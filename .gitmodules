@@ -1,0 +1,3 @@
+[submodule "wsjtx-lib"]
+	path = packages/wsjtx-lib
+	url = https://github.com/boybook/wsjtx-lib-nodejs.git
