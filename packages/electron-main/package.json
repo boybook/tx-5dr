@@ -1,0 +1,26 @@
+{
+  "name": "@tx5dr/electron-main",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "exports": {
+    ".": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "wait-on http://localhost:4000 http://localhost:5173 && cd ../.. && NODE_ENV=development electron .",
+    "start": "cd ../.. && electron .",
+    "lint": "eslint src/**/*.ts"
+  },
+  "dependencies": {
+    "@tx5dr/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@tx5dr/electron-preload": "workspace:*",
+    "@tx5dr/shared-config": "workspace:*",
+    "@types/node": "^20.0.0",
+    "electron": "^27.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0",
+    "wait-on": "^7.0.0"
+  }
+}

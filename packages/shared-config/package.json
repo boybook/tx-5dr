@@ -1,0 +1,24 @@
+{
+  "name": "@tx5dr/shared-config",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./eslint": "./eslint.config.js",
+    "./tsconfig": "./tsconfig.json",
+    "./prettier": "./prettier.config.js"
+  },
+  "scripts": {
+    "build": "echo 'No build needed for shared-config'",
+    "dev": "echo 'No dev needed for shared-config'",
+    "lint": "echo 'No lint needed for shared-config'",
+    "test": "echo 'No test needed for shared-config'"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.0.0"
+  }
+}

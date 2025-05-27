@@ -1,0 +1,20 @@
+{
+  "audio": {
+    "inputDeviceId": "input-1",
+    "outputDeviceId": "output-6",
+    "sampleRate": 48000,
+    "bufferSize": 1024
+  },
+  "ft8": {
+    "myCallsign": "",
+    "myGrid": "",
+    "frequency": 14074000,
+    "transmitPower": 25,
+    "autoReply": false,
+    "maxQSOTimeout": 6
+  },
+  "server": {
+    "port": 3000,
+    "host": "0.0.0.0"
+  }
+}

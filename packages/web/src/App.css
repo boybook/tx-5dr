@@ -1,0 +1,147 @@
+.App {
+  text-align: center;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.App-header {
+  background-color: #282c34;
+  padding: 20px;
+  color: white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.App-header h1 {
+  margin: 0 0 10px 0;
+  font-size: 2.5rem;
+}
+
+.App-header p {
+  margin: 0 0 20px 0;
+  font-size: 1.1rem;
+  opacity: 0.9;
+}
+
+.nav-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.nav-tab {
+  padding: 10px 20px;
+  border: none;
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.nav-tab:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.nav-tab.active {
+  background-color: #007acc;
+  box-shadow: 0 2px 4px rgba(0, 122, 204, 0.3);
+}
+
+.App-main {
+  flex: 1;
+  padding: 30px 20px;
+  background-color: #f8f9fa;
+}
+
+.home-content {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.home-content h2 {
+  color: #333;
+  margin-bottom: 20px;
+}
+
+.error {
+  background-color: #fee;
+  border: 1px solid #fcc;
+  color: #c33;
+  padding: 20px;
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
+
+.success {
+  background-color: #efe;
+  border: 1px solid #cfc;
+  color: #363;
+  padding: 20px;
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
+
+.features {
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 25px;
+  text-align: left;
+  margin-top: 20px;
+}
+
+.features h3 {
+  color: #333;
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.features ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.features li {
+  padding: 8px 0;
+  font-size: 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.features li:last-child {
+  border-bottom: none;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .App-header h1 {
+    font-size: 2rem;
+  }
+  
+  .nav-tabs {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .nav-tab {
+    width: 200px;
+  }
+  
+  .App-main {
+    padding: 20px 15px;
+  }
+}
+
+.message {
+  color: #61dafb;
+  font-weight: bold;
+}
+
+.error {
+  color: #ff6b6b;
+  font-weight: bold;
+} 

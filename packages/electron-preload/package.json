@@ -1,0 +1,20 @@
+{
+  "name": "@tx5dr/electron-preload",
+  "version": "1.0.0",
+  "main": "dist/preload.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint src/**/*.ts"
+  },
+  "dependencies": {
+    "@tx5dr/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@tx5dr/shared-config": "workspace:*",
+    "@types/node": "^20.0.0",
+    "electron": "^27.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}

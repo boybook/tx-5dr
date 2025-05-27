@@ -1,0 +1,22 @@
+{
+  "name": "tx-5dr",
+  "version": "1.0.0",
+  "description": "TX-5DR - Shared Node backend + web browser client + optional Electron shell",
+  "type": "module",
+  "private": true,
+  "main": "packages/electron-main/dist/main.js",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "preview": "yarn workspace @tx5dr/web preview",
+    "lint": "turbo run lint",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "packageManager": "yarn@4.9.1"
+}
