@@ -1,5 +1,13 @@
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 
+// 定义消息类型
+interface WSJTXMessage {
+  text: string;
+  snr: number;
+  deltaTime: number;
+  deltaFrequency: number;
+}
+
 // 工作线程的解码函数
 export default async function decodeAudio(data: {
   slotId: string;
@@ -48,7 +56,7 @@ export default async function decodeAudio(data: {
     // console.log(`📨 [Worker] 找到 ${messages.length} 个消息`);
     
     // 转换为我们的格式
-    const frames = messages.map(msg => ({
+    const frames = (messages as WSJTXMessage[]).map(msg => ({
       message: msg.text,
       snr: msg.snr,
       dt: msg.deltaTime,
