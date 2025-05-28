@@ -19,13 +19,21 @@ export interface AppConfig {
   };
 }
 
+// 音频处理配置接口
+export interface AudioConfig {
+  inputDeviceId?: string;
+  outputDeviceId?: string;
+  sampleRate: number;
+  bufferSize: number;
+}
+
 // 默认配置
 const DEFAULT_CONFIG: AppConfig = {
   audio: {
     inputDeviceId: undefined,
     outputDeviceId: undefined,
     sampleRate: 48000,
-    bufferSize: 1024,
+    bufferSize: 1024
   },
   ft8: {
     myCallsign: '',

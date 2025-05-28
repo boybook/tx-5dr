@@ -95,7 +95,7 @@ export class FT8MessageParser {
     }
 
     const callsign = parts[callsignIndex];
-    if (!this.isValidCallsign(callsign)) {
+    if (!callsign || !this.isValidCallsign(callsign)) {
       return result;
     }
 
@@ -105,7 +105,7 @@ export class FT8MessageParser {
     // 检查是否有网格定位
     if (parts.length > callsignIndex + 1) {
       const grid = parts[callsignIndex + 1];
-      if (this.isValidGrid(grid)) {
+      if (grid && this.isValidGrid(grid)) {
         result.grid = grid;
       }
     }
@@ -127,18 +127,29 @@ export class FT8MessageParser {
    * 格式: CALLSIGN1 CALLSIGN2 [GRID]
    */
   private static parseResponseMessage(parts: string[], rawMessage: string): ParsedFT8Message {
+    const callsign1 = parts[0];
+    const callsign2 = parts[1];
+    
+    if (!callsign1 || !callsign2) {
+      return {
+        type: FT8MessageType.UNKNOWN,
+        rawMessage,
+        isValid: false,
+      };
+    }
+
     const result: ParsedFT8Message = {
       type: FT8MessageType.RESPONSE,
       rawMessage,
-      callsign1: parts[0],
-      callsign2: parts[1],
+      callsign1,
+      callsign2,
       isValid: true,
     };
 
     // 检查是否有网格定位
     if (parts.length > 2) {
       const grid = parts[2];
-      if (this.isValidGrid(grid)) {
+      if (grid && this.isValidGrid(grid)) {
         result.grid = grid;
       }
     }
@@ -153,6 +164,7 @@ export class FT8MessageParser {
     return parts.length >= 3 && 
            this.isValidCallsign(parts[0]) && 
            this.isValidCallsign(parts[1]) && 
+           parts[2] !== undefined &&
            this.isValidReport(parts[2]);
   }
 
@@ -161,12 +173,24 @@ export class FT8MessageParser {
    * 格式: CALLSIGN1 CALLSIGN2 REPORT
    */
   private static parseSignalReportMessage(parts: string[], rawMessage: string): ParsedFT8Message {
+    const callsign1 = parts[0];
+    const callsign2 = parts[1];
+    const report = parts[2];
+    
+    if (!callsign1 || !callsign2 || !report) {
+      return {
+        type: FT8MessageType.UNKNOWN,
+        rawMessage,
+        isValid: false,
+      };
+    }
+
     return {
       type: FT8MessageType.SIGNAL_REPORT,
       rawMessage,
-      callsign1: parts[0],
-      callsign2: parts[1],
-      report: parts[2],
+      callsign1,
+      callsign2,
+      report,
       isValid: true,
     };
   }
@@ -188,13 +212,23 @@ export class FT8MessageParser {
    * 格式: CALLSIGN1 CALLSIGN2 RRR 或 CALLSIGN1 CALLSIGN2 RR73
    */
   private static parseConfirmationMessage(parts: string[], rawMessage: string): ParsedFT8Message {
+    const callsign1 = parts[0];
+    const callsign2 = parts[1];
     const lastPart = parts[parts.length - 1];
+    
+    if (!callsign1 || !callsign2) {
+      return {
+        type: FT8MessageType.UNKNOWN,
+        rawMessage,
+        isValid: false,
+      };
+    }
     
     return {
       type: lastPart === 'RR73' ? FT8MessageType.SEVENTY_THREE : FT8MessageType.RRR,
       rawMessage,
-      callsign1: parts[0],
-      callsign2: parts[1],
+      callsign1,
+      callsign2,
       isValid: true,
     };
   }
@@ -214,11 +248,22 @@ export class FT8MessageParser {
    * 格式: CALLSIGN1 CALLSIGN2 73
    */
   private static parse73Message(parts: string[], rawMessage: string): ParsedFT8Message {
+    const callsign1 = parts[0];
+    const callsign2 = parts[1];
+    
+    if (!callsign1 || !callsign2) {
+      return {
+        type: FT8MessageType.UNKNOWN,
+        rawMessage,
+        isValid: false,
+      };
+    }
+
     return {
       type: FT8MessageType.SEVENTY_THREE,
       rawMessage,
-      callsign1: parts[0],
-      callsign2: parts[1],
+      callsign1,
+      callsign2,
       isValid: true,
     };
   }
@@ -226,7 +271,8 @@ export class FT8MessageParser {
   /**
    * 验证呼号格式
    */
-  private static isValidCallsign(callsign: string): boolean {
+  private static isValidCallsign(callsign?: string): boolean {
+    if (!callsign) return false;
     return CALLSIGN_REGEX.test(callsign);
   }
 

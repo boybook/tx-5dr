@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ApiClient } from '@tx5dr/core';
+import { api } from '@tx5dr/core';
 import type { 
   AudioDevice, 
   AudioDevicesResponse, 
@@ -13,7 +13,6 @@ interface AudioDeviceSettingsProps {
 }
 
 export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }: AudioDeviceSettingsProps) {
-  const [apiClient] = useState(() => new ApiClient(apiBaseUrl));
   
   // 状态管理
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
@@ -42,8 +41,8 @@ export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }
 
       // 并行获取设备列表和当前设置
       const [devicesResponse, settingsResponse] = await Promise.all([
-        apiClient.getAudioDevices(),
-        apiClient.getAudioSettings()
+        api.getAudioDevices(apiBaseUrl),
+        api.getAudioSettings(apiBaseUrl)
       ]);
 
       // 设置设备列表
@@ -81,7 +80,7 @@ export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }
         bufferSize,
       };
 
-      const response = await apiClient.updateAudioSettings(newSettings);
+      const response = await api.updateAudioSettings(newSettings, apiBaseUrl);
       
       if (response.success) {
         setCurrentSettings(response.currentSettings);
@@ -104,7 +103,7 @@ export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }
       setError(null);
       setSuccessMessage(null);
 
-      const response = await apiClient.resetAudioSettings();
+      const response = await api.resetAudioSettings(apiBaseUrl);
       
       if (response.success) {
         setCurrentSettings(response.currentSettings);

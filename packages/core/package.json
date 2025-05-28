@@ -17,7 +17,8 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@tx5dr/contracts": "workspace:*"
+    "@tx5dr/contracts": "workspace:*",
+    "eventemitter3": "^5.0.1"
   },
   "devDependencies": {
     "@tx5dr/shared-config": "workspace:*",

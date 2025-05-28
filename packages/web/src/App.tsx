@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react';
 import { getHello } from '@tx5dr/core';
 import type { HelloResponse } from '@tx5dr/contracts';
 import { AudioDeviceSettings } from './components/AudioDeviceSettings';
+import { DigitalRadioControl } from './components/DigitalRadioControl';
 import './App.css';
 
 function App() {
   const [message, setMessage] = useState<string>('Loading...');
   const [error, setError] = useState<string | null>(null);
-  const [currentTab, setCurrentTab] = useState<'home' | 'audio'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'audio' | 'radio'>('radio');
 
   useEffect(() => {
     async function fetchHello() {
@@ -31,6 +32,12 @@ function App() {
         
         <nav className="nav-tabs">
           <button 
+            className={`nav-tab ${currentTab === 'radio' ? 'active' : ''}`}
+            onClick={() => setCurrentTab('radio')}
+          >
+            数字无线电
+          </button>
+          <button 
             className={`nav-tab ${currentTab === 'home' ? 'active' : ''}`}
             onClick={() => setCurrentTab('home')}
           >
@@ -46,6 +53,10 @@ function App() {
       </header>
 
       <main className="App-main">
+        {currentTab === 'radio' && (
+          <DigitalRadioControl />
+        )}
+
         {currentTab === 'home' && (
           <div className="home-content">
             <h2>系统状态</h2>
@@ -65,7 +76,9 @@ function App() {
               <h3>功能模块</h3>
               <ul>
                 <li>✅ 音频设备管理</li>
-                <li>🚧 FT8解码与编码</li>
+                <li>✅ 数字无线电引擎控制</li>
+                <li>✅ FT8解码显示</li>
+                <li>✅ WebSocket实时通信</li>
                 <li>🚧 QSO状态机</li>
                 <li>🚧 频谱显示</li>
                 <li>🚧 自动通联</li>
