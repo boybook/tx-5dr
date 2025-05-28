@@ -1,4 +1,16 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
+import { 
+  Card, 
+  CardBody, 
+  CardHeader, 
+  Button, 
+  Select, 
+  SelectItem,
+  Input,
+  Divider,
+  Spinner,
+  Chip
+} from '@heroui/react';
 import { api } from '@tx5dr/core';
 import type { 
   AudioDevice, 
@@ -6,14 +18,8 @@ import type {
   AudioDeviceSettings,
   AudioDeviceSettingsResponse 
 } from '@tx5dr/contracts';
-import './AudioDeviceSettings.css';
 
-interface AudioDeviceSettingsProps {
-  apiBaseUrl?: string;
-}
-
-export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }: AudioDeviceSettingsProps) {
-  
+export function AudioDeviceSettings() {
   // 状态管理
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
@@ -39,10 +45,10 @@ export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }
       setLoading(true);
       setError(null);
 
-      // 并行获取设备列表和当前设置
+      // 并行获取设备列表和当前设置，直接调用API
       const [devicesResponse, settingsResponse] = await Promise.all([
-        api.getAudioDevices(apiBaseUrl),
-        api.getAudioSettings(apiBaseUrl)
+        api.getAudioDevices(),
+        api.getAudioSettings()
       ]);
 
       // 设置设备列表
@@ -80,7 +86,7 @@ export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }
         bufferSize,
       };
 
-      const response = await api.updateAudioSettings(newSettings, apiBaseUrl);
+      const response = await api.updateAudioSettings(newSettings);
       
       if (response.success) {
         setCurrentSettings(response.currentSettings);
@@ -103,7 +109,7 @@ export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }
       setError(null);
       setSuccessMessage(null);
 
-      const response = await api.resetAudioSettings(apiBaseUrl);
+      const response = await api.resetAudioSettings();
       
       if (response.success) {
         setCurrentSettings(response.currentSettings);
@@ -124,139 +130,263 @@ export function AudioDeviceSettings({ apiBaseUrl = 'http://localhost:4000/api' }
 
   if (loading) {
     return (
-      <div className="audio-settings">
-        <h2>音频设备设置</h2>
-        <div className="loading">正在加载音频设备...</div>
-      </div>
+      <Card>
+        <CardBody className="flex items-center justify-center py-12">
+          <div className="text-center">
+            <Spinner size="lg" />
+            <p className="mt-4 text-default-500">正在加载音频设备...</p>
+          </div>
+        </CardBody>
+      </Card>
     );
   }
 
   return (
-    <div className="audio-settings">
-      <h2>音频设备设置</h2>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <h2 className="text-xl font-bold">🎤 音频设备设置</h2>
+        </CardHeader>
+      </Card>
       
       {error && (
-        <div className="error-message">
-          错误: {error}
-        </div>
+        <Card>
+          <CardBody>
+            <div className="bg-danger-50 border border-danger-200 rounded-lg p-4">
+              <p className="text-danger-800 font-medium">错误: {error}</p>
+            </div>
+          </CardBody>
+        </Card>
       )}
       
       {successMessage && (
-        <div className="success-message">
-          {successMessage}
-        </div>
+        <Card>
+          <CardBody>
+            <div className="bg-success-50 border border-success-200 rounded-lg p-4">
+              <p className="text-success-800 font-medium">{successMessage}</p>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
-      <div className="current-settings">
-        <h3>当前设置</h3>
-        <div className="settings-info">
-          <p><strong>输入设备:</strong> {
-            currentSettings.inputDeviceId 
-              ? inputDevices.find(d => d.id === currentSettings.inputDeviceId)?.name || '未知设备'
-              : '未设置'
-          }</p>
-          <p><strong>输出设备:</strong> {
-            currentSettings.outputDeviceId 
-              ? outputDevices.find(d => d.id === currentSettings.outputDeviceId)?.name || '未知设备'
-              : '未设置'
-          }</p>
-          <p><strong>采样率:</strong> {currentSettings.sampleRate} Hz</p>
-          <p><strong>缓冲区大小:</strong> {currentSettings.bufferSize} samples</p>
-        </div>
+      {/* 当前设置 */}
+      <Card>
+        <CardHeader>
+          <h3 className="text-lg font-semibold">当前设置</h3>
+        </CardHeader>
+        <CardBody>
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-default-600">输入设备:</span>
+              <Chip color="primary" variant="flat">
+                {currentSettings.inputDeviceId 
+                  ? inputDevices.find(d => d.id === currentSettings.inputDeviceId)?.name || '未知设备'
+                  : '未设置'
+                }
+              </Chip>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-default-600">输出设备:</span>
+              <Chip color="primary" variant="flat">
+                {currentSettings.outputDeviceId 
+                  ? outputDevices.find(d => d.id === currentSettings.outputDeviceId)?.name || '未知设备'
+                  : '未设置'
+                }
+              </Chip>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-default-600">采样率:</span>
+              <span className="font-mono">{currentSettings.sampleRate} Hz</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-default-600">缓冲区大小:</span>
+              <span className="font-mono">{currentSettings.bufferSize} samples</span>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* 设置表单 */}
+      <Card>
+        <CardHeader>
+          <h3 className="text-lg font-semibold">设备配置</h3>
+        </CardHeader>
+        <CardBody>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <Select
+              label="音频输入设备"
+              placeholder="请选择输入设备"
+              selectedKeys={selectedInputDevice ? [selectedInputDevice] : []}
+              onSelectionChange={(keys) => {
+                const selected = Array.from(keys)[0] as string;
+                setSelectedInputDevice(selected || '');
+              }}
+              isDisabled={saving}
+            >
+              {inputDevices.map((device) => (
+                <SelectItem 
+                  key={device.id}
+                  textValue={`${device.name} ${device.isDefault ? '(默认)' : ''} - ${device.channels}ch, ${device.sampleRate}Hz`}
+                >
+                  {device.name} {device.isDefault ? '(默认)' : ''} - {device.channels}ch, {device.sampleRate}Hz
+                </SelectItem>
+              ))}
+            </Select>
+
+            <Select
+              label="音频输出设备"
+              placeholder="请选择输出设备"
+              selectedKeys={selectedOutputDevice ? [selectedOutputDevice] : []}
+              onSelectionChange={(keys) => {
+                const selected = Array.from(keys)[0] as string;
+                setSelectedOutputDevice(selected || '');
+              }}
+              isDisabled={saving}
+            >
+              {outputDevices.map((device) => (
+                <SelectItem 
+                  key={device.id}
+                  textValue={`${device.name} ${device.isDefault ? '(默认)' : ''} - ${device.channels}ch, ${device.sampleRate}Hz`}
+                >
+                  {device.name} {device.isDefault ? '(默认)' : ''} - {device.channels}ch, {device.sampleRate}Hz
+                </SelectItem>
+              ))}
+            </Select>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Select
+                label="采样率 (Hz)"
+                selectedKeys={[sampleRate.toString()]}
+                onSelectionChange={(keys) => {
+                  const selected = Array.from(keys)[0] as string;
+                  setSampleRate(parseInt(selected));
+                }}
+                isDisabled={saving}
+              >
+                <SelectItem key="8000" textValue="8,000 Hz">8,000 Hz</SelectItem>
+                <SelectItem key="16000" textValue="16,000 Hz">16,000 Hz</SelectItem>
+                <SelectItem key="22050" textValue="22,050 Hz">22,050 Hz</SelectItem>
+                <SelectItem key="44100" textValue="44,100 Hz">44,100 Hz</SelectItem>
+                <SelectItem key="48000" textValue="48,000 Hz">48,000 Hz</SelectItem>
+                <SelectItem key="96000" textValue="96,000 Hz">96,000 Hz</SelectItem>
+              </Select>
+
+              <Select
+                label="缓冲区大小 (samples)"
+                selectedKeys={[bufferSize.toString()]}
+                onSelectionChange={(keys) => {
+                  const selected = Array.from(keys)[0] as string;
+                  setBufferSize(parseInt(selected));
+                }}
+                isDisabled={saving}
+              >
+                <SelectItem key="128" textValue="128">128</SelectItem>
+                <SelectItem key="256" textValue="256">256</SelectItem>
+                <SelectItem key="512" textValue="512">512</SelectItem>
+                <SelectItem key="1024" textValue="1,024">1,024</SelectItem>
+                <SelectItem key="2048" textValue="2,048">2,048</SelectItem>
+                <SelectItem key="4096" textValue="4,096">4,096</SelectItem>
+              </Select>
+            </div>
+
+            <Divider />
+
+            <div className="flex gap-3">
+              <Button 
+                type="submit"
+                color="primary"
+                isLoading={saving}
+                startContent={!saving ? "💾" : undefined}
+              >
+                {saving ? '保存中...' : '保存设置'}
+              </Button>
+              
+              <Button 
+                type="button"
+                color="default"
+                variant="bordered"
+                onPress={handleReset}
+                isLoading={saving}
+                startContent={!saving ? "🔄" : undefined}
+              >
+                {saving ? '重置中...' : '重置为默认'}
+              </Button>
+              
+              <Button 
+                type="button"
+                color="secondary"
+                variant="bordered"
+                onPress={loadAudioData}
+                isLoading={loading}
+                startContent={!loading ? "🔍" : undefined}
+              >
+                {loading ? '刷新中...' : '刷新设备列表'}
+              </Button>
+            </div>
+          </form>
+        </CardBody>
+      </Card>
+
+      {/* 设备列表 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <h3 className="text-lg font-semibold">可用输入设备</h3>
+          </CardHeader>
+          <CardBody>
+            <div className="space-y-2">
+              {inputDevices.length === 0 ? (
+                <p className="text-default-500">未找到输入设备</p>
+              ) : (
+                inputDevices.map((device) => (
+                  <div key={device.id} className="p-3 border border-divider rounded-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-medium">{device.name}</p>
+                        <p className="text-sm text-default-500">
+                          {device.channels}声道, {device.sampleRate}Hz
+                        </p>
+                      </div>
+                      {device.isDefault && (
+                        <Chip size="sm" color="success" variant="flat">默认</Chip>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <h3 className="text-lg font-semibold">可用输出设备</h3>
+          </CardHeader>
+          <CardBody>
+            <div className="space-y-2">
+              {outputDevices.length === 0 ? (
+                <p className="text-default-500">未找到输出设备</p>
+              ) : (
+                outputDevices.map((device) => (
+                  <div key={device.id} className="p-3 border border-divider rounded-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-medium">{device.name}</p>
+                        <p className="text-sm text-default-500">
+                          {device.channels}声道, {device.sampleRate}Hz
+                        </p>
+                      </div>
+                      {device.isDefault && (
+                        <Chip size="sm" color="success" variant="flat">默认</Chip>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardBody>
+        </Card>
       </div>
-
-      <form onSubmit={handleSubmit} className="settings-form">
-        <div className="form-group">
-          <label htmlFor="input-device">音频输入设备:</label>
-          <select
-            id="input-device"
-            value={selectedInputDevice}
-            onChange={(e) => setSelectedInputDevice(e.target.value)}
-            disabled={saving}
-          >
-            <option value="">请选择输入设备</option>
-            {inputDevices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name} {device.isDefault ? '(默认)' : ''} - {device.channels}ch, {device.sampleRate}Hz
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="output-device">音频输出设备:</label>
-          <select
-            id="output-device"
-            value={selectedOutputDevice}
-            onChange={(e) => setSelectedOutputDevice(e.target.value)}
-            disabled={saving}
-          >
-            <option value="">请选择输出设备</option>
-            {outputDevices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name} {device.isDefault ? '(默认)' : ''} - {device.channels}ch, {device.sampleRate}Hz
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="sample-rate">采样率 (Hz):</label>
-          <select
-            id="sample-rate"
-            value={sampleRate}
-            onChange={(e) => setSampleRate(Number(e.target.value))}
-            disabled={saving}
-          >
-            <option value={44100}>44100 Hz</option>
-            <option value={48000}>48000 Hz</option>
-            <option value={96000}>96000 Hz</option>
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="buffer-size">缓冲区大小 (samples):</label>
-          <select
-            id="buffer-size"
-            value={bufferSize}
-            onChange={(e) => setBufferSize(Number(e.target.value))}
-            disabled={saving}
-          >
-            <option value={256}>256</option>
-            <option value={512}>512</option>
-            <option value={1024}>1024</option>
-            <option value={2048}>2048</option>
-          </select>
-        </div>
-
-        <div className="form-actions">
-          <button 
-            type="submit" 
-            disabled={saving}
-            className="submit-button"
-          >
-            {saving ? '保存中...' : '保存设置'}
-          </button>
-          
-          <button 
-            type="button" 
-            onClick={handleReset}
-            disabled={saving}
-            className="reset-button"
-          >
-            重置为默认
-          </button>
-          
-          <button 
-            type="button" 
-            onClick={loadAudioData}
-            disabled={saving}
-            className="refresh-button"
-          >
-            刷新设备列表
-          </button>
-        </div>
-      </form>
     </div>
   );
 } 

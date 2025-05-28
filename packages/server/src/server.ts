@@ -10,9 +10,7 @@ import { audioRoutes } from './routes/audio.js';
 import { configRoutes } from './routes/config.js';
 import { clockRoutes } from './routes/clock.js';
 import { slotpackRoutes } from './routes/slotpack.js';
-
-// WebSocket连接管理
-const wsClients = new Set<WebSocket>();
+import { WSServer } from '@tx5dr/core';
 
 export async function createServer() {
   const fastify = Fastify({
@@ -46,83 +44,155 @@ export async function createServer() {
   await digitalRadioEngine.initialize();
   fastify.log.info('数字无线电引擎初始化完成');
 
+  // 初始化WebSocket服务器
+  const wsServer = new WSServer();
+  fastify.log.info('WebSocket服务器初始化完成');
+
   // 设置DigitalRadioEngine事件监听器，转发到WebSocket客户端
   digitalRadioEngine.on('modeChanged', (mode) => {
-    broadcastToClients({
-      type: 'modeChanged',
-      data: mode,
-      timestamp: new Date().toISOString()
-    });
+    console.log('🔄 服务器收到modeChanged事件，广播给客户端');
+    wsServer.broadcastModeChanged(mode);
   });
 
   digitalRadioEngine.on('clockStarted', () => {
-    broadcastToClients({
-      type: 'clockStarted',
-      data: {},
-      timestamp: new Date().toISOString()
-    });
+    console.log('🚀 服务器收到clockStarted事件，广播给客户端');
+    wsServer.broadcastClockStarted();
   });
 
   digitalRadioEngine.on('clockStopped', () => {
-    broadcastToClients({
-      type: 'clockStopped',
-      data: {},
-      timestamp: new Date().toISOString()
-    });
+    console.log('⏹️ 服务器收到clockStopped事件，广播给客户端');
+    wsServer.broadcastClockStopped();
   });
 
   digitalRadioEngine.on('slotStart', (slotInfo) => {
-    broadcastToClients({
-      type: 'slotStart',
-      data: slotInfo,
-      timestamp: new Date().toISOString()
-    });
+    wsServer.broadcastSlotStart(slotInfo);
   });
 
   digitalRadioEngine.on('subWindow', (windowInfo) => {
-    broadcastToClients({
-      type: 'subWindow',
-      data: windowInfo,
-      timestamp: new Date().toISOString()
-    });
+    wsServer.broadcastSubWindow(windowInfo);
   });
 
   digitalRadioEngine.on('slotPackUpdated', (slotPack) => {
-    broadcastToClients({
-      type: 'slotPackUpdated',
-      data: slotPack,
-      timestamp: new Date().toISOString()
-    });
+    wsServer.broadcastSlotPackUpdated(slotPack);
   });
 
   digitalRadioEngine.on('decodeError', (errorInfo) => {
-    broadcastToClients({
-      type: 'decodeError',
-      data: errorInfo,
-      timestamp: new Date().toISOString()
-    });
+    wsServer.broadcastDecodeError(errorInfo);
   });
 
-  // 广播消息到所有WebSocket客户端
-  function broadcastToClients(message: any) {
-    const messageStr = JSON.stringify(message);
-    wsClients.forEach((client) => {
-      if (client.readyState === client.OPEN) {
+  // 设置WebSocket服务器事件监听器，处理客户端命令
+  wsServer.onWSEvent('rawMessage', async (message: any) => {
+    // 处理不同类型的命令
+    switch (message.type) {
+      case 'startEngine':
+        console.log('📥 服务器收到startEngine命令');
         try {
-          client.send(messageStr);
+          const currentStatus = digitalRadioEngine.getStatus();
+          if (currentStatus.isRunning) {
+            console.log('⚠️ 时钟已经在运行中，发送当前状态同步');
+            // 时钟已经在运行，直接发送状态同步事件
+            wsServer.broadcastClockStarted();
+          } else {
+            await digitalRadioEngine.start();
+            console.log('✅ digitalRadioEngine.start() 执行成功');
+          }
         } catch (error) {
-          fastify.log.error('发送WebSocket消息失败:', error);
-          wsClients.delete(client);
+          console.error('❌ digitalRadioEngine.start() 执行失败:', error);
         }
-      } else {
-        wsClients.delete(client);
-      }
-    });
-  }
+        break;
+
+      case 'stopEngine':
+        console.log('📥 服务器收到stopEngine命令');
+        try {
+          const currentStatus = digitalRadioEngine.getStatus();
+          if (!currentStatus.isRunning) {
+            console.log('⚠️ 时钟已经停止，发送当前状态同步');
+            // 时钟已经停止，直接发送状态同步事件
+            wsServer.broadcastClockStopped();
+            wsServer.broadcast('commandResult', {
+              command: 'stopEngine',
+              success: true,
+              message: 'Already stopped'
+            });
+          } else {
+            await digitalRadioEngine.stop();
+            console.log('✅ digitalRadioEngine.stop() 执行成功');
+            wsServer.broadcast('commandResult', {
+              command: 'stopEngine',
+              success: true
+            });
+          }
+        } catch (error) {
+          console.error('❌ digitalRadioEngine.stop() 执行失败:', error);
+          wsServer.broadcast('commandResult', {
+            command: 'stopEngine',
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        break;
+
+      case 'getStatus':
+        const currentStatus = digitalRadioEngine.getStatus();
+        wsServer.broadcastSystemStatus(currentStatus);
+        break;
+
+      case 'setMode':
+        try {
+          await digitalRadioEngine.setMode(message.data.mode);
+          wsServer.broadcast('commandResult', {
+            command: 'setMode',
+            success: true
+          });
+        } catch (error) {
+          wsServer.broadcast('commandResult', {
+            command: 'setMode',
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        break;
+
+      case 'ping':
+        // ping消息由WSServer自动处理，发送pong响应
+        break;
+
+      default:
+        fastify.log.warn('未知的WebSocket消息类型:', message.type);
+    }
+  });
 
   // Register CORS plugin
   await fastify.register(cors, {
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: (origin, callback) => {
+      // 允许的源列表
+      const allowedOrigins = [
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+      ];
+      
+      // 开发环境：允许所有localhost和127.0.0.1的端口
+      if (process.env.NODE_ENV === 'development' || !origin) {
+        if (!origin || 
+            origin.startsWith('http://localhost:') || 
+            origin.startsWith('http://127.0.0.1:') ||
+            origin.startsWith('https://localhost:') ||
+            origin.startsWith('https://127.0.0.1:')) {
+          callback(null, true);
+          return;
+        }
+      }
+      
+      // 生产环境：检查是否在允许列表中，或者是同域请求
+      if (allowedOrigins.includes(origin) || !origin) {
+        callback(null, true);
+      } else {
+        fastify.log.warn(`CORS: 拒绝来自 ${origin} 的请求`);
+        callback(new Error('Not allowed by CORS'), false);
+      }
+    },
     credentials: true,
   });
 
@@ -177,117 +247,19 @@ export async function createServer() {
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
     fastify.log.info('WebSocket客户端已连接');
     
-    // 添加到客户端集合
-    wsClients.add(socket);
+    // 添加连接到WebSocket服务器
+    const connection = wsServer.addConnection(socket);
     
-    // 发送欢迎消息
-    socket.send(JSON.stringify({
-      type: 'welcome',
-      message: 'Connected to TX-5DR WebSocket server',
-      timestamp: new Date().toISOString()
-    }));
-
     // 发送当前系统状态
     const status = digitalRadioEngine.getStatus();
-    socket.send(JSON.stringify({
-      type: 'systemStatus',
-      data: status,
-      timestamp: new Date().toISOString()
-    }));
+    connection.send('systemStatus', status);
 
-    // 处理接收到的消息
-    socket.on('message', async (message: Buffer) => {
-      try {
-        const data = JSON.parse(message.toString());
-        fastify.log.info('收到WebSocket消息:', message.toString());
-        
-        // 处理不同类型的命令
-        switch (data.type) {
-          case 'startEngine':
-            try {
-              await digitalRadioEngine.start();
-              socket.send(JSON.stringify({
-                type: 'commandResult',
-                command: 'startEngine',
-                success: true,
-                timestamp: new Date().toISOString()
-              }));
-            } catch (error) {
-              socket.send(JSON.stringify({
-                type: 'commandResult',
-                command: 'startEngine',
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-                timestamp: new Date().toISOString()
-              }));
-            }
-            break;
+    // 连接断开时的清理工作由WSServer自动处理
+  });
 
-          case 'stopEngine':
-            try {
-              await digitalRadioEngine.stop();
-              socket.send(JSON.stringify({
-                type: 'commandResult',
-                command: 'stopEngine',
-                success: true,
-                timestamp: new Date().toISOString()
-              }));
-            } catch (error) {
-              socket.send(JSON.stringify({
-                type: 'commandResult',
-                command: 'stopEngine',
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-                timestamp: new Date().toISOString()
-              }));
-            }
-            break;
-
-          case 'getStatus':
-            const currentStatus = digitalRadioEngine.getStatus();
-            socket.send(JSON.stringify({
-              type: 'systemStatus',
-              data: currentStatus,
-              timestamp: new Date().toISOString()
-            }));
-            break;
-
-          case 'ping':
-            socket.send(JSON.stringify({
-              type: 'pong',
-              timestamp: new Date().toISOString()
-            }));
-            break;
-
-          default:
-            // 回显未知消息
-            socket.send(JSON.stringify({
-              type: 'echo',
-              originalMessage: data,
-              timestamp: new Date().toISOString()
-            }));
-        }
-      } catch (error) {
-        fastify.log.error('解析WebSocket消息错误:', error);
-        socket.send(JSON.stringify({
-          type: 'error',
-          message: 'Invalid JSON format',
-          timestamp: new Date().toISOString()
-        }));
-      }
-    });
-
-    // 处理连接关闭
-    socket.on('close', () => {
-      fastify.log.info('WebSocket客户端已断开连接');
-      wsClients.delete(socket);
-    });
-
-    // 处理错误
-    socket.on('error', (error: Error) => {
-      fastify.log.error('WebSocket错误:', error);
-      wsClients.delete(socket);
-    });
+  // 服务器关闭时清理WebSocket连接
+  fastify.addHook('onClose', async () => {
+    wsServer.cleanup();
   });
 
   return fastify;

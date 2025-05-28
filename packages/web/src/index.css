@@ -1,5 +1,25 @@
-body {
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-gray: #f5f5f5;
+  --bg-white: #ffffff;
+  /* FT8 周期颜色配置 */
+  --ft8-cycle-odd: #FFB96A;    /* 15/45秒周期装饰条 (原来的颜色) */
+  --ft8-cycle-even: #6CCE64;   /* 00/30秒周期装饰条 (原来的颜色) */
+  --ft8-tx: #f59e0b;           /* TX传输 */
+  
+  /* FT8 周期背景颜色 (20% 透明度) */
+  --ft8-cycle-odd-bg: rgba(255, 205, 148, 0.2);    /* 15/45秒周期背景 */
+  --ft8-cycle-even-bg: rgba(153, 255, 145, 0.2);   /* 00/30秒周期背景 */
+}
+
+html, body {
   margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
@@ -7,7 +27,26 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+#root {
+  height: 100%;
+  width: 100%;
+}
+
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
+}
+
+/* FT8 表格行 hover 效果 */
+.ft8-row:hover {
+  background-color: var(--hover-bg) !important;
+}
+
+/* Select组件自定义hover样式 */
+.select-auto-mode:hover {
+  background-color: rgb(220 252 231) !important; /* success-200 */
+}
+
+.select-manual-mode:hover {
+  background-color: rgb(229 231 235) !important; /* gray-200 */
 } 

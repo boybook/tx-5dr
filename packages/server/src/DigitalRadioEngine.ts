@@ -31,6 +31,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private clockSource: ClockSourceSystem;
   private currentMode: ModeDescriptor = MODES.FT8;
   private isRunning = false;
+  private audioStarted = false;
   
   // 真实的音频和解码系统
   private audioStreamManager: AudioStreamManager;
@@ -142,6 +143,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     console.log(`🚀 [时钟管理器] 启动时钟，模式: ${this.currentMode.name}`);
     
     // 启动音频流
+    let audioStarted = false;
     try {
       // 从配置管理器获取音频设备设置
       const configManager = ConfigManager.getInstance();
@@ -151,9 +153,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       
       await this.audioStreamManager.startStream(audioConfig.inputDeviceId);
       console.log(`🎤 [时钟管理器] 音频流启动成功`);
+      audioStarted = true;
     } catch (error) {
       console.error(`❌ [时钟管理器] 音频流启动失败:`, error);
-      throw error;
+      console.warn(`⚠️ [时钟管理器] 将在没有音频输入的情况下继续运行`);
+      // 不抛出错误，让Engine继续运行
     }
     
     this.slotClock.start();
@@ -165,6 +169,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     
     this.isRunning = true;
+    this.audioStarted = audioStarted;
     this.emit('clockStarted');
   }
   
@@ -196,6 +201,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
       
       this.isRunning = false;
+      this.audioStarted = false; // 重置音频状态
       this.emit('clockStopped');
     }
   }
@@ -267,7 +273,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       isRunning: this.isRunning,
       currentMode: this.currentMode,
       currentTime: this.clockSource.now(),
-      nextSlotIn: 0 // 简化实现，暂时返回 0
+      nextSlotIn: 0, // 简化实现，暂时返回 0
+      audioStarted: this.audioStarted
     };
   }
   
