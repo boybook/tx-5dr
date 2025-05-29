@@ -6,6 +6,7 @@ import { useConnection, useRadioState, useSlotPacks } from '../store/radioStore'
 import type { SlotPack, FT8Frame } from '@tx5dr/contracts';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
+import { SpectrumDisplay } from '../components/SpectrumDisplay';
 
 export const LeftLayout: React.FC = () => {
   const connection = useConnection();
@@ -121,23 +122,31 @@ export const LeftLayout: React.FC = () => {
         </div>
       </div>
 
-      {/* FT8解码消息表格 */}
-      <div className="flex-1 px-5 pb-5 min-h-0">
-        {ft8Groups.length === 0 ? (
-          <div className="text-center py-12">
-            <div className="text-default-400 mb-2 text-4xl">📡</div>
-            <p className="text-default-500 mb-1">暂无FT8解码消息</p>
-            <p className="text-default-400 text-sm">
-              {!connection.state.isConnected 
-                ? '请先连接到TX5DR服务器' 
-                : !radio.state.isDecoding 
-                  ? '请启动解码引擎' 
-                  : '等待FT8信号...'}
-            </p>
-          </div>
-        ) : (
-          <FT8Table groups={ft8Groups} className="h-full" />
-        )}
+      {/* 主要内容区域 */}
+      <div className="flex-1 px-5 pb-5 min-h-0 flex flex-col gap-4">
+        {/* FT8解码消息表格 */}
+        <div className="flex-1 min-h-0">
+          {ft8Groups.length === 0 ? (
+            <div className="text-center py-12">
+              <div className="text-default-400 mb-2 text-4xl">📡</div>
+              <p className="text-default-500 mb-1">暂无FT8解码消息</p>
+              <p className="text-default-400 text-sm">
+                {!connection.state.isConnected 
+                  ? '请先连接到TX5DR服务器' 
+                  : !radio.state.isDecoding 
+                    ? '请启动解码引擎' 
+                    : '等待FT8信号...'}
+              </p>
+            </div>
+          ) : (
+            <FT8Table groups={ft8Groups} className="h-full" />
+          )}
+        </div>
+
+        {/* 频谱显示 */}
+        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+          <SpectrumDisplay height={128} />
+        </div>
       </div>
     </div>
   );

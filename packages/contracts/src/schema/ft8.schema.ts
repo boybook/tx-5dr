@@ -43,17 +43,43 @@ export const FT8DecodesResponseSchema = z.object({
 
 // FT8频谱数据
 export const FT8SpectrumSchema = z.object({
-  // FFT数据
-  fftData: z.array(z.number()),
+  // 时间戳
+  timestamp: z.number(),
+  // 采样率
+  sampleRate: z.number(),
   // 频率范围
   frequencyRange: z.object({
     min: z.number(),
     max: z.number(),
   }),
-  // 时间戳
-  timestamp: z.number(),
-  // 采样率
-  sampleRate: z.number(),
+  // 二进制频谱数据
+  binaryData: z.object({
+    // 二进制数据，使用base64编码
+    data: z.string(),
+    // 数据格式描述
+    format: z.object({
+      type: z.literal('int16'),
+      // 数据点数量
+      length: z.number(),
+      // 缩放因子（可选）
+      scale: z.number().optional(),
+      // 偏移量（可选）
+      offset: z.number().optional(),
+    }),
+  }),
+  // 频谱数据摘要
+  summary: z.object({
+    // 峰值频率（Hz）
+    peakFrequency: z.number(),
+    // 峰值幅度（dB）
+    peakMagnitude: z.number(),
+    // 平均幅度（dB）
+    averageMagnitude: z.number(),
+    // 动态范围（dB）
+    dynamicRange: z.number(),
+    // 能量分布（可选）
+    energyDistribution: z.array(z.number()).optional(),
+  }).optional(),
 });
 
 // FT8频谱响应

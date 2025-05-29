@@ -9,6 +9,7 @@ import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
 import { SlotPackManager } from './slot/SlotPackManager.js';
 import { ConfigManager } from './config/config-manager.js';
+import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -27,13 +28,34 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private audioStreamManager: AudioStreamManager;
   private realDecodeQueue: WSJTXDecodeWorkQueue;
   private slotPackManager: SlotPackManager;
+  private spectrumScheduler: SpectrumScheduler;
+  
+  // 频谱分析配置常量
+  private static readonly SPECTRUM_CONFIG = {
+    ANALYSIS_INTERVAL_MS: 150,    // 100ms间隔进行频谱分析
+    FFT_SIZE: 4096,              // FFT大小
+    WINDOW_FUNCTION: 'hann' as const,
+    WORKER_POOL_SIZE: 1,
+    ENABLED: true,
+    TARGET_SAMPLE_RATE: 6400     // 目标采样率6.4kHz
+  };
   
   private constructor() {
     super();
     this.clockSource = new ClockSourceSystem();
     this.audioStreamManager = new AudioStreamManager();
-    this.realDecodeQueue = new WSJTXDecodeWorkQueue(4); // 4个并发工作线程
+    this.realDecodeQueue = new WSJTXDecodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
+    
+    // 初始化频谱调度器
+    this.spectrumScheduler = new SpectrumScheduler({
+      analysisInterval: DigitalRadioEngine.SPECTRUM_CONFIG.ANALYSIS_INTERVAL_MS,
+      fftSize: DigitalRadioEngine.SPECTRUM_CONFIG.FFT_SIZE,
+      windowFunction: DigitalRadioEngine.SPECTRUM_CONFIG.WINDOW_FUNCTION,
+      workerPoolSize: DigitalRadioEngine.SPECTRUM_CONFIG.WORKER_POOL_SIZE,
+      enabled: DigitalRadioEngine.SPECTRUM_CONFIG.ENABLED,
+      targetSampleRate: DigitalRadioEngine.SPECTRUM_CONFIG.TARGET_SAMPLE_RATE
+    });
   }
   
   /**
@@ -114,6 +136,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.emit('slotPackUpdated', slotPack);
     });
     
+    // 初始化频谱调度器
+    await this.spectrumScheduler.initialize(
+      this.audioStreamManager.getAudioProvider(),
+      48000 // 默认采样率，后续会从音频流管理器获取实际采样率
+    );
+    
+    // 监听频谱调度器事件
+    this.spectrumScheduler.on('spectrumReady', (spectrum) => {
+      // 发射频谱数据事件给WebSocket客户端
+      this.emit('spectrumData', spectrum);
+    });
+    
+    this.spectrumScheduler.on('error', (error) => {
+      console.error('📊 [时钟管理器] 频谱分析错误:', error);
+    });
+    
     console.log(`✅ [时钟管理器] 初始化完成，当前模式: ${this.currentMode.name}`);
   }
   
@@ -158,6 +196,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.log(`📡 [时钟管理器] 启动解码调度器`);
     }
     
+    // 启动频谱调度器
+    if (this.spectrumScheduler) {
+      this.spectrumScheduler.start();
+      console.log(`📊 [时钟管理器] 启动频谱分析调度器`);
+    }
+    
     this.isRunning = true;
     this.audioStarted = audioStarted;
     
@@ -195,6 +239,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       
       this.isRunning = false;
       this.audioStarted = false; // 重置音频状态
+      
+      // 停止频谱调度器
+      if (this.spectrumScheduler) {
+        this.spectrumScheduler.stop();
+        console.log(`🛑 [时钟管理器] 停止频谱分析调度器`);
+      }
       
       // 发射系统状态变化事件
       const status = this.getStatus();
@@ -313,6 +363,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     // 清理 SlotPackManager
     this.slotPackManager.cleanup();
+    
+    // 销毁频谱调度器
+    if (this.spectrumScheduler) {
+      await this.spectrumScheduler.destroy();
+      console.log('🗑️  [时钟管理器] 频谱调度器已销毁');
+    }
     
     if (this.slotClock) {
       this.slotClock.removeAllListeners();

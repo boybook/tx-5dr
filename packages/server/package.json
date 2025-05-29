@@ -24,6 +24,7 @@
     "@types/ws": "^8.18.1",
     "eventemitter3": "^5.0.1",
     "fastify": "^5.1.0",
+    "fft.js": "^4.0.4",
     "mic": "^2.1.2",
     "naudiodon2": "^2.5.0",
     "node-wav": "^0.0.2",

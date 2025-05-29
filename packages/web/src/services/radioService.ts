@@ -198,7 +198,7 @@ export class RadioService {
 
     // 监听频谱数据
     this.wsClient.onWSEvent('spectrumData', (spectrumData: any) => {
-      console.log('📊 频谱数据:', spectrumData);
+      // console.log('📊 频谱数据:', spectrumData);
       this.eventListeners.spectrumData?.(spectrumData);
     });
   }

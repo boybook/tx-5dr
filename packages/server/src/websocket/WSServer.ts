@@ -112,6 +112,10 @@ export class WSServer extends WSMessageHandler {
       this.broadcastSlotPackUpdated(slotPack);
     });
 
+    this.digitalRadioEngine.on('spectrumData', (spectrum) => {
+      this.broadcastSpectrumData(spectrum);
+    });
+
     this.digitalRadioEngine.on('decodeError', (errorInfo) => {
       this.broadcastDecodeError(errorInfo);
     });
@@ -275,7 +279,7 @@ export class WSServer extends WSMessageHandler {
    */
   broadcast(type: string, data?: any, id?: string): void {
     const activeConnections = this.getActiveConnections();
-    console.log(`📡 广播消息到 ${activeConnections.length} 个客户端: ${type}`);
+    // console.log(`📡 广播消息到 ${activeConnections.length} 个客户端: ${type}`);
     
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
