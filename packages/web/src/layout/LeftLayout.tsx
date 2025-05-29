@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { Button } from '@heroui/react';
 import { FT8Table, FT8Group, FT8Message } from '../components/FT8Table';
 import { parseFT8LocationInfo } from '@tx5dr/core';
-import { useRadio } from '../store/radioStore';
+import { useConnection, useRadioState, useSlotPacks } from '../store/radioStore';
 import type { SlotPack, FT8Frame } from '@tx5dr/contracts';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
 
 export const LeftLayout: React.FC = () => {
-  const { state, dispatch } = useRadio();
+  const connection = useConnection();
+  const radio = useRadioState();
+  const slotPacks = useSlotPacks();
   const [ft8Groups, setFt8Groups] = useState<FT8Group[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -25,7 +27,7 @@ export const LeftLayout: React.FC = () => {
   useEffect(() => {
     const groupsMap = new Map<string, { messages: FT8Message[], cycle: 'even' | 'odd' }>();
     
-    state.slotPacks.forEach(slotPack => {
+    slotPacks.state.slotPacks.forEach(slotPack => {
       slotPack.frames.forEach((frame: FT8Frame) => {
         const slotStartTime = new Date(slotPack.startMs);
         const utcSeconds = slotStartTime.toISOString().slice(11, 19);
@@ -77,11 +79,11 @@ export const LeftLayout: React.FC = () => {
       .sort((a, b) => a.time.localeCompare(b.time));
 
     setFt8Groups(groups);
-  }, [state.slotPacks]);
+  }, [slotPacks.state.slotPacks]);
 
   // 清空数据
   const handleClearData = () => {
-    dispatch({ type: 'CLEAR_DATA' });
+    slotPacks.dispatch({ type: 'CLEAR_DATA' });
   };
 
   // 格式化UTC时间
@@ -126,9 +128,9 @@ export const LeftLayout: React.FC = () => {
             <div className="text-default-400 mb-2 text-4xl">📡</div>
             <p className="text-default-500 mb-1">暂无FT8解码消息</p>
             <p className="text-default-400 text-sm">
-              {!state.isConnected 
+              {!connection.state.isConnected 
                 ? '请先连接到TX5DR服务器' 
-                : !state.isDecoding 
+                : !radio.state.isDecoding 
                   ? '请启动解码引擎' 
                   : '等待FT8信号...'}
             </p>

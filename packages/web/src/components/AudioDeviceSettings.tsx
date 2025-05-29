@@ -1,15 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Card, 
-  CardBody, 
-  CardHeader, 
   Button, 
   Select, 
   SelectItem,
-  Input,
   Divider,
   Spinner,
-  Chip
+  Chip,
+  Alert
 } from '@heroui/react';
 import { api } from '@tx5dr/core';
 import type { 
@@ -19,7 +16,11 @@ import type {
   AudioDeviceSettingsResponse 
 } from '@tx5dr/contracts';
 
-export function AudioDeviceSettings() {
+interface AudioDeviceSettingsProps {
+  onClose?: () => void;
+}
+
+export function AudioDeviceSettings({ onClose }: AudioDeviceSettingsProps) {
   // 状态管理
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
@@ -45,7 +46,7 @@ export function AudioDeviceSettings() {
       setLoading(true);
       setError(null);
 
-      // 并行获取设备列表和当前设置，直接调用API
+      // 并行获取设备列表和当前设置
       const [devicesResponse, settingsResponse] = await Promise.all([
         api.getAudioDevices(),
         api.getAudioSettings()
@@ -91,6 +92,11 @@ export function AudioDeviceSettings() {
       if (response.success) {
         setCurrentSettings(response.currentSettings);
         setSuccessMessage(response.message || '音频设备设置更新成功');
+        
+        // 3秒后自动关闭弹窗
+        setTimeout(() => {
+          onClose?.();
+        }, 2000);
       } else {
         setError('更新失败');
       }
@@ -130,263 +136,202 @@ export function AudioDeviceSettings() {
 
   if (loading) {
     return (
-      <Card>
-        <CardBody className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <Spinner size="lg" />
-            <p className="mt-4 text-default-500">正在加载音频设备...</p>
-          </div>
-        </CardBody>
-      </Card>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <Spinner size="lg" />
+          <p className="mt-4 text-default-500">正在加载音频设备...</p>
+        </div>
+      </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <h2 className="text-xl font-bold">🎤 音频设备设置</h2>
-        </CardHeader>
-      </Card>
-      
+      {/* 错误提示 */}
       {error && (
-        <Card>
-          <CardBody>
-            <div className="bg-danger-50 border border-danger-200 rounded-lg p-4">
-              <p className="text-danger-800 font-medium">错误: {error}</p>
-            </div>
-          </CardBody>
-        </Card>
+        <Alert color="danger" variant="flat" title="错误">
+          {error}
+        </Alert>
       )}
       
+      {/* 成功提示 */}
       {successMessage && (
-        <Card>
-          <CardBody>
-            <div className="bg-success-50 border border-success-200 rounded-lg p-4">
-              <p className="text-success-800 font-medium">{successMessage}</p>
-            </div>
-          </CardBody>
-        </Card>
+        <Alert color="success" variant="flat" title="成功">
+          {successMessage}
+        </Alert>
       )}
 
-      {/* 当前设置 */}
-      <Card>
-        <CardHeader>
-          <h3 className="text-lg font-semibold">当前设置</h3>
-        </CardHeader>
-        <CardBody>
-          <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-default-600">输入设备:</span>
-              <Chip color="primary" variant="flat">
-                {currentSettings.inputDeviceId 
-                  ? inputDevices.find(d => d.id === currentSettings.inputDeviceId)?.name || '未知设备'
-                  : '未设置'
-                }
-              </Chip>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-default-600">输出设备:</span>
-              <Chip color="primary" variant="flat">
-                {currentSettings.outputDeviceId 
-                  ? outputDevices.find(d => d.id === currentSettings.outputDeviceId)?.name || '未知设备'
-                  : '未设置'
-                }
-              </Chip>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-default-600">采样率:</span>
-              <span className="font-mono">{currentSettings.sampleRate} Hz</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-default-600">缓冲区大小:</span>
-              <span className="font-mono">{currentSettings.bufferSize} samples</span>
-            </div>
+      {/* 当前设置概览 */}
+      <div className="bg-default-50 rounded-lg p-4">
+        <h3 className="text-lg font-semibold mb-4">当前设置</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <div className="text-sm text-default-600">输入设备</div>
+            <Chip color="primary" variant="flat" className="w-full justify-start">
+              {currentSettings.inputDeviceId 
+                ? inputDevices.find(d => d.id === currentSettings.inputDeviceId)?.name || '未知设备'
+                : '未设置'
+              }
+            </Chip>
           </div>
-        </CardBody>
-      </Card>
+          <div className="space-y-2">
+            <div className="text-sm text-default-600">输出设备</div>
+            <Chip color="primary" variant="flat" className="w-full justify-start">
+              {currentSettings.outputDeviceId 
+                ? outputDevices.find(d => d.id === currentSettings.outputDeviceId)?.name || '未知设备'
+                : '未设置'
+              }
+            </Chip>
+          </div>
+          <div className="space-y-2">
+            <div className="text-sm text-default-600">采样率</div>
+            <div className="font-mono text-sm">{currentSettings.sampleRate} Hz</div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-sm text-default-600">缓冲区大小</div>
+            <div className="font-mono text-sm">{currentSettings.bufferSize} samples</div>
+          </div>
+        </div>
+      </div>
 
       {/* 设置表单 */}
-      <Card>
-        <CardHeader>
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="space-y-4">
           <h3 className="text-lg font-semibold">设备配置</h3>
-        </CardHeader>
-        <CardBody>
-          <form onSubmit={handleSubmit} className="space-y-6">
+          
+          <Select
+            label="音频输入设备"
+            placeholder="请选择输入设备"
+            selectedKeys={selectedInputDevice ? [selectedInputDevice] : []}
+            onSelectionChange={(keys) => {
+              const selected = Array.from(keys)[0] as string;
+              setSelectedInputDevice(selected || '');
+            }}
+            isDisabled={saving}
+            aria-label="选择音频输入设备"
+          >
+            {inputDevices.map((device) => (
+              <SelectItem 
+                key={device.id}
+                textValue={`${device.name} ${device.isDefault ? '(默认)' : ''}`}
+              >
+                <div className="flex flex-col">
+                  <span>{device.name} {device.isDefault ? '(默认)' : ''}</span>
+                  <span className="text-xs text-default-400">{device.channels}声道, {device.sampleRate}Hz</span>
+                </div>
+              </SelectItem>
+            ))}
+          </Select>
+
+          <Select
+            label="音频输出设备"
+            placeholder="请选择输出设备"
+            selectedKeys={selectedOutputDevice ? [selectedOutputDevice] : []}
+            onSelectionChange={(keys) => {
+              const selected = Array.from(keys)[0] as string;
+              setSelectedOutputDevice(selected || '');
+            }}
+            isDisabled={saving}
+            aria-label="选择音频输出设备"
+          >
+            {outputDevices.map((device) => (
+              <SelectItem 
+                key={device.id}
+                textValue={`${device.name} ${device.isDefault ? '(默认)' : ''}`}
+              >
+                <div className="flex flex-col">
+                  <span>{device.name} {device.isDefault ? '(默认)' : ''}</span>
+                  <span className="text-xs text-default-400">{device.channels}声道, {device.sampleRate}Hz</span>
+                </div>
+              </SelectItem>
+            ))}
+          </Select>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Select
-              label="音频输入设备"
-              placeholder="请选择输入设备"
-              selectedKeys={selectedInputDevice ? [selectedInputDevice] : []}
+              label="采样率 (Hz)"
+              selectedKeys={[sampleRate.toString()]}
               onSelectionChange={(keys) => {
                 const selected = Array.from(keys)[0] as string;
-                setSelectedInputDevice(selected || '');
+                setSampleRate(parseInt(selected));
               }}
               isDisabled={saving}
+              aria-label="选择采样率"
             >
-              {inputDevices.map((device) => (
-                <SelectItem 
-                  key={device.id}
-                  textValue={`${device.name} ${device.isDefault ? '(默认)' : ''} - ${device.channels}ch, ${device.sampleRate}Hz`}
-                >
-                  {device.name} {device.isDefault ? '(默认)' : ''} - {device.channels}ch, {device.sampleRate}Hz
-                </SelectItem>
-              ))}
+              <SelectItem key="8000" textValue="8,000 Hz">8,000 Hz</SelectItem>
+              <SelectItem key="16000" textValue="16,000 Hz">16,000 Hz</SelectItem>
+              <SelectItem key="22050" textValue="22,050 Hz">22,050 Hz</SelectItem>
+              <SelectItem key="44100" textValue="44,100 Hz">44,100 Hz</SelectItem>
+              <SelectItem key="48000" textValue="48,000 Hz">48,000 Hz</SelectItem>
+              <SelectItem key="96000" textValue="96,000 Hz">96,000 Hz</SelectItem>
             </Select>
 
             <Select
-              label="音频输出设备"
-              placeholder="请选择输出设备"
-              selectedKeys={selectedOutputDevice ? [selectedOutputDevice] : []}
+              label="缓冲区大小 (samples)"
+              selectedKeys={[bufferSize.toString()]}
               onSelectionChange={(keys) => {
                 const selected = Array.from(keys)[0] as string;
-                setSelectedOutputDevice(selected || '');
+                setBufferSize(parseInt(selected));
               }}
               isDisabled={saving}
+              aria-label="选择缓冲区大小"
             >
-              {outputDevices.map((device) => (
-                <SelectItem 
-                  key={device.id}
-                  textValue={`${device.name} ${device.isDefault ? '(默认)' : ''} - ${device.channels}ch, ${device.sampleRate}Hz`}
-                >
-                  {device.name} {device.isDefault ? '(默认)' : ''} - {device.channels}ch, {device.sampleRate}Hz
-                </SelectItem>
-              ))}
+              <SelectItem key="128" textValue="128">128</SelectItem>
+              <SelectItem key="256" textValue="256">256</SelectItem>
+              <SelectItem key="512" textValue="512">512</SelectItem>
+              <SelectItem key="1024" textValue="1,024">1,024</SelectItem>
+              <SelectItem key="2048" textValue="2,048">2,048</SelectItem>
+              <SelectItem key="4096" textValue="4,096">4,096</SelectItem>
             </Select>
+          </div>
+        </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Select
-                label="采样率 (Hz)"
-                selectedKeys={[sampleRate.toString()]}
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys)[0] as string;
-                  setSampleRate(parseInt(selected));
-                }}
-                isDisabled={saving}
-              >
-                <SelectItem key="8000" textValue="8,000 Hz">8,000 Hz</SelectItem>
-                <SelectItem key="16000" textValue="16,000 Hz">16,000 Hz</SelectItem>
-                <SelectItem key="22050" textValue="22,050 Hz">22,050 Hz</SelectItem>
-                <SelectItem key="44100" textValue="44,100 Hz">44,100 Hz</SelectItem>
-                <SelectItem key="48000" textValue="48,000 Hz">48,000 Hz</SelectItem>
-                <SelectItem key="96000" textValue="96,000 Hz">96,000 Hz</SelectItem>
-              </Select>
+        <Divider />
 
-              <Select
-                label="缓冲区大小 (samples)"
-                selectedKeys={[bufferSize.toString()]}
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys)[0] as string;
-                  setBufferSize(parseInt(selected));
-                }}
-                isDisabled={saving}
-              >
-                <SelectItem key="128" textValue="128">128</SelectItem>
-                <SelectItem key="256" textValue="256">256</SelectItem>
-                <SelectItem key="512" textValue="512">512</SelectItem>
-                <SelectItem key="1024" textValue="1,024">1,024</SelectItem>
-                <SelectItem key="2048" textValue="2,048">2,048</SelectItem>
-                <SelectItem key="4096" textValue="4,096">4,096</SelectItem>
-              </Select>
-            </div>
-
-            <Divider />
-
-            <div className="flex gap-3">
-              <Button 
-                type="submit"
-                color="primary"
-                isLoading={saving}
-                startContent={!saving ? "💾" : undefined}
-              >
-                {saving ? '保存中...' : '保存设置'}
-              </Button>
-              
-              <Button 
-                type="button"
-                color="default"
-                variant="bordered"
-                onPress={handleReset}
-                isLoading={saving}
-                startContent={!saving ? "🔄" : undefined}
-              >
-                {saving ? '重置中...' : '重置为默认'}
-              </Button>
-              
-              <Button 
-                type="button"
-                color="secondary"
-                variant="bordered"
-                onPress={loadAudioData}
-                isLoading={loading}
-                startContent={!loading ? "🔍" : undefined}
-              >
-                {loading ? '刷新中...' : '刷新设备列表'}
-              </Button>
-            </div>
-          </form>
-        </CardBody>
-      </Card>
-
-      {/* 设备列表 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <h3 className="text-lg font-semibold">可用输入设备</h3>
-          </CardHeader>
-          <CardBody>
-            <div className="space-y-2">
-              {inputDevices.length === 0 ? (
-                <p className="text-default-500">未找到输入设备</p>
-              ) : (
-                inputDevices.map((device) => (
-                  <div key={device.id} className="p-3 border border-divider rounded-lg">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="font-medium">{device.name}</p>
-                        <p className="text-sm text-default-500">
-                          {device.channels}声道, {device.sampleRate}Hz
-                        </p>
-                      </div>
-                      {device.isDefault && (
-                        <Chip size="sm" color="success" variant="flat">默认</Chip>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <h3 className="text-lg font-semibold">可用输出设备</h3>
-          </CardHeader>
-          <CardBody>
-            <div className="space-y-2">
-              {outputDevices.length === 0 ? (
-                <p className="text-default-500">未找到输出设备</p>
-              ) : (
-                outputDevices.map((device) => (
-                  <div key={device.id} className="p-3 border border-divider rounded-lg">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="font-medium">{device.name}</p>
-                        <p className="text-sm text-default-500">
-                          {device.channels}声道, {device.sampleRate}Hz
-                        </p>
-                      </div>
-                      {device.isDefault && (
-                        <Chip size="sm" color="success" variant="flat">默认</Chip>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardBody>
-        </Card>
-      </div>
+        {/* 操作按钮 */}
+        <div className="flex justify-end gap-3">
+          <Button 
+            type="button"
+            color="default"
+            variant="flat"
+            onPress={onClose || (() => {})}
+            isDisabled={saving}
+          >
+            取消
+          </Button>
+          
+          <Button 
+            type="button"
+            color="warning"
+            variant="flat"
+            onPress={handleReset}
+            isLoading={saving}
+            isDisabled={saving}
+          >
+            重置为默认
+          </Button>
+          
+          <Button 
+            type="button"
+            color="secondary"
+            variant="flat"
+            onPress={loadAudioData}
+            isLoading={loading}
+            isDisabled={saving}
+          >
+            刷新设备
+          </Button>
+          
+          <Button 
+            type="submit"
+            color="primary"
+            isLoading={saving}
+            isDisabled={saving}
+          >
+            保存设置
+          </Button>
+        </div>
+      </form>
     </div>
   );
 } 

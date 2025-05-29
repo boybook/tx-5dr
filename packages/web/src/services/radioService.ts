@@ -23,6 +23,23 @@ export class RadioService {
       heartbeatInterval: 30000
     });
     this.setupEventListeners();
+    
+    // 自动尝试连接
+    this.autoConnect();
+  }
+
+  /**
+   * 自动连接到服务器
+   */
+  private async autoConnect(): Promise<void> {
+    try {
+      console.log('🚀 RadioService 自动连接中...');
+      await this.connect();
+      console.log('✅ RadioService 自动连接成功');
+    } catch (error) {
+      console.warn('⚠️ RadioService 自动连接失败，将通过重连机制重试:', error);
+      // 不抛出错误，让WebSocket的自动重连机制处理
+    }
   }
 
   /**
@@ -134,7 +151,7 @@ export class RadioService {
       this.eventListeners.disconnected?.();
     });
 
-    this.wsClient.onWSEvent('connectionError', (error: Error) => {
+    this.wsClient.onWSEvent('error', (error: Error) => {
       console.error('🚨 WebSocket错误:', error);
       this.eventListeners.error?.(error);
     });
@@ -145,22 +162,13 @@ export class RadioService {
       this.eventListeners.slotPackUpdated?.(slotPack);
     });
 
-    // 监听解码引擎状态变化
-    this.wsClient.onWSEvent('clockStarted', () => {
-      this._isDecoding = true;
-      console.log('🚀 解码引擎已启动');
-      this.eventListeners.clockStarted?.();
-    });
-
-    this.wsClient.onWSEvent('clockStopped', () => {
-      this._isDecoding = false;
-      console.log('⏹️ 解码引擎已停止');
-      this.eventListeners.clockStopped?.();
-    });
-
-    // 监听系统状态
+    // 监听系统状态变化（包含时钟启动/停止状态）
     this.wsClient.onWSEvent('systemStatus', (status: any) => {
       console.log('📊 系统状态更新:', status);
+      
+      // 更新内部解码状态
+      this._isDecoding = status.isDecoding || false;
+      
       this.eventListeners.systemStatus?.(status);
     });
 
@@ -170,27 +178,28 @@ export class RadioService {
       this.eventListeners.decodeError?.(errorInfo);
     });
 
-    // 监听命令结果
-    this.wsClient.onWSEvent('commandResult', (result: any) => {
-      this.eventListeners.commandResult?.(result);
-    });
-
     // 监听模式变化
     this.wsClient.onWSEvent('modeChanged', (mode: any) => {
+      console.log('🔄 模式变化:', mode);
       this.eventListeners.modeChanged?.(mode);
     });
 
-    // 监听其他事件
+    // 监听时隙开始事件
     this.wsClient.onWSEvent('slotStart', (slotInfo: any) => {
+      console.log('🎯 时隙开始:', slotInfo);
       this.eventListeners.slotStart?.(slotInfo);
     });
 
+    // 监听子窗口事件
     this.wsClient.onWSEvent('subWindow', (windowInfo: any) => {
+      console.log('🔍 子窗口:', windowInfo);
       this.eventListeners.subWindow?.(windowInfo);
     });
 
-    this.wsClient.onWSEvent('error', (error: any) => {
-      this.eventListeners.error?.(new Error(error.message || String(error)));
+    // 监听频谱数据
+    this.wsClient.onWSEvent('spectrumData', (spectrumData: any) => {
+      console.log('📊 频谱数据:', spectrumData);
+      this.eventListeners.spectrumData?.(spectrumData);
     });
   }
 } 

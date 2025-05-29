@@ -35,7 +35,7 @@ export const FT8FrameSchema = z.object({
 export type FT8Frame = z.infer<typeof FT8FrameSchema>;
 
 /**
- * 解码请求
+ * 解码请求，用于SlotScheduler内部
  */
 export const DecodeRequestSchema = z.object({
   /** 关联的时隙ID */
@@ -53,7 +53,7 @@ export const DecodeRequestSchema = z.object({
 export type DecodeRequest = z.infer<typeof DecodeRequestSchema>;
 
 /**
- * 解码结果
+ * 解码结果，用于SlotScheduler内部
  */
 export const DecodeResultSchema = z.object({
   /** 关联的时隙ID */

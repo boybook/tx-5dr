@@ -1,21 +1,11 @@
 import { WSEventEmitter } from './WSEventEmitter.js';
-import type { WSEventMap } from './WSEventEmitter.js';
+import { WSMessageType } from '@tx5dr/contracts';
 
 /**
  * WebSocket消息处理器
  * 负责消息的序列化、反序列化、验证和路由
  */
 export class WSMessageHandler extends WSEventEmitter {
-  /**
-   * 已知的WebSocket事件类型集合
-   * 从WSEventMap中提取，用于运行时类型检查
-   */
-  private static readonly KNOWN_EVENT_TYPES = new Set<keyof WSEventMap>([
-    'modeChanged', 'clockStarted', 'clockStopped', 'slotStart', 'subWindow',
-    'slotPackUpdated', 'decodeError', 'systemStatus', 'commandResult',
-    'welcome', 'pong', 'error', 'connected', 'disconnected', 'connectionError'
-  ]);
-
   /**
    * 处理接收到的原始消息
    * @param rawMessage 原始消息字符串
@@ -30,11 +20,7 @@ export class WSMessageHandler extends WSEventEmitter {
       }
     } catch (error) {
       console.error('解析WebSocket消息失败:', error);
-      this.emitWSEvent('error', {
-        message: '消息格式错误',
-        code: 'PARSE_ERROR',
-        details: { rawMessage, error: error instanceof Error ? error.message : String(error) }
-      });
+      this.emitWSEvent('error', new Error(`消息格式错误: ${error instanceof Error ? error.message : String(error)}`));
     }
   }
 
@@ -50,11 +36,7 @@ export class WSMessageHandler extends WSEventEmitter {
     }
     
     console.error('WebSocket消息验证失败: 缺少必要字段');
-    this.emitWSEvent('error', {
-      message: '消息验证失败',
-      code: 'VALIDATION_ERROR',
-      details: { data }
-    });
+    this.emitWSEvent('error', new Error('消息验证失败'));
     return null;
   }
 
@@ -64,25 +46,47 @@ export class WSMessageHandler extends WSEventEmitter {
    */
   private handleMessage(message: any): void {
     // 发射原始消息事件（用于调试和扩展）
-    this.emitWSEvent('rawMessage', message);
+    this.emitRawMessage(message);
 
     const messageType = message.type;
     
-    if (WSMessageHandler.KNOWN_EVENT_TYPES.has(messageType)) {
-      // 动态发射事件，根据消息是否有data决定参数
-      if (message.data !== undefined) {
-        this.emitWSEvent(messageType as keyof WSEventMap, message.data);
-      } else {
-        this.emitWSEvent(messageType as keyof WSEventMap);
-      }
+    // 检查是否是已知的消息类型
+    if (Object.values(WSMessageType).includes(messageType)) {
+      // 根据消息类型分发事件
+      this.dispatchMessageEvent(messageType, message);
     } else {
       console.warn('未知的WebSocket消息类型:', messageType);
-      this.emitWSEvent('error', {
-        message: '未知的消息类型',
-        code: 'UNKNOWN_MESSAGE_TYPE',
-        details: { message }
-      });
+      this.emitWSEvent('error', new Error(`未知的消息类型: ${messageType}`));
     }
+  }
+
+  /**
+   * 分发消息事件
+   * @param messageType 消息类型
+   * @param message 消息对象
+   */
+  private dispatchMessageEvent(messageType: string, message: any): void {
+    // 定义消息类型到事件名的映射
+    const messageTypeToEventMap: Record<string, string> = {
+      [WSMessageType.MODE_CHANGED]: 'modeChanged',
+      [WSMessageType.SLOT_START]: 'slotStart',
+      [WSMessageType.SUB_WINDOW]: 'subWindow',
+      [WSMessageType.SLOT_PACK_UPDATED]: 'slotPackUpdated',
+      [WSMessageType.SPECTRUM_DATA]: 'spectrumData',
+      [WSMessageType.DECODE_ERROR]: 'decodeError',
+      [WSMessageType.SYSTEM_STATUS]: 'systemStatus',
+    };
+
+    // 检查是否有对应的事件映射
+    const eventName = messageTypeToEventMap[messageType];
+    if (eventName) {
+      // 动态发射事件
+      this.emitWSEvent(eventName as any, message.data);
+    } else if (messageType === WSMessageType.ERROR) {
+      // 特殊处理错误消息
+      this.emitWSEvent('error', new Error(message.data?.message || 'Unknown error'));
+    }
+    // 对于其他消息类型（如ping/pong等），不需要特殊处理
   }
 
   /**
@@ -114,8 +118,6 @@ export class WSMessageHandler extends WSEventEmitter {
    */
   serializeMessage(message: any): string {
     try {
-      // 发射原始发送事件（用于调试和扩展）
-      this.emitWSEvent('rawSend', message);
       return JSON.stringify(message);
     } catch (error) {
       console.error('序列化WebSocket消息失败:', error);

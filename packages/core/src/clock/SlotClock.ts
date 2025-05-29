@@ -14,7 +14,10 @@ export interface SlotClockEvents {
 export class SlotClock extends EventEmitter<SlotClockEvents> {
   private clockSource: ClockSource;
   private mode: ModeDescriptor;
-  private isRunning = false;
+  private _isRunning = false;
+  public get isRunning() {
+    return this._isRunning;
+  }
   private timerId: NodeJS.Timeout | undefined;
   private lastSlotId = 0;
   
@@ -32,7 +35,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
       return;
     }
     
-    this.isRunning = true;
+    this._isRunning = true;
     this.scheduleNextSlot();
   }
   
@@ -40,7 +43,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
    * 停止时隙时钟
    */
   stop(): void {
-    this.isRunning = false;
+    this._isRunning = false;
     if (this.timerId) {
       clearTimeout(this.timerId);
       this.timerId = undefined;

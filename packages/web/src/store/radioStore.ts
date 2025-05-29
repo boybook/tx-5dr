@@ -2,48 +2,103 @@ import React, { createContext, useContext, useReducer, useEffect, ReactNode } fr
 import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 
-// 状态接口定义
-export interface RadioState {
-  slotPacks: SlotPack[];
+// ===== 连接状态管理 =====
+export interface ConnectionState {
   isConnected: boolean;
-  isDecoding: boolean;
-  totalMessages: number;
-  lastUpdateTime: Date | null;
   radioService: RadioService | null;
+}
+
+export type ConnectionAction = 
+  | { type: 'connected' }
+  | { type: 'disconnected' }
+  | { type: 'SET_RADIO_SERVICE'; payload: RadioService };
+
+const initialConnectionState: ConnectionState = {
+  isConnected: false,
+  radioService: null
+};
+
+function connectionReducer(state: ConnectionState, action: ConnectionAction): ConnectionState {
+  switch (action.type) {
+    case 'connected':
+      return { ...state, isConnected: true };
+    case 'disconnected':
+      return { ...state, isConnected: false };
+    case 'SET_RADIO_SERVICE':
+      return { ...state, radioService: action.payload };
+    default:
+      return state;
+  }
+}
+
+// ===== 电台状态管理 =====
+export interface RadioState {
+  isDecoding: boolean;
   currentMode: ModeDescriptor | null;
   systemStatus: any;
 }
 
-// 动作类型定义 - 直接对应WebSocket事件
 export type RadioAction = 
-  // WebSocket事件对应的actions
-  | { type: 'slotPackUpdated'; payload: SlotPack }
-  | { type: 'connected' }
-  | { type: 'disconnected' }
-  | { type: 'clockStarted' }
-  | { type: 'clockStopped' }
   | { type: 'modeChanged'; payload: ModeDescriptor }
   | { type: 'systemStatus'; payload: any }
   | { type: 'decodeError'; payload: any }
-  | { type: 'error'; payload: Error }
-  // 内部管理actions
-  | { type: 'SET_RADIO_SERVICE'; payload: RadioService }
-  | { type: 'CLEAR_DATA' };
+  | { type: 'error'; payload: Error };
 
-// 初始状态
-const initialState: RadioState = {
-  slotPacks: [],
-  isConnected: false,
+const initialRadioState: RadioState = {
   isDecoding: false,
-  totalMessages: 0,
-  lastUpdateTime: null,
-  radioService: null,
   currentMode: null,
   systemStatus: null
 };
 
-// Reducer函数
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
+  switch (action.type) {
+    case 'modeChanged':
+      return {
+        ...state,
+        currentMode: action.payload
+      };
+    
+    case 'systemStatus':
+      return {
+        ...state,
+        systemStatus: action.payload,
+        // 从systemStatus中提取isDecoding状态
+        isDecoding: action.payload?.isDecoding || false,
+        // 从systemStatus中提取当前模式
+        currentMode: action.payload?.currentMode || state.currentMode
+      };
+    
+    case 'decodeError':
+      console.warn('解码错误:', action.payload);
+      return state;
+    
+    case 'error':
+      console.error('RadioService错误:', action.payload);
+      return state;
+    
+    default:
+      return state;
+  }
+}
+
+// ===== 时隙包数据管理 =====
+export interface SlotPacksState {
+  slotPacks: SlotPack[];
+  totalMessages: number;
+  lastUpdateTime: Date | null;
+}
+
+export type SlotPacksAction = 
+  | { type: 'slotPackUpdated'; payload: SlotPack }
+  | { type: 'CLEAR_DATA' };
+
+const initialSlotPacksState: SlotPacksState = {
+  slotPacks: [],
+  totalMessages: 0,
+  lastUpdateTime: null
+};
+
+function slotPacksReducer(state: SlotPacksState, action: SlotPacksAction): SlotPacksState {
   switch (action.type) {
     case 'slotPackUpdated': {
       const newSlotPack = action.payload;
@@ -76,51 +131,6 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       };
     }
     
-    case 'connected':
-      return {
-        ...state,
-        isConnected: true
-      };
-    
-    case 'disconnected':
-      return {
-        ...state,
-        isConnected: false,
-        isDecoding: false
-      };
-    
-    case 'clockStarted':
-      return {
-        ...state,
-        isDecoding: true
-      };
-    
-    case 'clockStopped':
-      return {
-        ...state,
-        isDecoding: false
-      };
-    
-    case 'modeChanged':
-      return {
-        ...state,
-        currentMode: action.payload
-      };
-    
-    case 'systemStatus':
-      return {
-        ...state,
-        systemStatus: action.payload
-      };
-    
-    case 'decodeError':
-      console.warn('解码错误:', action.payload);
-      return state;
-    
-    case 'error':
-      console.error('RadioService错误:', action.payload);
-      return state;
-    
     case 'CLEAR_DATA':
       return {
         ...state,
@@ -129,58 +139,69 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         lastUpdateTime: null
       };
     
-    case 'SET_RADIO_SERVICE':
-      return {
-        ...state,
-        radioService: action.payload
-      };
-    
     default:
       return state;
   }
 }
 
-// Context创建
+// ===== 组合状态和Context =====
+export interface CombinedState {
+  connection: ConnectionState;
+  radio: RadioState;
+  slotPacks: SlotPacksState;
+}
+
+export interface CombinedDispatch {
+  connectionDispatch: React.Dispatch<ConnectionAction>;
+  radioDispatch: React.Dispatch<RadioAction>;
+  slotPacksDispatch: React.Dispatch<SlotPacksAction>;
+}
+
 const RadioContext = createContext<{
-  state: RadioState;
-  dispatch: React.Dispatch<RadioAction>;
+  state: CombinedState;
+  dispatch: CombinedDispatch;
 } | undefined>(undefined);
 
 // Provider组件
 export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [state, dispatch] = useReducer(radioReducer, initialState);
+  const [connectionState, connectionDispatch] = useReducer(connectionReducer, initialConnectionState);
+  const [radioState, radioDispatch] = useReducer(radioReducer, initialRadioState);
+  const [slotPacksState, slotPacksDispatch] = useReducer(slotPacksReducer, initialSlotPacksState);
 
   // 初始化RadioService
   useEffect(() => {
     const radioService = new RadioService();
     
-    // 设置事件监听器 - 直接映射WebSocket事件到Redux actions
-    const eventMappings: Array<{
-      event: keyof DigitalRadioEngineEvents;
-      actionType: RadioAction['type'];
-    }> = [
-      { event: 'slotPackUpdated', actionType: 'slotPackUpdated' },
-      { event: 'connected', actionType: 'connected' },
-      { event: 'disconnected', actionType: 'disconnected' },
-      { event: 'clockStarted', actionType: 'clockStarted' },
-      { event: 'clockStopped', actionType: 'clockStopped' },
-      { event: 'modeChanged', actionType: 'modeChanged' },
-      { event: 'systemStatus', actionType: 'systemStatus' },
-      { event: 'decodeError', actionType: 'decodeError' },
-      { event: 'error', actionType: 'error' }
-    ];
-
-    eventMappings.forEach(({ event, actionType }) => {
-      radioService.on(event, (payload?: any) => {
-        if (payload !== undefined) {
-          dispatch({ type: actionType, payload } as RadioAction);
-        } else {
-          dispatch({ type: actionType } as RadioAction);
-        }
-      });
+    // 设置事件监听器 - 分发到不同的reducer
+    radioService.on('connected', () => {
+      connectionDispatch({ type: 'connected' });
     });
 
-    dispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });
+    radioService.on('disconnected', () => {
+      connectionDispatch({ type: 'disconnected' });
+    });
+
+    radioService.on('modeChanged', (mode: ModeDescriptor) => {
+      radioDispatch({ type: 'modeChanged', payload: mode });
+    });
+
+    radioService.on('systemStatus', (status: any) => {
+      radioDispatch({ type: 'systemStatus', payload: status });
+    });
+
+    radioService.on('decodeError', (errorInfo: any) => {
+      radioDispatch({ type: 'decodeError', payload: errorInfo });
+    });
+
+    radioService.on('error', (error: Error) => {
+      radioDispatch({ type: 'error', payload: error });
+    });
+
+    radioService.on('slotPackUpdated', (slotPack: SlotPack) => {
+      slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });
+    });
+
+    connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });
 
     // 清理函数
     return () => {
@@ -188,9 +209,21 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
   }, []);
 
+  const combinedState: CombinedState = {
+    connection: connectionState,
+    radio: radioState,
+    slotPacks: slotPacksState
+  };
+
+  const combinedDispatch: CombinedDispatch = {
+    connectionDispatch,
+    radioDispatch,
+    slotPacksDispatch
+  };
+
   return React.createElement(
     RadioContext.Provider,
-    { value: { state, dispatch } },
+    { value: { state: combinedState, dispatch: combinedDispatch } },
     children
   );
 };
@@ -202,4 +235,29 @@ export const useRadio = () => {
     throw new Error('useRadio must be used within a RadioProvider');
   }
   return context;
+};
+
+// 便捷的单独hooks
+export const useConnection = () => {
+  const { state, dispatch } = useRadio();
+  return {
+    state: state.connection,
+    dispatch: dispatch.connectionDispatch
+  };
+};
+
+export const useRadioState = () => {
+  const { state, dispatch } = useRadio();
+  return {
+    state: state.radio,
+    dispatch: dispatch.radioDispatch
+  };
+};
+
+export const useSlotPacks = () => {
+  const { state, dispatch } = useRadio();
+  return {
+    state: state.slotPacks,
+    dispatch: dispatch.slotPacksDispatch
+  };
 }; 

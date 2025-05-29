@@ -2,55 +2,21 @@ import { EventEmitter } from 'eventemitter3';
 import type { 
   WSMessage, 
   WSMessageType,
-  ModeDescriptor,
-  SlotPack,
-  SystemStatus,
-  SlotInfo,
-  SubWindowInfo,
-  DecodeErrorInfo,
-  CommandResult
+  DigitalRadioEngineEvents
 } from '@tx5dr/contracts';
-
-/**
- * WebSocket事件映射接口
- * 定义了所有可能的WebSocket事件及其数据类型
- */
-export interface WSEventMap {
-  // 服务端到客户端事件
-  'modeChanged': [mode: ModeDescriptor];
-  'clockStarted': [];
-  'clockStopped': [];
-  'slotStart': [slotInfo: SlotInfo];
-  'subWindow': [windowInfo: SubWindowInfo];
-  'slotPackUpdated': [slotPack: SlotPack];
-  'decodeError': [errorInfo: DecodeErrorInfo];
-  'systemStatus': [status: SystemStatus];
-  'commandResult': [result: CommandResult];
-  'welcome': [data: { message: string; serverVersion?: string }];
-  'pong': [];
-  'error': [error: { message: string; code?: string; details?: any }];
-  
-  // 连接状态事件
-  'connected': [];
-  'disconnected': [];
-  'connectionError': [error: Error];
-  
-  // 原始消息事件（用于调试和扩展）
-  'rawMessage': [message: WSMessage];
-  'rawSend': [message: WSMessage];
-}
 
 /**
  * WebSocket事件发射器基类
  * 提供类型安全的事件发射和监听功能
+ * 基于contracts中定义的DigitalRadioEngineEvents接口
  */
 export class WSEventEmitter extends EventEmitter {
   /**
    * 发射WebSocket事件
    */
-  emitWSEvent<K extends keyof WSEventMap>(
+  emitWSEvent<K extends keyof DigitalRadioEngineEvents>(
     event: K,
-    ...args: WSEventMap[K]
+    ...args: Parameters<DigitalRadioEngineEvents[K]>
   ): boolean {
     return this.emit(event, ...args);
   }
@@ -58,9 +24,9 @@ export class WSEventEmitter extends EventEmitter {
   /**
    * 监听WebSocket事件
    */
-  onWSEvent<K extends keyof WSEventMap>(
+  onWSEvent<K extends keyof DigitalRadioEngineEvents>(
     event: K,
-    listener: (...args: WSEventMap[K]) => void
+    listener: DigitalRadioEngineEvents[K]
   ): this {
     return this.on(event, listener);
   }
@@ -68,9 +34,9 @@ export class WSEventEmitter extends EventEmitter {
   /**
    * 移除WebSocket事件监听器
    */
-  offWSEvent<K extends keyof WSEventMap>(
+  offWSEvent<K extends keyof DigitalRadioEngineEvents>(
     event: K,
-    listener?: (...args: WSEventMap[K]) => void
+    listener?: DigitalRadioEngineEvents[K]
   ): this {
     return this.off(event, listener);
   }
@@ -78,10 +44,24 @@ export class WSEventEmitter extends EventEmitter {
   /**
    * 一次性监听WebSocket事件
    */
-  onceWSEvent<K extends keyof WSEventMap>(
+  onceWSEvent<K extends keyof DigitalRadioEngineEvents>(
     event: K,
-    listener: (...args: WSEventMap[K]) => void
+    listener: DigitalRadioEngineEvents[K]
   ): this {
     return this.once(event, listener);
+  }
+
+  /**
+   * 发射原始WebSocket消息事件（用于内部处理）
+   */
+  emitRawMessage(message: WSMessage): boolean {
+    return this.emit('rawMessage', message);
+  }
+
+  /**
+   * 监听原始WebSocket消息事件（用于内部处理）
+   */
+  onRawMessage(listener: (message: WSMessage) => void): this {
+    return this.on('rawMessage', listener);
   }
 } 

@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button} from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown } from '@fortawesome/free-solid-svg-icons';
-import { useRadio } from '../store/radioStore';
+import { useConnection, useRadioState } from '../store/radioStore';
 
 const frequencies = [
   { key: "50313", label: "50.313MHz" }
@@ -20,7 +20,8 @@ export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
 };
 
 export const RadioControl: React.FC = () => {
-  const { state, dispatch } = useRadio();
+  const connection = useConnection();
+  const radio = useRadioState();
   const [isConnecting, setIsConnecting] = React.useState(false);
   
   // 本地UI状态管理
@@ -31,17 +32,17 @@ export const RadioControl: React.FC = () => {
   // 添加调试信息
   React.useEffect(() => {
     console.log('🔍 RadioControl状态更新:', {
-      isConnected: state.isConnected,
-      isDecoding: state.isDecoding,
-      hasRadioService: !!state.radioService,
+      isConnected: connection.state.isConnected,
+      isDecoding: radio.state.isDecoding,
+      hasRadioService: !!connection.state.radioService,
       isListenLoading,
       pendingListenState
     });
-  }, [state.isConnected, state.isDecoding, state.radioService, isListenLoading, pendingListenState]);
+  }, [connection.state.isConnected, radio.state.isDecoding, connection.state.radioService, isListenLoading, pendingListenState]);
 
   // 监听WebSocket状态变化，清除loading状态
   React.useEffect(() => {
-    if (pendingListenState !== null && state.isDecoding === pendingListenState) {
+    if (pendingListenState !== null && radio.state.isDecoding === pendingListenState) {
       // 状态已同步，清除loading
       console.log('✅ 监听状态已同步，清除loading状态');
       setIsListenLoading(false);
@@ -53,7 +54,7 @@ export const RadioControl: React.FC = () => {
         timeoutRef.current = null;
       }
     }
-  }, [state.isDecoding, pendingListenState]);
+  }, [radio.state.isDecoding, pendingListenState]);
 
   // 组件卸载时清理定时器
   React.useEffect(() => {
@@ -66,7 +67,7 @@ export const RadioControl: React.FC = () => {
 
   // 连接到服务器
   const handleConnect = async () => {
-    if (!state.radioService) {
+    if (!connection.state.radioService) {
       console.warn('⚠️ RadioService未初始化');
       return;
     }
@@ -74,7 +75,7 @@ export const RadioControl: React.FC = () => {
     setIsConnecting(true);
     try {
       console.log('🔗 开始连接到服务器...');
-      await state.radioService.connect();
+      await connection.state.radioService.connect();
       console.log('✅ 连接成功');
     } catch (error) {
       console.error('❌ 连接失败:', error);
@@ -85,12 +86,12 @@ export const RadioControl: React.FC = () => {
 
   // 监听开关控制 - 优雅的loading状态管理
   const handleListenToggle = (isSelected: boolean) => {
-    if (!state.radioService) {
+    if (!connection.state.radioService) {
       console.warn('⚠️ RadioService未初始化，无法切换监听状态');
       return;
     }
 
-    if (!state.isConnected) {
+    if (!connection.state.isConnected) {
       console.warn('⚠️ 未连接到服务器，无法切换监听状态');
       return;
     }
@@ -116,9 +117,9 @@ export const RadioControl: React.FC = () => {
     
     // 发送命令
     if (isSelected) {
-      state.radioService.startDecoding();
+      connection.state.radioService.startDecoding();
     } else {
-      state.radioService.stopDecoding();
+      connection.state.radioService.stopDecoding();
     }
   };
 
@@ -127,7 +128,7 @@ export const RadioControl: React.FC = () => {
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-0">
-          {state.isConnected ? (
+          {connection.state.isConnected ? (
             <span className="text-sm text-default-400">已连接电台 IC-705</span>
           ) : (
             <div className="flex items-center gap-2">
@@ -170,13 +171,14 @@ export const RadioControl: React.FC = () => {
             variant="flat"
             size="md"
             radius="md"
+            aria-label="选择频率"
             classNames={{
               trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
               value: "font-bold text-lg",
               innerWrapper: "shadow-none",
               mainWrapper: "shadow-none"
             }}
-            isDisabled={!state.isConnected}
+            isDisabled={!connection.state.isConnected}
           >
             {frequencies.map((frequency) => (
               <SelectItem key={frequency.key} textValue={frequency.label}>
@@ -194,13 +196,14 @@ export const RadioControl: React.FC = () => {
             variant="flat"
             size="md"
             radius="md"
+            aria-label="选择通联模式"
             classNames={{
               trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
               value: "font-bold text-lg",
               innerWrapper: "shadow-none",
               mainWrapper: "shadow-none"
             }}
-            isDisabled={!state.isConnected}
+            isDisabled={!connection.state.isConnected}
           >
             {modes.map((format) => (
               <SelectItem key={format.key} textValue={format.label}>
@@ -217,11 +220,11 @@ export const RadioControl: React.FC = () => {
               监听
             </span>
             <Switch 
-              isSelected={state.isDecoding} 
+              isSelected={radio.state.isDecoding} 
               onValueChange={handleListenToggle}
               size="sm"
               color="primary"
-              isDisabled={!state.isConnected || isListenLoading}
+              isDisabled={!connection.state.isConnected || isListenLoading}
               aria-label="切换监听状态"
               className={isListenLoading ? 'opacity-50 pointer-events-none' : ''}
             />

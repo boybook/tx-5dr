@@ -1,3 +1,4 @@
+import { WSMessageType } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 
 /**
@@ -75,7 +76,7 @@ export class WSClient extends WSMessageHandler {
         this.ws.onerror = (error) => {
           console.error('❌ WebSocket错误:', error);
           this.isConnecting = false;
-          this.emitWSEvent('connectionError', new Error('WebSocket连接错误'));
+          this.emitWSEvent('error', new Error('WebSocket连接错误'));
           reject(new Error('WebSocket连接失败'));
         };
 
@@ -116,7 +117,7 @@ export class WSClient extends WSMessageHandler {
    */
   startEngine(): void {
     console.log('📤 WSClient.startEngine() - 发送startEngine命令');
-    this.send('startEngine');
+    this.send(WSMessageType.START_ENGINE);
   }
 
   /**
@@ -124,21 +125,21 @@ export class WSClient extends WSMessageHandler {
    */
   stopEngine(): void {
     console.log('📤 WSClient.stopEngine() - 发送stopEngine命令');
-    this.send('stopEngine');
+    this.send(WSMessageType.STOP_ENGINE);
   }
 
   /**
    * 获取系统状态
    */
   getStatus(): void {
-    this.send('getStatus');
+    this.send(WSMessageType.GET_STATUS);
   }
 
   /**
    * 设置模式
    */
   setMode(mode: any): void {
-    this.send('setMode', { mode });
+    this.send(WSMessageType.SET_MODE, { mode });
   }
 
   /**
@@ -146,20 +147,6 @@ export class WSClient extends WSMessageHandler {
    */
   ping(): void {
     this.send('ping');
-  }
-
-  /**
-   * 订阅频道
-   */
-  subscribe(channels: string[]): void {
-    this.send('subscribe', { channels });
-  }
-
-  /**
-   * 取消订阅频道
-   */
-  unsubscribe(channels: string[]): void {
-    this.send('unsubscribe', { channels });
   }
 
   /**

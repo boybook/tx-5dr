@@ -3,22 +3,12 @@ import {
   SlotScheduler, 
   ClockSourceSystem,
 } from '@tx5dr/core';
-import { MODES, type ModeDescriptor, type SlotPack } from '@tx5dr/contracts';
+import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
 import { SlotPackManager } from './slot/SlotPackManager.js';
 import { ConfigManager } from './config/config-manager.js';
-
-export interface DigitalRadioEngineEvents {
-  'modeChanged': (mode: ModeDescriptor) => void;
-  'clockStarted': () => void;
-  'clockStopped': () => void;
-  'slotStart': (slotInfo: any) => void;
-  'subWindow': (windowInfo: any) => void;
-  'slotPackUpdated': (slotPack: SlotPack) => void;
-  'decodeError': (errorInfo: any) => void;
-}
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -170,7 +160,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     this.isRunning = true;
     this.audioStarted = audioStarted;
-    this.emit('clockStarted');
+    
+    // 发射系统状态变化事件
+    const status = this.getStatus();
+    this.emit('systemStatus', status);
   }
   
   /**
@@ -202,7 +195,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       
       this.isRunning = false;
       this.audioStarted = false; // 重置音频状态
-      this.emit('clockStopped');
+      
+      // 发射系统状态变化事件
+      const status = this.getStatus();
+      this.emit('systemStatus', status);
     }
   }
   
@@ -271,6 +267,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   getStatus() {
     return {
       isRunning: this.isRunning,
+      isDecoding: this.slotClock?.isRunning ?? false,
       currentMode: this.currentMode,
       currentTime: this.clockSource.now(),
       nextSlotIn: 0, // 简化实现，暂时返回 0

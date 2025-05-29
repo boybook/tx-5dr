@@ -10,23 +10,25 @@ import {
   Select,
   SelectItem
 } from '@heroui/react';
-import { useRadio } from '../store/radioStore';
+import { useSlotPacks } from '../store/radioStore';
 import { RadioControl } from '../components/RadioControl';
+import { SettingsModal } from '../components/SettingsModal';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog } from '@fortawesome/free-solid-svg-icons';
 
 export const RightLayout: React.FC = () => {
-  const { state } = useRadio();
+  const slotPacks = useSlotPacks();
   const [logs, setLogs] = useState<string[]>([]);
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // 监听状态变化，生成日志
   useEffect(() => {
-    if (state.lastUpdateTime) {
-      const newLog = `${state.lastUpdateTime.toLocaleTimeString()} - 接收到新的FT8数据包`;
+    if (slotPacks.state.lastUpdateTime) {
+      const newLog = `${slotPacks.state.lastUpdateTime.toLocaleTimeString()} - 接收到新的FT8数据包`;
       setLogs(prev => [...prev.slice(-19), newLog]); // 保持最新20条日志
     }
-  }, [state.lastUpdateTime]);
+  }, [slotPacks.state.lastUpdateTime]);
 
   // 清空日志
   const handleClearLogs = () => {
@@ -40,6 +42,16 @@ export const RightLayout: React.FC = () => {
   const handleModeChange = (keys: any) => {
     const selectedKey = Array.from(keys)[0] as string;
     setSelectedMode(selectedKey);
+  };
+
+  // 打开设置弹窗
+  const handleOpenSettings = () => {
+    setIsSettingsOpen(true);
+  };
+
+  // 关闭设置弹窗
+  const handleCloseSettings = () => {
+    setIsSettingsOpen(false);
   };
 
   return (
@@ -58,6 +70,7 @@ export const RightLayout: React.FC = () => {
             size="sm"
             radius="md"
             className="w-[110px] h-6"
+            aria-label="选择自动程序模式"
             classNames={{
               trigger: `${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-gray-100 select-manual-mode'} rounded-md px-2 h-6 min-h-6 max-h-6 text-xs font-mono text-default-400 leading-none border-0 shadow-none transition-colors duration-200 !py-0`,
               value: "text-xs font-mono text-default-400",
@@ -98,7 +111,7 @@ export const RightLayout: React.FC = () => {
             BG5DRB
           </Button>
           <Button
-            onPress={() => {}}
+            onPress={handleOpenSettings}
             isIconOnly
             variant="light"
             size="sm"
@@ -119,7 +132,7 @@ export const RightLayout: React.FC = () => {
               <h3 className="text-lg font-semibold">系统日志</h3>
               <div className="flex items-center gap-2">
                 <Badge content={logs.length} color="primary" size="sm" aria-label={`${logs.length}条系统日志`}>
-                  <span></span>
+                  <div className="w-4 h-4"></div>
                 </Badge>
                 <Button 
                   size="sm" 
@@ -162,6 +175,12 @@ export const RightLayout: React.FC = () => {
           <RadioControl />
         </div>
       </div>
+
+      {/* 设置弹窗 */}
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={handleCloseSettings} 
+      />
     </div>
   );
 };
