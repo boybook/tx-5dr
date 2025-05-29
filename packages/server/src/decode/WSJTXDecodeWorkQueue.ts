@@ -84,11 +84,11 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       }
       
       // 步骤2: 音量标准化
-      console.log(`🔊 [解码队列] 开始音量标准化...`);
-      const normalizedAudioData = normalizeAudioVolume(resampledAudioData, 0.95, 0.1, 10.0);
+      //console.log(`🔊 [解码队列] 开始音量标准化...`);
+      //const normalizedAudioData = normalizeAudioVolume(resampledAudioData, 0.95, 0.1, 10.0);
       
       // 步骤3: 音频质量分析
-      const audioQuality = analyzeAudioQualityDetailed(normalizedAudioData, 12000);
+      const audioQuality = analyzeAudioQualityDetailed(resampledAudioData, 12000);
       console.log(`📊 [解码队列] 音频质量分析:`);
       console.log(`   时长: ${audioQuality.durationSeconds.toFixed(2)}s`);
       console.log(`   峰值: ${audioQuality.peakLevel.toFixed(4)}`);
@@ -108,7 +108,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       const result = await this.pool.run({
         slotId: request.slotId,
         windowIdx: request.windowIdx,
-        audioData: Array.from(normalizedAudioData), // 转换为普通数组以便序列化
+        audioData: Array.from(resampledAudioData), // 转换为普通数组以便序列化
         sampleRate: 12000, // 处理后的采样率
         timestamp: request.timestamp
       });

@@ -56,6 +56,13 @@ export interface ParsedFT8Message {
   isValid: boolean;        // 是否为有效的FT8消息
 }
 
+// Enriched FT8 message with SNR, DT, DF for internal processing
+export interface EnrichedParsedFT8Message extends ParsedFT8Message {
+  snr?: number;
+  dt?: number;
+  df?: number;
+}
+
 // QSO联系记录
 export interface QSORecord {
   id: string;
@@ -75,22 +82,29 @@ export interface QSORecord {
 export interface QSOContext {
   currentState: QSOState;
   targetCallsign?: string;
+  targetGrid?: string;
   myCallsign: string;
   myGrid: string;
   frequency: number;
   reportSent?: string;
   reportReceived?: string;
   lastTransmission?: string;
+  lastReceivedMessageFromTarget?: EnrichedParsedFT8Message;
   cyclesSinceLastTransmission: number;
-  timeoutCycles: number;   // 超时周期数
+  cyclesSinceLastReceptionFromTarget: number;
+  transmissionAttempts: number;
+  timeoutCycles: number;
 }
 
 // 系统配置
 export interface SystemConfig {
   myCallsign: string;
   myGrid: string;
-  autoReply: boolean;      // 是否自动回复
-  maxQSOTimeout: number;   // QSO超时时间（周期数）
-  transmitPower: number;   // 发射功率
-  frequency: number;       // 工作频率
+  autoReplyToCQ: boolean;
+  maxQSOTimeoutCycles: number;
+  maxCallAttempts: number;
+  transmitPower: number;
+  frequency: number;
+  autoResumeCQAfterFail: boolean;
+  autoResumeCQAfterSuccess: boolean;
 } 

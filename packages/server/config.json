@@ -1,6 +1,6 @@
 {
   "audio": {
-    "inputDeviceId": "input-1",
+    "inputDeviceId": "input-4",
     "outputDeviceId": "output-0",
     "sampleRate": 48000,
     "bufferSize": 1024

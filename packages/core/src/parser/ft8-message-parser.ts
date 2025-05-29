@@ -37,24 +37,24 @@ export class FT8MessageParser {
       return this.parseCQMessage(parts, message);
     }
 
-    // 检查响应消息
-    if (this.isResponseMessage(parts)) {
-      return this.parseResponseMessage(parts, message);
+    // 检查73消息（优先于信号报告，避免73被误识别为报告）
+    if (this.is73Message(parts)) {
+      return this.parse73Message(parts, message);
     }
 
-    // 检查信号报告消息
+    // 检查信号报告消息（优先于响应消息，因为格式更具体）
     if (this.isSignalReportMessage(parts)) {
       return this.parseSignalReportMessage(parts, message);
     }
 
-    // 检查确认消息
+    // 检查确认消息（RRR/RR73，优先于响应消息）
     if (this.isConfirmationMessage(parts)) {
       return this.parseConfirmationMessage(parts, message);
     }
 
-    // 检查73消息
-    if (this.is73Message(parts)) {
-      return this.parse73Message(parts, message);
+    // 检查响应消息（最后检查，因为格式最宽泛）
+    if (this.isResponseMessage(parts)) {
+      return this.parseResponseMessage(parts, message);
     }
 
     // 如果都不匹配，标记为自定义消息
@@ -292,6 +292,9 @@ export class FT8MessageParser {
 
   /**
    * 生成标准FT8消息
+   * @param type 消息类型
+   * @param params 消息参数，包括我方呼号、目标呼号、网格、报告等
+   * @returns 生成的消息字符串
    */
   static generateMessage(type: FT8MessageType, params: {
     myCallsign: string;
@@ -303,38 +306,45 @@ export class FT8MessageParser {
 
     switch (type) {
       case FT8MessageType.CQ:
-        return `CQ ${myCallsign}${grid ? ' ' + grid : ''}`;
+        return `CQ ${myCallsign} ${grid}`;
         
       case FT8MessageType.CQ_DX:
         return `CQ DX ${myCallsign}${grid ? ' ' + grid : ''}`;
         
       case FT8MessageType.RESPONSE:
-        if (!targetCallsign) throw new Error('Target callsign required for response');
-        return `${targetCallsign} ${myCallsign}${grid ? ' ' + grid : ''}`;
+        if (!targetCallsign || !grid) {
+          throw new Error('响应消息需要目标呼号和网格');
+        }
+        return `${targetCallsign} ${myCallsign} ${grid}`;
         
       case FT8MessageType.SIGNAL_REPORT:
-        if (!targetCallsign || !report) throw new Error('Target callsign and report required');
+        if (!targetCallsign || !report) {
+          throw new Error('信号报告消息需要目标呼号和报告');
+        }
         return `${targetCallsign} ${myCallsign} ${report}`;
         
-      case FT8MessageType.ROGER_REPORT:
-        if (!targetCallsign) throw new Error('Target callsign required');
-        return `${targetCallsign} ${myCallsign} RRR`;
-        
       case FT8MessageType.RRR:
-        if (!targetCallsign) throw new Error('Target callsign required');
+        if (!targetCallsign) {
+          throw new Error('RRR 消息需要目标呼号');
+        }
         return `${targetCallsign} ${myCallsign} RRR`;
         
       case FT8MessageType.SEVENTY_THREE:
-        if (!targetCallsign) throw new Error('Target callsign required');
+        if (!targetCallsign) {
+          throw new Error('73 消息需要目标呼号');
+        }
         return `${targetCallsign} ${myCallsign} 73`;
         
       default:
-        throw new Error(`Cannot generate message for type: ${type}`);
+        throw new Error(`不支持的消息类型: ${type}`);
     }
   }
 
   /**
    * 检查消息是否包含指定呼号
+   * @param message 解析后的FT8消息对象
+   * @param callsign 要检查的呼号
+   * @returns 如果消息包含该呼号则返回 true，否则返回 false
    */
   static messageContainsCallsign(message: ParsedFT8Message, callsign: string): boolean {
     return message.callsign1 === callsign || message.callsign2 === callsign;
@@ -342,6 +352,9 @@ export class FT8MessageParser {
 
   /**
    * 获取消息中的对方呼号（相对于指定的本地呼号）
+   * @param message 解析后的FT8消息对象
+   * @param myCallsign 我方呼号
+   * @returns 对方呼号，如果消息与我方呼号无关则返回 undefined
    */
   static getOtherCallsign(message: ParsedFT8Message, myCallsign: string): string | undefined {
     if (message.callsign1 === myCallsign) {
@@ -350,5 +363,15 @@ export class FT8MessageParser {
       return message.callsign1;
     }
     return undefined;
+  }
+
+  /**
+   * 根据SNR值生成标准的FT8信号报告字符串。
+   * @param snr 信号噪声比 (dB)。
+   * @returns 格式化的信号报告字符串 (例如, "-15", "+05")。
+   */
+  static generateSignalReport(snr: number): string {
+    // 将 SNR 四舍五入到最接近的整数
+    return Math.round(snr).toString();
   }
 } 
