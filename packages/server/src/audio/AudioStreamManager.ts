@@ -1,7 +1,7 @@
 import * as naudiodon from 'naudiodon2';
-import { RingBufferAudioProvider } from './AudioBufferProvider.js';
+import { RingBufferAudioProvider } from './AudioBufferProvider';
 import { EventEmitter } from 'eventemitter3';
-import { clearResamplerCache } from '../utils/audioUtils.js';
+import { clearResamplerCache } from '../utils/audioUtils';
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;

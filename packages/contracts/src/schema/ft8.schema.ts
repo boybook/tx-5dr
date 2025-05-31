@@ -104,6 +104,107 @@ export const FT8TransmitResponseSchema = z.object({
   scheduledCycle: z.number().optional(),
 });
 
+// FT8消息类型常量
+export const FT8MessageType = {
+  CQ: 'cq',           // CQ呼叫
+  CALL: 'call',         // 响应呼叫
+  SIGNAL_REPORT: 'signal_report',// 信号报告
+  ROGER_REPORT: 'roger_report', // 确认信号报告
+  RRR: 'rrr',          // RRR确认
+  SEVENTY_THREE: '73',           // 73告别
+  CUSTOM: 'custom',       // 自定义消息
+  UNKNOWN: 'unknown',      // 未知消息类型
+} as const;
+
+// FT8消息类型
+export const FT8MessageTypeSchema = z.enum([
+  FT8MessageType.CQ,
+  FT8MessageType.CALL,
+  FT8MessageType.SIGNAL_REPORT,
+  FT8MessageType.ROGER_REPORT,
+  FT8MessageType.RRR,
+  FT8MessageType.SEVENTY_THREE,
+  FT8MessageType.CUSTOM,
+  FT8MessageType.UNKNOWN,
+]);
+
+// FT8消息基础schema
+export const FT8MessageBaseSchema = z.object({
+  type: FT8MessageTypeSchema,
+});
+
+// FT8消息具体类型schema
+export const FT8MessageCQSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('cq'),
+  senderCallsign: z.string(),
+  flag: z.string().optional(),
+  grid: z.string().optional(),
+});
+
+export const FT8MessageCallSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('call'),
+  senderCallsign: z.string(),
+  targetCallsign: z.string(),
+  grid: z.string().optional(),
+});
+
+export const FT8MessageSignalReportSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('signal_report'),
+  senderCallsign: z.string(),
+  targetCallsign: z.string(),
+  report: z.number(),
+});
+
+export const FT8MessageRogerReportSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('roger_report'),
+  senderCallsign: z.string(),
+  targetCallsign: z.string(),
+  report: z.number(),
+});
+
+export const FT8MessageRRRSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('rrr'),
+  senderCallsign: z.string(),
+  targetCallsign: z.string(),
+});
+
+export const FT8MessageSeventyThreeSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('73'),
+  senderCallsign: z.string(),
+  targetCallsign: z.string(),
+});
+
+export const FT8MessageCustomSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('custom'),
+});
+
+export const FT8MessageUnknownSchema = FT8MessageBaseSchema.extend({
+  type: z.literal('unknown'),
+});
+
+// FT8消息联合类型
+export const FT8MessageSchema = z.discriminatedUnion('type', [
+  FT8MessageCQSchema,
+  FT8MessageCallSchema,
+  FT8MessageSignalReportSchema,
+  FT8MessageRogerReportSchema,
+  FT8MessageRRRSchema,
+  FT8MessageSeventyThreeSchema,
+  FT8MessageCustomSchema,
+  FT8MessageUnknownSchema,
+]);
+
+// 解析后的FT8消息
+export const ParsedFT8MessageSchema = z.object({
+  snr: z.number(),
+  dt: z.number(),
+  df: z.number(),
+  rawMessage: z.string(),
+  message: FT8MessageSchema,
+  slotId: z.string(),
+  timestamp: z.number(),
+});
+
 export type FT8Decode = z.infer<typeof FT8DecodeSchema>;
 export type FT8EncodeRequest = z.infer<typeof FT8EncodeRequestSchema>;
 export type FT8EncodeResponse = z.infer<typeof FT8EncodeResponseSchema>;
@@ -111,4 +212,15 @@ export type FT8DecodesResponse = z.infer<typeof FT8DecodesResponseSchema>;
 export type FT8Spectrum = z.infer<typeof FT8SpectrumSchema>;
 export type FT8SpectrumResponse = z.infer<typeof FT8SpectrumResponseSchema>;
 export type FT8TransmitRequest = z.infer<typeof FT8TransmitRequestSchema>;
-export type FT8TransmitResponse = z.infer<typeof FT8TransmitResponseSchema>; 
+export type FT8TransmitResponse = z.infer<typeof FT8TransmitResponseSchema>;
+export type FT8MessageBase = z.infer<typeof FT8MessageBaseSchema>;
+export type FT8MessageCQ = z.infer<typeof FT8MessageCQSchema>;
+export type FT8MessageCall = z.infer<typeof FT8MessageCallSchema>;
+export type FT8MessageSignalReport = z.infer<typeof FT8MessageSignalReportSchema>;
+export type FT8MessageRogerReport = z.infer<typeof FT8MessageRogerReportSchema>;
+export type FT8MessageRRR = z.infer<typeof FT8MessageRRRSchema>;
+export type FT8MessageSeventyThree = z.infer<typeof FT8MessageSeventyThreeSchema>;
+export type FT8MessageCustom = z.infer<typeof FT8MessageCustomSchema>;
+export type FT8MessageUnknown = z.infer<typeof FT8MessageUnknownSchema>;
+export type FT8Message = z.infer<typeof FT8MessageSchema>;
+export type ParsedFT8Message = z.infer<typeof ParsedFT8MessageSchema>; 

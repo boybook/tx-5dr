@@ -1,5 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
-import type { SlotPack, DecodeResult, FT8Frame } from '@tx5dr/contracts';
+import type { SlotPack, DecodeResult, FT8Frame, ModeDescriptor } from '@tx5dr/contracts';
+import { MODES } from '@tx5dr/contracts';
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
@@ -11,9 +12,18 @@ export interface SlotPackManagerEvents {
  */
 export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private slotPacks = new Map<string, SlotPack>();
+  private currentMode: ModeDescriptor = MODES.FT8;
   
   constructor() {
     super();
+  }
+  
+  /**
+   * 设置当前模式
+   */
+  setMode(mode: ModeDescriptor): void {
+    this.currentMode = mode;
+    console.log(`🔄 [SlotPackManager] 切换到模式: ${mode.name}, 时隙长度: ${mode.slotMs}ms`);
   }
   
   /**
@@ -93,16 +103,16 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private createSlotPack(slotId: string, timestamp: number): SlotPack {
     // 从 slotId 中提取时隙开始时间
     const parts = slotId.split('-');
-    const startMs = parseInt(parts[parts.length - 1] || '0') || timestamp;
+    let startMs = timestamp;
     
-    // 根据模式名称确定时隙长度
-    const modeName = parts[0] || 'FT8';
-    let slotDurationMs = 15000; // 默认 FT8
-    if (modeName.includes('FT4')) {
-      slotDurationMs = 7500;
-    } else if (modeName.includes('Debug')) {
-      slotDurationMs = 10000;
+    // 尝试从 slotId 中提取时间戳
+    const timePart = parts[parts.length - 1];
+    if (timePart && !isNaN(parseInt(timePart))) {
+      startMs = parseInt(timePart);
     }
+    
+    // 使用当前模式的时隙长度
+    const slotDurationMs = this.currentMode.slotMs;
     
     const slotPack: SlotPack = {
       slotId,

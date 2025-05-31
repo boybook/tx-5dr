@@ -1,7 +1,7 @@
 {
   "name": "@tx5dr/core",
   "version": "1.0.0",
-  "description": "Core functionality for TX5DR",
+  "description": "TX-5DR Core Package",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,7 +15,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "eslint src/**/*.ts",
-    "test:qso": "node --import tsx src/operator/__tests__/RadioOperator.test.ts"
+    "test": "tsx --test",
+    "test:qso": "tsx --test test/qso.test.ts"
   },
   "dependencies": {
     "@tx5dr/contracts": "workspace:*",
@@ -25,6 +26,7 @@
     "@tx5dr/shared-config": "workspace:*",
     "eslint": "^8.0.0",
     "tsx": "^4.19.4",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.24"
   }
 }

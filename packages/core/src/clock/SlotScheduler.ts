@@ -100,7 +100,8 @@ export class SlotScheduler {
         windowIdx,
         pcm: pcmBuffer,
         sampleRate: actualSampleRate, // 使用实际采样率
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        windowOffsetMs
       };
       
       const offsetSign = windowOffsetMs >= 0 ? '+' : '';

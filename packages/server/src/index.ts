@@ -1,5 +1,5 @@
-import { createServer } from './server.js';
-import { DigitalRadioEngine } from './DigitalRadioEngine.js';
+import { createServer } from './server';
+import { DigitalRadioEngine } from './DigitalRadioEngine';
 
 const PORT = Number(process.env.PORT) || 4000;
 
@@ -13,16 +13,10 @@ async function start() {
     const clockManager = DigitalRadioEngine.getInstance();
     console.log('🕐 启动时钟系统进行测试...');
     
-    // 切换到多窗口测试模式
-    const testMode = clockManager.getAvailableModes().find(m => m.name === 'FT8-MultiWindow');
-    if (testMode) {
-      console.log('🔄 切换到多窗口测试模式 (FT8-MultiWindow)...');
-      await clockManager.setMode(testMode);
-    }
-    
     await clockManager.start();
+    console.log('✅ 服务器启动完成！');
   } catch (err) {
-    console.error('Error starting server:', err);
+    console.error('❌ 服务器启动失败:', err);
     process.exit(1);
   }
 }

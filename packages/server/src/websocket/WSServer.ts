@@ -9,7 +9,7 @@ import type {
   SystemStatus 
 } from '@tx5dr/contracts';
 import { WSMessageHandler } from '@tx5dr/core';
-import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import type { DigitalRadioEngine } from '../DigitalRadioEngine';
 
 /**
  * WebSocket连接包装器

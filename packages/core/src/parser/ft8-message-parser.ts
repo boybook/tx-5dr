@@ -1,4 +1,4 @@
-import { ParsedFT8Message, FT8MessageType } from '@tx5dr/contracts';
+import { FT8Message, FT8MessageType } from '@tx5dr/contracts';
 
 // 呼号正则表达式（支持标准呼号格式）
 const CALLSIGN_REGEX = /^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$/;
@@ -17,21 +17,10 @@ export class FT8MessageParser {
    * @param message 原始消息字符串
    * @returns 解析后的FT8消息对象
    */
-  static parseMessage(message: string): ParsedFT8Message {
+  static parseMessage(message: string): FT8Message {
     const trimmedMessage = message.trim().toUpperCase();
     const parts = trimmedMessage.split(/\s+/);
     
-    // 基础结果对象
-    const result: ParsedFT8Message = {
-      type: FT8MessageType.UNKNOWN,
-      rawMessage: message,
-      isValid: false,
-    };
-
-    if (parts.length === 0) {
-      return result;
-    }
-
     // 检查CQ消息
     if (this.isCQMessage(parts)) {
       return this.parseCQMessage(parts, message);
@@ -57,11 +46,10 @@ export class FT8MessageParser {
       return this.parseResponseMessage(parts, message);
     }
 
-    // 如果都不匹配，标记为自定义消息
-    result.type = FT8MessageType.CUSTOM;
-    result.isValid = true;
-    
-    return result;
+    // 如果都不匹配，返回未知类型
+    return {
+      type: FT8MessageType.UNKNOWN
+    };
   }
 
   /**
@@ -75,32 +63,37 @@ export class FT8MessageParser {
    * 解析CQ消息
    * 格式: CQ [DX] CALLSIGN [GRID]
    */
-  private static parseCQMessage(parts: string[], rawMessage: string): ParsedFT8Message {
-    const result: ParsedFT8Message = {
-      type: FT8MessageType.CQ,
-      rawMessage,
-      isValid: false,
-    };
-
+  private static parseCQMessage(parts: string[], rawMessage: string): FT8Message {
     let callsignIndex = 1;
+    let flag: string | undefined;
     
     // 检查是否为CQ DX
     if (parts[1] === 'DX') {
-      result.type = FT8MessageType.CQ_DX;
+      flag = 'DX';
       callsignIndex = 2;
     }
 
     if (parts.length <= callsignIndex) {
-      return result;
+      return {
+        type: FT8MessageType.UNKNOWN
+      };
     }
 
     const callsign = parts[callsignIndex];
     if (!callsign || !this.isValidCallsign(callsign)) {
-      return result;
+      return {
+        type: FT8MessageType.UNKNOWN
+      };
     }
 
-    result.callsign1 = callsign;
-    result.isValid = true;
+    const result: FT8Message = {
+      type: FT8MessageType.CQ,
+      senderCallsign: callsign,
+    };
+
+    if (flag) {
+      result.flag = flag;
+    }
 
     // 检查是否有网格定位
     if (parts.length > callsignIndex + 1) {
@@ -126,24 +119,20 @@ export class FT8MessageParser {
    * 解析响应消息
    * 格式: CALLSIGN1 CALLSIGN2 [GRID]
    */
-  private static parseResponseMessage(parts: string[], rawMessage: string): ParsedFT8Message {
-    const callsign1 = parts[0];
-    const callsign2 = parts[1];
+  private static parseResponseMessage(parts: string[], rawMessage: string): FT8Message {
+    const targetCallsign = parts[0];
+    const senderCallsign = parts[1];
     
-    if (!callsign1 || !callsign2) {
+    if (!targetCallsign || !senderCallsign) {
       return {
-        type: FT8MessageType.UNKNOWN,
-        rawMessage,
-        isValid: false,
+        type: FT8MessageType.UNKNOWN
       };
     }
 
-    const result: ParsedFT8Message = {
-      type: FT8MessageType.RESPONSE,
-      rawMessage,
-      callsign1,
-      callsign2,
-      isValid: true,
+    const result: FT8Message = {
+      type: FT8MessageType.CALL,
+      senderCallsign,
+      targetCallsign,
     };
 
     // 检查是否有网格定位
@@ -172,26 +161,22 @@ export class FT8MessageParser {
    * 解析信号报告消息
    * 格式: CALLSIGN1 CALLSIGN2 REPORT
    */
-  private static parseSignalReportMessage(parts: string[], rawMessage: string): ParsedFT8Message {
-    const callsign1 = parts[0];
-    const callsign2 = parts[1];
+  private static parseSignalReportMessage(parts: string[], rawMessage: string): FT8Message {
+    const targetCallsign = parts[0];
+    const senderCallsign = parts[1];
     const report = parts[2];
     
-    if (!callsign1 || !callsign2 || !report) {
+    if (!targetCallsign || !senderCallsign || !report) {
       return {
-        type: FT8MessageType.UNKNOWN,
-        rawMessage,
-        isValid: false,
+        type: FT8MessageType.UNKNOWN
       };
     }
 
     return {
       type: FT8MessageType.SIGNAL_REPORT,
-      rawMessage,
-      callsign1,
-      callsign2,
-      report,
-      isValid: true,
+      senderCallsign,
+      targetCallsign,
+      report: parseInt(report, 10),
     };
   }
 
@@ -200,36 +185,51 @@ export class FT8MessageParser {
    */
   private static isConfirmationMessage(parts: string[]): boolean {
     if (parts.length < 3) return false;
-    
     const lastPart = parts[parts.length - 1];
-    return (lastPart === 'RRR' || lastPart === 'RR73') &&
-           this.isValidCallsign(parts[0]) && 
-           this.isValidCallsign(parts[1]);
+    // 新增对R-xx的识别
+    return (
+      lastPart === 'RRR' || lastPart === 'RR73' || /^R[+-]?\d{1,2}$/.test(lastPart)
+    ) &&
+      this.isValidCallsign(parts[0]) &&
+      this.isValidCallsign(parts[1]);
   }
 
   /**
    * 解析确认消息
-   * 格式: CALLSIGN1 CALLSIGN2 RRR 或 CALLSIGN1 CALLSIGN2 RR73
+   * 格式: CALLSIGN1 CALLSIGN2 RRR / RR73 / R-01 / R+05
    */
-  private static parseConfirmationMessage(parts: string[], rawMessage: string): ParsedFT8Message {
-    const callsign1 = parts[0];
-    const callsign2 = parts[1];
+  private static parseConfirmationMessage(parts: string[], rawMessage: string): FT8Message {
+    const targetCallsign = parts[0];
+    const senderCallsign = parts[1];
     const lastPart = parts[parts.length - 1];
-    
-    if (!callsign1 || !callsign2) {
+    if (!targetCallsign || !senderCallsign) {
       return {
-        type: FT8MessageType.UNKNOWN,
-        rawMessage,
-        isValid: false,
+        type: FT8MessageType.UNKNOWN
       };
     }
-    
+    if (lastPart === 'RR73') {
+      return {
+        type: FT8MessageType.RRR,
+        senderCallsign,
+        targetCallsign,
+      };
+    } else if (lastPart === 'RRR') {
+      return {
+        type: FT8MessageType.RRR,
+        senderCallsign,
+        targetCallsign,
+      };
+    } else if (/^R[+-]?\d{1,2}$/.test(lastPart)) {
+      // R-01, R+05等，解析为ROGER_REPORT
+      return {
+        type: FT8MessageType.ROGER_REPORT,
+        senderCallsign,
+        targetCallsign,
+        report: parseInt(lastPart.slice(1), 10)
+      };
+    }
     return {
-      type: lastPart === 'RR73' ? FT8MessageType.SEVENTY_THREE : FT8MessageType.RRR,
-      rawMessage,
-      callsign1,
-      callsign2,
-      isValid: true,
+      type: FT8MessageType.UNKNOWN
     };
   }
 
@@ -247,24 +247,20 @@ export class FT8MessageParser {
    * 解析73消息
    * 格式: CALLSIGN1 CALLSIGN2 73
    */
-  private static parse73Message(parts: string[], rawMessage: string): ParsedFT8Message {
-    const callsign1 = parts[0];
-    const callsign2 = parts[1];
+  private static parse73Message(parts: string[], rawMessage: string): FT8Message {
+    const targetCallsign = parts[0];
+    const senderCallsign = parts[1];
     
-    if (!callsign1 || !callsign2) {
+    if (!targetCallsign || !senderCallsign) {
       return {
-        type: FT8MessageType.UNKNOWN,
-        rawMessage,
-        isValid: false,
+        type: FT8MessageType.UNKNOWN
       };
     }
 
     return {
       type: FT8MessageType.SEVENTY_THREE,
-      rawMessage,
-      callsign1,
-      callsign2,
-      isValid: true,
+      senderCallsign,
+      targetCallsign,
     };
   }
 
@@ -296,73 +292,43 @@ export class FT8MessageParser {
    * @param params 消息参数，包括我方呼号、目标呼号、网格、报告等
    * @returns 生成的消息字符串
    */
-  static generateMessage(type: FT8MessageType, params: {
-    myCallsign: string;
-    targetCallsign?: string;
-    grid?: string;
-    report?: string;
-  }): string {
-    const { myCallsign, targetCallsign, grid, report } = params;
-
-    switch (type) {
+  static generateMessage(message: FT8Message): string {
+    switch (message.type) {
       case FT8MessageType.CQ:
-        return `CQ ${myCallsign} ${grid}`;
-        
-      case FT8MessageType.CQ_DX:
-        return `CQ DX ${myCallsign}${grid ? ' ' + grid : ''}`;
-        
-      case FT8MessageType.RESPONSE:
-        if (!targetCallsign || !grid) {
-          throw new Error('响应消息需要目标呼号和网格');
+        if (message.flag && message.grid) {
+          return `CQ ${message.flag} ${message.senderCallsign} ${message.grid}`;
+        } else if (message.flag) {
+          return `CQ ${message.flag} ${message.senderCallsign}`;
+        } else if (message.grid) {
+          return `CQ ${message.senderCallsign} ${message.grid}`;
+        } else {
+          return `CQ ${message.senderCallsign}`;
         }
-        return `${targetCallsign} ${myCallsign} ${grid}`;
-        
+      case FT8MessageType.CALL:
+        if (message.grid) {
+          return `${message.targetCallsign} ${message.senderCallsign} ${message.grid}`;
+        } else {
+          return `${message.targetCallsign} ${message.senderCallsign}`;
+        }
       case FT8MessageType.SIGNAL_REPORT:
-        if (!targetCallsign || !report) {
-          throw new Error('信号报告消息需要目标呼号和报告');
+        if (message.report) {
+          return `${message.targetCallsign} ${message.senderCallsign} ${this.generateSignalReport(message.report)}`;
+        } else {
+          return `${message.targetCallsign} ${message.senderCallsign}`;
         }
-        return `${targetCallsign} ${myCallsign} ${report}`;
-        
+      case FT8MessageType.ROGER_REPORT:
+        if (message.report) {
+          return `${message.targetCallsign} ${message.senderCallsign} R${this.generateSignalReport(message.report)}`;
+        } else {
+          return `${message.targetCallsign} ${message.senderCallsign} R`;
+        }
       case FT8MessageType.RRR:
-        if (!targetCallsign) {
-          throw new Error('RRR 消息需要目标呼号');
-        }
-        return `${targetCallsign} ${myCallsign} RRR`;
-        
+        return `${message.targetCallsign} ${message.senderCallsign} RR73`;
       case FT8MessageType.SEVENTY_THREE:
-        if (!targetCallsign) {
-          throw new Error('73 消息需要目标呼号');
-        }
-        return `${targetCallsign} ${myCallsign} 73`;
-        
+        return `${message.targetCallsign} ${message.senderCallsign} 73`;
       default:
-        throw new Error(`不支持的消息类型: ${type}`);
+        return '';
     }
-  }
-
-  /**
-   * 检查消息是否包含指定呼号
-   * @param message 解析后的FT8消息对象
-   * @param callsign 要检查的呼号
-   * @returns 如果消息包含该呼号则返回 true，否则返回 false
-   */
-  static messageContainsCallsign(message: ParsedFT8Message, callsign: string): boolean {
-    return message.callsign1 === callsign || message.callsign2 === callsign;
-  }
-
-  /**
-   * 获取消息中的对方呼号（相对于指定的本地呼号）
-   * @param message 解析后的FT8消息对象
-   * @param myCallsign 我方呼号
-   * @returns 对方呼号，如果消息与我方呼号无关则返回 undefined
-   */
-  static getOtherCallsign(message: ParsedFT8Message, myCallsign: string): string | undefined {
-    if (message.callsign1 === myCallsign) {
-      return message.callsign2;
-    } else if (message.callsign2 === myCallsign) {
-      return message.callsign1;
-    }
-    return undefined;
   }
 
   /**
@@ -372,6 +338,9 @@ export class FT8MessageParser {
    */
   static generateSignalReport(snr: number): string {
     // 将 SNR 四舍五入到最接近的整数
-    return Math.round(snr).toString();
+    const roundedSnr = Math.round(snr);
+    const absSnr = Math.abs(roundedSnr);
+    // 格式化为两位数,添加正负号
+    return `${roundedSnr < 0 ? '-' : '+'}${absSnr.toString().padStart(2, '0')}`;
   }
-} 
+}

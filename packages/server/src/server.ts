@@ -4,13 +4,13 @@ import websocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type { HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest } from 'fastify';
-import { ConfigManager } from './config/config-manager.js';
-import { DigitalRadioEngine } from './DigitalRadioEngine.js';
-import { audioRoutes } from './routes/audio.js';
-import { configRoutes } from './routes/config.js';
-import { clockRoutes } from './routes/clock.js';
-import { slotpackRoutes } from './routes/slotpack.js';
-import { WSServer } from './websocket/WSServer.js';
+import { ConfigManager } from './config/config-manager';
+import { DigitalRadioEngine } from './DigitalRadioEngine';
+import { audioRoutes } from './routes/audio';
+import { configRoutes } from './routes/config';
+import { clockRoutes } from './routes/clock';
+import { slotpackRoutes } from './routes/slotpack';
+import { WSServer } from './websocket/WSServer';
 
 export async function createServer() {
   const fastify = Fastify({

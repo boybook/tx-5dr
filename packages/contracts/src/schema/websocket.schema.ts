@@ -61,7 +61,6 @@ export const DecodeErrorInfoSchema = z.object({
 
 // ===== 导出共享类型 =====
 export type SystemStatus = z.infer<typeof SystemStatusSchema>;
-export type SlotInfo = z.infer<typeof SlotInfoSchema>;
 export type SubWindowInfo = z.infer<typeof SubWindowInfoSchema>;
 export type DecodeErrorInfo = z.infer<typeof DecodeErrorInfoSchema>;
 
@@ -196,6 +195,13 @@ export type WSStopEngineMessage = z.infer<typeof WSStopEngineMessageSchema>;
 export type WSSetModeMessage = z.infer<typeof WSSetModeMessageSchema>;
 export type WSGetStatusMessage = z.infer<typeof WSGetStatusMessageSchema>;
 
+export const TransmitRequestSchema = z.object({
+  operatorId: z.string(),
+  transmission: z.string(),
+});
+
+export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
+
 // ===== 前端应用事件接口 =====
 
 /**
@@ -207,12 +213,15 @@ export interface DigitalRadioEngineEvents {
   modeChanged: (mode: z.infer<typeof ModeDescriptorSchema>) => void;
   
   // 时隙和窗口事件
-  slotStart: (slotInfo: SlotInfo) => void;
+  slotStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;
   subWindow: (windowInfo: SubWindowInfo) => void;
   
   // 数据更新事件
   slotPackUpdated: (slotPack: z.infer<typeof SlotPackSchema>) => void;
   spectrumData: (spectrumData: z.infer<typeof FT8SpectrumSchema>) => void;
+
+  // 发射
+  requestTransmit: (request: TransmitRequest) => void;
   
   // 错误和状态事件
   decodeError: (errorInfo: DecodeErrorInfo) => void;

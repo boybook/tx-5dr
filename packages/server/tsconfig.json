@@ -5,7 +5,21 @@
     "rootDir": "src",
     "lib": ["ES2021"],
     "noEmit": false,
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": false,
+    "declarationDir": "dist",
+    "module": "ESNext",
+    "target": "ESNext",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "listFiles": true,
+    "listEmittedFiles": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifiers": true
+  }
 } 

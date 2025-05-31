@@ -267,7 +267,7 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
   // 使用FT8消息解析器解析消息结构
   const parsedMessage = FT8MessageParser.parseMessage(message);
   
-  if (!parsedMessage.isValid) {
+  if (parsedMessage.type === FT8MessageType.UNKNOWN) {
     // 如果解析失败，回退到简单的呼号提取
     const callsignInfos = parseCallsignInfo(message);
     if (callsignInfos.length > 0) {
@@ -296,23 +296,22 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
   
   switch (parsedMessage.type) {
     case FT8MessageType.CQ:
-    case FT8MessageType.CQ_DX:
-      // CQ消息：位置信息来自发起者（第一个呼号）
-      targetCallsign = parsedMessage.callsign1;
+      // CQ消息：位置信息来自发起者
+      targetCallsign = parsedMessage.senderCallsign;
       break;
       
-    case FT8MessageType.RESPONSE:
+    case FT8MessageType.CALL:
     case FT8MessageType.SIGNAL_REPORT:
     case FT8MessageType.RRR:
-    case FT8MessageType.ROGER_REPORT:
     case FT8MessageType.SEVENTY_THREE:
       // 响应类消息：位置信息来自第二个呼号（响应者）
-      targetCallsign = parsedMessage.callsign2;
+      targetCallsign = parsedMessage.targetCallsign;
       break;
       
     default:
       // 其他类型：尝试第二个呼号，如果没有则用第一个
-      targetCallsign = parsedMessage.callsign2 || parsedMessage.callsign1;
+      targetCallsign = 'targetCallsign' in parsedMessage ? parsedMessage.targetCallsign as string : 
+                      'senderCallsign' in parsedMessage ? parsedMessage.senderCallsign as string : undefined;
       break;
   }
 
@@ -330,7 +329,7 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
   }
 
   // 添加网格信息（如果有）
-  if (parsedMessage.grid) {
+  if ('grid' in parsedMessage && parsedMessage.grid) {
     result.grid = parsedMessage.grid;
   }
 

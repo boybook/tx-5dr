@@ -6,6 +6,122 @@
 - **Yarn** 4+ (Berry)
 - **Git**
 
+### 安装 Yarn 4
+
+本项目使用 yarn 4 进行项目管理，请按照如下说明安装。
+
+#### 方法一：使用 Corepack（推荐）
+
+Node.js 16.10+ 内置了 Corepack，可以直接使用：
+
+```bash
+# 启用 Corepack
+corepack enable
+
+# 设置 Yarn 版本
+corepack prepare yarn@4.1.1 --activate
+```
+
+#### 方法二：手动安装
+
+```bash
+# 1. 创建项目目录
+mkdir my-project
+cd my-project
+
+# 2. 初始化 Yarn
+yarn init -2
+
+# 3. 验证安装
+yarn --version
+```
+
+#### 平台特定说明
+
+##### Linux/macOS
+```bash
+# 如果遇到权限问题，可能需要使用 sudo
+sudo corepack enable
+
+# 验证安装
+yarn --version
+```
+
+##### Windows
+```powershell
+# 以管理员身份运行 PowerShell
+corepack enable
+
+# 验证安装
+yarn --version
+```
+
+### 平台特定依赖
+
+#### Linux (Ubuntu/Debian)
+```bash
+# 安装基础构建工具和依赖
+sudo apt-get update
+sudo apt-get install -y \
+  cmake \
+  build-essential \
+  gfortran \
+  libfftw3-dev \
+  libboost-all-dev \
+  pkg-config
+
+# ARM64 架构额外依赖
+sudo apt-get install -y \
+  gcc-aarch64-linux-gnu \
+  g++-aarch64-linux-gnu \
+  gfortran-aarch64-linux-gnu
+sudo dpkg --add-architecture arm64
+sudo apt-get update
+sudo apt-get install -y \
+  libfftw3-dev:arm64 \
+  libboost-all-dev:arm64
+```
+
+#### macOS
+```bash
+# 使用 Homebrew 安装依赖
+brew install cmake fftw boost gcc pkg-config
+
+# 设置环境变量（根据架构）
+if [ "$(uname -m)" = "arm64" ]; then
+  # Apple Silicon (ARM64)
+  BREW_PREFIX="/opt/homebrew"
+else
+  # Intel (x64)
+  BREW_PREFIX="/usr/local"
+fi
+
+# 确保 brew 路径在 PATH 中
+echo 'export PATH="'$BREW_PREFIX'/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# 设置库路径
+export LIBRARY_PATH=$BREW_PREFIX/lib:$LIBRARY_PATH
+export LD_LIBRARY_PATH=$BREW_PREFIX/lib:$LD_LIBRARY_PATH
+```
+
+#### Windows
+1. 安装 Visual Studio 2022 或更高版本（包含 MSVC 工具链）
+2. 安装 Intel oneAPI（包含 Intel Fortran 编译器）
+3. 安装 vcpkg 并配置依赖：
+```cmd
+# 克隆 vcpkg
+git clone https://github.com/Microsoft/vcpkg.git
+cd vcpkg
+.\bootstrap-vcpkg.bat
+
+# 安装依赖
+.\vcpkg install fftw3[float,threads]:x64-windows boost:x64-windows
+
+# 集成到 Visual Studio（可选）
+.\vcpkg integrate install
+```
+
 ## 🚀 快速开始
 
 ### 1. 克隆项目
@@ -111,95 +227,9 @@ shared-config ← contracts ← core ← {web, electron-preload, server}
 - 可选择性地嵌入服务器
 - 管理应用窗口和生命周期
 
-## 🛠️ 开发工作流
-
-### 添加新包
-
-1. 在 `packages/` 目录下创建新文件夹
-2. 添加 `package.json` 并设置工作区依赖
-3. 创建 `tsconfig.json` 继承共享配置
-4. 在根目录的 `turbo.json` 中配置构建管道（如需要）
-
-### 运行测试
-
-```bash
-yarn test
-```
-
-### 代码检查
-
-```bash
-yarn lint
-```
-
-### 类型检查
-
-```bash
-# 在各个包中运行
-cd packages/core
-yarn build
-```
-
-## ⚡ Turborepo 优化
-
-### 启用远程缓存
-
-```bash
-npx turbo login
-npx turbo link
-```
-
-### 查看构建图
-
-```bash
-npx turbo run build --graph
-```
-
-### 并行执行
-
-Turborepo 会自动并行执行可以并行的任务，并根据依赖关系正确排序。
-
-## 🔧 配置说明
-
-### TypeScript
-- 目标：ES2021
-- 模块：ESNext
-- 严格模式启用
-- 支持装饰器和实验性功能
-
-### ESLint
-- 基于 TypeScript ESLint 推荐配置
-- 自定义规则确保代码质量
-- 支持 React JSX
-
-### Prettier
-- 统一的代码格式化
-- 单引号、分号、尾随逗号等配置
-
-## 🚀 部署
-
-### Web 应用
-构建后的 Web 应用位于 `packages/web/dist/`，可以部署到任何静态文件服务器。
-
-### 服务器
-构建后的服务器位于 `packages/server/dist/`，可以作为 Node.js 应用部署。
-
-### Electron 应用
-使用 `electron-builder` 或类似工具打包桌面应用。
-
-## 🤝 贡献
-
-1. Fork 项目
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 打开 Pull Request
-
 ## 📄 许可证
 
 本项目采用 GNU General Public License v3.0 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-**重要说明**：由于本项目依赖了使用 GPL v3 许可证的 `wsjtx_lib` 库，根据 GPL v3 的 copyleft 条款，整个项目必须以 GPL v3 许可证发布。
 
 ## 🙏 致谢
 

@@ -13,7 +13,7 @@ import {
   resampleAudioProfessional,
   normalizeAudioVolume,
   analyzeAudioQualityDetailed
-} from '../utils/audioUtils.js';
+} from '../utils/audioUtils';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -120,8 +120,9 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
         slotId: request.slotId,
         windowIdx: request.windowIdx,
         frames: result.frames || [],
-        timestamp: Date.now(),
-        processingTimeMs: result.processingTimeMs || 0
+        timestamp: request.timestamp,
+        processingTimeMs: result.processingTimeMs || 0,
+        windowOffsetMs: request.windowOffsetMs || 0  // 添加窗口偏移信息
       };
       
       console.log(`🔧 [解码完成] 时隙: ${request.slotId}, 窗口: ${request.windowIdx}, 找到 ${decodeResult.frames.length} 个信号, 耗时: ${decodeResult.processingTimeMs}ms`);

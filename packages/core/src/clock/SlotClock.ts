@@ -1,6 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import type { ClockSource } from './ClockSource.js';
-import type { ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
+import type { ModeDescriptor, SlotInfo, SlotInfoSchema } from '@tx5dr/contracts';
 
 export interface SlotClockEvents {
   'slotStart': (slotInfo: SlotInfo) => void;
@@ -99,7 +99,9 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
   }
   
   private handleSlotStart(slotStartTime: number): void {
-    const slotId = `${this.mode.name}-${++this.lastSlotId}-${slotStartTime}`;
+    const cycleNumber = Math.floor(slotStartTime / (this.mode.slotMs * 2));
+    const utcSeconds = Math.floor(slotStartTime / 1000);
+    const slotId = `${this.mode.name}-${cycleNumber}-${slotStartTime}`;
     const now = this.clockSource.now();
     const phaseMs = now - slotStartTime;
     
@@ -107,7 +109,10 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
       id: slotId,
       startMs: slotStartTime,
       phaseMs,
-      driftMs: 0 // 可以在后续版本中实现漂移检测
+      driftMs: 0, // 可以在后续版本中实现漂移检测
+      cycleNumber,
+      utcSeconds,
+      mode: this.mode.name
     };
     
     // 发出时隙开始事件

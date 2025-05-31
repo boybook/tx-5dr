@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 /**
+ * 时隙周期（偶数奇数）
+ */
+
+/**
  * 时隙信息
  */
 export const SlotInfoSchema = z.object({
@@ -11,7 +15,13 @@ export const SlotInfoSchema = z.object({
   /** 相位偏移（毫秒） */
   phaseMs: z.number(),
   /** 时钟漂移（毫秒） */
-  driftMs: z.number().default(0)
+  driftMs: z.number().default(0),
+  /** 时隙周期号 */
+  cycleNumber: z.number(),
+  /** 时隙UTC时间戳（秒） */
+  utcSeconds: z.number(),
+  /** 时隙类型（FT8/FT4） */
+  mode: z.string()
 });
 
 export type SlotInfo = z.infer<typeof SlotInfoSchema>;
@@ -47,7 +57,9 @@ export const DecodeRequestSchema = z.object({
   /** 采样率 */
   sampleRate: z.number().positive().default(12000),
   /** 请求时间戳 */
-  timestamp: z.number().default(() => Date.now())
+  timestamp: z.number().default(() => Date.now()),
+  /** 窗口时间偏移（毫秒） */
+  windowOffsetMs: z.number().default(0)
 });
 
 export type DecodeRequest = z.infer<typeof DecodeRequestSchema>;
@@ -67,10 +79,12 @@ export const DecodeResultSchema = z.object({
   /** 处理耗时（毫秒） */
   processingTimeMs: z.number().nonnegative().default(0),
   /** 错误信息（如果有） */
-  error: z.string().optional()
+  error: z.string().optional(),
+  /** 窗口时间偏移（毫秒） */
+  windowOffsetMs: z.number().default(0)
 });
 
-export type DecodeResult = z.infer<typeof DecodeResultSchema>; 
+export type DecodeResult = z.infer<typeof DecodeResultSchema>;
 
 /**
  * 时隙封装信息（去重和多次解码取优）
