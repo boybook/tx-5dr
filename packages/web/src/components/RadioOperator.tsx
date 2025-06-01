@@ -346,7 +346,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   return (
     <div 
-      className="border border-gray-200 rounded-lg overflow-hidden transition-all duration-300 ease-in-out"
+      className="border border-gray-200 rounded-lg overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
       style={{
         transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
       }}

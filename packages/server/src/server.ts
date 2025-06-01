@@ -10,6 +10,7 @@ import { audioRoutes } from './routes/audio';
 import { configRoutes } from './routes/config';
 import { slotpackRoutes } from './routes/slotpack';
 import { modeRoutes } from './routes/mode';
+import { operatorRoutes } from './routes/operators';
 import { WSServer } from './websocket/WSServer';
 
 export async function createServer() {
@@ -128,6 +129,10 @@ export async function createServer() {
   // 注册模式管理API路由
   await fastify.register(modeRoutes, { prefix: '/api/mode' });
   fastify.log.info('模式管理API路由注册完成');
+
+  // 注册操作员管理API路由
+  await fastify.register(operatorRoutes, { prefix: '/api/operators' });
+  fastify.log.info('操作员管理API路由注册完成');
 
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {

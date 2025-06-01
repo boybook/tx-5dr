@@ -5,7 +5,7 @@ import {
   RadioOperator,
   StandardQSOStrategy
 } from '@tx5dr/core';
-import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type OperatorConfig, type TransmitRequest } from '@tx5dr/contracts';
+import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type RadioOperatorConfig, type OperatorConfig, type TransmitRequest } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue';
@@ -280,36 +280,52 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.error('📊 [时钟管理器] 频谱分析错误:', error);
     });
     
-    // 创建固定的电台操作员实例
-    this.initializeDefaultOperator();
+    // 从配置文件初始化操作员
+    this.initializeOperatorsFromConfig();
     
     console.log(`✅ [时钟管理器] 初始化完成，当前模式: ${this.currentMode.name}`);
   }
   
   /**
-   * 初始化默认的电台操作员
+   * 将RadioOperatorConfig转换为OperatorConfig
    */
-  private initializeDefaultOperator(): void {
-    const defaultConfig: OperatorConfig = {
-      id: 'default-operator',
-      myCallsign: 'BG5DRB',
-      myGrid: 'OP09',
-      frequency: 1550,
-      mode: this.currentMode,
-      transmitCycles: [0], // 偶数周期发射
-      maxQSOTimeoutCycles: 10,
-      maxCallAttempts: 3,
-      autoReplyToCQ: false,
-      autoResumeCQAfterFail: false,
-      autoResumeCQAfterSuccess: false,
+  private convertToOperatorConfig(config: RadioOperatorConfig): OperatorConfig {
+    return {
+      id: config.id,
+      myCallsign: config.myCallsign,
+      myGrid: config.myGrid || '', // 设置默认值
+      frequency: config.frequency,
+      transmitCycles: config.transmitCycles,
+      maxQSOTimeoutCycles: config.maxQSOTimeoutCycles,
+      maxCallAttempts: config.maxCallAttempts,
+      autoReplyToCQ: config.autoReplyToCQ,
+      autoResumeCQAfterFail: config.autoResumeCQAfterFail,
+      autoResumeCQAfterSuccess: config.autoResumeCQAfterSuccess,
+      mode: config.mode || MODES.FT8, // 设置默认模式
     };
+  }
 
-    try {
-      const operator = this.addOperator(defaultConfig);
-      operator.start();
-      console.log('📻 [时钟管理器] 默认电台操作员已创建并启动');
-    } catch (error) {
-      console.error('❌ [时钟管理器] 创建默认电台操作员失败:', error);
+  /**
+   * 从配置文件初始化操作员
+   */
+  private initializeOperatorsFromConfig(): void {
+    const configManager = ConfigManager.getInstance();
+    const operatorsConfig = configManager.getOperatorsConfig();
+
+    if (operatorsConfig.length === 0) {
+      // 如果没有配置的操作员，不创建默认操作员，等待用户手动创建
+      console.log('📻 [时钟管理器] 没有配置的操作员，等待用户创建');
+      return;
+    }
+
+    for (const config of operatorsConfig) {
+      try {
+        const operator = this.addOperator(config);
+        operator.start();
+        console.log(`📻 [时钟管理器] 操作员 ${config.id} 已创建并启动`);
+      } catch (error) {
+        console.error(`❌ [时钟管理器] 创建操作员 ${config.id} 失败:`, error);
+      }
     }
   }
 
@@ -507,13 +523,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   /**
    * 添加电台操作员
    */
-  addOperator(config: OperatorConfig): RadioOperator {
+  addOperator(config: RadioOperatorConfig): RadioOperator {
     if (this.operators.has(config.id)) {
       throw new Error(`操作员 ${config.id} 已存在`);
     }
 
+    // 转换配置类型
+    const operatorConfig = this.convertToOperatorConfig(config);
+
     const operator = new RadioOperator(
-      config,
+      operatorConfig,
       this,
       (op: RadioOperator) => new StandardQSOStrategy(op)
     );
@@ -561,6 +580,78 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   getAllOperators(): RadioOperator[] {
     return Array.from(this.operators.values());
+  }
+
+  /**
+   * 从配置文件重新加载所有操作员
+   * 用于前端配置更改后同步到运行时
+   */
+  async reloadOperatorsFromConfig(): Promise<void> {
+    console.log('🔄 [时钟管理器] 从配置文件重新加载操作员');
+    
+    // 停止并移除所有现有操作员
+    for (const [id, operator] of this.operators.entries()) {
+      operator.stop();
+      this.operators.delete(id);
+      console.log(`🛑 [时钟管理器] 移除操作员: ${id}`);
+    }
+    
+    // 重新从配置文件加载操作员
+    this.initializeOperatorsFromConfig();
+    
+    console.log('✅ [时钟管理器] 操作员重新加载完成');
+  }
+
+  /**
+   * 同步添加操作员（从配置文件和运行时同时添加）
+   */
+  async syncAddOperator(config: RadioOperatorConfig): Promise<RadioOperator> {
+    // 添加到运行时
+    const operator = this.addOperator(config);
+    
+    // 如果引擎正在运行，启动操作员
+    if (this.isRunning) {
+      operator.start();
+    }
+    
+    console.log(`📻 [时钟管理器] 同步添加操作员: ${config.id}`);
+    
+    // 广播操作员列表更新
+    this.broadcastOperatorListUpdate();
+    
+    return operator;
+  }
+
+  /**
+   * 同步删除操作员（从配置文件和运行时同时删除）
+   */
+  async syncRemoveOperator(id: string): Promise<void> {
+    this.removeOperator(id);
+    console.log(`📻 [时钟管理器] 同步删除操作员: ${id}`);
+    
+    // 广播操作员列表更新（删除后列表变化）
+    this.broadcastOperatorListUpdate();
+  }
+
+  /**
+   * 同步更新操作员配置
+   */
+  async syncUpdateOperator(config: RadioOperatorConfig): Promise<void> {
+    const operator = this.operators.get(config.id);
+    if (!operator) {
+      throw new Error(`操作员 ${config.id} 不存在`);
+    }
+
+    // 更新操作员配置
+    const operatorConfig = this.convertToOperatorConfig(config);
+    
+    // 更新运行时配置
+    Object.assign(operator.config, operatorConfig);
+    
+    console.log(`📻 [时钟管理器] 同步更新操作员配置: ${config.id}`);
+    
+    // 广播操作员列表更新
+    this.broadcastOperatorListUpdate();
   }
 
   /**
@@ -849,4 +940,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     // console.log('📢 [广播] 完成广播所有操作员状态更新');
   }
-} 
+
+  /**
+   * 广播操作员列表更新
+   */
+  private broadcastOperatorListUpdate(): void {
+    // 获取所有操作员状态
+    const operators = this.getOperatorsStatus();
+    
+    console.log(`📻 [时钟管理器] 广播操作员列表更新，包含 ${operators.length} 个操作员`);
+    
+    // 发射操作员列表事件
+    this.emit('operatorsList' as any, { operators });
+  }
+}

@@ -25,16 +25,21 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
   // 记录上一次的发射状态
   const previousTransmittingStatesRef = useRef<Map<string, boolean>>(new Map());
 
-  // 获取当前操作员的呼号
-  const getCurrentOperatorCallsign = (): string => {
-    const defaultOperator = radio.state.operators.find(op => op.id === 'default-operator');
-    return defaultOperator?.context?.myCall || 'BG5DRB';
+  // 获取当前操作员的呼号和网格
+  const getCurrentOperator = () => {
+    const firstOperator = radio.state.operators[0];
+    return {
+      myCallsign: firstOperator?.context?.myCall || '',
+      myGrid: firstOperator?.context?.myGrid || ''
+    };
   };
+
+  const { myCallsign, myGrid } = getCurrentOperator();
 
   // 获取当前操作员的目标呼号
   const getCurrentTargetCallsign = (): string => {
-    const defaultOperator = radio.state.operators.find(op => op.id === 'default-operator');
-    return defaultOperator?.context?.targetCall || '';
+    const firstOperator = radio.state.operators[0];
+    return firstOperator?.context?.targetCall || '';
   };
 
   // 监听操作员状态变化，检测发射状态改变
@@ -69,12 +74,11 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
   // 处理SlotPack数据，过滤出与我相关的消息
   useEffect(() => {
     const groupsMap = new Map<string, { messages: FT8Message[], cycle: 'even' | 'odd', type: 'receive' | 'transmit' }>();
-    const myCallsign = getCurrentOperatorCallsign();
     const targetCallsign = getCurrentTargetCallsign();
     
     // 获取当前操作员的发射周期配置
-    const defaultOperator = radio.state.operators.find(op => op.id === 'default-operator');
-    const myTransmitCycles = defaultOperator?.transmitCycles || [0]; // 默认偶数周期发射
+    const firstOperator = radio.state.operators[0];
+    const myTransmitCycles = firstOperator?.transmitCycles || [0]; // 默认偶数周期发射
     
     // 处理接收到的消息（从SlotPack中过滤）
     slotPacks.state.slotPacks.forEach(slotPack => {

@@ -128,6 +128,12 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('operatorStatusUpdate' as any, (operatorStatus) => {
       this.broadcastOperatorStatusUpdate(operatorStatus);
     });
+
+    // 监听操作员列表更新事件
+    this.digitalRadioEngine.on('operatorsList' as any, (data: { operators: any[] }) => {
+      console.log('📻 [WSServer] 收到operatorsList事件，广播给客户端', data.operators.length, '个操作员');
+      this.broadcast(WSMessageType.OPERATORS_LIST, data);
+    });
   }
 
   /**

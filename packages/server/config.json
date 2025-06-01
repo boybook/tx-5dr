@@ -1,7 +1,7 @@
 {
   "audio": {
-    "inputDeviceId": "input-3",
-    "outputDeviceId": "output-4",
+    "inputDeviceId": "input-1",
+    "outputDeviceId": "output-0",
     "sampleRate": 48000,
     "bufferSize": 1024
   },
@@ -16,5 +16,69 @@
   "server": {
     "port": 3000,
     "host": "0.0.0.0"
-  }
+  },
+  "operators": [
+    {
+      "myCallsign": "BG5DRB",
+      "myGrid": "PL09",
+      "frequency": 1500,
+      "transmitCycles": [
+        0
+      ],
+      "maxQSOTimeoutCycles": 10,
+      "maxCallAttempts": 10,
+      "autoReplyToCQ": true,
+      "autoResumeCQAfterFail": true,
+      "autoResumeCQAfterSuccess": true,
+      "mode": {
+        "name": "FT8",
+        "slotMs": 15000,
+        "toleranceMs": 100,
+        "windowTiming": [
+          -2000,
+          -1500,
+          -1000,
+          -500,
+          -250,
+          0,
+          250,
+          500,
+          1000
+        ],
+        "cycleType": "EVEN_ODD"
+      },
+      "id": "operator-1748763145003-ealgyf55x"
+    },
+    {
+      "myCallsign": "BG5DRB/QRP",
+      "myGrid": "PL09",
+      "frequency": 1500,
+      "transmitCycles": [
+        0
+      ],
+      "maxQSOTimeoutCycles": 10,
+      "maxCallAttempts": 3,
+      "autoReplyToCQ": false,
+      "autoResumeCQAfterFail": false,
+      "autoResumeCQAfterSuccess": false,
+      "mode": {
+        "name": "FT8",
+        "slotMs": 15000,
+        "toleranceMs": 100,
+        "windowTiming": [
+          -2000,
+          -1500,
+          -1000,
+          -500,
+          -250,
+          0,
+          250,
+          500,
+          1000
+        ],
+        "cycleType": "EVEN_ODD"
+      },
+      "id": "operator-1748767367383-uq8dben15"
+    }
+  ]
 }

@@ -1,8 +1,15 @@
 import * as React from 'react';
+import { Button } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faPlus } from '@fortawesome/free-solid-svg-icons';
 import { useRadioState, useConnection } from '../store/radioStore';
 import { RadioOperator } from './RadioOperator';
 
-export const RadioOperatorList: React.FC = () => {
+interface RadioOperatorListProps {
+  onCreateOperator?: () => void; // 创建操作员的回调
+}
+
+export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOperator }) => {
   const radio = useRadioState();
   const connection = useConnection();
 
@@ -36,15 +43,29 @@ export const RadioOperatorList: React.FC = () => {
 
   if (radio.state.operators.length === 0) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <div className="text-center">
-          <div className="text-default-500">
-            {connection.state.isConnected ? '正在加载操作员...' : '请先连接到服务器'}
-          </div>
-          <div className="text-xs text-default-400 mt-2">
-            连接: {connection.state.isConnected ? '已连接' : '未连接'} | 
-            服务: {connection.state.radioService ? '已初始化' : '未初始化'}
-          </div>
+      <div className="flex items-center justify-center">
+        <div className="text-center w-full">
+          {connection.state.isConnected ? (
+            // 已连接但没有操作员，显示创建按钮
+            <Button
+              onPress={onCreateOperator}
+              variant="bordered"
+              size="md"
+              className="w-full border-2 border-dashed border-default-300 hover:border-default-400 bg-transparent hover:bg-default-50 text-default-500 py-3"
+            >
+              <FontAwesomeIcon icon={faPlus} className="mr-2" />
+              创建第一个操作员
+            </Button>
+          ) : (
+            // 未连接时的提示
+            <div>
+              <div className="text-default-500">请先连接到服务器</div>
+              <div className="text-xs text-default-400 mt-2">
+                连接: {connection.state.isConnected ? '已连接' : '未连接'} | 
+                服务: {connection.state.radioService ? '已初始化' : '未初始化'}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );

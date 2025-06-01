@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { AudioDeviceSettings } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig } from '@tx5dr/contracts';
+import { MODES } from '@tx5dr/contracts';
 
 // 应用配置接口
 export interface AppConfig {
@@ -17,6 +18,7 @@ export interface AppConfig {
     port: number;
     host: string;
   };
+  operators: RadioOperatorConfig[];
 }
 
 // 音频处理配置接口
@@ -47,6 +49,9 @@ const DEFAULT_CONFIG: AppConfig = {
     port: 3000,
     host: '0.0.0.0',
   },
+  operators: [
+    // 从空操作员列表开始，等待用户创建
+  ],
 };
 
 // 配置管理器
@@ -177,6 +182,68 @@ export class ConfigManager {
   }
 
   /**
+   * 获取操作员配置列表
+   */
+  getOperatorsConfig(): RadioOperatorConfig[] {
+    return [...this.config.operators];
+  }
+
+  /**
+   * 获取指定操作员配置
+   */
+  getOperatorConfig(id: string): RadioOperatorConfig | undefined {
+    return this.config.operators.find(op => op.id === id);
+  }
+
+  /**
+   * 添加操作员配置
+   */
+  async addOperatorConfig(operatorConfig: Omit<RadioOperatorConfig, 'id'>): Promise<RadioOperatorConfig> {
+    // 生成唯一ID
+    const id = `operator-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const newOperator: RadioOperatorConfig = {
+      ...operatorConfig,
+      id,
+      mode: operatorConfig.mode || MODES.FT8,
+    };
+
+    this.config.operators.push(newOperator);
+    await this.saveConfig();
+    return newOperator;
+  }
+
+  /**
+   * 更新操作员配置
+   */
+  async updateOperatorConfig(id: string, updates: Partial<Omit<RadioOperatorConfig, 'id'>>): Promise<RadioOperatorConfig> {
+    const operatorIndex = this.config.operators.findIndex(op => op.id === id);
+    if (operatorIndex === -1) {
+      throw new Error(`操作员 ${id} 不存在`);
+    }
+
+    this.config.operators[operatorIndex] = {
+      ...this.config.operators[operatorIndex],
+      ...updates,
+    };
+
+    await this.saveConfig();
+    return this.config.operators[operatorIndex];
+  }
+
+  /**
+   * 删除操作员配置
+   */
+  async deleteOperatorConfig(id: string): Promise<void> {
+    const operatorIndex = this.config.operators.findIndex(op => op.id === id);
+    if (operatorIndex === -1) {
+      throw new Error(`操作员 ${id} 不存在`);
+    }
+
+    this.config.operators.splice(operatorIndex, 1);
+    await this.saveConfig();
+  }
+
+  /**
    * 验证配置的有效性
    */
   validateConfig(): { isValid: boolean; errors: string[] } {
@@ -197,6 +264,26 @@ export class ConfigManager {
 
     if (this.config.ft8.transmitPower <= 0 || this.config.ft8.transmitPower > 100) {
       errors.push('发射功率必须在1-100之间');
+    }
+
+    // 验证操作员配置
+    this.config.operators.forEach((operator, index) => {
+      if (!operator.myCallsign) {
+        errors.push(`操作员 ${index + 1}: 呼号不能为空`);
+      }
+      if (operator.frequency < 200 || operator.frequency > 4000) {
+        errors.push(`操作员 ${index + 1}: 频率必须在200-4000Hz之间`);
+      }
+      if (!operator.transmitCycles || operator.transmitCycles.length === 0) {
+        errors.push(`操作员 ${index + 1}: 发射周期不能为空`);
+      }
+    });
+
+    // 检查操作员ID唯一性
+    const operatorIds = this.config.operators.map(op => op.id);
+    const duplicateIds = operatorIds.filter((id, index) => operatorIds.indexOf(id) !== index);
+    if (duplicateIds.length > 0) {
+      errors.push(`操作员ID重复: ${duplicateIds.join(', ')}`);
     }
 
     // 验证服务器配置

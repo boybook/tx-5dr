@@ -5,7 +5,13 @@ import type {
   AudioDeviceSettingsResponse,
   FT8ConfigUpdate,
   ServerConfigUpdate,
-  ModeDescriptor
+  ModeDescriptor,
+  RadioOperatorConfig,
+  CreateRadioOperatorRequest,
+  UpdateRadioOperatorRequest,
+  RadioOperatorListResponse,
+  RadioOperatorDetailResponse,
+  RadioOperatorActionResponse
 } from '@tx5dr/contracts';
 
 // ========== API 对象 ==========
@@ -250,6 +256,136 @@ export const api = {
     
     return await res.json();
   },
+
+  // ========== 操作员管理API ==========
+
+  /**
+   * 获取所有操作员配置
+   */
+  async getOperators(apiBase = '/api'): Promise<RadioOperatorListResponse> {
+    const res = await fetch(`${apiBase}/operators`);
+    if (!res.ok) {
+      throw new Error(`获取操作员列表失败: ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as RadioOperatorListResponse;
+  },
+
+  /**
+   * 获取指定操作员配置
+   */
+  async getOperator(id: string, apiBase = '/api'): Promise<RadioOperatorDetailResponse> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}`);
+    if (!res.ok) {
+      throw new Error(`获取操作员详情失败: ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as RadioOperatorDetailResponse;
+  },
+
+  /**
+   * 创建新操作员
+   */
+  async createOperator(
+    operatorData: CreateRadioOperatorRequest, 
+    apiBase = '/api'
+  ): Promise<RadioOperatorActionResponse> {
+    const res = await fetch(`${apiBase}/operators`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(operatorData),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `创建操作员失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return (await res.json()) as RadioOperatorActionResponse;
+  },
+
+  /**
+   * 更新操作员配置
+   */
+  async updateOperator(
+    id: string,
+    updates: UpdateRadioOperatorRequest, 
+    apiBase = '/api'
+  ): Promise<RadioOperatorActionResponse> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `更新操作员失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return (await res.json()) as RadioOperatorActionResponse;
+  },
+
+  /**
+   * 删除操作员
+   */
+  async deleteOperator(id: string, apiBase = '/api'): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `删除操作员失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 启动操作员发射
+   */
+  async startOperator(id: string, apiBase = '/api'): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}/start`, {
+      method: 'POST',
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `启动操作员失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 停止操作员发射
+   */
+  async stopOperator(id: string, apiBase = '/api'): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}/stop`, {
+      method: 'POST',
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `停止操作员失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 获取操作员运行状态
+   */
+  async getOperatorStatus(id: string, apiBase = '/api'): Promise<{ success: boolean; data: any }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}/status`);
+    if (!res.ok) {
+      throw new Error(`获取操作员状态失败: ${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+  },
 }
 
 // 为了向后兼容，也导出单独的函数
@@ -269,5 +405,14 @@ export const {
   getConfigPath,
   getAvailableModes,
   getCurrentMode,
-  switchMode
+  switchMode,
+  // 操作员管理函数
+  getOperators,
+  getOperator,
+  createOperator,
+  updateOperator,
+  deleteOperator,
+  startOperator,
+  stopOperator,
+  getOperatorStatus
 } = api; 

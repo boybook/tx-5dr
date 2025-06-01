@@ -58,3 +58,33 @@ export * from './schema/cycle.schema';
 
 // 导出模式相关的类型
 export * from './schema/mode.schema';
+
+// Audio Schema
+export * from './schema/audio.schema';
+
+// Config Schema  
+export * from './schema/config.schema';
+
+// Cycle Schema
+export * from './schema/cycle.schema';
+
+// FT8 Schema
+export * from './schema/ft8.schema';
+
+// Hello Schema
+export * from './schema/hello.schema';
+
+// Mode Schema
+export * from './schema/mode.schema';
+
+// Operator Schema
+export * from './schema/operator.schema';
+
+// QSO Schema  
+export * from './schema/qso.schema';
+
+// Slot Info Schema
+export * from './schema/slot-info.schema';
+
+// WebSocket Schema
+export * from './schema/websocket.schema';

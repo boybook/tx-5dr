@@ -16,11 +16,12 @@ export const RightLayout: React.FC = () => {
   const radio = useRadioState();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'advanced'>('audio');
 
   // 获取当前操作员的呼号
   const getCurrentOperatorCallsign = (): string => {
-    const defaultOperator = radio.state.operators.find(op => op.id === 'default-operator');
-    return defaultOperator?.context?.myCall || 'BG5DRB';
+    const firstOperator = radio.state.operators[0];
+    return firstOperator?.context?.myCall || 'N0CALL';
   };
 
   // 判断是否为自动模式
@@ -34,12 +35,19 @@ export const RightLayout: React.FC = () => {
 
   // 打开设置弹窗
   const handleOpenSettings = () => {
+    setSettingsInitialTab('audio');
     setIsSettingsOpen(true);
   };
 
   // 关闭设置弹窗
   const handleCloseSettings = () => {
     setIsSettingsOpen(false);
+  };
+
+  // 处理创建操作员
+  const handleCreateOperator = () => {
+    setSettingsInitialTab('operator');
+    setIsSettingsOpen(true);
   };
 
   return (
@@ -120,7 +128,7 @@ export const RightLayout: React.FC = () => {
         
         {/* 操作员列表 - 固定高度 */}
         <div className="flex-shrink-0">
-          <RadioOperatorList />
+          <RadioOperatorList onCreateOperator={handleCreateOperator} />
         </div>
         
         {/* 电台控制 - 固定高度 */}
@@ -132,7 +140,8 @@ export const RightLayout: React.FC = () => {
       {/* 设置弹窗 */}
       <SettingsModal 
         isOpen={isSettingsOpen} 
-        onClose={handleCloseSettings} 
+        onClose={handleCloseSettings}
+        initialTab={settingsInitialTab}
       />
     </div>
   );
