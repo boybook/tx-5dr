@@ -12,6 +12,7 @@ import {
 } from '@heroui/react';
 import { useSlotPacks } from '../store/radioStore';
 import { RadioControl } from '../components/RadioControl';
+import { RadioOperatorList } from '../components/RadioOperatorList';
 import { SettingsModal } from '../components/SettingsModal';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog } from '@fortawesome/free-solid-svg-icons';
@@ -169,6 +170,11 @@ export const RightLayout: React.FC = () => {
             </ScrollShadow>
           </CardBody>
         </Card>
+        
+        {/* 操作员列表 - 固定高度 */}
+        <div className="flex-shrink-0">
+          <RadioOperatorList />
+        </div>
         
         {/* 电台控制 - 固定高度 */}
         <div className="flex-shrink-0">

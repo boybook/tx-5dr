@@ -119,12 +119,22 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('decodeError', (errorInfo) => {
       this.broadcastDecodeError(errorInfo);
     });
+
+    this.digitalRadioEngine.on('systemStatus', (status) => {
+      this.broadcastSystemStatus(status);
+    });
+
+    // 监听操作员状态更新事件
+    this.digitalRadioEngine.on('operatorStatusUpdate' as any, (operatorStatus) => {
+      this.broadcastOperatorStatusUpdate(operatorStatus);
+    });
   }
 
   /**
    * 处理客户端命令
    */
   private async handleClientCommand(connectionId: string, message: any): Promise<void> {
+    console.log(`📥 [WSServer] 收到客户端命令: ${message.type}, 连接: ${connectionId}`);
     switch (message.type) {
       case WSMessageType.START_ENGINE:
         await this.handleStartEngine();
@@ -140,6 +150,30 @@ export class WSServer extends WSMessageHandler {
 
       case WSMessageType.SET_MODE:
         await this.handleSetMode(message.data?.mode);
+        break;
+
+      case WSMessageType.GET_OPERATORS:
+        await this.handleGetOperators();
+        break;
+
+      case WSMessageType.SET_OPERATOR_CONTEXT:
+        await this.handleSetOperatorContext(message.data);
+        break;
+
+      case WSMessageType.SET_OPERATOR_SLOT:
+        await this.handleSetOperatorSlot(message.data);
+        break;
+
+      case WSMessageType.USER_COMMAND:
+        await this.handleUserCommand(message.data);
+        break;
+
+      case WSMessageType.START_OPERATOR:
+        await this.handleStartOperator(message.data);
+        break;
+
+      case WSMessageType.STOP_OPERATOR:
+        await this.handleStopOperator(message.data);
         break;
 
       case WSMessageType.PING:
@@ -209,7 +243,7 @@ export class WSServer extends WSMessageHandler {
   /**
    * 处理设置模式命令
    */
-  private async handleSetMode(mode: any): Promise<void> {
+  private async handleSetMode(mode: ModeDescriptor): Promise<void> {
     try {
       await this.digitalRadioEngine.setMode(mode);
     } catch (error) {
@@ -217,6 +251,113 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.ERROR, {
         message: error instanceof Error ? error.message : String(error),
         code: 'SET_MODE_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理获取操作员列表命令
+   */
+  private async handleGetOperators(): Promise<void> {
+    console.log('📥 [WSServer] 收到 getOperators 请求');
+    try {
+      const operators = this.digitalRadioEngine.getOperatorsStatus();
+      console.log('📻 [WSServer] 操作员列表:', operators);
+      this.broadcast(WSMessageType.OPERATORS_LIST, { operators });
+      console.log('📤 [WSServer] 已广播操作员列表');
+    } catch (error) {
+      console.error('❌ 获取操作员列表失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'GET_OPERATORS_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理设置操作员上下文命令
+   */
+  private async handleSetOperatorContext(data: any): Promise<void> {
+    try {
+      const { operatorId, context } = data;
+      this.digitalRadioEngine.updateOperatorContext(operatorId, context);
+    } catch (error) {
+      console.error('❌ 设置操作员上下文失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'SET_OPERATOR_CONTEXT_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理设置操作员时隙命令
+   */
+  private async handleSetOperatorSlot(data: any): Promise<void> {
+    try {
+      const { operatorId, slot } = data;
+      this.digitalRadioEngine.setOperatorSlot(operatorId, slot);
+    } catch (error) {
+      console.error('❌ 设置操作员时隙失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'SET_OPERATOR_SLOT_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理用户命令
+   */
+  private async handleUserCommand(data: any): Promise<void> {
+    try {
+      const { operatorId, command, args } = data;
+      const operator = this.digitalRadioEngine.getOperator(operatorId);
+      if (!operator) {
+        throw new Error(`操作员 ${operatorId} 不存在`);
+      }
+      
+      operator.userCommand({ command, args });
+      console.log(`📻 [WSServer] 执行用户命令: 操作员=${operatorId}, 命令=${command}, 参数=`, args);
+    } catch (error) {
+      console.error('❌ 执行用户命令失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'USER_COMMAND_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理启动操作员命令
+   */
+  private async handleStartOperator(data: any): Promise<void> {
+    try {
+      const { operatorId } = data;
+      this.digitalRadioEngine.startOperator(operatorId);
+      console.log(`📻 [WSServer] 启动操作员: ${operatorId}`);
+    } catch (error) {
+      console.error('❌ 启动操作员失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'START_OPERATOR_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理停止操作员命令
+   */
+  private async handleStopOperator(data: any): Promise<void> {
+    try {
+      const { operatorId } = data;
+      this.digitalRadioEngine.stopOperator(operatorId);
+      console.log(`📻 [WSServer] 停止操作员: ${operatorId}`);
+    } catch (error) {
+      console.error('❌ 停止操作员失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'STOP_OPERATOR_ERROR'
       });
     }
   }
@@ -244,6 +385,14 @@ export class WSServer extends WSMessageHandler {
     // 发送当前系统状态给新连接的客户端
     const status = this.digitalRadioEngine.getStatus();
     connection.send(WSMessageType.SYSTEM_STATUS, status);
+
+    // 发送当前操作员列表给新连接的客户端
+    try {
+      const operators = this.digitalRadioEngine.getOperatorsStatus();
+      connection.send(WSMessageType.OPERATORS_LIST, { operators });
+    } catch (error) {
+      console.error('❌ 发送操作员列表失败:', error);
+    }
 
     return connection;
   }
@@ -347,6 +496,13 @@ export class WSServer extends WSMessageHandler {
    */
   broadcastSystemStatus(status: SystemStatus): void {
     this.broadcast(WSMessageType.SYSTEM_STATUS, status);
+  }
+
+  /**
+   * 广播操作员状态更新事件
+   */
+  broadcastOperatorStatusUpdate(operatorStatus: any): void {
+    this.broadcast(WSMessageType.OPERATOR_STATUS_UPDATE, operatorStatus);
   }
 
   /**

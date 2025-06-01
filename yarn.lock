@@ -5153,6 +5153,7 @@ __metadata:
   dependencies:
     "@tx5dr/contracts": "workspace:*"
     "@tx5dr/shared-config": "workspace:*"
+    "@types/node": "npm:^20.11.24"
     eslint: "npm:^8.0.0"
     eventemitter3: "npm:^5.0.1"
     tsx: "npm:^4.19.4"
@@ -5440,6 +5441,15 @@ __metadata:
   dependencies:
     undici-types: "npm:~6.19.2"
   checksum: 10c0/98a4f394c22b93e1bb37b3cfdfa5df7b79fcab19dafe80fe19e94126f897a8d2b3d58a4b680dc15591c5660bdd2f1ae49d6c59e7cbe7fc0c7cf433b0b984b389
+  languageName: node
+  linkType: hard
+
+"@types/node@npm:^20.11.24":
+  version: 20.17.57
+  resolution: "@types/node@npm:20.17.57"
+  dependencies:
+    undici-types: "npm:~6.19.2"
+  checksum: 10c0/c04f3b6c4f335ad50bd3af62cd9e64a86c355cb6b363cb0e618511db4c6801c8539781c3786076eca6f56e999d6c7fc4748e43393a107aad57e65e3ffd1f73bf
   languageName: node
   linkType: hard
 

@@ -26,3 +26,7 @@ export * from './types/index.js';
 
 // 新增：FT8位置信息类型
 export type { CallsignInfo, FT8LocationInfo } from './utils/callsign.js';
+
+// 导出操作员相关
+export { RadioOperator } from './operator/RadioOperator';
+export { StandardQSOStrategy } from './operator/transmission/strategies/StandardQSOStrategy';

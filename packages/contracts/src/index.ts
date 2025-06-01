@@ -26,6 +26,24 @@ export type {
   SlotInfo
 } from './schema/slot-info.schema.js';
 
+export type {
+  ModeDescriptor
+} from './schema/mode.schema.js';
+
+export {
+  WSMessageType
+} from './schema/websocket.schema.js';
+
+export type {
+  OperatorStatus,
+  WSGetOperatorsMessage,
+  WSOperatorsListMessage,
+  WSOperatorStatusUpdateMessage,
+  WSSetOperatorContextMessage,
+  WSSetOperatorSlotMessage,
+  // ... 其他websocket相关类型
+} from './schema/websocket.schema.js';
+
 // 导出所有schema中定义的类型
 export * from './schema/ft8.schema.js';
 export * from './schema/qso.schema.js';
@@ -37,3 +55,6 @@ export * from './schema/hello.schema.js';
 
 // 导出周期相关类型
 export * from './schema/cycle.schema';
+
+// 导出模式相关的类型
+export * from './schema/mode.schema';

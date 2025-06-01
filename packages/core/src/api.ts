@@ -204,69 +204,53 @@ export const api = {
     return await res.json();
   },
 
-  // ========== 时钟和模式API ==========
+  // ========== 模式管理API ==========
 
   /**
-   * 获取可用的模式列表
+   * 获取所有可用模式
    */
-  async getModes(apiBase = '/api'): Promise<{ modes: ModeDescriptor[]; default: string }> {
-    const res = await fetch(`${apiBase}/modes`);
+  async getAvailableModes(apiBase = '/api'): Promise<{ success: boolean; data: ModeDescriptor[] }> {
+    const res = await fetch(`${apiBase}/mode`);
     if (!res.ok) {
-      throw new Error(`获取模式列表失败: ${res.status} ${res.statusText}`);
+      throw new Error(`获取可用模式失败: ${res.status} ${res.statusText}`);
     }
     return await res.json();
   },
 
   /**
-   * 获取时钟状态
+   * 获取当前模式
    */
-  async getClockStatus(apiBase = '/api'): Promise<{
-    isRunning: boolean;
-    currentMode: ModeDescriptor;
-    currentTime: number;
-    nextSlotIn: number;
-  }> {
-    const res = await fetch(`${apiBase}/clock/status`);
+  async getCurrentMode(apiBase = '/api'): Promise<{ success: boolean; data: ModeDescriptor }> {
+    const res = await fetch(`${apiBase}/mode/current`);
     if (!res.ok) {
-      throw new Error(`获取时钟状态失败: ${res.status} ${res.statusText}`);
+      throw new Error(`获取当前模式失败: ${res.status} ${res.statusText}`);
     }
     return await res.json();
   },
 
   /**
-   * 设置时钟模式
+   * 切换模式
    */
-  async setClockMode(mode: string, apiBase = '/api'): Promise<void> {
-    const res = await fetch(`${apiBase}/clock/mode`, {
+  async switchMode(
+    mode: ModeDescriptor, 
+    apiBase = '/api'
+  ): Promise<{ success: boolean; message: string; data: ModeDescriptor }> {
+    const res = await fetch(`${apiBase}/mode/switch`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ mode })
+      body: JSON.stringify(mode),
     });
     
     if (!res.ok) {
-      throw new Error(`设置时钟模式失败: ${res.status} ${res.statusText}`);
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `切换模式失败: ${res.status} ${res.statusText}`);
     }
+    
+    return await res.json();
   },
-
-  /**
-   * 控制时钟启停
-   */
-  async controlClock(action: 'start' | 'stop', apiBase = '/api'): Promise<void> {
-    const res = await fetch(`${apiBase}/clock/control`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ action })
-    });
-    
-    if (!res.ok) {
-      throw new Error(`控制时钟失败: ${res.status} ${res.statusText}`);
-    }
-  }
-};
+}
 
 // 为了向后兼容，也导出单独的函数
 export const {
@@ -283,8 +267,7 @@ export const {
   validateConfig,
   resetConfig,
   getConfigPath,
-  getModes,
-  getClockStatus,
-  setClockMode,
-  controlClock
+  getAvailableModes,
+  getCurrentMode,
+  switchMode
 } = api; 

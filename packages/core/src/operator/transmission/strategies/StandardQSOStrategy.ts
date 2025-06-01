@@ -271,8 +271,14 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             /* if (result.changeState !== 'TX6') {
                 this.operator.start();  // 启动发射
             } */
+            const oldState = this.state;
             this.state = result.changeState;
             this.timeoutCycles = 0;
+            
+            // 状态变化时通知槽位更新
+            if (oldState !== this.state) {
+                this.notifyStateChanged();
+            }
             
             // 调用新状态的onEnter
             const newState = states[this.state];
@@ -287,8 +293,14 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
                 if (currentState.onTimeout) {
                     const timeoutResult = currentState.onTimeout(this);
                     if (timeoutResult.changeState) {
+                        const oldState = this.state;
                         this.state = timeoutResult.changeState;
                         this.timeoutCycles = 0;
+                        
+                        // 状态变化时通知槽位更新
+                        if (oldState !== this.state) {
+                            this.notifyStateChanged();
+                        }
                     }
                     if (timeoutResult.stop) {
                         return { stop: true };
@@ -306,7 +318,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         return this.slots[this.state];
     }
 
-    userCommand?(command: QSOCommand): void {
+    userCommand?(command: QSOCommand): any {
         switch (command.command) {
             case 'update_context':
                 this._context = {
@@ -314,11 +326,47 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
                     ...command.args
                 }
                 this.updateSlots();
-                break;
+                return { success: true };
             case 'set_state':
+                const oldState = this.state;
                 this.state = command.args;
-                break;
+                // 手动设置状态时也通知槽位更新
+                if (oldState !== this.state) {
+                    this.notifyStateChanged();
+                }
+                return { success: true };
+            case 'set_slot_content':
+                // 设置指定时隙的内容
+                const { slot, content } = command.args;
+                if (slot && this.slots.hasOwnProperty(slot)) {
+                    this.slots[slot as SlotsIndex] = content || '';
+                    this.notifySlotsUpdated();
+                    return { success: true };
+                }
+                return { error: 'Invalid slot or content' };
+            case 'get_slots':
+                // 返回当前slots状态
+                return this.getSlots();
+            case 'get_state':
+                // 返回当前状态
+                return this.state;
+            default:
+                return { error: 'Unknown command' };
         }
+    }
+    
+    /**
+     * 获取当前所有时隙的内容
+     */
+    getSlots(): Slots {
+        return { ...this.slots };
+    }
+    
+    /**
+     * 获取当前状态
+     */
+    getCurrentState(): SlotsIndex {
+        return this.state;
     }
     
     updateSlots() {
@@ -363,5 +411,24 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             senderCallsign: this.operator.config.myCallsign,
             grid: this.operator.config.myGrid,
         });
+        
+        // 通知操作员slots已更新
+        this.notifySlotsUpdated();
+    }
+    
+    /**
+     * 通知slots更新
+     */
+    private notifySlotsUpdated(): void {
+        // 通过operator通知slots更新
+        this.operator.notifySlotsUpdated?.(this.getSlots());
+    }
+    
+    /**
+     * 通知状态变化
+     */
+    private notifyStateChanged(): void {
+        // 通过operator通知状态变化
+        this.operator.notifyStateChanged?.(this.state);
     }
 }

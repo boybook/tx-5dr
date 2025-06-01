@@ -5,7 +5,18 @@ import { ModeDescriptorSchema } from './mode.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
-  // 服务端到客户端 - 事件通知
+  // ===== 基础连接管理 =====
+  PING = 'ping',
+  PONG = 'pong',
+  ERROR = 'error',
+  
+  // ===== 引擎控制 =====
+  START_ENGINE = 'startEngine',
+  STOP_ENGINE = 'stopEngine',
+  GET_STATUS = 'getStatus',
+  SET_MODE = 'setMode',
+  
+  // ===== 引擎事件 =====
   MODE_CHANGED = 'modeChanged',
   SLOT_START = 'slotStart',
   SUB_WINDOW = 'subWindow',
@@ -14,19 +25,15 @@ export enum WSMessageType {
   DECODE_ERROR = 'decodeError',
   SYSTEM_STATUS = 'systemStatus',
   
-  // 服务端到客户端 - 响应
-  ERROR = 'error',
-  
-  // 客户端到服务端 - 命令
-  START_ENGINE = 'startEngine',
-  STOP_ENGINE = 'stopEngine',
-  SET_MODE = 'setMode',
-  GET_STATUS = 'getStatus',
-
-  // 通用
-  PING = 'ping',
-  PONG = 'pong',
-  
+  // ===== 电台操作员管理 =====
+  GET_OPERATORS = 'getOperators',
+  OPERATORS_LIST = 'operatorsList',
+  OPERATOR_STATUS_UPDATE = 'operatorStatusUpdate',
+  SET_OPERATOR_CONTEXT = 'setOperatorContext',
+  SET_OPERATOR_SLOT = 'setOperatorSlot',
+  USER_COMMAND = 'userCommand',
+  START_OPERATOR = 'startOperator',
+  STOP_OPERATOR = 'stopOperator',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -153,6 +160,147 @@ export const WSGetStatusMessageSchema = WSBaseMessageSchema.extend({
   data: z.object({}).optional(),
 });
 
+// ===== 电台操作员相关Schema =====
+
+/**
+ * 电台操作员状态信息
+ */
+export const OperatorStatusSchema = z.object({
+  id: z.string(),
+  isActive: z.boolean(),
+  isTransmitting: z.boolean(), // 是否正在发射
+  currentSlot: z.string().optional(),
+  context: z.object({
+    myCall: z.string(),
+    myGrid: z.string(),
+    targetCall: z.string(),
+    targetGrid: z.string().optional(),
+    frequency: z.number().optional(),
+    reportSent: z.number().optional(), // 改为number类型
+    reportReceived: z.number().optional(), // 改为number类型
+  }),
+  strategy: z.object({
+    name: z.string(),
+    state: z.string(),
+    availableSlots: z.array(z.string()),
+  }),
+  cycleInfo: z.object({
+    currentCycle: z.number(),
+    isTransmitCycle: z.boolean(),
+    cycleProgress: z.number().min(0).max(1), // 0-1 表示周期进度百分比
+  }).optional(),
+  // TX1-TX6 时隙内容
+  slots: z.object({
+    TX1: z.string().optional(),
+    TX2: z.string().optional(),
+    TX3: z.string().optional(),
+    TX4: z.string().optional(),
+    TX5: z.string().optional(),
+    TX6: z.string().optional(),
+  }).optional(),
+  // 发射周期配置
+  transmitCycles: z.array(z.number()).optional(),
+});
+
+export type OperatorStatus = z.infer<typeof OperatorStatusSchema>;
+
+/**
+ * 获取操作员列表消息
+ */
+export const WSGetOperatorsMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.GET_OPERATORS),
+});
+
+/**
+ * 操作员列表响应消息
+ */
+export const WSOperatorsListMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATORS_LIST),
+  data: z.object({
+    operators: z.array(OperatorStatusSchema),
+  }),
+});
+
+/**
+ * 操作员状态更新消息
+ */
+export const WSOperatorStatusUpdateMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATOR_STATUS_UPDATE),
+  data: OperatorStatusSchema,
+});
+
+/**
+ * 设置操作员上下文消息
+ */
+export const WSSetOperatorContextMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_OPERATOR_CONTEXT),
+  data: z.object({
+    operatorId: z.string(),
+    context: z.object({
+      myCall: z.string(),
+      myGrid: z.string(),
+      targetCall: z.string(),
+      targetGrid: z.string().optional(),
+      frequency: z.number().optional(),
+      reportSent: z.number().optional(),
+      reportReceived: z.number().optional(),
+    }),
+  }),
+});
+
+/**
+ * 设置操作员时隙消息
+ */
+export const WSSetOperatorSlotMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_OPERATOR_SLOT),
+  data: z.object({
+    operatorId: z.string(),
+    slot: z.string(),
+  }),
+});
+
+/**
+ * 用户命令消息
+ */
+export const WSUserCommandMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.USER_COMMAND),
+  data: z.object({
+    operatorId: z.string(),
+    command: z.string(),
+    args: z.any(),
+  }),
+});
+
+/**
+ * 启动操作员消息
+ */
+export const WSStartOperatorMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.START_OPERATOR),
+  data: z.object({
+    operatorId: z.string(),
+  }),
+});
+
+/**
+ * 停止操作员消息
+ */
+export const WSStopOperatorMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.STOP_OPERATOR),
+  data: z.object({
+    operatorId: z.string(),
+  }),
+});
+
+// 导出类型
+export type WSGetOperatorsMessage = z.infer<typeof WSGetOperatorsMessageSchema>;
+export type WSOperatorsListMessage = z.infer<typeof WSOperatorsListMessageSchema>;
+export type WSOperatorStatusUpdateMessage = z.infer<typeof WSOperatorStatusUpdateMessageSchema>;
+export type WSSetOperatorContextMessage = z.infer<typeof WSSetOperatorContextMessageSchema>;
+export type WSSetOperatorSlotMessage = z.infer<typeof WSSetOperatorSlotMessageSchema>;
+export type WSUserCommandMessage = z.infer<typeof WSUserCommandMessageSchema>;
+export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
+export type WSStopOperatorMessage = z.infer<typeof WSStopOperatorMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -172,6 +320,16 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSStopEngineMessageSchema,
   WSSetModeMessageSchema,
   WSGetStatusMessageSchema,
+  
+  // 操作员相关消息
+  WSGetOperatorsMessageSchema,
+  WSOperatorsListMessageSchema,
+  WSOperatorStatusUpdateMessageSchema,
+  WSSetOperatorContextMessageSchema,
+  WSSetOperatorSlotMessageSchema,
+  WSUserCommandMessageSchema,
+  WSStartOperatorMessageSchema,
+  WSStopOperatorMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -222,6 +380,10 @@ export interface DigitalRadioEngineEvents {
 
   // 发射
   requestTransmit: (request: TransmitRequest) => void;
+  
+  // 操作员事件
+  operatorsList: (operators: OperatorStatus[]) => void;
+  operatorStatusUpdate: (operatorStatus: OperatorStatus) => void;
   
   // 错误和状态事件
   decodeError: (errorInfo: DecodeErrorInfo) => void;

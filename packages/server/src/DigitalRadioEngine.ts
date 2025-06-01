@@ -2,8 +2,10 @@ import {
   SlotClock, 
   SlotScheduler, 
   ClockSourceSystem,
+  RadioOperator,
+  StandardQSOStrategy
 } from '@tx5dr/core';
-import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type OperatorConfig, type TransmitRequest } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue';
@@ -29,6 +31,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private realDecodeQueue: WSJTXDecodeWorkQueue;
   private slotPackManager: SlotPackManager;
   private spectrumScheduler: SpectrumScheduler;
+
+  // 电台操作员管理
+  private operators: Map<string, RadioOperator> = new Map();
+  private pendingTransmissions: TransmitRequest[] = [];
   
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -56,6 +62,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       enabled: DigitalRadioEngine.SPECTRUM_CONFIG.ENABLED,
       targetSampleRate: DigitalRadioEngine.SPECTRUM_CONFIG.TARGET_SAMPLE_RATE
     });
+
+    // 监听发射请求
+    this.on('requestTransmit', (request: TransmitRequest) => {
+      this.pendingTransmissions.push(request);
+    });
   }
   
   /**
@@ -81,6 +92,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.slotClock.on('slotStart', (slotInfo) => {
       console.log(`🎯 [时隙开始] ID: ${slotInfo.id}, 开始时间: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
       this.emit('slotStart', slotInfo);
+      
+      // 广播所有操作员的状态更新（包含更新的周期进度）
+      this.broadcastAllOperatorStatusUpdates();
     });
     
     this.slotClock.on('subWindow', (slotInfo, windowIdx) => {
@@ -152,7 +166,308 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.error('📊 [时钟管理器] 频谱分析错误:', error);
     });
     
+    // 创建固定的电台操作员实例
+    this.initializeDefaultOperator();
+    
     console.log(`✅ [时钟管理器] 初始化完成，当前模式: ${this.currentMode.name}`);
+  }
+  
+  /**
+   * 初始化默认的电台操作员
+   */
+  private initializeDefaultOperator(): void {
+    const defaultConfig: OperatorConfig = {
+      id: 'default-operator',
+      myCallsign: 'BG5DRB',
+      myGrid: 'OP09',
+      frequency: 1550,
+      mode: this.currentMode,
+      transmitCycles: [0], // 偶数周期发射
+      maxQSOTimeoutCycles: 10,
+      maxCallAttempts: 3,
+      autoReplyToCQ: false,
+      autoResumeCQAfterFail: false,
+      autoResumeCQAfterSuccess: false,
+    };
+
+    try {
+      const operator = this.addOperator(defaultConfig);
+      operator.start();
+      console.log('📻 [时钟管理器] 默认电台操作员已创建并启动');
+    } catch (error) {
+      console.error('❌ [时钟管理器] 创建默认电台操作员失败:', error);
+    }
+  }
+
+  /**
+   * 获取所有操作员的状态信息
+   */
+  getOperatorsStatus(): any[] {
+    const operators = [];
+    
+    for (const [id, operator] of this.operators.entries()) {
+      // 计算周期信息
+      let cycleInfo;
+      if (this.slotClock && this.isRunning) {
+        const now = this.clockSource.now();
+        const slotMs = this.currentMode.slotMs;
+        const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
+        const cycleProgress = (now - currentSlotStartMs) / slotMs;
+        
+        // 根据操作员的transmitCycles配置判断是否为发射周期
+        const cycleNumber = Math.floor(currentSlotStartMs / slotMs);
+        let isTransmitCycle = false;
+        
+        if (this.currentMode.cycleType === 'EVEN_ODD') {
+          // FT8偶奇周期模式：0=偶数周期，1=奇数周期
+          const evenOddCycle = cycleNumber % 2;
+          isTransmitCycle = operator.getTransmitCycles().includes(evenOddCycle);
+          
+          // 添加调试信息
+          console.log(`🔄 [周期计算] 操作员${id}: 周期${cycleNumber}(${evenOddCycle === 0 ? '偶数' : '奇数'}), 配置${JSON.stringify(operator.getTransmitCycles())}, 发射=${isTransmitCycle}`);
+        } else if (this.currentMode.cycleType === 'CONTINUOUS') {
+          // FT4连续周期模式：根据配置的transmitCycles判断
+          isTransmitCycle = operator.getTransmitCycles().includes(cycleNumber);
+          
+          // 添加调试信息
+          console.log(`🔄 [周期计算] 操作员${id}: 周期${cycleNumber}, 配置${JSON.stringify(operator.getTransmitCycles())}, 发射=${isTransmitCycle}`);
+        }
+        
+        cycleInfo = {
+          currentCycle: cycleNumber,
+          isTransmitCycle,
+          cycleProgress
+        };
+      }
+      
+      // 从策略获取slots信息
+      let slots;
+      let currentSlot = 'TX6';
+      let targetContext = { 
+        targetCall: '', 
+        targetGrid: '', 
+        reportSent: 0,
+        reportReceived: 0
+      };
+      
+      if (operator.transmissionStrategy) {
+        try {
+          // 获取slots
+          const slotsResult = operator.transmissionStrategy.userCommand?.({
+            command: 'get_slots'
+          } as any);
+          if (slotsResult && typeof slotsResult === 'object') {
+            slots = slotsResult;
+          }
+          
+          // 获取当前状态
+          const stateResult = operator.transmissionStrategy.userCommand?.({
+            command: 'get_state'
+          } as any);
+          if (stateResult && typeof stateResult === 'string') {
+            currentSlot = stateResult;
+          }
+          
+          // 获取策略状态和上下文 - 通过类型转换访问
+          const strategy = operator.transmissionStrategy as any;
+          if (strategy.context) {
+            const context = strategy.context;
+            targetContext = {
+              targetCall: context.targetCallsign || '',
+              targetGrid: context.targetGrid || '',
+              reportSent: context.reportSent ?? 0,
+              reportReceived: context.reportReceived ?? 0
+            };
+          }
+        } catch (error) {
+          console.error(`获取操作员 ${id} 的slots信息失败:`, error);
+        }
+      }
+      
+      operators.push({
+        id,
+        isActive: this.isRunning, // 基于引擎状态判断活跃状态
+        isTransmitting: operator.isTransmitting, // 操作员发射状态
+        currentSlot, // 从策略获取当前时隙
+        context: {
+          myCall: operator.config.myCallsign,
+          myGrid: operator.config.myGrid,
+          targetCall: targetContext.targetCall,
+          targetGrid: targetContext.targetGrid,
+          frequency: operator.config.frequency,
+          reportSent: targetContext.reportSent,
+          reportReceived: targetContext.reportReceived,
+        },
+        strategy: {
+          name: 'StandardQSOStrategy',
+          state: currentSlot, // 当前策略状态
+          availableSlots: ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6']
+        },
+        cycleInfo,
+        slots, // 添加slots信息
+        transmitCycles: operator.getTransmitCycles(), // 添加发射周期配置
+      });
+    }
+    
+    return operators;
+  }
+
+  /**
+   * 更新操作员上下文
+   */
+  updateOperatorContext(operatorId: string, context: any): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`操作员 ${operatorId} 不存在`);
+    }
+    
+    // 更新操作员配置
+    operator.config.myCallsign = context.myCall || operator.config.myCallsign;
+    operator.config.myGrid = context.myGrid || operator.config.myGrid;
+    operator.config.frequency = context.frequency || operator.config.frequency;
+    
+    console.log(`📻 [时钟管理器] 更新操作员 ${operatorId} 上下文:`, context);
+    
+    // 发射操作员状态更新事件
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 设置操作员时隙
+   */
+  setOperatorSlot(operatorId: string, slot: string): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`操作员 ${operatorId} 不存在`);
+    }
+    
+    // 使用 userCommand 来设置时隙
+    operator.userCommand({
+      type: 'setSlot',
+      slot: slot
+    } as any);
+    
+    console.log(`📻 [时钟管理器] 设置操作员 ${operatorId} 时隙: ${slot}`);
+    
+    // 发射操作员状态更新事件
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 启动操作员发射
+   */
+  startOperator(operatorId: string): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`操作员 ${operatorId} 不存在`);
+    }
+    
+    operator.start();
+    console.log(`📻 [时钟管理器] 启动操作员 ${operatorId} 发射`);
+    
+    // 发射操作员状态更新事件
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 停止操作员发射
+   */
+  stopOperator(operatorId: string): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`操作员 ${operatorId} 不存在`);
+    }
+    
+    operator.stop();
+    console.log(`📻 [时钟管理器] 停止操作员 ${operatorId} 发射`);
+    
+    // 发射操作员状态更新事件
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 发射操作员状态更新事件
+   */
+  private emitOperatorStatusUpdate(operatorId: string): void {
+    const operatorStatus = this.getOperatorsStatus().find(op => op.id === operatorId);
+    if (operatorStatus) {
+      // 使用 emit 发射自定义事件
+      this.emit('operatorStatusUpdate' as any, operatorStatus);
+    }
+  }
+
+  /**
+   * 添加电台操作员
+   */
+  addOperator(config: OperatorConfig): RadioOperator {
+    if (this.operators.has(config.id)) {
+      throw new Error(`操作员 ${config.id} 已存在`);
+    }
+
+    const operator = new RadioOperator(
+      config,
+      this,
+      (op: RadioOperator) => new StandardQSOStrategy(op)
+    );
+
+    // 监听操作员的slots更新事件
+    operator.addSlotsUpdateListener((data: any) => {
+      console.log(`📻 [时钟管理器] 操作员 ${data.operatorId} 的slots已更新`);
+      // 发射操作员状态更新事件
+      this.emitOperatorStatusUpdate(data.operatorId);
+    });
+
+    // 监听操作员的状态变化事件
+    operator.addStateChangeListener((data: any) => {
+      console.log(`📻 [时钟管理器] 操作员 ${data.operatorId} 的状态已变化为: ${data.state}`);
+      // 发射操作员状态更新事件
+      this.emitOperatorStatusUpdate(data.operatorId);
+    });
+
+    this.operators.set(config.id, operator);
+    console.log(`📻 [时钟管理器] 添加操作员: ${config.id}`);
+    return operator;
+  }
+
+  /**
+   * 移除电台操作员
+   */
+  removeOperator(id: string): void {
+    const operator = this.operators.get(id);
+    if (operator) {
+      operator.stop();
+      this.operators.delete(id);
+      console.log(`📻 [时钟管理器] 移除操作员: ${id}`);
+    }
+  }
+
+  /**
+   * 获取电台操作员
+   */
+  getOperator(id: string): RadioOperator | undefined {
+    return this.operators.get(id);
+  }
+
+  /**
+   * 获取所有电台操作员
+   */
+  getAllOperators(): RadioOperator[] {
+    return Array.from(this.operators.values());
+  }
+
+  /**
+   * 处理发射请求
+   */
+  private handleTransmissions(): void {
+    if (this.pendingTransmissions.length === 0) {
+      return;
+    }
+
+    // TODO: 实现实际的发射逻辑
+    console.log(`📢 [时钟管理器] 待发射消息:`, this.pendingTransmissions);
+    
+    // 清空待发射队列
+    this.pendingTransmissions = [];
   }
   
   /**
@@ -211,6 +526,58 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
   
   /**
+   * 获取所有活跃的时隙包
+   */
+  getActiveSlotPacks(): SlotPack[] {
+    return this.slotPackManager.getActiveSlotPacks();
+  }
+
+  /**
+   * 获取指定时隙包
+   */
+  getSlotPack(slotId: string): SlotPack | null {
+    return this.slotPackManager.getSlotPack(slotId);
+  }
+
+  /**
+   * 设置当前模式
+   */
+  async setMode(mode: ModeDescriptor): Promise<void> {
+    if (this.currentMode.name === mode.name) {
+      console.log(`🔄 [时钟管理器] 已经是模式: ${mode.name}`);
+      return;
+    }
+
+    console.log(`🔄 [时钟管理器] 切换模式: ${this.currentMode.name} -> ${mode.name}`);
+    this.currentMode = mode;
+
+    // 更新 SlotClock 的模式
+    if (this.slotClock) {
+      this.slotClock.setMode(mode);
+    }
+
+    // 更新 SlotPackManager 的模式
+    this.slotPackManager.setMode(mode);
+
+    // 发射模式变化事件
+    this.emit('modeChanged', mode);
+  }
+
+  /**
+   * 获取当前状态
+   */
+  public getStatus() {
+    return {
+      isRunning: this.isRunning,
+      isDecoding: this.slotClock?.isRunning ?? false,
+      currentMode: this.currentMode,
+      currentTime: this.clockSource.now(),
+      nextSlotIn: this.slotClock?.getNextSlotIn() ?? 0,
+      audioStarted: this.audioStarted
+    };
+  }
+  
+  /**
    * 停止时钟
    */
   async stop(): Promise<void> {
@@ -245,113 +612,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         this.spectrumScheduler.stop();
         console.log(`🛑 [时钟管理器] 停止频谱分析调度器`);
       }
+
+      // 停止所有操作员
+      for (const operator of this.operators.values()) {
+        operator.stop();
+      }
       
       // 发射系统状态变化事件
       const status = this.getStatus();
       this.emit('systemStatus', status);
     }
-  }
-  
-  /**
-   * 切换模式
-   */
-  async setMode(mode: ModeDescriptor): Promise<void> {
-    if (this.currentMode.name === mode.name) {
-      console.log(`⚠️  [时钟管理器] 已经是 ${mode.name} 模式`);
-      return;
-    }
-    
-    const wasRunning = this.isRunning;
-    
-    // 如果正在运行，先停止
-    if (wasRunning) {
-      await this.stop();
-    }
-    
-    console.log(`🔄 [时钟管理器] 切换模式: ${this.currentMode.name} -> ${mode.name}`);
-    this.currentMode = mode;
-    
-    // 更新 SlotPackManager 的模式
-    this.slotPackManager.setMode(mode);
-    
-    // 重新创建 SlotClock
-    if (this.slotClock) {
-      this.slotClock.removeAllListeners();
-    }
-    
-    this.slotClock = new SlotClock(this.clockSource, this.currentMode);
-    
-    // 重新绑定事件
-    this.slotClock.on('slotStart', (slotInfo) => {
-      console.log(`🎯 [时隙开始] ID: ${slotInfo.id}, 开始时间: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
-      this.emit('slotStart', slotInfo);
-    });
-    
-    this.slotClock.on('subWindow', (slotInfo, windowIdx) => {
-      const totalWindows = this.currentMode.windowTiming?.length || 0;
-      console.log(`🔍 [子窗口] 时隙: ${slotInfo.id}, 窗口: ${windowIdx}/${totalWindows}, 开始: ${new Date(slotInfo.startMs).toISOString()}`);
-      this.emit('subWindow', { slotInfo, windowIdx });
-    });
-    
-    // 重新创建 SlotScheduler
-    if (this.slotScheduler) {
-      this.slotScheduler = new SlotScheduler(
-        this.slotClock, 
-        this.realDecodeQueue, 
-        this.audioStreamManager.getAudioProvider()
-      );
-      if (this.isRunning) {
-        this.slotScheduler.start();
-        console.log(`📡 [时钟管理器] 重新启动解码调度器`);
-      }
-    }
-    
-    this.emit('modeChanged', mode);
-    
-    // 如果之前在运行，重新启动
-    if (wasRunning) {
-      await this.start();
-    }
-  }
-  
-  /**
-   * 获取当前状态
-   */
-  getStatus() {
-    return {
-      isRunning: this.isRunning,
-      isDecoding: this.slotClock?.isRunning ?? false,
-      currentMode: this.currentMode,
-      currentTime: this.clockSource.now(),
-      nextSlotIn: 0, // 简化实现，暂时返回 0
-      audioStarted: this.audioStarted
-    };
-  }
-  
-  /**
-   * 获取可用的模式列表
-   */
-  getAvailableModes(): ModeDescriptor[] {
-    return [
-      MODES.FT8,
-      MODES.FT4,
-      (MODES as any)['FT8-MultiWindow'],
-      (MODES as any)['FT8-HighFreq']
-    ];
-  }
-  
-  /**
-   * 获取活跃的时隙包
-   */
-  getActiveSlotPacks(): SlotPack[] {
-    return this.slotPackManager.getActiveSlotPacks();
-  }
-  
-  /**
-   * 获取指定时隙包
-   */
-  getSlotPack(slotId: string): SlotPack | null {
-    return this.slotPackManager.getSlotPack(slotId);
   }
   
   /**
@@ -381,6 +651,35 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.slotScheduler = null;
     this.removeAllListeners();
     
+    // 清理操作员
+    this.operators.clear();
+    
     console.log('✅ [时钟管理器] 销毁完成');
+  }
+
+  /**
+   * 获取所有可用模式
+   */
+  getAvailableModes(): ModeDescriptor[] {
+    return Object.values(MODES);
+  }
+
+  /**
+   * 广播所有操作员的状态更新
+   */
+  private broadcastAllOperatorStatusUpdates(): void {
+    console.log('📢 [广播] 开始广播所有操作员状态更新');
+    const operators = this.getOperatorsStatus();
+    console.log(`📢 [广播] 获取到 ${operators.length} 个操作员状态`);
+    for (const operator of operators) {
+      console.log(`📢 [广播] 广播操作员 ${operator.id} 状态:`, {
+        currentCycle: operator.cycleInfo?.currentCycle,
+        isTransmitCycle: operator.cycleInfo?.isTransmitCycle,
+        isTransmitting: operator.isTransmitting,
+        transmitCycles: operator.transmitCycles
+      });
+      this.emit('operatorStatusUpdate' as any, operator);
+    }
+    console.log('📢 [广播] 完成广播所有操作员状态更新');
   }
 } 

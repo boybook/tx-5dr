@@ -3,14 +3,11 @@ import {Select, SelectItem, Switch, Button} from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
+import { api } from '@tx5dr/core';
+import type { ModeDescriptor } from '@tx5dr/contracts';
 
 const frequencies = [
   { key: "50313", label: "50.313MHz" }
-]
-
-const modes = [
-  { key: "ft8", label: "FT8" },
-  { key: "ft4", label: "FT4" },
 ]
 
 export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
@@ -23,11 +20,54 @@ export const RadioControl: React.FC = () => {
   const connection = useConnection();
   const radio = useRadioState();
   const [isConnecting, setIsConnecting] = React.useState(false);
+  const [availableModes, setAvailableModes] = React.useState<ModeDescriptor[]>([]);
+  const [isLoadingModes, setIsLoadingModes] = React.useState(false);
+  const [modeError, setModeError] = React.useState<string | null>(null);
   
   // 本地UI状态管理
   const [isListenLoading, setIsListenLoading] = React.useState(false);
   const [pendingListenState, setPendingListenState] = React.useState<boolean | null>(null);
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // 加载可用模式列表
+  React.useEffect(() => {
+    const loadModes = async () => {
+      if (!connection.state.isConnected) {
+        console.log('🔌 未连接到服务器，清空模式列表');
+        setAvailableModes([]);
+        return;
+      }
+      
+      setIsLoadingModes(true);
+      setModeError(null);
+      
+      try {
+        console.log('🔄 开始加载模式列表...');
+        const response = await api.getAvailableModes();
+        console.log('📦 收到模式列表响应:', response);
+        
+        if (response.success && Array.isArray(response.data)) {
+          if (response.data.length === 0) {
+            console.warn('⚠️ 模式列表为空');
+            setModeError('没有可用的模式');
+          } else {
+            console.log(`✅ 成功加载 ${response.data.length} 个模式:`, response.data.map(m => m.name).join(', '));
+            setAvailableModes(response.data);
+          }
+        } else {
+          console.error('❌ 加载模式列表失败: 返回数据格式错误', response);
+          setModeError('加载模式列表失败: 数据格式错误');
+        }
+      } catch (error) {
+        console.error('❌ 加载模式列表失败:', error);
+        setModeError('加载模式列表失败: ' + (error instanceof Error ? error.message : '未知错误'));
+      } finally {
+        setIsLoadingModes(false);
+      }
+    };
+
+    loadModes();
+  }, [connection.state.isConnected]);
 
   // 添加调试信息
   React.useEffect(() => {
@@ -36,9 +76,23 @@ export const RadioControl: React.FC = () => {
       isDecoding: radio.state.isDecoding,
       hasRadioService: !!connection.state.radioService,
       isListenLoading,
-      pendingListenState
+      pendingListenState,
+      currentMode: radio.state.currentMode,
+      availableModes: availableModes.length,
+      isLoadingModes,
+      modeError
     });
-  }, [connection.state.isConnected, radio.state.isDecoding, connection.state.radioService, isListenLoading, pendingListenState]);
+  }, [
+    connection.state.isConnected, 
+    radio.state.isDecoding, 
+    connection.state.radioService, 
+    isListenLoading, 
+    pendingListenState, 
+    radio.state.currentMode,
+    availableModes.length,
+    isLoadingModes,
+    modeError
+  ]);
 
   // 监听WebSocket状态变化，清除loading状态
   React.useEffect(() => {
@@ -123,6 +177,31 @@ export const RadioControl: React.FC = () => {
     }
   };
 
+  // 处理模式切换
+  const handleModeChange = async (keys: any) => {
+    if (!connection.state.isConnected) {
+      console.warn('⚠️ 未连接到服务器，无法切换模式');
+      return;
+    }
+
+    const selectedModeName = Array.from(keys)[0];
+    const selectedMode = availableModes.find(mode => mode.name === selectedModeName);
+    
+    if (!selectedMode) {
+      console.warn('⚠️ 未找到选中的模式:', selectedModeName);
+      return;
+    }
+
+    try {
+      const response = await api.switchMode(selectedMode);
+      if (response.success) {
+        console.log(`✅ 模式已切换到: ${selectedMode.name}`);
+      }
+    } catch (error) {
+      console.error('❌ 切换模式失败:', error);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-0 bg-gray-100 px-4 py-2 pt-3 rounded-lg cursor-default">
       {/* 顶部标题栏 */}
@@ -190,9 +269,9 @@ export const RadioControl: React.FC = () => {
             disableSelectorIconRotation
             className="w-[100px]"
             labelPlacement="outside"
-            placeholder="通联模式"
+            placeholder={modeError || "通联模式"}
             selectorIcon={<SelectorIcon />}
-            defaultSelectedKeys={['ft8']}
+            selectedKeys={radio.state.currentMode ? [radio.state.currentMode.name] : []}
             variant="flat"
             size="md"
             radius="md"
@@ -203,11 +282,17 @@ export const RadioControl: React.FC = () => {
               innerWrapper: "shadow-none",
               mainWrapper: "shadow-none"
             }}
-            isDisabled={!connection.state.isConnected}
+            isDisabled={!connection.state.isConnected || isLoadingModes}
+            onSelectionChange={handleModeChange}
+            isLoading={isLoadingModes}
           >
-            {modes.map((format) => (
-              <SelectItem key={format.key} textValue={format.label}>
-                {format.label}
+            {availableModes?.filter(mode => mode && mode.name).map((mode) => (
+              <SelectItem 
+                key={mode.name} 
+                textValue={mode.name}
+                className="text-xs py-1 px-2 min-h-6"
+              >
+                {mode.name}
               </SelectItem>
             ))}
           </Select>
@@ -227,17 +312,6 @@ export const RadioControl: React.FC = () => {
               isDisabled={!connection.state.isConnected || isListenLoading}
               aria-label="切换监听状态"
               className={isListenLoading ? 'opacity-50 pointer-events-none' : ''}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-default-600">发射</span>
-            <Switch 
-              isSelected={false} 
-              color="danger" 
-              onValueChange={() => {}} 
-              size="sm"
-              isDisabled={true}
-              aria-label="切换发射状态"
             />
           </div>
         </div>

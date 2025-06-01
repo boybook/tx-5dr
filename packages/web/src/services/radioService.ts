@@ -181,6 +181,10 @@ export class RadioService {
     // 监听模式变化
     this.wsClient.onWSEvent('modeChanged', (mode: any) => {
       console.log('🔄 模式变化:', mode);
+      if (!mode || !mode.name) {
+        console.warn('⚠️ 收到无效的模式数据:', mode);
+        return;
+      }
       this.eventListeners.modeChanged?.(mode);
     });
 
@@ -201,5 +205,75 @@ export class RadioService {
       // console.log('📊 频谱数据:', spectrumData);
       this.eventListeners.spectrumData?.(spectrumData);
     });
+
+    // 监听操作员列表
+    this.wsClient.onWSEvent('operatorsList', (data: any) => {
+      console.log('📻 操作员列表:', data);
+      this.eventListeners.operatorsList?.(data.operators);
+    });
+
+    // 监听操作员状态更新
+    this.wsClient.onWSEvent('operatorStatusUpdate', (operatorStatus: any) => {
+      console.log('📻 操作员状态更新:', operatorStatus);
+      this.eventListeners.operatorStatusUpdate?.(operatorStatus);
+    });
   }
-} 
+
+  /**
+   * 获取操作员列表
+   */
+  getOperators(): void {
+    console.log('📤 [RadioService] getOperators 调用，isConnected:', this.isConnected);
+    if (this.isConnected) {
+      console.log('📤 [RadioService] 发送 getOperators 消息');
+      this.wsClient.send('getOperators');
+    } else {
+      console.warn('⚠️ [RadioService] 未连接，无法获取操作员列表');
+    }
+  }
+
+  /**
+   * 设置操作员上下文
+   */
+  setOperatorContext(operatorId: string, context: any): void {
+    if (this.isConnected) {
+      this.wsClient.send('setOperatorContext', { operatorId, context });
+    }
+  }
+
+  /**
+   * 设置操作员时隙
+   */
+  setOperatorSlot(operatorId: string, slot: string): void {
+    if (this.isConnected) {
+      this.wsClient.send('setOperatorSlot', { operatorId, slot });
+    }
+  }
+
+  /**
+   * 发送用户命令到操作员
+   */
+  sendUserCommand(operatorId: string, command: string, args: any): void {
+    if (this.isConnected) {
+      this.wsClient.send('userCommand', { operatorId, command, args });
+    }
+  }
+  
+  /**
+   * 启动操作员发射
+   */
+  startOperator(operatorId: string): void {
+    if (this.isConnected) {
+      this.wsClient.send('startOperator', { operatorId });
+    }
+  }
+
+  /**
+   * 停止操作员发射
+   */
+  stopOperator(operatorId: string): void {
+    if (this.isConnected) {
+      this.wsClient.send('stopOperator', { operatorId });
+    }
+  }
+}

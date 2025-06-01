@@ -8,8 +8,8 @@ import { ConfigManager } from './config/config-manager';
 import { DigitalRadioEngine } from './DigitalRadioEngine';
 import { audioRoutes } from './routes/audio';
 import { configRoutes } from './routes/config';
-import { clockRoutes } from './routes/clock';
 import { slotpackRoutes } from './routes/slotpack';
+import { modeRoutes } from './routes/mode';
 import { WSServer } from './websocket/WSServer';
 
 export async function createServer() {
@@ -121,13 +121,13 @@ export async function createServer() {
   await fastify.register(configRoutes, { prefix: '/api/config' });
   fastify.log.info('配置管理API路由注册完成');
 
-  // 注册时钟管理API路由
-  await fastify.register(clockRoutes, { prefix: '/api/clock' });
-  fastify.log.info('时钟管理API路由注册完成');
-
   // 注册时隙包管理API路由
   await fastify.register(slotpackRoutes, { prefix: '/api/slotpack' });
   fastify.log.info('时隙包管理API路由注册完成');
+
+  // 注册模式管理API路由
+  await fastify.register(modeRoutes, { prefix: '/api/mode' });
+  fastify.log.info('模式管理API路由注册完成');
 
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 
 // ===== 连接状态管理 =====
@@ -36,18 +36,22 @@ export interface RadioState {
   isDecoding: boolean;
   currentMode: ModeDescriptor | null;
   systemStatus: any;
+  operators: OperatorStatus[];
 }
 
 export type RadioAction = 
   | { type: 'modeChanged'; payload: ModeDescriptor }
   | { type: 'systemStatus'; payload: any }
   | { type: 'decodeError'; payload: any }
-  | { type: 'error'; payload: Error };
+  | { type: 'error'; payload: Error }
+  | { type: 'operatorsList'; payload: OperatorStatus[] }
+  | { type: 'operatorStatusUpdate'; payload: OperatorStatus };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
   currentMode: null,
-  systemStatus: null
+  systemStatus: null,
+  operators: []
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -75,6 +79,53 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
     case 'error':
       console.error('RadioService错误:', action.payload);
       return state;
+    
+    case 'operatorsList':
+      return {
+        ...state,
+        operators: action.payload
+      };
+    
+    case 'operatorStatusUpdate':
+      console.log('📻 [Store] 收到操作员状态更新:', action.payload);
+      return {
+        ...state,
+        operators: state.operators.map(op => {
+          if (op.id === action.payload.id) {
+            // 深度比较，只有实际变化时才更新
+            const hasContextChanged = 
+              JSON.stringify(op.context) !== JSON.stringify(action.payload.context);
+            const hasSlotChanged = op.currentSlot !== action.payload.currentSlot;
+            const hasTransmittingChanged = op.isTransmitting !== action.payload.isTransmitting;
+            const hasSlotsChanged = 
+              JSON.stringify(op.slots) !== JSON.stringify(action.payload.slots);
+            const hasCycleInfoChanged = 
+              JSON.stringify(op.cycleInfo) !== JSON.stringify(action.payload.cycleInfo);
+            const hasTransmitCyclesChanged = 
+              JSON.stringify(op.transmitCycles) !== JSON.stringify(action.payload.transmitCycles);
+              
+            // 如果没有实质性变化，返回原对象（避免重新渲染）
+            if (!hasContextChanged && !hasSlotChanged && !hasTransmittingChanged && 
+                !hasSlotsChanged && !hasCycleInfoChanged && !hasTransmitCyclesChanged) {
+              console.log(`📻 [Store] 操作员 ${op.id} 状态无变化，跳过更新`);
+              return op;
+            }
+            
+            console.log(`📻 [Store] 操作员 ${op.id} 状态有变化，进行更新:`, {
+              hasContextChanged,
+              hasSlotChanged,
+              hasTransmittingChanged,
+              hasSlotsChanged,
+              hasCycleInfoChanged,
+              hasTransmitCyclesChanged,
+              newCycleInfo: action.payload.cycleInfo
+            });
+            
+            return action.payload;
+          }
+          return op;
+        })
+      };
     
     default:
       return state;
@@ -199,6 +250,14 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     radioService.on('slotPackUpdated', (slotPack: SlotPack) => {
       slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });
+    });
+
+    radioService.on('operatorsList', (operators: OperatorStatus[]) => {
+      radioDispatch({ type: 'operatorsList', payload: operators });
+    });
+
+    radioService.on('operatorStatusUpdate', (operatorStatus: OperatorStatus) => {
+      radioDispatch({ type: 'operatorStatusUpdate', payload: operatorStatus });
     });
 
     connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });

@@ -170,5 +170,19 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     return this.mode.windowTiming || [];
   }
   
+  /**
+   * 获取下一个时隙的倒计时（毫秒）
+   */
+  public getNextSlotIn(): number {
+    if (!this.isRunning) {
+      return 0;
+    }
+    
+    const now = this.clockSource.now();
+    const slotMs = this.mode.slotMs;
+    const nextSlot = Math.ceil(now / slotMs) * slotMs;
+    return nextSlot - now;
+  }
+  
   // EventEmitter3 已经提供了类型安全的方法
 } 

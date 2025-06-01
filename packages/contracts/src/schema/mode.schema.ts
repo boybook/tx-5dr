@@ -33,7 +33,7 @@ export const ModeDescriptorSchema = z.object({
    * EVEN_ODD: 偶数/奇数周期（如 FT8）
    * CONTINUOUS: 连续周期（如 FT4）
    */
-  cycleType: z.nativeEnum(CycleType)
+  cycleType: z.enum(['EVEN_ODD', 'CONTINUOUS'])
 });
 
 export type ModeDescriptor = z.infer<typeof ModeDescriptorSchema>;
@@ -47,7 +47,7 @@ export const MODES = {
     slotMs: 15000,
     toleranceMs: 100,
     windowTiming: [-2000, -1500, -1000, -500, -250, 0, 250, 500, 1000],
-    cycleType: CycleType.EVEN_ODD
+    cycleType: 'EVEN_ODD'
   } as ModeDescriptor,
   FT4: {
     name: 'FT4', 
@@ -55,7 +55,6 @@ export const MODES = {
     toleranceMs: 50,
     // 双窗口模式：在时隙结束时和结束后3.75秒时进行解码
     windowTiming: [0, 3750],
-    cycleType: CycleType.CONTINUOUS
+    cycleType: 'CONTINUOUS'
   } as ModeDescriptor,
-  
 } as const; 

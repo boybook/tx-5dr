@@ -9,6 +9,7 @@ export class RadioOperator {
     private _transmissionStrategy?: ITransmissionStrategy;
     private _config: OperatorConfig; 
     private _stopped: boolean = false;
+    private _isTransmitting: boolean = false; // 发射状态
 
     private static readonly DEFAULT_CONFIG: OperatorConfig = {
         mode: MODES.FT8,
@@ -38,12 +39,24 @@ export class RadioOperator {
         return this._config;
     }
 
+    get transmissionStrategy(): ITransmissionStrategy | undefined {
+        return this._transmissionStrategy;
+    }
+
+    get isTransmitting(): boolean {
+        return this._isTransmitting;
+    }
+
     stop() {
         this._stopped = true;
+        this._isTransmitting = false;
+        this.notifyStatusChanged();
     }
 
     start() {
         this._stopped = false;
+        this._isTransmitting = true;
+        this.notifyStatusChanged();
     }
 
     initEventListener(eventEmitter: EventEmitter<DigitalRadioEngineEvents>) {
@@ -138,10 +151,72 @@ export class RadioOperator {
     }
 
     userCommand(command: QSOCommand): void {
+        // 首先检查是否是RadioOperator级别的命令
+        if (command.command === 'set_transmit_cycles') {
+            const { transmitCycles } = command.args;
+            this.setTransmitCycles(transmitCycles);
+            // 通知状态变化
+            this.notifyStatusChanged();
+            return;
+        }
+        
+        // 其他命令转发给transmission strategy
         this._transmissionStrategy?.userCommand?.(command);
+    }
+
+    /**
+     * 获取当前发射周期配置
+     */
+    getTransmitCycles(): number[] {
+        return [...this._config.transmitCycles];
     }
 
     recordQSOLog(qsoRecord: QSORecord): void {
         // TODO
+    }
+    
+    /**
+     * 通知slots更新
+     */
+    notifySlotsUpdated(slots: any): void {
+        this._eventEmitter.emit('operatorSlotsUpdated' as any, {
+            operatorId: this._config.id,
+            slots
+        });
+    }
+    
+    /**
+     * 添加slots更新监听器
+     */
+    addSlotsUpdateListener(callback: (data: { operatorId: string; slots: any }) => void): void {
+        this._eventEmitter.on('operatorSlotsUpdated' as any, callback);
+    }
+    
+    /**
+     * 添加状态变化监听器
+     */
+    addStateChangeListener(callback: (data: { operatorId: string; state: string }) => void): void {
+        this._eventEmitter.on('operatorStateChanged' as any, callback);
+    }
+
+    /**
+     * 通知状态变化（发射状态等）
+     */
+    private notifyStatusChanged(): void {
+        this._eventEmitter.emit('operatorStatusChanged' as any, {
+            operatorId: this._config.id,
+            isTransmitting: this._isTransmitting,
+            isStopped: this._stopped
+        });
+    }
+
+    /**
+     * 通知状态变化
+     */
+    notifyStateChanged(state: string): void {
+        this._eventEmitter.emit('operatorStateChanged' as any, {
+            operatorId: this._config.id,
+            state
+        });
     }
 }

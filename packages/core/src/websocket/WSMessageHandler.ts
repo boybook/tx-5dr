@@ -75,6 +75,10 @@ export class WSMessageHandler extends WSEventEmitter {
       [WSMessageType.SPECTRUM_DATA]: 'spectrumData',
       [WSMessageType.DECODE_ERROR]: 'decodeError',
       [WSMessageType.SYSTEM_STATUS]: 'systemStatus',
+      
+      // 操作员相关事件
+      [WSMessageType.OPERATORS_LIST]: 'operatorsList',
+      [WSMessageType.OPERATOR_STATUS_UPDATE]: 'operatorStatusUpdate',
     };
 
     // 检查是否有对应的事件映射

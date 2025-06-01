@@ -9,7 +9,7 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
   const clockManager = DigitalRadioEngine.getInstance();
   
   // 获取所有活跃的时隙包
-  fastify.get('/api/slotpacks', async (request, reply) => {
+  fastify.get('/slotpacks', async (request, reply) => {
     try {
       const slotPacks: SlotPack[] = clockManager.getActiveSlotPacks();
       
@@ -28,7 +28,7 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
   });
   
   // 获取指定时隙包
-  fastify.get('/api/slotpacks/:slotId', async (request, reply) => {
+  fastify.get('/slotpacks/:slotId', async (request, reply) => {
     try {
       const { slotId } = request.params as { slotId: string };
       
@@ -56,18 +56,18 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
   });
   
   // 获取时隙包统计信息
-  fastify.get('/api/slotpacks/stats', async (request, reply) => {
+  fastify.get('/slotpacks/stats', async (request, reply) => {
     try {
       const activeSlotPacks = clockManager.getActiveSlotPacks();
-      const totalFrames = activeSlotPacks.reduce((sum, pack) => sum + pack.frames.length, 0);
-      const totalDecodes = activeSlotPacks.reduce((sum, pack) => sum + pack.stats.totalDecodes, 0);
+      const totalFrames = activeSlotPacks.reduce((sum: number, pack: SlotPack) => sum + pack.frames.length, 0);
+      const totalDecodes = activeSlotPacks.reduce((sum: number, pack: SlotPack) => sum + pack.stats.totalDecodes, 0);
       
       const stats = {
         activeSlotPacks: activeSlotPacks.length,
         totalProcessed: totalDecodes,
         totalFrames: totalFrames,
         averageFramesPerSlot: activeSlotPacks.length > 0 ? totalFrames / activeSlotPacks.length : 0,
-        lastActivity: activeSlotPacks.length > 0 ? Math.max(...activeSlotPacks.map(p => p.stats.lastUpdated)) : Date.now()
+        lastActivity: activeSlotPacks.length > 0 ? Math.max(...activeSlotPacks.map((p: SlotPack) => p.stats.lastUpdated)) : Date.now()
       };
       
       return {
