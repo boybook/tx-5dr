@@ -33,7 +33,7 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
     // 对于完整时隙请求，确保有足够的时间已经过去
     if (durationMs >= 10000) { // 如果请求的是长时间数据（如完整时隙）
       if (timeSinceSlotStart < durationMs) {
-        console.log(`⏳ [AudioBufferProvider] 等待完整时隙数据: 需要=${durationMs}ms, 已过去=${timeSinceSlotStart}ms`);
+        // console.log(`⏳ [AudioBufferProvider] 等待完整时隙数据: 需要=${durationMs}ms, 已过去=${timeSinceSlotStart}ms`);
         // 对于完整时隙，我们需要等待足够的时间
         const actualDurationMs = Math.min(durationMs, timeSinceSlotStart);
         return this.ringBuffer.readFromSlotStart(startMs, actualDurationMs);

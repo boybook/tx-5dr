@@ -9,6 +9,7 @@ import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvent
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue';
+import { WSJTXEncodeWorkQueue, type EncodeRequest as WSJTXEncodeRequest } from './decode/WSJTXEncodeWorkQueue';
 import { SlotPackManager } from './slot/SlotPackManager';
 import { ConfigManager } from './config/config-manager';
 import { SpectrumScheduler } from './audio/SpectrumScheduler';
@@ -29,6 +30,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // 真实的音频和解码系统
   private audioStreamManager: AudioStreamManager;
   private realDecodeQueue: WSJTXDecodeWorkQueue;
+  private realEncodeQueue: WSJTXEncodeWorkQueue;
   private slotPackManager: SlotPackManager;
   private spectrumScheduler: SpectrumScheduler;
 
@@ -51,6 +53,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.clockSource = new ClockSourceSystem();
     this.audioStreamManager = new AudioStreamManager();
     this.realDecodeQueue = new WSJTXDecodeWorkQueue(1);
+    this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
     this.slotPackManager = new SlotPackManager();
     
     // 初始化频谱调度器
@@ -66,6 +69,114 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 监听发射请求
     this.on('requestTransmit', (request: TransmitRequest) => {
       this.pendingTransmissions.push(request);
+    });
+    
+    // 监听编码完成事件
+    this.realEncodeQueue.on('encodeComplete', async (result) => {
+      try {
+        console.log(`🎵 [时钟管理器] 编码完成，计算播放时序`, {
+          operatorId: result.operatorId,
+          duration: result.duration
+        });
+        
+        // 计算当前模式的时序参数
+        const slotDurationSec = this.currentMode.slotMs / 1000; // 周期时长（秒）
+        const audioDurationSec = result.duration; // 音频时长（秒）
+        
+        // 计算居中播放需要的延迟时间
+        const centeringDelaySec = (slotDurationSec - audioDurationSec) / 2;
+        
+        console.log(`⏰ [时钟管理器] 播放时序计算:`);
+        console.log(`   周期时长: ${slotDurationSec}s`);
+        console.log(`   音频时长: ${audioDurationSec.toFixed(2)}s`);
+        console.log(`   居中延迟: ${centeringDelaySec.toFixed(2)}s`);
+        
+        // 获取当前时隙信息
+        const now = this.clockSource.now();
+        const currentSlotStartMs = Math.floor(now / this.currentMode.slotMs) * this.currentMode.slotMs;
+        const timeSinceSlotStartMs = now - currentSlotStartMs;
+        const timeSinceSlotStartSec = timeSinceSlotStartMs / 1000;
+        
+        console.log(`   当前时隙开始: ${new Date(currentSlotStartMs).toISOString()}`);
+        console.log(`   时隙已过时间: ${timeSinceSlotStartSec.toFixed(2)}s`);
+        
+        // 计算应该开始播放的时间点
+        const playbackStartSec = centeringDelaySec;
+        let delayMs = 0;
+        
+        if (timeSinceSlotStartSec < playbackStartSec) {
+          // 还没到播放时间，需要等待
+          delayMs = (playbackStartSec - timeSinceSlotStartSec) * 1000;
+          console.log(`⌛ [时钟管理器] 等待播放，延迟: ${delayMs.toFixed(0)}ms`);
+        } else if (timeSinceSlotStartSec < playbackStartSec + audioDurationSec) {
+          // 已经过了开始时间但还在播放窗口内，立即播放
+          const lateMs = (timeSinceSlotStartSec - playbackStartSec) * 1000;
+          console.log(`⚠️ [时钟管理器] 播放稍晚，已过时间: ${lateMs.toFixed(0)}ms，立即播放`);
+          delayMs = 0;
+        } else {
+          // 已经错过了整个播放窗口，跳过这次播放
+          console.warn(`❌ [时钟管理器] 错过播放窗口，跳过此次发射`);
+          console.warn(`   播放窗口: ${playbackStartSec.toFixed(2)}s - ${(playbackStartSec + audioDurationSec).toFixed(2)}s`);
+          console.warn(`   当前时间: ${timeSinceSlotStartSec.toFixed(2)}s`);
+          
+          this.emit('transmissionComplete' as any, {
+            operatorId: result.operatorId,
+            success: false,
+            error: '错过播放窗口'
+          });
+          return;
+        }
+        
+        // 如果需要延迟，设置定时器
+        if (delayMs > 0) {
+          setTimeout(async () => {
+            try {
+              console.log(`🎵 [时钟管理器] 开始播放音频`);
+              await this.audioStreamManager.playAudio(result.audioData, result.sampleRate);
+              
+              this.emit('transmissionComplete' as any, {
+                operatorId: result.operatorId,
+                success: true,
+                duration: result.duration
+              });
+            } catch (error) {
+              console.error(`❌ [时钟管理器] 延迟播放失败:`, error);
+              this.emit('transmissionComplete' as any, {
+                operatorId: result.operatorId,
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+              });
+            }
+          }, delayMs);
+        } else {
+          // 立即播放
+          console.log(`🎵 [时钟管理器] 立即播放音频`);
+          await this.audioStreamManager.playAudio(result.audioData, result.sampleRate);
+          
+          this.emit('transmissionComplete' as any, {
+            operatorId: result.operatorId,
+            success: true,
+            duration: result.duration
+          });
+        }
+        
+      } catch (error) {
+        console.error(`❌ [时钟管理器] 音频播放失败:`, error);
+        this.emit('transmissionComplete' as any, {
+          operatorId: result.operatorId,
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    });
+    
+    this.realEncodeQueue.on('encodeError', (error, request) => {
+      console.error(`❌ [时钟管理器] 编码失败:`, error);
+      this.emit('transmissionComplete' as any, {
+        operatorId: request.operatorId,
+        success: false,
+        error: error.message
+      });
     });
   }
   
@@ -92,6 +203,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.slotClock.on('slotStart', (slotInfo) => {
       console.log(`🎯 [时隙开始] ID: ${slotInfo.id}, 开始时间: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
       this.emit('slotStart', slotInfo);
+      
+      // 处理待发射的消息
+      this.handleTransmissions();
       
       // 广播所有操作员的状态更新（包含更新的周期进度）
       this.broadcastAllOperatorStatusUpdates();
@@ -222,15 +336,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           // FT8偶奇周期模式：0=偶数周期，1=奇数周期
           const evenOddCycle = cycleNumber % 2;
           isTransmitCycle = operator.getTransmitCycles().includes(evenOddCycle);
-          
-          // 添加调试信息
-          console.log(`🔄 [周期计算] 操作员${id}: 周期${cycleNumber}(${evenOddCycle === 0 ? '偶数' : '奇数'}), 配置${JSON.stringify(operator.getTransmitCycles())}, 发射=${isTransmitCycle}`);
         } else if (this.currentMode.cycleType === 'CONTINUOUS') {
           // FT4连续周期模式：根据配置的transmitCycles判断
           isTransmitCycle = operator.getTransmitCycles().includes(cycleNumber);
-          
-          // 添加调试信息
-          console.log(`🔄 [周期计算] 操作员${id}: 周期${cycleNumber}, 配置${JSON.stringify(operator.getTransmitCycles())}, 发射=${isTransmitCycle}`);
         }
         
         cycleInfo = {
@@ -463,11 +571,58 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       return;
     }
 
-    // TODO: 实现实际的发射逻辑
-    console.log(`📢 [时钟管理器] 待发射消息:`, this.pendingTransmissions);
+    // 检查当前是否是发射周期
+    const now = this.clockSource.now();
+    const currentSlotStartMs = Math.floor(now / this.currentMode.slotMs) * this.currentMode.slotMs;
+    const timeSinceSlotStartMs = now - currentSlotStartMs;
     
-    // 清空待发射队列
-    this.pendingTransmissions = [];
+    // 只有在时隙刚开始时（前500ms内）才处理发射请求，避免重复处理
+    if (timeSinceSlotStartMs > 500) {
+      console.log(`⏰ [时钟管理器] 时隙已过 ${timeSinceSlotStartMs}ms，跳过发射处理`);
+      return;
+    }
+
+    console.log(`📢 [时钟管理器] 处理 ${this.pendingTransmissions.length} 个待发射消息`);
+    console.log(`⏰ [时钟管理器] 当前时隙开始: ${new Date(currentSlotStartMs).toISOString()}`);
+    console.log(`⏰ [时钟管理器] 时隙已过时间: ${timeSinceSlotStartMs}ms`);
+    
+    // 处理每个发射请求
+    const transmissionsToProcess = [...this.pendingTransmissions];
+    this.pendingTransmissions = []; // 立即清空待发射队列，避免重复处理
+    
+    for (const request of transmissionsToProcess) {
+      try {
+        console.log(`📻 [发射] 操作员: ${request.operatorId}, 消息: "${request.transmission}"`);
+        
+        // 获取操作员配置以获取频率
+        const operator = this.operators.get(request.operatorId);
+        const frequency = operator?.config.frequency || 1500; // 默认频率1500Hz
+        
+        // 创建编码请求
+        const encodeRequest: WSJTXEncodeRequest = {
+          operatorId: request.operatorId,
+          message: request.transmission,
+          frequency: frequency,
+          mode: this.currentMode.name === 'FT4' ? 'FT4' : 'FT8'
+        };
+        
+        console.log(`🎵 [发射] 编码参数: 频率=${frequency}Hz, 模式=${encodeRequest.mode}`);
+        console.log(`⏰ [发射] 提交编码请求，将在适当时机播放`);
+        
+        // 提交到编码队列
+        this.realEncodeQueue.push(encodeRequest);
+        
+      } catch (error) {
+        console.error(`❌ [发射失败] 操作员: ${request.operatorId}, 错误:`, error);
+        
+        // 发射失败事件
+        this.emit('transmissionComplete' as any, {
+          operatorId: request.operatorId,
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
   }
   
   /**
@@ -494,12 +649,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       
       console.log(`🎤 [时钟管理器] 使用音频设备配置:`, audioConfig);
       
+      // 启动音频输入
       await this.audioStreamManager.startStream(audioConfig.inputDeviceId);
-      console.log(`🎤 [时钟管理器] 音频流启动成功`);
+      console.log(`🎤 [时钟管理器] 音频输入流启动成功`);
+      
+      // 启动音频输出
+      await this.audioStreamManager.startOutput(audioConfig.outputDeviceId);
+      console.log(`🔊 [时钟管理器] 音频输出流启动成功`);
+      
       audioStarted = true;
     } catch (error) {
       console.error(`❌ [时钟管理器] 音频流启动失败:`, error);
-      console.warn(`⚠️ [时钟管理器] 将在没有音频输入的情况下继续运行`);
+      console.warn(`⚠️ [时钟管理器] 将在没有音频输入/输出的情况下继续运行`);
       // 不抛出错误，让Engine继续运行
     }
     
@@ -599,7 +760,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // 停止音频流
       try {
         await this.audioStreamManager.stopStream();
-        console.log(`🛑 [时钟管理器] 音频流停止成功`);
+        console.log(`🛑 [时钟管理器] 音频输入流停止成功`);
+        
+        await this.audioStreamManager.stopOutput();
+        console.log(`🛑 [时钟管理器] 音频输出流停止成功`);
       } catch (error) {
         console.error(`❌ [时钟管理器] 音频流停止失败:`, error);
       }
@@ -633,6 +797,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     // 销毁解码队列
     await this.realDecodeQueue.destroy();
+    
+    // 销毁编码队列
+    await this.realEncodeQueue.destroy();
     
     // 清理 SlotPackManager
     this.slotPackManager.cleanup();
@@ -668,18 +835,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    * 广播所有操作员的状态更新
    */
   private broadcastAllOperatorStatusUpdates(): void {
-    console.log('📢 [广播] 开始广播所有操作员状态更新');
+    // console.log('📢 [广播] 开始广播所有操作员状态更新');
     const operators = this.getOperatorsStatus();
-    console.log(`📢 [广播] 获取到 ${operators.length} 个操作员状态`);
+    // console.log(`📢 [广播] 获取到 ${operators.length} 个操作员状态`);
     for (const operator of operators) {
-      console.log(`📢 [广播] 广播操作员 ${operator.id} 状态:`, {
+      /* console.log(`📢 [广播] 广播操作员 ${operator.id} 状态:`, {
         currentCycle: operator.cycleInfo?.currentCycle,
         isTransmitCycle: operator.cycleInfo?.isTransmitCycle,
         isTransmitting: operator.isTransmitting,
         transmitCycles: operator.transmitCycles
-      });
+      }); */
       this.emit('operatorStatusUpdate' as any, operator);
     }
-    console.log('📢 [广播] 完成广播所有操作员状态更新');
+    // console.log('📢 [广播] 完成广播所有操作员状态更新');
   }
 } 

@@ -262,9 +262,9 @@ export class WSServer extends WSMessageHandler {
     console.log('📥 [WSServer] 收到 getOperators 请求');
     try {
       const operators = this.digitalRadioEngine.getOperatorsStatus();
-      console.log('📻 [WSServer] 操作员列表:', operators);
+      // console.log('📻 [WSServer] 操作员列表:', operators);
       this.broadcast(WSMessageType.OPERATORS_LIST, { operators });
-      console.log('📤 [WSServer] 已广播操作员列表');
+      // console.log('📤 [WSServer] 已广播操作员列表');
     } catch (error) {
       console.error('❌ 获取操作员列表失败:', error);
       this.broadcast(WSMessageType.ERROR, {

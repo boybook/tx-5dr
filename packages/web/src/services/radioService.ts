@@ -208,13 +208,13 @@ export class RadioService {
 
     // 监听操作员列表
     this.wsClient.onWSEvent('operatorsList', (data: any) => {
-      console.log('📻 操作员列表:', data);
+      // console.log('📻 操作员列表:', data);
       this.eventListeners.operatorsList?.(data.operators);
     });
 
     // 监听操作员状态更新
     this.wsClient.onWSEvent('operatorStatusUpdate', (operatorStatus: any) => {
-      console.log('📻 操作员状态更新:', operatorStatus);
+      // console.log('📻 操作员状态更新:', operatorStatus);
       this.eventListeners.operatorStatusUpdate?.(operatorStatus);
     });
   }

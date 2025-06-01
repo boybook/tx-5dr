@@ -8,17 +8,17 @@ export const RadioOperatorList: React.FC = () => {
 
   // 连接后请求操作员列表
   React.useEffect(() => {
-    console.log('🔍 [RadioOperatorList] 连接状态检查:', {
+    /* console.log('🔍 [RadioOperatorList] 连接状态检查:', {
       isConnected: connection.state.isConnected,
       hasRadioService: !!connection.state.radioService,
       operatorCount: radio.state.operators.length
-    });
+    }); */
     
     if (connection.state.isConnected && connection.state.radioService) {
-      console.log('🔗 [RadioOperatorList] 连接成功，延迟500ms后请求操作员列表');
+      // console.log('🔗 [RadioOperatorList] 连接成功，延迟500ms后请求操作员列表');
       // 延迟一下确保WebSocket完全就绪
       const timer = setTimeout(() => {
-        console.log('📤 [RadioOperatorList] 正在请求操作员列表...');
+        // console.log('📤 [RadioOperatorList] 正在请求操作员列表...');
         connection.state.radioService?.getOperators();
       }, 500);
       
@@ -27,12 +27,12 @@ export const RadioOperatorList: React.FC = () => {
   }, [connection.state.isConnected, connection.state.radioService]);
 
   // 监听操作员状态变化
-  React.useEffect(() => {
+  /* React.useEffect(() => {
     console.log('📻 [RadioOperatorList] 操作员状态更新:', {
       operatorCount: radio.state.operators.length,
       operators: radio.state.operators
     });
-  }, [radio.state.operators]);
+  }, [radio.state.operators]); */
 
   if (radio.state.operators.length === 0) {
     return (

@@ -54,13 +54,13 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
   async push(request: DecodeRequest): Promise<void> {
     this.queueSize++;
     
-    const pcmSizeKB = (request.pcm.byteLength / 1024).toFixed(1);
+    /* const pcmSizeKB = (request.pcm.byteLength / 1024).toFixed(1);
     console.log(`📡 [真实解码队列] 收到解码请求:`);
     console.log(`   时隙: ${request.slotId}`);
     console.log(`   窗口: ${request.windowIdx}`);
     console.log(`   PCM大小: ${pcmSizeKB}KB (${request.pcm.byteLength}字节)`);
     console.log(`   原始采样率: ${request.sampleRate}Hz`);
-    console.log(`   队列大小: ${this.queueSize}`);
+    console.log(`   队列大小: ${this.queueSize}`); */
     
     try {
       // 将 ArrayBuffer 转换为 Float32Array
@@ -69,7 +69,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       // 步骤1: 重采样到 12kHz（FT8/FT4 标准采样率）
       let resampledAudioData: Float32Array;
       if (request.sampleRate && request.sampleRate !== 12000) {
-        console.log(`🔄 [解码队列] 重采样: ${request.sampleRate}Hz -> 12000Hz`);
+        // console.log(`🔄 [解码队列] 重采样: ${request.sampleRate}Hz -> 12000Hz`);
         resampledAudioData = await resampleAudioProfessional(
           originalAudioData,
           request.sampleRate,
@@ -77,10 +77,10 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
           1, // 单声道
           1  // SRC_SINC_MEDIUM_QUALITY
         );
-        console.log(`🔄 [解码队列] 重采样完成: ${originalAudioData.length} -> ${resampledAudioData.length} 样本`);
+        // console.log(`🔄 [解码队列] 重采样完成: ${originalAudioData.length} -> ${resampledAudioData.length} 样本`);
       } else {
         resampledAudioData = originalAudioData;
-        console.log(`✅ [解码队列] 无需重采样，已经是12kHz`);
+        // console.log(`✅ [解码队列] 无需重采样，已经是12kHz`);
       }
       
       // 步骤2: 音量标准化
@@ -88,7 +88,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       //const normalizedAudioData = normalizeAudioVolume(resampledAudioData, 0.95, 0.1, 10.0);
       
       // 步骤3: 音频质量分析
-      const audioQuality = analyzeAudioQualityDetailed(resampledAudioData, 12000);
+      /* const audioQuality = analyzeAudioQualityDetailed(resampledAudioData, 12000);
       console.log(`📊 [解码队列] 音频质量分析:`);
       console.log(`   时长: ${audioQuality.durationSeconds.toFixed(2)}s`);
       console.log(`   峰值: ${audioQuality.peakLevel.toFixed(4)}`);
@@ -97,7 +97,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       console.log(`   信噪比估计: ${audioQuality.snrEstimate.toFixed(1)}dB`);
       if (audioQuality.clippedSamples > 0) {
         console.log(`   ⚠️ 削波样本: ${audioQuality.clippedSamples}`);
-      }
+      } */
       
       // （测试）保存处理后的 PCM 数据为 WAV 文件
       // const filename2 = generateAudioFilename(request.slotId, request.windowIdx, 'processed');
@@ -128,9 +128,9 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       console.log(`🔧 [解码完成] 时隙: ${request.slotId}, 窗口: ${request.windowIdx}, 找到 ${decodeResult.frames.length} 个信号, 耗时: ${decodeResult.processingTimeMs}ms`);
       
       // 简化的解码结果显示 - 不显示详细信息，留给 SlotPack 统一处理
-      if (decodeResult.frames.length > 0) {
+      /* if (decodeResult.frames.length > 0) {
         console.log(`   📡 发现 ${decodeResult.frames.length} 个信号 (详情将在时隙包更新时显示)`);
-      }
+      } */
       
       this.emit('decodeComplete', decodeResult);
       

@@ -16,9 +16,12 @@ export interface AudioStreamEvents {
  */
 export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private audioInput: any = null;
+  private audioOutput: any = null;
   private isStreaming = false;
+  private isOutputting = false;
   private audioProvider: RingBufferAudioProvider;
   private deviceId: string | null = null;
+  private outputDeviceId: string | null = null;
   private sampleRate: number = 48000;
   private channels: number = 1;
   
@@ -181,7 +184,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   getStatus() {
     return {
       isStreaming: this.isStreaming,
-      deviceId: this.deviceId,
+      isOutputting: this.isOutputting,
+      inputDeviceId: this.deviceId,
+      outputDeviceId: this.outputDeviceId,
       sampleRate: this.sampleRate,
       channels: this.channels,
       bufferStatus: this.audioProvider.getStatus()
@@ -231,5 +236,195 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   clearBuffer(): void {
     this.audioProvider.clear();
+  }
+  
+  /**
+   * 启动音频输出流
+   */
+  async startOutput(outputDeviceId?: string): Promise<void> {
+    if (this.isOutputting) {
+      console.log('⚠️ 音频输出已经在运行中');
+      return;
+    }
+    
+    try {
+      console.log('🔊 启动音频输出...');
+      
+      // 处理输出设备 ID
+      let actualOutputDeviceId: number | undefined = undefined;
+      if (outputDeviceId) {
+        if (outputDeviceId.startsWith('output-')) {
+          actualOutputDeviceId = parseInt(outputDeviceId.replace('output-', ''));
+        } else {
+          actualOutputDeviceId = parseInt(outputDeviceId);
+        }
+        console.log(`🎯 使用指定音频输出设备 ID: ${actualOutputDeviceId}`);
+      } else {
+        console.log('🎯 使用默认音频输出设备');
+      }
+      
+      // 配置音频输出参数
+      const outputOptions: any = {
+        channelCount: this.channels,
+        sampleFormat: naudiodon.SampleFormatFloat32,
+        sampleRate: this.sampleRate,
+        deviceId: actualOutputDeviceId,
+        framesPerBuffer: 1024,
+        suggestedLatency: 0.05
+      };
+      
+      console.log('音频输出配置:', outputOptions);
+      
+      // 创建音频输出流
+      this.audioOutput = new (naudiodon as any).AudioIO({
+        outOptions: outputOptions
+      });
+      this.outputDeviceId = outputDeviceId || 'default';
+      
+      this.audioOutput.on('error', (error: Error) => {
+        console.error('音频输出错误:', error);
+        this.emit('error', error);
+      });
+      
+      // 启动音频输出流
+      this.audioOutput.start();
+      this.isOutputting = true;
+      
+      console.log(`✅ 音频输出启动成功 (${this.sampleRate}Hz)`);
+      
+    } catch (error) {
+      console.error('启动音频输出失败:', error);
+      this.emit('error', error as Error);
+      throw error;
+    }
+  }
+  
+  /**
+   * 停止音频输出流
+   */
+  async stopOutput(): Promise<void> {
+    if (!this.isOutputting) {
+      console.log('⚠️ 音频输出未运行');
+      return;
+    }
+    
+    try {
+      console.log('🛑 停止音频输出...');
+      
+      if (this.audioOutput) {
+        this.audioOutput.quit();
+        this.audioOutput = null;
+      }
+      
+      this.isOutputting = false;
+      this.outputDeviceId = null;
+      
+      console.log('✅ 音频输出停止成功');
+      
+    } catch (error) {
+      console.error('停止音频输出失败:', error);
+      this.emit('error', error as Error);
+      throw error;
+    }
+  }
+  
+  /**
+   * 播放编码后的音频数据
+   */
+  async playAudio(audioData: Float32Array, targetSampleRate: number = 48000): Promise<void> {
+    if (!this.isOutputting || !this.audioOutput) {
+      throw new Error('音频输出流未启动');
+    }
+    
+    console.log(`🔊 [音频播放] 开始播放音频:`);
+    console.log(`   原始样本数: ${audioData.length}`);
+    console.log(`   原始采样率: ${targetSampleRate}Hz`);
+    console.log(`   原始时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
+    console.log(`   目标采样率: ${this.sampleRate}Hz`);
+    
+    // 检查音频数据是否合理（FT8应该大约12.64秒）
+    const originalDuration = audioData.length / targetSampleRate;
+    if (originalDuration > 20) {
+      console.warn(`⚠️ [音频播放] 音频时长异常: ${originalDuration.toFixed(2)}s，可能存在编码问题`);
+      // 截断到合理长度（15秒）
+      const maxSamples = Math.floor(15 * targetSampleRate);
+      if (audioData.length > maxSamples) {
+        console.log(`🔄 [音频播放] 截断音频: ${audioData.length} -> ${maxSamples} 样本`);
+        audioData = audioData.slice(0, maxSamples);
+      }
+    }
+    
+    try {
+      let playbackData: Float32Array;
+      
+      // 检查是否需要重采样
+      if (targetSampleRate !== this.sampleRate) {
+        console.log(`🔄 [音频播放] 重采样: ${targetSampleRate}Hz -> ${this.sampleRate}Hz`);
+        // 使用更准确的重采样
+        const ratio = this.sampleRate / targetSampleRate;
+        const newLength = Math.floor(audioData.length * ratio);
+        playbackData = new Float32Array(newLength);
+        
+        for (let i = 0; i < newLength; i++) {
+          const sourceIndex = i / ratio;
+          const index = Math.floor(sourceIndex);
+          const fraction = sourceIndex - index;
+          
+          if (index + 1 < audioData.length) {
+            playbackData[i] = audioData[index] * (1 - fraction) + audioData[index + 1] * fraction;
+          } else {
+            playbackData[i] = audioData[index] || 0;
+          }
+        }
+        
+        console.log(`🔄 [音频播放] 重采样完成: ${audioData.length} -> ${playbackData.length} 样本`);
+      } else {
+        console.log(`✅ [音频播放] 采样率匹配，无需重采样`);
+        playbackData = audioData;
+      }
+      
+      // 验证重采样后的时长
+      const finalDuration = playbackData.length / this.sampleRate;
+      console.log(`🔊 [音频播放] 最终播放参数:`);
+      console.log(`   最终样本数: ${playbackData.length}`);
+      console.log(`   最终时长: ${finalDuration.toFixed(2)}s`);
+      
+      // 分块播放，避免缓冲区溢出
+      const chunkSize = 4096; // 4K 样本一块
+      const totalChunks = Math.ceil(playbackData.length / chunkSize);
+      
+      console.log(`🔊 [音频播放] 分块播放: ${totalChunks} 块，每块 ${chunkSize} 样本`);
+      
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, playbackData.length);
+        const chunk = playbackData.slice(start, end);
+        
+        // 转换为 Buffer
+        const buffer = Buffer.allocUnsafe(chunk.length * 4);
+        for (let j = 0; j < chunk.length; j++) {
+          buffer.writeFloatLE(chunk[j], j * 4);
+        }
+        
+        // 写入音频输出流
+        const written = this.audioOutput.write(buffer);
+        if (!written) {
+          // console.warn(`⚠️ [音频播放] 第 ${i + 1}/${totalChunks} 块写入失败，缓冲区可能已满`);
+          // 短暂等待缓冲区空闲
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        
+        // 控制播放速度，避免缓冲区溢出
+        if (i % 10 === 0) { // 每10块暂停一下
+          await new Promise(resolve => setTimeout(resolve, 1));
+        }
+      }
+      
+      console.log(`✅ [音频播放] 音频播放完成, 总时长: ${finalDuration.toFixed(2)}s, 分 ${totalChunks} 块播放`);
+      
+    } catch (error) {
+      console.error('❌ [音频播放] 播放失败:', error);
+      throw error;
+    }
   }
 } 
