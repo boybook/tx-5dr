@@ -78,7 +78,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
 
   const getGroupColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
     if (type === 'transmit') {
-      return 'bg-warning-50';
+      return 'bg-danger-50';
     }
     // 使用CSS变量设置背景颜色
     return '';
@@ -95,14 +95,14 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
 
   const getBorderColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
     if (type === 'transmit') {
-      return 'var(--ft8-tx)';
+      return '#f31260'; // 使用danger红色
     }
     return cycle === 'even' ? 'var(--ft8-cycle-even)' : 'var(--ft8-cycle-odd)';
   };
 
   const getRowHoverColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
     if (type === 'transmit') {
-      return 'hover:bg-warning-100';
+      return 'hover:bg-danger-100';
     }
     // 使用CSS变量设置hover颜色，稍微加深一些
     return '';
@@ -130,10 +130,10 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
     <div className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default`}>
       {/* 固定表头 */}
       <div className="flex-shrink-0">
-        <div className="grid grid-cols-[80px_48px_48px_80px_1fr_96px] gap-0 px-3 py-1">
+        <div className="grid grid-cols-[60px_48px_48px_80px_1fr_96px] gap-0 px-3 py-1">
           <div className="text-left text-xs font-medium text-default-400 pl-1">UTC</div>
-          <div className="text-left text-xs font-medium text-default-400">dB</div>
-          <div className="text-left text-xs font-medium text-default-400">DT</div>
+          <div className="text-right text-xs font-medium text-default-400">dB</div>
+          <div className="text-right text-xs font-medium text-default-400">DT</div>
           <div className="text-center text-xs font-medium text-default-400">频率</div>
           <div className="text-left text-xs font-medium text-default-400">信息</div>
           <div className="text-right text-xs font-medium text-default-400 pr-1">位置</div>
@@ -146,7 +146,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
         className="flex-1"
         onScroll={handleScroll}
       >
-        <div className="space-y-1">
+        <div className="space-y-1 pt-1">
           {groups.map((group, groupIndex) => (
             <div
               key={`${group.time}-${groupIndex}`}
@@ -170,25 +170,27 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
                   className={`
                     ft8-row
                     ${getRowHoverColor(group.cycle, group.type)}
-                    ${message.db === 'TX' ? 'bg-warning-100/70' : ''}
+                    ${message.db === 'TX' ? 'bg-danger-100/70' : ''}
                     transition-colors duration-150
-                    grid grid-cols-[80px_48px_48px_80px_1fr_96px] gap-0 px-3 py-0.5 ml-1
+                    grid grid-cols-[60px_48px_48px_80px_1fr_96px] gap-0 px-3 py-0.5 ml-1
                   `}
                   style={getRowHoverStyle(group.cycle, group.type)}
                 >
                   <div className="text-xs font-mono">
                     {message.utc}
                   </div>
-                  <div className="text-xs text-left font-mono">
+                  <div className="text-xs text-right font-mono">
                     {message.db === 'TX' ? (
-                      <Chip size="sm" color="warning" variant="flat">TX</Chip>
+                      <div className="flex justify-end">
+                        <Chip size="sm" color="danger" variant="flat">TX</Chip>
+                      </div>
                     ) : (
                       <span className="text-xs font-mono">
                         {message.db}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-left font-mono">
+                  <div className="text-xs text-right font-mono">
                     {message.dt === '-' ? '-' : message.dt.toFixed(1)}
                   </div>
                   <div className="text-xs text-center font-mono">

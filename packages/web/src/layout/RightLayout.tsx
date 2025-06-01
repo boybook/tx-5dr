@@ -1,39 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
-  Card, 
-  CardHeader, 
-  CardBody, 
-  Divider, 
-  ScrollShadow,
-  Badge,
   Button,
   Select,
   SelectItem
 } from '@heroui/react';
-import { useSlotPacks } from '../store/radioStore';
+import { useRadioState } from '../store/radioStore';
 import { RadioControl } from '../components/RadioControl';
 import { RadioOperatorList } from '../components/RadioOperatorList';
 import { SettingsModal } from '../components/SettingsModal';
+import { MyRelatedFT8Table } from '../components/MyRelatedFT8Table';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog } from '@fortawesome/free-solid-svg-icons';
 
 export const RightLayout: React.FC = () => {
-  const slotPacks = useSlotPacks();
-  const [logs, setLogs] = useState<string[]>([]);
+  const radio = useRadioState();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // 监听状态变化，生成日志
-  useEffect(() => {
-    if (slotPacks.state.lastUpdateTime) {
-      const newLog = `${slotPacks.state.lastUpdateTime.toLocaleTimeString()} - 接收到新的FT8数据包`;
-      setLogs(prev => [...prev.slice(-19), newLog]); // 保持最新20条日志
-    }
-  }, [slotPacks.state.lastUpdateTime]);
-
-  // 清空日志
-  const handleClearLogs = () => {
-    setLogs([]);
+  // 获取当前操作员的呼号
+  const getCurrentOperatorCallsign = (): string => {
+    const defaultOperator = radio.state.operators.find(op => op.id === 'default-operator');
+    return defaultOperator?.context?.myCall || 'BG5DRB';
   };
 
   // 判断是否为自动模式
@@ -109,7 +96,7 @@ export const RightLayout: React.FC = () => {
             title="电台呼号"
             className="bg-gray-100 rounded-md px-3 h-6 text-xs font-mono text-default-400 leading-none"
           >
-            BG5DRB
+            {getCurrentOperatorCallsign()}
           </Button>
           <Button
             onPress={handleOpenSettings}
@@ -126,50 +113,10 @@ export const RightLayout: React.FC = () => {
       
       {/* 主内容区域 */}
       <div className="flex-1 p-5 pt-0 flex flex-col gap-4 min-h-0">
-        {/* 系统日志 - 占据剩余空间 */}
-        <Card className="flex-1 min-h-0">
-          <CardHeader className="pb-2 flex-shrink-0">
-            <div className="flex justify-between items-center w-full">
-              <h3 className="text-lg font-semibold">系统日志</h3>
-              <div className="flex items-center gap-2">
-                <Badge content={logs.length} color="primary" size="sm" aria-label={`${logs.length}条系统日志`}>
-                  <div className="w-4 h-4"></div>
-                </Badge>
-                <Button 
-                  size="sm" 
-                  color="default" 
-                  variant="flat"
-                  onPress={handleClearLogs}
-                >
-                  清空
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <Divider className="flex-shrink-0" />
-          <CardBody className="pt-4 flex-1 min-h-0">
-            <ScrollShadow className="h-full">
-              {logs.length === 0 ? (
-                <div className="text-center py-12">
-                  <div className="text-default-400 mb-2 text-4xl">📋</div>
-                  <p className="text-default-500 mb-1">暂无系统日志</p>
-                  <p className="text-default-400 text-sm">系统操作和事件将在这里显示</p>
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {logs.map((log, index) => (
-                    <div 
-                      key={index} 
-                      className="font-mono text-sm p-2 rounded bg-default-50 border-l-2 border-primary-200"
-                    >
-                      {log}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </ScrollShadow>
-          </CardBody>
-        </Card>
+        {/* 和我有关的通联信息 - 占据剩余空间 */}
+        <div className="flex-1 min-h-0">
+          <MyRelatedFT8Table className="h-full" />
+        </div>
         
         {/* 操作员列表 - 固定高度 */}
         <div className="flex-shrink-0">
