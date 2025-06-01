@@ -160,6 +160,25 @@ export class RadioOperator {
             return;
         }
         
+        // 处理update_context命令 - 更新操作员配置
+        if (command.command === 'update_context') {
+            const { myCall, myGrid, frequency } = command.args;
+            
+            // 更新操作员配置字段
+            if (myCall !== undefined) {
+                this._config.myCallsign = myCall;
+            }
+            if (myGrid !== undefined) {
+                this._config.myGrid = myGrid;
+            }
+            if (frequency !== undefined) {
+                this._config.frequency = frequency;
+            }
+            
+            // 通知状态变化
+            this.notifyStatusChanged();
+        }
+        
         // 其他命令转发给transmission strategy
         this._transmissionStrategy?.userCommand?.(command);
     }

@@ -204,10 +204,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     
     // 设置新的防抖定时器，200ms后同步到服务端（减少延迟）
     debounceTimerRef.current = setTimeout(() => {
-      // 发送update_context命令
+      // 发送update_context命令，包含所有相关字段
       sendUserCommand('update_context', {
+        myCall: newContext.myCall,
+        myGrid: newContext.myGrid,
         targetCallsign: newContext.targetCall,
         targetGrid: newContext.targetGrid,
+        frequency: newContext.frequency,
         reportSent: newContext.reportSent,
         reportReceived: null,
       });
