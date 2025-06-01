@@ -60,30 +60,30 @@ export class RadioOperator {
     }
 
     initEventListener(eventEmitter: EventEmitter<DigitalRadioEngineEvents>) {
-        // 时隙包更新事件
-        eventEmitter.on('slotPackUpdated', (slotPack: SlotPack) => {
-            const parsedMessages = slotPack.frames.map(frame => {
-                const message = FT8MessageParser.parseMessage(frame.message);
-                const parsedMessage: ParsedFT8Message = {
-                    message,
-                    snr: frame.snr,
-                    dt: frame.dt,
-                    df: frame.freq,
-                    rawMessage: frame.message,
-                    slotId: slotPack.slotId,
-                    timestamp: slotPack.startMs
-                }
-                return parsedMessage;
-            });
-            const result = this._transmissionStrategy?.handleReceivedAndDicideNext(parsedMessages);
-            if (result?.stop) {
-                this.stop();
-            }
-        });
         // 周期开始事件
-        eventEmitter.on('slotStart', (slotInfo: SlotInfo) => {
+        eventEmitter.on('slotStart', (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
             if (this._stopped) {
                 return;
+            }
+            if (lastSlotPack) {
+                const parsedMessages = lastSlotPack.frames.map(frame => {
+                    const message = FT8MessageParser.parseMessage(frame.message);
+                    const parsedMessage: ParsedFT8Message = {
+                        message,
+                        snr: frame.snr,
+                        dt: frame.dt,
+                        df: frame.freq,
+                        rawMessage: frame.message,
+                        slotId: lastSlotPack.slotId,
+                        timestamp: lastSlotPack.startMs
+                    }
+                    return parsedMessage;
+                });
+                const result = this._transmissionStrategy?.handleReceivedAndDicideNext(parsedMessages);
+                if (result?.stop) {
+                    this.stop();
+                }
+                console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 自动决策`, result);
             }
             // 判断是否为发射时隙
             const isTransmitSlot = this.isTransmitSlot(slotInfo);
@@ -97,6 +97,9 @@ export class RadioOperator {
                 } else {
                     console.log(this.config.id + " 没有发射");
                 }
+                console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 收到时隙开始，发射时隙`, transmission);
+            } else {
+                console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 收到时隙开始，不是发射时隙`);
             }
         });
     }

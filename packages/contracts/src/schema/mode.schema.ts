@@ -46,15 +46,15 @@ export const MODES = {
     name: 'FT8',
     slotMs: 15000,
     toleranceMs: 100,
-    windowTiming: [-2000, -1500, -1000, -500, -250, 0, 250, 500, 1000],
+    // windowTiming: [-2000, -1500, -1000, -500, -250, 0, 250, 500, 1000],
+    windowTiming: [-1500, -1000, -500, 0],
     cycleType: 'EVEN_ODD'
   } as ModeDescriptor,
   FT4: {
     name: 'FT4', 
     slotMs: 7500,
     toleranceMs: 50,
-    // 双窗口模式：在时隙结束时和结束后3.75秒时进行解码
-    windowTiming: [0, 3750],
+    windowTiming: [0],
     cycleType: 'CONTINUOUS'
   } as ModeDescriptor,
 } as const; 

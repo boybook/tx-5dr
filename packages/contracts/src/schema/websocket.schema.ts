@@ -363,6 +363,19 @@ export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
 // ===== 前端应用事件接口 =====
 
 /**
+ * 发射完成事件信息
+ */
+export const TransmissionCompleteInfoSchema = z.object({
+  operatorId: z.string(),
+  success: z.boolean(),
+  duration: z.number().optional(),
+  error: z.string().optional(),
+  mixedWith: z.array(z.string()).optional(), // 与其他操作员混音的ID列表
+});
+
+export type TransmissionCompleteInfo = z.infer<typeof TransmissionCompleteInfoSchema>;
+
+/**
  * 数字无线电引擎事件接口
  * 定义了前端应用层面的事件类型，基于底层WebSocket事件
  */
@@ -371,15 +384,16 @@ export interface DigitalRadioEngineEvents {
   modeChanged: (mode: z.infer<typeof ModeDescriptorSchema>) => void;
   
   // 时隙和窗口事件
-  slotStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;
+  slotStart: (slotInfo: z.infer<typeof SlotInfoSchema>, lastSlotPack: z.infer<typeof SlotPackSchema> | null) => void;
   subWindow: (windowInfo: SubWindowInfo) => void;
   
   // 数据更新事件
   slotPackUpdated: (slotPack: z.infer<typeof SlotPackSchema>) => void;
   spectrumData: (spectrumData: z.infer<typeof FT8SpectrumSchema>) => void;
 
-  // 发射
+  // 发射相关事件
   requestTransmit: (request: TransmitRequest) => void;
+  transmissionComplete: (info: TransmissionCompleteInfo) => void;
   
   // 操作员事件
   operatorsList: (operators: OperatorStatus[]) => void;

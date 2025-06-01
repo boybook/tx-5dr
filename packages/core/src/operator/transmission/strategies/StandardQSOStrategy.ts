@@ -93,9 +93,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 等待对方发送RRR或73
             const msgRRR = messages
                 .filter((msg) => 
-                    (msg.message.type === FT8MessageType.ROGER_REPORT || 
-                     msg.message.type === FT8MessageType.SIGNAL_REPORT ||
-                     msg.message.type === FT8MessageType.RRR) && 
+                    msg.message.type === FT8MessageType.RRR && 
                     msg.message.senderCallsign === strategy.context.targetCallsign && 
                     msg.message.targetCallsign === strategy.context.config.myCallsign)
                 .sort((a, b) => a.snr - b.snr)
@@ -168,6 +166,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 reportReceived: strategy.context.reportReceived?.toString(),
                 messages: []
             };
+            strategy.operator.recordQSOLog(qsoRecord);
         },
         handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult {
             // 复用TX6的CQ处理逻辑

@@ -248,6 +248,15 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const pack = this.slotPacks.get(slotId);
     return pack ? { ...pack } : null;
   }
+
+  /**
+   * 获取最新的时隙包
+   */
+  getLatestSlotPack(): SlotPack | null {
+    const slotIds = Array.from(this.slotPacks.keys()).sort();
+    const latestSlotId = slotIds[slotIds.length - 1];
+    return this.getSlotPack(latestSlotId);
+  }
   
   /**
    * 清理指定时隙包

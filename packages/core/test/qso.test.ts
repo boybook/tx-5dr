@@ -14,6 +14,7 @@ class DummyRadioEngine {
     slotIndex = 0;
     messagesPool: TransmitRequest[] = [];
     messagesLog: string[] = [];
+    lastSlotPack: SlotPack | null = null;
 
     constructor() {
         this.sharedEventEmitter.on('requestTransmit', (request) => {
@@ -24,15 +25,14 @@ class DummyRadioEngine {
     nextCycle() {
         this.slotIndex++;
         const slotInfo = createSlotInfo(`slot${this.slotIndex}`, this.startTime + this.slotIndex * 15000);
-        this.sharedEventEmitter.emit('slotStart', slotInfo);
+        this.sharedEventEmitter.emit('slotStart', slotInfo, this.lastSlotPack);
+        this.lastSlotPack = createSlotPack(slotInfo.id, slotInfo.startMs, this.messagesPool.map(request => request.transmission));
         
         // 打印当前时隙的消息
         this.messagesPool.forEach(request => {
             console.log(`📢 [${this.slotIndex}] ${request.operatorId} -> ${request.transmission}`);
             this.messagesLog.push(request.transmission);
         });
-
-        this.sharedEventEmitter.emit('slotPackUpdated', createSlotPack(slotInfo.id, slotInfo.startMs, this.messagesPool.map(request => request.transmission)));
         this.messagesPool = [];
     }
 

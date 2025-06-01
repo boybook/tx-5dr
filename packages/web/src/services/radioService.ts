@@ -1,5 +1,5 @@
 import { api, WSClient } from '@tx5dr/core';
-import type { SlotPack, DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import type { SlotPack, DigitalRadioEngineEvents, SlotInfo } from '@tx5dr/contracts';
 import { getWebSocketUrl } from '../utils/config';
 
 /**
@@ -189,9 +189,9 @@ export class RadioService {
     });
 
     // 监听时隙开始事件
-    this.wsClient.onWSEvent('slotStart', (slotInfo: any) => {
+    this.wsClient.onWSEvent('slotStart', (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
       console.log('🎯 时隙开始:', slotInfo);
-      this.eventListeners.slotStart?.(slotInfo);
+      this.eventListeners.slotStart?.(slotInfo, lastSlotPack);
     });
 
     // 监听子窗口事件
