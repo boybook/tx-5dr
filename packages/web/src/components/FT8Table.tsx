@@ -127,9 +127,9 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
   }
 
   return (
-    <div className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default`}>
+    <div className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default select-none`}>
       {/* 固定表头 */}
-      <div className="flex-shrink-0">
+      <div className="flex-shrink-0 cursor-default select-none">
         <div className="grid grid-cols-[60px_48px_48px_80px_1fr_96px] gap-0 px-3 py-1">
           <div className="text-left text-xs font-medium text-default-400 pl-1">UTC</div>
           <div className="text-right text-xs font-medium text-default-400">dB</div>

@@ -223,6 +223,12 @@ export class RadioService {
       // console.log('📻 操作员状态更新:', operatorStatus);
       this.eventListeners.operatorStatusUpdate?.(operatorStatus);
     });
+
+    // 监听音量变化事件
+    this.wsClient.onWSEvent('volumeGainChanged', (gain: number) => {
+      console.log('🔊 音量变化:', gain);
+      this.eventListeners.volumeGainChanged?.(gain);
+    });
   }
 
   /**
@@ -280,6 +286,15 @@ export class RadioService {
   stopOperator(operatorId: string): void {
     if (this.isConnected) {
       this.wsClient.send('stopOperator', { operatorId });
+    }
+  }
+
+  /**
+   * 设置音量增益
+   */
+  setVolumeGain(gain: number): void {
+    if (this.isConnected) {
+      this.wsClient.send('setVolumeGain', { gain });
     }
   }
 }

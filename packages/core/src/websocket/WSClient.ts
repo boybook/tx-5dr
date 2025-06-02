@@ -272,6 +272,11 @@ export class WSClient extends WSMessageHandler {
           console.log('📝 [WSClient] 收到发射日志:', message.data);
           this.emitWSEvent('transmissionLog', message.data);
           break;
+
+        case WSMessageType.VOLUME_GAIN_CHANGED:
+          console.log('🔊 [WSClient] 收到音量变化:', message.data.gain);
+          this.emitWSEvent('volumeGainChanged', message.data.gain);
+          break;
       }
     } catch (error) {
       console.error('❌ 处理WebSocket消息失败:', error);

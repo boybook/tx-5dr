@@ -466,7 +466,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       currentMode: this.currentMode,
       currentTime: this.clockSource.now(),
       nextSlotIn: this.slotClock?.getNextSlotIn() ?? 0,
-      audioStarted: this.audioStarted
+      audioStarted: this.audioStarted,
+      volumeGain: this.audioStreamManager.getVolumeGain()
     };
   }
   
@@ -566,5 +567,21 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   getAvailableModes(): ModeDescriptor[] {
     return Object.values(MODES);
+  }
+
+  /**
+   * 设置音量增益
+   */
+  setVolumeGain(gain: number): void {
+    this.audioStreamManager.setVolumeGain(gain);
+    // 广播音量变化事件
+    this.emit('volumeGainChanged', gain);
+  }
+
+  /**
+   * 获取当前音量增益
+   */
+  getVolumeGain(): number {
+    return this.audioStreamManager.getVolumeGain();
   }
 }

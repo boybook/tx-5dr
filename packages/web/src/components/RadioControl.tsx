@@ -1,10 +1,11 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent} from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api } from '@tx5dr/core';
 import type { ModeDescriptor } from '@tx5dr/contracts';
+import { useState, useEffect, useRef } from 'react';
 
 const frequencies = [
   { key: "50313", label: "50.313MHz" }
@@ -19,15 +20,17 @@ export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
 export const RadioControl: React.FC = () => {
   const connection = useConnection();
   const radio = useRadioState();
-  const [isConnecting, setIsConnecting] = React.useState(false);
-  const [availableModes, setAvailableModes] = React.useState<ModeDescriptor[]>([]);
-  const [isLoadingModes, setIsLoadingModes] = React.useState(false);
-  const [modeError, setModeError] = React.useState<string | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [availableModes, setAvailableModes] = useState<ModeDescriptor[]>([]);
+  const [isLoadingModes, setIsLoadingModes] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
   
   // 本地UI状态管理
-  const [isListenLoading, setIsListenLoading] = React.useState(false);
-  const [pendingListenState, setPendingListenState] = React.useState<boolean | null>(null);
-  const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const [isListenLoading, setIsListenLoading] = useState(false);
+  const [pendingListenState, setPendingListenState] = useState<boolean | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [volumeGain, setVolumeGain] = useState(1.0);
 
   // 加载可用模式列表
   React.useEffect(() => {
@@ -202,13 +205,49 @@ export const RadioControl: React.FC = () => {
     }
   };
 
+  // 处理音量变化
+  const handleVolumeChange = (value: number | number[]) => {
+    const gain = Array.isArray(value) ? value[0] : value;
+    setVolumeGain(gain);
+    connection.state.radioService?.setVolumeGain(gain);
+  };
+
+  // 监听音量变化事件
+  useEffect(() => {
+    if (connection.state.radioService) {
+      connection.state.radioService.on('volumeGainChanged', (gain: number) => {
+        console.log('🔊 收到服务器音量变化:', gain);
+        setVolumeGain(gain);
+      });
+    }
+  }, [connection.state.radioService]);
+
+  // 在连接成功后获取当前音量
+  useEffect(() => {
+    if (connection.state.isConnected && connection.state.radioService) {
+      // 获取系统状态，其中包含当前音量
+      connection.state.radioService.getSystemStatus();
+    }
+  }, [connection.state.isConnected]);
+
+  // 监听系统状态更新
+  useEffect(() => {
+    if (connection.state.radioService) {
+      connection.state.radioService.on('systemStatus', (status: any) => {
+        if (status.volumeGain !== undefined) {
+          setVolumeGain(status.volumeGain);
+        }
+      });
+    }
+  }, [connection.state.radioService]);
+
   return (
     <div className="flex flex-col gap-0 bg-gray-100 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-0">
+        <div className="flex items-center gap-2">
           {connection.state.isConnected ? (
-            <span className="text-sm text-default-400">已连接电台 IC-705</span>
+            <span className="text-sm text-default-400">已连接服务端</span>
           ) : (
             <div className="flex items-center gap-2">
               <span className="text-sm text-default-400">未连接</span>
@@ -224,22 +263,55 @@ export const RadioControl: React.FC = () => {
               </Button>
             </div>
           )}
-          <Button
-            isIconOnly
-            variant="light"
-            size="sm"
-            className="text-default-400 min-w-unit-6 w-6 h-6"
-            aria-label="电台设置"
-          >
-            <FontAwesomeIcon icon={faCog} className="text-xs" />
-          </Button>
+          <div className="flex items-center gap-0">
+            <Button
+              isIconOnly
+              variant="light"
+              size="sm"
+              className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
+              aria-label="电台设置"
+              onPress={() => {}}
+            >
+              <FontAwesomeIcon icon={faCog} className="text-xs" />
+            </Button>
+            <Popover>
+              <PopoverTrigger>
+                <Button
+                  isIconOnly
+                  variant="light"
+                  size="sm"
+                  className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
+                  aria-label="发射音量增益"
+                >
+                  <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="py-2 pt-3 space-y-1">
+                <Slider
+                  orientation="vertical"
+                  minValue={0}
+                  maxValue={1.2}
+                  step={0.01}
+                  value={[volumeGain]}
+                  onChange={handleVolumeChange}
+                  style={{
+                    height: '120px'
+                  }}
+                  aria-label='音量控制'
+                />
+                <div className="text-sm text-default-400">
+                  {(volumeGain * 100).toFixed(0)}
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
       </div>
       
       {/* 主控制区域 */}
       <div className="flex items-center">
         {/* 左侧选择器 */}
-        <div className="flex gap-3 flex-1 -ml-3">
+        <div className="flex gap-1 flex-1 -ml-3">
           <Select
             disableSelectorIconRotation
             className="w-[160px]"
@@ -267,7 +339,7 @@ export const RadioControl: React.FC = () => {
           </Select>
           <Select
             disableSelectorIconRotation
-            className="w-[100px]"
+            className="w-[88px]"
             labelPlacement="outside"
             placeholder={modeError || "通联模式"}
             selectorIcon={<SelectorIcon />}

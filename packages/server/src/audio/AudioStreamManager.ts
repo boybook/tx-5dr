@@ -24,6 +24,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private outputDeviceId: string | null = null;
   private sampleRate: number = 48000;
   private channels: number = 1;
+  private volumeGain: number = 1.0; // 默认音量为1.0（100%）
+  private currentAudioData: Float32Array | null = null; // 当前正在播放的音频数据
+  private currentSampleRate: number = 48000; // 当前音频的采样率
   
   constructor() {
     super();
@@ -329,6 +332,39 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
   
   /**
+   * 设置音量增益
+   * @param gain 增益值（0.0 - 2.0）
+   */
+  setVolumeGain(gain: number): void {
+    // 限制增益范围在0.0到2.0之间
+    this.volumeGain = Math.max(0.0, Math.min(2.0, gain));
+    console.log(`🔊 设置音量增益: ${this.volumeGain.toFixed(2)}`);
+    
+    // 如果当前有正在播放的音频，立即应用新的音量
+    if (this.currentAudioData) {
+      this.applyVolumeGain(this.currentAudioData);
+    }
+  }
+
+  /**
+   * 应用音量增益到音频数据
+   */
+  private applyVolumeGain(audioData: Float32Array): void {
+    if (this.volumeGain !== 1.0) {
+      for (let i = 0; i < audioData.length; i++) {
+        audioData[i] *= this.volumeGain;
+      }
+    }
+  }
+  
+  /**
+   * 获取当前音量增益
+   */
+  getVolumeGain(): number {
+    return this.volumeGain;
+  }
+  
+  /**
    * 播放编码后的音频数据
    */
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000): Promise<void> {
@@ -341,6 +377,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     console.log(`   原始采样率: ${targetSampleRate}Hz`);
     console.log(`   原始时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
     console.log(`   目标采样率: ${this.sampleRate}Hz`);
+    console.log(`   音量增益: ${this.volumeGain.toFixed(2)}`);
     
     try {
       let playbackData: Float32Array;
@@ -370,6 +407,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         console.log(`✅ [音频播放] 采样率匹配，无需重采样`);
         playbackData = audioData;
       }
+
+      // 保存当前播放的音频数据
+      this.currentAudioData = playbackData;
+      this.currentSampleRate = this.sampleRate;
+
+      // 应用音量增益
+      this.applyVolumeGain(playbackData);
       
       // 分块播放，避免缓冲区溢出
       const chunkSize = 4096; // 4K 样本一块
@@ -391,8 +435,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         // 写入音频输出流
         const written = this.audioOutput.write(buffer);
         if (!written) {
-          // console.warn(`⚠️ [音频播放] 第 ${i + 1}/${totalChunks} 块写入失败，缓冲区可能已满`);
-          // 短暂等待缓冲区空闲
           await new Promise(resolve => setTimeout(resolve, 10));
         }
         
@@ -402,10 +444,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       }
       
-      // console.log(`✅ [音频播放] 音频播放完成, 总时长: ${finalDuration.toFixed(2)}s, 分 ${totalChunks} 块播放`);
+      // 播放完成后清除当前音频数据
+      this.currentAudioData = null;
       
     } catch (error) {
       console.error('❌ [音频播放] 播放失败:', error);
+      this.currentAudioData = null;
       throw error;
     }
   }

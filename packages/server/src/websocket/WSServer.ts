@@ -140,6 +140,11 @@ export class WSServer extends WSMessageHandler {
       console.log('📻 [WSServer] 收到operatorsList事件，广播给客户端', data.operators.length, '个操作员');
       this.broadcast(WSMessageType.OPERATORS_LIST, data);
     });
+
+    // 监听音量变化事件
+    this.digitalRadioEngine.on('volumeGainChanged', (gain) => {
+      this.broadcast(WSMessageType.VOLUME_GAIN_CHANGED, { gain });
+    });
   }
 
   /**
@@ -212,6 +217,10 @@ export class WSServer extends WSMessageHandler {
 
       case WSMessageType.LOG_IMPORT_ADIF:
         await this.handleLogImportAdif(connectionId, message.data);
+        break;
+
+      case WSMessageType.SET_VOLUME_GAIN:
+        await this.handleSetVolumeGain(message.data);
         break;
 
       default:
@@ -628,6 +637,22 @@ export class WSServer extends WSMessageHandler {
       this.sendToConnection(connectionId, WSMessageType.ERROR, {
         message: error instanceof Error ? error.message : String(error),
         code: 'LOG_IMPORT_ADIF_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理设置音量增益命令
+   */
+  private async handleSetVolumeGain(data: any): Promise<void> {
+    try {
+      const { gain } = data;
+      this.digitalRadioEngine.setVolumeGain(gain);
+    } catch (error) {
+      console.error('❌ 设置音量增益失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'SET_VOLUME_GAIN_ERROR'
       });
     }
   }

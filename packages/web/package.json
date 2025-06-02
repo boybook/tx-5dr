@@ -13,6 +13,7 @@
     "@fortawesome/fontawesome-svg-core": "^6.7.2",
     "@fortawesome/free-solid-svg-icons": "^6.7.2",
     "@fortawesome/react-fontawesome": "^0.2.2",
+    "@heroicons/react": "^2.2.0",
     "@heroui/react": "^2.7.8",
     "@heroui/theme": "^2.4.15",
     "@tx5dr/contracts": "workspace:*",

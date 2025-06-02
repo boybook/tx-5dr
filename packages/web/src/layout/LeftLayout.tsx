@@ -96,7 +96,7 @@ export const LeftLayout: React.FC = () => {
     <div className="h-screen flex flex-col">
       {/* 顶部空隙和UTC时间/清空按钮 */}
       <div 
-        className="flex-shrink-0 flex justify-between items-center p-2 px-3"
+        className="flex-shrink-0 flex justify-between items-center p-2 px-3 cursor-default select-none"
         style={{ 
           WebkitAppRegion: 'drag',
         } as React.CSSProperties & { WebkitAppRegion: string }}

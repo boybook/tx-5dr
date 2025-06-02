@@ -819,6 +819,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@heroicons/react@npm:^2.2.0":
+  version: 2.2.0
+  resolution: "@heroicons/react@npm:2.2.0"
+  peerDependencies:
+    react: ">= 16 || ^19.0.0-rc"
+  checksum: 10c0/f8d3cf689b56716339c91df3542f3948115042d1e70e6bc940a3f3e347c0bc78b56aa563917fbd7ce097fe2f38ebb21bffb0db39be914cbc545a754bddae9ab4
+  languageName: node
+  linkType: hard
+
 "@heroui/accordion@npm:2.2.16":
   version: 2.2.16
   resolution: "@heroui/accordion@npm:2.2.16"
@@ -5242,6 +5251,7 @@ __metadata:
     "@fortawesome/fontawesome-svg-core": "npm:^6.7.2"
     "@fortawesome/free-solid-svg-icons": "npm:^6.7.2"
     "@fortawesome/react-fontawesome": "npm:^0.2.2"
+    "@heroicons/react": "npm:^2.2.0"
     "@heroui/react": "npm:^2.7.8"
     "@heroui/theme": "npm:^2.4.15"
     "@tx5dr/contracts": "workspace:*"

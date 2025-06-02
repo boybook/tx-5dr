@@ -49,6 +49,10 @@ export enum WSMessageType {
   
   // ===== 发射日志 =====
   TRANSMISSION_LOG = 'transmissionLog',
+  
+  // ===== 音量控制 =====
+  SET_VOLUME_GAIN = 'setVolumeGain',
+  VOLUME_GAIN_CHANGED = 'volumeGainChanged',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -344,6 +348,18 @@ export const WSTransmissionLogMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSTransmissionLogMessage = z.infer<typeof WSTransmissionLogMessageSchema>;
 
+/**
+ * 设置音量增益消息
+ */
+export const WSSetVolumeGainMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_VOLUME_GAIN),
+  data: z.object({
+    gain: z.number().min(0).max(2),
+  }),
+});
+
+export type WSSetVolumeGainMessage = z.infer<typeof WSSetVolumeGainMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -374,6 +390,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSUserCommandMessageSchema,
   WSStartOperatorMessageSchema,
   WSStopOperatorMessageSchema,
+  
+  // 音量控制消息
+  WSSetVolumeGainMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -458,4 +477,7 @@ export interface DigitalRadioEngineEvents {
   connected: () => void;
   disconnected: () => void;
   error: (error: Error) => void;
+  
+  // 音量控制事件
+  volumeGainChanged: (gain: number) => void;
 } 
