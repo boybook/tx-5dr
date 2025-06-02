@@ -210,4 +210,72 @@ export class WSClient extends WSMessageHandler {
     this.disconnect();
     this.removeAllListeners();
   }
+
+  /**
+   * 处理原始WebSocket消息
+   */
+  public handleRawMessage(messageStr: string): void {
+    try {
+      const message = JSON.parse(messageStr);
+      
+      // 发射原始消息事件
+      this.emitRawMessage(message);
+      
+      // 根据消息类型处理
+      switch (message.type) {
+        case WSMessageType.PONG:
+          // 不发射 pong 事件，因为它不是 DigitalRadioEngineEvents 的一部分
+          break;
+          
+        case WSMessageType.ERROR:
+          this.emitWSEvent('error', new Error(message.data?.message || '未知错误'));
+          break;
+          
+        case WSMessageType.MODE_CHANGED:
+          this.emitWSEvent('modeChanged', message.data);
+          break;
+          
+        case WSMessageType.SLOT_START:
+          // 从 SlotPackManager 获取最新的 SlotPack
+          this.emitWSEvent('slotStart', message.data, null);
+          break;
+          
+        case WSMessageType.SUB_WINDOW:
+          this.emitWSEvent('subWindow', message.data);
+          break;
+          
+        case WSMessageType.SLOT_PACK_UPDATED:
+          this.emitWSEvent('slotPackUpdated', message.data);
+          break;
+          
+        case WSMessageType.SPECTRUM_DATA:
+          this.emitWSEvent('spectrumData', message.data);
+          break;
+          
+        case WSMessageType.DECODE_ERROR:
+          this.emitWSEvent('decodeError', message.data);
+          break;
+          
+        case WSMessageType.SYSTEM_STATUS:
+          this.emitWSEvent('systemStatus', message.data);
+          break;
+          
+        case WSMessageType.OPERATORS_LIST:
+          this.emitWSEvent('operatorsList', message.data);
+          break;
+          
+        case WSMessageType.OPERATOR_STATUS_UPDATE:
+          this.emitWSEvent('operatorStatusUpdate', message.data);
+          break;
+
+        case WSMessageType.TRANSMISSION_LOG:
+          console.log('📝 [WSClient] 收到发射日志:', message.data);
+          this.emitWSEvent('transmissionLog', message.data);
+          break;
+      }
+    } catch (error) {
+      console.error('❌ 处理WebSocket消息失败:', error);
+      this.emitWSEvent('error', error instanceof Error ? error : new Error('消息处理失败'));
+    }
+  }
 } 

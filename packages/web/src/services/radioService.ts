@@ -156,6 +156,12 @@ export class RadioService {
       this.eventListeners.error?.(error);
     });
 
+    // 监听发射日志
+    this.wsClient.onWSEvent('transmissionLog', (data: any) => {
+      console.log('📝 收到发射日志:', data);
+      this.eventListeners.transmissionLog?.(data);
+    });
+
     // 监听SlotPack数据更新
     this.wsClient.onWSEvent('slotPackUpdated', (slotPack: SlotPack) => {
       console.log('📦 收到SlotPack数据:', slotPack);

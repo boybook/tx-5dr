@@ -124,6 +124,12 @@ export class WSServer extends WSMessageHandler {
       this.broadcastSystemStatus(status);
     });
 
+    // 监听发射日志事件
+    this.digitalRadioEngine.on('transmissionLog' as any, (data) => {
+      console.log('📝 [WSServer] 收到发射日志，广播给客户端:', data);
+      this.broadcast(WSMessageType.TRANSMISSION_LOG, data);
+    });
+
     // 监听操作员状态更新事件
     this.digitalRadioEngine.on('operatorStatusUpdate' as any, (operatorStatus) => {
       this.broadcastOperatorStatusUpdate(operatorStatus);

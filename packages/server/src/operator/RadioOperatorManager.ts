@@ -453,57 +453,73 @@ export class RadioOperatorManager {
    * @param midSlot 是否在时隙中间调用（默认false）
    */
   handleTransmissions(midSlot: boolean = false): void {
-    if (this.pendingTransmissions.length === 0) {
+    if (!this.isRunning) {
+      console.log('⚠️ [RadioOperatorManager] 操作员管理器未运行，跳过处理发射请求');
       return;
     }
 
-    const currentMode = this.getCurrentMode();
+    // 获取当前时隙信息
     const now = this.clockSource.now();
+    const currentMode = this.getCurrentMode();
     const currentSlotStartMs = Math.floor(now / currentMode.slotMs) * currentMode.slotMs;
-    const timeSinceSlotStartMs = now - currentSlotStartMs;
-    
-    console.log(`📢 [操作员管理器] 处理 ${this.pendingTransmissions.length} 个待发射消息${midSlot ? ' (时隙中间)' : ''}`);
-    console.log(`   时隙已过时间: ${timeSinceSlotStartMs}ms`);
-    
-    const transmissionsToProcess = [...this.pendingTransmissions];
-    this.pendingTransmissions = [];
-    
-    for (const request of transmissionsToProcess) {
-      try {
-        console.log(`📻 [发射] 操作员: ${request.operatorId}, 消息: "${request.transmission}"`);
-        
-        const operator = this.operators.get(request.operatorId);
-        const frequency = operator?.config.frequency || 1500;
-        
-        const encodeRequest: WSJTXEncodeRequest = {
-          operatorId: request.operatorId,
-          message: request.transmission,
-          frequency: frequency,
-          mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
-          // 添加时隙开始时间，用于计算音频裁剪
-          slotStartMs: currentSlotStartMs,
-          // 总是传递正确的时间偏移，不管是否是 midSlot
-          timeSinceSlotStartMs: timeSinceSlotStartMs
-        };
-        
-        console.log(`🎵 [发射] 编码参数: 频率=${frequency}Hz, 模式=${encodeRequest.mode}`);
-        if (midSlot) {
-          console.log(`⏰ [发射] 时隙中间发射，已过时间: ${timeSinceSlotStartMs}ms`);
-        }
-        console.log(`⏰ [发射] 提交编码请求，将在适当时机播放`);
-        
-        this.encodeQueue.push(encodeRequest);
-        
-      } catch (error) {
-        console.error(`❌ [发射失败] 操作员: ${request.operatorId}, 错误:`, error);
-        
-        this.eventEmitter.emit('transmissionComplete', {
-          operatorId: request.operatorId,
-          success: false,
-          error: error instanceof Error ? error.message : String(error)
-        });
+    const currentTimeSinceSlotStartMs = now - currentSlotStartMs;
+
+    console.log(`📡 [RadioOperatorManager] 处理发射请求:`, {
+      midSlot,
+      currentSlotStartMs: new Date(currentSlotStartMs).toISOString(),
+      timeSinceSlotStart: currentTimeSinceSlotStartMs
+    });
+
+    // 处理每个操作员的发射请求
+    this.operators.forEach((operator, operatorId) => {
+      if (!operator.isTransmitting) {
+        return;
       }
-    }
+
+      // 检查是否在发射周期内
+      const cycleNumber = Math.floor(currentSlotStartMs / currentMode.slotMs);
+      let isTransmitCycle = false;
+      
+      if (currentMode.cycleType === 'EVEN_ODD') {
+        const evenOddCycle = cycleNumber % 2;
+        isTransmitCycle = operator.getTransmitCycles().includes(evenOddCycle);
+      } else if (currentMode.cycleType === 'CONTINUOUS') {
+        isTransmitCycle = operator.getTransmitCycles().includes(cycleNumber);
+      }
+
+      if (!isTransmitCycle) {
+        console.log(`📻 [RadioOperatorManager] 操作员 ${operatorId} 不在发射周期内`);
+        return;
+      }
+
+      // 获取操作员的发射内容
+      const transmission = operator.transmissionStrategy?.handleTransmitSlot();
+      if (!transmission) {
+        return;
+      }
+
+      // 获取操作员的频率
+      const frequency = operator.config.frequency || 0;
+
+      // 广播发射日志
+      this.eventEmitter.emit('transmissionLog' as any, {
+        operatorId,
+        time: new Date(currentSlotStartMs).toISOString().slice(11, 19).replace(/:/g, ''),
+        message: transmission,
+        frequency: frequency,
+        slotStartMs: currentSlotStartMs
+      });
+
+      // 提交到编码队列
+      this.encodeQueue.push({
+        operatorId,
+        message: transmission,
+        frequency,
+        mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
+        slotStartMs: currentSlotStartMs,
+        timeSinceSlotStartMs: currentTimeSinceSlotStartMs
+      });
+    });
   }
 
   /**

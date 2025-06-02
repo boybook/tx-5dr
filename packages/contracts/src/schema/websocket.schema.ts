@@ -46,6 +46,9 @@ export enum WSMessageType {
   LOG_EXPORT_ADIF_RESPONSE = 'logExportAdifResponse',
   LOG_IMPORT_ADIF = 'logImportAdif',
   LOG_IMPORT_ADIF_RESPONSE = 'logImportAdifResponse',
+  
+  // ===== 发射日志 =====
+  TRANSMISSION_LOG = 'transmissionLog',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -325,6 +328,22 @@ export type WSUserCommandMessage = z.infer<typeof WSUserCommandMessageSchema>;
 export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
 export type WSStopOperatorMessage = z.infer<typeof WSStopOperatorMessageSchema>;
 
+/**
+ * 发射日志消息
+ */
+export const WSTransmissionLogMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.TRANSMISSION_LOG),
+  data: z.object({
+    operatorId: z.string(),
+    time: z.string(),
+    message: z.string(),
+    frequency: z.number(),
+    slotStartMs: z.number()
+  }),
+});
+
+export type WSTransmissionLogMessage = z.infer<typeof WSTransmissionLogMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -338,6 +357,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSDecodeErrorMessageSchema,
   WSSystemStatusMessageSchema,
   WSErrorMessageSchema,
+  WSTransmissionLogMessageSchema,
   
   // 客户端到服务端
   WSStartEngineMessageSchema,
@@ -418,6 +438,13 @@ export interface DigitalRadioEngineEvents {
   // 发射相关事件
   requestTransmit: (request: TransmitRequest) => void;
   transmissionComplete: (info: TransmissionCompleteInfo) => void;
+  transmissionLog: (data: {
+    operatorId: string;
+    time: string;
+    message: string;
+    frequency: number;
+    slotStartMs: number;
+  }) => void;
   
   // 操作员事件
   operatorsList: (operators: OperatorStatus[]) => void;

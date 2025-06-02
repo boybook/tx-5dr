@@ -182,7 +182,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
                   <div className="text-xs text-right font-mono">
                     {message.db === 'TX' ? (
                       <div className="flex justify-end">
-                        <Chip size="sm" color="danger" variant="flat">TX</Chip>
+                        <Chip size="sm" color="danger" variant="flat" className="h-4">TX</Chip>
                       </div>
                     ) : (
                       <span className="text-xs font-mono">

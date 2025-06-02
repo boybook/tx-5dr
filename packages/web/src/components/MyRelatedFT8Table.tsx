@@ -6,24 +6,68 @@ import { useSlotPacks, useRadioState } from '../store/radioStore';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
 import type { FT8Frame } from '@tx5dr/contracts';
+import { RadioService } from '../services/radioService';
 
 interface MyRelatedFT8TableProps {
   className?: string;
+}
+
+// 发射日志的本地存储键
+const TRANSMISSION_LOGS_STORAGE_KEY = 'tx5dr_transmission_logs';
+
+// 发射日志类型
+interface TransmissionLog {
+  time: string;
+  message: string;
+  frequency: number;
+  operatorId: string;
+  slotStartMs: number;
 }
 
 export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const [myFt8Groups, setMyFt8Groups] = useState<FT8Group[]>([]);
-  const [transmissionLogs, setTransmissionLogs] = useState<Array<{
-    time: string;
-    message: string;
-    frequency: number;
-    operatorId: string;
-  }>>([]);
+  const [transmissionLogs, setTransmissionLogs] = useState<TransmissionLog[]>([]);
 
-  // 记录上一次的发射状态
-  const previousTransmittingStatesRef = useRef<Map<string, boolean>>(new Map());
+  // 从本地存储加载发射日志
+  useEffect(() => {
+    const storedLogs = localStorage.getItem(TRANSMISSION_LOGS_STORAGE_KEY);
+    if (storedLogs) {
+      try {
+        const logs = JSON.parse(storedLogs);
+        setTransmissionLogs(logs);
+      } catch (error) {
+        console.error('加载发射日志失败:', error);
+      }
+    }
+  }, []);
+
+  // 保存发射日志到本地存储
+  useEffect(() => {
+    localStorage.setItem(TRANSMISSION_LOGS_STORAGE_KEY, JSON.stringify(transmissionLogs));
+  }, [transmissionLogs]);
+
+  // 监听服务端推送的发射日志
+  useEffect(() => {
+    const radioService = new RadioService();
+    
+    const handleTransmissionLog = (data: {
+      operatorId: string;
+      time: string;
+      message: string;
+      frequency: number;
+      slotStartMs: number;
+    }) => {
+      setTransmissionLogs(prev => [...prev, data]);
+    };
+    
+    radioService.on('transmissionLog', handleTransmissionLog);
+    
+    return () => {
+      radioService.off('transmissionLog');
+    };
+  }, []);
 
   // 获取当前操作员的呼号和网格
   const getCurrentOperator = () => {
@@ -41,35 +85,6 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
     const firstOperator = radio.state.operators[0];
     return firstOperator?.context?.targetCall || '';
   };
-
-  // 监听操作员状态变化，检测发射状态改变
-  useEffect(() => {
-    radio.state.operators.forEach(operator => {
-      const previousState = previousTransmittingStatesRef.current.get(operator.id);
-      
-      // 检测从发射状态到停止发射的变化（发射完成）
-      if (previousState === true && !operator.isTransmitting) {
-        // 发射完成，记录发射日志
-        if (operator.slots && operator.currentSlot) {
-          const transmissionMessage = operator.slots[operator.currentSlot as keyof typeof operator.slots];
-          if (transmissionMessage) {
-            const now = new Date();
-            const timeString = now.toISOString().slice(11, 19).replace(/:/g, '');
-            
-            setTransmissionLogs(prev => [...prev, {
-              time: timeString,
-              message: transmissionMessage,
-              frequency: operator.context.frequency || 1550,
-              operatorId: operator.id
-            }]);
-          }
-        }
-      }
-      
-      // 更新当前状态
-      previousTransmittingStatesRef.current.set(operator.id, operator.isTransmitting);
-    });
-  }, [radio.state.operators]);
 
   // 处理SlotPack数据，过滤出与我相关的消息
   useEffect(() => {
@@ -94,6 +109,27 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
           message.endsWith(` ${myCallsign}`);                // 以我的呼号结尾
         
         if (!isRelevantToMe) return;
+        
+        // 检查这条消息是否已经存在于发射日志中
+        const isAlreadyInTransmissionLogs = transmissionLogs.some(log => {
+          // 检查时间是否匹配（允许1秒的误差）
+          const logTime = parseInt(log.time);
+          const frameTime = parseInt(new Date(slotPack.startMs).toISOString().slice(11, 19).replace(/:/g, ''));
+          const timeDiff = Math.abs(logTime - frameTime);
+          
+          // 检查消息内容是否匹配
+          const messageMatch = log.message === message;
+          
+          // 检查频率是否匹配（允许1Hz的误差）
+          const freqMatch = Math.abs(log.frequency - frame.freq) <= 1;
+          
+          return timeDiff <= 1 && messageMatch && freqMatch;
+        });
+        
+        // 如果消息已经在发射日志中，跳过
+        if (isAlreadyInTransmissionLogs) {
+          return;
+        }
         
         const slotStartTime = new Date(slotPack.startMs);
         const utcSeconds = slotStartTime.toISOString().slice(11, 19);
@@ -191,6 +227,7 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
   const handleClearMyData = () => {
     setMyFt8Groups([]);
     setTransmissionLogs([]);
+    localStorage.removeItem(TRANSMISSION_LOGS_STORAGE_KEY);
   };
 
   return (
