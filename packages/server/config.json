@@ -1,7 +1,7 @@
 {
   "audio": {
-    "inputDeviceId": "input-3",
-    "outputDeviceId": "output-4",
+    "inputDeviceId": "input-1",
+    "outputDeviceId": "output-0",
     "sampleRate": 48000,
     "bufferSize": 1024
   },
@@ -51,32 +51,6 @@
         "transmitTiming": 1180
       },
       "id": "operator-1748763145003-ealgyf55x"
-    },
-    {
-      "myCallsign": "BA1ABC",
-      "myGrid": "OO11",
-      "frequency": 1500,
-      "transmitCycles": [
-        0
-      ],
-      "maxQSOTimeoutCycles": 10,
-      "maxCallAttempts": 3,
-      "autoReplyToCQ": true,
-      "autoResumeCQAfterFail": false,
-      "autoResumeCQAfterSuccess": false,
-      "replyToWorkedStations": false,
-      "prioritizeNewCalls": true,
-      "mode": {
-        "name": "FT8",
-        "slotMs": 15000,
-        "toleranceMs": 100,
-        "windowTiming": [
-          0
-        ],
-        "cycleType": "EVEN_ODD",
-        "transmitTiming": 1180
-      },
-      "id": "operator-1748787755337-rs4x53gwe"
     }
   ]
 }

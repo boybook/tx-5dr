@@ -351,7 +351,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       className="border border-gray-200 rounded-lg overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
       style={{
         transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
-        boxShadow: operators.length > 0 && currentOperatorId === operatorStatus.id ? '0 0 0 2px rgba(255, 50, 50, 0.5)' : 'none'
+        boxShadow: operators.length > 1 && currentOperatorId === operatorStatus.id ? '0 0 0 2px rgba(255, 166, 0, 0.5)' : 'none'
       }}
       onClick={() => {
         setCurrentOperatorId(operatorStatus.id);

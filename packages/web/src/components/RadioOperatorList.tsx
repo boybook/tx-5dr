@@ -58,7 +58,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
             </Button>
           ) : (
             // 未连接时的提示
-            <div>
+            <div className="cursor-default select-none">
               <div className="text-default-500">请先连接到服务器</div>
               <div className="text-xs text-default-400 mt-2">
                 连接: {connection.state.isConnected ? '已连接' : '未连接'} | 

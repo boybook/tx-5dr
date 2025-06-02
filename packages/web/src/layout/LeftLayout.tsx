@@ -127,7 +127,7 @@ export const LeftLayout: React.FC = () => {
         {/* FT8解码消息表格 */}
         <div className="flex-1 min-h-0">
           {ft8Groups.length === 0 ? (
-            <div className="text-center py-12">
+            <div className="text-center py-12 cursor-default select-none">
               <div className="text-default-400 mb-2 text-4xl">📡</div>
               <p className="text-default-500 mb-1">暂无FT8解码消息</p>
               <p className="text-default-400 text-sm">
