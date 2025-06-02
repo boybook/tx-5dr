@@ -34,6 +34,18 @@ export enum WSMessageType {
   USER_COMMAND = 'userCommand',
   START_OPERATOR = 'startOperator',
   STOP_OPERATOR = 'stopOperator',
+  
+  // ===== 日志管理 =====
+  LOG_QUERY = 'logQuery',
+  LOG_QUERY_RESPONSE = 'logQueryResponse',
+  LOG_ANALYZE_CALLSIGN = 'logAnalyzeCallsign',
+  LOG_ANALYZE_CALLSIGN_RESPONSE = 'logAnalyzeCallsignResponse',
+  LOG_STATISTICS = 'logStatistics',
+  LOG_STATISTICS_RESPONSE = 'logStatisticsResponse',
+  LOG_EXPORT_ADIF = 'logExportAdif',
+  LOG_EXPORT_ADIF_RESPONSE = 'logExportAdifResponse',
+  LOG_IMPORT_ADIF = 'logImportAdif',
+  LOG_IMPORT_ADIF_RESPONSE = 'logImportAdifResponse',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -178,6 +190,12 @@ export const OperatorStatusSchema = z.object({
     frequency: z.number().optional(),
     reportSent: z.number().optional(), // 改为number类型
     reportReceived: z.number().optional(), // 改为number类型
+    // 自动化设置
+    autoReplyToCQ: z.boolean().optional(),
+    autoResumeCQAfterFail: z.boolean().optional(),
+    autoResumeCQAfterSuccess: z.boolean().optional(),
+    replyToWorkedStations: z.boolean().optional(),
+    prioritizeNewCalls: z.boolean().optional(),
   }),
   strategy: z.object({
     name: z.string(),
@@ -244,6 +262,12 @@ export const WSSetOperatorContextMessageSchema = WSBaseMessageSchema.extend({
       frequency: z.number().optional(),
       reportSent: z.number().optional(),
       reportReceived: z.number().optional(),
+      // 自动化设置
+      autoReplyToCQ: z.boolean().optional(),
+      autoResumeCQAfterFail: z.boolean().optional(),
+      autoResumeCQAfterSuccess: z.boolean().optional(),
+      replyToWorkedStations: z.boolean().optional(),
+      prioritizeNewCalls: z.boolean().optional(),
     }),
   }),
 });

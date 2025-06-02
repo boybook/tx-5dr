@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowsAltH, faRepeat } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useRadioState } from '../store/radioStore';
+import { useConnection, useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import type { OperatorStatus } from '@tx5dr/contracts';
 
 interface RadioOperatorProps {
@@ -14,6 +14,8 @@ const SLOT_OPTIONS = ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'];
 export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operatorStatus }) => {
   const connection = useConnection();
   const radio = useRadioState();
+  const { operators } = useOperators();
+  const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
   
   // 调试：渲染计数器
   const renderCountRef = React.useRef(0);
@@ -348,7 +350,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     <div 
       className="border border-gray-200 rounded-lg overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
       style={{
-        transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
+        transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
+        boxShadow: operators.length > 0 && currentOperatorId === operatorStatus.id ? '0 0 0 2px rgba(255, 50, 50, 0.5)' : 'none'
+      }}
+      onClick={() => {
+        setCurrentOperatorId(operatorStatus.id);
       }}
     >
       {/* 上半部分 - 进度条背景 */}

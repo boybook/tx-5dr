@@ -13,6 +13,8 @@ export const RadioOperatorConfigSchema = z.object({
   autoReplyToCQ: z.boolean().default(false),
   autoResumeCQAfterFail: z.boolean().default(false),
   autoResumeCQAfterSuccess: z.boolean().default(false),
+  replyToWorkedStations: z.boolean().default(false), // 是否回复已通联过的电台
+  prioritizeNewCalls: z.boolean().default(true), // 是否优先选择新呼号
   mode: ModeDescriptorSchema.optional(),
 });
 

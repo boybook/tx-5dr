@@ -350,7 +350,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     
     // 初始化操作员管理器
-    this.operatorManager.initialize();
+    await this.operatorManager.initialize();
     
     console.log(`✅ [时钟管理器] 初始化完成，当前模式: ${this.currentMode.name}`);
   }

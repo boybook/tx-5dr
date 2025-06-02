@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, ReactNode, useState } from 'react';
 import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 
@@ -37,6 +37,7 @@ export interface RadioState {
   currentMode: ModeDescriptor | null;
   systemStatus: any;
   operators: OperatorStatus[];
+  currentOperatorId: string | null;
 }
 
 export type RadioAction = 
@@ -45,13 +46,15 @@ export type RadioAction =
   | { type: 'decodeError'; payload: any }
   | { type: 'error'; payload: Error }
   | { type: 'operatorsList'; payload: OperatorStatus[] }
-  | { type: 'operatorStatusUpdate'; payload: OperatorStatus };
+  | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
+  | { type: 'setCurrentOperator'; payload: string };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
   currentMode: null,
   systemStatus: null,
-  operators: []
+  operators: [],
+  currentOperatorId: null
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -66,9 +69,7 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return {
         ...state,
         systemStatus: action.payload,
-        // 从systemStatus中提取isDecoding状态
         isDecoding: action.payload?.isDecoding || false,
-        // 从systemStatus中提取当前模式
         currentMode: action.payload?.currentMode || state.currentMode
       };
     
@@ -125,6 +126,12 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
           }
           return op;
         })
+      };
+
+    case 'setCurrentOperator':
+      return {
+        ...state,
+        currentOperatorId: action.payload
       };
     
     default:
@@ -320,3 +327,21 @@ export const useSlotPacks = () => {
     dispatch: dispatch.slotPacksDispatch
   };
 }; 
+
+export const useOperators = () => {
+  const { state } = useRadio();
+  return {
+    operators: state.radio.operators,
+  };
+};
+
+export const useCurrentOperatorId = () => {
+  const { state, dispatch } = useRadio();
+  return {
+    currentOperatorId: state.radio.currentOperatorId || state.radio.operators[0]?.id,
+    setCurrentOperatorId: (operatorId: string) => {
+      // 只更新前端状态，不发送到后端
+      dispatch.radioDispatch({ type: 'setCurrentOperator', payload: operatorId });
+    }
+  };
+};

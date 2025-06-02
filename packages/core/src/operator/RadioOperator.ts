@@ -23,6 +23,8 @@ export class RadioOperator {
         autoReplyToCQ: false,
         autoResumeCQAfterFail: false,
         autoResumeCQAfterSuccess: false,
+        replyToWorkedStations: false,
+        prioritizeNewCalls: true,
     };
 
     constructor(config: OperatorConfig, eventEmitter: EventEmitter<DigitalRadioEngineEvents>, strategyFactory: (operator: RadioOperator) => ITransmissionStrategy) {
@@ -61,7 +63,7 @@ export class RadioOperator {
 
     initEventListener(eventEmitter: EventEmitter<DigitalRadioEngineEvents>) {
         // 周期开始事件 - 用于处理接收到的消息
-        eventEmitter.on('slotStart', (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
+        eventEmitter.on('slotStart', async (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
             if (this._stopped) {
                 return;
             }
@@ -79,7 +81,7 @@ export class RadioOperator {
                     }
                     return parsedMessage;
                 });
-                const result = this._transmissionStrategy?.handleReceivedAndDicideNext(parsedMessages);
+                const result = await this._transmissionStrategy?.handleReceivedAndDicideNext(parsedMessages);
                 if (result?.stop) {
                     this.stop();
                 }
@@ -178,7 +180,16 @@ export class RadioOperator {
         
         // 处理update_context命令 - 更新操作员配置
         if (command.command === 'update_context') {
-            const { myCall, myGrid, frequency } = command.args;
+            const { 
+                myCall, 
+                myGrid, 
+                frequency,
+                autoReplyToCQ,
+                autoResumeCQAfterFail,
+                autoResumeCQAfterSuccess,
+                replyToWorkedStations,
+                prioritizeNewCalls
+            } = command.args;
             
             // 更新操作员配置字段
             if (myCall !== undefined) {
@@ -189,6 +200,21 @@ export class RadioOperator {
             }
             if (frequency !== undefined) {
                 this._config.frequency = frequency;
+            }
+            if (autoReplyToCQ !== undefined) {
+                this._config.autoReplyToCQ = autoReplyToCQ;
+            }
+            if (autoResumeCQAfterFail !== undefined) {
+                this._config.autoResumeCQAfterFail = autoResumeCQAfterFail;
+            }
+            if (autoResumeCQAfterSuccess !== undefined) {
+                this._config.autoResumeCQAfterSuccess = autoResumeCQAfterSuccess;
+            }
+            if (replyToWorkedStations !== undefined) {
+                this._config.replyToWorkedStations = replyToWorkedStations;
+            }
+            if (prioritizeNewCalls !== undefined) {
+                this._config.prioritizeNewCalls = prioritizeNewCalls;
             }
             
             // 通知状态变化
@@ -225,7 +251,45 @@ export class RadioOperator {
     }
 
     recordQSOLog(qsoRecord: QSORecord): void {
-        // TODO
+        // 发射记录QSO日志的事件
+        this._eventEmitter.emit('recordQSO' as any, {
+            operatorId: this._config.id,
+            qsoRecord
+        });
+    }
+    
+    /**
+     * 检查是否已经与某呼号通联过
+     * 通过事件系统查询
+     */
+    async hasWorkedCallsign(callsign: string): Promise<boolean> {
+        return new Promise((resolve) => {
+            // 生成唯一的请求ID
+            const requestId = `${Date.now()}_${Math.random()}`;
+            
+            // 设置一次性监听器等待响应
+            const responseHandler = (data: { requestId: string; hasWorked: boolean }) => {
+                if (data.requestId === requestId) {
+                    this._eventEmitter.off('hasWorkedCallsignResponse' as any, responseHandler);
+                    resolve(data.hasWorked);
+                }
+            };
+            
+            this._eventEmitter.on('hasWorkedCallsignResponse' as any, responseHandler);
+            
+            // 发射查询事件
+            this._eventEmitter.emit('checkHasWorkedCallsign' as any, {
+                operatorId: this._config.id,
+                callsign,
+                requestId
+            });
+            
+            // 设置超时（避免永久等待）
+            setTimeout(() => {
+                this._eventEmitter.off('hasWorkedCallsignResponse' as any, responseHandler);
+                resolve(false); // 默认返回false
+            }, 1000);
+        });
     }
     
     /**

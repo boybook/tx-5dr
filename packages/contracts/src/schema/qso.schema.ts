@@ -13,7 +13,9 @@ export const OperatorConfigSchema = z.object({
   maxCallAttempts: z.number(),
   frequency: z.number(),
   autoResumeCQAfterFail: z.boolean().default(false),
-  autoResumeCQAfterSuccess: z.boolean().default(false)
+  autoResumeCQAfterSuccess: z.boolean().default(false),
+  replyToWorkedStations: z.boolean().default(false),
+  prioritizeNewCalls: z.boolean().default(true)
 });
 
 // QSO状态机上下文

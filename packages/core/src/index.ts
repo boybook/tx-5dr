@@ -28,5 +28,9 @@ export * from './types/index.js';
 export type { CallsignInfo, FT8LocationInfo } from './utils/callsign.js';
 
 // 导出操作员相关
-export { RadioOperator } from './operator/RadioOperator';
-export { StandardQSOStrategy } from './operator/transmission/strategies/StandardQSOStrategy';
+export { RadioOperator } from './operator/RadioOperator.js';
+export { StandardQSOStrategy } from './operator/transmission/strategies/StandardQSOStrategy.js';
+export * from './operator/transmission/ITransmissionStrategy.js';
+
+// 日志系统导出
+export * from './log/index.js';

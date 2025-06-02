@@ -1,28 +1,32 @@
 import React, { useState } from 'react';
 import { 
   Button,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Select,
   SelectItem
 } from '@heroui/react';
-import { useRadioState } from '../store/radioStore';
+import { useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import { RadioControl } from '../components/RadioControl';
 import { RadioOperatorList } from '../components/RadioOperatorList';
 import { SettingsModal } from '../components/SettingsModal';
 import { MyRelatedFT8Table } from '../components/MyRelatedFT8Table';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faCog } from '@fortawesome/free-solid-svg-icons';
+import { AutomationSettingsPanel } from '../components/AutomationSettingsPanel';
 
 export const RightLayout: React.FC = () => {
   const radio = useRadioState();
+  const { operators } = useOperators();
+  const { currentOperatorId } = useCurrentOperatorId();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'advanced'>('audio');
-
-  // 获取当前操作员的呼号
-  const getCurrentOperatorCallsign = (): string => {
-    const firstOperator = radio.state.operators[0];
-    return firstOperator?.context?.myCall || 'N0CALL';
-  };
 
   // 判断是否为自动模式
   const isAutoMode = selectedMode.startsWith('auto');
@@ -61,50 +65,41 @@ export const RightLayout: React.FC = () => {
       >
         <div></div> {/* 左侧空白 */}
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
-          <Select
-            variant="flat"
-            size="sm"
-            radius="md"
-            className="w-[110px] h-6"
-            aria-label="选择自动程序模式"
-            classNames={{
-              trigger: `${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-gray-100 select-manual-mode'} rounded-md px-2 h-6 min-h-6 max-h-6 text-xs font-mono text-default-400 leading-none border-0 shadow-none transition-colors duration-200 !py-0`,
-              value: "text-xs font-mono text-default-400",
-              innerWrapper: "shadow-none h-6",
-              mainWrapper: "shadow-none h-6",
-              selectorIcon: "right-1",
-              popoverContent: "p-1 min-w-[140px]"
-            }}
-            selectedKeys={[selectedMode]}
-            onSelectionChange={handleModeChange}
-            renderValue={(items) => {
-              const item = Array.from(items)[0];
-              if (item && item.key && item.key.toString().startsWith('auto')) {
-                return (
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 bg-success-500 rounded-full flex-shrink-0"></div>
-                    <span className="truncate">{item.textValue}</span>
-                  </div>
-                );
-              }
-              return item?.textValue || '';
-            }}
-          >
-            <SelectItem key="manual" textValue="手动" className="text-xs py-1 px-2 min-h-6">手动</SelectItem>
-            <SelectItem key="auto1" textValue="自动程序1" className="text-xs py-1 px-2 min-h-6">自动程序1</SelectItem>
-            <SelectItem key="auto2" textValue="自动程序2" className="text-xs py-1 px-2 min-h-6">自动程序2</SelectItem>
-            <SelectItem key="auto3" textValue="自动程序3" className="text-xs py-1 px-2 min-h-6">自动程序3</SelectItem>
-            <SelectItem key="auto4" textValue="自动程序4" className="text-xs py-1 px-2 min-h-6">自动程序4</SelectItem>
-            <SelectItem key="auto5" textValue="自动程序5" className="text-xs py-1 px-2 min-h-6">自动程序5</SelectItem>
-          </Select>
+          <Popover placement="bottom-start">
+            <PopoverTrigger>
+              <Button
+                variant="light" 
+                size="sm"
+                title="自动化程序"
+                className={`${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-gray-100 select-manual-mode'} rounded-md px-3 h-6 text-xs font-mono text-default-600 leading-none`}
+              >
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 bg-success-500 rounded-full flex-shrink-0"></div>
+                  <span className="truncate">自动化程序</span>
+                  <FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs -mr-1" />
+                </div>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="px-1">
+              <div>
+                <AutomationSettingsPanel isOpen={true} onClose={() => {}} />
+              </div>
+            </PopoverContent>
+          </Popover>
+          
           <Button
-            onPress={() => {}}
             variant="light" 
             size="sm"
             title="电台呼号"
             className="bg-gray-100 rounded-md px-3 h-6 text-xs font-mono text-default-400 leading-none"
+            onPress={() => {
+              setSettingsInitialTab('operator');
+              setIsSettingsOpen(true);
+            }}
           >
-            {getCurrentOperatorCallsign()}
+            {
+              currentOperatorId ? operators.find(op => op.id === currentOperatorId)?.context.myCall || 'N0CALL' : 'N0CALL'
+            }
           </Button>
           <Button
             onPress={handleOpenSettings}

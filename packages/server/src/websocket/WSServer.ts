@@ -187,6 +187,27 @@ export class WSServer extends WSMessageHandler {
         this.sendToConnection(connectionId, WSMessageType.PONG);
         break;
 
+      // ===== 日志管理命令 =====
+      case WSMessageType.LOG_QUERY:
+        await this.handleLogQuery(connectionId, message.data);
+        break;
+
+      case WSMessageType.LOG_ANALYZE_CALLSIGN:
+        await this.handleLogAnalyzeCallsign(connectionId, message.data);
+        break;
+
+      case WSMessageType.LOG_STATISTICS:
+        await this.handleLogStatistics(connectionId, message.data);
+        break;
+
+      case WSMessageType.LOG_EXPORT_ADIF:
+        await this.handleLogExportAdif(connectionId, message.data);
+        break;
+
+      case WSMessageType.LOG_IMPORT_ADIF:
+        await this.handleLogImportAdif(connectionId, message.data);
+        break;
+
       default:
         console.warn('未知的WebSocket消息类型:', message.type);
     }
@@ -509,6 +530,100 @@ export class WSServer extends WSMessageHandler {
    */
   broadcastOperatorStatusUpdate(operatorStatus: any): void {
     this.broadcast(WSMessageType.OPERATOR_STATUS_UPDATE, operatorStatus);
+  }
+
+  /**
+   * 处理日志查询命令
+   */
+  private async handleLogQuery(connectionId: string, data: any): Promise<void> {
+    try {
+      const logManager = this.digitalRadioEngine.operatorManager.getLogManager();
+      const qsos = await logManager.queryQSOs(data?.options);
+      
+      this.sendToConnection(connectionId, WSMessageType.LOG_QUERY_RESPONSE, { qsos });
+    } catch (error) {
+      console.error('❌ 查询日志失败:', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'LOG_QUERY_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理呼号分析命令
+   */
+  private async handleLogAnalyzeCallsign(connectionId: string, data: any): Promise<void> {
+    try {
+      const logManager = this.digitalRadioEngine.operatorManager.getLogManager();
+      const analysis = await logManager.analyzeCallsign(
+        data.callsign,
+        data.grid,
+        data.operatorId
+      );
+      
+      this.sendToConnection(connectionId, WSMessageType.LOG_ANALYZE_CALLSIGN_RESPONSE, { analysis });
+    } catch (error) {
+      console.error('❌ 分析呼号失败:', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'LOG_ANALYZE_CALLSIGN_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理日志统计命令
+   */
+  private async handleLogStatistics(connectionId: string, data: any): Promise<void> {
+    try {
+      const logManager = this.digitalRadioEngine.operatorManager.getLogManager();
+      const statistics = await logManager.getStatistics(data?.operatorId);
+      
+      this.sendToConnection(connectionId, WSMessageType.LOG_STATISTICS_RESPONSE, { statistics });
+    } catch (error) {
+      console.error('❌ 获取日志统计失败:', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'LOG_STATISTICS_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理导出ADIF命令
+   */
+  private async handleLogExportAdif(connectionId: string, data: any): Promise<void> {
+    try {
+      const logManager = this.digitalRadioEngine.operatorManager.getLogManager();
+      const adifContent = await logManager.exportADIF(data?.options);
+      
+      this.sendToConnection(connectionId, WSMessageType.LOG_EXPORT_ADIF_RESPONSE, { adifContent });
+    } catch (error) {
+      console.error('❌ 导出ADIF失败:', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'LOG_EXPORT_ADIF_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理导入ADIF命令
+   */
+  private async handleLogImportAdif(connectionId: string, data: any): Promise<void> {
+    try {
+      const logManager = this.digitalRadioEngine.operatorManager.getLogManager();
+      await logManager.importADIF(data.adifContent, data.operatorId);
+      
+      this.sendToConnection(connectionId, WSMessageType.LOG_IMPORT_ADIF_RESPONSE, { success: true });
+    } catch (error) {
+      console.error('❌ 导入ADIF失败:', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'LOG_IMPORT_ADIF_ERROR'
+      });
+    }
   }
 
   /**

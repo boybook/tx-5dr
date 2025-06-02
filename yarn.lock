@@ -5154,6 +5154,7 @@ __metadata:
     "@tx5dr/contracts": "workspace:*"
     "@tx5dr/shared-config": "workspace:*"
     "@types/node": "npm:^20.11.24"
+    adif-parser-ts: "npm:^0.6.22"
     eslint: "npm:^8.0.0"
     eventemitter3: "npm:^5.0.1"
     tsx: "npm:^4.19.4"
@@ -5836,6 +5837,13 @@ __metadata:
   bin:
     acorn: bin/acorn
   checksum: 10c0/dbd36c1ed1d2fa3550140000371fcf721578095b18777b85a79df231ca093b08edc6858d75d6e48c73e431c174dcf9214edbd7e6fa5911b93bd8abfa54e47123
+  languageName: node
+  linkType: hard
+
+"adif-parser-ts@npm:^0.6.22":
+  version: 0.6.22
+  resolution: "adif-parser-ts@npm:0.6.22"
+  checksum: 10c0/c3c7da6bddc47c2fb762a476d6cba4d12903d9552fee3cc8cc80cd2b8d4bee26ca3171ca38a7f7a50c7acf9d5ea75c705d6ee5d30a191801ca83138719e810db
   languageName: node
   linkType: hard
 

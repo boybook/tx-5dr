@@ -22,14 +22,14 @@ interface StateHandleResult {
 }
 
 interface StandardState {
-    handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult;
+    handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult>;
     onTimeout?(strategy: StandardQSOStrategy): StateHandleResult;
     onEnter?(strategy: StandardQSOStrategy): void;
 }
 
 const states: { [key in SlotsIndex]: StandardState } = {
     TX1: {
-        handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult {
+        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 只接受指定的呼号回复我
             const msgSignalReport = messages
                 .filter((msg) => msg.message.type === FT8MessageType.SIGNAL_REPORT && 
@@ -48,7 +48,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
             return {}
         },
+        onEnter(strategy: StandardQSOStrategy) {
+            // 记录QSO开始时间
+            strategy.qsoStartTime = Date.now();
+        },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            // 清理QSO开始时间
+            strategy.qsoStartTime = undefined;
             if (strategy.operator.config.autoReplyToCQ) {
                 return { changeState: 'TX6' };
             }
@@ -56,7 +62,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX2: {
-        handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult {
+        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             /* if (strategy.context.config.id === 'BA1ABC') {
                 console.log('TX2', strategy.context, messages);
             } */
@@ -81,7 +87,15 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
             return {}
         },
+        onEnter(strategy: StandardQSOStrategy) {
+            // 如果是直接从回复开始的QSO，记录开始时间
+            if (!strategy.qsoStartTime) {
+                strategy.qsoStartTime = Date.now();
+            }
+        },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            // 清理QSO开始时间
+            strategy.qsoStartTime = undefined;
             if (strategy.operator.config.autoReplyToCQ) {
                 return { changeState: 'TX6' };
             }
@@ -89,7 +103,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX3: {
-        handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult {
+        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 等待对方发送RRR或73
             const msgRRR = messages
                 .filter((msg) => 
@@ -119,6 +133,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return {}
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            // 清理QSO开始时间
+            strategy.qsoStartTime = undefined;
             if (strategy.operator.config.autoReplyToCQ) {
                 return { changeState: 'TX6' };
             }
@@ -133,17 +149,20 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 callsign: strategy.context.targetCallsign!,
                 grid: strategy.context.targetGrid,
                 frequency: strategy.context.config.frequency,
-                mode: 'FT8',
-                startTime: Date.now(),
+                mode: strategy.context.config.mode.name,
+                startTime: strategy.qsoStartTime || Date.now(),
+                endTime: Date.now(),
                 reportSent: strategy.context.reportSent?.toString(),
                 reportReceived: strategy.context.reportReceived?.toString(),
                 messages: []
             };
             strategy.operator.recordQSOLog(qsoRecord);
+            // 清理QSO开始时间
+            strategy.qsoStartTime = undefined;
         },
-        handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult {
+        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 复用TX6的CQ处理逻辑
-            const result = states.TX6.handle(strategy, messages);
+            const result = await states.TX6.handle(strategy, messages);
             if (!result.stop && !result.changeState) {
                 return {
                     changeState: 'TX6'
@@ -160,17 +179,20 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 callsign: strategy.context.targetCallsign!,
                 grid: strategy.context.targetGrid,
                 frequency: strategy.context.config.frequency,
-                mode: 'FT8',
-                startTime: Date.now(),
+                mode: strategy.context.config.mode.name,
+                startTime: strategy.qsoStartTime || Date.now(),
+                endTime: Date.now(),
                 reportSent: strategy.context.reportSent?.toString(),
                 reportReceived: strategy.context.reportReceived?.toString(),
                 messages: []
             };
             strategy.operator.recordQSOLog(qsoRecord);
+            // 清理QSO开始时间
+            strategy.qsoStartTime = undefined;
         },
-        handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult {
+        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 复用TX6的CQ处理逻辑
-            const result = states.TX6.handle(strategy, messages);
+            const result = await states.TX6.handle(strategy, messages);
             if (!result.stop && !result.changeState) {
                 return {
                     changeState: 'TX6'
@@ -180,7 +202,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX6: {
-        handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): StateHandleResult {
+        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 收集所有TX1和TX2形式的消息
             const directCalls = messages
                 .filter((msg) => 
@@ -216,12 +238,41 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             // 其次处理CQ呼叫
             if (cqCalls.length > 0) {
-                const msg = cqCalls[0].message as FT8MessageCQ;
-                strategy.context.targetCallsign = msg.senderCallsign;
-                strategy.context.targetGrid = msg.grid;
-                strategy.context.reportSent = cqCalls[0].snr;
-                strategy.updateSlots();
-                return { changeState: 'TX1' };
+                // 按信噪比从低到高尝试，找到合适的电台
+                const sortedCalls = cqCalls.sort((a, b) => {
+                    // 如果优先新呼号，则按信噪比从低到高排序
+                    if (strategy.operator.config.prioritizeNewCalls) {
+                        return a.snr - b.snr;
+                    }
+                    // 否则按信噪比从高到低排序
+                    return b.snr - a.snr;
+                });
+
+                for (const cqCall of sortedCalls) {
+                    const msg = cqCall.message as FT8MessageCQ;
+                    const callsign = msg.senderCallsign;
+                    
+                    try {
+                        // 检查是否已经通联过
+                        const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
+                        
+                        // 根据配置决定是否回复已通联过的电台
+                        if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
+                            console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${cqCall.snr})`);
+                            strategy.context.targetCallsign = callsign;
+                            strategy.context.targetGrid = msg.grid;
+                            strategy.context.reportSent = cqCall.snr;
+                            strategy.updateSlots();
+                            return { changeState: 'TX1' };
+                        } else {
+                            console.log(`[StandardQSOStrategy] 跳过CQ: ${callsign} (已通联过, SNR: ${cqCall.snr})`);
+                        }
+                    } catch (error) {
+                        console.error(`[StandardQSOStrategy] 检查呼号 ${callsign} 失败:`, error);
+                        // 如果检查失败，跳过这个呼号
+                        continue;
+                    }
+                }
             } 
 
             return {};
@@ -242,6 +293,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     };
     private _context: QSOContext;
     private timeoutCycles: number = 0;
+    public qsoStartTime?: number; // QSO开始时间
 
     constructor(operator: RadioOperator) {
         this.operator = operator;
@@ -255,7 +307,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         return this._context;
     }
 
-    handleReceivedAndDicideNext(messages: ParsedFT8Message[]): StrategiesResult {
+    async handleReceivedAndDicideNext(messages: ParsedFT8Message[]): Promise<StrategiesResult> {
         const currentState = states[this.state];
 
         // 过滤掉发送者是我自己的消息
@@ -263,7 +315,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         
         // console.log(this.context.config.id, "收到消息", filteredMessages);
         // 处理接收到的消息
-        const result = currentState.handle(this, filteredMessages);
+        const result = await currentState.handle(this, filteredMessages);
         
         // 如果状态需要改变
         if (result.changeState) {

@@ -1,6 +1,6 @@
 {
   "audio": {
-    "inputDeviceId": "input-2",
+    "inputDeviceId": "input-3",
     "outputDeviceId": "output-4",
     "sampleRate": 48000,
     "bufferSize": 1024
@@ -26,10 +26,12 @@
         0
       ],
       "maxQSOTimeoutCycles": 10,
-      "maxCallAttempts": 10,
+      "maxCallAttempts": 3,
       "autoReplyToCQ": true,
       "autoResumeCQAfterFail": true,
       "autoResumeCQAfterSuccess": true,
+      "replyToWorkedStations": true,
+      "prioritizeNewCalls": true,
       "mode": {
         "name": "FT8",
         "slotMs": 15000,
@@ -45,7 +47,8 @@
           500,
           1000
         ],
-        "cycleType": "EVEN_ODD"
+        "cycleType": "EVEN_ODD",
+        "transmitTiming": 1180
       },
       "id": "operator-1748763145003-ealgyf55x"
     },
@@ -58,9 +61,11 @@
       ],
       "maxQSOTimeoutCycles": 10,
       "maxCallAttempts": 3,
-      "autoReplyToCQ": false,
+      "autoReplyToCQ": true,
       "autoResumeCQAfterFail": false,
       "autoResumeCQAfterSuccess": false,
+      "replyToWorkedStations": false,
+      "prioritizeNewCalls": true,
       "mode": {
         "name": "FT8",
         "slotMs": 15000,
@@ -68,7 +73,8 @@
         "windowTiming": [
           0
         ],
-        "cycleType": "EVEN_ODD"
+        "cycleType": "EVEN_ODD",
+        "transmitTiming": 1180
       },
       "id": "operator-1748787755337-rs4x53gwe"
     }

@@ -10,9 +10,11 @@ import {
   type TransmitRequest,
   type DigitalRadioEngineEvents,
   type ModeDescriptor,
+  type QSORecord,
   MODES
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager';
+import { LogManager } from '../log/LogManager';
 import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue';
 
 export interface RadioOperatorManagerOptions {
@@ -33,16 +35,48 @@ export class RadioOperatorManager {
   private clockSource: ClockSourceSystem;
   private getCurrentMode: () => ModeDescriptor;
   private isRunning: boolean = false;
+  private logManager: LogManager;
 
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
     this.encodeQueue = options.encodeQueue;
     this.clockSource = options.clockSource;
     this.getCurrentMode = options.getCurrentMode;
+    this.logManager = LogManager.getInstance();
 
     // 监听发射请求
     this.eventEmitter.on('requestTransmit', (request: TransmitRequest) => {
       this.pendingTransmissions.push(request);
+    });
+    
+    // 监听记录QSO事件
+    this.eventEmitter.on('recordQSO' as any, async (data: { operatorId: string; qsoRecord: QSORecord }) => {
+      try {
+        await this.logManager.recordQSO(data.qsoRecord, data.operatorId);
+        console.log(`📝 [操作员管理器] 已记录QSO: ${data.qsoRecord.callsign} for operator ${data.operatorId}`);
+      } catch (error) {
+        console.error(`❌ [操作员管理器] 记录QSO失败:`, error);
+      }
+    });
+    
+    // 监听检查是否已通联事件
+    this.eventEmitter.on('checkHasWorkedCallsign' as any, async (data: { operatorId: string; callsign: string; requestId: string }) => {
+      try {
+        const hasWorked = await this.logManager.hasWorkedCallsign(data.callsign, data.operatorId);
+        
+        // 发送响应
+        this.eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+          requestId: data.requestId,
+          hasWorked
+        });
+      } catch (error) {
+        console.error(`❌ [操作员管理器] 检查呼号失败:`, error);
+        // 发送错误响应
+        this.eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+          requestId: data.requestId,
+          hasWorked: false
+        });
+      }
     });
     
     // 监听操作员发射周期变更事件
@@ -83,8 +117,12 @@ export class RadioOperatorManager {
   /**
    * 初始化操作员管理器
    */
-  initialize(): void {
+  async initialize(): Promise<void> {
     console.log('📻 [操作员管理器] 初始化...');
+    
+    // 初始化日志管理器
+    await this.logManager.initialize();
+    
     this.initializeOperatorsFromConfig();
   }
 
@@ -126,6 +164,8 @@ export class RadioOperatorManager {
       autoReplyToCQ: config.autoReplyToCQ,
       autoResumeCQAfterFail: config.autoResumeCQAfterFail,
       autoResumeCQAfterSuccess: config.autoResumeCQAfterSuccess,
+      replyToWorkedStations: config.replyToWorkedStations ?? false,
+      prioritizeNewCalls: config.prioritizeNewCalls ?? true,
       mode: config.mode || MODES.FT8,
     };
   }
@@ -144,7 +184,7 @@ export class RadioOperatorManager {
       this.eventEmitter,
       (op: RadioOperator) => new StandardQSOStrategy(op)
     );
-
+    
     // 监听操作员的slots更新事件
     operator.addSlotsUpdateListener((data: any) => {
       console.log(`📻 [操作员管理器] 操作员 ${data.operatorId} 的slots已更新`);
@@ -275,6 +315,12 @@ export class RadioOperatorManager {
           frequency: operator.config.frequency,
           reportSent: targetContext.reportSent,
           reportReceived: targetContext.reportReceived,
+          // 自动化设置
+          autoReplyToCQ: operator.config.autoReplyToCQ,
+          autoResumeCQAfterFail: operator.config.autoResumeCQAfterFail,
+          autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
+          replyToWorkedStations: operator.config.replyToWorkedStations,
+          prioritizeNewCalls: operator.config.prioritizeNewCalls,
         },
         strategy: {
           name: 'StandardQSOStrategy',
@@ -556,10 +602,14 @@ export class RadioOperatorManager {
   /**
    * 清理资源
    */
-  cleanup(): void {
+  async cleanup(): Promise<void> {
     this.stop();
     this.operators.clear();
     this.pendingTransmissions = [];
+    
+    // 关闭日志管理器
+    await this.logManager.close();
+    
     console.log('📻 [操作员管理器] 清理完成');
   }
 
@@ -602,5 +652,12 @@ export class RadioOperatorManager {
       console.log(`📻 [操作员管理器] 操作员 ${operatorId} 的发射周期已更改`);
       this.checkAndTriggerTransmission(operatorId);
     }
+  }
+  
+  /**
+   * 获取日志管理器
+   */
+  getLogManager(): LogManager {
+    return this.logManager;
   }
 } 

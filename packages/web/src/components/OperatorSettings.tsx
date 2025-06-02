@@ -242,6 +242,20 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                   {operator.autoResumeCQAfterSuccess ? "启用" : "禁用"}
                 </Chip>
               </div>
+              
+              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
+                <span className="text-sm">回复已通联过的电台</span>
+                <Chip size="sm" variant="flat" color={operator.replyToWorkedStations ? "success" : "default"}>
+                  {operator.replyToWorkedStations ? "启用" : "禁用"}
+                </Chip>
+              </div>
+              
+              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
+                <span className="text-sm">优先选择新呼号</span>
+                <Chip size="sm" variant="flat" color={operator.prioritizeNewCalls ? "success" : "default"}>
+                  {operator.prioritizeNewCalls ? "启用" : "禁用"}
+                </Chip>
+              </div>
             </div>
           </div>
 
@@ -345,6 +359,34 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 size="sm"
               >
                 成功后自动恢复CQ
+              </Switch>
+              
+              <Switch
+                isSelected={formData.replyToWorkedStations || false}
+                onValueChange={(checked) => {
+                  if (isNewOperator) {
+                    setNewOperatorData({ ...newOperatorData, replyToWorkedStations: checked });
+                  } else {
+                    updateEditFormData(operatorId!, 'replyToWorkedStations', checked);
+                  }
+                }}
+                size="sm"
+              >
+                回复已通联过的电台
+              </Switch>
+              
+              <Switch
+                isSelected={formData.prioritizeNewCalls !== false}
+                onValueChange={(checked) => {
+                  if (isNewOperator) {
+                    setNewOperatorData({ ...newOperatorData, prioritizeNewCalls: checked });
+                  } else {
+                    updateEditFormData(operatorId!, 'prioritizeNewCalls', checked);
+                  }
+                }}
+                size="sm"
+              >
+                优先选择新呼号
               </Switch>
             </div>
           </div>

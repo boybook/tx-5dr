@@ -11,9 +11,7 @@ export interface ITransmissionStrategy {
      * @param lastMessageFromTarget 从当前目标接收到的最后一条消息 (如果存在)。
      * @returns 要发送的FT8消息字符串，如果为null，表示直接停止发射。
      */
-    handleReceivedAndDicideNext(
-        messages: ParsedFT8Message[]
-    ): StrategiesResult;
+    handleReceivedAndDicideNext(messages: ParsedFT8Message[]): Promise<StrategiesResult>;
 
     /**
      * 当用户手动设置了下一条要发送的消息时调用此方法。
