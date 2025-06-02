@@ -97,7 +97,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       
       // 如果引擎正在运行，同步添加到引擎中
       try {
-        await engine.syncAddOperator(newOperator);
+        await engine.operatorManager.syncAddOperator(newOperator);
         fastify.log.info(`📻 [API] 创建操作员: ${newOperator.id} (${newOperator.myCallsign})`);
       } catch (engineError) {
         fastify.log.warn(`📻 [API] 操作员配置已保存，但添加到引擎失败: ${engineError}`);
@@ -156,7 +156,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       
       // 同步更新到引擎中
       try {
-        await engine.syncUpdateOperator(updatedOperator);
+        await engine.operatorManager.syncUpdateOperator(updatedOperator);
         fastify.log.info(`📻 [API] 更新操作员: ${id} (${updatedOperator.myCallsign})`);
       } catch (engineError) {
         fastify.log.warn(`📻 [API] 操作员配置已更新，但同步到引擎失败: ${engineError}`);
@@ -203,7 +203,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       
       // 从引擎中移除操作员
       try {
-        await engine.syncRemoveOperator(id);
+        await engine.operatorManager.syncRemoveOperator(id);
         fastify.log.info(`📻 [API] 删除操作员: ${id}`);
       } catch (engineError) {
         fastify.log.warn(`📻 [API] 操作员配置已删除，但从引擎移除失败: ${engineError}`);
@@ -235,7 +235,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       
-      engine.startOperator(id);
+      engine.operatorManager.startOperator(id);
       
       return reply.code(200).send({
         success: true,
@@ -256,7 +256,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       
-      engine.stopOperator(id);
+      engine.operatorManager.stopOperator(id);
       
       return reply.code(200).send({
         success: true,
@@ -277,7 +277,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       
-      const operatorStatus = engine.getOperatorsStatus().find(op => op.id === id);
+      const operatorStatus = engine.operatorManager.getOperatorsStatus().find(op => op.id === id);
       
       if (!operatorStatus) {
         return reply.code(404).send({

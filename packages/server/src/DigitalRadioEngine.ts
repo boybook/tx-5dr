@@ -38,7 +38,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private audioMixer: AudioMixer;
 
   // 电台操作员管理器
-  private operatorManager: RadioOperatorManager;
+  private _operatorManager: RadioOperatorManager;
+
+  public get operatorManager(): RadioOperatorManager {
+    return this._operatorManager;
+  }
   
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -62,7 +66,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.audioMixer = new AudioMixer(100);
     
     // 初始化操作员管理器
-    this.operatorManager = new RadioOperatorManager({
+    this._operatorManager = new RadioOperatorManager({
       eventEmitter: this,
       encodeQueue: this.realEncodeQueue,
       clockSource: this.clockSource,
@@ -294,97 +298,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     console.log(`✅ [时钟管理器] 初始化完成，当前模式: ${this.currentMode.name}`);
   }
 
-  /**
-   * 获取所有操作员的状态信息
-   */
-  getOperatorsStatus(): any[] {
-    return this.operatorManager.getOperatorsStatus();
-  }
-
-  /**
-   * 更新操作员上下文
-   */
-  updateOperatorContext(operatorId: string, context: any): void {
-    this.operatorManager.updateOperatorContext(operatorId, context);
-  }
-
-  /**
-   * 设置操作员时隙
-   */
-  setOperatorSlot(operatorId: string, slot: string): void {
-    this.operatorManager.setOperatorSlot(operatorId, slot);
-  }
-
-  /**
-   * 启动操作员发射
-   */
-  startOperator(operatorId: string): void {
-    this.operatorManager.startOperator(operatorId);
-  }
-
-  /**
-   * 停止操作员发射
-   */
-  stopOperator(operatorId: string): void {
-    this.operatorManager.stopOperator(operatorId);
-  }
-
-  /**
-   * 添加电台操作员
-   */
-  addOperator(config: RadioOperatorConfig) {
-    return this.operatorManager.addOperator(config);
-  }
-
-  /**
-   * 移除电台操作员
-   */
-  removeOperator(id: string): void {
-    this.operatorManager.removeOperator(id);
-  }
-
-  /**
-   * 获取电台操作员
-   */
-  getOperator(id: string) {
-    return this.operatorManager.getOperator(id);
-  }
-
-  /**
-   * 获取所有电台操作员
-   */
-  getAllOperators() {
-    return this.operatorManager.getAllOperators();
-  }
-
-  /**
-   * 从配置文件重新加载所有操作员
-   */
-  async reloadOperatorsFromConfig(): Promise<void> {
-    await this.operatorManager.reloadOperatorsFromConfig();
-  }
-
-  /**
-   * 同步添加操作员
-   */
-  async syncAddOperator(config: RadioOperatorConfig) {
-    return await this.operatorManager.syncAddOperator(config);
-  }
-
-  /**
-   * 同步删除操作员
-   */
-  async syncRemoveOperator(id: string): Promise<void> {
-    await this.operatorManager.syncRemoveOperator(id);
-  }
-
-  /**
-   * 同步更新操作员配置
-   */
-  async syncUpdateOperator(config: RadioOperatorConfig): Promise<void> {
-    await this.operatorManager.syncUpdateOperator(config);
-  }
-  
   /**
    * 启动时钟
    */
