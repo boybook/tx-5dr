@@ -44,6 +44,40 @@ export class RadioOperatorManager {
     this.eventEmitter.on('requestTransmit', (request: TransmitRequest) => {
       this.pendingTransmissions.push(request);
     });
+    
+    // 监听操作员发射周期变更事件
+    this.eventEmitter.on('operatorTransmitCyclesChanged' as any, (data: { operatorId: string; transmitCycles: number[] }) => {
+      console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 发射周期变更: [${data.transmitCycles.join(', ')}]`);
+      // 立即检查并触发发射
+      this.checkAndTriggerTransmission(data.operatorId);
+      // 发送状态更新到前端
+      this.emitOperatorStatusUpdate(data.operatorId);
+    });
+    
+    // 监听操作员切换发射槽位事件
+    this.eventEmitter.on('operatorSlotChanged' as any, (data: { operatorId: string; slot: string }) => {
+      console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 切换发射槽位: ${data.slot}`);
+      // 立即检查并触发发射
+      this.checkAndTriggerTransmission(data.operatorId);
+      // 发送状态更新到前端
+      this.emitOperatorStatusUpdate(data.operatorId);
+    });
+    
+    // 监听操作员发射内容变更事件
+    this.eventEmitter.on('operatorSlotContentChanged' as any, (data: { operatorId: string; slot: string; content: string }) => {
+      console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 编辑发射内容: 槽位=${data.slot}`);
+      // 立即检查并触发发射（如果当前正在该槽位发射）
+      const operator = this.operators.get(data.operatorId);
+      if (operator) {
+        const currentSlot = operator.transmissionStrategy?.userCommand?.({ command: 'get_state' } as any);
+        if (currentSlot === data.slot) {
+          console.log(`📻 [操作员管理器] 当前正在槽位 ${data.slot} 发射，立即更新发射内容`);
+          this.checkAndTriggerTransmission(data.operatorId);
+        }
+      }
+      // 发送状态更新到前端
+      this.emitOperatorStatusUpdate(data.operatorId);
+    });
   }
 
   /**
@@ -302,7 +336,128 @@ export class RadioOperatorManager {
     
     operator.start();
     console.log(`📻 [操作员管理器] 启动操作员 ${operatorId} 发射`);
+    
+    // 立即检查并触发发射（如果在发射周期内）
+    this.checkAndTriggerTransmission(operatorId);
+    
     this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 检查并触发单个操作员的发射
+   * 用于在时隙中间启动或切换发射周期时立即触发
+   */
+  private checkAndTriggerTransmission(operatorId: string): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator || !operator.isTransmitting) {
+      return;
+    }
+
+    const currentMode = this.getCurrentMode();
+    const now = this.clockSource.now();
+    const slotMs = currentMode.slotMs;
+    const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
+    const timeSinceSlotStartMs = now - currentSlotStartMs;
+    
+    // 检查是否在发射周期内
+    const cycleNumber = Math.floor(currentSlotStartMs / slotMs);
+    let isTransmitCycle = false;
+    
+    if (currentMode.cycleType === 'EVEN_ODD') {
+      const evenOddCycle = cycleNumber % 2;
+      isTransmitCycle = operator.getTransmitCycles().includes(evenOddCycle);
+    } else if (currentMode.cycleType === 'CONTINUOUS') {
+      isTransmitCycle = operator.getTransmitCycles().includes(cycleNumber);
+    }
+    
+    if (!isTransmitCycle) {
+      console.log(`📻 [操作员管理器] 操作员 ${operatorId} 不在发射周期内`);
+      // 即使不在发射周期内，也需要更新状态（cycleInfo会显示isTransmitCycle=false）
+      this.emitOperatorStatusUpdate(operatorId);
+      return;
+    }
+    
+    // 生成发射内容
+    const transmission = operator.transmissionStrategy?.handleTransmitSlot();
+    if (!transmission) {
+      console.log(`📻 [操作员管理器] 操作员 ${operatorId} 没有发射内容`);
+      // 即使没有发射内容，也需要更新状态
+      this.emitOperatorStatusUpdate(operatorId);
+      return;
+    }
+    
+    console.log(`📻 [操作员管理器] 在时隙中间触发发射: 操作员=${operatorId}, 已过时间=${timeSinceSlotStartMs}ms`);
+    
+    // 立即将发射请求加入队列
+    const request: TransmitRequest = {
+      operatorId,
+      transmission
+    };
+    this.pendingTransmissions.push(request);
+    
+    // 立即处理发射（传入 midSlot=true 标记）
+    this.handleTransmissions(true);
+    
+    // 发送状态更新到前端
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 处理发射请求
+   * @param midSlot 是否在时隙中间调用（默认false）
+   */
+  handleTransmissions(midSlot: boolean = false): void {
+    if (this.pendingTransmissions.length === 0) {
+      return;
+    }
+
+    const currentMode = this.getCurrentMode();
+    const now = this.clockSource.now();
+    const currentSlotStartMs = Math.floor(now / currentMode.slotMs) * currentMode.slotMs;
+    const timeSinceSlotStartMs = now - currentSlotStartMs;
+    
+    console.log(`📢 [操作员管理器] 处理 ${this.pendingTransmissions.length} 个待发射消息${midSlot ? ' (时隙中间)' : ''}`);
+    console.log(`   时隙已过时间: ${timeSinceSlotStartMs}ms`);
+    
+    const transmissionsToProcess = [...this.pendingTransmissions];
+    this.pendingTransmissions = [];
+    
+    for (const request of transmissionsToProcess) {
+      try {
+        console.log(`📻 [发射] 操作员: ${request.operatorId}, 消息: "${request.transmission}"`);
+        
+        const operator = this.operators.get(request.operatorId);
+        const frequency = operator?.config.frequency || 1500;
+        
+        const encodeRequest: WSJTXEncodeRequest = {
+          operatorId: request.operatorId,
+          message: request.transmission,
+          frequency: frequency,
+          mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
+          // 添加时隙开始时间，用于计算音频裁剪
+          slotStartMs: currentSlotStartMs,
+          // 总是传递正确的时间偏移，不管是否是 midSlot
+          timeSinceSlotStartMs: timeSinceSlotStartMs
+        };
+        
+        console.log(`🎵 [发射] 编码参数: 频率=${frequency}Hz, 模式=${encodeRequest.mode}`);
+        if (midSlot) {
+          console.log(`⏰ [发射] 时隙中间发射，已过时间: ${timeSinceSlotStartMs}ms`);
+        }
+        console.log(`⏰ [发射] 提交编码请求，将在适当时机播放`);
+        
+        this.encodeQueue.push(encodeRequest);
+        
+      } catch (error) {
+        console.error(`❌ [发射失败] 操作员: ${request.operatorId}, 错误:`, error);
+        
+        this.eventEmitter.emit('transmissionComplete', {
+          operatorId: request.operatorId,
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
   }
 
   /**
@@ -380,61 +535,6 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 处理发射请求
-   */
-  handleTransmissions(): void {
-    if (this.pendingTransmissions.length === 0) {
-      return;
-    }
-
-    const currentMode = this.getCurrentMode();
-    const now = this.clockSource.now();
-    const currentSlotStartMs = Math.floor(now / currentMode.slotMs) * currentMode.slotMs;
-    const timeSinceSlotStartMs = now - currentSlotStartMs;
-    
-    // 只有在时隙刚开始时（前500ms内）才处理发射请求
-    if (timeSinceSlotStartMs > 500) {
-      console.log(`⏰ [操作员管理器] 时隙已过 ${timeSinceSlotStartMs}ms，跳过发射处理`);
-      return;
-    }
-
-    console.log(`📢 [操作员管理器] 处理 ${this.pendingTransmissions.length} 个待发射消息`);
-    
-    const transmissionsToProcess = [...this.pendingTransmissions];
-    this.pendingTransmissions = [];
-    
-    for (const request of transmissionsToProcess) {
-      try {
-        console.log(`📻 [发射] 操作员: ${request.operatorId}, 消息: "${request.transmission}"`);
-        
-        const operator = this.operators.get(request.operatorId);
-        const frequency = operator?.config.frequency || 1500;
-        
-        const encodeRequest: WSJTXEncodeRequest = {
-          operatorId: request.operatorId,
-          message: request.transmission,
-          frequency: frequency,
-          mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8'
-        };
-        
-        console.log(`🎵 [发射] 编码参数: 频率=${frequency}Hz, 模式=${encodeRequest.mode}`);
-        console.log(`⏰ [发射] 提交编码请求，将在适当时机播放`);
-        
-        this.encodeQueue.push(encodeRequest);
-        
-      } catch (error) {
-        console.error(`❌ [发射失败] 操作员: ${request.operatorId}, 错误:`, error);
-        
-        this.eventEmitter.emit('transmissionComplete', {
-          operatorId: request.operatorId,
-          success: false,
-          error: error instanceof Error ? error.message : String(error)
-        });
-      }
-    }
-  }
-
-  /**
    * 启动所有操作员
    */
   start(): void {
@@ -490,5 +590,17 @@ export class RadioOperatorManager {
     const operators = this.getOperatorsStatus();
     console.log(`📻 [操作员管理器] 广播操作员列表更新，包含 ${operators.length} 个操作员`);
     this.eventEmitter.emit('operatorsList', operators);
+  }
+
+  /**
+   * 用户命令处理（来自 RadioOperator）
+   * 当操作员的发射周期被更改时触发发射检查
+   */
+  handleOperatorCommand(operatorId: string, command: any): void {
+    if (command.command === 'set_transmit_cycles') {
+      // 操作员的发射周期已更改，立即检查是否需要发射
+      console.log(`📻 [操作员管理器] 操作员 ${operatorId} 的发射周期已更改`);
+      this.checkAndTriggerTransmission(operatorId);
+    }
   }
 } 

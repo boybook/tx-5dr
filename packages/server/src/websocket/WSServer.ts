@@ -267,7 +267,7 @@ export class WSServer extends WSMessageHandler {
   private async handleGetOperators(): Promise<void> {
     console.log('📥 [WSServer] 收到 getOperators 请求');
     try {
-      const operators = this.digitalRadioEngine.getOperatorsStatus();
+      const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
       // console.log('📻 [WSServer] 操作员列表:', operators);
       this.broadcast(WSMessageType.OPERATORS_LIST, { operators });
       // console.log('📤 [WSServer] 已广播操作员列表');
@@ -286,7 +286,7 @@ export class WSServer extends WSMessageHandler {
   private async handleSetOperatorContext(data: any): Promise<void> {
     try {
       const { operatorId, context } = data;
-      this.digitalRadioEngine.updateOperatorContext(operatorId, context);
+      this.digitalRadioEngine.operatorManager.updateOperatorContext(operatorId, context);
     } catch (error) {
       console.error('❌ 设置操作员上下文失败:', error);
       this.broadcast(WSMessageType.ERROR, {
@@ -302,7 +302,7 @@ export class WSServer extends WSMessageHandler {
   private async handleSetOperatorSlot(data: any): Promise<void> {
     try {
       const { operatorId, slot } = data;
-      this.digitalRadioEngine.setOperatorSlot(operatorId, slot);
+      this.digitalRadioEngine.operatorManager.setOperatorSlot(operatorId, slot);
     } catch (error) {
       console.error('❌ 设置操作员时隙失败:', error);
       this.broadcast(WSMessageType.ERROR, {
@@ -318,7 +318,7 @@ export class WSServer extends WSMessageHandler {
   private async handleUserCommand(data: any): Promise<void> {
     try {
       const { operatorId, command, args } = data;
-      const operator = this.digitalRadioEngine.getOperator(operatorId);
+      const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
       if (!operator) {
         throw new Error(`操作员 ${operatorId} 不存在`);
       }
@@ -340,7 +340,7 @@ export class WSServer extends WSMessageHandler {
   private async handleStartOperator(data: any): Promise<void> {
     try {
       const { operatorId } = data;
-      this.digitalRadioEngine.startOperator(operatorId);
+      this.digitalRadioEngine.operatorManager.startOperator(operatorId);
       console.log(`📻 [WSServer] 启动操作员: ${operatorId}`);
     } catch (error) {
       console.error('❌ 启动操作员失败:', error);
@@ -357,7 +357,7 @@ export class WSServer extends WSMessageHandler {
   private async handleStopOperator(data: any): Promise<void> {
     try {
       const { operatorId } = data;
-      this.digitalRadioEngine.stopOperator(operatorId);
+      this.digitalRadioEngine.operatorManager.stopOperator(operatorId);
       console.log(`📻 [WSServer] 停止操作员: ${operatorId}`);
     } catch (error) {
       console.error('❌ 停止操作员失败:', error);
@@ -394,7 +394,7 @@ export class WSServer extends WSMessageHandler {
 
     // 发送当前操作员列表给新连接的客户端
     try {
-      const operators = this.digitalRadioEngine.getOperatorsStatus();
+      const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
       connection.send(WSMessageType.OPERATORS_LIST, { operators });
     } catch (error) {
       console.error('❌ 发送操作员列表失败:', error);

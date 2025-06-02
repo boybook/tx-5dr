@@ -4,6 +4,7 @@ import type { ModeDescriptor, SlotInfo, SlotInfoSchema } from '@tx5dr/contracts'
 
 export interface SlotClockEvents {
   'slotStart': (slotInfo: SlotInfo) => void;
+  'transmitStart': (slotInfo: SlotInfo) => void;
   'subWindow': (slotInfo: SlotInfo, windowIdx: number) => void;
   'error': (error: Error) => void;
 }
@@ -117,6 +118,19 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     
     // 发出时隙开始事件
     this.emit('slotStart', slotInfo);
+    
+    // 根据 transmitTiming 延迟发射 transmitStart 事件
+    const transmitDelay = this.mode.transmitTiming || 0;
+    if (transmitDelay > 0) {
+      setTimeout(() => {
+        if (this.isRunning) {
+          this.emit('transmitStart', slotInfo);
+        }
+      }, transmitDelay);
+    } else {
+      // 如果没有延迟，立即发射
+      this.emit('transmitStart', slotInfo);
+    }
     
     // 计算窗口时机 - 使用 windowTiming 数组
     const windowTimings = this.mode.windowTiming;

@@ -93,50 +93,100 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         
         // 计算当前模式的时序参数
         const slotDurationSec = this.currentMode.slotMs / 1000; // 周期时长（秒）
-        const audioDurationSec = result.duration; // 音频时长（秒）
+        let audioDurationSec = result.duration; // 音频时长（秒）
+        let audioData = result.audioData;
         
-        // 计算居中播放需要的延迟时间
-        const centeringDelaySec = (slotDurationSec - audioDurationSec) / 2;
-        
-        console.log(`⏰ [时钟管理器] 播放时序计算:`);
-        console.log(`   周期时长: ${slotDurationSec}s`);
-        console.log(`   音频时长: ${audioDurationSec.toFixed(2)}s`);
-        console.log(`   居中延迟: ${centeringDelaySec.toFixed(2)}s`);
+        // 获取编码请求中的时间信息
+        const request = (result as any).request;
+        const timeSinceSlotStartMs = request?.timeSinceSlotStartMs || 0;
         
         // 获取当前时隙信息
         const now = this.clockSource.now();
         const currentSlotStartMs = Math.floor(now / this.currentMode.slotMs) * this.currentMode.slotMs;
-        const timeSinceSlotStartMs = now - currentSlotStartMs;
-        const timeSinceSlotStartSec = timeSinceSlotStartMs / 1000;
+        const currentTimeSinceSlotStartMs = now - currentSlotStartMs;
+        const currentTimeSinceSlotStartSec = currentTimeSinceSlotStartMs / 1000;
         
+        console.log(`⏰ [时钟管理器] 播放时序计算:`);
+        console.log(`   周期时长: ${slotDurationSec}s`);
+        console.log(`   原始音频时长: ${result.duration.toFixed(2)}s`);
+        console.log(`   当前音频时长: ${audioDurationSec.toFixed(2)}s`);
+        console.log(`   发射延迟设置: ${(this.currentMode.transmitTiming || 0)}ms`);
         console.log(`   当前时隙开始: ${new Date(currentSlotStartMs).toISOString()}`);
-        console.log(`   时隙已过时间: ${timeSinceSlotStartSec.toFixed(2)}s`);
+        console.log(`   时隙已过时间: ${currentTimeSinceSlotStartSec.toFixed(2)}s`);
+        if (timeSinceSlotStartMs > 0) {
+          console.log(`   中途发射标记: 是 (${(timeSinceSlotStartMs/1000).toFixed(2)}s)`);
+        }
         
-        // 计算应该开始播放的时间点
-        const playbackStartSec = centeringDelaySec;
-        const playbackStartMs = currentSlotStartMs + (playbackStartSec * 1000);
+        // 清除该操作员之前的待播放音频（如果有）
+        this.audioMixer.clearOperatorAudio(result.operatorId);
         
-        if (timeSinceSlotStartSec < playbackStartSec) {
-          // 还没到播放时间，提交到混音器等待
-          console.log(`⌛ [时钟管理器] 提交到混音器，计划播放时间: ${new Date(playbackStartMs).toISOString()}`);
-          this.audioMixer.addAudio(result.operatorId, result.audioData, result.sampleRate, playbackStartMs);
-        } else if (timeSinceSlotStartSec < playbackStartSec + audioDurationSec) {
-          // 已经过了开始时间但还在播放窗口内，立即提交到混音器
-          const lateMs = (timeSinceSlotStartSec - playbackStartSec) * 1000;
-          console.log(`⚠️ [时钟管理器] 播放稍晚，已过时间: ${lateMs.toFixed(0)}ms，立即提交到混音器`);
-          this.audioMixer.addAudio(result.operatorId, result.audioData, result.sampleRate, now);
-        } else {
-          // 已经错过了整个播放窗口，跳过这次播放
-          console.warn(`❌ [时钟管理器] 错过播放窗口，跳过此次发射`);
-          console.warn(`   播放窗口: ${playbackStartSec.toFixed(2)}s - ${(playbackStartSec + audioDurationSec).toFixed(2)}s`);
-          console.warn(`   当前时间: ${timeSinceSlotStartSec.toFixed(2)}s`);
+        // 计算应该开始播放的时间点和需要裁剪的音频
+        let playbackStartMs: number;
+        let audioSkipMs: number = 0; // 需要跳过的音频毫秒数
+        const transmitStartFromSlotMs = this.currentMode.transmitTiming || 0;
+        
+        // 判断是否是时隙中间切换（而不是正常的 transmitStart 触发）
+        // 正常的 transmitStart 触发时，timeSinceSlotStartMs 应该接近 transmitTiming
+        const isMidSlotSwitch = timeSinceSlotStartMs > 0 && 
+                                Math.abs(timeSinceSlotStartMs - transmitStartFromSlotMs) > 100; // 允许100ms误差
+        
+        if (isMidSlotSwitch) {
+          // 时隙中间切换发射内容
+          console.log(`🔄 [时钟管理器] 检测到时隙中间切换`);
           
-          this.emit('transmissionComplete', {
-            operatorId: result.operatorId,
-            success: false,
-            error: '错过播放窗口'
-          });
-          return;
+          if (currentTimeSinceSlotStartMs >= transmitStartFromSlotMs) {
+            // 已经过了正常的发射开始时间，立即播放并裁剪音频
+            playbackStartMs = now;
+            // 计算从发射开始到现在已经过了多少时间
+            audioSkipMs = currentTimeSinceSlotStartMs - transmitStartFromSlotMs;
+            console.log(`🎯 [时钟管理器] 时隙中间切换，已过发射时间点 ${audioSkipMs}ms，立即播放并裁剪音频`);
+          } else {
+            // 还没到发射时间，等到发射时间点再播放
+            playbackStartMs = currentSlotStartMs + transmitStartFromSlotMs;
+            audioSkipMs = 0;
+            console.log(`🎯 [时钟管理器] 时隙中间切换，等待到发射时间点: ${new Date(playbackStartMs).toISOString()}`);
+          }
+        } else {
+          // 正常的 transmitStart 触发，立即播放
+          playbackStartMs = now;
+          audioSkipMs = 0;
+          console.log(`🎯 [时钟管理器] 正常发射触发，立即播放`);
+        }
+        
+        // 如果需要裁剪音频
+        if (audioSkipMs > 0 && audioSkipMs < audioDurationSec * 1000) {
+          const skipSamples = Math.floor((audioSkipMs / 1000) * result.sampleRate);
+          
+          if (skipSamples < audioData.length) {
+            audioData = audioData.slice(skipSamples);
+            audioDurationSec = audioData.length / result.sampleRate;
+            console.log(`✂️ [时钟管理器] 裁剪音频:`);
+            console.log(`   跳过时间: ${audioSkipMs.toFixed(0)}ms`);
+            console.log(`   跳过样本: ${skipSamples}`);
+            console.log(`   剩余样本: ${audioData.length}`);
+            console.log(`   剩余时长: ${audioDurationSec.toFixed(2)}s`);
+          } else {
+            console.warn(`❌ [时钟管理器] 需要跳过的时间超过音频长度，取消播放`);
+            this.emit('transmissionComplete', {
+              operatorId: result.operatorId,
+              success: false,
+              error: '错过播放窗口'
+            });
+            return;
+          }
+        }
+        
+        // 计算从现在到播放开始的延迟
+        const delayMs = playbackStartMs - now;
+        
+        if (delayMs > 0) {
+          // 还没到播放时间，提交到混音器等待
+          console.log(`⌛ [时钟管理器] 等待 ${delayMs}ms 后开始播放`);
+          this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, playbackStartMs);
+        } else {
+          // 立即提交到混音器播放
+          console.log(`🎵 [时钟管理器] 立即播放音频 (时长: ${audioDurationSec.toFixed(2)}s)`);
+          this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, now);
         }
         
       } catch (error) {
@@ -194,6 +244,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         error: error.message
       });
     });
+
   }
   
   /**
@@ -220,11 +271,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.log(`🎯 [时隙开始] ID: ${slotInfo.id}, 开始时间: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
       this.emit('slotStart', slotInfo, this.slotPackManager.getLatestSlotPack());
       
-      // 处理待发射的消息
-      this.operatorManager.handleTransmissions();
-      
       // 广播所有操作员的状态更新（包含更新的周期进度）
       this.operatorManager.broadcastAllOperatorStatusUpdates();
+    });
+    
+    // 监听发射开始事件
+    this.slotClock.on('transmitStart', (slotInfo) => {
+      console.log(`📡 [发射时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 延迟: ${this.currentMode.transmitTiming}ms`);
+      this.emit('transmitStart' as any, slotInfo);
+      
+      // 处理待发射的消息
+      this.operatorManager.handleTransmissions();
     });
     
     this.slotClock.on('subWindow', (slotInfo, windowIdx) => {

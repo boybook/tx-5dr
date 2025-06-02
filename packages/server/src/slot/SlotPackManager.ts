@@ -12,6 +12,7 @@ export interface SlotPackManagerEvents {
  */
 export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private slotPacks = new Map<string, SlotPack>();
+  private lastSlotPack: SlotPack | null = null;
   private currentMode: ModeDescriptor = MODES.FT8;
   
   constructor() {
@@ -37,6 +38,11 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     if (!slotPack) {
       slotPack = this.createSlotPack(slotId, result.timestamp);
       this.slotPacks.set(slotId, slotPack);
+      
+      // 更新最新的 SlotPack
+      if (!this.lastSlotPack || slotPack.startMs > this.lastSlotPack.startMs) {
+        this.lastSlotPack = slotPack;
+      }
     }
     
     // 更新解码统计
@@ -76,6 +82,11 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const allFrames = [...slotPack.frames, ...correctedFrames];
     slotPack.frames = this.deduplicateAndOptimizeFrames(allFrames);
     slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
+    
+    // 确保 lastSlotPack 指向最新的 SlotPack
+    if (slotPack.startMs > (this.lastSlotPack?.startMs || 0)) {
+      this.lastSlotPack = slotPack;
+    }
     
     /* console.log(`📦 [SlotPackManager] 更新时隙包: ${slotId}`);
     console.log(`   解码次数: ${slotPack.stats.totalDecodes}, 成功: ${slotPack.stats.successfulDecodes}`);
@@ -251,22 +262,56 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
 
   /**
    * 获取最新的时隙包
+   * 优化版本：直接返回缓存的 lastSlotPack
    */
   getLatestSlotPack(): SlotPack | null {
-    const slotIds = Array.from(this.slotPacks.keys()).sort();
-    const latestSlotId = slotIds[slotIds.length - 1];
-    return this.getSlotPack(latestSlotId);
+    // 如果有缓存的最新 SlotPack，直接返回副本
+    if (this.lastSlotPack) {
+      return { ...this.lastSlotPack };
+    }
+    return null;
   }
   
   /**
    * 清理指定时隙包
    */
   removeSlotPack(slotId: string): boolean {
+    const slotPack = this.slotPacks.get(slotId);
     const removed = this.slotPacks.delete(slotId);
+    
     if (removed) {
       console.log(`🗑️ [SlotPackManager] 清理时隙包: ${slotId}`);
+      
+      // 如果删除的是最新的 SlotPack，需要重新计算 lastSlotPack
+      if (slotPack && this.lastSlotPack && slotPack.slotId === this.lastSlotPack.slotId) {
+        this.updateLastSlotPack();
+      }
     }
+    
     return removed;
+  }
+  
+  /**
+   * 重新计算并更新 lastSlotPack
+   */
+  private updateLastSlotPack(): void {
+    this.lastSlotPack = null;
+    
+    if (this.slotPacks.size === 0) {
+      return;
+    }
+    
+    let latestStartMs = 0;
+    for (const slotPack of this.slotPacks.values()) {
+      if (slotPack.startMs > latestStartMs) {
+        latestStartMs = slotPack.startMs;
+        this.lastSlotPack = slotPack;
+      }
+    }
+    
+    if (this.lastSlotPack) {
+      console.log(`🔄 [SlotPackManager] 更新最新时隙包缓存: ${this.lastSlotPack.slotId}`);
+    }
   }
   
   /**
@@ -275,13 +320,24 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   cleanupExpiredSlotPacks(maxAgeMs: number = 60000): number {
     const now = Date.now();
     let cleanedCount = 0;
+    let lastSlotPackRemoved = false;
     
     for (const [slotId, slotPack] of this.slotPacks.entries()) {
       if (now - slotPack.stats.lastUpdated > maxAgeMs) {
+        // 检查是否要删除最新的 SlotPack
+        if (this.lastSlotPack && slotPack.slotId === this.lastSlotPack.slotId) {
+          lastSlotPackRemoved = true;
+        }
+        
         this.slotPacks.delete(slotId);
         cleanedCount++;
         console.log(`🗑️ [SlotPackManager] 清理过期时隙包: ${slotId} (${Math.round((now - slotPack.stats.lastUpdated) / 1000)}秒前)`);
       }
+    }
+    
+    // 如果删除了最新的 SlotPack，重新计算
+    if (lastSlotPackRemoved) {
+      this.updateLastSlotPack();
     }
     
     if (cleanedCount > 0) {
@@ -292,10 +348,29 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   }
   
   /**
+   * 获取 SlotPackManager 的状态信息
+   */
+  getStatus() {
+    return {
+      totalSlotPacks: this.slotPacks.size,
+      lastSlotPack: this.lastSlotPack ? {
+        slotId: this.lastSlotPack.slotId,
+        startMs: this.lastSlotPack.startMs,
+        frameCount: this.lastSlotPack.frames.length,
+        totalDecodes: this.lastSlotPack.stats.totalDecodes,
+        lastUpdated: this.lastSlotPack.stats.lastUpdated
+      } : null,
+      currentMode: this.currentMode.name,
+      slotDurationMs: this.currentMode.slotMs
+    };
+  }
+
+  /**
    * 清理所有时隙包
    */
   cleanup(): void {
     this.slotPacks.clear();
+    this.lastSlotPack = null; // 重置最新时隙包缓存
     this.removeAllListeners();
     
     console.log('🧹 [SlotPackManager] 清理完成');

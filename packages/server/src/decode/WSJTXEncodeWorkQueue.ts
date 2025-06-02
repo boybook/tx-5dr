@@ -11,6 +11,8 @@ export interface EncodeRequest {
   frequency: number;
   operatorId: string;
   mode?: 'FT8' | 'FT4';
+  slotStartMs?: number; // 时隙开始时间戳
+  timeSinceSlotStartMs?: number; // 从时隙开始到现在经过的时间（毫秒）
 }
 
 export interface EncodeResult {
@@ -62,6 +64,9 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
     console.log(`   消息: "${request.message}"`);
     console.log(`   频率: ${request.frequency}Hz`);
     console.log(`   模式: ${request.mode || 'FT8'}`);
+    if (request.timeSinceSlotStartMs) {
+      console.log(`   时隙已过时间: ${request.timeSinceSlotStartMs}ms`);
+    }
     console.log(`   队列大小: ${this.queueSize}`);
     
     try {
@@ -70,14 +75,15 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       
       this.queueSize--;
       
-      // 构建编码结果
-      const encodeResult: EncodeResult = {
+      // 构建编码结果，并附加原始请求信息
+      const encodeResult: EncodeResult & { request?: EncodeRequest } = {
         operatorId: result.operatorId,
         audioData: new Float32Array(result.audioData), // 转换回 Float32Array
         sampleRate: result.sampleRate,
         duration: result.duration,
         success: result.success,
-        error: result.error
+        error: result.error,
+        request: request // 附加原始请求信息
       };
       
       if (encodeResult.success) {

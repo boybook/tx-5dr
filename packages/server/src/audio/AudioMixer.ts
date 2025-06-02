@@ -209,6 +209,25 @@ export class AudioMixer extends EventEmitter {
   }
 
   /**
+   * 清除特定操作员的待混音音频
+   */
+  public clearOperatorAudio(operatorId: string): boolean {
+    if (this.pendingAudios.has(operatorId)) {
+      this.pendingAudios.delete(operatorId);
+      console.log(`🧹 [音频混音器] 清除操作员 ${operatorId} 的待混音音频`);
+      
+      // 如果没有其他待混音音频，取消混音定时器
+      if (this.pendingAudios.size === 0 && this.mixingTimeout) {
+        clearTimeout(this.mixingTimeout);
+        this.mixingTimeout = null;
+      }
+      
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * 清空所有待混音的音频
    */
   public clear(): void {

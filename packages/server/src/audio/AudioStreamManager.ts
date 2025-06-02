@@ -342,18 +342,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     console.log(`   原始时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
     console.log(`   目标采样率: ${this.sampleRate}Hz`);
     
-    // 检查音频数据是否合理（FT8应该大约12.64秒）
-    const originalDuration = audioData.length / targetSampleRate;
-    if (originalDuration > 20) {
-      console.warn(`⚠️ [音频播放] 音频时长异常: ${originalDuration.toFixed(2)}s，可能存在编码问题`);
-      // 截断到合理长度（15秒）
-      const maxSamples = Math.floor(15 * targetSampleRate);
-      if (audioData.length > maxSamples) {
-        console.log(`🔄 [音频播放] 截断音频: ${audioData.length} -> ${maxSamples} 样本`);
-        audioData = audioData.slice(0, maxSamples);
-      }
-    }
-    
     try {
       let playbackData: Float32Array;
       
@@ -382,12 +370,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         console.log(`✅ [音频播放] 采样率匹配，无需重采样`);
         playbackData = audioData;
       }
-      
-      // 验证重采样后的时长
-      const finalDuration = playbackData.length / this.sampleRate;
-      console.log(`🔊 [音频播放] 最终播放参数:`);
-      console.log(`   最终样本数: ${playbackData.length}`);
-      console.log(`   最终时长: ${finalDuration.toFixed(2)}s`);
       
       // 分块播放，避免缓冲区溢出
       const chunkSize = 4096; // 4K 样本一块
@@ -420,7 +402,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       }
       
-      console.log(`✅ [音频播放] 音频播放完成, 总时长: ${finalDuration.toFixed(2)}s, 分 ${totalChunks} 块播放`);
+      // console.log(`✅ [音频播放] 音频播放完成, 总时长: ${finalDuration.toFixed(2)}s, 分 ${totalChunks} 块播放`);
       
     } catch (error) {
       console.error('❌ [音频播放] 播放失败:', error);

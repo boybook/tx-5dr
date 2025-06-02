@@ -60,7 +60,7 @@ export class RadioOperator {
     }
 
     initEventListener(eventEmitter: EventEmitter<DigitalRadioEngineEvents>) {
-        // 周期开始事件
+        // 周期开始事件 - 用于处理接收到的消息
         eventEmitter.on('slotStart', (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
             if (this._stopped) {
                 return;
@@ -85,6 +85,14 @@ export class RadioOperator {
                 }
                 console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 自动决策`, result);
             }
+        });
+        
+        // 发射开始事件 - 用于处理发射
+        eventEmitter.on('transmitStart' as any, (slotInfo: SlotInfo) => {
+            if (this._stopped) {
+                return;
+            }
+            
             // 判断是否为发射时隙
             const isTransmitSlot = this.isTransmitSlot(slotInfo);
             if (isTransmitSlot) {
@@ -94,12 +102,12 @@ export class RadioOperator {
                         operatorId: this._config.id,
                         transmission
                     });
+                    console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 发射时机到达，发射内容: ${transmission}`);
                 } else {
-                    console.log(this.config.id + " 没有发射");
+                    console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 发射时机到达，但没有发射内容`);
                 }
-                console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 收到时隙开始，发射时隙`, transmission);
             } else {
-                console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 收到时隙开始，不是发射时隙`);
+                console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 发射时机到达，但不是发射时隙`);
             }
         });
     }
@@ -160,6 +168,11 @@ export class RadioOperator {
             this.setTransmitCycles(transmitCycles);
             // 通知状态变化
             this.notifyStatusChanged();
+            // 发射事件通知发射周期已更改
+            this._eventEmitter.emit('operatorTransmitCyclesChanged' as any, {
+                operatorId: this._config.id,
+                transmitCycles: this._config.transmitCycles
+            });
             return;
         }
         
@@ -183,7 +196,25 @@ export class RadioOperator {
         }
         
         // 其他命令转发给transmission strategy
-        this._transmissionStrategy?.userCommand?.(command);
+        const result = this._transmissionStrategy?.userCommand?.(command);
+        
+        // 检查特定命令，发射相应事件以触发立即发射
+        if (command.command === 'set_state') {
+            // 切换发射槽位时，发射事件
+            this._eventEmitter.emit('operatorSlotChanged' as any, {
+                operatorId: this._config.id,
+                slot: command.args
+            });
+        } else if (command.command === 'set_slot_content') {
+            // 编辑发射内容时，发射事件
+            this._eventEmitter.emit('operatorSlotContentChanged' as any, {
+                operatorId: this._config.id,
+                slot: command.args.slot,
+                content: command.args.content
+            });
+        }
+        
+        return result;
     }
 
     /**
