@@ -1,6 +1,6 @@
 import { QSOContext, FT8MessageType, ParsedFT8Message, QSOCommand, StrategiesResult, FT8MessageCQ, FT8MessageCall, FT8MessageSignalReport, FT8MessageRogerReport, QSORecord, FT8MessageRRR } from '@tx5dr/contracts';
 import { ITransmissionStrategy } from '../ITransmissionStrategy';
-import { FT8MessageParser } from '../../../parser/ft8-message-parser';
+import { FT8MessageParser } from '../../../parser/ft8-message-parser.js';
 import { RadioOperator } from '../../RadioOperator';
 
 type SlotsIndex = 'TX1' | 'TX2' | 'TX3' | 'TX4' | 'TX5' | 'TX6';

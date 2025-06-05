@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ModeDescriptorSchema } from './mode.schema';
+import { ModeDescriptorSchema } from './mode.schema.js';
 
 // 操作员配置 Schema (重命名以避免冲突)
 export const RadioOperatorConfigSchema = z.object({

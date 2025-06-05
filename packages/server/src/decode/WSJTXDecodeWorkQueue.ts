@@ -13,7 +13,7 @@ import {
   resampleAudioProfessional,
   normalizeAudioVolume,
   analyzeAudioQualityDetailed
-} from '../utils/audioUtils';
+} from '../utils/audioUtils.js';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);

@@ -1,2 +1,2 @@
-export { RadioOperatorManager } from './RadioOperatorManager';
-export type { RadioOperatorManagerOptions } from './RadioOperatorManager'; 
+export { RadioOperatorManager } from './RadioOperatorManager.js';
+export type { RadioOperatorManagerOptions } from './RadioOperatorManager.js'; 

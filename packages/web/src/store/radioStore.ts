@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, ReactNode, useState } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode, useState } from 'react';
 import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 
@@ -225,10 +225,19 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [connectionState, connectionDispatch] = useReducer(connectionReducer, initialConnectionState);
   const [radioState, radioDispatch] = useReducer(radioReducer, initialRadioState);
   const [slotPacksState, slotPacksDispatch] = useReducer(slotPacksReducer, initialSlotPacksState);
+  
+  // 使用 useRef 确保 RadioService 单例，避免 StrictMode 导致的重复创建
+  const radioServiceRef = useRef<RadioService | null>(null);
 
   // 初始化RadioService
   useEffect(() => {
+    // 如果已经有实例，直接返回，避免重复创建
+    if (radioServiceRef.current) {
+      return;
+    }
+    
     const radioService = new RadioService();
+    radioServiceRef.current = radioService;
     
     // 设置事件监听器 - 分发到不同的reducer
     radioService.on('connected', () => {
@@ -271,7 +280,10 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     // 清理函数
     return () => {
-      radioService.disconnect();
+      if (radioServiceRef.current) {
+        radioServiceRef.current.disconnect();
+        radioServiceRef.current = null;
+      }
     };
   }, []);
 

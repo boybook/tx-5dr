@@ -13,9 +13,9 @@ import {
   type QSORecord,
   MODES
 } from '@tx5dr/contracts';
-import { ConfigManager } from '../config/config-manager';
-import { LogManager } from '../log/LogManager';
-import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue';
+import { ConfigManager } from '../config/config-manager.js';
+import { LogManager } from '../log/LogManager.js';
+import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
 
 export interface RadioOperatorManagerOptions {
   eventEmitter: EventEmitter<DigitalRadioEngineEvents>;

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ModeDescriptorSchema } from './mode.schema';
+import { ModeDescriptorSchema } from './mode.schema.js';
 
 // 操作配置
 export const OperatorConfigSchema = z.object({

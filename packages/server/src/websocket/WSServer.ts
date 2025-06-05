@@ -9,7 +9,7 @@ import type {
   SystemStatus 
 } from '@tx5dr/contracts';
 import { WSMessageHandler } from '@tx5dr/core';
-import type { DigitalRadioEngine } from '../DigitalRadioEngine';
+import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 
 /**
  * WebSocket连接包装器
@@ -424,16 +424,62 @@ export class WSServer extends WSMessageHandler {
     this.connections.set(id, connection);
     console.log(`🔗 新的WebSocket连接: ${id}`);
 
-    // 发送当前系统状态给新连接的客户端
+    // 发送完整的状态信息给新连接的客户端
+    console.log(`📤 [WSServer] 为新连接 ${id} 发送初始状态...`);
+    
+    // 1. 发送当前系统状态
     const status = this.digitalRadioEngine.getStatus();
     connection.send(WSMessageType.SYSTEM_STATUS, status);
-
-    // 发送当前操作员列表给新连接的客户端
+    console.log(`📤 [WSServer] 已发送系统状态:`, status);
+    
+    // 2. 发送当前模式信息（确保客户端能获取到模式变化）
+    connection.send(WSMessageType.MODE_CHANGED, status.currentMode);
+    console.log(`📤 [WSServer] 已发送当前模式:`, status.currentMode);
+    
+    // 3. 发送当前操作员列表
     try {
       const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
       connection.send(WSMessageType.OPERATORS_LIST, { operators });
+      console.log(`📤 [WSServer] 已发送操作员列表: ${operators.length} 个操作员`);
     } catch (error) {
       console.error('❌ 发送操作员列表失败:', error);
+    }
+    
+    // 4. 发送当前音量增益
+    try {
+      const volumeGain = this.digitalRadioEngine.getVolumeGain();
+      connection.send(WSMessageType.VOLUME_GAIN_CHANGED, { gain: volumeGain });
+      console.log(`📤 [WSServer] 已发送音量增益: ${volumeGain}`);
+    } catch (error) {
+      console.error('❌ 发送音量增益失败:', error);
+    }
+    
+    // 5. 发送最近的时隙包数据（如果有）
+    try {
+      const activeSlotPacks = this.digitalRadioEngine.getActiveSlotPacks();
+      if (activeSlotPacks.length > 0) {
+        // 发送最近的几个时隙包（最多10个）
+        const recentSlotPacks = activeSlotPacks.slice(-10);
+        for (const slotPack of recentSlotPacks) {
+          connection.send(WSMessageType.SLOT_PACK_UPDATED, slotPack);
+        }
+        console.log(`📤 [WSServer] 已发送 ${recentSlotPacks.length} 个最近的时隙包`);
+      }
+    } catch (error) {
+      console.error('❌ 发送时隙包数据失败:', error);
+    }
+    
+    console.log(`✅ [WSServer] 新连接 ${id} 的初始状态发送完成`);
+    
+    // 6. 如果引擎正在运行，额外发送一次状态确保同步
+    if (status.isRunning) {
+      // 延迟500ms再发送一次，确保客户端已完全建立连接
+      setTimeout(() => {
+        if (connection.isAlive) {
+          connection.send(WSMessageType.SYSTEM_STATUS, this.digitalRadioEngine.getStatus());
+          console.log(`📤 [WSServer] 延迟发送状态同步给连接 ${id}`);
+        }
+      }, 500);
     }
 
     return connection;

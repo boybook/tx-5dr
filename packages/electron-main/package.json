@@ -2,20 +2,18 @@
   "name": "@tx5dr/electron-main",
   "version": "1.0.0",
   "main": "dist/main.js",
-  "exports": {
-    ".": "./dist/main.js"
-  },
   "scripts": {
     "build": "tsc",
-    "dev": "wait-on http://localhost:4000 http://localhost:5173 && cd ../.. && NODE_ENV=development electron .",
-    "start": "cd ../.. && electron .",
+    "dev": "wait-on http://localhost:4000 http://localhost:5173 && cd ../.. && NODE_ENV=development electron --experimental-specifier-resolution=node --enable-source-maps .",
+    "start": "cd ../.. && EMBEDDED=true electron --experimental-specifier-resolution=node --enable-source-maps .",
     "lint": "eslint src/**/*.ts"
   },
   "dependencies": {
-    "@tx5dr/server": "workspace:*"
+    "esbuild": "^0.20.0"
   },
   "devDependencies": {
     "@tx5dr/electron-preload": "workspace:*",
+    "@tx5dr/server": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",
     "@types/node": "^20.0.0",
     "electron": "^27.0.0",

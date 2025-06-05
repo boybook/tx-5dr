@@ -1,6 +1,10 @@
 import { api, WSClient } from '@tx5dr/core';
-import type { SlotPack, DigitalRadioEngineEvents, SlotInfo } from '@tx5dr/contracts';
-import { getWebSocketUrl } from '../utils/config';
+import { getWebSocketUrl, getApiBaseUrl } from '../utils/config';
+import type { 
+  DigitalRadioEngineEvents, 
+  SlotPack, 
+  SlotInfo 
+} from '@tx5dr/contracts';
 
 /**
  * 无线电数据服务
@@ -48,7 +52,8 @@ export class RadioService {
   async connect(): Promise<void> {
     try {
       // 首先测试REST API连接
-      await api.getHello();
+      const apiBase = getApiBaseUrl();
+      await api.getHello(apiBase);
       console.log('✅ REST API连接成功');
       
       // 然后建立WebSocket连接

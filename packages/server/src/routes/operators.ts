@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
-import { ConfigManager } from '../config/config-manager';
-import { DigitalRadioEngine } from '../DigitalRadioEngine';
+import { ConfigManager } from '../config/config-manager.js';
+import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { 
   RadioOperatorListResponseSchema,
   RadioOperatorDetailResponseSchema,

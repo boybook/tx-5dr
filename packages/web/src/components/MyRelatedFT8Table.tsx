@@ -2,11 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Badge, Button } from '@heroui/react';
 import { FT8Table, FT8Group, FT8Message } from './FT8Table';
 import { parseFT8LocationInfo } from '@tx5dr/core';
-import { useSlotPacks, useRadioState } from '../store/radioStore';
+import { useSlotPacks, useRadioState, useConnection } from '../store/radioStore';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
 import type { FT8Frame } from '@tx5dr/contracts';
-import { RadioService } from '../services/radioService';
 
 interface MyRelatedFT8TableProps {
   className?: string;
@@ -27,6 +26,7 @@ interface TransmissionLog {
 export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
+  const connection = useConnection();
   const [myFt8Groups, setMyFt8Groups] = useState<FT8Group[]>([]);
   const [transmissionLogs, setTransmissionLogs] = useState<TransmissionLog[]>([]);
 
@@ -50,7 +50,11 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
 
   // 监听服务端推送的发射日志
   useEffect(() => {
-    const radioService = new RadioService();
+    const radioService = connection.state.radioService;
+    
+    if (!radioService) {
+      return;
+    }
     
     const handleTransmissionLog = (data: {
       operatorId: string;
@@ -67,7 +71,7 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
     return () => {
       radioService.off('transmissionLog');
     };
-  }, []);
+  }, [connection.state.radioService]);
 
   // 获取当前操作员的呼号和网格
   const getCurrentOperator = () => {

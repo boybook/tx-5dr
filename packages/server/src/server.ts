@@ -4,14 +4,14 @@ import websocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type { HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest } from 'fastify';
-import { ConfigManager } from './config/config-manager';
-import { DigitalRadioEngine } from './DigitalRadioEngine';
-import { audioRoutes } from './routes/audio';
-import { configRoutes } from './routes/config';
-import { slotpackRoutes } from './routes/slotpack';
-import { modeRoutes } from './routes/mode';
-import { operatorRoutes } from './routes/operators';
-import { WSServer } from './websocket/WSServer';
+import { ConfigManager } from './config/config-manager.js';
+import { DigitalRadioEngine } from './DigitalRadioEngine.js';
+import { audioRoutes } from './routes/audio.js';
+import { configRoutes } from './routes/config.js';
+import { slotpackRoutes } from './routes/slotpack.js';
+import { modeRoutes } from './routes/mode.js';
+import { operatorRoutes } from './routes/operators.js';
+import { WSServer } from './websocket/WSServer.js';
 
 export async function createServer() {
   const fastify = Fastify({
@@ -60,10 +60,15 @@ export async function createServer() {
         'http://127.0.0.1:3000',
       ];
       
+      // 没有origin（同域请求）或来自file://（Electron）的请求
+      if (!origin || origin.startsWith('file://')) {
+        callback(null, true);
+        return;
+      }
+      
       // 开发环境：允许所有localhost和127.0.0.1的端口
-      if (process.env.NODE_ENV === 'development' || !origin) {
-        if (!origin || 
-            origin.startsWith('http://localhost:') || 
+      if (process.env.NODE_ENV === 'development') {
+        if (origin.startsWith('http://localhost:') || 
             origin.startsWith('http://127.0.0.1:') ||
             origin.startsWith('https://localhost:') ||
             origin.startsWith('https://127.0.0.1:')) {
@@ -72,8 +77,8 @@ export async function createServer() {
         }
       }
       
-      // 生产环境：检查是否在允许列表中，或者是同域请求
-      if (allowedOrigins.includes(origin) || !origin) {
+      // 生产环境：检查是否在允许列表中
+      if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         fastify.log.warn(`CORS: 拒绝来自 ${origin} 的请求`);

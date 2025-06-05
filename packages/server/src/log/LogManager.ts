@@ -1,6 +1,6 @@
 import { ILogProvider, CallsignAnalysis } from '@tx5dr/core';
 import { QSORecord } from '@tx5dr/contracts';
-import { ADIFLogProvider } from './ADIFLogProvider';
+import { ADIFLogProvider } from './ADIFLogProvider.js';
 
 /**
  * 日志管理器 - 单例模式

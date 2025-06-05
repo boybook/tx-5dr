@@ -163,9 +163,8 @@ export const api = {
   /**
    * 获取FT8配置
    */
-  async getFT8Config(apiBase?: string): Promise<{ success: boolean; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/ft8`);
+  async getFT8Config(apiBase = '/api'): Promise<{ success: boolean; data: any }> {
+    const res = await fetch(`${apiBase}/config/ft8`);
     if (!res.ok) {
       throw new Error(`获取FT8配置失败: ${res.status} ${res.statusText}`);
     }
@@ -177,10 +176,9 @@ export const api = {
    */
   async updateFT8Config(
     config: FT8ConfigUpdate, 
-    apiBase?: string
+    apiBase = '/api'
   ): Promise<{ success: boolean; message: string; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/ft8`, {
+    const res = await fetch(`${apiBase}/config/ft8`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -199,9 +197,8 @@ export const api = {
   /**
    * 获取服务器配置
    */
-  async getServerConfig(apiBase?: string): Promise<{ success: boolean; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/server`);
+  async getServerConfig(apiBase = '/api'): Promise<{ success: boolean; data: any }> {
+    const res = await fetch(`${apiBase}/config/server`);
     if (!res.ok) {
       throw new Error(`获取服务器配置失败: ${res.status} ${res.statusText}`);
     }
@@ -213,10 +210,9 @@ export const api = {
    */
   async updateServerConfig(
     config: ServerConfigUpdate, 
-    apiBase?: string
+    apiBase = '/api'
   ): Promise<{ success: boolean; message: string; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/server`, {
+    const res = await fetch(`${apiBase}/config/server`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -235,9 +231,8 @@ export const api = {
   /**
    * 验证配置
    */
-  async validateConfig(apiBase?: string): Promise<{ success: boolean; data: { isValid: boolean; errors: string[] } }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/validate`);
+  async validateConfig(apiBase = '/api'): Promise<{ success: boolean; data: { isValid: boolean; errors: string[] } }> {
+    const res = await fetch(`${apiBase}/config/validate`);
     if (!res.ok) {
       throw new Error(`验证配置失败: ${res.status} ${res.statusText}`);
     }
@@ -247,9 +242,8 @@ export const api = {
   /**
    * 重置配置
    */
-  async resetConfig(apiBase?: string): Promise<{ success: boolean; message: string; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/reset`, {
+  async resetConfig(apiBase = '/api'): Promise<{ success: boolean; message: string; data: any }> {
+    const res = await fetch(`${apiBase}/config/reset`, {
       method: 'POST',
     });
     
@@ -263,9 +257,8 @@ export const api = {
   /**
    * 获取配置文件路径
    */
-  async getConfigPath(apiBase?: string): Promise<{ success: boolean; data: { path: string } }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/path`);
+  async getConfigPath(apiBase = '/api'): Promise<{ success: boolean; data: { path: string } }> {
+    const res = await fetch(`${apiBase}/config/path`);
     if (!res.ok) {
       throw new Error(`获取配置文件路径失败: ${res.status} ${res.statusText}`);
     }
@@ -289,9 +282,8 @@ export const api = {
   /**
    * 获取当前模式
    */
-  async getCurrentMode(apiBase?: string): Promise<{ success: boolean; data: ModeDescriptor }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/mode/current`);
+  async getCurrentMode(apiBase = '/api'): Promise<{ success: boolean; data: ModeDescriptor }> {
+    const res = await fetch(`${apiBase}/mode/current`);
     if (!res.ok) {
       throw new Error(`获取当前模式失败: ${res.status} ${res.statusText}`);
     }
@@ -303,10 +295,9 @@ export const api = {
    */
   async switchMode(
     mode: ModeDescriptor, 
-    apiBase?: string
+    apiBase = '/api'
   ): Promise<{ success: boolean; message: string; data: ModeDescriptor }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/mode/switch`, {
+    const res = await fetch(`${apiBase}/mode/switch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -339,9 +330,8 @@ export const api = {
   /**
    * 获取指定操作员配置
    */
-  async getOperator(id: string, apiBase?: string): Promise<RadioOperatorDetailResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}`);
+  async getOperator(id: string, apiBase = '/api'): Promise<RadioOperatorDetailResponse> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}`);
     if (!res.ok) {
       throw new Error(`获取操作员详情失败: ${res.status} ${res.statusText}`);
     }
@@ -353,10 +343,9 @@ export const api = {
    */
   async createOperator(
     operatorData: CreateRadioOperatorRequest, 
-    apiBase?: string
+    apiBase = '/api'
   ): Promise<RadioOperatorActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators`, {
+    const res = await fetch(`${apiBase}/operators`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -378,10 +367,9 @@ export const api = {
   async updateOperator(
     id: string,
     updates: UpdateRadioOperatorRequest, 
-    apiBase?: string
+    apiBase = '/api'
   ): Promise<RadioOperatorActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}`, {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -400,9 +388,8 @@ export const api = {
   /**
    * 删除操作员
    */
-  async deleteOperator(id: string, apiBase?: string): Promise<{ success: boolean; message: string }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}`, {
+  async deleteOperator(id: string, apiBase = '/api'): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
     
@@ -417,9 +404,8 @@ export const api = {
   /**
    * 启动操作员发射
    */
-  async startOperator(id: string, apiBase?: string): Promise<{ success: boolean; message: string }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}/start`, {
+  async startOperator(id: string, apiBase = '/api'): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}/start`, {
       method: 'POST',
     });
     
@@ -434,9 +420,8 @@ export const api = {
   /**
    * 停止操作员发射
    */
-  async stopOperator(id: string, apiBase?: string): Promise<{ success: boolean; message: string }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}/stop`, {
+  async stopOperator(id: string, apiBase = '/api'): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}/stop`, {
       method: 'POST',
     });
     
@@ -451,9 +436,8 @@ export const api = {
   /**
    * 获取操作员运行状态
    */
-  async getOperatorStatus(id: string, apiBase?: string): Promise<{ success: boolean; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}/status`);
+  async getOperatorStatus(id: string, apiBase = '/api'): Promise<{ success: boolean; data: any }> {
+    const res = await fetch(`${apiBase}/operators/${encodeURIComponent(id)}/status`);
     if (!res.ok) {
       throw new Error(`获取操作员状态失败: ${res.status} ${res.statusText}`);
     }

@@ -1,6 +1,6 @@
 import { QSOContext, OperatorConfig, QSORecord, ParsedFT8Message, SlotPack, DigitalRadioEngineEvents, SlotInfo, MODES, QSOCommand } from '@tx5dr/contracts';
 import { ITransmissionStrategy } from './transmission/ITransmissionStrategy';
-import { FT8MessageParser } from '../parser/ft8-message-parser';
+import { FT8MessageParser } from '../parser/ft8-message-parser.js';
 import EventEmitter from 'eventemitter3';
 
 export class RadioOperator {

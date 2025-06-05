@@ -5,14 +5,14 @@ import {
 } from '@tx5dr/core';
 import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type RadioOperatorConfig, type TransmissionCompleteInfo } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
-import { AudioStreamManager } from './audio/AudioStreamManager';
-import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue';
-import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue';
-import { SlotPackManager } from './slot/SlotPackManager';
-import { ConfigManager } from './config/config-manager';
-import { SpectrumScheduler } from './audio/SpectrumScheduler';
-import { AudioMixer, type MixedAudio } from './audio/AudioMixer';
-import { RadioOperatorManager } from './operator/RadioOperatorManager';
+import { AudioStreamManager } from './audio/AudioStreamManager.js';
+import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
+import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue.js';
+import { SlotPackManager } from './slot/SlotPackManager.js';
+import { ConfigManager } from './config/config-manager.js';
+import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
+import { AudioMixer, type MixedAudio } from './audio/AudioMixer.js';
+import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统

@@ -1,5 +1,5 @@
-import { createServer } from './server';
-import { DigitalRadioEngine } from './DigitalRadioEngine';
+import { createServer } from './server.js';
+import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 
