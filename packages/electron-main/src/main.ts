@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Menu } = require('electron');
 const { join } = require('path');
 
 async function createWindow() {
@@ -45,6 +45,13 @@ async function createWindow() {
   mainWindow.webContents.on('console-message', (event: any, level: any, message: any, line: any, sourceId: any) => {
     console.log(`Console [${level}]:`, message);
   });
+
+  // 在 Windows 和 Linux 下隐藏菜单栏
+  if (process.platform === 'win32' || process.platform === 'linux') {
+    mainWindow.setMenuBarVisibility(false);
+    // 或者可以使用 Menu.setApplicationMenu(null) 来完全移除应用菜单
+    // Menu.setApplicationMenu(null);
+  }
 
   // Load the app
   if (process.env.NODE_ENV === 'development') {
