@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
+    "build:electron": "turbo run build && yarn workspace @tx5dr/electron-main dist",
+    "pack:electron": "turbo run build && yarn workspace @tx5dr/electron-main pack",
     "preview": "yarn workspace @tx5dr/web preview",
     "electron": "yarn workspace @tx5dr/electron-main dev",
     "electron:embedded": "EMBEDDED=true yarn workspace @tx5dr/electron-main dev",
