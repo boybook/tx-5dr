@@ -185,7 +185,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         config={{
           displayModeBar: false,
           responsive: true,
-          staticPlot: true,
+          staticPlot: false,
         }}
         style={{
           width: '100%',

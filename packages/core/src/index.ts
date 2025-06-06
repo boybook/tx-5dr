@@ -19,13 +19,13 @@ export * from './websocket/WSClient.js';
 export type { WSClientConfig } from './websocket/WSClient.js';
 
 // 工具导出
-export * from './utils/callsign.js';
+export * from './callsign/callsign.js';
 
 // 类型导出
 export * from './types/index.js';
 
 // 新增：FT8位置信息类型
-export type { CallsignInfo, FT8LocationInfo } from './utils/callsign.js';
+export type { CallsignInfo, FT8LocationInfo } from './callsign/callsign.js';
 
 // 导出操作员相关
 export { RadioOperator } from './operator/RadioOperator.js';

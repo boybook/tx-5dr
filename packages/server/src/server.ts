@@ -71,7 +71,8 @@ export async function createServer() {
         if (origin.startsWith('http://localhost:') || 
             origin.startsWith('http://127.0.0.1:') ||
             origin.startsWith('https://localhost:') ||
-            origin.startsWith('https://127.0.0.1:')) {
+            origin.startsWith('https://127.0.0.1:') ||
+            origin.startsWith('http://ylw.boybook.top:')) {
           callback(null, true);
           return;
         }

@@ -1,7 +1,10 @@
 import { FT8Message, FT8MessageType } from '@tx5dr/contracts';
 
-// 呼号正则表达式（支持标准呼号格式）
+// 呼号正则表达式（支持标准呼号格式和<>包裹的格式）
 const CALLSIGN_REGEX = /^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$/;
+
+// 标准呼号正则表达式（2-6位，最多一个数字位于第2-4位）
+const STANDARD_CALLSIGN_REGEX = /^[A-Z0-9]{2,6}$/;
 
 // 网格定位正则表达式（4位或6位）
 const GRID_REGEX = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
@@ -13,13 +16,72 @@ const REPORT_REGEX = /^[+-]?\d{1,2}$/;
 export class FT8MessageParser {
   
   /**
+   * 判断是否为标准呼号
+   * 标准呼号规则：
+   * 1. 长度在2-6位之间
+   * 2. 只包含字母A-Z和数字0-9
+   * 3. 最多一个数字，且位于第2-4位
+   */
+  private static isStandardCallsign(callsign: string): boolean {
+    // 移除可能存在的 <>
+    const cleanCallsign = callsign.replace(/[<>]/g, '');
+    
+    // 基本格式检查
+    if (!STANDARD_CALLSIGN_REGEX.test(cleanCallsign)) {
+      return false;
+    }
+
+    // 检查数字位置
+    const digits = cleanCallsign.match(/\d/g);
+    if (!digits || digits.length > 1) {
+      return false;
+    }
+
+    const digitIndex = cleanCallsign.search(/\d/);
+    return digitIndex >= 1 && digitIndex <= 3;
+  }
+
+  /**
+   * 判断是否需要使用 <> 包裹呼号
+   * 规则：
+   * 1. 如果消息中包含网格或数字讯报，且有两个呼号，则非标准呼号需要用 <> 包裹
+   * 2. 如果消息中只有一个呼号，且是非标准呼号，则需要用 <> 包裹
+   */
+  private static shouldWrapCallsign(callsign: string, message: FT8Message): boolean {
+    // 如果是标准呼号，不需要包裹
+    if (this.isStandardCallsign(callsign)) {
+      return false;
+    }
+
+    // 根据消息类型判断是否需要包裹
+    switch (message.type) {
+      case FT8MessageType.CQ:
+        // CQ 消息中，如果包含网格，非标准呼号需要包裹
+        return !!(message as any).grid;
+      
+      case FT8MessageType.CALL:
+      case FT8MessageType.SIGNAL_REPORT:
+      case FT8MessageType.ROGER_REPORT:
+      case FT8MessageType.RRR:
+      case FT8MessageType.SEVENTY_THREE:
+        // 其他消息类型中，如果包含网格或报告，非标准呼号需要包裹
+        return !!((message as any).grid || (message as any).report);
+      
+      default:
+        return false;
+    }
+  }
+
+  /**
    * 解析FT8消息字符串
    * @param message 原始消息字符串
    * @returns 解析后的FT8消息对象
    */
   static parseMessage(message: string): FT8Message {
     const trimmedMessage = message.trim().toUpperCase();
-    const parts = trimmedMessage.split(/\s+/);
+    // 移除所有呼号周围的 <>
+    const cleanedMessage = trimmedMessage.replace(/<([A-Z0-9]+)>/g, '$1');
+    const parts = cleanedMessage.split(/\s+/);
     
     // 检查CQ消息
     if (this.isCQMessage(parts)) {
@@ -267,9 +329,10 @@ export class FT8MessageParser {
   /**
    * 验证呼号格式
    */
-  private static isValidCallsign(callsign?: string): boolean {
-    if (!callsign) return false;
-    return CALLSIGN_REGEX.test(callsign);
+  private static isValidCallsign(callsign: string): boolean {
+    // 移除可能存在的 <>
+    const cleanCallsign = callsign.replace(/[<>]/g, '');
+    return CALLSIGN_REGEX.test(cleanCallsign);
   }
 
   /**
@@ -293,39 +356,47 @@ export class FT8MessageParser {
    * @returns 生成的消息字符串
    */
   static generateMessage(message: FT8Message): string {
+    // 包装呼号（如果需要）
+    const wrapCallsign = (callsign: string) => {
+      if (this.shouldWrapCallsign(callsign, message)) {
+        return `<${callsign}>`;
+      }
+      return callsign;
+    };
+
     switch (message.type) {
       case FT8MessageType.CQ:
         if (message.flag && message.grid) {
-          return `CQ ${message.flag} ${message.senderCallsign} ${message.grid}`;
+          return `CQ ${message.flag} ${wrapCallsign(message.senderCallsign)} ${message.grid}`;
         } else if (message.flag) {
-          return `CQ ${message.flag} ${message.senderCallsign}`;
+          return `CQ ${message.flag} ${wrapCallsign(message.senderCallsign)}`;
         } else if (message.grid) {
-          return `CQ ${message.senderCallsign} ${message.grid}`;
+          return `CQ ${wrapCallsign(message.senderCallsign)} ${message.grid}`;
         } else {
-          return `CQ ${message.senderCallsign}`;
+          return `CQ ${wrapCallsign(message.senderCallsign)}`;
         }
       case FT8MessageType.CALL:
         if (message.grid) {
-          return `${message.targetCallsign} ${message.senderCallsign} ${message.grid}`;
+          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} ${message.grid}`;
         } else {
-          return `${message.targetCallsign} ${message.senderCallsign}`;
+          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)}`;
         }
       case FT8MessageType.SIGNAL_REPORT:
         if (message.report) {
-          return `${message.targetCallsign} ${message.senderCallsign} ${this.generateSignalReport(message.report)}`;
+          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} ${this.generateSignalReport(message.report)}`;
         } else {
-          return `${message.targetCallsign} ${message.senderCallsign}`;
+          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)}`;
         }
       case FT8MessageType.ROGER_REPORT:
         if (message.report) {
-          return `${message.targetCallsign} ${message.senderCallsign} R${this.generateSignalReport(message.report)}`;
+          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} R${this.generateSignalReport(message.report)}`;
         } else {
-          return `${message.targetCallsign} ${message.senderCallsign} R`;
+          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} R`;
         }
       case FT8MessageType.RRR:
-        return `${message.targetCallsign} ${message.senderCallsign} RR73`;
+        return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} RR73`;
       case FT8MessageType.SEVENTY_THREE:
-        return `${message.targetCallsign} ${message.senderCallsign} 73`;
+        return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} 73`;
       default:
         return '';
     }

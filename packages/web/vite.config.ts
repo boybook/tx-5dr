@@ -8,6 +8,7 @@ export default defineConfig({
     port: 5173,
     host: '0.0.0.0',
     strictPort: true,
+    allowedHosts: true,
     proxy: {
       // 代理所有 /api 请求到后端服务器（包括WebSocket）
       '/api': {

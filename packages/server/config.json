@@ -1,8 +1,8 @@
 {
   "audio": {
-    "inputDeviceId": "input-3",
+    "inputDeviceId": "input-2",
     "outputDeviceId": "output-4",
-    "sampleRate": 48000,
+    "sampleRate": 8000,
     "bufferSize": 1024
   },
   "ft8": {
