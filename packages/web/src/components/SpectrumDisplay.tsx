@@ -1,13 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import type { PlotParams } from 'react-plotly.js';
-import type { Data } from 'plotly.js';
-import createPlotlyComponent from 'react-plotly.js/factory';
-import Plotly from 'plotly.js-dist-min';
 import type { FT8Spectrum } from '@tx5dr/contracts';
 import { useConnection } from '../store/radioStore';
-
-// 创建Plot组件
-const Plot = createPlotlyComponent(Plotly);
+import { WebGLWaterfall } from './WebGLWaterfall';
 
 // 瀑布图配置
 const WATERFALL_HISTORY = 120; // 保存120个历史数据点
@@ -126,72 +120,16 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     );
   }
 
-  const plotData: Data[] = [{
-    type: 'heatmap' as const,
-    z: waterfallData.spectrumData,
-    x: waterfallData.frequencies,
-    y: waterfallData.timeLabels,
-    colorscale: [
-      [0, '#000020'],    // 深蓝色
-      [0.0833, '#000030'],
-      [0.1666, '#000050'],
-      [0.25, '#000091'],
-      [0.3333, '#1E90FF'],
-      [0.4166, '#FFFFFF'],
-      [0.5, '#FFFF00'],  // 黄色
-      [0.5833, '#FE6D16'],
-      [0.6666, '#FF0000'], // 红色
-      [0.75, '#C60000'],
-      [0.8333, '#9F0000'],
-      [0.9166, '#750000'],
-      [1, '#4A0000'],    // 深红色
-    ],
-    zmin: -35, // 最小dB值
-    zmax: 10,    // 最大dB值
-    showscale: false, // 不显示颜色条
-  }];
-
   return (
     <div className={className}>
-      <Plot
-        data={plotData}
-        layout={{
-          height,
-          autosize: true,
-          margin: { t: 0, r: 0, b: 0, l: 0 },
-          showlegend: false,
-          xaxis: {
-            // 使用后端传来的频率范围
-            range: [spectrum.frequencyRange.min, spectrum.frequencyRange.max],
-            showgrid: false,
-            zeroline: false,
-            showline: false,
-            showticklabels: false,
-            fixedrange: true,
-          },
-          yaxis: {
-            showgrid: false,
-            zeroline: false,
-            showline: false,
-            showticklabels: false,
-            autorange: 'reversed',
-            fixedrange: true,
-            range: [WATERFALL_HISTORY, 0],
-            dtick: 1,
-          },
-          plot_bgcolor: 'transparent',
-          paper_bgcolor: 'transparent',
-        }}
-        config={{
-          displayModeBar: false,
-          responsive: true,
-          staticPlot: false,
-        }}
-        style={{
-          width: '100%',
-          height: '100%',
-        }}
-        useResizeHandler={true}
+      <WebGLWaterfall
+        data={waterfallData.spectrumData}
+        frequencies={waterfallData.frequencies}
+        height={height}
+        minDb={-35}
+        maxDb={10}
+        autoRange={true}
+        className="bg-transparent"
       />
     </div>
   );

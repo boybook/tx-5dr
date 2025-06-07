@@ -4,6 +4,17 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   base: './', // 使用相对路径，支持 Electron 生产环境
+  define: {
+    global: 'globalThis',
+  },
+  resolve: {
+    alias: {
+      events: 'events',
+    },
+  },
+  optimizeDeps: {
+    include: ['events'],
+  },
   server: {
     port: 5173,
     host: '0.0.0.0',
