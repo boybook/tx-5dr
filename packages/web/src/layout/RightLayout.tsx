@@ -65,54 +65,58 @@ export const RightLayout: React.FC = () => {
         } as React.CSSProperties & { WebkitAppRegion: string }}
       >
         <div></div> {/* 左侧空白 */}
-        <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
-          <Popover placement="bottom-start">
-            <PopoverTrigger>
-              <Button
-                variant="light" 
-                size="sm"
-                title="自动化程序"
-                className={`${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-content2 select-manual-mode'} rounded-md px-3 h-6 text-xs font-mono text-default-600 leading-none`}
-              >
-                <div className="flex items-center gap-1">
-                  <div className="w-2 h-2 bg-success-500 rounded-full flex-shrink-0"></div>
-                  <span className="truncate">自动化程序</span>
-                  <FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs -mr-1" />
+        <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
+          <div className="flex items-center gap-1">
+            <Popover placement="bottom-start">
+              <PopoverTrigger>
+                <Button
+                  variant="light" 
+                  size="sm"
+                  title="自动化程序"
+                  className={`${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-content2 select-manual-mode'} rounded-md px-3 h-6 text-xs font-mono text-default-600 leading-none`}
+                >
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 bg-success-500 rounded-full flex-shrink-0"></div>
+                    <span className="truncate">自动化程序</span>
+                    <FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs -mr-1" />
+                  </div>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="px-1">
+                <div>
+                  <AutomationSettingsPanel isOpen={true} onClose={() => {}} />
                 </div>
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="px-1">
-              <div>
-                <AutomationSettingsPanel isOpen={true} onClose={() => {}} />
-              </div>
-            </PopoverContent>
-          </Popover>
-          
-          <Button
-            variant="light" 
-            size="sm"
-            title="电台呼号"
-            className="bg-content2 rounded-md px-3 h-6 text-xs font-mono text-default-500 leading-none"
-            onPress={() => {
-              setSettingsInitialTab('operator');
-              setIsSettingsOpen(true);
-            }}
-          >
-            {
-              currentOperatorId ? operators.find(op => op.id === currentOperatorId)?.context.myCall || 'N0CALL' : 'N0CALL'
-            }
-          </Button>
-          <ThemeToggle variant="dropdown" size="sm" />
-          <Button
-            onPress={handleOpenSettings}
-            isIconOnly
-            variant="light"
-            size="sm"
-            title="设置"
-            aria-label="打开设置"
-          >
-            <FontAwesomeIcon icon={faCog} className="text-default-400" />
-          </Button>
+              </PopoverContent>
+            </Popover>
+            
+            <Button
+              variant="light" 
+              size="sm"
+              title="电台呼号"
+              className="bg-content2 rounded-md px-3 h-6 text-xs font-mono text-default-500 leading-none"
+              onPress={() => {
+                setSettingsInitialTab('operator');
+                setIsSettingsOpen(true);
+              }}
+            >
+              {
+                currentOperatorId ? operators.find(op => op.id === currentOperatorId)?.context.myCall || 'N0CALL' : 'N0CALL'
+              }
+            </Button>
+          </div>
+          <div className="flex items-center gap-0">
+            <ThemeToggle variant="dropdown" size="sm" />
+            <Button
+              onPress={handleOpenSettings}
+              isIconOnly
+              variant="light"
+              size="sm"
+              title="设置"
+              aria-label="打开设置"
+            >
+              <FontAwesomeIcon icon={faCog} className="text-default-400 text-sm" />
+            </Button>
+          </div>
         </div>
       </div>
       

@@ -369,7 +369,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               // 完全依赖服务端推送的状态
               if (!operatorStatus.cycleInfo) {
                 return (
-                  <div className="text-foreground opacity-65 font-bold font-mono text-lg">
+                  <div className="text-foreground opacity-65 font-bold text-lg">
                     监听中...
                   </div>
                 );

@@ -6,25 +6,71 @@ import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences 
 // ===== 连接状态管理 =====
 export interface ConnectionState {
   isConnected: boolean;
+  isConnecting: boolean;
+  isReconnecting: boolean;
+  reconnectAttempts: number;
+  maxReconnectAttempts: number;
+  hasReachedMaxAttempts: boolean;
+  lastReconnectInfo: any;
   radioService: RadioService | null;
 }
 
 export type ConnectionAction = 
   | { type: 'connected' }
   | { type: 'disconnected' }
+  | { type: 'reconnecting'; payload: any }
+  | { type: 'reconnectStopped'; payload: any }
+  | { type: 'updateConnectionInfo'; payload: any }
   | { type: 'SET_RADIO_SERVICE'; payload: RadioService };
 
 const initialConnectionState: ConnectionState = {
   isConnected: false,
+  isConnecting: false,
+  isReconnecting: false,
+  reconnectAttempts: 0,
+  maxReconnectAttempts: -1,
+  hasReachedMaxAttempts: false,
+  lastReconnectInfo: null,
   radioService: null
 };
 
 function connectionReducer(state: ConnectionState, action: ConnectionAction): ConnectionState {
   switch (action.type) {
     case 'connected':
-      return { ...state, isConnected: true };
+      return { 
+        ...state, 
+        isConnected: true, 
+        isConnecting: false,
+        isReconnecting: false,
+        reconnectAttempts: 0,
+        hasReachedMaxAttempts: false
+      };
     case 'disconnected':
-      return { ...state, isConnected: false };
+      return { ...state, isConnected: false, isConnecting: false };
+    case 'reconnecting':
+      return { 
+        ...state, 
+        isReconnecting: true,
+        reconnectAttempts: action.payload.attempt,
+        maxReconnectAttempts: action.payload.maxAttempts,
+        hasReachedMaxAttempts: false,
+        lastReconnectInfo: action.payload
+      };
+    case 'reconnectStopped':
+      return { 
+        ...state, 
+        isReconnecting: false,
+        hasReachedMaxAttempts: state.maxReconnectAttempts !== -1 && action.payload.reason === 'maxAttemptsReached'
+      };
+    case 'updateConnectionInfo':
+      return {
+        ...state,
+        isConnecting: action.payload.isConnecting,
+        isReconnecting: action.payload.isReconnecting,
+        reconnectAttempts: action.payload.reconnectAttempts,
+        maxReconnectAttempts: action.payload.maxReconnectAttempts,
+        hasReachedMaxAttempts: action.payload.maxReconnectAttempts !== -1 && action.payload.hasReachedMaxAttempts
+      };
     case 'SET_RADIO_SERVICE':
       return { ...state, radioService: action.payload };
     default:
@@ -229,6 +275,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   
   // 使用 useRef 确保 RadioService 单例，避免 StrictMode 导致的重复创建
   const radioServiceRef = useRef<RadioService | null>(null);
+  const connectionStatusTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // 初始化RadioService
   useEffect(() => {
@@ -301,10 +348,32 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // 握手完成后，所有过滤数据都已正确接收
     });
 
+    (radioService as any).on('reconnecting', (reconnectInfo: any) => {
+      console.log('🔄 [RadioProvider] 正在重连:', reconnectInfo);
+      connectionDispatch({ type: 'reconnecting', payload: reconnectInfo });
+    });
+
+    (radioService as any).on('reconnectStopped', (stopInfo: any) => {
+      console.log('⏹️ [RadioProvider] 重连已停止:', stopInfo);
+      connectionDispatch({ type: 'reconnectStopped', payload: stopInfo });
+    });
+
     connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });
+
+    // 启动连接状态定期更新
+    connectionStatusTimerRef.current = setInterval(() => {
+      if (radioServiceRef.current) {
+        const connectionStatus = radioServiceRef.current.getConnectionStatus();
+        connectionDispatch({ type: 'updateConnectionInfo', payload: connectionStatus });
+      }
+    }, 1000); // 每秒更新一次连接状态
 
     // 清理函数
     return () => {
+      if (connectionStatusTimerRef.current) {
+        clearInterval(connectionStatusTimerRef.current);
+        connectionStatusTimerRef.current = null;
+      }
       if (radioServiceRef.current) {
         radioServiceRef.current.disconnect();
         radioServiceRef.current = null;

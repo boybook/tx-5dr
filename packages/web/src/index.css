@@ -64,8 +64,63 @@ body.text-foreground.bg-background {
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+  font-family: 
+    /* 优先使用现代等宽字体 */
+    'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New',
+    /* 中文字体回退 - Windows */
+    'Microsoft YaHei', '微软雅黑',
+    /* 中文字体回退 - macOS */
+    'PingFang SC', 'Hiragino Sans GB',
+    /* 中文字体回退 - Linux */
+    'Source Han Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei',
+    /* 通用回退 */
+    sans-serif, monospace;
+    
+  /* 优化代码显示 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 为font-mono类优化中文字体回退，解决Windows端宋体问题 */
+.font-mono {
+  font-family: 
+    /* 西文等宽字体 */
+    'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New',
+    /* 中文字体回退 - Windows */
+    'Microsoft YaHei', '微软雅黑',
+    /* 中文字体回退 - macOS */
+    'PingFang SC', 'Hiragino Sans GB',
+    /* 中文字体回退 - Linux */
+    'Source Han Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei',
+    /* 通用回退 */
+    sans-serif, monospace !important;
+  
+  /* 优化字体渲染 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  
+  /* 确保数字和字母对齐 */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* 为输入框中的等宽字体提供额外优化 */
+input.font-mono, 
+textarea.font-mono,
+.font-mono input,
+.font-mono textarea {
+  font-family: inherit;
+  /* 保持输入框的等宽特性 */
+  letter-spacing: 0;
+}
+
+/* 为小字号等宽文本优化可读性 */
+.text-xs.font-mono,
+.text-sm.font-mono {
+  /* 轻微增加字符间距，提高小字号可读性 */
+  letter-spacing: 0.025em;
 }
 
 /* FT8 表格行 hover 效果 */

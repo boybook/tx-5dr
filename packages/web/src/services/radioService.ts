@@ -22,7 +22,7 @@ export class RadioService {
     console.log('🔧 RadioService WebSocket URL:', wsUrl);
     this.wsClient = new WSClient({
       url: wsUrl,
-      reconnectAttempts: 5,
+      reconnectAttempts: -1, // 无限重连
       reconnectDelay: 1000,
       heartbeatInterval: 30000
     });
@@ -103,9 +103,10 @@ export class RadioService {
    * 获取连接状态
    */
   getConnectionStatus() {
+    const connectionInfo = this.wsClient.connectionInfo;
     return {
-      isConnected: this.isConnected,
-      isDecoding: this.isDecoding
+      isDecoding: this.isDecoding,
+      ...connectionInfo
     };
   }
 
@@ -234,6 +235,17 @@ export class RadioService {
       console.log('🔊 音量变化:', gain);
       this.eventListeners.volumeGainChanged?.(gain);
     });
+
+    // 监听重连状态变化
+    this.wsClient.onWSEvent('reconnecting' as any, (reconnectInfo: any) => {
+      console.log('🔄 正在重连:', reconnectInfo);
+      (this.eventListeners as any).reconnecting?.(reconnectInfo);
+    });
+
+    this.wsClient.onWSEvent('reconnectStopped' as any, (stopInfo: any) => {
+      console.log('⏹️ 重连已停止:', stopInfo);
+      (this.eventListeners as any).reconnectStopped?.(stopInfo);
+    });
   }
 
   /**
@@ -325,5 +337,12 @@ export class RadioService {
         clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
       });
     }
+  }
+
+  /**
+   * 重置重连计数器
+   */
+  resetReconnectAttempts(): void {
+    this.wsClient.resetReconnectAttempts();
   }
 }

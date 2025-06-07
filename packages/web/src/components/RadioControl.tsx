@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent} from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faWifi, faSpinner, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api } from '@tx5dr/core';
 import type { ModeDescriptor } from '@tx5dr/contracts';
@@ -14,6 +14,80 @@ const frequencies = [
 export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
   return (
     <FontAwesomeIcon icon={faChevronDown} className="text-default-400" />
+  );
+};
+
+// 连接状态指示器组件
+const ConnectionStatus: React.FC<{ connection: any }> = ({ connection }) => {
+  const [currentTime, setCurrentTime] = useState(Date.now());
+
+  // 每秒更新当前时间，用于重连倒计时
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (connection.isReconnecting && connection.lastReconnectInfo) {
+      timer = setInterval(() => {
+        setCurrentTime(Date.now());
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [connection.isReconnecting, connection.lastReconnectInfo]);
+  const getStatusIcon = () => {
+    if (connection.isConnected) {
+      return undefined;
+    } else if (connection.isReconnecting) {
+      return <FontAwesomeIcon icon={faSpinner} className="text-warning animate-spin" />;
+    } else if (connection.hasReachedMaxAttempts) {
+      return <FontAwesomeIcon icon={faExclamationTriangle} className="text-danger" />;
+    } else if (connection.isConnecting) {
+      return <FontAwesomeIcon icon={faSpinner} className="text-primary animate-spin" />;
+    } else {
+      return <FontAwesomeIcon icon={faWifi} className="text-default-400" />;
+    }
+  };
+
+  const getStatusText = () => {
+    if (connection.isConnected) {
+      return '已连接服务端';
+    } else if (connection.isReconnecting) {
+      const nextAttemptIn = connection.lastReconnectInfo 
+        ? Math.max(0, Math.ceil((connection.lastReconnectInfo.nextAttemptAt - currentTime) / 1000))
+        : 0;
+      const attemptText = connection.maxReconnectAttempts === -1 
+        ? `第${connection.reconnectAttempts}次` 
+        : `${connection.reconnectAttempts}/${connection.maxReconnectAttempts}`;
+      return `重连中 (${attemptText}) ${nextAttemptIn > 0 ? `${nextAttemptIn}s后重试` : ''}`;
+    } else if (connection.hasReachedMaxAttempts) {
+      return '连接失败，已停止重试';
+    } else if (connection.isConnecting) {
+      return '连接中...';
+    } else {
+      return '未连接';
+    }
+  };
+
+  const getStatusColor = () => {
+    if (connection.isConnected) {
+      return 'text-default-500';
+    } else if (connection.isReconnecting) {
+      return 'text-warning';
+    } else if (connection.hasReachedMaxAttempts) {
+      return 'text-danger';
+    } else if (connection.isConnecting) {
+      return 'text-primary';
+    } else {
+      return 'text-default-400';
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      {getStatusIcon()}
+      <span className={`text-sm ${getStatusColor()}`}>
+        {getStatusText()}
+      </span>
+    </div>
   );
 };
 
@@ -131,11 +205,17 @@ export const RadioControl: React.FC = () => {
     
     setIsConnecting(true);
     try {
-      console.log('🔗 开始连接到服务器...');
+      console.log('🔗 开始手动连接到服务器...');
+      
+      // 如果达到最大重连次数，需要重置重连计数器
+      if (connection.state.hasReachedMaxAttempts) {
+        connection.state.radioService.resetReconnectAttempts();
+      }
+      
       await connection.state.radioService.connect();
-      console.log('✅ 连接成功');
+      console.log('✅ 手动连接成功');
     } catch (error) {
-      console.error('❌ 连接失败:', error);
+      console.error('❌ 手动连接失败:', error);
     } finally {
       setIsConnecting(false);
     }
@@ -246,22 +326,30 @@ export const RadioControl: React.FC = () => {
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {connection.state.isConnected ? (
-            <span className="text-sm text-default-400">已连接服务端</span>
-          ) : (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-default-400">未连接</span>
-              <Button
-                size="sm"
-                color="primary"
-                variant="flat"
-                onPress={handleConnect}
-                isLoading={isConnecting}
-                className="h-6 px-2 text-xs"
-              >
-                {isConnecting ? '连接中' : '连接'}
-              </Button>
-            </div>
+          <ConnectionStatus connection={connection.state} />
+          {(!connection.state.isConnected && !connection.state.isConnecting && !connection.state.isReconnecting) && (
+            <Button
+              size="sm"
+              color="primary"
+              variant="flat"
+              onPress={handleConnect}
+              isLoading={isConnecting}
+              className="h-6 px-2 text-xs"
+            >
+              {isConnecting ? '连接中' : '重新连接'}
+            </Button>
+          )}
+          {connection.state.hasReachedMaxAttempts && (
+            <Button
+              size="sm"
+              color="warning"
+              variant="flat"
+              onPress={handleConnect}
+              isLoading={isConnecting}
+              className="h-6 px-2 text-xs"
+            >
+              {isConnecting ? '连接中' : '重试'}
+            </Button>
           )}
           <div className="flex items-center gap-0">
             <Button

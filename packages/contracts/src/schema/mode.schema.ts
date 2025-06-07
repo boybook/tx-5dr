@@ -53,7 +53,7 @@ export const MODES = {
     slotMs: 15000,
     toleranceMs: 100,
     // windowTiming: [-2000, -1500, -1000, -500, -250, 0, 250, 500, 1000],
-    windowTiming: [-1500, -1000, -500, 0],
+    windowTiming: [-1500, -1000, -500, 0, 250, 500],
     cycleType: 'EVEN_ODD',
     transmitTiming: 1180 // (15000 - 12640) / 2 = 1180ms
   } as ModeDescriptor,

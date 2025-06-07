@@ -6,9 +6,10 @@ import { WSMessageHandler } from './WSMessageHandler.js';
  */
 export interface WSClientConfig {
   url: string;
-  reconnectAttempts?: number;
+  reconnectAttempts?: number; // 设置为 -1 表示无限重连
   reconnectDelay?: number;
   heartbeatInterval?: number;
+  maxReconnectDelay?: number; // 最大重连延迟，避免延迟过长
 }
 
 /**
@@ -28,9 +29,10 @@ export class WSClient extends WSMessageHandler {
     
     this.config = {
       url: config.url,
-      reconnectAttempts: config.reconnectAttempts ?? 5,
+      reconnectAttempts: config.reconnectAttempts ?? -1, // 默认无限重连
       reconnectDelay: config.reconnectDelay ?? 1000,
       heartbeatInterval: config.heartbeatInterval ?? 30000,
+      maxReconnectDelay: config.maxReconnectDelay ?? 30000, // 最大30秒延迟
     };
   }
 
@@ -67,9 +69,15 @@ export class WSClient extends WSMessageHandler {
           this.stopHeartbeat();
           this.emitWSEvent('disconnected');
           
-          // 自动重连
-          if (this.reconnectAttempts < this.config.reconnectAttempts) {
+          // 自动重连 (-1 表示无限重连)
+          if (this.config.reconnectAttempts === -1 || this.reconnectAttempts < this.config.reconnectAttempts) {
             this.scheduleReconnect();
+          } else {
+            console.log('🛑 已达到最大重连次数，停止重连');
+            this.emitWSEvent('reconnectStopped' as any, {
+              reason: 'maxAttemptsReached',
+              finalAttempt: this.reconnectAttempts
+            });
           }
         };
 
@@ -175,13 +183,33 @@ export class WSClient extends WSMessageHandler {
   private scheduleReconnect(): void {
     this.stopReconnect();
     this.reconnectAttempts++;
-    const delay = this.config.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
     
-    console.log(`🔄 ${delay}ms后尝试第${this.reconnectAttempts}次重连...`);
+         // 计算延迟：指数退避，但限制最大延迟
+     const exponentialDelay = this.config.reconnectDelay * Math.pow(2, Math.min(this.reconnectAttempts - 1, 6)); // 最多2^6倍延迟
+     const delay = Math.min(exponentialDelay, this.config.maxReconnectDelay || 30000);
+    
+    const isInfiniteReconnect = this.config.reconnectAttempts === -1;
+    console.log(`🔄 ${delay}ms后尝试第${this.reconnectAttempts}次重连${isInfiniteReconnect ? ' (无限重连模式)' : ''}...`);
+    
+    // 发射重连开始事件
+    this.emitWSEvent('reconnecting' as any, {
+      attempt: this.reconnectAttempts,
+      maxAttempts: this.config.reconnectAttempts,
+      delay,
+      nextAttemptAt: Date.now() + delay
+    });
     
     this.reconnectTimer = setTimeout(() => {
       this.connect().catch((error) => {
         console.error('重连失败:', error);
+        
+        // 如果不是无限重连且达到最大重连次数，发射重连停止事件
+        if (this.config.reconnectAttempts !== -1 && this.reconnectAttempts >= this.config.reconnectAttempts) {
+          this.emitWSEvent('reconnectStopped' as any, {
+            reason: 'maxAttemptsReached',
+            finalAttempt: this.reconnectAttempts
+          });
+        }
       });
     }, delay);
   }
@@ -197,10 +225,61 @@ export class WSClient extends WSMessageHandler {
   }
 
   /**
+   * 重置重连计数器，用于手动重试
+   */
+  resetReconnectAttempts(): void {
+    console.log('🔄 重置重连计数器');
+    this.reconnectAttempts = 0;
+    this.stopReconnect();
+  }
+
+  /**
    * 获取连接状态
    */
   get isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * 获取是否正在连接
+   */
+  get connecting(): boolean {
+    return this.isConnecting;
+  }
+
+  /**
+   * 获取是否正在重连
+   */
+  get isReconnecting(): boolean {
+    return this.reconnectTimer !== null;
+  }
+
+  /**
+   * 获取当前重连尝试次数
+   */
+  get currentReconnectAttempts(): number {
+    return this.reconnectAttempts;
+  }
+
+  /**
+   * 获取最大重连尝试次数
+   */
+  get maxReconnectAttempts(): number {
+    return this.config.reconnectAttempts;
+  }
+
+  /**
+   * 获取连接状态信息
+   */
+  get connectionInfo() {
+    return {
+      isConnected: this.isConnected,
+      isConnecting: this.connecting,
+      isReconnecting: this.isReconnecting,
+      reconnectAttempts: this.currentReconnectAttempts,
+      maxReconnectAttempts: this.maxReconnectAttempts,
+      hasReachedMaxAttempts: this.config.reconnectAttempts !== -1 && this.currentReconnectAttempts >= this.maxReconnectAttempts
+    };
   }
 
   /**
