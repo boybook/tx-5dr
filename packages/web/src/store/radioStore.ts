@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode, useState } from 'react';
 import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
+import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
 
 // ===== 连接状态管理 =====
 export interface ConnectionState {
@@ -242,6 +243,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     // 设置事件监听器 - 分发到不同的reducer
     radioService.on('connected', () => {
       connectionDispatch({ type: 'connected' });
+      
+      // 连接成功后立即发送握手消息（包含操作员偏好设置）
+      const handshakeOperatorIds = getHandshakeOperatorIds();
+      
+      console.log('🤝 [RadioProvider] 连接成功，发送握手消息:', {
+        enabledOperatorIds: handshakeOperatorIds
+      });
+      
+      radioService.sendHandshake(handshakeOperatorIds);
     });
 
     radioService.on('disconnected', () => {
@@ -274,6 +284,21 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     radioService.on('operatorStatusUpdate', (operatorStatus: OperatorStatus) => {
       radioDispatch({ type: 'operatorStatusUpdate', payload: operatorStatus });
+    });
+
+    radioService.on('handshakeComplete' as any, (data: any) => {
+      console.log('🤝 [RadioProvider] 握手完成:', data);
+      
+      // 如果是新客户端，保存服务端确定的操作员列表到本地
+      if (data.finalEnabledOperatorIds) {
+        console.log('💾 [RadioProvider] 新客户端，保存默认操作员偏好:', data.finalEnabledOperatorIds);
+        setOperatorPreferences({
+          enabledOperatorIds: data.finalEnabledOperatorIds,
+          lastUpdated: Date.now()
+        });
+      }
+      
+      // 握手完成后，所有过滤数据都已正确接收
     });
 
     connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });

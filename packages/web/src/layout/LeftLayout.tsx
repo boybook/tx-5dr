@@ -62,7 +62,8 @@ export const LeftLayout: React.FC = () => {
           message: frame.message,
           ...(locationInfo.country && { country: locationInfo.country }),
           ...(locationInfo.countryZh && { countryZh: locationInfo.countryZh }),
-          ...(locationInfo.flag && { flag: locationInfo.flag })
+          ...(locationInfo.flag && { flag: locationInfo.flag }),
+          ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis })
         };
         
         groupsMap.get(groupKey)!.messages.push(message);

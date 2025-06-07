@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus } from '@fortawesome/free-solid-svg-icons';
+import { faPlus, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import { useRadioState, useConnection, useOperators, useCurrentOperatorId } from '../store/radioStore';
 import { RadioOperator } from './RadioOperator';
+import { hasOperatorPreferences } from '../utils/operatorPreferences';
 
 interface RadioOperatorListProps {
   onCreateOperator?: () => void; // 创建操作员的回调
@@ -46,16 +47,27 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
       <div className="flex items-center justify-center">
         <div className="text-center w-full">
           {connection.state.isConnected ? (
-            // 已连接但没有操作员，显示创建按钮
-            <Button
-              onPress={onCreateOperator}
-              variant="bordered"
-              size="md"
-              className="w-full border-2 border-dashed border-default-300 hover:border-default-400 bg-transparent hover:bg-default-50 text-default-500 py-3"
-            >
-              <FontAwesomeIcon icon={faPlus} className="mr-2" />
-              创建第一个操作员
-            </Button>
+            // 区分"服务端没有操作员"和"客户端禁用了所有操作员"
+            hasOperatorPreferences() ? (
+              // 用户有偏好设置但所有操作员都被禁用了
+              <div className="cursor-default select-none space-y-3">
+                <div className="text-xs text-default-400">
+                  <FontAwesomeIcon icon={faEyeSlash} className="mr-2" />
+                  <span>所有操作员均已隐藏</span>
+                </div>
+              </div>
+            ) : (
+              // 服务端真的没有操作员，显示创建按钮
+              <Button
+                onPress={onCreateOperator}
+                variant="bordered"
+                size="md"
+                className="w-full border-2 border-dashed border-default-300 hover:border-default-400 bg-transparent hover:bg-default-50 text-default-500 py-3"
+              >
+                <FontAwesomeIcon icon={faPlus} className="mr-2" />
+                创建第一个操作员
+              </Button>
+            )
           ) : (
             // 未连接时的提示
             <div className="cursor-default select-none">

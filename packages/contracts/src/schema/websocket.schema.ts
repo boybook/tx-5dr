@@ -35,6 +35,13 @@ export enum WSMessageType {
   START_OPERATOR = 'startOperator',
   STOP_OPERATOR = 'stopOperator',
   
+  // ===== 客户端操作员过滤 =====
+  SET_CLIENT_ENABLED_OPERATORS = 'setClientEnabledOperators',
+  
+  // ===== 握手协议 =====
+  CLIENT_HANDSHAKE = 'clientHandshake',
+  SERVER_HANDSHAKE_COMPLETE = 'serverHandshakeComplete',
+  
   // ===== 发射日志 =====
   TRANSMISSION_LOG = 'transmissionLog',
   
@@ -310,6 +317,39 @@ export const WSStopOperatorMessageSchema = WSBaseMessageSchema.extend({
   }),
 });
 
+/**
+ * 设置客户端启用的操作员列表消息
+ */
+export const WSSetClientEnabledOperatorsMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_CLIENT_ENABLED_OPERATORS),
+  data: z.object({
+    enabledOperatorIds: z.array(z.string()),
+  }),
+});
+
+/**
+ * 客户端握手消息
+ */
+export const WSClientHandshakeMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.CLIENT_HANDSHAKE),
+  data: z.object({
+    enabledOperatorIds: z.array(z.string()).nullable(), // null表示新客户端，数组表示已配置的偏好
+    clientVersion: z.string().optional(),
+    clientCapabilities: z.array(z.string()).optional(),
+  }),
+});
+
+/**
+ * 服务器握手完成消息
+ */
+export const WSServerHandshakeCompleteMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SERVER_HANDSHAKE_COMPLETE),
+  data: z.object({
+    serverVersion: z.string().optional(),
+    supportedFeatures: z.array(z.string()).optional(),
+  }),
+});
+
 // 导出类型
 export type WSGetOperatorsMessage = z.infer<typeof WSGetOperatorsMessageSchema>;
 export type WSOperatorsListMessage = z.infer<typeof WSOperatorsListMessageSchema>;
@@ -319,6 +359,9 @@ export type WSSetOperatorSlotMessage = z.infer<typeof WSSetOperatorSlotMessageSc
 export type WSUserCommandMessage = z.infer<typeof WSUserCommandMessageSchema>;
 export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
 export type WSStopOperatorMessage = z.infer<typeof WSStopOperatorMessageSchema>;
+export type WSSetClientEnabledOperatorsMessage = z.infer<typeof WSSetClientEnabledOperatorsMessageSchema>;
+export type WSClientHandshakeMessage = z.infer<typeof WSClientHandshakeMessageSchema>;
+export type WSServerHandshakeCompleteMessage = z.infer<typeof WSServerHandshakeCompleteMessageSchema>;
 
 /**
  * 发射日志消息
@@ -381,6 +424,13 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   
   // 音量控制消息
   WSSetVolumeGainMessageSchema,
+  
+  // 客户端启用操作员列表消息
+  WSSetClientEnabledOperatorsMessageSchema,
+  
+  // 握手消息
+  WSClientHandshakeMessageSchema,
+  WSServerHandshakeCompleteMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====

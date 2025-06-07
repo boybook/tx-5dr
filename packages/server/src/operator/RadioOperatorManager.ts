@@ -431,8 +431,6 @@ export class RadioOperatorManager {
     
     console.log(`📻 [操作员管理器] 更新操作员 ${operatorId} 上下文:`, context);
     this.emitOperatorStatusUpdate(operatorId);
-    // 也广播完整操作员列表更新，确保前端能及时刷新
-    this.broadcastOperatorListUpdate();
   }
 
   /**
@@ -723,6 +721,7 @@ export class RadioOperatorManager {
 
   /**
    * 广播所有操作员的状态更新
+   * 注意：这个方法只发射事件，实际的过滤逻辑在WSServer中处理
    */
   broadcastAllOperatorStatusUpdates(): void {
     const operators = this.getOperatorsStatus();

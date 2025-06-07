@@ -14,6 +14,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSave } from '@fortawesome/free-solid-svg-icons';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
+import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -22,7 +23,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型
-type SettingsTab = 'audio' | 'radio' | 'operator' | 'advanced';
+type SettingsTab = 'audio' | 'radio' | 'operator' | 'display' | 'advanced';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'audio');
@@ -34,6 +35,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // 用于检查组件是否有未保存的更改
   const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
+  const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
 
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
@@ -51,6 +53,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return audioSettingsRef.current?.hasUnsavedChanges() || false;
       case 'operator':
         return operatorSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'display':
+        return displaySettingsRef.current?.hasUnsavedChanges() || false;
       default:
         return false;
     }
@@ -95,6 +99,11 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         case 'operator':
           if (operatorSettingsRef.current) {
             await operatorSettingsRef.current.save();
+          }
+          break;
+        case 'display':
+          if (displaySettingsRef.current) {
+            await displaySettingsRef.current.save();
           }
           break;
         // 其他标签页的保存逻辑将在后续实现
@@ -165,6 +174,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return '📻 电台设备';
       case 'operator':
         return '👤 操作员';
+      case 'display':
+        return '🎨 显示通知';
       case 'advanced':
         return '⚙️ 高级设置';
       default:
@@ -195,6 +206,13 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return (
           <OperatorSettings
             ref={operatorSettingsRef}
+            onUnsavedChanges={setHasUnsavedChanges}
+          />
+        );
+      case 'display':
+        return (
+          <DisplayNotificationSettings
+            ref={displaySettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
           />
         );
@@ -267,6 +285,12 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     key="operator" 
                     title={
                       getTabTitle('operator')
+                    } 
+                  />
+                  <Tab 
+                    key="display" 
+                    title={
+                      getTabTitle('display')
                     } 
                   />
                   <Tab 

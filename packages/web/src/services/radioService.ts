@@ -302,4 +302,28 @@ export class RadioService {
       this.wsClient.send('setVolumeGain', { gain });
     }
   }
+
+  /**
+   * 设置客户端启用的操作员列表
+   */
+  setClientEnabledOperators(enabledOperatorIds: string[]): void {
+    if (this.isConnected) {
+      console.log('📤 [RadioService] 设置客户端启用操作员:', enabledOperatorIds);
+      this.wsClient.send('setClientEnabledOperators', { enabledOperatorIds });
+    }
+  }
+
+  /**
+   * 发送握手消息
+   */
+  sendHandshake(enabledOperatorIds: string[] | null): void {
+    if (this.isConnected) {
+      console.log('🤝 [RadioService] 发送握手消息:', { enabledOperatorIds });
+      this.wsClient.send('clientHandshake', {
+        enabledOperatorIds,
+        clientVersion: '1.0.0',
+        clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
+      });
+    }
+  }
 }

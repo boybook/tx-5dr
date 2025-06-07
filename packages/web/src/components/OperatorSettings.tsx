@@ -16,10 +16,12 @@ import {
   ModalContent,
   ModalHeader,
   ModalBody,
-  ModalFooter
+  ModalFooter,
+  Tabs,
+  Tab
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faEdit, faTrash, faPlay, faStop, faSave, faTimes } from '@fortawesome/free-solid-svg-icons';
+import { faPlus, faEdit, faTrash, faPlay, faStop, faSave, faTimes, faUsers, faToggleOn, faToggleOff, faCog } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import type { 
   RadioOperatorConfig, 
@@ -27,6 +29,13 @@ import type {
   UpdateRadioOperatorRequest
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
+import { useConnection } from '../store/radioStore';
+import { 
+  getOperatorPreferences, 
+  setOperatorEnabled, 
+  setAllOperatorsEnabled,
+  isOperatorEnabled 
+} from '../utils/operatorPreferences';
 
 export interface OperatorSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -43,6 +52,12 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
     const [hasChanges, setHasChanges] = useState(false);
+    const [activeTab, setActiveTab] = useState<'manage' | 'preferences'>('manage');
+    
+    // 操作员偏好设置状态
+    const connection = useConnection();
+    const [localEnabledStates, setLocalEnabledStates] = useState<Record<string, boolean>>({});
+    const [preferencesHasChanges, setPreferencesHasChanges] = useState(false);
     
     // 编辑状态 - 记录哪些操作员正在编辑中
     const [editingOperators, setEditingOperators] = useState<Set<string>>(new Set());
@@ -69,8 +84,12 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
     // 暴露给父组件的方法
     useImperativeHandle(ref, () => ({
-      hasUnsavedChanges: () => hasChanges,
+      hasUnsavedChanges: () => hasChanges || preferencesHasChanges,
       save: async () => {
+        // 保存偏好设置
+        if (preferencesHasChanges) {
+          await handleApplyPreferences();
+        }
         // 操作员设置通常是即时保存的，不需要批量保存
         setHasChanges(false);
         onUnsavedChanges?.(false);
@@ -101,10 +120,82 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       }
     }, [loading, operators.length, isCreating]);
 
+    // 初始化操作员偏好设置
+    useEffect(() => {
+      const initialStates: Record<string, boolean> = {};
+      operators.forEach(operator => {
+        initialStates[operator.id] = isOperatorEnabled(operator.id);
+      });
+      setLocalEnabledStates(initialStates);
+      setPreferencesHasChanges(false);
+    }, [operators]);
+
     // 处理未保存更改状态
     const updateUnsavedChanges = (hasChanges: boolean) => {
       setHasChanges(hasChanges);
-      onUnsavedChanges?.(hasChanges);
+      onUnsavedChanges?.(hasChanges || preferencesHasChanges);
+    };
+
+    // 检查偏好设置是否有未保存的更改
+    const checkPreferencesChanges = (newStates: Record<string, boolean>) => {
+      const hasAnyChanges = operators.some(operator => {
+        const currentEnabled = isOperatorEnabled(operator.id);
+        const newEnabled = newStates[operator.id] ?? currentEnabled;
+        return currentEnabled !== newEnabled;
+      });
+      
+      setPreferencesHasChanges(hasAnyChanges);
+      onUnsavedChanges?.(hasChanges || hasAnyChanges);
+    };
+
+    // 处理单个操作员启用状态变化
+    const handleOperatorToggle = (operatorId: string, enabled: boolean) => {
+      const newStates = {
+        ...localEnabledStates,
+        [operatorId]: enabled
+      };
+      setLocalEnabledStates(newStates);
+      checkPreferencesChanges(newStates);
+    };
+
+    // 处理全部启用/禁用
+    const handleToggleAll = (enabled: boolean) => {
+      const newStates: Record<string, boolean> = {};
+      operators.forEach(operator => {
+        newStates[operator.id] = enabled;
+      });
+      setLocalEnabledStates(newStates);
+      checkPreferencesChanges(newStates);
+    };
+
+    // 应用偏好设置更改
+    const handleApplyPreferences = async () => {
+      if (!preferencesHasChanges) return;
+      
+      try {
+        // 保存到localStorage
+        operators.forEach(operator => {
+          const enabled = localEnabledStates[operator.id] ?? true;
+          setOperatorEnabled(operator.id, enabled);
+        });
+
+        // 发送到服务器
+        if (connection.state.isConnected && connection.state.radioService) {
+          const enabledIds = operators
+            .filter(op => localEnabledStates[op.id] ?? true)
+            .map(op => op.id);
+          
+          console.log('📤 [OperatorSettings] 应用操作员偏好设置:', enabledIds);
+          connection.state.radioService.setClientEnabledOperators(enabledIds);
+        }
+
+        setPreferencesHasChanges(false);
+        onUnsavedChanges?.(hasChanges);
+        
+        console.log('✅ 操作员偏好设置已应用');
+      } catch (error) {
+        console.error('❌ 应用操作员偏好设置失败:', error);
+      }
     };
 
     // 开始编辑操作员
@@ -509,6 +600,130 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       );
     };
 
+    // 渲染操作员偏好设置选项卡
+    const renderPreferencesTab = () => {
+      const enabledCount = Object.values(localEnabledStates).filter(Boolean).length;
+      const totalCount = operators.length;
+
+      return (
+        <div className="space-y-6">
+          <div>
+            <h4 className="text-md font-semibold text-default-700 mb-2">操作员显示偏好</h4>
+            <p className="text-sm text-default-500 mb-4">
+              选择在此客户端中显示哪些操作员。未启用的操作员将不会在界面中显示，也不会接收其相关事件。
+            </p>
+          </div>
+
+          {/* 统计信息和批量操作 */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex justify-between items-center w-full">
+                <div className="flex items-center gap-2">
+                  <FontAwesomeIcon icon={faUsers} className="text-primary" />
+                  <span className="font-medium">操作员列表</span>
+                  <Chip size="sm" variant="flat" color="primary">
+                    {enabledCount}/{totalCount} 已启用
+                  </Chip>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    onPress={() => handleToggleAll(true)}
+                    isDisabled={enabledCount === totalCount}
+                  >
+                    <FontAwesomeIcon icon={faToggleOn} className="mr-1" />
+                    全部启用
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    color="danger"
+                    onPress={() => handleToggleAll(false)}
+                    isDisabled={enabledCount === 0}
+                  >
+                    <FontAwesomeIcon icon={faToggleOff} className="mr-1" />
+                    全部禁用
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <Divider />
+            <CardBody>
+              {operators.length === 0 ? (
+                <div className="text-center py-8 text-default-500">
+                  <FontAwesomeIcon icon={faUsers} className="text-4xl mb-3 opacity-50" />
+                  <p>暂无操作员</p>
+                  <p className="text-sm mt-1">请先在"操作员管理"选项卡中创建操作员</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {operators.map((operator) => {
+                    const enabled = localEnabledStates[operator.id] ?? true;
+                    return (
+                      <div
+                        key={operator.id}
+                        className="flex items-center justify-between p-3 bg-default-50 rounded-lg"
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3">
+                            <div className="font-medium text-default-700">
+                              {operator.myCallsign || operator.id}
+                            </div>
+                            <div className="text-sm text-default-500">
+                              {operator.myGrid && `网格: ${operator.myGrid}`}
+                            </div>
+                            {operator.frequency && (
+                              <Chip size="sm" variant="flat" color="secondary">
+                                {operator.frequency} Hz
+                              </Chip>
+                            )}
+                          </div>
+                          <div className="text-xs text-default-400 mt-1">
+                            ID: {operator.id}
+                          </div>
+                        </div>
+                        <Switch
+                          isSelected={enabled}
+                          onValueChange={(checked) => handleOperatorToggle(operator.id, checked)}
+                          size="sm"
+                          color="primary"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardBody>
+          </Card>
+
+          {/* 应用按钮 */}
+          {preferencesHasChanges && (
+            <div className="flex justify-end">
+              <Button
+                color="primary"
+                onPress={handleApplyPreferences}
+                isDisabled={!connection.state.isConnected}
+              >
+                应用设置
+              </Button>
+            </div>
+          )}
+
+          {/* 说明信息 */}
+          <div className="p-4 bg-default-50 rounded-lg">
+            <h5 className="text-sm font-medium text-default-700 mb-2">设置说明</h5>
+            <ul className="text-xs text-default-600 space-y-1">
+              <li>• 禁用的操作员不会在操作员列表中显示</li>
+              <li>• 禁用的操作员的状态更新和事件不会发送到此客户端</li>
+              <li>• 设置仅影响当前客户端，不影响服务器上的操作员运行</li>
+              <li>• 设置会保存在浏览器本地存储中，下次打开时会自动恢复</li>
+            </ul>
+          </div>
+        </div>
+      );
+    };
+
     // 渲染新建操作员卡片
     const renderNewOperatorCard = () => {
       if (!isCreating) return null;
@@ -550,25 +765,11 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
     return (
       <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <div>
-            <h3 className="text-lg font-semibold">电台操作员管理</h3>
-            <p className="text-sm text-default-500 mt-1">
-              管理多个电台操作员配置，支持同时运行多个操作员
-            </p>
-          </div>
-          {/* 当没有操作员且已在创建模式时，隐藏新建按钮 */}
-          {!(operators.length === 0 && isCreating) && (
-            <Button
-              color="primary"
-              variant="flat"
-              onPress={() => setIsCreating(true)}
-              startContent={<FontAwesomeIcon icon={faPlus} />}
-              isDisabled={isCreating}
-            >
-              新建操作员
-            </Button>
-          )}
+        <div>
+          <h3 className="text-lg font-semibold">电台操作员设置</h3>
+          <p className="text-sm text-default-500 mt-1">
+            管理操作员配置和显示偏好
+          </p>
         </div>
 
         {error && (
@@ -577,21 +778,124 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           </div>
         )}
 
-        {loading ? (
-          <div className="flex justify-center py-8">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-              <p className="text-sm text-default-500 mt-2">加载中...</p>
+        {operators.length <= 1 ? (
+          // 当操作员数量≤1时，只显示管理界面，不显示选项卡
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <h4 className="text-md font-semibold">操作员配置</h4>
+                <p className="text-sm text-default-500 mt-1">
+                  创建和管理多个电台操作员配置
+                </p>
+              </div>
+              {/* 当没有操作员且已在创建模式时，隐藏新建按钮 */}
+              {!(operators.length === 0 && isCreating) && (
+                <Button
+                  color="primary"
+                  variant="flat"
+                  onPress={() => setIsCreating(true)}
+                  startContent={<FontAwesomeIcon icon={faPlus} />}
+                  isDisabled={isCreating}
+                >
+                  新建操作员
+                </Button>
+              )}
             </div>
+
+            {loading ? (
+              <div className="flex justify-center py-8">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                  <p className="text-sm text-default-500 mt-2">加载中...</p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* 新建操作员卡片 */}
+                {renderNewOperatorCard()}
+                
+                {/* 现有操作员卡片 */}
+                {operators.length > 0 && operators.map(renderOperatorCard)}
+              </div>
+            )}
           </div>
         ) : (
-          <div className="space-y-4">
-            {/* 新建操作员卡片 */}
-            {renderNewOperatorCard()}
-            
-            {/* 现有操作员卡片 */}
-            {operators.length > 0 && operators.map(renderOperatorCard)}
-          </div>
+          // 当操作员数量>1时，显示带选项卡的界面
+          <Tabs
+            selectedKey={activeTab}
+            onSelectionChange={(key) => setActiveTab(key as 'manage' | 'preferences')}
+            size="md"
+            className="w-full"
+          >
+            <Tab 
+              key="manage" 
+              title={
+                <div className="flex items-center gap-2">
+                  <FontAwesomeIcon icon={faCog} />
+                  <span>操作员管理</span>
+                </div>
+              }
+            >
+            <div className="space-y-6 pt-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h4 className="text-md font-semibold">操作员配置</h4>
+                  <p className="text-sm text-default-500 mt-1">
+                    创建和管理多个电台操作员配置
+                  </p>
+                </div>
+                {/* 当没有操作员且已在创建模式时，隐藏新建按钮 */}
+                {!(operators.length === 0 && isCreating) && (
+                  <Button
+                    color="primary"
+                    variant="flat"
+                    onPress={() => setIsCreating(true)}
+                    startContent={<FontAwesomeIcon icon={faPlus} />}
+                    isDisabled={isCreating}
+                  >
+                    新建操作员
+                  </Button>
+                )}
+              </div>
+
+              {loading ? (
+                <div className="flex justify-center py-8">
+                  <div className="text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                    <p className="text-sm text-default-500 mt-2">加载中...</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* 新建操作员卡片 */}
+                  {renderNewOperatorCard()}
+                  
+                  {/* 现有操作员卡片 */}
+                  {operators.length > 0 && operators.map(renderOperatorCard)}
+                </div>
+              )}
+            </div>
+          </Tab>
+          
+          <Tab 
+            key="preferences" 
+            title={
+              <div className="flex items-center gap-2">
+                <FontAwesomeIcon icon={faUsers} />
+                <span>显示偏好</span>
+                {preferencesHasChanges && (
+                  <Chip size="sm" color="warning" variant="flat">
+                    有更改
+                  </Chip>
+                )}
+              </div>
+            }
+          >
+            <div className="pt-4">
+              {renderPreferencesTab()}
+            </div>
+          </Tab>
+        </Tabs>
         )}
 
         {/* 删除确认对话框 */}

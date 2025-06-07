@@ -313,7 +313,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     
     // 监听 SlotPackManager 事件
-    this.slotPackManager.on('slotPackUpdated', (slotPack) => {
+    this.slotPackManager.on('slotPackUpdated', async (slotPack) => {
       console.log(`📦 [时钟管理器] 时隙包更新事件: ${slotPack.slotId}`);
       console.log(`   当前状态: ${slotPack.frames.length}个信号, 解码${slotPack.stats.totalDecodes}次`);
       

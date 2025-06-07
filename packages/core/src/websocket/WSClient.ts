@@ -277,10 +277,42 @@ export class WSClient extends WSMessageHandler {
           console.log('🔊 [WSClient] 收到音量变化:', message.data.gain);
           this.emitWSEvent('volumeGainChanged', message.data.gain);
           break;
+
+        case 'serverHandshakeComplete':
+          console.log('🤝 [WSClient] 服务器握手完成:', message.data);
+          this.emitWSEvent('handshakeComplete' as any, message.data);
+          break;
       }
     } catch (error) {
       console.error('❌ 处理WebSocket消息失败:', error);
       this.emitWSEvent('error', error instanceof Error ? error : new Error('消息处理失败'));
     }
+  }
+
+  /**
+   * 设置音量增益
+   */
+  setVolumeGain(gain: number): void {
+    this.send('setVolumeGain', { gain });
+  }
+
+  /**
+   * 设置客户端启用的操作员列表
+   */
+  setClientEnabledOperators(enabledOperatorIds: string[]): void {
+    console.log('📤 [WSClient] 设置客户端启用操作员:', enabledOperatorIds);
+    this.send('setClientEnabledOperators', { enabledOperatorIds });
+  }
+
+  /**
+   * 发送客户端握手消息
+   */
+  sendHandshake(enabledOperatorIds: string[] | null): void {
+    console.log('🤝 [WSClient] 发送握手消息:', { enabledOperatorIds });
+    this.send('clientHandshake', {
+      enabledOperatorIds,
+      clientVersion: '1.0.0',
+      clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
+    });
   }
 } 

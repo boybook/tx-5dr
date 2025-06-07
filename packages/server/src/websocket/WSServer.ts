@@ -18,6 +18,8 @@ import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 export class WSConnection extends WSMessageHandler {
   private ws: any; // WebSocket实例（支持不同的WebSocket库）
   private id: string;
+  private enabledOperatorIds: Set<string> = new Set(); // 客户端启用的操作员ID列表
+  private handshakeCompleted: boolean = false; // 握手是否完成
 
   constructor(ws: any, id: string) {
     super();
@@ -73,6 +75,45 @@ export class WSConnection extends WSMessageHandler {
   get isAlive(): boolean {
     return this.ws.readyState === 1; // WebSocket.OPEN
   }
+
+  /**
+   * 设置启用的操作员列表
+   */
+  setEnabledOperators(operatorIds: string[]): void {
+    this.enabledOperatorIds = new Set(operatorIds);
+    console.log(`🔧 [WSConnection] 连接 ${this.id} 设置启用操作员: [${operatorIds.join(', ')}]`);
+  }
+
+  /**
+   * 检查操作员是否在该连接中启用
+   */
+  isOperatorEnabled(operatorId: string): boolean {
+    // 直接检查操作员是否在启用列表中（握手时已经处理了null转换）
+    return this.enabledOperatorIds.has(operatorId);
+  }
+
+  /**
+   * 获取启用的操作员ID列表
+   */
+  getEnabledOperatorIds(): string[] {
+    return Array.from(this.enabledOperatorIds);
+  }
+
+  /**
+   * 完成握手
+   */
+  completeHandshake(enabledOperatorIds: string[]): void {
+    this.enabledOperatorIds = new Set(enabledOperatorIds);
+    this.handshakeCompleted = true;
+    console.log(`🤝 [WSConnection] 连接 ${this.id} 握手完成，启用操作员: [${enabledOperatorIds.join(', ')}]`);
+  }
+
+  /**
+   * 检查握手是否完成
+   */
+  isHandshakeCompleted(): boolean {
+    return this.handshakeCompleted;
+  }
 }
 
 /**
@@ -108,8 +149,8 @@ export class WSServer extends WSMessageHandler {
       this.broadcastSubWindow(windowInfo);
     });
 
-    this.digitalRadioEngine.on('slotPackUpdated', (slotPack) => {
-      this.broadcastSlotPackUpdated(slotPack);
+    this.digitalRadioEngine.on('slotPackUpdated', async (slotPack) => {
+      await this.broadcastSlotPackUpdated(slotPack);
     });
 
     this.digitalRadioEngine.on('spectrumData', (spectrum) => {
@@ -137,8 +178,15 @@ export class WSServer extends WSMessageHandler {
 
     // 监听操作员列表更新事件
     this.digitalRadioEngine.on('operatorsList' as any, (data: { operators: any[] }) => {
-      console.log('📻 [WSServer] 收到operatorsList事件，广播给客户端', data.operators.length, '个操作员');
-      this.broadcast(WSMessageType.OPERATORS_LIST, data);
+      console.log('📻 [WSServer] 收到operatorsList事件，向各客户端发送过滤后的操作员列表');
+      
+      const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+      activeConnections.forEach(connection => {
+        const filteredOperators = data.operators.filter(op => connection.isOperatorEnabled(op.id));
+        connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
+      });
+      
+      console.log(`📤 [WSServer] 已向 ${activeConnections.length} 个已握手的客户端发送过滤后的操作员列表`);
     });
 
     // 监听音量变化事件
@@ -200,6 +248,14 @@ export class WSServer extends WSMessageHandler {
 
       case WSMessageType.SET_VOLUME_GAIN:
         await this.handleSetVolumeGain(message.data);
+        break;
+
+      case 'setClientEnabledOperators':
+        await this.handleSetClientEnabledOperators(connectionId, message.data);
+        break;
+
+      case 'clientHandshake':
+        await this.handleClientHandshake(connectionId, message.data);
         break;
 
       default:
@@ -283,9 +339,15 @@ export class WSServer extends WSMessageHandler {
     console.log('📥 [WSServer] 收到 getOperators 请求');
     try {
       const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
-      // console.log('📻 [WSServer] 操作员列表:', operators);
-      this.broadcast(WSMessageType.OPERATORS_LIST, { operators });
-      // console.log('📤 [WSServer] 已广播操作员列表');
+      
+      // 只向已完成握手的客户端发送过滤后的操作员列表
+      const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+      activeConnections.forEach(connection => {
+        const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
+        connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
+      });
+      
+      console.log(`📤 [WSServer] 已向 ${activeConnections.length} 个已握手的客户端发送过滤后的操作员列表`);
     } catch (error) {
       console.error('❌ 获取操作员列表失败:', error);
       this.broadcast(WSMessageType.ERROR, {
@@ -403,63 +465,28 @@ export class WSServer extends WSMessageHandler {
     this.connections.set(id, connection);
     console.log(`🔗 新的WebSocket连接: ${id}`);
 
-    // 发送完整的状态信息给新连接的客户端
-    console.log(`📤 [WSServer] 为新连接 ${id} 发送初始状态...`);
+    // 阶段1: 发送基础状态信息（不包括需要过滤的数据）
+    console.log(`📤 [WSServer] 为新连接 ${id} 发送基础状态...`);
     
     // 1. 发送当前系统状态
     const status = this.digitalRadioEngine.getStatus();
     connection.send(WSMessageType.SYSTEM_STATUS, status);
-    console.log(`📤 [WSServer] 已发送系统状态:`, status);
+    console.log(`📤 [WSServer] 已发送系统状态`);
     
-    // 2. 发送当前模式信息（确保客户端能获取到模式变化）
+    // 2. 发送当前模式信息
     connection.send(WSMessageType.MODE_CHANGED, status.currentMode);
-    console.log(`📤 [WSServer] 已发送当前模式:`, status.currentMode);
+    console.log(`📤 [WSServer] 已发送当前模式`);
     
-    // 3. 发送当前操作员列表
-    try {
-      const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
-      connection.send(WSMessageType.OPERATORS_LIST, { operators });
-      console.log(`📤 [WSServer] 已发送操作员列表: ${operators.length} 个操作员`);
-    } catch (error) {
-      console.error('❌ 发送操作员列表失败:', error);
-    }
-    
-    // 4. 发送当前音量增益
+    // 3. 发送当前音量增益
     try {
       const volumeGain = this.digitalRadioEngine.getVolumeGain();
       connection.send(WSMessageType.VOLUME_GAIN_CHANGED, { gain: volumeGain });
-      console.log(`📤 [WSServer] 已发送音量增益: ${volumeGain}`);
+      console.log(`📤 [WSServer] 已发送音量增益`);
     } catch (error) {
       console.error('❌ 发送音量增益失败:', error);
     }
     
-    // 5. 发送最近的时隙包数据（如果有）
-    try {
-      const activeSlotPacks = this.digitalRadioEngine.getActiveSlotPacks();
-      if (activeSlotPacks.length > 0) {
-        // 发送最近的几个时隙包（最多10个）
-        const recentSlotPacks = activeSlotPacks.slice(-10);
-        for (const slotPack of recentSlotPacks) {
-          connection.send(WSMessageType.SLOT_PACK_UPDATED, slotPack);
-        }
-        console.log(`📤 [WSServer] 已发送 ${recentSlotPacks.length} 个最近的时隙包`);
-      }
-    } catch (error) {
-      console.error('❌ 发送时隙包数据失败:', error);
-    }
-    
-    console.log(`✅ [WSServer] 新连接 ${id} 的初始状态发送完成`);
-    
-    // 6. 如果引擎正在运行，额外发送一次状态确保同步
-    if (status.isRunning) {
-      // 延迟500ms再发送一次，确保客户端已完全建立连接
-      setTimeout(() => {
-        if (connection.isAlive) {
-          connection.send(WSMessageType.SYSTEM_STATUS, this.digitalRadioEngine.getStatus());
-          console.log(`📤 [WSServer] 延迟发送状态同步给连接 ${id}`);
-        }
-      }, 500);
-    }
+    console.log(`✅ [WSServer] 新连接 ${id} 的基础状态发送完成，等待客户端握手`);
 
     return connection;
   }
@@ -538,10 +565,140 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
-   * 广播时隙包更新事件
+   * 广播时隙包更新事件（为每个客户端定制化数据）
    */
-  broadcastSlotPackUpdated(slotPack: SlotPack): void {
-    this.broadcast(WSMessageType.SLOT_PACK_UPDATED, slotPack);
+  async broadcastSlotPackUpdated(slotPack: SlotPack): Promise<void> {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    
+    // 为每个客户端分别生成定制化的SlotPack
+    const customizedPromises = activeConnections.map(async (connection) => {
+      try {
+        const customizedSlotPack = await this.customizeSlotPackForClient(connection, slotPack);
+        connection.send(WSMessageType.SLOT_PACK_UPDATED, customizedSlotPack);
+      } catch (error) {
+        console.error(`❌ [WSServer] 为连接 ${connection.getId()} 定制化SlotPack失败:`, error);
+        // 发送原始数据作为后备
+        connection.send(WSMessageType.SLOT_PACK_UPDATED, slotPack);
+      }
+    });
+    
+    await Promise.all(customizedPromises);
+    console.log(`📡 [WSServer] 向 ${activeConnections.length} 个客户端发送定制化时隙包更新`);
+  }
+
+  /**
+   * 为特定客户端定制化SlotPack数据
+   */
+  private async customizeSlotPackForClient(connection: WSConnection, slotPack: SlotPack): Promise<SlotPack> {
+    // 获取该客户端启用的操作员
+    const enabledOperatorIds = connection.getEnabledOperatorIds();
+    if (enabledOperatorIds.length === 0) {
+      // 如果没有启用任何操作员，返回原始数据（不带logbook分析）
+      return slotPack;
+    }
+
+    // 复制SlotPack以避免修改原始数据
+    const customizedSlotPack = JSON.parse(JSON.stringify(slotPack));
+
+    // 为每个frame添加logbook分析
+    const framePromises = customizedSlotPack.frames.map(async (frame: any) => {
+      try {
+        const logbookAnalysis = await this.analyzeFrameForOperators(frame, enabledOperatorIds);
+        if (logbookAnalysis) {
+          frame.logbookAnalysis = logbookAnalysis;
+        }
+      } catch (error) {
+        console.warn(`⚠️ [WSServer] 分析frame失败: ${frame.message}`, error);
+        // 继续处理，不影响其他frame
+      }
+      return frame;
+    });
+
+    customizedSlotPack.frames = await Promise.all(framePromises);
+    return customizedSlotPack;
+  }
+
+  /**
+   * 分析单个frame对所有启用操作员的日志本情况
+   */
+  private async analyzeFrameForOperators(frame: any, enabledOperatorIds: string[]): Promise<any> {
+    const { FT8MessageParser } = await import('@tx5dr/core');
+    
+    // 解析FT8消息
+    const parsedMessage = FT8MessageParser.parseMessage(frame.message);
+    
+    // 提取呼号和网格信息
+    let callsign: string | undefined;
+    let grid: string | undefined;
+    
+    // 根据消息类型提取呼号和网格
+    if (parsedMessage.type === 'cq') {
+      callsign = parsedMessage.senderCallsign;
+      grid = parsedMessage.grid;
+    } else if (parsedMessage.type === 'call') {
+      callsign = parsedMessage.senderCallsign;
+      grid = parsedMessage.grid;
+    } else if (parsedMessage.type === 'signal_report') {
+      callsign = parsedMessage.senderCallsign;
+    } else if (parsedMessage.type === 'roger_report') {
+      callsign = parsedMessage.senderCallsign;
+    } else if (parsedMessage.type === 'rrr') {
+      callsign = parsedMessage.senderCallsign;
+    } else if (parsedMessage.type === '73') {
+      callsign = parsedMessage.senderCallsign;
+    }
+    
+    if (!callsign) {
+      // 如果没有呼号信息，不进行分析
+      return null;
+    }
+
+    // 对每个启用的操作员检查日志本
+    const operatorManager = this.digitalRadioEngine.operatorManager;
+    const logManager = operatorManager.getLogManager();
+    
+    // 合并所有操作员的分析结果
+    let isNewCallsign = true;
+    let isNewPrefix = true; 
+    let isNewGrid = true;
+    let prefix: string | undefined;
+
+    for (const operatorId of enabledOperatorIds) {
+      try {
+        const logBook = logManager.getOperatorLogBook(operatorId);
+        if (logBook) {
+          const analysis = await logBook.provider.analyzeCallsign(callsign, grid, operatorId);
+          
+          // 如果任一操作员已通联过，则不是新的
+          if (!analysis.isNewCallsign) {
+            isNewCallsign = false;
+          }
+          if (!analysis.isNewPrefix) {
+            isNewPrefix = false;
+          }
+          if (grid && !analysis.isNewGrid) {
+            isNewGrid = false;
+          }
+          
+          // 记录前缀信息
+          if (analysis.prefix) {
+            prefix = analysis.prefix;
+          }
+        }
+      } catch (error) {
+        console.warn(`⚠️ [WSServer] 分析操作员 ${operatorId} 的日志本失败:`, error);
+        // 继续处理其他操作员
+      }
+    }
+
+    return {
+      isNewCallsign,
+      isNewPrefix,
+      isNewGrid: grid ? isNewGrid : undefined,
+      callsign,
+      grid,
+      prefix
+    };
   }
 
   /**
@@ -569,10 +726,16 @@ export class WSServer extends WSMessageHandler {
    * 广播操作员状态更新事件
    */
   broadcastOperatorStatusUpdate(operatorStatus: any): void {
-    this.broadcast(WSMessageType.OPERATOR_STATUS_UPDATE, operatorStatus);
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    
+    activeConnections.forEach(connection => {
+      if (connection.isOperatorEnabled(operatorStatus.id)) {
+        connection.send(WSMessageType.OPERATOR_STATUS_UPDATE, operatorStatus);
+      }
+    });
+    
+    console.log(`📡 [WSServer] 向 ${activeConnections.filter(conn => conn.isOperatorEnabled(operatorStatus.id)).length} 个启用操作员 ${operatorStatus.id} 的客户端发送状态更新`);
   }
-
-
 
   /**
    * 处理设置音量增益命令
@@ -590,7 +753,111 @@ export class WSServer extends WSMessageHandler {
     }
   }
 
+  /**
+   * 处理设置客户端启用操作员命令
+   */
+  private async handleSetClientEnabledOperators(connectionId: string, data: any): Promise<void> {
+    try {
+      const { enabledOperatorIds } = data;
+      const connection = this.getConnection(connectionId);
+      if (connection) {
+        connection.setEnabledOperators(enabledOperatorIds);
+        console.log(`🔧 [WSServer] 连接 ${connectionId} 设置启用操作员: [${enabledOperatorIds.join(', ')}]`);
+        
+        // 立即发送过滤后的操作员列表给该客户端
+        const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
+        const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
+        connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
+      }
+    } catch (error) {
+      console.error('❌ 设置客户端启用操作员失败:', error);
+      this.sendToConnection(connectionId, 'error', {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'SET_CLIENT_ENABLED_OPERATORS_ERROR'
+      });
+    }
+  }
 
+  /**
+   * 处理客户端握手命令
+   */
+  private async handleClientHandshake(connectionId: string, data: any): Promise<void> {
+    try {
+      const { enabledOperatorIds } = data;
+      const connection = this.getConnection(connectionId);
+      if (!connection) {
+        throw new Error(`连接 ${connectionId} 不存在`);
+      }
+
+      // 处理客户端发送的操作员偏好设置
+      let finalEnabledOperatorIds: string[];
+      
+      if (enabledOperatorIds === null) {
+        // 新客户端：null表示没有本地偏好，默认启用所有操作员
+        const allOperators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
+        finalEnabledOperatorIds = allOperators.map(op => op.id);
+        console.log(`🆕 [WSServer] 新客户端 ${connectionId}，默认启用所有操作员: [${finalEnabledOperatorIds.join(', ')}]`);
+      } else {
+        // 已配置的客户端：直接使用发送的列表（可能为空数组表示全部禁用）
+        finalEnabledOperatorIds = enabledOperatorIds;
+        console.log(`🔧 [WSServer] 已配置客户端 ${connectionId}，启用操作员: [${enabledOperatorIds.join(', ')}]`);
+      }
+
+      // 完成握手（此时finalEnabledOperatorIds已经是实际的操作员ID列表）
+      connection.completeHandshake(finalEnabledOperatorIds);
+
+      // 阶段2: 发送过滤后的完整数据
+      console.log(`📤 [WSServer] 为连接 ${connectionId} 发送完整过滤数据...`);
+
+      // 1. 发送过滤后的操作员列表
+      try {
+        const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
+        const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
+        connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
+        console.log(`📤 [WSServer] 已发送过滤后的操作员列表: ${filteredOperators.length}/${operators.length} 个操作员`);
+      } catch (error) {
+        console.error('❌ 发送操作员列表失败:', error);
+      }
+
+      // 2. 发送最近的时隙包数据（如果有）
+      try {
+        const activeSlotPacks = this.digitalRadioEngine.getActiveSlotPacks();
+        if (activeSlotPacks.length > 0) {
+          // 发送最近的几个时隙包（最多10个）
+          const recentSlotPacks = activeSlotPacks.slice(-10);
+          for (const slotPack of recentSlotPacks) {
+            connection.send(WSMessageType.SLOT_PACK_UPDATED, slotPack);
+          }
+          console.log(`📤 [WSServer] 已发送 ${recentSlotPacks.length} 个最近的时隙包`);
+        }
+      } catch (error) {
+        console.error('❌ 发送时隙包数据失败:', error);
+      }
+
+      // 3. 发送握手完成消息
+      connection.send('serverHandshakeComplete', {
+        serverVersion: '1.0.0',
+        supportedFeatures: ['operatorFiltering', 'handshakeProtocol'],
+        finalEnabledOperatorIds: enabledOperatorIds === null ? finalEnabledOperatorIds : undefined // 新客户端需要保存最终的操作员列表
+      });
+
+      // 4. 如果引擎正在运行，发送额外的状态同步
+      const status = this.digitalRadioEngine.getStatus();
+      if (status.isRunning) {
+        connection.send(WSMessageType.SYSTEM_STATUS, status);
+        console.log(`📤 [WSServer] 发送运行状态同步给连接 ${connectionId}`);
+      }
+
+      console.log(`✅ [WSServer] 连接 ${connectionId} 握手流程完成`);
+
+    } catch (error) {
+      console.error('❌ 处理客户端握手失败:', error);
+      this.sendToConnection(connectionId, 'error', {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'CLIENT_HANDSHAKE_ERROR'
+      });
+    }
+  }
 
   /**
    * 清理所有连接
