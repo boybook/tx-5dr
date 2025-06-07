@@ -62,7 +62,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
                 onPress={onCreateOperator}
                 variant="bordered"
                 size="md"
-                className="w-full border-2 border-dashed border-default-300 hover:border-default-400 bg-transparent hover:bg-default-50 text-default-500 py-3"
+                className="w-full border-2 border-dashed border-default-300 hover:border-default-400 bg-transparent hover:bg-content1 text-default-500 py-3"
               >
                 <FontAwesomeIcon icon={faPlus} className="mr-2" />
                 创建第一个操作员

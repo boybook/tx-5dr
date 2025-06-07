@@ -293,9 +293,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     const progress = realtimeProgress / 100;
     
     if (!operatorStatus.cycleInfo || !radio.state.currentMode) {
-      // 默认状态
+      // 默认状态 - 使用CSS变量适配暗黑模式
       return {
-        background: `linear-gradient(to right, #99FF9133 0%, #99FF9133 ${progress * 100}%, #ffffff ${progress * 100}%, #ffffff 100%)`
+        background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
       };
     }
     
@@ -305,9 +305,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
     
     if (isActuallyTransmitting) {
-      // 实际发射时为红色渐变 - FF4C4C 10%透明度
+      // 实际发射时为红色渐变 - 使用danger色彩适配暗黑模式
       return {
-        background: `linear-gradient(to right, #FF4C4C1A 0%, #FF4C4C1A ${progress * 100}%, #ffffff ${progress * 100}%, #ffffff 100%)`
+        background: `linear-gradient(to right, hsl(var(--heroui-danger) / 0.1) 0%, hsl(var(--heroui-danger) / 0.1) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
       };
     } else {
       // 其他情况：根据当前周期类型显示对应颜色
@@ -315,40 +315,40 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       
       if (mode.cycleType === 'EVEN_ODD') {
         if (currentCycle % 2 === 0) {
-          // 偶数周期：99FF91 20%透明度
+          // 偶数周期：使用CSS变量适配暗黑模式
           return {
-            background: `linear-gradient(to right, #99FF9133 0%, #99FF9133 ${progress * 100}%, #ffffff ${progress * 100}%, #ffffff 100%)`
+            background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
           };
         } else {
-          // 奇数周期：FFCD94 20%透明度
+          // 奇数周期：使用CSS变量适配暗黑模式
           return {
-            background: `linear-gradient(to right, #FFCD9433 0%, #FFCD9433 ${progress * 100}%, #ffffff ${progress * 100}%, #ffffff 100%)`
+            background: `linear-gradient(to right, var(--ft8-cycle-odd-bg) 0%, var(--ft8-cycle-odd-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
           };
         }
       } else if (mode.cycleType === 'CONTINUOUS') {
         if (currentCycle % 2 === 0) {
-          // 偶数周期：99FF91 20%透明度
+          // 偶数周期：使用CSS变量适配暗黑模式
           return {
-            background: `linear-gradient(to right, #99FF9133 0%, #99FF9133 ${progress * 100}%, #ffffff ${progress * 100}%, #ffffff 100%)`
+            background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
           };
         } else {
-          // 奇数周期：FFCD94 20%透明度
+          // 奇数周期：使用CSS变量适配暗黑模式
           return {
-            background: `linear-gradient(to right, #FFCD9433 0%, #FFCD9433 ${progress * 100}%, #ffffff ${progress * 100}%, #ffffff 100%)`
+            background: `linear-gradient(to right, var(--ft8-cycle-odd-bg) 0%, var(--ft8-cycle-odd-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
           };
         }
       }
       
-      // 默认偶数周期颜色
+      // 默认偶数周期颜色 - 使用CSS变量适配暗黑模式
       return {
-        background: `linear-gradient(to right, #99FF9133 0%, #99FF9133 ${progress * 100}%, #ffffff ${progress * 100}%, #ffffff 100%)`
+        background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
       };
     }
   };
 
   return (
     <div 
-      className="border border-gray-200 rounded-lg overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
+      className="border border-divider rounded-lg overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
       style={{
         transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
         boxShadow: operators.length > 1 && currentOperatorId === operatorStatus.id ? '0 0 0 2px rgba(255, 166, 0, 0.5)' : 'none'
@@ -369,7 +369,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               // 完全依赖服务端推送的状态
               if (!operatorStatus.cycleInfo) {
                 return (
-                  <div className="text-black text-opacity-65 font-bold font-mono text-lg">
+                  <div className="text-foreground opacity-65 font-bold font-mono text-lg">
                     监听中...
                   </div>
                 );
@@ -379,11 +379,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
               
               return isActuallyTransmitting ? (
-                <div className="font-bold font-mono text-lg" style={{ color: '#FF4C4C' }}>
+                <div className="font-bold font-mono text-lg text-danger">
                   {getCurrentTransmissionContent() || '准备发射...'}
                 </div>
               ) : (
-                <div className="text-black text-opacity-65 font-bold font-mono text-lg">
+                <div className="text-foreground opacity-65 font-bold font-mono text-lg">
                   监听中...
                 </div>
               );
@@ -392,7 +392,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           
           {/* 右侧 - 发射开关 */}
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">发射</span>
+            <span className="text-sm text-default-600">发射</span>
             <Switch 
               isSelected={operatorStatus.isTransmitting} 
               onValueChange={(isSelected) => {
@@ -414,18 +414,18 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       </div>
       
       {/* 分割线 */}
-      <div className="border-t border-gray-200"></div>
+      <div className="border-t border-divider"></div>
       
       {/* 下半部分 */}
       <div className="p-4 flex flex-col gap-3">
         {/* 第一行 - 发射周期和发射槽位选择 */}
         <div className="flex gap-2 -my-1">
           <div className="flex items-center gap-0">
-            <span className="text-gray-500 text-sm">发射周期:</span>
+            <span className="text-default-500 text-sm">发射周期:</span>
             <Button
               size="sm"
               variant="light"
-              className="h-auto p-1 min-w-0 bg-transparent hover:bg-transparent px-2 rounded-md"
+                              className="h-auto p-1 min-w-0 bg-transparent hover:bg-content2 px-2 rounded-md"
               isDisabled={!connection.state.isConnected}
               aria-label="切换发射周期"
               onPress={() => {
@@ -490,8 +490,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                         className="w-2 h-2 rounded-full" 
                         style={{ backgroundColor: dotColor }}
                       ></div>
-                      <span className="text-sm font-mono text-black">{displayText}</span>
-                      <FontAwesomeIcon icon={faRepeat} className="ml-1 text-gray-400 text-xs" />
+                      <span className="text-sm font-mono text-foreground">{displayText}</span>
+                      <FontAwesomeIcon icon={faRepeat} className="ml-1 text-default-400 text-xs" />
                     </>
                   );
                 })()}
@@ -515,9 +515,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             variant="bordered"
             className="w-auto min-w-[200px]"
             classNames={{
-              trigger: "bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-gray-100",
-              value: "text-sm font-mono text-black p-0",
-              selectorIcon: "text-gray-400 text-xs",
+              trigger: "bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2",
+              value: "text-sm font-mono text-foreground p-0",
+              selectorIcon: "text-default-400 text-xs",
               popoverContent: "min-w-[260px]",
             }}
             isDisabled={!connection.state.isConnected}
@@ -549,8 +549,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           <Input
             startContent={
               <div className="flex items-center">
-                <span className="text-sm text-gray-500 whitespace-nowrap">目标</span>
-                <div className="w-px h-4 bg-gray-300 mx-2"></div>
+                <span className="text-sm text-default-500 whitespace-nowrap">目标</span>
+                <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
             }
             value={localContext.targetCall}
@@ -565,8 +565,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           <Input
             startContent={
               <div className="flex items-center">
-                <span className="text-sm text-gray-500 whitespace-nowrap">报告</span>
-                <div className="w-px h-4 bg-gray-300 mx-2"></div>
+                <span className="text-sm text-default-500 whitespace-nowrap">报告</span>
+                <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
             }
             type="number"
@@ -588,8 +588,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           <Input
             startContent={
               <div className="flex items-center">
-                <span className="text-sm text-gray-500 whitespace-nowrap">频率</span>
-                <div className="w-px h-4 bg-gray-300 mx-2"></div>
+                <span className="text-sm text-default-500 whitespace-nowrap">频率</span>
+                <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
             }
             type="number"
@@ -607,7 +607,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             size="sm"
             variant="light"
             onPress={() => setIsSlotContentExpanded(!isSlotContentExpanded)}
-            className="text-gray-400 text-sm min-w-0 px-3 transition-all duration-200 hover:bg-gray-100"
+            className="text-default-400 text-sm min-w-0 px-3 transition-all duration-200 hover:bg-content2"
             style={{
               transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
             }}
@@ -637,22 +637,22 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           }}
         >
           {operatorStatus.slots && (
-            <div className="space-y-2 py-1 bg-gray-50 overflow-hidden rounded-lg">
+            <div className="space-y-2 py-1 bg-content2 overflow-hidden rounded-lg">
               <div className="grid grid-cols-1 gap-0 text-xs">
                 {Object.entries(operatorStatus.slots).map(([slot, content]) => (
                   <div 
                     key={slot} 
                     className={`p-2 py-1 transition-colors duration-200 ${
                       operatorStatus.currentSlot === slot 
-                        ? 'bg-blue-50 border-blue-200' 
-                        : 'bg-gray-50 border-gray-200'
+                        ? 'bg-primary-50 border-primary-200' 
+                        : 'bg-content2 border-divider'
                     }`}
                     style={{
                       transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
                     }}
                   >
                     <div className="flex px-1 items-center gap-2">
-                      <span className="text-sm font-medium text-gray-600 min-w-[30px]">{slot}:</span>
+                      <span className="text-sm font-medium text-default-600 min-w-[30px]">{slot}:</span>
                       <Input
                         value={content || ''}
                         onChange={(e) => handleSlotContentChange(slot, e.target.value)}

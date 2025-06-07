@@ -16,6 +16,7 @@ import { RadioControl } from '../components/RadioControl';
 import { RadioOperatorList } from '../components/RadioOperatorList';
 import { SettingsModal } from '../components/SettingsModal';
 import { MyRelatedFT8Table } from '../components/MyRelatedFT8Table';
+import { ThemeToggle } from '../components/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faCog } from '@fortawesome/free-solid-svg-icons';
 import { AutomationSettingsPanel } from '../components/AutomationSettingsPanel';
@@ -71,7 +72,7 @@ export const RightLayout: React.FC = () => {
                 variant="light" 
                 size="sm"
                 title="自动化程序"
-                className={`${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-gray-100 select-manual-mode'} rounded-md px-3 h-6 text-xs font-mono text-default-600 leading-none`}
+                className={`${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-content2 select-manual-mode'} rounded-md px-3 h-6 text-xs font-mono text-default-600 leading-none`}
               >
                 <div className="flex items-center gap-1">
                   <div className="w-2 h-2 bg-success-500 rounded-full flex-shrink-0"></div>
@@ -91,7 +92,7 @@ export const RightLayout: React.FC = () => {
             variant="light" 
             size="sm"
             title="电台呼号"
-            className="bg-gray-100 rounded-md px-3 h-6 text-xs font-mono text-default-400 leading-none"
+            className="bg-content2 rounded-md px-3 h-6 text-xs font-mono text-default-500 leading-none"
             onPress={() => {
               setSettingsInitialTab('operator');
               setIsSettingsOpen(true);
@@ -101,6 +102,7 @@ export const RightLayout: React.FC = () => {
               currentOperatorId ? operators.find(op => op.id === currentOperatorId)?.context.myCall || 'N0CALL' : 'N0CALL'
             }
           </Button>
+          <ThemeToggle variant="dropdown" size="sm" />
           <Button
             onPress={handleOpenSettings}
             isIconOnly

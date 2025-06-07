@@ -5,14 +5,28 @@
 :root {
   --bg-gray: #f5f5f5;
   --bg-white: #ffffff;
-  /* FT8 周期颜色配置 */
-  --ft8-cycle-odd: #FFB96A;    /* 15/45秒周期装饰条 (原来的颜色) */
-  --ft8-cycle-even: #6CCE64;   /* 00/30秒周期装饰条 (原来的颜色) */
+  /* FT8 周期颜色配置 - 亮色模式 */
+  --ft8-cycle-odd: #FFB96A;    /* 15/45秒周期装饰条 */
+  --ft8-cycle-even: #6CCE64;   /* 00/30秒周期装饰条 */
   --ft8-tx: #f59e0b;           /* TX传输 */
   
-  /* FT8 周期背景颜色 (20% 透明度) */
+  /* FT8 周期背景颜色 - 亮色模式 */
   --ft8-cycle-odd-bg: rgba(255, 205, 148, 0.2);    /* 15/45秒周期背景 */
   --ft8-cycle-even-bg: rgba(153, 255, 145, 0.2);   /* 00/30秒周期背景 */
+}
+
+/* 暗黑模式 */
+.dark {
+  --bg-gray: #1a1a1a;
+  --bg-white: #27272a;
+  /* FT8 周期颜色配置 - 暗色模式 */
+  --ft8-cycle-odd: #D97706;    /* 15/45秒周期装饰条（更深的橙色） */
+  --ft8-cycle-even: #059669;   /* 00/30秒周期装饰条（更深的绿色） */
+  --ft8-tx: #f59e0b;           /* TX传输 */
+  
+  /* FT8 周期背景颜色 - 暗色模式 */
+  --ft8-cycle-odd-bg: rgba(217, 119, 6, 0.25);     /* 15/45秒周期背景 */
+  --ft8-cycle-even-bg: rgba(5, 150, 105, 0.25);    /* 00/30秒周期背景 */
 }
 
 html, body {
@@ -25,11 +39,28 @@ html, body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 确保根元素有正确的样式基础 */
+  color-scheme: light dark;
+}
+
+/* 为根元素应用默认HeroUI背景 */
+html {
+  background-color: hsl(var(--heroui-background));
+  color: hsl(var(--heroui-foreground));
+}
+
+/* 为body元素应用HeroUI样式 */
+body.text-foreground.bg-background {
+  background-color: hsl(var(--heroui-background)) !important;
+  color: hsl(var(--heroui-foreground)) !important;
 }
 
 #root {
   height: 100%;
   width: 100%;
+  /* 继承背景色 */
+  background-color: inherit;
+  color: inherit;
 }
 
 code {
@@ -42,11 +73,18 @@ code {
   background-color: var(--hover-bg) !important;
 }
 
-/* Select组件自定义hover样式 */
+/* Select组件自定义hover样式 - 使用HeroUI主题变量 */
 .select-auto-mode:hover {
-  background-color: rgb(220 252 231) !important; /* success-200 */
+  background-color: hsl(var(--heroui-success-200)) !important;
 }
 
 .select-manual-mode:hover {
-  background-color: rgb(229 231 235) !important; /* gray-200 */
+  background-color: hsl(var(--heroui-content3)) !important;
+}
+
+/* 应用根容器的背景色适配 */
+.App {
+  background-color: inherit;
+  color: inherit;
+  transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
 } 

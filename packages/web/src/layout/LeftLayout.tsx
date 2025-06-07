@@ -115,8 +115,8 @@ export const LeftLayout: React.FC = () => {
             <FontAwesomeIcon icon={faTrashCan} className="text-default-400" />
           </Button>
           {/* UTC时间显示 */}
-          <div className="bg-white rounded-md px-3 py-1">
-            <div className="text-xs font-mono text-default-400">
+          <div className="bg-content2 rounded-md px-3 py-1">
+            <div className="text-xs font-mono text-default-500">
               UTC {formatUTCTime(currentTime)}
             </div>
           </div>
@@ -145,7 +145,7 @@ export const LeftLayout: React.FC = () => {
         </div>
 
         {/* 频谱显示 */}
-        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+        <div className="bg-content2 rounded-lg shadow-sm overflow-hidden">
           <SpectrumDisplay height={128} />
         </div>
       </div>

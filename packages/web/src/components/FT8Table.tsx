@@ -6,6 +6,7 @@ import {
 import { useDisplayNotificationSettings } from '../hooks/useDisplayNotificationSettings';
 import { HighlightType, HIGHLIGHT_TYPE_LABELS } from '../utils/displayNotificationSettings';
 import { getBadgeColors, getRowHoverColor, hexToRgba } from '../utils/colorUtils';
+import { useTheme } from '../hooks/useTheme';
 
 export interface FT8Message {
   utc: string;
@@ -138,9 +139,12 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
       }
     }
 
-    // 默认hover颜色
+    // 使用CSS变量的默认hover颜色，支持暗黑模式
+    const evenHoverColor = 'var(--ft8-cycle-even-bg)';
+    const oddHoverColor = 'var(--ft8-cycle-odd-bg)';
+    
     return {
-      '--hover-bg': cycle === 'even' ? 'rgba(153, 255, 145, 0.35)' : 'rgba(255, 205, 148, 0.35)'
+      '--hover-bg': cycle === 'even' ? evenHoverColor : oddHoverColor
     } as React.CSSProperties;
   };
 

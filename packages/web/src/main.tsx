@@ -9,8 +9,14 @@ import './index.css';
 // 配置API基础URL
 configureApi(getApiBaseUrl());
 
+function ThemedApp() {
+  return (
+    <HeroUIProvider>
+      <App />
+    </HeroUIProvider>
+  );
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <HeroUIProvider>
-    <App />
-  </HeroUIProvider>
+  <ThemedApp />
 ); 

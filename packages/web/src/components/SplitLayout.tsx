@@ -80,7 +80,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
         style={{ width: `${leftWidth}%` }}
       >
         
-        <div className="h-full overflow-auto bg-gray-100">
+        <div className="h-full overflow-auto bg-content1">
             {leftContent}
         </div>
       </div>
@@ -112,7 +112,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
 
       {/* 右侧面板 */}
       <div className="flex-1 overflow-hidden">
-        <div className="h-full overflow-auto bg-white">
+        <div className="h-full overflow-auto bg-background">
             {rightContent}
         </div>
       </div>
