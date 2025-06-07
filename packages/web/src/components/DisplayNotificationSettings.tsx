@@ -163,8 +163,10 @@ export const DisplayNotificationSettings = forwardRef<
     const isEnabled = settings.enabled && config.enabled;
     
     return (
-      <Card key={type} className="mb-4">
-        <CardBody className="space-y-4">
+      <Card key={type} className="mb-4" shadow="none" radius="lg" classNames={{
+        base: "border border-divider bg-content1"
+      }}>
+        <CardBody className="space-y-4 p-4">
           {/* 标题和开关 */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -214,8 +216,10 @@ export const DisplayNotificationSettings = forwardRef<
       </div>
 
       {/* 全局开关 */}
-      <Card>
-        <CardBody>
+      <Card shadow="none" radius="lg" classNames={{
+        base: "border border-divider bg-content1"
+      }}>
+        <CardBody className="p-4">
           <div className="flex items-center justify-between">
             <div>
               <h4 className="font-semibold text-default-900">启用高亮显示</h4>
@@ -242,8 +246,10 @@ export const DisplayNotificationSettings = forwardRef<
 
       {/* 预览区域 */}
       {settings.enabled && (
-        <Card>
-          <CardBody>
+        <Card shadow="none" radius="lg" classNames={{
+          base: "border border-divider bg-content1"
+        }}>
+          <CardBody className="p-4">
             <h4 className="font-semibold text-default-900 mb-4">效果预览</h4>
             <div className="space-y-2">
               {Object.values(HighlightType).map(type => {

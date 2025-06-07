@@ -67,6 +67,7 @@ const COUNTRY_ZH_MAP: Record<string, string> = {
   'Cuba': '古巴',
   'Cyprus': '塞浦路斯',
   'Czech Republic': '捷克共和国',
+  'Corsica': '科西嘉岛',
   'Denmark': '丹麦',
   'Djibouti': '吉布提',
   'Dominica': '多米尼克',

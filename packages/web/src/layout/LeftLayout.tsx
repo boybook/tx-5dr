@@ -149,13 +149,13 @@ export const LeftLayout: React.FC = () => {
           {ft8Groups.length === 0 ? (
             <div className="text-center py-12 cursor-default select-none">
               <div className="text-default-400 mb-2 text-4xl">📡</div>
-              <p className="text-default-500 mb-1">暂无FT8解码消息</p>
+              <p className="text-default-500 mb-1">暂无解码消息</p>
               <p className="text-default-400 text-sm">
                 {!connection.state.isConnected 
                   ? '请先连接到TX5DR服务器' 
                   : !radio.state.isDecoding 
                     ? '请启动解码引擎' 
-                    : '等待FT8信号...'}
+                    : '等待信号...'}
               </p>
             </div>
           ) : (

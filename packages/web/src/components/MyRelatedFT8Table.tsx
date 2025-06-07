@@ -219,7 +219,7 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
         <div className="text-center py-12 cursor-default select-none">
           <div className="text-default-400 mb-2 text-4xl">📞</div>
           <p className="text-default-500 mb-1">暂无相关通联记录</p>
-          <p className="text-default-400 text-sm">与我有关的FT8消息将在这里显示</p>
+          <p className="text-default-400 text-sm">与我有关的消息将在这里显示</p>
         </div>
       ) : (
         <FT8Table groups={myFt8Groups} className="h-full" />

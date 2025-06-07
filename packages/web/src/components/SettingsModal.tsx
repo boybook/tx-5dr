@@ -323,7 +323,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   variant="flat"
                   onPress={handleSave}
                   isDisabled={!hasUnsavedChanges}
-                  className="bg-white border border-default-200 hover:bg-default-50"
+                  className="bg-content1 border border-divider hover:bg-content2"
                 >
                   <FontAwesomeIcon icon={faSave} className="mr-2" />
                   保存设置

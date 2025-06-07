@@ -537,7 +537,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             base: isEditing ? "" : "border border-default-200 bg-default-50/50"
           }}
         >
-          <CardHeader className="flex justify-between items-start">
+          <CardHeader className="flex justify-between items-start p-4 pb-2">
             <div className="flex items-center gap-3">
               <div>
                 <h4 className="text-lg font-semibold">{operator.myCallsign}</h4>
@@ -593,7 +593,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             </div>
           </CardHeader>
           
-          <CardBody className='pt-0'>
+          <CardBody className='pt-0 p-4 pt-0'>
             {isEditing ? renderEditMode(formData, operator.id) : renderDisplayMode(operator)}
           </CardBody>
         </Card>
@@ -696,19 +696,6 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               )}
             </CardBody>
           </Card>
-
-          {/* 应用按钮 */}
-          {preferencesHasChanges && (
-            <div className="flex justify-end">
-              <Button
-                color="primary"
-                onPress={handleApplyPreferences}
-                isDisabled={!connection.state.isConnected}
-              >
-                应用设置
-              </Button>
-            </div>
-          )}
 
           {/* 说明信息 */}
           <div className="p-4 bg-default-50 rounded-lg">
