@@ -47,12 +47,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
-    ANALYSIS_INTERVAL_MS: 150,    // 100ms间隔进行频谱分析
+    ANALYSIS_INTERVAL_MS: 150,    // 频谱分析间隔
     FFT_SIZE: 4096,              // FFT大小
     WINDOW_FUNCTION: 'hann' as const,
     WORKER_POOL_SIZE: 1,
     ENABLED: true,
-    TARGET_SAMPLE_RATE: 6400     // 目标采样率6.4kHz
+    TARGET_SAMPLE_RATE: 6000     // 目标采样率6kHz
   };
   
   private constructor() {

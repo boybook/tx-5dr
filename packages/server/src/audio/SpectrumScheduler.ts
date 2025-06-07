@@ -62,11 +62,11 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     
     this.config = {
       analysisInterval: config.analysisInterval ?? 100, // 100ms间隔
-      fftSize: config.fftSize ?? 2048, // 减小FFT大小，因为采样率降低了
+      fftSize: config.fftSize ?? 2048,
       windowFunction: config.windowFunction ?? 'hann',
       workerPoolSize: config.workerPoolSize ?? 2,
       enabled: config.enabled ?? true,
-      targetSampleRate: config.targetSampleRate ?? 4000 // 默认8kHz
+      targetSampleRate: config.targetSampleRate ?? 4000
     };
   }
 

@@ -21,8 +21,8 @@ declare global {
  */
 export function isElectron(): boolean {
   const result = typeof window !== 'undefined' && window.navigator.userAgent.includes('Electron');
-  console.log('🔍 [配置] 环境检测 - Electron环境:', result);
-  console.log('🔍 [配置] User Agent:', typeof window !== 'undefined' ? window.navigator.userAgent : 'N/A');
+  //console.log('🔍 [配置] 环境检测 - Electron环境:', result);
+  //console.log('🔍 [配置] User Agent:', typeof window !== 'undefined' ? window.navigator.userAgent : 'N/A');
   return result;
 }
 

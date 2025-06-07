@@ -3,10 +3,12 @@ import { Button } from '@heroui/react';
 import { FT8Table, FT8Group, FT8Message } from '../components/FT8Table';
 import { parseFT8LocationInfo } from '@tx5dr/core';
 import { useConnection, useRadioState, useSlotPacks } from '../store/radioStore';
-import type { SlotPack, FT8Frame } from '@tx5dr/contracts';
+import type { FT8Frame } from '@tx5dr/contracts';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
+import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/SpectrumDisplay';
+import { isElectron } from '../utils/config';
 
 export const LeftLayout: React.FC = () => {
   const connection = useConnection();
@@ -102,7 +104,24 @@ export const LeftLayout: React.FC = () => {
           WebkitAppRegion: 'drag',
         } as React.CSSProperties & { WebkitAppRegion: string }}
       >
-        <div></div> {/* 左侧空白 */}
+        {/* 左侧：非Electron环境下显示软件名称 */}
+        <div className="flex items-center">
+          {!isElectron() && (
+            <div className="text-lg font-bold text-foreground cursor-default select-none pl-2 flex items-center gap-1">
+              <span className="text-default-800">TX-5DR</span>
+              <Button
+                onPress={() => window.open('https://github.com/boybook/tx-5dr', '_blank')}
+                isIconOnly
+                variant="light"
+                size="sm"
+                title="Github"
+                aria-label="Github"
+              >
+                <FontAwesomeIcon icon={faGithub} className="text-default-400 text-sm" />
+              </Button>
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           <Button
             onPress={handleClearData}
