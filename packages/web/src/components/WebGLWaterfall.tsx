@@ -17,7 +17,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   height = 200,
   minDb = -35,
   maxDb = 10,
-  autoRange = true
+  autoRange = true,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -28,21 +28,47 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const [webglSupported, setWebglSupported] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [actualRange, setActualRange] = React.useState<{min: number, max: number} | null>(null);
+  
+  // 性能优化：缓存相关引用
+  const positionBufferRef = useRef<WebGLBuffer | null>(null);
+  const texCoordBufferRef = useRef<WebGLBuffer | null>(null);
+  const colorMapTextureRef = useRef<WebGLTexture | null>(null);
+  const lastDataLengthRef = useRef<number>(0);
+  const rangeUpdateCounterRef = useRef<number>(0);
+  const cachedRangeRef = useRef<{min: number, max: number} | null>(null);
+  const textureDataRef = useRef<Uint8Array | null>(null);
 
-  // 计算数据的实际范围
+  // 优化后的数据范围计算 - 使用采样和缓存
   const calculateDataRange = useCallback((spectrumData: number[][]) => {
+    const calculateInternal = () => {
     if (spectrumData.length === 0) return { min: minDb, max: maxDb };
+    
+    // 每10帧更新一次范围，减少计算频率
+    rangeUpdateCounterRef.current++;
+    if (rangeUpdateCounterRef.current % 10 !== 0 && cachedRangeRef.current) {
+      return cachedRangeRef.current;
+    }
     
     let min = Infinity;
     let max = -Infinity;
     const values: number[] = [];
     
-    for (const row of spectrumData) {
-      for (const value of row) {
+    // 采样策略：对于大数据集，只采样部分数据
+    const sampleRate = spectrumData.length > 50 ? 2 : 1;
+    const maxSamples = 5000; // 最多采样5000个点
+    let sampleCount = 0;
+    
+    for (let i = 0; i < spectrumData.length && sampleCount < maxSamples; i += sampleRate) {
+      const row = spectrumData[i];
+      const rowSampleRate = row.length > 100 ? Math.ceil(row.length / 100) : 1;
+      
+      for (let j = 0; j < row.length; j += rowSampleRate) {
+        const value = row[j];
         if (isFinite(value)) {
           min = Math.min(min, value);
           max = Math.max(max, value);
           values.push(value);
+          sampleCount++;
         }
       }
     }
@@ -52,32 +78,31 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return { min: minDb, max: maxDb };
     }
     
-    // 计算百分位数和统计信息
+    // 快速百分位数计算（使用部分排序）
     values.sort((a, b) => a - b);
-    const p1 = values[Math.floor(values.length * 0.01)];
-    const p10 = values[Math.floor(values.length * 0.10)];
     const p15 = values[Math.floor(values.length * 0.15)];
     const p25 = values[Math.floor(values.length * 0.25)];
     const median = values[Math.floor(values.length * 0.5)];
     const p75 = values[Math.floor(values.length * 0.75)];
-    const p90 = values[Math.floor(values.length * 0.90)];
     const p99 = values[Math.floor(values.length * 0.99)];
     
-    // 使用优化的动态范围策略，提升底噪抑制
-    const medianRange = p75 - p25; // 四分位距
-    
-    // 大幅提高最小值以获得更纯净的底色
-    const dynamicMin = Math.max(p15, median - medianRange); // 使用P25，进一步减少范围倍数
-    
-    // 大幅提高最大值，给强信号留出充足余量
-    const dynamicMax = Math.max(p99, median + medianRange * 4.0); // 确保至少达到P99，增加到4倍范围
+    // 使用优化的动态范围策略
+    const medianRange = p75 - p25;
+    const dynamicMin = Math.max(p15, median - medianRange);
+    const dynamicMax = Math.max(p99, median + medianRange * 4.0);
     
     const result = {
       min: dynamicMin,
       max: dynamicMax
     };
     
+    // 缓存结果
+    cachedRangeRef.current = result;
+    
     return result;
+    };
+
+    return calculateInternal();
   }, [minDb, maxDb]);
 
   // 瀑布图颜色映射 - 经典配色方案
@@ -233,7 +258,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (!canvas) return false;
 
     try {
-      const gl = canvas.getContext('webgl') as WebGLRenderingContext || canvas.getContext('experimental-webgl') as WebGLRenderingContext;
+      const gl = canvas.getContext('webgl', {
+        antialias: false,
+        depth: false,
+        stencil: false,
+        alpha: false,
+        preserveDrawingBuffer: false,
+        powerPreference: 'high-performance'
+      }) as WebGLRenderingContext || canvas.getContext('experimental-webgl') as WebGLRenderingContext;
+      
       if (!gl) {
         setWebglSupported(false);
         setError('WebGL不被支持');
@@ -249,8 +282,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       programRef.current = program;
       gl.useProgram(program);
 
-      // 创建颜色映射纹理
+      // 创建并缓存颜色映射纹理
       const colorMapTexture = gl.createTexture();
+      colorMapTextureRef.current = colorMapTexture;
       gl.bindTexture(gl.TEXTURE_2D, colorMapTexture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, colorMap);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -277,8 +311,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         1, 1,
       ]);
 
-      // 创建位置缓冲区
+      // 创建并缓存位置缓冲区
       const positionBuffer = gl.createBuffer();
+      positionBufferRef.current = positionBuffer;
       gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
 
@@ -286,8 +321,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.enableVertexAttribArray(positionLocation);
       gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
-      // 创建纹理坐标缓冲区
+      // 创建并缓存纹理坐标缓冲区
       const texCoordBuffer = gl.createBuffer();
+      texCoordBufferRef.current = texCoordBuffer;
       gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
 
@@ -306,7 +342,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.uniform1f(maxDbLocation, maxDb);
 
       const useFloatTextureLocation = gl.getUniformLocation(program, 'u_useFloatTexture');
-      // 强制使用UNSIGNED_BYTE纹理格式（这解决了兼容性问题）
       gl.uniform1i(useFloatTextureLocation, 0);
 
       // 设置纹理单元
@@ -328,8 +363,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
   }, [createProgram, colorMap, minDb, maxDb]);
 
-  // 更新纹理数据
+  // 优化后的纹理更新
   const updateTexture = useCallback((spectrumData: number[][]) => {
+    const updateInternal = () => {
     const gl = glRef.current;
     const texture = textureRef.current;
     const program = programRef.current;
@@ -338,6 +374,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     const width = spectrumData[0].length;
     const height = spectrumData.length;
+    const dataSize = width * height;
+
+    // 重用或创建纹理数据数组
+    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
+      textureDataRef.current = new Uint8Array(dataSize);
+    }
+    const textureData = textureDataRef.current;
 
     // 计算实际数据范围
     let currentMin = minDb;
@@ -347,35 +390,51 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       const range = calculateDataRange(spectrumData);
       currentMin = range.min;
       currentMax = range.max;
-      setActualRange(range);
       
-      // 更新着色器的uniform变量
-      gl.useProgram(program);
-      const minDbLocation = gl.getUniformLocation(program, 'u_minDb');
-      const maxDbLocation = gl.getUniformLocation(program, 'u_maxDb');
-      gl.uniform1f(minDbLocation, currentMin);
-      gl.uniform1f(maxDbLocation, currentMax);
+      // 只在范围变化显著时更新
+      if (!actualRange || 
+          Math.abs(actualRange.min - currentMin) > 0.5 || 
+          Math.abs(actualRange.max - currentMax) > 0.5) {
+        setActualRange(range);
+        
+        // 更新着色器的uniform变量
+        gl.useProgram(program);
+        const minDbLocation = gl.getUniformLocation(program, 'u_minDb');
+        const maxDbLocation = gl.getUniformLocation(program, 'u_maxDb');
+        gl.uniform1f(minDbLocation, currentMin);
+        gl.uniform1f(maxDbLocation, currentMax);
+      }
     }
 
-    // 使用UNSIGNED_BYTE格式（这解决了Float纹理兼容性问题）
-    const textureData = new Uint8Array(width * height);
+    // 优化的数据转换循环
+    const range = currentMax - currentMin;
+    const scale = range > 0 ? 255 / range : 1;
     
+    let index = 0;
     for (let y = 0; y < height; y++) {
+      const row = spectrumData[y];
       for (let x = 0; x < width; x++) {
-        // 将dB值映射到0-255范围
-        const normalizedValue = Math.max(0, Math.min(1, (spectrumData[y][x] - currentMin) / (currentMax - currentMin)));
-        textureData[y * width + x] = Math.floor(normalizedValue * 255);
+        const normalizedValue = (row[x] - currentMin) * scale;
+        textureData[index++] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
       }
     }
     
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  }, [minDb, maxDb, autoRange, calculateDataRange]);
+    
+    // 只在纹理大小改变时设置参数
+    if (lastDataLengthRef.current !== dataSize) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      lastDataLengthRef.current = dataSize;
+    }
+    };
+
+    updateInternal();
+  }, [minDb, maxDb, autoRange, calculateDataRange, actualRange]);
 
   // 渲染
   const render = useCallback(() => {
@@ -403,6 +462,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const canvasWidth = containerRect.width;
     const canvasHeight = height;
     
+    // 只在尺寸真正改变时更新
+    if (canvas.width === canvasWidth * pixelRatio && 
+        canvas.height === canvasHeight * pixelRatio) {
+      return;
+    }
+    
     canvas.width = canvasWidth * pixelRatio;
     canvas.height = canvasHeight * pixelRatio;
     
@@ -422,7 +487,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
       gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
       
-      // 更新顶点数据
+      // 重用已有的缓冲区，只更新数据
       const positions = new Float32Array([
         0, 0,
         canvas.width, 0,
@@ -430,29 +495,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         canvas.width, canvas.height,
       ]);
 
-      const positionBuffer = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+      if (positionBufferRef.current) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBufferRef.current);
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
 
-      const positionLocation = gl.getAttribLocation(program, 'a_position');
-      gl.enableVertexAttribArray(positionLocation);
-      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
-      
-      // 重新绑定纹理坐标（确保完整性）
-      const texCoords = new Float32Array([
-        0, 0,
-        1, 0,
-        0, 1,
-        1, 1,
-      ]);
-      
-      const texCoordBuffer = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
-
-      const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
-      gl.enableVertexAttribArray(texCoordLocation);
-      gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+        const positionLocation = gl.getAttribLocation(program, 'a_position');
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+      }
       
       // 立即重新渲染
       render();
@@ -492,16 +541,23 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   // 数据更新时重新渲染
   useEffect(() => {
     if (data.length > 0) {
-      // 使用requestAnimationFrame优化渲染性能
+      // 取消之前的动画帧
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
       
+      // 使用requestAnimationFrame批量处理更新
       animationRef.current = requestAnimationFrame(() => {
         updateTexture(data);
         render();
       });
     }
+    
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
   }, [data, updateTexture, render]);
 
   // height属性变化时重新调整尺寸

@@ -5,7 +5,7 @@ import { WebGLWaterfall } from './WebGLWaterfall';
 
 // 瀑布图配置
 const WATERFALL_HISTORY = 120; // 保存120个历史数据点
-const WATERFALL_UPDATE_INTERVAL = 100; // 100ms更新一次
+const WATERFALL_UPDATE_INTERVAL = 100;
 
 interface SpectrumDisplayProps {
   className?: string;
@@ -30,6 +30,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   });
   const connection = useConnection();
   const lastUpdateRef = useRef<number>(0);
+  const pendingDataRef = useRef<FT8Spectrum | null>(null);
+  const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // 解码二进制频谱数据
   const decodeSpectrumData = useCallback((spectrum: FT8Spectrum) => {
@@ -65,14 +67,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return frequencies;
   }, []);
 
-  // 更新瀑布图数据
-  const updateWaterfallData = useCallback((newSpectrum: FT8Spectrum) => {
-    const now = Date.now();
-    if (now - lastUpdateRef.current < WATERFALL_UPDATE_INTERVAL) {
-      return;
-    }
-    lastUpdateRef.current = now;
-
+  // 批量更新瀑布图数据
+  const performUpdate = useCallback(() => {
+    const newSpectrum = pendingDataRef.current;
+    if (!newSpectrum) return;
+    
+    pendingDataRef.current = null;
+    
     const dbValues = decodeSpectrumData(newSpectrum);
     const timeLabel = new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
 
@@ -96,6 +97,29 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setSpectrum(newSpectrum);
   }, [decodeSpectrumData, generateFrequencyAxis]);
 
+  // 更新瀑布图数据（带节流）
+  const updateWaterfallData = useCallback((newSpectrum: FT8Spectrum) => {
+    const now = Date.now();
+    pendingDataRef.current = newSpectrum;
+    
+    // 如果距离上次更新时间足够长，立即更新
+    if (now - lastUpdateRef.current >= WATERFALL_UPDATE_INTERVAL) {
+      lastUpdateRef.current = now;
+      performUpdate();
+    } else {
+      // 否则，设置定时器在下一个更新间隔执行
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+      }
+      
+      const delay = WATERFALL_UPDATE_INTERVAL - (now - lastUpdateRef.current);
+      updateTimerRef.current = setTimeout(() => {
+        lastUpdateRef.current = Date.now();
+        performUpdate();
+      }, delay);
+    }
+  }, [performUpdate]);
+
   // 订阅频谱数据更新
   useEffect(() => {
     const radioService = connection.state.radioService;
@@ -109,6 +133,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     return () => {
       radioService.off('spectrumData');
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+      }
     };
   }, [connection.state.radioService, updateWaterfallData]);
 
