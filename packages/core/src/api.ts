@@ -3,15 +3,23 @@ import type {
   AudioDevicesResponse,
   AudioDeviceSettings,
   AudioDeviceSettingsResponse,
-  FT8ConfigUpdate,
-  ServerConfigUpdate,
   ModeDescriptor,
   RadioOperatorConfig,
   CreateRadioOperatorRequest,
   UpdateRadioOperatorRequest,
   RadioOperatorListResponse,
   RadioOperatorDetailResponse,
-  RadioOperatorActionResponse
+  RadioOperatorActionResponse,
+  RadioOperatorStatusResponse,
+  LogBookListResponse,
+  LogBookDetailResponse,
+  LogBookActionResponse,
+  CreateLogBookRequest,
+  UpdateLogBookRequest,
+  ConnectOperatorToLogBookRequest,
+  LogBookQSOQueryOptions,
+  LogBookExportOptions,
+  QSORecord
 } from '@tx5dr/contracts';
 
 // ========== API 配置 ==========
@@ -144,132 +152,6 @@ export const api = {
     }
     
     return (await res.json()) as AudioDeviceSettingsResponse;
-  },
-
-  // ========== 配置管理API ==========
-
-  /**
-   * 获取完整配置
-   */
-  async getConfig(apiBase?: string): Promise<{ success: boolean; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config`);
-    if (!res.ok) {
-      throw new Error(`获取配置失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
-  },
-
-  /**
-   * 获取FT8配置
-   */
-  async getFT8Config(apiBase?: string): Promise<{ success: boolean; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/ft8`);
-    if (!res.ok) {
-      throw new Error(`获取FT8配置失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
-  },
-
-  /**
-   * 更新FT8配置
-   */
-  async updateFT8Config(
-    config: FT8ConfigUpdate, 
-    apiBase?: string
-  ): Promise<{ success: boolean; message: string; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/ft8`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(config),
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `更新FT8配置失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
-  },
-
-  /**
-   * 获取服务器配置
-   */
-  async getServerConfig(apiBase?: string): Promise<{ success: boolean; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/server`);
-    if (!res.ok) {
-      throw new Error(`获取服务器配置失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
-  },
-
-  /**
-   * 更新服务器配置
-   */
-  async updateServerConfig(
-    config: ServerConfigUpdate, 
-    apiBase?: string
-  ): Promise<{ success: boolean; message: string; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/server`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(config),
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `更新服务器配置失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
-  },
-
-  /**
-   * 验证配置
-   */
-  async validateConfig(apiBase?: string): Promise<{ success: boolean; data: { isValid: boolean; errors: string[] } }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/validate`);
-    if (!res.ok) {
-      throw new Error(`验证配置失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
-  },
-
-  /**
-   * 重置配置
-   */
-  async resetConfig(apiBase?: string): Promise<{ success: boolean; message: string; data: any }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/reset`, {
-      method: 'POST',
-    });
-    
-    if (!res.ok) {
-      throw new Error(`重置配置失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
-  },
-
-  /**
-   * 获取配置文件路径
-   */
-  async getConfigPath(apiBase?: string): Promise<{ success: boolean; data: { path: string } }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/config/path`);
-    if (!res.ok) {
-      throw new Error(`获取配置文件路径失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
   },
 
   // ========== 模式管理API ==========
@@ -451,12 +333,217 @@ export const api = {
   /**
    * 获取操作员运行状态
    */
-  async getOperatorStatus(id: string, apiBase?: string): Promise<{ success: boolean; data: any }> {
+  async getOperatorStatus(id: string, apiBase?: string): Promise<RadioOperatorStatusResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
     const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}/status`);
     if (!res.ok) {
       throw new Error(`获取操作员状态失败: ${res.status} ${res.statusText}`);
     }
+    return await res.json();
+  },
+
+  // ========== 日志本管理API ==========
+
+  /**
+   * 获取所有日志本列表
+   */
+  async getLogBooks(apiBase?: string): Promise<LogBookListResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks`);
+    if (!res.ok) {
+      throw new Error(`获取日志本列表失败: ${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+  },
+
+  /**
+   * 获取特定日志本详情
+   */
+  async getLogBook(id: string, apiBase?: string): Promise<LogBookDetailResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${id}`);
+    if (!res.ok) {
+      throw new Error(`获取日志本详情失败: ${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+  },
+
+  /**
+   * 创建新日志本
+   */
+  async createLogBook(
+    logBookData: CreateLogBookRequest, 
+    apiBase?: string
+  ): Promise<LogBookActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(logBookData),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `创建日志本失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 更新日志本信息
+   */
+  async updateLogBook(
+    id: string,
+    updates: UpdateLogBookRequest, 
+    apiBase?: string
+  ): Promise<LogBookActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `更新日志本失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 删除日志本
+   */
+  async deleteLogBook(id: string, apiBase?: string): Promise<LogBookActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${id}`, {
+      method: 'DELETE',
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `删除日志本失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 连接操作员到日志本
+   */
+  async connectOperatorToLogBook(
+    logBookId: string,
+    operatorId: string, 
+    apiBase?: string
+  ): Promise<LogBookActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${logBookId}/connect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ operatorId }),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `连接操作员到日志本失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 断开操作员与日志本的连接
+   */
+  async disconnectOperatorFromLogBook(operatorId: string, apiBase?: string): Promise<LogBookActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/disconnect/${operatorId}`, {
+      method: 'POST',
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `断开操作员连接失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 查询日志本中的QSO记录
+   */
+  async getLogBookQSOs(id: string, options?: LogBookQSOQueryOptions, apiBase?: string): Promise<{ success: boolean; data: QSORecord[] }> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const params = new URLSearchParams();
+    
+    if (options) {
+      Object.entries(options).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          params.append(key, String(value));
+        }
+      });
+    }
+    
+    const url = `${baseUrl}/logbooks/${id}/qsos${params.toString() ? '?' + params.toString() : ''}`;
+    const res = await fetch(url);
+    
+    if (!res.ok) {
+      throw new Error(`查询QSO记录失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 导出日志本数据
+   */
+  async exportLogBook(id: string, options?: LogBookExportOptions, apiBase?: string): Promise<string> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const params = new URLSearchParams();
+    
+    if (options) {
+      Object.entries(options).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          params.append(key, String(value));
+        }
+      });
+    }
+    
+    const url = `${baseUrl}/logbooks/${id}/export${params.toString() ? '?' + params.toString() : ''}`;
+    const res = await fetch(url);
+    
+    if (!res.ok) {
+      throw new Error(`导出日志本失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.text();
+  },
+
+  /**
+   * 导入数据到日志本
+   */
+  async importToLogBook(id: string, adifContent: string, operatorId?: string, apiBase?: string): Promise<LogBookActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${id}/import`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ adifContent, operatorId }),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `导入数据失败: ${res.status} ${res.statusText}`);
+    }
+    
     return await res.json();
   },
 }
@@ -468,14 +555,6 @@ export const {
   getAudioSettings,
   updateAudioSettings,
   resetAudioSettings,
-  getConfig,
-  getFT8Config,
-  updateFT8Config,
-  getServerConfig,
-  updateServerConfig,
-  validateConfig,
-  resetConfig,
-  getConfigPath,
   getAvailableModes,
   getCurrentMode,
   switchMode,
@@ -487,5 +566,16 @@ export const {
   deleteOperator,
   startOperator,
   stopOperator,
-  getOperatorStatus
+  getOperatorStatus,
+  // 日志本管理函数
+  getLogBooks,
+  getLogBook,
+  createLogBook,
+  updateLogBook,
+  deleteLogBook,
+  connectOperatorToLogBook,
+  disconnectOperatorFromLogBook,
+  getLogBookQSOs,
+  exportLogBook,
+  importToLogBook
 } = api; 

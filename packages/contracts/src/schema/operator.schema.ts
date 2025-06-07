@@ -16,6 +16,7 @@ export const RadioOperatorConfigSchema = z.object({
   replyToWorkedStations: z.boolean().default(false), // 是否回复已通联过的电台
   prioritizeNewCalls: z.boolean().default(true), // 是否优先选择新呼号
   mode: ModeDescriptorSchema.optional(),
+  logBookId: z.string().optional(), // 连接的日志本ID，如果未指定则使用默认日志本
 });
 
 // 创建操作员请求
@@ -47,10 +48,55 @@ export const RadioOperatorActionResponseSchema = z.object({
   data: RadioOperatorConfigSchema.optional(),
 });
 
+// 操作员状态响应（从websocket.schema.ts导入）
+export const RadioOperatorStatusResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    id: z.string(),
+    isActive: z.boolean(),
+    isTransmitting: z.boolean(),
+    currentSlot: z.string().optional(),
+    context: z.object({
+      myCall: z.string(),
+      myGrid: z.string(),
+      targetCall: z.string(),
+      targetGrid: z.string().optional(),
+      frequency: z.number().optional(),
+      reportSent: z.number().optional(),
+      reportReceived: z.number().optional(),
+      autoReplyToCQ: z.boolean().optional(),
+      autoResumeCQAfterFail: z.boolean().optional(),
+      autoResumeCQAfterSuccess: z.boolean().optional(),
+      replyToWorkedStations: z.boolean().optional(),
+      prioritizeNewCalls: z.boolean().optional(),
+    }),
+    strategy: z.object({
+      name: z.string(),
+      state: z.string(),
+      availableSlots: z.array(z.string()),
+    }),
+    cycleInfo: z.object({
+      currentCycle: z.number(),
+      isTransmitCycle: z.boolean(),
+      cycleProgress: z.number().min(0).max(1),
+    }).optional(),
+    slots: z.object({
+      TX1: z.string().optional(),
+      TX2: z.string().optional(),
+      TX3: z.string().optional(),
+      TX4: z.string().optional(),
+      TX5: z.string().optional(),
+      TX6: z.string().optional(),
+    }).optional(),
+    transmitCycles: z.array(z.number()).optional(),
+  }),
+});
+
 // TypeScript 类型导出
 export type RadioOperatorConfig = z.infer<typeof RadioOperatorConfigSchema>;
 export type CreateRadioOperatorRequest = z.infer<typeof CreateRadioOperatorRequestSchema>;
 export type UpdateRadioOperatorRequest = z.infer<typeof UpdateRadioOperatorRequestSchema>;
 export type RadioOperatorListResponse = z.infer<typeof RadioOperatorListResponseSchema>;
 export type RadioOperatorDetailResponse = z.infer<typeof RadioOperatorDetailResponseSchema>;
-export type RadioOperatorActionResponse = z.infer<typeof RadioOperatorActionResponseSchema>; 
+export type RadioOperatorActionResponse = z.infer<typeof RadioOperatorActionResponseSchema>;
+export type RadioOperatorStatusResponse = z.infer<typeof RadioOperatorStatusResponseSchema>; 

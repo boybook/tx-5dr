@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { AudioDeviceSettings, RadioOperatorConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
+import { getConfigFilePath } from '../utils/app-paths.js';
 
 // 应用配置接口
 export interface AppConfig {
@@ -62,7 +63,7 @@ export class ConfigManager {
 
   private constructor() {
     this.config = { ...DEFAULT_CONFIG };
-    this.configPath = join(process.cwd(), 'config.json');
+    this.configPath = ''; // 将在initialize中设置
   }
 
   static getInstance(): ConfigManager {
@@ -77,11 +78,16 @@ export class ConfigManager {
    */
   async initialize(): Promise<void> {
     try {
+      // 设置配置文件路径
+      this.configPath = await getConfigFilePath('config.json');
+      console.log(`📁 [配置管理器] 配置文件路径: ${this.configPath}`);
+      
       await this.loadConfig();
-      console.log('配置文件加载成功');
+      console.log('✅ [配置管理器] 配置文件加载成功');
     } catch (error) {
-      console.log('配置文件不存在或格式错误，使用默认配置');
+      console.log('⚠️ [配置管理器] 配置文件不存在或格式错误，使用默认配置');
       await this.saveConfig();
+      console.log('✅ [配置管理器] 默认配置文件已创建');
     }
   }
 

@@ -13,6 +13,7 @@ import { ConfigManager } from './config/config-manager.js';
 import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
 import { AudioMixer, type MixedAudio } from './audio/AudioMixer.js';
 import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
+import { printAppPaths } from './utils/debug-paths.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -262,6 +263,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   async initialize(): Promise<void> {
     console.log('🕐 [时钟管理器] 正在初始化...');
+    
+    // 显示应用程序路径信息
+    await printAppPaths();
     
     // 创建 SlotClock
     this.slotClock = new SlotClock(this.clockSource, this.currentMode);

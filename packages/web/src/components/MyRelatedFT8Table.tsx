@@ -11,9 +11,6 @@ interface MyRelatedFT8TableProps {
   className?: string;
 }
 
-// 发射日志的本地存储键
-const TRANSMISSION_LOGS_STORAGE_KEY = 'tx5dr_transmission_logs';
-
 // 发射日志类型
 interface TransmissionLog {
   time: string;
@@ -29,24 +26,6 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
   const connection = useConnection();
   const [myFt8Groups, setMyFt8Groups] = useState<FT8Group[]>([]);
   const [transmissionLogs, setTransmissionLogs] = useState<TransmissionLog[]>([]);
-
-  // 从本地存储加载发射日志
-  useEffect(() => {
-    const storedLogs = localStorage.getItem(TRANSMISSION_LOGS_STORAGE_KEY);
-    if (storedLogs) {
-      try {
-        const logs = JSON.parse(storedLogs);
-        setTransmissionLogs(logs);
-      } catch (error) {
-        console.error('加载发射日志失败:', error);
-      }
-    }
-  }, []);
-
-  // 保存发射日志到本地存储
-  useEffect(() => {
-    localStorage.setItem(TRANSMISSION_LOGS_STORAGE_KEY, JSON.stringify(transmissionLogs));
-  }, [transmissionLogs]);
 
   // 监听服务端推送的发射日志
   useEffect(() => {
@@ -231,7 +210,6 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
   const handleClearMyData = () => {
     setMyFt8Groups([]);
     setTransmissionLogs([]);
-    localStorage.removeItem(TRANSMISSION_LOGS_STORAGE_KEY);
   };
 
   return (

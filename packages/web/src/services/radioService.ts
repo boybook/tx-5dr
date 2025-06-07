@@ -220,7 +220,7 @@ export class RadioService {
     // 监听操作员列表
     this.wsClient.onWSEvent('operatorsList', (data: any) => {
       // console.log('📻 操作员列表:', data);
-      this.eventListeners.operatorsList?.(data.operators);
+      this.eventListeners.operatorsList?.(data);
     });
 
     // 监听操作员状态更新

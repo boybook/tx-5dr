@@ -4,6 +4,7 @@ import { AdifParser } from 'adif-parser-ts';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
+import { getLogFilePath } from '../utils/app-paths.js';
 
 /**
  * ADIF日志Provider选项
@@ -74,8 +75,11 @@ export class ADIFLogProvider implements ILogProvider {
    * 查找或创建日志文件路径
    */
   private async findOrCreateLogPath(): Promise<string> {
-    // 尝试多个可能的位置
-    const possiblePaths = [
+    // 使用新的跨平台路径管理器
+    const standardPath = await getLogFilePath(this.options.logFileName!);
+    
+    // 尝试旧的位置查找现有文件
+    const legacyPaths = [
       // 用户文档目录
       path.join(os.homedir(), 'Documents', 'TX-5DR', this.options.logFileName!),
       // 用户主目录下的.tx5dr目录
@@ -84,22 +88,30 @@ export class ADIFLogProvider implements ILogProvider {
       path.join(process.cwd(), 'logs', this.options.logFileName!),
     ];
     
-    // 查找第一个存在的文件
-    for (const logPath of possiblePaths) {
+    // 查找是否有旧的日志文件存在
+    for (const legacyPath of legacyPaths) {
       try {
-        await fs.access(logPath);
-        return logPath;
+        await fs.access(legacyPath);
+        console.log(`📋 [ADIFLogProvider] 发现旧日志文件: ${legacyPath}`);
+        console.log(`📋 [ADIFLogProvider] 将迁移到标准位置: ${standardPath}`);
+        
+        // 迁移文件到新位置
+        const dir = path.dirname(standardPath);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.copyFile(legacyPath, standardPath);
+        
+        console.log(`✅ [ADIFLogProvider] 文件迁移完成`);
+        return standardPath;
       } catch {
         // 文件不存在，继续下一个
       }
     }
     
-    // 如果都不存在，使用第一个路径并创建目录
-    const defaultPath = possiblePaths[0];
-    const dir = path.dirname(defaultPath);
+    // 没有发现旧文件，使用标准路径
+    const dir = path.dirname(standardPath);
     await fs.mkdir(dir, { recursive: true });
     
-    return defaultPath;
+    return standardPath;
   }
   
   /**

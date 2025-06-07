@@ -7,7 +7,6 @@ import type { FastifyRequest } from 'fastify';
 import { ConfigManager } from './config/config-manager.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { audioRoutes } from './routes/audio.js';
-import { configRoutes } from './routes/config.js';
 import { slotpackRoutes } from './routes/slotpack.js';
 import { modeRoutes } from './routes/mode.js';
 import { operatorRoutes } from './routes/operators.js';
@@ -124,10 +123,6 @@ export async function createServer() {
   await fastify.register(audioRoutes, { prefix: '/api/audio' });
   fastify.log.info('音频设备API路由注册完成');
 
-  // 注册配置管理API路由
-  await fastify.register(configRoutes, { prefix: '/api/config' });
-  fastify.log.info('配置管理API路由注册完成');
-
   // 注册时隙包管理API路由
   await fastify.register(slotpackRoutes, { prefix: '/api/slotpack' });
   fastify.log.info('时隙包管理API路由注册完成');
@@ -139,6 +134,11 @@ export async function createServer() {
   // 注册操作员管理API路由
   await fastify.register(operatorRoutes, { prefix: '/api/operators' });
   fastify.log.info('操作员管理API路由注册完成');
+
+  // 注册日志本管理API路由
+  const { logbookRoutes } = await import('./routes/logbooks.js');
+  await fastify.register(logbookRoutes, { prefix: '/api/logbooks' });
+  fastify.log.info('日志本管理API路由注册完成');
 
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {

@@ -3,7 +3,6 @@ export * from './schema/hello.schema.js';
 export * from './schema/audio.schema.js';
 export * from './schema/ft8.schema.js';
 export * from './schema/websocket.schema.js';
-export * from './schema/config.schema.js';
 export * from './schema/mode.schema.js';
 export * from './schema/qso.schema.js';
 export * from './schema/cycle.schema.js';
@@ -50,7 +49,6 @@ export * from './schema/qso.schema.js';
 export * from './schema/websocket.schema.js';
 export * from './schema/slot-info.schema.js';
 export * from './schema/audio.schema.js';
-export * from './schema/config.schema.js';
 export * from './schema/hello.schema.js';
 
 // 导出周期相关类型
@@ -61,9 +59,6 @@ export * from './schema/mode.schema.js';
 
 // Audio Schema
 export * from './schema/audio.schema.js';
-
-// Config Schema  
-export * from './schema/config.schema.js';
 
 // Cycle Schema
 export * from './schema/cycle.schema.js';
@@ -88,3 +83,6 @@ export * from './schema/slot-info.schema.js';
 
 // WebSocket Schema
 export * from './schema/websocket.schema.js';
+
+// Logbook Schema
+export * from './schema/logbook.schema.js';

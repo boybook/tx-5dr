@@ -35,18 +35,6 @@ export enum WSMessageType {
   START_OPERATOR = 'startOperator',
   STOP_OPERATOR = 'stopOperator',
   
-  // ===== 日志管理 =====
-  LOG_QUERY = 'logQuery',
-  LOG_QUERY_RESPONSE = 'logQueryResponse',
-  LOG_ANALYZE_CALLSIGN = 'logAnalyzeCallsign',
-  LOG_ANALYZE_CALLSIGN_RESPONSE = 'logAnalyzeCallsignResponse',
-  LOG_STATISTICS = 'logStatistics',
-  LOG_STATISTICS_RESPONSE = 'logStatisticsResponse',
-  LOG_EXPORT_ADIF = 'logExportAdif',
-  LOG_EXPORT_ADIF_RESPONSE = 'logExportAdifResponse',
-  LOG_IMPORT_ADIF = 'logImportAdif',
-  LOG_IMPORT_ADIF_RESPONSE = 'logImportAdifResponse',
-  
   // ===== 发射日志 =====
   TRANSMISSION_LOG = 'transmissionLog',
   
@@ -466,7 +454,7 @@ export interface DigitalRadioEngineEvents {
   }) => void;
   
   // 操作员事件
-  operatorsList: (operators: OperatorStatus[]) => void;
+  operatorsList: (data: { operators: OperatorStatus[] }) => void;
   operatorStatusUpdate: (operatorStatus: OperatorStatus) => void;
   
   // 错误和状态事件

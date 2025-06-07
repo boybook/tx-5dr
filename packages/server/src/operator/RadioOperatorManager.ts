@@ -52,8 +52,17 @@ export class RadioOperatorManager {
     // 监听记录QSO事件
     this.eventEmitter.on('recordQSO' as any, async (data: { operatorId: string; qsoRecord: QSORecord }) => {
       try {
-        await this.logManager.recordQSO(data.qsoRecord, data.operatorId);
-        console.log(`📝 [操作员管理器] 已记录QSO: ${data.qsoRecord.callsign} for operator ${data.operatorId}`);
+        console.log(`📝 [操作员管理器] 记录QSO: ${data.qsoRecord.callsign} (操作员: ${data.operatorId})`);
+        
+        // 获取操作员连接的日志本
+        const logBook = this.logManager.getOperatorLogBook(data.operatorId);
+        if (!logBook) {
+          throw new Error(`操作员 ${data.operatorId} 未连接到任何日志本`);
+        }
+        
+        console.log(`📝 [操作员管理器] 记录QSO到日志本 ${logBook.name}: ${data.qsoRecord.callsign} @ ${new Date(data.qsoRecord.startTime).toISOString()}`);
+        await logBook.provider.addQSO(data.qsoRecord, data.operatorId);
+        
       } catch (error) {
         console.error(`❌ [操作员管理器] 记录QSO失败:`, error);
       }
@@ -62,7 +71,13 @@ export class RadioOperatorManager {
     // 监听检查是否已通联事件
     this.eventEmitter.on('checkHasWorkedCallsign' as any, async (data: { operatorId: string; callsign: string; requestId: string }) => {
       try {
-        const hasWorked = await this.logManager.hasWorkedCallsign(data.callsign, data.operatorId);
+        // 获取操作员连接的日志本
+        const logBook = this.logManager.getOperatorLogBook(data.operatorId);
+        if (!logBook) {
+          throw new Error(`操作员 ${data.operatorId} 未连接到任何日志本`);
+        }
+        
+        const hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, data.operatorId);
         
         // 发送响应
         this.eventEmitter.emit('hasWorkedCallsignResponse' as any, {
@@ -118,12 +133,14 @@ export class RadioOperatorManager {
    * 初始化操作员管理器
    */
   async initialize(): Promise<void> {
-    console.log('📻 [操作员管理器] 初始化...');
+    console.log('📻 [操作员管理器] 正在初始化...');
     
     // 初始化日志管理器
     await this.logManager.initialize();
     
     this.initializeOperatorsFromConfig();
+    
+    console.log('✅ [操作员管理器] 初始化完成');
   }
 
   /**
@@ -141,8 +158,8 @@ export class RadioOperatorManager {
     for (const config of operatorsConfig) {
       try {
         const operator = this.addOperator(config);
-        operator.start();
-        console.log(`📻 [操作员管理器] 操作员 ${config.id} 已创建并启动`);
+        /* operator.start(); */
+        console.log(`📻 [操作员管理器] 操作员 ${config.id} 已创建`);
       } catch (error) {
         console.error(`❌ [操作员管理器] 创建操作员 ${config.id} 失败:`, error);
       }
@@ -185,6 +202,11 @@ export class RadioOperatorManager {
       (op: RadioOperator) => new StandardQSOStrategy(op)
     );
     
+    // 如果配置中指定了日志本ID，连接到该日志本
+    if (config.logBookId) {
+      this.connectOperatorToLogBook(config.id, config.logBookId);
+    }
+    
     // 监听操作员的slots更新事件
     operator.addSlotsUpdateListener((data: any) => {
       console.log(`📻 [操作员管理器] 操作员 ${data.operatorId} 的slots已更新`);
@@ -203,15 +225,65 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 移除电台操作员
+   * 删除操作员
    */
-  removeOperator(id: string): void {
-    const operator = this.operators.get(id);
-    if (operator) {
-      operator.stop();
-      this.operators.delete(id);
-      console.log(`📻 [操作员管理器] 移除操作员: ${id}`);
+  removeOperator(operatorId: string): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`操作员 ${operatorId} 不存在`);
     }
+
+    // 断开与日志本的连接
+    this.logManager.disconnectOperatorFromLogBook(operatorId);
+    
+    this.operators.delete(operatorId);
+    console.log(`📻 [操作员管理器] 删除操作员: ${operatorId}`);
+  }
+
+  /**
+   * 将操作员连接到指定日志本
+   */
+  async connectOperatorToLogBook(operatorId: string, logBookId: string): Promise<void> {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`操作员 ${operatorId} 不存在`);
+    }
+
+    await this.logManager.connectOperatorToLogBook(operatorId, logBookId);
+    console.log(`📻 [操作员管理器] 操作员 ${operatorId} 已连接到日志本 ${logBookId}`);
+  }
+
+  /**
+   * 断开操作员与日志本的连接（使用默认日志本）
+   */
+  disconnectOperatorFromLogBook(operatorId: string): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`操作员 ${operatorId} 不存在`);
+    }
+
+    this.logManager.disconnectOperatorFromLogBook(operatorId);
+    console.log(`📻 [操作员管理器] 操作员 ${operatorId} 已断开日志本连接`);
+  }
+
+  /**
+   * 获取操作员当前连接的日志本信息
+   */
+  getOperatorLogBookInfo(operatorId: string): { logBookId: string; logBook: any } {
+    const logBookId = this.logManager.getOperatorLogBookId(operatorId);
+    const logBook = this.logManager.getLogBook(logBookId);
+    
+    return {
+      logBookId,
+      logBook: logBook ? {
+        id: logBook.id,
+        name: logBook.name,
+        description: logBook.description,
+        filePath: logBook.filePath,
+        lastUsed: logBook.lastUsed,
+        isActive: logBook.isActive
+      } : null
+    };
   }
 
   /**
@@ -345,12 +417,22 @@ export class RadioOperatorManager {
       throw new Error(`操作员 ${operatorId} 不存在`);
     }
     
-    operator.config.myCallsign = context.myCall || operator.config.myCallsign;
-    operator.config.myGrid = context.myGrid || operator.config.myGrid;
-    operator.config.frequency = context.frequency || operator.config.frequency;
+    // 更新基本信息
+    if (context.myCall !== undefined) operator.config.myCallsign = context.myCall;
+    if (context.myGrid !== undefined) operator.config.myGrid = context.myGrid;
+    if (context.frequency !== undefined) operator.config.frequency = context.frequency;
+    
+    // 更新自动化设置
+    if (context.autoReplyToCQ !== undefined) operator.config.autoReplyToCQ = context.autoReplyToCQ;
+    if (context.autoResumeCQAfterFail !== undefined) operator.config.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
+    if (context.autoResumeCQAfterSuccess !== undefined) operator.config.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
+    if (context.replyToWorkedStations !== undefined) operator.config.replyToWorkedStations = context.replyToWorkedStations;
+    if (context.prioritizeNewCalls !== undefined) operator.config.prioritizeNewCalls = context.prioritizeNewCalls;
     
     console.log(`📻 [操作员管理器] 更新操作员 ${operatorId} 上下文:`, context);
     this.emitOperatorStatusUpdate(operatorId);
+    // 也广播完整操作员列表更新，确保前端能及时刷新
+    this.broadcastOperatorListUpdate();
   }
 
   /**
@@ -561,9 +643,9 @@ export class RadioOperatorManager {
   async syncAddOperator(config: RadioOperatorConfig): Promise<RadioOperator> {
     const operator = this.addOperator(config);
     
-    if (this.isRunning) {
+    /* if (this.isRunning) {
       operator.start();
-    }
+    } */
     
     console.log(`📻 [操作员管理器] 同步添加操作员: ${config.id}`);
     this.broadcastOperatorListUpdate();
@@ -630,9 +712,9 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 发射操作员状态更新事件
+   * 发射操作员状态更新事件（触发前端更新）
    */
-  private emitOperatorStatusUpdate(operatorId: string): void {
+  emitOperatorStatusUpdate(operatorId: string): void {
     const operatorStatus = this.getOperatorsStatus().find(op => op.id === operatorId);
     if (operatorStatus) {
       this.eventEmitter.emit('operatorStatusUpdate', operatorStatus);
@@ -655,7 +737,7 @@ export class RadioOperatorManager {
   private broadcastOperatorListUpdate(): void {
     const operators = this.getOperatorsStatus();
     console.log(`📻 [操作员管理器] 广播操作员列表更新，包含 ${operators.length} 个操作员`);
-    this.eventEmitter.emit('operatorsList', operators);
+    this.eventEmitter.emit('operatorsList', { operators });
   }
 
   /**

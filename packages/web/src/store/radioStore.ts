@@ -84,7 +84,7 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
     case 'operatorsList':
       return {
         ...state,
-        operators: action.payload
+        operators: action.payload || []
       };
     
     case 'operatorStatusUpdate':
@@ -268,8 +268,8 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });
     });
 
-    radioService.on('operatorsList', (operators: OperatorStatus[]) => {
-      radioDispatch({ type: 'operatorsList', payload: operators });
+    radioService.on('operatorsList', (data: { operators: OperatorStatus[] }) => {
+      radioDispatch({ type: 'operatorsList', payload: data.operators });
     });
 
     radioService.on('operatorStatusUpdate', (operatorStatus: OperatorStatus) => {
@@ -343,14 +343,14 @@ export const useSlotPacks = () => {
 export const useOperators = () => {
   const { state } = useRadio();
   return {
-    operators: state.radio.operators,
+    operators: state.radio.operators || [],
   };
 };
 
 export const useCurrentOperatorId = () => {
   const { state, dispatch } = useRadio();
   return {
-    currentOperatorId: state.radio.currentOperatorId || state.radio.operators[0]?.id,
+    currentOperatorId: state.radio.currentOperatorId || state.radio.operators?.[0]?.id,
     setCurrentOperatorId: (operatorId: string) => {
       // 只更新前端状态，不发送到后端
       dispatch.radioDispatch({ type: 'setCurrentOperator', payload: operatorId });
