@@ -1,7 +1,9 @@
 import { EventEmitter } from 'eventemitter3';
-import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor } from '@tx5dr/contracts';
+import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
+import { CycleUtils } from '@tx5dr/core';
 import { SlotPackPersistence } from './SlotPackPersistence.js';
+import { FT8MessageParser } from '@tx5dr/core';
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
@@ -163,20 +165,6 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       this.lastSlotPack = slotPack;
     }
     
-    /* console.log(`📦 [SlotPackManager] 更新时隙包: ${slotId}`);
-    console.log(`   解码次数: ${slotPack.stats.totalDecodes}, 成功: ${slotPack.stats.successfulDecodes}`);
-    console.log(`   帧数: ${slotPack.stats.totalFramesBeforeDedup} -> ${slotPack.stats.totalFramesAfterDedup} (去重后)`); */
-    
-    // 显示当前时隙包中的所有解码结果
-    /* if (slotPack.frames.length > 0) {
-      console.log(`📨 [当前时隙包解码结果]:`);
-      slotPack.frames.forEach((frame, index) => {
-        console.log(`   信号 ${index + 1}: "${frame.message}" (SNR: ${frame.snr}dB, 频率: ${frame.freq}Hz, 时间偏移: ${frame.dt.toFixed(2)}s, 置信度: ${frame.confidence.toFixed(2)})`);
-      });
-    } else {
-      console.log(`   📭 当前时隙包暂无有效解码结果`);
-    } */
-    
     // 异步存储到本地（不阻塞主流程）
     if (this.persistenceEnabled) {
       this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
@@ -255,8 +243,6 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     
     // 合并发射帧和去重后的接收帧，发射帧在前
     const result = [...transmissionFrames, ...optimizedReceivedFrames];
-    
-    // console.log(`🔍 [SlotPackManager] 去重优化: ${frames.length} -> ${result.length} 帧 (发射帧: ${transmissionFrames.length}, 接收帧: ${optimizedReceivedFrames.length})`);
     
     return result;
   }
@@ -338,7 +324,6 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
           const bestDtAbs = Math.abs(bestFrame.dt);
           
           if (currentDtAbs < bestDtAbs - 0.05) { // dt 差异超过 0.05 秒
-            // console.log(`🎯 [帧选择] 选择更准确的时间偏移: "${current.message}" dt=${current.dt.toFixed(3)}s (|${currentDtAbs.toFixed(3)}|) 替代 dt=${bestFrame.dt.toFixed(3)}s (|${bestDtAbs.toFixed(3)}|)`);
             bestFrame = current;
             continue;
           }
@@ -520,6 +505,239 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    */
   async getAvailableStorageDates(): Promise<string[]> {
     return this.persistence.getAvailableDates();
+  }
+
+  /**
+   * 获取指定呼号最后发送的消息
+   * @param callsign 目标呼号
+   * @returns 包含消息和时隙信息的对象，如果没有找到则返回undefined
+   */
+  getLastMessageFromCallsign(callsign: string): { message: FrameMessage, slotInfo: SlotInfo } | undefined {
+    // 获取所有slotPacks并按时间排序（最新的在前）
+    const sortedSlotPacks = Array.from(this.slotPacks.values())
+      .sort((a, b) => b.startMs - a.startMs);
+
+    const upperCallsign = callsign.toUpperCase().trim();
+
+    for (const slotPack of sortedSlotPacks) {
+      // 从后往前遍历frames（最新的在后）
+      for (let i = slotPack.frames.length - 1; i >= 0; i--) {
+        const frame = slotPack.frames[i];
+        
+        // 跳过发射帧（SNR=-999），只查找接收到的消息
+        if (frame.snr === -999) {
+          continue;
+        }
+
+        try {
+          // 使用FT8MessageParser解析消息
+          const parsedMessage = FT8MessageParser.parseMessage(frame.message);
+          
+          // 检查是否有senderCallsign字段且匹配目标呼号
+          if ((parsedMessage as any).senderCallsign && 
+              (parsedMessage as any).senderCallsign.toUpperCase() === upperCallsign) {
+            
+            // 构造SlotInfo，使用统一的周期计算方法
+            const utcSeconds = Math.floor(slotPack.startMs / 1000);
+            const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, this.currentMode.slotMs);
+            
+            const slotInfo: SlotInfo = {
+              id: slotPack.slotId,
+              startMs: slotPack.startMs,
+              phaseMs: 0, // 默认值，SlotPack中没有这个信息
+              driftMs: 0, // 默认值
+              cycleNumber,
+              utcSeconds,
+              mode: this.currentMode.name
+            };
+
+            console.log(`🔍 [SlotPackManager] 找到呼号 ${callsign} 的最后消息: "${frame.message}" 在时隙 ${slotPack.slotId}`);
+            return { message: frame, slotInfo };
+          }
+        } catch (error) {
+          // 解析失败，跳过这个消息
+          console.warn(`⚠️ [SlotPackManager] 解析消息失败: "${frame.message}"`, error);
+          continue;
+        }
+      }
+    }
+
+    console.log(`🔍 [SlotPackManager] 未找到呼号 ${callsign} 的任何消息`);
+    return undefined;
+  }
+
+  /**
+   * 从指定时隙包中查找最空隙的可用发射频率
+   * @param slotId 时隙ID
+   * @param minFreq 最小频率 (Hz)，默认300
+   * @param maxFreq 最大频率 (Hz)，默认3500  
+   * @param guardBandwidth 保护带宽 (Hz)，默认100Hz（信号两侧各50Hz）
+   * @returns 推荐的发射频率，如果没有找到合适频率则返回undefined
+   */
+  findBestTransmitFrequency(
+    slotId: string, 
+    minFreq: number = 300, 
+    maxFreq: number = 3500, 
+    guardBandwidth: number = 100
+  ): number | undefined {
+    const slotPack = this.slotPacks.get(slotId);
+    if (!slotPack) {
+      console.warn(`⚠️ [SlotPackManager] 时隙包不存在: ${slotId}`);
+      return undefined;
+    }
+
+    // 收集所有接收帧的频率（跳过发射帧 SNR=-999）
+    const usedFrequencies: number[] = slotPack.frames
+      .filter(frame => frame.snr !== -999) // 排除发射帧
+      .map(frame => frame.freq)
+      .sort((a, b) => a - b); // 按频率排序
+
+    console.log(`🔍 [SlotPackManager] 时隙 ${slotId} 中的占用频率:`, usedFrequencies);
+
+    // 如果没有任何占用频率，返回中间频率
+    if (usedFrequencies.length === 0) {
+      const centerFreq = Math.round((minFreq + maxFreq) / 2);
+      console.log(`✅ [SlotPackManager] 无占用频率，返回中心频率: ${centerFreq}Hz`);
+      return centerFreq;
+    }
+
+    // 构建可用频率段列表
+    interface FrequencyGap {
+      start: number;
+      end: number;
+      width: number;
+      center: number;
+    }
+
+    const gaps: FrequencyGap[] = [];
+    
+    // 检查最低频率之前的空隙
+    if (usedFrequencies[0] > minFreq + guardBandwidth) {
+      const start = minFreq;
+      const end = usedFrequencies[0] - guardBandwidth / 2;
+      gaps.push({
+        start,
+        end,
+        width: end - start,
+        center: Math.round((start + end) / 2)
+      });
+    }
+
+    // 检查频率之间的空隙
+    for (let i = 0; i < usedFrequencies.length - 1; i++) {
+      const currentFreq = usedFrequencies[i];
+      const nextFreq = usedFrequencies[i + 1];
+      const gapWidth = nextFreq - currentFreq;
+      
+      // 只有当空隙宽度大于保护带宽时才考虑
+      if (gapWidth > guardBandwidth) {
+        const start = currentFreq + guardBandwidth / 2;
+        const end = nextFreq - guardBandwidth / 2;
+        gaps.push({
+          start,
+          end,
+          width: end - start,
+          center: Math.round((start + end) / 2)
+        });
+      }
+    }
+
+    // 检查最高频率之后的空隙
+    const lastFreq = usedFrequencies[usedFrequencies.length - 1];
+    if (lastFreq < maxFreq - guardBandwidth) {
+      const start = lastFreq + guardBandwidth / 2;
+      const end = maxFreq;
+      gaps.push({
+        start,
+        end,
+        width: end - start,
+        center: Math.round((start + end) / 2)
+      });
+    }
+
+    // 过滤掉太小的空隙（宽度小于最小保护带宽）
+    const validGaps = gaps.filter(gap => gap.width >= guardBandwidth / 2);
+
+    if (validGaps.length === 0) {
+      console.warn(`⚠️ [SlotPackManager] 时隙 ${slotId} 中没有找到足够的空隙频率`);
+      return undefined;
+    }
+
+    // 选择最大的空隙，如果有多个相同大小的空隙，选择中心频率最接近整体中心的
+    const overallCenter = (minFreq + maxFreq) / 2;
+    const bestGap = validGaps.reduce((best, current) => {
+      // 优先选择更宽的空隙
+      if (current.width > best.width) {
+        return current;
+      }
+      // 如果宽度相同，选择更接近中心的
+      if (current.width === best.width) {
+        const currentDistance = Math.abs(current.center - overallCenter);
+        const bestDistance = Math.abs(best.center - overallCenter);
+        return currentDistance < bestDistance ? current : best;
+      }
+      return best;
+    });
+
+    // 确保推荐频率在合理范围内
+    const recommendedFreq = Math.max(minFreq, Math.min(maxFreq, bestGap.center));
+
+    console.log(`✅ [SlotPackManager] 找到最佳发射频率: ${recommendedFreq}Hz`);
+    console.log(`   空隙范围: ${bestGap.start.toFixed(1)}Hz - ${bestGap.end.toFixed(1)}Hz`);
+    console.log(`   空隙宽度: ${bestGap.width.toFixed(1)}Hz`);
+    console.log(`   占用频率: [${usedFrequencies.join(', ')}]Hz`);
+
+    return recommendedFreq;
+  }
+
+  /**
+   * 获取指定时隙包的频率占用分析
+   * @param slotId 时隙ID
+   * @returns 频率占用分析结果
+   */
+  getFrequencyAnalysis(slotId: string): {
+    slotId: string;
+    usedFrequencies: number[];
+    frequencyRange: { min: number; max: number };
+    averageFrequency: number;
+    frequencySpread: number;
+    signalCount: number;
+  } | undefined {
+    const slotPack = this.slotPacks.get(slotId);
+    if (!slotPack) {
+      return undefined;
+    }
+
+    // 收集所有接收帧的频率（跳过发射帧）
+    const usedFrequencies = slotPack.frames
+      .filter(frame => frame.snr !== -999) // 排除发射帧
+      .map(frame => frame.freq)
+      .sort((a, b) => a - b);
+
+    if (usedFrequencies.length === 0) {
+      return {
+        slotId,
+        usedFrequencies: [],
+        frequencyRange: { min: 0, max: 0 },
+        averageFrequency: 0,
+        frequencySpread: 0,
+        signalCount: 0
+      };
+    }
+
+    const minFreq = usedFrequencies[0];
+    const maxFreq = usedFrequencies[usedFrequencies.length - 1];
+    const averageFrequency = usedFrequencies.reduce((sum, freq) => sum + freq, 0) / usedFrequencies.length;
+    const frequencySpread = maxFreq - minFreq;
+
+    return {
+      slotId,
+      usedFrequencies,
+      frequencyRange: { min: minFreq, max: maxFreq },
+      averageFrequency: Math.round(averageFrequency),
+      frequencySpread,
+      signalCount: usedFrequencies.length
+    };
   }
 
   /**

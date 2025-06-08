@@ -1,14 +1,20 @@
-// 完全使用 CommonJS 模式
-const { app, BrowserWindow, Menu } = require('electron');
-const { join, resolve } = require('path');
-const { spawn } = require('child_process');
+import { app, BrowserWindow, Menu } from 'electron';
+import { join, resolve } from 'path';
+import { spawn } from 'child_process';
+import { createRequire } from 'module';
+import http from 'http';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// 获取当前模块的目录（ESM中的__dirname替代方案）
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 let serverProcess: any = null;
 let serverCheckInterval: any = null;
 
 async function checkServerHealth(): Promise<boolean> {
   return new Promise((resolve) => {
-    const http = require('http');
     const options = {
       hostname: '127.0.0.1', // 明确使用 IPv4
       port: 4000,
@@ -193,8 +199,8 @@ async function createWindow() {
       nodeIntegration: false,
       webSecurity: false, // 在开发环境中禁用 web 安全策略
       allowRunningInsecureContent: true,
-      // 暂时注释掉预加载脚本
-      // preload: join(__dirname, '../../electron-preload/dist/preload.js'),
+      // 使用ESM格式的预加载脚本
+      preload: join(__dirname, '../../electron-preload/dist/preload.mjs'),
     },
   });
 
@@ -203,8 +209,8 @@ async function createWindow() {
     console.error('Failed to load:', errorCode, errorDescription, validatedURL);
   });
 
-  mainWindow.webContents.on('crashed', (event: any, killed: any) => {
-    console.error('Renderer process crashed:', killed);
+  mainWindow.webContents.on('render-process-gone', (event: any, details: any) => {
+    console.error('Renderer process gone:', details);
   });
 
   // 添加控制台日志监听
@@ -276,7 +282,7 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// 如果直接运行此文件，启动应用
-if (require.main === module) {
+// 如果直接运行此文件，启动应用（ESM版本检查）
+if (import.meta.url === `file://${process.argv[1]}`) {
   startApp().catch(console.error);
 } 

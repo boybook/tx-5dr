@@ -114,19 +114,10 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return cycle === 'even' ? 'var(--ft8-cycle-even)' : 'var(--ft8-cycle-odd)';
   };
 
-  const getRowHoverColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
-    if (type === 'transmit') {
-      return 'hover:bg-danger-100';
-    }
-    // 使用CSS变量设置hover颜色，稍微加深一些
-    return '';
-  };
-
   const getRowHoverStyle = (cycle: 'even' | 'odd', type: 'receive' | 'transmit', message?: FrameDisplayMessage) => {
-    if (type === 'transmit') {
+    if (message?.db === 'TX') {
       return {};
     }
-
     // 检查是否为特殊消息且有日志本分析
     if (message && message.logbookAnalysis && isSpecialMessageType(message.message)) {
       const highlightType = getHighestPriorityHighlight(message.logbookAnalysis);
@@ -162,7 +153,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
   // 根据日志本分析获取背景色（仅特殊消息类型使用全行背景色）
   const getLogbookAnalysisStyle = (message: FrameDisplayMessage, cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
-    if (type === 'transmit' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
+    if (type === 'transmit' || message.db === 'TX' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
       return {};
     }
 
@@ -179,7 +170,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
   // 获取右侧颜色条的颜色（所有有高亮的消息都显示）
   const getRightBorderColor = (message: FrameDisplayMessage, type: 'receive' | 'transmit') => {
-    if (type === 'transmit' || !message.logbookAnalysis) {
+    if (type === 'transmit' || message.db === 'TX' || !message.logbookAnalysis) {
       return null;
     }
 
@@ -208,18 +199,23 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     });
   };
 
-  const formatMessage = (message: string, analysis?: FrameDisplayMessage['logbookAnalysis']) => {
+  const formatMessage = (messageObj: FrameDisplayMessage) => {
+    // 如果是TX消息，忽略所有logbookAnalysis相关逻辑
+    if (messageObj.db === 'TX') {
+      return <span>{messageObj.message}</span>;
+    }
+
     // 检查是否包含自己的呼号
-    const hasMyCallsign = containsMyCallsign(message);
+    const hasMyCallsign = containsMyCallsign(messageObj.message);
     
     // 基础消息文本
-    const showChips = analysis && isSpecialMessageType(message);
+    const showChips = messageObj.logbookAnalysis && isSpecialMessageType(messageObj.message);
     
     const content = (
       <span className="flex items-center gap-1">
-        <span className={hasMyCallsign ? 'text-danger font-semibold' : ''}>{message}</span>
+        <span className={hasMyCallsign ? 'text-danger font-semibold' : ''}>{messageObj.message}</span>
         {showChips && (() => {
-          const highlightType = getHighestPriorityHighlight(analysis);
+          const highlightType = getHighestPriorityHighlight(messageObj.logbookAnalysis!);
           if (!highlightType) return null;
           
           const baseColor = getHighlightColor(highlightType);
@@ -296,11 +292,10 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                   key={`${message.utc}-${messageIndex}`}
                   className={`
                     ft8-row
-                    ${getRowHoverColor(group.cycle, group.type)}
                     ${message.db === 'TX' ? 'bg-danger-100/70' : ''}
                     transition-colors duration-150
                     grid grid-cols-[60px_48px_48px_80px_1fr_96px] gap-0 px-3 py-0.5 ml-1 relative
-                    hover:[background-color:var(--hover-bg)]
+                    ${message.db !== 'TX' ? 'hover:[background-color:var(--hover-bg)]' : ''}
                   `}
                   style={{
                     ...getRowHoverStyle(group.cycle, group.type, message),
@@ -338,7 +333,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                     {message.freq}
                   </div>
                   <div className="text-xs font-mono">
-                    {formatMessage(message.message, message.logbookAnalysis)}
+                    {formatMessage(message)}
                   </div>
                   <div className="text-xs text-right pr-1">
                     {(message.country || message.countryZh) && (

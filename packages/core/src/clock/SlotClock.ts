@@ -1,6 +1,7 @@
 import { EventEmitter } from 'eventemitter3';
 import type { ClockSource } from './ClockSource.js';
 import type { ModeDescriptor, SlotInfo, SlotInfoSchema } from '@tx5dr/contracts';
+import { CycleUtils } from '../utils/cycleUtils.js';
 
 export interface SlotClockEvents {
   'slotStart': (slotInfo: SlotInfo) => void;
@@ -100,8 +101,9 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
   }
   
   private handleSlotStart(slotStartTime: number): void {
-    const cycleNumber = Math.floor(slotStartTime / (this.mode.slotMs * 2));
     const utcSeconds = Math.floor(slotStartTime / 1000);
+    // 使用统一的周期计算方法
+    const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, this.mode.slotMs);
     const slotId = `${this.mode.name}-${cycleNumber}-${slotStartTime}`;
     const now = this.clockSource.now();
     const phaseMs = now - slotStartTime;
@@ -196,6 +198,31 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     const slotMs = this.mode.slotMs;
     const nextSlot = Math.ceil(now / slotMs) * slotMs;
     return nextSlot - now;
+  }
+  
+  /**
+   * 获取当前时隙信息
+   */
+  public getCurrentSlotInfo(): SlotInfo | null {
+    if (!this.isRunning) {
+      return null;
+    }
+    
+    const now = this.clockSource.now();
+    const slotMs = this.mode.slotMs;
+    const currentSlotStart = Math.floor(now / slotMs) * slotMs;
+    const utcSeconds = Math.floor(currentSlotStart / 1000);
+    const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, this.mode.slotMs);
+    
+    return {
+      id: `${this.mode.name}-${cycleNumber}-${currentSlotStart}`,
+      startMs: currentSlotStart,
+      phaseMs: now - currentSlotStart,
+      driftMs: 0,
+      cycleNumber,
+      utcSeconds,
+      mode: this.mode.name
+    };
   }
   
   // EventEmitter3 已经提供了类型安全的方法

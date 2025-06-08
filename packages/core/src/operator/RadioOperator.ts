@@ -1,4 +1,5 @@
-import { OperatorConfig, QSORecord, ParsedFT8Message, SlotPack, DigitalRadioEngineEvents, SlotInfo, MODES, QSOCommand } from '@tx5dr/contracts';
+import { OperatorConfig, QSORecord, ParsedFT8Message, SlotPack, DigitalRadioEngineEvents, SlotInfo, MODES, QSOCommand, FrameMessage } from '@tx5dr/contracts';
+import { CycleUtils } from '../utils/cycleUtils.js';
 import { ITransmissionStrategy } from './transmission/ITransmissionStrategy';
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
 import EventEmitter from 'eventemitter3';
@@ -127,44 +128,16 @@ export class RadioOperator {
      * @returns 是否为发射时隙
      */
     private isTransmitSlot(slotInfo: SlotInfo): boolean {
-        const { transmitCycles } = this._config;
-        if (!transmitCycles || transmitCycles.length === 0) {
-            return false;
-        }
-
-        // 获取当前时隙的周期号
-        const cycleNumber = this.getCycleNumber(slotInfo);
-        
-        // 检查当前周期是否在发射周期列表中
-        return transmitCycles.includes(cycleNumber);
-    }
-
-    /**
-     * 获取时隙的周期号
-     * @param slotInfo 时隙信息
-     * @returns 周期号（0=偶数周期，1=奇数周期）
-     */
-    private getCycleNumber(slotInfo: SlotInfo): number {
-        // 从配置中获取当前模式的时隙长度
-        const slotMs = this._config.mode.slotMs;
-        
-        // 根据周期类型计算
-        if (this._config.mode.cycleType === 'EVEN_ODD') {
-            // 偶奇周期模式：每两个时隙为一个周期
-            const cycleMs = slotMs * 2;
-            const cyclePosition = (slotInfo.utcSeconds * 1000) % cycleMs;
-            return cyclePosition < slotMs ? 0 : 1;
-        } else {
-            // 连续周期模式：每个时隙都是一个独立的周期
-            return Math.floor(slotInfo.utcSeconds * 1000 / slotMs);
-        }
+        return CycleUtils.isOperatorTransmitCycle(
+            this._config.transmitCycles,
+            slotInfo.utcSeconds,
+            this._config.mode.slotMs
+        );
     }
 
     /**
      * 设置发射周期
-     * @param transmitCycles 发射周期
-     * - 对于 EVEN_ODD 类型：0=偶数周期，1=奇数周期
-     * - 对于 CONTINUOUS 类型：数组中的数字表示发射周期
+     * @param transmitCycles 发射周期数组，0=偶数周期，1=奇数周期
      */
     setTransmitCycles(transmitCycles: number | number[]): void {
         this._config.transmitCycles = Array.isArray(transmitCycles) ? transmitCycles : [transmitCycles];
@@ -248,6 +221,18 @@ export class RadioOperator {
         }
         
         return result;
+    }
+
+    requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
+        // console.log(`[RadioOperator.requestCall] (${this.config.myCallsign}) 请求通联 ${callsign}`, lastMessage);
+        // 启用发射
+        this.start();
+        // 切换周期
+        if (lastMessage) {
+            this.setTransmitCycles((lastMessage.slotInfo.cycleNumber + 1) % 2);
+        }
+        // 发送内容决策
+        this._transmissionStrategy?.requestCall(callsign, lastMessage);
     }
 
     /**

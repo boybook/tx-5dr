@@ -4,6 +4,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowsAltH, faRepeat } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import type { OperatorStatus } from '@tx5dr/contracts';
+import { CycleUtils } from '@tx5dr/core';
 
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
@@ -311,38 +312,20 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       };
     } else {
       // 其他情况：根据当前周期类型显示对应颜色
-      const mode = radio.state.currentMode;
+      // 使用统一的周期计算方法
+      const isEvenCycle = CycleUtils.isEvenCycle(currentCycle);
       
-      if (mode.cycleType === 'EVEN_ODD') {
-        if (currentCycle % 2 === 0) {
-          // 偶数周期：使用CSS变量适配暗黑模式
-          return {
-            background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-          };
-        } else {
-          // 奇数周期：使用CSS变量适配暗黑模式
-          return {
-            background: `linear-gradient(to right, var(--ft8-cycle-odd-bg) 0%, var(--ft8-cycle-odd-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-          };
-        }
-      } else if (mode.cycleType === 'CONTINUOUS') {
-        if (currentCycle % 2 === 0) {
-          // 偶数周期：使用CSS变量适配暗黑模式
-          return {
-            background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-          };
-        } else {
-          // 奇数周期：使用CSS变量适配暗黑模式
-          return {
-            background: `linear-gradient(to right, var(--ft8-cycle-odd-bg) 0%, var(--ft8-cycle-odd-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-          };
-        }
+      if (isEvenCycle) {
+        // 偶数周期：使用CSS变量适配暗黑模式
+        return {
+          background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
+        };
+      } else {
+        // 奇数周期：使用CSS变量适配暗黑模式
+        return {
+          background: `linear-gradient(to right, var(--ft8-cycle-odd-bg) 0%, var(--ft8-cycle-odd-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
+        };
       }
-      
-      // 默认偶数周期颜色 - 使用CSS变量适配暗黑模式
-      return {
-        background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-      };
     }
   };
 
@@ -460,7 +443,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   // 根据用户设置的发射周期决定显示内容
                   if (transmitCycles.includes(0) && !transmitCycles.includes(1)) {
                     // 只在偶数周期发射
-                    if (mode?.cycleType === 'EVEN_ODD') {
+                    if (mode?.name === 'FT8') {
                       displayText = "00/30";
                     } else {
                       displayText = "偶数周期";
@@ -468,7 +451,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     dotColor = "#5EC56F"; // 绿色
                   } else if (transmitCycles.includes(1) && !transmitCycles.includes(0)) {
                     // 只在奇数周期发射
-                    if (mode?.cycleType === 'EVEN_ODD') {
+                    if (mode?.name === 'FT8') {
                       displayText = "15/45";
                     } else {
                       displayText = "奇数周期";
@@ -476,8 +459,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     dotColor = "#FFCD94"; // 黄色
                   } else {
                     // 默认显示偶数周期
-                    if (mode?.cycleType === 'EVEN_ODD') {
-                      displayText = "15/45";
+                    if (mode?.name === 'FT8') {
+                      displayText = "00/30";
                     } else {
                       displayText = "偶数周期";
                     }

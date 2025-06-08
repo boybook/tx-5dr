@@ -1,9 +1,10 @@
 {
   "name": "@tx5dr/electron-preload",
   "version": "1.0.0",
+  "type": "module",
   "main": "dist/preload.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mv dist/preload.js dist/preload.mjs && mv dist/preload.js.map dist/preload.mjs.map",
     "dev": "tsc --watch",
     "lint": "eslint src/**/*.ts"
   },

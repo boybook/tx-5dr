@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo } from '@tx5dr/core';
-import { useConnection, useRadioState, useSlotPacks } from '../store/radioStore';
+import { useConnection, useCurrentOperatorId, useRadioState, useSlotPacks } from '../store/radioStore';
 import type { FrameMessage } from '@tx5dr/contracts';
-import { CycleType } from '@tx5dr/contracts';
+import { CycleUtils } from '@tx5dr/core';
 
 interface SlotPacksMessageDisplayProps {
   className?: string;
@@ -14,6 +14,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const radio = useRadioState();
   const slotPacks = useSlotPacks();
   const [frameGroups, setFrameGroups] = useState<FrameGroup[]>([]);
+  const {currentOperatorId} = useCurrentOperatorId();
 
   // 获取所有启用操作员的呼号列表
   const getMyCallsigns = (): string[] => {
@@ -23,7 +24,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       .filter(call => call.trim() !== ''); // 过滤掉空呼号
   };
 
-      // 处理SlotPack数据转换为FT8Group格式
+  // 处理SlotPack数据转换为FT8Group格式
   useEffect(() => {
     const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean }>();
     const currentMode = radio.state.currentMode;
@@ -37,29 +38,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         const slotStartTime = new Date(slotPack.startMs);
         const utcSeconds = slotStartTime.toISOString().slice(11, 19);
         
-        // 根据模式配置计算周期
-        const totalSeconds = slotStartTime.getHours() * 3600 + 
-                           slotStartTime.getMinutes() * 60 + 
-                           slotStartTime.getSeconds();
-        const cycleNumber = Math.floor(totalSeconds / (currentMode.slotMs / 1000));
+        // 使用统一的周期计算方法
+        const utcSecondsNumber = Math.floor(slotPack.startMs / 1000);
+        const cycleNumber = CycleUtils.calculateCycleNumber(utcSecondsNumber, currentMode.slotMs);
+        const isEvenCycle = CycleUtils.isEvenCycle(cycleNumber);
         
-        // 根据周期类型决定是even还是odd
-        let isEvenCycle = true;
-        if (currentMode.cycleType === CycleType.EVEN_ODD) {
-          isEvenCycle = cycleNumber % 2 === 0;
-        } else if (currentMode.cycleType === CycleType.CONTINUOUS) {
-          // 对于连续周期，我们仍然需要区分显示，这里使用周期号除以2的余数
-          // 这样可以保持视觉上的交替效果
-          isEvenCycle = Math.floor(cycleNumber / 2) % 2 === 0;
-        }
-        
-        // 生成组键：按时隙对齐
-        const alignedSeconds = Math.floor(totalSeconds / (currentMode.slotMs / 1000)) * (currentMode.slotMs / 1000);
-        const groupTime = new Date(slotStartTime);
-        groupTime.setHours(Math.floor(alignedSeconds / 3600));
-        groupTime.setMinutes(Math.floor((alignedSeconds % 3600) / 60));
-        groupTime.setSeconds(alignedSeconds % 60);
-        const groupKey = groupTime.toISOString().slice(11, 19).replace(/:/g, '');
+        // 生成组键：使用统一的组键生成方法
+        const groupKey = CycleUtils.generateSlotGroupKey(slotPack.startMs, currentMode.slotMs);
         
         if (!groupsMap.has(groupKey)) {
           groupsMap.set(groupKey, {
@@ -99,13 +84,23 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       .map(([time, { messages, cycle, hasTransmission }]) => ({
         time,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
-        type: hasTransmission ? 'transmit' as const : 'receive' as const, // 如果有发射帧，组类型为transmit
+        type: 'receive' as const, // 如果有发射帧，组类型为transmit
         cycle
       }))
       .sort((a, b) => a.time.localeCompare(b.time));
 
     setFrameGroups(groups);
   }, [slotPacks.state.slotPacks, radio.state.currentMode]);
+
+  
+  const handleRowDoubleClick = (message: FrameDisplayMessage, group: FrameGroup) => {
+    const callsign = message.logbookAnalysis?.callsign;
+    if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
+      if (connection.state.radioService) {
+        connection.state.radioService.sendRequestCall(currentOperatorId, callsign);
+      }
+    }
+  };
 
   if (frameGroups.length === 0) {
     return (
@@ -128,6 +123,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       groups={frameGroups} 
       className={className} 
       myCallsigns={getMyCallsigns()}
+      onRowDoubleClick={handleRowDoubleClick}
     />
   );
 }; 

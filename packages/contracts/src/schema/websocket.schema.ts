@@ -34,6 +34,7 @@ export enum WSMessageType {
   USER_COMMAND = 'userCommand',
   START_OPERATOR = 'startOperator',
   STOP_OPERATOR = 'stopOperator',
+  OPERATOR_REQUEST_CALL = 'operatorRequestCall',
   
   // ===== 客户端操作员过滤 =====
   SET_CLIENT_ENABLED_OPERATORS = 'setClientEnabledOperators',

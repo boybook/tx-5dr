@@ -1,6 +1,7 @@
 {
   "name": "@tx5dr/electron-main",
   "version": "1.0.0",
+  "type": "module",
   "description": "TX-5DR Ham Radio FT8 Application",
   "author": "BG5DRB",
   "main": "dist/main.js",
@@ -23,7 +24,7 @@
     "@tx5dr/server": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",
     "@types/node": "^20.0.0",
-    "electron": "27.0.0",
+    "electron": "^36.4.0",
     "electron-builder": "26.0.12",
     "eslint": "^8.0.0",
     "typescript": "^5.0.0",
@@ -60,8 +61,8 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
-            "arm64"
+            "arm64",
+            "x64"
           ]
         }
       ]

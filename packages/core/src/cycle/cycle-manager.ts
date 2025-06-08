@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
-import { ModeDescriptor, CycleType } from '@tx5dr/contracts';
+import { ModeDescriptor } from '@tx5dr/contracts';
+import { CycleUtils } from '../utils/cycleUtils.js';
 
 /**
  * 周期信息
@@ -33,17 +34,9 @@ export class CycleManager extends EventEmitter {
    */
   private initializeCycle(): void {
     const now = Date.now();
-    const slotMs = this._currentMode.slotMs;
-    const cycleType = this._currentMode.cycleType;
-
-    if (cycleType === CycleType.EVEN_ODD) {
-      // 偶奇周期模式
-      const cycle = Math.floor(now / slotMs);
-      this._currentCycle = cycle % 2 === 0 ? 0 : 1;
-    } else {
-      // 连续周期模式
-      this._currentCycle = Math.floor(now / slotMs);
-    }
+    const utcSeconds = Math.floor(now / 1000);
+    // 使用统一的周期计算方法
+    this._currentCycle = CycleUtils.calculateCycleNumber(utcSeconds, this._currentMode.slotMs);
   }
 
   /**
@@ -72,19 +65,11 @@ export class CycleManager extends EventEmitter {
 
     const now = Date.now();
     const slotMs = this._currentMode.slotMs;
-    const cycleType = this._currentMode.cycleType;
-
-    let nextCycleStart: number;
-    if (cycleType === CycleType.EVEN_ODD) {
-      // 偶奇周期模式
-      const currentSlot = Math.floor(now / slotMs);
-      nextCycleStart = (currentSlot + 1) * slotMs;
-    } else {
-      // 连续周期模式
-      nextCycleStart = Math.ceil(now / slotMs) * slotMs;
-    }
-
-    const delay = nextCycleStart - now;
+    
+    // 计算下一个时隙的开始时间
+    const nextSlotStart = Math.ceil(now / slotMs) * slotMs;
+    const delay = nextSlotStart - now;
+    
     this._timer = setTimeout(() => {
       this.handleCycleEnd();
     }, delay);
@@ -94,14 +79,10 @@ export class CycleManager extends EventEmitter {
    * 处理周期结束
    */
   private handleCycleEnd(): void {
-    const cycleType = this._currentMode.cycleType;
-    if (cycleType === CycleType.EVEN_ODD) {
-      // 偶奇周期模式
-      this._currentCycle = this._currentCycle === 0 ? 1 : 0;
-    } else {
-      // 连续周期模式
-      this._currentCycle++;
-    }
+    // 重新计算当前周期
+    const now = Date.now();
+    const utcSeconds = Math.floor(now / 1000);
+    this._currentCycle = CycleUtils.calculateCycleNumber(utcSeconds, this._currentMode.slotMs);
 
     this.emit('cycleEnd', this.getCycleInfo());
     this.startTimer();

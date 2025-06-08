@@ -1,4 +1,4 @@
-import { EventEmitter } from 'eventemitter3';
+import EventEmitter from 'eventemitter3';
 import { 
   RadioOperator, 
   StandardQSOStrategy,
@@ -11,8 +11,10 @@ import {
   type DigitalRadioEngineEvents,
   type ModeDescriptor,
   type QSORecord,
-  MODES
+  MODES,
+  QSOCommand
 } from '@tx5dr/contracts';
+import { CycleUtils } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
@@ -316,15 +318,14 @@ export class RadioOperatorManager {
         const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
         const cycleProgress = (now - currentSlotStartMs) / slotMs;
         
-        const cycleNumber = Math.floor(currentSlotStartMs / slotMs);
-        let isTransmitCycle = false;
-        
-        if (currentMode.cycleType === 'EVEN_ODD') {
-          const evenOddCycle = cycleNumber % 2;
-          isTransmitCycle = operator.getTransmitCycles().includes(evenOddCycle);
-        } else if (currentMode.cycleType === 'CONTINUOUS') {
-          isTransmitCycle = operator.getTransmitCycles().includes(cycleNumber);
-        }
+        // 使用统一的周期计算方法
+        const utcSeconds = Math.floor(currentSlotStartMs / 1000);
+        const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, currentMode.slotMs);
+        const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+          operator.getTransmitCycles(),
+          utcSeconds,
+          currentMode.slotMs
+        );
         
         cycleInfo = {
           currentCycle: cycleNumber,
@@ -370,7 +371,8 @@ export class RadioOperatorManager {
             };
           }
         } catch (error) {
-          console.error(`获取操作员 ${id} 的slots信息失败:`, error);
+          console.error(`❌ [操作员管理器] 获取操作员 ${id} 状态失败:`, error);
+          slots = {};
         }
       }
       
@@ -485,16 +487,13 @@ export class RadioOperatorManager {
     const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
     const timeSinceSlotStartMs = now - currentSlotStartMs;
     
-    // 检查是否在发射周期内
-    const cycleNumber = Math.floor(currentSlotStartMs / slotMs);
-    let isTransmitCycle = false;
-    
-    if (currentMode.cycleType === 'EVEN_ODD') {
-      const evenOddCycle = cycleNumber % 2;
-      isTransmitCycle = operator.getTransmitCycles().includes(evenOddCycle);
-    } else if (currentMode.cycleType === 'CONTINUOUS') {
-      isTransmitCycle = operator.getTransmitCycles().includes(cycleNumber);
-    }
+    // 使用统一的周期计算方法
+    const utcSeconds = Math.floor(currentSlotStartMs / 1000);
+    const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+      operator.getTransmitCycles(),
+      utcSeconds,
+      currentMode.slotMs
+    );
     
     if (!isTransmitCycle) {
       console.log(`📻 [操作员管理器] 操作员 ${operatorId} 不在发射周期内`);
@@ -556,16 +555,13 @@ export class RadioOperatorManager {
         return;
       }
 
-      // 检查是否在发射周期内
-      const cycleNumber = Math.floor(currentSlotStartMs / currentMode.slotMs);
-      let isTransmitCycle = false;
-      
-      if (currentMode.cycleType === 'EVEN_ODD') {
-        const evenOddCycle = cycleNumber % 2;
-        isTransmitCycle = operator.getTransmitCycles().includes(evenOddCycle);
-      } else if (currentMode.cycleType === 'CONTINUOUS') {
-        isTransmitCycle = operator.getTransmitCycles().includes(cycleNumber);
-      }
+      // 使用统一的周期计算方法
+      const utcSeconds = Math.floor(currentSlotStartMs / 1000);
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+        operator.getTransmitCycles(),
+        utcSeconds,
+        currentMode.slotMs
+      );
 
       if (!isTransmitCycle) {
         console.log(`📻 [RadioOperatorManager] 操作员 ${operatorId} 不在发射周期内`);

@@ -1,4 +1,4 @@
-import { ParsedFT8Message, QSOCommand, StrategiesResult, SlotInfo } from "@tx5dr/contracts";
+import { ParsedFT8Message, QSOCommand, StrategiesResult, SlotInfo, FrameMessage } from "@tx5dr/contracts";
 
 /**
  * 传输策略接口，定义了如何根据当前QSO上下文和收到的消息来决定下一条要发送的FT8消息。
@@ -12,6 +12,13 @@ export interface ITransmissionStrategy {
      * @returns 要发送的FT8消息字符串，如果为null，表示直接停止发射。
      */
     handleReceivedAndDicideNext(messages: ParsedFT8Message[]): Promise<StrategiesResult>;
+
+    /**
+     * 请求呼叫一个呼号
+     * @param callsign 呼号
+     * @param lastMessage 从目标接收到的最后一条消息
+     */
+    requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void;
 
     /**
      * 当用户手动设置了下一条要发送的消息时调用此方法。

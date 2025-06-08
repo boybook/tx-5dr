@@ -67,10 +67,10 @@ code {
   font-family: 
     /* 优先使用现代等宽字体 */
     'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New',
+    /* 中文字体回退 - macOS */
+    '-apple-system', 'PingFang SC', 'Hiragino Sans GB',
     /* 中文字体回退 - Windows */
     'Microsoft YaHei', '微软雅黑',
-    /* 中文字体回退 - macOS */
-    'PingFang SC', 'Hiragino Sans GB',
     /* 中文字体回退 - Linux */
     'Source Han Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei',
     /* 通用回退 */
@@ -87,10 +87,10 @@ code {
   font-family: 
     /* 西文等宽字体 */
     'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New',
+    /* 中文字体回退 - macOS */
+    '-apple-system', 'PingFang SC', 'Hiragino Sans GB',
     /* 中文字体回退 - Windows */
     'Microsoft YaHei', '微软雅黑',
-    /* 中文字体回退 - macOS */
-    'PingFang SC', 'Hiragino Sans GB',
     /* 中文字体回退 - Linux */
     'Source Han Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei',
     /* 通用回退 */

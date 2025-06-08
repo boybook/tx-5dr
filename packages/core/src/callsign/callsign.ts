@@ -5,7 +5,7 @@
 
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
 import { FT8MessageType } from '@tx5dr/contracts';
-import dxccData from './dxcc.json';
+import dxccData from './dxcc.json' with { type: 'json' };
 
 // 中文地名映射表
 const COUNTRY_ZH_MAP: Record<string, string> = {

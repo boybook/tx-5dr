@@ -1,7 +1,10 @@
 import { FT8Message, FT8MessageType } from '@tx5dr/contracts';
 
-// 呼号正则表达式（支持标准呼号格式、<>包裹的格式和带有/的格式）
-const CALLSIGN_REGEX = /^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z](\/[0-9]|\/[A-Z])?$/;
+// 基础呼号正则表达式（更宽松的匹配）
+const BASE_CALLSIGN_REGEX = /^[A-Z0-9]{1,6}$/;
+
+// 完整呼号正则表达式（包括前缀和后缀）
+const FULL_CALLSIGN_REGEX = /^[A-Z0-9]{1,8}(\/[A-Z0-9]{1,8})*$/;
 
 // 标准呼号正则表达式（2-6位，最多一个数字位于第2-4位，支持/数字或/字母后缀）
 const STANDARD_CALLSIGN_REGEX = /^[A-Z0-9]{2,6}(\/[0-9]|\/[A-Z])?$/;
@@ -341,23 +344,82 @@ export class FT8MessageParser {
    * 验证呼号格式
    */
   private static isValidCallsign(callsign: string): boolean {
-    // 移除可能存在的 <>
-    const cleanCallsign = callsign.replace(/[<>]/g, '');
-    // 如果是<...>格式，直接返回true
+    if (!callsign) return false;
+    
+    // 如果是<...>格式，支持特殊情况
     if (callsign.startsWith('<') && callsign.endsWith('>')) {
+      const innerCallsign = callsign.slice(1, -1);
+      // 特殊情况：<...> 是FT8协议中的占位符
+      if (innerCallsign === '...') {
+        return true;
+      }
+      // 其他尖括号包裹的呼号需要符合基本格式
+      return innerCallsign.length > 0 && FULL_CALLSIGN_REGEX.test(innerCallsign);
+    }
+    
+    // 检查是否包含/
+    if (callsign.includes('/')) {
+      return this.isValidCallsignWithSlash(callsign);
+    }
+    
+    // 基本呼号格式检查
+    return this.isBasicValidCallsign(callsign);
+  }
+
+  /**
+   * 验证带有斜杠的呼号格式
+   * 支持前缀/基础呼号 和 基础呼号/后缀 两种格式
+   */
+  private static isValidCallsignWithSlash(callsign: string): boolean {
+    const parts = callsign.split('/');
+    if (parts.length !== 2) return false;
+    
+    const [part1, part2] = parts;
+    
+    // 检查每个部分都不为空且符合基本格式
+    if (!part1 || !part2 || !BASE_CALLSIGN_REGEX.test(part1) || !BASE_CALLSIGN_REGEX.test(part2)) {
+      return false;
+    }
+    
+    // 情况1：前缀/基础呼号（如 OY/K4LT）
+    // 前缀通常是1-3个字符，基础呼号包含数字
+    if (part1.length <= 3 && /\d/.test(part2)) {
       return true;
     }
-    // 检查是否包含/，如果有，确保格式正确
-    if (cleanCallsign.includes('/')) {
-      const [base, suffix] = cleanCallsign.split('/');
-      // 确保后缀是单个数字或单个字母
-      if (!/^[0-9A-Z]$/.test(suffix)) {
-        return false;
-      }
-      // 检查基础呼号部分
-      return CALLSIGN_REGEX.test(base);
+    
+    // 情况2：基础呼号/后缀（如 JA1ABC/1）
+    // 基础呼号包含数字，后缀通常是1个字符或数字
+    if (/\d/.test(part1) && part2.length <= 3) {
+      return true;
     }
-    return CALLSIGN_REGEX.test(cleanCallsign);
+    
+    // 情况3：基础呼号/移动标识（如 JA1ABC/MM）
+    // 基础呼号包含数字，后缀是移动标识
+    if (/\d/.test(part1) && /^(P|M|MM|AM|QRP|[0-9])$/.test(part2)) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * 验证基础呼号格式
+   * 支持更广泛的呼号格式
+   */
+  private static isBasicValidCallsign(callsign: string): boolean {
+    // 基本长度检查
+    if (callsign.length < 3 || callsign.length > 8) return false;
+    
+    // 必须包含至少一个数字
+    if (!/\d/.test(callsign)) return false;
+    
+    // 只能包含字母和数字
+    if (!/^[A-Z0-9]+$/.test(callsign)) return false;
+    
+    // 数字不能在开头或结尾
+    if (/^\d/.test(callsign) || /\d$/.test(callsign)) return false;
+    
+    return true;
   }
 
   /**

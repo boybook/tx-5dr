@@ -241,6 +241,10 @@ export class WSServer extends WSMessageHandler {
         await this.handleStopOperator(message.data);
         break;
 
+      case WSMessageType.OPERATOR_REQUEST_CALL:
+        await this.handleOperatorRequestCall(message.data);
+        break;
+
       case WSMessageType.PING:
         // ping消息回复pong到指定客户端
         this.sendToConnection(connectionId, WSMessageType.PONG);
@@ -250,11 +254,11 @@ export class WSServer extends WSMessageHandler {
         await this.handleSetVolumeGain(message.data);
         break;
 
-      case 'setClientEnabledOperators':
+      case WSMessageType.SET_CLIENT_ENABLED_OPERATORS:
         await this.handleSetClientEnabledOperators(connectionId, message.data);
         break;
 
-      case 'clientHandshake':
+      case WSMessageType.CLIENT_HANDSHAKE:
         await this.handleClientHandshake(connectionId, message.data);
         break;
 
@@ -441,6 +445,26 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.ERROR, {
         message: error instanceof Error ? error.message : String(error),
         code: 'STOP_OPERATOR_ERROR'
+      });
+    }
+  }
+
+  private async handleOperatorRequestCall(data: any): Promise<void> {
+    try {
+      const { operatorId, callsign } = data;
+      const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
+      if (!operator) {
+        throw new Error(`操作员 ${operatorId} 不存在`);
+      }
+      const lastMessage = this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign);
+      operator.requestCall(callsign, lastMessage);
+      // 调用manager中的start，来启用中途发射
+      this.digitalRadioEngine.operatorManager.startOperator(operatorId);
+    } catch (error) {
+      console.error('❌ 处理操作员请求呼叫失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'OPERATOR_REQUEST_CALL_ERROR'
       });
     }
   }

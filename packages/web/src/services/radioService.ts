@@ -345,4 +345,15 @@ export class RadioService {
   resetReconnectAttempts(): void {
     this.wsClient.resetReconnectAttempts();
   }
+  
+  /**
+   * 操作员请求呼叫某人
+   * @param operatorId 操作员ID
+   * @param callsign 呼号
+   */
+  sendRequestCall(operatorId: string, callsign: string): void {
+    if (this.isConnected) {
+      this.wsClient.requestCall(operatorId, callsign);
+    }
+  }
 }

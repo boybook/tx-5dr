@@ -5322,7 +5322,7 @@ __metadata:
     "@tx5dr/server": "workspace:*"
     "@tx5dr/shared-config": "workspace:*"
     "@types/node": "npm:^20.0.0"
-    electron: "npm:27.0.0"
+    electron: "npm:^36.4.0"
     electron-builder: "npm:26.0.12"
     esbuild: "npm:^0.20.0"
     eslint: "npm:^8.0.0"
@@ -5596,6 +5596,15 @@ __metadata:
   dependencies:
     undici-types: "npm:~6.19.2"
   checksum: 10c0/c04f3b6c4f335ad50bd3af62cd9e64a86c355cb6b363cb0e618511db4c6801c8539781c3786076eca6f56e999d6c7fc4748e43393a107aad57e65e3ffd1f73bf
+  languageName: node
+  linkType: hard
+
+"@types/node@npm:^22.7.7":
+  version: 22.15.30
+  resolution: "@types/node@npm:22.15.30"
+  dependencies:
+    undici-types: "npm:~6.21.0"
+  checksum: 10c0/ca330ac0e7fd502686d6df115fcc606aba46fd334220f749bbba2f639accdadcb23f7900603ceccdc8240be736739cad5c0b87c0fa92c9255a4dff245f07d664
   languageName: node
   linkType: hard
 
@@ -7178,19 +7187,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:27.0.0":
-  version: 27.0.0
-  resolution: "electron@npm:27.0.0"
-  dependencies:
-    "@electron/get": "npm:^2.0.0"
-    "@types/node": "npm:^18.11.18"
-    extract-zip: "npm:^2.0.1"
-  bin:
-    electron: cli.js
-  checksum: 10c0/6c2f11150f14c468a4eeae365a7c9bc1abae4ec0e5d5f6815247fbf9ac5de9862a21b9a1759fa7969341ab4e43ac99108d6d4b0d742cb0b8c17e6d9234361b6e
-  languageName: node
-  linkType: hard
-
 "electron@npm:^27.0.0":
   version: 27.3.11
   resolution: "electron@npm:27.3.11"
@@ -7201,6 +7197,19 @@ __metadata:
   bin:
     electron: cli.js
   checksum: 10c0/9643a284beca7e9855da5d785426426617af05ea2d9377384b8925f757714d9d04994f9f8fd4b4702f630b7b8efe8a7ecf2a1211b5b671570d72fced965c5931
+  languageName: node
+  linkType: hard
+
+"electron@npm:^36.4.0":
+  version: 36.4.0
+  resolution: "electron@npm:36.4.0"
+  dependencies:
+    "@electron/get": "npm:^2.0.0"
+    "@types/node": "npm:^22.7.7"
+    extract-zip: "npm:^2.0.1"
+  bin:
+    electron: cli.js
+  checksum: 10c0/c82fab3fbda01e5be561509f362bbbce1179f50e6f2fe3b5262cbb622887ae7c0f8d0ac728190207d3fb9480f3144ce5ddfbd1a6145627c3d267cd24811e9fdf
   languageName: node
   linkType: hard
 

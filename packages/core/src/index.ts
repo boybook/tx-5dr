@@ -20,6 +20,7 @@ export type { WSClientConfig } from './websocket/WSClient.js';
 
 // 工具导出
 export * from './callsign/callsign.js';
+export * from './utils/cycleUtils.js';
 
 // 类型导出
 export * from './types/index.js';

@@ -394,4 +394,11 @@ export class WSClient extends WSMessageHandler {
       clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
     });
   }
+
+  /**
+   * 操作员请求呼叫某人
+   */
+  requestCall(operatorId: string, callsign: string): void {
+    this.send(WSMessageType.OPERATOR_REQUEST_CALL, { operatorId, callsign });
+  }
 } 

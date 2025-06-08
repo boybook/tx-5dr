@@ -1,16 +1,6 @@
 import { z } from 'zod';
 
 /**
- * 周期类型枚举
- */
-export enum CycleType {
-  /** 偶数/奇数周期（如 FT8） */
-  EVEN_ODD = 'EVEN_ODD',
-  /** 连续周期（如 FT4） */
-  CONTINUOUS = 'CONTINUOUS'
-}
-
-/**
  * 模式描述符 - 定义 FT8/FT4 等模式的时序参数
  */
 export const ModeDescriptorSchema = z.object({
@@ -28,12 +18,6 @@ export const ModeDescriptorSchema = z.object({
    * 支持负偏移，可以获取时隙结束前或其他周期的音频数据
    */
   windowTiming: z.array(z.number()),
-  /** 
-   * 周期类型
-   * EVEN_ODD: 偶数/奇数周期（如 FT8）
-   * CONTINUOUS: 连续周期（如 FT4）
-   */
-  cycleType: z.enum(['EVEN_ODD', 'CONTINUOUS']),
   /**
    * 发射时机（毫秒）- 从时隙开始的延迟
    * FT8: 约1180ms (使12.64秒的音频在15秒时隙中居中)
@@ -52,9 +36,7 @@ export const MODES = {
     name: 'FT8',
     slotMs: 15000,
     toleranceMs: 100,
-    // windowTiming: [-2000, -1500, -1000, -500, -250, 0, 250, 500, 1000],
     windowTiming: [-1500, -1000, -500, 0, 250, 500],
-    cycleType: 'EVEN_ODD',
     transmitTiming: 1180 // (15000 - 12640) / 2 = 1180ms
   } as ModeDescriptor,
   FT4: {
@@ -62,7 +44,6 @@ export const MODES = {
     slotMs: 7500,
     toleranceMs: 50,
     windowTiming: [0],
-    cycleType: 'CONTINUOUS',
     transmitTiming: 550 // (7500 - 6400) / 2 = 550ms
   } as ModeDescriptor,
 } as const; 

@@ -1,4 +1,4 @@
-import { QSOContext, FT8MessageType, ParsedFT8Message, QSOCommand, StrategiesResult, FT8MessageCQ, FT8MessageCall, FT8MessageSignalReport, FT8MessageRogerReport, QSORecord, FT8MessageRRR } from '@tx5dr/contracts';
+import { QSOContext, FT8MessageType, ParsedFT8Message, QSOCommand, StrategiesResult, FT8MessageCQ, FT8MessageCall, FT8MessageSignalReport, FT8MessageRogerReport, QSORecord, FT8MessageRRR, FrameMessage, SlotInfo } from '@tx5dr/contracts';
 import { ITransmissionStrategy } from '../ITransmissionStrategy';
 import { FT8MessageParser } from '../../../parser/ft8-message-parser.js';
 import { RadioOperator } from '../../RadioOperator';
@@ -307,6 +307,23 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         return this._context;
     }
 
+    changeState(state: SlotsIndex) {
+        const oldState = this.state;
+        this.state = state;
+        this.timeoutCycles = 0;
+        
+        // 状态变化时通知槽位更新
+        if (oldState !== this.state) {
+            this.notifyStateChanged();
+        }
+        
+        // 调用新状态的onEnter
+        const newState = states[this.state];
+        if (newState.onEnter) {
+            newState.onEnter(this);
+        }
+    }
+
     async handleReceivedAndDicideNext(messages: ParsedFT8Message[]): Promise<StrategiesResult> {
         const currentState = states[this.state];
 
@@ -322,20 +339,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             /* if (result.changeState !== 'TX6') {
                 this.operator.start();  // 启动发射
             } */
-            const oldState = this.state;
-            this.state = result.changeState;
-            this.timeoutCycles = 0;
-            
-            // 状态变化时通知槽位更新
-            if (oldState !== this.state) {
-                this.notifyStateChanged();
-            }
-            
-            // 调用新状态的onEnter
-            const newState = states[this.state];
-            if (newState.onEnter) {
-                newState.onEnter(this);
-            }
+            this.changeState(result.changeState);
         } else {
             // 增加超时计数
             this.timeoutCycles++;
@@ -369,9 +373,59 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         return this.slots[this.state];
     }
 
-    requestCall(callsign: string): void {
+    requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
+        console.log(`[StandardQSOStrategy.requestCall] (${this.operator.config.myCallsign}) 请求通联 ${callsign}`, lastMessage);
+        if (!lastMessage) {
+            this.context.targetCallsign = callsign;
+            this.updateSlots();
+            this.changeState('TX1');  // 呼叫他
+            return;
+        }
         this.context.targetCallsign = callsign;
+        this.context.reportSent = lastMessage.message.snr;
+        const msg = FT8MessageParser.parseMessage(lastMessage.message.message);
+        const parsedMessage: ParsedFT8Message = {
+            message: msg,
+            snr: lastMessage.message.snr,
+            dt: lastMessage.message.dt,
+            df: lastMessage.message.freq,
+            rawMessage: lastMessage.message.message,
+            slotId: lastMessage.slotInfo.id,
+            timestamp: lastMessage.slotInfo.startMs
+        }
+        if (msg.type === FT8MessageType.UNKNOWN || msg.type === FT8MessageType.CUSTOM) {
+            this.updateSlots();
+            this.changeState('TX1');  // 呼叫他
+            return;
+        }
+        // 包含 targetCallsign 的消息
+        if (msg.type === FT8MessageType.SIGNAL_REPORT || msg.type === FT8MessageType.CALL || msg.type === FT8MessageType.ROGER_REPORT || msg.type === FT8MessageType.RRR || msg.type === FT8MessageType.SEVENTY_THREE) {
+            if (msg.targetCallsign === this._context.config.myCallsign) {
+                // 和我有关，则设置当前状态到对应消息的上一步，然后立即执行原始 handleReceivedAndDicideNext
+                if (msg.type === FT8MessageType.CALL) {
+                    this.changeState('TX6');
+                } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
+                    this.changeState('TX1');
+                } else if (msg.type === FT8MessageType.ROGER_REPORT) {
+                    this.changeState('TX2');
+                } else if (msg.type === FT8MessageType.RRR) {
+                    this.changeState('TX3');
+                } else if (msg.type === FT8MessageType.SEVENTY_THREE) {
+                    this.changeState('TX4');
+                }
+                this.updateSlots();
+                this.handleReceivedAndDicideNext([parsedMessage]);
+                return;
+            } else {
+                // 和我无关，那么就正常CQ他
+                this.updateSlots();
+                this.changeState('TX1');  // 呼叫他
+            }
+            return;
+        }
+        // 不包含 targetCallsign 的消息
         this.updateSlots();
+        this.changeState('TX1');  // 呼叫他
     }
 
     userCommand?(command: QSOCommand): any {
