@@ -7,92 +7,21 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "dev": "wait-on http://localhost:4000 http://localhost:5173 && cd ../.. && NODE_ENV=development electron --experimental-specifier-resolution=node --enable-source-maps .",
-    "start": "cd ../.. && EMBEDDED=true electron --experimental-specifier-resolution=node --enable-source-maps .",
-    "lint": "eslint src/**/*.ts",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dev": "wait-on http://localhost:4000 http://localhost:5173 && cd ../.. && node scripts/fix-naudiodon.js && NODE_ENV=development electron --experimental-specifier-resolution=node --enable-source-maps .",
+    "start": "cd ../.. && node scripts/fix-naudiodon.js && electron --experimental-specifier-resolution=node --enable-source-maps .",
+    "lint": "eslint src/**/*.ts"
   },
   "dependencies": {
+    "@tx5dr/server": "workspace:*",
     "esbuild": "^0.20.0"
   },
   "devDependencies": {
     "@tx5dr/electron-preload": "workspace:*",
-    "@tx5dr/server": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",
     "@types/node": "^20.0.0",
     "electron": "^36.4.0",
-    "electron-builder": "26.0.12",
     "eslint": "^8.0.0",
     "typescript": "^5.0.0",
     "wait-on": "^7.0.0"
-  },
-  "build": {
-    "appId": "com.tx5dr.app",
-    "productName": "TX-5DR",
-    "directories": {
-      "output": "../../dist"
-    },
-    "files": [
-      "dist/**/*",
-      "../../packages/web/dist/**/*",
-      "../../packages/server/dist/**/*",
-      "../../packages/core/dist/**/*",
-      "../../packages/contracts/dist/**/*",
-      "../../packages/electron-preload/dist/**/*",
-      "../../node_modules/**/*",
-      "../../packages/server/node_modules/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "../../packages/web/dist",
-        "to": "app/web",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "mac": {
-      "category": "public.app-category.utilities",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        }
-      ]
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    }
   }
 }

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+const { contextBridge, ipcRenderer } = require('electron');
 
 /**
  * Electron Preload 脚本
@@ -122,4 +122,7 @@ declare global {
       };
     };
   }
-} 
+}
+
+// 导出空对象使其成为模块
+export {}; 

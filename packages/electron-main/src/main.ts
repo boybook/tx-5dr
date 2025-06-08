@@ -1,17 +1,41 @@
 import { app, BrowserWindow, Menu } from 'electron';
-import { join, resolve } from 'path';
-import { spawn } from 'child_process';
-import { createRequire } from 'module';
+import { join } from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+
+// 直接导入服务端模块
+import { createServer } from '@tx5dr/server/server';
+import { DigitalRadioEngine } from '@tx5dr/server/DigitalRadioEngine';
 
 // 获取当前模块的目录（ESM中的__dirname替代方案）
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-let serverProcess: any = null;
+let embeddedServer: any = null;
 let serverCheckInterval: any = null;
+
+async function startEmbeddedServer(): Promise<boolean> {
+  try {
+    console.log('🚀 启动嵌入式服务器...');
+    
+    // 直接创建服务器实例
+    embeddedServer = await createServer();
+    await embeddedServer.listen({ port: 4000, host: '0.0.0.0' });
+    console.log('🚀 TX-5DR server running on http://localhost:4000');
+    
+    // 启动时钟系统
+    const clockManager = DigitalRadioEngine.getInstance();
+    console.log('🕐 启动时钟系统进行测试...');
+    await clockManager.start();
+    console.log('✅ 嵌入式服务器启动完成！');
+    
+    return true;
+  } catch (error) {
+    console.error('❌ 嵌入式服务器启动失败:', error);
+    return false;
+  }
+}
 
 async function checkServerHealth(): Promise<boolean> {
   return new Promise((resolve) => {
@@ -23,15 +47,10 @@ async function checkServerHealth(): Promise<boolean> {
       timeout: 2000
     };
     
-    // 只在服务器进程存在时输出调试信息
-    if (serverProcess && !serverProcess.killed) {
-      console.log('🩺 [健康检查] 正在连接 http://localhost:4000/...');
-    }
+    console.log('🩺 [健康检查] 正在连接 http://localhost:4000/...');
     
     const req = http.request(options, (res: any) => {
-      if (serverProcess && !serverProcess.killed) {
-        console.log(`🩺 [健康检查] 收到响应，状态码: ${res.statusCode}`);
-      }
+      console.log(`🩺 [健康检查] 收到响应，状态码: ${res.statusCode}`);
       
       let data = '';
       res.on('data', (chunk: any) => {
@@ -39,24 +58,18 @@ async function checkServerHealth(): Promise<boolean> {
       });
       
       res.on('end', () => {
-        if (serverProcess && !serverProcess.killed) {
-          console.log(`🩺 [健康检查] 响应数据: ${data}`);
-        }
+        console.log(`🩺 [健康检查] 响应数据: ${data}`);
         resolve(res.statusCode === 200);
       });
     });
     
     req.on('error', (err: any) => {
-      if (serverProcess && !serverProcess.killed) {
-        console.log(`🩺 [健康检查] 连接错误: ${err.message}`);
-      }
+      console.log(`🩺 [健康检查] 连接错误: ${err.message}`);
       resolve(false);
     });
     
     req.on('timeout', () => {
-      if (serverProcess && !serverProcess.killed) {
-        console.log('🩺 [健康检查] 连接超时');
-      }
+      console.log('🩺 [健康检查] 连接超时');
       resolve(false);
     });
     
@@ -64,130 +77,79 @@ async function checkServerHealth(): Promise<boolean> {
   });
 }
 
-async function waitForServerOrStart() {
-  if (process.env.EMBEDDED === 'true') {
-    console.log('🚀 Starting embedded TX-5DR server...');
-    
-    // 启动服务器进程（保存进程引用）
-    serverProcess = spawn('yarn', ['workspace', '@tx5dr/server', 'start'], {
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        NODE_ENV: 'production'
-      }
-    });
-
-    // 监听服务器进程事件
-    serverProcess.on('close', (code: number) => {
-      console.log(`📡 [服务器进程] 进程退出，代码: ${code}`);
-      serverProcess = null;
-    });
-
-    serverProcess.on('error', (error: Error) => {
-      console.error('❌ [服务器进程] 启动失败:', error);
-      serverProcess = null;
-    });
-
-    console.log('🚀 Embedded server is starting...');
-    
-    // 等待服务器真正启动完成
-    return new Promise<boolean>((resolve) => {
-      let attempts = 0;
-      const maxAttempts = 60; // 60秒超时
-      
-      // 延迟3秒开始检查，给服务器更多启动时间
-      setTimeout(async () => {
-        const checkInterval = setInterval(async () => {
-          // 如果服务器进程已经退出，返回失败
-          if (!serverProcess || serverProcess.killed) {
-            console.log('❌ [嵌入式服务器] 服务器进程意外退出');
-            clearInterval(checkInterval);
-            resolve(false);
-            return;
-          }
-          
-          attempts++;
-          console.log(`🔍 [嵌入式服务器] 健康检查 ${attempts}/${maxAttempts}...`);
-          
-          const isHealthy = await checkServerHealth();
-          if (isHealthy) {
-            console.log(`✅ TX-5DR embedded server is ready! (took ${attempts} seconds)`);
-            clearInterval(checkInterval);
-            resolve(true);
-          } else if (attempts >= maxAttempts) {
-            console.error('❌ Embedded server failed to start within 60 seconds');
-            clearInterval(checkInterval);
-            resolve(false);
-          } else {
-            console.log(`⏳ Waiting for embedded server... (${attempts}/${maxAttempts})`);
-          }
-        }, 1000);
-      }, 3000);
-    });
-  } else {
-    // 检查服务器是否已经运行
-    console.log('🔍 [外部服务器] 检查服务器是否已经运行...');
-    const isHealthy = await checkServerHealth();
-    if (isHealthy) {
-      console.log('✅ TX-5DR server is already running!');
-      return true;
-    } else {
-      console.log('⚠️ TX-5DR server is not running. Please start it manually with:');
-      console.log('   yarn workspace @tx5dr/server dev');
-      return false;
-    }
-  }
-}
-
 // 清理函数
 function cleanup() {
   console.log('🧹 [清理] 正在清理资源...');
   
-  // 清理常规服务器健康检查定时器
+  const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
+  
+  // 清理服务器健康检查定时器
   if (serverCheckInterval) {
     clearInterval(serverCheckInterval);
     serverCheckInterval = null;
-    console.log('🧹 [清理] 已清理常规健康检查定时器');
+    console.log('🧹 [清理] 已清理健康检查定时器');
   }
   
-  // 清理服务器进程
-  if (serverProcess && !serverProcess.killed) {
-    console.log('🧹 [清理] 正在终止服务器进程...');
+  // 只在生产模式下清理嵌入式服务器
+  if (!isDevelopment && embeddedServer) {
+    console.log('🧹 [清理] 正在关闭嵌入式服务器...');
     try {
-      // 先尝试优雅关闭
-      serverProcess.kill('SIGTERM');
-      
-      // 如果3秒后还没关闭，强制终止
-      setTimeout(() => {
-        if (serverProcess && !serverProcess.killed) {
-          console.log('🧹 [清理] 强制终止服务器进程');
-          serverProcess.kill('SIGKILL');
-        }
-      }, 3000);
+      embeddedServer.close();
+      embeddedServer = null;
+      console.log('🧹 [清理] 嵌入式服务器已关闭');
     } catch (error) {
-      console.error('❌ [清理] 终止服务器进程失败:', error);
+      console.error('❌ [清理] 关闭嵌入式服务器失败:', error);
     }
+  } else if (isDevelopment) {
+    console.log('🧹 [清理] 开发模式：跳过嵌入式服务器清理');
   }
 }
 
 async function createWindow() {
-  // 检查或启动服务器
-  const serverReady = await waitForServerOrStart();
+  console.log('🔍 createWindow 函数开始执行...');
+  const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
+  console.log('🔍 isDevelopment:', isDevelopment);
   
-  if (!serverReady) {
-    if (process.env.EMBEDDED === 'true') {
+  if (isDevelopment) {
+    console.log('🛠️ 开发模式：使用外部服务器 (http://localhost:4000)');
+    console.log('📋 请确保已经启动开发服务器：yarn dev');
+    
+    // 在开发模式下，等待外部服务器准备就绪
+    console.log('⏳ 等待外部服务器启动...');
+    let serverReady = false;
+    for (let i = 0; i < 30; i++) { // 最多等待30秒
+      serverReady = await checkServerHealth();
+      if (serverReady) break;
+      console.log(`⏳ 等待外部服务器... (${i + 1}/30)`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    if (!serverReady) {
+      console.error('❌ 无法连接到外部服务器 (http://localhost:4000)');
+      console.error('💡 请先启动开发服务器：yarn dev');
+      process.exit(1);
+    }
+    
+    console.log('✅ 外部服务器连接成功！');
+  } else {
+    // 生产模式：启动嵌入式服务器
+    console.log('🚀 生产模式：启动嵌入式服务器...');
+    const serverStarted = await startEmbeddedServer();
+    
+    if (!serverStarted) {
       console.error('❌ Failed to start embedded server. Exiting...');
       process.exit(1);
-    } else {
-      console.log('📱 Opening app anyway - you can start the server later');
     }
-  } else {
-    console.log('🎉 Server is ready! Creating application window...');
+    
+    console.log('✅ 嵌入式服务器启动完成！');
   }
+
+  console.log('🎉 Server is ready! Creating application window...');
 
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    show: true, // 立即显示窗口
     titleBarStyle: 'hiddenInset', // macOS 下隐藏标题栏但保留交通灯按钮
     titleBarOverlay: process.platform === 'win32' ? {
       color: '#ffffff',
@@ -199,8 +161,10 @@ async function createWindow() {
       nodeIntegration: false,
       webSecurity: false, // 在开发环境中禁用 web 安全策略
       allowRunningInsecureContent: true,
-      // 使用ESM格式的预加载脚本
-      preload: join(__dirname, '../../electron-preload/dist/preload.mjs'),
+      // 使用预加载脚本
+      preload: app.isPackaged
+        ? join(process.resourcesPath, 'app.asar', 'packages', 'electron-preload', 'dist', 'preload.js')
+        : join(__dirname, '../../electron-preload/dist/preload.js'),
     },
   });
 
@@ -227,26 +191,108 @@ async function createWindow() {
   serverCheckInterval = setInterval(async () => {
     const isHealthy = await checkServerHealth();
     if (!isHealthy) {
-      console.log('⚠️ Server connection lost');
-  }
+      if (isDevelopment) {
+        console.log('⚠️ 外部服务器连接丢失 (开发模式)');
+      } else {
+        console.log('⚠️ 嵌入式服务器连接丢失');
+      }
+    }
   }, 10000); // 每10秒检查一次
 
-  // Load the app
-  if (process.env.NODE_ENV === 'development') {
-    console.log('Loading development URL: http://localhost:5173');
-    await mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
-  } else {
-    const indexPath = join(__dirname, '../../web/dist/index.html');
-    console.log('Loading production file:', indexPath);
-    await mainWindow.loadFile(indexPath);
+  // 立即聚焦窗口并激活应用
+  console.log('🎉 正在显示和聚焦窗口...');
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.moveTop();
+  
+  // macOS特殊处理：确保应用激活到前台
+  if (process.platform === 'darwin') {
+    app.focus({ steal: true });
+    // 额外的macOS激活步骤
+    if (app.dock) {
+      app.dock.bounce('critical');
+    }
   }
+
+  // Load the app
+  if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
+    console.log('Loading development URL: http://localhost:5173');
+    try {
+      await mainWindow.loadURL('http://localhost:5173');
+      if (isDevelopment) {
+        mainWindow.webContents.openDevTools();
+      }
+    } catch (error) {
+      console.error('❌ 加载开发页面失败:', error);
+    }
+  } else {
+    // 打包后的路径
+    const indexPath = app.isPackaged 
+      ? join(process.resourcesPath, 'app.asar', 'packages', 'web', 'dist', 'index.html')
+      : join(__dirname, '../../web/dist/index.html');
+    console.log('Loading production file:', indexPath);
+    try {
+      await mainWindow.loadFile(indexPath);
+    } catch (error) {
+      console.error('❌ 加载生产页面失败:', error);
+    }
+  }
+  
+  // 页面加载完成后再次确保聚焦
+  mainWindow.once('ready-to-show', () => {
+    console.log('🎉 页面加载完成，确保窗口聚焦...');
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.moveTop();
+    
+    if (process.platform === 'darwin') {
+      app.focus({ steal: true });
+      // 强制将应用带到前台
+      app.show();
+    }
+  });
+  
+  // 确保窗口返回以便后续使用
+  console.log('🔍 createWindow 函数准备返回窗口:', mainWindow ? 'BrowserWindow实例' : 'undefined');
+  return mainWindow;
 }
 
 // 启动应用
 const startApp = async () => {
   await app.whenReady();
-  await createWindow();
+  
+  // macOS: 确保应用有权限激活到前台
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.show();
+  }
+  
+  console.log('🔍 正在调用 createWindow...');
+  const window = await createWindow();
+  console.log('🔍 createWindow 返回值:', window ? 'BrowserWindow实例' : 'undefined或null');
+  
+  // 创建窗口后额外确保显示和聚焦
+  setTimeout(() => {
+    if (window && !window.isDestroyed()) {
+      console.log('🔄 额外聚焦检查...');
+      window.show();
+      window.focus();
+      window.moveTop();
+      
+      if (process.platform === 'darwin') {
+        app.focus({ steal: true });
+        app.show();
+        // 多次尝试确保窗口显示
+        setTimeout(() => {
+          if (!window.isDestroyed()) {
+            window.show();
+            window.focus();
+          }
+        }, 100);
+      }
+    } else {
+      console.log('⚠️ 窗口为空或已销毁，无法进行额外聚焦');
+    }
+  }, 500); // 延迟500ms确保所有初始化完成
 };
 
 // 应用退出事件处理
@@ -264,8 +310,21 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
+  // macOS: 当点击dock图标时
   if (BrowserWindow.getAllWindows().length === 0) {
+    console.log('📱 [应用] activate事件：创建新窗口');
     createWindow();
+  } else {
+    // 如果已有窗口，显示并聚焦第一个窗口
+    const existingWindow = BrowserWindow.getAllWindows()[0];
+    if (existingWindow) {
+      console.log('📱 [应用] activate事件：显示现有窗口');
+      if (existingWindow.isMinimized()) {
+        existingWindow.restore();
+      }
+      existingWindow.show();
+      existingWindow.focus();
+    }
   }
 }); 
 
@@ -282,7 +341,6 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// 如果直接运行此文件，启动应用（ESM版本检查）
-if (import.meta.url === `file://${process.argv[1]}`) {
-  startApp().catch(console.error);
-} 
+// 确保应用总是启动
+console.log('🚀 应用启动流程开始...');
+startApp().catch(console.error); 

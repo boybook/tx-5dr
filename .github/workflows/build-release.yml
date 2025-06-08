@@ -1,0 +1,189 @@
+name: Build and Release Electron App
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            build_command: make
+            artifact_name: tx-5dr-windows-x64
+            
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+            build_command: make
+            artifact_name: tx-5dr-macos-arm64
+            
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            build_command: make
+            artifact_name: tx-5dr-linux-x64
+            
+          - os: ubuntu-latest
+            platform: linux
+            arch: arm64
+            build_command: make
+            artifact_name: tx-5dr-linux-arm64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.1'
+          cache: 'yarn'
+
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+
+      - name: Setup Python (for native modules)
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
+          
+      - name: Setup MSBuild (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v1
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+        env:
+          npm_config_cache: .npm
+          ELECTRON_CACHE: .electron-cache
+          ELECTRON_BUILDER_CACHE: .electron-builder-cache
+
+      - name: Build application
+        run: yarn build
+        env:
+          NODE_ENV: production
+
+      - name: Package application
+        run: yarn ${{ matrix.build_command }}
+        env:
+          NODE_ENV: production
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+
+      - name: List build outputs (Debug)
+        shell: bash
+        run: |
+          echo "=== Build Output Directory ==="
+          ls -la out/ || echo "No out/ directory found"
+          find out/ -type f -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.tar.gz" || echo "No installable files found"
+
+      - name: Upload artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            out/make/**/*.exe
+            out/make/**/*.zip
+          retention-days: 30
+
+      - name: Upload artifacts (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            out/make/**/*.zip
+          retention-days: 30
+
+      - name: Upload artifacts (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            out/make/**/*.deb
+            out/make/**/*.rpm
+            out/make/**/*.zip
+          retention-days: 30
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Display structure of downloaded files
+        run: ls -R dist/
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          release_name: TX-5DR ${{ github.event.inputs.version }}
+          body: |
+            ## TX-5DR Release ${{ github.event.inputs.version }}
+            
+            ### 🚀 新功能
+            - Electron应用多平台自动构建
+            - 支持Windows、macOS、Linux平台
+            
+            ### 📦 下载说明
+            - **Windows (x64)**: 下载 `.exe` 或 `.msi` 文件
+            - **macOS (ARM64)**: 下载 `.dmg` 文件 
+            - **Linux (x64/ARM64)**: 下载 `.AppImage`、`.deb` 或 `.rpm` 文件
+            
+            ### 🔧 系统要求
+            - Node.js >= 22.15.1
+            - 操作系统: Windows 10+, macOS 11+, Ubuntu 20.04+
+            
+            ---
+            自动构建于: ${{ github.sha }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Assets
+        run: |
+          for file in dist/**/*; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file"
+              gh release upload ${{ github.event.inputs.version }} "$file" --clobber
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 

@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
-    "./server": "./dist/server.js"
+    "./server": "./dist/server.js",
+    "./DigitalRadioEngine": "./dist/DigitalRadioEngine.js"
   },
   "scripts": {
     "build": "tsc",
