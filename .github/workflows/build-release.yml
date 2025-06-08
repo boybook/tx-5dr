@@ -89,12 +89,21 @@ jobs:
         run: |
           yarn install --immutable || {
             echo "Immutable install failed, trying to update lockfile..."
-            yarn install
+            yarn install || {
+              echo "Standard install failed, applying naudiodon2 fixes and retrying..."
+              node scripts/fix-naudiodon.js
+              yarn install || {
+                echo "Final fallback: installing with --ignore-optional..."
+                yarn install --ignore-optional
+              }
+            }
           }
         env:
           npm_config_cache: .npm
           ELECTRON_CACHE: .electron-cache
           ELECTRON_BUILDER_CACHE: .electron-builder-cache
+          # Try to use prebuilt binaries first
+          npm_config_build_from_source: false
 
       - name: Build application
         run: yarn build
