@@ -263,6 +263,8 @@ export interface CallsignInfo {
   prefix?: string;
   entityCode?: number;
   continent?: string[];
+  cqZone?: number;
+  ituZone?: number;
 }
 
 export interface FT8LocationInfo {
@@ -271,6 +273,11 @@ export interface FT8LocationInfo {
   flag?: string;
   callsign?: string;
   grid?: string;
+}
+
+export interface GridCoordinates {
+  lat: number;
+  lon: number;
 }
 
 // 中国呼号分区信息
@@ -495,7 +502,9 @@ class DXCCIndex {
         flag: '🇨🇳',
         prefix: upperCallsign.substring(0, 2),
         entityCode: 318, // 中国的 DXCC 实体代码
-        continent: ['AS']
+        continent: ['AS'],
+        cqZone: 24,
+        ituZone: 44
       };
     }
 
@@ -556,8 +565,177 @@ export function getCallsignInfo(callsign: string): CallsignInfo | undefined {
     flag: entity.flag,
     prefix: callsign.match(/^[A-Z]+/)?.[0],
     entityCode: entity.entityCode,
-    continent: entity.continent
+    continent: entity.continent,
+    cqZone: entity.cqZone,
+    ituZone: entity.ituZone
   };
+}
+
+/**
+ * 提取呼号前缀
+ * @param callsign 呼号
+ * @returns 前缀
+ */
+export function extractCallsignPrefix(callsign: string): string {
+  if (!callsign) return '';
+  
+  // 移除常见的后缀标识符（如 /P, /M, /MM, /AM, /QRP等）
+  const cleanCallsign = callsign.split('/')[0].toUpperCase();
+  
+  // 查找最长匹配的前缀
+  let longestMatch = '';
+  const allEntities = dxccIndex.getAllEntities();
+  
+  for (const entity of allEntities) {
+    if (entity.prefix) {
+      const prefixes = entity.prefix.split(',').map((p: string) => p.trim());
+      for (const prefix of prefixes) {
+        if (cleanCallsign.startsWith(prefix) && prefix.length > longestMatch.length) {
+          longestMatch = prefix;
+        }
+      }
+    }
+  }
+  
+  // 如果没有找到匹配的前缀，尝试提取前1-2个字符作为前缀
+  if (!longestMatch) {
+    // 如果第二个字符是数字，通常前缀只有一个字母
+    if (cleanCallsign.length >= 2 && /\d/.test(cleanCallsign[1])) {
+      longestMatch = cleanCallsign[0];
+    } else if (cleanCallsign.length >= 2) {
+      // 否则取前两个字符
+      longestMatch = cleanCallsign.substring(0, 2);
+    } else {
+      longestMatch = cleanCallsign;
+    }
+  }
+  
+  return longestMatch;
+}
+
+/**
+ * 提取呼号前缀（向后兼容别名）
+ * @param callsign 呼号
+ * @returns 前缀
+ */
+export const extractPrefix = extractCallsignPrefix;
+
+/**
+ * 验证呼号格式是否有效
+ * @param callsign 呼号
+ * @returns 是否有效
+ */
+export function isValidCallsign(callsign: string): boolean {
+  if (!callsign || callsign.length < 3) return false;
+  
+  // 基本的呼号格式验证
+  // 呼号通常包含字母和数字，可能有/分隔符
+  const callsignPattern = /^[A-Z0-9]{1,3}[0-9][A-Z0-9]{1,4}(\/[A-Z0-9]+)?$/i;
+  return callsignPattern.test(callsign);
+}
+
+/**
+ * 根据频率获取频段
+ * @param frequency 频率（Hz）
+ * @returns 频段信息
+ */
+export function getBandFromFrequency(frequency: number): string {
+  const freqMHz = frequency / 1000000;
+  
+  if (freqMHz >= 1.8 && freqMHz <= 2.0) return '160m';
+  if (freqMHz >= 3.5 && freqMHz <= 4.0) return '80m';
+  if (freqMHz >= 5.0 && freqMHz <= 5.5) return '60m';
+  if (freqMHz >= 7.0 && freqMHz <= 7.3) return '40m';
+  if (freqMHz >= 10.1 && freqMHz <= 10.15) return '30m';
+  if (freqMHz >= 14.0 && freqMHz <= 14.35) return '20m';
+  if (freqMHz >= 18.068 && freqMHz <= 18.168) return '17m';
+  if (freqMHz >= 21.0 && freqMHz <= 21.45) return '15m';
+  if (freqMHz >= 24.89 && freqMHz <= 24.99) return '12m';
+  if (freqMHz >= 28.0 && freqMHz <= 29.7) return '10m';
+  if (freqMHz >= 50 && freqMHz <= 54) return '6m';
+  if (freqMHz >= 144 && freqMHz <= 148) return '2m';
+  if (freqMHz >= 420 && freqMHz <= 450) return '70cm';
+  
+  return 'Unknown';
+}
+
+/**
+ * 将网格定位符转换为经纬度坐标
+ * @param grid 网格定位符（如 "FN31"）
+ * @returns 经纬度坐标
+ */
+export function gridToCoordinates(grid: string): GridCoordinates | null {
+  if (!grid || grid.length < 4) return null;
+  
+  const upperGrid = grid.toUpperCase();
+  
+  // 提取字段
+  const lon1 = upperGrid.charCodeAt(0) - 65; // A=0, R=17
+  const lat1 = upperGrid.charCodeAt(1) - 65; // A=0, R=17
+  const lon2 = parseInt(upperGrid[2]);
+  const lat2 = parseInt(upperGrid[3]);
+  
+  if (isNaN(lon2) || isNaN(lat2)) return null;
+  
+  // 计算经纬度
+  let lon = (lon1 * 20 + lon2 * 2) - 180 + 1;
+  let lat = (lat1 * 10 + lat2) - 90 + 0.5;
+  
+  // 如果有子网格（6位网格）
+  if (grid.length >= 6) {
+    const lon3 = upperGrid.charCodeAt(4) - 65;
+    const lat3 = upperGrid.charCodeAt(5) - 65;
+    lon += lon3 * 5 / 60;
+    lat += lat3 * 2.5 / 60;
+  }
+  
+  return { lat, lon };
+}
+
+/**
+ * 计算网格距离（公里）
+ * @param grid1 网格1
+ * @param grid2 网格2
+ * @returns 距离（公里）
+ */
+export function calculateGridDistance(grid1: string, grid2: string): number | null {
+  const coord1 = gridToCoordinates(grid1);
+  const coord2 = gridToCoordinates(grid2);
+  
+  if (!coord1 || !coord2) return null;
+  
+  return haversineDistance(coord1, coord2);
+}
+
+/**
+ * 使用Haversine公式计算两点间的距离
+ * @param coord1 坐标1
+ * @param coord2 坐标2
+ * @returns 距离（公里）
+ */
+function haversineDistance(
+  coord1: GridCoordinates,
+  coord2: GridCoordinates
+): number {
+  const R = 6371; // 地球半径（公里）
+  const dLat = toRadians(coord2.lat - coord1.lat);
+  const dLon = toRadians(coord2.lon - coord1.lon);
+  
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(toRadians(coord1.lat)) * Math.cos(toRadians(coord2.lat)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * 角度转弧度
+ * @param degrees 角度
+ * @returns 弧度
+ */
+function toRadians(degrees: number): number {
+  return degrees * (Math.PI / 180);
 }
 
 /**
@@ -624,4 +802,35 @@ export function getSupportedCountries(): Array<{ country: string; flag: string; 
       flag: entity.flag,
       prefixes: entity.prefix ? entity.prefix.split(',').map((p: string) => p.trim()) : []
     }));
+}
+
+/**
+ * 获取呼号的前缀信息
+ * @param callsign 呼号
+ * @returns 前缀信息
+ */
+export function getPrefixInfo(callsign: string): any | null {
+  if (!callsign) return null;
+  const entity = dxccIndex.findEntityByCallsign(callsign);
+  return entity;
+}
+
+/**
+ * 获取CQ分区
+ * @param callsign 呼号
+ * @returns CQ分区号
+ */
+export function getCQZone(callsign: string): number | null {
+  const info = getCallsignInfo(callsign);
+  return info?.cqZone || null;
+}
+
+/**
+ * 获取ITU分区
+ * @param callsign 呼号
+ * @returns ITU分区号
+ */
+export function getITUZone(callsign: string): number | null {
+  const info = getCallsignInfo(callsign);
+  return info?.ituZone || null;
 } 

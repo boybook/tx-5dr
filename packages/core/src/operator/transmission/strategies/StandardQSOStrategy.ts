@@ -369,6 +369,11 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         return this.slots[this.state];
     }
 
+    requestCall(callsign: string): void {
+        this.context.targetCallsign = callsign;
+        this.updateSlots();
+    }
+
     userCommand?(command: QSOCommand): any {
         switch (command.command) {
             case 'update_context':

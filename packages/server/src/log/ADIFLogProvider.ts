@@ -1,5 +1,15 @@
 import { QSORecord } from '@tx5dr/contracts';
-import { ILogProvider, LogQueryOptions, LogStatistics, CallsignAnalysis, CallsignUtils } from '@tx5dr/core';
+import { 
+  ILogProvider, 
+  LogQueryOptions, 
+  LogStatistics, 
+  CallsignAnalysis,
+  getBandFromFrequency,
+  extractPrefix,
+  getPrefixInfo,
+  getCQZone,
+  getITUZone
+} from '@tx5dr/core';
 import { AdifParser } from 'adif-parser-ts';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -234,7 +244,7 @@ export class ADIFLogProvider implements ILogProvider {
     adifRecord += `<MODE:${qso.mode.length}>${qso.mode}`;
     adifRecord += `<FREQ:${((qso.frequency / 1000000).toFixed(6)).length}>${(qso.frequency / 1000000).toFixed(6)}`;
     
-    const band = CallsignUtils.getBandFromFrequency(qso.frequency);
+    const band = getBandFromFrequency(qso.frequency);
     adifRecord += `<BAND:${band.length}>${band}`;
     
     // 可选字段
@@ -482,8 +492,8 @@ export class ADIFLogProvider implements ILogProvider {
     this.ensureInitialized();
     
     const upperCallsign = callsign.toUpperCase();
-    const prefix = CallsignUtils.extractPrefix(upperCallsign);
-    const prefixInfo = CallsignUtils.getPrefixInfo(upperCallsign);
+    const prefix = extractPrefix(upperCallsign);
+    const prefixInfo = getPrefixInfo(upperCallsign);
     
     // 查找所有与该呼号的QSO
     const qsos = await this.queryQSOs({ callsign: upperCallsign, operatorId });
@@ -500,22 +510,22 @@ export class ADIFLogProvider implements ILogProvider {
     const allPrefixes = new Set<string>();
     for (const qso of this.qsoCache.values()) {
       if (this.isQSOBelongsToOperator(qso.id, operatorId)) {
-        allPrefixes.add(CallsignUtils.extractPrefix(qso.callsign));
+        allPrefixes.add(extractPrefix(qso.callsign));
       }
     }
     const isNewPrefix = !allPrefixes.has(prefix);
     
     // 检查是否是新CQ/ITU分区
-    const cqZone = CallsignUtils.getCQZone(upperCallsign);
-    const ituZone = CallsignUtils.getITUZone(upperCallsign);
+    const cqZone = getCQZone(upperCallsign);
+    const ituZone = getITUZone(upperCallsign);
     
     const allCQZones = new Set<number>();
     const allITUZones = new Set<number>();
     
     for (const qso of this.qsoCache.values()) {
       if (this.isQSOBelongsToOperator(qso.id, operatorId)) {
-        const qsoCQ = CallsignUtils.getCQZone(qso.callsign);
-        const qsoITU = CallsignUtils.getITUZone(qso.callsign);
+        const qsoCQ = getCQZone(qso.callsign);
+        const qsoITU = getITUZone(qso.callsign);
         if (qsoCQ !== null) allCQZones.add(qsoCQ);
         if (qsoITU !== null) allITUZones.add(qsoITU);
       }
@@ -562,7 +572,7 @@ export class ADIFLogProvider implements ILogProvider {
       byMode.set(qso.mode, modeCount + 1);
       
       // 按频段统计
-      const band = CallsignUtils.getBandFromFrequency(qso.frequency);
+      const band = getBandFromFrequency(qso.frequency);
       const bandCount = byBand.get(band) || 0;
       byBand.set(band, bandCount + 1);
       
