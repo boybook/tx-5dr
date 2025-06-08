@@ -9,7 +9,7 @@ export default {
   packagerConfig: {
     name: 'TX-5DR',
     executableName: 'tx-5dr',
-    icon: './assets/icon',
+    icon: './packages/electron-main/assets/icon',
     appBundleId: 'com.tx5dr.app',
     appCategoryType: 'public.app-category.utilities',
     asar: true,
@@ -70,8 +70,8 @@ export default {
         name: 'TX5DR',
         authors: 'BG5DRB',
         description: 'TX-5DR Ham Radio FT8 Application',
-        setupIcon: './assets/icon.ico',
-        iconUrl: 'https://raw.githubusercontent.com/your-repo/tx-5dr/main/assets/icon.ico'
+        setupIcon: './packages/electron-main/assets/icon.png',
+        iconUrl: 'https://raw.githubusercontent.com/boybook/tx-5dr/main/packages/electron-main/assets/icon.png'
       }
     },
     // macOS Packages
@@ -88,7 +88,7 @@ export default {
         options: {
           maintainer: 'BG5DRB <bg5drb@example.com>',
           homepage: 'https://tx5dr.com',
-          icon: './assets/icon.png',
+          icon: './packages/electron-main/assets/icon.png',
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
           genericName: 'Ham Radio Application'
@@ -101,7 +101,7 @@ export default {
       config: {
         options: {
           homepage: 'https://tx5dr.com',
-          icon: './assets/icon.png',
+          icon: './packages/electron-main/assets/icon.png',
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
           genericName: 'Ham Radio Application',
