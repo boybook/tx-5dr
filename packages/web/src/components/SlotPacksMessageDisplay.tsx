@@ -15,9 +15,17 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const slotPacks = useSlotPacks();
   const [frameGroups, setFrameGroups] = useState<FrameGroup[]>([]);
 
-  // 处理SlotPack数据转换为FT8Group格式
+  // 获取所有启用操作员的呼号列表
+  const getMyCallsigns = (): string[] => {
+    return radio.state.operators
+      .filter(op => op.isActive) // 只获取启用的操作员
+      .map(op => op.context?.myCall || '') // 提取每个操作员的呼号
+      .filter(call => call.trim() !== ''); // 过滤掉空呼号
+  };
+
+      // 处理SlotPack数据转换为FT8Group格式
   useEffect(() => {
-    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd' }>();
+    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean }>();
     const currentMode = radio.state.currentMode;
     
     if (!currentMode) {
@@ -56,7 +64,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         if (!groupsMap.has(groupKey)) {
           groupsMap.set(groupKey, {
             messages: [],
-            cycle: isEvenCycle ? 'even' : 'odd'
+            cycle: isEvenCycle ? 'even' : 'odd',
+            hasTransmission: false
           });
         }
         
@@ -65,8 +74,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         
         const message: FrameDisplayMessage = {
           utc: utcSeconds,
-          db: frame.snr,
-          dt: frame.dt,
+          db: frame.snr === -999 ? 'TX' : frame.snr, // 将发射帧的SNR=-999转换为TX标记
+          dt: frame.snr === -999 ? '-' : frame.dt, // 发射帧的dt显示为'-'
           freq: Math.round(frame.freq),
           message: frame.message,
           ...(locationInfo.country && { country: locationInfo.country }),
@@ -75,16 +84,22 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
           ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis })
         };
         
-        groupsMap.get(groupKey)!.messages.push(message);
+        const group = groupsMap.get(groupKey)!;
+        group.messages.push(message);
+        
+        // 如果是发射帧，标记这个组有发射
+        if (frame.snr === -999) {
+          group.hasTransmission = true;
+        }
       });
     });
 
     // 转换为FT8Group数组并按时间排序
     const groups: FrameGroup[] = Array.from(groupsMap.entries())
-      .map(([time, { messages, cycle }]) => ({
+      .map(([time, { messages, cycle, hasTransmission }]) => ({
         time,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
-        type: 'receive' as const,
+        type: hasTransmission ? 'transmit' as const : 'receive' as const, // 如果有发射帧，组类型为transmit
         cycle
       }))
       .sort((a, b) => a.time.localeCompare(b.time));
@@ -108,5 +123,11 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     );
   }
 
-  return <FramesTable groups={frameGroups} className={className} />;
+  return (
+    <FramesTable 
+      groups={frameGroups} 
+      className={className} 
+      myCallsigns={getMyCallsigns()}
+    />
+  );
 }; 

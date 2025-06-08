@@ -44,6 +44,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   public get operatorManager(): RadioOperatorManager {
     return this._operatorManager;
   }
+
+  /**
+   * 获取时隙包管理器（用于API访问）
+   */
+  public getSlotPackManager(): SlotPackManager {
+    return this.slotPackManager;
+  }
   
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -312,6 +319,27 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.emit('decodeError', { error, request });
     });
     
+    // 监听发射日志事件，将发射信息添加到SlotPackManager
+    this.on('transmissionLog' as any, (data: {
+      operatorId: string;
+      time: string;
+      message: string;
+      frequency: number;
+      slotStartMs: number;
+    }) => {
+      // 生成时隙ID（与解码结果一致的格式）
+      const slotId = `slot-${data.slotStartMs}`;
+      
+      // 添加发射帧到SlotPackManager
+      this.slotPackManager.addTransmissionFrame(
+        slotId,
+        data.operatorId,
+        data.message,
+        data.frequency,
+        data.slotStartMs
+      );
+    });
+
     // 监听 SlotPackManager 事件
     this.slotPackManager.on('slotPackUpdated', async (slotPack) => {
       console.log(`📦 [时钟管理器] 时隙包更新事件: ${slotPack.slotId}`);
@@ -323,14 +351,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         const slotStartTime = new Date(slotPack.startMs);
         
         for (const frame of slotPack.frames) {
-          // 格式: HHMMSS SNR DT FREQ ~ MESSAGE
+          // 格式: HHMMSS SNR DT FREQ ~ MESSAGE  
           const utcTime = slotStartTime.toISOString().slice(11, 19).replace(/:/g, '').slice(0, 6); // HHMMSS
-          const snr = frame.snr >= 0 ? ` ${frame.snr}` : `${frame.snr}`; // SNR 带符号
-          const dt = frame.dt.toFixed(1).padStart(5); // 时间偏移，1位小数，5位宽度
-          const freq = Math.round(frame.freq).toString().padStart(4); // 频率，4位宽度
-          const message = frame.message; // 消息不需要填充
           
-          console.log(` - ${utcTime} ${snr.padStart(3)} ${dt} ${freq} ~  ${message}`);
+          // 检查是否为发射帧
+          if (frame.snr === -999) {
+            // 发射帧显示为 TX
+            console.log(` - ${utcTime}  TX  ${frame.dt.toFixed(1).padStart(5)} ${Math.round(frame.freq).toString().padStart(4)} ~  ${frame.message}`);
+          } else {
+            // 接收帧正常显示SNR
+            const snr = frame.snr >= 0 ? ` ${frame.snr}` : `${frame.snr}`; // SNR 带符号
+            const dt = frame.dt.toFixed(1).padStart(5); // 时间偏移，1位小数，5位宽度
+            const freq = Math.round(frame.freq).toString().padStart(4); // 频率，4位宽度
+            const message = frame.message; // 消息不需要填充
+            
+            console.log(` - ${utcTime} ${snr.padStart(3)} ${dt} ${freq} ~  ${message}`);
+          }
         }
       }
       
@@ -537,7 +573,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     await this.realEncodeQueue.destroy();
     
     // 清理 SlotPackManager
-    this.slotPackManager.cleanup();
+    await this.slotPackManager.cleanup();
     
     // 清理音频混音器
     if (this.audioMixer) {

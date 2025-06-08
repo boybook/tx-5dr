@@ -54,6 +54,13 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     return radio.state.operators.filter(op => op.isActive);
   };
 
+  // 获取所有启用操作员的呼号列表
+  const getMyCallsigns = (): string[] => {
+    return getEnabledOperators()
+      .map(op => op.context?.myCall || '') // 提取每个操作员的呼号
+      .filter(call => call.trim() !== ''); // 过滤掉空呼号
+  };
+
   // 获取所有启用的操作员的呼号和网格
   const getCurrentOperators = () => {
     const enabledOperators = getEnabledOperators();
@@ -234,7 +241,11 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           <p className="text-default-400 text-sm">与我有关的消息将在这里显示</p>
         </div>
       ) : (
-        <FramesTable groups={myFrameGroups} className="h-full" />
+        <FramesTable 
+          groups={myFrameGroups} 
+          className="h-full" 
+          myCallsigns={getMyCallsigns()}
+        />
       )}
     </div>
   );

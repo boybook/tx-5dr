@@ -1,6 +1,7 @@
 import { EventEmitter } from 'eventemitter3';
 import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
+import { SlotPackPersistence } from './SlotPackPersistence.js';
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
@@ -14,9 +15,76 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private slotPacks = new Map<string, SlotPack>();
   private lastSlotPack: SlotPack | null = null;
   private currentMode: ModeDescriptor = MODES.FT8;
+  private persistence: SlotPackPersistence;
+  private persistenceEnabled: boolean = true;
   
   constructor() {
     super();
+    this.persistence = new SlotPackPersistence();
+  }
+
+  /**
+   * 添加发射帧到指定时隙包
+   * 将发射的消息作为特殊的帧添加到SlotPack中
+   */
+  addTransmissionFrame(slotId: string, operatorId: string, message: string, frequency: number, timestamp: number): void {
+    try {
+      // 获取或创建时隙包
+      let slotPack = this.slotPacks.get(slotId);
+      if (!slotPack) {
+        slotPack = this.createSlotPack(slotId, timestamp);
+        this.slotPacks.set(slotId, slotPack);
+        
+        // 更新最新的 SlotPack
+        if (!this.lastSlotPack || slotPack.startMs > this.lastSlotPack.startMs) {
+          this.lastSlotPack = slotPack;
+        }
+      }
+
+      // 创建发射帧，使用特殊值标识为发射
+      const transmissionFrame: FrameMessage = {
+        message: message,
+        snr: -999, // 使用特殊SNR值标识发射(-999表示TX)
+        dt: 0.0, // 发射消息时间偏移设为0
+        freq: frequency, // 使用操作员配置的频率
+        confidence: 1.0, // 发射消息置信度为1.0
+        // 不设置logbookAnalysis，发射消息不需要分析
+      };
+
+      // 检查是否已经存在相同的发射帧（避免重复添加）
+      const existingTransmissionFrame = slotPack.frames.find(frame => 
+        frame.snr === -999 && 
+        frame.message === message && 
+        Math.abs(frame.freq - frequency) < 1 // 频率允许1Hz误差
+      );
+
+      if (existingTransmissionFrame) {
+        console.log(`📡 [SlotPackManager] 发射帧已存在，跳过重复添加: ${message}`);
+        return;
+      }
+
+      // 添加发射帧到frames数组的开头（让发射消息显示在接收消息之前）
+      slotPack.frames.unshift(transmissionFrame);
+      
+      // 更新统计信息
+      slotPack.stats.lastUpdated = timestamp;
+      slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
+
+      console.log(`📡 [SlotPackManager] 添加发射帧: ${slotId}, 操作员: ${operatorId}, 消息: "${message}"`);
+
+      // 异步存储到本地（不阻塞主流程）
+      if (this.persistenceEnabled) {
+        this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
+          console.error(`💾 [SlotPackManager] 发射帧存储失败:`, error);
+        });
+      }
+
+      // 发出更新事件
+      this.emit('slotPackUpdated', { ...slotPack });
+
+    } catch (error) {
+      console.error(`❌ [SlotPackManager] 添加发射帧失败:`, error);
+    }
   }
   
   /**
@@ -42,6 +110,13 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       // 更新最新的 SlotPack
       if (!this.lastSlotPack || slotPack.startMs > this.lastSlotPack.startMs) {
         this.lastSlotPack = slotPack;
+      }
+
+      // 异步存储新创建的SlotPack（不阻塞主流程）
+      if (this.persistenceEnabled) {
+        this.persistence.store(slotPack, 'created', this.currentMode.name).catch(error => {
+          console.error(`💾 [SlotPackManager] 新建存储失败:`, error);
+        });
       }
     }
     
@@ -102,6 +177,13 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       console.log(`   📭 当前时隙包暂无有效解码结果`);
     } */
     
+    // 异步存储到本地（不阻塞主流程）
+    if (this.persistenceEnabled) {
+      this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
+        console.error(`💾 [SlotPackManager] 存储失败:`, error);
+      });
+    }
+
     // 发出更新事件
     this.emit('slotPackUpdated', { ...slotPack });
     
@@ -146,9 +228,43 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   /**
    * 去重和优化帧数据
    * 基于消息内容、频率和 SNR 进行去重，保留最优的帧
+   * 发射帧（SNR=-999）和接收帧分别处理，发射帧不参与去重
    * 按照添加顺序排列，而不是按信号强度排序
    */
   private deduplicateAndOptimizeFrames(frames: FrameMessage[]): FrameMessage[] {
+    if (frames.length === 0) return [];
+    
+    // 分离发射帧和接收帧
+    const transmissionFrames: FrameMessage[] = [];
+    const receivedFrames: FrameMessage[] = [];
+    
+    for (const frame of frames) {
+      if (!frame) continue; // 跳过 undefined 帧
+      
+      if (frame.snr === -999) {
+        // 发射帧
+        transmissionFrames.push(frame);
+      } else {
+        // 接收帧
+        receivedFrames.push(frame);
+      }
+    }
+    
+    // 对接收帧进行去重处理
+    const optimizedReceivedFrames = this.deduplicateReceivedFrames(receivedFrames);
+    
+    // 合并发射帧和去重后的接收帧，发射帧在前
+    const result = [...transmissionFrames, ...optimizedReceivedFrames];
+    
+    // console.log(`🔍 [SlotPackManager] 去重优化: ${frames.length} -> ${result.length} 帧 (发射帧: ${transmissionFrames.length}, 接收帧: ${optimizedReceivedFrames.length})`);
+    
+    return result;
+  }
+
+  /**
+   * 对接收帧进行去重和优化
+   */
+  private deduplicateReceivedFrames(frames: FrameMessage[]): FrameMessage[] {
     if (frames.length === 0) return [];
     
     // 按消息内容分组，同时记录每个消息第一次出现的位置
@@ -178,8 +294,6 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     
     // 按照首次出现的顺序排序（保持添加顺序）
     optimizedFrames.sort((a, b) => a.firstIndex - b.firstIndex);
-    
-    // console.log(`🔍 [SlotPackManager] 去重优化: ${frames.length} -> ${optimizedFrames.length} 帧 (保持添加顺序)`);
     
     return optimizedFrames.map(item => item.frame);
   }
@@ -366,9 +480,70 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   }
 
   /**
+   * 启用或禁用持久化存储
+   */
+  setPersistenceEnabled(enabled: boolean): void {
+    this.persistenceEnabled = enabled;
+    console.log(`💾 [SlotPackManager] 持久化存储${enabled ? '已启用' : '已禁用'}`);
+  }
+
+  /**
+   * 获取持久化存储状态
+   */
+  isPersistenceEnabled(): boolean {
+    return this.persistenceEnabled;
+  }
+
+  /**
+   * 获取持久化存储统计信息
+   */
+  async getPersistenceStats() {
+    return this.persistence.getStorageStats();
+  }
+
+  /**
+   * 强制刷新持久化缓冲区
+   */
+  async flushPersistence(): Promise<void> {
+    await this.persistence.flush();
+  }
+
+  /**
+   * 读取指定日期的存储记录
+   */
+  async readStoredRecords(dateStr: string) {
+    return this.persistence.readRecords(dateStr);
+  }
+
+  /**
+   * 获取可用的存储日期列表
+   */
+  async getAvailableStorageDates(): Promise<string[]> {
+    return this.persistence.getAvailableDates();
+  }
+
+  /**
    * 清理所有时隙包
    */
-  cleanup(): void {
+  async cleanup(): Promise<void> {
+    console.log('🧹 [SlotPackManager] 正在清理...');
+    
+    // 刷新持久化缓冲区
+    try {
+      await this.persistence.flush();
+      console.log('💾 [SlotPackManager] 持久化缓冲区已刷新');
+    } catch (error) {
+      console.error('💾 [SlotPackManager] 持久化缓冲区刷新失败:', error);
+    }
+    
+    // 清理持久化资源
+    try {
+      await this.persistence.cleanup();
+      console.log('💾 [SlotPackManager] 持久化资源已清理');
+    } catch (error) {
+      console.error('💾 [SlotPackManager] 持久化资源清理失败:', error);
+    }
+    
     this.slotPacks.clear();
     this.lastSlotPack = null; // 重置最新时隙包缓存
     this.removeAllListeners();

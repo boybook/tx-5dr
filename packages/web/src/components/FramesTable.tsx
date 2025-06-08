@@ -37,9 +37,10 @@ interface FramesTableProps {
   groups: FrameGroup[];
   className?: string;
   onRowDoubleClick?: (message: FrameDisplayMessage, group: FrameGroup) => void;
+  myCallsigns?: string[]; // 自己的呼号列表
 }
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [] }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [prevGroupsLength, setPrevGroupsLength] = useState(0);
@@ -176,8 +177,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     } as React.CSSProperties;
   };
 
-
-
   // 获取右侧颜色条的颜色（所有有高亮的消息都显示）
   const getRightBorderColor = (message: FrameDisplayMessage, type: 'receive' | 'transmit') => {
     if (type === 'transmit' || !message.logbookAnalysis) {
@@ -190,13 +189,35 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return getHighlightColor(highlightType);
   };
 
+  // 检查消息是否包含自己的呼号
+  const containsMyCallsign = (message: string): boolean => {
+    if (!myCallsigns || myCallsigns.length === 0) return false;
+    
+    const upperMessage = message.toUpperCase();
+    return myCallsigns.some(callsign => {
+      const upperCallsign = callsign.toUpperCase().trim();
+      if (!upperCallsign) return false;
+      
+      // 检查完整单词匹配，避免部分匹配
+      const words = upperMessage.split(/\s+/);
+      return words.some(word => {
+        // 移除常见的后缀（如 /QRP, /P 等）
+        const cleanWord = word.replace(/\/[A-Z0-9]+$/, '');
+        return cleanWord === upperCallsign;
+      });
+    });
+  };
+
   const formatMessage = (message: string, analysis?: FrameDisplayMessage['logbookAnalysis']) => {
+    // 检查是否包含自己的呼号
+    const hasMyCallsign = containsMyCallsign(message);
+    
     // 基础消息文本
     const showChips = analysis && isSpecialMessageType(message);
     
     const content = (
       <span className="flex items-center gap-1">
-        <span>{message}</span>
+        <span className={hasMyCallsign ? 'text-danger font-semibold' : ''}>{message}</span>
         {showChips && (() => {
           const highlightType = getHighestPriorityHighlight(analysis);
           if (!highlightType) return null;

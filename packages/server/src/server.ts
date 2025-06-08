@@ -140,6 +140,11 @@ export async function createServer() {
   await fastify.register(logbookRoutes, { prefix: '/api/logbooks' });
   fastify.log.info('日志本管理API路由注册完成');
 
+  // 注册存储管理API路由
+  const { storageRoutes } = await import('./routes/storage.js');
+  await fastify.register(storageRoutes, { prefix: '/api/storage' });
+  fastify.log.info('存储管理API路由注册完成');
+
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
     fastify.log.info('WebSocket客户端已连接');

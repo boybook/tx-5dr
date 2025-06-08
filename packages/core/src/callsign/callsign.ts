@@ -104,6 +104,7 @@ const COUNTRY_ZH_MAP: Record<string, string> = {
   'Guinea': '几内亚',
   'Guinea-Bissau': '几内亚比绍',
   'Guyana': '圭亚那',
+  'Gilbert Islands': '吉尔伯特群岛',
   'Haiti': '海地',
   'Honduras': '洪都拉斯',
   'Hong Kong': '中国香港',
