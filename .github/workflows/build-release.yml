@@ -105,6 +105,10 @@ jobs:
           # Try to use prebuilt binaries first
           npm_config_build_from_source: false
 
+      - name: Generate ICO file (Windows)
+        if: matrix.os == 'windows-latest'
+        run: node scripts/generate-ico.js
+
       - name: Build application
         run: yarn build
         env:

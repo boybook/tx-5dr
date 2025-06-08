@@ -20,7 +20,7 @@
     "start": "electron-forge start",
     "postinstall": "node scripts/fix-naudiodon.js",
     "build:package": "yarn build && yarn package",
-    "build:make": "yarn build && yarn make",
+    "build:make": "node scripts/generate-ico.js && yarn build && yarn make",
     "clean": "rm -rf out/ && find packages -name dist -type d -exec rm -rf {} + || true",
     "fresh-build": "yarn clean && yarn install && yarn build:package"
   },
@@ -33,6 +33,7 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.8.1",
     "@electron/rebuild": "^4.0.1",
     "electron": "^36.4.0",
+    "png-to-ico": "^2.1.8",
     "turbo": "^2.5.4"
   },
   "packageManager": "yarn@4.9.1",

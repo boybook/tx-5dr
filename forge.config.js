@@ -70,8 +70,8 @@ export default {
         name: 'TX5DR',
         authors: 'BG5DRB',
         description: 'TX-5DR Ham Radio FT8 Application',
-        setupIcon: './packages/electron-main/assets/icon.png',
-        iconUrl: 'https://raw.githubusercontent.com/boybook/tx-5dr/main/packages/electron-main/assets/icon.png'
+        setupIcon: './packages/electron-main/assets/icon.ico',
+                  iconUrl: 'https://raw.githubusercontent.com/boybook/tx-5dr/main/packages/electron-main/assets/icon.ico'
       }
     },
     // macOS Packages
