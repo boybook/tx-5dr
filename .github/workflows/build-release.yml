@@ -52,12 +52,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22.15.1'
-          cache: 'yarn'
 
-      - name: Enable Corepack
+      - name: Enable Corepack and setup Yarn
+        shell: bash
         run: |
           corepack enable
           corepack prepare yarn@4.9.1 --activate
+          yarn --version || {
+            echo "Corepack failed, installing Yarn 4.9.1 manually"
+            npm install -g yarn@4.9.1
+            yarn --version
+          }
 
       - name: Setup Python (for native modules)
         uses: actions/setup-python@v4
@@ -73,6 +78,12 @@ jobs:
       - name: Setup MSBuild (Windows)
         if: matrix.os == 'windows-latest'
         uses: microsoft/setup-msbuild@v1
+
+      - name: Verify Yarn version
+        run: |
+          echo "Node version: $(node --version)"
+          echo "Yarn version: $(yarn --version)"
+          echo "Package manager in package.json: $(grep packageManager package.json)"
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
