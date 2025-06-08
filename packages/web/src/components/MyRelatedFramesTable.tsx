@@ -1,11 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Badge, Button } from '@heroui/react';
-import { FT8Table, FT8Group, FT8Message } from './FT8Table';
+import React, { useState, useEffect } from 'react';
+import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo } from '@tx5dr/core';
 import { useSlotPacks, useRadioState, useConnection } from '../store/radioStore';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
-import type { FT8Frame } from '@tx5dr/contracts';
+import { FrameMessage } from '@tx5dr/contracts';
 
 interface MyRelatedFT8TableProps {
   className?: string;
@@ -20,11 +17,11 @@ interface TransmissionLog {
   slotStartMs: number;
 }
 
-export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
+export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const connection = useConnection();
-  const [myFt8Groups, setMyFt8Groups] = useState<FT8Group[]>([]);
+  const [myFrameGroups, setMyFrameGroups] = useState<FrameGroup[]>([]);
   const [transmissionLogs, setTransmissionLogs] = useState<TransmissionLog[]>([]);
 
   // 监听服务端推送的发射日志
@@ -52,44 +49,59 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
     };
   }, [connection.state.radioService]);
 
-  // 获取当前操作员的呼号和网格
-  const getCurrentOperator = () => {
-    const firstOperator = radio.state.operators[0];
-    return {
-      myCallsign: firstOperator?.context?.myCall || '',
-      myGrid: firstOperator?.context?.myGrid || ''
-    };
+  // 获取所有启用的操作员信息
+  const getEnabledOperators = () => {
+    return radio.state.operators.filter(op => op.isActive);
   };
 
-  const { myCallsign, myGrid } = getCurrentOperator();
+  // 获取所有启用的操作员的呼号和网格
+  const getCurrentOperators = () => {
+    const enabledOperators = getEnabledOperators();
+    return enabledOperators.map(op => ({
+      myCallsign: op.context?.myCall || '',
+      myGrid: op.context?.myGrid || ''
+    })).filter(op => op.myCallsign); // 过滤掉没有呼号的操作员
+  };
 
-  // 获取当前操作员的目标呼号
-  const getCurrentTargetCallsign = (): string => {
-    const firstOperator = radio.state.operators[0];
-    return firstOperator?.context?.targetCall || '';
+  // 获取所有启用的操作员的目标呼号
+  const getCurrentTargetCallsigns = (): string[] => {
+    const enabledOperators = getEnabledOperators();
+    return enabledOperators
+      .map(op => op.context?.targetCall || '')
+      .filter(call => call); // 过滤掉空目标呼号
+  };
+
+  // 获取所有启用的操作员的发射周期
+  const getCurrentTransmitCycles = (): number[] => {
+    const enabledOperators = getEnabledOperators();
+    const allCycles = enabledOperators
+      .map(op => op.transmitCycles || [0]) // 默认偶数周期发射
+      .flat();
+    // 去重
+    return [...new Set(allCycles)];
   };
 
   // 处理SlotPack数据，过滤出与我相关的消息
   useEffect(() => {
-    const groupsMap = new Map<string, { messages: FT8Message[], cycle: 'even' | 'odd', type: 'receive' | 'transmit' }>();
-    const targetCallsign = getCurrentTargetCallsign();
-    
-    // 获取当前操作员的发射周期配置
-    const firstOperator = radio.state.operators[0];
-    const myTransmitCycles = firstOperator?.transmitCycles || [0]; // 默认偶数周期发射
+    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', type: 'receive' | 'transmit' }>();
+    const targetCallsigns = getCurrentTargetCallsigns();
+    const operators = getCurrentOperators();
+    const myTransmitCycles = getCurrentTransmitCycles();
     
     // 处理接收到的消息（从SlotPack中过滤）
     slotPacks.state.slotPacks.forEach(slotPack => {
-      slotPack.frames.forEach((frame: FT8Frame) => {
+      slotPack.frames.forEach((frame: FrameMessage) => {
         const message = frame.message;
         
-        // 检查消息是否与我相关
-        const isRelevantToMe = 
+        // 检查消息是否与任何启用的操作员相关
+        const isRelevantToMe = operators.some(({ myCallsign }) => 
           message.includes(myCallsign) ||                    // 消息中包含我的呼号
-          (targetCallsign && message.includes(targetCallsign)) || // 消息中包含我的目标呼号
           message.startsWith(`${myCallsign} `) ||            // 以我的呼号开头
           message.includes(` ${myCallsign} `) ||             // 消息中间包含我的呼号
-          message.endsWith(` ${myCallsign}`);                // 以我的呼号结尾
+          message.endsWith(` ${myCallsign}`)                 // 以我的呼号结尾
+        ) || targetCallsigns.some(targetCall => 
+          targetCall && message.includes(targetCall)         // 消息中包含任何目标呼号
+        );
         
         if (!isRelevantToMe) return;
         
@@ -143,7 +155,7 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
         // 使用统一位置解析函数
         const locationInfo = parseFT8LocationInfo(frame.message);
         
-        const ft8Message: FT8Message = {
+        const ft8Message: FrameDisplayMessage = {
           utc: utcSeconds,
           db: frame.snr,
           dt: frame.dt,
@@ -182,7 +194,7 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
       const group = groupsMap.get(groupKey)!;
       group.type = 'transmit'; // 如果有我的发射，则标记为发射类型
       
-      const ft8Message: FT8Message = {
+      const ft8Message: FrameDisplayMessage = {
         utc: log.time,
         db: 'TX',
         dt: '-',
@@ -194,7 +206,7 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
     });
 
     // 转换为FT8Group数组并按时间排序
-    const groups: FT8Group[] = Array.from(groupsMap.entries())
+    const groups: FrameGroup[] = Array.from(groupsMap.entries())
       .map(([time, { messages, cycle, type }]) => ({
         time,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
@@ -203,26 +215,26 @@ export const MyRelatedFT8Table: React.FC<MyRelatedFT8TableProps> = ({ className 
       }))
       .sort((a, b) => a.time.localeCompare(b.time));
 
-    setMyFt8Groups(groups);
+    setMyFrameGroups(groups);
   }, [slotPacks.state.slotPacks, transmissionLogs, radio.state.operators]);
 
   // 清空我的通联数据
   const handleClearMyData = () => {
-    setMyFt8Groups([]);
+    setMyFrameGroups([]);
     setTransmissionLogs([]);
   };
 
   return (
     <div className={className}>
       {/* 内容 */}
-      {myFt8Groups.length === 0 ? (
+      {myFrameGroups.length === 0 ? (
         <div className="text-center py-12 cursor-default select-none">
           <div className="text-default-400 mb-2 text-4xl">📞</div>
           <p className="text-default-500 mb-1">暂无相关通联记录</p>
           <p className="text-default-400 text-sm">与我有关的消息将在这里显示</p>
         </div>
       ) : (
-        <FT8Table groups={myFt8Groups} className="h-full" />
+        <FramesTable groups={myFrameGroups} className="h-full" />
       )}
     </div>
   );

@@ -1,10 +1,10 @@
 import { FT8Message, FT8MessageType } from '@tx5dr/contracts';
 
-// 呼号正则表达式（支持标准呼号格式和<>包裹的格式）
-const CALLSIGN_REGEX = /^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z]$/;
+// 呼号正则表达式（支持标准呼号格式、<>包裹的格式和带有/的格式）
+const CALLSIGN_REGEX = /^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z](\/[0-9]|\/[A-Z])?$/;
 
-// 标准呼号正则表达式（2-6位，最多一个数字位于第2-4位）
-const STANDARD_CALLSIGN_REGEX = /^[A-Z0-9]{2,6}$/;
+// 标准呼号正则表达式（2-6位，最多一个数字位于第2-4位，支持/数字或/字母后缀）
+const STANDARD_CALLSIGN_REGEX = /^[A-Z0-9]{2,6}(\/[0-9]|\/[A-Z])?$/;
 
 // 网格定位正则表达式（4位或6位）
 const GRID_REGEX = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
@@ -79,33 +79,44 @@ export class FT8MessageParser {
    */
   static parseMessage(message: string): FT8Message {
     const trimmedMessage = message.trim().toUpperCase();
-    // 移除所有呼号周围的 <>
-    const cleanedMessage = trimmedMessage.replace(/<([A-Z0-9]+)>/g, '$1');
-    const parts = cleanedMessage.split(/\s+/);
     
+    // 首先处理<...>格式
+    const parts = trimmedMessage.split(/\s+/);
+    const processedParts = parts.map(part => {
+      // 如果是<...>格式，保持原样
+      if (part.startsWith('<') && part.endsWith('>')) {
+        return part;
+      }
+      // 如果是普通呼号，检查是否需要包裹
+      if (this.isValidCallsign(part)) {
+        return part;
+      }
+      return part;
+    });
+
     // 检查CQ消息
-    if (this.isCQMessage(parts)) {
-      return this.parseCQMessage(parts, message);
+    if (this.isCQMessage(processedParts)) {
+      return this.parseCQMessage(processedParts, message);
     }
 
     // 检查73消息（优先于信号报告，避免73被误识别为报告）
-    if (this.is73Message(parts)) {
-      return this.parse73Message(parts, message);
+    if (this.is73Message(processedParts)) {
+      return this.parse73Message(processedParts, message);
     }
 
     // 检查信号报告消息（优先于响应消息，因为格式更具体）
-    if (this.isSignalReportMessage(parts)) {
-      return this.parseSignalReportMessage(parts, message);
+    if (this.isSignalReportMessage(processedParts)) {
+      return this.parseSignalReportMessage(processedParts, message);
     }
 
     // 检查确认消息（RRR/RR73，优先于响应消息）
-    if (this.isConfirmationMessage(parts)) {
-      return this.parseConfirmationMessage(parts, message);
+    if (this.isConfirmationMessage(processedParts)) {
+      return this.parseConfirmationMessage(processedParts, message);
     }
 
     // 检查响应消息（最后检查，因为格式最宽泛）
-    if (this.isResponseMessage(parts)) {
-      return this.parseResponseMessage(parts, message);
+    if (this.isResponseMessage(processedParts)) {
+      return this.parseResponseMessage(processedParts, message);
     }
 
     // 如果都不匹配，返回未知类型
@@ -332,6 +343,20 @@ export class FT8MessageParser {
   private static isValidCallsign(callsign: string): boolean {
     // 移除可能存在的 <>
     const cleanCallsign = callsign.replace(/[<>]/g, '');
+    // 如果是<...>格式，直接返回true
+    if (callsign.startsWith('<') && callsign.endsWith('>')) {
+      return true;
+    }
+    // 检查是否包含/，如果有，确保格式正确
+    if (cleanCallsign.includes('/')) {
+      const [base, suffix] = cleanCallsign.split('/');
+      // 确保后缀是单个数字或单个字母
+      if (!/^[0-9A-Z]$/.test(suffix)) {
+        return false;
+      }
+      // 检查基础呼号部分
+      return CALLSIGN_REGEX.test(base);
+    }
     return CALLSIGN_REGEX.test(cleanCallsign);
   }
 

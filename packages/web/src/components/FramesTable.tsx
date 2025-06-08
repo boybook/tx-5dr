@@ -4,11 +4,10 @@ import {
   ScrollShadow
 } from '@heroui/react';
 import { useDisplayNotificationSettings } from '../hooks/useDisplayNotificationSettings';
-import { HighlightType, HIGHLIGHT_TYPE_LABELS } from '../utils/displayNotificationSettings';
-import { getBadgeColors, getRowHoverColor, hexToRgba } from '../utils/colorUtils';
-import { useTheme } from '../hooks/useTheme';
+import { HIGHLIGHT_TYPE_LABELS } from '../utils/displayNotificationSettings';
+import { getBadgeColors, hexToRgba } from '../utils/colorUtils';
 
-export interface FT8Message {
+export interface FrameDisplayMessage {
   utc: string;
   db: number | 'TX';
   dt: number | '-';
@@ -27,19 +26,20 @@ export interface FT8Message {
   };
 }
 
-export interface FT8Group {
+export interface FrameGroup {
   time: string;
-  messages: FT8Message[];
+  messages: FrameDisplayMessage[];
   type: 'receive' | 'transmit';
   cycle: 'even' | 'odd'; // 偶数或奇数周期
 }
 
-interface FT8TableProps {
-  groups: FT8Group[];
+interface FramesTableProps {
+  groups: FrameGroup[];
   className?: string;
+  onRowDoubleClick?: (message: FrameDisplayMessage, group: FrameGroup) => void;
 }
 
-export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [prevGroupsLength, setPrevGroupsLength] = useState(0);
@@ -121,7 +121,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
     return '';
   };
 
-  const getRowHoverStyle = (cycle: 'even' | 'odd', type: 'receive' | 'transmit', message?: FT8Message) => {
+  const getRowHoverStyle = (cycle: 'even' | 'odd', type: 'receive' | 'transmit', message?: FrameDisplayMessage) => {
     if (type === 'transmit') {
       return {};
     }
@@ -160,7 +160,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
   };
 
   // 根据日志本分析获取背景色（仅特殊消息类型使用全行背景色）
-  const getLogbookAnalysisStyle = (message: FT8Message, cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
+  const getLogbookAnalysisStyle = (message: FrameDisplayMessage, cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
     if (type === 'transmit' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
       return {};
     }
@@ -179,7 +179,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
 
 
   // 获取右侧颜色条的颜色（所有有高亮的消息都显示）
-  const getRightBorderColor = (message: FT8Message, type: 'receive' | 'transmit') => {
+  const getRightBorderColor = (message: FrameDisplayMessage, type: 'receive' | 'transmit') => {
     if (type === 'transmit' || !message.logbookAnalysis) {
       return null;
     }
@@ -190,7 +190,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
     return getHighlightColor(highlightType);
   };
 
-  const formatMessage = (message: string, analysis?: FT8Message['logbookAnalysis']) => {
+  const formatMessage = (message: string, analysis?: FrameDisplayMessage['logbookAnalysis']) => {
     // 基础消息文本
     const showChips = analysis && isSpecialMessageType(message);
     
@@ -285,6 +285,7 @@ export const FT8Table: React.FC<FT8TableProps> = ({ groups, className = '' }) =>
                     ...getRowHoverStyle(group.cycle, group.type, message),
                     ...getLogbookAnalysisStyle(message, group.cycle, group.type)
                   }}
+                  onDoubleClick={() => onRowDoubleClick?.(message, group)}
                 >
                   {/* 右侧颜色条（非特殊消息类型时显示） */}
                   {getRightBorderColor(message, group.type) && (

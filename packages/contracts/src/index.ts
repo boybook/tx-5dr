@@ -10,7 +10,7 @@ export * from './schema/cycle.schema.js';
 // 显式导出slot-info.schema.js以避免与websocket.schema.js的冲突
 export { 
   SlotPackSchema,
-  FT8FrameSchema,
+  FrameMessageSchema,
   DecodeRequestSchema,
   DecodeResultSchema,
   SlotInfoSchema
@@ -19,7 +19,7 @@ export {
 // 导出类型
 export type { 
   SlotPack,
-  FT8Frame,
+  FrameMessage,
   DecodeRequest,
   DecodeResult,
   SlotInfo

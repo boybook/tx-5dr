@@ -322,7 +322,7 @@ export const RadioControl: React.FC = () => {
   }, [connection.state.radioService]);
 
   return (
-    <div className="flex flex-col gap-0 bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
+    <div className="flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

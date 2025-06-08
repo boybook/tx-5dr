@@ -1,4 +1,4 @@
-import { QSOContext, OperatorConfig, QSORecord, ParsedFT8Message, SlotPack, DigitalRadioEngineEvents, SlotInfo, MODES, QSOCommand } from '@tx5dr/contracts';
+import { OperatorConfig, QSORecord, ParsedFT8Message, SlotPack, DigitalRadioEngineEvents, SlotInfo, MODES, QSOCommand } from '@tx5dr/contracts';
 import { ITransmissionStrategy } from './transmission/ITransmissionStrategy';
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
 import EventEmitter from 'eventemitter3';
@@ -65,6 +65,10 @@ export class RadioOperator {
         // 周期开始事件 - 用于处理接收到的消息
         eventEmitter.on('slotStart', async (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
             if (this._stopped) {
+                return;
+            }
+            // 如果当前不是发射时隙，则不处理
+            if (!this.isTransmitSlot(slotInfo)) {
                 return;
             }
             if (lastSlotPack) {

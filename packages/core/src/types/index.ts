@@ -4,7 +4,7 @@ export type {
   SlotInfo,
   DecodeRequest,
   DecodeResult,
-  FT8Frame
+  FrameMessage as FT8Frame
 } from '@tx5dr/contracts';
 
 // 导出 core 包特有的接口

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
-import type { SlotPack, DecodeResult, FT8Frame, ModeDescriptor } from '@tx5dr/contracts';
+import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 
 export interface SlotPackManagerEvents {
@@ -148,11 +148,11 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 基于消息内容、频率和 SNR 进行去重，保留最优的帧
    * 按照添加顺序排列，而不是按信号强度排序
    */
-  private deduplicateAndOptimizeFrames(frames: FT8Frame[]): FT8Frame[] {
+  private deduplicateAndOptimizeFrames(frames: FrameMessage[]): FrameMessage[] {
     if (frames.length === 0) return [];
     
     // 按消息内容分组，同时记录每个消息第一次出现的位置
-    const messageGroups = new Map<string, { frames: FT8Frame[], firstIndex: number }>();
+    const messageGroups = new Map<string, { frames: FrameMessage[], firstIndex: number }>();
     
     for (let i = 0; i < frames.length; i++) {
       const frame = frames[i];
@@ -166,7 +166,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       messageGroups.get(message)!.frames.push(frame);
     }
     
-    const optimizedFrames: { frame: FT8Frame, firstIndex: number }[] = [];
+    const optimizedFrames: { frame: FrameMessage, firstIndex: number }[] = [];
     
     // 对每个消息组选择最优帧，并记录其首次出现位置
     for (const [message, groupData] of messageGroups) {
@@ -187,7 +187,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   /**
    * 从同一消息的多个帧中选择最优的一个
    */
-  private selectBestFrame(frames: FT8Frame[]): FT8Frame | null {
+  private selectBestFrame(frames: FrameMessage[]): FrameMessage | null {
     if (frames.length === 0) return null;
     if (frames.length === 1) return frames[0] || null;
     

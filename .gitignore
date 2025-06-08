@@ -4,6 +4,7 @@ node_modules/
 .pnp.js
 .yarn
 .turbo
+.cursor
 
 # Production builds
 dist/

@@ -15,7 +15,7 @@ import { useCurrentOperatorId, useOperators, useRadioState } from '../store/radi
 import { RadioControl } from '../components/RadioControl';
 import { RadioOperatorList } from '../components/RadioOperatorList';
 import { SettingsModal } from '../components/SettingsModal';
-import { MyRelatedFT8Table } from '../components/MyRelatedFT8Table';
+import { MyRelatedFramesTable } from '../components/MyRelatedFramesTable';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faCog } from '@fortawesome/free-solid-svg-icons';
@@ -124,7 +124,7 @@ export const RightLayout: React.FC = () => {
       <div className="flex-1 p-5 pt-0 flex flex-col gap-4 min-h-0">
         {/* 和我有关的通联信息 - 占据剩余空间 */}
         <div className="flex-1 min-h-0">
-          <MyRelatedFT8Table className="h-full" />
+          <MyRelatedFramesTable className="h-full" />
         </div>
         
         {/* 操作员列表 - 固定高度 */}

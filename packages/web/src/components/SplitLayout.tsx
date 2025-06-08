@@ -80,7 +80,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
         style={{ width: `${leftWidth}%` }}
       >
         
-        <div className="h-full overflow-auto bg-content1">
+        <div className="h-full overflow-auto bg-content2 dark:bg-content1">
             {leftContent}
         </div>
       </div>

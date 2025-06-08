@@ -49,7 +49,7 @@ export type LogbookAnalysis = z.infer<typeof LogbookAnalysisSchema>;
 /**
  * FT8 帧数据
  */
-export const FT8FrameSchema = z.object({
+export const FrameMessageSchema = z.object({
   /** 信号强度 (dB) */
   snr: z.number(),
   /** 频率偏移 (Hz) */
@@ -64,7 +64,7 @@ export const FT8FrameSchema = z.object({
   logbookAnalysis: LogbookAnalysisSchema.optional()
 });
 
-export type FT8Frame = z.infer<typeof FT8FrameSchema>;
+export type FrameMessage = z.infer<typeof FrameMessageSchema>;
 
 /**
  * 解码请求，用于SlotScheduler内部
@@ -95,7 +95,7 @@ export const DecodeResultSchema = z.object({
   /** 子窗口索引 */
   windowIdx: z.number().int().nonnegative(),
   /** 解码出的帧数据 */
-  frames: z.array(FT8FrameSchema),
+  frames: z.array(FrameMessageSchema),
   /** 结果时间戳 */
   timestamp: z.number().default(() => Date.now()),
   /** 处理耗时（毫秒） */
@@ -119,7 +119,7 @@ export const SlotPackSchema = z.object({
   /** 时隙结束时间戳（毫秒） */
   endMs: z.number(),
   /** 去重后的最优解码结果 */
-  frames: z.array(FT8FrameSchema),
+  frames: z.array(FrameMessageSchema),
   /** 解码统计信息 */
   stats: z.object({
     /** 总解码次数 */
