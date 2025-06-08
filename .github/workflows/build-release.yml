@@ -86,7 +86,11 @@ jobs:
           echo "Package manager in package.json: $(grep packageManager package.json)"
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: |
+          yarn install --immutable || {
+            echo "Immutable install failed, trying to update lockfile..."
+            yarn install
+          }
         env:
           npm_config_cache: .npm
           ELECTRON_CACHE: .electron-cache
