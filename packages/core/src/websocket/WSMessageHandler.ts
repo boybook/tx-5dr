@@ -2,6 +2,29 @@ import { WSEventEmitter } from './WSEventEmitter.js';
 import { WSMessageType } from '@tx5dr/contracts';
 
 /**
+ * 消息类型到事件名称的映射表
+ * 客户端和服务器都可复用
+ */
+export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
+  [WSMessageType.MODE_CHANGED]: 'modeChanged',
+  [WSMessageType.SLOT_START]: 'slotStart',
+  [WSMessageType.SUB_WINDOW]: 'subWindow',
+  [WSMessageType.SLOT_PACK_UPDATED]: 'slotPackUpdated',
+  [WSMessageType.SPECTRUM_DATA]: 'spectrumData',
+  [WSMessageType.DECODE_ERROR]: 'decodeError',
+  [WSMessageType.SYSTEM_STATUS]: 'systemStatus',
+
+  // 操作员相关事件
+  [WSMessageType.OPERATORS_LIST]: 'operatorsList',
+  [WSMessageType.OPERATOR_STATUS_UPDATE]: 'operatorStatusUpdate',
+
+  // 其他事件
+  [WSMessageType.TRANSMISSION_LOG]: 'transmissionLog',
+  [WSMessageType.VOLUME_GAIN_CHANGED]: 'volumeGainChanged',
+  [WSMessageType.SERVER_HANDSHAKE_COMPLETE]: 'handshakeComplete'
+};
+
+/**
  * WebSocket消息处理器
  * 负责消息的序列化、反序列化、验证和路由
  */
@@ -66,23 +89,7 @@ export class WSMessageHandler extends WSEventEmitter {
    * @param message 消息对象
    */
   private dispatchMessageEvent(messageType: string, message: any): void {
-    // 定义消息类型到事件名的映射
-    const messageTypeToEventMap: Record<string, string> = {
-      [WSMessageType.MODE_CHANGED]: 'modeChanged',
-      [WSMessageType.SLOT_START]: 'slotStart',
-      [WSMessageType.SUB_WINDOW]: 'subWindow',
-      [WSMessageType.SLOT_PACK_UPDATED]: 'slotPackUpdated',
-      [WSMessageType.SPECTRUM_DATA]: 'spectrumData',
-      [WSMessageType.DECODE_ERROR]: 'decodeError',
-      [WSMessageType.SYSTEM_STATUS]: 'systemStatus',
-      
-      // 操作员相关事件
-      [WSMessageType.OPERATORS_LIST]: 'operatorsList',
-      [WSMessageType.OPERATOR_STATUS_UPDATE]: 'operatorStatusUpdate',
-    };
-
-    // 检查是否有对应的事件映射
-    const eventName = messageTypeToEventMap[messageType];
+    const eventName = WS_MESSAGE_EVENT_MAP[messageType];
     if (eventName) {
       // 动态发射事件
       this.emitWSEvent(eventName as any, message.data);
