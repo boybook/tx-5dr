@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create } from './simpleStore';
 import React, { useEffect, useRef, ReactNode } from 'react';
 import type { SlotPack, ModeDescriptor, OperatorStatus } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
