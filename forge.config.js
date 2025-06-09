@@ -12,14 +12,14 @@ export default {
     icon: './packages/electron-main/assets/icon',
     appBundleId: 'com.tx5dr.app',
     appCategoryType: 'public.app-category.utilities',
-    asar: true,
+    asar: false,
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
     platform: process.env.PLATFORM || undefined,
-    // 忽略开发依赖和源代码
+    // 忽略开发依赖和源代码，但保留必要的生产依赖
     ignore: [
       /^\/\.git/,
-      /^\/node_modules\/(?!(@tx5dr|electron))/,
+      // 只忽略特定的开发相关文件和目录
       /^\/packages\/[^/]+\/src/,
       /^\/packages\/[^/]+\/test/,
       /^\/packages\/[^/]+\/\.turbo/,
@@ -39,15 +39,12 @@ export default {
       /^\/dist$/,  // 忽略根目录的 dist
       /^\/out$/,   // 忽略输出目录
       /^\/README-BUILD\.md$/,
+      // 忽略一些明确的开发依赖，但保留生产依赖
+      /^\/node_modules\/(typescript|@types|eslint|prettier|jest|vitest|turbo|@electron-forge)/,
+      /^\/node_modules\/.*\.d\.ts$/,
     ],
-    // 额外的资源文件 - 暂时注释掉，避免冲突
-    // extraResource: [
-    //   './packages/web/dist',
-    //   './packages/server/dist',
-    //   './packages/core/dist',
-    //   './packages/contracts/dist',
-    //   './packages/electron-preload/dist'
-    // ],
+    // 确保包含所有生产依赖
+    prune: false, // 禁用自动裁剪，让我们手动控制
     darwinDarkModeSupport: true,
     // 平台特定配置
     osxSign: false, // 暂时禁用签名
@@ -117,10 +114,10 @@ export default {
     }
   ],
   plugins: [
-    {
-      name: '@electron-forge/plugin-auto-unpack-natives',
-      config: {}
-    }
+    // {
+    //   name: '@electron-forge/plugin-auto-unpack-natives',
+    //   config: {}
+    // }
   ],
   hooks: {
     // 打包前构建所有项目

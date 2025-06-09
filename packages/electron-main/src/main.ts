@@ -4,10 +4,6 @@ import http from 'http';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
-// 直接导入服务端模块
-import { createServer } from '@tx5dr/server/server';
-import { DigitalRadioEngine } from '@tx5dr/server/DigitalRadioEngine';
-
 // 获取当前模块的目录（ESM中的__dirname替代方案）
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -19,7 +15,23 @@ async function startEmbeddedServer(): Promise<boolean> {
   try {
     console.log('🚀 启动嵌入式服务器...');
     
-    // 直接创建服务器实例
+    // 根据打包状态确定服务器模块路径
+    const serverModulePath = app.isPackaged
+      ? join(process.resourcesPath, 'app', 'packages', 'server', 'dist', 'server.js')
+      : join(__dirname, '../../server/dist/server.js');
+    
+    const digitalRadioEnginePath = app.isPackaged
+      ? join(process.resourcesPath, 'app', 'packages', 'server', 'dist', 'DigitalRadioEngine.js')
+      : join(__dirname, '../../server/dist/DigitalRadioEngine.js');
+
+    console.log('🔍 Server module path:', serverModulePath);
+    console.log('🔍 DigitalRadioEngine path:', digitalRadioEnginePath);
+    
+    // 动态导入服务端模块
+    const { createServer } = await import(serverModulePath);
+    const { DigitalRadioEngine } = await import(digitalRadioEnginePath);
+    
+    // 创建服务器实例
     embeddedServer = await createServer();
     await embeddedServer.listen({ port: 4000, host: '0.0.0.0' });
     console.log('🚀 TX-5DR server running on http://localhost:4000');
@@ -33,6 +45,7 @@ async function startEmbeddedServer(): Promise<boolean> {
     return true;
   } catch (error) {
     console.error('❌ 嵌入式服务器启动失败:', error);
+    console.error('❌ 错误详情:', error);
     return false;
   }
 }
@@ -163,7 +176,7 @@ async function createWindow() {
       allowRunningInsecureContent: true,
       // 使用预加载脚本
       preload: app.isPackaged
-        ? join(process.resourcesPath, 'app.asar', 'packages', 'electron-preload', 'dist', 'preload.js')
+        ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
         : join(__dirname, '../../electron-preload/dist/preload.js'),
     },
   });
@@ -226,9 +239,9 @@ async function createWindow() {
       console.error('❌ 加载开发页面失败:', error);
     }
   } else {
-    // 打包后的路径
+    // 打包后的路径 - 不使用 asar
     const indexPath = app.isPackaged 
-      ? join(process.resourcesPath, 'app.asar', 'packages', 'web', 'dist', 'index.html')
+      ? join(process.resourcesPath, 'app', 'packages', 'web', 'dist', 'index.html')
       : join(__dirname, '../../web/dist/index.html');
     console.log('Loading production file:', indexPath);
     try {

@@ -122,7 +122,7 @@ declare global {
       };
     };
   }
-}
+} 
 
 // 导出空对象使其成为模块
 export {}; 
