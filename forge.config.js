@@ -16,35 +16,19 @@ export default {
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
     platform: process.env.PLATFORM || undefined,
-    // 忽略开发依赖和源代码，但保留必要的生产依赖
+    // 简化 ignore 规则，只忽略最基本的开发文件
     ignore: [
       /^\/\.git/,
-      // 只忽略特定的开发相关文件和目录
-      /^\/packages\/[^/]+\/src/,
-      /^\/packages\/[^/]+\/test/,
-      /^\/packages\/[^/]+\/\.turbo/,
       /^\/\.turbo/,
       /^\/turbo\.json$/,
       /^\/forge\.config\.js$/,
       /^\/yarn\.lock$/,
       /^\/\.yarn/,
       /^\/\.pnp/,
-      /^\/README\.md$/,
-      /^\/docs/,
-      /^\/\.github/,
-      /^\/\.vscode/,
-      /^\/\.eslintrc/,
-      /^\/\.prettierrc/,
-      /^\/tsconfig\.json$/,
-      /^\/dist$/,  // 忽略根目录的 dist
       /^\/out$/,   // 忽略输出目录
-      /^\/README-BUILD\.md$/,
-      // 忽略一些明确的开发依赖，但保留生产依赖
-      /^\/node_modules\/(typescript|@types|eslint|prettier|jest|vitest|turbo|@electron-forge)/,
-      /^\/node_modules\/.*\.d\.ts$/,
     ],
-    // 确保包含所有生产依赖
-    prune: false, // 禁用自动裁剪，让我们手动控制
+    // 使用默认的依赖裁剪
+    prune: true,
     darwinDarkModeSupport: true,
     // 平台特定配置
     osxSign: false, // 暂时禁用签名
@@ -130,7 +114,29 @@ export default {
     // 打包后的处理
     postPackage: async (forgeConfig, options) => {
       console.log('📦 Post-package hook executed');
-      // 可以在这里添加额外的处理逻辑
+      
+      // 在 Linux 平台上，清理可能导致 RPM 打包失败的跨架构文件
+      if (options.platform === 'linux') {
+        const { execSync } = await import('child_process');
+        const { join } = await import('path');
+        
+        console.log('🧹 [Linux] 清理跨架构二进制文件...');
+        
+        const packagingResult = options.outputPaths[0];
+        const resourcesPath = join(packagingResult, 'resources', 'app');
+        
+        try {
+          // 清理 wsjtx-lib 的 ARM64 预构建文件
+          execSync(`find "${resourcesPath}" -path "*/wsjtx-lib/prebuilds/linux-arm64*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          
+          // 清理 naudiodon2 的 ARM 预构建文件  
+          execSync(`find "${resourcesPath}" -path "*/naudiodon2/portaudio/bin_arm*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          
+          console.log('✅ [Linux] 跨架构文件清理完成');
+        } catch (error) {
+          console.warn('⚠️ [Linux] 清理跨架构文件时出现警告:', error.message);
+        }
+      }
     }
   }
 }; 
