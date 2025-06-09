@@ -516,7 +516,10 @@ export interface DigitalRadioEngineEvents {
   connected: () => void;
   disconnected: () => void;
   error: (error: Error) => void;
-  
+
   // 音量控制事件
   volumeGainChanged: (gain: number) => void;
-} 
+
+  // 握手完成事件
+  handshakeComplete: (data: any) => void;
+}

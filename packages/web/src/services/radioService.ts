@@ -1,4 +1,5 @@
 import { api, WSClient } from '@tx5dr/core';
+import { WSMessageType } from '@tx5dr/contracts';
 import { getWebSocketUrl, getApiBaseUrl } from '../utils/config';
 import type { 
   DigitalRadioEngineEvents, 
@@ -255,7 +256,7 @@ export class RadioService {
     console.log('📤 [RadioService] getOperators 调用，isConnected:', this.isConnected);
     if (this.isConnected) {
       console.log('📤 [RadioService] 发送 getOperators 消息');
-      this.wsClient.send('getOperators');
+      this.wsClient.send(WSMessageType.GET_OPERATORS);
     } else {
       console.warn('⚠️ [RadioService] 未连接，无法获取操作员列表');
     }
@@ -266,7 +267,7 @@ export class RadioService {
    */
   setOperatorContext(operatorId: string, context: any): void {
     if (this.isConnected) {
-      this.wsClient.send('setOperatorContext', { operatorId, context });
+      this.wsClient.send(WSMessageType.SET_OPERATOR_CONTEXT, { operatorId, context });
     }
   }
 
@@ -275,7 +276,7 @@ export class RadioService {
    */
   setOperatorSlot(operatorId: string, slot: string): void {
     if (this.isConnected) {
-      this.wsClient.send('setOperatorSlot', { operatorId, slot });
+      this.wsClient.send(WSMessageType.SET_OPERATOR_SLOT, { operatorId, slot });
     }
   }
 
@@ -284,7 +285,7 @@ export class RadioService {
    */
   sendUserCommand(operatorId: string, command: string, args: any): void {
     if (this.isConnected) {
-      this.wsClient.send('userCommand', { operatorId, command, args });
+      this.wsClient.send(WSMessageType.USER_COMMAND, { operatorId, command, args });
     }
   }
   
@@ -293,7 +294,7 @@ export class RadioService {
    */
   startOperator(operatorId: string): void {
     if (this.isConnected) {
-      this.wsClient.send('startOperator', { operatorId });
+      this.wsClient.send(WSMessageType.START_OPERATOR, { operatorId });
     }
   }
 
@@ -302,7 +303,7 @@ export class RadioService {
    */
   stopOperator(operatorId: string): void {
     if (this.isConnected) {
-      this.wsClient.send('stopOperator', { operatorId });
+      this.wsClient.send(WSMessageType.STOP_OPERATOR, { operatorId });
     }
   }
 
@@ -311,7 +312,7 @@ export class RadioService {
    */
   setVolumeGain(gain: number): void {
     if (this.isConnected) {
-      this.wsClient.send('setVolumeGain', { gain });
+      this.wsClient.send(WSMessageType.SET_VOLUME_GAIN, { gain });
     }
   }
 
@@ -321,7 +322,7 @@ export class RadioService {
   setClientEnabledOperators(enabledOperatorIds: string[]): void {
     if (this.isConnected) {
       console.log('📤 [RadioService] 设置客户端启用操作员:', enabledOperatorIds);
-      this.wsClient.send('setClientEnabledOperators', { enabledOperatorIds });
+      this.wsClient.send(WSMessageType.SET_CLIENT_ENABLED_OPERATORS, { enabledOperatorIds });
     }
   }
 
@@ -331,7 +332,7 @@ export class RadioService {
   sendHandshake(enabledOperatorIds: string[] | null): void {
     if (this.isConnected) {
       console.log('🤝 [RadioService] 发送握手消息:', { enabledOperatorIds });
-      this.wsClient.send('clientHandshake', {
+      this.wsClient.send(WSMessageType.CLIENT_HANDSHAKE, {
         enabledOperatorIds,
         clientVersion: '1.0.0',
         clientCapabilities: ['operatorFiltering', 'handshakeProtocol']

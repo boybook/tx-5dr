@@ -79,6 +79,9 @@ export class WSMessageHandler extends WSEventEmitter {
       // 操作员相关事件
       [WSMessageType.OPERATORS_LIST]: 'operatorsList',
       [WSMessageType.OPERATOR_STATUS_UPDATE]: 'operatorStatusUpdate',
+      [WSMessageType.TRANSMISSION_LOG]: 'transmissionLog',
+      [WSMessageType.VOLUME_GAIN_CHANGED]: 'volumeGainChanged',
+      [WSMessageType.SERVER_HANDSHAKE_COMPLETE]: 'handshakeComplete',
     };
 
     // 检查是否有对应的事件映射

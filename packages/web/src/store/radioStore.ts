@@ -333,7 +333,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       radioDispatch({ type: 'operatorStatusUpdate', payload: operatorStatus });
     });
 
-    radioService.on('handshakeComplete' as any, (data: any) => {
+    radioService.on('handshakeComplete', (data: any) => {
       console.log('🤝 [RadioProvider] 握手完成:', data);
       
       // 如果是新客户端，保存服务端确定的操作员列表到本地

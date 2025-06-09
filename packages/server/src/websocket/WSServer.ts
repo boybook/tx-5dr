@@ -859,7 +859,7 @@ export class WSServer extends WSMessageHandler {
       }
 
       // 3. 发送握手完成消息
-      connection.send('serverHandshakeComplete', {
+      connection.send(WSMessageType.SERVER_HANDSHAKE_COMPLETE, {
         serverVersion: '1.0.0',
         supportedFeatures: ['operatorFiltering', 'handshakeProtocol'],
         finalEnabledOperatorIds: enabledOperatorIds === null ? finalEnabledOperatorIds : undefined // 新客户端需要保存最终的操作员列表

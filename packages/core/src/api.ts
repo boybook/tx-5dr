@@ -71,6 +71,24 @@ function getConfiguredApiBase(): string {
   return ApiConfig.getInstance().getApiBase();
 }
 
+/**
+ * 统一的请求封装，简化错误处理
+ */
+async function request<T>(path: string, options: RequestInit & { apiBase?: string; expectText?: boolean } = {}): Promise<T> {
+  const { apiBase, expectText, ...fetchOptions } = options;
+  const baseUrl = apiBase || getConfiguredApiBase();
+  const res = await fetch(`${baseUrl}${path}`, fetchOptions);
+  const isJSON = res.headers.get('content-type')?.includes('application/json');
+  const data = expectText ? await res.text() : isJSON ? await res.json().catch(() => ({})) : undefined;
+
+  if (!res.ok) {
+    const message = typeof data === 'object' && data && 'message' in data ? (data as any).message : `HTTP ${res.status}: ${res.statusText}`;
+    throw new Error(message);
+  }
+
+  return (data as unknown) as T;
+}
+
 // ========== API 对象 ==========
 
 export const api = {
@@ -80,12 +98,7 @@ export const api = {
    * 获取Hello消息
    */
   async getHello(apiBase?: string): Promise<HelloResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/hello`);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    }
-    return (await res.json()) as HelloResponse;
+    return request<HelloResponse>('/hello', { apiBase });
   },
 
   // ========== 音频设备API ==========
@@ -94,64 +107,36 @@ export const api = {
    * 获取所有音频设备列表
    */
   async getAudioDevices(apiBase?: string): Promise<AudioDevicesResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/audio/devices`);
-    if (!res.ok) {
-      throw new Error(`获取音频设备失败: ${res.status} ${res.statusText}`);
-    }
-    return (await res.json()) as AudioDevicesResponse;
+    return request<AudioDevicesResponse>('/audio/devices', { apiBase });
   },
 
   /**
    * 获取当前音频设备设置
    */
   async getAudioSettings(apiBase?: string): Promise<AudioDeviceSettingsResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/audio/settings`);
-    if (!res.ok) {
-      throw new Error(`获取音频设置失败: ${res.status} ${res.statusText}`);
-    }
-    return (await res.json()) as AudioDeviceSettingsResponse;
+    return request<AudioDeviceSettingsResponse>('/audio/settings', { apiBase });
   },
 
   /**
    * 更新音频设备设置
    */
   async updateAudioSettings(
-    settings: AudioDeviceSettings, 
+    settings: AudioDeviceSettings,
     apiBase?: string
   ): Promise<AudioDeviceSettingsResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/audio/settings`, {
+    return request('/audio/settings', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `更新音频设置失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return (await res.json()) as AudioDeviceSettingsResponse;
   },
 
   /**
    * 重置音频设备设置
    */
   async resetAudioSettings(apiBase?: string): Promise<AudioDeviceSettingsResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/audio/settings/reset`, {
-      method: 'POST',
-    });
-    
-    if (!res.ok) {
-      throw new Error(`重置音频设置失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return (await res.json()) as AudioDeviceSettingsResponse;
+    return request<AudioDeviceSettingsResponse>('/audio/settings/reset', { method: 'POST', apiBase });
   },
 
   // ========== 模式管理API ==========
@@ -160,48 +145,29 @@ export const api = {
    * 获取所有可用模式
    */
   async getAvailableModes(apiBase?: string): Promise<{ success: boolean; data: ModeDescriptor[] }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/mode`);
-    if (!res.ok) {
-      throw new Error(`获取可用模式失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
+    return request<{ success: boolean; data: ModeDescriptor[] }>('/mode', { apiBase });
   },
 
   /**
    * 获取当前模式
    */
   async getCurrentMode(apiBase?: string): Promise<{ success: boolean; data: ModeDescriptor }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/mode/current`);
-    if (!res.ok) {
-      throw new Error(`获取当前模式失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
+    return request<{ success: boolean; data: ModeDescriptor }>('/mode/current', { apiBase });
   },
 
   /**
    * 切换模式
    */
   async switchMode(
-    mode: ModeDescriptor, 
+    mode: ModeDescriptor,
     apiBase?: string
   ): Promise<{ success: boolean; message: string; data: ModeDescriptor }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/mode/switch`, {
+    return request('/mode/switch', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(mode),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `切换模式失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
   },
 
   // ========== 操作员管理API ==========
@@ -210,48 +176,29 @@ export const api = {
    * 获取所有操作员配置
    */
   async getOperators(apiBase?: string): Promise<RadioOperatorListResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators`);
-    if (!res.ok) {
-      throw new Error(`获取操作员列表失败: ${res.status} ${res.statusText}`);
-    }
-    return (await res.json()) as RadioOperatorListResponse;
+    return request<RadioOperatorListResponse>('/operators', { apiBase });
   },
 
   /**
    * 获取指定操作员配置
    */
   async getOperator(id: string, apiBase?: string): Promise<RadioOperatorDetailResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}`);
-    if (!res.ok) {
-      throw new Error(`获取操作员详情失败: ${res.status} ${res.statusText}`);
-    }
-    return (await res.json()) as RadioOperatorDetailResponse;
+    return request<RadioOperatorDetailResponse>(`/operators/${encodeURIComponent(id)}`, { apiBase });
   },
 
   /**
    * 创建新操作员
    */
   async createOperator(
-    operatorData: CreateRadioOperatorRequest, 
+    operatorData: CreateRadioOperatorRequest,
     apiBase?: string
   ): Promise<RadioOperatorActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators`, {
+    return request('/operators', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(operatorData),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `创建操作员失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return (await res.json()) as RadioOperatorActionResponse;
   },
 
   /**
@@ -259,87 +206,43 @@ export const api = {
    */
   async updateOperator(
     id: string,
-    updates: UpdateRadioOperatorRequest, 
+    updates: UpdateRadioOperatorRequest,
     apiBase?: string
   ): Promise<RadioOperatorActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}`, {
+    return request(`/operators/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `更新操作员失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return (await res.json()) as RadioOperatorActionResponse;
   },
 
   /**
    * 删除操作员
    */
   async deleteOperator(id: string, apiBase?: string): Promise<{ success: boolean; message: string }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `删除操作员失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+    return request(`/operators/${encodeURIComponent(id)}`, { method: 'DELETE', apiBase });
   },
 
   /**
    * 启动操作员发射
    */
   async startOperator(id: string, apiBase?: string): Promise<{ success: boolean; message: string }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}/start`, {
-      method: 'POST',
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `启动操作员失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+    return request(`/operators/${encodeURIComponent(id)}/start`, { method: 'POST', apiBase });
   },
 
   /**
    * 停止操作员发射
    */
   async stopOperator(id: string, apiBase?: string): Promise<{ success: boolean; message: string }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}/stop`, {
-      method: 'POST',
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `停止操作员失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+    return request(`/operators/${encodeURIComponent(id)}/stop`, { method: 'POST', apiBase });
   },
 
   /**
    * 获取操作员运行状态
    */
   async getOperatorStatus(id: string, apiBase?: string): Promise<RadioOperatorStatusResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/operators/${encodeURIComponent(id)}/status`);
-    if (!res.ok) {
-      throw new Error(`获取操作员状态失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
+    return request<RadioOperatorStatusResponse>(`/operators/${encodeURIComponent(id)}/status`, { apiBase });
   },
 
   // ========== 日志本管理API ==========
@@ -348,48 +251,29 @@ export const api = {
    * 获取所有日志本列表
    */
   async getLogBooks(apiBase?: string): Promise<LogBookListResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks`);
-    if (!res.ok) {
-      throw new Error(`获取日志本列表失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
+    return request<LogBookListResponse>('/logbooks', { apiBase });
   },
 
   /**
    * 获取特定日志本详情
    */
   async getLogBook(id: string, apiBase?: string): Promise<LogBookDetailResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${id}`);
-    if (!res.ok) {
-      throw new Error(`获取日志本详情失败: ${res.status} ${res.statusText}`);
-    }
-    return await res.json();
+    return request<LogBookDetailResponse>(`/logbooks/${id}`, { apiBase });
   },
 
   /**
    * 创建新日志本
    */
   async createLogBook(
-    logBookData: CreateLogBookRequest, 
+    logBookData: CreateLogBookRequest,
     apiBase?: string
   ): Promise<LogBookActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks`, {
+    return request('/logbooks', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(logBookData),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `创建日志本失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
   },
 
   /**
@@ -397,41 +281,22 @@ export const api = {
    */
   async updateLogBook(
     id: string,
-    updates: UpdateLogBookRequest, 
+    updates: UpdateLogBookRequest,
     apiBase?: string
   ): Promise<LogBookActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${id}`, {
+    return request(`/logbooks/${id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `更新日志本失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
   },
 
   /**
    * 删除日志本
    */
   async deleteLogBook(id: string, apiBase?: string): Promise<LogBookActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${id}`, {
-      method: 'DELETE',
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `删除日志本失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+    return request(`/logbooks/${id}`, { method: 'DELETE', apiBase });
   },
 
   /**
@@ -439,112 +304,58 @@ export const api = {
    */
   async connectOperatorToLogBook(
     logBookId: string,
-    operatorId: string, 
+    operatorId: string,
     apiBase?: string
   ): Promise<LogBookActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${logBookId}/connect`, {
+    return request(`/logbooks/${logBookId}/connect`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ operatorId }),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `连接操作员到日志本失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
   },
 
   /**
    * 断开操作员与日志本的连接
    */
   async disconnectOperatorFromLogBook(operatorId: string, apiBase?: string): Promise<LogBookActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/disconnect/${operatorId}`, {
-      method: 'POST',
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `断开操作员连接失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+    return request(`/logbooks/disconnect/${operatorId}`, { method: 'POST', apiBase });
   },
 
   /**
    * 查询日志本中的QSO记录
    */
   async getLogBookQSOs(id: string, options?: LogBookQSOQueryOptions, apiBase?: string): Promise<{ success: boolean; data: QSORecord[] }> {
-    const baseUrl = apiBase || getConfiguredApiBase();
     const params = new URLSearchParams();
-    
     if (options) {
-      Object.entries(options).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          params.append(key, String(value));
-        }
-      });
+      Object.entries(options).forEach(([k, v]) => { if (v !== undefined && v !== null) params.append(k, String(v)); });
     }
-    
-    const url = `${baseUrl}/logbooks/${id}/qsos${params.toString() ? '?' + params.toString() : ''}`;
-    const res = await fetch(url);
-    
-    if (!res.ok) {
-      throw new Error(`查询QSO记录失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+    const query = params.toString();
+    return request<{ success: boolean; data: QSORecord[] }>(`/logbooks/${id}/qsos${query ? '?' + query : ''}`, { apiBase });
   },
 
   /**
    * 导出日志本数据
    */
   async exportLogBook(id: string, options?: LogBookExportOptions, apiBase?: string): Promise<string> {
-    const baseUrl = apiBase || getConfiguredApiBase();
     const params = new URLSearchParams();
-    
     if (options) {
-      Object.entries(options).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          params.append(key, String(value));
-        }
-      });
+      Object.entries(options).forEach(([k, v]) => { if (v !== undefined && v !== null) params.append(k, String(v)); });
     }
-    
-    const url = `${baseUrl}/logbooks/${id}/export${params.toString() ? '?' + params.toString() : ''}`;
-    const res = await fetch(url);
-    
-    if (!res.ok) {
-      throw new Error(`导出日志本失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.text();
+    const query = params.toString();
+    return request<string>(`/logbooks/${id}/export${query ? '?' + query : ''}`, { apiBase, expectText: true });
   },
 
   /**
    * 导入数据到日志本
    */
   async importToLogBook(id: string, adifContent: string, operatorId?: string, apiBase?: string): Promise<LogBookActionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${id}/import`, {
+    return request(`/logbooks/${id}/import`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ adifContent, operatorId }),
+      apiBase,
     });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `导入数据失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
   },
 }
 
