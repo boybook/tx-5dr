@@ -124,7 +124,7 @@ export class WSServer extends WSMessageHandler {
   private connections = new Map<string, WSConnection>();
   private connectionIdCounter = 0;
   private digitalRadioEngine: DigitalRadioEngine;
-  private commandHandlers: Record<string, (data: any, connectionId: string) => Promise<void> | void>;
+  private commandHandlers: Partial<Record<WSMessageType, (data: any, connectionId: string) => Promise<void> | void>>;
 
   constructor(digitalRadioEngine: DigitalRadioEngine) {
     super();
@@ -219,7 +219,7 @@ export class WSServer extends WSMessageHandler {
    */
   private async handleClientCommand(connectionId: string, message: any): Promise<void> {
     console.log(`📥 [WSServer] 收到客户端命令: ${message.type}, 连接: ${connectionId}`);
-    const handler = this.commandHandlers[message.type];
+    const handler = this.commandHandlers[message.type as WSMessageType];
     if (handler) {
       await handler(message.data, connectionId);
     } else {
