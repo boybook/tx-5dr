@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu } from 'electron';
 import { join } from 'path';
 import http from 'http';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname } from 'path';
 
 // 获取当前模块的目录（ESM中的__dirname替代方案）
@@ -27,9 +27,16 @@ async function startEmbeddedServer(): Promise<boolean> {
     console.log('🔍 Server module path:', serverModulePath);
     console.log('🔍 DigitalRadioEngine path:', digitalRadioEnginePath);
     
+    // 在 Windows 上需要将路径转换为 file:// URL 格式
+    const serverModuleURL = pathToFileURL(serverModulePath).href;
+    const digitalRadioEngineURL = pathToFileURL(digitalRadioEnginePath).href;
+    
+    console.log('🔍 Server module URL:', serverModuleURL);
+    console.log('🔍 DigitalRadioEngine URL:', digitalRadioEngineURL);
+    
     // 动态导入服务端模块
-    const { createServer } = await import(serverModulePath);
-    const { DigitalRadioEngine } = await import(digitalRadioEnginePath);
+    const { createServer } = await import(serverModuleURL);
+    const { DigitalRadioEngine } = await import(digitalRadioEngineURL);
     
     // 创建服务器实例
     embeddedServer = await createServer();
