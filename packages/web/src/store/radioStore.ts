@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode, useState } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode } from 'react';
 import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
@@ -288,74 +288,61 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     radioServiceRef.current = radioService;
     
     // 设置事件监听器 - 分发到不同的reducer
-    radioService.on('connected', () => {
-      connectionDispatch({ type: 'connected' });
-      
-      // 连接成功后立即发送握手消息（包含操作员偏好设置）
-      const handshakeOperatorIds = getHandshakeOperatorIds();
-      
-      console.log('🤝 [RadioProvider] 连接成功，发送握手消息:', {
-        enabledOperatorIds: handshakeOperatorIds
-      });
-      
-      radioService.sendHandshake(handshakeOperatorIds);
-    });
-
-    radioService.on('disconnected', () => {
-      connectionDispatch({ type: 'disconnected' });
-    });
-
-    radioService.on('modeChanged', (mode: ModeDescriptor) => {
-      radioDispatch({ type: 'modeChanged', payload: mode });
-    });
-
-    radioService.on('systemStatus', (status: any) => {
-      radioDispatch({ type: 'systemStatus', payload: status });
-    });
-
-    radioService.on('decodeError', (errorInfo: any) => {
-      radioDispatch({ type: 'decodeError', payload: errorInfo });
-    });
-
-    radioService.on('error', (error: Error) => {
-      radioDispatch({ type: 'error', payload: error });
-    });
-
-    radioService.on('slotPackUpdated', (slotPack: SlotPack) => {
-      slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });
-    });
-
-    radioService.on('operatorsList', (data: { operators: OperatorStatus[] }) => {
-      radioDispatch({ type: 'operatorsList', payload: data.operators });
-    });
-
-    radioService.on('operatorStatusUpdate', (operatorStatus: OperatorStatus) => {
-      radioDispatch({ type: 'operatorStatusUpdate', payload: operatorStatus });
-    });
-
-    radioService.on('handshakeComplete' as any, (data: any) => {
-      console.log('🤝 [RadioProvider] 握手完成:', data);
-      
-      // 如果是新客户端，保存服务端确定的操作员列表到本地
-      if (data.finalEnabledOperatorIds) {
-        console.log('💾 [RadioProvider] 新客户端，保存默认操作员偏好:', data.finalEnabledOperatorIds);
-        setOperatorPreferences({
-          enabledOperatorIds: data.finalEnabledOperatorIds,
-          lastUpdated: Date.now()
+    const eventMap: Record<string, (...args: any[]) => void> = {
+      connected: () => {
+        connectionDispatch({ type: 'connected' });
+        const handshakeOperatorIds = getHandshakeOperatorIds();
+        console.log('🤝 [RadioProvider] 连接成功，发送握手消息:', {
+          enabledOperatorIds: handshakeOperatorIds
         });
+        radioService.sendHandshake(handshakeOperatorIds);
+      },
+      disconnected: () => {
+        connectionDispatch({ type: 'disconnected' });
+      },
+      modeChanged: (mode: ModeDescriptor) => {
+        radioDispatch({ type: 'modeChanged', payload: mode });
+      },
+      systemStatus: (status: any) => {
+        radioDispatch({ type: 'systemStatus', payload: status });
+      },
+      decodeError: (errorInfo: any) => {
+        radioDispatch({ type: 'decodeError', payload: errorInfo });
+      },
+      error: (error: Error) => {
+        radioDispatch({ type: 'error', payload: error });
+      },
+      slotPackUpdated: (slotPack: SlotPack) => {
+        slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });
+      },
+      operatorsList: (data: { operators: OperatorStatus[] }) => {
+        radioDispatch({ type: 'operatorsList', payload: data.operators });
+      },
+      operatorStatusUpdate: (operatorStatus: OperatorStatus) => {
+        radioDispatch({ type: 'operatorStatusUpdate', payload: operatorStatus });
+      },
+      handshakeComplete: (data: any) => {
+        console.log('🤝 [RadioProvider] 握手完成:', data);
+        if (data.finalEnabledOperatorIds) {
+          console.log('💾 [RadioProvider] 新客户端，保存默认操作员偏好:', data.finalEnabledOperatorIds);
+          setOperatorPreferences({
+            enabledOperatorIds: data.finalEnabledOperatorIds,
+            lastUpdated: Date.now()
+          });
+        }
+      },
+      reconnecting: (reconnectInfo: any) => {
+        console.log('🔄 [RadioProvider] 正在重连:', reconnectInfo);
+        connectionDispatch({ type: 'reconnecting', payload: reconnectInfo });
+      },
+      reconnectStopped: (stopInfo: any) => {
+        console.log('⏹️ [RadioProvider] 重连已停止:', stopInfo);
+        connectionDispatch({ type: 'reconnectStopped', payload: stopInfo });
       }
-      
-      // 握手完成后，所有过滤数据都已正确接收
-    });
+    };
 
-    (radioService as any).on('reconnecting', (reconnectInfo: any) => {
-      console.log('🔄 [RadioProvider] 正在重连:', reconnectInfo);
-      connectionDispatch({ type: 'reconnecting', payload: reconnectInfo });
-    });
-
-    (radioService as any).on('reconnectStopped', (stopInfo: any) => {
-      console.log('⏹️ [RadioProvider] 重连已停止:', stopInfo);
-      connectionDispatch({ type: 'reconnectStopped', payload: stopInfo });
+    Object.entries(eventMap).forEach(([event, handler]) => {
+      radioService.on(event as any, handler as any);
     });
 
     connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });
