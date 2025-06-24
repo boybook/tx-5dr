@@ -14,6 +14,7 @@ export * from './clock/SlotScheduler.js';
 export * from './websocket/WSEventEmitter.js';
 
 export * from './websocket/WSMessageHandler.js';
+export { WS_MESSAGE_EVENT_MAP } from './websocket/WSMessageHandler.js';
 export * from './websocket/WSClient.js';
 
 export type { WSClientConfig } from './websocket/WSClient.js';

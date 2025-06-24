@@ -124,11 +124,30 @@ export class WSServer extends WSMessageHandler {
   private connections = new Map<string, WSConnection>();
   private connectionIdCounter = 0;
   private digitalRadioEngine: DigitalRadioEngine;
+  private commandHandlers: Partial<Record<WSMessageType, (data: any, connectionId: string) => Promise<void> | void>>;
 
   constructor(digitalRadioEngine: DigitalRadioEngine) {
     super();
     this.digitalRadioEngine = digitalRadioEngine;
     this.setupEngineEventListeners();
+
+    this.commandHandlers = {
+      [WSMessageType.START_ENGINE]: () => this.handleStartEngine(),
+      [WSMessageType.STOP_ENGINE]: () => this.handleStopEngine(),
+      [WSMessageType.GET_STATUS]: () => this.handleGetStatus(),
+      [WSMessageType.SET_MODE]: (data) => this.handleSetMode(data?.mode),
+      [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
+      [WSMessageType.SET_OPERATOR_CONTEXT]: (data) => this.handleSetOperatorContext(data),
+      [WSMessageType.SET_OPERATOR_SLOT]: (data) => this.handleSetOperatorSlot(data),
+      [WSMessageType.USER_COMMAND]: (data) => this.handleUserCommand(data),
+      [WSMessageType.START_OPERATOR]: (data) => this.handleStartOperator(data),
+      [WSMessageType.STOP_OPERATOR]: (data) => this.handleStopOperator(data),
+      [WSMessageType.OPERATOR_REQUEST_CALL]: (data) => this.handleOperatorRequestCall(data),
+      [WSMessageType.PING]: (_data, id) => { this.sendToConnection(id, WSMessageType.PONG); },
+      [WSMessageType.SET_VOLUME_GAIN]: (data) => this.handleSetVolumeGain(data),
+      [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: (data, id) => this.handleSetClientEnabledOperators(id, data),
+      [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
+    };
   }
 
   /**
@@ -200,70 +219,11 @@ export class WSServer extends WSMessageHandler {
    */
   private async handleClientCommand(connectionId: string, message: any): Promise<void> {
     console.log(`📥 [WSServer] 收到客户端命令: ${message.type}, 连接: ${connectionId}`);
-    switch (message.type) {
-      case WSMessageType.START_ENGINE:
-        await this.handleStartEngine();
-        break;
-
-      case WSMessageType.STOP_ENGINE:
-        await this.handleStopEngine();
-        break;
-
-      case WSMessageType.GET_STATUS:
-        await this.handleGetStatus();
-        break;
-
-      case WSMessageType.SET_MODE:
-        await this.handleSetMode(message.data?.mode);
-        break;
-
-      case WSMessageType.GET_OPERATORS:
-        await this.handleGetOperators();
-        break;
-
-      case WSMessageType.SET_OPERATOR_CONTEXT:
-        await this.handleSetOperatorContext(message.data);
-        break;
-
-      case WSMessageType.SET_OPERATOR_SLOT:
-        await this.handleSetOperatorSlot(message.data);
-        break;
-
-      case WSMessageType.USER_COMMAND:
-        await this.handleUserCommand(message.data);
-        break;
-
-      case WSMessageType.START_OPERATOR:
-        await this.handleStartOperator(message.data);
-        break;
-
-      case WSMessageType.STOP_OPERATOR:
-        await this.handleStopOperator(message.data);
-        break;
-
-      case WSMessageType.OPERATOR_REQUEST_CALL:
-        await this.handleOperatorRequestCall(message.data);
-        break;
-
-      case WSMessageType.PING:
-        // ping消息回复pong到指定客户端
-        this.sendToConnection(connectionId, WSMessageType.PONG);
-        break;
-
-      case WSMessageType.SET_VOLUME_GAIN:
-        await this.handleSetVolumeGain(message.data);
-        break;
-
-      case WSMessageType.SET_CLIENT_ENABLED_OPERATORS:
-        await this.handleSetClientEnabledOperators(connectionId, message.data);
-        break;
-
-      case WSMessageType.CLIENT_HANDSHAKE:
-        await this.handleClientHandshake(connectionId, message.data);
-        break;
-
-      default:
-        console.warn('未知的WebSocket消息类型:', message.type);
+    const handler = this.commandHandlers[message.type as WSMessageType];
+    if (handler) {
+      await handler(message.data, connectionId);
+    } else {
+      console.warn('未知的WebSocket消息类型:', message.type);
     }
   }
 
