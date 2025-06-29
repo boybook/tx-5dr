@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  tx5dr:
+    build: .
+    container_name: tx5dr
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      # 应用配置和数据目录
+      - ./data/config:/app/data/config
+      - ./data/logs:/app/data/logs
+      - ./data/cache:/app/data/cache
+      # nginx日志
+      - ./data/logs/nginx:/var/log/nginx
+      # supervisor日志
+      - ./data/logs/supervisor:/var/log/supervisor
+    devices:
+      # USB设备（支持USB声卡和串口设备）
+      - /dev/bus/usb:/dev/bus/usb:rwm
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      # TX-5DR应用路径配置
+      - TX5DR_CONFIG_DIR=/app/data/config
+      - TX5DR_DATA_DIR=/app/data
+      - TX5DR_LOGS_DIR=/app/data/logs
+      - TX5DR_CACHE_DIR=/app/data/cache
+    privileged: true
+    # 音频设备访问
+    group_add:
+      - audio
+    cap_add:
+      - SYS_ADMIN
+      - DAC_OVERRIDE
+    security_opt:
+      - apparmor:unconfined
+    # 共享主机音频子系统
+    volumes_from: []
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m 

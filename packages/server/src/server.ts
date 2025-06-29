@@ -57,6 +57,9 @@ export async function createServer() {
         'http://127.0.0.1:5173',
         'http://localhost:3000',
         'http://127.0.0.1:3000',
+        // Docker容器端口
+        'http://localhost:8080',
+        'http://127.0.0.1:8080',
       ];
       
       // 没有origin（同域请求）或来自file://（Electron）的请求
@@ -77,13 +80,21 @@ export async function createServer() {
         }
       }
       
-      // 生产环境：检查是否在允许列表中
+      // 检查是否在允许列表中
       if (allowedOrigins.includes(origin)) {
         callback(null, true);
-      } else {
-        fastify.log.warn(`CORS: 拒绝来自 ${origin} 的请求`);
-        callback(new Error('Not allowed by CORS'), false);
+        return;
       }
+      
+      // Docker环境特殊处理：允许内部容器访问
+      if (process.env.NODE_ENV === 'production' && origin && 
+          (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:'))) {
+        callback(null, true);
+        return;
+      }
+      
+      fastify.log.warn(`CORS: 拒绝来自 ${origin} 的请求`);
+      callback(new Error('Not allowed by CORS'), false);
     },
     credentials: true,
   });
