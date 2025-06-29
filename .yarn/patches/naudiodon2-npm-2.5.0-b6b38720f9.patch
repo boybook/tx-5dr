@@ -1,0 +1,28 @@
+diff --git a/binding.gyp b/binding.gyp
+index d40b48c8163b97e19c015641d1c0c5d9e65d75df..0f29e7b1b973ab0f7fb94ae7fb2823c07567796a 100644
+--- a/binding.gyp
++++ b/binding.gyp
+@@ -109,21 +109,13 @@
+                  ],
+                 "link_settings": {
+                   "libraries": [
+-                    "<@(module_root_dir)/build/Release/libportaudio.so.2"
++		   "-lportaudio"
+                   ],
+                   "ldflags": [
+                   "-L<@(module_root_dir)/build/Release",
+                   "-Wl,-rpath,<@(module_root_dir)/build/Release"
+                   ]
+-                },
+-                "copies": [
+-                  {
+-                    "destination": "build/Release/",
+-                    "files": [
+-                      "<@(module_root_dir)/portaudio/bin/libportaudio.so.2"
+-                    ]
+-                  }
+-                ]
++                }
+               }]
+             ]
+           }
