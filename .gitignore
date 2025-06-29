@@ -2,9 +2,14 @@
 node_modules/
 .pnp
 .pnp.js
-.yarn
 .turbo
 .cursor
+
+# Yarn 4 artefacts
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
 
 # Production builds
 dist/
