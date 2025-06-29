@@ -30,9 +30,17 @@ export class AppPaths {
    * - Windows: %APPDATA%\{AppName}
    * - macOS: ~/Library/Application Support/{AppName}
    * - Linux: ~/.config/{AppName}
+   * - Docker: TX5DR_CONFIG_DIR环境变量
    */
   async getConfigDir(): Promise<string> {
     if (this._configDir) {
+      return this._configDir;
+    }
+
+    // Docker环境变量优先
+    if (process.env.TX5DR_CONFIG_DIR) {
+      this._configDir = process.env.TX5DR_CONFIG_DIR;
+      await this.ensureDirectoryExists(this._configDir);
       return this._configDir;
     }
 
@@ -64,9 +72,17 @@ export class AppPaths {
    * - Windows: %LOCALAPPDATA%\{AppName}
    * - macOS: ~/Library/Application Support/{AppName}
    * - Linux: ~/.local/share/{AppName}
+   * - Docker: TX5DR_DATA_DIR环境变量
    */
   async getDataDir(): Promise<string> {
     if (this._dataDir) {
+      return this._dataDir;
+    }
+
+    // Docker环境变量优先
+    if (process.env.TX5DR_DATA_DIR) {
+      this._dataDir = process.env.TX5DR_DATA_DIR;
+      await this.ensureDirectoryExists(this._dataDir);
       return this._dataDir;
     }
 
@@ -98,9 +114,17 @@ export class AppPaths {
    * - Windows: %LOCALAPPDATA%\{AppName}\logs
    * - macOS: ~/Library/Logs/{AppName}
    * - Linux: ~/.local/share/{AppName}/logs
+   * - Docker: TX5DR_LOGS_DIR环境变量
    */
   async getLogsDir(): Promise<string> {
     if (this._logsDir) {
+      return this._logsDir;
+    }
+
+    // Docker环境变量优先
+    if (process.env.TX5DR_LOGS_DIR) {
+      this._logsDir = process.env.TX5DR_LOGS_DIR;
+      await this.ensureDirectoryExists(this._logsDir);
       return this._logsDir;
     }
 
@@ -131,9 +155,17 @@ export class AppPaths {
    * - Windows: %LOCALAPPDATA%\{AppName}\cache
    * - macOS: ~/Library/Caches/{AppName}
    * - Linux: ~/.cache/{AppName}
+   * - Docker: TX5DR_CACHE_DIR环境变量
    */
   async getCacheDir(): Promise<string> {
     if (this._cacheDir) {
+      return this._cacheDir;
+    }
+
+    // Docker环境变量优先
+    if (process.env.TX5DR_CACHE_DIR) {
+      this._cacheDir = process.env.TX5DR_CACHE_DIR;
+      await this.ensureDirectoryExists(this._cacheDir);
       return this._cacheDir;
     }
 
