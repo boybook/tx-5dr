@@ -154,6 +154,58 @@ export const api = {
     return (await res.json()) as AudioDeviceSettingsResponse;
   },
 
+  // ========== 电台控制API ==========
+
+  async getRadioConfig(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/config`);
+    return await res.json();
+  },
+
+  async updateRadioConfig(config: any, apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    return await res.json();
+  },
+
+  async getSupportedRigs(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/rigs`);
+    return await res.json();
+  },
+
+  async getSerialPorts(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/serial-ports`);
+    return await res.json();
+  },
+
+  async testRadio(config: any, apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    return await res.json();
+  },
+
+  async testPTT(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/test-ptt`, { method: 'POST' });
+    return await res.json();
+  },
+
+  async getPresetFrequencies(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/frequencies`);
+    return await res.json();
+  },
+
   // ========== 模式管理API ==========
 
   /**
@@ -578,4 +630,11 @@ export const {
   getLogBookQSOs,
   exportLogBook,
   importToLogBook
-} = api; 
+  ,getRadioConfig
+  ,updateRadioConfig
+  ,getSupportedRigs
+  ,getSerialPorts
+  ,testRadio
+  ,testPTT
+  ,getPresetFrequencies
+} = api;
