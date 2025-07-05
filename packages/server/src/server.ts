@@ -10,6 +10,7 @@ import { audioRoutes } from './routes/audio.js';
 import { slotpackRoutes } from './routes/slotpack.js';
 import { modeRoutes } from './routes/mode.js';
 import { operatorRoutes } from './routes/operators.js';
+import { radioRoutes } from './routes/radio.js';
 import { WSServer } from './websocket/WSServer.js';
 
 export async function createServer() {
@@ -145,6 +146,9 @@ export async function createServer() {
   // 注册操作员管理API路由
   await fastify.register(operatorRoutes, { prefix: '/api/operators' });
   fastify.log.info('操作员管理API路由注册完成');
+
+  await fastify.register(radioRoutes, { prefix: '/api/radio' });
+  fastify.log.info('电台控制API路由注册完成');
 
   // 注册日志本管理API路由
   const { logbookRoutes } = await import('./routes/logbooks.js');
