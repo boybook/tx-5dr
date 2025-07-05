@@ -14,6 +14,7 @@ import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
 import { AudioMixer, type MixedAudio } from './audio/AudioMixer.js';
 import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
 import { printAppPaths } from './utils/debug-paths.js';
+import { PhysicalRadioManager } from './radio/PhysicalRadioManager.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -38,6 +39,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // 音频混音器
   private audioMixer: AudioMixer;
 
+  // 物理电台管理器
+  private radioManager: PhysicalRadioManager;
+
   // 电台操作员管理器
   private _operatorManager: RadioOperatorManager;
 
@@ -50,6 +54,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   public getSlotPackManager(): SlotPackManager {
     return this.slotPackManager;
+  }
+
+  /** 获取物理电台管理器 */
+  public getRadioManager(): PhysicalRadioManager {
+    return this.radioManager;
   }
   
   // 频谱分析配置常量
@@ -72,13 +81,21 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     // 初始化音频混音器，设置100ms的混音窗口
     this.audioMixer = new AudioMixer(100);
+
+    // 初始化物理电台管理器
+    this.radioManager = new PhysicalRadioManager();
     
     // 初始化操作员管理器
     this._operatorManager = new RadioOperatorManager({
       eventEmitter: this,
       encodeQueue: this.realEncodeQueue,
       clockSource: this.clockSource,
-      getCurrentMode: () => this.currentMode
+      getCurrentMode: () => this.currentMode,
+      setRadioFrequency: (freq: number) => {
+        if (this.radioManager) {
+          try { this.radioManager.setFrequency(freq); } catch (e) { console.error('设置电台频率失败', e); }
+        }
+      }
     });
     
     // 初始化频谱调度器
@@ -215,8 +232,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`   混音时长: ${mixedAudio.duration.toFixed(2)}s`);
         console.log(`   采样率: ${mixedAudio.sampleRate}Hz`);
         
+        // 物理电台PTT开始
+        if (this.radioManager.isConnected()) {
+          try { this.radioManager.setPTT(true); } catch (e) { console.error('PTT start failed', e); }
+        }
+
         // 播放混音后的音频
         await this.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
+
+        // 物理电台PTT结束
+        if (this.radioManager.isConnected()) {
+          try { this.radioManager.setPTT(false); } catch (e) { console.error('PTT stop failed', e); }
+        }
         
         // 为所有参与混音的操作员发送成功事件
         for (const operatorId of mixedAudio.operatorIds) {
@@ -416,6 +443,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // 从配置管理器获取音频设备设置
       const configManager = ConfigManager.getInstance();
       const audioConfig = configManager.getAudioConfig();
+      const radioConfig = configManager.getRadioConfig();
       
       console.log(`🎤 [时钟管理器] 使用音频设备配置:`, audioConfig);
       
@@ -426,7 +454,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // 启动音频输出
       await this.audioStreamManager.startOutput(audioConfig.outputDeviceId);
       console.log(`🔊 [时钟管理器] 音频输出流启动成功`);
-      
+
+      // 连接物理电台（如果配置）
+      await this.radioManager.applyConfig(radioConfig);
+      console.log(`📡 [时钟管理器] 物理电台配置已应用:`, radioConfig);
+
       audioStarted = true;
     } catch (error) {
       console.error(`❌ [时钟管理器] 音频流启动失败:`, error);
@@ -534,9 +566,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       try {
         await this.audioStreamManager.stopStream();
         console.log(`🛑 [时钟管理器] 音频输入流停止成功`);
-        
+
         await this.audioStreamManager.stopOutput();
         console.log(`🛑 [时钟管理器] 音频输出流停止成功`);
+
+        // 断开物理电台
+        await this.radioManager.disconnect();
+        console.log(`🛑 [时钟管理器] 物理电台已断开`);
       } catch (error) {
         console.error(`❌ [时钟管理器] 音频流停止失败:`, error);
       }
