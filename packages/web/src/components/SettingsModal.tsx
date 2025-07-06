@@ -13,6 +13,7 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSave } from '@fortawesome/free-solid-svg-icons';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
+import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 
@@ -34,6 +35,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   
   // 用于检查组件是否有未保存的更改
   const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
+  const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
 
@@ -51,6 +53,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     switch (activeTab) {
       case 'audio':
         return audioSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'radio':
+        return radioSettingsRef.current?.hasUnsavedChanges() || false;
       case 'operator':
         return operatorSettingsRef.current?.hasUnsavedChanges() || false;
       case 'display':
@@ -94,6 +98,11 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         case 'audio':
           if (audioSettingsRef.current) {
             await audioSettingsRef.current.save();
+          }
+          break;
+        case 'radio':
+          if (radioSettingsRef.current) {
+            await radioSettingsRef.current.save();
           }
           break;
         case 'operator':
@@ -195,12 +204,10 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         );
       case 'radio':
         return (
-          <div className="flex items-center justify-center py-12">
-            <div className="text-center text-default-500">
-              <p>电台设备设置</p>
-              <p className="text-sm mt-2">即将开发...</p>
-            </div>
-          </div>
+          <RadioDeviceSettings
+            ref={radioSettingsRef}
+            onUnsavedChanges={setHasUnsavedChanges}
+          />
         );
       case 'operator':
         return (
