@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, addToast} from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faWifi, faSpinner, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
@@ -339,6 +339,57 @@ export const RadioControl: React.FC = () => {
     connection.state.radioService?.setVolumeGain(gain);
   };
 
+  // 根据当前模式筛选频率
+  const filteredFrequencies = React.useMemo(() => {
+    if (!radio.state.currentMode) {
+      return availableFrequencies;
+    }
+    
+    const currentModeName = radio.state.currentMode.name;
+    const filtered = availableFrequencies.filter(freq => freq.mode === currentModeName);
+    
+    console.log(`🔍 当前模式: ${currentModeName}, 筛选出 ${filtered.length} 个频率`);
+    return filtered;
+  }, [availableFrequencies, radio.state.currentMode]);
+
+  // 自动设置频率到后端（避免递归调用）
+  const autoSetFrequency = async (frequency: FrequencyOption) => {
+    if (!connection.state.isConnected) return;
+    
+    try {
+      console.log(`🔄 自动设置频率: ${frequency.label} (${frequency.frequency} Hz)`);
+      const baseUrl = '/api';
+      const res = await fetch(`${baseUrl}/radio/frequency`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ frequency: frequency.frequency }),
+      });
+      const response = await res.json();
+      
+      if (response.success) {
+        console.log(`✅ 自动设置频率成功: ${frequency.label}`);
+      } else {
+        console.error('❌ 自动设置频率失败:', response.message);
+      }
+    } catch (error) {
+      console.error('❌ 自动设置频率失败:', error);
+    }
+  };
+
+  // 当模式改变时，自动选择第一个匹配的频率
+  React.useEffect(() => {
+    if (filteredFrequencies.length > 0) {
+      const currentFreqExists = filteredFrequencies.some(freq => freq.key === currentFrequency);
+      if (!currentFreqExists) {
+        const firstFreq = filteredFrequencies[0];
+        console.log(`🔄 模式改变，自动选择第一个频率: ${firstFreq.label}`);
+        setCurrentFrequency(firstFreq.key);
+        // 自动设置频率到后端
+        autoSetFrequency(firstFreq);
+      }
+    }
+  }, [filteredFrequencies]);
+
   // 处理频率切换
   const handleFrequencyChange = async (keys: any) => {
     if (!connection.state.isConnected) {
@@ -368,12 +419,36 @@ export const RadioControl: React.FC = () => {
       
       if (response.success) {
         setCurrentFrequency(selectedFrequencyKey);
-        console.log(`✅ 频率已切换到: ${selectedFrequency.label}`);
+        if (response.radioConnected) {
+          console.log(`✅ 频率已切换到: ${selectedFrequency.label}`);
+          addToast({
+            title: '✅ 频率切换成功',
+            description: `已切换到 ${selectedFrequency.label}`,
+            timeout: 3000
+          });
+        } else {
+          console.log(`📝 频率已记录: ${selectedFrequency.label} (电台未连接)`);
+          addToast({
+            title: '📝 频率已记录',
+            description: `${selectedFrequency.label} (电台未连接)`,
+            timeout: 4000
+          });
+        }
       } else {
         console.error('❌ 切换频率失败:', response.message);
+        addToast({
+          title: '❌ 频率切换失败',
+          description: response.message,
+          timeout: 5000
+        });
       }
     } catch (error) {
       console.error('❌ 切换频率失败:', error);
+      addToast({
+        title: '❌ 频率切换失败',
+        description: '网络错误或服务器无响应',
+        timeout: 5000
+      });
     }
   };
 
@@ -487,9 +562,9 @@ export const RadioControl: React.FC = () => {
         <div className="flex gap-1 flex-1 -ml-3">
           <Select
             disableSelectorIconRotation
-            className="w-[160px]"
+            className="w-[200px]"
             labelPlacement="outside"
-            placeholder="频率"
+            placeholder={radio.state.currentMode ? `${radio.state.currentMode.name} 频率` : "频率"}
             selectorIcon={<SelectorIcon />}
             selectedKeys={[currentFrequency]}
             variant="flat"
@@ -502,11 +577,11 @@ export const RadioControl: React.FC = () => {
               innerWrapper: "shadow-none",
               mainWrapper: "shadow-none"
             }}
-            isDisabled={!connection.state.isConnected || isLoadingFrequencies}
+            isDisabled={!connection.state.isConnected || isLoadingFrequencies || !radio.state.currentMode}
             isLoading={isLoadingFrequencies}
             onSelectionChange={handleFrequencyChange}
           >
-            {availableFrequencies.map((frequency) => (
+            {filteredFrequencies.map((frequency) => (
               <SelectItem key={frequency.key} textValue={frequency.label}>
                 {frequency.label}
               </SelectItem>

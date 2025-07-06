@@ -29,6 +29,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private isRunning = false;
   private audioStarted = false;
   
+  // PTT状态管理
+  private isPTTActive = false;
+  private pttTimeoutId: NodeJS.Timeout | null = null;
+  
   // 真实的音频和解码系统
   private audioStreamManager: AudioStreamManager;
   private realDecodeQueue: WSJTXDecodeWorkQueue;
@@ -232,18 +236,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`   混音时长: ${mixedAudio.duration.toFixed(2)}s`);
         console.log(`   采样率: ${mixedAudio.sampleRate}Hz`);
         
-        // 物理电台PTT开始
-        if (this.radioManager.isConnected()) {
-          try { this.radioManager.setPTT(true); } catch (e) { console.error('PTT start failed', e); }
-        }
+        // 启动PTT
+        await this.startPTT();
 
-        // 播放混音后的音频
+        // 开始播放混音后的音频（这个方法只是将数据写入音频缓冲区）
         await this.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
 
-        // 物理电台PTT结束
-        if (this.radioManager.isConnected()) {
-          try { this.radioManager.setPTT(false); } catch (e) { console.error('PTT stop failed', e); }
-        }
+        // 计算音频实际播放时间 + 延迟停止时间
+        const actualPlaybackTimeMs = mixedAudio.duration * 1000; // 音频实际播放时间
+        const pttHoldTimeMs = Math.max(200, actualPlaybackTimeMs * 0.1); // 播放完成后的额外延迟时间
+        const totalPTTTimeMs = actualPlaybackTimeMs + pttHoldTimeMs; // 总的PTT持续时间
+        
+        console.log(`📡 [时钟管理器] PTT时序计算:`);
+        console.log(`   音频播放时间: ${actualPlaybackTimeMs.toFixed(0)}ms`);
+        console.log(`   PTT额外延迟: ${pttHoldTimeMs.toFixed(0)}ms`);
+        console.log(`   PTT总持续时间: ${totalPTTTimeMs.toFixed(0)}ms`);
+        
+        // 安排PTT在音频播放完成后停止
+        this.schedulePTTStop(totalPTTTimeMs);
         
         // 为所有参与混音的操作员发送成功事件
         for (const operatorId of mixedAudio.operatorIds) {
@@ -259,6 +269,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         
       } catch (error) {
         console.error(`❌ [时钟管理器] 混音播放失败:`, error);
+        
+        // 播放失败时立即停止PTT
+        await this.stopPTT();
         
         // 为所有参与混音的操作员发送失败事件
         for (const operatorId of mixedAudio.operatorIds) {
@@ -305,8 +318,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.slotClock = new SlotClock(this.clockSource, this.currentMode);
     
     // 监听时钟事件
-    this.slotClock.on('slotStart', (slotInfo) => {
+    this.slotClock.on('slotStart', async (slotInfo) => {
       console.log(`🎯 [时隙开始] ID: ${slotInfo.id}, 开始时间: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
+      
+      // 确保PTT在新时隙开始时被停止
+      await this.forceStopPTT();
+      
       this.emit('slotStart', slotInfo, this.slotPackManager.getLatestSlotPack());
       
       // 广播所有操作员的状态更新（包含更新的周期进度）
@@ -403,7 +420,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 初始化频谱调度器
     await this.spectrumScheduler.initialize(
       this.audioStreamManager.getAudioProvider(),
-      48000 // 默认采样率，后续会从音频流管理器获取实际采样率
+      this.audioStreamManager.getCurrentSampleRate() // 使用音频流管理器的实际采样率
     );
     
     // 监听频谱调度器事件
@@ -539,7 +556,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       currentTime: this.clockSource.now(),
       nextSlotIn: this.slotClock?.getNextSlotIn() ?? 0,
       audioStarted: this.audioStarted,
-      volumeGain: this.audioStreamManager.getVolumeGain()
+      volumeGain: this.audioStreamManager.getVolumeGain(),
+      isPTTActive: this.isPTTActive,
+      radioConnected: this.radioManager.isConnected()
     };
   }
   
@@ -555,6 +574,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (this.slotClock) {
       console.log('🛑 [时钟管理器] 停止时钟');
       this.slotClock.stop();
+      
+      // 确保PTT被停止
+      await this.stopPTT();
       
       // 停止 SlotScheduler
       if (this.slotScheduler) {
@@ -601,6 +623,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   async destroy(): Promise<void> {
     console.log('🗑️  [时钟管理器] 正在销毁...');
     await this.stop();
+    
+    // 清理PTT相关资源
+    if (this.pttTimeoutId) {
+      clearTimeout(this.pttTimeoutId);
+      this.pttTimeoutId = null;
+      console.log('🗑️  [时钟管理器] PTT计时器已清理');
+    }
     
     // 销毁解码队列
     await this.realDecodeQueue.destroy();
@@ -659,5 +688,92 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   getVolumeGain(): number {
     return this.audioStreamManager.getVolumeGain();
+  }
+
+  /**
+   * 启动PTT
+   */
+  private async startPTT(): Promise<void> {
+    if (this.isPTTActive) {
+      console.log('📡 [PTT] PTT已经激活，跳过启动');
+      return;
+    }
+    
+    // 清除任何待定的PTT停止计时器
+    if (this.pttTimeoutId) {
+      clearTimeout(this.pttTimeoutId);
+      this.pttTimeoutId = null;
+    }
+    
+    if (this.radioManager.isConnected()) {
+      try {
+        await this.radioManager.setPTT(true);
+        this.isPTTActive = true;
+        console.log('📡 [PTT] PTT启动成功');
+      } catch (error) {
+        console.error('📡 [PTT] PTT启动失败:', error);
+        throw error;
+      }
+    } else {
+      console.log('📡 [PTT] 电台未连接，跳过PTT启动');
+    }
+  }
+
+  /**
+   * 停止PTT
+   */
+  private async stopPTT(): Promise<void> {
+    if (!this.isPTTActive) {
+      console.log('📡 [PTT] PTT已经停止，跳过操作');
+      return;
+    }
+    
+    // 清除任何待定的PTT停止计时器
+    if (this.pttTimeoutId) {
+      clearTimeout(this.pttTimeoutId);
+      this.pttTimeoutId = null;
+    }
+    
+    if (this.radioManager.isConnected()) {
+      try {
+        await this.radioManager.setPTT(false);
+        this.isPTTActive = false;
+        console.log('📡 [PTT] PTT停止成功');
+      } catch (error) {
+        console.error('📡 [PTT] PTT停止失败:', error);
+        // 即使停止失败，也要更新状态，避免状态不一致
+        this.isPTTActive = false;
+      }
+    } else {
+      this.isPTTActive = false;
+      console.log('📡 [PTT] 电台未连接，更新PTT状态为停止');
+    }
+  }
+
+  /**
+   * 安排PTT停止
+   */
+  private schedulePTTStop(delayMs: number): void {
+    // 清除任何现有的计时器
+    if (this.pttTimeoutId) {
+      clearTimeout(this.pttTimeoutId);
+    }
+    
+    console.log(`📡 [PTT] 安排 ${delayMs}ms 后停止PTT`);
+    
+    this.pttTimeoutId = setTimeout(async () => {
+      this.pttTimeoutId = null;
+      await this.stopPTT();
+    }, delayMs);
+  }
+
+  /**
+   * 强制停止PTT（在时隙切换时调用）
+   */
+  private async forceStopPTT(): Promise<void> {
+    if (this.isPTTActive) {
+      console.log('📡 [PTT] 强制停止PTT（时隙切换）');
+      await this.stopPTT();
+    }
   }
 }

@@ -51,17 +51,26 @@ export async function radioRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ success: false, message: '无效的频率值' });
       }
       
-      // 验证频率是否在业余无线电频段内
-      if (!freqManager.isValidAmateuerFrequency(frequency)) {
-        return reply.code(400).send({ 
-          success: false, 
-          message: `频率 ${(frequency / 1000000).toFixed(3)} MHz 不在业余无线电频段范围内` 
+      // 检查电台是否已连接
+      if (!radioManager.isConnected()) {
+        // 电台未连接时，只记录频率但不实际设置
+        console.log(`📡 [Radio Routes] 电台未连接，记录频率: ${(frequency / 1000000).toFixed(3)} MHz`);
+        return reply.send({ 
+          success: true, 
+          frequency,
+          message: '频率已记录（电台未连接）',
+          radioConnected: false
         });
       }
       
       // 设置电台频率
       await radioManager.setFrequency(frequency);
-      return reply.send({ success: true, frequency });
+      return reply.send({ 
+        success: true, 
+        frequency,
+        message: '频率设置成功',
+        radioConnected: true
+      });
     } catch (error) {
       return reply.code(500).send({ 
         success: false, 

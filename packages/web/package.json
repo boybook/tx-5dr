@@ -17,6 +17,7 @@
     "@heroicons/react": "^2.2.0",
     "@heroui/react": "^2.7.8",
     "@heroui/theme": "^2.4.15",
+    "@heroui/toast": "^2.0.12",
     "@tx5dr/contracts": "workspace:*",
     "@tx5dr/core": "workspace:*",
     "autoprefixer": "^10.4.21",

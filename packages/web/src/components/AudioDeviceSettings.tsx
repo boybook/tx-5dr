@@ -3,8 +3,11 @@ import {
   Select, 
   SelectItem,
   Spinner,
-  Alert
+  Alert,
+  Button
 } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import type { 
   AudioDevice, 
@@ -35,6 +38,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   // 加载状态
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [refreshingDevices, setRefreshingDevices] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -53,6 +57,19 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     hasUnsavedChanges,
     save: handleSubmit
   }), [selectedInputDevice, selectedOutputDevice, sampleRate, bufferSize, currentSettings]);
+
+  // 检查是否选择了相同的设备
+  const isSameDevice = () => {
+    if (!selectedInputDevice || !selectedOutputDevice) {
+      return false;
+    }
+    
+    // 提取实际的设备ID进行比较
+    const inputDeviceId = selectedInputDevice.replace('input-', '');
+    const outputDeviceId = selectedOutputDevice.replace('output-', '');
+    
+    return inputDeviceId === outputDeviceId;
+  };
 
   // 监听更改并通知父组件
   useEffect(() => {
@@ -92,6 +109,27 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       console.error('加载音频设备失败:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshDevices = async () => {
+    try {
+      setRefreshingDevices(true);
+      setError(null);
+
+      // 重新获取设备列表
+      const devicesResponse = await api.getAudioDevices();
+      
+      setInputDevices(devicesResponse.inputDevices);
+      setOutputDevices(devicesResponse.outputDevices);
+      
+      console.log('🔄 音频设备列表已刷新');
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '刷新音频设备列表失败');
+      console.error('刷新音频设备失败:', err);
+    } finally {
+      setRefreshingDevices(false);
     }
   };
 
@@ -186,9 +224,32 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         </Alert>
       )}
 
+      {/* 相同设备警告 */}
+      {isSameDevice() && (
+        <Alert color="warning" variant="flat" title="您选择了相同的音频设备作为输入和输出设备。">
+          <ul className="text-sm list-disc list-inside space-y-1 ml-2 pt-2">
+            <li>可能导致音频流冲突，导致输入数据接收不稳定</li>
+            <li>可能出现音频暂停或断续现象</li>
+          </ul>
+        </Alert>
+      )}
+
       {/* 设备配置表单 */}
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold">音频设备配置</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">音频设备配置</h3>
+          <Button
+            variant="flat"
+            color="primary"
+            size="sm"
+            onPress={refreshDevices}
+            isLoading={refreshingDevices}
+            isDisabled={saving}
+            startContent={refreshingDevices ? undefined : <FontAwesomeIcon icon={faRotateRight} />}
+          >
+            {refreshingDevices ? '刷新中...' : '刷新设备'}
+          </Button>
+        </div>
         
         <Select
           label="音频输入设备"
@@ -283,6 +344,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             <li>• 输出设备：用于发送FT8音频信号的设备</li>
             <li>• 采样率：建议使用48kHz以获得最佳音质</li>
             <li>• 缓冲区：较大的缓冲区可以减少音频爆音，但会增加延迟</li>
+            <li>• ⚠️ 避免选择相同设备：输入输出使用同一设备可能导致音频冲突</li>
           </ul>
         </div>
       </div>
