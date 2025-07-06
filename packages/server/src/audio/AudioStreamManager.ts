@@ -279,6 +279,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       console.log('音频输出配置:', outputOptions);
       
       // 创建音频输出流
+      console.log('🔧 创建音频输出流...');
       this.audioOutput = new (naudiodon as any).AudioIO({
         outOptions: outputOptions
       });
@@ -289,17 +290,59 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.emit('error', error);
       });
       
-      // 启动音频输出流
-      this.audioOutput.start();
-      this.isOutputting = true;
+      // 添加超时保护的异步启动
+      console.log('🚀 启动音频输出流...');
+      await this.startOutputWithTimeout();
       
+      this.isOutputting = true;
       console.log(`✅ 音频输出启动成功 (${this.sampleRate}Hz)`);
       
     } catch (error) {
       console.error('启动音频输出失败:', error);
+      // 清理失败的输出流
+      if (this.audioOutput) {
+        try {
+          this.audioOutput.quit();
+        } catch (cleanupError) {
+          console.error('清理音频输出流失败:', cleanupError);
+        }
+        this.audioOutput = null;
+      }
+      this.isOutputting = false;
+      this.outputDeviceId = null;
       this.emit('error', error as Error);
       throw error;
     }
+  }
+  
+  /**
+   * 带超时保护的音频输出启动
+   */
+  private async startOutputWithTimeout(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        console.error('⏰ 音频输出启动超时 (10秒)');
+        reject(new Error('音频输出启动超时'));
+      }, 10000); // 10秒超时
+      
+      try {
+        // 使用 setImmediate 异步化启动过程
+        setImmediate(() => {
+          try {
+            console.log('🔄 执行音频输出启动...');
+            this.audioOutput.start();
+            clearTimeout(timeout);
+            resolve();
+          } catch (error) {
+            clearTimeout(timeout);
+            reject(error);
+          }
+        });
+      } catch (error) {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    });
   }
   
   /**
