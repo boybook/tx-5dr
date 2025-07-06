@@ -73,7 +73,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpulse-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
+          sudo apt-get install -y libasound2-dev libpulse-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev portaudio19-dev build-essential python3-dev pkg-config
           
       - name: Setup MSBuild (Windows)
         if: matrix.os == 'windows-latest'
@@ -87,14 +87,17 @@ jobs:
 
       - name: Install dependencies
         run: |
+          echo "=== Installing dependencies ==="
           yarn install --immutable || {
             echo "Immutable install failed, trying to update lockfile..."
             yarn install || {
               echo "Standard install failed, applying naudiodon2 fixes and retrying..."
               node scripts/fix-naudiodon.js
+              echo "Clearing yarn cache and retrying..."
+              yarn cache clean || true
               yarn install || {
-                echo "Final fallback: installing with --ignore-optional..."
-                yarn install --ignore-optional
+                echo "Final fallback: forcing rebuild of native modules..."
+                yarn install --check-files
               }
             }
           }
@@ -104,6 +107,9 @@ jobs:
           ELECTRON_BUILDER_CACHE: .electron-builder-cache
           # Try to use prebuilt binaries first
           npm_config_build_from_source: false
+          # Ensure proper build environment
+          CC: gcc
+          CXX: g++
 
       - name: Generate ICO file (Windows)
         if: matrix.os == 'windows-latest'
