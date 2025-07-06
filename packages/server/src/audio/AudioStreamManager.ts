@@ -2,6 +2,7 @@ import * as naudiodon from 'naudiodon2';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache } from '../utils/audioUtils.js';
+import { ConfigManager } from '../config/config-manager.js';
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
@@ -22,16 +23,28 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private audioProvider: RingBufferAudioProvider;
   private deviceId: string | null = null;
   private outputDeviceId: string | null = null;
-  private sampleRate: number = 48000;
+  private sampleRate: number;
+  private bufferSize: number;
   private channels: number = 1;
   private volumeGain: number = 1.0; // 默认音量为1.0（100%）
   private currentAudioData: Float32Array | null = null; // 当前正在播放的音频数据
-  private currentSampleRate: number = 48000; // 当前音频的采样率
+  private currentSampleRate: number; // 当前音频的采样率
   
   constructor() {
     super();
-    // 创建音频缓冲区提供者，使用原始采样率（48kHz）
-    this.audioProvider = new RingBufferAudioProvider(this.sampleRate, 240000); // 5秒缓冲（48000 * 5）
+    
+    // 从配置管理器获取音频设置
+    const configManager = ConfigManager.getInstance();
+    const audioConfig = configManager.getAudioConfig();
+    
+    this.sampleRate = audioConfig.sampleRate || 48000;
+    this.bufferSize = audioConfig.bufferSize || 1024;
+    this.currentSampleRate = this.sampleRate;
+    
+    console.log(`🎵 [AudioStreamManager] 使用音频配置: 采样率=${this.sampleRate}Hz, 缓冲区=${this.bufferSize}帧`);
+    
+    // 创建音频缓冲区提供者，使用配置的采样率
+    this.audioProvider = new RingBufferAudioProvider(this.sampleRate, this.sampleRate * 5); // 5秒缓冲
   }
   
   /**
@@ -59,16 +72,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         console.log('🎯 使用默认音频输入设备');
       }
       
-      // 配置音频输入参数 - 关键：设置适当的缓冲区大小
+      // 配置音频输入参数 - 使用配置的设置
       const inputOptions: any = {
         channelCount: this.channels,
         sampleFormat: naudiodon.SampleFormatFloat32, // 使用 float32 格式
         sampleRate: this.sampleRate,
         deviceId: actualDeviceId,
-        // 关键配置：设置缓冲区大小以避免爆音
-        framesPerBuffer: 1024, // 每个缓冲区的帧数（较大的值可以减少爆音）
-        // 可选：设置建议的延迟
-        suggestedLatency: 0.05 // 50ms 延迟，平衡延迟和稳定性
+        // 使用配置的缓冲区大小
+        framesPerBuffer: this.bufferSize,
+        // 根据缓冲区大小计算建议延迟
+        suggestedLatency: (this.bufferSize / this.sampleRate) * 2 // 缓冲区大小的2倍作为延迟
       };
       
       console.log('音频输入配置:', inputOptions);
@@ -143,6 +156,27 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   getCurrentSampleRate(): number {
     return this.sampleRate;
+  }
+
+  /**
+   * 重新加载音频配置
+   * 注意：需要重启音频流才能生效
+   */
+  reloadAudioConfig(): void {
+    const configManager = ConfigManager.getInstance();
+    const audioConfig = configManager.getAudioConfig();
+    
+    const oldSampleRate = this.sampleRate;
+    const oldBufferSize = this.bufferSize;
+    
+    this.sampleRate = audioConfig.sampleRate || 48000;
+    this.bufferSize = audioConfig.bufferSize || 1024;
+    this.currentSampleRate = this.sampleRate;
+    
+    console.log(`🔄 [AudioStreamManager] 音频配置已重新加载:`);
+    console.log(`   采样率: ${oldSampleRate}Hz -> ${this.sampleRate}Hz`);
+    console.log(`   缓冲区: ${oldBufferSize}帧 -> ${this.bufferSize}帧`);
+    console.log(`   ⚠️ 需要重启音频流才能生效`);
   }
   
   /**
@@ -230,14 +264,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         console.log('🎯 使用默认音频输出设备');
       }
       
-      // 配置音频输出参数
+      // 配置音频输出参数 - 使用配置的设置
       const outputOptions: any = {
         channelCount: this.channels,
         sampleFormat: naudiodon.SampleFormatFloat32,
         sampleRate: this.sampleRate,
         deviceId: actualOutputDeviceId,
-        framesPerBuffer: 1024,
-        suggestedLatency: 0.05
+        // 使用配置的缓冲区大小
+        framesPerBuffer: this.bufferSize,
+        // 根据缓冲区大小计算建议延迟
+        suggestedLatency: (this.bufferSize / this.sampleRate) * 2
       };
       
       console.log('音频输出配置:', outputOptions);

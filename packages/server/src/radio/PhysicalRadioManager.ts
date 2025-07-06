@@ -120,7 +120,11 @@ export class PhysicalRadioManager {
       throw new Error('电台未连接');
     }
 
+    const startTime = Date.now();
+    
     try {
+      console.log(`📡 [PhysicalRadioManager] 开始PTT操作: ${state ? '启动发射' : '停止发射'}`);
+      
       // 异步设置PTT，带超时保护
       await Promise.race([
         this.rig.setPtt(state),
@@ -129,8 +133,11 @@ export class PhysicalRadioManager {
         )
       ]);
       
-      console.log(`📡 [PhysicalRadioManager] PTT设置成功: ${state ? '发射' : '接收'}`);
+      const duration = Date.now() - startTime;
+      console.log(`📡 [PhysicalRadioManager] PTT设置成功: ${state ? '发射' : '接收'} (耗时: ${duration}ms)`);
     } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`📡 [PhysicalRadioManager] PTT设置失败: ${state ? '发射' : '接收'} (耗时: ${duration}ms) - ${(error as Error).message}`);
       throw new Error(`PTT设置失败: ${(error as Error).message}`);
     }
   }
