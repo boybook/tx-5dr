@@ -203,6 +203,22 @@ export const api = {
   async getPresetFrequencies(apiBase?: string): Promise<any> {
     const baseUrl = apiBase || getConfiguredApiBase();
     const res = await fetch(`${baseUrl}/radio/frequencies`);
+    if (!res.ok) {
+      throw new Error(`获取预设频率失败: ${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+  },
+
+  async setRadioFrequency(frequency: number, apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/frequency`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frequency }),
+    });
+    if (!res.ok) {
+      throw new Error(`设置电台频率失败: ${res.status} ${res.statusText}`);
+    }
     return await res.json();
   },
 
@@ -637,4 +653,5 @@ export const {
   ,testRadio
   ,testPTT
   ,getPresetFrequencies
+  ,setRadioFrequency
 } = api;
