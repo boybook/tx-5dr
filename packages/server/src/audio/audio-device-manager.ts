@@ -32,11 +32,11 @@ export class AudioDeviceManager {
   /**
    * 将naudiodon设备信息转换为我们的AudioDevice格式
    */
-  private convertNaudiodonDevice(device: any, type: 'input' | 'output'): AudioDevice {
+  private convertNaudiodonDevice(device: any, type: 'input' | 'output', isSystemDefault: boolean = false): AudioDevice {
     return {
       id: `${type}-${device.id}`,
       name: device.name || `${type === 'input' ? '输入' : '输出'}设备 ${device.id}`,
-      isDefault: device.defaultSampleRate ? true : false,
+      isDefault: isSystemDefault,
       channels: device.maxInputChannels || device.maxOutputChannels || 2,
       sampleRate: device.defaultSampleRate || 48000,
       type: type,
@@ -49,12 +49,17 @@ export class AudioDeviceManager {
   async getInputDevices(): Promise<AudioDevice[]> {
     try {
       const devices = naudiodon.getDevices();
-      const inputDevices = devices
-        .filter(device => device.maxInputChannels > 0)
-        .map(device => this.convertNaudiodonDevice(device, 'input'));
+      const inputDevices = devices.filter(device => device.maxInputChannels > 0);
       
-      console.log(`找到 ${inputDevices.length} 个输入设备`);
-      return inputDevices;
+      const result = inputDevices.map((device, index) => {
+        // 判断是否为默认设备的逻辑：通常第一个设备是系统默认设备
+        const isSystemDefault = false;
+        
+        return this.convertNaudiodonDevice(device, 'input', isSystemDefault);
+      });
+      
+      console.log(`找到 ${result.length} 个输入设备`);
+      return result;
     } catch (error) {
       console.error('获取输入设备失败:', error);
       // 返回模拟数据作为后备
@@ -77,12 +82,17 @@ export class AudioDeviceManager {
   async getOutputDevices(): Promise<AudioDevice[]> {
     try {
       const devices = naudiodon.getDevices();
-      const outputDevices = devices
-        .filter(device => device.maxOutputChannels > 0)
-        .map(device => this.convertNaudiodonDevice(device, 'output'));
+      const outputDevices = devices.filter(device => device.maxOutputChannels > 0);
       
-      console.log(`找到 ${outputDevices.length} 个输出设备`);
-      return outputDevices;
+      const result = outputDevices.map((device, index) => {
+        // 判断是否为默认设备的逻辑：通常第一个设备是系统默认设备
+        const isSystemDefault = false;
+        
+        return this.convertNaudiodonDevice(device, 'output', isSystemDefault);
+      });
+      
+      console.log(`找到 ${result.length} 个输出设备`);
+      return result;
     } catch (error) {
       console.error('获取输出设备失败:', error);
       // 返回模拟数据作为后备

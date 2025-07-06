@@ -24,6 +24,7 @@ export interface RadioOperatorManagerOptions {
   encodeQueue: WSJTXEncodeWorkQueue;
   clockSource: ClockSourceSystem;
   getCurrentMode: () => ModeDescriptor;
+  setRadioFrequency: (freq: number) => void;
 }
 
 /**
@@ -36,6 +37,7 @@ export class RadioOperatorManager {
   private encodeQueue: WSJTXEncodeWorkQueue;
   private clockSource: ClockSourceSystem;
   private getCurrentMode: () => ModeDescriptor;
+  private setRadioFrequency: (freq: number) => void;
   private isRunning: boolean = false;
   private logManager: LogManager;
 
@@ -44,6 +46,7 @@ export class RadioOperatorManager {
     this.encodeQueue = options.encodeQueue;
     this.clockSource = options.clockSource;
     this.getCurrentMode = options.getCurrentMode;
+    this.setRadioFrequency = options.setRadioFrequency;
     this.logManager = LogManager.getInstance();
 
     // 监听发射请求
@@ -576,6 +579,13 @@ export class RadioOperatorManager {
 
       // 获取操作员的频率
       const frequency = operator.config.frequency || 0;
+
+      // 调整物理电台频率
+      try {
+        this.setRadioFrequency(frequency);
+      } catch (e) {
+        console.error('设置电台频率失败', e);
+      }
 
       // 广播发射日志
       this.eventEmitter.emit('transmissionLog' as any, {

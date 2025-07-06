@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { AudioDeviceSettings, RadioOperatorConfig } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 
@@ -19,6 +19,7 @@ export interface AppConfig {
     port: number;
     host: string;
   };
+  radio: HamlibConfig;
   operators: RadioOperatorConfig[];
 }
 
@@ -49,6 +50,9 @@ const DEFAULT_CONFIG: AppConfig = {
   server: {
     port: 3000,
     host: '0.0.0.0',
+  },
+  radio: {
+    type: 'none',
   },
   operators: [
     // 从空操作员列表开始，等待用户创建
@@ -176,6 +180,21 @@ export class ConfigManager {
    */
   async updateServerConfig(serverConfig: Partial<AppConfig['server']>): Promise<void> {
     this.config.server = { ...this.config.server, ...serverConfig };
+    await this.saveConfig();
+  }
+
+  /**
+   * 获取电台(Hamlib)配置
+   */
+  getRadioConfig(): HamlibConfig {
+    return { ...this.config.radio } as HamlibConfig;
+  }
+
+  /**
+   * 更新电台(Hamlib)配置
+   */
+  async updateRadioConfig(radioConfig: Partial<HamlibConfig>): Promise<void> {
+    this.config.radio = { ...this.config.radio, ...radioConfig } as HamlibConfig;
     await this.saveConfig();
   }
 
