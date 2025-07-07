@@ -27,6 +27,9 @@ services:
       - TX5DR_DATA_DIR=/app/data
       - TX5DR_LOGS_DIR=/app/data/logs
       - TX5DR_CACHE_DIR=/app/data/cache
+      # 用户权限配置 - 自动获取主机用户ID
+      - HOST_UID=${HOST_UID:-1000}
+      - HOST_GID=${HOST_GID:-1000}
     privileged: true
     # 音频设备访问
     group_add:
