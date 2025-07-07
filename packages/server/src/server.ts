@@ -49,54 +49,9 @@ export async function createServer() {
   const wsServer = new WSServer(digitalRadioEngine);
   fastify.log.info('WebSocket服务器初始化完成');
 
-  // Register CORS plugin
+  // Register CORS plugin - 允许所有跨域
   await fastify.register(cors, {
-    origin: (origin, callback) => {
-      // 允许的源列表
-      const allowedOrigins = [
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        // Docker容器端口
-        'http://localhost:8080',
-        'http://127.0.0.1:8080',
-      ];
-      
-      // 没有origin（同域请求）或来自file://（Electron）的请求
-      if (!origin || origin.startsWith('file://')) {
-        callback(null, true);
-        return;
-      }
-      
-      // 开发环境：允许所有localhost和127.0.0.1的端口
-      if (process.env.NODE_ENV === 'development') {
-        if (origin.startsWith('http://localhost:') || 
-            origin.startsWith('http://127.0.0.1:') ||
-            origin.startsWith('https://localhost:') ||
-            origin.startsWith('https://127.0.0.1:') ||
-            origin.startsWith('http://ylw.boybook.top:')) {
-          callback(null, true);
-          return;
-        }
-      }
-      
-      // 检查是否在允许列表中
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
-      
-      // Docker环境特殊处理：允许内部容器访问
-      if (process.env.NODE_ENV === 'production' && origin && 
-          (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:'))) {
-        callback(null, true);
-        return;
-      }
-      
-      fastify.log.warn(`CORS: 拒绝来自 ${origin} 的请求`);
-      callback(new Error('Not allowed by CORS'), false);
-    },
+    origin: true, // 允许所有来源
     credentials: true,
   });
 

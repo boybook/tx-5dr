@@ -1,58 +1,104 @@
-# Git相关
+# TX-5DR Docker Ignore File
+# 排除不需要的文件和目录以优化构建过程
+
+# Git
 .git
 .gitignore
+.gitattributes
 
-# Docker相关
-Dockerfile
-.dockerignore
-
-# IDE和编辑器
-.vscode
-.idea
-*.swp
-*.swo
-*~
-
+# Node.js
 node_modules
-
-# 系统文件
-.DS_Store
-Thumbs.db
-
-# 日志文件
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# 运行时缓存
+npm-debug.log
+yarn-error.log
 .npm
 .yarn/cache
 .yarn/unplugged
 .yarn/build-state.yml
 .yarn/install-state.gz
-.pnp.*
+# Keep .yarn/patches and .yarn/releases for Docker build
+!.yarn/patches/
+!.yarn/releases/
 
-# 构建输出（保留dist，因为需要检查是否存在）
+# Build outputs
+dist/
+build/
 out/
+*.tgz
+
+# Development
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+
+# Logs
+*.log
+logs/
+data/logs/
+
+# Cache
+.cache/
+.electron-cache/
+.electron-builder-cache/
+.turbo/
+
+# Testing
 coverage/
 .nyc_output/
-.cache/
 
-# Electron特定
-.electron-cache/
-dist-standalone/
-
-# 环境变量
+# Environment
+.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
-# 第三方服务
-.vercel
-.netlify
+# Documentation
+README.md
+docs/
+*.md
 
-# 运行时数据目录
+# CI/CD
+.github/
+.travis.yml
+.circleci/
+
+# Docker
+Dockerfile.dev
+docker-compose.override.yml
+docker-compose.dev.yml
+
+# Audio test files
+recordings/
+audio-test-output/
+examples/output/
+
+# Temporary files
+tmp/
+temp/
+
+# Development data
+data/config/
+data/cache/
 data/logs/
-data/cache/ 
+
+# Keep these files for Docker build
+!package.json
+!yarn.lock
+!turbo.json
+!forge.config.js
+!scripts/
+!packages/
+!assets/
+!config/
+!docker/
+!.yarn/patches/
+!.yarn/releases/
+!.yarnrc.yml 

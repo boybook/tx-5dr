@@ -22,7 +22,10 @@
     "build:package": "yarn build && yarn package",
     "build:make": "node scripts/generate-ico.js && yarn build && yarn make",
     "clean": "rm -rf out/ && find packages -name dist -type d -exec rm -rf {} + || true",
-    "fresh-build": "yarn clean && yarn install && yarn build:package"
+    "fresh-build": "yarn clean && yarn install && yarn build:package",
+    "docker:build": "scripts/docker-quick-build.sh",
+    "docker:build-multi": "scripts/build-docker.sh",
+    "docker:build-and-push": "scripts/build-docker.sh boybook tx-5dr latest true"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.8.1",
