@@ -125,15 +125,6 @@ update_readme() {
         return 1
     fi
     
-    # 检查Docker Hub token
-    if [ -z "$token" ]; then
-        echo "❌ DOCKER_HUB_TOKEN environment variable not set"
-        echo "   Please set your Docker Hub access token:"
-        echo "   export DOCKER_HUB_TOKEN='your-token-here'"
-        echo "   Get your token from: https://hub.docker.com/settings/security"
-        return 1
-    fi
-    
     # 检查jq是否可用
     if ! command -v jq &> /dev/null; then
         echo "❌ jq is required but not installed. Please install jq first."
@@ -142,7 +133,55 @@ update_readme() {
         return 1
     fi
     
+    # 如果没有token，尝试使用docker login的凭据
+    if [ -z "$token" ]; then
+        echo "⚠️  DOCKER_HUB_TOKEN not set, trying alternative authentication..."
+        
+        # 检查是否已经登录Docker Hub
+        if ! docker system info 2>/dev/null | grep -q "Username: $username"; then
+            echo "❌ Please login to Docker Hub first: docker login"
+            echo "   Or set DOCKER_HUB_TOKEN environment variable"
+            return 1
+        fi
+        
+        # 尝试从Docker配置中获取认证信息
+        local docker_config_dir="${HOME}/.docker"
+        if [ -f "$docker_config_dir/config.json" ]; then
+            echo "🔍 Found Docker config, trying to get auth token..."
+            
+            # 获取用户名和密码（如果有的话）
+            local auth_info=$(cat "$docker_config_dir/config.json" | jq -r '.auths["https://index.docker.io/v1/"] // empty')
+            if [ -n "$auth_info" ]; then
+                echo "🔑 Using Docker Hub JWT authentication..."
+                return update_readme_with_jwt "$readme_file" "$username"
+            fi
+        fi
+        
+        echo "❌ No authentication method available"
+        echo "   Please set DOCKER_HUB_TOKEN or ensure docker login is working"
+        return 1
+    fi
+    
+    # 调试信息
+    echo "🔍 Debug info:"
+    echo "   Repository: $username/$IMAGE_NAME"
+    echo "   Token length: ${#token}"
+    echo "   Username: $username"
+    
+    # 验证仓库是否存在
+    echo "🔍 Checking if repository exists..."
+    local repo_check=$(curl -s -o /dev/null -w "%{http_code}" \
+        "https://hub.docker.com/v2/repositories/$username/$IMAGE_NAME/")
+    
+    if [ "$repo_check" != "200" ]; then
+        echo "❌ Repository $username/$IMAGE_NAME not found (HTTP $repo_check)"
+        echo "   Please create the repository on Docker Hub first"
+        echo "   Or check the repository name and username"
+        return 1
+    fi
+    
     # 读取README内容并转义JSON
+    echo "📖 Reading README content..."
     local readme_content=$(cat "$readme_file" | jq -R -s .)
     
     # 准备API请求数据
@@ -154,6 +193,7 @@ EOF
 )
     
     # 发送API请求
+    echo "📡 Sending API request..."
     local response=$(curl -s -w "\n%{http_code}" \
         -X PATCH \
         -H "Authorization: Bearer $token" \
@@ -171,8 +211,48 @@ EOF
     else
         echo "❌ Failed to update README. HTTP code: $http_code"
         echo "Response: $body"
+        
+        # 提供针对性的错误建议
+        case "$http_code" in
+            401)
+                echo "💡 401 Unauthorized - Token may be invalid or expired"
+                echo "   1. Check if token is correct: export DOCKER_HUB_TOKEN='your-token'"
+                echo "   2. Create new token at: https://hub.docker.com/settings/security"
+                echo "   3. Make sure token has 'Repository: Read, Write' permissions"
+                ;;
+            403)
+                echo "💡 403 Forbidden - Insufficient permissions"
+                echo "   1. Ensure your token has 'Repository: Read, Write' permissions"
+                echo "   2. Try recreating the token with correct permissions"
+                echo "   3. Check if you're the owner/collaborator of the repository"
+                ;;
+            404)
+                echo "💡 404 Not Found - Repository doesn't exist"
+                echo "   1. Create repository on Docker Hub first"
+                echo "   2. Check repository name: $username/$IMAGE_NAME"
+                ;;
+        esac
+        
         return 1
     fi
+}
+
+# JWT认证的备用方法
+update_readme_with_jwt() {
+    local readme_file="$1"
+    local username="$2"
+    
+    echo "🔑 Using JWT authentication (experimental)..."
+    
+    # 这里需要用户名和密码来获取JWT token
+    # 由于安全考虑，我们提示用户使用访问令牌
+    echo "❌ JWT authentication requires username/password"
+    echo "   For security, please use Docker Hub Access Token instead:"
+    echo "   1. Visit: https://hub.docker.com/settings/security"
+    echo "   2. Create 'New Access Token' with 'Repository: Read, Write' permissions"
+    echo "   3. Set: export DOCKER_HUB_TOKEN='your-token'"
+    
+    return 1
 }
 
 echo "🚀 TX-5DR Docker Multi-Architecture Build"
