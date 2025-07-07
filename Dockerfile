@@ -130,16 +130,16 @@ COPY --from=builder /app/turbo.json ./turbo.json
 # 复制配置文件
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY docker/entrypoint.sh /entrypoint.sh
 
-# 创建数据目录
+# 设置入口脚本权限
+RUN chmod +x /entrypoint.sh
+
+# 创建数据目录（权限将在入口脚本中设置）
 RUN mkdir -p /app/data/config /app/data/logs /app/data/cache
-
-# 设置权限
-RUN chown -R www-data:www-data /app/data && \
-    chmod -R 755 /app/data
 
 # 暴露端口
 EXPOSE 80
 
-# 启动supervisor
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+# 使用入口脚本启动
+CMD ["/entrypoint.sh"] 
