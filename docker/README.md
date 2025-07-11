@@ -25,7 +25,7 @@ version: '3.8'
 
 services:
   tx5dr:
-    build: .
+    image: boybook/tx-5dr:latest
     container_name: tx5dr
     restart: unless-stopped
     ports:
