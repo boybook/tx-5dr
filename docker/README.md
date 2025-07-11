@@ -22,9 +22,10 @@ docker run -d -p 8076:80 --name tx-5dr boybook/tx-5dr:latest
 
 ```yaml
 version: '3.8'
+
 services:
   tx5dr:
-    image: boybook/tx-5dr:latest
+    build: .
     container_name: tx5dr
     restart: unless-stopped
     ports:
@@ -33,14 +34,25 @@ services:
       - ./data/config:/app/data/config
       - ./data/logs:/app/data/logs
       - ./data/cache:/app/data/cache
+      - ./data/logs/nginx:/var/log/nginx
+      - ./data/logs/supervisor:/var/log/supervisor
     devices:
-      - /dev/bus/usb:/dev/bus/usb:rwm  # For USB audio devices
+      - /dev/bus/usb:/dev/bus/usb:rwm
     environment:
       - NODE_ENV=production
       - PORT=4000
-    privileged: true
+      - TX5DR_CONFIG_DIR=/app/data/config
+      - TX5DR_DATA_DIR=/app/data
+      - TX5DR_LOGS_DIR=/app/data/logs
+      - TX5DR_CACHE_DIR=/app/data/cache
     group_add:
       - audio
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m 
 ```
 
 ## ✨ Features
