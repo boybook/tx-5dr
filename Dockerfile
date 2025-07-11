@@ -113,6 +113,7 @@ RUN apt-get update && apt-get install -y \
     libhamlib4 \
     nginx \
     supervisor \
+    gosu \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && apt-get autoremove -y
@@ -131,6 +132,10 @@ COPY --from=builder /app/turbo.json ./turbo.json
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
+# 复制entrypoint脚本
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # 创建数据目录
 RUN mkdir -p /app/data/config /app/data/logs /app/data/cache
 
@@ -141,5 +146,8 @@ RUN chown -R www-data:www-data /app/data && \
 # 暴露端口
 EXPOSE 80
 
-# 启动supervisor
+# 设置entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+
+# 默认启动supervisor
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 

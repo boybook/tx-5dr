@@ -12,10 +12,10 @@ TX-5DR is a modern, web-based amateur radio application designed for FT8 digital
 
 ```bash
 # Run the application
-docker run -d -p 8080:80 --name tx-5dr boybook/tx-5dr:latest
+docker run -d -p 8076:80 --name tx-5dr boybook/tx-5dr:latest
 
 # Access the web interface
-# Open http://localhost:8080 in your browser
+# Open http://localhost:8076 in your browser
 ```
 
 ### Run with Docker Compose
@@ -28,7 +28,7 @@ services:
     container_name: tx5dr
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "8076:80"
     volumes:
       - ./data/config:/app/data/config
       - ./data/logs:/app/data/logs
@@ -118,8 +118,8 @@ docker run --privileged ...
 
 ### Basic FT8 Operation
 
-1. **Start the container**: `docker run -d -p 8080:80 boybook/tx-5dr:latest`
-2. **Access web interface**: Open `http://localhost:8080`
+1. **Start the container**: `docker run -d -p 8076:80 boybook/tx-5dr:latest`
+2. **Access web interface**: Open `http://localhost:8076`
 3. **Configure audio devices**: Select input/output devices in settings
 4. **Configure radio**: Set up CAT control for your transceiver
 5. **Start operating**: Begin FT8 communication
@@ -128,7 +128,7 @@ docker run --privileged ...
 
 ```bash
 docker run -d \
-  -p 8080:80 \
+  -p 8076:80 \
   --device=/dev/snd \
   --group-add audio \
   boybook/tx-5dr:latest
@@ -138,7 +138,7 @@ docker run -d \
 
 ```bash
 docker run -d \
-  -p 8080:80 \
+  -p 8076:80 \
   -v $(pwd)/config:/app/data/config \
   -e NODE_ENV=development \
   boybook/tx-5dr:latest
@@ -159,7 +159,7 @@ docker run -d \
 - Ensure correct baud rate and protocol settings
 
 **Web Interface Not Loading**
-- Check if port 8080 is available
+- Check if port 8076 is available
 - Verify container is running: `docker ps`
 - Check container logs: `docker logs tx-5dr`
 
