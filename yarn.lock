@@ -6004,7 +6004,7 @@ __metadata:
     typescript: "npm:^5.0.0"
     vitest: "npm:^1.0.0"
     wav: "npm:^1.0.2"
-    wsjtx-lib: "npm:^1.0.1"
+    wsjtx-lib: "npm:^1.0.3"
     zod: "npm:^3.25.30"
     zod-to-json-schema: "npm:^3.24.5"
   languageName: unknown
@@ -10305,11 +10305,11 @@ __metadata:
   linkType: hard
 
 "node-addon-api@npm:^8.3.1":
-  version: 8.3.1
-  resolution: "node-addon-api@npm:8.3.1"
+  version: 8.4.0
+  resolution: "node-addon-api@npm:8.4.0"
   dependencies:
     node-gyp: "npm:latest"
-  checksum: 10c0/e28f1c5094130ecc3a0bf882e0385e74cac9c5112d35287dbce369959551ab7ca4d1f1a69af737107c894c14b4063dd5002e2b3c16a27035d025bb06eefee058
+  checksum: 10c0/d51be099e1b9a6ac4a72f1a60787004d44c8ffe4be1efa38755d54b2a9f4f66647cc6913070e0ed20256d0e6eacceabfff90175fba2ef71153c2d06f8db8e7a9
   languageName: node
   linkType: hard
 
@@ -13004,7 +13004,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"wsjtx-lib@npm:^1.0.1":
+"wsjtx-lib@npm:^1.0.3":
   version: 1.0.3
   resolution: "wsjtx-lib@npm:1.0.3"
   dependencies:
