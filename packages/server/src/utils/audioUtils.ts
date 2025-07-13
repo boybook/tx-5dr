@@ -13,7 +13,8 @@ const resamplerCache = new Map<string, any>();
 let LibSampleRate: any = null;
 export async function getLibSampleRate() {
   if (!LibSampleRate) {
-    LibSampleRate = await import('@alexanderolsen/libsamplerate-js');
+    const module = await import('@alexanderolsen/libsamplerate-js');
+    LibSampleRate = module.default || module;
   }
   return LibSampleRate;
 }
