@@ -1,6 +1,7 @@
 import { EventEmitter } from 'eventemitter3';
 import Piscina from 'piscina';
 import * as path from 'path';
+import * as fs from 'fs';
 import { 
   type IDecodeQueue, 
   type DecodeRequest, 
@@ -37,15 +38,59 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
     super();
     this.maxConcurrency = maxConcurrency;
     
+    // 动态确定 worker 文件路径
+    const workerFilename = this.resolveWorkerPath();
+    
     // 创建工作池
     this.pool = new Piscina({
-      filename: path.join(__dirname, 'wsjtxWorker.js'),
+      filename: workerFilename,
       maxThreads: maxConcurrency,
       minThreads: 1,
       idleTimeout: 30000, // 30秒空闲超时
     });
     
     console.log(`🔧 [解码队列] 初始化完成，最大并发: ${maxConcurrency}`);
+    console.log(`📁 [解码队列] Worker 文件路径: ${workerFilename}`);
+  }
+  
+  /**
+   * 解析 worker 文件路径，优先使用编译后的 dist 目录
+   */
+  private resolveWorkerPath(): string {
+    const workerFileName = 'wsjtxWorker.js';
+    
+    // 候选路径列表（按优先级排序）
+    const candidatePaths = [
+      // 1. 如果当前在 dist 目录中，直接使用同目录的文件
+      path.join(__dirname, workerFileName),
+      
+      // 2. 如果在源码目录中，查找编译后的 dist 目录
+      path.join(path.dirname(path.dirname(__dirname)), 'dist', 'decode', workerFileName),
+      
+      // 3. 相对于项目根目录的 dist 路径
+      path.join(process.cwd(), 'packages', 'server', 'dist', 'decode', workerFileName),
+      
+      // 4. 相对于当前包根目录的 dist 路径
+      path.join(path.dirname(path.dirname(__dirname)), 'dist', 'decode', workerFileName),
+    ];
+    
+    // 尝试找到存在的文件
+    for (const candidatePath of candidatePaths) {
+      try {
+        // 检查文件是否存在
+        if (fs.existsSync(candidatePath)) {
+          return candidatePath;
+        }
+      } catch (error) {
+        // 继续尝试下一个路径
+      }
+    }
+    
+    // 如果都没找到，返回默认路径（可能会出错，但至少有错误信息）
+    const defaultPath = path.join(__dirname, workerFileName);
+    console.warn(`⚠️  [解码队列] 未找到 worker 文件，使用默认路径: ${defaultPath}`);
+    console.warn(`🔍 [解码队列] 尝试过的路径:`, candidatePaths);
+    return defaultPath;
   }
   
   /**
