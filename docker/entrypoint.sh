@@ -48,6 +48,26 @@ for dir in "${DATA_DIRS[@]}"; do
     fi
 done
 
+# 创建 nginx 临时目录
+NGINX_TEMP_DIRS=(
+    "/var/lib/nginx"
+    "/var/lib/nginx/body"
+    "/var/lib/nginx/proxy"
+    "/var/lib/nginx/fastcgi"
+    "/var/lib/nginx/uwsgi"
+    "/var/lib/nginx/scgi"
+)
+
+for dir in "${NGINX_TEMP_DIRS[@]}"; do
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir"
+        log "Created nginx temp directory: $dir"
+    fi
+    # 设置为 nginx 用户可写
+    chown -R www-data:www-data "$dir"
+    chmod -R 755 "$dir"
+done
+
 # 自动检测宿主机用户权限
 # 通过检查挂载卷的所有者来确定宿主机用户
 detect_host_user() {
@@ -135,14 +155,10 @@ if [[ -f "/etc/supervisor/conf.d/supervisord.conf" ]]; then
     log "Updated supervisor configuration with user: $APP_USER"
 fi
 
-# 修改nginx配置文件中的用户设置
+# nginx 配置保持不变，使用 www-data 用户
+# nginx 自身以 root 运行，但 worker 进程使用 www-data 用户
 if [[ -f "/etc/nginx/nginx.conf" ]]; then
-    # 备份原始配置
-    cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak
-    
-    # 更新nginx用户设置
-    sed -i "s/user www-data;/user $APP_USER;/g" /etc/nginx/nginx.conf
-    log "Updated nginx configuration with user: $APP_USER"
+    log "Nginx configuration using www-data user for worker processes"
 fi
 
 # 创建日志文件并设置权限
