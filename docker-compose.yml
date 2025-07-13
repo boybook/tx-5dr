@@ -16,9 +16,17 @@ services:
       - ./data/logs/nginx:/var/log/nginx
       # supervisor日志
       - ./data/logs/supervisor:/var/log/supervisor
+      # 音频设备映射
+      - /dev/snd:/dev/snd:rw
+      - /dev/shm:/dev/shm:rw
+      # PulseAudio 支持（如果需要）
+      - /run/user/1000/pulse:/run/user/1000/pulse:ro
+      - /var/lib/pulse:/var/lib/pulse:ro
     devices:
       # USB设备（支持USB声卡和串口设备）
       - /dev/bus/usb:/dev/bus/usb:rwm
+      # 音频设备
+      - /dev/snd:/dev/snd:rwm
     environment:
       - NODE_ENV=production
       - PORT=4000
@@ -27,6 +35,9 @@ services:
       - TX5DR_DATA_DIR=/app/data
       - TX5DR_LOGS_DIR=/app/data/logs
       - TX5DR_CACHE_DIR=/app/data/cache
+      # 音频环境变量
+      - PULSE_RUNTIME_PATH=/run/user/1000/pulse
+      - PULSE_STATE_PATH=/var/lib/pulse
     # 音频设备访问
     group_add:
       - audio
@@ -34,6 +45,8 @@ services:
       - CHOWN
       - SETUID
       - SETGID
+      - SYS_NICE
+      - SYS_RESOURCE
     # 共享主机音频子系统
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=100m 
+      - /tmp:rw,noexec,nosuid,size=100m
