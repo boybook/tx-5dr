@@ -34,10 +34,21 @@ services:
       - ./data/config:/app/data/config
       - ./data/logs:/app/data/logs
       - ./data/cache:/app/data/cache
+      # nginx
       - ./data/logs/nginx:/var/log/nginx
+      # supervisor
       - ./data/logs/supervisor:/var/log/supervisor
+      # devices
+      - /dev/snd:/dev/snd:rw
+      - /dev/shm:/dev/shm:rw
+      # PulseAudio
+      - /run/user/1000/pulse:/run/user/1000/pulse:ro
+      - /var/lib/pulse:/var/lib/pulse:ro
     devices:
+      # USB devices
       - /dev/bus/usb:/dev/bus/usb:rwm
+      # Audio devices
+      - /dev/snd:/dev/snd:rwm
     environment:
       - NODE_ENV=production
       - PORT=4000
@@ -45,14 +56,18 @@ services:
       - TX5DR_DATA_DIR=/app/data
       - TX5DR_LOGS_DIR=/app/data/logs
       - TX5DR_CACHE_DIR=/app/data/cache
+      - PULSE_RUNTIME_PATH=/run/user/1000/pulse
+      - PULSE_STATE_PATH=/var/lib/pulse
     group_add:
       - audio
     cap_add:
       - CHOWN
       - SETUID
       - SETGID
+      - SYS_NICE
+      - SYS_RESOURCE
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=100m 
+      - /tmp:rw,noexec,nosuid,size=100m
 ```
 
 ## ✨ Features
