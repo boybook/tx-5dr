@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode } from 'react';
-import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus } from '@tx5dr/contracts';
+import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus, QSORecord, LogBookStatistics } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
 
@@ -197,9 +197,28 @@ export type SlotPacksAction =
   | { type: 'slotPackUpdated'; payload: SlotPack }
   | { type: 'CLEAR_DATA' };
 
+// ===== 通联日志数据管理 =====
+export interface LogbookState {
+  qsosByOperator: Map<string, QSORecord[]>; // 按操作员ID分组的QSO记录
+  statisticsByLogbook: Map<string, LogBookStatistics>; // 按日志本ID分组的统计信息
+  lastUpdateTime: Date | null;
+}
+
+export type LogbookAction = 
+  | { type: 'qsoRecordAdded'; payload: { operatorId: string; logBookId: string; qsoRecord: QSORecord } }
+  | { type: 'logbookUpdated'; payload: { logBookId: string; statistics: LogBookStatistics } }
+  | { type: 'loadQSOs'; payload: { operatorId: string; qsos: QSORecord[] } }
+  | { type: 'CLEAR_LOGBOOK_DATA' };
+
 const initialSlotPacksState: SlotPacksState = {
   slotPacks: [],
   totalMessages: 0,
+  lastUpdateTime: null
+};
+
+const initialLogbookState: LogbookState = {
+  qsosByOperator: new Map(),
+  statisticsByLogbook: new Map(),
   lastUpdateTime: null
 };
 
@@ -249,17 +268,98 @@ function slotPacksReducer(state: SlotPacksState, action: SlotPacksAction): SlotP
   }
 }
 
+function logbookReducer(state: LogbookState, action: LogbookAction): LogbookState {
+  switch (action.type) {
+    case 'qsoRecordAdded': {
+      const { operatorId, qsoRecord } = action.payload;
+      const updatedQsosByOperator = new Map(state.qsosByOperator);
+      
+      // 获取该操作员现有的QSO记录
+      const existingQsos = updatedQsosByOperator.get(operatorId) || [];
+      
+      // 检查是否已存在相同的QSO记录（避免重复）
+      const existingIndex = existingQsos.findIndex(qso => qso.id === qsoRecord.id);
+      
+      let updatedQsos: QSORecord[];
+      if (existingIndex >= 0) {
+        // 更新现有记录
+        updatedQsos = [...existingQsos];
+        updatedQsos[existingIndex] = qsoRecord;
+      } else {
+        // 添加新记录
+        updatedQsos = [...existingQsos, qsoRecord];
+      }
+      
+      // 按时间排序（最新的在前）
+      updatedQsos.sort((a, b) => b.startTime - a.startTime);
+      
+      // 限制每个操作员保留的记录数量（例如最近1000条）
+      if (updatedQsos.length > 1000) {
+        updatedQsos = updatedQsos.slice(0, 1000);
+      }
+      
+      updatedQsosByOperator.set(operatorId, updatedQsos);
+      
+      return {
+        ...state,
+        qsosByOperator: updatedQsosByOperator,
+        lastUpdateTime: new Date()
+      };
+    }
+    
+    case 'logbookUpdated': {
+      const { logBookId, statistics } = action.payload;
+      const updatedStatistics = new Map(state.statisticsByLogbook);
+      updatedStatistics.set(logBookId, statistics);
+      
+      return {
+        ...state,
+        statisticsByLogbook: updatedStatistics,
+        lastUpdateTime: new Date()
+      };
+    }
+    
+    case 'loadQSOs': {
+      const { operatorId, qsos } = action.payload;
+      const updatedQsosByOperator = new Map(state.qsosByOperator);
+      
+      // 按时间排序（最新的在前）
+      const sortedQsos = [...qsos].sort((a, b) => b.startTime - a.startTime);
+      updatedQsosByOperator.set(operatorId, sortedQsos);
+      
+      return {
+        ...state,
+        qsosByOperator: updatedQsosByOperator,
+        lastUpdateTime: new Date()
+      };
+    }
+    
+    case 'CLEAR_LOGBOOK_DATA':
+      return {
+        ...state,
+        qsosByOperator: new Map(),
+        statisticsByLogbook: new Map(),
+        lastUpdateTime: null
+      };
+    
+    default:
+      return state;
+  }
+}
+
 // ===== 组合状态和Context =====
 export interface CombinedState {
   connection: ConnectionState;
   radio: RadioState;
   slotPacks: SlotPacksState;
+  logbook: LogbookState;
 }
 
 export interface CombinedDispatch {
   connectionDispatch: React.Dispatch<ConnectionAction>;
   radioDispatch: React.Dispatch<RadioAction>;
   slotPacksDispatch: React.Dispatch<SlotPacksAction>;
+  logbookDispatch: React.Dispatch<LogbookAction>;
 }
 
 const RadioContext = createContext<{
@@ -272,6 +372,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [connectionState, connectionDispatch] = useReducer(connectionReducer, initialConnectionState);
   const [radioState, radioDispatch] = useReducer(radioReducer, initialRadioState);
   const [slotPacksState, slotPacksDispatch] = useReducer(slotPacksReducer, initialSlotPacksState);
+  const [logbookState, logbookDispatch] = useReducer(logbookReducer, initialLogbookState);
   
   // 使用 useRef 确保 RadioService 单例，避免 StrictMode 导致的重复创建
   const radioServiceRef = useRef<RadioService | null>(null);
@@ -314,6 +415,14 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       slotPackUpdated: (slotPack: SlotPack) => {
         slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });
+      },
+      qsoRecordAdded: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
+        console.log('📝 [RadioProvider] 收到QSO记录添加事件:', data);
+        logbookDispatch({ type: 'qsoRecordAdded', payload: data });
+      },
+      logbookUpdated: (data: { logBookId: string; statistics: LogBookStatistics }) => {
+        console.log('📊 [RadioProvider] 收到日志本更新事件:', data);
+        logbookDispatch({ type: 'logbookUpdated', payload: data });
       },
       operatorsList: (data: { operators: OperatorStatus[] }) => {
         radioDispatch({ type: 'operatorsList', payload: data.operators });
@@ -371,13 +480,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const combinedState: CombinedState = {
     connection: connectionState,
     radio: radioState,
-    slotPacks: slotPacksState
+    slotPacks: slotPacksState,
+    logbook: logbookState
   };
 
   const combinedDispatch: CombinedDispatch = {
     connectionDispatch,
     radioDispatch,
-    slotPacksDispatch
+    slotPacksDispatch,
+    logbookDispatch
   };
 
   return React.createElement(
@@ -435,6 +546,23 @@ export const useCurrentOperatorId = () => {
     setCurrentOperatorId: (operatorId: string) => {
       // 只更新前端状态，不发送到后端
       dispatch.radioDispatch({ type: 'setCurrentOperator', payload: operatorId });
+    }
+  };
+};
+
+export const useLogbook = () => {
+  const { state, dispatch } = useRadio();
+  return {
+    state: state.logbook,
+    dispatch: dispatch.logbookDispatch,
+    // 便捷方法
+    getQSOsForOperator: (operatorId: string) => state.logbook.qsosByOperator.get(operatorId) || [],
+    getStatisticsForLogbook: (logBookId: string) => state.logbook.statisticsByLogbook.get(logBookId),
+    addQSORecord: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
+      dispatch.logbookDispatch({ type: 'qsoRecordAdded', payload: data });
+    },
+    loadQSOs: (operatorId: string, qsos: QSORecord[]) => {
+      dispatch.logbookDispatch({ type: 'loadQSOs', payload: { operatorId, qsos } });
     }
   };
 };

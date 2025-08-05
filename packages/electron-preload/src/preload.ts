@@ -74,6 +74,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     toggleMaximize: () => ipcRenderer.invoke('app:toggleMaximize')
   },
+
+  // 窗口管理
+  window: {
+    /**
+     * 打开通联日志窗口
+     */
+    openLogbookWindow: (queryString: string) => ipcRenderer.invoke('window:openLogbook', queryString)
+  },
   
   // 配置管理
   config: {
@@ -114,6 +122,9 @@ declare global {
         quit(): Promise<void>;
         minimize(): Promise<void>;
         toggleMaximize(): Promise<void>;
+      };
+      window: {
+        openLogbookWindow(queryString: string): Promise<void>;
       };
       config: {
         get(key: string): Promise<any>;

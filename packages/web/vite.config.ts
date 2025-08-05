@@ -1,9 +1,18 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [react()],
   base: './', // 使用相对路径，支持 Electron 生产环境
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        logbook: resolve(__dirname, 'logbook.html'),
+      },
+    },
+  },
   define: {
     global: 'globalThis',
   },

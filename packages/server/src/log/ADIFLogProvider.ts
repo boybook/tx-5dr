@@ -613,6 +613,63 @@ export class ADIFLogProvider implements ILogProvider {
     
     return adifContent;
   }
+
+  async exportCSV(options?: LogQueryOptions): Promise<string> {
+    this.ensureInitialized();
+    
+    const qsos = await this.queryQSOs(options);
+    
+    // CSV 标题行
+    const headers = [
+      'Date',
+      'Time',
+      'Callsign', 
+      'Grid',
+      'Frequency (MHz)',
+      'Mode',
+      'Report Sent',
+      'Report Received',
+      'Comments'
+    ];
+    
+    let csvContent = headers.join(',') + '\n';
+    
+    for (const qso of qsos) {
+      const startDate = new Date(qso.startTime);
+      const date = startDate.toISOString().slice(0, 10); // YYYY-MM-DD
+      const time = startDate.toISOString().slice(11, 19); // HH:MM:SS
+      
+      const row = [
+        date,
+        time,
+        this.escapeCsvField(qso.callsign),
+        this.escapeCsvField(qso.grid || ''),
+        (qso.frequency / 1000000).toFixed(6), // 转换为MHz
+        this.escapeCsvField(qso.mode),
+        this.escapeCsvField(qso.reportSent || ''),
+        this.escapeCsvField(qso.reportReceived || ''),
+        this.escapeCsvField(qso.messages?.join(' | ') || '')
+      ];
+      
+      csvContent += row.join(',') + '\n';
+    }
+    
+    return csvContent;
+  }
+
+  /**
+   * 转义CSV字段中的特殊字符
+   */
+  private escapeCsvField(field: string): string {
+    if (!field) return '';
+    
+    // 如果包含逗号、双引号或换行符，需要用双引号包围并转义内部的双引号
+    if (field.includes(',') || field.includes('"') || field.includes('\n') || field.includes('\r')) {
+      return '"' + field.replace(/"/g, '""') + '"';
+    }
+    
+    return field;
+  }
   
   async importADIF(adifContent: string, operatorId?: string): Promise<void> {
     this.ensureInitialized();

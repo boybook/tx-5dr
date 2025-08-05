@@ -62,7 +62,7 @@ Components ↔ RadioProvider ↔ RadioService ↔ WSClient ↔ WSServer ↔ Digi
 
 **后端 (server/websocket/)**:
 - **WSServer**: WebSocket 服务器，管理多客户端连接 + 消息广播
-- **WSConnection**: 单客户端连接包装器，支持操作员过滤
+- **WSConnection**: 单L客户端连接包装器，支持操作员过滤
 - **握手协议**: 客户端发送操作员偏好，服务端返回过滤数据
 
 ### 关键通信机制
