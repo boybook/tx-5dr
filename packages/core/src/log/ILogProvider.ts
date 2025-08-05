@@ -228,6 +228,12 @@ export interface ILogProvider {
   exportADIF(options?: LogQueryOptions): Promise<string>;
   
   /**
+   * 导出日志（CSV格式）
+   * @param options 查询选项
+   */
+  exportCSV(options?: LogQueryOptions): Promise<string>;
+  
+  /**
    * 导入日志（ADIF格式）
    * @param adifContent ADIF内容
    * @param operatorId 操作员ID（可选）

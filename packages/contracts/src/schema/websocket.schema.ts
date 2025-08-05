@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { FT8DecodeSchema, FT8SpectrumSchema } from './ft8.schema.js';
 import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
+import { QSORecordSchema } from './qso.schema.js';
+import { LogBookStatisticsSchema } from './logbook.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -49,6 +51,10 @@ export enum WSMessageType {
   // ===== 音量控制 =====
   SET_VOLUME_GAIN = 'setVolumeGain',
   VOLUME_GAIN_CHANGED = 'volumeGainChanged',
+  
+  // ===== 通联日志 =====
+  QSO_RECORD_ADDED = 'qsoRecordAdded',
+  LOGBOOK_UPDATED = 'logbookUpdated',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -392,6 +398,33 @@ export const WSSetVolumeGainMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSSetVolumeGainMessage = z.infer<typeof WSSetVolumeGainMessageSchema>;
 
+/**
+ * QSO记录添加消息（服务端到客户端）
+ */
+export const WSQSORecordAddedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.QSO_RECORD_ADDED),
+  data: z.object({
+    operatorId: z.string(),
+    logBookId: z.string(),
+    qsoRecord: QSORecordSchema,
+  }),
+});
+
+export type WSQSORecordAddedMessage = z.infer<typeof WSQSORecordAddedMessageSchema>;
+
+/**
+ * 日志本更新消息（服务端到客户端）
+ */
+export const WSLogbookUpdatedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.LOGBOOK_UPDATED),
+  data: z.object({
+    logBookId: z.string(),
+    statistics: LogBookStatisticsSchema,
+  }),
+});
+
+export type WSLogbookUpdatedMessage = z.infer<typeof WSLogbookUpdatedMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -425,6 +458,10 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   
   // 音量控制消息
   WSSetVolumeGainMessageSchema,
+  
+  // 通联日志消息
+  WSQSORecordAddedMessageSchema,
+  WSLogbookUpdatedMessageSchema,
   
   // 客户端启用操作员列表消息
   WSSetClientEnabledOperatorsMessageSchema,

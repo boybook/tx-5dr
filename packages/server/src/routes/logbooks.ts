@@ -287,11 +287,62 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const qsos = await logBook.provider.queryQSOs(options);
+      // 转换查询选项格式以匹配LogQueryOptions接口
+      const queryOptions: import('@tx5dr/core').LogQueryOptions = {
+        callsign: options.callsign,
+        mode: options.mode,
+        limit: options.limit,
+        orderBy: 'time',
+        orderDirection: 'desc'
+      };
+
+      // 处理频段过滤（转换为频率范围）
+      if (options.band) {
+        const bandFreqRanges: Record<string, { min: number; max: number }> = {
+          '20m': { min: 14000000, max: 14350000 },
+          '40m': { min: 7000000, max: 7300000 },
+          '80m': { min: 3500000, max: 4000000 },
+          '160m': { min: 1800000, max: 2000000 },
+        };
+        
+        if (bandFreqRanges[options.band]) {
+          queryOptions.frequencyRange = bandFreqRanges[options.band];
+        }
+      }
+
+      // 处理日期范围过滤（转换为时间戳）
+      if (options.startDate || options.endDate) {
+        const startTime = options.startDate ? new Date(options.startDate).getTime() : 0;
+        let endTime = Date.now();
+        
+        if (options.endDate) {
+          // 结束日期包含整天，所以设置为当天23:59:59
+          const endDate = new Date(options.endDate);
+          endDate.setHours(23, 59, 59, 999);
+          endTime = endDate.getTime();
+        }
+        
+        queryOptions.timeRange = {
+          start: startTime,
+          end: endTime
+        };
+      }
+
+      const qsos = await logBook.provider.queryQSOs(queryOptions);
+
+      // 应用分页（provider可能不支持offset分页）
+      const offset = options.offset || 0;
+      const limit = options.limit || 100;
+      const paginatedQsos = qsos.slice(offset, offset + limit);
 
       return reply.send({
         success: true,
-        data: qsos
+        data: paginatedQsos,
+        meta: {
+          total: qsos.length,
+          offset,
+          limit
+        }
       });
     } catch (error) {
       fastify.log.error('查询QSO记录失败:', error);
@@ -319,11 +370,57 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const exportedData = await logBook.provider.exportADIF(options);
+      // 将LogBookExportOptions转换为LogQueryOptions
+      const queryOptions: import('@tx5dr/core').LogQueryOptions = {
+        callsign: options.callsign,
+        orderBy: 'time',
+        orderDirection: 'desc'
+      };
 
-      // 设置下载响应头
-      reply.header('Content-Type', 'application/octet-stream');
-      reply.header('Content-Disposition', `attachment; filename="${logBook.name}.adi"`);
+      // 处理频段过滤（暂时不支持，因为ExportOptions中没有band字段）
+      
+      // 处理日期范围过滤
+      if (options.startDate || options.endDate) {
+        const startTime = options.startDate ? new Date(options.startDate).getTime() : 0;
+        let endTime = Date.now();
+        
+        if (options.endDate) {
+          // 结束日期包含整天，所以设置为当天23:59:59
+          const endDate = new Date(options.endDate);
+          endDate.setHours(23, 59, 59, 999);
+          endTime = endDate.getTime();
+        }
+        
+        queryOptions.timeRange = {
+          start: startTime,
+          end: endTime
+        };
+      }
+
+      // 根据格式选择导出方法
+      let exportedData: string;
+      if (options.format === 'csv') {
+        exportedData = await logBook.provider.exportCSV(queryOptions);
+      } else {
+        exportedData = await logBook.provider.exportADIF(queryOptions);
+      }
+      
+      // 确保返回的是字符串
+      if (typeof exportedData !== 'string') {
+        fastify.log.error('导出方法返回了非字符串类型:', typeof exportedData, exportedData);
+        throw new Error('导出数据格式错误');
+      }
+
+      // 设置正确的MIME类型和文件扩展名
+      const fileExtension = options.format === 'csv' ? 'csv' : 'adi';
+      const mimeType = options.format === 'csv' ? 'text/csv' : 'application/octet-stream';
+      
+      // 清理文件名中的非ASCII字符，避免Content-Disposition头部错误
+      const sanitizedFileName = logBook.name.replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, '_') || 'logbook';
+      const fileName = `${sanitizedFileName}.${fileExtension}`;
+      
+      reply.header('Content-Type', mimeType);
+      reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
 
       return reply.send(exportedData);
     } catch (error) {

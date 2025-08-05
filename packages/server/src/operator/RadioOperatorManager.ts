@@ -68,6 +68,26 @@ export class RadioOperatorManager {
         console.log(`📝 [操作员管理器] 记录QSO到日志本 ${logBook.name}: ${data.qsoRecord.callsign} @ ${new Date(data.qsoRecord.startTime).toISOString()}`);
         await logBook.provider.addQSO(data.qsoRecord, data.operatorId);
         
+        // QSO记录成功后，发射事件通知上层系统
+        this.eventEmitter.emit('qsoRecordAdded' as any, {
+          operatorId: data.operatorId,
+          logBookId: logBook.id,
+          qsoRecord: data.qsoRecord
+        });
+        console.log(`📡 [操作员管理器] 已发射 qsoRecordAdded 事件: ${data.qsoRecord.callsign}`);
+        
+        // 获取更新的统计信息并发射日志本更新事件
+        try {
+          const statistics = await logBook.provider.getStatistics();
+          this.eventEmitter.emit('logbookUpdated' as any, {
+            logBookId: logBook.id,
+            statistics
+          });
+          console.log(`📡 [操作员管理器] 已发射 logbookUpdated 事件: ${logBook.name}`);
+        } catch (statsError) {
+          console.warn(`⚠️ [操作员管理器] 获取日志本统计信息失败:`, statsError);
+        }
+        
       } catch (error) {
         console.error(`❌ [操作员管理器] 记录QSO失败:`, error);
       }

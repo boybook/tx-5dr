@@ -212,6 +212,18 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('volumeGainChanged', (gain) => {
       this.broadcast(WSMessageType.VOLUME_GAIN_CHANGED, { gain });
     });
+
+    // 监听QSO记录添加事件
+    this.digitalRadioEngine.on('qsoRecordAdded' as any, (data: { operatorId: string; logBookId: string; qsoRecord: any }) => {
+      console.log(`📡 [WSServer] 收到QSO记录添加事件:`, data.qsoRecord.callsign);
+      this.broadcastQSORecordAdded(data);
+    });
+
+    // 监听日志本更新事件
+    this.digitalRadioEngine.on('logbookUpdated' as any, (data: { logBookId: string; statistics: any }) => {
+      console.log(`📡 [WSServer] 收到日志本更新事件:`, data.logBookId);
+      this.broadcastLogbookUpdated(data);
+    });
   }
 
   /**
@@ -719,6 +731,37 @@ export class WSServer extends WSMessageHandler {
     });
     
     console.log(`📡 [WSServer] 向 ${activeConnections.filter(conn => conn.isOperatorEnabled(operatorStatus.id)).length} 个启用操作员 ${operatorStatus.id} 的客户端发送状态更新`);
+  }
+
+  /**
+   * 广播QSO记录添加事件
+   */
+  broadcastQSORecordAdded(data: { operatorId: string; logBookId: string; qsoRecord: any }): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    
+    // 只向启用了相关操作员的客户端发送
+    activeConnections.forEach(connection => {
+      if (connection.isOperatorEnabled(data.operatorId)) {
+        connection.send(WSMessageType.QSO_RECORD_ADDED, data);
+      }
+    });
+    
+    const targetConnections = activeConnections.filter(conn => conn.isOperatorEnabled(data.operatorId));
+    console.log(`📡 [WSServer] 向 ${targetConnections.length} 个启用操作员 ${data.operatorId} 的客户端发送QSO记录添加事件: ${data.qsoRecord.callsign}`);
+  }
+
+  /**
+   * 广播日志本更新事件
+   */
+  broadcastLogbookUpdated(data: { logBookId: string; statistics: any }): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    
+    // 发送给所有已握手的客户端（日志本统计信息通常所有客户端都需要）
+    activeConnections.forEach(connection => {
+      connection.send(WSMessageType.LOGBOOK_UPDATED, data);
+    });
+    
+    console.log(`📡 [WSServer] 向 ${activeConnections.length} 个客户端发送日志本更新事件: ${data.logBookId}`);
   }
 
   /**

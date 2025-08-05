@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain } from 'electron';
 import { join } from 'path';
 import http from 'http';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -272,6 +272,9 @@ async function createWindow() {
     }
   });
   
+  // 设置IPC处理器
+  setupIpcHandlers();
+  
   // 确保窗口返回以便后续使用
   console.log('🔍 createWindow 函数准备返回窗口:', mainWindow ? 'BrowserWindow实例' : 'undefined');
   return mainWindow;
@@ -360,6 +363,71 @@ process.on('SIGTERM', () => {
   cleanup();
   process.exit(0);
 });
+
+/**
+ * 设置IPC处理器
+ */
+function setupIpcHandlers() {
+  // 处理打开通联日志窗口的请求
+  ipcMain.handle('window:openLogbook', async (event, queryString: string) => {
+    console.log('📖 [IPC] 收到打开通联日志窗口请求:', queryString);
+    
+    try {
+      // 创建新的通联日志窗口
+      const logbookWindow = new BrowserWindow({
+        width: 1200,
+        height: 800,
+        show: true,
+        titleBarStyle: 'hiddenInset',
+        titleBarOverlay: process.platform === 'win32' ? {
+          color: '#ffffff',
+          symbolColor: '#000000'
+        } : false,
+        frame: process.platform !== 'darwin',
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          webSecurity: false,
+          allowRunningInsecureContent: true,
+          preload: app.isPackaged
+            ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
+            : join(__dirname, '../../electron-preload/dist/preload.js'),
+        },
+      });
+
+      // 在 Windows 和 Linux 下隐藏菜单栏
+      if (process.platform === 'win32' || process.platform === 'linux') {
+        logbookWindow.setMenuBarVisibility(false);
+      }
+
+      // 加载通联日志页面
+      if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
+        // 开发模式：使用开发服务器
+        const logbookUrl = `http://localhost:5173/logbook.html?${queryString}`;
+        console.log('📖 [IPC] 加载开发URL:', logbookUrl);
+        await logbookWindow.loadURL(logbookUrl);
+        logbookWindow.webContents.openDevTools();
+      } else {
+        // 生产模式：加载打包后的文件
+        const logbookPath = app.isPackaged 
+          ? join(process.resourcesPath, 'app', 'packages', 'web', 'dist', 'logbook.html')
+          : join(__dirname, '../../web/dist/logbook.html');
+        
+        const fullUrl = `file://${logbookPath}?${queryString}`;
+        console.log('📖 [IPC] 加载生产文件:', fullUrl);
+        await logbookWindow.loadURL(fullUrl);
+      }
+
+      // 聚焦新窗口
+      logbookWindow.focus();
+      
+      console.log('✅ [IPC] 通联日志窗口创建成功');
+    } catch (error) {
+      console.error('❌ [IPC] 创建通联日志窗口失败:', error);
+      throw error;
+    }
+  });
+}
 
 // 确保应用总是启动
 console.log('🚀 应用启动流程开始...');

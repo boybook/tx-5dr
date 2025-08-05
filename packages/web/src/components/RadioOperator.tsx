@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsAltH, faRepeat } from '@fortawesome/free-solid-svg-icons';
+import { faArrowsAltH, faRepeat, faBook } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import type { OperatorStatus } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
+import { openLogbookWindow } from '../utils/windowManager';
 
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
@@ -373,8 +374,19 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             })()}
           </div>
           
-          {/* 右侧 - 发射开关 */}
+          {/* 右侧 - 通联日志按钮和发射开关 */}
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="light"
+              isIconOnly
+              onPress={() => openLogbookWindow({ operatorId: operatorStatus.id })}
+              className="h-8 w-8 min-w-8"
+              title="查看通联日志"
+              aria-label="查看通联日志"
+            >
+              <FontAwesomeIcon icon={faBook} className="text-default-600" />
+            </Button>
             <span className="text-sm text-default-600">发射</span>
             <Switch 
               isSelected={operatorStatus.isTransmitting} 
