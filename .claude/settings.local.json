@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(yarn lint)",
+      "Bash(yarn build)",
+      "Bash(npx tsc:*)",
+      "Bash(yarn workspace @tx5dr/web:*)",
+      "Bash(yarn workspace @tx5dr/server:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)"
+    ],
+    "deny": []
+  }
+}
