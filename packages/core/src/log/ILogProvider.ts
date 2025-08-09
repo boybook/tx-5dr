@@ -44,7 +44,12 @@ export interface LogQueryOptions {
    * 限制返回记录数
    */
   limit?: number;
-  
+
+  /**
+   * 偏移量（用于分页）
+   */
+  offset?: number;
+
   /**
    * 排序方式
    */

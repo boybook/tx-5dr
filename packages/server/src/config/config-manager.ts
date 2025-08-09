@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 
@@ -21,6 +21,7 @@ export interface AppConfig {
   };
   radio: HamlibConfig;
   operators: RadioOperatorConfig[];
+  wavelog: WaveLogConfig;
 }
 
 // 音频处理配置接口
@@ -57,6 +58,14 @@ const DEFAULT_CONFIG: AppConfig = {
   operators: [
     // 从空操作员列表开始，等待用户创建
   ],
+  wavelog: {
+    enabled: false,
+    url: '',
+    apiKey: '',
+    stationId: '',
+    radioName: 'TX5DR',
+    autoUploadQSO: true,
+  },
 };
 
 // 配置管理器
@@ -334,5 +343,28 @@ export class ConfigManager {
    */
   setConfigPath(path: string): void {
     this.configPath = path;
+  }
+
+  /**
+   * 获取WaveLog配置
+   */
+  getWaveLogConfig(): WaveLogConfig {
+    return { ...this.config.wavelog };
+  }
+
+  /**
+   * 更新WaveLog配置
+   */
+  async updateWaveLogConfig(waveLogConfig: Partial<WaveLogConfig>): Promise<void> {
+    this.config.wavelog = { ...this.config.wavelog, ...waveLogConfig };
+    await this.saveConfig();
+  }
+
+  /**
+   * 重置WaveLog配置为默认值
+   */
+  async resetWaveLogConfig(): Promise<void> {
+    this.config.wavelog = { ...DEFAULT_CONFIG.wavelog };
+    await this.saveConfig();
   }
 } 

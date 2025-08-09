@@ -41,6 +41,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
                 strategy.context.reportSent = msgSignalReport.snr;  // 更新信号报告
                 strategy.context.targetCallsign = msg.senderCallsign;
+                // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
+                strategy.context.actualFrequency = strategy.context.config.frequency + msgSignalReport.df;
                 strategy.updateSlots();
                 return {
                     changeState: 'TX3'
@@ -80,6 +82,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 const msg = msgRogerReport.message as FT8MessageRogerReport;
                 strategy.context.reportReceived = msg.report;
                 strategy.context.reportSent = msgRogerReport.snr;
+                // 记录或更新实际通联频率 (基础频率 + 对方信号的频率偏移)
+                strategy.context.actualFrequency = strategy.context.config.frequency + msgRogerReport.df;
                 strategy.updateSlots();
                 return {
                     changeState: 'TX4'
@@ -148,7 +152,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 id: Date.now().toString(),
                 callsign: strategy.context.targetCallsign!,
                 grid: strategy.context.targetGrid,
-                frequency: strategy.context.config.frequency,
+                frequency: strategy.context.actualFrequency || strategy.context.config.frequency,
                 mode: strategy.context.config.mode.name,
                 startTime: strategy.qsoStartTime || Date.now(),
                 endTime: Date.now(),
@@ -178,7 +182,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 id: Date.now().toString(),
                 callsign: strategy.context.targetCallsign!,
                 grid: strategy.context.targetGrid,
-                frequency: strategy.context.config.frequency,
+                frequency: strategy.context.actualFrequency || strategy.context.config.frequency,
                 mode: strategy.context.config.mode.name,
                 startTime: strategy.qsoStartTime || Date.now(),
                 endTime: Date.now(),
@@ -225,12 +229,16 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     strategy.context.targetCallsign = msg.senderCallsign;
                     strategy.context.reportSent = directCalls[0].snr;
                     strategy.context.targetGrid = msg.grid;
+                    // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
+                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
                     strategy.updateSlots();
                     return { changeState: 'TX2' };
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                     strategy.context.targetCallsign = msg.senderCallsign;
                     strategy.context.reportReceived = msg.report;
                     strategy.context.reportSent = directCalls[0].snr;
+                    // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
+                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
                     strategy.updateSlots();
                     return { changeState: 'TX3' };
                 }
@@ -262,6 +270,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             strategy.context.targetCallsign = callsign;
                             strategy.context.targetGrid = msg.grid;
                             strategy.context.reportSent = cqCall.snr;
+                            // 记录实际通联频率 (基础频率 + CQ信号的频率偏移)
+                            strategy.context.actualFrequency = strategy.context.config.frequency + cqCall.df;
                             strategy.updateSlots();
                             return { changeState: 'TX1' };
                         } else {

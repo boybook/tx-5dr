@@ -11,6 +11,7 @@ import { slotpackRoutes } from './routes/slotpack.js';
 import { modeRoutes } from './routes/mode.js';
 import { operatorRoutes } from './routes/operators.js';
 import { radioRoutes } from './routes/radio.js';
+import { waveLogRoutes } from './routes/wavelog.js';
 import { WSServer } from './websocket/WSServer.js';
 
 export async function createServer() {
@@ -44,6 +45,22 @@ export async function createServer() {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
   await digitalRadioEngine.initialize();
   fastify.log.info('数字无线电引擎初始化完成');
+
+  // 初始化WaveLog服务
+  const { WaveLogServiceManager } = await import('./services/WaveLogService.js');
+  const waveLogManager = WaveLogServiceManager.getInstance();
+  const waveLogConfig = configManager.getWaveLogConfig();
+  if (waveLogConfig.enabled) {
+    waveLogManager.initializeService(waveLogConfig);
+    fastify.log.info('WaveLog服务初始化完成');
+    
+    // WaveLog同步服务已准备就绪（仅支持手动触发）
+    const { WaveLogSyncScheduler } = await import('./services/WaveLogSyncScheduler.js');
+    const syncScheduler = WaveLogSyncScheduler.getInstance();
+    fastify.log.info('WaveLog同步服务已准备就绪');
+  } else {
+    fastify.log.info('WaveLog服务已禁用，跳过初始化');
+  }
 
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine);
@@ -104,6 +121,10 @@ export async function createServer() {
 
   await fastify.register(radioRoutes, { prefix: '/api/radio' });
   fastify.log.info('电台控制API路由注册完成');
+
+  // 注册WaveLog同步API路由
+  await fastify.register(waveLogRoutes, { prefix: '/api/wavelog' });
+  fastify.log.info('WaveLog同步API路由注册完成');
 
   // 注册日志本管理API路由
   const { logbookRoutes } = await import('./routes/logbooks.js');

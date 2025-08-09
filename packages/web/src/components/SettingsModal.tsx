@@ -16,6 +16,7 @@ import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceS
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
+import { LogbookSyncSettings, type LogbookSyncSettingsRef } from './LogbookSyncSettings';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -24,7 +25,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型
-type SettingsTab = 'audio' | 'radio' | 'operator' | 'display' | 'advanced';
+type SettingsTab = 'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'advanced';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'audio');
@@ -38,6 +39,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
+  const logbookSyncSettingsRef = useRef<LogbookSyncSettingsRef | null>(null);
 
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
@@ -59,6 +61,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return operatorSettingsRef.current?.hasUnsavedChanges() || false;
       case 'display':
         return displaySettingsRef.current?.hasUnsavedChanges() || false;
+      case 'logbook_sync':
+        return logbookSyncSettingsRef.current?.hasUnsavedChanges() || false;
       default:
         return false;
     }
@@ -113,6 +117,11 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         case 'display':
           if (displaySettingsRef.current) {
             await displaySettingsRef.current.save();
+          }
+          break;
+        case 'logbook_sync':
+          if (logbookSyncSettingsRef.current) {
+            await logbookSyncSettingsRef.current.save();
           }
           break;
         // 其他标签页的保存逻辑将在后续实现
@@ -185,6 +194,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return '👤 操作员';
       case 'display':
         return '🎨 显示通知';
+      case 'logbook_sync':
+        return '📊 通联日志同步';
       case 'advanced':
         return '⚙️ 高级设置';
       default:
@@ -220,6 +231,13 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return (
           <DisplayNotificationSettings
             ref={displaySettingsRef}
+            onUnsavedChanges={setHasUnsavedChanges}
+          />
+        );
+      case 'logbook_sync':
+        return (
+          <LogbookSyncSettings
+            ref={logbookSyncSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
           />
         );
@@ -298,6 +316,12 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     key="display" 
                     title={
                       getTabTitle('display')
+                    } 
+                  />
+                  <Tab 
+                    key="logbook_sync" 
+                    title={
+                      getTabTitle('logbook_sync')
                     } 
                   />
                   <Tab 

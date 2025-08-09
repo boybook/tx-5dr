@@ -19,10 +19,11 @@ import {
 } from '@heroui/react';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics } from '@tx5dr/contracts';
+import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
+import type { QSORecord, LogBookStatistics, WaveLogSyncResponse } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
 import { useLogbook } from '../store/radioStore';
+import { isElectron } from '../utils/config';
 
 interface LogbookViewerProps {
   operatorId: string;
@@ -46,6 +47,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [filters, setFilters] = useState<QSOFilters>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(50);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [actualTotalRecords, setActualTotalRecords] = useState(0);
+  const [hasFilters, setHasFilters] = useState(false);
   const [sortDescriptor, setSortDescriptor] = useState<{
     column: string;
     direction: 'ascending' | 'descending';
@@ -92,8 +96,30 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         offset: (currentPage - 1) * itemsPerPage,
       };
       
+      console.log('📊 [LogbookViewer] 发送API请求:', {
+        effectiveLogBookId,
+        queryOptions,
+        currentPage,
+        itemsPerPage,
+        calculatedOffset: (currentPage - 1) * itemsPerPage
+      });
+      
       const response = await api.getLogBookQSOs(effectiveLogBookId, queryOptions);
+      console.log('📊 [LogbookViewer] API响应:', { 
+        dataLength: response.data.length, 
+        meta: response.meta,
+        filteredTotal: response.meta?.total,
+        actualTotalRecords: response.meta?.totalRecords,
+        currentPage,
+        itemsPerPage,
+        calculatedTotalPages: Math.ceil((response.meta?.total || response.data.length) / itemsPerPage)
+      });
       setQsos(response.data);
+      // 使用筛选后的总数来计算分页
+      setTotalRecords(response.meta?.total || response.data.length);
+      // 保存实际总记录数用于显示
+      setActualTotalRecords(response.meta?.totalRecords || response.data.length);
+      setHasFilters(response.meta?.hasFilters || false);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '加载QSO记录失败';
       console.error('加载QSO记录失败:', error);
@@ -122,58 +148,20 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     loadStatistics();
   }, [effectiveLogBookId, filters, currentPage]);
 
-  // 过滤和排序后的数据（性能优化）
-  const sortedQsos = useMemo(() => {
-    if (qsos.length === 0) return [];
-    
-    // 使用稳定排序避免不必要的重新渲染
-    return [...qsos].sort((a, b) => {
-      const column = sortDescriptor.column as keyof QSORecord;
-      const aValue = a[column];
-      const bValue = b[column];
-      
-      // 处理空值
-      if (aValue == null && bValue == null) return 0;
-      if (aValue == null) return sortDescriptor.direction === 'ascending' ? -1 : 1;
-      if (bValue == null) return sortDescriptor.direction === 'ascending' ? 1 : -1;
-      
-      // 字符串比较
-      if (typeof aValue === 'string' && typeof bValue === 'string') {
-        const result = aValue.localeCompare(bValue);
-        return sortDescriptor.direction === 'ascending' ? result : -result;
-      }
-      
-      // 数字比较
-      if (typeof aValue === 'number' && typeof bValue === 'number') {
-        const result = aValue - bValue;
-        return sortDescriptor.direction === 'ascending' ? result : -result;
-      }
-      
-      // 日期比较
-      if (column === 'startTime') {
-        const result = Number(aValue) - Number(bValue);
-        return sortDescriptor.direction === 'ascending' ? result : -result;
-      }
-      
-      return 0;
-    });
-  }, [qsos, sortDescriptor]);
-
-  // 分页数据（性能优化）
-  const paginatedQsos = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return sortedQsos.slice(startIndex, endIndex);
-  }, [sortedQsos, currentPage, itemsPerPage]);
-  
-  // 总页数计算
+  // 总页数计算 - 基于筛选后的记录数
   const totalPages = useMemo(() => {
-    return Math.ceil(qsos.length / itemsPerPage);
-  }, [qsos.length, itemsPerPage]);
+    const pages = Math.ceil(totalRecords / itemsPerPage);
+    return pages;
+  }, [totalRecords, itemsPerPage, currentPage]);
 
   // 导出功能（增强错误处理）
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  
+  // WaveLog同步功能
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncSuccess, setSyncSuccess] = useState<string | null>(null);
   
   const handleExport = async (format: 'adif' | 'csv') => {
     if (isExporting) return;
@@ -209,6 +197,61 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
+  // WaveLog同步功能
+  const handleWaveLogSync = async (operation: 'download' | 'upload' | 'full_sync') => {
+    if (isSyncing) return;
+    
+    try {
+      setIsSyncing(true);
+      setSyncError(null);
+      setSyncSuccess(null);
+      
+      // 调用WaveLog同步API
+      const response = await fetch('/api/wavelog/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ operation })
+      });
+      
+      const result = await response.json() as WaveLogSyncResponse;
+      
+      if (result.success) {
+        setSyncSuccess(result.message);
+        // 同步成功后重新加载QSO数据
+        await loadQSOs();
+        await loadStatistics();
+        
+        console.log(`📊 WaveLog同步成功: ${operation}`, result);
+      } else {
+        setSyncError(result.message || '同步失败');
+      }
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'WaveLog同步失败';
+      console.error('WaveLog同步失败:', error);
+      setSyncError(errorMessage);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // 自动清除成功/错误消息
+  useEffect(() => {
+    if (syncSuccess) {
+      const timer = setTimeout(() => setSyncSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [syncSuccess]);
+
+  useEffect(() => {
+    if (syncError) {
+      const timer = setTimeout(() => setSyncError(null), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [syncError]);
+
   // 筛选控制
   const handleFilterChange = (key: keyof QSOFilters, value: string | undefined) => {
     setFilters(prev => ({
@@ -223,6 +266,23 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     setCurrentPage(1);
   };
 
+  // 打开外部链接的函数
+  const openExternalLink = (url: string) => {
+    if (isElectron()) {
+      // Electron环境：尝试使用shell.openExternal
+      if (typeof window !== 'undefined' && (window as any).electronAPI?.shell?.openExternal) {
+        (window as any).electronAPI.shell.openExternal(url);
+      } else {
+        // 如果shell API不可用，回退到window.open
+        console.warn('Electron shell API不可用，回退到window.open');
+        window.open(url, '_blank');
+      }
+    } else {
+      // 浏览器环境：使用window.open
+      window.open(url, '_blank');
+    }
+  };
+
   // 格式化日期显示
   const formatDateTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString('zh-CN', {
@@ -231,15 +291,36 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
-    });
+      timeZone: 'UTC'
+    }) + ' UTC';
+  };
+
+  // 格式化频率显示
+  const formatFrequency = (frequencyHz: number) => {
+    if (frequencyHz >= 1_000_000_000) {
+      // 大于等于1GHz - 保留6位小数，去除尾随零
+      const ghz = frequencyHz / 1_000_000_000;
+      return `${parseFloat(ghz.toFixed(6))} GHz`;
+    } else if (frequencyHz >= 1_000_000) {
+      // 大于等于1MHz - 保留6位小数，去除尾随零
+      const mhz = frequencyHz / 1_000_000;
+      return `${parseFloat(mhz.toFixed(6))} MHz`;
+    } else if (frequencyHz >= 1_000) {
+      // 大于等于1KHz - 保留3位小数，去除尾随零
+      const khz = frequencyHz / 1_000;
+      return `${parseFloat(khz.toFixed(3))} KHz`;
+    } else {
+      // 小于1KHz，显示Hz
+      return `${frequencyHz} Hz`;
+    }
   };
 
   // 表格列定义
   const columns = [
-    { key: 'startTime', label: '时间', sortable: true },
+    { key: 'startTime', label: '时间 (UTC)', sortable: true },
     { key: 'callsign', label: '呼号', sortable: true },
     { key: 'grid', label: '网格', sortable: true },
-    { key: 'frequency', label: '频率 (Hz)', sortable: true },
+    { key: 'frequency', label: '频率', sortable: true },
     { key: 'mode', label: '模式', sortable: true },
     { key: 'reportSent', label: '发送信号报告', sortable: false },
     { key: 'reportReceived', label: '接收信号报告', sortable: false },
@@ -254,7 +335,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         return formatDateTime(qso.startTime);
       case "callsign":
         return (
-          <div className="font-semibold">{qso.callsign}</div>
+          <div className="font-semibold flex items-center gap-2">
+            {qso.callsign}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openExternalLink(`https://www.qrz.com/db/${qso.callsign}`);
+              }}
+              className="text-default-400 hover:text-primary transition-colors"
+              title={`在QRZ.com查看 ${qso.callsign} 的信息`}
+            >
+              <FontAwesomeIcon icon={faExternalLinkAlt} size="sm" />
+            </button>
+          </div>
         );
       case "grid":
         return qso.grid ? (
@@ -263,7 +356,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           </Chip>
         ) : '-';
       case "frequency":
-        return qso.frequency ? qso.frequency.toLocaleString() : '-';
+        return qso.frequency ? formatFrequency(qso.frequency) : '-';
       case "mode":
         return (
           <Chip size="sm" variant="flat" color="secondary">
@@ -395,6 +488,47 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               </Button>
             )}
             
+            {/* WaveLog同步按钮 */}
+            <Dropdown>
+              <DropdownTrigger>
+                <Button
+                  color="secondary"
+                  variant="bordered"
+                  size="sm"
+                  isLoading={isSyncing}
+                  startContent={<FontAwesomeIcon icon={faSync} className={isSyncing ? 'animate-spin' : ''} />}
+                >
+                  WaveLog同步
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu
+                aria-label="WaveLog同步操作"
+                onAction={(key) => handleWaveLogSync(key as 'download' | 'upload' | 'full_sync')}
+              >
+                <DropdownItem 
+                  key="download"
+                  startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
+                  description="从WaveLog下载最新的QSO记录"
+                >
+                  下载同步
+                </DropdownItem>
+                <DropdownItem 
+                  key="upload"
+                  startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
+                  description="上传本地QSO记录到WaveLog"
+                >
+                  上传同步
+                </DropdownItem>
+                <DropdownItem 
+                  key="full_sync"
+                  startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
+                  description="双向完整同步"
+                >
+                  完整同步
+                </DropdownItem>
+              </DropdownMenu>
+            </Dropdown>
+            
             <Dropdown>
               <DropdownTrigger>
                 <Button
@@ -420,12 +554,17 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
         {/* 统计信息 */}
         <div className="flex justify-between items-center text-small text-default-500">
-          <span>共 {qsos.length} 条通联记录</span>
+          <span>
+            {hasFilters 
+              ? `筛选结果: ${totalRecords} 条 / 总计: ${actualTotalRecords} 条通联记录`
+              : `共 ${actualTotalRecords} 条通联记录`
+            }
+          </span>
           {statistics && (
             <span>
               唯一呼号: {statistics.uniqueCallsigns}
               {statistics.lastQSO && (
-                <> | 最近通联: {new Date(statistics.lastQSO).toLocaleDateString()}</>
+                <> | 最近通联: {new Date(statistics.lastQSO).toLocaleDateString('zh-CN', { timeZone: 'UTC' })} UTC</>
               )}
             </span>
           )}
@@ -438,7 +577,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     filters.callsign,
     filters.band, 
     filters.mode,
-    qsos.length,
+    totalRecords,
+    actualTotalRecords,
+    hasFilters,
     statistics,
     isExporting,
     handleFilterChange,
@@ -448,18 +589,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 底部内容：分页
   const bottomContent = React.useMemo(() => {
+    console.log('📊 [LogbookViewer] 渲染分页组件:', { 
+      currentPage, 
+      totalPages, 
+      showPagination: totalPages > 1 
+    });
+    
+    // 如果只有一页，不显示分页组件
+    if (totalPages <= 1) {
+      return null;
+    }
+    
     return (
       <div className="py-2 px-2 flex justify-between items-center">
-        <span className="w-[30%] text-small text-default-400">
-          {statistics && (
-            <>
-              总通联: {statistics.totalQSOs} | 唯一呼号: {statistics.uniqueCallsigns}
-              {statistics.lastQSO && (
-                <> | 最近通联: {new Date(statistics.lastQSO).toLocaleDateString()}</>
-              )}
-            </>
-          )}
-        </span>
         <Pagination
           isCompact
           showControls
@@ -467,19 +609,38 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="primary"
           page={currentPage}
           total={totalPages}
-          onChange={setCurrentPage}
+          onChange={(page) => {
+            console.log('📊 [LogbookViewer] 分页切换:', { from: currentPage, to: page });
+            setCurrentPage(page);
+          }}
         />
-        <div className="hidden sm:flex w-[30%] justify-end gap-2">
-          <Button isDisabled size="sm" variant="flat" onPress={() => setCurrentPage(1)}>
+        <div className="flex gap-2">
+          <Button 
+            size="sm" 
+            variant="flat" 
+            onPress={() => {
+              console.log('📊 [LogbookViewer] 跳转到第一页');
+              setCurrentPage(1);
+            }}
+            isDisabled={currentPage === 1 || totalPages <= 1}
+          >
             第一页
           </Button>
-          <Button isDisabled size="sm" variant="flat" onPress={() => setCurrentPage(totalPages)}>
+          <Button 
+            size="sm" 
+            variant="flat" 
+            onPress={() => {
+              console.log('📊 [LogbookViewer] 跳转到最后页:', totalPages);
+              setCurrentPage(totalPages);
+            }}
+            isDisabled={currentPage === totalPages || totalPages <= 1}
+          >
             最后页
           </Button>
         </div>
       </div>
     );
-  }, [currentPage, totalPages, statistics]);
+  }, [currentPage, totalPages]);
 
   // 计算加载状态的内容
   const loadingState = loading ? "loading" : "idle";
@@ -487,7 +648,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 如果有错误，显示错误信息
   if (error) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
+      <div className="h-full flex items-center justify-center p-6 max-w-7xl mx-auto">
         <Alert
           color="danger"
           title="加载失败"
@@ -511,13 +672,37 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   }
 
   return (
-    <div className="p-6 pt-4 max-w-7xl mx-auto space-y-6">
-      {/* 导出错误提示 */}
+    <div className="p-6 max-w-7xl mx-auto">
+      {/* 通知区域 */}
+      {syncSuccess && (
+        <Alert
+          color="success"
+          variant="flat"
+          className="w-full mb-4"
+          title="WaveLog同步成功"
+          description={syncSuccess}
+          isClosable
+          onClose={() => setSyncSuccess(null)}
+        />
+      )}
+      
+      {syncError && (
+        <Alert
+          color="danger"
+          variant="flat"
+          className="w-full mb-4"
+          title="WaveLog同步失败"
+          description={syncError}
+          isClosable
+          onClose={() => setSyncError(null)}
+        />
+      )}
+      
       {exportError && (
         <Alert
           color="danger"
           variant="flat"
-          className="w-full"
+          className="w-full mb-4"
           title="导出失败"
           description={exportError}
           isClosable
@@ -525,14 +710,14 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         />
       )}
 
-      {/* QSO记录表格 - 直接使用Table，不包装Card */}
+      {/* 表格 - 固定高度 */}
       <Table
         aria-label="QSO记录表格"
         isHeaderSticky
         bottomContent={bottomContent}
         bottomContentPlacement="outside"
         classNames={{
-          wrapper: "max-h-[382px]",
+          wrapper: "max-h-[calc(100vh-228px)] overflow-auto",
         }}
         sortDescriptor={sortDescriptor}
         topContent={topContent}
@@ -550,7 +735,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           )}
         </TableHeader>
         <TableBody
-          items={paginatedQsos}
+          items={qsos}
           loadingContent={<Spinner />} 
           loadingState={loadingState}
           emptyContent={"暂无通联记录"}
@@ -563,7 +748,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             </TableRow>
           )}
         </TableBody>
-      </Table>
+        </Table>
     </div>
   );
 };

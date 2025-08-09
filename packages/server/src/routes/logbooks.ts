@@ -16,7 +16,7 @@ import {
   type LogBookExportOptions
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { LogManager } from '../log/LogManager.js';
+import { LogQueryOptions } from "@tx5dr/core";
 
 /**
  * 日志本管理API路由
@@ -288,10 +288,11 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       // 转换查询选项格式以匹配LogQueryOptions接口
-      const queryOptions: import('@tx5dr/core').LogQueryOptions = {
+      const queryOptions: LogQueryOptions = {
         callsign: options.callsign,
         mode: options.mode,
         limit: options.limit,
+        offset: options.offset,
         orderBy: 'time',
         orderDirection: 'desc'
       };
@@ -328,20 +329,49 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         };
       }
 
-      const qsos = await logBook.provider.queryQSOs(queryOptions);
+      // 分离分页参数和筛选参数
+      const { limit: requestLimit, offset: requestOffset, ...filterOptions } = queryOptions;
+      
+      console.log(`📊 [LogBook API] 分页请求参数:`, {
+        requestLimit,
+        requestOffset,
+        filterOptions: Object.keys(filterOptions)
+      });
+      
+      // 先获取不带分页限制的筛选后总数
+      const allFilteredQsos = await logBook.provider.queryQSOs(filterOptions);
+      const totalFiltered = allFilteredQsos.length;
 
       // 应用分页（provider可能不支持offset分页）
-      const offset = options.offset || 0;
-      const limit = options.limit || 100;
-      const paginatedQsos = qsos.slice(offset, offset + limit);
+      const offset = requestOffset || 0;
+      const limit = requestLimit || 100;
+      const paginatedQsos = allFilteredQsos.slice(offset, offset + limit);
+      
+      console.log(`📊 [LogBook API] 分页处理结果:`, {
+        totalFiltered,
+        offset,
+        limit,
+        paginatedCount: paginatedQsos.length,
+        firstRecordId: paginatedQsos[0]?.id,
+        firstRecordCallsign: paginatedQsos[0]?.callsign
+      });
+
+      // 同时获取不带任何筛选的总记录数（用于统计显示）
+      const baseQueryOptions = { operatorId: filterOptions.operatorId };
+      const allQsos = await logBook.provider.queryQSOs(baseQueryOptions);
+      const totalRecords = allQsos.length;
 
       return reply.send({
         success: true,
         data: paginatedQsos,
         meta: {
-          total: qsos.length,
+          total: totalFiltered, // 筛选后的总数（用于分页计算）
+          totalRecords, // 总记录数（用于统计显示）
           offset,
-          limit
+          limit,
+          hasFilters: Object.keys(filterOptions).some(key => 
+            key !== 'operatorId' && filterOptions[key as keyof typeof filterOptions] !== undefined
+          )
         }
       });
     } catch (error) {
