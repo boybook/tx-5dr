@@ -25,6 +25,7 @@ export const QSOContextSchema = z.object({
   targetGrid: z.string().optional(),
   reportSent: z.number().optional(),
   reportReceived: z.number().optional(),
+  actualFrequency: z.number().optional(), // 实际通联频率 (基础频率 + 偏移频率)
 });
 
 // QSO命令

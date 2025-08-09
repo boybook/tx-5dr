@@ -19,7 +19,10 @@ import type {
   ConnectOperatorToLogBookRequest,
   LogBookQSOQueryOptions,
   LogBookExportOptions,
-  QSORecord
+  QSORecord,
+  WaveLogConfig,
+  WaveLogTestConnectionRequest,
+  WaveLogTestConnectionResponse
 } from '@tx5dr/contracts';
 
 // ========== API 配置 ==========
@@ -547,7 +550,7 @@ export const api = {
   /**
    * 查询日志本中的QSO记录
    */
-  async getLogBookQSOs(id: string, options?: LogBookQSOQueryOptions, apiBase?: string): Promise<{ success: boolean; data: QSORecord[] }> {
+  async getLogBookQSOs(id: string, options?: LogBookQSOQueryOptions, apiBase?: string): Promise<{ success: boolean; data: QSORecord[]; meta?: { total: number; totalRecords: number; offset: number; limit: number; hasFilters: boolean } }> {
     const baseUrl = apiBase || getConfiguredApiBase();
     const params = new URLSearchParams();
     
@@ -557,9 +560,15 @@ export const api = {
           params.append(key, String(value));
         }
       });
+      
+      console.log('📊 [API Client] 构建请求参数:', {
+        options,
+        searchParams: params.toString()
+      });
     }
     
     const url = `${baseUrl}/logbooks/${id}/qsos${params.toString() ? '?' + params.toString() : ''}`;
+    console.log('📊 [API Client] 请求URL:', url);
     const res = await fetch(url);
     
     if (!res.ok) {
@@ -614,6 +623,79 @@ export const api = {
     
     return await res.json();
   },
+
+  // ========== WaveLog同步API ==========
+
+  /**
+   * 获取WaveLog配置
+   */
+  async getWaveLogConfig(apiBase?: string): Promise<WaveLogConfig> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/wavelog/config`);
+    if (!res.ok) {
+      throw new Error(`获取WaveLog配置失败: ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as WaveLogConfig;
+  },
+
+  /**
+   * 更新WaveLog配置
+   */
+  async updateWaveLogConfig(config: Partial<WaveLogConfig>, apiBase?: string): Promise<WaveLogConfig> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/wavelog/config`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(config),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `更新WaveLog配置失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 测试WaveLog连接
+   */
+  async testWaveLogConnection(request: WaveLogTestConnectionRequest, apiBase?: string): Promise<WaveLogTestConnectionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/wavelog/test`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `测试WaveLog连接失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
+
+  /**
+   * 重置WaveLog配置
+   */
+  async resetWaveLogConfig(apiBase?: string): Promise<WaveLogConfig> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/wavelog/config/reset`, {
+      method: 'POST',
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `重置WaveLog配置失败: ${res.status} ${res.statusText}`);
+    }
+    
+    return await res.json();
+  },
 }
 
 // 为了向后兼容，也导出单独的函数
@@ -645,7 +727,12 @@ export const {
   disconnectOperatorFromLogBook,
   getLogBookQSOs,
   exportLogBook,
-  importToLogBook
+  importToLogBook,
+  // WaveLog同步函数
+  getWaveLogConfig,
+  updateWaveLogConfig,
+  testWaveLogConnection,
+  resetWaveLogConfig
   ,getRadioConfig
   ,updateRadioConfig
   ,getSupportedRigs

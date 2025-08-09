@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, shell } from 'electron';
 import { join } from 'path';
 import http from 'http';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -424,6 +424,28 @@ function setupIpcHandlers() {
       console.log('✅ [IPC] 通联日志窗口创建成功');
     } catch (error) {
       console.error('❌ [IPC] 创建通联日志窗口失败:', error);
+      throw error;
+    }
+  });
+
+  // 处理打开外部链接的请求
+  ipcMain.handle('shell:openExternal', async (event, url: string) => {
+    console.log('🔗 [IPC] 收到打开外部链接请求:', url);
+    
+    try {
+      // 验证URL格式
+      const urlObj = new URL(url);
+      
+      // 只允许http和https协议
+      if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+        throw new Error(`不安全的协议: ${urlObj.protocol}`);
+      }
+      
+      // 使用系统默认浏览器打开链接
+      await shell.openExternal(url);
+      console.log('✅ [IPC] 外部链接打开成功');
+    } catch (error) {
+      console.error('❌ [IPC] 打开外部链接失败:', error);
       throw error;
     }
   });

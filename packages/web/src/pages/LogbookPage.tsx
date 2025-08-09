@@ -82,7 +82,7 @@ const LogbookContent: React.FC = () => {
       </div>
       
       {/* 内容区域 */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1">
         <LogbookViewer 
           operatorId={operatorId} 
           logBookId={logBookId}

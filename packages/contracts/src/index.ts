@@ -87,3 +87,6 @@ export * from './schema/websocket.schema.js';
 // Logbook Schema
 export * from './schema/logbook.schema.js';
 export * from './schema/radio.schema.js';
+
+// WaveLog Schema
+export * from './schema/wavelog.schema.js';

@@ -82,6 +82,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     openLogbookWindow: (queryString: string) => ipcRenderer.invoke('window:openLogbook', queryString)
   },
+
+  // 系统集成
+  shell: {
+    /**
+     * 使用系统默认浏览器打开外部链接
+     */
+    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url)
+  },
   
   // 配置管理
   config: {
@@ -125,6 +133,9 @@ declare global {
       };
       window: {
         openLogbookWindow(queryString: string): Promise<void>;
+      };
+      shell: {
+        openExternal(url: string): Promise<void>;
       };
       config: {
         get(key: string): Promise<any>;
