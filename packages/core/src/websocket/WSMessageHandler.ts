@@ -18,6 +18,18 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.OPERATORS_LIST]: 'operatorsList',
   [WSMessageType.OPERATOR_STATUS_UPDATE]: 'operatorStatusUpdate',
 
+  // 电台相关事件
+  [WSMessageType.RADIO_STATUS_CHANGED]: 'radioStatusChanged',
+  [WSMessageType.RADIO_RECONNECTING]: 'radioReconnecting',
+  [WSMessageType.RADIO_RECONNECT_FAILED]: 'radioReconnectFailed',
+  [WSMessageType.RADIO_RECONNECT_STOPPED]: 'radioReconnectStopped',
+  [WSMessageType.RADIO_ERROR]: 'radioError',
+  [WSMessageType.RADIO_DISCONNECTED_DURING_TRANSMISSION]: 'radioDisconnectedDuringTransmission',
+
+  // QSO 日志相关事件
+  [WSMessageType.QSO_RECORD_ADDED]: 'qsoRecordAdded',
+  [WSMessageType.LOGBOOK_UPDATED]: 'logbookUpdated',
+
   // 其他事件
   [WSMessageType.TRANSMISSION_LOG]: 'transmissionLog',
   [WSMessageType.VOLUME_GAIN_CHANGED]: 'volumeGainChanged',

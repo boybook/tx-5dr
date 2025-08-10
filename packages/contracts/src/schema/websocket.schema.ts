@@ -56,6 +56,15 @@ export enum WSMessageType {
   // ===== 通联日志 =====
   QSO_RECORD_ADDED = 'qsoRecordAdded',
   LOGBOOK_UPDATED = 'logbookUpdated',
+  
+  // ===== 电台连接管理 =====
+  RADIO_STATUS_CHANGED = 'radioStatusChanged',
+  RADIO_RECONNECTING = 'radioReconnecting',
+  RADIO_RECONNECT_FAILED = 'radioReconnectFailed',
+  RADIO_RECONNECT_STOPPED = 'radioReconnectStopped',
+  RADIO_ERROR = 'radioError',
+  RADIO_MANUAL_RECONNECT = 'radioManualReconnect',
+  RADIO_DISCONNECTED_DURING_TRANSMISSION = 'radioDisconnectedDuringTransmission',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -68,6 +77,15 @@ export const SystemStatusSchema = z.object({
   currentTime: z.number(),
   nextSlotIn: z.number(),
   audioStarted: z.boolean(),
+  radioConnected: z.boolean().optional(),
+  radioReconnectInfo: z.object({
+    isReconnecting: z.boolean(),
+    reconnectAttempts: z.number(),
+    maxReconnectAttempts: z.number(),
+    hasReachedMaxAttempts: z.boolean(),
+    connectionHealthy: z.boolean(),
+    nextReconnectDelay: z.number(),
+  }).optional(),
 });
 
 // 子窗口信息数据结构
@@ -438,6 +456,132 @@ export const WSLogbookUpdatedMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSLogbookUpdatedMessage = z.infer<typeof WSLogbookUpdatedMessageSchema>;
 
+/**
+ * 电台状态变化消息
+ */
+export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_STATUS_CHANGED),
+  data: z.object({
+    connected: z.boolean(),
+    reason: z.string().optional(),
+    reconnectInfo: z.object({
+      isReconnecting: z.boolean(),
+      reconnectAttempts: z.number(),
+      maxReconnectAttempts: z.number(),
+      hasReachedMaxAttempts: z.boolean(),
+      connectionHealthy: z.boolean(),
+      nextReconnectDelay: z.number(),
+    }),
+  }),
+});
+
+export type WSRadioStatusChangedMessage = z.infer<typeof WSRadioStatusChangedMessageSchema>;
+
+/**
+ * 电台重连中消息
+ */
+export const WSRadioReconnectingMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_RECONNECTING),
+  data: z.object({
+    attempt: z.number(),
+    reconnectInfo: z.object({
+      isReconnecting: z.boolean(),
+      reconnectAttempts: z.number(),
+      maxReconnectAttempts: z.number(),
+      hasReachedMaxAttempts: z.boolean(),
+      connectionHealthy: z.boolean(),
+      nextReconnectDelay: z.number(),
+    }),
+  }),
+});
+
+export type WSRadioReconnectingMessage = z.infer<typeof WSRadioReconnectingMessageSchema>;
+
+/**
+ * 电台重连失败消息
+ */
+export const WSRadioReconnectFailedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_RECONNECT_FAILED),
+  data: z.object({
+    error: z.string(),
+    attempt: z.number(),
+    reconnectInfo: z.object({
+      isReconnecting: z.boolean(),
+      reconnectAttempts: z.number(),
+      maxReconnectAttempts: z.number(),
+      hasReachedMaxAttempts: z.boolean(),
+      connectionHealthy: z.boolean(),
+      nextReconnectDelay: z.number(),
+    }),
+  }),
+});
+
+export type WSRadioReconnectFailedMessage = z.infer<typeof WSRadioReconnectFailedMessageSchema>;
+
+/**
+ * 电台重连停止消息
+ */
+export const WSRadioReconnectStoppedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_RECONNECT_STOPPED),
+  data: z.object({
+    maxAttempts: z.number(),
+    reconnectInfo: z.object({
+      isReconnecting: z.boolean(),
+      reconnectAttempts: z.number(),
+      maxReconnectAttempts: z.number(),
+      hasReachedMaxAttempts: z.boolean(),
+      connectionHealthy: z.boolean(),
+      nextReconnectDelay: z.number(),
+    }),
+  }),
+});
+
+export type WSRadioReconnectStoppedMessage = z.infer<typeof WSRadioReconnectStoppedMessageSchema>;
+
+/**
+ * 电台错误消息
+ */
+export const WSRadioErrorMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_ERROR),
+  data: z.object({
+    error: z.string(),
+    reconnectInfo: z.object({
+      isReconnecting: z.boolean(),
+      reconnectAttempts: z.number(),
+      maxReconnectAttempts: z.number(),
+      hasReachedMaxAttempts: z.boolean(),
+      connectionHealthy: z.boolean(),
+      nextReconnectDelay: z.number(),
+    }),
+  }),
+});
+
+export type WSRadioErrorMessage = z.infer<typeof WSRadioErrorMessageSchema>;
+
+/**
+ * 手动重连电台消息（客户端到服务端）
+ */
+export const WSRadioManualReconnectMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_MANUAL_RECONNECT),
+  data: z.object({}).optional(),
+});
+
+export type WSRadioManualReconnectMessage = z.infer<typeof WSRadioManualReconnectMessageSchema>;
+
+/**
+ * 电台发射中断开连接消息
+ */
+export const WSRadioDisconnectedDuringTransmissionMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_DISCONNECTED_DURING_TRANSMISSION),
+  data: z.object({
+    reason: z.string(),
+    message: z.string(),
+    recommendation: z.string(),
+  }),
+});
+
+export type WSRadioDisconnectedDuringTransmissionMessage = z.infer<typeof WSRadioDisconnectedDuringTransmissionMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -483,6 +627,15 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   // 握手消息
   WSClientHandshakeMessageSchema,
   WSServerHandshakeCompleteMessageSchema,
+  
+  // 电台连接管理消息
+  WSRadioStatusChangedMessageSchema,
+  WSRadioReconnectingMessageSchema,
+  WSRadioReconnectFailedMessageSchema,
+  WSRadioReconnectStoppedMessageSchema,
+  WSRadioErrorMessageSchema,
+  WSRadioManualReconnectMessageSchema,
+  WSRadioDisconnectedDuringTransmissionMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====

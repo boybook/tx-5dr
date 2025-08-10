@@ -198,7 +198,10 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         ...state,
         radioConnected: action.payload.radioConnected,
         radioInfo: action.payload.radioInfo,
-        radioConfig: action.payload.radioConfig
+        // 只有当payload中有有效的radioConfig时才更新，否则保持现有配置
+        radioConfig: (action.payload.radioConfig && action.payload.radioConfig.type !== 'none') 
+          ? action.payload.radioConfig 
+          : state.radioConfig
       };
     
     default:
@@ -467,6 +470,33 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       reconnectStopped: (stopInfo: any) => {
         console.log('⏹️ [RadioProvider] 重连已停止:', stopInfo);
         connectionDispatch({ type: 'reconnectStopped', payload: stopInfo });
+      },
+      radioStatusChanged: (data: any) => {
+        console.log('📡 [RadioProvider] 电台状态变化:', data.connected ? '已连接' : '已断开', data.reason || '');
+        
+        radioDispatch({ 
+          type: 'radioStatusUpdate',
+          payload: {
+            radioConnected: data.connected,
+            radioInfo: data.connected ? (data.radioInfo || null) : null, // 断开时清空radioInfo
+            radioConfig: data.radioConfig || { type: 'none' } // reducer会智能处理配置保持
+          }
+        });
+      },
+      radioReconnecting: (data: any) => {
+        console.log('🔄 [RadioProvider] 电台重连中:', data);
+      },
+      radioReconnectFailed: (data: any) => {
+        console.log('❌ [RadioProvider] 电台重连失败:', data);
+      },
+      radioReconnectStopped: (data: any) => {
+        console.log('⏹️ [RadioProvider] 电台重连已停止:', data);
+      },
+      radioError: (data: any) => {
+        console.log('⚠️ [RadioProvider] 电台错误:', data);
+      },
+      radioDisconnectedDuringTransmission: (data: any) => {
+        console.warn('🚨 [RadioProvider] 电台发射中断开连接:', data);
       }
     };
 

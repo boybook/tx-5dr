@@ -380,7 +380,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               size="sm"
               variant="light"
               isIconOnly
-              onPress={() => openLogbookWindow({ operatorId: operatorStatus.id })}
+              onPress={() => openLogbookWindow({ 
+                operatorId: operatorStatus.id,
+                logBookId: operatorStatus.context.myCall
+              })}
               className="h-8 w-8 min-w-8"
               title="查看通联日志"
               aria-label="查看通联日志"

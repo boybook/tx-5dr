@@ -30,8 +30,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
   const [currentSettings, setCurrentSettings] = useState<AudioDeviceSettingsType>({});
-  const [selectedInputDevice, setSelectedInputDevice] = useState<string>('');
-  const [selectedOutputDevice, setSelectedOutputDevice] = useState<string>('');
+  const [selectedInputDeviceName, setSelectedInputDeviceName] = useState<string>('');
+  const [selectedOutputDeviceName, setSelectedOutputDeviceName] = useState<string>('');
   const [sampleRate, setSampleRate] = useState<number>(48000);
   const [bufferSize, setBufferSize] = useState<number>(1024);
   
@@ -45,8 +45,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   // 检查是否有未保存的更改
   const hasUnsavedChanges = () => {
     return (
-      selectedInputDevice !== (currentSettings.inputDeviceId || '') ||
-      selectedOutputDevice !== (currentSettings.outputDeviceId || '') ||
+      selectedInputDeviceName !== (currentSettings.inputDeviceName || '') ||
+      selectedOutputDeviceName !== (currentSettings.outputDeviceName || '') ||
       sampleRate !== (currentSettings.sampleRate || 48000) ||
       bufferSize !== (currentSettings.bufferSize || 1024)
     );
@@ -56,17 +56,25 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   useImperativeHandle(ref, () => ({
     hasUnsavedChanges,
     save: handleSubmit
-  }), [selectedInputDevice, selectedOutputDevice, sampleRate, bufferSize, currentSettings]);
+  }), [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, currentSettings]);
 
   // 检查是否选择了相同的设备
   const isSameDevice = () => {
-    if (!selectedInputDevice || !selectedOutputDevice) {
+    if (!selectedInputDeviceName || !selectedOutputDeviceName) {
       return false;
     }
     
-    // 提取实际的设备ID进行比较
-    const inputDeviceId = selectedInputDevice.replace('input-', '');
-    const outputDeviceId = selectedOutputDevice.replace('output-', '');
+    // 根据设备名称找到对应的设备对象，比较它们的底层ID
+    const inputDevice = inputDevices.find(device => device.name === selectedInputDeviceName);
+    const outputDevice = outputDevices.find(device => device.name === selectedOutputDeviceName);
+    
+    if (!inputDevice || !outputDevice) {
+      return false;
+    }
+    
+    // 提取实际的设备ID进行比较（去除 input- 和 output- 前缀）
+    const inputDeviceId = inputDevice.id.replace('input-', '');
+    const outputDeviceId = outputDevice.id.replace('output-', '');
     
     return inputDeviceId === outputDeviceId;
   };
@@ -74,7 +82,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   // 监听更改并通知父组件
   useEffect(() => {
     onUnsavedChanges?.(hasUnsavedChanges());
-  }, [selectedInputDevice, selectedOutputDevice, sampleRate, bufferSize, currentSettings, onUnsavedChanges]);
+  }, [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, currentSettings, onUnsavedChanges]);
 
   // 加载音频设备和当前设置
   useEffect(() => {
@@ -99,8 +107,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       // 设置当前配置
       const settings = settingsResponse.currentSettings;
       setCurrentSettings(settings);
-      setSelectedInputDevice(settings.inputDeviceId || '');
-      setSelectedOutputDevice(settings.outputDeviceId || '');
+      setSelectedInputDeviceName(settings.inputDeviceName || '');
+      setSelectedOutputDeviceName(settings.outputDeviceName || '');
       setSampleRate(settings.sampleRate || 48000);
       setBufferSize(settings.bufferSize || 1024);
 
@@ -144,8 +152,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       setSuccessMessage(null);
 
       const newSettings: AudioDeviceSettingsType = {
-        inputDeviceId: selectedInputDevice || undefined,
-        outputDeviceId: selectedOutputDevice || undefined,
+        inputDeviceName: selectedInputDeviceName || undefined,
+        outputDeviceName: selectedOutputDeviceName || undefined,
         sampleRate,
         bufferSize,
       };
@@ -182,8 +190,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       
       if (response.success) {
         setCurrentSettings(response.currentSettings);
-        setSelectedInputDevice(response.currentSettings.inputDeviceId || '');
-        setSelectedOutputDevice(response.currentSettings.outputDeviceId || '');
+        setSelectedInputDeviceName(response.currentSettings.inputDeviceName || '');
+        setSelectedOutputDeviceName(response.currentSettings.outputDeviceName || '');
         setSampleRate(response.currentSettings.sampleRate || 48000);
         setBufferSize(response.currentSettings.bufferSize || 1024);
         setSuccessMessage(response.message || '音频设备设置已重置');
@@ -254,17 +262,31 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         <Select
           label="音频输入设备"
           placeholder="请选择输入设备"
-          selectedKeys={selectedInputDevice ? [selectedInputDevice] : []}
+          selectedKeys={selectedInputDeviceName ? [selectedInputDeviceName] : []}
           onSelectionChange={(keys) => {
             const selected = Array.from(keys)[0] as string;
-            setSelectedInputDevice(selected || '');
+            setSelectedInputDeviceName(selected || '');
           }}
           isDisabled={saving}
           aria-label="选择音频输入设备"
         >
+          {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
+          {selectedInputDeviceName && !inputDevices.find(d => d.name === selectedInputDeviceName) && (
+            <SelectItem 
+              key={selectedInputDeviceName}
+              textValue={`${selectedInputDeviceName} (暂时失效)`}
+              className="text-warning"
+            >
+              <div className="flex flex-col">
+                <span className="text-warning">{selectedInputDeviceName} (暂时失效)</span>
+                <span className="text-xs text-warning-400">设备当前不可用，请重新选择</span>
+              </div>
+            </SelectItem>
+          )}
+          {/* 可用设备列表 */}
           {inputDevices.map((device) => (
             <SelectItem 
-              key={device.id}
+              key={device.name}
               textValue={`${device.name} ${device.isDefault ? '(默认)' : ''}`}
             >
               <div className="flex flex-col">
@@ -278,17 +300,31 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         <Select
           label="音频输出设备"
           placeholder="请选择输出设备"
-          selectedKeys={selectedOutputDevice ? [selectedOutputDevice] : []}
+          selectedKeys={selectedOutputDeviceName ? [selectedOutputDeviceName] : []}
           onSelectionChange={(keys) => {
             const selected = Array.from(keys)[0] as string;
-            setSelectedOutputDevice(selected || '');
+            setSelectedOutputDeviceName(selected || '');
           }}
           isDisabled={saving}
           aria-label="选择音频输出设备"
         >
+          {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
+          {selectedOutputDeviceName && !outputDevices.find(d => d.name === selectedOutputDeviceName) && (
+            <SelectItem 
+              key={selectedOutputDeviceName}
+              textValue={`${selectedOutputDeviceName} (暂时失效)`}
+              className="text-warning"
+            >
+              <div className="flex flex-col">
+                <span className="text-warning">{selectedOutputDeviceName} (暂时失效)</span>
+                <span className="text-xs text-warning-400">设备当前不可用，请重新选择</span>
+              </div>
+            </SelectItem>
+          )}
+          {/* 可用设备列表 */}
           {outputDevices.map((device) => (
             <SelectItem 
-              key={device.id}
+              key={device.name}
               textValue={`${device.name} ${device.isDefault ? '(默认)' : ''}`}
             >
               <div className="flex flex-col">

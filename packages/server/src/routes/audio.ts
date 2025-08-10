@@ -59,23 +59,23 @@ export async function audioRoutes(fastify: FastifyInstance) {
     try {
       const settings = AudioDeviceSettingsSchema.parse(request.body);
       
-      // 验证设备是否存在
-      if (settings.inputDeviceId) {
-        const inputDeviceExists = await audioManager.validateDevice(settings.inputDeviceId);
-        if (!inputDeviceExists) {
+      // 验证设备是否存在（通过名称查找）
+      if (settings.inputDeviceName) {
+        const inputDevice = await audioManager.getInputDeviceByName(settings.inputDeviceName);
+        if (!inputDevice) {
           return reply.code(400).send({
             success: false,
-            message: '指定的输入设备不存在',
+            message: `指定的输入设备 "${settings.inputDeviceName}" 不存在`,
           });
         }
       }
       
-      if (settings.outputDeviceId) {
-        const outputDeviceExists = await audioManager.validateDevice(settings.outputDeviceId);
-        if (!outputDeviceExists) {
+      if (settings.outputDeviceName) {
+        const outputDevice = await audioManager.getOutputDeviceByName(settings.outputDeviceName);
+        if (!outputDevice) {
           return reply.code(400).send({
             success: false,
-            message: '指定的输出设备不存在',
+            message: `指定的输出设备 "${settings.outputDeviceName}" 不存在`,
           });
         }
       }
@@ -89,7 +89,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
         await digitalRadioEngine.stop();
       }
       
-      // 更新配置
+      // 更新配置（只存储设备名称）
       await configManager.updateAudioConfig(settings);
       fastify.log.info('音频设备配置已更新:', settings);
       
@@ -140,8 +140,8 @@ export async function audioRoutes(fastify: FastifyInstance) {
       }
 
       await configManager.updateAudioConfig({
-        inputDeviceId: undefined,
-        outputDeviceId: undefined,
+        inputDeviceName: undefined,
+        outputDeviceName: undefined,
         sampleRate: 48000,
         bufferSize: 1024,
       });

@@ -47,6 +47,10 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   private isRunning = false;
   private sampleRate = 48000; // 默认采样率
   
+  // PTT 状态管理
+  private isPTTActive = false;
+  private pausedDueToPTT = false;
+  
   // 性能统计
   private stats = {
     totalAnalyses: 0,
@@ -131,6 +135,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     console.log('📊 [频谱调度器] 停止频谱分析');
     
     this.isRunning = false;
+    this.pausedDueToPTT = false; // 重置暂停状态
     
     if (this.analysisTimer) {
       clearInterval(this.analysisTimer);
@@ -141,10 +146,59 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   }
 
   /**
+   * 设置PTT状态
+   */
+  setPTTActive(active: boolean): void {
+    const wasActive = this.isPTTActive;
+    this.isPTTActive = active;
+    
+    if (active && !wasActive) {
+      // PTT 激活，暂停频谱分析
+      console.log('📊 [频谱调度器] PTT激活，暂停频谱分析');
+      this.pauseAnalysis();
+    } else if (!active && wasActive) {
+      // PTT 停止，恢复频谱分析
+      console.log('📊 [频谱调度器] PTT停止，恢复频谱分析');
+      this.resumeAnalysis();
+    }
+  }
+
+  /**
+   * 暂停频谱分析（由于PTT激活）
+   */
+  private pauseAnalysis(): void {
+    if (this.isRunning && !this.pausedDueToPTT) {
+      this.pausedDueToPTT = true;
+      if (this.analysisTimer) {
+        clearInterval(this.analysisTimer);
+        this.analysisTimer = null;
+      }
+      console.log('📊 [频谱调度器] 频谱分析已暂停（PTT激活）');
+    }
+  }
+
+  /**
+   * 恢复频谱分析（PTT停止）
+   */
+  private resumeAnalysis(): void {
+    if (this.isRunning && this.pausedDueToPTT) {
+      this.pausedDueToPTT = false;
+      // 重新启动定时分析
+      this.analysisTimer = setInterval(() => {
+        this.performAnalysis();
+      }, this.config.analysisInterval);
+      
+      // 立即执行一次分析
+      this.performAnalysis();
+      console.log('📊 [频谱调度器] 频谱分析已恢复（PTT停止）');
+    }
+  }
+
+  /**
    * 执行一次频谱分析
    */
   private async performAnalysis(): Promise<void> {
-    if (!this.audioProvider || !this.workerPool || !this.isRunning) {
+    if (!this.audioProvider || !this.workerPool || !this.isRunning || this.isPTTActive) {
       return;
     }
 
@@ -233,6 +287,8 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     return {
       ...this.stats,
       isRunning: this.isRunning,
+      isPTTActive: this.isPTTActive,
+      pausedDueToPTT: this.pausedDueToPTT,
       workerPoolStats: this.workerPool ? {
         threads: this.workerPool.threads.length,
         queueSize: this.workerPool.queueSize,

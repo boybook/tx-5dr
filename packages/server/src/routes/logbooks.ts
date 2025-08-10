@@ -66,7 +66,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   fastify.get('/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
       const { id } = request.params;
-      const logBook = logManager.getLogBook(id);
+      let logBook = logManager.getLogBook(id);
+      
+      // 如果直接ID查找失败，尝试按呼号查找或创建
+      if (!logBook) {
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch (error) {
+          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+        }
+      }
       
       if (!logBook) {
         return reply.status(404).send({
@@ -160,7 +169,17 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const updates = UpdateLogBookRequestSchema.parse(request.body);
       
-      const logBook = logManager.getLogBook(id);
+      let logBook = logManager.getLogBook(id);
+      
+      // 如果直接ID查找失败，尝试按呼号查找或创建
+      if (!logBook) {
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch (error) {
+          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+        }
+      }
+      
       if (!logBook) {
         return reply.status(404).send({
           success: false,
@@ -282,7 +301,17 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const options = LogBookQSOQueryOptionsSchema.parse(request.query);
       
-      const logBook = logManager.getLogBook(id);
+      let logBook = logManager.getLogBook(id);
+      
+      // 如果直接ID查找失败，尝试按呼号查找或创建
+      if (!logBook) {
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch (error) {
+          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+        }
+      }
+      
       if (!logBook) {
         return reply.status(404).send({
           success: false,
@@ -395,7 +424,17 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const options = LogBookExportOptionsSchema.parse(request.query);
       
-      const logBook = logManager.getLogBook(id);
+      let logBook = logManager.getLogBook(id);
+      
+      // 如果直接ID查找失败，尝试按呼号查找或创建
+      if (!logBook) {
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch (error) {
+          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+        }
+      }
+      
       if (!logBook) {
         return reply.status(404).send({
           success: false,
@@ -474,7 +513,17 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const { adifContent, operatorId } = request.body;
       
-      const logBook = logManager.getLogBook(id);
+      let logBook = logManager.getLogBook(id);
+      
+      // 如果直接ID查找失败，尝试按呼号查找或创建
+      if (!logBook) {
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch (error) {
+          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+        }
+      }
+      
       if (!logBook) {
         return reply.status(404).send({
           success: false,

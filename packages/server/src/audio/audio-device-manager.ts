@@ -70,35 +70,32 @@ export class AudioDeviceManager {
         });
       });
       
-      // 过滤输入设备 - 非常宽松的条件，只要有可能是输入设备就保留
+      // 过滤输入设备 - 严格基于输入通道数筛选
       const inputDevices = devices.filter((device, index) => {
+        // 主要条件：必须有输入通道
         const hasInputChannels = device.maxInputChannels && device.maxInputChannels > 0;
-        const isDefaultDevice = device.name && (
-          device.name.toLowerCase().includes('default') || 
-          device.name.toLowerCase().includes('sysdefault')
-        );
-        const isHardwareDevice = device.name && device.name.includes('hw:');
-        // 如果是第一个设备，通常也是默认设备
-        const isFirstDevice = index === 0;
-        // 如果设备名称包含常见的输入设备关键词
+        
+        // 特殊情况：包含明确输入关键词的设备，即使通道数为0也保留（某些驱动可能报告不准确）
         const isInputKeyword = device.name && (
           device.name.toLowerCase().includes('input') ||
           device.name.toLowerCase().includes('capture') ||
           device.name.toLowerCase().includes('mic') ||
           device.name.toLowerCase().includes('record')
         );
-        // 如果设备有名称且不是明确的输出设备，也保留
-        const hasNameNotOutput = device.name && !device.name.toLowerCase().includes('output');
         
-        const shouldKeep = hasInputChannels || isDefaultDevice || isHardwareDevice || isFirstDevice || isInputKeyword || hasNameNotOutput;
+        // 默认设备：包含 default 关键词且不是明确的输出设备
+        const isDefaultInputDevice = device.name && (
+          device.name.toLowerCase().includes('default') || 
+          device.name.toLowerCase().includes('sysdefault')
+        ) && !device.name.toLowerCase().includes('output');
+        
+        const shouldKeep = hasInputChannels || isInputKeyword || isDefaultInputDevice;
         
         console.log(`🎤 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${shouldKeep}`, {
           hasInputChannels,
-          isDefaultDevice,
-          isHardwareDevice,
-          isFirstDevice,
+          maxInputChannels: device.maxInputChannels,
           isInputKeyword,
-          hasNameNotOutput
+          isDefaultInputDevice
         });
         
         return shouldKeep;
@@ -161,35 +158,32 @@ export class AudioDeviceManager {
       const devices = naudiodon.getDevices();
       console.log(`🔊 [AudioDeviceManager] naudiodon 返回 ${devices.length} 个设备`);
       
-      // 过滤输出设备 - 非常宽松的条件，只要有可能是输出设备就保留
+      // 过滤输出设备 - 严格基于输出通道数筛选
       const outputDevices = devices.filter((device, index) => {
+        // 主要条件：必须有输出通道
         const hasOutputChannels = device.maxOutputChannels && device.maxOutputChannels > 0;
-        const isDefaultDevice = device.name && (
-          device.name.toLowerCase().includes('default') || 
-          device.name.toLowerCase().includes('sysdefault')
-        );
-        const isHardwareDevice = device.name && device.name.includes('hw:');
-        // 如果是第一个设备，通常也是默认设备
-        const isFirstDevice = index === 0;
-        // 如果设备名称包含常见的输出设备关键词
+        
+        // 特殊情况：包含明确输出关键词的设备，即使通道数为0也保留（某些驱动可能报告不准确）
         const isOutputKeyword = device.name && (
           device.name.toLowerCase().includes('output') ||
           device.name.toLowerCase().includes('playback') ||
           device.name.toLowerCase().includes('speaker') ||
           device.name.toLowerCase().includes('headphone')
         );
-        // 如果设备有名称且不是明确的输入设备，也保留
-        const hasNameNotInput = device.name && !device.name.toLowerCase().includes('input');
         
-        const shouldKeep = hasOutputChannels || isDefaultDevice || isHardwareDevice || isFirstDevice || isOutputKeyword || hasNameNotInput;
+        // 默认设备：包含 default 关键词且不是明确的输入设备
+        const isDefaultOutputDevice = device.name && (
+          device.name.toLowerCase().includes('default') || 
+          device.name.toLowerCase().includes('sysdefault')
+        ) && !device.name.toLowerCase().includes('input');
+        
+        const shouldKeep = hasOutputChannels || isOutputKeyword || isDefaultOutputDevice;
         
         console.log(`🔊 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${shouldKeep}`, {
           hasOutputChannels,
-          isDefaultDevice,
-          isHardwareDevice,
-          isFirstDevice,
+          maxOutputChannels: device.maxOutputChannels,
           isOutputKeyword,
-          hasNameNotInput
+          isDefaultOutputDevice
         });
         
         return shouldKeep;
@@ -269,6 +263,112 @@ export class AudioDeviceManager {
     const allDevicesList = [...allDevices.inputDevices, ...allDevices.outputDevices];
     
     return allDevicesList.find(device => device.id === deviceId) || null;
+  }
+
+  /**
+   * 根据设备名称查找输入设备
+   */
+  async getInputDeviceByName(deviceName: string): Promise<AudioDevice | null> {
+    try {
+      const inputDevices = await this.getInputDevices();
+      return inputDevices.find(device => device.name === deviceName) || null;
+    } catch (error) {
+      console.error(`🎤 [AudioDeviceManager] 根据名称查找输入设备失败:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 根据设备名称查找输出设备
+   */
+  async getOutputDeviceByName(deviceName: string): Promise<AudioDevice | null> {
+    try {
+      const outputDevices = await this.getOutputDevices();
+      return outputDevices.find(device => device.name === deviceName) || null;
+    } catch (error) {
+      console.error(`🔊 [AudioDeviceManager] 根据名称查找输出设备失败:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 获取默认输入设备
+   */
+  async getDefaultInputDevice(): Promise<AudioDevice | null> {
+    try {
+      const inputDevices = await this.getInputDevices();
+      // 优先返回标记为默认的设备，否则返回第一个
+      const defaultDevice = inputDevices.find(device => device.isDefault);
+      return defaultDevice || inputDevices[0] || null;
+    } catch (error) {
+      console.error(`🎤 [AudioDeviceManager] 获取默认输入设备失败:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 获取默认输出设备
+   */
+  async getDefaultOutputDevice(): Promise<AudioDevice | null> {
+    try {
+      const outputDevices = await this.getOutputDevices();
+      // 优先返回标记为默认的设备，否则返回第一个
+      const defaultDevice = outputDevices.find(device => device.isDefault);
+      return defaultDevice || outputDevices[0] || null;
+    } catch (error) {
+      console.error(`🔊 [AudioDeviceManager] 获取默认输出设备失败:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 根据设备名称解析为设备ID，如果找不到则使用默认设备
+   */
+  async resolveInputDeviceId(deviceName?: string): Promise<string | undefined> {
+    if (!deviceName) {
+      // 没有指定设备名称，使用默认设备
+      const defaultDevice = await this.getDefaultInputDevice();
+      console.log(`🎤 [AudioDeviceManager] 使用默认输入设备: ${defaultDevice?.name || '无'}`);
+      return defaultDevice?.id;
+    }
+
+    // 尝试根据名称查找设备
+    const device = await this.getInputDeviceByName(deviceName);
+    if (device) {
+      console.log(`🎤 [AudioDeviceManager] 找到配置的输入设备: ${device.name} -> ${device.id}`);
+      return device.id;
+    }
+
+    // 设备名称未找到，回退到默认设备
+    console.warn(`🎤 [AudioDeviceManager] 输入设备 "${deviceName}" 未找到，回退到默认设备`);
+    const defaultDevice = await this.getDefaultInputDevice();
+    console.log(`🎤 [AudioDeviceManager] 回退到默认输入设备: ${defaultDevice?.name || '无'}`);
+    return defaultDevice?.id;
+  }
+
+  /**
+   * 根据设备名称解析为设备ID，如果找不到则使用默认设备
+   */
+  async resolveOutputDeviceId(deviceName?: string): Promise<string | undefined> {
+    if (!deviceName) {
+      // 没有指定设备名称，使用默认设备
+      const defaultDevice = await this.getDefaultOutputDevice();
+      console.log(`🔊 [AudioDeviceManager] 使用默认输出设备: ${defaultDevice?.name || '无'}`);
+      return defaultDevice?.id;
+    }
+
+    // 尝试根据名称查找设备
+    const device = await this.getOutputDeviceByName(deviceName);
+    if (device) {
+      console.log(`🔊 [AudioDeviceManager] 找到配置的输出设备: ${device.name} -> ${device.id}`);
+      return device.id;
+    }
+
+    // 设备名称未找到，回退到默认设备
+    console.warn(`🔊 [AudioDeviceManager] 输出设备 "${deviceName}" 未找到，回退到默认设备`);
+    const defaultDevice = await this.getDefaultOutputDevice();
+    console.log(`🔊 [AudioDeviceManager] 回退到默认输出设备: ${defaultDevice?.name || '无'}`);
+    return defaultDevice?.id;
   }
 
   /**

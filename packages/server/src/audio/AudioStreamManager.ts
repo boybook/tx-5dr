@@ -3,6 +3,7 @@ import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache } from '../utils/audioUtils.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { AudioDeviceManager } from './audio-device-manager.js';
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
@@ -60,9 +61,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     try {
       console.log('🎤 启动音频流...');
       
-      // 处理设备 ID
+      // 从配置获取设备名称并解析为设备ID
+      const configManager = ConfigManager.getInstance();
+      const audioConfig = configManager.getAudioConfig();
+      const audioDeviceManager = AudioDeviceManager.getInstance();
+      
+      // 解析输入设备ID
       let actualDeviceId: number | undefined = undefined;
       if (deviceId) {
+        // 如果提供了设备ID，直接使用
         if (deviceId.startsWith('input-')) {
           actualDeviceId = parseInt(deviceId.replace('input-', ''));
         } else {
@@ -70,7 +77,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
         console.log(`🎯 使用指定音频输入设备 ID: ${actualDeviceId}`);
       } else {
-        console.log('🎯 使用默认音频输入设备');
+        // 使用配置中的设备名称解析为ID
+        const resolvedDeviceId = await audioDeviceManager.resolveInputDeviceId(audioConfig.inputDeviceName);
+        if (resolvedDeviceId) {
+          if (resolvedDeviceId.startsWith('input-')) {
+            actualDeviceId = parseInt(resolvedDeviceId.replace('input-', ''));
+          } else {
+            actualDeviceId = parseInt(resolvedDeviceId);
+          }
+          console.log(`🎯 解析到音频输入设备: ${audioConfig.inputDeviceName || '默认设备'} -> ID ${actualDeviceId}`);
+        } else {
+          console.log('🎯 使用系统默认音频输入设备');
+        }
       }
       
       // 配置音频输入参数 - 使用配置的设置
@@ -252,9 +270,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     try {
       console.log('🔊 启动音频输出...');
       
-      // 处理输出设备 ID
+      // 从配置获取设备名称并解析为设备ID
+      const configManager = ConfigManager.getInstance();
+      const audioConfig = configManager.getAudioConfig();
+      const audioDeviceManager = AudioDeviceManager.getInstance();
+      
+      // 解析输出设备ID
       let actualOutputDeviceId: number | undefined = undefined;
       if (outputDeviceId) {
+        // 如果提供了设备ID，直接使用
         if (outputDeviceId.startsWith('output-')) {
           actualOutputDeviceId = parseInt(outputDeviceId.replace('output-', ''));
         } else {
@@ -262,7 +286,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
         console.log(`🎯 使用指定音频输出设备 ID: ${actualOutputDeviceId}`);
       } else {
-        console.log('🎯 使用默认音频输出设备');
+        // 使用配置中的设备名称解析为ID
+        const resolvedDeviceId = await audioDeviceManager.resolveOutputDeviceId(audioConfig.outputDeviceName);
+        if (resolvedDeviceId) {
+          if (resolvedDeviceId.startsWith('output-')) {
+            actualOutputDeviceId = parseInt(resolvedDeviceId.replace('output-', ''));
+          } else {
+            actualOutputDeviceId = parseInt(resolvedDeviceId);
+          }
+          console.log(`🎯 解析到音频输出设备: ${audioConfig.outputDeviceName || '默认设备'} -> ID ${actualOutputDeviceId}`);
+        } else {
+          console.log('🎯 使用系统默认音频输出设备');
+        }
       }
       
       // 配置音频输出参数 - 使用配置的设置

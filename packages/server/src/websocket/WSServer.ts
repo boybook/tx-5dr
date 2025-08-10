@@ -148,6 +148,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_VOLUME_GAIN_DB]: (data) => this.handleSetVolumeGainDb(data),
       [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: (data, id) => this.handleSetClientEnabledOperators(id, data),
       [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
+      [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
     };
   }
 
@@ -231,6 +232,42 @@ export class WSServer extends WSMessageHandler {
       console.log(`📡 [WSServer] 收到日志本更新事件:`, data.logBookId);
       this.broadcastLogbookUpdated(data);
     });
+
+    // 监听电台状态变化事件
+    this.digitalRadioEngine.on('radioStatusChanged' as any, (data: any) => {
+      console.log(`📡 [WSServer] 收到电台状态变化事件:`, data);
+      this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, data);
+    });
+
+    // 监听电台重连中事件
+    this.digitalRadioEngine.on('radioReconnecting' as any, (data: any) => {
+      console.log(`📡 [WSServer] 收到电台重连中事件:`, data);
+      this.broadcast(WSMessageType.RADIO_RECONNECTING, data);
+    });
+
+    // 监听电台重连失败事件
+    this.digitalRadioEngine.on('radioReconnectFailed' as any, (data: any) => {
+      console.log(`📡 [WSServer] 收到电台重连失败事件:`, data);
+      this.broadcast(WSMessageType.RADIO_RECONNECT_FAILED, data);
+    });
+
+    // 监听电台重连停止事件
+    this.digitalRadioEngine.on('radioReconnectStopped' as any, (data: any) => {
+      console.log(`📡 [WSServer] 收到电台重连停止事件:`, data);
+      this.broadcast(WSMessageType.RADIO_RECONNECT_STOPPED, data);
+    });
+
+    // 监听电台错误事件
+    this.digitalRadioEngine.on('radioError' as any, (data: any) => {
+      console.log(`📡 [WSServer] 收到电台错误事件:`, data);
+      this.broadcast(WSMessageType.RADIO_ERROR, data);
+    });
+
+    // 监听电台发射中断开连接事件
+    this.digitalRadioEngine.on('radioDisconnectedDuringTransmission' as any, (data: any) => {
+      console.log(`⚠️ [WSServer] 收到电台发射中断开连接事件:`, data);
+      this.broadcast(WSMessageType.RADIO_DISCONNECTED_DURING_TRANSMISSION, data);
+    });
   }
 
   /**
@@ -252,14 +289,14 @@ export class WSServer extends WSMessageHandler {
   private async handleStartEngine(): Promise<void> {
     console.log('📥 服务器收到startEngine命令');
     try {
-      const currentStatus = this.digitalRadioEngine.getStatus();
-      if (currentStatus.isRunning) {
-        console.log('⚠️ 时钟已经在运行中，发送当前状态同步');
-        this.broadcastSystemStatus(currentStatus);
-      } else {
-        await this.digitalRadioEngine.start();
-        console.log('✅ digitalRadioEngine.start() 执行成功');
-      }
+      // 始终调用引擎方法，让引擎内部处理重复调用情况
+      await this.digitalRadioEngine.start();
+      console.log('✅ digitalRadioEngine.start() 执行完成');
+      
+      // 强制发送最新状态确保同步
+      const status = this.digitalRadioEngine.getStatus();
+      this.broadcastSystemStatus(status);
+      console.log('📡 已广播最新系统状态，isDecoding:', status.isDecoding);
     } catch (error) {
       console.error('❌ digitalRadioEngine.start() 执行失败:', error);
       this.broadcast(WSMessageType.ERROR, {
@@ -275,14 +312,14 @@ export class WSServer extends WSMessageHandler {
   private async handleStopEngine(): Promise<void> {
     console.log('📥 服务器收到stopEngine命令');
     try {
-      const currentStatus = this.digitalRadioEngine.getStatus();
-      if (!currentStatus.isRunning) {
-        console.log('⚠️ 时钟已经停止，发送当前状态同步');
-        this.broadcastSystemStatus(currentStatus);
-      } else {
-        await this.digitalRadioEngine.stop();
-        console.log('✅ digitalRadioEngine.stop() 执行成功');
-      }
+      // 始终调用引擎方法，让引擎内部处理重复调用情况
+      await this.digitalRadioEngine.stop();
+      console.log('✅ digitalRadioEngine.stop() 执行完成');
+      
+      // 强制发送最新状态确保同步
+      const status = this.digitalRadioEngine.getStatus();
+      this.broadcastSystemStatus(status);
+      console.log('📡 已广播最新系统状态，isDecoding:', status.isDecoding);
     } catch (error) {
       console.error('❌ digitalRadioEngine.stop() 执行失败:', error);
       this.broadcast(WSMessageType.ERROR, {
@@ -529,7 +566,7 @@ export class WSServer extends WSMessageHandler {
    */
   broadcast(type: string, data?: any, id?: string): void {
     const activeConnections = this.getActiveConnections();
-    // console.log(`📡 广播消息到 ${activeConnections.length} 个客户端: ${type}`);
+    // console.log(`📡 [WSServer] 广播消息到 ${activeConnections.length} 个客户端: ${type}`);
     
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
@@ -863,6 +900,31 @@ export class WSServer extends WSMessageHandler {
       this.sendToConnection(connectionId, 'error', {
         message: error instanceof Error ? error.message : String(error),
         code: 'SET_CLIENT_ENABLED_OPERATORS_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理手动重连电台命令
+   */
+  private async handleRadioManualReconnect(): Promise<void> {
+    try {
+      console.log('📥 [WSServer] 收到手动重连电台命令');
+      
+      const radioManager = this.digitalRadioEngine.getRadioManager();
+      await radioManager.manualReconnect();
+      
+      console.log('✅ [WSServer] 电台手动重连成功');
+      
+      // 广播最新的系统状态
+      const status = this.digitalRadioEngine.getStatus();
+      this.broadcastSystemStatus(status);
+      
+    } catch (error) {
+      console.error('❌ [WSServer] 电台手动重连失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'RADIO_MANUAL_RECONNECT_ERROR'
       });
     }
   }
