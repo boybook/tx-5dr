@@ -126,21 +126,26 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/test-ptt', async (_req, reply) => {
-    try {
-      if (!radioManager.isConnected()) {
-        return reply.code(400).send({ 
-          success: false, 
-          message: '电台未连接，请先配置并连接电台' 
-        });
-      }
+    const config = configManager.getRadioConfig();
+    
+    if (config.type === 'none') {
+      return reply.code(400).send({
+        success: false,
+        message: '无电台模式无需测试PTT'
+      });
+    }
 
+    // 检查主程序是否已有电台连接
+    if (radioManager.isConnected()) {
+      console.log('🔄 [Radio Routes] 使用已有电台连接进行PTT测试');
+      
       // 立即返回成功，然后在后台执行PTT测试
       reply.send({ success: true, message: 'PTT测试已启动，正在切换发射状态0.5秒' });
       
       // 在后台异步执行PTT测试流程
       setImmediate(async () => {
         try {
-          console.log('🔄 [Radio Routes] 开始PTT测试...');
+          console.log('🔄 [Radio Routes] 开始PTT测试 (使用已有连接)...');
           
           // 开启PTT
           await radioManager.setPTT(true);
@@ -161,8 +166,167 @@ export async function radioRoutes(fastify: FastifyInstance) {
         }
       });
       
+      return;
+    }
+
+    // 主程序未连接，创建临时测试实例
+    console.log('🔄 [Radio Routes] 创建临时连接进行PTT测试');
+    const tester = new PhysicalRadioManager();
+    
+    try {
+      // 应用配置并连接
+      await tester.applyConfig(config);
+      
+      // 立即返回成功，然后在后台执行PTT测试
+      reply.send({ success: true, message: 'PTT测试已启动，正在切换发射状态0.5秒' });
+      
+      // 在后台异步执行PTT测试流程
+      setImmediate(async () => {
+        try {
+          console.log('🔄 [Radio Routes] 开始PTT测试 (临时连接)...');
+          
+          // 开启PTT
+          await tester.setPTT(true);
+          console.log('📡 [Radio Routes] PTT已开启，电台处于发射状态');
+          
+          // 等待0.5秒后关闭PTT
+          setTimeout(async () => {
+            try {
+              await tester.setPTT(false);
+              console.log('✅ [Radio Routes] PTT测试完成，已恢复接收状态');
+            } catch (error) {
+              console.warn('❌ [Radio Routes] PTT关闭失败:', error);
+            } finally {
+              // 清理测试连接
+              try {
+                await tester.disconnect();
+                console.log('🧹 [Radio Routes] PTT测试连接已清理');
+              } catch (error) {
+                console.warn('❌ [Radio Routes] 清理PTT测试连接失败:', error);
+              }
+            }
+          }, 500);
+          
+        } catch (error) {
+          console.error('❌ [Radio Routes] PTT测试失败:', error);
+          // 清理测试连接
+          try {
+            await tester.disconnect();
+          } catch (cleanupError) {
+            console.warn('❌ [Radio Routes] 清理PTT测试连接失败:', cleanupError);
+          }
+        }
+      });
+      
     } catch (e) {
+      // 配置失败时立即清理并返回错误
+      setTimeout(async () => {
+        try {
+          await tester.disconnect();
+        } catch (error) {
+          console.warn('❌ [Radio Routes] PTT配置失败后清理实例失败:', error);
+        }
+      }, 0);
+      
       return reply.code(400).send({ success: false, message: (e as Error).message });
+    }
+  });
+
+  // 获取电台连接状态
+  fastify.get('/status', async (_req, reply) => {
+    try {
+      const config = configManager.getRadioConfig();
+      const isConnected = radioManager.isConnected();
+      
+      let radioInfo = null;
+      if (isConnected && config.type !== 'none') {
+        // 获取电台型号信息
+        if (config.type === 'serial' && config.rigModel) {
+          const supportedRigs = PhysicalRadioManager.listSupportedRigs();
+          const rigInfo = supportedRigs.find(r => r.rigModel === config.rigModel);
+          if (rigInfo) {
+            radioInfo = {
+              manufacturer: rigInfo.mfgName,
+              model: rigInfo.modelName,
+              rigModel: rigInfo.rigModel
+            };
+          }
+        } else if (config.type === 'network') {
+          radioInfo = {
+            manufacturer: 'Network',
+            model: 'RigCtrl',
+            rigModel: 2
+          };
+        }
+      }
+      
+      return reply.send({
+        success: true,
+        config,
+        isConnected,
+        radioInfo,
+        connectionType: config.type
+      });
+    } catch (error) {
+      return reply.code(500).send({
+        success: false,
+        message: `获取电台状态失败: ${(error as Error).message}`
+      });
+    }
+  });
+
+  // 手动连接电台
+  fastify.post('/connect', async (_req, reply) => {
+    try {
+      const config = configManager.getRadioConfig();
+      
+      if (config.type === 'none') {
+        return reply.code(400).send({
+          success: false,
+          message: '当前配置为无电台模式，无法连接'
+        });
+      }
+
+      if (radioManager.isConnected()) {
+        return reply.send({
+          success: true,
+          message: '电台已连接',
+          isConnected: true
+        });
+      }
+
+      // 应用配置并连接
+      await radioManager.applyConfig(config);
+      
+      return reply.send({
+        success: true,
+        message: '电台连接成功',
+        isConnected: true
+      });
+    } catch (error) {
+      return reply.code(500).send({
+        success: false,
+        message: `连接电台失败: ${(error as Error).message}`,
+        isConnected: false
+      });
+    }
+  });
+
+  // 断开电台连接
+  fastify.post('/disconnect', async (_req, reply) => {
+    try {
+      await radioManager.disconnect();
+      
+      return reply.send({
+        success: true,
+        message: '电台已断开连接',
+        isConnected: false
+      });
+    } catch (error) {
+      return reply.code(500).send({
+        success: false,
+        message: `断开电台失败: ${(error as Error).message}`
+      });
     }
   });
 }

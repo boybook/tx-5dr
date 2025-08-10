@@ -19,6 +19,30 @@ export const FrequencyListResponseSchema = z.object({
 });
 
 /**
+ * 串口配置参数Schema
+ */
+export const SerialConfigSchema = z.object({
+  // 基础串口设置
+  data_bits: z.enum(['5', '6', '7', '8']).optional(),
+  stop_bits: z.enum(['1', '2']).optional(),
+  serial_parity: z.enum(['None', 'Even', 'Odd', 'Mark', 'Space']).optional(),
+  serial_handshake: z.enum(['None', 'Hardware', 'Software']).optional(),
+  
+  // 控制信号
+  rts_state: z.enum(['ON', 'OFF', 'UNSET']).optional(),
+  dtr_state: z.enum(['ON', 'OFF', 'UNSET']).optional(),
+  
+  // 通信设置
+  rate: z.number().int().min(150).max(4000000).optional(), // 波特率
+  timeout: z.number().int().min(0).optional(), // 超时时间(ms)
+  retry: z.number().int().min(0).optional(), // 重试次数
+  
+  // 时序控制
+  write_delay: z.number().int().min(0).optional(), // 字节间延迟(ms)
+  post_write_delay: z.number().int().min(0).optional(), // 命令间延迟(ms)
+});
+
+/**
  * Hamlib配置Schema
  */
 export const HamlibConfigSchema = z.object({
@@ -29,6 +53,7 @@ export const HamlibConfigSchema = z.object({
   // 串口模式配置  
   path: z.string().optional(),
   rigModel: z.number().optional(),
+  serialConfig: SerialConfigSchema.optional(),
 });
 
 /**
@@ -86,6 +111,7 @@ export const TestResponseSchema = z.object({
 // 导出类型
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;
 export type FrequencyListResponse = z.infer<typeof FrequencyListResponseSchema>;
+export type SerialConfig = z.infer<typeof SerialConfigSchema>;
 export type HamlibConfig = z.infer<typeof HamlibConfigSchema>;
 export type RadioConfigResponse = z.infer<typeof RadioConfigResponseSchema>;
 export type SupportedRig = z.infer<typeof SupportedRigSchema>;

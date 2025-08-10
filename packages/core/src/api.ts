@@ -203,6 +203,24 @@ export const api = {
     return await res.json();
   },
 
+  async getRadioStatus(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/status`);
+    return await res.json();
+  },
+
+  async connectRadio(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/connect`, { method: 'POST' });
+    return await res.json();
+  },
+
+  async disconnectRadio(apiBase?: string): Promise<any> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/radio/disconnect`, { method: 'POST' });
+    return await res.json();
+  },
+
   async getPresetFrequencies(apiBase?: string): Promise<any> {
     const baseUrl = apiBase || getConfiguredApiBase();
     const res = await fetch(`${baseUrl}/radio/frequencies`);
