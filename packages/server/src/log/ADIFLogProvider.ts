@@ -14,7 +14,7 @@ import { AdifParser } from 'adif-parser-ts';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-import { getLogFilePath } from '../utils/app-paths.js';
+import { getDataFilePath } from '../utils/app-paths.js';
 
 /**
  * ADIF日志Provider选项
@@ -85,8 +85,8 @@ export class ADIFLogProvider implements ILogProvider {
    * 查找或创建日志文件路径
    */
   private async findOrCreateLogPath(): Promise<string> {
-    // 使用新的跨平台路径管理器
-    const standardPath = await getLogFilePath(this.options.logFileName!);
+    // 使用新的跨平台路径管理器 - 通联日志本应存储在用户数据目录
+    const standardPath = await getDataFilePath(this.options.logFileName!);
     
     // 尝试旧的位置查找现有文件
     const legacyPaths = [
@@ -103,7 +103,7 @@ export class ADIFLogProvider implements ILogProvider {
       try {
         await fs.access(legacyPath);
         console.log(`📋 [ADIFLogProvider] 发现旧日志文件: ${legacyPath}`);
-        console.log(`📋 [ADIFLogProvider] 将迁移到标准位置: ${standardPath}`);
+        console.log(`📋 [ADIFLogProvider] 将迁移到用户数据目录: ${standardPath}`);
         
         // 迁移文件到新位置
         const dir = path.dirname(standardPath);

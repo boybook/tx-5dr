@@ -235,7 +235,11 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
   );
 };
 
-export const RadioControl: React.FC = () => {
+interface RadioControlProps {
+  onOpenRadioSettings?: () => void;
+}
+
+export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings }) => {
   const connection = useConnection();
   const radio = useRadioState();
   const [isConnecting, setIsConnecting] = useState(false);
@@ -791,7 +795,7 @@ export const RadioControl: React.FC = () => {
               size="sm"
               className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
               aria-label="电台设置"
-              onPress={() => {}}
+              onPress={onOpenRadioSettings}
             >
               <FontAwesomeIcon icon={faCog} className="text-xs" />
             </Button>

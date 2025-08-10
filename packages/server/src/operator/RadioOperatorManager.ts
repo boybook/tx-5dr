@@ -60,10 +60,17 @@ export class RadioOperatorManager {
       try {
         console.log(`📝 [操作员管理器] 记录QSO: ${data.qsoRecord.callsign} (操作员: ${data.operatorId})`);
         
-        // 获取操作员连接的日志本
-        const logBook = this.logManager.getOperatorLogBook(data.operatorId);
+        // 获取操作员对应的日志本
+        const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
         if (!logBook) {
-          throw new Error(`操作员 ${data.operatorId} 未连接到任何日志本`);
+          const callsign = this.logManager.getOperatorCallsign(data.operatorId);
+          if (!callsign) {
+            console.error(`📝 [操作员管理器] 无法记录QSO: 操作员 ${data.operatorId} 未注册呼号`);
+            return;
+          } else {
+            console.error(`📝 [操作员管理器] 无法记录QSO: 操作员 ${data.operatorId} (呼号: ${callsign}) 的日志本创建失败`);
+            return;
+          }
         }
         
         console.log(`📝 [操作员管理器] 记录QSO到日志本 ${logBook.name}: ${data.qsoRecord.callsign} @ ${new Date(data.qsoRecord.startTime).toISOString()}`);
@@ -100,13 +107,22 @@ export class RadioOperatorManager {
     // 监听检查是否已通联事件
     this.eventEmitter.on('checkHasWorkedCallsign' as any, async (data: { operatorId: string; callsign: string; requestId: string }) => {
       try {
-        // 获取操作员连接的日志本
-        const logBook = this.logManager.getOperatorLogBook(data.operatorId);
-        if (!logBook) {
-          throw new Error(`操作员 ${data.operatorId} 未连接到任何日志本`);
-        }
+        // 获取操作员对应的日志本
+        const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
+        let hasWorked = false;
         
-        const hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, data.operatorId);
+        if (!logBook) {
+          const callsign = this.logManager.getOperatorCallsign(data.operatorId);
+          if (!callsign) {
+            console.warn(`📝 [操作员管理器] 检查已通联: 操作员 ${data.operatorId} 未注册呼号，默认返回false`);
+            hasWorked = false;
+          } else {
+            console.warn(`📝 [操作员管理器] 检查已通联: 操作员 ${data.operatorId} (呼号: ${callsign}) 的日志本不存在，默认返回false`);
+            hasWorked = false;
+          }
+        } else {
+          hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, data.operatorId);
+        }
         
         // 发送响应
         this.eventEmitter.emit('hasWorkedCallsignResponse' as any, {
@@ -167,7 +183,8 @@ export class RadioOperatorManager {
     // 初始化日志管理器
     await this.logManager.initialize();
     
-    this.initializeOperatorsFromConfig();
+    // 从配置文件初始化操作员（包括创建对应的日志本）
+    await this.initializeOperatorsFromConfig();
     
     console.log('✅ [操作员管理器] 初始化完成');
   }
@@ -175,7 +192,7 @@ export class RadioOperatorManager {
   /**
    * 从配置文件初始化操作员
    */
-  private initializeOperatorsFromConfig(): void {
+  private async initializeOperatorsFromConfig(): Promise<void> {
     const configManager = ConfigManager.getInstance();
     const operatorsConfig = configManager.getOperatorsConfig();
 
@@ -186,7 +203,7 @@ export class RadioOperatorManager {
 
     for (const config of operatorsConfig) {
       try {
-        const operator = this.addOperator(config);
+        const operator = await this.addOperator(config);
         /* operator.start(); */
         console.log(`📻 [操作员管理器] 操作员 ${config.id} 已创建`);
       } catch (error) {
@@ -219,7 +236,7 @@ export class RadioOperatorManager {
   /**
    * 添加电台操作员
    */
-  addOperator(config: RadioOperatorConfig): RadioOperator {
+  async addOperator(config: RadioOperatorConfig): Promise<RadioOperator> {
     if (this.operators.has(config.id)) {
       throw new Error(`操作员 ${config.id} 已存在`);
     }
@@ -231,7 +248,18 @@ export class RadioOperatorManager {
       (op: RadioOperator) => new StandardQSOStrategy(op)
     );
     
-    // 如果配置中指定了日志本ID，连接到该日志本
+    // 注册操作员的呼号到日志管理器
+    this.logManager.registerOperatorCallsign(config.id, config.myCallsign);
+    
+    // 立即为该呼号创建日志本
+    try {
+      await this.logManager.getOrCreateLogBookByCallsign(config.myCallsign);
+      console.log(`📻 [操作员管理器] 已为操作员 ${config.id} (呼号: ${config.myCallsign}) 创建日志本`);
+    } catch (error) {
+      console.error(`📻 [操作员管理器] 为操作员 ${config.id} (呼号: ${config.myCallsign}) 创建日志本失败:`, error);
+    }
+    
+    // 如果配置中指定了日志本ID，连接到该日志本（向后兼容）
     if (config.logBookId) {
       this.connectOperatorToLogBook(config.id, config.logBookId);
     }
@@ -298,9 +326,9 @@ export class RadioOperatorManager {
   /**
    * 获取操作员当前连接的日志本信息
    */
-  getOperatorLogBookInfo(operatorId: string): { logBookId: string; logBook: any } {
+  getOperatorLogBookInfo(operatorId: string): { logBookId: string | null; logBook: any } {
     const logBookId = this.logManager.getOperatorLogBookId(operatorId);
-    const logBook = this.logManager.getLogBook(logBookId);
+    const logBook = logBookId ? this.logManager.getLogBook(logBookId) : null;
     
     return {
       logBookId,
@@ -669,7 +697,7 @@ export class RadioOperatorManager {
    * 同步添加操作员
    */
   async syncAddOperator(config: RadioOperatorConfig): Promise<RadioOperator> {
-    const operator = this.addOperator(config);
+    const operator = await this.addOperator(config);
     
     /* if (this.isRunning) {
       operator.start();
