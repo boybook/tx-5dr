@@ -471,6 +471,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // 启动音频输出
       await this.audioStreamManager.startOutput(audioConfig.outputDeviceId);
       console.log(`🔊 [时钟管理器] 音频输出流启动成功`);
+      
+      // 恢复上次设置的音量增益
+      const lastVolumeGain = configManager.getLastVolumeGain();
+      if (lastVolumeGain) {
+        console.log(`🔊 [时钟管理器] 恢复上次设置的音量增益: ${lastVolumeGain.gainDb.toFixed(1)}dB (${lastVolumeGain.gain.toFixed(3)})`);
+        // 直接设置到 audioStreamManager，不触发保存逻辑避免递归
+        this.audioStreamManager.setVolumeGainDb(lastVolumeGain.gainDb);
+      } else {
+        console.log(`🔊 [时钟管理器] 使用默认音量增益: 0.0dB (1.000)`);
+      }
 
       // 连接物理电台（如果配置）
       await this.radioManager.applyConfig(radioConfig);
@@ -557,6 +567,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       nextSlotIn: this.slotClock?.getNextSlotIn() ?? 0,
       audioStarted: this.audioStarted,
       volumeGain: this.audioStreamManager.getVolumeGain(),
+      volumeGainDb: this.audioStreamManager.getVolumeGainDb(),
       isPTTActive: this.isPTTActive,
       radioConnected: this.radioManager.isConnected()
     };
@@ -675,19 +686,57 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   /**
-   * 设置音量增益
+   * 设置音量增益（线性单位，向后兼容）
    */
   setVolumeGain(gain: number): void {
     this.audioStreamManager.setVolumeGain(gain);
-    // 广播音量变化事件
-    this.emit('volumeGainChanged', gain);
+    
+    // 保存到配置文件
+    const currentGain = this.audioStreamManager.getVolumeGain();
+    const currentGainDb = this.audioStreamManager.getVolumeGainDb();
+    ConfigManager.getInstance().updateLastVolumeGain(currentGain, currentGainDb).catch((error: any) => {
+      console.warn('⚠️ [DigitalRadioEngine] 保存音量增益配置失败:', error);
+    });
+    
+    // 广播音量变化事件，同时发送线性和dB值
+    this.emit('volumeGainChanged', {
+      gain: currentGain,
+      gainDb: currentGainDb
+    });
   }
 
   /**
-   * 获取当前音量增益
+   * 设置音量增益（dB单位）
+   */
+  setVolumeGainDb(gainDb: number): void {
+    this.audioStreamManager.setVolumeGainDb(gainDb);
+    
+    // 保存到配置文件
+    const currentGain = this.audioStreamManager.getVolumeGain();
+    const currentGainDb = this.audioStreamManager.getVolumeGainDb();
+    ConfigManager.getInstance().updateLastVolumeGain(currentGain, currentGainDb).catch((error: any) => {
+      console.warn('⚠️ [DigitalRadioEngine] 保存音量增益配置失败:', error);
+    });
+    
+    // 广播音量变化事件，同时发送线性和dB值
+    this.emit('volumeGainChanged', {
+      gain: currentGain,
+      gainDb: currentGainDb
+    });
+  }
+
+  /**
+   * 获取当前音量增益（线性单位）
    */
   getVolumeGain(): number {
     return this.audioStreamManager.getVolumeGain();
+  }
+
+  /**
+   * 获取当前音量增益（dB单位）
+   */
+  getVolumeGainDb(): number {
+    return this.audioStreamManager.getVolumeGainDb();
   }
 
   /**

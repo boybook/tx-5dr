@@ -307,11 +307,20 @@ export class RadioService {
   }
 
   /**
-   * 设置音量增益
+   * 设置音量增益（线性单位）
    */
   setVolumeGain(gain: number): void {
     if (this.isConnected) {
       this.wsClient.send('setVolumeGain', { gain });
+    }
+  }
+
+  /**
+   * 设置音量增益（dB单位）
+   */
+  setVolumeGainDb(gainDb: number): void {
+    if (this.isConnected) {
+      this.wsClient.send('setVolumeGainDb', { gainDb });
     }
   }
 

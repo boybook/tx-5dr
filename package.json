@@ -37,7 +37,7 @@
     "@electron/rebuild": "^4.0.1",
     "electron": "^36.4.0",
     "png-to-ico": "^2.1.8",
-    "turbo": "^2.5.4"
+    "turbo": "^2.5.5"
   },
   "packageManager": "yarn@4.9.1",
   "optionalDependencies": {
