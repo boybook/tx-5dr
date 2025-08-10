@@ -26,7 +26,7 @@
     "eventemitter3": "^5.0.1",
     "fastify": "^5.1.0",
     "fft.js": "^4.0.4",
-    "hamlib": "^0.1.6",
+    "hamlib": "^0.1.9",
     "mic": "^2.1.2",
     "naudiodon2": "patch:naudiodon2@npm%3A2.5.0#~/.yarn/patches/naudiodon2-npm-2.5.0-b6b38720f9.patch",
     "node-wav": "^0.0.2",

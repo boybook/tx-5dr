@@ -21,9 +21,11 @@ export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
   );
 };
 
-// 连接状态指示器组件
-const ConnectionStatus: React.FC<{ connection: any }> = ({ connection }) => {
+// 服务器和电台连接状态指示器组件
+const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ connection, radio }) => {
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const [isConnectingRadio, setIsConnectingRadio] = useState(false);
+  const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
 
   // 每秒更新当前时间，用于重连倒计时
   useEffect(() => {
@@ -37,7 +39,85 @@ const ConnectionStatus: React.FC<{ connection: any }> = ({ connection }) => {
       if (timer) clearInterval(timer);
     };
   }, [connection.isReconnecting, connection.lastReconnectInfo]);
-  const getStatusIcon = () => {
+
+  // 加载支持的电台列表
+  useEffect(() => {
+    const loadSupportedRigs = async () => {
+      if (connection.isConnected) {
+        try {
+          const rigsResponse = await api.getSupportedRigs();
+          if (rigsResponse.rigs && Array.isArray(rigsResponse.rigs)) {
+            setSupportedRigs(rigsResponse.rigs);
+          }
+        } catch (error) {
+          console.error('获取支持的电台列表失败:', error);
+        }
+      }
+    };
+
+    loadSupportedRigs();
+  }, [connection.isConnected]);
+
+  // 加载电台状态
+  useEffect(() => {
+    const loadRadioStatus = async () => {
+      if (connection.isConnected && connection.radioService) {
+        try {
+          const status = await api.getRadioStatus();
+          if (status.success) {
+            radio.dispatch({
+              type: 'radioStatusUpdate',
+              payload: {
+                radioConnected: status.isConnected,
+                radioInfo: status.radioInfo,
+                radioConfig: status.config
+              }
+            });
+          }
+        } catch (error) {
+          console.error('获取电台状态失败:', error);
+        }
+      }
+    };
+
+    loadRadioStatus();
+  }, [connection.isConnected, connection.radioService]);
+
+  // 连接电台
+  const handleConnectRadio = async () => {
+    setIsConnectingRadio(true);
+    try {
+      const result = await api.connectRadio();
+      if (result.success) {
+        radio.dispatch({
+          type: 'radioStatusUpdate',
+          payload: {
+            radioConnected: result.isConnected,
+            radioInfo: null,
+            radioConfig: radio.state.radioConfig
+          }
+        });
+        // 重新获取状态以获取电台信息
+        const status = await api.getRadioStatus();
+        if (status.success) {
+          radio.dispatch({
+            type: 'radioStatusUpdate',
+            payload: {
+              radioConnected: status.isConnected,
+              radioInfo: status.radioInfo,
+              radioConfig: status.config
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('连接电台失败:', error);
+    } finally {
+      setIsConnectingRadio(false);
+    }
+  };
+
+  const getServerStatusIcon = () => {
     if (connection.isConnected) {
       return undefined;
     } else if (connection.isReconnecting) {
@@ -51,9 +131,9 @@ const ConnectionStatus: React.FC<{ connection: any }> = ({ connection }) => {
     }
   };
 
-  const getStatusText = () => {
+  const getServerStatusText = () => {
     if (connection.isConnected) {
-      return '已连接服务端';
+      return '服务器已连接';
     } else if (connection.isReconnecting) {
       const nextAttemptIn = connection.lastReconnectInfo 
         ? Math.max(0, Math.ceil((connection.lastReconnectInfo.nextAttemptAt - currentTime) / 1000))
@@ -71,7 +151,7 @@ const ConnectionStatus: React.FC<{ connection: any }> = ({ connection }) => {
     }
   };
 
-  const getStatusColor = () => {
+  const getServerStatusColor = () => {
     if (connection.isConnected) {
       return 'text-default-500';
     } else if (connection.isReconnecting) {
@@ -85,12 +165,71 @@ const ConnectionStatus: React.FC<{ connection: any }> = ({ connection }) => {
     }
   };
 
+  const getRadioDisplayText = () => {
+    if (!connection.isConnected) {
+      return null;
+    }
+
+    const config = radio.state.radioConfig;
+    if (config.type === 'none') {
+      return <span className="text-sm text-default-500">无电台模式</span>;
+    }
+
+    if (radio.state.radioConnected && radio.state.radioInfo) {
+      return (
+        <span className="text-sm text-default-500">
+          {radio.state.radioInfo.manufacturer} {radio.state.radioInfo.model} 电台已连接
+        </span>
+      );
+    } else {
+      // 显示配置的电台型号和连接按钮
+      let radioModelText = '';
+      if (config.type === 'serial' && config.rigModel) {
+        // 从支持的电台列表中查找型号名称
+        const rigInfo = supportedRigs.find(r => r.rigModel === config.rigModel);
+        if (rigInfo) {
+          radioModelText = `${rigInfo.mfgName} ${rigInfo.modelName}`;
+        } else {
+          radioModelText = `电台型号 ${config.rigModel}`;
+        }
+      } else if (config.type === 'network') {
+        radioModelText = 'Network RigCtrl';
+      } else {
+        radioModelText = '已配置电台';
+      }
+
+      return (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-default-500">{radioModelText}</span>
+          <Button
+            size="sm"
+            color="primary"
+            variant="flat"
+            onPress={handleConnectRadio}
+            isLoading={isConnectingRadio}
+            className="h-6 px-2 text-xs"
+          >
+            {isConnectingRadio ? '连接中' : '连接'}
+          </Button>
+        </div>
+      );
+    }
+  };
+
   return (
     <div className="flex items-center gap-2">
-      {getStatusIcon()}
-      <span className={`text-sm ${getStatusColor()}`}>
-        {getStatusText()}
-      </span>
+      {connection.isConnected ? (
+        // 服务器已连接时，只显示电台连接状态
+        getRadioDisplayText()
+      ) : (
+        // 服务器未连接时，显示服务器连接状态
+        <>
+          {getServerStatusIcon()}
+          <span className={`text-sm ${getServerStatusColor()}`}>
+            {getServerStatusText()}
+          </span>
+        </>
+      )}
     </div>
   );
 };
@@ -486,7 +625,7 @@ export const RadioControl: React.FC = () => {
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ConnectionStatus connection={connection.state} />
+          <ConnectionAndRadioStatus connection={connection.state} radio={radio} />
           {(!connection.state.isConnected && !connection.state.isConnecting && !connection.state.isReconnecting) && (
             <Button
               size="sm"

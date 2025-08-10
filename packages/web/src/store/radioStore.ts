@@ -85,6 +85,14 @@ export interface RadioState {
   systemStatus: any;
   operators: OperatorStatus[];
   currentOperatorId: string | null;
+  // 电台连接状态
+  radioConnected: boolean;
+  radioInfo: {
+    manufacturer?: string;
+    model?: string;
+    rigModel?: number;
+  } | null;
+  radioConfig: any;
 }
 
 export type RadioAction = 
@@ -94,14 +102,18 @@ export type RadioAction =
   | { type: 'error'; payload: Error }
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
-  | { type: 'setCurrentOperator'; payload: string };
+  | { type: 'setCurrentOperator'; payload: string }
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: any; radioConfig: any } };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
   currentMode: null,
   systemStatus: null,
   operators: [],
-  currentOperatorId: null
+  currentOperatorId: null,
+  radioConnected: false,
+  radioInfo: null,
+  radioConfig: { type: 'none' }
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -179,6 +191,14 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return {
         ...state,
         currentOperatorId: action.payload
+      };
+
+    case 'radioStatusUpdate':
+      return {
+        ...state,
+        radioConnected: action.payload.radioConnected,
+        radioInfo: action.payload.radioInfo,
+        radioConfig: action.payload.radioConfig
       };
     
     default:

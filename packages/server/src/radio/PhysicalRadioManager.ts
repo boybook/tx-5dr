@@ -1,5 +1,5 @@
 import { HamLib } from 'hamlib';
-import { HamlibConfig } from '@tx5dr/contracts';
+import { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
 
 export class PhysicalRadioManager {
   private rig: HamLib | null = null;
@@ -22,13 +22,66 @@ export class PhysicalRadioManager {
     
     try {
       this.rig = new HamLib(model as any, port as any);
-      
+
+      // 如果是串口模式且有串口配置，应用串口参数
+      if (config.type === 'serial' && config.serialConfig) {
+        await this.applySerialConfig(config.serialConfig);
+      }
+
       // 异步打开连接，带超时保护
       await this.openWithTimeout();
+      
       console.log(`✅ [PhysicalRadioManager] 电台连接成功: ${config.type === 'network' ? 'Network' : 'Serial'} - ${port}`);
     } catch (error) {
       this.rig = null;
       throw new Error(`电台连接失败: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * 应用串口配置参数
+   */
+  private async applySerialConfig(serialConfig: SerialConfig): Promise<void> {
+    if (!this.rig) {
+      throw new Error('电台实例未初始化');
+    }
+
+    console.log('🔧 [PhysicalRadioManager] 应用串口配置参数...');
+
+    try {
+      // 基础串口设置
+      const configs = [
+        { param: 'data_bits', value: serialConfig.data_bits },
+        { param: 'stop_bits', value: serialConfig.stop_bits },
+        { param: 'serial_parity', value: serialConfig.serial_parity },
+        { param: 'serial_handshake', value: serialConfig.serial_handshake },
+        { param: 'rts_state', value: serialConfig.rts_state },
+        { param: 'dtr_state', value: serialConfig.dtr_state },
+        // 通信设置
+        { param: 'rate', value: serialConfig.rate?.toString() },
+        { param: 'timeout', value: serialConfig.timeout?.toString() },
+        { param: 'retry', value: serialConfig.retry?.toString() },
+        // 时序控制
+        { param: 'write_delay', value: serialConfig.write_delay?.toString() },
+        { param: 'post_write_delay', value: serialConfig.post_write_delay?.toString() }
+      ];
+
+      for (const config of configs) {
+        if (config.value !== undefined && config.value !== null) {
+          console.log(`🔧 [PhysicalRadioManager] 设置 ${config.param}: ${config.value}`);
+          await Promise.race([
+            this.rig.setSerialConfig(config.param as any, config.value),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error(`设置${config.param}超时`)), 3000)
+            )
+          ]);
+        }
+      }
+
+      console.log('✅ [PhysicalRadioManager] 串口配置参数应用成功');
+    } catch (error) {
+      console.warn('⚠️ [PhysicalRadioManager] 串口配置应用失败:', (error as Error).message);
+      throw new Error(`串口配置失败: ${(error as Error).message}`);
     }
   }
 
