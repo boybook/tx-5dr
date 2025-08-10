@@ -13,6 +13,7 @@ interface FrequencyOption {
   frequency: number;
   band: string;
   mode: string;
+  radioMode?: string; // 电台调制模式，如 USB, LSB
 }
 
 export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
@@ -314,7 +315,8 @@ export const RadioControl: React.FC = () => {
             label: preset.description || `${preset.band} ${(preset.frequency / 1000000).toFixed(3)} MHz`,
             frequency: preset.frequency,
             band: preset.band,
-            mode: preset.mode
+            mode: preset.mode,
+            radioMode: preset.radioMode
           }));
           
           setAvailableFrequencies(frequencyOptions);
@@ -331,6 +333,50 @@ export const RadioControl: React.FC = () => {
 
     loadFrequencies();
   }, [connection.state.isConnected]);
+
+  // 加载并恢复上次选择的频率
+  React.useEffect(() => {
+    const loadLastFrequency = async () => {
+      if (!connection.state.isConnected || availableFrequencies.length === 0) {
+        return;
+      }
+
+      try {
+        console.log('🔄 加载上次选择的频率...');
+        const baseUrl = '/api';
+        const res = await fetch(`${baseUrl}/radio/last-frequency`);
+        const response = await res.json();
+        
+        if (response.success && response.lastFrequency) {
+          const lastFreq = response.lastFrequency;
+          console.log('📦 找到上次选择的频率:', lastFreq);
+          
+          // 查找匹配的频率选项
+          const matchingFreq = availableFrequencies.find(freq => 
+            freq.frequency === lastFreq.frequency && freq.mode === lastFreq.mode
+          );
+          
+          if (matchingFreq && radio.state.currentMode?.name === lastFreq.mode) {
+            console.log(`🔄 自动恢复上次频率: ${matchingFreq.label}`);
+            setCurrentFrequency(matchingFreq.key);
+            // 自动设置频率到电台
+            autoSetFrequency(matchingFreq);
+          } else {
+            console.log('⚠️ 上次选择的频率与当前模式不匹配或未找到对应选项');
+          }
+        } else {
+          console.log('ℹ️ 没有找到上次选择的频率记录');
+        }
+      } catch (error) {
+        console.error('❌ 加载上次选择的频率失败:', error);
+      }
+    };
+
+    // 延迟执行，等待频率列表和模式都加载完成
+    if (availableFrequencies.length > 0 && radio.state.currentMode) {
+      setTimeout(loadLastFrequency, 500);
+    }
+  }, [availableFrequencies, radio.state.currentMode, connection.state.isConnected]);
 
   // 添加调试信息
   React.useEffect(() => {
@@ -471,12 +517,43 @@ export const RadioControl: React.FC = () => {
     }
   };
 
-  // 处理音量变化
-  const handleVolumeChange = (value: number | number[]) => {
-    const gain = Array.isArray(value) ? value[0] : value;
-    setVolumeGain(gain);
-    connection.state.radioService?.setVolumeGain(gain);
+  // dB到线性增益的转换
+  const dbToGain = (db: number): number => {
+    return Math.pow(10, db / 20);
   };
+
+  // 线性增益到dB的转换
+  const gainToDb = (gain: number): number => {
+    return 20 * Math.log10(Math.max(0.001, gain));
+  };
+
+  // 格式化dB显示
+  const formatDbDisplay = (db: number): string => {
+    // 防止无效值
+    if (db === null || db === undefined || isNaN(db)) {
+      return '0.0dB';
+    }
+    
+    // 格式化显示：正值显示+，负值显示-，保留1位小数
+    if (db >= 0) {
+      return `+${db.toFixed(1)}dB`;
+    } else {
+      return `${db.toFixed(1)}dB`;
+    }
+  };
+
+  // 处理音量变化（现在使用dB单位）
+  const handleVolumeChange = (value: number | number[]) => {
+    const dbValue = Array.isArray(value) ? value[0] : value;
+    // 确保dB值有效
+    if (!isNaN(dbValue) && dbValue >= -60 && dbValue <= 20) {
+      const gainValue = dbToGain(dbValue);
+      setVolumeGain(gainValue);
+      // 使用新的dB API发送到后端
+      connection.state.radioService?.setVolumeGainDb(dbValue);
+    }
+  };
+
 
   // 根据当前模式筛选频率
   const filteredFrequencies = React.useMemo(() => {
@@ -496,12 +573,22 @@ export const RadioControl: React.FC = () => {
     if (!connection.state.isConnected) return;
     
     try {
-      console.log(`🔄 自动设置频率: ${frequency.label} (${frequency.frequency} Hz)`);
+      console.log(`🔄 自动设置频率: ${frequency.label} (${frequency.frequency} Hz)${frequency.radioMode ? ` [${frequency.radioMode}]` : ''}`);
       const baseUrl = '/api';
+      const requestBody: any = { 
+        frequency: frequency.frequency,
+        mode: frequency.mode,
+        band: frequency.band,
+        description: frequency.label
+      };
+      if (frequency.radioMode) {
+        requestBody.radioMode = frequency.radioMode;
+      }
+      
       const res = await fetch(`${baseUrl}/radio/frequency`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ frequency: frequency.frequency }),
+        body: JSON.stringify(requestBody),
       });
       const response = await res.json();
       
@@ -539,37 +626,52 @@ export const RadioControl: React.FC = () => {
     const selectedFrequencyKey = Array.from(keys)[0] as string;
     if (!selectedFrequencyKey) return;
 
-    const selectedFrequency = availableFrequencies.find(freq => freq.key === selectedFrequencyKey);
+    const selectedFrequency = filteredFrequencies.find(freq => freq.key === selectedFrequencyKey);
     if (!selectedFrequency) {
       console.warn('⚠️ 未找到选中的频率:', selectedFrequencyKey);
       return;
     }
 
     try {
-      console.log(`🔄 切换频率到: ${selectedFrequency.label} (${selectedFrequency.frequency} Hz)`);
-      // 临时直接调用API，直到类型问题解决
+      console.log(`🔄 切换频率到: ${selectedFrequency.label} (${selectedFrequency.frequency} Hz)${selectedFrequency.radioMode ? ` [${selectedFrequency.radioMode}]` : ''}`);
+      
+      // 设置频率和电台调制模式
       const baseUrl = '/api';
+      const requestBody: any = { 
+        frequency: selectedFrequency.frequency,
+        mode: selectedFrequency.mode,
+        band: selectedFrequency.band,
+        description: selectedFrequency.label
+      };
+      if (selectedFrequency.radioMode) {
+        requestBody.radioMode = selectedFrequency.radioMode;
+      }
+      
       const res = await fetch(`${baseUrl}/radio/frequency`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ frequency: selectedFrequency.frequency }),
+        body: JSON.stringify(requestBody),
       });
       const response = await res.json();
       
       if (response.success) {
         setCurrentFrequency(selectedFrequencyKey);
+        const successMessage = selectedFrequency.radioMode 
+          ? `已切换到 ${selectedFrequency.label} (${selectedFrequency.radioMode})` 
+          : `已切换到 ${selectedFrequency.label}`;
+          
         if (response.radioConnected) {
           console.log(`✅ 频率已切换到: ${selectedFrequency.label}`);
           addToast({
             title: '✅ 频率切换成功',
-            description: `已切换到 ${selectedFrequency.label}`,
+            description: successMessage,
             timeout: 3000
           });
         } else {
           console.log(`📝 频率已记录: ${selectedFrequency.label} (电台未连接)`);
           addToast({
             title: '📝 频率已记录',
-            description: `${selectedFrequency.label} (电台未连接)`,
+            description: `${successMessage} (电台未连接)`,
             timeout: 4000
           });
         }
@@ -594,9 +696,27 @@ export const RadioControl: React.FC = () => {
   // 监听音量变化事件
   useEffect(() => {
     if (connection.state.radioService) {
-      connection.state.radioService.on('volumeGainChanged', (gain: number) => {
-        console.log('🔊 收到服务器音量变化:', gain);
-        setVolumeGain(gain);
+      connection.state.radioService.on('volumeGainChanged', (data: any) => {
+        console.log('🔊 收到服务器音量变化:', data);
+        
+        // 处理新的数据格式（包含gain和gainDb）
+        if (data && typeof data === 'object' && data.gain !== undefined) {
+          // 新格式：{ gain: number, gainDb: number }
+          if (!isNaN(data.gain) && data.gain >= 0) {
+            setVolumeGain(data.gain);
+          } else {
+            console.warn('⚠️ 收到无效的音量增益值:', data);
+          }
+        } else if (typeof data === 'number') {
+          // 向后兼容：直接是gain数值
+          if (!isNaN(data) && data >= 0) {
+            setVolumeGain(data);
+          } else {
+            console.warn('⚠️ 收到无效的音量增益值:', data);
+          }
+        } else {
+          console.warn('⚠️ 收到未知格式的音量增益数据:', data);
+        }
       });
     }
   }, [connection.state.radioService]);
@@ -614,7 +734,21 @@ export const RadioControl: React.FC = () => {
     if (connection.state.radioService) {
       connection.state.radioService.on('systemStatus', (status: any) => {
         if (status.volumeGain !== undefined) {
-          setVolumeGain(status.volumeGain);
+          // 确保系统状态中的gain值有效
+          const gain = status.volumeGain;
+          if (!isNaN(gain) && gain >= 0) {
+            setVolumeGain(gain);
+          } else {
+            console.warn('⚠️ 系统状态中收到无效的音量增益值:', gain);
+          }
+        }
+        // 支持dB格式的系统状态（如果后续添加）
+        if (status.volumeGainDb !== undefined) {
+          const gainDb = status.volumeGainDb;
+          if (!isNaN(gainDb) && gainDb >= -60 && gainDb <= 20) {
+            const gain = dbToGain(gainDb);
+            setVolumeGain(gain);
+          }
         }
       });
     }
@@ -676,18 +810,18 @@ export const RadioControl: React.FC = () => {
               <PopoverContent className="py-2 pt-3 space-y-1">
                 <Slider
                   orientation="vertical"
-                  minValue={0}
-                  maxValue={1.2}
-                  step={0.01}
-                  value={[volumeGain]}
+                  minValue={-60}
+                  maxValue={20}
+                  step={0.1}
+                  value={[gainToDb(volumeGain)]}
                   onChange={handleVolumeChange}
                   style={{
                     height: '120px'
                   }}
                   aria-label='音量控制'
                 />
-                <div className="text-sm text-default-400">
-                  {(volumeGain * 100).toFixed(0)}
+                <div className="text-sm text-default-400 text-center font-mono">
+                  {formatDbDisplay(gainToDb(volumeGain))}
                 </div>
               </PopoverContent>
             </Popover>

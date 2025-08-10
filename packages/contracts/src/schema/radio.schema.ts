@@ -5,7 +5,8 @@ import { z } from 'zod';
  */
 export const PresetFrequencySchema = z.object({
   band: z.string(),
-  mode: z.string(),
+  mode: z.string(), // 协议模式，如 FT8, FT4
+  radioMode: z.string().optional(), // 电台调制模式，如 USB, LSB, AM, FM
   frequency: z.number(),
   description: z.string().optional(),
 });

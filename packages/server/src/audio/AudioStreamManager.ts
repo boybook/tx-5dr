@@ -26,7 +26,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private sampleRate: number;
   private bufferSize: number;
   private channels: number = 1;
-  private volumeGain: number = 1.0; // 默认音量为1.0（100%）
+  private volumeGain: number = 1.0; // 默认音量为1.0（100%），对应0dB
+  private volumeGainDb: number = 0.0; // 以dB为单位的增益值
   private currentAudioData: Float32Array | null = null; // 当前正在播放的音频数据
   private currentSampleRate: number; // 当前音频的采样率
   
@@ -473,13 +474,50 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
   
   /**
-   * 设置音量增益
-   * @param gain 增益值（0.0 - 2.0）
+   * 将dB值转换为线性增益
+   * @param db dB值
+   * @returns 线性增益值
+   */
+  private dbToGain(db: number): number {
+    return Math.pow(10, db / 20);
+  }
+
+  /**
+   * 将线性增益转换为dB值
+   * @param gain 线性增益值
+   * @returns dB值
+   */
+  private gainToDb(gain: number): number {
+    return 20 * Math.log10(Math.max(0.001, gain));
+  }
+
+  /**
+   * 设置音量增益（dB单位）
+   * @param db dB值（-60 到 +20 dB）
+   */
+  setVolumeGainDb(db: number): void {
+    // 限制dB范围在-60到+20之间
+    this.volumeGainDb = Math.max(-60.0, Math.min(20.0, db));
+    this.volumeGain = this.dbToGain(this.volumeGainDb);
+    
+    console.log(`🔊 设置音量增益: ${this.volumeGainDb.toFixed(1)}dB (线性: ${this.volumeGain.toFixed(3)})`);
+    
+    // 如果当前有正在播放的音频，立即应用新的音量
+    if (this.currentAudioData) {
+      this.applyVolumeGain(this.currentAudioData);
+    }
+  }
+
+  /**
+   * 设置音量增益（线性单位，向后兼容）
+   * @param gain 增益值（0.001 - 10.0）
    */
   setVolumeGain(gain: number): void {
-    // 限制增益范围在0.0到2.0之间
-    this.volumeGain = Math.max(0.0, Math.min(2.0, gain));
-    console.log(`🔊 设置音量增益: ${this.volumeGain.toFixed(2)}`);
+    // 限制增益范围
+    this.volumeGain = Math.max(0.001, Math.min(10.0, gain));
+    this.volumeGainDb = this.gainToDb(this.volumeGain);
+    
+    console.log(`🔊 设置音量增益: ${this.volumeGain.toFixed(3)} (${this.volumeGainDb.toFixed(1)}dB)`);
     
     // 如果当前有正在播放的音频，立即应用新的音量
     if (this.currentAudioData) {
@@ -499,10 +537,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
   
   /**
-   * 获取当前音量增益
+   * 获取当前音量增益（线性单位）
    */
   getVolumeGain(): number {
     return this.volumeGain;
+  }
+
+  /**
+   * 获取当前音量增益（dB单位）
+   */
+  getVolumeGainDb(): number {
+    return this.volumeGainDb;
   }
   
   /**

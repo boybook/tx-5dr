@@ -50,6 +50,7 @@ export enum WSMessageType {
   
   // ===== 音量控制 =====
   SET_VOLUME_GAIN = 'setVolumeGain',
+  SET_VOLUME_GAIN_DB = 'setVolumeGainDb',
   VOLUME_GAIN_CHANGED = 'volumeGainChanged',
   
   // ===== 通联日志 =====
@@ -387,16 +388,28 @@ export const WSTransmissionLogMessageSchema = WSBaseMessageSchema.extend({
 export type WSTransmissionLogMessage = z.infer<typeof WSTransmissionLogMessageSchema>;
 
 /**
- * 设置音量增益消息
+ * 设置音量增益消息（线性单位）
  */
 export const WSSetVolumeGainMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.SET_VOLUME_GAIN),
   data: z.object({
-    gain: z.number().min(0).max(2),
+    gain: z.number().min(0.001).max(10),
   }),
 });
 
 export type WSSetVolumeGainMessage = z.infer<typeof WSSetVolumeGainMessageSchema>;
+
+/**
+ * 设置音量增益消息（dB单位）
+ */
+export const WSSetVolumeGainDbMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_VOLUME_GAIN_DB),
+  data: z.object({
+    gainDb: z.number().min(-60).max(20),
+  }),
+});
+
+export type WSSetVolumeGainDbMessage = z.infer<typeof WSSetVolumeGainDbMessageSchema>;
 
 /**
  * QSO记录添加消息（服务端到客户端）
@@ -458,6 +471,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   
   // 音量控制消息
   WSSetVolumeGainMessageSchema,
+  WSSetVolumeGainDbMessageSchema,
   
   // 通联日志消息
   WSQSORecordAddedMessageSchema,
@@ -555,5 +569,5 @@ export interface DigitalRadioEngineEvents {
   error: (error: Error) => void;
   
   // 音量控制事件
-  volumeGainChanged: (gain: number) => void;
+  volumeGainChanged: (data: { gain: number; gainDb: number } | number) => void;
 } 

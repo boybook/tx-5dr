@@ -15,6 +15,19 @@ export interface AppConfig {
     autoReply: boolean;
     maxQSOTimeout: number;
   };
+  // 最后选择的频率配置
+  lastSelectedFrequency: {
+    frequency: number;
+    mode: string; // 协议模式，如 FT8, FT4
+    radioMode?: string; // 电台调制模式，如 USB, LSB
+    band: string;
+    description?: string;
+  } | null;
+  // 最后设置的音量增益
+  lastVolumeGain: {
+    gain: number; // 线性增益值
+    gainDb: number; // dB增益值
+  } | null;
   server: {
     port: number;
     host: string;
@@ -48,6 +61,8 @@ const DEFAULT_CONFIG: AppConfig = {
     autoReply: false,
     maxQSOTimeout: 6, // 6个周期 = 90秒
   },
+  lastSelectedFrequency: null, // 初始时没有选择过频率
+  lastVolumeGain: null, // 初始时没有设置过音量增益
   server: {
     port: 3000,
     host: '0.0.0.0',
@@ -365,6 +380,60 @@ export class ConfigManager {
    */
   async resetWaveLogConfig(): Promise<void> {
     this.config.wavelog = { ...DEFAULT_CONFIG.wavelog };
+    await this.saveConfig();
+  }
+
+  /**
+   * 获取最后选择的频率
+   */
+  getLastSelectedFrequency(): AppConfig['lastSelectedFrequency'] {
+    return this.config.lastSelectedFrequency ? { ...this.config.lastSelectedFrequency } : null;
+  }
+
+  /**
+   * 更新最后选择的频率
+   */
+  async updateLastSelectedFrequency(frequencyConfig: {
+    frequency: number;
+    mode: string;
+    radioMode?: string;
+    band: string;
+    description?: string;
+  }): Promise<void> {
+    this.config.lastSelectedFrequency = { ...frequencyConfig };
+    await this.saveConfig();
+    console.log(`💾 [配置管理器] 已保存最后选择的频率: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
+  }
+
+  /**
+   * 清除最后选择的频率
+   */
+  async clearLastSelectedFrequency(): Promise<void> {
+    this.config.lastSelectedFrequency = null;
+    await this.saveConfig();
+  }
+
+  /**
+   * 获取最后设置的音量增益
+   */
+  getLastVolumeGain(): AppConfig['lastVolumeGain'] {
+    return this.config.lastVolumeGain ? { ...this.config.lastVolumeGain } : null;
+  }
+
+  /**
+   * 更新最后设置的音量增益
+   */
+  async updateLastVolumeGain(gain: number, gainDb: number): Promise<void> {
+    this.config.lastVolumeGain = { gain, gainDb };
+    await this.saveConfig();
+    console.log(`💾 [配置管理器] 已保存最后设置的音量增益: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
+  }
+
+  /**
+   * 清除最后设置的音量增益
+   */
+  async clearLastVolumeGain(): Promise<void> {
+    this.config.lastVolumeGain = null;
     await this.saveConfig();
   }
 } 

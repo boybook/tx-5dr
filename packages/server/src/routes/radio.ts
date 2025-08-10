@@ -44,31 +44,74 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, presets: freqManager.getPresets() });
   });
 
+  fastify.get('/last-frequency', async (_req, reply) => {
+    const lastFrequency = configManager.getLastSelectedFrequency();
+    return reply.send({ 
+      success: true, 
+      lastFrequency: lastFrequency 
+    });
+  });
+
   fastify.post('/frequency', async (req, reply) => {
     try {
-      const { frequency } = req.body as { frequency: number };
+      const { frequency, radioMode, mode, band, description } = req.body as { 
+        frequency: number; 
+        radioMode?: string;
+        mode?: string;
+        band?: string;
+        description?: string;
+      };
       if (!frequency || typeof frequency !== 'number') {
         return reply.code(400).send({ success: false, message: '无效的频率值' });
+      }
+      
+      // 保存到配置文件（无论电台是否连接都要保存）
+      if (mode && band) {
+        try {
+          await configManager.updateLastSelectedFrequency({
+            frequency,
+            mode,
+            radioMode,
+            band,
+            description
+          });
+        } catch (configError) {
+          console.warn(`⚠️ [Radio Routes] 保存频率配置失败: ${(configError as Error).message}`);
+        }
       }
       
       // 检查电台是否已连接
       if (!radioManager.isConnected()) {
         // 电台未连接时，只记录频率但不实际设置
-        console.log(`📡 [Radio Routes] 电台未连接，记录频率: ${(frequency / 1000000).toFixed(3)} MHz`);
+        console.log(`📡 [Radio Routes] 电台未连接，记录频率: ${(frequency / 1000000).toFixed(3)} MHz${radioMode ? ` (${radioMode})` : ''}`);
         return reply.send({ 
           success: true, 
           frequency,
+          radioMode,
           message: '频率已记录（电台未连接）',
           radioConnected: false
         });
       }
       
-      // 设置电台频率
+      // 设置电台频率和调制模式
       await radioManager.setFrequency(frequency);
+      
+      // 如果提供了电台调制模式，也设置该模式
+      if (radioMode) {
+        try {
+          await radioManager.setMode(radioMode);
+          console.log(`📻 [Radio Routes] 电台调制模式已设置: ${radioMode}`);
+        } catch (modeError) {
+          console.warn(`⚠️ [Radio Routes] 设置电台调制模式失败: ${(modeError as Error).message}`);
+          // 模式设置失败不影响频率设置的成功
+        }
+      }
+      
       return reply.send({ 
         success: true, 
         frequency,
-        message: '频率设置成功',
+        radioMode,
+        message: radioMode ? `频率和调制模式设置成功 (${radioMode})` : '频率设置成功',
         radioConnected: true
       });
     } catch (error) {

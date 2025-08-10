@@ -145,6 +145,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.OPERATOR_REQUEST_CALL]: (data) => this.handleOperatorRequestCall(data),
       [WSMessageType.PING]: (_data, id) => { this.sendToConnection(id, WSMessageType.PONG); },
       [WSMessageType.SET_VOLUME_GAIN]: (data) => this.handleSetVolumeGain(data),
+      [WSMessageType.SET_VOLUME_GAIN_DB]: (data) => this.handleSetVolumeGainDb(data),
       [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: (data, id) => this.handleSetClientEnabledOperators(id, data),
       [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
     };
@@ -209,8 +210,14 @@ export class WSServer extends WSMessageHandler {
     });
 
     // 监听音量变化事件
-    this.digitalRadioEngine.on('volumeGainChanged', (gain) => {
-      this.broadcast(WSMessageType.VOLUME_GAIN_CHANGED, { gain });
+    this.digitalRadioEngine.on('volumeGainChanged', (data) => {
+      // 支持向后兼容：如果data是数字，则为老版本格式
+      if (typeof data === 'number') {
+        this.broadcast(WSMessageType.VOLUME_GAIN_CHANGED, { gain: data });
+      } else {
+        // 新版本格式，同时发送线性和dB值
+        this.broadcast(WSMessageType.VOLUME_GAIN_CHANGED, data);
+      }
     });
 
     // 监听QSO记录添加事件
@@ -476,8 +483,12 @@ export class WSServer extends WSMessageHandler {
     // 3. 发送当前音量增益
     try {
       const volumeGain = this.digitalRadioEngine.getVolumeGain();
-      connection.send(WSMessageType.VOLUME_GAIN_CHANGED, { gain: volumeGain });
-      console.log(`📤 [WSServer] 已发送音量增益`);
+      const volumeGainDb = this.digitalRadioEngine.getVolumeGainDb();
+      connection.send(WSMessageType.VOLUME_GAIN_CHANGED, { 
+        gain: volumeGain, 
+        gainDb: volumeGainDb 
+      });
+      console.log(`📤 [WSServer] 已发送音量增益: ${volumeGain.toFixed(3)} (${volumeGainDb.toFixed(1)}dB)`);
     } catch (error) {
       console.error('❌ 发送音量增益失败:', error);
     }
@@ -596,9 +607,38 @@ export class WSServer extends WSMessageHandler {
     // 复制SlotPack以避免修改原始数据
     const customizedSlotPack = JSON.parse(JSON.stringify(slotPack));
 
-    // 为每个frame添加logbook分析
+    // 获取该连接启用的操作员的呼号列表，用于过滤该连接用户自己发射的内容
+    const myOperatorCallsigns = new Set<string>();
+    const operatorManager = this.digitalRadioEngine.operatorManager;
+    for (const operatorId of enabledOperatorIds) {
+      const operator = operatorManager.getOperator(operatorId);
+      if (operator && operator.config.myCallsign) {
+        myOperatorCallsigns.add(operator.config.myCallsign.toUpperCase());
+      }
+    }
+
+    // 过滤和处理frames
     const framePromises = customizedSlotPack.frames.map(async (frame: any) => {
       try {
+        // 过滤掉收到的自己发射的内容（排除发射帧SNR=-999）
+        if (frame.snr !== -999) {
+          const { FT8MessageParser } = await import('@tx5dr/core');
+          try {
+            const parsedMessage = FT8MessageParser.parseMessage(frame.message);
+            
+            // 检查是否为该连接用户自己发射的消息（通过sender呼号匹配）
+            const senderCallsign = (parsedMessage as any).senderCallsign;
+            if (senderCallsign && myOperatorCallsigns.has(senderCallsign.toUpperCase())) {
+              console.log(`🚫 [WSServer] 连接 ${connection.getId()} 过滤自己的消息: "${frame.message}" (${senderCallsign})`);
+              return null; // 标记为过滤掉
+            }
+          } catch (parseError) {
+            // 解析失败时保留原frame，不影响其他处理
+            console.warn(`⚠️ [WSServer] 解析消息用于过滤失败: "${frame.message}"`, parseError);
+          }
+        }
+
+        // 添加logbook分析
         const logbookAnalysis = await this.analyzeFrameForOperators(frame, enabledOperatorIds);
         if (logbookAnalysis) {
           frame.logbookAnalysis = logbookAnalysis;
@@ -610,9 +650,13 @@ export class WSServer extends WSMessageHandler {
       return frame;
     });
 
-    customizedSlotPack.frames = await Promise.all(framePromises);
+    const processedFrames = await Promise.all(framePromises);
+    // 过滤掉被标记为null的frames（即被过滤的自己发射的内容）
+    customizedSlotPack.frames = processedFrames.filter(frame => frame !== null);
+    
     return customizedSlotPack;
   }
+
 
   /**
    * 分析单个frame对所有启用操作员的日志本情况
@@ -765,17 +809,35 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
-   * 处理设置音量增益命令
+   * 处理设置音量增益命令（线性单位）
    */
   private async handleSetVolumeGain(data: any): Promise<void> {
     try {
       const { gain } = data;
+      console.log(`🔊 [WSServer] 设置音量增益 (线性): ${gain.toFixed(3)}`);
       this.digitalRadioEngine.setVolumeGain(gain);
     } catch (error) {
       console.error('❌ 设置音量增益失败:', error);
       this.broadcast(WSMessageType.ERROR, {
         message: error instanceof Error ? error.message : String(error),
         code: 'SET_VOLUME_GAIN_ERROR'
+      });
+    }
+  }
+
+  /**
+   * 处理设置音量增益命令（dB单位）
+   */
+  private async handleSetVolumeGainDb(data: any): Promise<void> {
+    try {
+      const { gainDb } = data;
+      console.log(`🔊 [WSServer] 设置音量增益 (dB): ${gainDb.toFixed(1)}dB`);
+      this.digitalRadioEngine.setVolumeGainDb(gainDb);
+    } catch (error) {
+      console.error('❌ 设置音量增益(dB)失败:', error);
+      this.broadcast(WSMessageType.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'SET_VOLUME_GAIN_DB_ERROR'
       });
     }
   }
