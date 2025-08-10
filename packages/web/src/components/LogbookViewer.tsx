@@ -57,7 +57,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
 
   // 获取操作员连接的日志本
-  const effectiveLogBookId = logBookId || 'default';
+  // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
+  const effectiveLogBookId = logBookId || operatorId;
   
   // 集成实时数据更新
   const { getQSOsForOperator, getStatisticsForLogbook } = useLogbook();

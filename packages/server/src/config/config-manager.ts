@@ -39,8 +39,8 @@ export interface AppConfig {
 
 // 音频处理配置接口
 export interface AudioConfig {
-  inputDeviceId?: string;
-  outputDeviceId?: string;
+  inputDeviceName?: string; // 存储的设备名称
+  outputDeviceName?: string; // 存储的设备名称
   sampleRate: number;
   bufferSize: number;
 }
@@ -48,8 +48,8 @@ export interface AudioConfig {
 // 默认配置
 const DEFAULT_CONFIG: AppConfig = {
   audio: {
-    inputDeviceId: undefined,
-    outputDeviceId: undefined,
+    inputDeviceName: undefined,  // 默认无设备名称，使用系统默认
+    outputDeviceName: undefined, // 默认无设备名称，使用系统默认
     sampleRate: 48000,
     bufferSize: 1024
   },

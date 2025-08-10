@@ -94,7 +94,14 @@ export async function radioRoutes(fastify: FastifyInstance) {
       }
       
       // 设置电台频率和调制模式
-      await radioManager.setFrequency(frequency);
+      const frequencySuccess = await radioManager.setFrequency(frequency);
+      
+      if (!frequencySuccess) {
+        return reply.code(500).send({ 
+          success: false, 
+          message: '电台频率设置失败' 
+        });
+      }
       
       // 如果提供了电台调制模式，也设置该模式
       if (radioMode) {
@@ -369,6 +376,35 @@ export async function radioRoutes(fastify: FastifyInstance) {
       return reply.code(500).send({
         success: false,
         message: `断开电台失败: ${(error as Error).message}`
+      });
+    }
+  });
+
+  // 手动重连电台
+  fastify.post('/manual-reconnect', async (_req, reply) => {
+    try {
+      const config = configManager.getRadioConfig();
+      
+      if (config.type === 'none') {
+        return reply.code(400).send({
+          success: false,
+          message: '当前配置为无电台模式，无法重连'
+        });
+      }
+
+      // 执行手动重连
+      await radioManager.manualReconnect();
+      
+      return reply.send({
+        success: true,
+        message: '电台手动重连成功',
+        isConnected: true
+      });
+    } catch (error) {
+      return reply.code(500).send({
+        success: false,
+        message: `手动重连失败: ${(error as Error).message}`,
+        isConnected: false
       });
     }
   });

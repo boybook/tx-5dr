@@ -18,8 +18,8 @@ export const AudioDevicesResponseSchema = z.object({
 
 // 音频设备设置请求
 export const AudioDeviceSettingsSchema = z.object({
-  inputDeviceId: z.string().optional(),
-  outputDeviceId: z.string().optional(),
+  inputDeviceName: z.string().optional(),  // 使用设备名称而非ID
+  outputDeviceName: z.string().optional(), // 使用设备名称而非ID  
   sampleRate: z.number().optional(),
   bufferSize: z.number().optional(),
 });

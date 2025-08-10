@@ -89,6 +89,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 初始化物理电台管理器
     this.radioManager = new PhysicalRadioManager();
     
+    // 监听物理电台管理器事件
+    this.setupRadioManagerEventListeners();
+    
     // 初始化操作员管理器
     this._operatorManager = new RadioOperatorManager({
       eventEmitter: this,
@@ -433,6 +436,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.error('📊 [时钟管理器] 频谱分析错误:', error);
     });
     
+    // 确保频谱调度器初始PTT状态正确
+    this.spectrumScheduler.setPTTActive(this.isPTTActive);
+    
     // 初始化操作员管理器
     await this.operatorManager.initialize();
     
@@ -444,7 +450,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   async start(): Promise<void> {
     if (this.isRunning) {
-      console.log('⚠️  [时钟管理器] 时钟已经在运行中');
+      console.log('⚠️  [时钟管理器] 时钟已经在运行中，发送状态同步');
+      // 即使重复调用也发射状态事件确保前端同步
+      const status = this.getStatus();
+      console.log(`📡 [时钟管理器] 发射systemStatus事件(重复调用): isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
+      this.emit('systemStatus', status);
       return;
     }
     
@@ -464,12 +474,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       
       console.log(`🎤 [时钟管理器] 使用音频设备配置:`, audioConfig);
       
-      // 启动音频输入
-      await this.audioStreamManager.startStream(audioConfig.inputDeviceId);
+      // 启动音频输入 - 不需要传递设备ID，AudioStreamManager会从配置中自动解析设备名称
+      await this.audioStreamManager.startStream();
       console.log(`🎤 [时钟管理器] 音频输入流启动成功`);
       
-      // 启动音频输出
-      await this.audioStreamManager.startOutput(audioConfig.outputDeviceId);
+      // 启动音频输出 - 不需要传递设备ID，AudioStreamManager会从配置中自动解析设备名称
+      await this.audioStreamManager.startOutput();
       console.log(`🔊 [时钟管理器] 音频输出流启动成功`);
       
       // 恢复上次设置的音量增益
@@ -514,6 +524,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     // 发射系统状态变化事件
     const status = this.getStatus();
+    console.log(`📡 [时钟管理器] 发射systemStatus事件: isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
     this.emit('systemStatus', status);
   }
   
@@ -559,9 +570,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    * 获取当前状态
    */
   public getStatus() {
+    // 统一 isDecoding 语义：只有当引擎运行且时钟正在运行时才表示正在解码
+    const isActuallyDecoding = this.isRunning && (this.slotClock?.isRunning ?? false);
+    
     return {
       isRunning: this.isRunning,
-      isDecoding: this.slotClock?.isRunning ?? false,
+      isDecoding: isActuallyDecoding, // 明确语义：正在监听解码
       currentMode: this.currentMode,
       currentTime: this.clockSource.now(),
       nextSlotIn: this.slotClock?.getNextSlotIn() ?? 0,
@@ -569,7 +583,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       volumeGain: this.audioStreamManager.getVolumeGain(),
       volumeGainDb: this.audioStreamManager.getVolumeGainDb(),
       isPTTActive: this.isPTTActive,
-      radioConnected: this.radioManager.isConnected()
+      radioConnected: this.radioManager.isConnected(),
+      radioReconnectInfo: this.radioManager.getReconnectInfo()
     };
   }
   
@@ -578,7 +593,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   async stop(): Promise<void> {
     if (!this.isRunning) {
-      console.log('⚠️  [时钟管理器] 时钟已经停止');
+      console.log('⚠️  [时钟管理器] 时钟已经停止，发送状态同步');
+      // 即使重复调用也发射状态事件确保前端同步
+      const status = this.getStatus();
+      console.log(`📡 [时钟管理器] 发射systemStatus事件(重复调用): isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
+      this.emit('systemStatus', status);
       return;
     }
     
@@ -624,6 +643,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       
       // 发射系统状态变化事件
       const status = this.getStatus();
+      console.log(`📡 [时钟管理器] 发射systemStatus事件: isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
       this.emit('systemStatus', status);
     }
   }
@@ -758,7 +778,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       try {
         await this.radioManager.setPTT(true);
         this.isPTTActive = true;
-        console.log('📡 [PTT] PTT启动成功');
+        
+        // 通知频谱调度器PTT状态改变
+        this.spectrumScheduler.setPTTActive(true);
+        
+        console.log('📡 [PTT] PTT启动成功，频谱分析已暂停');
       } catch (error) {
         console.error('📡 [PTT] PTT启动失败:', error);
         throw error;
@@ -787,15 +811,21 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       try {
         await this.radioManager.setPTT(false);
         this.isPTTActive = false;
-        console.log('📡 [PTT] PTT停止成功');
+        
+        // 通知频谱调度器PTT状态改变
+        this.spectrumScheduler.setPTTActive(false);
+        
+        console.log('📡 [PTT] PTT停止成功，频谱分析已恢复');
       } catch (error) {
         console.error('📡 [PTT] PTT停止失败:', error);
         // 即使停止失败，也要更新状态，避免状态不一致
         this.isPTTActive = false;
+        this.spectrumScheduler.setPTTActive(false);
       }
     } else {
       this.isPTTActive = false;
-      console.log('📡 [PTT] 电台未连接，更新PTT状态为停止');
+      this.spectrumScheduler.setPTTActive(false);
+      console.log('📡 [PTT] 电台未连接，更新PTT状态为停止，频谱分析已恢复');
     }
   }
 
@@ -814,6 +844,102 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.pttTimeoutId = null;
       await this.stopPTT();
     }, delayMs);
+  }
+
+  /**
+   * 设置物理电台管理器事件监听器
+   */
+  private setupRadioManagerEventListeners(): void {
+    // 监听电台连接成功
+    this.radioManager.on('connected', () => {
+      console.log('📡 [DigitalRadioEngine] 物理电台连接成功');
+      // 广播电台状态更新事件
+      this.emit('radioStatusChanged' as any, {
+        connected: true,
+        reconnectInfo: this.radioManager.getReconnectInfo()
+      });
+    });
+
+    // 监听电台断开连接
+    this.radioManager.on('disconnected', async (reason) => {
+      console.log(`📡 [DigitalRadioEngine] 物理电台断开连接: ${reason || '未知原因'}`);
+      
+      // 立即停止所有操作员的发射
+      this.operatorManager.stopAllOperators();
+      
+      // 如果是在PTT激活时断开连接，立即停止PTT并停止引擎
+      if (this.isPTTActive) {
+        console.warn('⚠️ [DigitalRadioEngine] 电台在发射过程中断开连接，立即停止发射和监听');
+        
+        // 强制停止PTT
+        await this.forceStopPTT();
+        
+        // 停止引擎以防止继续尝试发射
+        if (this.isRunning) {
+          try {
+            await this.stop();
+            console.log('🛑 [DigitalRadioEngine] 因电台断开连接已停止监听');
+          } catch (error) {
+            console.error('❌ [DigitalRadioEngine] 停止引擎时出错:', error);
+          }
+        }
+        
+        // 广播特殊的发射中断开连接事件
+        this.emit('radioDisconnectedDuringTransmission' as any, {
+          reason: reason || '电台在发射过程中断开连接',
+          message: '电台在发射过程中断开连接，可能是发射功率过大导致USB通讯受到干扰。系统已自动停止发射和监听。',
+          recommendation: '请检查电台设置，降低发射功率或改善通讯环境，然后重新连接电台。'
+        });
+      }
+      
+      // 广播电台状态更新事件
+      this.emit('radioStatusChanged' as any, {
+        connected: false,
+        reason,
+        reconnectInfo: this.radioManager.getReconnectInfo()
+      });
+    });
+
+    // 监听重连开始
+    this.radioManager.on('reconnecting', (attempt) => {
+      console.log(`📡 [DigitalRadioEngine] 物理电台重连中 (第${attempt}次尝试)`);
+      // 广播重连状态更新事件
+      this.emit('radioReconnecting' as any, {
+        attempt,
+        reconnectInfo: this.radioManager.getReconnectInfo()
+      });
+    });
+
+    // 监听重连失败
+    this.radioManager.on('reconnectFailed', (error, attempt) => {
+      console.warn(`📡 [DigitalRadioEngine] 物理电台重连失败 (第${attempt}次): ${error.message}`);
+      // 广播重连失败事件
+      this.emit('radioReconnectFailed' as any, {
+        error: error.message,
+        attempt,
+        reconnectInfo: this.radioManager.getReconnectInfo()
+      });
+    });
+
+    // 监听重连停止
+    this.radioManager.on('reconnectStopped', (maxAttempts) => {
+      console.error(`📡 [DigitalRadioEngine] 物理电台重连停止 (已达最大${maxAttempts}次尝试)`);
+      // 广播重连停止事件
+      this.emit('radioReconnectStopped' as any, {
+        maxAttempts,
+        reconnectInfo: this.radioManager.getReconnectInfo()
+      });
+    });
+
+    // 监听电台错误
+    this.radioManager.on('error', (error) => {
+      console.error(`📡 [DigitalRadioEngine] 物理电台错误: ${error.message}`);
+      // 广播电台错误事件
+      this.emit('radioError' as any, {
+        error: error.message,
+        reconnectInfo: this.radioManager.getReconnectInfo()
+      });
+    });
   }
 
   /**

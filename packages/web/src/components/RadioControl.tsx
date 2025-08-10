@@ -5,7 +5,7 @@ import { faCog, faChevronDown, faVolumeUp, faWifi, faSpinner, faExclamationTrian
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api } from '@tx5dr/core';
 import type { ModeDescriptor } from '@tx5dr/contracts';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 
 interface FrequencyOption {
   key: string;
@@ -27,6 +27,15 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [isConnectingRadio, setIsConnectingRadio] = useState(false);
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
+  
+  // 电台重连状态
+  const [radioReconnectInfo, setRadioReconnectInfo] = useState({
+    isReconnecting: false,
+    reconnectAttempts: 0,
+    maxReconnectAttempts: 5,
+    hasReachedMaxAttempts: false,
+    nextAttemptAt: 0
+  });
 
   // 每秒更新当前时间，用于重连倒计时
   useEffect(() => {
@@ -84,6 +93,121 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     loadRadioStatus();
   }, [connection.isConnected, connection.radioService]);
 
+  // 监听电台重连事件（仅处理UI相关的本地状态，不处理全局状态）
+  useEffect(() => {
+    if (connection.radioService) {
+      // 电台重连中
+      connection.radioService.on('radioReconnecting', (data: any) => {
+        console.log('🔄 [RadioControl] 电台重连中:', data);
+        const reconnectInfo = data.reconnectInfo || {};
+        setRadioReconnectInfo(prev => ({
+          ...prev,
+          isReconnecting: true,
+          reconnectAttempts: data.attempt || 0,
+          maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
+          hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
+          nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
+        }));
+      });
+
+      // 电台状态变化 - 只处理本地UI状态，全局状态由radioStore处理
+      connection.radioService.on('radioStatusChanged', (data: any) => {
+        console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
+        
+        if (data.connected) {
+          // 连接成功，清除重连状态
+          setRadioReconnectInfo(prev => ({
+            ...prev,
+            isReconnecting: false,
+            reconnectAttempts: 0,
+            hasReachedMaxAttempts: false
+          }));
+        } else {
+          // 连接断开时，如果不在重连过程中，重置重连状态
+          setRadioReconnectInfo(prev => {
+            if (!data.reconnectInfo?.isReconnecting) {
+              return {
+                ...prev,
+                isReconnecting: false,
+                hasReachedMaxAttempts: false
+              };
+            }
+            return prev;
+          });
+        }
+      });
+
+      // 电台重连停止
+      connection.radioService.on('radioReconnectStopped', (data: any) => {
+        console.log('⏹️ [RadioControl] 电台重连已停止:', data);
+        const reconnectInfo = data.reconnectInfo || {};
+        setRadioReconnectInfo(prev => ({
+          ...prev,
+          isReconnecting: false,
+          hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || true,
+          maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || prev.maxReconnectAttempts
+        }));
+      });
+
+      // 电台重连失败
+      connection.radioService.on('radioReconnectFailed', (data: any) => {
+        console.log('❌ [RadioControl] 电台重连失败:', data);
+        const reconnectInfo = data.reconnectInfo || {};
+        setRadioReconnectInfo(prev => ({
+          ...prev,
+          reconnectAttempts: data.attempt || prev.reconnectAttempts,
+          maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
+          hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
+          nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
+        }));
+      });
+
+      // 电台发射中断开连接
+      connection.radioService.on('radioDisconnectedDuringTransmission', (data: any) => {
+        console.warn('🚨 [RadioControl] 电台发射中断开连接:', data);
+        
+        // 显示专门的错误提示
+        addToast({
+          title: '⚠️ 电台发射中断连接',
+          description: data.message,
+          timeout: 10000 // 10秒显示
+        });
+        
+        // 再显示一个包含建议的提示
+        setTimeout(() => {
+          addToast({
+            title: '💡 建议',
+            description: data.recommendation,
+            timeout: 15000 // 15秒显示
+          });
+        }, 1000);
+      });
+    }
+
+    return () => {
+      if (connection.radioService) {
+        connection.radioService.off('radioReconnecting');
+        connection.radioService.off('radioStatusChanged');
+        connection.radioService.off('radioReconnectStopped');
+        connection.radioService.off('radioReconnectFailed');
+        connection.radioService.off('radioDisconnectedDuringTransmission');
+      }
+    };
+  }, [connection.radioService]);
+
+  // 电台重连倒计时更新
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (radioReconnectInfo.isReconnecting && radioReconnectInfo.nextAttemptAt > Date.now()) {
+      timer = setInterval(() => {
+        setCurrentTime(Date.now());
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [radioReconnectInfo.isReconnecting, radioReconnectInfo.nextAttemptAt]);
+
   // 连接电台
   const handleConnectRadio = async () => {
     setIsConnectingRadio(true);
@@ -115,6 +239,32 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       console.error('连接电台失败:', error);
     } finally {
       setIsConnectingRadio(false);
+    }
+  };
+
+  // 手动重连电台
+  const handleManualReconnectRadio = async () => {
+    setIsConnectingRadio(true);
+    try {
+      if (connection.radioService) {
+        // 通过WebSocket发送手动重连命令
+        connection.radioService.radioManualReconnect();
+        
+        // 清除所有重连状态
+        setRadioReconnectInfo(prev => ({
+          ...prev,
+          isReconnecting: false,
+          hasReachedMaxAttempts: false,
+          reconnectAttempts: 0
+        }));
+      }
+    } catch (error) {
+      console.error('手动重连电台失败:', error);
+    } finally {
+      // 延迟清除loading状态，给重连一些时间
+      setTimeout(() => {
+        setIsConnectingRadio(false);
+      }, 2000);
     }
   };
 
@@ -176,45 +326,90 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       return <span className="text-sm text-default-500">无电台模式</span>;
     }
 
-    if (radio.state.radioConnected && radio.state.radioInfo) {
+    // 电台已连接 - 修复条件判断，只依赖radioConnected状态
+    if (radio.state.radioConnected) {
+      const displayText = radio.state.radioInfo 
+        ? `${radio.state.radioInfo.manufacturer} ${radio.state.radioInfo.model} 电台已连接`
+        : '电台已连接';
       return (
         <span className="text-sm text-default-500">
-          {radio.state.radioInfo.manufacturer} {radio.state.radioInfo.model} 电台已连接
+          {displayText}
         </span>
       );
-    } else {
-      // 显示配置的电台型号和连接按钮
-      let radioModelText = '';
-      if (config.type === 'serial' && config.rigModel) {
-        // 从支持的电台列表中查找型号名称
-        const rigInfo = supportedRigs.find(r => r.rigModel === config.rigModel);
-        if (rigInfo) {
-          radioModelText = `${rigInfo.mfgName} ${rigInfo.modelName}`;
-        } else {
-          radioModelText = `电台型号 ${config.rigModel}`;
-        }
-      } else if (config.type === 'network') {
-        radioModelText = 'Network RigCtrl';
-      } else {
-        radioModelText = '已配置电台';
-      }
+    }
 
+    // 获取电台型号文本
+    let radioModelText = '';
+    if (config.type === 'serial' && config.rigModel) {
+      const rigInfo = supportedRigs.find(r => r.rigModel === config.rigModel);
+      if (rigInfo) {
+        radioModelText = `${rigInfo.mfgName} ${rigInfo.modelName}`;
+      } else {
+        radioModelText = `电台型号 ${config.rigModel}`;
+      }
+    } else if (config.type === 'network') {
+      radioModelText = 'Network RigCtrl';
+    } else {
+      radioModelText = '已配置电台';
+    }
+
+    // 电台正在重连中
+    if (radioReconnectInfo.isReconnecting) {
+      const nextAttemptIn = radioReconnectInfo.nextAttemptAt > currentTime 
+        ? Math.ceil((radioReconnectInfo.nextAttemptAt - currentTime) / 1000) 
+        : 0;
+      const attemptText = `第${radioReconnectInfo.reconnectAttempts}次`;
+      
       return (
         <div className="flex items-center gap-2">
-          <span className="text-sm text-default-500">{radioModelText}</span>
+          <div className="flex items-center gap-1">
+            <FontAwesomeIcon icon={faSpinner} className="text-warning animate-spin text-xs" />
+            <span className="text-sm text-warning">
+              电台重连中 ({attemptText}) {nextAttemptIn > 0 ? `${nextAttemptIn}s后重试` : ''}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    // 电台重连已达最大次数
+    if (radioReconnectInfo.hasReachedMaxAttempts) {
+      return (
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <FontAwesomeIcon icon={faExclamationTriangle} className="text-danger text-xs" />
+            <span className="text-sm text-danger">{radioModelText} 连接失败</span>
+          </div>
           <Button
             size="sm"
-            color="primary"
+            color="warning"
             variant="flat"
-            onPress={handleConnectRadio}
+            onPress={handleManualReconnectRadio}
             isLoading={isConnectingRadio}
             className="h-6 px-2 text-xs"
           >
-            {isConnectingRadio ? '连接中' : '连接'}
+            {isConnectingRadio ? '重连中' : '手动重连'}
           </Button>
         </div>
       );
     }
+
+    // 电台未连接（初始状态）
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-default-500">{radioModelText}</span>
+        <Button
+          size="sm"
+          color="primary"
+          variant="flat"
+          onPress={handleConnectRadio}
+          isLoading={isConnectingRadio}
+          className="h-6 px-2 text-xs"
+        >
+          {isConnectingRadio ? '连接中' : '连接'}
+        </Button>
+      </div>
+    );
   };
 
   return (
@@ -250,10 +445,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [isLoadingFrequencies, setIsLoadingFrequencies] = useState(false);
   const [currentFrequency, setCurrentFrequency] = useState<string>('14074000');
   
-  // 本地UI状态管理
-  const [isListenLoading, setIsListenLoading] = useState(false);
-  const [pendingListenState, setPendingListenState] = useState<boolean | null>(null);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // 简化的UI状态管理
+  const [isTogglingListen, setIsTogglingListen] = useState(false);
 
   const [volumeGain, setVolumeGain] = useState(1.0);
 
@@ -382,55 +575,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   }, [availableFrequencies, radio.state.currentMode, connection.state.isConnected]);
 
-  // 添加调试信息
-  React.useEffect(() => {
-    console.log('🔍 RadioControl状态更新:', {
-      isConnected: connection.state.isConnected,
-      isDecoding: radio.state.isDecoding,
-      hasRadioService: !!connection.state.radioService,
-      isListenLoading,
-      pendingListenState,
-      currentMode: radio.state.currentMode,
-      availableModes: availableModes.length,
-      isLoadingModes,
-      modeError
-    });
-  }, [
-    connection.state.isConnected, 
-    radio.state.isDecoding, 
-    connection.state.radioService, 
-    isListenLoading, 
-    pendingListenState, 
-    radio.state.currentMode,
-    availableModes.length,
-    isLoadingModes,
-    modeError
-  ]);
 
-  // 监听WebSocket状态变化，清除loading状态
-  React.useEffect(() => {
-    if (pendingListenState !== null && radio.state.isDecoding === pendingListenState) {
-      // 状态已同步，清除loading
-      console.log('✅ 监听状态已同步，清除loading状态');
-      setIsListenLoading(false);
-      setPendingListenState(null);
-      
-      // 清除超时定时器
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-    }
-  }, [radio.state.isDecoding, pendingListenState]);
-
-  // 组件卸载时清理定时器
-  React.useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
 
   // 连接到服务器
   const handleConnect = async () => {
@@ -457,42 +602,38 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   };
 
-  // 监听开关控制 - 优雅的loading状态管理
-  const handleListenToggle = (isSelected: boolean) => {
+  // 简化的监听开关控制
+  const handleListenToggle = async (isSelected: boolean) => {
     if (!connection.state.radioService) {
-      console.warn('⚠️ RadioService未初始化，无法切换监听状态');
       return;
     }
 
     if (!connection.state.isConnected) {
-      console.warn('⚠️ 未连接到服务器，无法切换监听状态');
       return;
     }
 
-    if (isListenLoading) {
-      console.warn('⚠️ 正在处理中，请稍候...');
+    if (isTogglingListen) {
       return;
     }
     
-    console.log(`🎧 切换监听状态: ${isSelected ? '开启' : '关闭'}`);
+    // 进入loading状态
+    setIsTogglingListen(true);
     
-    // 立即进入loading状态
-    setIsListenLoading(true);
-    setPendingListenState(isSelected);
-    
-    // 设置超时处理（5秒后自动恢复）
-    timeoutRef.current = setTimeout(() => {
-      console.warn('⚠️ 监听状态切换超时，恢复UI状态');
-      setIsListenLoading(false);
-      setPendingListenState(null);
-      timeoutRef.current = null;
-    }, 5000);
-    
-    // 发送命令
-    if (isSelected) {
-      connection.state.radioService.startDecoding();
-    } else {
-      connection.state.radioService.stopDecoding();
+    try {
+      // 发送命令（RadioService内部已包含状态确认机制）
+      if (isSelected) {
+        connection.state.radioService.startDecoding();
+      } else {
+        connection.state.radioService.stopDecoding();
+      }
+      
+    } catch (error) {
+      console.error('❌ 切换监听状态失败:', error);
+    } finally {
+      // 2秒后自动清除loading状态
+      setTimeout(() => {
+        setIsTogglingListen(false);
+      }, 2000);
     }
   };
 
@@ -908,9 +1049,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               onValueChange={handleListenToggle}
               size="sm"
               color="primary"
-              isDisabled={!connection.state.isConnected || isListenLoading}
+              isDisabled={!connection.state.isConnected || isTogglingListen}
               aria-label="切换监听状态"
-              className={isListenLoading ? 'opacity-50 pointer-events-none' : ''}
+              className={isTogglingListen ? 'opacity-50 pointer-events-none' : ''}
             />
           </div>
         </div>

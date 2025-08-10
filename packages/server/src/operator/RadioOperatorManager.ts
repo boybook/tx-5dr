@@ -632,12 +632,8 @@ export class RadioOperatorManager {
       // 获取操作员的频率
       const frequency = operator.config.frequency || 0;
 
-      // 调整物理电台频率
-      try {
-        this.setRadioFrequency(frequency);
-      } catch (e) {
-        console.error('设置电台频率失败', e);
-      }
+      // 注释：不在发射过程中设置频率，避免电台在PTT状态下拒绝频率变更
+      // 频率应该在发射前预先设置，而不是在发射过程中设置
 
       // 广播发射日志
       this.eventEmitter.emit('transmissionLog' as any, {
@@ -672,6 +668,27 @@ export class RadioOperatorManager {
     operator.stop();
     console.log(`📻 [操作员管理器] 停止操作员 ${operatorId} 发射`);
     this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 停止所有操作员发射
+   * 通常在电台断开连接时调用
+   */
+  stopAllOperators(): void {
+    let stoppedCount = 0;
+    
+    this.operators.forEach((operator, operatorId) => {
+      if (operator.isTransmitting) {
+        operator.stop();
+        stoppedCount++;
+        console.log(`📻 [操作员管理器] 停止操作员 ${operatorId} 发射（电台断开）`);
+        this.emitOperatorStatusUpdate(operatorId);
+      }
+    });
+    
+    if (stoppedCount > 0) {
+      console.log(`📻 [操作员管理器] 已停止 ${stoppedCount} 个操作员发射（电台断开连接）`);
+    }
   }
 
   /**

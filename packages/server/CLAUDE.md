@@ -35,6 +35,65 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 3. 更新 WebSocket 事件
 4. 错误处理
 
+### WebSocket 事件标准流程
+
+**⚠️ 重要坑点**: 添加新的WebSocket事件时，必须同时更新三个地方，否则前端无法接收到事件！
+
+#### 1. 定义消息类型 (contracts)
+```typescript
+// packages/contracts/src/schema/websocket.schema.ts
+export enum WSMessageType {
+  NEW_EVENT = 'newEvent',  // 添加新事件类型
+}
+```
+
+#### 2. 服务器端发送事件 (server)
+```typescript
+// packages/server/src/websocket/WSServer.ts
+private setupEngineEventListeners(): void {
+  this.digitalRadioEngine.on('newEventName', (data) => {
+    console.log('📡 [WSServer] 收到新事件:', data);
+    this.broadcast(WSMessageType.NEW_EVENT, data);  // 广播事件
+  });
+}
+```
+
+#### 3. 前端事件映射 (core) **⚠️ 经常被遗忘的地方！**
+```typescript
+// packages/core/src/websocket/WSMessageHandler.ts
+export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
+  [WSMessageType.NEW_EVENT]: 'newEvent',  // 添加映射关系
+  // ... 其他映射
+};
+```
+
+#### 4. 前端接收处理 (web)
+```typescript
+// packages/web/src/services/radioService.ts
+this.wsClient.onWSEvent('newEvent', (data: any) => {
+  console.log('📱 收到新事件:', data);
+  this.eventListeners.newEvent?.forEach(listener => listener(data));
+});
+```
+
+#### 5. 构建更新
+```bash
+# 修改core包后必须重新构建
+yarn workspace @tx5dr/core build
+```
+
+### 常见问题排查
+
+#### 问题：前端收不到WebSocket事件
+**原因**: `WSMessageHandler.ts` 中缺少事件映射
+**解决**: 检查 `WS_MESSAGE_EVENT_MAP` 是否包含新事件
+**调试**: 服务器有发送日志但前端无接收日志 = 映射缺失
+
+#### 问题：事件数据格式错误
+**原因**: 服务器发送的数据结构与前端期望不符
+**解决**: 在contracts中定义统一的数据类型
+**调试**: 对比服务器发送和前端接收的数据结构
+
 ### WebSocket 命令
 ```typescript
 private commandHandlers = {
@@ -47,6 +106,7 @@ private commandHandlers = {
 ### 最佳实践
 - 音频：缓冲区管理，错误恢复，性能监控
 - 解码：工作池配置，内存管理，异常重启
+- WebSocket：始终同步更新contracts、server、core三处代码
 
 ## 运维
 
