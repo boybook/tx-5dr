@@ -76,15 +76,8 @@ export async function operatorRoutes(fastify: FastifyInstance) {
     try {
       const operatorData = CreateRadioOperatorRequestSchema.parse(request.body);
       
-      // 检查呼号是否已存在
-      const existingOperators = configManager.getOperatorsConfig();
-      const callsignExists = existingOperators.some(op => op.myCallsign === operatorData.myCallsign);
-      if (callsignExists) {
-        return reply.code(400).send({
-          success: false,
-          message: `呼号 ${operatorData.myCallsign} 已存在`
-        });
-      }
+      // 移除呼号重复检查 - 支持相同呼号的多操作员
+      // 相同呼号的多操作员会共享同一个通联日志本
       
       // 创建操作员配置，确保所有必需字段都存在
       const newOperatorData = {
@@ -139,17 +132,8 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const updates = UpdateRadioOperatorRequestSchema.parse(request.body);
       
-      // 检查呼号是否与其他操作员冲突
-      if (updates.myCallsign) {
-        const existingOperators = configManager.getOperatorsConfig();
-        const callsignExists = existingOperators.some(op => op.id !== id && op.myCallsign === updates.myCallsign);
-        if (callsignExists) {
-          return reply.code(400).send({
-            success: false,
-            message: `呼号 ${updates.myCallsign} 已被其他操作员使用`
-          });
-        }
-      }
+      // 移除呼号冲突检查 - 支持相同呼号的多操作员
+      // 相同呼号的多操作员会共享同一个通联日志本
       
       // 更新配置
       const updatedOperator = await configManager.updateOperatorConfig(id, updates);

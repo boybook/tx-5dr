@@ -55,6 +55,12 @@ export const RightLayout: React.FC = () => {
     setIsSettingsOpen(true);
   };
 
+  // 处理打开电台设置
+  const handleOpenRadioSettings = () => {
+    setSettingsInitialTab('radio');
+    setIsSettingsOpen(true);
+  };
+
   return (
     <div className="h-screen flex flex-col">
       {/* 顶部工具栏 */}
@@ -134,7 +140,7 @@ export const RightLayout: React.FC = () => {
         
         {/* 电台控制 - 固定高度 */}
         <div className="flex-shrink-0">
-          <RadioControl />
+          <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
         </div>
       </div>
 

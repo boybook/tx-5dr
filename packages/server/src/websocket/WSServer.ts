@@ -705,7 +705,7 @@ export class WSServer extends WSMessageHandler {
 
     for (const operatorId of enabledOperatorIds) {
       try {
-        const logBook = logManager.getOperatorLogBook(operatorId);
+        const logBook = await logManager.getOperatorLogBook(operatorId);
         if (logBook) {
           const analysis = await logBook.provider.analyzeCallsign(callsign, grid, operatorId);
           

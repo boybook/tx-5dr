@@ -80,7 +80,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       
       // 获取连接的操作员
       const connectedOperators = digitalRadioEngine.operatorManager.getAllOperators()
-        .filter(op => logManager.getOperatorLogBookId(op.config.id) === id)
+        .filter(op => {
+          const logBookId = logManager.getOperatorLogBookId(op.config.id);
+          return logBookId === id;
+        })
         .map(op => op.config.id);
 
       const response = LogBookDetailResponseSchema.parse({
