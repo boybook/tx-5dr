@@ -469,13 +469,13 @@ export class FT8MessageParser {
           return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)}`;
         }
       case FT8MessageType.SIGNAL_REPORT:
-        if (message.report) {
+        if (message.report !== undefined) {
           return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} ${this.generateSignalReport(message.report)}`;
         } else {
           return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)}`;
         }
       case FT8MessageType.ROGER_REPORT:
-        if (message.report) {
+        if (message.report !== undefined) {
           return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} R${this.generateSignalReport(message.report)}`;
         } else {
           return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} R`;
