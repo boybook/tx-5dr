@@ -250,7 +250,46 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         
         // 记录音频添加到混音器的时间
         this.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
-        
+
+        // 🔄 检查是否需要重新混音（编码完成后的兜底方案）
+        if (this.shouldTriggerRemix()) {
+          console.log(`🔄 [时钟管理器] 检测到需要重新混音，停止当前播放并重新混音`);
+
+          try {
+            // 1. 停止当前正在播放的音频，获取已播放的时间
+            const elapsedTimeMs = await this.audioStreamManager.stopCurrentPlayback();
+            console.log(`🛑 [时钟管理器] 已停止当前播放，已播放时间: ${elapsedTimeMs}ms`);
+
+            // 2. 调用混音器重新混音
+            const remixedAudio = await this.audioMixer.remixWithNewAudio(elapsedTimeMs);
+
+            if (remixedAudio) {
+              console.log(`🎵 [时钟管理器] 重新混音完成，开始播放:`);
+              console.log(`   操作员: [${remixedAudio.operatorIds.join(', ')}]`);
+              console.log(`   混音时长: ${remixedAudio.duration.toFixed(2)}s`);
+              console.log(`   采样率: ${remixedAudio.sampleRate}Hz`);
+
+              // 3. 播放重新混音后的音频（从中途开始）
+              await this.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
+
+              // 4. 重新计算PTT持续时间
+              const actualPlaybackTimeMs = remixedAudio.duration * 1000;
+              const pttHoldTimeMs = 200;
+              const totalPTTTimeMs = actualPlaybackTimeMs + pttHoldTimeMs;
+
+              // 5. 重新安排PTT停止
+              this.schedulePTTStop(totalPTTTimeMs);
+
+              console.log(`✅ [时钟管理器] 重新混音播放完成`);
+            } else {
+              console.warn(`⚠️ [时钟管理器] 重新混音返回null，跳过播放`);
+            }
+          } catch (remixError) {
+            console.error(`❌ [时钟管理器] 重新混音失败:`, remixError);
+            // 重新混音失败时，让混音器正常处理
+          }
+        }
+
       } catch (error) {
         console.error(`❌ [时钟管理器] 编码结果处理失败:`, error);
         this.emit('transmissionComplete', {
@@ -1031,5 +1070,29 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.log('📡 [PTT] 强制停止PTT（时隙切换）');
       await this.stopPTT();
     }
+  }
+
+  /**
+   * 检测是否需要触发重新混音
+   * 条件: 1. 音频正在播放  2. 混音器有当前混音音频  3. 有新的待混音音频
+   */
+  private shouldTriggerRemix(): boolean {
+    // 检查音频是否正在播放
+    const isAudioPlaying = this.audioStreamManager.isPlaying();
+
+    // 检查混音器状态
+    const mixerStatus = this.audioMixer.getStatus();
+
+    // 条件判断
+    const shouldRemix = isAudioPlaying && mixerStatus.pendingCount > 0;
+
+    if (shouldRemix) {
+      console.log(`🔄 [重新混音检测] 满足重新混音条件:`);
+      console.log(`   音频播放中: ${isAudioPlaying}`);
+      console.log(`   待混音音频数: ${mixerStatus.pendingCount}`);
+      console.log(`   待混音操作员: [${mixerStatus.operatorIds.join(', ')}]`);
+    }
+
+    return shouldRemix;
   }
 }

@@ -24,6 +24,10 @@ export class AudioMixer extends EventEmitter {
   private mixingTimeout: NodeJS.Timeout | null = null;
   private readonly mixingWindowMs: number = 100; // 混音窗口时间，100ms内的音频会被混音
 
+  // 当前播放状态跟踪（用于重新混音）
+  private currentMixedAudio: MixedAudio | null = null;  // 当前正在播放的混音音频
+  private isPlayingMixedAudio: boolean = false;         // 是否正在播放混音音频
+
   constructor(mixingWindowMs: number = 100) {
     super();
     this.mixingWindowMs = mixingWindowMs;
@@ -115,25 +119,30 @@ export class AudioMixer extends EventEmitter {
     console.log(`🎛️ [音频混音器] 开始混音: ${audioList.length}个音频, 操作员=[${operatorIds.join(', ')}]`);
 
     try {
+      let mixedAudio: MixedAudio;
+
       if (audioList.length === 1) {
         // 只有一个音频，直接输出（快速路径）
         const single = audioList[0];
         console.log(`🔊 [音频混音器] 单一音频直接输出`);
-        
-        const mixedAudio: MixedAudio = {
+
+        mixedAudio = {
           audioData: single.audioData,
           sampleRate: single.sampleRate,
           duration: single.duration,
           operatorIds: [single.operatorId]
         };
-        
-        this.emit('mixedAudioReady', mixedAudio);
       } else {
         // 多个音频需要混音
-        const mixedAudio = await this.mixAudios(audioList);
+        mixedAudio = await this.mixAudios(audioList);
         console.log(`🎵 [音频混音器] 混音完成: ${audioList.length}个音频 -> 1个混合音频, 时长=${mixedAudio.duration.toFixed(2)}s`);
-        this.emit('mixedAudioReady', mixedAudio);
       }
+
+      // 保存当前混音音频（用于重新混音）
+      this.currentMixedAudio = mixedAudio;
+      this.isPlayingMixedAudio = true;
+
+      this.emit('mixedAudioReady', mixedAudio);
     } catch (error) {
       console.error(`❌ [音频混音器] 混音处理失败:`, error);
       // 发射错误事件，让上层处理
@@ -285,6 +294,260 @@ export class AudioMixer extends EventEmitter {
       }
     }
     return peak;
+  }
+
+  /**
+   * 重新混音：包含正在播放的音频和新的音频
+   * @param elapsedTimeMs 已播放的时间(ms)
+   * @returns 混音后的音频（已裁剪到未播放的部分），如果无需重新混音则返回 null
+   */
+  public async remixWithNewAudio(elapsedTimeMs: number): Promise<MixedAudio | null> {
+    const remixStartTime = Date.now();
+    console.log(`🔄 [音频混音器] 开始重新混音: 已播放=${elapsedTimeMs}ms, 时间=${new Date(remixStartTime).toISOString()}`);
+
+    // 检查是否有正在播放的音频
+    if (!this.currentMixedAudio) {
+      console.warn(`⚠️ [音频混音器] 没有正在播放的音频，无法重新混音`);
+      return null;
+    }
+
+    // 检查是否有新的待混音音频
+    if (this.pendingAudios.size === 0) {
+      console.warn(`⚠️ [音频混音器] 没有新的待混音音频，无需重新混音`);
+      return null;
+    }
+
+    const currentAudio = this.currentMixedAudio;
+    const newAudioList = Array.from(this.pendingAudios.values());
+    const newOperatorIds = newAudioList.map(audio => audio.operatorId);
+
+    console.log(`🔄 [音频混音器] 重新混音参数: 当前音频时长=${currentAudio.duration.toFixed(2)}s, 新音频数量=${newAudioList.length}, 新操作员=[${newOperatorIds.join(', ')}]`);
+
+    try {
+      // 1. 确定目标采样率（使用最高的采样率）
+      const targetSampleRate = Math.max(
+        currentAudio.sampleRate,
+        ...newAudioList.map(a => a.sampleRate)
+      );
+      console.log(`🎛️ [音频混音器] 重新混音目标采样率: ${targetSampleRate}Hz`);
+
+      // 2. 计算已播放的采样点数
+      const elapsedSeconds = elapsedTimeMs / 1000;
+      const elapsedSamples = Math.floor(elapsedSeconds * currentAudio.sampleRate);
+      console.log(`⏱️ [音频混音器] 已播放: ${elapsedSeconds.toFixed(3)}s (${elapsedSamples} 样本)`);
+
+      // 3. 裁剪当前音频，保留未播放的部分
+      let remainingCurrentAudio: Float32Array;
+      if (elapsedSamples >= currentAudio.audioData.length) {
+        console.warn(`⚠️ [音频混音器] 当前音频已播放完毕，只混合新音频`);
+        remainingCurrentAudio = new Float32Array(0);
+      } else {
+        remainingCurrentAudio = currentAudio.audioData.slice(elapsedSamples);
+        console.log(`✂️ [音频混音器] 裁剪当前音频: ${currentAudio.audioData.length} -> ${remainingCurrentAudio.length} 样本`);
+      }
+
+      // 4. 重采样所有音频到目标采样率
+      const resampledAudios: { operatorId: string; samples: Float32Array; duration: number }[] = [];
+
+      // 4.1 重采样当前音频的剩余部分（如果需要）
+      if (remainingCurrentAudio.length > 0) {
+        if (currentAudio.sampleRate === targetSampleRate) {
+          console.log(`✅ [音频混音器] 当前音频采样率匹配，无需重采样`);
+          resampledAudios.push({
+            operatorId: currentAudio.operatorIds.join('+'),
+            samples: remainingCurrentAudio,
+            duration: remainingCurrentAudio.length / currentAudio.sampleRate
+          });
+        } else {
+          console.log(`🔄 [音频混音器] 当前音频重采样: ${currentAudio.sampleRate}Hz -> ${targetSampleRate}Hz`);
+          const resampleStartTime = Date.now();
+
+          try {
+            const resampler = await libsamplerate.create(
+              1,
+              currentAudio.sampleRate,
+              targetSampleRate,
+              {
+                converterType: libsamplerate.ConverterType.SRC_SINC_FASTEST
+              }
+            );
+
+            const resampled = await resampler.simple(remainingCurrentAudio);
+            const newDuration = resampled.length / targetSampleRate;
+
+            const resampleEndTime = Date.now();
+            console.log(`🚀 [音频混音器] 当前音频重采样完成: ${remainingCurrentAudio.length} -> ${resampled.length} 样本, 耗时: ${resampleEndTime - resampleStartTime}ms`);
+
+            resampledAudios.push({
+              operatorId: currentAudio.operatorIds.join('+'),
+              samples: resampled,
+              duration: newDuration
+            });
+          } catch (error) {
+            console.error(`❌ [音频混音器] 当前音频重采样失败，使用备用方案:`, error);
+
+            // 备用方案：线性插值
+            const ratio = targetSampleRate / currentAudio.sampleRate;
+            const newLength = Math.floor(remainingCurrentAudio.length * ratio);
+            const resampled = new Float32Array(newLength);
+
+            for (let i = 0; i < newLength; i++) {
+              const sourceIndex = i / ratio;
+              const index = Math.floor(sourceIndex);
+              const fraction = sourceIndex - index;
+
+              if (index + 1 < remainingCurrentAudio.length) {
+                resampled[i] = remainingCurrentAudio[index] * (1 - fraction) + remainingCurrentAudio[index + 1] * fraction;
+              } else {
+                resampled[i] = remainingCurrentAudio[index] || 0;
+              }
+            }
+
+            const newDuration = newLength / targetSampleRate;
+            console.log(`🔄 [音频混音器] 当前音频备用重采样完成: ${remainingCurrentAudio.length} -> ${newLength} 样本`);
+
+            resampledAudios.push({
+              operatorId: currentAudio.operatorIds.join('+'),
+              samples: resampled,
+              duration: newDuration
+            });
+          }
+        }
+      }
+
+      // 4.2 重采样新音频
+      for (const audio of newAudioList) {
+        if (audio.sampleRate === targetSampleRate) {
+          console.log(`✅ [音频混音器] 操作员 ${audio.operatorId}: 采样率匹配，无需重采样`);
+          resampledAudios.push({
+            operatorId: audio.operatorId,
+            samples: audio.audioData,
+            duration: audio.duration
+          });
+        } else {
+          console.log(`🔄 [音频混音器] 操作员 ${audio.operatorId}: 重采样 ${audio.sampleRate}Hz -> ${targetSampleRate}Hz`);
+          const resampleStartTime = Date.now();
+
+          try {
+            const resampler = await libsamplerate.create(
+              1,
+              audio.sampleRate,
+              targetSampleRate,
+              {
+                converterType: libsamplerate.ConverterType.SRC_SINC_FASTEST
+              }
+            );
+
+            const resampled = await resampler.simple(audio.audioData);
+            const newDuration = resampled.length / targetSampleRate;
+
+            const resampleEndTime = Date.now();
+            console.log(`🚀 [音频混音器] 操作员 ${audio.operatorId}: 重采样完成 ${audio.audioData.length} -> ${resampled.length} 样本, 耗时: ${resampleEndTime - resampleStartTime}ms`);
+
+            resampledAudios.push({
+              operatorId: audio.operatorId,
+              samples: resampled,
+              duration: newDuration
+            });
+          } catch (error) {
+            console.error(`❌ [音频混音器] 操作员 ${audio.operatorId}: 重采样失败，使用备用方案:`, error);
+
+            // 备用方案：线性插值
+            const ratio = targetSampleRate / audio.sampleRate;
+            const newLength = Math.floor(audio.audioData.length * ratio);
+            const resampled = new Float32Array(newLength);
+
+            for (let i = 0; i < newLength; i++) {
+              const sourceIndex = i / ratio;
+              const index = Math.floor(sourceIndex);
+              const fraction = sourceIndex - index;
+
+              if (index + 1 < audio.audioData.length) {
+                resampled[i] = audio.audioData[index] * (1 - fraction) + audio.audioData[index + 1] * fraction;
+              } else {
+                resampled[i] = audio.audioData[index] || 0;
+              }
+            }
+
+            const newDuration = newLength / targetSampleRate;
+            console.log(`🔄 [音频混音器] 操作员 ${audio.operatorId}: 备用重采样完成 ${audio.audioData.length} -> ${newLength} 样本`);
+
+            resampledAudios.push({
+              operatorId: audio.operatorId,
+              samples: resampled,
+              duration: newDuration
+            });
+          }
+        }
+      }
+
+      // 5. 找到最长的音频长度
+      const maxLength = Math.max(...resampledAudios.map(a => a.samples.length));
+      console.log(`🎛️ [音频混音器] 重新混音最大音频长度: ${maxLength} 样本`);
+
+      // 6. 创建混合音频缓冲区
+      const mixedSamples = new Float32Array(maxLength);
+
+      // 7. 混合所有音频
+      for (const audio of resampledAudios) {
+        console.log(`🎵 [音频混音器] 混合音频: 操作员=${audio.operatorId}, 样本数=${audio.samples.length}`);
+        for (let i = 0; i < audio.samples.length; i++) {
+          mixedSamples[i] += audio.samples[i];
+        }
+      }
+
+      // 8. 应用归一化，防止削峰
+      const peakLevel = this.findPeakLevel(mixedSamples);
+      if (peakLevel > 1.0) {
+        const normalizeRatio = 0.95 / peakLevel;
+        console.log(`🔧 [音频混音器] 应用归一化: 峰值=${peakLevel.toFixed(3)}, 比率=${normalizeRatio.toFixed(3)}`);
+        for (let i = 0; i < mixedSamples.length; i++) {
+          mixedSamples[i] *= normalizeRatio;
+        }
+      } else {
+        console.log(`✅ [音频混音器] 无需归一化，峰值在安全范围: ${peakLevel.toFixed(3)}`);
+      }
+
+      // 9. 构造新的混音结果
+      const finalDuration = maxLength / targetSampleRate;
+      const allOperatorIds = [
+        ...currentAudio.operatorIds,
+        ...newOperatorIds
+      ];
+
+      const remixedAudio: MixedAudio = {
+        audioData: mixedSamples,
+        sampleRate: targetSampleRate,
+        duration: finalDuration,
+        operatorIds: allOperatorIds
+      };
+
+      // 10. 更新当前混音音频（用于下次可能的重新混音）
+      this.currentMixedAudio = remixedAudio;
+
+      // 11. 清空待混音队列
+      this.pendingAudios.clear();
+      if (this.mixingTimeout) {
+        clearTimeout(this.mixingTimeout);
+        this.mixingTimeout = null;
+      }
+
+      const remixEndTime = Date.now();
+      const totalRemixDuration = remixEndTime - remixStartTime;
+      console.log(`⏱️ [音频混音器] 重新混音完成: 总耗时=${totalRemixDuration}ms, 新时长=${finalDuration.toFixed(2)}s, 操作员=[${allOperatorIds.join(', ')}]`);
+
+      return remixedAudio;
+
+    } catch (error) {
+      console.error(`❌ [音频混音器] 重新混音失败:`, error);
+      // 清空待混音队列，防止状态不一致
+      this.pendingAudios.clear();
+      if (this.mixingTimeout) {
+        clearTimeout(this.mixingTimeout);
+        this.mixingTimeout = null;
+      }
+      throw error;
+    }
   }
 
   /**

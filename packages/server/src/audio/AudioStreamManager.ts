@@ -31,6 +31,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private volumeGainDb: number = 0.0; // 以dB为单位的增益值
   private currentAudioData: Float32Array | null = null; // 当前正在播放的音频数据
   private currentSampleRate: number; // 当前音频的采样率
+
+  // 播放状态跟踪（用于重新混音兜底方案）
+  private playing: boolean = false;             // 是否正在播放
+  private playbackStartTime: number = 0;        // 播放开始时间戳
+  private currentPlaybackPromise: Promise<void> | null = null;  // 当前播放的Promise
+  private shouldStopPlayback: boolean = false;  // 停止播放标志
   
   constructor() {
     super();
@@ -584,25 +590,77 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   getVolumeGainDb(): number {
     return this.volumeGainDb;
   }
-  
+
+  /**
+   * 检查是否正在播放音频
+   * @returns 是否正在播放
+   */
+  public isPlaying(): boolean {
+    return this.playing;
+  }
+
+  /**
+   * 停止当前正在播放的音频（用于重新混音）
+   * @returns 已播放的时间(ms)
+   */
+  public async stopCurrentPlayback(): Promise<number> {
+    if (!this.playing) {
+      console.log('🛑 [音频播放] 没有正在播放的音频');
+      return 0;
+    }
+
+    const now = Date.now();
+    const elapsedTime = now - this.playbackStartTime;
+
+    console.log(`🛑 [音频播放] 停止当前播放, 已播放时间: ${elapsedTime}ms`);
+
+    // 设置停止标志,让播放循环自动退出
+    this.shouldStopPlayback = true;
+
+    // 等待当前播放完全停止
+    if (this.currentPlaybackPromise) {
+      try {
+        await this.currentPlaybackPromise;
+      } catch (error) {
+        // 播放被中断是预期的行为
+        console.log(`🛑 [音频播放] 播放已被中断`);
+      }
+    }
+
+    this.playing = false;
+    this.shouldStopPlayback = false;
+    this.currentPlaybackPromise = null;
+
+    console.log(`✅ [音频播放] 停止完成, 已播放: ${elapsedTime}ms`);
+
+    return elapsedTime;
+  }
+
   /**
    * 播放编码后的音频数据
    */
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000): Promise<void> {
     const playStartTime = Date.now();
-    
+
     if (!this.isOutputting || !this.audioOutput) {
       throw new Error('音频输出流未启动');
     }
-    
+
+    // 保存播放状态
+    this.playing = true;
+    this.playbackStartTime = playStartTime;
+    this.shouldStopPlayback = false;
+
     console.log(`🔊 [音频播放] 开始播放音频 (${new Date(playStartTime).toISOString()}):`);
     console.log(`   原始样本数: ${audioData.length}`);
     console.log(`   原始采样率: ${targetSampleRate}Hz`);
     console.log(`   原始时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
     console.log(`   目标采样率: ${this.sampleRate}Hz`);
     console.log(`   音量增益: ${this.volumeGain.toFixed(2)}`);
-    
-    try {
+
+    // 保存当前播放的Promise
+    this.currentPlaybackPromise = (async () => {
+      try {
       let playbackData: Float32Array;
       
       // 检查是否需要重采样
@@ -648,43 +706,54 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       console.log(`📝 [音频播放] 开始分块写入 (${new Date(chunkStartTime).toISOString()})`);
       
       for (let i = 0; i < totalChunks; i++) {
+        // 检查是否需要停止播放
+        if (this.shouldStopPlayback) {
+          console.log(`🛑 [音频播放] 检测到停止信号,中断播放 (已播放${i}/${totalChunks}块)`);
+          throw new Error('播放已被中断');
+        }
+
         const start = i * chunkSize;
         const end = Math.min(start + chunkSize, playbackData.length);
         const chunk = playbackData.slice(start, end);
-        
+
         // 转换为 Buffer
         const buffer = Buffer.allocUnsafe(chunk.length * 4);
         for (let j = 0; j < chunk.length; j++) {
           buffer.writeFloatLE(chunk[j], j * 4);
         }
-        
+
         // 写入音频输出流
         const written = this.audioOutput.write(buffer);
         if (!written) {
           await new Promise(resolve => setTimeout(resolve, 10));
         }
-        
+
         // 控制播放速度，避免缓冲区溢出
         if (i % 10 === 0) { // 每10块暂停一下
           await new Promise(resolve => setTimeout(resolve, 1));
         }
       }
-      
+
       const chunkEndTime = Date.now();
       const chunkDuration = chunkEndTime - chunkStartTime;
       console.log(`📝 [音频播放] 分块写入完成 (${new Date(chunkEndTime).toISOString()}), 耗时: ${chunkDuration}ms`);
-      
-      // 播放完成后清除当前音频数据
-      this.currentAudioData = null;
-      
+
       const playEndTime = Date.now();
       const playDuration = playEndTime - playStartTime;
       console.log(`✅ [音频播放] 播放完成 (${new Date(playEndTime).toISOString()}), 耗时: ${playDuration}ms`);
-      
-    } catch (error) {
-      console.error('❌ [音频播放] 播放失败:', error);
-      this.currentAudioData = null;
-      throw error;
-    }
+
+      } catch (error) {
+        console.error('❌ [音频播放] 播放失败:', error);
+        throw error;
+      } finally {
+        // 清理播放状态
+        this.playing = false;
+        this.currentAudioData = null;
+        this.currentPlaybackPromise = null;
+      }
+    })();
+
+    // 等待播放完成
+    return this.currentPlaybackPromise;
   }
 } 
