@@ -491,11 +491,23 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     userCommand?(command: QSOCommand): any {
         switch (command.command) {
             case 'update_context':
+                // 更新context
                 this._context = {
                     ...this._context,
                     ...command.args
                 }
-                this.updateSlots();
+
+                // 只有在targetCallsign或reportSent等影响slots内容的字段变化时才调用updateSlots
+                // 这避免了频率等字段变化时触发不必要的slots更新和operatorStatusUpdate事件
+                const needsSlotUpdate =
+                    command.args.targetCallsign !== undefined ||
+                    command.args.reportSent !== undefined ||
+                    command.args.reportReceived !== undefined;
+
+                if (needsSlotUpdate) {
+                    this.updateSlots();
+                }
+
                 return { success: true };
             case 'set_state':
                 const oldState = this.state;

@@ -292,13 +292,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         
         // 开始播放混音后的音频（这个方法会将数据写入音频缓冲区）
         const audioPromise = this.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
-        
-        // 等待PTT和音频播放都完成（或者至少PTT完成）
-        await Promise.all([pttPromise, audioPromise]);
 
         // 计算音频实际播放时间 + 延迟停止时间
         const actualPlaybackTimeMs = mixedAudio.duration * 1000; // 音频实际播放时间
-        const pttHoldTimeMs = Math.max(200, actualPlaybackTimeMs * 0.1); // 播放完成后的额外延迟时间
+        const pttHoldTimeMs = 200;
         const totalPTTTimeMs = actualPlaybackTimeMs + pttHoldTimeMs; // 总的PTT持续时间
         
         console.log(`📡 [时钟管理器] PTT时序计算:`);
@@ -308,6 +305,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         
         // 安排PTT在音频播放完成后停止
         this.schedulePTTStop(totalPTTTimeMs);
+
+        // 等待PTT和音频播放都完成（或者至少PTT完成）
+        await Promise.all([pttPromise, audioPromise]);
         
         // 为所有参与混音的操作员发送成功事件
         for (const operatorId of mixedAudio.operatorIds) {
