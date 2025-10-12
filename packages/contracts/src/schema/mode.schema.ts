@@ -43,7 +43,7 @@ export const MODES = {
     toleranceMs: 100,
     windowTiming: [-1500, -1000, -500, 0, 250, 500],
     transmitTiming: 1180, // (15000 - 12640) / 2 = 1180ms - 使音频在时隙中居中
-    encodeAdvance: 400    // 提前400ms开始编码准备
+    encodeAdvance: 1000    // 提前1000ms开始编码准备
   } as ModeDescriptor,
   FT4: {
     name: 'FT4',
@@ -51,6 +51,6 @@ export const MODES = {
     toleranceMs: 50,
     windowTiming: [0],
     transmitTiming: 550, // (7500 - 6400) / 2 = 550ms
-    encodeAdvance: 300   // 提前300ms开始编码准备
+    encodeAdvance: 500   // 提前500ms开始编码准备
   } as ModeDescriptor,
 } as const; 

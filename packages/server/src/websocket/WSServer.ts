@@ -268,6 +268,12 @@ export class WSServer extends WSMessageHandler {
       console.log(`⚠️ [WSServer] 收到电台发射中断开连接事件:`, data);
       this.broadcast(WSMessageType.RADIO_DISCONNECTED_DURING_TRANSMISSION, data);
     });
+
+    // 监听频率变化事件
+    this.digitalRadioEngine.on('frequencyChanged' as any, (data: any) => {
+      console.log(`📡 [WSServer] 收到频率变化事件:`, data);
+      this.broadcast(WSMessageType.FREQUENCY_CHANGED, data);
+    });
   }
 
   /**

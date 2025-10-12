@@ -81,28 +81,41 @@ export async function radioRoutes(fastify: FastifyInstance) {
       }
       
       // 检查电台是否已连接
-      if (!radioManager.isConnected()) {
+      const radioConnected = radioManager.isConnected();
+
+      if (!radioConnected) {
         // 电台未连接时，只记录频率但不实际设置
         console.log(`📡 [Radio Routes] 电台未连接，记录频率: ${(frequency / 1000000).toFixed(3)} MHz${radioMode ? ` (${radioMode})` : ''}`);
-        return reply.send({ 
-          success: true, 
+
+        // 广播频率变化到所有客户端
+        engine.emit('frequencyChanged', {
+          frequency,
+          mode: mode || 'FT8',
+          band: band || '',
+          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+          radioMode,
+          radioConnected: false
+        });
+
+        return reply.send({
+          success: true,
           frequency,
           radioMode,
           message: '频率已记录（电台未连接）',
           radioConnected: false
         });
       }
-      
+
       // 设置电台频率和调制模式
       const frequencySuccess = await radioManager.setFrequency(frequency);
-      
+
       if (!frequencySuccess) {
-        return reply.code(500).send({ 
-          success: false, 
-          message: '电台频率设置失败' 
+        return reply.code(500).send({
+          success: false,
+          message: '电台频率设置失败'
         });
       }
-      
+
       // 如果提供了电台调制模式，也设置该模式
       if (radioMode) {
         try {
@@ -113,9 +126,19 @@ export async function radioRoutes(fastify: FastifyInstance) {
           // 模式设置失败不影响频率设置的成功
         }
       }
-      
-      return reply.send({ 
-        success: true, 
+
+      // 广播频率变化到所有客户端
+      engine.emit('frequencyChanged', {
+        frequency,
+        mode: mode || 'FT8',
+        band: band || '',
+        description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+        radioMode,
+        radioConnected: true
+      });
+
+      return reply.send({
+        success: true,
         frequency,
         radioMode,
         message: radioMode ? `频率和调制模式设置成功 (${radioMode})` : '频率设置成功',
