@@ -90,6 +90,3 @@ export * from './schema/radio.schema.js';
 
 // WaveLog Schema
 export * from './schema/wavelog.schema.js';
-
-// Utility functions
-export * from './utils/frequency.js';

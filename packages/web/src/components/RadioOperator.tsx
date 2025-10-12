@@ -5,7 +5,6 @@ import { faArrowsAltH, faRepeat, faBook } from '@fortawesome/free-solid-svg-icon
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import type { OperatorStatus } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
-import { formatFrequency } from '@tx5dr/contracts';
 import { openLogbookWindow } from '../utils/windowManager';
 
 interface RadioOperatorProps {

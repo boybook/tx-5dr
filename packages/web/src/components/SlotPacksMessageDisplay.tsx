@@ -35,6 +35,11 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     
     slotPacks.state.slotPacks.forEach(slotPack => {
       slotPack.frames.forEach((frame: FrameMessage) => {
+        // 跳过自己发射的TX信号
+        if (frame.snr === -999) {
+          return;
+        }
+
         const slotStartTime = new Date(slotPack.startMs);
         const utcSeconds = slotStartTime.toISOString().slice(11, 19);
         

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, addToast} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, addToast, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input} from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faWifi, faSpinner, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
@@ -444,11 +444,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [availableFrequencies, setAvailableFrequencies] = useState<FrequencyOption[]>([]);
   const [isLoadingFrequencies, setIsLoadingFrequencies] = useState(false);
   const [currentFrequency, setCurrentFrequency] = useState<string>('14074000');
-  
+
   // 简化的UI状态管理
   const [isTogglingListen, setIsTogglingListen] = useState(false);
 
   const [volumeGain, setVolumeGain] = useState(1.0);
+
+  // 自定义频率相关状态
+  const [isCustomFrequencyModalOpen, setIsCustomFrequencyModalOpen] = useState(false);
+  const [customFrequencyInput, setCustomFrequencyInput] = useState('');
+  const [customFrequencyError, setCustomFrequencyError] = useState('');
+  const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
+  const [customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
 
   // 加载可用模式列表
   React.useEffect(() => {
@@ -700,15 +707,131 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   };
 
 
+  // 频率格式验证和转换
+  const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return { frequency: 0, error: '请输入频率' };
+    }
+
+    // 尝试解析为数字
+    const value = parseFloat(trimmed);
+    if (isNaN(value) || value <= 0) {
+      return { frequency: 0, error: '请输入有效的数字' };
+    }
+
+    let frequencyHz: number;
+
+    // 判断输入格式:包含小数点视为MHz,否则视为Hz
+    if (trimmed.includes('.')) {
+      // MHz 格式
+      if (value < 1 || value > 1000) {
+        return { frequency: 0, error: '频率范围: 1-1000 MHz' };
+      }
+      frequencyHz = Math.round(value * 1000000);
+    } else {
+      // Hz 格式
+      if (value < 1000000 || value > 1000000000) {
+        return { frequency: 0, error: '频率范围: 1-1000 MHz (1000000-1000000000 Hz)' };
+      }
+      frequencyHz = Math.round(value);
+    }
+
+    return { frequency: frequencyHz, error: '' };
+  };
+
+  // 格式化频率显示 (Hz -> MHz)
+  const formatFrequencyDisplay = (frequencyHz: number): string => {
+    return (frequencyHz / 1000000).toFixed(3);
+  };
+
+  // 处理自定义频率确认
+  const handleCustomFrequencyConfirm = async () => {
+    const result = parseFrequencyInput(customFrequencyInput);
+    if (!result || result.error) {
+      setCustomFrequencyError(result?.error || '输入无效');
+      return;
+    }
+
+    const { frequency } = result;
+    setIsSettingCustomFrequency(true);
+
+    try {
+      console.log(`🔄 设置自定义频率: ${formatFrequencyDisplay(frequency)} MHz (${frequency} Hz)`);
+
+      const baseUrl = '/api';
+      const requestBody: any = {
+        frequency: frequency,
+        mode: radio.state.currentMode?.name || 'FT8',
+        band: '自定义',
+        description: `${formatFrequencyDisplay(frequency)} MHz (自定义)`
+      };
+
+      const res = await fetch(`${baseUrl}/radio/frequency`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+      const response = await res.json();
+
+      if (response.success) {
+        // 关闭模态框
+        setIsCustomFrequencyModalOpen(false);
+        setCustomFrequencyInput('');
+        setCustomFrequencyError('');
+
+        // 更新当前频率显示
+        const frequencyLabel = `${formatFrequencyDisplay(frequency)} MHz (自定义)`;
+        setCurrentFrequency(String(frequency));
+        setCustomFrequencyLabel(frequencyLabel);
+
+        const successMessage = `已切换到 ${formatFrequencyDisplay(frequency)} MHz`;
+
+        if (response.radioConnected) {
+          console.log(`✅ 自定义频率已设置: ${formatFrequencyDisplay(frequency)} MHz`);
+          addToast({
+            title: '✅ 频率切换成功',
+            description: successMessage,
+            timeout: 3000
+          });
+        } else {
+          console.log(`📝 自定义频率已记录: ${formatFrequencyDisplay(frequency)} MHz (电台未连接)`);
+          addToast({
+            title: '📝 频率已记录',
+            description: `${successMessage} (电台未连接)`,
+            timeout: 4000
+          });
+        }
+      } else {
+        console.error('❌ 设置自定义频率失败:', response.message);
+        setCustomFrequencyError(response.message || '设置失败');
+      }
+    } catch (error) {
+      console.error('❌ 设置自定义频率失败:', error);
+      setCustomFrequencyError('网络错误或服务器无响应');
+    } finally {
+      setIsSettingCustomFrequency(false);
+    }
+  };
+
+  // 处理自定义频率输入变化
+  const handleCustomFrequencyInputChange = (value: string) => {
+    setCustomFrequencyInput(value);
+    // 清除之前的错误
+    if (customFrequencyError) {
+      setCustomFrequencyError('');
+    }
+  };
+
   // 根据当前模式筛选频率
   const filteredFrequencies = React.useMemo(() => {
     if (!radio.state.currentMode) {
       return availableFrequencies;
     }
-    
+
     const currentModeName = radio.state.currentMode.name;
     const filtered = availableFrequencies.filter(freq => freq.mode === currentModeName);
-    
+
     console.log(`🔍 当前模式: ${currentModeName}, 筛选出 ${filtered.length} 个频率`);
     return filtered;
   }, [availableFrequencies, radio.state.currentMode]);
@@ -755,6 +878,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         const firstFreq = filteredFrequencies[0];
         console.log(`🔄 模式改变，自动选择第一个频率: ${firstFreq.label}`);
         setCurrentFrequency(firstFreq.key);
+        // 清除自定义频率标签
+        setCustomFrequencyLabel('');
         // 自动设置频率到后端
         autoSetFrequency(firstFreq);
       }
@@ -770,6 +895,16 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     const selectedFrequencyKey = Array.from(keys)[0] as string;
     if (!selectedFrequencyKey) return;
+
+    // 检查是否选择了自定义频率选项
+    if (selectedFrequencyKey === '__custom__') {
+      console.log('📝 打开自定义频率输入框');
+      setIsCustomFrequencyModalOpen(true);
+      setCustomFrequencyInput('');
+      setCustomFrequencyError('');
+      // 不改变当前选中的频率
+      return;
+    }
 
     const selectedFrequency = filteredFrequencies.find(freq => freq.key === selectedFrequencyKey);
     if (!selectedFrequency) {
@@ -801,10 +936,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       
       if (response.success) {
         setCurrentFrequency(selectedFrequencyKey);
-        const successMessage = selectedFrequency.radioMode 
-          ? `已切换到 ${selectedFrequency.label} (${selectedFrequency.radioMode})` 
+        // 切换到预设频率时清除自定义频率标签
+        setCustomFrequencyLabel('');
+
+        const successMessage = selectedFrequency.radioMode
+          ? `已切换到 ${selectedFrequency.label} (${selectedFrequency.radioMode})`
           : `已切换到 ${selectedFrequency.label}`;
-          
+
         if (response.radioConnected) {
           console.log(`✅ 频率已切换到: ${selectedFrequency.label}`);
           addToast({
@@ -898,6 +1036,32 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       });
     }
   }, [connection.state.radioService]);
+
+  // 监听频率变化事件
+  useEffect(() => {
+    if (connection.state.radioService) {
+      connection.state.radioService.on('frequencyChanged', (data: any) => {
+        console.log('📻 收到频率变化广播:', data);
+
+        // 更新当前频率
+        setCurrentFrequency(String(data.frequency));
+
+        // 判断是否是预设频率
+        const isPreset = filteredFrequencies.some(f => f.key === String(data.frequency));
+        if (!isPreset) {
+          // 自定义频率,显示自定义标签
+          setCustomFrequencyLabel(data.description);
+        } else {
+          // 预设频率,清除自定义标签
+          setCustomFrequencyLabel('');
+        }
+      });
+
+      return () => {
+        connection.state.radioService?.off('frequencyChanged');
+      };
+    }
+  }, [connection.state.radioService, filteredFrequencies]);
 
   return (
     <div className="flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
@@ -998,12 +1162,24 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             isDisabled={!connection.state.isConnected || isLoadingFrequencies || !radio.state.currentMode}
             isLoading={isLoadingFrequencies}
             onSelectionChange={handleFrequencyChange}
+            renderValue={(items: any) => {
+              // 如果选中的是自定义频率,显示自定义标签
+              if (customFrequencyLabel && !filteredFrequencies.find(f => f.key === currentFrequency)) {
+                return <span className="font-bold text-lg">{customFrequencyLabel}</span>;
+              }
+              // 否则显示预设频率的标签
+              const selectedFreq = filteredFrequencies.find(f => f.key === currentFrequency);
+              return selectedFreq ? <span className="font-bold text-lg">{selectedFreq.label}</span> : null;
+            }}
           >
-            {filteredFrequencies.map((frequency) => (
+            {[...filteredFrequencies.map((frequency) => (
               <SelectItem key={frequency.key} textValue={frequency.label}>
                 {frequency.label}
               </SelectItem>
-            ))}
+            )),
+            <SelectItem key="__custom__" textValue="自定义频率..." className="text-primary">
+              自定义频率...
+            </SelectItem>]}
           </Select>
           <Select
             disableSelectorIconRotation
@@ -1056,6 +1232,72 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           </div>
         </div>
       </div>
+
+      {/* 自定义频率输入模态框 */}
+      <Modal
+        isOpen={isCustomFrequencyModalOpen}
+        onClose={() => {
+          setIsCustomFrequencyModalOpen(false);
+          setCustomFrequencyInput('');
+          setCustomFrequencyError('');
+        }}
+        placement="center"
+        size="sm"
+      >
+        <ModalContent>
+          <ModalHeader>
+            <h3 className="text-lg font-semibold">自定义频率</h3>
+          </ModalHeader>
+          <ModalBody>
+            <Input
+              autoFocus
+              label="频率"
+              placeholder="例如: 14.074 或 14074000"
+              value={customFrequencyInput}
+              onValueChange={handleCustomFrequencyInputChange}
+              variant="flat"
+              isInvalid={!!customFrequencyError}
+              errorMessage={customFrequencyError}
+              description={
+                customFrequencyInput && !customFrequencyError && parseFrequencyInput(customFrequencyInput)?.frequency
+                  ? `将设置为 ${formatFrequencyDisplay(parseFrequencyInput(customFrequencyInput)!.frequency)} MHz`
+                  : '支持 MHz (如 14.074) 或 Hz (如 14074000) 格式'
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !isSettingCustomFrequency) {
+                  handleCustomFrequencyConfirm();
+                } else if (e.key === 'Escape') {
+                  setIsCustomFrequencyModalOpen(false);
+                  setCustomFrequencyInput('');
+                  setCustomFrequencyError('');
+                }
+              }}
+            />
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              color="default"
+              variant="flat"
+              onPress={() => {
+                setIsCustomFrequencyModalOpen(false);
+                setCustomFrequencyInput('');
+                setCustomFrequencyError('');
+              }}
+              isDisabled={isSettingCustomFrequency}
+            >
+              取消
+            </Button>
+            <Button
+              color="primary"
+              onPress={handleCustomFrequencyConfirm}
+              isLoading={isSettingCustomFrequency}
+              isDisabled={!customFrequencyInput.trim()}
+            >
+              确认
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 };

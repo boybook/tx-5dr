@@ -102,6 +102,9 @@ export class RadioOperator {
             if (this._stopped) {
                 return;
             }
+            if (!this._isTransmitting) {
+                return;
+            }
 
             // 判断是否为发射时隙
             const isTransmitSlot = this.isTransmitSlot(slotInfo);

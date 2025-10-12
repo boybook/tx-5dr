@@ -65,6 +65,9 @@ export enum WSMessageType {
   RADIO_ERROR = 'radioError',
   RADIO_MANUAL_RECONNECT = 'radioManualReconnect',
   RADIO_DISCONNECTED_DURING_TRANSMISSION = 'radioDisconnectedDuringTransmission',
+
+  // ===== 频率管理 =====
+  FREQUENCY_CHANGED = 'frequencyChanged',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -106,10 +109,21 @@ export const DecodeErrorInfoSchema = z.object({
   }),
 });
 
+// 频率状态数据结构
+export const FrequencyStateSchema = z.object({
+  frequency: z.number(),
+  mode: z.string(),
+  band: z.string(),
+  description: z.string(),
+  radioMode: z.string().optional(),
+  radioConnected: z.boolean(),
+});
+
 // ===== 导出共享类型 =====
 export type SystemStatus = z.infer<typeof SystemStatusSchema>;
 export type SubWindowInfo = z.infer<typeof SubWindowInfoSchema>;
 export type DecodeErrorInfo = z.infer<typeof DecodeErrorInfoSchema>;
+export type FrequencyState = z.infer<typeof FrequencyStateSchema>;
 
 // ===== WebSocket消息Schema定义 =====
 
@@ -582,6 +596,16 @@ export const WSRadioDisconnectedDuringTransmissionMessageSchema = WSBaseMessageS
 
 export type WSRadioDisconnectedDuringTransmissionMessage = z.infer<typeof WSRadioDisconnectedDuringTransmissionMessageSchema>;
 
+/**
+ * 频率变化消息（服务端到客户端）
+ */
+export const WSFrequencyChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.FREQUENCY_CHANGED),
+  data: FrequencyStateSchema,
+});
+
+export type WSFrequencyChangedMessage = z.infer<typeof WSFrequencyChangedMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -636,6 +660,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSRadioErrorMessageSchema,
   WSRadioManualReconnectMessageSchema,
   WSRadioDisconnectedDuringTransmissionMessageSchema,
+
+  // 频率管理消息
+  WSFrequencyChangedMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -720,7 +747,10 @@ export interface DigitalRadioEngineEvents {
   connected: () => void;
   disconnected: () => void;
   error: (error: Error) => void;
-  
+
   // 音量控制事件
   volumeGainChanged: (data: { gain: number; gainDb: number } | number) => void;
+
+  // 频率控制事件
+  frequencyChanged: (data: FrequencyState) => void;
 } 
