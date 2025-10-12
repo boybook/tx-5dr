@@ -42,7 +42,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 strategy.context.reportSent = msgSignalReport.snr;  // 更新信号报告
                 strategy.context.targetCallsign = msg.senderCallsign;
                 // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
-                strategy.context.actualFrequency = strategy.context.config.frequency + msgSignalReport.df;
+                // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                    strategy.context.actualFrequency = strategy.context.config.frequency + msgSignalReport.df;
+                }
                 strategy.updateSlots();
                 return {
                     changeState: 'TX3'
@@ -83,7 +86,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 strategy.context.reportReceived = msg.report;
                 strategy.context.reportSent = msgRogerReport.snr;
                 // 记录或更新实际通联频率 (基础频率 + 对方信号的频率偏移)
-                strategy.context.actualFrequency = strategy.context.config.frequency + msgRogerReport.df;
+                // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                    strategy.context.actualFrequency = strategy.context.config.frequency + msgRogerReport.df;
+                }
                 strategy.updateSlots();
                 return {
                     changeState: 'TX4'
@@ -148,11 +154,17 @@ const states: { [key in SlotsIndex]: StandardState } = {
     TX4: {
         onEnter(strategy: StandardQSOStrategy) {
             // 记录QSO日志
+            // 优先使用actualFrequency（包含音频偏移的精确频率）
+            // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
+            const frequency = (strategy.context.actualFrequency && strategy.context.actualFrequency > 1000000)
+                ? strategy.context.actualFrequency
+                : (strategy.context.config.frequency || 0);
+
             const qsoRecord: QSORecord = {
                 id: Date.now().toString(),
                 callsign: strategy.context.targetCallsign!,
                 grid: strategy.context.targetGrid,
-                frequency: strategy.context.actualFrequency || strategy.context.config.frequency,
+                frequency: frequency,
                 mode: strategy.context.config.mode.name,
                 startTime: strategy.qsoStartTime || Date.now(),
                 endTime: Date.now(),
@@ -178,11 +190,17 @@ const states: { [key in SlotsIndex]: StandardState } = {
     TX5: {
         onEnter(strategy: StandardQSOStrategy) {
             // 记录QSO日志
+            // 优先使用actualFrequency（包含音频偏移的精确频率）
+            // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
+            const frequency = (strategy.context.actualFrequency && strategy.context.actualFrequency > 1000000)
+                ? strategy.context.actualFrequency
+                : (strategy.context.config.frequency || 0);
+
             const qsoRecord: QSORecord = {
                 id: Date.now().toString(),
                 callsign: strategy.context.targetCallsign!,
                 grid: strategy.context.targetGrid,
-                frequency: strategy.context.actualFrequency || strategy.context.config.frequency,
+                frequency: frequency,
                 mode: strategy.context.config.mode.name,
                 startTime: strategy.qsoStartTime || Date.now(),
                 endTime: Date.now(),
@@ -225,22 +243,51 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 优先处理直接呼叫
             if (directCalls.length > 0) {
                 const msg = directCalls[0].message;
+
                 if (msg.type === FT8MessageType.CALL) {
-                    strategy.context.targetCallsign = msg.senderCallsign;
-                    strategy.context.reportSent = directCalls[0].snr;
-                    strategy.context.targetGrid = msg.grid;
-                    // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
-                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
-                    strategy.updateSlots();
-                    return { changeState: 'TX2' };
+                    const callsign = msg.senderCallsign;
+
+                    // 检查是否已经通联过
+                    const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
+
+                    // 根据配置决定是否回复已通联过的直接呼叫
+                    if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
+                        console.log(`[StandardQSOStrategy] 回复直接呼叫: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCalls[0].snr})`);
+                        strategy.context.targetCallsign = callsign;
+                        strategy.context.reportSent = directCalls[0].snr;
+                        strategy.context.targetGrid = msg.grid;
+                        // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
+                        // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                            strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                        }
+                        strategy.updateSlots();
+                        return { changeState: 'TX2' };
+                    } else {
+                        console.log(`[StandardQSOStrategy] 跳过直接呼叫: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCalls[0].snr})`);
+                    }
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
-                    strategy.context.targetCallsign = msg.senderCallsign;
-                    strategy.context.reportReceived = msg.report;
-                    strategy.context.reportSent = directCalls[0].snr;
-                    // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
-                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
-                    strategy.updateSlots();
-                    return { changeState: 'TX3' };
+                    const callsign = msg.senderCallsign;
+
+                    // 检查是否已经通联过
+                    const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
+
+                    // 根据配置决定是否回复已通联过的直接呼叫
+                    if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
+                        console.log(`[StandardQSOStrategy] 回复直接信号报告: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCalls[0].snr})`);
+                        strategy.context.targetCallsign = callsign;
+                        strategy.context.reportReceived = msg.report;
+                        strategy.context.reportSent = directCalls[0].snr;
+                        // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
+                        // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                            strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                        }
+                        strategy.updateSlots();
+                        return { changeState: 'TX3' };
+                    } else {
+                        console.log(`[StandardQSOStrategy] 跳过直接信号报告: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCalls[0].snr})`);
+                    }
                 }
             }
 
@@ -263,15 +310,18 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     try {
                         // 检查是否已经通联过
                         const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
-                        
-                        // 根据配置决定是否回复已通联过的电台
-                        if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                            console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${cqCall.snr})`);
+
+                        // CQ呼叫只回复未通联过的电台(不受replyToWorkedStations配置影响)
+                        if (!hasWorked) {
+                            console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (未通联过, SNR: ${cqCall.snr})`);
                             strategy.context.targetCallsign = callsign;
                             strategy.context.targetGrid = msg.grid;
                             strategy.context.reportSent = cqCall.snr;
                             // 记录实际通联频率 (基础频率 + CQ信号的频率偏移)
-                            strategy.context.actualFrequency = strategy.context.config.frequency + cqCall.df;
+                            // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + cqCall.df;
+                            }
                             strategy.updateSlots();
                             return { changeState: 'TX1' };
                         } else {

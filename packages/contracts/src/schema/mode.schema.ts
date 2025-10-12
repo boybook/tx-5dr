@@ -23,7 +23,12 @@ export const ModeDescriptorSchema = z.object({
    * FT8: 约1180ms (使12.64秒的音频在15秒时隙中居中)
    * FT4: 约550ms (使6.4秒的音频在7.5秒时隙中居中)
    */
-  transmitTiming: z.number().nonnegative()
+  transmitTiming: z.number().nonnegative(),
+  /**
+   * 编码提前量（毫秒）- 在transmitTiming之前多久开始编码
+   * 默认400ms,用于补偿编码+混音时间
+   */
+  encodeAdvance: z.number().nonnegative().default(400)
 });
 
 export type ModeDescriptor = z.infer<typeof ModeDescriptorSchema>;
@@ -37,13 +42,15 @@ export const MODES = {
     slotMs: 15000,
     toleranceMs: 100,
     windowTiming: [-1500, -1000, -500, 0, 250, 500],
-    transmitTiming: 1180 // (15000 - 12640) / 2 = 1180ms
+    transmitTiming: 1180, // (15000 - 12640) / 2 = 1180ms - 使音频在时隙中居中
+    encodeAdvance: 400    // 提前400ms开始编码准备
   } as ModeDescriptor,
   FT4: {
-    name: 'FT4', 
+    name: 'FT4',
     slotMs: 7500,
     toleranceMs: 50,
     windowTiming: [0],
-    transmitTiming: 550 // (7500 - 6400) / 2 = 550ms
+    transmitTiming: 550, // (7500 - 6400) / 2 = 550ms
+    encodeAdvance: 300   // 提前300ms开始编码准备
   } as ModeDescriptor,
 } as const; 

@@ -97,12 +97,12 @@ export class RadioOperator {
             }
         });
         
-        // 发射开始事件 - 用于处理发射
-        eventEmitter.on('transmitStart' as any, (slotInfo: SlotInfo) => {
+        // 编码开始事件 - 提前触发编码准备（新时序系统）
+        eventEmitter.on('encodeStart' as any, (slotInfo: SlotInfo) => {
             if (this._stopped) {
                 return;
             }
-            
+
             // 判断是否为发射时隙
             const isTransmitSlot = this.isTransmitSlot(slotInfo);
             if (isTransmitSlot) {
@@ -112,12 +112,24 @@ export class RadioOperator {
                         operatorId: this._config.id,
                         transmission
                     });
-                    console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 发射时机到达，发射内容: ${transmission}`);
+                    console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 编码时机到达，准备发射: ${transmission}`);
                 } else {
-                    console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 发射时机到达，但没有发射内容`);
+                    console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 编码时机到达，但没有发射内容`);
                 }
             } else {
-                console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 发射时机到达，但不是发射时隙`);
+                console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 编码时机到达，但不是发射时隙`);
+            }
+        });
+
+        // 目标播放时机事件 - 仅用于日志记录
+        eventEmitter.on('transmitStart' as any, (slotInfo: SlotInfo) => {
+            if (this._stopped || !this._isTransmitting) {
+                return;
+            }
+            // 判断是否为发射时隙
+            const isTransmitSlot = this.isTransmitSlot(slotInfo);
+            if (isTransmitSlot) {
+                console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 目标播放时间到达`);
             }
         });
     }

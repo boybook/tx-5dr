@@ -589,11 +589,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 播放编码后的音频数据
    */
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000): Promise<void> {
+    const playStartTime = Date.now();
+    
     if (!this.isOutputting || !this.audioOutput) {
       throw new Error('音频输出流未启动');
     }
     
-    console.log(`🔊 [音频播放] 开始播放音频:`);
+    console.log(`🔊 [音频播放] 开始播放音频 (${new Date(playStartTime).toISOString()}):`);
     console.log(`   原始样本数: ${audioData.length}`);
     console.log(`   原始采样率: ${targetSampleRate}Hz`);
     console.log(`   原始时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
@@ -642,6 +644,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       
       console.log(`🔊 [音频播放] 分块播放: ${totalChunks} 块，每块 ${chunkSize} 样本`);
       
+      const chunkStartTime = Date.now();
+      console.log(`📝 [音频播放] 开始分块写入 (${new Date(chunkStartTime).toISOString()})`);
+      
       for (let i = 0; i < totalChunks; i++) {
         const start = i * chunkSize;
         const end = Math.min(start + chunkSize, playbackData.length);
@@ -665,8 +670,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       }
       
+      const chunkEndTime = Date.now();
+      const chunkDuration = chunkEndTime - chunkStartTime;
+      console.log(`📝 [音频播放] 分块写入完成 (${new Date(chunkEndTime).toISOString()}), 耗时: ${chunkDuration}ms`);
+      
       // 播放完成后清除当前音频数据
       this.currentAudioData = null;
+      
+      const playEndTime = Date.now();
+      const playDuration = playEndTime - playStartTime;
+      console.log(`✅ [音频播放] 播放完成 (${new Date(playEndTime).toISOString()}), 耗时: ${playDuration}ms`);
       
     } catch (error) {
       console.error('❌ [音频播放] 播放失败:', error);

@@ -26,6 +26,7 @@ export interface RadioOperatorManagerOptions {
   clockSource: ClockSourceSystem;
   getCurrentMode: () => ModeDescriptor;
   setRadioFrequency: (freq: number) => void;
+  transmissionTracker?: any; // TransmissionTracker实例
 }
 
 /**
@@ -41,6 +42,7 @@ export class RadioOperatorManager {
   private setRadioFrequency: (freq: number) => void;
   private isRunning: boolean = false;
   private logManager: LogManager;
+  private transmissionTracker: any; // TransmissionTracker实例
 
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
@@ -49,6 +51,7 @@ export class RadioOperatorManager {
     this.getCurrentMode = options.getCurrentMode;
     this.setRadioFrequency = options.setRadioFrequency;
     this.logManager = LogManager.getInstance();
+    this.transmissionTracker = options.transmissionTracker;
 
     // 监听发射请求
     this.eventEmitter.on('requestTransmit', (request: TransmitRequest) => {
@@ -527,6 +530,78 @@ export class RadioOperatorManager {
   }
 
   /**
+   * 处理待发射队列
+   * 由 DigitalRadioEngine 在 transmitStart 事件时调用
+   * 处理所有通过了 RadioOperator 周期检查的发射请求
+   * @param slotInfo 时隙信息(包含准确的时间戳)
+   */
+  processPendingTransmissions(slotInfo: any): void {
+    if (!this.isRunning) {
+      console.log('⚠️ [RadioOperatorManager] 操作员管理器未运行，跳过处理发射队列');
+      return;
+    }
+
+    if (this.pendingTransmissions.length === 0) {
+      console.log('📡 [RadioOperatorManager] 发射队列为空，无待发射请求');
+      return;
+    }
+
+    console.log(`📡 [RadioOperatorManager] 处理发射队列: ${this.pendingTransmissions.length} 个待发射请求`);
+
+    const currentMode = this.getCurrentMode();
+    const slotStartMs = slotInfo.startMs; // 使用 slotInfo 中的准确时间戳
+    const now = this.clockSource.now();
+    const timeSinceSlotStartMs = now - slotStartMs;
+
+    // 处理队列中的所有请求
+    const requests = [...this.pendingTransmissions];
+    this.pendingTransmissions = []; // 清空队列
+
+    for (const request of requests) {
+      const operatorId = request.operatorId;
+      const transmission = request.transmission;
+
+      // 获取操作员的频率
+      const operator = this.operators.get(operatorId);
+      if (!operator) {
+        console.warn(`⚠️ [RadioOperatorManager] 操作员 ${operatorId} 不存在，跳过发射请求`);
+        continue;
+      }
+
+      const frequency = operator.config.frequency || 0;
+
+      // 广播发射日志
+      this.eventEmitter.emit('transmissionLog' as any, {
+        operatorId,
+        time: new Date(slotStartMs).toISOString().slice(11, 19).replace(/:/g, ''),
+        message: transmission,
+        frequency: frequency,
+        slotStartMs: slotStartMs
+      });
+
+      // 启动传输跟踪
+      if (this.transmissionTracker) {
+        const slotId = `slot-${slotStartMs}`;
+        const targetTransmitTime = slotStartMs + (currentMode.transmitTiming || 0);
+        this.transmissionTracker.startTransmission(operatorId, slotId, targetTransmitTime);
+        this.transmissionTracker.updatePhase(operatorId, 'preparing' as any);
+      }
+
+      // 提交到编码队列
+      this.encodeQueue.push({
+        operatorId,
+        message: transmission,
+        frequency,
+        mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
+        slotStartMs: slotStartMs,
+        timeSinceSlotStartMs: timeSinceSlotStartMs
+      });
+
+      console.log(`📡 [RadioOperatorManager] 已处理操作员 ${operatorId} 的发射请求: "${transmission}"`);
+    }
+  }
+
+  /**
    * 检查并触发单个操作员的发射
    * 用于在时隙中间启动或切换发射周期时立即触发
    */
@@ -644,6 +719,14 @@ export class RadioOperatorManager {
         slotStartMs: currentSlotStartMs
       });
 
+      // 启动传输跟踪
+      if (this.transmissionTracker) {
+        const slotId = `slot-${currentSlotStartMs}`;
+        const targetTransmitTime = currentSlotStartMs + (currentMode.transmitTiming || 0);
+        this.transmissionTracker.startTransmission(operatorId, slotId, targetTransmitTime);
+        this.transmissionTracker.updatePhase(operatorId, 'preparing' as any);
+      }
+
       // 提交到编码队列
       this.encodeQueue.push({
         operatorId,
@@ -689,6 +772,43 @@ export class RadioOperatorManager {
     if (stoppedCount > 0) {
       console.log(`📻 [操作员管理器] 已停止 ${stoppedCount} 个操作员发射（电台断开连接）`);
     }
+  }
+
+  /**
+   * 检查当前周期是否有任何操作员准备发射
+   * 基于现有的 handleTransmissions 逻辑，但只做检查不执行发射
+   * @returns true 如果有操作员在当前周期准备发射
+   */
+  hasActiveTransmissionsInCurrentCycle(): boolean {
+    if (!this.isRunning) {
+      return false;
+    }
+
+    // 获取当前时隙信息（复用 handleTransmissions 的逻辑）
+    const now = this.clockSource.now();
+    const currentMode = this.getCurrentMode();
+    const currentSlotStartMs = Math.floor(now / currentMode.slotMs) * currentMode.slotMs;
+
+    // 检查每个操作员（复用 handleTransmissions 的遍历逻辑）
+    for (const [operatorId, operator] of this.operators) {
+      if (!operator.isTransmitting) {
+        continue;
+      }
+
+      // 使用现有的周期判断逻辑
+      const utcSeconds = Math.floor(currentSlotStartMs / 1000);
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+        operator.getTransmitCycles(),
+        utcSeconds,
+        currentMode.slotMs
+      );
+
+      if (isTransmitCycle) {
+        return true; // 找到准备发射的操作员
+      }
+    }
+
+    return false;
   }
 
   /**

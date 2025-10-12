@@ -5,7 +5,8 @@ import { CycleUtils } from '../utils/cycleUtils.js';
 
 export interface SlotClockEvents {
   'slotStart': (slotInfo: SlotInfo) => void;
-  'transmitStart': (slotInfo: SlotInfo) => void;
+  'encodeStart': (slotInfo: SlotInfo) => void;  // 提前触发编码准备
+  'transmitStart': (slotInfo: SlotInfo) => void; // 目标播放时间
   'subWindow': (slotInfo: SlotInfo, windowIdx: number) => void;
   'error': (error: Error) => void;
 }
@@ -120,17 +121,37 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     
     // 发出时隙开始事件
     this.emit('slotStart', slotInfo);
-    
-    // 根据 transmitTiming 延迟发射 transmitStart 事件
+
+    // 计算编码和发射时机
     const transmitDelay = this.mode.transmitTiming || 0;
+    const encodeAdvance = this.mode.encodeAdvance || 400; // 默认提前400ms
+    const encodeDelay = Math.max(0, transmitDelay - encodeAdvance);
+
+    // 先发射 encodeStart 事件（提前开始编码）
+    if (encodeDelay > 0) {
+      setTimeout(() => {
+        if (this.isRunning) {
+          console.log(`🔧 [SlotClock] encodeStart 事件触发: 时隙=${slotInfo.id}, 延迟=${encodeDelay}ms, 距离目标播放=${encodeAdvance}ms`);
+          this.emit('encodeStart', slotInfo);
+        }
+      }, encodeDelay);
+    } else {
+      // 如果没有足够时间，立即触发
+      console.log(`🔧 [SlotClock] encodeStart 事件立即触发: 时隙=${slotInfo.id}`);
+      this.emit('encodeStart', slotInfo);
+    }
+
+    // 然后发射 transmitStart 事件（目标播放时间）
     if (transmitDelay > 0) {
       setTimeout(() => {
         if (this.isRunning) {
+          console.log(`📡 [SlotClock] transmitStart 事件触发: 时隙=${slotInfo.id}, 延迟=${transmitDelay}ms`);
           this.emit('transmitStart', slotInfo);
         }
       }, transmitDelay);
     } else {
       // 如果没有延迟，立即发射
+      console.log(`📡 [SlotClock] transmitStart 事件立即触发: 时隙=${slotInfo.id}`);
       this.emit('transmitStart', slotInfo);
     }
     
