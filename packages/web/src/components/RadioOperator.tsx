@@ -93,17 +93,24 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           frequency: editingFields.has('frequency') ? prevContext.frequency : operatorStatus.context.frequency,
           reportSent: editingFields.has('reportSent') ? prevContext.reportSent : (operatorStatus.context.reportSent ?? 0),
         };
-        
-        // 只有在数据实际变化时才更新状态
-        const hasChanged = 
+
+        // 深度对比：只有在数据实际变化时才更新状态
+        // 这防止了因服务端推送相同值导致的不必要重新渲染
+        const hasChanged =
           prevContext.myCall !== newContext.myCall ||
           prevContext.myGrid !== newContext.myGrid ||
           prevContext.targetCall !== newContext.targetCall ||
           prevContext.targetGrid !== newContext.targetGrid ||
           prevContext.frequency !== newContext.frequency ||
           prevContext.reportSent !== newContext.reportSent;
-          
-        return hasChanged ? newContext : prevContext;
+
+        // 如果没有变化，返回原对象引用，避免触发下游重新渲染
+        if (!hasChanged) {
+          return prevContext;
+        }
+
+        // 有变化时，返回新对象
+        return newContext;
       });
     }
   }, [operatorStatus.context, editingFields]);
@@ -219,13 +226,16 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         reportSent: newContext.reportSent,
         reportReceived: null,
       });
-      
-      // 清除该字段的编辑状态
-      setEditingFields(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(field);
-        return newSet;
-      });
+
+      // 延迟清除编辑标记，等待服务端推送状态更新（约100ms）
+      // 这避免了在服务端推送到达前过早清除标记导致的状态闪烁
+      setTimeout(() => {
+        setEditingFields(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(field);
+          return newSet;
+        });
+      }, 150); // 给服务端处理和推送留出时间窗口
     }, 200); // 减少防抖时间从500ms到200ms
   };
 

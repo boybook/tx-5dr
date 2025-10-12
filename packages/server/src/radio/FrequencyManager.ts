@@ -30,6 +30,7 @@ export class FrequencyManager {
     { band: '6m', mode: 'FT8', radioMode: 'USB', frequency: 50313000, description: '50.313 MHz 6m' },
     { band: '6m', mode: 'FT4', radioMode: 'USB', frequency: 50318000, description: '50.318 MHz 6m' },
     { band: '2m', mode: 'FT8', radioMode: 'USB', frequency: 144174000, description: '144.174 MHz 2m' },
+    { band: '2m', mode: 'FT8', radioMode: 'USB', frequency: 144460000, description: '144.460 MHz 2m' },
     { band: '70cm', mode: 'FT8', radioMode: 'USB', frequency: 432174000, description: '432.174 MHz 70cm' },
   ];
 
