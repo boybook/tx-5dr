@@ -15,6 +15,7 @@ import { AudioMixer, type MixedAudio } from './audio/AudioMixer.js';
 import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
 import { printAppPaths } from './utils/debug-paths.js';
 import { PhysicalRadioManager } from './radio/PhysicalRadioManager.js';
+import { TransmissionTracker } from './transmission/TransmissionTracker.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -48,6 +49,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   // 电台操作员管理器
   private _operatorManager: RadioOperatorManager;
+
+  // 传输跟踪器
+  private transmissionTracker: TransmissionTracker;
 
   public get operatorManager(): RadioOperatorManager {
     return this._operatorManager;
@@ -89,6 +93,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 初始化物理电台管理器
     this.radioManager = new PhysicalRadioManager();
     
+    // 初始化传输跟踪器
+    this.transmissionTracker = new TransmissionTracker();
+    
     // 监听物理电台管理器事件
     this.setupRadioManagerEventListeners();
     
@@ -102,7 +109,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         if (this.radioManager) {
           try { this.radioManager.setFrequency(freq); } catch (e) { console.error('设置电台频率失败', e); }
         }
-      }
+      },
+      transmissionTracker: this.transmissionTracker
     });
     
     // 初始化频谱调度器
@@ -120,6 +128,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       try {
         console.log(`🎵 [时钟管理器] 编码完成，提交到混音器`, {
           operatorId: result.operatorId,
+          duration: result.duration
+        });
+        
+        // 先记录编码完成，进入混音阶段
+        this.transmissionTracker.updatePhase(result.operatorId, 'mixing' as any);
+        
+        // 然后记录音频准备就绪时间
+        this.transmissionTracker.updatePhase(result.operatorId, 'ready' as any, {
+          audioData: result.audioData,
+          sampleRate: result.sampleRate,
           duration: result.duration
         });
         
@@ -208,18 +226,30 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           }
         }
         
+        // 计算目标播放时间（基于 transmitTiming）
+        const targetPlaybackTime = currentSlotStartMs + (this.currentMode.transmitTiming || 0);
+
         // 计算从现在到播放开始的延迟
         const delayMs = playbackStartMs - now;
-        
+
+        console.log(`🎯 [时钟管理器] 播放时序:`);
+        console.log(`   目标播放时间: ${new Date(targetPlaybackTime).toISOString()}`);
+        console.log(`   实际播放时间: ${new Date(playbackStartMs).toISOString()}`);
+        console.log(`   当前时间: ${new Date(now).toISOString()}`);
+        console.log(`   延迟: ${delayMs}ms`);
+
         if (delayMs > 0) {
           // 还没到播放时间，提交到混音器等待
           console.log(`⌛ [时钟管理器] 等待 ${delayMs}ms 后开始播放`);
-          this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, playbackStartMs);
+          this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, playbackStartMs, targetPlaybackTime);
         } else {
           // 立即提交到混音器播放
           console.log(`🎵 [时钟管理器] 立即播放音频 (时长: ${audioDurationSec.toFixed(2)}s)`);
-          this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, now);
+          this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, now, targetPlaybackTime);
         }
+        
+        // 记录音频添加到混音器的时间
+        this.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
         
       } catch (error) {
         console.error(`❌ [时钟管理器] 编码结果处理失败:`, error);
@@ -239,11 +269,32 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`   混音时长: ${mixedAudio.duration.toFixed(2)}s`);
         console.log(`   采样率: ${mixedAudio.sampleRate}Hz`);
         
-        // 启动PTT
-        await this.startPTT();
-
-        // 开始播放混音后的音频（这个方法只是将数据写入音频缓冲区）
-        await this.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
+        // 记录混音完成时间
+        for (const operatorId of mixedAudio.operatorIds) {
+          this.transmissionTracker.recordMixedAudioReady(operatorId);
+        }
+        
+        // 并行启动PTT和音频播放准备
+        console.log(`📡 [时钟管理器] 并行启动PTT和音频播放`);
+        
+        // 记录音频播放开始时间（在实际播放之前记录）
+        for (const operatorId of mixedAudio.operatorIds) {
+          this.transmissionTracker.recordAudioPlaybackStart(operatorId);
+        }
+        
+        // 启动PTT（不等待完成）
+        const pttPromise = this.startPTT().then(() => {
+          // PTT启动完成后记录时间
+          for (const operatorId of mixedAudio.operatorIds) {
+            this.transmissionTracker.recordPTTStart(operatorId);
+          }
+        });
+        
+        // 开始播放混音后的音频（这个方法会将数据写入音频缓冲区）
+        const audioPromise = this.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
+        
+        // 等待PTT和音频播放都完成（或者至少PTT完成）
+        await Promise.all([pttPromise, audioPromise]);
 
         // 计算音频实际播放时间 + 延迟停止时间
         const actualPlaybackTimeMs = mixedAudio.duration * 1000; // 音频实际播放时间
@@ -333,13 +384,23 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.operatorManager.broadcastAllOperatorStatusUpdates();
     });
     
-    // 监听发射开始事件
+    // 监听编码开始事件 (提前触发，留出编码时间)
+    this.slotClock.on('encodeStart', (slotInfo) => {
+      console.log(`🔧 [编码时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 提前量: ${this.currentMode.encodeAdvance}ms`);
+      this.emit('encodeStart' as any, slotInfo);
+
+      // 处理发射请求队列 - 开始编码
+      // RadioOperator 会在 encodeStart 事件中进行周期检查
+      // 只有在正确的发射周期内才会发出 requestTransmit 事件加入队列
+      // 这里处理队列中已经通过周期检查的发射请求
+      this.operatorManager.processPendingTransmissions(slotInfo);
+    });
+
+    // 监听发射开始事件 (目标播放时间)
     this.slotClock.on('transmitStart', (slotInfo) => {
-      console.log(`📡 [发射时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 延迟: ${this.currentMode.transmitTiming}ms`);
+      console.log(`📡 [目标播放时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 延迟: ${this.currentMode.transmitTiming}ms`);
       this.emit('transmitStart' as any, slotInfo);
-      
-      // 处理待发射的消息
-      this.operatorManager.handleTransmissions();
+      // 此时编码应该已经完成或接近完成，音频即将播放
     });
     
     this.slotClock.on('subWindow', (slotInfo, windowIdx) => {
@@ -352,7 +413,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.slotScheduler = new SlotScheduler(
       this.slotClock, 
       this.realDecodeQueue, 
-      this.audioStreamManager.getAudioProvider()
+      this.audioStreamManager.getAudioProvider(),
+      this._operatorManager  // 传递操作员管理器作为发射状态检查器
     );
     
     // 监听解码结果并通过 SlotPackManager 处理
@@ -695,6 +757,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 清理操作员管理器
     this.operatorManager.cleanup();
     
+    // 清理传输跟踪器
+    if (this.transmissionTracker) {
+      this.transmissionTracker.cleanup();
+      console.log('🗑️  [时钟管理器] 传输跟踪器已清理');
+    }
+    
     console.log('✅ [时钟管理器] 销毁完成');
   }
 
@@ -763,6 +831,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    * 启动PTT
    */
   private async startPTT(): Promise<void> {
+    const pttStartTime = Date.now();
+    console.log(`📡 [PTT] 开始启动PTT (${new Date(pttStartTime).toISOString()})`);
+    
     if (this.isPTTActive) {
       console.log('📡 [PTT] PTT已经激活，跳过启动');
       return;
@@ -776,13 +847,23 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     if (this.radioManager.isConnected()) {
       try {
+        console.log(`📡 [PTT] 调用radioManager.setPTT(true)...`);
+        const radioCallStartTime = Date.now();
+        
         await this.radioManager.setPTT(true);
+        
+        const radioCallEndTime = Date.now();
+        const radioCallDuration = radioCallEndTime - radioCallStartTime;
+        console.log(`📡 [PTT] radioManager.setPTT(true)完成，耗时: ${radioCallDuration}ms`);
+        
         this.isPTTActive = true;
         
         // 通知频谱调度器PTT状态改变
         this.spectrumScheduler.setPTTActive(true);
         
-        console.log('📡 [PTT] PTT启动成功，频谱分析已暂停');
+        const pttEndTime = Date.now();
+        const pttTotalDuration = pttEndTime - pttStartTime;
+        console.log(`📡 [PTT] PTT启动成功，频谱分析已暂停，总耗时: ${pttTotalDuration}ms`);
       } catch (error) {
         console.error('📡 [PTT] PTT启动失败:', error);
         throw error;

@@ -68,7 +68,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const [newOperatorData, setNewOperatorData] = useState<Partial<CreateRadioOperatorRequest>>({
       myCallsign: '',
       myGrid: '',
-      frequency: 1500,
+      frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
       transmitCycles: [0],
       maxQSOTimeoutCycles: 10,
       maxCallAttempts: 3,
@@ -260,7 +260,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         setNewOperatorData({
           myCallsign: '',
           myGrid: '',
-          frequency: 1500,
+          frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
           transmitCycles: [0],
           maxQSOTimeoutCycles: 10,
           maxCallAttempts: 3,

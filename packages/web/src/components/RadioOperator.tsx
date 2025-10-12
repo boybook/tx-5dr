@@ -5,6 +5,7 @@ import { faArrowsAltH, faRepeat, faBook } from '@fortawesome/free-solid-svg-icon
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import type { OperatorStatus } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
+import { formatFrequency } from '@tx5dr/contracts';
 import { openLogbookWindow } from '../utils/windowManager';
 
 interface RadioOperatorProps {
@@ -47,7 +48,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       myGrid: operatorStatus.context.myGrid || '',
       targetCall: operatorStatus.context.targetCall || '',
       targetGrid: operatorStatus.context.targetGrid || '',
-      frequency: operatorStatus.context.frequency ?? 1550,
+      frequency: operatorStatus.context.frequency, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
       reportSent: operatorStatus.context.reportSent ?? 0,
     };
   });
@@ -89,7 +90,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           myGrid: editingFields.has('myGrid') ? prevContext.myGrid : (operatorStatus.context.myGrid || ''),
           targetCall: editingFields.has('targetCall') ? prevContext.targetCall : (operatorStatus.context.targetCall || ''),
           targetGrid: editingFields.has('targetGrid') ? prevContext.targetGrid : (operatorStatus.context.targetGrid || ''),
-          frequency: editingFields.has('frequency') ? prevContext.frequency : (operatorStatus.context.frequency ?? 1550),
+          frequency: editingFields.has('frequency') ? prevContext.frequency : operatorStatus.context.frequency,
           reportSent: editingFields.has('reportSent') ? prevContext.reportSent : (operatorStatus.context.reportSent ?? 0),
         };
         
@@ -591,7 +592,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               </div>
             }
             type="number"
-            value={localContext.frequency.toString()}
+            value={localContext?.frequency?.toString()}
             onChange={(e) => handleContextUpdate('frequency', parseInt(e.target.value) || 1550)}
             size="sm"
             variant="flat"

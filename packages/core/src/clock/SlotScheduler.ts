@@ -18,6 +18,17 @@ export interface IDecodeQueue {
 }
 
 /**
+ * 发射状态检查器接口 - 由 server 包实现
+ */
+export interface ITransmissionChecker {
+  /**
+   * 检查当前周期是否有操作员准备发射
+   * @returns true 如果有操作员在当前周期准备发射
+   */
+  hasActiveTransmissionsInCurrentCycle(): boolean;
+}
+
+/**
  * 时隙调度器 - 监听时隙事件并生成解码请求
  * 统一使用子窗口处理，支持单窗口和多窗口模式
  */
@@ -25,16 +36,19 @@ export class SlotScheduler {
   private slotClock: SlotClock;
   private decodeQueue: IDecodeQueue;
   private audioBufferProvider: AudioBufferProvider;
+  private transmissionChecker?: ITransmissionChecker;
   private isActive = false;
   
   constructor(
     slotClock: SlotClock, 
     decodeQueue: IDecodeQueue,
-    audioBufferProvider: AudioBufferProvider
+    audioBufferProvider: AudioBufferProvider,
+    transmissionChecker?: ITransmissionChecker
   ) {
     this.slotClock = slotClock;
     this.decodeQueue = decodeQueue;
     this.audioBufferProvider = audioBufferProvider;
+    this.transmissionChecker = transmissionChecker;
   }
   
   /**
@@ -67,6 +81,12 @@ export class SlotScheduler {
 
   private async handleSubWindow(slotInfo: SlotInfo, windowIdx: number): Promise<void> {
     if (!this.isActive) return;
+    
+    // 检查当前周期是否有操作员准备发射
+    if (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle()) {
+      console.log(`🚫 [SlotScheduler] 当前周期有操作员准备发射，暂停解码 窗口${windowIdx}`);
+      return;
+    }
     
     try {
       const mode = this.slotClock.getMode();
