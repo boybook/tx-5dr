@@ -30,11 +30,12 @@ import type {
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { useConnection } from '../store/radioStore';
-import { 
-  getOperatorPreferences, 
-  setOperatorEnabled, 
+import {
+  getOperatorPreferences,
+  setOperatorEnabled,
   setAllOperatorsEnabled,
-  isOperatorEnabled 
+  isOperatorEnabled,
+  getEnabledOperatorIds
 } from '../utils/operatorPreferences';
 
 export interface OperatorSettingsRef {
@@ -252,9 +253,22 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     // 创建新操作员
     const createNewOperator = async () => {
       try {
-        await api.createOperator(newOperatorData as CreateRadioOperatorRequest);
+        const response = await api.createOperator(newOperatorData as CreateRadioOperatorRequest);
         await loadOperators();
-        
+
+        // 自动启用新创建的操作员
+        if (response.data) {
+          setOperatorEnabled(response.data.id, true);
+          console.log('✅ 新操作员已自动启用:', response.data.id, response.data.myCallsign);
+
+          // 如果已连接，同步到服务器
+          if (connection.state.isConnected && connection.state.radioService) {
+            const enabledIds = [...getEnabledOperatorIds(), response.data.id];
+            connection.state.radioService.setClientEnabledOperators(enabledIds);
+            console.log('📤 [OperatorSettings] 已同步新操作员到服务器');
+          }
+        }
+
         // 重置新建状态
         setIsCreating(false);
         setNewOperatorData({
