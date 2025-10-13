@@ -389,7 +389,7 @@ export class WSServer extends WSMessageHandler {
   private async handleSetOperatorContext(data: any): Promise<void> {
     try {
       const { operatorId, context } = data;
-      this.digitalRadioEngine.operatorManager.updateOperatorContext(operatorId, context);
+      await this.digitalRadioEngine.operatorManager.updateOperatorContext(operatorId, context);
     } catch (error) {
       console.error('❌ 设置操作员上下文失败:', error);
       this.broadcast(WSMessageType.ERROR, {
@@ -425,7 +425,14 @@ export class WSServer extends WSMessageHandler {
       if (!operator) {
         throw new Error(`操作员 ${operatorId} 不存在`);
       }
-      
+
+      // 如果是update_context命令，先持久化到配置文件（此时内存还未更新，可以检测到变化）
+      if (command === 'update_context') {
+        await this.digitalRadioEngine.operatorManager.updateOperatorContext(operatorId, args);
+        console.log(`💾 [WSServer] update_context命令已持久化到配置文件`);
+      }
+
+      // 然后调用operator更新内存状态
       operator.userCommand({ command, args });
       console.log(`📻 [WSServer] 执行用户命令: 操作员=${operatorId}, 命令=${command}, 参数=`, args);
     } catch (error) {

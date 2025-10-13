@@ -471,24 +471,58 @@ export class RadioOperatorManager {
   /**
    * 更新操作员上下文
    */
-  updateOperatorContext(operatorId: string, context: any): void {
+  async updateOperatorContext(operatorId: string, context: any): Promise<void> {
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`操作员 ${operatorId} 不存在`);
     }
-    
+
+    // 构建更新对象（只包含实际变化的字段）
+    const updates: Partial<RadioOperatorConfig> = {};
+
     // 更新基本信息
-    if (context.myCall !== undefined) operator.config.myCallsign = context.myCall;
-    if (context.myGrid !== undefined) operator.config.myGrid = context.myGrid;
-    if (context.frequency !== undefined) operator.config.frequency = context.frequency;
-    
+    if (context.myCall !== undefined && context.myCall !== operator.config.myCallsign) {
+      operator.config.myCallsign = context.myCall;
+      updates.myCallsign = context.myCall;
+    }
+    if (context.myGrid !== undefined && context.myGrid !== operator.config.myGrid) {
+      operator.config.myGrid = context.myGrid;
+      updates.myGrid = context.myGrid;
+    }
+    if (context.frequency !== undefined && context.frequency !== operator.config.frequency) {
+      operator.config.frequency = context.frequency;
+      updates.frequency = context.frequency;
+    }
+
     // 更新自动化设置
-    if (context.autoReplyToCQ !== undefined) operator.config.autoReplyToCQ = context.autoReplyToCQ;
-    if (context.autoResumeCQAfterFail !== undefined) operator.config.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
-    if (context.autoResumeCQAfterSuccess !== undefined) operator.config.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
-    if (context.replyToWorkedStations !== undefined) operator.config.replyToWorkedStations = context.replyToWorkedStations;
-    if (context.prioritizeNewCalls !== undefined) operator.config.prioritizeNewCalls = context.prioritizeNewCalls;
-    
+    if (context.autoReplyToCQ !== undefined && context.autoReplyToCQ !== operator.config.autoReplyToCQ) {
+      operator.config.autoReplyToCQ = context.autoReplyToCQ;
+      updates.autoReplyToCQ = context.autoReplyToCQ;
+    }
+    if (context.autoResumeCQAfterFail !== undefined && context.autoResumeCQAfterFail !== operator.config.autoResumeCQAfterFail) {
+      operator.config.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
+      updates.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
+    }
+    if (context.autoResumeCQAfterSuccess !== undefined && context.autoResumeCQAfterSuccess !== operator.config.autoResumeCQAfterSuccess) {
+      operator.config.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
+      updates.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
+    }
+    if (context.replyToWorkedStations !== undefined && context.replyToWorkedStations !== operator.config.replyToWorkedStations) {
+      operator.config.replyToWorkedStations = context.replyToWorkedStations;
+      updates.replyToWorkedStations = context.replyToWorkedStations;
+    }
+    if (context.prioritizeNewCalls !== undefined && context.prioritizeNewCalls !== operator.config.prioritizeNewCalls) {
+      operator.config.prioritizeNewCalls = context.prioritizeNewCalls;
+      updates.prioritizeNewCalls = context.prioritizeNewCalls;
+    }
+
+    // 如果有任何字段发生了变化，保存到配置文件
+    if (Object.keys(updates).length > 0) {
+      const configManager = ConfigManager.getInstance();
+      await configManager.updateOperatorConfig(operatorId, updates);
+      console.log(`💾 [操作员管理器] 已保存操作员 ${operatorId} 配置到文件:`, updates);
+    }
+
     console.log(`📻 [操作员管理器] 更新操作员 ${operatorId} 上下文:`, context);
     this.emitOperatorStatusUpdate(operatorId);
   }
