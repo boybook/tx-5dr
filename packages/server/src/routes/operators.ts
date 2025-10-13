@@ -1,17 +1,47 @@
 import { FastifyInstance } from 'fastify';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { 
+import {
   RadioOperatorListResponseSchema,
   RadioOperatorDetailResponseSchema,
   RadioOperatorActionResponseSchema,
   CreateRadioOperatorRequestSchema,
   UpdateRadioOperatorRequestSchema,
   type CreateRadioOperatorRequest,
-  type UpdateRadioOperatorRequest 
+  type UpdateRadioOperatorRequest,
+  type RadioOperatorConfig
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+
+/**
+ * 智能分配音频频率
+ * 为新操作员分配一个未被占用的频率，避免与现有操作员冲突
+ * @param existingOperators 现有操作员列表
+ * @returns 分配的频率（Hz）
+ */
+function allocateFrequency(existingOperators: RadioOperatorConfig[]): number {
+  const BASE_FREQ = 1000; // 起始频率 1000 Hz
+  const STEP = 300;       // 间隔 300 Hz（避免相邻频率干扰）
+  const MAX_OPERATORS = 10; // 最多支持10个操作员
+
+  // 获取所有已使用的频率
+  const usedFrequencies = existingOperators
+    .map(op => op.frequency)
+    .filter((f): f is number => f !== undefined && f > 0)
+    .sort((a, b) => a - b);
+
+  // 尝试分配频率：1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100, 3400, 3700
+  for (let i = 0; i < MAX_OPERATORS; i++) {
+    const candidate = BASE_FREQ + (i * STEP);
+    if (!usedFrequencies.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  // 如果所有预设频率都被占用，返回一个随机频率（降级策略）
+  return BASE_FREQ + Math.floor(Math.random() * 2000);
+}
 
 export async function operatorRoutes(fastify: FastifyInstance) {
   const configManager = ConfigManager.getInstance();
@@ -75,17 +105,26 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const operatorData = CreateRadioOperatorRequestSchema.parse(request.body);
-      
+
       // 移除呼号重复检查 - 支持相同呼号的多操作员
       // 相同呼号的多操作员会共享同一个通联日志本
-      
+
+      // 智能分配频率（如果未指定或为0）
+      let frequency = operatorData.frequency;
+      if (!frequency || frequency === 0) {
+        const existingOperators = configManager.getOperatorsConfig();
+        frequency = allocateFrequency(existingOperators);
+        fastify.log.info(`📻 [API] 为新操作员自动分配频率: ${frequency} Hz`);
+      }
+
       // 创建操作员配置，确保所有必需字段都存在
       const newOperatorData = {
         ...operatorData,
         mode: operatorData.mode || MODES.FT8,
         myGrid: operatorData.myGrid || '',  // 确保myGrid不为undefined
+        frequency,  // 使用分配的频率
       };
-      
+
       const newOperator = await configManager.addOperatorConfig(newOperatorData);
       
       // 如果引擎正在运行，同步添加到引擎中

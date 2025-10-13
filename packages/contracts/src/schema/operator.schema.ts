@@ -6,7 +6,7 @@ export const RadioOperatorConfigSchema = z.object({
   id: z.string().min(1, '操作员ID不能为空'),
   myCallsign: z.string().min(1, '呼号不能为空').max(10, '呼号不能超过10个字符'),
   myGrid: z.string().min(4, '网格坐标至少4位').max(8, '网格坐标不能超过8位').optional(),
-  frequency: z.number().min(0).max(1000000000, '频率必须在0-1GHz之间').optional(), // 完整的无线电频率（Hz），可选，用于无电台模式
+  frequency: z.number().min(0).max(1000000000, '频率必须在0-1GHz之间').default(1000), // 音频偏移频率（Hz），默认1000Hz，创建时自动分配不重复值
   transmitCycles: z.array(z.number().min(0).max(1)).default([0]), // 0=偶数周期，1=奇数周期
   maxQSOTimeoutCycles: z.number().min(1).max(50).default(10),
   maxCallAttempts: z.number().min(1).max(10).default(3),
