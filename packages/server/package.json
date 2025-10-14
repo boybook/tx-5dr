@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "NODE_ENV=development tsx watch src/index.ts",
+    "dev:prof": "NODE_ENV=development tsx --prof src/index.ts",
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts",
     "test": "vitest"
@@ -33,7 +34,7 @@
     "piscina": "^5.0.0",
     "serialport": "^13.0.0",
     "wav": "^1.0.2",
-    "wsjtx-lib": "^1.0.3",
+    "wsjtx-lib": "^1.0.4",
     "zod": "^3.25.30",
     "zod-to-json-schema": "^3.24.5"
   },

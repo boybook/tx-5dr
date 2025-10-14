@@ -16,6 +16,62 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import { getDataFilePath } from '../utils/app-paths.js';
 
+// —— 索引数据结构 ——
+interface PerCallsignInfo {
+  count: number;
+  lastQSO: QSORecord;
+  grids: Set<string>;
+}
+
+interface OperatorIndex {
+  prefixes: Set<string>;
+  cqZones: Set<number>;
+  ituZones: Set<number>;
+  perCallsign: Map<string, PerCallsignInfo>;
+}
+
+function createEmptyOperatorIndex(): OperatorIndex {
+  return {
+    prefixes: new Set<string>(),
+    cqZones: new Set<number>(),
+    ituZones: new Set<number>(),
+    perCallsign: new Map<string, PerCallsignInfo>()
+  };
+}
+
+function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
+  // 前缀/CQ/ITU（使用 core 的高效实现）
+  try {
+    const prefix = extractPrefix(qso.callsign.toUpperCase());
+    if (prefix) index.prefixes.add(prefix);
+  } catch {}
+  try {
+    const cq = getCQZone(qso.callsign.toUpperCase());
+    if (cq !== null) index.cqZones.add(cq);
+  } catch {}
+  try {
+    const itu = getITUZone(qso.callsign.toUpperCase());
+    if (itu !== null) index.ituZones.add(itu);
+  } catch {}
+
+  // 按呼号的统计
+  const key = qso.callsign.toUpperCase();
+  const existing = index.perCallsign.get(key);
+  if (!existing) {
+    index.perCallsign.set(key, {
+      count: 1,
+      lastQSO: qso,
+      grids: new Set(qso.grid ? [qso.grid] : [])
+    });
+  } else {
+    existing.count += 1;
+    if (!existing.lastQSO || qso.startTime > existing.lastQSO.startTime) {
+      existing.lastQSO = qso;
+    }
+    if (qso.grid) existing.grids.add(qso.grid);
+  }
+}
+
 /**
  * ADIF日志Provider选项
  */
@@ -44,6 +100,8 @@ export class ADIFLogProvider implements ILogProvider {
   private options: ADIFLogProviderOptions;
   private qsoCache: Map<string, QSORecord> = new Map();
   private isInitialized: boolean = false;
+  private static readonly ALL_KEY = '__ALL__';
+  private operatorIndexMap: Map<string, OperatorIndex> = new Map();
   
   constructor(options: ADIFLogProviderOptions = {}) {
     this.options = {
@@ -77,6 +135,8 @@ export class ADIFLogProvider implements ILogProvider {
     
     // 加载现有日志到缓存
     await this.loadCache();
+    // 构建/重建索引
+    this.rebuildIndexes();
     
     this.isInitialized = true;
   }
@@ -167,6 +227,46 @@ export class ADIFLogProvider implements ILogProvider {
     } catch (error) {
       console.error('Failed to load ADIF log cache:', error);
     }
+  }
+
+  // —— 索引维护 ——
+  private getOperatorKey(operatorId?: string): string {
+    return operatorId || ADIFLogProvider.ALL_KEY;
+  }
+
+  private rebuildIndexes(): void {
+    this.operatorIndexMap.clear();
+    // 仅预构建 ALL 索引；按需构建其它 operator 索引
+    const all = this.buildIndexForAll();
+    this.operatorIndexMap.set(ADIFLogProvider.ALL_KEY, all);
+  }
+
+  private buildIndexForAll(): OperatorIndex {
+    const idx = createEmptyOperatorIndex();
+    for (const qso of this.qsoCache.values()) {
+      addQSOToIndex(idx, qso);
+    }
+    return idx;
+  }
+
+  private buildIndexForOperator(operatorId: string): OperatorIndex {
+    const idx = createEmptyOperatorIndex();
+    for (const qso of this.qsoCache.values()) {
+      if (this.isQSOBelongsToOperator(qso.id, operatorId)) {
+        addQSOToIndex(idx, qso);
+      }
+    }
+    return idx;
+  }
+
+  private ensureIndex(operatorId?: string): OperatorIndex {
+    const key = this.getOperatorKey(operatorId);
+    let idx = this.operatorIndexMap.get(key);
+    if (!idx) {
+      idx = key === ADIFLogProvider.ALL_KEY ? this.buildIndexForAll() : this.buildIndexForOperator(key);
+      this.operatorIndexMap.set(key, idx);
+    }
+    return idx;
   }
   
   /**
@@ -311,6 +411,14 @@ export class ADIFLogProvider implements ILogProvider {
     }
     
     this.qsoCache.set(record.id, record);
+    // 增量更新 ALL 索引
+    const allIdx = this.operatorIndexMap.get(ADIFLogProvider.ALL_KEY);
+    if (allIdx) addQSOToIndex(allIdx, record);
+    // 增量更新指定 operator 的索引（如果已构建）
+    if (operatorId) {
+      const opIdx = this.operatorIndexMap.get(this.getOperatorKey(operatorId));
+      if (opIdx) addQSOToIndex(opIdx, record);
+    }
     await this.saveCache();
   }
   
@@ -324,6 +432,8 @@ export class ADIFLogProvider implements ILogProvider {
     
     const updated = { ...existing, ...updates, id };
     this.qsoCache.set(id, updated);
+    // 简化处理：更新后重建索引（更新频率低，成本可接受）
+    this.rebuildIndexes();
     await this.saveCache();
   }
   
@@ -334,6 +444,8 @@ export class ADIFLogProvider implements ILogProvider {
       throw new Error(`QSO with id ${id} not found`);
     }
     
+    // 删除后重建索引
+    this.rebuildIndexes();
     await this.saveCache();
   }
   
@@ -435,7 +547,10 @@ export class ADIFLogProvider implements ILogProvider {
         return orderDir === 'asc' ? comparison : -comparison;
       });
       
-      // 限制返回数量
+      // 限制/分页
+      if (options.offset) {
+        results = results.slice(options.offset);
+      }
       if (options.limit) {
         results = results.slice(0, options.limit);
       }
@@ -446,98 +561,44 @@ export class ADIFLogProvider implements ILogProvider {
   
   async hasWorkedCallsign(callsign: string, operatorId?: string): Promise<boolean> {
     this.ensureInitialized();
-    
-    const upperCallsign = callsign.toUpperCase();
-    
-    for (const qso of this.qsoCache.values()) {
-      if (qso.callsign.toUpperCase() === upperCallsign) {
-        // 如果没有指定operatorId，返回true
-        if (!operatorId) {
-          return true;
-        }
-        
-        // 检查ID中是否包含operatorId
-        if (qso.id.includes(operatorId)) {
-          return true;
-        }
-        
-        // 向后兼容：如果记录ID没有operatorId部分（旧格式），也认为匹配
-        // ID格式可能是：callsign_date_time 或 callsign_timestamp_timestamp_operatorId
-        const parts = qso.id.split('_');
-        if (parts.length === 3) {
-          // 旧格式，没有operatorId，认为匹配所有operator
-          return true;
-        }
-      }
-    }
-    
-    return false;
+    const idx = this.ensureIndex(operatorId);
+    const info = idx.perCallsign.get(callsign.toUpperCase());
+    return !!info && info.count > 0;
   }
   
   async getLastQSOWithCallsign(callsign: string, operatorId?: string): Promise<QSORecord | null> {
     this.ensureInitialized();
-    
-    const qsos = await this.queryQSOs({
-      callsign,
-      operatorId,
-      orderBy: 'time',
-      orderDirection: 'desc',
-      limit: 1
-    });
-    
-    return qsos.length > 0 ? qsos[0] : null;
+    const idx = this.ensureIndex(operatorId);
+    const info = idx.perCallsign.get(callsign.toUpperCase());
+    return info ? info.lastQSO : null;
   }
   
   async analyzeCallsign(callsign: string, grid?: string, operatorId?: string): Promise<CallsignAnalysis> {
     this.ensureInitialized();
-    
-    const upperCallsign = callsign.toUpperCase();
-    const prefix = extractPrefix(upperCallsign);
-    const prefixInfo = getPrefixInfo(upperCallsign);
-    
-    // 查找所有与该呼号的QSO
-    const qsos = await this.queryQSOs({ callsign: upperCallsign, operatorId });
-    const isNewCallsign = qsos.length === 0;
-    const lastQSO = qsos.length > 0 ? qsos[0] : undefined;
-    
-    // 检查是否是新网格
+    const upper = callsign.toUpperCase();
+    const idx = this.ensureIndex(operatorId);
+    const info = idx.perCallsign.get(upper);
+
+    const prefix = extractPrefix(upper);
+    const prefixInfo = getPrefixInfo(upper);
+    const cqZone = getCQZone(upper);
+    const ituZone = getITUZone(upper);
+
+    const isNewCallsign = !info;
+    const lastQSO = info?.lastQSO;
+    const qsoCount = info?.count || 0;
     let isNewGrid = !!grid;
-    if (grid && !isNewCallsign) {
-      isNewGrid = !qsos.some(qso => qso.grid === grid);
+    if (grid && info) {
+      isNewGrid = !info.grids.has(grid);
     }
-    
-    // 检查是否是新前缀
-    const allPrefixes = new Set<string>();
-    for (const qso of this.qsoCache.values()) {
-      if (this.isQSOBelongsToOperator(qso.id, operatorId)) {
-        allPrefixes.add(extractPrefix(qso.callsign));
-      }
-    }
-    const isNewPrefix = !allPrefixes.has(prefix);
-    
-    // 检查是否是新CQ/ITU分区
-    const cqZone = getCQZone(upperCallsign);
-    const ituZone = getITUZone(upperCallsign);
-    
-    const allCQZones = new Set<number>();
-    const allITUZones = new Set<number>();
-    
-    for (const qso of this.qsoCache.values()) {
-      if (this.isQSOBelongsToOperator(qso.id, operatorId)) {
-        const qsoCQ = getCQZone(qso.callsign);
-        const qsoITU = getITUZone(qso.callsign);
-        if (qsoCQ !== null) allCQZones.add(qsoCQ);
-        if (qsoITU !== null) allITUZones.add(qsoITU);
-      }
-    }
-    
-    const isNewCQZone = cqZone !== null && !allCQZones.has(cqZone);
-    const isNewITUZone = ituZone !== null && !allITUZones.has(ituZone);
-    
+    const isNewPrefix = !idx.prefixes.has(prefix);
+    const isNewCQZone = cqZone !== null && !idx.cqZones.has(cqZone);
+    const isNewITUZone = ituZone !== null && !idx.ituZones.has(ituZone);
+
     return {
       isNewCallsign,
       lastQSO,
-      qsoCount: qsos.length,
+      qsoCount,
       isNewGrid,
       isNewPrefix,
       isNewCQZone,

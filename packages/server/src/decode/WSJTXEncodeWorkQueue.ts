@@ -1,10 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
-import Piscina from 'piscina';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 
 export interface EncodeRequest {
   message: string;
@@ -34,23 +29,15 @@ export interface EncodeWorkQueueEvents {
  * 使用 wsjtx-lib 进行FT8消息编码
  */
 export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
-  private pool: Piscina;
   private queueSize = 0;
   private maxConcurrency: number;
+  private lib: WSJTXLib;
   
   constructor(maxConcurrency: number = 2) {
     super();
     this.maxConcurrency = maxConcurrency;
-    
-    // 创建工作池
-    this.pool = new Piscina({
-      filename: path.join(__dirname, 'wsjtxEncodeWorker.js'),
-      maxThreads: maxConcurrency,
-      minThreads: 1,
-      idleTimeout: 30000, // 30秒空闲超时
-    });
-    
-    console.log(`🎵 [编码队列] 初始化完成，最大并发: ${maxConcurrency}`);
+    this.lib = new WSJTXLib();
+    console.log(`🎵 [编码队列] 初始化完成（主线程），最大并发标注: ${maxConcurrency}`);
   }
   
   /**
@@ -70,42 +57,73 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
     console.log(`   队列大小: ${this.queueSize}`);
     
     try {
-      // 提交到工作池
-      const result = await this.pool.run(request);
-      
-      this.queueSize--;
-      
-      // 构建编码结果，并附加原始请求信息
+      const startTime = performance.now();
+
+      // 确定模式
+      const mode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
+
+      // 调用原生库编码
+      const { audioData: audioFloat32, messageSent } = await this.lib.encode(
+        mode,
+        request.message,
+        request.frequency
+      );
+
+      if (!audioFloat32 || audioFloat32.length === 0) {
+        throw new Error('编码返回的音频数据为空');
+      }
+
+      // 基于模式校验并必要时截断
+      const expectedDuration = mode === WSJTXMode.FT8 ? 12.64 : 6.4;
+      const sampleRate = 48000; // FT8/FT4 均为48kHz
+      const actualDuration = audioFloat32.length / sampleRate;
+      const maxSamples = Math.floor(expectedDuration * sampleRate * 1.5);
+      let finalAudio = audioFloat32;
+      if (finalAudio.length > maxSamples) {
+        console.warn(`⚠️ [编码队列] 音频过长，截断 ${finalAudio.length} -> ${maxSamples}`);
+        finalAudio = finalAudio.slice(0, maxSamples);
+      }
+      if (Math.abs(actualDuration - expectedDuration) > 2 && actualDuration > expectedDuration * 2) {
+        const expectedSamples = Math.floor(expectedDuration * sampleRate);
+        console.log(`🔄 [编码队列] 再次截断到期望长度: ${expectedSamples}`);
+        finalAudio = finalAudio.slice(0, expectedSamples);
+      }
+
+      // 统计振幅范围
+      let minSample = finalAudio[0];
+      let maxSample = finalAudio[0];
+      let maxAmplitude = 0;
+      for (let i = 0; i < finalAudio.length; i++) {
+        const s = finalAudio[i];
+        if (s < minSample) minSample = s;
+        if (s > maxSample) maxSample = s;
+        const a = Math.abs(s);
+        if (a > maxAmplitude) maxAmplitude = a;
+      }
+
+      const duration = finalAudio.length / sampleRate;
+      const processingTimeMs = performance.now() - startTime;
+
+      console.log(`✅ [编码完成] 操作员: ${request.operatorId}, 时长: ${duration.toFixed(2)}s, 振幅范围: [${minSample.toFixed(4)}, ${maxSample.toFixed(4)}], 耗时: ${processingTimeMs.toFixed(2)}ms`);
+
       const encodeResult: EncodeResult & { request?: EncodeRequest } = {
-        operatorId: result.operatorId,
-        audioData: new Float32Array(result.audioData), // 转换回 Float32Array
-        sampleRate: result.sampleRate,
-        duration: result.duration,
-        success: result.success,
-        error: result.error,
-        request: request // 附加原始请求信息
+        operatorId: request.operatorId,
+        audioData: finalAudio,
+        sampleRate,
+        duration,
+        success: true,
+        request
       };
-      
-      if (encodeResult.success) {
-        console.log(`🎵 [编码完成] 操作员: ${request.operatorId}, 音频时长: ${encodeResult.duration.toFixed(2)}s, 样本数: ${encodeResult.audioData.length}`);
-      } else {
-        console.error(`❌ [编码失败] 操作员: ${request.operatorId}, 错误: ${encodeResult.error}`);
-      }
-      
+
       this.emit('encodeComplete', encodeResult);
-      
-      if (this.queueSize === 0) {
-        this.emit('queueEmpty');
-      }
-      
+      if (this.queueSize === 0) this.emit('queueEmpty');
+
     } catch (error) {
-      this.queueSize--;
       console.error(`❌ [编码失败] 操作员: ${request.operatorId}:`, error);
       this.emit('encodeError', error as Error, request);
-      
-      if (this.queueSize === 0) {
-        this.emit('queueEmpty');
-      }
+      if (this.queueSize === 0) this.emit('queueEmpty');
+    } finally {
+      if (this.queueSize > 0) this.queueSize--;
     }
   }
   
@@ -123,8 +141,8 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
     return {
       queueSize: this.queueSize,
       maxConcurrency: this.maxConcurrency,
-      activeThreads: this.pool.threads.length,
-      utilization: this.pool.utilization
+      activeThreads: 0,
+      utilization: 0
     };
   }
   
@@ -132,8 +150,6 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
    * 销毁工作池
    */
   async destroy(): Promise<void> {
-    console.log('🗑️ [编码队列] 正在销毁工作池...');
-    await this.pool.destroy();
-    console.log('✅ [编码队列] 工作池销毁完成');
+    console.log('🗑️ [编码队列] 清理（主线程，无工作池）');
   }
-} 
+}
