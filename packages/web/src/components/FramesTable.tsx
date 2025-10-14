@@ -207,13 +207,17 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
     // 检查是否包含自己的呼号
     const hasMyCallsign = containsMyCallsign(messageObj.message);
+    // 是否已通联过（根据日志本分析：非新呼号即已通联）
+    const isWorkedCallsign = messageObj.logbookAnalysis?.isNewCallsign === false;
     
     // 基础消息文本
     const showChips = messageObj.logbookAnalysis && isSpecialMessageType(messageObj.message);
     
     const content = (
       <span className="flex items-center gap-1">
-        <span className={hasMyCallsign ? 'text-danger font-semibold' : ''}>{messageObj.message}</span>
+        <span className={`${hasMyCallsign ? 'text-danger font-semibold' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}>
+          {messageObj.message}
+        </span>
         {showChips && (() => {
           const highlightType = getHighestPriorityHighlight(messageObj.logbookAnalysis!);
           if (!highlightType) return null;
