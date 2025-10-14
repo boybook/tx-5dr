@@ -127,6 +127,14 @@ export async function radioRoutes(fastify: FastifyInstance) {
         }
       }
 
+      // 基础动作：立即清空服务端内存中的历史接收缓存
+      try {
+        engine.getSlotPackManager().clearInMemory();
+        console.log('🧹 [Radio Routes] 频率切换：已清空 SlotPack 内存缓存');
+      } catch (e) {
+        console.warn('⚠️ [Radio Routes] 频率切换：清空 SlotPack 缓存失败（继续广播）:', e);
+      }
+
       // 广播频率变化到所有客户端
       engine.emit('frequencyChanged', {
         frequency,

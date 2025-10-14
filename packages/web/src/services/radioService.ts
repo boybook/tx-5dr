@@ -225,6 +225,12 @@ export class RadioService {
       this.eventListeners.modeChanged?.forEach(listener => listener(mode));
     });
 
+    // 监听频率变化（用于清空历史数据并更新UI）
+    this.wsClient.onWSEvent('frequencyChanged', (data: any) => {
+      console.log('📻 频率变化:', data);
+      (this.eventListeners as any).frequencyChanged?.forEach?.((listener: any) => listener(data));
+    });
+
     // 监听时隙开始事件
     this.wsClient.onWSEvent('slotStart', (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
       console.log('🎯 时隙开始:', slotInfo);
@@ -256,9 +262,9 @@ export class RadioService {
     });
 
     // 监听音量变化事件
-    this.wsClient.onWSEvent('volumeGainChanged', (gain: number) => {
-      console.log('🔊 音量变化:', gain);
-      this.eventListeners.volumeGainChanged?.forEach(listener => listener(gain));
+    this.wsClient.onWSEvent('volumeGainChanged', (data: number | { gain: number; gainDb: number }) => {
+      console.log('🔊 音量变化:', data);
+      this.eventListeners.volumeGainChanged?.forEach(listener => listener(data as any));
     });
 
     // 监听重连状态变化
