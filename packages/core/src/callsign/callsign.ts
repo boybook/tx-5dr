@@ -604,8 +604,8 @@ class ChinaCallsignParser {
 
 // 日本呼号解析器（按区号推断地区名）
 class JapanCallsignParser {
-  // 日本常见业余前缀范围：JA-JS, 7J-7N, 8J-8N（含活动台）
-  private static readonly JAPAN_PREFIX_REGEX = /^(J[A-S]|7[J-N]|8[J-N])/;
+  // 日本常见业余前缀范围：JA-JS, 7J-7N, 8N（与DXCC前缀对齐）
+  private static readonly JAPAN_PREFIX_REGEX = /^(J[A-S]|7[J-N]|8N)/;
 
   // 区号到地区（中文）映射
   private static readonly AREA_MAP: Record<string, string> = {
@@ -630,10 +630,10 @@ class JapanCallsignParser {
     if (/^JD1/.test(upper)) return null;
     if (!this.JAPAN_PREFIX_REGEX.test(upper)) return null;
 
-    // 提取区号（前缀字母后的首个数字）
-    const m = upper.match(/^[A-Z]{1,2}(\d)/);
+    // 提取区号：取呼号中出现的第一个数字字符
+    const m = upper.match(/\d/);
     if (!m) return null;
-    const area = m[1];
+    const area = m[0];
     const region = this.AREA_MAP[area];
     if (!region) return null;
 
