@@ -602,6 +602,48 @@ class ChinaCallsignParser {
   }
 }
 
+// 日本呼号解析器（按区号推断地区名）
+class JapanCallsignParser {
+  // 日本常见业余前缀范围：JA-JS, 7J-7N, 8J-8N（含活动台）
+  private static readonly JAPAN_PREFIX_REGEX = /^(J[A-S]|7[J-N]|8[J-N])/;
+
+  // 区号到地区（中文）映射
+  private static readonly AREA_MAP: Record<string, string> = {
+    '0': '信越',        // JA0（长野、新潟等）
+    '1': '关东',        // JA1（东京、神奈川、千叶、埼玉等）
+    '2': '东海',        // JA2（爱知、静冈、岐阜、三重）
+    '3': '关西',        // JA3（大阪、京都、兵库、奈良、滋贺、和歌山）
+    '4': '中国地方',    // JA4（广岛、冈山、山口、岛根、鸟取）
+    '5': '四国',        // JA5（香川、德岛、爱媛、高知）
+    '6': '九州/冲绳',   // JA6（九州各县，历史上含冲绳 JR6/JS6）
+    '7': '东北',        // JA7（青森、岩手、秋田、山形、宫城、福岛）
+    '8': '北海道',      // JA8（北海道）
+    '9': '北陆'         // JA9（富山、石川、福井）
+  };
+
+  public static parseJapanCallsign(callsign: string): { country: string; countryZh: string } | null {
+    if (!callsign) return null;
+    const upper = callsign.toUpperCase();
+
+    // 仅处理日本通用前缀
+    // 排除 JD1（小笠原/南鸟岛等独立 DXCC 实体）
+    if (/^JD1/.test(upper)) return null;
+    if (!this.JAPAN_PREFIX_REGEX.test(upper)) return null;
+
+    // 提取区号（前缀字母后的首个数字）
+    const m = upper.match(/^[A-Z]{1,2}(\d)/);
+    if (!m) return null;
+    const area = m[1];
+    const region = this.AREA_MAP[area];
+    if (!region) return null;
+
+    return {
+      country: 'Japan',
+      countryZh: `日本·${region}`
+    };
+  }
+}
+
 // DXCC 数据索引
 class DXCCIndex {
   private entityMap: Map<number, any>;
@@ -735,6 +777,21 @@ class DXCCIndex {
       };
     }
 
+    // 尝试日本呼号解析（附带地区信息）
+    const japanInfo = JapanCallsignParser.parseJapanCallsign(upperCallsign);
+    if (japanInfo) {
+      return {
+        name: japanInfo.country,
+        countryZh: japanInfo.countryZh,
+        flag: '🇯🇵',
+        prefix: upperCallsign.match(/^[A-Z]+/)?.[0],
+        entityCode: 339, // 日本 DXCC 实体代码
+        continent: ['AS'],
+        cqZone: 25,
+        ituZone: 45
+      };
+    }
+
     // 1. 首先使用 Trie 进行最长前缀匹配
     const trieHit = this.longestTrieMatch(upperCallsign);
     if (trieHit.entity) {
@@ -758,7 +815,7 @@ class DXCCIndex {
       }
     }
 
-    this.entityLRU.set(upperCallsign, null);
+    // 不缓存负结果，避免数据或规则更新后“粘住”未命中
     return null;
   }
 
