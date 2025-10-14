@@ -6004,7 +6004,7 @@ __metadata:
     typescript: "npm:^5.0.0"
     vitest: "npm:^1.0.0"
     wav: "npm:^1.0.2"
-    wsjtx-lib: "npm:^1.0.3"
+    wsjtx-lib: "npm:^1.0.4"
     zod: "npm:^3.25.30"
     zod-to-json-schema: "npm:^3.24.5"
   languageName: unknown
@@ -13004,14 +13004,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"wsjtx-lib@npm:^1.0.3":
-  version: 1.0.3
-  resolution: "wsjtx-lib@npm:1.0.3"
+"wsjtx-lib@npm:^1.0.4":
+  version: 1.0.4
+  resolution: "wsjtx-lib@npm:1.0.4"
   dependencies:
     node-addon-api: "npm:^8.3.1"
     node-gyp: "npm:latest"
     prebuild-install: "npm:^7.1.1"
-  checksum: 10c0/018700e69628aad5146ce108ae46ca113574ccf998cc7c0d9ae2748f0b22df4f37b40234785a3141d54a0c899f3c662ba0d6f388181bab9b2ebb961324f6a59a
+  checksum: 10c0/82a4c11ab6b124ac74be7b7a8658e80a3effd23e9bd9adf30587497a9ea35d11977b06dd6f7a67dabde25919f7e7cfd964c4702367be094955548edea9f98c73
   conditions: (os=darwin | os=linux | os=win32) & (cpu=x64 | cpu=arm64)
   languageName: node
   linkType: hard

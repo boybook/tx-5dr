@@ -379,6 +379,42 @@ const COUNTRY_ZH_MAP: Record<string, string> = {
   'Zimbabwe': '津巴布韦'
 };
 
+// 简单的 LRU 缓存实现（用于高频呼号/前缀查询）
+class LRU<K, V> {
+  private map: Map<K, V>;
+  private limit: number;
+  constructor(limit = 1000) {
+    this.map = new Map();
+    this.limit = limit;
+  }
+  get(key: K): V | undefined {
+    if (!this.map.has(key)) return undefined;
+    const value = this.map.get(key)!;
+    // 刷新最近使用
+    this.map.delete(key);
+    this.map.set(key, value);
+    return value;
+  }
+  set(key: K, value: V): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, value);
+    if (this.map.size > this.limit) {
+      const firstKey = this.map.keys().next().value as K;
+      this.map.delete(firstKey);
+    }
+  }
+}
+
+// 前缀Trie结构（字符图）
+interface PrefixTrieNode {
+  c: Map<string, PrefixTrieNode>; // children
+  e?: any; // entity at terminal
+  p?: string; // prefix at terminal
+}
+function createTrieNode(): PrefixTrieNode {
+  return { c: new Map() };
+}
+
 export interface CallsignInfo {
   callsign: string;
   country?: string;
@@ -572,12 +608,20 @@ class DXCCIndex {
   private prefixRegexMap: Map<RegExp, any>;
   private prefixMap: Map<string, any>;
   private countryNameMap: Map<string, any>;
+  // 基于字符的前缀Trie，用于最长前缀匹配（比遍历更高效）
+  private prefixTrie: PrefixTrieNode;
+  // 结果缓存，减少重复解析成本
+  private prefixLRU: LRU<string, string>;
+  private entityLRU: LRU<string, any>;
 
   constructor() {
     this.entityMap = new Map();
     this.prefixRegexMap = new Map();
     this.prefixMap = new Map();
     this.countryNameMap = new Map();
+    this.prefixTrie = createTrieNode();
+    this.prefixLRU = new LRU(5000);
+    this.entityLRU = new LRU(5000);
 
     // 初始化索引
     this.initializeIndex();
@@ -603,19 +647,78 @@ class DXCCIndex {
         }
       }
 
-      // 前缀索引
+      // 前缀索引（在初始化阶段完成 split/trim 并构建 Trie）
       if (entity.prefix) {
-        entity.prefix.split(',').forEach(prefix => {
-          this.prefixMap.set(prefix.trim(), entity);
-        });
+        const prefixes = entity.prefix.split(',').map((p: string) => p.trim()).filter(Boolean);
+        for (const prefix of prefixes) {
+          this.prefixMap.set(prefix, entity);
+          this.insertIntoTrie(prefix, entity);
+        }
       }
     });
+  }
+
+  private insertIntoTrie(prefix: string, entity: any): void {
+    let node = this.prefixTrie;
+    for (let i = 0; i < prefix.length; i++) {
+      const ch = prefix[i];
+      let next = node.c.get(ch);
+      if (!next) {
+        next = createTrieNode();
+        node.c.set(ch, next);
+      }
+      node = next;
+    }
+    // 在终止节点记录命中的实体
+    node.e = entity;
+    node.p = prefix;
+  }
+
+  private longestTrieMatch(callsign: string): { prefix: string | null; entity: any | null } {
+    // 仅做一次清洗：转大写+去除 '/...'
+    const upper = callsign.toUpperCase();
+    const slashIdx = upper.indexOf('/');
+    const clean = slashIdx === -1 ? upper : upper.slice(0, slashIdx);
+
+    // 先查缓存
+    const cachedPrefix = this.prefixLRU.get(clean);
+    if (cachedPrefix !== undefined) {
+      const ent = cachedPrefix ? this.prefixMap.get(cachedPrefix) || null : null;
+      return { prefix: cachedPrefix || null, entity: ent };
+    }
+
+    let node = this.prefixTrie;
+    let lastPrefix: string | null = null;
+    let lastEntity: any | null = null;
+
+    for (let i = 0; i < clean.length; i++) {
+      const ch = clean[i];
+      const next = node.c.get(ch);
+      if (!next) break;
+      node = next;
+      if (node.e) {
+        lastPrefix = node.p || null;
+        lastEntity = node.e;
+      }
+    }
+
+    this.prefixLRU.set(clean, lastPrefix || '');
+    return { prefix: lastPrefix, entity: lastEntity };
+  }
+
+  public getLongestPrefix(callsign: string): string | null {
+    const { prefix } = this.longestTrieMatch(callsign);
+    return prefix || null;
   }
 
   public findEntityByCallsign(callsign: string): any {
     if (!callsign) return null;
 
     const upperCallsign = callsign.toUpperCase();
+
+    // LRU 缓存命中
+    const cached = this.entityLRU.get(upperCallsign);
+    if (cached !== undefined) return cached;
 
     // 首先尝试中国呼号解析
     const chinaInfo = ChinaCallsignParser.parseChinaCallsign(upperCallsign);
@@ -632,26 +735,30 @@ class DXCCIndex {
       };
     }
 
-    // 1. 首先尝试前缀匹配
-    for (const [prefix, entity] of this.prefixMap) {
-      if (upperCallsign.startsWith(prefix)) {
-        return {
-          ...entity,
-          countryZh: COUNTRY_ZH_MAP[entity.name] || entity.name
-        };
-      }
+    // 1. 首先使用 Trie 进行最长前缀匹配
+    const trieHit = this.longestTrieMatch(upperCallsign);
+    if (trieHit.entity) {
+      const result = {
+        ...trieHit.entity,
+        countryZh: COUNTRY_ZH_MAP[trieHit.entity.name] || trieHit.entity.name
+      };
+      this.entityLRU.set(upperCallsign, result);
+      return result;
     }
 
     // 2. 然后尝试正则表达式匹配
     for (const [regex, entity] of this.prefixRegexMap) {
       if (regex.test(upperCallsign)) {
-        return {
+        const result = {
           ...entity,
           countryZh: COUNTRY_ZH_MAP[entity.name] || entity.name
         };
+        this.entityLRU.set(upperCallsign, result);
+        return result;
       }
     }
 
+    this.entityLRU.set(upperCallsign, null);
     return null;
   }
 
@@ -702,39 +809,18 @@ export function getCallsignInfo(callsign: string): CallsignInfo | undefined {
  */
 export function extractCallsignPrefix(callsign: string): string {
   if (!callsign) return '';
-  
-  // 移除常见的后缀标识符（如 /P, /M, /MM, /AM, /QRP等）
-  const cleanCallsign = callsign.split('/')[0].toUpperCase();
-  
-  // 查找最长匹配的前缀
-  let longestMatch = '';
-  const allEntities = dxccIndex.getAllEntities();
-  
-  for (const entity of allEntities) {
-    if (entity.prefix) {
-      const prefixes = entity.prefix.split(',').map((p: string) => p.trim());
-      for (const prefix of prefixes) {
-        if (cleanCallsign.startsWith(prefix) && prefix.length > longestMatch.length) {
-          longestMatch = prefix;
-        }
-      }
-    }
-  }
-  
-  // 如果没有找到匹配的前缀，尝试提取前1-2个字符作为前缀
-  if (!longestMatch) {
-    // 如果第二个字符是数字，通常前缀只有一个字母
-    if (cleanCallsign.length >= 2 && /\d/.test(cleanCallsign[1])) {
-      longestMatch = cleanCallsign[0];
-    } else if (cleanCallsign.length >= 2) {
-      // 否则取前两个字符
-      longestMatch = cleanCallsign.substring(0, 2);
-    } else {
-      longestMatch = cleanCallsign;
-    }
-  }
-  
-  return longestMatch;
+  // 使用Trie获取最长DXCC前缀
+  const prefix = dxccIndex.getLongestPrefix(callsign);
+  if (prefix) return prefix;
+
+  // 回退：快速推断 1-2 个字符作为前缀（无需 split/match）
+  const upper = callsign.toUpperCase();
+  const slashIdx = upper.indexOf('/');
+  const clean = slashIdx === -1 ? upper : upper.slice(0, slashIdx);
+
+  if (clean.length >= 2 && /\d/.test(clean[1])) return clean[0];
+  if (clean.length >= 2) return clean.slice(0, 2);
+  return clean;
 }
 
 /**
