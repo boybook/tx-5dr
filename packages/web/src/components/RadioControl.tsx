@@ -1039,28 +1039,30 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   // 监听频率变化事件
   useEffect(() => {
-    if (connection.state.radioService) {
-      connection.state.radioService.on('frequencyChanged', (data: any) => {
-        console.log('📻 收到频率变化广播:', data);
+    if (!connection.state.radioService) return;
 
-        // 更新当前频率
-        setCurrentFrequency(String(data.frequency));
+    const handleFrequencyChanged = (data: any) => {
+      console.log('📻 收到频率变化广播:', data);
 
-        // 判断是否是预设频率
-        const isPreset = filteredFrequencies.some(f => f.key === String(data.frequency));
-        if (!isPreset) {
-          // 自定义频率,显示自定义标签
-          setCustomFrequencyLabel(data.description);
-        } else {
-          // 预设频率,清除自定义标签
-          setCustomFrequencyLabel('');
-        }
-      });
+      // 更新当前频率
+      setCurrentFrequency(String(data.frequency));
 
-      return () => {
-        connection.state.radioService?.off('frequencyChanged');
-      };
-    }
+      // 判断是否是预设频率
+      const isPreset = filteredFrequencies.some(f => f.key === String(data.frequency));
+      if (!isPreset) {
+        // 自定义频率,显示自定义标签
+        setCustomFrequencyLabel(data.description);
+      } else {
+        // 预设频率,清除自定义标签
+        setCustomFrequencyLabel('');
+      }
+    };
+
+    connection.state.radioService.on('frequencyChanged', handleFrequencyChanged as any);
+
+    return () => {
+      connection.state.radioService?.off('frequencyChanged', handleFrequencyChanged as any);
+    };
   }, [connection.state.radioService, filteredFrequencies]);
 
   return (

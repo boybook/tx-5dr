@@ -453,6 +453,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       operatorStatusUpdate: (operatorStatus: OperatorStatus) => {
         radioDispatch({ type: 'operatorStatusUpdate', payload: operatorStatus });
       },
+      // 频率变化：清空本地 SlotPack 历史
+      frequencyChanged: (_data: any) => {
+        console.log('📻 [RadioProvider] 频率变化，清空本地时隙历史');
+        slotPacksDispatch({ type: 'CLEAR_DATA' });
+      },
       handshakeComplete: (data: any) => {
         console.log('🤝 [RadioProvider] 握手完成:', data);
         if (data.finalEnabledOperatorIds) {

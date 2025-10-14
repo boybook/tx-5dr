@@ -50,7 +50,25 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     radioService.on('transmissionLog', handleTransmissionLog);
     
     return () => {
-      radioService.off('transmissionLog');
+      radioService.off('transmissionLog', handleTransmissionLog as any);
+    };
+  }, [connection.state.radioService]);
+
+  // 频率变化时清空本地缓存，避免跨频率混杂
+  useEffect(() => {
+    const radioService = connection.state.radioService;
+    if (!radioService) return;
+
+    const handleFrequencyChanged = () => {
+      setMyFrameGroups([]);
+      setTransmissionLogs([]);
+      setFrozenFrameGroups([]);
+      setRecentSlotGroupKeys([]);
+    };
+
+    radioService.on('frequencyChanged' as any, handleFrequencyChanged as any);
+    return () => {
+      radioService.off('frequencyChanged' as any, handleFrequencyChanged as any);
     };
   }, [connection.state.radioService]);
 

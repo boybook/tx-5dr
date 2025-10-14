@@ -26,6 +26,16 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   }
 
   /**
+   * 清空内存中的所有时隙包但保留事件监听器
+   * 用于诸如切换频率等需要快速“换盘”的场景，避免打断外部对本管理器的订阅
+   */
+  clearInMemory(): void {
+    console.log('🧹 [SlotPackManager] 清空内存中的时隙缓存（保留监听器）');
+    this.slotPacks.clear();
+    this.lastSlotPack = null;
+  }
+
+  /**
    * 添加发射帧到指定时隙包
    * 将发射的消息作为特殊的帧添加到SlotPack中
    */
@@ -101,6 +111,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 处理解码结果，更新对应的 SlotPack
    */
   processDecodeResult(result: DecodeResult): SlotPack {
+
     const { slotId } = result;
     
     // 获取或创建 SlotPack
