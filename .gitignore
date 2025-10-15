@@ -109,5 +109,8 @@ ehthumbs.db
 Thumbs.db
 
 # Electron
-out/ 
-resources/
+out/
+
+# Ignore downloaded binaries in resources but keep structure and docs
+resources/bin/*/
+!resources/bin/.keep
