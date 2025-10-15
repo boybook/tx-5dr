@@ -9,15 +9,15 @@ export default {
   packagerConfig: {
     name: 'TX-5DR',
     executableName: 'tx-5dr',
-    icon: './packages/electron-main/assets/icon',
+    icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon'),
     appBundleId: 'com.tx5dr.app',
     appCategoryType: 'public.app-category.utilities',
     asar: false,
     // 拷贝外置资源到 Contents/Resources 根目录（非 app/ 下）
     extraResource: [
-      './resources/bin',
-      './resources/licenses',
-      './resources/README.txt'
+      join(__dirname, 'resources', 'bin'),
+      join(__dirname, 'resources', 'licenses'),
+      join(__dirname, 'resources', 'README.txt')
     ],
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
@@ -57,8 +57,8 @@ export default {
         name: 'TX5DR',
         authors: 'BG5DRB',
         description: 'TX-5DR Ham Radio FT8 Application',
-        setupIcon: './packages/electron-main/assets/icon.ico',
-                  iconUrl: 'https://raw.githubusercontent.com/boybook/tx-5dr/main/packages/electron-main/assets/icon.ico'
+        setupIcon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.ico'),
+        iconUrl: 'https://raw.githubusercontent.com/boybook/tx-5dr/main/packages/electron-main/assets/icon.ico'
       }
     },
     // macOS Packages
@@ -75,7 +75,7 @@ export default {
         options: {
           maintainer: 'BG5DRB <bg5drb@example.com>',
           homepage: 'https://tx5dr.com',
-          icon: './packages/electron-main/assets/icon.png',
+          icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.png'),
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
           genericName: 'Ham Radio Application'
@@ -88,7 +88,7 @@ export default {
       config: {
         options: {
           homepage: 'https://tx5dr.com',
-          icon: './packages/electron-main/assets/icon.png',
+          icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.png'),
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
           genericName: 'Ham Radio Application',
