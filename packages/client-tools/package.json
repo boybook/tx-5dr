@@ -1,0 +1,12 @@
+{
+  "name": "@tx5dr/client-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/proxy.js",
+  "scripts": {
+    "build": "node -e \"console.log('client-tools: no build step')\"",
+    "dev": "node src/proxy.js",
+    "start": "node src/proxy.js"
+  }
+}

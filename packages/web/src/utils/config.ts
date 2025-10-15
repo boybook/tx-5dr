@@ -21,8 +21,6 @@ declare global {
  */
 export function isElectron(): boolean {
   const result = typeof window !== 'undefined' && window.navigator.userAgent.includes('Electron');
-  //console.log('🔍 [配置] 环境检测 - Electron环境:', result);
-  //console.log('🔍 [配置] User Agent:', typeof window !== 'undefined' ? window.navigator.userAgent : 'N/A');
   return result;
 }
 
@@ -33,17 +31,8 @@ export function isElectron(): boolean {
  * Electron环境：使用localhost:4000
  */
 export function getApiBaseUrl(): string {
-  const electronEnv = isElectron();
-  let result: string;
-  
-  if (electronEnv) {
-    // Electron环境，直接连接到服务器
-    result = 'http://localhost:4000/api';
-  } else {
-    // 统一使用相对路径，由Vite代理或生产环境路由处理
-    result = '/api';
-  }
-  
+  // 统一使用相对路径，由 Vite 代理（开发）或 client-tools 反向代理（生产/Electron）处理
+  const result = '/api';
   console.log('🔍 [配置] API基础URL:', result);
   return result;
 }
@@ -66,18 +55,9 @@ export function getApiUrl(endpoint: string = ''): string {
  * Electron环境：使用localhost:4000
  */
 export function getWebSocketUrl(): string {
-  const electronEnv = isElectron();
-  let result: string;
-  
-  if (electronEnv) {
-    // Electron环境，直接连接到服务器
-    result = 'ws://localhost:4000/api/ws';
-  } else {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    result = `${protocol}//${host}/api/ws`;
-  }
-  
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = window.location.host;
+  const result = `${protocol}//${host}/api/ws`;
   console.log('🔍 [配置] WebSocket URL:', result);
   return result;
 }

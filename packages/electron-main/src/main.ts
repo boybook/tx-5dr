@@ -1,60 +1,102 @@
 import { app, BrowserWindow, Menu, ipcMain, shell } from 'electron';
 import { join } from 'path';
 import http from 'http';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
 
 // 获取当前模块的目录（ESM中的__dirname替代方案）
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-let embeddedServer: any = null;
 let serverCheckInterval: any = null;
+let serverProcess: import('node:child_process').ChildProcess | null = null;
+let webProcess: import('node:child_process').ChildProcess | null = null;
 
-async function startEmbeddedServer(): Promise<boolean> {
-  try {
-    console.log('🚀 启动嵌入式服务器...');
-    
-    // 根据打包状态确定服务器模块路径
-    const serverModulePath = app.isPackaged
-      ? join(process.resourcesPath, 'app', 'packages', 'server', 'dist', 'server.js')
-      : join(__dirname, '../../server/dist/server.js');
-    
-    const digitalRadioEnginePath = app.isPackaged
-      ? join(process.resourcesPath, 'app', 'packages', 'server', 'dist', 'DigitalRadioEngine.js')
-      : join(__dirname, '../../server/dist/DigitalRadioEngine.js');
+function triplet() {
+  const arch = process.arch; // 'x64' | 'arm64'
+  const plat = process.platform; // 'win32' | 'linux' | 'darwin'
+  return `${plat}-${arch}`;
+}
 
-    console.log('🔍 Server module path:', serverModulePath);
-    console.log('🔍 DigitalRadioEngine path:', digitalRadioEnginePath);
-    
-    // 在 Windows 上需要将路径转换为 file:// URL 格式
-    const serverModuleURL = pathToFileURL(serverModulePath).href;
-    const digitalRadioEngineURL = pathToFileURL(digitalRadioEnginePath).href;
-    
-    console.log('🔍 Server module URL:', serverModuleURL);
-    console.log('🔍 DigitalRadioEngine URL:', digitalRadioEngineURL);
-    
-    // 动态导入服务端模块
-    const { createServer } = await import(serverModuleURL);
-    const { DigitalRadioEngine } = await import(digitalRadioEngineURL);
-    
-    // 创建服务器实例
-    embeddedServer = await createServer();
-    await embeddedServer.listen({ port: 4000, host: '0.0.0.0' });
-    console.log('🚀 TX-5DR server running on http://localhost:4000');
-    
-    // 启动时钟系统
-    const clockManager = DigitalRadioEngine.getInstance();
-    console.log('🕐 启动时钟系统进行测试...');
-    await clockManager.start();
-    console.log('✅ 嵌入式服务器启动完成！');
-    
-    return true;
-  } catch (error) {
-    console.error('❌ 嵌入式服务器启动失败:', error);
-    console.error('❌ 错误详情:', error);
-    return false;
+function resourcesRoot() {
+  return app.isPackaged
+    ? process.resourcesPath
+    : path.resolve(__dirname, '..', '..', '..', 'resources');
+}
+
+function nodePath() {
+  const res = resourcesRoot();
+  const exe = process.platform === 'win32' ? 'node.exe' : 'node';
+  return path.join(res, 'bin', triplet(), exe);
+}
+
+// no quarantine/permission fallbacks; we assume portable node file is valid
+
+function runChild(name: string, entryAbs: string, extraEnv: Record<string, string> = {}) {
+  const res = resourcesRoot();
+  const NODE = nodePath();
+  if (!fs.existsSync(NODE)) {
+    console.error(`[child:${name}] node binary not found:`, NODE);
   }
+  if (!fs.existsSync(entryAbs)) {
+    console.error(`[child:${name}] entry not found:`, entryAbs);
+  }
+  const env = {
+    ...process.env,
+    NODE_ENV: 'production',
+    APP_RESOURCES: res,
+    ...(process.platform === 'win32'
+      ? { PATH: `${process.env.PATH};${path.join(res, 'app', 'native')}` }
+      : { LD_LIBRARY_PATH: `${path.join(res, 'app', 'native')}:${process.env.LD_LIBRARY_PATH || ''}` }),
+    ...extraEnv,
+  } as NodeJS.ProcessEnv;
+
+  const cwd = path.dirname(entryAbs);
+  const child = spawn(NODE, [entryAbs], { cwd, env, stdio: 'inherit' });
+  child.on('exit', (code) => {
+    console.log(`[child:${name}] exited with code`, code);
+  });
+  child.on('error', (err) => {
+    console.error(`[child:${name}] failed to start:`, err);
+  });
+  return child;
+}
+
+// 简单 HTTP 等待
+async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Promise<boolean> {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    function once() {
+      try {
+        const u = new URL(url);
+        const req = http.request(
+          { hostname: u.hostname, port: Number(u.port || 80), path: u.pathname, method: 'GET', timeout: 2000 },
+          (res) => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 500) return resolve(true);
+            res.resume();
+            res.on('end', () => setTimeout(next, intervalMs));
+          }
+        );
+        req.on('error', () => setTimeout(next, intervalMs));
+        req.on('timeout', () => {
+          req.destroy();
+          setTimeout(next, intervalMs);
+        });
+        req.end();
+      } catch {
+        setTimeout(next, intervalMs);
+      }
+    }
+    function next() {
+      if (Date.now() - started > timeoutMs) return resolve(false);
+      once();
+    }
+    once();
+  });
 }
 
 async function checkServerHealth(): Promise<boolean> {
@@ -79,7 +121,7 @@ async function checkServerHealth(): Promise<boolean> {
       
       res.on('end', () => {
         console.log(`🩺 [健康检查] 响应数据: ${data}`);
-        resolve(res.statusCode === 200);
+        resolve((res.statusCode || 0) < 500);
       });
     });
     
@@ -110,18 +152,20 @@ function cleanup() {
     console.log('🧹 [清理] 已清理健康检查定时器');
   }
   
-  // 只在生产模式下清理嵌入式服务器
-  if (!isDevelopment && embeddedServer) {
-    console.log('🧹 [清理] 正在关闭嵌入式服务器...');
-    try {
-      embeddedServer.close();
-      embeddedServer = null;
-      console.log('🧹 [清理] 嵌入式服务器已关闭');
-    } catch (error) {
-      console.error('❌ [清理] 关闭嵌入式服务器失败:', error);
+  // 生产模式：关闭子进程
+  if (!isDevelopment) {
+    if (webProcess && !webProcess.killed) {
+      console.log('🧹 [清理] 关闭 web 子进程');
+      try { webProcess.kill(); } catch {}
+      webProcess = null;
     }
-  } else if (isDevelopment) {
-    console.log('🧹 [清理] 开发模式：跳过嵌入式服务器清理');
+    if (serverProcess && !serverProcess.killed) {
+      console.log('🧹 [清理] 关闭 server 子进程');
+      try { serverProcess.kill(); } catch {}
+      serverProcess = null;
+    }
+  } else {
+    console.log('🧹 [清理] 开发模式：无子进程可清理');
   }
 }
 
@@ -152,16 +196,27 @@ async function createWindow() {
     
     console.log('✅ 外部服务器连接成功！');
   } else {
-    // 生产模式：启动嵌入式服务器
-    console.log('🚀 生产模式：启动嵌入式服务器...');
-    const serverStarted = await startEmbeddedServer();
-    
-    if (!serverStarted) {
-      console.error('❌ Failed to start embedded server. Exiting...');
-      process.exit(1);
+    // 生产模式：使用便携 Node 启动子进程（server + web）
+    console.log('🚀 生产模式：使用便携 Node 启动子进程...');
+    const res = resourcesRoot();
+    const serverEntry = join(res, 'app', 'packages', 'server', 'dist', 'index.js');
+    const webEntry = join(res, 'app', 'packages', 'client-tools', 'src', 'proxy.js');
+
+    serverProcess = runChild('server', serverEntry, { PORT: '4000' });
+    webProcess = runChild('client-tools', webEntry, {
+      PORT: '5173',
+      STATIC_DIR: join(res, 'app', 'packages', 'web', 'dist'),
+      TARGET: 'http://127.0.0.1:4000',
+      // 默认对外开放（监听 0.0.0.0）
+      PUBLIC: '1',
+    });
+
+    const webOk = await waitForHttp('http://127.0.0.1:5173');
+    if (!webOk) {
+      console.warn('⚠️ web 服务启动等待超时');
+    } else {
+      console.log('✅ web 服务已就绪');
     }
-    
-    console.log('✅ 嵌入式服务器启动完成！');
   }
 
   console.log('🎉 Server is ready! Creating application window...');
@@ -246,13 +301,11 @@ async function createWindow() {
       console.error('❌ 加载开发页面失败:', error);
     }
   } else {
-    // 打包后的路径 - 不使用 asar
-    const indexPath = app.isPackaged 
-      ? join(process.resourcesPath, 'app', 'packages', 'web', 'dist', 'index.html')
-      : join(__dirname, '../../web/dist/index.html');
-    console.log('Loading production file:', indexPath);
+    // 生产模式：连接内置静态 web 服务
+    const indexPath = 'http://127.0.0.1:5173';
+    console.log('Loading production URL:', indexPath);
     try {
-      await mainWindow.loadFile(indexPath);
+      await mainWindow.loadURL(indexPath);
     } catch (error) {
       console.error('❌ 加载生产页面失败:', error);
     }
@@ -402,19 +455,15 @@ function setupIpcHandlers() {
 
       // 加载通联日志页面
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
-        // 开发模式：使用开发服务器
+        // 开发模式：使用 Vite
         const logbookUrl = `http://localhost:5173/logbook.html?${queryString}`;
         console.log('📖 [IPC] 加载开发URL:', logbookUrl);
         await logbookWindow.loadURL(logbookUrl);
         logbookWindow.webContents.openDevTools();
       } else {
-        // 生产模式：加载打包后的文件
-        const logbookPath = app.isPackaged 
-          ? join(process.resourcesPath, 'app', 'packages', 'web', 'dist', 'logbook.html')
-          : join(__dirname, '../../web/dist/logbook.html');
-        
-        const fullUrl = `file://${logbookPath}?${queryString}`;
-        console.log('📖 [IPC] 加载生产文件:', fullUrl);
+        // 生产模式：连接内置静态 web 服务
+        const fullUrl = `http://127.0.0.1:5173/logbook.html?${queryString}`;
+        console.log('📖 [IPC] 加载生产URL:', fullUrl);
         await logbookWindow.loadURL(fullUrl);
       }
 

@@ -5920,6 +5920,12 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@tx5dr/client-tools@workspace:packages/client-tools":
+  version: 0.0.0-use.local
+  resolution: "@tx5dr/client-tools@workspace:packages/client-tools"
+  languageName: unknown
+  linkType: soft
+
 "@tx5dr/contracts@workspace:*, @tx5dr/contracts@workspace:packages/contracts":
   version: 0.0.0-use.local
   resolution: "@tx5dr/contracts@workspace:packages/contracts"

@@ -13,6 +13,12 @@ export default {
     appBundleId: 'com.tx5dr.app',
     appCategoryType: 'public.app-category.utilities',
     asar: false,
+    // 拷贝外置资源到 Contents/Resources 根目录（非 app/ 下）
+    extraResource: [
+      './resources/bin',
+      './resources/licenses',
+      './resources/README.txt'
+    ],
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
     platform: process.env.PLATFORM || undefined,
@@ -111,7 +117,7 @@ export default {
       execSync('yarn build', { stdio: 'inherit' });
       console.log('✅ Build completed');
     },
-    // 打包后的处理
+    // 打包后的处理（保留 Linux 清理）
     postPackage: async (forgeConfig, options) => {
       console.log('📦 Post-package hook executed');
       
