@@ -110,6 +110,15 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           try { this.radioManager.setFrequency(freq); } catch (e) { console.error('设置电台频率失败', e); }
         }
       },
+      getRadioFrequency: async () => {
+        try {
+          // 若未连接，将抛错；由上层处理回退
+          const freq = await this.radioManager.getFrequency();
+          return typeof freq === 'number' ? freq : null;
+        } catch {
+          return null;
+        }
+      },
       transmissionTracker: this.transmissionTracker
     });
     

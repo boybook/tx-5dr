@@ -39,7 +39,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 .pop();
             if (msgSignalReport) {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
-                strategy.context.reportSent = msgSignalReport.snr;  // 更新信号报告
+                // 对方发来的 SIGNAL_REPORT 表示对我方的报告，应记录为我方“接收的信号报告”
+                strategy.context.reportReceived = msg.report;
+                // 同时预设我方准备回送给对方的报告值（常以我方测得的SNR为准）
+                strategy.context.reportSent = msgSignalReport.snr;
                 strategy.context.targetCallsign = msg.senderCallsign;
                 // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
                 // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
@@ -83,8 +86,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             
             if (msgRogerReport) {
                 const msg = msgRogerReport.message as FT8MessageRogerReport;
-                strategy.context.reportReceived = msg.report;
-                strategy.context.reportSent = msgRogerReport.snr;
+                // 对方的 R-xx 是对我方报告的确认，不应覆盖“接收的信号报告”（应由对方最初的 SIGNAL_REPORT 提供）
+                // 保守处理：仅在我方未设置 reportSent 时，从当前帧的SNR补齐
+                if (strategy.context.reportSent === undefined || strategy.context.reportSent === null) {
+                    strategy.context.reportSent = msgRogerReport.snr;
+                }
                 // 记录或更新实际通联频率 (基础频率 + 对方信号的频率偏移)
                 // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
                 if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {

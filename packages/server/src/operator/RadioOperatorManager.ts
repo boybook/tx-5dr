@@ -27,6 +27,8 @@ export interface RadioOperatorManagerOptions {
   getCurrentMode: () => ModeDescriptor;
   setRadioFrequency: (freq: number) => void;
   transmissionTracker?: any; // TransmissionTracker实例
+  // 获取物理电台当前基频（Hz）；若无法获取，返回null
+  getRadioFrequency?: () => Promise<number | null>;
 }
 
 /**
@@ -43,6 +45,7 @@ export class RadioOperatorManager {
   private isRunning: boolean = false;
   private logManager: LogManager;
   private transmissionTracker: any; // TransmissionTracker实例
+  private getRadioFrequency?: () => Promise<number | null>;
 
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
@@ -52,6 +55,7 @@ export class RadioOperatorManager {
     this.setRadioFrequency = options.setRadioFrequency;
     this.logManager = LogManager.getInstance();
     this.transmissionTracker = options.transmissionTracker;
+    this.getRadioFrequency = options.getRadioFrequency;
 
     // 监听发射请求
     this.eventEmitter.on('requestTransmit', (request: TransmitRequest) => {
@@ -76,14 +80,51 @@ export class RadioOperatorManager {
           }
         }
         
-        console.log(`📝 [操作员管理器] 记录QSO到日志本 ${logBook.name}: ${data.qsoRecord.callsign} @ ${new Date(data.qsoRecord.startTime).toISOString()}`);
-        await logBook.provider.addQSO(data.qsoRecord, data.operatorId);
+        // 兜底校正频率：防止误将音频偏移(Hz)写入为绝对频率
+        const operator = this.operators.get(data.operatorId);
+        let baseFreq = 0;
+        // 优先从物理电台获取全局基频
+        if (this.getRadioFrequency) {
+          try {
+            const rf = await this.getRadioFrequency();
+            if (rf && rf > 1_000_000) baseFreq = rf;
+          } catch {}
+        }
+        // 若仍无效，回退到“最后选择的频率”配置
+        if (!(baseFreq > 1_000_000)) {
+          try {
+            const cfg = ConfigManager.getInstance();
+            const last = cfg.getLastSelectedFrequency();
+            if (last && last.frequency && last.frequency > 1_000_000) {
+              baseFreq = last.frequency;
+              console.warn(`🛠️ [操作员管理器] 使用最后选择的频率作为基频: ${baseFreq}Hz`);
+            }
+          } catch {}
+        }
+        const originalFreq = data.qsoRecord.frequency || 0;
+        let normalizedFreq = originalFreq;
+        // 若记录频率小于1MHz，且操作员基础频率有效，则视为偏移量进行修正
+        if (originalFreq > 0 && originalFreq < 1_000_000 && baseFreq > 1_000_000) {
+          normalizedFreq = baseFreq + originalFreq;
+          console.warn(`🛠️ [操作员管理器] 发现异常频率(${originalFreq}Hz)，已按偏移修正为 ${normalizedFreq}Hz (基频 ${baseFreq}Hz)`);
+        } else if (originalFreq === 0 && baseFreq > 1_000_000) {
+          normalizedFreq = baseFreq;
+          console.warn(`🛠️ [操作员管理器] 记录频率缺失，使用基频 ${normalizedFreq}Hz`);
+        }
+
+        const qsoToSave: QSORecord = {
+          ...data.qsoRecord,
+          frequency: normalizedFreq
+        };
+
+        console.log(`📝 [操作员管理器] 记录QSO到日志本 ${logBook.name}: ${qsoToSave.callsign} @ ${new Date(qsoToSave.startTime).toISOString()} (${qsoToSave.frequency}Hz)`);
+        await logBook.provider.addQSO(qsoToSave, data.operatorId);
         
         // QSO记录成功后，发射事件通知上层系统
         this.eventEmitter.emit('qsoRecordAdded' as any, {
           operatorId: data.operatorId,
           logBookId: logBook.id,
-          qsoRecord: data.qsoRecord
+          qsoRecord: qsoToSave
         });
         console.log(`📡 [操作员管理器] 已发射 qsoRecordAdded 事件: ${data.qsoRecord.callsign}`);
         
