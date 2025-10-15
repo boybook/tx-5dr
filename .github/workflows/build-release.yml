@@ -35,11 +35,11 @@ jobs:
             build_command: make
             artifact_name: tx-5dr-linux-x64
             
-          - os: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-            build_command: make
-            artifact_name: tx-5dr-linux-arm64
+#          - os: ubuntu-24.04-arm
+#            platform: linux
+#            arch: arm64
+#            build_command: make
+#            artifact_name: tx-5dr-linux-arm64
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
