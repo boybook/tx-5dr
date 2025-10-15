@@ -104,6 +104,41 @@ export const LogBookExportOptionsSchema = z.object({
   callsign: z.string().optional(),
 });
 
+/**
+ * 更新QSO记录请求Schema
+ */
+export const UpdateQSORequestSchema = z.object({
+  callsign: z.string().optional(),
+  grid: z.string().optional(),
+  frequency: z.number().optional(),
+  mode: z.string().optional(),
+  startTime: z.number().optional(),
+  endTime: z.number().optional(),
+  reportSent: z.string().optional(),
+  reportReceived: z.string().optional(),
+  messages: z.array(z.string()).optional(),
+});
+
+/**
+ * QSO操作响应Schema
+ */
+export const QSOActionResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  data: z.object({
+    id: z.string(),
+    callsign: z.string(),
+    grid: z.string().optional(),
+    frequency: z.number(),
+    mode: z.string(),
+    startTime: z.number(),
+    endTime: z.number().optional(),
+    reportSent: z.string().optional(),
+    reportReceived: z.string().optional(),
+    messages: z.array(z.string()),
+  }).optional(),
+});
+
 // ========== 类型导出 ==========
 
 export type LogBookInfo = z.infer<typeof LogBookInfoSchema>;
@@ -115,4 +150,6 @@ export type LogBookListResponse = z.infer<typeof LogBookListResponseSchema>;
 export type LogBookDetailResponse = z.infer<typeof LogBookDetailResponseSchema>;
 export type LogBookActionResponse = z.infer<typeof LogBookActionResponseSchema>;
 export type LogBookQSOQueryOptions = z.infer<typeof LogBookQSOQueryOptionsSchema>;
-export type LogBookExportOptions = z.infer<typeof LogBookExportOptionsSchema>; 
+export type LogBookExportOptions = z.infer<typeof LogBookExportOptionsSchema>;
+export type UpdateQSORequest = z.infer<typeof UpdateQSORequestSchema>;
+export type QSOActionResponse = z.infer<typeof QSOActionResponseSchema>; 

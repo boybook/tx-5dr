@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { 
+import {
   LogBookListResponseSchema,
   LogBookDetailResponseSchema,
   LogBookActionResponseSchema,
@@ -8,12 +8,16 @@ import {
   ConnectOperatorToLogBookRequestSchema,
   LogBookQSOQueryOptionsSchema,
   LogBookExportOptionsSchema,
+  UpdateQSORequestSchema,
+  QSOActionResponseSchema,
   type LogBookInfo,
   type CreateLogBookRequest,
   type UpdateLogBookRequest,
   type ConnectOperatorToLogBookRequest,
   type LogBookQSOQueryOptions,
-  type LogBookExportOptions
+  type LogBookExportOptions,
+  type UpdateQSORequest,
+  type QSOActionResponse
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { LogQueryOptions } from "@tx5dr/core";
@@ -512,10 +516,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       const { adifContent, operatorId } = request.body;
-      
+
       let logBook = logManager.getLogBook(id);
-      
-      // 如果直接ID查找失败，尝试按呼号查找或创建
+
+      // 如果直接ID查找失败,尝试按呼号查找或创建
       if (!logBook) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
@@ -523,7 +527,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
         }
       }
-      
+
       if (!logBook) {
         return reply.status(404).send({
           success: false,
@@ -542,6 +546,102 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         message: error instanceof Error ? error.message : '导入数据到日志本失败'
+      });
+    }
+  });
+
+  /**
+   * 更新单条QSO记录
+   * PUT /api/logbooks/:id/qsos/:qsoId
+   */
+  fastify.put('/:id/qsos/:qsoId', async (request: FastifyRequest<{ Params: { id: string; qsoId: string }; Body: UpdateQSORequest }>, reply: FastifyReply) => {
+    try {
+      const { id, qsoId } = request.params;
+      const updates = UpdateQSORequestSchema.parse(request.body);
+
+      let logBook = logManager.getLogBook(id);
+
+      // 如果直接ID查找失败,尝试按呼号查找或创建
+      if (!logBook) {
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch (error) {
+          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+        }
+      }
+
+      if (!logBook) {
+        return reply.status(404).send({
+          success: false,
+          message: `日志本 ${id} 不存在`
+        });
+      }
+
+      // 更新QSO记录
+      await logBook.provider.updateQSO(qsoId, updates);
+
+      // 获取更新后的记录
+      const updatedQSO = await logBook.provider.getQSO(qsoId);
+
+      if (!updatedQSO) {
+        return reply.status(404).send({
+          success: false,
+          message: `QSO记录 ${qsoId} 不存在`
+        });
+      }
+
+      return reply.send({
+        success: true,
+        message: 'QSO记录更新成功',
+        data: updatedQSO
+      });
+    } catch (error) {
+      fastify.log.error('更新QSO记录失败:', error);
+      return reply.status(500).send({
+        success: false,
+        message: error instanceof Error ? error.message : '更新QSO记录失败'
+      });
+    }
+  });
+
+  /**
+   * 删除单条QSO记录
+   * DELETE /api/logbooks/:id/qsos/:qsoId
+   */
+  fastify.delete('/:id/qsos/:qsoId', async (request: FastifyRequest<{ Params: { id: string; qsoId: string } }>, reply: FastifyReply) => {
+    try {
+      const { id, qsoId } = request.params;
+
+      let logBook = logManager.getLogBook(id);
+
+      // 如果直接ID查找失败,尝试按呼号查找或创建
+      if (!logBook) {
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch (error) {
+          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+        }
+      }
+
+      if (!logBook) {
+        return reply.status(404).send({
+          success: false,
+          message: `日志本 ${id} 不存在`
+        });
+      }
+
+      // 删除QSO记录
+      await logBook.provider.deleteQSO(qsoId);
+
+      return reply.send({
+        success: true,
+        message: 'QSO记录删除成功'
+      });
+    } catch (error) {
+      fastify.log.error('删除QSO记录失败:', error);
+      return reply.status(500).send({
+        success: false,
+        message: error instanceof Error ? error.message : '删除QSO记录失败'
       });
     }
   });

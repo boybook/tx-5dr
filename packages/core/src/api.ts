@@ -1,4 +1,4 @@
-import type { 
+import type {
   HelloResponse,
   AudioDevicesResponse,
   AudioDeviceSettings,
@@ -20,6 +20,8 @@ import type {
   LogBookQSOQueryOptions,
   LogBookExportOptions,
   QSORecord,
+  UpdateQSORequest,
+  QSOActionResponse,
   WaveLogConfig,
   WaveLogTestConnectionRequest,
   WaveLogTestConnectionResponse
@@ -633,12 +635,50 @@ export const api = {
       },
       body: JSON.stringify({ adifContent, operatorId }),
     });
-    
+
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
       throw new Error(errorData.message || `导入数据失败: ${res.status} ${res.statusText}`);
     }
-    
+
+    return await res.json();
+  },
+
+  /**
+   * 更新单条QSO记录
+   */
+  async updateQSO(logbookId: string, qsoId: string, updates: UpdateQSORequest, apiBase?: string): Promise<QSOActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${logbookId}/qsos/${qsoId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates),
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `更新QSO记录失败: ${res.status} ${res.statusText}`);
+    }
+
+    return await res.json();
+  },
+
+  /**
+   * 删除单条QSO记录
+   */
+  async deleteQSO(logbookId: string, qsoId: string, apiBase?: string): Promise<QSOActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${logbookId}/qsos/${qsoId}`, {
+      method: 'DELETE',
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `删除QSO记录失败: ${res.status} ${res.statusText}`);
+    }
+
     return await res.json();
   },
 
@@ -716,7 +756,7 @@ export const api = {
   },
 }
 
-// 为了向后兼容，也导出单独的函数
+// 为了向后兼容,也导出单独的函数
 export const {
   getHello,
   getAudioDevices,
@@ -746,6 +786,8 @@ export const {
   getLogBookQSOs,
   exportLogBook,
   importToLogBook,
+  updateQSO,
+  deleteQSO,
   // WaveLog同步函数
   getWaveLogConfig,
   updateWaveLogConfig,

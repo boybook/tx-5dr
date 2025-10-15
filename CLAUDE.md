@@ -17,8 +17,13 @@ Node.js 后端 + React 前端 + Electron 桌面应用，Turborepo + Yarn 4 管�
 ## 常用命令
 ```bash
 # 开发
-yarn dev                    # 浏览器模式
-EMBEDDED=true yarn dev      # Electron模式
+yarn dev                    # 浏览器模式（启动 server + web，访问 http://localhost:5173）
+yarn dev:electron           # Electron模式（启动 server + web + electron-main）
+
+# 独立启动（用于调试）
+yarn workspace @tx5dr/server dev    # 单独启动后端（4000端口）
+yarn workspace @tx5dr/web dev       # 单独启动前端（5173端口）
+yarn workspace @tx5dr/electron-main dev  # 单独启动Electron（需要先启动server和web）
 
 # 构建
 yarn build                  # 构建所有包

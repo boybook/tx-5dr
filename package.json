@@ -8,7 +8,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo run dev --parallel",
+    "dev": "turbo run dev --parallel --filter='!@tx5dr/client-tools' --filter='!@tx5dr/electron-main'",
+    "dev:electron": "turbo run dev --parallel --filter='!@tx5dr/client-tools'",
     "build": "turbo run build",
     "preview": "yarn workspace @tx5dr/web preview",
     "electron": "yarn workspace @tx5dr/electron-main dev",
