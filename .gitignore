@@ -110,3 +110,4 @@ Thumbs.db
 
 # Electron
 out/ 
+resources/

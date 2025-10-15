@@ -17,12 +17,11 @@ jobs:
     strategy:
       matrix:
         include:
-          # 暂时跳过windows
-          # - os: windows-latest
-          #   platform: win32
-          #   arch: x64
-          #   build_command: make
-          #   artifact_name: tx-5dr-windows-x64
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            build_command: make
+            artifact_name: tx-5dr-windows-x64
             
           - os: macos-latest
             platform: darwin
@@ -74,7 +73,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpulse-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev portaudio19-dev build-essential python3-dev pkg-config
+          sudo apt-get install -y \
+            libasound2-dev libpulse-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+            portaudio19-dev build-essential python3-dev pkg-config \
+            xz-utils rpm
           
       - name: Setup MSBuild (Windows)
         if: matrix.os == 'windows-latest'
@@ -120,6 +123,56 @@ jobs:
         run: yarn build
         env:
           NODE_ENV: production
+
+      - name: Prepare portable Node runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_VERSION="22.15.1"
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${{ matrix.arch }}"
+          TRIPLET="${PLATFORM}-${ARCH}"
+          echo "Preparing portable node ${NODE_VERSION} for ${TRIPLET}"
+
+          mkdir -p resources/bin/${TRIPLET}
+          mkdir -p resources/licenses
+
+          if [ "${PLATFORM}" = "darwin" ]; then
+            PKG="node-v${NODE_VERSION}-darwin-${ARCH}.tar.xz"
+            URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
+            echo "Downloading ${URL}"
+            curl -fsSL -o ${PKG} ${URL}
+            tar -xJf ${PKG}
+            SRC_DIR=$(echo node-v${NODE_VERSION}-darwin-${ARCH})
+            install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
+            strip resources/bin/${TRIPLET}/node || true
+            cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+          elif [ "${PLATFORM}" = "linux" ]; then
+            PKG="node-v${NODE_VERSION}-linux-${ARCH}.tar.xz"
+            URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
+            echo "Downloading ${URL}"
+            curl -fsSL -o ${PKG} ${URL}
+            tar -xJf ${PKG}
+            SRC_DIR=$(echo node-v${NODE_VERSION}-linux-${ARCH})
+            install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
+            strip resources/bin/${TRIPLET}/node || true
+            cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+          else
+            # Windows
+            PKG="node-v${NODE_VERSION}-win-${ARCH}.zip"
+            URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
+            echo "Downloading ${URL}"
+            curl -fsSL -o ${PKG} ${URL}
+            # Use bsdtar to extract zip on Windows runner
+            tar -xf ${PKG}
+            SRC_DIR=$(echo node-v${NODE_VERSION}-win-${ARCH})
+            mkdir -p resources/bin/${TRIPLET}
+            cp -f ${SRC_DIR}/node.exe resources/bin/${TRIPLET}/node.exe
+            cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+          fi
+
+          echo "Portable node prepared:"
+          ls -la resources/bin/${TRIPLET}
 
       - name: Package application
         run: yarn ${{ matrix.build_command }}

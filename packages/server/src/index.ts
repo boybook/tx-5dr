@@ -64,9 +64,16 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
     logger.restore();
   };
 
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
-  process.on('exit', cleanup);
+  const handleSignal = (signal: NodeJS.Signals) => {
+    try { cleanup(); } catch {}
+    // 确保进程在收到信号后真正退出
+    try { process.exit(0); } catch {}
+  };
+
+  process.on('SIGINT', () => handleSignal('SIGINT'));
+  process.on('SIGTERM', () => handleSignal('SIGTERM'));
+  // 'exit' 事件仅做清理，不再调用 process.exit()
+  process.on('exit', () => { try { cleanup(); } catch {} });
   
   console.log('🔧 日志维护任务已启动');
 }
