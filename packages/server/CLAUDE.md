@@ -182,13 +182,13 @@ operatorSlotChanged / operatorSlotContentChanged / operatorTransmitCyclesChanged
 RadioOperatorManager.checkAndTriggerTransmission(operatorId)
     ├─ 检查当前是否在发射周期
     ├─ ✓ 是 → 立即生成发射内容
-    └─ handleTransmissions(midSlot=true)
-        └─ 提交编码，timeSinceSlotStartMs > 0 (标记中途发射)
+    └─ processPendingTransmissions(基于当前时隙startMs)
+        └─ 统一入队并消费，正确计算 timeSinceSlotStartMs（标记中途发射/重新混音）
 ```
 
 #### 时间戳一致性保证
 
-**核心要点**: 所有时间计算使用同一个 `slotInfo.startMs`，避免跨时隙边界错误。
+**核心要点**: 所有时间计算使用同一个 `slotInfo.startMs`（中途触发时由管理器基于当前时隙计算得到），避免跨时隙边界错误；队列在消费层统一清空，防止请求残留导致下一个非发射周期误发。
 
 ```
     transmitStart(slotInfo) 触发 → processPendingTransmissions(slotInfo)

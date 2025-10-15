@@ -676,16 +676,24 @@ export class RadioOperatorManager {
     }
     
     console.log(`📻 [操作员管理器] 在时隙中间触发发射: 操作员=${operatorId}, 已过时间=${timeSinceSlotStartMs}ms`);
-    
-    // 立即将发射请求加入队列
+
+    // 将发射请求加入队列（仅入队，交由统一的队列消费层处理）
     const request: TransmitRequest = {
       operatorId,
       transmission
     };
     this.pendingTransmissions.push(request);
-    
-    // 立即处理发射（传入 midSlot=true 标记）
-    this.handleTransmissions(true);
+
+    // 由统一的队列消费层处理：构造当前时隙信息并消费队列
+    // 这样可以确保：
+    // 1) 所有编码请求都通过相同路径进入（避免重复）
+    // 2) 正确计算 timeSinceSlotStartMs 以支持中途重新混音/发射
+    // 3) 队列被正确清空，避免跨入下一个非发射周期误发
+    const slotInfo = {
+      id: `slot-${currentSlotStartMs}`,
+      startMs: currentSlotStartMs,
+    } as any;
+    this.processPendingTransmissions(slotInfo);
     
     // 发送状态更新到前端
     this.emitOperatorStatusUpdate(operatorId);
