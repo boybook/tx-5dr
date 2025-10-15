@@ -176,7 +176,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 endTime: Date.now(),
                 reportSent: strategy.context.reportSent?.toString(),
                 reportReceived: strategy.context.reportReceived?.toString(),
-                messages: []
+                messages: [],
+                myCallsign: strategy.context.config.myCallsign,
+                myGrid: strategy.context.config.myGrid
             };
             strategy.operator.recordQSOLog(qsoRecord);
             // 清理QSO开始时间
@@ -229,7 +231,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 endTime: Date.now(),
                 reportSent: strategy.context.reportSent?.toString(),
                 reportReceived: strategy.context.reportReceived?.toString(),
-                messages: []
+                messages: [],
+                myCallsign: strategy.context.config.myCallsign,
+                myGrid: strategy.context.config.myGrid
             };
             strategy.operator.recordQSOLog(qsoRecord);
             // 清理QSO开始时间

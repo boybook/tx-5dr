@@ -46,6 +46,8 @@ export const QSORecordSchema = z.object({
   reportSent: z.string().optional(),     // 发送的信号报告
   reportReceived: z.string().optional(), // 接收的信号报告
   messages: z.array(z.string()), // 消息历史
+  myCallsign: z.string().optional(), // 我的呼号（操作员呼号）
+  myGrid: z.string().optional(), // 我的网格定位（操作员网格）
 });
 
 // 策略执行结果
