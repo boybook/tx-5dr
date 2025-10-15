@@ -379,7 +379,18 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   };
 
   // 格式化日期显示
-  const formatDateTime = (timestamp: number) => {
+  const formatDateTime = (timestamp: number, compact = false) => {
+    if (compact) {
+      // 移动端紧凑格式
+      return new Date(timestamp).toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'UTC'
+      });
+    }
+    // 桌面端完整格式
     return new Date(timestamp).toLocaleString('zh-CN', {
       year: 'numeric',
       month: '2-digit',
@@ -410,16 +421,16 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
-  // 表格列定义
+  // 表格列定义（响应式）
   const columns = [
-    { key: 'startTime', label: '时间 (UTC)', sortable: true },
-    { key: 'callsign', label: '呼号', sortable: true },
-    { key: 'grid', label: '网格', sortable: true },
-    { key: 'frequency', label: '频率', sortable: true },
-    { key: 'mode', label: '模式', sortable: true },
-    { key: 'reportSent', label: '发送信号报告', sortable: false },
-    { key: 'reportReceived', label: '接收信号报告', sortable: false },
-    { key: 'actions', label: '操作', sortable: false },
+    { key: 'startTime', label: '时间 (UTC)', sortable: true, hideOnMobile: false },
+    { key: 'callsign', label: '呼号', sortable: true, hideOnMobile: false },
+    { key: 'grid', label: '网格', sortable: true, hideOnMobile: true },
+    { key: 'frequency', label: '频率', sortable: true, hideOnMobile: false },
+    { key: 'mode', label: '模式', sortable: true, hideOnMobile: true },
+    { key: 'reportSent', label: '发送报告', sortable: false, hideOnMobile: true },
+    { key: 'reportReceived', label: '接收报告', sortable: false, hideOnMobile: true },
+    { key: 'actions', label: '操作', sortable: false, hideOnMobile: false },
   ];
 
   // 渲染单元格内容
@@ -428,11 +439,16 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
     switch (columnKey) {
       case "startTime":
-        return formatDateTime(qso.startTime);
+        return (
+          <div className="flex flex-col">
+            <span className="hidden md:inline">{formatDateTime(qso.startTime)}</span>
+            <span className="md:hidden text-xs">{formatDateTime(qso.startTime, true)}</span>
+          </div>
+        );
       case "callsign":
         return (
-          <div className="font-semibold flex items-center gap-2">
-            {qso.callsign}
+          <div className="font-semibold flex items-center gap-1 md:gap-2">
+            <span className="text-sm md:text-base">{qso.callsign}</span>
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -452,7 +468,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           </Chip>
         ) : '-';
       case "frequency":
-        return qso.frequency ? formatFrequency(qso.frequency) : '-';
+        return qso.frequency ? (
+          <span className="text-xs md:text-sm whitespace-nowrap">
+            {formatFrequency(qso.frequency)}
+          </span>
+        ) : '-';
       case "mode":
         return (
           <Chip size="sm" variant="flat" color="secondary">
@@ -465,15 +485,16 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         return qso.reportReceived || '-';
       case "actions":
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2">
             <Tooltip content="编辑">
               <Button
                 size="sm"
                 variant="light"
                 isIconOnly
                 onPress={() => handleEditClick(qso)}
+                className="min-w-unit-8 w-8 h-8"
               >
-                <FontAwesomeIcon icon={faEdit} className="text-primary" />
+                <FontAwesomeIcon icon={faEdit} className="text-primary text-sm" />
               </Button>
             </Tooltip>
             <Tooltip content="删除">
@@ -483,8 +504,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 color="danger"
                 isIconOnly
                 onPress={() => handleDeleteClick(qso)}
+                className="min-w-unit-8 w-8 h-8"
               >
-                <FontAwesomeIcon icon={faTrash} />
+                <FontAwesomeIcon icon={faTrash} className="text-sm" />
               </Button>
             </Tooltip>
           </div>
@@ -499,29 +521,29 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     return (
       <div className="flex flex-col gap-4">
         {/* 标题和操作按钮 */}
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-foreground">
+            <h1 className="text-xl md:text-2xl font-bold text-foreground">
               通联日志
             </h1>
             {operatorCallsign && (
               <div className="flex items-center gap-2">
-                <span className="text-default-500">-</span>
-                <div className="bg-primary-50 dark:bg-primary-100/20 text-primary-600 dark:text-primary-400 px-3 py-1.5 rounded-full text-sm font-mono font-medium">
+                <span className="text-default-500 hidden md:inline">-</span>
+                <div className="bg-primary-50 dark:bg-primary-100/20 text-primary-600 dark:text-primary-400 px-2 md:px-3 py-1 md:py-1.5 rounded-full text-xs md:text-sm font-mono font-medium">
                   {operatorCallsign}
                 </div>
               </div>
             )}
           </div>
-          
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0">
             {/* 可展开的搜索框 */}
             {isSearchExpanded ? (
               <Input
                 autoFocus
                 isClearable
                 size="sm"
-                className="w-64 transition-all duration-200"
+                className="w-40 md:w-64 transition-all duration-200"
                 placeholder="搜索呼号..."
                 startContent={<SearchIcon />}
                 value={filters.callsign || ''}
@@ -537,24 +559,27 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               <Button
                 variant="flat"
                 size="sm"
-                startContent={<SearchIcon />}
+                startContent={<SearchIcon className="hidden md:inline" />}
                 onPress={() => setIsSearchExpanded(true)}
-                className="transition-all duration-200"
+                className="transition-all duration-200 min-w-0"
               >
-                搜索
+                <span className="hidden md:inline">搜索</span>
+                <SearchIcon className="md:hidden" />
               </Button>
             )}
             
             {/* 筛选按钮 */}
             <Dropdown>
               <DropdownTrigger>
-                <Button 
+                <Button
                   variant="flat"
                   size="sm"
-                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs" />}
+                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
                   color={filters.band ? "primary" : "default"}
+                  className="min-w-0"
                 >
-                  频段{filters.band ? `: ${filters.band}` : ''}
+                  <span className="hidden md:inline">频段{filters.band ? `: ${filters.band}` : ''}</span>
+                  <span className="md:hidden">{filters.band || '频段'}</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
@@ -567,21 +592,37 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 }}
               >
                 <DropdownItem key="">全部频段</DropdownItem>
-                <DropdownItem key="20m">20m</DropdownItem>
-                <DropdownItem key="40m">40m</DropdownItem>
-                <DropdownItem key="80m">80m</DropdownItem>
+                <DropdownItem key="160m">160m (1.8MHz)</DropdownItem>
+                <DropdownItem key="80m">80m (3.5MHz)</DropdownItem>
+                <DropdownItem key="60m">60m (5MHz)</DropdownItem>
+                <DropdownItem key="40m">40m (7MHz)</DropdownItem>
+                <DropdownItem key="30m">30m (10MHz)</DropdownItem>
+                <DropdownItem key="20m">20m (14MHz)</DropdownItem>
+                <DropdownItem key="17m">17m (18MHz)</DropdownItem>
+                <DropdownItem key="15m">15m (21MHz)</DropdownItem>
+                <DropdownItem key="12m">12m (24MHz)</DropdownItem>
+                <DropdownItem key="10m">10m (28MHz)</DropdownItem>
+                <DropdownItem key="6m">6m (50MHz)</DropdownItem>
+                <DropdownItem key="4m">4m (70MHz)</DropdownItem>
+                <DropdownItem key="2m">2m (144MHz)</DropdownItem>
+                <DropdownItem key="1.25m">1.25m (222MHz)</DropdownItem>
+                <DropdownItem key="70cm">70cm (430MHz)</DropdownItem>
+                <DropdownItem key="33cm">33cm (902MHz)</DropdownItem>
+                <DropdownItem key="23cm">23cm (1.2GHz)</DropdownItem>
               </DropdownMenu>
             </Dropdown>
             
             <Dropdown>
               <DropdownTrigger>
-                <Button 
+                <Button
                   variant="flat"
                   size="sm"
-                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs" />}
+                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
                   color={filters.mode ? "primary" : "default"}
+                  className="min-w-0"
                 >
-                  模式{filters.mode ? `: ${filters.mode}` : ''}
+                  <span className="hidden md:inline">模式{filters.mode ? `: ${filters.mode}` : ''}</span>
+                  <span className="md:hidden">{filters.mode || '模式'}</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
@@ -601,12 +642,14 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             
             {Object.keys(filters).length > 0 && (
               <Button
-                variant="light" 
+                variant="light"
                 color="danger"
                 size="sm"
                 onPress={clearFilters}
+                className="min-w-0 whitespace-nowrap"
               >
-                清除筛选
+                <span className="hidden md:inline">清除筛选</span>
+                <span className="md:hidden">清除</span>
               </Button>
             )}
             
@@ -619,8 +662,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   size="sm"
                   isLoading={isSyncing}
                   startContent={<FontAwesomeIcon icon={faSync} className={isSyncing ? 'animate-spin' : ''} />}
+                  className="min-w-0"
                 >
-                  WaveLog同步
+                  <span className="hidden lg:inline">WaveLog同步</span>
+                  <span className="lg:hidden hidden md:inline">同步</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
@@ -659,8 +704,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   size="sm"
                   isLoading={isExporting}
                   disabled={qsos.length === 0}
+                  className="min-w-0"
+                  startContent={<FontAwesomeIcon icon={faDownload} className="md:hidden" />}
                 >
-                  导出
+                  <span className="hidden md:inline">导出</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
@@ -675,18 +722,18 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         </div>
 
         {/* 统计信息 */}
-        <div className="flex justify-between items-center text-small text-default-500">
+        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-2 text-xs md:text-small text-default-500">
           <span>
-            {hasFilters 
+            {hasFilters
               ? `筛选结果: ${totalRecords} 条 / 总计: ${actualTotalRecords} 条通联记录`
               : `共 ${actualTotalRecords} 条通联记录`
             }
           </span>
           {statistics && (
-            <span>
-              唯一呼号: {statistics.uniqueCallsigns}
+            <span className="flex flex-wrap gap-2 md:gap-0">
+              <span>唯一呼号: {statistics.uniqueCallsigns}</span>
               {statistics.lastQSO && (
-                <> | 最近通联: {new Date(statistics.lastQSO).toLocaleDateString('zh-CN', { timeZone: 'UTC' })} UTC</>
+                <span className="hidden md:inline"> | 最近通联: {new Date(statistics.lastQSO).toLocaleDateString('zh-CN', { timeZone: 'UTC' })} UTC</span>
               )}
             </span>
           )}
@@ -723,7 +770,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
     
     return (
-      <div className="py-2 px-2 flex justify-between items-center">
+      <div className="py-2 px-2 flex flex-col md:flex-row justify-between items-center gap-2">
         <Pagination
           isCompact
           showControls
@@ -735,29 +782,38 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             console.log('📊 [LogbookViewer] 分页切换:', { from: currentPage, to: page });
             setCurrentPage(page);
           }}
+          classNames={{
+            wrapper: "gap-0 overflow-visible h-8",
+            item: "w-8 h-8 text-xs min-w-8",
+            cursor: "shadow-sm",
+          }}
         />
         <div className="flex gap-2">
-          <Button 
-            size="sm" 
-            variant="flat" 
+          <Button
+            size="sm"
+            variant="flat"
             onPress={() => {
               console.log('📊 [LogbookViewer] 跳转到第一页');
               setCurrentPage(1);
             }}
             isDisabled={currentPage === 1 || totalPages <= 1}
+            className="min-w-0 text-xs md:text-sm"
           >
-            第一页
+            <span className="hidden md:inline">第一页</span>
+            <span className="md:hidden">首页</span>
           </Button>
-          <Button 
-            size="sm" 
-            variant="flat" 
+          <Button
+            size="sm"
+            variant="flat"
             onPress={() => {
               console.log('📊 [LogbookViewer] 跳转到最后页:', totalPages);
               setCurrentPage(totalPages);
             }}
             isDisabled={currentPage === totalPages || totalPages <= 1}
+            className="min-w-0 text-xs md:text-sm"
           >
-            最后页
+            <span className="hidden md:inline">最后页</span>
+            <span className="md:hidden">尾页</span>
           </Button>
         </div>
       </div>
@@ -794,7 +850,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
       {/* 通知区域 */}
       {syncSuccess && (
         <Alert
@@ -839,7 +895,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         bottomContent={bottomContent}
         bottomContentPlacement="outside"
         classNames={{
-          wrapper: "max-h-[calc(100vh-228px)] overflow-auto",
+          wrapper: "max-h-[calc(100vh-280px)] md:max-h-[calc(100vh-228px)] overflow-auto",
+          base: "overflow-x-auto",
+          table: "min-w-full",
         }}
         sortDescriptor={sortDescriptor}
         topContent={topContent}
@@ -851,6 +909,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             <TableColumn
               key={column.key}
               allowsSorting={column.sortable}
+              className={column.hideOnMobile ? 'hidden md:table-cell' : ''}
             >
               {column.label}
             </TableColumn>
@@ -858,15 +917,20 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         </TableHeader>
         <TableBody
           items={qsos}
-          loadingContent={<Spinner />} 
+          loadingContent={<Spinner />}
           loadingState={loadingState}
           emptyContent={"暂无通联记录"}
         >
           {(qso) => (
             <TableRow key={qso.id}>
-              {(columnKey) => (
-                <TableCell>{renderCell(qso, columnKey)}</TableCell>
-              )}
+              {(columnKey) => {
+                const column = columns.find(c => c.key === columnKey);
+                return (
+                  <TableCell className={column?.hideOnMobile ? 'hidden md:table-cell' : ''}>
+                    {renderCell(qso, columnKey)}
+                  </TableCell>
+                );
+              }}
             </TableRow>
           )}
         </TableBody>

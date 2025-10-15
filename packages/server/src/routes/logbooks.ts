@@ -336,12 +336,25 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       // 处理频段过滤（转换为频率范围）
       if (options.band) {
         const bandFreqRanges: Record<string, { min: number; max: number }> = {
-          '20m': { min: 14000000, max: 14350000 },
-          '40m': { min: 7000000, max: 7300000 },
-          '80m': { min: 3500000, max: 4000000 },
           '160m': { min: 1800000, max: 2000000 },
+          '80m': { min: 3500000, max: 4000000 },
+          '60m': { min: 5000000, max: 5500000 },
+          '40m': { min: 7000000, max: 7300000 },
+          '30m': { min: 10100000, max: 10150000 },
+          '20m': { min: 14000000, max: 14350000 },
+          '17m': { min: 18068000, max: 18168000 },
+          '15m': { min: 21000000, max: 21450000 },
+          '12m': { min: 24890000, max: 24990000 },
+          '10m': { min: 28000000, max: 29700000 },
+          '6m': { min: 50000000, max: 54000000 },
+          '4m': { min: 70000000, max: 71000000 },
+          '2m': { min: 144000000, max: 148000000 },
+          '1.25m': { min: 222000000, max: 225000000 },
+          '70cm': { min: 420000000, max: 450000000 },
+          '33cm': { min: 902000000, max: 928000000 },
+          '23cm': { min: 1240000000, max: 1300000000 },
         };
-        
+
         if (bandFreqRanges[options.band]) {
           queryOptions.frequencyRange = bandFreqRanges[options.band];
         }

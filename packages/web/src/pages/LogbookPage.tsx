@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { HeroUIProvider } from '@heroui/react';
 import { configureApi } from '@tx5dr/core';
-import { getApiBaseUrl } from '../utils/config';
+import { getApiBaseUrl, isElectron } from '../utils/config';
 import { RadioProvider, useOperators } from '../store/radioStore';
 import { useTheme } from '../hooks/useTheme';
 import { ThemeToggle } from '../components/ThemeToggle';
@@ -112,28 +112,30 @@ const LogbookContent: React.FC = () => {
     );
   }
 
+  const inElectron = isElectron();
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* 顶部拖拽条 - 很矮，避免与macOS交通灯冲突 */}
+      {/* 顶部区域 - Electron模式下显示拖拽条，浏览器模式下只显示按钮 */}
       <div
-        className="flex-shrink-0 h-8 flex justify-end items-center px-4"
-        style={{ 
+        className={`flex-shrink-0 flex justify-end items-center px-4 ${inElectron ? 'h-8' : 'h-0'}`}
+        style={inElectron ? {
           WebkitAppRegion: 'drag',
-        } as React.CSSProperties & { WebkitAppRegion: string }}
+        } as React.CSSProperties & { WebkitAppRegion: string } : {}}
       >
-        {/* 只放主题切换按钮 */}
-        <div 
-          className="flex items-center" 
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
+        {/* 主题切换按钮 - 始终显示 */}
+        <div
+          className={`flex items-center ${inElectron ? '' : 'absolute top-2 right-4 z-50'}`}
+          style={inElectron ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string } : {}}
         >
           <ThemeToggle variant="button" size="sm" />
         </div>
       </div>
-      
+
       {/* 内容区域 */}
       <div className="flex-1">
-        <LogbookViewer 
-          operatorId={operatorId} 
+        <LogbookViewer
+          operatorId={operatorId}
           logBookId={logBookId}
           operatorCallsign={operatorCallsign}
         />

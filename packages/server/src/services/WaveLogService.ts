@@ -116,7 +116,7 @@ export class WaveLogService {
 
     // 转换QSO记录为ADIF格式
     const adifString = this.convertQSOToADIF(qso);
-    
+
     const payload = {
       key: this.config.apiKey,
       station_profile_id: this.config.stationId,
@@ -124,8 +124,27 @@ export class WaveLogService {
       string: adifString
     };
 
+    // 🔍 添加详细的调试日志
+    console.log('📊 [WaveLog] 准备上传 QSO:');
+    console.log('  - My Callsign:', qso.myCallsign || '(未设置)');
+    console.log('  - My Grid:', qso.myGrid || '(未设置)');
+    console.log('  - Their Callsign:', qso.callsign);
+    console.log('  - Their Grid:', qso.grid || '(未知)');
+    console.log('  - Mode:', qso.mode);
+    console.log('  - Frequency:', qso.frequency, 'Hz');
+    console.log('  - Start Time:', new Date(qso.startTime).toISOString());
+    console.log('  - Reports:', qso.reportSent, '/', qso.reportReceived);
+    console.log('📊 [WaveLog] 配置信息:');
+    console.log('  - API Key:', this.config.apiKey ? `${this.config.apiKey.substring(0, 10)}...` : '未设置');
+    console.log('  - Station ID:', this.config.stationId);
+    console.log('  - Radio Name:', this.config.radioName);
+    console.log('📊 [WaveLog] 生成的 ADIF 字符串:');
+    console.log('  ', adifString);
+    console.log('📊 [WaveLog] 完整 Payload:');
+    console.log('  ', JSON.stringify(payload, null, 2));
+
     const url = `${this.config.url.replace(/\/$/, '')}/index.php/api/qso`;
-    
+
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -139,8 +158,14 @@ export class WaveLogService {
       });
 
       const responseText = await response.text();
+
+      // 🔍 记录服务器响应
+      console.log('📊 [WaveLog] 服务器响应:');
+      console.log('  - Status:', response.status, response.statusText);
+      console.log('  - Response:', responseText);
+
       let result;
-      
+
       try {
         result = JSON.parse(responseText);
       } catch {
@@ -157,7 +182,14 @@ export class WaveLogService {
           message: result.status === 'created' ? '上传成功' : (result.reason || '上传失败')
         };
       } else {
-        throw new Error(result.reason || `HTTP错误 ${response.status}`);
+        // 🔍 记录详细的错误信息
+        console.error('📊 [WaveLog] 上传失败详情:', {
+          status: response.status,
+          result: result,
+          reason: result.reason || result.message || result.messages,
+          qso: { callsign: qso.callsign, mode: qso.mode }
+        });
+        throw new Error(result.reason || result.message || (result.messages ? JSON.stringify(result.messages) : `HTTP错误 ${response.status}`));
       }
     } catch (error) {
       console.error('上传QSO到WaveLog失败:', error);
@@ -426,16 +458,26 @@ export class WaveLogService {
     if (qso.reportSent) {
       adifFields.push(`<rst_sent:${qso.reportSent.length}>${qso.reportSent}`);
     }
-    
+
     if (qso.reportReceived) {
       adifFields.push(`<rst_rcvd:${qso.reportReceived.length}>${qso.reportReceived}`);
     }
-    
-    // 电台名称
-    if (this.config.radioName) {
-      adifFields.push(`<station_callsign:${this.config.radioName.length}>${this.config.radioName}`);
+
+    // 注意：station_callsign 处理
+    // 默认不发送 station_callsign，让 WaveLog 自动使用 Station Profile 中配置的呼号
+    // 如果 QSO 记录包含 myCallsign 且您确认它与 WaveLog Station Profile 的呼号一致，
+    // 可以取消下面的注释来发送 station_callsign 字段
+    /*
+    if (qso.myCallsign) {
+      adifFields.push(`<station_callsign:${qso.myCallsign.length}>${qso.myCallsign}`);
     }
-    
+    */
+
+    // 我的网格坐标（操作员网格）
+    if (qso.myGrid) {
+      adifFields.push(`<my_gridsquare:${qso.myGrid.length}>${qso.myGrid}`);
+    }
+
     // 结束标记
     adifFields.push('<eor>');
     
