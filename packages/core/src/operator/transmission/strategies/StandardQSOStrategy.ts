@@ -183,7 +183,24 @@ const states: { [key in SlotsIndex]: StandardState } = {
             strategy.qsoStartTime = undefined;
         },
         async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
-            // 复用TX6的CQ处理逻辑
+            // 首先检查是否收到对方的 RRR/RR73
+            const msgRRR = messages
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.RRR &&
+                    msg.message.senderCallsign === strategy.context.targetCallsign &&
+                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                .sort((a, b) => a.snr - b.snr)
+                .pop();
+
+            if (msgRRR) {
+                // 对方发送了 RR73，我们应该发送 73 结束通联
+                strategy.updateSlots();
+                return {
+                    changeState: 'TX5'
+                }
+            }
+
+            // 如果没有收到 RRR，复用TX6的CQ处理逻辑
             const result = await states.TX6.handle(strategy, messages);
             if (!result.stop && !result.changeState) {
                 return {

@@ -20,14 +20,35 @@ class DummyRadioEngine {
         this.sharedEventEmitter.on('requestTransmit', (request) => {
             this.messagesPool.push(request);
         });
+        // 添加 hasWorkedCallsign 查询的响应处理器
+        this.sharedEventEmitter.on('checkHasWorkedCallsign' as any, (data: {operatorId: string, callsign: string, requestId: string}) => {
+            // 在测试环境中，假设没有任何电台曾经通联过
+            this.sharedEventEmitter.emit('hasWorkedCallsignResponse' as any, {
+                requestId: data.requestId,
+                hasWorked: false
+            });
+        });
     }
 
-    nextCycle() {
+    async nextCycle() {
         this.slotIndex++;
         const slotInfo = createSlotInfo(`slot${this.slotIndex}`, this.startTime + this.slotIndex * 15000);
-        this.sharedEventEmitter.emit('slotStart', slotInfo, this.lastSlotPack);
+        // 首先发射 slotStart 事件，处理上一个时隙的消息并做出决策
+        // 需要等待所有异步处理完成
+        const promises: Promise<void>[] = [];
+        this.sharedEventEmitter.listeners('slotStart').forEach((listener: any) => {
+            const result = listener(slotInfo, this.lastSlotPack);
+            if (result instanceof Promise) {
+                promises.push(result);
+            }
+        });
+        await Promise.all(promises);
+
+        // 然后发射 encodeStart 事件，让 operators 根据最新决策准备发射内容
+        this.sharedEventEmitter.emit('encodeStart' as any, slotInfo);
+        // 保存当前时隙的消息池
         this.lastSlotPack = createSlotPack(slotInfo.id, slotInfo.startMs, this.messagesPool.map(request => request.transmission));
-        
+
         // 打印当前时隙的消息
         this.messagesPool.forEach(request => {
             console.log(`📢 [${this.slotIndex}] ${request.operatorId} -> ${request.transmission}`);
@@ -105,8 +126,11 @@ test('QSO通联周期测试', async (t) => {
             autoResumeCQAfterFail: true,
             autoResumeCQAfterSuccess: true
         }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+        // 启动两个 operators
+        operator1.start();
+        operator2.start();
         for (let i = 0; i < 6; i++) {
-            dummyRadioEngine.nextCycle();
+            await dummyRadioEngine.nextCycle();
         }
         const expectedMessages: string[] = [
             'CQ BA1ABC PM95',           // TX1: BA1ABC发送CQ
@@ -162,10 +186,12 @@ test('QSO通联周期测试', async (t) => {
                 command: 'set_state',
                 args: 'TX1'
             })
+            operator.start();
         }
+        me.start();
         for (let i = 0; i < 40; i++) {
             console.log('🔄 第', i + 1, '个时隙');
-            dummyRadioEngine.nextCycle();
+            await dummyRadioEngine.nextCycle();
         }
         assert.ok(true, '多人通联完成');
     });
@@ -199,13 +225,16 @@ test('QSO通联周期测试', async (t) => {
             autoResumeCQAfterFail: true,
             autoResumeCQAfterSuccess: true
         }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+        // 启动两个 operators
+        operator1.start();
+        operator2.start();
         for (let i = 0; i < 15; i++) {
             if (i === 3) {
                 operator2.stop();
             } else if (i === 10) {
                 operator2.start();
             }
-            dummyRadioEngine.nextCycle();
+            await dummyRadioEngine.nextCycle();
         }
 
         const expectedMessages: string[] = [
