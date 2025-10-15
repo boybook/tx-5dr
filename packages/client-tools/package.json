@@ -6,7 +6,7 @@
   "main": "src/proxy.js",
   "scripts": {
     "build": "node -e \"console.log('client-tools: no build step')\"",
-    "dev": "node src/proxy.js",
+    "dev": "echo 'client-tools: skipped in dev mode (only needed for production/Electron)'",
     "start": "node src/proxy.js"
   }
 }

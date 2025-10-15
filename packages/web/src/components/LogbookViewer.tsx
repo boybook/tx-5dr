@@ -16,10 +16,19 @@ import {
   DropdownMenu,
   DropdownItem,
   Alert,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  Tooltip,
+  ButtonGroup,
+  Select,
+  SelectItem,
 } from '@heroui/react';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash } from '@fortawesome/free-solid-svg-icons';
 import type { QSORecord, LogBookStatistics, WaveLogSyncResponse } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
 import { useLogbook } from '../store/radioStore';
@@ -55,6 +64,17 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     direction: 'ascending' | 'descending';
   }>({ column: 'startTime', direction: 'descending' });
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+
+  // 编辑 Modal 状态
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingQSO, setEditingQSO] = useState<QSORecord | null>(null);
+  const [editFormData, setEditFormData] = useState<Partial<QSORecord>>({});
+  const [isEditSaving, setIsEditSaving] = useState(false);
+
+  // 删除确认 Modal 状态
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deletingQSO, setDeletingQSO] = useState<QSORecord | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
@@ -267,6 +287,80 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     setCurrentPage(1);
   };
 
+  // 打开编辑 Modal
+  const handleEditClick = (qso: QSORecord) => {
+    setEditingQSO(qso);
+    setEditFormData({
+      callsign: qso.callsign,
+      grid: qso.grid,
+      frequency: qso.frequency,
+      mode: qso.mode,
+      startTime: qso.startTime,
+      endTime: qso.endTime,
+      reportSent: qso.reportSent,
+      reportReceived: qso.reportReceived,
+      messages: qso.messages,
+    });
+    setIsEditModalOpen(true);
+  };
+
+  // 保存编辑
+  const handleEditSave = async () => {
+    if (!editingQSO) return;
+
+    try {
+      setIsEditSaving(true);
+      await api.updateQSO(effectiveLogBookId, editingQSO.id, editFormData);
+
+      // 重新加载数据
+      await loadQSOs();
+      await loadStatistics();
+
+      // 关闭 Modal
+      setIsEditModalOpen(false);
+      setEditingQSO(null);
+      setEditFormData({});
+
+      console.log('✅ QSO记录更新成功');
+    } catch (error) {
+      console.error('更新QSO记录失败:', error);
+      setError(error instanceof Error ? error.message : '更新QSO记录失败');
+    } finally {
+      setIsEditSaving(false);
+    }
+  };
+
+  // 打开删除确认 Modal
+  const handleDeleteClick = (qso: QSORecord) => {
+    setDeletingQSO(qso);
+    setIsDeleteModalOpen(true);
+  };
+
+  // 确认删除
+  const handleDeleteConfirm = async () => {
+    if (!deletingQSO) return;
+
+    try {
+      setIsDeleting(true);
+      await api.deleteQSO(effectiveLogBookId, deletingQSO.id);
+
+      // 重新加载数据
+      await loadQSOs();
+      await loadStatistics();
+
+      // 关闭 Modal
+      setIsDeleteModalOpen(false);
+      setDeletingQSO(null);
+
+      console.log('✅ QSO记录删除成功');
+    } catch (error) {
+      console.error('删除QSO记录失败:', error);
+      setError(error instanceof Error ? error.message : '删除QSO记录失败');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   // 打开外部链接的函数
   const openExternalLink = (url: string) => {
     if (isElectron()) {
@@ -325,6 +419,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     { key: 'mode', label: '模式', sortable: true },
     { key: 'reportSent', label: '发送信号报告', sortable: false },
     { key: 'reportReceived', label: '接收信号报告', sortable: false },
+    { key: 'actions', label: '操作', sortable: false },
   ];
 
   // 渲染单元格内容
@@ -368,6 +463,32 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         return qso.reportSent || '-';
       case "reportReceived":
         return qso.reportReceived || '-';
+      case "actions":
+        return (
+          <div className="flex items-center gap-2">
+            <Tooltip content="编辑">
+              <Button
+                size="sm"
+                variant="light"
+                isIconOnly
+                onPress={() => handleEditClick(qso)}
+              >
+                <FontAwesomeIcon icon={faEdit} className="text-primary" />
+              </Button>
+            </Tooltip>
+            <Tooltip content="删除">
+              <Button
+                size="sm"
+                variant="light"
+                color="danger"
+                isIconOnly
+                onPress={() => handleDeleteClick(qso)}
+              >
+                <FontAwesomeIcon icon={faTrash} />
+              </Button>
+            </Tooltip>
+          </div>
+        );
       default:
         return cellValue;
     }
@@ -749,7 +870,159 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             </TableRow>
           )}
         </TableBody>
-        </Table>
+      </Table>
+
+      {/* 编辑 Modal */}
+      <Modal
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setEditingQSO(null);
+          setEditFormData({});
+        }}
+        size="2xl"
+        scrollBehavior="inside"
+      >
+        <ModalContent>
+          <ModalHeader>
+            <h3 className="text-lg font-semibold">编辑 QSO 记录</h3>
+          </ModalHeader>
+          <ModalBody>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Input
+                  label="呼号"
+                  value={editFormData.callsign || ''}
+                  onChange={(e) => setEditFormData({ ...editFormData, callsign: e.target.value })}
+                  isRequired
+                />
+                <Input
+                  label="网格坐标"
+                  value={editFormData.grid || ''}
+                  onChange={(e) => setEditFormData({ ...editFormData, grid: e.target.value })}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Input
+                  label="频率 (Hz)"
+                  type="number"
+                  value={editFormData.frequency?.toString() || ''}
+                  onChange={(e) => setEditFormData({ ...editFormData, frequency: parseInt(e.target.value) || 0 })}
+                  isRequired
+                />
+                <Select
+                  label="模式"
+                  selectedKeys={editFormData.mode ? [editFormData.mode] : []}
+                  onSelectionChange={(keys) => {
+                    const selected = Array.from(keys)[0];
+                    setEditFormData({ ...editFormData, mode: selected as string });
+                  }}
+                  isRequired
+                >
+                  <SelectItem key="FT8" value="FT8">FT8</SelectItem>
+                  <SelectItem key="FT4" value="FT4">FT4</SelectItem>
+                  <SelectItem key="RTTY" value="RTTY">RTTY</SelectItem>
+                  <SelectItem key="CW" value="CW">CW</SelectItem>
+                  <SelectItem key="SSB" value="SSB">SSB</SelectItem>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Input
+                  label="发送信号报告"
+                  value={editFormData.reportSent || ''}
+                  onChange={(e) => setEditFormData({ ...editFormData, reportSent: e.target.value })}
+                />
+                <Input
+                  label="接收信号报告"
+                  value={editFormData.reportReceived || ''}
+                  onChange={(e) => setEditFormData({ ...editFormData, reportReceived: e.target.value })}
+                />
+              </div>
+
+              <div className="p-3 bg-warning-50 dark:bg-warning-100/20 border border-warning-200 dark:border-warning-400/30 rounded-lg">
+                <p className="text-warning-700 dark:text-warning-400 text-sm">
+                  ⚠️ 注意:修改 QSO 记录可能会影响统计数据的准确性,请谨慎操作。
+                </p>
+              </div>
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="flat"
+              onPress={() => {
+                setIsEditModalOpen(false);
+                setEditingQSO(null);
+                setEditFormData({});
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              color="primary"
+              onPress={handleEditSave}
+              isLoading={isEditSaving}
+              isDisabled={!editFormData.callsign || !editFormData.frequency}
+            >
+              保存
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* 删除确认 Modal */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          setIsDeleteModalOpen(false);
+          setDeletingQSO(null);
+        }}
+        size="sm"
+      >
+        <ModalContent>
+          <ModalHeader>
+            <h3 className="text-lg font-semibold text-danger">删除 QSO 记录</h3>
+          </ModalHeader>
+          <ModalBody>
+            {deletingQSO && (
+              <div className="space-y-3">
+                <p className="text-default-600">
+                  确定要删除与 <span className="font-semibold text-danger">{deletingQSO.callsign}</span> 的通联记录吗?
+                </p>
+                <div className="p-3 bg-default-100 rounded-lg space-y-1">
+                  <p className="text-sm"><span className="font-medium">时间:</span> {formatDateTime(deletingQSO.startTime)}</p>
+                  <p className="text-sm"><span className="font-medium">频率:</span> {formatFrequency(deletingQSO.frequency)}</p>
+                  <p className="text-sm"><span className="font-medium">模式:</span> {deletingQSO.mode}</p>
+                </div>
+                <div className="p-3 bg-danger-50 dark:bg-danger-100/20 border border-danger-200 dark:border-danger-400/30 rounded-lg">
+                  <p className="text-danger-700 dark:text-danger-400 text-sm">
+                    ⚠️ 此操作无法撤销,删除后该记录将永久丢失。
+                  </p>
+                </div>
+              </div>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="flat"
+              onPress={() => {
+                setIsDeleteModalOpen(false);
+                setDeletingQSO(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              color="danger"
+              onPress={handleDeleteConfirm}
+              isLoading={isDeleting}
+            >
+              确认删除
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </div>
   );
 };

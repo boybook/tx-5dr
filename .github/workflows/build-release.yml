@@ -64,6 +64,22 @@ jobs:
             yarn --version
           }
 
+      - name: Verify Yarn configuration
+        shell: bash
+        run: |
+          echo "=== Verifying Yarn PnP is disabled ==="
+          if [ -f .yarnrc.yml ]; then
+            echo "Found .yarnrc.yml:"
+            cat .yarnrc.yml
+            if grep -q "nodeLinker: node-modules" .yarnrc.yml; then
+              echo "✓ nodeLinker is set to node-modules (PnP disabled)"
+            else
+              echo "⚠ Warning: nodeLinker not set to node-modules"
+            fi
+          else
+            echo "⚠ Warning: .yarnrc.yml not found"
+          fi
+
       - name: Setup Python (for native modules)
         uses: actions/setup-python@v4
         with:
@@ -91,17 +107,18 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo "=== Installing dependencies ==="
-          yarn install --immutable || {
-            echo "Immutable install failed, trying to update lockfile..."
+          echo "=== Installing dependencies with Yarn 4 (node-modules mode) ==="
+          echo "Note: Using node-modules linker instead of PnP for better compatibility"
+          yarn install || {
+            echo "First install attempt failed, applying naudiodon2 fixes..."
+            node scripts/fix-naudiodon.js || true
+            echo "Clearing yarn cache and retrying..."
+            yarn cache clean || true
             yarn install || {
-              echo "Standard install failed, applying naudiodon2 fixes and retrying..."
-              node scripts/fix-naudiodon.js
-              echo "Clearing yarn cache and retrying..."
-              yarn cache clean || true
-              yarn install || {
-                echo "Final fallback: forcing rebuild of native modules..."
-                yarn install --check-files
+              echo "Second install failed, trying with network concurrency limit..."
+              yarn install --network-concurrency 1 || {
+                echo "Final fallback: installing with inline builds..."
+                yarn install --inline-builds
               }
             }
           }
@@ -114,6 +131,8 @@ jobs:
           # Ensure proper build environment
           CC: gcc
           CXX: g++
+          # Force Yarn to use node-modules linker (should be in .yarnrc.yml)
+          YARN_NODE_LINKER: node-modules
 
       - name: Generate ICO file (Windows)
         if: matrix.os == 'windows-latest'
