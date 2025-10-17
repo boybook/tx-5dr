@@ -100,7 +100,7 @@ export class RadioOperator {
                     if (elapsed > budget) {
                         // 决策耗时超过预算，可能赶不上本周期发射，广播告警（由WSServer转成TEXT_MESSAGE）
                         this._eventEmitter.emit('timingWarning' as any, {
-                            title: 'TIMING',
+                            title: '⚠️ 时序告警',
                             text: `决策耗时 ${elapsed}ms 超过预算 ${budget}ms，可能赶不上本周期发射（${this._config.myCallsign}）`
                         });
                     }
