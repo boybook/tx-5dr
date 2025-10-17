@@ -1005,6 +1005,11 @@ function toRadians(degrees: number): number {
   return degrees * (Math.PI / 180);
 }
 
+// 网格定位正则表达式（从 ft8-message-parser 导入）
+const GRID_REGEX_LOCAL = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
+// 信号报告正则表达式
+const REPORT_REGEX_LOCAL = /^[+-]?\d{1,2}$/;
+
 /**
  * 从FT8消息中解析位置信息
  * @param message FT8消息文本
@@ -1013,10 +1018,30 @@ function toRadians(degrees: number): number {
 export function parseFT8LocationInfo(message: string): FT8LocationInfo {
   const msg = FT8MessageParser.parseMessage(message);
   let callsignInfo;
+
+  // 尝试从解析后的消息中获取呼号信息
   if (msg.type !== FT8MessageType.UNKNOWN && msg.type !== FT8MessageType.CUSTOM) {
     callsignInfo = getCallsignInfo(msg.senderCallsign);
   }
-  
+
+  // 降级处理:如果FT8消息解析失败或无法识别发送者,尝试从原始消息中提取呼号
+  if (!callsignInfo) {
+    const words = message.trim().toUpperCase().split(/\s+/);
+    for (const word of words) {
+      // 跳过网格坐标和信号报告
+      if (GRID_REGEX_LOCAL.test(word) || REPORT_REGEX_LOCAL.test(word)) continue;
+
+      // 跳过常见的FT8关键字
+      if (word === 'CQ' || word === 'RRR' || word === 'RR73' || word === '73') continue;
+
+      const info = getCallsignInfo(word);
+      if (info) {
+        callsignInfo = info;
+        break; // 找到第一个有效呼号即返回
+      }
+    }
+  }
+
   if (!callsignInfo) return {};
 
   return {
