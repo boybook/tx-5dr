@@ -1,5 +1,6 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, addToast, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input} from "@heroui/react";
+import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faWifi, faSpinner, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';

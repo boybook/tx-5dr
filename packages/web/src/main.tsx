@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { HeroUIProvider } from '@heroui/react';
+import { ToastProvider } from '@heroui/toast';
 import { configureApi } from '@tx5dr/core';
 import { getApiBaseUrl } from './utils/config';
 import App from './App.tsx';
@@ -12,6 +13,7 @@ configureApi(getApiBaseUrl());
 function ThemedApp() {
   return (
     <HeroUIProvider>
+      <ToastProvider />
       <App />
     </HeroUIProvider>
   );

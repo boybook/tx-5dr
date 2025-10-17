@@ -1,4 +1,5 @@
 import { api, WSClient } from '@tx5dr/core';
+import { addToast } from '@heroui/toast';
 import { getWebSocketUrl, getApiBaseUrl } from '../utils/config';
 import type { 
   DigitalRadioEngineEvents, 
@@ -189,6 +190,21 @@ export class RadioService {
     this.wsClient.onWSEvent('transmissionLog', (data: any) => {
       console.log('📝 收到发射日志:', data);
       this.eventListeners.transmissionLog?.forEach(listener => listener(data));
+    });
+
+    // 监听极简文本消息，直接弹出Toast（标题+正文）
+    this.wsClient.onWSEvent('textMessage' as any, (payload: { title: string; text: string }) => {
+      try {
+        const title = payload?.title || '消息';
+        const description = payload?.text || '';
+        console.log('💬 收到TEXT_MESSAGE消息:', title, description);
+        addToast({
+          title,
+          description,
+        });
+      } catch (e) {
+        console.warn('⚠️ 处理TEXT_MESSAGE失败', e);
+      }
     });
 
     // 监听SlotPack数据更新

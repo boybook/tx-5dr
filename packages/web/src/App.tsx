@@ -4,7 +4,6 @@ import { RightLayout } from './layout/RightLayout';
 import { SplitLayout } from './components/SplitLayout';
 import { RadioProvider } from './store/radioStore';
 import { useTheme } from './hooks/useTheme';
-import { ToastProvider } from '@heroui/toast';
 
 function App() {
   // 初始化主题系统
@@ -20,7 +19,6 @@ function App() {
           minLeftWidth={25}
           maxLeftWidth={75}
         />
-        <ToastProvider />
       </div>
     </RadioProvider>
   );

@@ -36,7 +36,9 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // 其他事件
   [WSMessageType.TRANSMISSION_LOG]: 'transmissionLog',
   [WSMessageType.VOLUME_GAIN_CHANGED]: 'volumeGainChanged',
-  [WSMessageType.SERVER_HANDSHAKE_COMPLETE]: 'handshakeComplete'
+  [WSMessageType.SERVER_HANDSHAKE_COMPLETE]: 'handshakeComplete',
+  // 极简文本消息
+  [WSMessageType.TEXT_MESSAGE]: 'textMessage'
 };
 
 /**

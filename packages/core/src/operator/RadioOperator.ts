@@ -76,6 +76,7 @@ export class RadioOperator {
                 return;
             }
             if (lastSlotPack) {
+                const t0 = Date.now();
                 const parsedMessages = lastSlotPack.frames.map(frame => {
                     const message = FT8MessageParser.parseMessage(frame.message);
                     const parsedMessage: ParsedFT8Message = {
@@ -90,6 +91,20 @@ export class RadioOperator {
                     return parsedMessage;
                 });
                 const result = await this._transmissionStrategy?.handleReceivedAndDicideNext(parsedMessages);
+                const elapsed = Date.now() - t0;
+                try {
+                    // 计算从slotStart到encodeStart的预算时间：transmitTiming - encodeAdvance
+                    const transmitTiming = (this._config.mode as any).transmitTiming || 0;
+                    const encodeAdvance = (this._config.mode as any).encodeAdvance || 0;
+                    const budget = Math.max(0, transmitTiming - encodeAdvance);
+                    if (elapsed > budget) {
+                        // 决策耗时超过预算，可能赶不上本周期发射，广播告警（由WSServer转成TEXT_MESSAGE）
+                        this._eventEmitter.emit('timingWarning' as any, {
+                            title: 'TIMING',
+                            text: `决策耗时 ${elapsed}ms 超过预算 ${budget}ms，可能赶不上本周期发射（${this._config.myCallsign}）`
+                        });
+                    }
+                } catch {}
                 if (result?.stop) {
                     this.stop();
                 }
