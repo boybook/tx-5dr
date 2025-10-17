@@ -68,6 +68,9 @@ export enum WSMessageType {
 
   // ===== 频率管理 =====
   FREQUENCY_CHANGED = 'frequencyChanged',
+
+  // ===== 极简文本消息 =====
+  TEXT_MESSAGE = 'textMessage',
 }
 
 // ===== 共享数据类型Schema定义 =====

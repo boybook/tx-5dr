@@ -170,6 +170,15 @@ export class WSServer extends WSMessageHandler {
       this.broadcastSubWindow(windowInfo);
     });
 
+    // 监听时序告警事件（由核心/操作员侧在判定“赶不上发射”时发出）
+    this.digitalRadioEngine.on('timingWarning' as any, (data: any) => {
+      try {
+        const title = data?.title || 'TIMING';
+        const text = data?.text || '时序告警';
+        this.broadcastTextMessage(title, text);
+      } catch {}
+    });
+
     this.digitalRadioEngine.on('slotPackUpdated', async (slotPack) => {
       await this.broadcastSlotPackUpdated(slotPack);
     });
@@ -619,6 +628,14 @@ export class WSServer extends WSMessageHandler {
    */
   broadcastSubWindow(windowInfo: SubWindowInfo): void {
     this.broadcast(WSMessageType.SUB_WINDOW, windowInfo);
+  }
+
+  /**
+   * 广播极简文本消息（标题+正文）
+   */
+  broadcastTextMessage(title: string, text: string): void {
+    console.log("广播文本消息:", title, text);
+    this.broadcast(WSMessageType.TEXT_MESSAGE, { title, text });
   }
 
   /**
