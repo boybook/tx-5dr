@@ -301,14 +301,17 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
               <Select
                 label="Station配置"
                 placeholder="选择要使用的Station配置"
-                value={config.stationId}
-                onChange={(e) => updateConfig('stationId', e.target.value)}
+                selectedKeys={config.stationId ? [config.stationId] : []}
+                onSelectionChange={(keys) => {
+                  const selected = Array.from(keys as Set<string>)[0] || '';
+                  updateConfig('stationId', selected);
+                }}
                 isDisabled={!config.enabled}
                 isRequired
                 description="选择在WaveLog中创建的Station配置"
               >
                 {stations.map((station) => (
-                  <SelectItem key={station.station_id} value={station.station_id}>
+                  <SelectItem key={station.station_id} textValue={station.station_profile_name}>
                     {station.station_profile_name}
                   </SelectItem>
                 ))}

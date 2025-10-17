@@ -536,7 +536,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             )}
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0">
+          <div className="flex items-center gap-2 overflow-x-visible overflow-y-visible pb-2 md:pb-0">
             {/* 可展开的搜索框 */}
             {isSearchExpanded ? (
               <Input
@@ -896,7 +896,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         bottomContentPlacement="outside"
         classNames={{
           wrapper: "max-h-[calc(100vh-280px)] md:max-h-[calc(100vh-228px)] overflow-auto",
-          base: "overflow-x-auto",
+          base: "overflow-x-visible",
           table: "min-w-full",
         }}
         sortDescriptor={sortDescriptor}
@@ -979,16 +979,16 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   label="模式"
                   selectedKeys={editFormData.mode ? [editFormData.mode] : []}
                   onSelectionChange={(keys) => {
-                    const selected = Array.from(keys)[0];
+                    const selected = Array.from(keys as Set<string>)[0];
                     setEditFormData({ ...editFormData, mode: selected as string });
                   }}
                   isRequired
                 >
-                  <SelectItem key="FT8" value="FT8">FT8</SelectItem>
-                  <SelectItem key="FT4" value="FT4">FT4</SelectItem>
-                  <SelectItem key="RTTY" value="RTTY">RTTY</SelectItem>
-                  <SelectItem key="CW" value="CW">CW</SelectItem>
-                  <SelectItem key="SSB" value="SSB">SSB</SelectItem>
+                  <SelectItem key="FT8">FT8</SelectItem>
+                  <SelectItem key="FT4">FT4</SelectItem>
+                  <SelectItem key="RTTY">RTTY</SelectItem>
+                  <SelectItem key="CW">CW</SelectItem>
+                  <SelectItem key="SSB">SSB</SelectItem>
                 </Select>
               </div>
 
