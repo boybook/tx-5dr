@@ -14,7 +14,7 @@ import {
   MODES,
   QSOCommand
 } from '@tx5dr/contracts';
-import { CycleUtils } from '@tx5dr/core';
+import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
@@ -154,6 +154,25 @@ export class RadioOperatorManager {
         // 获取操作员对应的日志本
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
         let hasWorked = false;
+        // 计算当前工作频段（用于按频段判重）：
+        // 优先从物理电台读频率；否则退回到“最后选择的频率”配置
+        let baseFreq = 0;
+        if (this.getRadioFrequency) {
+          try {
+            const rf = await this.getRadioFrequency();
+            if (rf && rf > 1_000_000) baseFreq = rf;
+          } catch {}
+        }
+        if (!(baseFreq > 1_000_000)) {
+          try {
+            const cfg = ConfigManager.getInstance();
+            const last = cfg.getLastSelectedFrequency();
+            if (last && last.frequency && last.frequency > 1_000_000) {
+              baseFreq = last.frequency;
+            }
+          } catch {}
+        }
+        const band = baseFreq > 1_000_000 ? getBandFromFrequency(baseFreq) : 'Unknown';
         
         if (!logBook) {
           const callsign = this.logManager.getOperatorCallsign(data.operatorId);
@@ -165,7 +184,7 @@ export class RadioOperatorManager {
             hasWorked = false;
           }
         } else {
-          hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, data.operatorId);
+          hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, { operatorId: data.operatorId, band });
         }
         
         // 发送响应

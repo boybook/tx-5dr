@@ -203,7 +203,10 @@ export interface ILogProvider {
    * @param callsign 呼号
    * @param operatorId 操作员ID（可选）
    */
-  hasWorkedCallsign(callsign: string, operatorId?: string): Promise<boolean>;
+  hasWorkedCallsign(
+    callsign: string,
+    options?: { operatorId?: string; band?: string }
+  ): Promise<boolean>;
   
   /**
    * 获取与某呼号的最后一次通联记录
@@ -218,7 +221,11 @@ export interface ILogProvider {
    * @param grid 网格（可选）
    * @param operatorId 操作员ID（可选）
    */
-  analyzeCallsign(callsign: string, grid?: string, operatorId?: string): Promise<CallsignAnalysis>;
+  analyzeCallsign(
+    callsign: string,
+    grid?: string,
+    options?: { operatorId?: string; band?: string }
+  ): Promise<CallsignAnalysis>;
   
   /**
    * 获取日志统计信息

@@ -28,6 +28,8 @@ interface OperatorIndex {
   cqZones: Set<number>;
   ituZones: Set<number>;
   perCallsign: Map<string, PerCallsignInfo>;
+  // 每个呼号对应已通联过的频段集合（用于O(1)按频段判重）
+  perCallsignBands: Map<string, Set<string>>;
 }
 
 function createEmptyOperatorIndex(): OperatorIndex {
@@ -35,7 +37,8 @@ function createEmptyOperatorIndex(): OperatorIndex {
     prefixes: new Set<string>(),
     cqZones: new Set<number>(),
     ituZones: new Set<number>(),
-    perCallsign: new Map<string, PerCallsignInfo>()
+    perCallsign: new Map<string, PerCallsignInfo>(),
+    perCallsignBands: new Map<string, Set<string>>()
   };
 }
 
@@ -70,6 +73,19 @@ function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
     }
     if (qso.grid) existing.grids.add(qso.grid);
   }
+
+  // 按呼号的频段集合（用于快速判重）
+  try {
+    const band = getBandFromFrequency(qso.frequency);
+    if (band && band !== 'Unknown') {
+      let bands = index.perCallsignBands.get(key);
+      if (!bands) {
+        bands = new Set<string>();
+        index.perCallsignBands.set(key, bands);
+      }
+      bands.add(band);
+    }
+  } catch {}
 }
 
 /**
@@ -559,10 +575,25 @@ export class ADIFLogProvider implements ILogProvider {
     return results;
   }
   
-  async hasWorkedCallsign(callsign: string, operatorId?: string): Promise<boolean> {
+  async hasWorkedCallsign(
+    callsign: string,
+    options?: { operatorId?: string; band?: string }
+  ): Promise<boolean> {
     this.ensureInitialized();
+    const operatorId = options?.operatorId;
+    const band = options?.band;
     const idx = this.ensureIndex(operatorId);
-    const info = idx.perCallsign.get(callsign.toUpperCase());
+    const key = callsign.toUpperCase();
+
+    if (band) {
+      // 若传入的band不可识别，则视为未通联（保守回复）
+      if (band === 'Unknown') return false;
+      const bandSet = idx.perCallsignBands.get(key);
+      return !!bandSet && bandSet.has(band);
+    }
+
+    // 未提供band时，退回到“呼号是否出现过”的宽判定
+    const info = idx.perCallsign.get(key);
     return !!info && info.count > 0;
   }
   
@@ -573,9 +604,11 @@ export class ADIFLogProvider implements ILogProvider {
     return info ? info.lastQSO : null;
   }
   
-  async analyzeCallsign(callsign: string, grid?: string, operatorId?: string): Promise<CallsignAnalysis> {
+  async analyzeCallsign(callsign: string, grid?: string, options?: { operatorId?: string; band?: string }): Promise<CallsignAnalysis> {
     this.ensureInitialized();
     const upper = callsign.toUpperCase();
+    const operatorId = options?.operatorId;
+    const band = options?.band;
     const idx = this.ensureIndex(operatorId);
     const info = idx.perCallsign.get(upper);
 
@@ -584,7 +617,14 @@ export class ADIFLogProvider implements ILogProvider {
     const cqZone = getCQZone(upper);
     const ituZone = getITUZone(upper);
 
-    const isNewCallsign = !info;
+    let isNewCallsign: boolean;
+    if (band && band !== 'Unknown') {
+      const bandSet = idx.perCallsignBands.get(upper);
+      isNewCallsign = !(bandSet && bandSet.has(band));
+    } else {
+      // 未指定band时，退回到宽判定（是否见过该呼号）
+      isNewCallsign = !info;
+    }
     const lastQSO = info?.lastQSO;
     const qsoCount = info?.count || 0;
     let isNewGrid = !!grid;
