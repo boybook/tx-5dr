@@ -712,7 +712,8 @@ export class WSServer extends WSMessageHandler {
    * 分析单个frame对所有启用操作员的日志本情况
    */
   private async analyzeFrameForOperators(frame: any, enabledOperatorIds: string[]): Promise<any> {
-    const { FT8MessageParser } = await import('@tx5dr/core');
+    const { FT8MessageParser, getBandFromFrequency } = await import('@tx5dr/core');
+    const { ConfigManager } = await import('../config/config-manager.js');
     
     // 解析FT8消息
     const parsedMessage = FT8MessageParser.parseMessage(frame.message);
@@ -743,7 +744,17 @@ export class WSServer extends WSMessageHandler {
       return null;
     }
 
-    // 对每个启用的操作员检查日志本
+    // 计算当前系统频段（用于按频段判断“是否新呼号”）
+    let band: string = 'Unknown';
+    try {
+      const cfg = ConfigManager.getInstance();
+      const last = cfg.getLastSelectedFrequency();
+      if (last && last.frequency && last.frequency > 1_000_000) {
+        band = getBandFromFrequency(last.frequency);
+      }
+    } catch {}
+
+    // 对每个启用的操作员检查日志本（按该频段）
     const operatorManager = this.digitalRadioEngine.operatorManager;
     const logManager = operatorManager.getLogManager();
     
@@ -757,7 +768,7 @@ export class WSServer extends WSMessageHandler {
       try {
         const logBook = await logManager.getOperatorLogBook(operatorId);
         if (logBook) {
-          const analysis = await logBook.provider.analyzeCallsign(callsign, grid, operatorId);
+          const analysis = await logBook.provider.analyzeCallsign(callsign, grid, { operatorId, band });
           
           // 如果任一操作员已通联过，则不是新的
           if (!analysis.isNewCallsign) {
