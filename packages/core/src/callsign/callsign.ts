@@ -10,7 +10,8 @@ import dxccData from './dxcc.json' with { type: 'json' };
 // 中文地名映射表
 const COUNTRY_ZH_MAP: Record<string, string> = {
   'Canada': '加拿大',
-  'Asiatic Russia': '俄罗斯',
+  'Asiatic Russia': '俄罗斯·亚洲',
+  'European Russia': '俄罗斯·欧洲',
   'Afghanistan': '阿富汗',
   'Agaléga and Saint Brandon': '阿加莱加和圣布兰登',
   'Åland Islands': '奥兰群岛',
@@ -79,7 +80,6 @@ const COUNTRY_ZH_MAP: Record<string, string> = {
   'Eritrea': '厄立特里亚',
   'Estonia': '爱沙尼亚',
   'Ethiopia': '埃塞俄比亚',
-  'European Russia': '俄罗斯',
   'East Malaysia': '东马来西亚',
   'West Malaysia': '西马来西亚',
   'Falkland Islands': '福克兰群岛',
@@ -644,6 +644,97 @@ class JapanCallsignParser {
   }
 }
 
+// 俄罗斯呼号解析器（区分欧洲俄罗斯和亚洲俄罗斯）
+class RussiaCallsignParser {
+  // 俄罗斯呼号前缀：UA-UI 系列和 R 系列
+  private static readonly RUSSIA_PREFIX_REGEX = /^(U[A-I]|R[A-Z0-9])/;
+
+  /**
+   * 解析俄罗斯呼号，区分欧洲和亚洲部分
+   *
+   * 规则说明:
+   * 欧洲俄罗斯:
+   * - UA1-7, UB1-7, UC1-7, UD1-7, UE1-7, UF1-7, UG1-7, UH1-7, UI1-7
+   * - R0-7, RA0-7, RB0-7, ..., RZ0-7
+   * - 特殊: UA2/UI2 带 F 或 K 后缀 = 加里宁格勒
+   * - 特殊: R8/R9/UA8-9/UI8-9 带 F/G/X 开头的后缀 = 欧洲俄罗斯
+   *
+   * 亚洲俄罗斯:
+   * - UA8-9-0, UB8-9-0, UC8-9-0, ..., UI8-9-0
+   * - R8-9-0 系列（除特殊后缀外）
+   */
+  public static parseRussiaCallsign(callsign: string): { country: string; countryZh: string; entityCode: number; continent: string[]; cqZone: number; ituZone: number } | null {
+    if (!callsign) return null;
+    const upper = callsign.toUpperCase();
+
+    // 检查是否为俄罗斯呼号
+    if (!this.RUSSIA_PREFIX_REGEX.test(upper)) return null;
+
+    // 提取数字和后缀
+    const digitMatch = upper.match(/\d/);
+    if (!digitMatch) return null;
+
+    const digit = parseInt(digitMatch[0]);
+    const digitIndex = upper.indexOf(digitMatch[0]);
+    const suffix = digitIndex < upper.length - 1 ? upper.substring(digitIndex + 1) : '';
+
+    // 判断是 UA-UI 系列还是 R 系列
+    const isUASeries = /^U[A-I]/.test(upper);
+    const isRSeries = /^R/.test(upper);
+
+    if (!isUASeries && !isRSeries) return null;
+
+    // 欧洲俄罗斯判定
+    let isEuropean = false;
+
+    if (isUASeries) {
+      // UA-UI 系列
+      if (digit >= 1 && digit <= 7) {
+        isEuropean = true;
+      } else if ((digit === 8 || digit === 9) && suffix.length > 0) {
+        // 检查后缀是否以 F, G, X 开头（欧洲俄罗斯特例）
+        const firstLetter = suffix[0];
+        if (firstLetter === 'F' || firstLetter === 'G' || firstLetter === 'X') {
+          isEuropean = true;
+        }
+      }
+    } else if (isRSeries) {
+      // R 系列（RA-RZ, R0-R9）
+      if (digit >= 0 && digit <= 7) {
+        isEuropean = true;
+      } else if ((digit === 8 || digit === 9) && suffix.length > 0) {
+        // 检查后缀是否以 F, G, X 开头
+        const firstLetter = suffix[0];
+        if (firstLetter === 'F' || firstLetter === 'G' || firstLetter === 'X') {
+          isEuropean = true;
+        }
+      }
+    }
+
+    if (isEuropean) {
+      // 欧洲俄罗斯
+      return {
+        country: 'European Russia',
+        countryZh: '俄罗斯·欧洲',
+        entityCode: 54,
+        continent: ['EU'],
+        cqZone: 16,
+        ituZone: 29
+      };
+    } else {
+      // 亚洲俄罗斯
+      return {
+        country: 'Asiatic Russia',
+        countryZh: '俄罗斯·亚洲',
+        entityCode: 15,
+        continent: ['AS'],
+        cqZone: 18,
+        ituZone: 30
+      };
+    }
+  }
+}
+
 // DXCC 数据索引
 class DXCCIndex {
   private entityMap: Map<number, any>;
@@ -790,6 +881,23 @@ class DXCCIndex {
         cqZone: 25,
         ituZone: 45
       };
+    }
+
+    // 尝试俄罗斯呼号解析（区分欧洲和亚洲部分）
+    const russiaInfo = RussiaCallsignParser.parseRussiaCallsign(upperCallsign);
+    if (russiaInfo) {
+      const result = {
+        name: russiaInfo.country,
+        countryZh: russiaInfo.countryZh,
+        flag: '🇷🇺',
+        prefix: upperCallsign.match(/^[A-Z]+/)?.[0],
+        entityCode: russiaInfo.entityCode,
+        continent: russiaInfo.continent,
+        cqZone: russiaInfo.cqZone,
+        ituZone: russiaInfo.ituZone
+      };
+      this.entityLRU.set(upperCallsign, result);
+      return result;
     }
 
     // 1. 首先使用 Trie 进行最长前缀匹配
