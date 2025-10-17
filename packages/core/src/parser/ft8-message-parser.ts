@@ -409,16 +409,16 @@ export class FT8MessageParser {
   private static isBasicValidCallsign(callsign: string): boolean {
     // 基本长度检查
     if (callsign.length < 3 || callsign.length > 8) return false;
-    
+
     // 必须包含至少一个数字
     if (!/\d/.test(callsign)) return false;
-    
+
     // 只能包含字母和数字
     if (!/^[A-Z0-9]+$/.test(callsign)) return false;
-    
-    // 数字不能在开头或结尾
-    if (/^\d/.test(callsign) || /\d$/.test(callsign)) return false;
-    
+
+    // 数字不能在结尾(但允许在开头,如韩国的6K5SPI、6L等)
+    if (/\d$/.test(callsign)) return false;
+
     return true;
   }
 
