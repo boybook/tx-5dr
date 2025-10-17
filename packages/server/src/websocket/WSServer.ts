@@ -173,8 +173,8 @@ export class WSServer extends WSMessageHandler {
     // 监听时序告警事件（由核心/操作员侧在判定“赶不上发射”时发出）
     this.digitalRadioEngine.on('timingWarning' as any, (data: any) => {
       try {
-        const title = data?.title || 'TIMING';
-        const text = data?.text || '时序告警';
+        const title = data?.title || '⚠️ 时序告警';
+        const text = data?.text || '操作员自动决策可能赶不上此发射时隙的编码';
         this.broadcastTextMessage(title, text);
       } catch {}
     });
