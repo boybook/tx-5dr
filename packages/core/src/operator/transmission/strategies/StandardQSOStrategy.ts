@@ -254,11 +254,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
         async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 收集所有TX1和TX2形式的消息
             const directCalls = messages
-                .filter((msg) => 
-                    (msg.message.type === FT8MessageType.CALL || 
-                     msg.message.type === FT8MessageType.SIGNAL_REPORT) && 
+                .filter((msg) =>
+                    (msg.message.type === FT8MessageType.CALL ||
+                     msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
                     msg.message.targetCallsign === strategy.context.config.myCallsign)
-                .sort((a, b) => a.snr - b.snr);
+                .sort((a, b) => b.snr - a.snr); // 降序排序: 信号最强的在前
 
             // 收集所有CQ消息
             const cqCalls = messages
@@ -320,15 +320,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             // 其次处理CQ呼叫
             if (cqCalls.length > 0) {
-                // 按信噪比从低到高尝试，找到合适的电台
-                const sortedCalls = cqCalls.sort((a, b) => {
-                    // 如果优先新呼号，则按信噪比从低到高排序
-                    if (strategy.operator.config.prioritizeNewCalls) {
-                        return a.snr - b.snr;
-                    }
-                    // 否则按信噪比从高到低排序
-                    return b.snr - a.snr;
-                });
+                // 始终按信号强度从高到低排序，遍历找到第一个未通联过的电台
+                const sortedCalls = cqCalls.sort((a, b) => b.snr - a.snr);
 
                 for (const cqCall of sortedCalls) {
                     const msg = cqCall.message as FT8MessageCQ;
@@ -340,7 +333,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                         // CQ呼叫只回复未通联过的电台(不受replyToWorkedStations配置影响)
                         if (!hasWorked) {
-                            console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (未通联过, SNR: ${cqCall.snr})`);
+                            console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (未通联过, SNR: ${cqCall.snr}dB, 按信号强度优先)`);
                             strategy.context.targetCallsign = callsign;
                             strategy.context.targetGrid = msg.grid;
                             strategy.context.reportSent = cqCall.snr;
