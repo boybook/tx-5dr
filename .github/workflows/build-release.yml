@@ -17,11 +17,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: windows-latest
-            platform: win32
-            arch: x64
-            build_command: make
-            artifact_name: tx-5dr-windows-x64
+#          - os: windows-latest
+#            platform: win32
+#            arch: x64
+#            build_command: make
+#            artifact_name: tx-5dr-windows-x64
             
           - os: macos-latest
             platform: darwin
