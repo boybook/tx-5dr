@@ -14,6 +14,8 @@ export interface AppConfig {
     transmitPower: number;
     autoReply: boolean;
     maxQSOTimeout: number;
+    decodeWhileTransmitting: boolean; // 发射时允许解码
+    spectrumWhileTransmitting: boolean; // 发射时允许频谱分析
   };
   // 最后选择的频率配置
   lastSelectedFrequency: {
@@ -60,6 +62,8 @@ const DEFAULT_CONFIG: AppConfig = {
     transmitPower: 25,
     autoReply: false,
     maxQSOTimeout: 6, // 6个周期 = 90秒
+    decodeWhileTransmitting: false, // 默认关闭,避免误解码残留信号
+    spectrumWhileTransmitting: true, // 默认开启,发射时继续频谱分析
   },
   lastSelectedFrequency: null, // 初始时没有选择过频率
   lastVolumeGain: null, // 初始时没有设置过音量增益

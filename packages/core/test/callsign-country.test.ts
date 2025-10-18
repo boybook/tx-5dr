@@ -87,3 +87,13 @@ test('FT8消息解析 - 含数字开头呼号', () => {
     assert.equal(info.countryZh, expectedZh, `消息 "${message}" 应解析为 ${expectedZh}`);
   }
 });
+
+test('FT8 CQ 带区域标记的消息解析', () => {
+  // 典型 FT8 CQ 带 flag 的格式：CQ NA CALL GRID
+  const message = 'CQ NA BI1RRE ON80';
+  const info = parseFT8LocationInfo(message);
+  // 应从消息中正确识别发送者呼号所在国家（BI1RRE 为中国）
+  assert.ok(info.country, '应能解析出国家');
+  assert.equal(info.country, 'China');
+  assert.equal(info.countryZh, '中国');
+});

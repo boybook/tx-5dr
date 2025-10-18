@@ -326,6 +326,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 for (const cqCall of sortedCalls) {
                     const msg = cqCall.message as FT8MessageCQ;
                     const callsign = msg.senderCallsign;
+                    // 跳过带有区域/活动标记的CQ（例如 CQ NA/EU/AS/AF/OC/SA/JA/DX/TEST/POTA 等）
+                    if ((msg as FT8MessageCQ).flag) {
+                        console.log(`[StandardQSOStrategy] 跳过带标记的CQ: ${callsign} (flag=${(msg as FT8MessageCQ).flag})`);
+                        continue;
+                    }
                     
                     try {
                         // 检查是否已经通联过

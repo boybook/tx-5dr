@@ -12,6 +12,7 @@ import { modeRoutes } from './routes/mode.js';
 import { operatorRoutes } from './routes/operators.js';
 import { radioRoutes } from './routes/radio.js';
 import { waveLogRoutes } from './routes/wavelog.js';
+import { settingsRoutes } from './routes/settings.js';
 import { WSServer } from './websocket/WSServer.js';
 
 export async function createServer() {
@@ -135,6 +136,10 @@ export async function createServer() {
   const { storageRoutes } = await import('./routes/storage.js');
   await fastify.register(storageRoutes, { prefix: '/api/storage' });
   fastify.log.info('存储管理API路由注册完成');
+
+  // 注册设置管理API路由
+  await fastify.register(settingsRoutes, { prefix: '/api/settings' });
+  fastify.log.info('设置管理API路由注册完成');
 
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {

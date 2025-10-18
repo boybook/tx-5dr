@@ -37,18 +37,21 @@ export class SlotScheduler {
   private decodeQueue: IDecodeQueue;
   private audioBufferProvider: AudioBufferProvider;
   private transmissionChecker?: ITransmissionChecker;
+  private shouldDecodeWhileTransmitting?: () => boolean;
   private isActive = false;
-  
+
   constructor(
-    slotClock: SlotClock, 
+    slotClock: SlotClock,
     decodeQueue: IDecodeQueue,
     audioBufferProvider: AudioBufferProvider,
-    transmissionChecker?: ITransmissionChecker
+    transmissionChecker?: ITransmissionChecker,
+    shouldDecodeWhileTransmitting?: () => boolean
   ) {
     this.slotClock = slotClock;
     this.decodeQueue = decodeQueue;
     this.audioBufferProvider = audioBufferProvider;
     this.transmissionChecker = transmissionChecker;
+    this.shouldDecodeWhileTransmitting = shouldDecodeWhileTransmitting;
   }
   
   /**
@@ -81,13 +84,19 @@ export class SlotScheduler {
 
   private async handleSubWindow(slotInfo: SlotInfo, windowIdx: number): Promise<void> {
     if (!this.isActive) return;
-    
-    // 检查当前周期是否有操作员准备发射
-    if (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle()) {
-      console.log(`🚫 [SlotScheduler] 当前周期有操作员准备发射，暂停解码 窗口${windowIdx}`);
-      return;
+
+    // 读取配置：是否允许发射时解码（默认true保证向后兼容）
+    const allowDecodeWhileTransmitting = this.shouldDecodeWhileTransmitting?.() ?? true;
+
+    // 只有在配置禁用发射时解码的情况下，才检查发射状态
+    if (!allowDecodeWhileTransmitting) {
+      // 检查当前周期是否有操作员准备发射
+      if (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle()) {
+        console.log(`🚫 [SlotScheduler] 发射周期中且配置禁用解码，跳过窗口${windowIdx}`);
+        return;
+      }
     }
-    
+
     try {
       const mode = this.slotClock.getMode();
       

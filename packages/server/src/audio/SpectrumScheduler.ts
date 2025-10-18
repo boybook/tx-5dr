@@ -46,11 +46,14 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   private analysisTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
   private sampleRate = 48000; // 默认采样率
-  
+
   // PTT 状态管理
   private isPTTActive = false;
   private pausedDueToPTT = false;
-  
+
+  // 配置：是否允许发射时频谱分析
+  private shouldSpectrumWhileTransmitting?: () => boolean;
+
   // 性能统计
   private stats = {
     totalAnalyses: 0,
@@ -61,8 +64,13 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     errorCount: 0
   };
 
-  constructor(config: Partial<SpectrumConfig> = {}) {
+  constructor(
+    config: Partial<SpectrumConfig> = {},
+    shouldSpectrumWhileTransmitting?: () => boolean
+  ) {
     super();
+
+    this.shouldSpectrumWhileTransmitting = shouldSpectrumWhileTransmitting;
     
     this.config = {
       analysisInterval: config.analysisInterval ?? 100, // 100ms间隔
@@ -151,15 +159,23 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   setPTTActive(active: boolean): void {
     const wasActive = this.isPTTActive;
     this.isPTTActive = active;
-    
-    if (active && !wasActive) {
-      // PTT 激活，暂停频谱分析
-      console.log('📊 [频谱调度器] PTT激活，暂停频谱分析');
-      this.pauseAnalysis();
-    } else if (!active && wasActive) {
-      // PTT 停止，恢复频谱分析
-      console.log('📊 [频谱调度器] PTT停止，恢复频谱分析');
-      this.resumeAnalysis();
+
+    // 读取配置：是否允许发射时频谱分析（默认true保证向后兼容）
+    const allowSpectrumWhileTransmitting = this.shouldSpectrumWhileTransmitting?.() ?? true;
+
+    // 只有在配置禁用发射时频谱分析的情况下，才暂停/恢复
+    if (!allowSpectrumWhileTransmitting) {
+      if (active && !wasActive) {
+        // PTT 激活，暂停频谱分析
+        console.log('📊 [频谱调度器] PTT激活且配置禁用发射时频谱分析，暂停频谱分析');
+        this.pauseAnalysis();
+      } else if (!active && wasActive) {
+        // PTT 停止，恢复频谱分析
+        console.log('📊 [频谱调度器] PTT停止，恢复频谱分析');
+        this.resumeAnalysis();
+      }
+    } else if (active && !wasActive) {
+      console.log('📊 [频谱调度器] PTT激活但配置允许发射时频谱分析，继续分析');
     }
   }
 
@@ -198,7 +214,15 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
    * 执行一次频谱分析
    */
   private async performAnalysis(): Promise<void> {
-    if (!this.audioProvider || !this.workerPool || !this.isRunning || this.isPTTActive) {
+    if (!this.audioProvider || !this.workerPool || !this.isRunning) {
+      return;
+    }
+
+    // 读取配置：是否允许发射时频谱分析（默认true保证向后兼容）
+    const allowSpectrumWhileTransmitting = this.shouldSpectrumWhileTransmitting?.() ?? true;
+
+    // 只有在配置禁用发射时频谱分析的情况下，才检查PTT状态
+    if (!allowSpectrumWhileTransmitting && this.isPTTActive) {
       return;
     }
 
