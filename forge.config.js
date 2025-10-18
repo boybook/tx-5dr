@@ -22,7 +22,7 @@ export default {
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
     platform: process.env.PLATFORM || undefined,
-    // 简化 ignore 规则，只忽略最基本的开发文件
+    // 精简打包产物：忽略开发产物、缓存、临时 Node 下载包，以及 app 内重复的 resources/bin
     ignore: [
       /^\/\.git/,
       /^\/\.turbo/,
@@ -31,7 +31,15 @@ export default {
       /^\/yarn\.lock$/,
       /^\/\.yarn/,
       /^\/\.pnp/,
-      /^\/out$/,   // 忽略输出目录
+      /^\/out$/,                     // 忽略输出目录
+      /^\/\.electron-cache$/,       // Electron 缓存
+      /^\/\.electron-builder-cache$/,
+      /^\/\.npm$/,                  // npm 缓存（若存在）
+      // 忽略临时下载/解压的 Node 包（例如 node-v22.15.1-darwin-arm64 及其 .tar.xz/.zip 文件）
+      /^\/node-v[0-9]+\.[0-9]+\.[0-9]+[\w.-]*$/,                                // 解压目录
+      /^\/node-v[0-9]+\.[0-9]+\.[0-9]+[\w.-]*\.(?:tar\.xz|tar\.gz|zip)$/,   // 压缩包
+      // 避免把 resources/bin 作为应用源码打进 Contents/Resources/app/resources/bin
+      /^\/resources\/bin(\/|$)/
     ],
     // 使用默认的依赖裁剪
     prune: true,

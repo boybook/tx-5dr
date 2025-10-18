@@ -166,6 +166,8 @@ jobs:
             install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
             strip resources/bin/${TRIPLET}/node || true
             cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+            # Clean up temporary archive and extracted directory to avoid packaging them
+            rm -rf "${PKG}" "${SRC_DIR}"
           elif [ "${PLATFORM}" = "linux" ]; then
             PKG="node-v${NODE_VERSION}-linux-${ARCH}.tar.xz"
             URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
@@ -176,6 +178,8 @@ jobs:
             install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
             strip resources/bin/${TRIPLET}/node || true
             cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+            # Clean up temporary archive and extracted directory to avoid packaging them
+            rm -rf "${PKG}" "${SRC_DIR}"
           else
             # Windows
             PKG="node-v${NODE_VERSION}-win-${ARCH}.zip"
@@ -188,6 +192,8 @@ jobs:
             mkdir -p resources/bin/${TRIPLET}
             cp -f ${SRC_DIR}/node.exe resources/bin/${TRIPLET}/node.exe
             cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+            # Clean up temporary archive and extracted directory to avoid packaging them
+            rm -rf "${PKG}" "${SRC_DIR}"
           fi
 
           echo "Portable node prepared:"
