@@ -54,8 +54,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
   fastify.post('/frequency', async (req, reply) => {
     try {
-      const { frequency, radioMode, mode, band, description } = req.body as { 
-        frequency: number; 
+      const { frequency, radioMode, mode, band, description } = req.body as {
+        frequency: number;
         radioMode?: string;
         mode?: string;
         band?: string;
@@ -64,7 +64,19 @@ export async function radioRoutes(fastify: FastifyInstance) {
       if (!frequency || typeof frequency !== 'number') {
         return reply.code(400).send({ success: false, message: '无效的频率值' });
       }
-      
+
+      // 获取当前频率配置，用于判断是否真正改变
+      const lastFrequency = configManager.getLastSelectedFrequency();
+      const isFrequencyChanged = !lastFrequency ||
+        lastFrequency.frequency !== frequency ||
+        (mode && lastFrequency.mode !== mode);
+
+      if (isFrequencyChanged) {
+        console.log(`📻 [Radio Routes] 频率真正改变: ${lastFrequency?.frequency || 'null'} → ${frequency}, 模式: ${lastFrequency?.mode || 'null'} → ${mode || 'null'}`);
+      } else {
+        console.log(`📻 [Radio Routes] 频率未改变，跳过清空和广播: ${frequency} Hz, 模式: ${mode}`);
+      }
+
       // 保存到配置文件（无论电台是否连接都要保存）
       if (mode && band) {
         try {
@@ -79,7 +91,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
           console.warn(`⚠️ [Radio Routes] 保存频率配置失败: ${(configError as Error).message}`);
         }
       }
-      
+
       // 检查电台是否已连接
       const radioConnected = radioManager.isConnected();
 
@@ -87,15 +99,17 @@ export async function radioRoutes(fastify: FastifyInstance) {
         // 电台未连接时，只记录频率但不实际设置
         console.log(`📡 [Radio Routes] 电台未连接，记录频率: ${(frequency / 1000000).toFixed(3)} MHz${radioMode ? ` (${radioMode})` : ''}`);
 
-        // 广播频率变化到所有客户端
-        engine.emit('frequencyChanged', {
-          frequency,
-          mode: mode || 'FT8',
-          band: band || '',
-          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-          radioMode,
-          radioConnected: false
-        });
+        // 只有在频率真正改变时才广播
+        if (isFrequencyChanged) {
+          engine.emit('frequencyChanged', {
+            frequency,
+            mode: mode || 'FT8',
+            band: band || '',
+            description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+            radioMode,
+            radioConnected: false
+          });
+        }
 
         return reply.send({
           success: true,
@@ -127,23 +141,26 @@ export async function radioRoutes(fastify: FastifyInstance) {
         }
       }
 
-      // 基础动作：立即清空服务端内存中的历史接收缓存
-      try {
-        engine.getSlotPackManager().clearInMemory();
-        console.log('🧹 [Radio Routes] 频率切换：已清空 SlotPack 内存缓存');
-      } catch (e) {
-        console.warn('⚠️ [Radio Routes] 频率切换：清空 SlotPack 缓存失败（继续广播）:', e);
-      }
+      // 只有在频率真正改变时才清空缓存和广播
+      if (isFrequencyChanged) {
+        // 基础动作：立即清空服务端内存中的历史接收缓存
+        try {
+          engine.getSlotPackManager().clearInMemory();
+          console.log('🧹 [Radio Routes] 频率切换：已清空 SlotPack 内存缓存');
+        } catch (e) {
+          console.warn('⚠️ [Radio Routes] 频率切换：清空 SlotPack 缓存失败（继续广播）:', e);
+        }
 
-      // 广播频率变化到所有客户端
-      engine.emit('frequencyChanged', {
-        frequency,
-        mode: mode || 'FT8',
-        band: band || '',
-        description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-        radioMode,
-        radioConnected: true
-      });
+        // 广播频率变化到所有客户端
+        engine.emit('frequencyChanged', {
+          frequency,
+          mode: mode || 'FT8',
+          band: band || '',
+          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+          radioMode,
+          radioConnected: true
+        });
+      }
 
       return reply.send({
         success: true,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo } from '@tx5dr/core';
-import { useSlotPacks, useRadioState, useConnection } from '../store/radioStore';
+import { useSlotPacks, useRadioState, useConnection, useCurrentOperatorId } from '../store/radioStore';
 import { FrameMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 
@@ -22,9 +22,10 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const connection = useConnection();
+  const { currentOperatorId } = useCurrentOperatorId();
   const [myFrameGroups, setMyFrameGroups] = useState<FrameGroup[]>([]);
   const [transmissionLogs, setTransmissionLogs] = useState<TransmissionLog[]>([]);
-  
+
   // 数据固化相关状态
   const [frozenFrameGroups, setFrozenFrameGroups] = useState<FrameGroup[]>([]);
   const [recentSlotGroupKeys, setRecentSlotGroupKeys] = useState<string[]>([]);
@@ -99,6 +100,13 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     return enabledOperators
       .map(op => op.context?.targetCall || '')
       .filter(call => call); // 过滤掉空目标呼号
+  };
+
+  // 获取当前操作员的目标呼号
+  const getCurrentOperatorTargetCallsign = (): string => {
+    if (!currentOperatorId) return '';
+    const currentOperator = radio.state.operators.find(op => op.id === currentOperatorId);
+    return currentOperator?.context?.targetCall || '';
   };
 
   // 获取所有启用的操作员的发射周期
@@ -348,10 +356,11 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           <p className="text-default-400 text-sm">与我有关的消息将在这里显示</p>
         </div>
       ) : (
-        <FramesTable 
-          groups={myFrameGroups} 
-          className="h-full" 
+        <FramesTable
+          groups={myFrameGroups}
+          className="h-full"
           myCallsigns={getMyCallsigns()}
+          targetCallsign={getCurrentOperatorTargetCallsign()}
         />
       )}
     </div>
