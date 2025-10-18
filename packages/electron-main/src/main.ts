@@ -49,6 +49,8 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
     ...process.env,
     NODE_ENV: 'production',
     APP_RESOURCES: res,
+    // 明确为子进程提供模块解析路径，确保能解析到 app/node_modules
+    NODE_PATH: path.join(res, 'app', 'node_modules'),
     ...(process.platform === 'win32'
       ? { PATH: `${process.env.PATH};${path.join(res, 'app', 'native')}` }
       : { LD_LIBRARY_PATH: `${path.join(res, 'app', 'native')}:${process.env.LD_LIBRARY_PATH || ''}` }),
