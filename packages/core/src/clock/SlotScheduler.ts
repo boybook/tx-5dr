@@ -22,10 +22,11 @@ export interface IDecodeQueue {
  */
 export interface ITransmissionChecker {
   /**
-   * 检查当前周期是否有操作员准备发射
-   * @returns true 如果有操作员在当前周期准备发射
+   * 检查指定时隙是否有操作员准备发射
+   * @param slotInfo 时隙信息，用于确定周期
+   * @returns true 如果有操作员在该时隙的周期准备发射
    */
-  hasActiveTransmissionsInCurrentCycle(): boolean;
+  hasActiveTransmissionsInCurrentCycle(slotInfo: SlotInfo): boolean;
 }
 
 /**
@@ -90,9 +91,10 @@ export class SlotScheduler {
 
     // 只有在配置禁用发射时解码的情况下，才检查发射状态
     if (!allowDecodeWhileTransmitting) {
-      // 检查当前周期是否有操作员准备发射
-      if (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle()) {
-        console.log(`🚫 [SlotScheduler] 发射周期中且配置禁用解码，跳过窗口${windowIdx}`);
+      // 检查slotInfo对应的时隙是否有操作员准备发射
+      // 传递slotInfo以确保周期判断与解码数据的时隙一致
+      if (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle(slotInfo)) {
+        console.log(`🚫 [SlotScheduler] 时隙${slotInfo.id}是发射周期且配置禁用解码，跳过窗口${windowIdx}`);
         return;
       }
     }
