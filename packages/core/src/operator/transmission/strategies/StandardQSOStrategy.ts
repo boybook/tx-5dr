@@ -251,7 +251,22 @@ const states: { [key in SlotsIndex]: StandardState } = {
             strategy.qsoStartTime = undefined;
         },
         async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
-            // 检查是否收到对方的 RRR/RR73
+            // 首先检查是否收到对方的73
+            const msg73 = messages
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.SEVENTY_THREE &&
+                    msg.message.senderCallsign === strategy.context.targetCallsign &&
+                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                .sort((a, b) => a.snr - b.snr)
+                .pop();
+
+            if (msg73) {
+                // 对方发送了73，QSO已完成，直接转到TX6
+                console.log(`[StandardQSOStrategy TX4] 收到对方73，QSO完成，转到TX6`);
+                return { changeState: 'TX6' };
+            }
+
+            // 其次检查是否收到对方的 RRR/RR73
             const msgRRR = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.RRR &&
@@ -261,7 +276,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 .pop();
 
             if (msgRRR) {
-                // 对方发送了 RR73，我们应该发送 73 结束通联
+                // 对方也发送了 RR73，我们应该发送 73 结束通联
                 strategy.updateSlots();
                 return {
                     changeState: 'TX5'
