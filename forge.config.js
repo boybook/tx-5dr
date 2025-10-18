@@ -41,8 +41,8 @@ export default {
       // 避免把 resources/bin 作为应用源码打进 Contents/Resources/app/resources/bin
       /^\/resources\/bin(\/|$)/
     ],
-    // 使用默认的依赖裁剪
-    prune: true,
+    // 禁用依赖裁剪，避免工作区（monorepo）被按根 package.json 误裁导致运行时缺包
+    prune: false,
     darwinDarkModeSupport: true,
     // 平台特定配置
     osxSign: false, // 暂时禁用签名
