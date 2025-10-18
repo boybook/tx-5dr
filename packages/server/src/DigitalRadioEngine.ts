@@ -130,7 +130,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       workerPoolSize: DigitalRadioEngine.SPECTRUM_CONFIG.WORKER_POOL_SIZE,
       enabled: DigitalRadioEngine.SPECTRUM_CONFIG.ENABLED,
       targetSampleRate: DigitalRadioEngine.SPECTRUM_CONFIG.TARGET_SAMPLE_RATE
-    });
+    }, () => ConfigManager.getInstance().getFT8Config().spectrumWhileTransmitting ?? true);
     
     // 监听编码完成事件 - 修改为使用音频混音器
     this.realEncodeQueue.on('encodeComplete', async (result) => {
@@ -459,10 +459,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     // 创建 SlotScheduler - 使用真实的音频和解码系统
     this.slotScheduler = new SlotScheduler(
-      this.slotClock, 
-      this.realDecodeQueue, 
+      this.slotClock,
+      this.realDecodeQueue,
       this.audioStreamManager.getAudioProvider(),
-      this._operatorManager  // 传递操作员管理器作为发射状态检查器
+      this._operatorManager,  // 传递操作员管理器作为发射状态检查器
+      () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false  // 配置函数
     );
     
     // 监听解码结果并通过 SlotPackManager 处理

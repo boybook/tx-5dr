@@ -1135,12 +1135,16 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
   // 降级处理:如果FT8消息解析失败或无法识别发送者,尝试从原始消息中提取呼号
   if (!callsignInfo) {
     const words = message.trim().toUpperCase().split(/\s+/);
+    // 常见的 CQ 区域/活动标记，在降级扫描时应忽略，避免被误当作呼号
+    const CQ_FLAGS = new Set([
+      'DX','NA','EU','AS','AF','OC','SA','JA','RU','UP','TEST','POTA','WW'
+    ]);
     for (const word of words) {
       // 跳过网格坐标和信号报告
       if (GRID_REGEX_LOCAL.test(word) || REPORT_REGEX_LOCAL.test(word)) continue;
 
       // 跳过常见的FT8关键字
-      if (word === 'CQ' || word === 'RRR' || word === 'RR73' || word === '73') continue;
+      if (word === 'CQ' || word === 'RRR' || word === 'RR73' || word === '73' || CQ_FLAGS.has(word)) continue;
 
       const info = getCallsignInfo(word);
       if (info) {

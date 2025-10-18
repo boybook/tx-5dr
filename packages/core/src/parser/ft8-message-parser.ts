@@ -137,16 +137,22 @@ export class FT8MessageParser {
 
   /**
    * 解析CQ消息
-   * 格式: CQ [DX] CALLSIGN [GRID]
+   * 格式: CQ [FLAG] CALLSIGN [GRID]
+   * 说明: FLAG 常见为 DX/NA/EU/AS/AF/OC/SA/JA/TEST/POTA 等，仅由字母组成
    */
   private static parseCQMessage(parts: string[], rawMessage: string): FT8Message {
     let callsignIndex = 1;
     let flag: string | undefined;
-    
-    // 检查是否为CQ DX
-    if (parts[1] === 'DX') {
-      flag = 'DX';
-      callsignIndex = 2;
+
+    // 连续吸收 CQ 后面出现的字母标记（不含数字，长度1-5），直到遇到有效呼号为止
+    // 例如：CQ NA BI1ABC PM95、CQ EU BI1ABC、CQ TEST BG5DRB PL09
+    const isLettersOnlyFlag = (token: string) => /^[A-Z]{1,5}$/.test(token);
+
+    // 逐个检查可能的FLAG，但在遇到有效呼号时停止
+    while (parts.length > callsignIndex && isLettersOnlyFlag(parts[callsignIndex]) && !this.isValidCallsign(parts[callsignIndex])) {
+      // 仅保留第一个标记作为 flag（协议字段目前只有一个）
+      if (!flag) flag = parts[callsignIndex];
+      callsignIndex += 1;
     }
 
     if (parts.length <= callsignIndex) {

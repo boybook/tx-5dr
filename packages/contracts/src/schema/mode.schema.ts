@@ -41,7 +41,7 @@ export const MODES = {
     name: 'FT8',
     slotMs: 15000,
     toleranceMs: 100,
-    windowTiming: [-1500, -1000, -500, 0, 250, 500],
+    windowTiming: [-1500, -1000, -500, 0, 250],
     transmitTiming: 1180, // (15000 - 12640) / 2 = 1180ms - 使音频在时隙中居中
     encodeAdvance: 1000    // 提前1000ms开始编码准备
   } as ModeDescriptor,
