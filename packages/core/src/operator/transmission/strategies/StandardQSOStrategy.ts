@@ -263,6 +263,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (msg73) {
                 // 对方发送了73，QSO已完成，直接转到TX6
                 console.log(`[StandardQSOStrategy TX4] 收到对方73，QSO完成，转到TX6`);
+                strategy.clearQSOContext();
                 return { changeState: 'TX6' };
             }
 
@@ -290,6 +291,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
+            strategy.clearQSOContext();
             if (strategy.operator.config.autoReplyToCQ) {
                 return { changeState: 'TX6' };
             }
@@ -371,7 +373,15 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             // 没有新的直接呼叫，转到TX6（CQ或等待新消息）
             // 这样确保只发送1次73后就转到TX6
+            strategy.clearQSOContext();
             return { changeState: 'TX6' };
+        },
+        onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            strategy.clearQSOContext();
+            if (strategy.operator.config.autoReplyToCQ) {
+                return { changeState: 'TX6' };
+            }
+            return { stop: true };
         }
     },
     TX6: {
@@ -742,11 +752,28 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             senderCallsign: this.operator.config.myCallsign,
             grid: this.operator.config.myGrid,
         });
-        
+
         // 通知操作员slots已更新
         this.notifySlotsUpdated();
     }
-    
+
+    /**
+     * 清空QSO上下文
+     * 在QSO结束时调用，确保干净的下一次通联
+     */
+    clearQSOContext(): void {
+        this.context.targetCallsign = undefined;
+        this.context.targetGrid = undefined;
+        this.context.reportSent = undefined;
+        this.context.reportReceived = undefined;
+        this.context.actualFrequency = undefined;
+
+        // 更新slots（TX1-TX5会变为空，只保留TX6的CQ）
+        this.updateSlots();
+
+        console.log(`[StandardQSOStrategy] 已清空QSO上下文`);
+    }
+
     /**
      * 通知slots更新
      */
