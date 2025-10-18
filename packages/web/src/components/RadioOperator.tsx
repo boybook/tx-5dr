@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsAltH, faRepeat, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faArrowsAltH, faRepeat, faBook, faRotateLeft } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import type { OperatorStatus } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
@@ -507,49 +507,75 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             </Button>
           </div>
           
-          <Select
-            selectedKeys={[operatorStatus.currentSlot || 'TX6']}
-            onSelectionChange={(keys) => {
-              const slot = Array.from(keys)[0] as string;
-              if (slot && connection.state.radioService) {
-                connection.state.radioService.sendUserCommand(
-                  operatorStatus.id,
-                  'set_state',
-                  slot
+          <div className="flex items-center gap-0">
+            <Select
+              selectedKeys={[operatorStatus.currentSlot || 'TX6']}
+              onSelectionChange={(keys) => {
+                const slot = Array.from(keys)[0] as string;
+                if (slot && connection.state.radioService) {
+                  connection.state.radioService.sendUserCommand(
+                    operatorStatus.id,
+                    'set_state',
+                    slot
+                  );
+                }
+              }}
+              size="sm"
+              variant="bordered"
+              className="w-auto min-w-[200px]"
+              classNames={{
+                trigger: "bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2",
+                value: "text-sm font-mono text-foreground p-0",
+                selectorIcon: "text-default-400 text-xs",
+                popoverContent: "min-w-[260px]",
+              }}
+              isDisabled={!connection.state.isConnected}
+              aria-label="选择当前时隙"
+              renderValue={(items) => {
+                const item = items[0];
+                if (!item || !operatorStatus.slots) return String(item?.key || 'TX6');
+
+                // 显示为"TXN: 内容"格式
+                const slotKey = String(item.key);
+                const slotContent = operatorStatus.slots[item.key as keyof typeof operatorStatus.slots];
+                return slotContent ? slotContent : slotKey;
+              }}
+            >
+              {operatorStatus.strategy.availableSlots.map((slot) => {
+                const slotContent = operatorStatus.slots?.[slot as keyof typeof operatorStatus.slots];
+                const displayText = slotContent ? `${slot}: ${slotContent}` : slot;
+                return (
+                  <SelectItem key={slot}>
+                    {displayText}
+                  </SelectItem>
                 );
-              }
-            }}
-            size="sm"
-            variant="bordered"
-            className="w-auto min-w-[200px]"
-            classNames={{
-              trigger: "bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2",
-              value: "text-sm font-mono text-foreground p-0",
-              selectorIcon: "text-default-400 text-xs",
-              popoverContent: "min-w-[260px]",
-            }}
-            isDisabled={!connection.state.isConnected}
-            aria-label="选择当前时隙"
-            renderValue={(items) => {
-              const item = items[0];
-              if (!item || !operatorStatus.slots) return String(item?.key || 'TX6');
-              
-              // 显示为"TXN: 内容"格式
-              const slotKey = String(item.key);
-              const slotContent = operatorStatus.slots[item.key as keyof typeof operatorStatus.slots];
-              return slotContent ? slotContent : slotKey;
-            }}
-          >
-            {operatorStatus.strategy.availableSlots.map((slot) => {
-              const slotContent = operatorStatus.slots?.[slot as keyof typeof operatorStatus.slots];
-              const displayText = slotContent ? `${slot}: ${slotContent}` : slot;
-              return (
-                <SelectItem key={slot}>
-                  {displayText}
-                </SelectItem>
-              );
-            })}
-          </Select>
+              })}
+            </Select>
+
+            {/* 重置按钮 - 仅在非TX6状态下显示 */}
+            {operatorStatus.currentSlot !== 'TX6' && (
+              <Button
+                size="sm"
+                variant="light"
+                isIconOnly
+                onPress={() => {
+                  if (connection.state.radioService) {
+                    connection.state.radioService.sendUserCommand(
+                      operatorStatus.id,
+                      'set_state',
+                      'TX6'
+                    );
+                  }
+                }}
+                className="h-auto p-2 min-w-0 w-auto"
+                title="重置到TX6"
+                aria-label="重置到TX6"
+                isDisabled={!connection.state.isConnected}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
+              </Button>
+            )}
+          </div>
         </div>
         
         {/* 第二行 - Context输入和展开按钮 */}
