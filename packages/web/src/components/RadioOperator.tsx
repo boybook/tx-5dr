@@ -1,11 +1,12 @@
 import * as React from 'react';
-import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection } from "@heroui/react";
+import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection, Tooltip } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsAltH, faRepeat, faBook, faRotateLeft } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
+import { faWandMagicSparkles, faRepeat, faBook, faRotateLeft } from '@fortawesome/free-solid-svg-icons';
+import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../store/radioStore';
 import type { OperatorStatus } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { openLogbookWindow } from '../utils/windowManager';
+import { addToast } from '@heroui/toast';
 
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
@@ -16,6 +17,7 @@ const SLOT_OPTIONS = ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'];
 export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operatorStatus }) => {
   const connection = useConnection();
   const radio = useRadioState();
+  const slotPacks = useSlotPacks();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
   
@@ -340,6 +342,80 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
   };
 
+  // 选择空闲频率
+  const pickIdleFrequency = () => {
+    const mode = radio.state.currentMode;
+    if (!mode) {
+      addToast({
+        title: '无法选择频率',
+        description: '当前未获取到模式信息，请稍后重试。',
+        color: 'warning'
+      });
+      return;
+    }
+
+    const transmitCycles = localTransmitCycles && localTransmitCycles.length > 0 ? localTransmitCycles : [0];
+    const now = Date.now();
+    const maxAgeMs = 5 * 60 * 1000; // 5分钟
+
+    const candidates = [...(slotPacks.state.slotPacks || [])]
+      .filter(sp => {
+        const recentEnough = (now - sp.endMs) <= maxAgeMs;
+        const cycleMatch = CycleUtils.isOperatorTransmitCycleFromMs(transmitCycles, sp.startMs, mode.slotMs);
+        return recentEnough && cycleMatch && sp.frames && sp.frames.length > 0;
+      })
+      .sort((a, b) => b.endMs - a.endMs);
+
+    if (candidates.length === 0) {
+      addToast({
+        title: '未找到可用时隙',
+        description: '5分钟内没有与当前发射周期一致的通联消息。请先取消发射，等待接收到该时隙的一组通联消息后再尝试。',
+        color: 'warning'
+      });
+      return;
+    }
+
+    const latest = candidates[0];
+    const freqs = latest.frames.map(f => f.freq).filter(f => Number.isFinite(f)) as number[];
+
+    if (freqs.length < 2) {
+      addToast({
+        title: '数据不足',
+        description: '最近时隙的解码帧数量不足，无法计算空闲频率。请停止发射并接收一个周期以获取更多数据。',
+        color: 'warning'
+      });
+      return;
+    }
+
+    freqs.sort((a, b) => a - b);
+
+    let maxGap = -1;
+    let midFreq = freqs[0];
+    for (let i = 0; i < freqs.length - 1; i++) {
+      const gap = freqs[i + 1] - freqs[i];
+      if (gap > maxGap) {
+        maxGap = gap;
+        midFreq = Math.round(freqs[i] + gap / 2);
+      }
+    }
+
+    if (!Number.isFinite(midFreq)) {
+      addToast({
+        title: '计算失败',
+        description: '无法计算空闲频率，请稍后重试。',
+        color: 'danger'
+      });
+      return;
+    }
+
+    handleContextUpdate('frequency', midFreq);
+    addToast({
+      title: '已选择空闲频率',
+      description: `${midFreq} Hz`,
+      color: 'success'
+    });
+  };
+
   return (
     <div 
       className="border border-divider rounded-lg overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
@@ -625,6 +701,22 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 <span className="text-sm text-default-500 whitespace-nowrap">频率</span>
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
+            }
+            endContent={
+              <Tooltip content="自动选择空闲频率" placement="top" offset={6}>
+                <Button
+                  size="sm"
+                  variant="light"
+                  isIconOnly
+                  radius="sm"
+                  className="min-w-0 h-6 w-6 text-default-400 hover:text-foreground"
+                  onPress={pickIdleFrequency}
+                  isDisabled={!connection.state.isConnected}
+                  aria-label="自动选择空闲频率"
+                >
+                  <FontAwesomeIcon icon={faWandMagicSparkles} />
+                </Button>
+              </Tooltip>
             }
             type="number"
             value={localContext?.frequency?.toString()}
