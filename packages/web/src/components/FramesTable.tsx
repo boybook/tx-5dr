@@ -181,6 +181,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return getHighlightColor(highlightType);
   };
 
+  // 清理呼号用于匹配（仅移除尖括号，保留后缀以便完整匹配）
+  const cleanCallsignForMatching = (word: string): string => {
+    // 移除尖括号
+    if (word.startsWith('<') && word.endsWith('>')) {
+      return word.slice(1, -1);
+    }
+    return word;
+  };
+
   // 检查消息是否包含自己的呼号
   const containsMyCallsign = (message: string): boolean => {
     if (!myCallsigns || myCallsigns.length === 0) return false;
@@ -193,8 +202,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
       // 检查完整单词匹配，避免部分匹配
       const words = upperMessage.split(/\s+/);
       return words.some(word => {
-        // 移除常见的后缀（如 /QRP, /P 等）
-        const cleanWord = word.replace(/\/[A-Z0-9]+$/, '');
+        const cleanWord = cleanCallsignForMatching(word);
         return cleanWord === upperCallsign;
       });
     });
@@ -218,8 +226,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     const upperMessage = messageObj.message.toUpperCase();
     const words = upperMessage.split(/\s+/);
     return words.some(word => {
-      // 移除常见的后缀（如 /QRP, /P 等）
-      const cleanWord = word.replace(/\/[A-Z0-9]+$/, '');
+      const cleanWord = cleanCallsignForMatching(word);
       return cleanWord === upperTarget;
     });
   };
