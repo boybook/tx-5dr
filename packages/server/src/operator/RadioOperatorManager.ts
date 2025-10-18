@@ -877,28 +877,30 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 检查当前周期是否有任何操作员准备发射
-   * 基于现有的 handleTransmissions 逻辑，但只做检查不执行发射
-   * @returns true 如果有操作员在当前周期准备发射
+   * 检查指定时隙是否有任何操作员准备发射
+   * 基于slotInfo的时间判断周期，确保与解码数据的时隙一致
+   * @param slotInfo 时隙信息，用于确定周期
+   * @returns true 如果有操作员在该时隙的周期准备发射
    */
-  hasActiveTransmissionsInCurrentCycle(): boolean {
+  hasActiveTransmissionsInCurrentCycle(slotInfo: any): boolean {
     if (!this.isRunning) {
       return false;
     }
 
-    // 获取当前时隙信息（复用 handleTransmissions 的逻辑）
-    const now = this.clockSource.now();
+    // 使用slotInfo的时间判断周期，而不是当前实时时间
+    // 这样可以确保周期判断与解码数据的时隙一致
+    // 即使解码窗口延迟到下一个时隙才触发（如windowTiming[4]=250），
+    // 判断的仍然是slotInfo对应时隙的周期
+    const utcSeconds = Math.floor(slotInfo.startMs / 1000);
     const currentMode = this.getCurrentMode();
-    const currentSlotStartMs = Math.floor(now / currentMode.slotMs) * currentMode.slotMs;
 
-    // 检查每个操作员（复用 handleTransmissions 的遍历逻辑）
+    // 检查每个操作员
     for (const [operatorId, operator] of this.operators) {
       if (!operator.isTransmitting) {
         continue;
       }
 
-      // 使用现有的周期判断逻辑
-      const utcSeconds = Math.floor(currentSlotStartMs / 1000);
+      // 基于slotInfo的周期判断
       const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
         operator.getTransmitCycles(),
         utcSeconds,
