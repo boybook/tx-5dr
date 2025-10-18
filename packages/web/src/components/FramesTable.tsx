@@ -38,9 +38,10 @@ interface FramesTableProps {
   className?: string;
   onRowDoubleClick?: (message: FrameDisplayMessage, group: FrameGroup) => void;
   myCallsigns?: string[]; // 自己的呼号列表
+  targetCallsign?: string; // 当前选中操作员的目标呼号
 }
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [] }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '' }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [prevGroupsLength, setPrevGroupsLength] = useState(0);
@@ -183,12 +184,12 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   // 检查消息是否包含自己的呼号
   const containsMyCallsign = (message: string): boolean => {
     if (!myCallsigns || myCallsigns.length === 0) return false;
-    
+
     const upperMessage = message.toUpperCase();
     return myCallsigns.some(callsign => {
       const upperCallsign = callsign.toUpperCase().trim();
       if (!upperCallsign) return false;
-      
+
       // 检查完整单词匹配，避免部分匹配
       const words = upperMessage.split(/\s+/);
       return words.some(word => {
@@ -196,6 +197,30 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         const cleanWord = word.replace(/\/[A-Z0-9]+$/, '');
         return cleanWord === upperCallsign;
       });
+    });
+  };
+
+  // 检查消息是否与目标呼号相关
+  const isTargetRelated = (messageObj: FrameDisplayMessage): boolean => {
+    if (!targetCallsign || targetCallsign.trim() === '') return false;
+
+    const upperTarget = targetCallsign.toUpperCase().trim();
+
+    // 检查是否来自目标呼号
+    if (messageObj.logbookAnalysis?.callsign) {
+      const upperCallsign = messageObj.logbookAnalysis.callsign.toUpperCase().trim();
+      if (upperCallsign === upperTarget) {
+        return true;
+      }
+    }
+
+    // 检查消息文本是否包含目标呼号
+    const upperMessage = messageObj.message.toUpperCase();
+    const words = upperMessage.split(/\s+/);
+    return words.some(word => {
+      // 移除常见的后缀（如 /QRP, /P 等）
+      const cleanWord = word.replace(/\/[A-Z0-9]+$/, '');
+      return cleanWord === upperTarget;
     });
   };
 
@@ -209,29 +234,41 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     const hasMyCallsign = containsMyCallsign(messageObj.message);
     // 是否已通联过（根据日志本分析：非新呼号即已通联）
     const isWorkedCallsign = messageObj.logbookAnalysis?.isNewCallsign === false;
-    
+    // 检查是否与目标呼号相关
+    const isTarget = isTargetRelated(messageObj);
+
     // 基础消息文本
     const showChips = messageObj.logbookAnalysis && isSpecialMessageType(messageObj.message);
-    
-    const content = (
+
+    return (
       <span className="flex items-center gap-1">
+        {/* 目标呼号标记 */}
+        {isTarget && (
+          <span
+            className="w-2 h-2 rounded-full bg-danger-500 flex-shrink-0 -ml-3"
+            style={{
+              animation: 'pulse-glow 2s ease-in-out infinite',
+              boxShadow: '0 0 0 1.5px rgba(244, 63, 94, 0.1)'
+            }}
+          />
+        )}
         <span className={`${hasMyCallsign ? 'text-danger font-semibold' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}>
           {messageObj.message}
         </span>
         {showChips && (() => {
           const highlightType = getHighestPriorityHighlight(messageObj.logbookAnalysis!);
           if (!highlightType) return null;
-          
+
           const baseColor = getHighlightColor(highlightType);
           const label = HIGHLIGHT_TYPE_LABELS[highlightType];
           const badgeColors = getBadgeColors(baseColor, true); // 特殊消息类型
-          
+
           return (
-            <Chip 
-              size="sm" 
-              variant="flat" 
+            <Chip
+              size="sm"
+              variant="flat"
               className="h-4 font-medium"
-              style={{ 
+              style={{
                 backgroundColor: badgeColors.backgroundColor,
                 color: badgeColors.textColor,
                 borderColor: badgeColors.borderColor,
@@ -245,8 +282,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         })()}
       </span>
     );
-    
-    return content;
   };
 
   if (groups.length === 0) {
@@ -254,7 +289,19 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   }
 
   return (
-    <div className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default`}>
+    <>
+      {/* 添加呼吸发光动画 */}
+      <style>{`
+        @keyframes pulse-glow {
+          0%, 100% {
+            box-shadow: 0 0 0 1.5px rgba(244, 63, 94, 0.1);
+          }
+          50% {
+            box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.3);
+          }
+        }
+      `}</style>
+      <div className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default`}>
       {/* 固定表头 */}
       <div className="flex-shrink-0 cursor-default select-none">
         <div className="grid grid-cols-[60px_48px_48px_80px_1fr_128px] gap-0 px-3 py-1">
@@ -356,5 +403,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         </div>
       </ScrollShadow>
     </div>
+    </>
   );
 }; 

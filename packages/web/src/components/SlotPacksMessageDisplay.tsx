@@ -24,6 +24,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       .filter(call => call.trim() !== ''); // 过滤掉空呼号
   };
 
+  // 获取当前操作员的目标呼号
+  const getTargetCallsign = (): string => {
+    if (!currentOperatorId) return '';
+    const currentOperator = radio.state.operators.find(op => op.id === currentOperatorId);
+    return currentOperator?.context?.targetCall || '';
+  };
+
   // 处理SlotPack数据转换为FT8Group格式
   useEffect(() => {
     const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean }>();
@@ -124,10 +131,11 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   }
 
   return (
-    <FramesTable 
-      groups={frameGroups} 
-      className={className} 
+    <FramesTable
+      groups={frameGroups}
+      className={className}
       myCallsigns={getMyCallsigns()}
+      targetCallsign={getTargetCallsign()}
       onRowDoubleClick={handleRowDoubleClick}
     />
   );
