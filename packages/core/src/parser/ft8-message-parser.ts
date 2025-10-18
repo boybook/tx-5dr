@@ -61,7 +61,7 @@ export class FT8MessageParser {
       case FT8MessageType.CQ:
         // CQ 消息中，如果包含网格，非标准呼号需要包裹
         return !!(message as any).grid;
-      
+
       case FT8MessageType.CALL:
       case FT8MessageType.SIGNAL_REPORT:
       case FT8MessageType.ROGER_REPORT:
@@ -69,10 +69,21 @@ export class FT8MessageParser {
       case FT8MessageType.SEVENTY_THREE:
         // 其他消息类型中，如果包含网格或报告，非标准呼号需要包裹
         return !!((message as any).grid || (message as any).report);
-      
+
       default:
         return false;
     }
+  }
+
+  /**
+   * 清理呼号，移除可能存在的尖括号
+   * 尖括号只是FT8协议的格式标记，不应成为呼号数据的一部分
+   */
+  private static cleanCallsign(callsign: string): string {
+    if (callsign.startsWith('<') && callsign.endsWith('>')) {
+      return callsign.slice(1, -1);
+    }
+    return callsign;
   }
 
   /**
@@ -170,7 +181,7 @@ export class FT8MessageParser {
 
     const result: FT8Message = {
       type: FT8MessageType.CQ,
-      senderCallsign: callsign,
+      senderCallsign: this.cleanCallsign(callsign),
     };
 
     if (flag) {
@@ -204,7 +215,7 @@ export class FT8MessageParser {
   private static parseResponseMessage(parts: string[], rawMessage: string): FT8Message {
     const targetCallsign = parts[0];
     const senderCallsign = parts[1];
-    
+
     if (!targetCallsign || !senderCallsign) {
       return {
         type: FT8MessageType.UNKNOWN
@@ -213,8 +224,8 @@ export class FT8MessageParser {
 
     const result: FT8Message = {
       type: FT8MessageType.CALL,
-      senderCallsign,
-      targetCallsign,
+      senderCallsign: this.cleanCallsign(senderCallsign),
+      targetCallsign: this.cleanCallsign(targetCallsign),
     };
 
     // 检查是否有网格定位
@@ -247,7 +258,7 @@ export class FT8MessageParser {
     const targetCallsign = parts[0];
     const senderCallsign = parts[1];
     const report = parts[2];
-    
+
     if (!targetCallsign || !senderCallsign || !report) {
       return {
         type: FT8MessageType.UNKNOWN
@@ -256,8 +267,8 @@ export class FT8MessageParser {
 
     return {
       type: FT8MessageType.SIGNAL_REPORT,
-      senderCallsign,
-      targetCallsign,
+      senderCallsign: this.cleanCallsign(senderCallsign),
+      targetCallsign: this.cleanCallsign(targetCallsign),
       report: parseInt(report, 10),
     };
   }
@@ -292,21 +303,21 @@ export class FT8MessageParser {
     if (lastPart === 'RR73') {
       return {
         type: FT8MessageType.RRR,
-        senderCallsign,
-        targetCallsign,
+        senderCallsign: this.cleanCallsign(senderCallsign),
+        targetCallsign: this.cleanCallsign(targetCallsign),
       };
     } else if (lastPart === 'RRR') {
       return {
         type: FT8MessageType.RRR,
-        senderCallsign,
-        targetCallsign,
+        senderCallsign: this.cleanCallsign(senderCallsign),
+        targetCallsign: this.cleanCallsign(targetCallsign),
       };
     } else if (/^R[+-]?\d{1,2}$/.test(lastPart)) {
       // R-01, R+05等，解析为ROGER_REPORT
       return {
         type: FT8MessageType.ROGER_REPORT,
-        senderCallsign,
-        targetCallsign,
+        senderCallsign: this.cleanCallsign(senderCallsign),
+        targetCallsign: this.cleanCallsign(targetCallsign),
         report: parseInt(lastPart.slice(1), 10)
       };
     }
@@ -332,7 +343,7 @@ export class FT8MessageParser {
   private static parse73Message(parts: string[], rawMessage: string): FT8Message {
     const targetCallsign = parts[0];
     const senderCallsign = parts[1];
-    
+
     if (!targetCallsign || !senderCallsign) {
       return {
         type: FT8MessageType.UNKNOWN
@@ -341,8 +352,8 @@ export class FT8MessageParser {
 
     return {
       type: FT8MessageType.SEVENTY_THREE,
-      senderCallsign,
-      targetCallsign,
+      senderCallsign: this.cleanCallsign(senderCallsign),
+      targetCallsign: this.cleanCallsign(targetCallsign),
     };
   }
 
