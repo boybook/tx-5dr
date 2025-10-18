@@ -199,6 +199,51 @@ jobs:
           echo "Portable node prepared:"
           ls -la resources/bin/${TRIPLET}
 
+      # macOS: fix wsjtx-lib prebuilt dylib install_names to load from its own folder
+      - name: Patch wsjtx-lib dylib install names (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Patching wsjtx-lib install names..."
+          ROOT=$(pwd)
+          PREBUILT_DIR="$ROOT/node_modules/wsjtx-lib/prebuilds/darwin-arm64"
+          if [ ! -d "$PREBUILT_DIR" ]; then
+            echo "wsjtx-lib prebuild dir not found: $PREBUILT_DIR"
+            exit 0
+          fi
+
+          # Ensure libquadmath and libgcc_s are present (copy from Homebrew GCC)
+          GCC_PREFIX=$(brew --prefix gcc@14 || brew --prefix gcc)
+          echo "GCC prefix: $GCC_PREFIX"
+          cp -Lv $(ls "$GCC_PREFIX"/lib/gcc/*/libquadmath.0.dylib | head -n1) "$PREBUILT_DIR" || true
+          cp -Lv $(ls "$GCC_PREFIX"/lib/gcc/*/libgcc_s.1.1.dylib | head -n1) "$PREBUILT_DIR" || true
+
+          pushd "$PREBUILT_DIR" >/dev/null
+          set +e
+          # Set ids to @loader_path
+          install_name_tool -id @loader_path/libfftw3f.3.dylib libfftw3f.3.dylib 2>/dev/null || true
+          install_name_tool -id @loader_path/libfftw3f_threads.3.dylib libfftw3f_threads.3.dylib 2>/dev/null || true
+          install_name_tool -id @loader_path/libgfortran.5.dylib libgfortran.5.dylib 2>/dev/null || true
+          [ -f libquadmath.0.dylib ] && install_name_tool -id @loader_path/libquadmath.0.dylib libquadmath.0.dylib || true
+          [ -f libgcc_s.1.1.dylib ] && install_name_tool -id @loader_path/libgcc_s.1.1.dylib libgcc_s.1.1.dylib || true
+
+          # Fix dependencies to @loader_path
+          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f.3.dylib @loader_path/libfftw3f.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f_threads.3.dylib @loader_path/libfftw3f_threads.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          # GCC dylibs may vary by version; try both gcc@14 and generic gcc paths
+          install_name_tool -change /opt/homebrew/opt/gcc@14/lib/gcc/14/libgfortran.5.dylib @loader_path/libgfortran.5.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change /opt/homebrew/opt/gcc/lib/gcc/*/libgfortran.5.dylib @loader_path/libgfortran.5.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change /opt/homebrew/opt/gcc@14/lib/gcc/14/libquadmath.0.dylib @loader_path/libquadmath.0.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change /opt/homebrew/opt/gcc/lib/gcc/*/libquadmath.0.dylib @loader_path/libquadmath.0.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+
+          # Fix secondary deps
+          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f.3.dylib @loader_path/libfftw3f.3.dylib libfftw3f_threads.3.dylib 2>/dev/null || true
+          install_name_tool -change @rpath/libquadmath.0.dylib @loader_path/libquadmath.0.dylib libgfortran.5.dylib 2>/dev/null || true
+          install_name_tool -change @rpath/libgcc_s.1.1.dylib @loader_path/libgcc_s.1.1.dylib libgfortran.5.dylib 2>/dev/null || true
+          set -e
+          popd >/dev/null
+
       - name: Package application
         run: yarn ${{ matrix.build_command }}
         env:

@@ -45,6 +45,7 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
   if (!fs.existsSync(entryAbs)) {
     console.error(`[child:${name}] entry not found:`, entryAbs);
   }
+  const wsjtxPrebuildDir = path.join(res, 'app', 'node_modules', 'wsjtx-lib', 'prebuilds', triplet());
   const env = {
     ...process.env,
     NODE_ENV: 'production',
@@ -52,8 +53,18 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
     // 明确为子进程提供模块解析路径，确保能解析到 app/node_modules
     NODE_PATH: path.join(res, 'app', 'node_modules'),
     ...(process.platform === 'win32'
-      ? { PATH: `${process.env.PATH};${path.join(res, 'app', 'native')}` }
-      : { LD_LIBRARY_PATH: `${path.join(res, 'app', 'native')}:${process.env.LD_LIBRARY_PATH || ''}` }),
+      ? {
+          PATH: `${process.env.PATH};${path.join(res, 'native')}`,
+        }
+      : process.platform === 'darwin'
+      ? {
+          // macOS 动态库搜索路径，附带 wsjtx-lib 预编译目录
+          DYLD_LIBRARY_PATH: `${wsjtxPrebuildDir}:${path.join(res, 'native')}:${process.env.DYLD_LIBRARY_PATH || ''}`,
+        }
+      : {
+          // Linux 动态库搜索路径，附带 wsjtx-lib 预编译目录
+          LD_LIBRARY_PATH: `${wsjtxPrebuildDir}:${path.join(res, 'native')}:${process.env.LD_LIBRARY_PATH || ''}`,
+        }),
     ...extraEnv,
   } as NodeJS.ProcessEnv;
 

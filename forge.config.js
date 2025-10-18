@@ -188,10 +188,27 @@ export default {
       // 平台特定：清理跨架构预构建二进制，避免携带无用文件
       if (options.platform === 'linux') {
         try {
-          console.log('🧹 [Linux] 清理跨架构二进制文件...');
-          execSync(`find "${appRoot}" -path "*/wsjtx-lib/prebuilds/linux-arm64*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          console.log('🧹 [Linux] 清理跨架构与非Linux二进制文件...');
+          const arch = options.arch || process.arch; // 'x64' | 'arm64'
+          const keep = arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+
+          // wsjtx-lib 仅保留本平台预编译目录
+          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/win32-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          if (keep === 'linux-x64') {
+            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/linux-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
+          } else {
+            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/linux-x64" 2>/dev/null || true`, { stdio: 'inherit' });
+          }
+
+          // naudiodon2: 删除Windows/MSVC目录与Windows二进制
+          execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/msvc" 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/bin" 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`find "${appRoot}" -type f \( -name "*.dll" -o -name "*.exe" \) -delete 2>/dev/null || true`, { stdio: 'inherit' });
+
+          // 兼容旧清理逻辑：删除 ARM 预编译碎片
           execSync(`find "${appRoot}" -path "*/naudiodon2/portaudio/bin_arm*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
-          console.log('✅ [Linux] 跨架构文件清理完成');
+          console.log('✅ [Linux] 清理完成');
         } catch (error) {
           console.warn('⚠️ [Linux] 清理跨架构文件时出现警告:', error.message);
         }
