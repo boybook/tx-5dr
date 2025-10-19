@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, ipcMain, shell } from 'electron';
+import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
@@ -15,6 +16,40 @@ const __dirname = dirname(__filename);
 let serverCheckInterval: any = null;
 let serverProcess: import('node:child_process').ChildProcess | null = null;
 let webProcess: import('node:child_process').ChildProcess | null = null;
+let selectedWebPort: number | null = null;
+let selectedServerPort: number | null = null;
+
+// 寻找可用端口（从起始端口开始递增尝试），可选避免指定端口冲突
+async function findFreePort(start: number, maxStep = 50, avoid?: number, host = '0.0.0.0'): Promise<number> {
+  function tryPort(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const srv = net.createServer();
+      srv.once('error', () => resolve(false));
+      srv.once('listening', () => {
+        srv.close(() => resolve(true));
+      });
+      srv.listen(port, host);
+    });
+  }
+  for (let i = 0; i <= maxStep; i++) {
+    const candidate = start + i;
+    if (avoid && candidate === avoid) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await tryPort(candidate);
+    if (ok) return candidate;
+  }
+  // 回退：让系统分配随机端口
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.once('listening', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr && 'port' in addr ? (addr as any).port : 0;
+      srv.close(() => resolve(port || start));
+    });
+    srv.listen(0, host);
+  });
+}
 
 function triplet() {
   const arch = process.arch; // 'x64' | 'arm64'
@@ -116,7 +151,7 @@ async function checkServerHealth(): Promise<boolean> {
   return new Promise((resolve) => {
     const options = {
       hostname: '127.0.0.1', // 明确使用 IPv4
-      port: 4000,
+      port: selectedServerPort || 4000,
       path: '/',
       method: 'GET',
       timeout: 2000
@@ -256,16 +291,24 @@ async function createWindow() {
     const serverEntry = join(res, 'app', 'packages', 'server', 'dist', 'index.js');
     const webEntry = join(res, 'app', 'packages', 'client-tools', 'src', 'proxy.js');
 
-    serverProcess = runChild('server', serverEntry, { PORT: '4000' });
+    // 自动端口探测，避免端口占用导致启动失败
+    const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
+    const webPort = await findFreePort(5173, 50, serverPort, '0.0.0.0'); // 避免和 serverPort 冲突
+    selectedServerPort = serverPort;
+    selectedWebPort = webPort;
+
+    console.log(`🔎 端口选择：server=${serverPort}, web=${webPort}`);
+
+    serverProcess = runChild('server', serverEntry, { PORT: String(serverPort) });
     webProcess = runChild('client-tools', webEntry, {
-      PORT: '5173',
+      PORT: String(webPort),
       STATIC_DIR: join(res, 'app', 'packages', 'web', 'dist'),
-      TARGET: 'http://127.0.0.1:4000',
+      TARGET: `http://127.0.0.1:${serverPort}`,
       // 默认对外开放（监听 0.0.0.0）
       PUBLIC: '1',
     });
 
-    const webOk = await waitForHttp('http://127.0.0.1:5173');
+    const webOk = await waitForHttp(`http://127.0.0.1:${selectedWebPort}`);
     if (!webOk) {
       console.warn('⚠️ web 服务启动等待超时');
     } else {
@@ -355,8 +398,8 @@ async function createWindow() {
       console.error('❌ 加载开发页面失败:', error);
     }
   } else {
-    // 生产模式：连接内置静态 web 服务
-    const indexPath = 'http://127.0.0.1:5173';
+    // 生产模式：连接内置静态 web 服务（使用上面选择的 webPort）
+    const indexPath = `http://127.0.0.1:${selectedWebPort || 5173}`;
     console.log('Loading production URL:', indexPath);
     try {
       await mainWindow.loadURL(indexPath);
