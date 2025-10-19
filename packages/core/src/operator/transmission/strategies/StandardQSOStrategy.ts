@@ -129,6 +129,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
+            // 清理QSO上下文
+            strategy.clearQSOContext();
             if (strategy.operator.config.autoReplyToCQ) {
                 return { changeState: 'TX6' };
             }
@@ -178,6 +180,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
+            // 清理QSO上下文
+            strategy.clearQSOContext();
             if (strategy.operator.config.autoReplyToCQ) {
                 return { changeState: 'TX6' };
             }
@@ -217,6 +221,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
+            // 清理QSO上下文
+            strategy.clearQSOContext();
             if (strategy.operator.config.autoReplyToCQ) {
                 return { changeState: 'TX6' };
             }
