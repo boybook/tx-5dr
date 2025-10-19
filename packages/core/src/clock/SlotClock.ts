@@ -23,11 +23,13 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
   }
   private timerId: NodeJS.Timeout | undefined;
   private lastSlotId = 0;
-  
-  constructor(clockSource: ClockSource, mode: ModeDescriptor) {
+  private compensationMs: number = 0; // 发射时序补偿（毫秒）
+
+  constructor(clockSource: ClockSource, mode: ModeDescriptor, compensationMs: number = 0) {
     super();
     this.clockSource = clockSource;
     this.mode = mode;
+    this.compensationMs = compensationMs;
   }
   
   /**
@@ -69,6 +71,22 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
       this.stop();
       this.start();
     }
+  }
+
+  /**
+   * 设置发射时序补偿（毫秒）
+   * @param compensationMs 补偿值，正值表示提前发射，负值表示延后发射
+   */
+  setCompensation(compensationMs: number): void {
+    this.compensationMs = compensationMs;
+    console.log(`⚙️ [SlotClock] 发射补偿已更新为 ${compensationMs}ms`);
+  }
+
+  /**
+   * 获取当前的发射时序补偿值
+   */
+  getCompensation(): number {
+    return this.compensationMs;
   }
   
   private scheduleNextSlot(): void {
@@ -125,16 +143,30 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     // 计算编码和发射时机
     const transmitDelay = this.mode.transmitTiming || 0;
     const encodeAdvance = this.mode.encodeAdvance || 400; // 默认提前400ms
-    const encodeDelay = Math.max(0, transmitDelay - encodeAdvance);
+    const encodeDelay = transmitDelay - encodeAdvance; // 原始编码延迟
+
+    // 应用时序补偿（正值表示提前发射，负值表示延后发射）
+    // 独立计算两个延迟的补偿，避免级联效应
+    const adjustedTransmitDelay = Math.max(0, transmitDelay - this.compensationMs);
+    const adjustedEncodeDelay = Math.max(0, encodeDelay - this.compensationMs);
+
+    if (this.compensationMs !== 0) {
+      console.log(`⚙️ [SlotClock] 应用发射补偿: ${this.compensationMs}ms, 调整后编码延迟=${adjustedEncodeDelay}ms, 发射延迟=${adjustedTransmitDelay}ms`);
+
+      // 警告：补偿值超出编码缓冲时间
+      if (adjustedEncodeDelay === 0 && encodeDelay > 0) {
+        console.warn(`⚠️ [SlotClock] 补偿值 ${this.compensationMs}ms 超过编码缓冲时间 ${encodeDelay}ms，编码将立即开始，可能导致时序紧张`);
+      }
+    }
 
     // 先发射 encodeStart 事件（提前开始编码）
-    if (encodeDelay > 0) {
+    if (adjustedEncodeDelay > 0) {
       setTimeout(() => {
         if (this.isRunning) {
-          console.log(`🔧 [SlotClock] encodeStart 事件触发: 时隙=${slotInfo.id}, 延迟=${encodeDelay}ms, 距离目标播放=${encodeAdvance}ms`);
+          console.log(`🔧 [SlotClock] encodeStart 事件触发: 时隙=${slotInfo.id}, 延迟=${adjustedEncodeDelay}ms, 距离目标播放=${encodeAdvance}ms`);
           this.emit('encodeStart', slotInfo);
         }
-      }, encodeDelay);
+      }, adjustedEncodeDelay);
     } else {
       // 如果没有足够时间，立即触发
       console.log(`🔧 [SlotClock] encodeStart 事件立即触发: 时隙=${slotInfo.id}`);
@@ -142,13 +174,13 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     }
 
     // 然后发射 transmitStart 事件（目标播放时间）
-    if (transmitDelay > 0) {
+    if (adjustedTransmitDelay > 0) {
       setTimeout(() => {
         if (this.isRunning) {
-          console.log(`📡 [SlotClock] transmitStart 事件触发: 时隙=${slotInfo.id}, 延迟=${transmitDelay}ms`);
+          console.log(`📡 [SlotClock] transmitStart 事件触发: 时隙=${slotInfo.id}, 延迟=${adjustedTransmitDelay}ms`);
           this.emit('transmitStart', slotInfo);
         }
-      }, transmitDelay);
+      }, adjustedTransmitDelay);
     } else {
       // 如果没有延迟，立即发射
       console.log(`📡 [SlotClock] transmitStart 事件立即触发: 时隙=${slotInfo.id}`);

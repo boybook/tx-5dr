@@ -10,7 +10,8 @@
       "Bash(grep:*)",
       "Bash(yarn workspace @tx5dr/contracts:*)",
       "Bash(yarn workspace @tx5dr/core:*)",
-      "WebFetch(domain:www.heroui.com)"
+      "WebFetch(domain:www.heroui.com)",
+      "WebSearch"
     ],
     "deny": []
   }
