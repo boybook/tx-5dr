@@ -4,6 +4,8 @@ import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache } from '../utils/audioUtils.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
+import { once } from 'events';
+import { performance } from 'node:perf_hooks';
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
@@ -542,11 +544,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.volumeGain = this.dbToGain(this.volumeGainDb);
     
     console.log(`🔊 设置音量增益: ${this.volumeGainDb.toFixed(1)}dB (线性: ${this.volumeGain.toFixed(3)})`);
-    
-    // 如果当前有正在播放的音频，立即应用新的音量
-    if (this.currentAudioData) {
-      this.applyVolumeGain(this.currentAudioData);
-    }
   }
 
   /**
@@ -559,11 +556,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.volumeGainDb = this.gainToDb(this.volumeGain);
     
     console.log(`🔊 设置音量增益: ${this.volumeGain.toFixed(3)} (${this.volumeGainDb.toFixed(1)}dB)`);
-    
-    // 如果当前有正在播放的音频，立即应用新的音量
-    if (this.currentAudioData) {
-      this.applyVolumeGain(this.currentAudioData);
-    }
   }
 
   /**
@@ -689,49 +681,70 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         playbackData = audioData;
       }
 
-      // 保存当前播放的音频数据
+      // 保存当前播放的音频数据（仅用于调试/查询，不再原地修改）
       this.currentAudioData = playbackData;
       this.currentSampleRate = this.sampleRate;
-
-      // 应用音量增益
-      this.applyVolumeGain(playbackData);
       
-      // 分块播放，避免缓冲区溢出
-      const chunkSize = 4096; // 4K 样本一块
+      // 分块播放，使用背压与时间节奏双重节流，避免过度预写导致无法即时停止
+      const framesPerBuffer = Math.max(64, this.bufferSize || 1024); // 与 outOptions.framesPerBuffer 对齐
+      const chunkSize = framesPerBuffer * this.channels; // 单声道时等于 framesPerBuffer
       const totalChunks = Math.ceil(playbackData.length / chunkSize);
-      
-      console.log(`🔊 [音频播放] 分块播放: ${totalChunks} 块，每块 ${chunkSize} 样本`);
-      
+
+      // 目标预缓冲时长，避免定时器抖动导致咔哒声（约 80~120ms）
+      const prebufferMs = Math.max(60, Math.min(200, Math.round((framesPerBuffer / this.sampleRate) * 1000 * 4)));
+
+      console.log(`🔊 [音频播放] 分块播放: ${totalChunks} 块，chunk=${chunkSize} 样本，预缓冲≈${prebufferMs}ms`);
+
       const chunkStartTime = Date.now();
-      console.log(`📝 [音频播放] 开始分块写入 (${new Date(chunkStartTime).toISOString()})`);
-      
+      const hrStart = performance.now();
+      let samplesWritten = 0;
+
+      const wait = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
+
       for (let i = 0; i < totalChunks; i++) {
-        // 检查是否需要停止播放
         if (this.shouldStopPlayback) {
-          console.log(`🛑 [音频播放] 检测到停止信号,中断播放 (已播放${i}/${totalChunks}块)`);
+          console.log(`🛑 [音频播放] 检测到停止信号,中断播放 (已提交${i}/${totalChunks}块)`);
           throw new Error('播放已被中断');
         }
 
         const start = i * chunkSize;
         const end = Math.min(start + chunkSize, playbackData.length);
-        const chunk = playbackData.slice(start, end);
+        const chunk = playbackData.subarray(start, end);
+
+        // 节拍控制：确保最多领先 prebufferMs
+        const elapsedMs = performance.now() - hrStart;
+        const producedMs = (samplesWritten / this.sampleRate) * 1000;
+        const leadMs = producedMs - elapsedMs;
+        if (leadMs > prebufferMs) {
+          // 过度领先，等待至窗口内
+          await wait(Math.min(20, Math.max(1, Math.floor(leadMs - prebufferMs))));
+        }
 
         // 转换为 Buffer
         const buffer = Buffer.allocUnsafe(chunk.length * 4);
+        // 在写入时应用当前音量增益，避免全局原地放大导致的阻塞/中断
+        const gain = this.volumeGain;
         for (let j = 0; j < chunk.length; j++) {
-          buffer.writeFloatLE(chunk[j], j * 4);
+          const s = chunk[j] * gain;
+          // 可选限幅，防止异常爆音
+          const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
+          buffer.writeFloatLE(clamped, j * 4);
         }
 
-        // 写入音频输出流
-        const written = this.audioOutput.write(buffer);
-        if (!written) {
-          await new Promise(resolve => setTimeout(resolve, 10));
+        // 背压控制：当 write 返回 false 时等待 'drain'，若无 drain 则兜底短暂等待
+        const ok: boolean = this.audioOutput.write(buffer);
+        if (!ok) {
+          try {
+            await Promise.race<unknown>([
+              once(this.audioOutput, 'drain') as unknown as Promise<unknown>,
+              wait(25),
+            ]);
+          } catch {
+            // 忽略事件等待中的异常（如流被停止）
+          }
         }
 
-        // 控制播放速度，避免缓冲区溢出
-        if (i % 10 === 0) { // 每10块暂停一下
-          await new Promise(resolve => setTimeout(resolve, 1));
-        }
+        samplesWritten += chunk.length;
       }
 
       const chunkEndTime = Date.now();
