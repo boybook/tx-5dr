@@ -188,6 +188,82 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       {testResult.message}
                     </Chip>
                   )}
+
+                  <Divider />
+
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium text-default-700">
+                      ⏱️ 发射时序补偿
+                    </h5>
+                    <p className="text-xs text-default-500">
+                      补偿网络传输和电台处理延迟，确保发射时间精确对齐。正值表示提前发射，负值表示延后发射。
+                    </p>
+
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="number"
+                        label="补偿值"
+                        value={(config.transmitCompensationMs || 0).toString()}
+                        onChange={e => {
+                          const value = parseInt(e.target.value) || 0;
+                          updateConfig({ transmitCompensationMs: value });
+                        }}
+                        min="-1000"
+                        max="1000"
+                        endContent={<span className="text-small text-default-400">ms</span>}
+                        size="sm"
+                        className="w-40"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 flex-wrap">
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="default"
+                        onClick={() => updateConfig({ transmitCompensationMs: 0 })}
+                        className="cursor-pointer hover:bg-default-200"
+                      >
+                        0ms
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onClick={() => updateConfig({ transmitCompensationMs: 50 })}
+                        className="cursor-pointer hover:bg-primary-100"
+                      >
+                        50ms（有线）
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onClick={() => updateConfig({ transmitCompensationMs: 100 })}
+                        className="cursor-pointer hover:bg-primary-100"
+                      >
+                        100ms（推荐）
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onClick={() => updateConfig({ transmitCompensationMs: 200 })}
+                        className="cursor-pointer hover:bg-primary-100"
+                      >
+                        200ms（无线）
+                      </Chip>
+                    </div>
+
+                    <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
+                      <p className="font-medium">💡 使用建议：</p>
+                      <p>• 有线网络：50-100ms</p>
+                      <p>• 无线网络：100-200ms</p>
+                      <p>• 远程控制：200-500ms</p>
+                      <p className="text-danger-600 font-semibold">⚠️ 设置过大（&gt;500ms）会压缩决策时间，可能影响自动回复功能</p>
+                      <p>• 可通过查看发射延迟统计来调整补偿值</p>
+                    </div>
+                  </div>
                 </div>
               </CardBody>
             </Card>
@@ -495,6 +571,82 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       {testResult.message}
                     </Chip>
                   )}
+
+                  <Divider />
+
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium text-default-700">
+                      ⏱️ 发射时序补偿
+                    </h5>
+                    <p className="text-xs text-default-500">
+                      补偿串口通信和电台处理延迟，确保发射时间精确对齐。正值表示提前发射，负值表示延后发射。
+                    </p>
+
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="number"
+                        label="补偿值"
+                        value={(config.transmitCompensationMs || 0).toString()}
+                        onChange={e => {
+                          const value = parseInt(e.target.value) || 0;
+                          updateConfig({ transmitCompensationMs: value });
+                        }}
+                        min="-1000"
+                        max="1000"
+                        endContent={<span className="text-small text-default-400">ms</span>}
+                        size="sm"
+                        className="w-40"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 flex-wrap">
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="default"
+                        onClick={() => updateConfig({ transmitCompensationMs: 0 })}
+                        className="cursor-pointer hover:bg-default-200"
+                      >
+                        0ms
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="success"
+                        onClick={() => updateConfig({ transmitCompensationMs: 10 })}
+                        className="cursor-pointer hover:bg-success-100"
+                      >
+                        10ms（快速）
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="success"
+                        onClick={() => updateConfig({ transmitCompensationMs: 20 })}
+                        className="cursor-pointer hover:bg-success-100"
+                      >
+                        20ms（推荐）
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="success"
+                        onClick={() => updateConfig({ transmitCompensationMs: 50 })}
+                        className="cursor-pointer hover:bg-success-100"
+                      >
+                        50ms（老式）
+                      </Chip>
+                    </div>
+
+                    <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
+                      <p className="font-medium">💡 使用建议：</p>
+                      <p>• 现代电台：10-30ms</p>
+                      <p>• 老式电台：30-50ms</p>
+                      <p>• USB-串口转换器：+10-20ms</p>
+                      <p className="text-danger-600 font-semibold">⚠️ 设置过大（&gt;500ms）会压缩决策时间，可能影响自动回复功能</p>
+                      <p>• 可通过查看发射延迟统计来调整补偿值</p>
+                    </div>
+                  </div>
                 </div>
               </CardBody>
             </Card>
@@ -506,6 +658,49 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
               <CardBody className="space-y-4 p-4">
                 <h4 className="font-semibold text-default-900">无电台控制</h4>
                 <p className="text-sm text-default-600">不使用电台控制功能，仅进行FT8解码</p>
+
+                <Divider />
+
+                <div className="space-y-3">
+                  <h5 className="text-sm font-medium text-default-700">
+                    ⏱️ 发射时序补偿
+                  </h5>
+                  <p className="text-xs text-default-500">
+                    补偿音频处理延迟，确保发射时间精确对齐。正值表示提前发射，负值表示延后发射。
+                  </p>
+
+                  <div className="flex items-center gap-3">
+                    <Input
+                      type="number"
+                      label="补偿值"
+                      value={(config.transmitCompensationMs || 0).toString()}
+                      onChange={e => {
+                        const value = parseInt(e.target.value) || 0;
+                        updateConfig({ transmitCompensationMs: value });
+                      }}
+                      min="-1000"
+                      max="1000"
+                      endContent={<span className="text-small text-default-400">ms</span>}
+                      size="sm"
+                      className="w-40"
+                    />
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="default"
+                      onPress={() => updateConfig({ transmitCompensationMs: 0 })}
+                    >
+                      重置为 0
+                    </Button>
+                  </div>
+
+                  <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
+                    <p className="font-medium">💡 使用建议：</p>
+                    <p>• 无电台模式通常无需补偿</p>
+                    <p className="text-danger-600 font-semibold">⚠️ 设置过大（&gt;500ms）会压缩决策时间，可能影响自动回复功能</p>
+                    <p>• 可通过查看发射延迟统计来调整补偿值</p>
+                  </div>
+                </div>
               </CardBody>
             </Card>
           );

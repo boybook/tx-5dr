@@ -53,6 +53,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // 传输跟踪器
   private transmissionTracker: TransmissionTracker;
 
+  // 编码状态跟踪（用于检测编码超时）
+  private currentSlotExpectedEncodes: number = 0; // 当前时隙期望的编码数量
+  private currentSlotCompletedEncodes: number = 0; // 当前时隙已完成的编码数量
+  private currentSlotId: string = ''; // 当前时隙ID
+
   public get operatorManager(): RadioOperatorManager {
     return this._operatorManager;
   }
@@ -68,7 +73,20 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   public getRadioManager(): PhysicalRadioManager {
     return this.radioManager;
   }
-  
+
+  /**
+   * 更新发射时序补偿值
+   * @param compensationMs 补偿值（毫秒），正值表示提前发射，负值表示延后发射
+   */
+  public updateTransmitCompensation(compensationMs: number): void {
+    if (this.slotClock) {
+      this.slotClock.setCompensation(compensationMs);
+      console.log(`⏱️ [DigitalRadioEngine] 发射补偿已更新为 ${compensationMs}ms`);
+    } else {
+      console.warn(`⚠️ [DigitalRadioEngine] SlotClock 未初始化，无法更新补偿值`);
+    }
+  }
+
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
     ANALYSIS_INTERVAL_MS: 150,    // 频谱分析间隔
@@ -139,7 +157,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           operatorId: result.operatorId,
           duration: result.duration
         });
-        
+
+        // 更新编码完成计数
+        this.currentSlotCompletedEncodes++;
+        console.log(`📊 [编码跟踪] 时隙 ${this.currentSlotId}: 已完成 ${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes}`);
+
         // 先记录编码完成，进入混音阶段
         this.transmissionTracker.updatePhase(result.operatorId, 'mixing' as any);
         
@@ -412,12 +434,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   async initialize(): Promise<void> {
     console.log('🕐 [时钟管理器] 正在初始化...');
-    
+
     // 显示应用程序路径信息
     await printAppPaths();
-    
-    // 创建 SlotClock
-    this.slotClock = new SlotClock(this.clockSource, this.currentMode);
+
+    // 从配置读取电台设置中的发射补偿值
+    const radioConfig = ConfigManager.getInstance().getRadioConfig();
+    const compensationMs = radioConfig.transmitCompensationMs || 0;
+    console.log(`⚙️ [时钟管理器] 读取发射补偿配置: ${compensationMs}ms`);
+
+    // 创建 SlotClock，传入补偿值
+    this.slotClock = new SlotClock(this.clockSource, this.currentMode, compensationMs);
     
     // 监听时钟事件
     this.slotClock.on('slotStart', async (slotInfo) => {
@@ -437,16 +464,44 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.log(`🔧 [编码时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 提前量: ${this.currentMode.encodeAdvance}ms`);
       this.emit('encodeStart' as any, slotInfo);
 
+      // 重置当前时隙的编码跟踪
+      this.currentSlotId = slotInfo.id;
+      this.currentSlotExpectedEncodes = 0;
+      this.currentSlotCompletedEncodes = 0;
+
       // 处理发射请求队列 - 开始编码
       // RadioOperator 会在 encodeStart 事件中进行周期检查
       // 只有在正确的发射周期内才会发出 requestTransmit 事件加入队列
       // 这里处理队列中已经通过周期检查的发射请求
+      const pendingCount = this.operatorManager.getPendingTransmissionsCount();
       this.operatorManager.processPendingTransmissions(slotInfo);
+
+      // 记录期望的编码数量（processPendingTransmissions 会消费队列并启动编码）
+      this.currentSlotExpectedEncodes = pendingCount;
+      if (this.currentSlotExpectedEncodes > 0) {
+        console.log(`📊 [编码跟踪] 时隙 ${slotInfo.id}: 期望 ${this.currentSlotExpectedEncodes} 个编码任务`);
+      }
     });
 
     // 监听发射开始事件 (目标播放时间)
     this.slotClock.on('transmitStart', (slotInfo) => {
       console.log(`📡 [目标播放时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 延迟: ${this.currentMode.transmitTiming}ms`);
+
+      // 检查编码是否完成
+      if (this.currentSlotExpectedEncodes > 0 &&
+          this.currentSlotCompletedEncodes < this.currentSlotExpectedEncodes) {
+        const missingCount = this.currentSlotExpectedEncodes - this.currentSlotCompletedEncodes;
+        console.warn(`⚠️ [编码超时] 发射时刻到达但编码未完成！期望 ${this.currentSlotExpectedEncodes} 个，已完成 ${this.currentSlotCompletedEncodes} 个，缺少 ${missingCount} 个`);
+
+        // 发出警告事件到前端
+        this.emit('timingWarning' as any, {
+          title: '⚠️ 编码超时警告',
+          text: `发射时刻已到达，但仍有 ${missingCount} 个编码任务未完成。这可能导致发射延迟或失败。建议检查发射补偿设置或减少同时发射的操作员数量。`
+        });
+      } else if (this.currentSlotExpectedEncodes > 0) {
+        console.log(`✅ [编码跟踪] 所有编码任务已按时完成 (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);
+      }
+
       this.emit('transmitStart' as any, slotInfo);
       // 此时编码应该已经完成或接近完成，音频即将播放
     });

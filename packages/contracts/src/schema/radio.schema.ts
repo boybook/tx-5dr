@@ -51,10 +51,14 @@ export const HamlibConfigSchema = z.object({
   // 网络模式配置
   host: z.string().optional(),
   port: z.number().optional(),
-  // 串口模式配置  
+  // 串口模式配置
   path: z.string().optional(),
   rigModel: z.number().optional(),
   serialConfig: SerialConfigSchema.optional(),
+  // 发射时序补偿（毫秒）- 用于补偿电台和网络的处理延迟
+  // 正值表示提前发射，负值表示延后发射
+  // 范围限制：-1000~1000ms，适用于各种网络和设备延迟场景
+  transmitCompensationMs: z.number().int().min(-1000).max(1000).optional(),
 });
 
 /**

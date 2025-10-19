@@ -24,6 +24,10 @@ export async function radioRoutes(fastify: FastifyInstance) {
       await configManager.updateRadioConfig(config);
       if (engine.getStatus().isRunning) {
         await radioManager.applyConfig(config);
+        // 立即更新 SlotClock 的发射补偿值
+        const compensationMs = config.transmitCompensationMs || 0;
+        engine.updateTransmitCompensation(compensationMs);
+        console.log(`✅ [Radio Routes] 发射补偿已热更新为: ${compensationMs}ms`);
       }
       return reply.send({ success: true, config });
     } catch (err) {

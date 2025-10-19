@@ -93,6 +93,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       await this.openWithTimeout();
       
       console.log(`✅ [PhysicalRadioManager] 电台连接成功: ${config.type === 'network' ? 'Network' : 'Serial'} - ${port}`);
+
+      const supportedModes = this.rig.getSupportedModes();
+      console.log(`📡 [PhysicalRadioManager] 支持的模式: ${supportedModes.join(', ')}`);
       
       // 连接成功后重置重连状态
       this.resetReconnectAttempts();

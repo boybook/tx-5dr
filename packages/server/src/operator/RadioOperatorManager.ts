@@ -422,6 +422,13 @@ export class RadioOperatorManager {
   }
 
   /**
+   * 获取待处理发射队列的大小
+   */
+  getPendingTransmissionsCount(): number {
+    return this.pendingTransmissions.length;
+  }
+
+  /**
    * 获取所有操作员的状态信息
    */
   getOperatorsStatus(): any[] {
