@@ -204,10 +204,12 @@ export default {
           // naudiodon2: 删除Windows/MSVC目录与Windows二进制
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/msvc" 2>/dev/null || true`, { stdio: 'inherit' });
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/bin" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`find "${appRoot}" -type f \( -name "*.dll" -o -name "*.exe" \) -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          // 使用 -o 替代 \( \) 语法以兼容 dash shell
+          execSync(`find "${appRoot}" -type f -name "*.dll" -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`find "${appRoot}" -type f -name "*.exe" -delete 2>/dev/null || true`, { stdio: 'inherit' });
 
-          // 兼容旧清理逻辑：删除 ARM 预编译碎片
-          execSync(`find "${appRoot}" -path "*/naudiodon2/portaudio/bin_arm*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          // 删除非目标架构的 naudiodon2 预编译二进制文件（包括所有 ARM 变体）
+          execSync(`rm -rf "${appRoot}"/node_modules/naudiodon2/portaudio/bin_arm* 2>/dev/null || true`, { stdio: 'inherit' });
           console.log('✅ [Linux] 清理完成');
         } catch (error) {
           console.warn('⚠️ [Linux] 清理跨架构文件时出现警告:', error.message);
