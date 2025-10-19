@@ -197,7 +197,9 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.on('listening', () => {
-  console.log(`[client-tools] static server listening on http://${HOST}:${PORT}`);
+  const addr = server.address();
+  const finalPort = typeof addr === 'object' && addr ? addr.port : PORT;
+  console.log(`[client-tools] static server listening on http://${HOST}:${finalPort}`);
   console.log(`[client-tools] static dir: ${STATIC_DIR}`);
   console.log(`[client-tools] api target: ${TARGET}`);
 });
@@ -207,7 +209,36 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, HOST);
+// 支持端口回退：若端口占用则尝试下一个，最多尝试 50 次
+function listenWithFallback(startPort, host) {
+  return new Promise((resolve) => {
+    let attempt = 0;
+    function tryListen(p) {
+      server.once('error', onError);
+      server.listen(p, host, () => {
+        server.off('error', onError);
+        resolve(true);
+      });
+      function onError(err) {
+        server.off('error', onError);
+        if (err && err.code === 'EADDRINUSE' && attempt < 50) {
+          attempt += 1;
+          const next = p + 1;
+          console.warn(`[client-tools] port ${p} in use, trying ${next}...`);
+          setTimeout(() => tryListen(next), 100);
+        } else {
+          console.error('[client-tools] failed to bind port:', err?.code || err);
+          resolve(false);
+        }
+      }
+    }
+    tryListen(startPort);
+  });
+}
+
+listenWithFallback(Number(PORT), HOST).then((ok) => {
+  if (!ok) process.exit(1);
+});
 
 // graceful shutdown
 function shutdown() {
