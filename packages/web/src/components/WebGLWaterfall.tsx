@@ -1,4 +1,15 @@
 import React, { useRef, useEffect, useCallback, useMemo } from 'react';
+import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
+
+export interface RxFrequency {
+  callsign: string;
+  frequency: number;
+}
+
+export interface TxFrequency {
+  operatorId: string;
+  frequency: number;
+}
 
 interface WebGLWaterfallProps {
   data: number[][];
@@ -8,6 +19,9 @@ interface WebGLWaterfallProps {
   minDb?: number;
   maxDb?: number;
   autoRange?: boolean;
+  rxFrequencies?: RxFrequency[];
+  txFrequencies?: TxFrequency[];
+  onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
 }
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
@@ -18,6 +32,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   minDb = -35,
   maxDb = 10,
   autoRange = true,
+  rxFrequencies = [],
+  txFrequencies = [],
+  onTxFrequencyChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -28,7 +45,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const [webglSupported, setWebglSupported] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [actualRange, setActualRange] = React.useState<{min: number, max: number} | null>(null);
-  
+
+  // TX拖动状态
+  const [draggingOperatorId, setDraggingOperatorId] = React.useState<string | null>(null);
+
+  // RX Popover hover状态
+  const [hoveredRxCallsign, setHoveredRxCallsign] = React.useState<string | null>(null);
+
   // 性能优化：缓存相关引用
   const positionBufferRef = useRef<WebGLBuffer | null>(null);
   const texCoordBufferRef = useRef<WebGLBuffer | null>(null);
@@ -565,9 +588,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const timer = setTimeout(() => {
       handleResize();
     }, 0);
-    
+
     return () => clearTimeout(timer);
   }, [height, handleResize]);
+
 
   if (!webglSupported || error) {
     return (
@@ -580,6 +604,62 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     );
   }
 
+  const FREQ_POSITION_OFFSET = 15;
+
+  // 计算频率到位置的百分比
+  const getFrequencyPosition = useCallback((frequency: number) => {
+    if (!frequencies || frequencies.length === 0) return 0;
+    const minFreq = frequencies[0];
+    const maxFreq = frequencies[frequencies.length - 1];
+    return ((frequency + FREQ_POSITION_OFFSET - minFreq) / (maxFreq - minFreq)) * 100;
+  }, [frequencies]);
+
+  // 从鼠标位置计算频率
+  const getFrequencyFromMousePosition = useCallback((clientX: number) => {
+    const container = containerRef.current;
+    if (!container || !frequencies || frequencies.length === 0) return 0;
+
+    const containerRect = container.getBoundingClientRect();
+    const relativeX = clientX - containerRect.left;
+    const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
+
+    const minFreq = frequencies[0];
+    const maxFreq = frequencies[frequencies.length - 1];
+    const frequency = minFreq + percentage * (maxFreq - minFreq) - FREQ_POSITION_OFFSET;
+
+    // 限制在有效范围内并四舍五入
+    return Math.round(Math.max(minFreq, Math.min(maxFreq, frequency)));
+  }, [frequencies]);
+
+  // 拖动处理函数
+  const handleMouseDown = useCallback((operatorId: string) => {
+    setDraggingOperatorId(operatorId);
+  }, []);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!draggingOperatorId || !onTxFrequencyChange) return;
+
+    const newFrequency = getFrequencyFromMousePosition(e.clientX);
+    onTxFrequencyChange(draggingOperatorId, newFrequency);
+  }, [draggingOperatorId, onTxFrequencyChange, getFrequencyFromMousePosition]);
+
+  const handleMouseUp = useCallback(() => {
+    setDraggingOperatorId(null);
+  }, []);
+
+  // 监听拖动事件
+  useEffect(() => {
+    if (draggingOperatorId) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [draggingOperatorId, handleMouseMove, handleMouseUp]);
+
   return (
     <div ref={containerRef} className={`relative ${className}`}>
       <canvas
@@ -587,6 +667,74 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         className="w-full"
         style={{ height: `${height}px` }}
       />
+
+      {/* 频率标记层 */}
+      <div className="absolute inset-0 pointer-events-none">
+        {/* TX标记 - 红色 */}
+        {txFrequencies.map(({ operatorId, frequency }) => {
+          const position = getFrequencyPosition(frequency);
+          const isDragging = draggingOperatorId === operatorId;
+          return (
+            <div
+              key={`tx-${operatorId}`}
+              className={`absolute top-0 h-full pointer-events-auto transition-opacity ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+              style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
+              onMouseDown={() => handleMouseDown(operatorId)}
+            >
+              <div className={`w-0.5 h-full ${isDragging ? 'bg-red-500' : 'bg-red-500/50'}`} />
+              <div
+                className="absolute bottom-1 left-1/2 -translate-x-1/2 px-1 text-xs font-semibold bg-black/60 rounded text-red-500 select-none"
+              >
+                TX
+              </div>
+            </div>
+          );
+        })}
+
+        {/* RX标记 - 绿色，带Popover (hover触发) */}
+        {rxFrequencies.map(({ callsign, frequency }) => {
+          const position = getFrequencyPosition(frequency);
+          const isOpen = hoveredRxCallsign === callsign;
+          return (
+            <Popover
+              key={`rx-${callsign}`}
+              placement="bottom"
+              isOpen={isOpen}
+              onOpenChange={(open) => {
+                if (!open) setHoveredRxCallsign(null);
+              }}
+            >
+              <PopoverTrigger>
+                <div
+                  className="absolute top-0 h-full pointer-events-auto cursor-pointer hover:opacity-80 transition-opacity"
+                  style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
+                  onMouseEnter={() => setHoveredRxCallsign(callsign)}
+                  onMouseLeave={() => setHoveredRxCallsign(null)}
+                >
+                  <div className="w-0.5 h-full bg-green-500/50" />
+                  <div
+                    className="absolute bottom-1 left-1/2 -translate-x-1/2 px-1 text-xs font-semibold bg-black/60 rounded text-green-500 select-none"
+                  >
+                    RX
+                  </div>
+                </div>
+              </PopoverTrigger>
+              <PopoverContent
+                onMouseEnter={() => setHoveredRxCallsign(callsign)}
+                onMouseLeave={() => setHoveredRxCallsign(null)}
+              >
+                <div className="px-2 py-1">
+                  <div className="text-sm font-semibold">{callsign}</div>
+                  <div className="text-xs text-default-400">
+                    {frequency.toFixed(0)} Hz
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          );
+        })}
+      </div>
+
       {autoRange && actualRange && (
         <div style={{ display: 'none' }} className="absolute top-2 right-2 text-xs text-white bg-black bg-opacity-50 px-2 py-1 rounded">
           范围: {actualRange.min.toFixed(1)} ~ {actualRange.max.toFixed(1)} dB

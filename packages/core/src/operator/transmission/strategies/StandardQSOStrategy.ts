@@ -155,11 +155,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (msgRogerReport) {
                 const msg = msgRogerReport.message as FT8MessageRogerReport;
                 console.log(`[StandardQSOStrategy TX2] 收到标准ROGER_REPORT，进入TX4`);
-                // 对方的 R-xx 是对我方报告的确认，不应覆盖"接收的信号报告"（应由对方最初的 SIGNAL_REPORT 提供）
-                // 保守处理：仅在我方未设置 reportSent 时，从当前帧的SNR补齐
-                if (strategy.context.reportSent === undefined || strategy.context.reportSent === null) {
-                    strategy.context.reportSent = msgRogerReport.snr;
+                // 【修复】ROGER_REPORT也包含对方给我们的信号报告（msg.report）
+                // 如果之前没有设置reportReceived，从ROGER_REPORT中获取
+                if (strategy.context.reportReceived === undefined || strategy.context.reportReceived === null) {
+                    strategy.context.reportReceived = msg.report;
                 }
+                // 【修复】允许更新reportSent为当前SNR（移除过于保守的条件限制）
+                strategy.context.reportSent = msgRogerReport.snr;
                 // 记录或更新实际通联频率 (基础频率 + 对方信号的频率偏移)
                 // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
                 if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
@@ -185,10 +187,12 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (msgSignalReport) {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
                 console.log(`[StandardQSOStrategy TX2] 容错：收到SIGNAL_REPORT（应为ROGER_REPORT），视为确认，进入TX4`);
-                // 记录对方的信号报告
-                if (strategy.context.reportSent === undefined || strategy.context.reportSent === null) {
-                    strategy.context.reportSent = msgSignalReport.snr;
+                // 【修复】提取对方告诉我们的信号报告值（msg.report）
+                if (strategy.context.reportReceived === undefined || strategy.context.reportReceived === null) {
+                    strategy.context.reportReceived = msg.report;
                 }
+                // 【修复】允许更新reportSent（移除过于保守的条件限制）
+                strategy.context.reportSent = msgSignalReport.snr;
                 // 记录或更新实际通联频率
                 if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
                     strategy.context.actualFrequency = strategy.context.config.frequency + msgSignalReport.df;
@@ -246,6 +250,37 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     }
                 }
             }
+
+            // 【新增】容错处理：如果对方继续发送SIGNAL_REPORT，更新信号报告
+            const msgSignalReport = messages
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.SIGNAL_REPORT &&
+                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
+                    msg.message.senderCallsign === strategy.context.targetCallsign)
+                .sort((a, b) => b.snr - a.snr)  // 按SNR降序，取最强信号
+                .shift();  // 取第一个（SNR最高的）
+
+            if (msgSignalReport) {
+                const msg = msgSignalReport.message as FT8MessageSignalReport;
+                console.log(`[StandardQSOStrategy TX3] 容错：收到对方重复的SIGNAL_REPORT (SNR: ${msgSignalReport.snr}dB)，更新信号报告`);
+
+                // 更新接收的信号报告（如果之前没有设置）
+                if (strategy.context.reportReceived === undefined ||
+                    strategy.context.reportReceived === null) {
+                    strategy.context.reportReceived = msg.report;
+                }
+
+                // 更新我方准备发送的报告（使用最新的SNR）
+                strategy.context.reportSent = msgSignalReport.snr;
+
+                // 更新实际通联频率
+                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                    strategy.context.actualFrequency = strategy.context.config.frequency + msgSignalReport.df;
+                }
+
+                strategy.updateSlots();
+            }
+
             return {}
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
