@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode } from 'react';
+import { addToast } from '@heroui/toast';
 import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus, QSORecord, LogBookStatistics } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
@@ -499,6 +500,28 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       reconnectStopped: (stopInfo: any) => {
         console.log('⏹️ [RadioProvider] 重连已停止:', stopInfo);
         connectionDispatch({ type: 'reconnectStopped', payload: stopInfo });
+        // 弹出Toast，提示失败原因
+        try {
+          const reason = stopInfo?.reason === 'maxAttemptsReached' ? '已达到最大重试次数' : (stopInfo?.reason || '重连已停止');
+          const env = import.meta.env.DEV ? 'development' : 'production';
+          const isInElectron = (() => {
+            try { return typeof window !== 'undefined' && window.navigator.userAgent.includes('Electron'); } catch { return false; }
+          })();
+          const tips: string[] = [`与服务器重连失败：${reason}`];
+          if (env === 'development') {
+            tips.push('请确认后端已启动：yarn workspace @tx5dr/server dev');
+            tips.push('打开后端控制台日志，检查错误并确认4000端口监听');
+          } else if (isInElectron) {
+            tips.push('请尝试重启应用；若仍失败，请查看 Electron 主进程与后端子进程日志');
+          } else {
+            tips.push('请确认部署环境后端服务已运行并可访问 /api');
+            tips.push('Docker：docker-compose logs -f 查看容器日志');
+          }
+          addToast({
+            title: '连接失败',
+            description: tips.join('\n'),
+          });
+        } catch {}
       },
       radioStatusChanged: (data: any) => {
         console.log('📡 [RadioProvider] 电台状态变化:', data.connected ? '已连接' : '已断开', data.reason || '');

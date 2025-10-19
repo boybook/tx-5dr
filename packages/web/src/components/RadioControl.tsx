@@ -1,8 +1,8 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faWifi, faSpinner, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api } from '@tx5dr/core';
 import type { ModeDescriptor } from '@tx5dr/contracts';
@@ -27,6 +27,7 @@ export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
 const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ connection, radio }) => {
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [isConnectingRadio, setIsConnectingRadio] = useState(false);
+  const [isManualServerConnecting, setIsManualServerConnecting] = useState(false);
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
   
   // 电台重连状态
@@ -273,11 +274,11 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     if (connection.isConnected) {
       return undefined;
     } else if (connection.isReconnecting) {
-      return <FontAwesomeIcon icon={faSpinner} className="text-warning animate-spin" />;
+      return <Spinner size="sm" color="warning" />;
     } else if (connection.hasReachedMaxAttempts) {
       return <FontAwesomeIcon icon={faExclamationTriangle} className="text-danger" />;
     } else if (connection.isConnecting) {
-      return <FontAwesomeIcon icon={faSpinner} className="text-primary animate-spin" />;
+      return <Spinner size="sm" color="primary" />;
     } else {
       return <FontAwesomeIcon icon={faWifi} className="text-default-400" />;
     }
@@ -314,6 +315,45 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       return 'text-primary';
     } else {
       return 'text-default-400';
+    }
+  };
+
+  const handleManualServerReconnect = async () => {
+    if (!connection.radioService) return;
+    setIsManualServerConnecting(true);
+    try {
+      // 若已停止重试或累计多次失败，重置计数器
+      if (connection.hasReachedMaxAttempts || connection.reconnectAttempts > 0) {
+        connection.radioService.resetReconnectAttempts();
+      }
+      await connection.radioService.connect();
+    } catch (error: any) {
+      console.error('手动重新连接服务器失败:', error);
+      // 组合更明确的引导文案
+      const env = import.meta.env.DEV ? 'development' : 'production';
+      const isInElectron = (() => {
+        try { return typeof window !== 'undefined' && window.navigator.userAgent.includes('Electron'); } catch { return false; }
+      })();
+      const baseLines: string[] = [];
+      const errMsg = error?.message || '未知错误';
+      if (errMsg.includes('未启动') || errMsg.includes('不可达')) {
+        baseLines.push('原因：后端服务未启动或不可达');
+      }
+      if (env === 'development') {
+        baseLines.push('排查：请先启动后端服务：yarn workspace @tx5dr/server dev');
+        baseLines.push('查看：终端窗口中的后端日志，确认4000端口是否监听');
+      } else if (isInElectron) {
+        baseLines.push('排查：请重启应用；若仍失败，请在系统日志/控制台查看 Electron 主进程与后端日志');
+      } else {
+        baseLines.push('排查：确认部署环境中的后端服务进程已运行并监听 /api');
+        baseLines.push('Docker：使用 docker-compose logs -f 查看容器日志');
+      }
+      addToast({
+        title: '连接失败',
+        description: `无法连接到服务器：${errMsg}。\n${baseLines.join('\n')}`,
+      });
+    } finally {
+      setIsManualServerConnecting(false);
     }
   };
 
@@ -364,7 +404,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       return (
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1">
-            <FontAwesomeIcon icon={faSpinner} className="text-warning animate-spin text-xs" />
+            <Spinner size="sm" color="warning" />
             <span className="text-sm text-warning">
               电台重连中 ({attemptText}) {nextAttemptIn > 0 ? `${nextAttemptIn}s后重试` : ''}
             </span>
@@ -420,12 +460,27 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
         getRadioDisplayText()
       ) : (
         // 服务器未连接时，显示服务器连接状态
-        <>
+        <div className="flex items-center gap-2">
           {getServerStatusIcon()}
           <span className={`text-sm ${getServerStatusColor()}`}>
             {getServerStatusText()}
           </span>
-        </>
+          {(
+            // 当已停止自动重试，或当前既不在重连也不在连接中（包括卡住未推进的情况）时，提供手动按钮
+            connection.hasReachedMaxAttempts || (!connection.isReconnecting && !connection.isConnecting)
+          ) && (
+            <Button
+              size="sm"
+              color="primary"
+              variant="flat"
+              onPress={handleManualServerReconnect}
+              isLoading={isManualServerConnecting}
+              className="h-6 px-2 text-xs"
+            >
+              {isManualServerConnecting ? '重连中' : '重新连接'}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1072,30 +1127,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ConnectionAndRadioStatus connection={connection.state} radio={radio} />
-          {(!connection.state.isConnected && !connection.state.isConnecting && !connection.state.isReconnecting) && (
-            <Button
-              size="sm"
-              color="primary"
-              variant="flat"
-              onPress={handleConnect}
-              isLoading={isConnecting}
-              className="h-6 px-2 text-xs"
-            >
-              {isConnecting ? '连接中' : '重新连接'}
-            </Button>
-          )}
-          {connection.state.hasReachedMaxAttempts && (
-            <Button
-              size="sm"
-              color="warning"
-              variant="flat"
-              onPress={handleConnect}
-              isLoading={isConnecting}
-              className="h-6 px-2 text-xs"
-            >
-              {isConnecting ? '连接中' : '重试'}
-            </Button>
-          )}
           <div className="flex items-center gap-0">
             <Button
               isIconOnly
