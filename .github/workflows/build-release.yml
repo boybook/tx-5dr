@@ -164,7 +164,6 @@ jobs:
             tar -xJf ${PKG}
             SRC_DIR=$(echo node-v${NODE_VERSION}-darwin-${ARCH})
             install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
-            strip resources/bin/${TRIPLET}/node || true
             cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
             # Clean up temporary archive and extracted directory to avoid packaging them
             rm -rf "${PKG}" "${SRC_DIR}"
