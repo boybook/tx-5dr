@@ -279,7 +279,7 @@ jobs:
           retention-days: 30
 
       - name: Upload artifacts (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
