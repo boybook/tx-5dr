@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import type { FT8Spectrum } from '@tx5dr/contracts';
-import { useConnection } from '../store/radioStore';
+import { useConnection, useOperators } from '../store/radioStore';
 import { WebGLWaterfall } from './WebGLWaterfall';
+import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
+import { useTxFrequencies } from '../hooks/useTxFrequencies';
 
 // 瀑布图配置
 const WATERFALL_HISTORY = 120; // 保存120个历史数据点
@@ -18,7 +20,7 @@ interface WaterfallData {
   timeLabels: string[];
 }
 
-export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({ 
+export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
   height = 200
 }) => {
@@ -29,9 +31,37 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     timeLabels: []
   });
   const connection = useConnection();
+  const { operators } = useOperators();
   const lastUpdateRef = useRef<number>(0);
   const pendingDataRef = useRef<FT8Spectrum | null>(null);
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 获取所有操作者的通联目标RX频率
+  const rxFrequencies = useTargetRxFrequencies();
+
+  // 获取所有操作者的发射TX频率
+  const txFrequencies = useTxFrequencies();
+
+  // 处理TX频率拖动更新
+  const handleTxFrequencyChange = useCallback((operatorId: string, frequency: number) => {
+    const radioService = connection.state.radioService;
+    if (!radioService) return;
+
+    // 查找对应的操作者
+    const operator = operators.find(op => op.id === operatorId);
+    if (!operator) return;
+
+    // 发送更新命令到后端
+    radioService.setOperatorContext(operatorId, {
+      myCall: operator.context.myCall,
+      myGrid: operator.context.myGrid,
+      targetCallsign: operator.context.targetCall,
+      targetGrid: operator.context.targetGrid,
+      frequency: Math.round(frequency), // 四舍五入到整数
+      reportSent: operator.context.reportSent,
+      reportReceived: operator.context.reportReceived,
+    });
+  }, [connection.state.radioService, operators]);
 
   // 解码二进制频谱数据
   const decodeSpectrumData = useCallback((spectrum: FT8Spectrum) => {
@@ -156,6 +186,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         minDb={-35}
         maxDb={10}
         autoRange={true}
+        rxFrequencies={rxFrequencies}
+        txFrequencies={txFrequencies}
+        onTxFrequencyChange={handleTxFrequencyChange}
         className="bg-transparent"
       />
     </div>

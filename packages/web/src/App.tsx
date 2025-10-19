@@ -17,7 +17,7 @@ function AppContent() {
           className="fixed inset-0 pointer-events-none z-[9999]"
           style={{
             border: '6px solid #ef4444',
-            borderRadius: '10px',
+            borderRadius: '10.5px',
             boxShadow: 'inset 0 0 20px rgba(239, 68, 68, 0.3)'
           }}
         />
