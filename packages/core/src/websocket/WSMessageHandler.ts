@@ -29,6 +29,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // QSO 日志相关事件
   [WSMessageType.QSO_RECORD_ADDED]: 'qsoRecordAdded',
   [WSMessageType.LOGBOOK_UPDATED]: 'logbookUpdated',
+  [WSMessageType.LOGBOOK_CHANGE_NOTICE]: 'logbookChangeNotice',
 
   // 频率相关事件
   [WSMessageType.FREQUENCY_CHANGED]: 'frequencyChanged',

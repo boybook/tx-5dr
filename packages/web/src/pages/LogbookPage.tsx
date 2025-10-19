@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { HeroUIProvider } from '@heroui/react';
-import { configureApi } from '@tx5dr/core';
+import { configureApi, api } from '@tx5dr/core';
 import { getApiBaseUrl, isElectron } from '../utils/config';
-import { RadioProvider, useOperators } from '../store/radioStore';
 import { useTheme } from '../hooks/useTheme';
 import { ThemeToggle } from '../components/ThemeToggle';
 import LogbookViewer from '../components/LogbookViewer';
@@ -15,11 +14,7 @@ const LogbookContent: React.FC = () => {
   const [operatorId, setOperatorId] = useState<string>('');
   const [logBookId, setLogBookId] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  
-  // 获取操作员信息以显示呼号
-  const { operators } = useOperators();
-  const currentOperator = operators.find(op => op.id === operatorId);
-  const operatorCallsign = currentOperator?.context?.myCall || operatorId;
+  const [operatorCallsign, setOperatorCallsign] = useState<string>('');
 
   useEffect(() => {
     // 配置API
@@ -38,7 +33,20 @@ const LogbookContent: React.FC = () => {
 
     setOperatorId(opId);
     setLogBookId(logId || '');
-    setLoading(false);
+
+    // 拉取操作员详情以显示呼号（避免依赖主WS与上下文）
+    (async () => {
+      try {
+        if (opId) {
+          const detail = await api.getOperator(opId);
+          setOperatorCallsign(detail.data?.context?.myCall || opId);
+        }
+      } catch (e) {
+        setOperatorCallsign(opId || '');
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   if (loading) {
@@ -152,9 +160,7 @@ const ThemedLogbookWrapper: React.FC = () => {
   useTheme();
   
   return (
-    <RadioProvider>
-      <LogbookContent />
-    </RadioProvider>
+    <LogbookContent />
   );
 };
 

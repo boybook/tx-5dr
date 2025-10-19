@@ -14,6 +14,7 @@ import { radioRoutes } from './routes/radio.js';
 import { waveLogRoutes } from './routes/wavelog.js';
 import { settingsRoutes } from './routes/settings.js';
 import { WSServer } from './websocket/WSServer.js';
+import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 
 export async function createServer() {
   const fastify = Fastify({
@@ -65,6 +66,7 @@ export async function createServer() {
 
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine);
+  const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
   fastify.log.info('WebSocket服务器初始化完成');
 
   // Register CORS plugin - 允许所有跨域
@@ -149,9 +151,24 @@ export async function createServer() {
     wsServer.addConnection(socket);
   });
 
+  // Logbook 专用 WebSocket endpoint（仅轻量通知）
+  fastify.get('/api/ws/logbook', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const operatorId = url.searchParams.get('operatorId') || undefined;
+      const logBookId = url.searchParams.get('logBookId') || undefined;
+      fastify.log.info(`Logbook WS 客户端连接: operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
+      logbookWsServer.addConnection(socket, { operatorId, logBookId });
+    } catch (e) {
+      fastify.log.warn('Logbook WS 连接参数解析失败, 以无过滤模式连接');
+      logbookWsServer.addConnection(socket);
+    }
+  });
+
   // 服务器关闭时清理WebSocket连接
   fastify.addHook('onClose', async () => {
     wsServer.cleanup();
+    logbookWsServer.cleanup();
   });
 
   return fastify;

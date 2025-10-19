@@ -40,19 +40,31 @@ export default defineConfig({
           proxy.on('error', (err: any, _req: any, res: any) => {
             // 当后端未启动或不可达时，http-proxy 会抛出 ECONNREFUSED 等错误
             const isBackendOffline = ['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET'].includes(err?.code);
-            if (res && !res.headersSent) {
-              res.writeHead(isBackendOffline ? 503 : 502, {
-                'Content-Type': 'application/json; charset=utf-8',
-                'x-proxy-error': isBackendOffline ? 'backend_offline' : 'proxy_error',
-              });
-              const payload = {
-                success: false,
-                code: isBackendOffline ? 'BACKEND_OFFLINE' : 'PROXY_ERROR',
-                message: isBackendOffline
-                  ? '后端服务器未启动或不可达（开发代理）'
-                  : `代理错误: ${err?.message || '未知错误'}`,
-              };
-              try { res.end(JSON.stringify(payload)); } catch { res.end(); }
+
+            // 注意：在 WS 握手失败的场景下，res 可能是 net.Socket 而不是 ServerResponse
+            const canWriteHead = res && typeof res.writeHead === 'function';
+            const canEnd = res && typeof res.end === 'function';
+
+            if (canWriteHead && !res.headersSent) {
+              try {
+                res.writeHead(isBackendOffline ? 503 : 502, {
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'x-proxy-error': isBackendOffline ? 'backend_offline' : 'proxy_error',
+                });
+                const payload = {
+                  success: false,
+                  code: isBackendOffline ? 'BACKEND_OFFLINE' : 'PROXY_ERROR',
+                  message: isBackendOffline
+                    ? '后端服务器未启动或不可达（开发代理）'
+                    : `代理错误: ${err?.message || '未知错误'}`,
+                };
+                res.end(JSON.stringify(payload));
+              } catch (e) {
+                try { canEnd && res.end(); } catch {}
+              }
+            } else if (canEnd) {
+              // WS 或无法写响应头的场景，直接结束连接即可
+              try { res.end(); } catch {}
             } else {
               console.log('🚨 代理错误(无法回写响应):', err?.code || '', err?.message || err);
             }
