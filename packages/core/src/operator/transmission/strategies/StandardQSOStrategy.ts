@@ -142,19 +142,20 @@ const states: { [key in SlotsIndex]: StandardState } = {
             /* if (strategy.context.config.id === 'BA1ABC') {
                 console.log('TX2', strategy.context, messages);
             } */
-            // 只等待当前目标呼号的确认
+            // 首先等待标准的ROGER_REPORT（R-XX）
             const msgRogerReport = messages
-                .filter((msg) => 
-                    msg.message.type === FT8MessageType.ROGER_REPORT &&  
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.ROGER_REPORT &&
                     msg.message.targetCallsign === strategy.context.config.myCallsign &&
                     msg.message.senderCallsign === strategy.context.targetCallsign
                 )
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
-            
+
             if (msgRogerReport) {
                 const msg = msgRogerReport.message as FT8MessageRogerReport;
-                // 对方的 R-xx 是对我方报告的确认，不应覆盖“接收的信号报告”（应由对方最初的 SIGNAL_REPORT 提供）
+                console.log(`[StandardQSOStrategy TX2] 收到标准ROGER_REPORT，进入TX4`);
+                // 对方的 R-xx 是对我方报告的确认，不应覆盖"接收的信号报告"（应由对方最初的 SIGNAL_REPORT 提供）
                 // 保守处理：仅在我方未设置 reportSent 时，从当前帧的SNR补齐
                 if (strategy.context.reportSent === undefined || strategy.context.reportSent === null) {
                     strategy.context.reportSent = msgRogerReport.snr;
@@ -169,6 +170,35 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     changeState: 'TX4'
                 }
             }
+
+            // 【容错处理】如果对方误发送了SIGNAL_REPORT而非ROGER_REPORT，也视为确认
+            // 这种情况在实际操作中可能发生（操作员误操作、软件bug等）
+            const msgSignalReport = messages
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.SIGNAL_REPORT &&
+                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
+                    msg.message.senderCallsign === strategy.context.targetCallsign
+                )
+                .sort((a, b) => a.snr - b.snr)
+                .pop();
+
+            if (msgSignalReport) {
+                const msg = msgSignalReport.message as FT8MessageSignalReport;
+                console.log(`[StandardQSOStrategy TX2] 容错：收到SIGNAL_REPORT（应为ROGER_REPORT），视为确认，进入TX4`);
+                // 记录对方的信号报告
+                if (strategy.context.reportSent === undefined || strategy.context.reportSent === null) {
+                    strategy.context.reportSent = msgSignalReport.snr;
+                }
+                // 记录或更新实际通联频率
+                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                    strategy.context.actualFrequency = strategy.context.config.frequency + msgSignalReport.df;
+                }
+                strategy.updateSlots();
+                return {
+                    changeState: 'TX4'
+                }
+            }
+
             return {}
         },
         onEnter(strategy: StandardQSOStrategy) {
