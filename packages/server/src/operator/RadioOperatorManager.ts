@@ -136,7 +136,8 @@ export class RadioOperatorManager {
           const statistics = await logBook.provider.getStatistics();
           this.eventEmitter.emit('logbookUpdated' as any, {
             logBookId: logBook.id,
-            statistics
+            statistics,
+            operatorId: data.operatorId,
           });
           console.log(`📡 [操作员管理器] 已发射 logbookUpdated 事件: ${logBook.name}`);
         } catch (statsError) {

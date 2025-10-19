@@ -56,6 +56,8 @@ export enum WSMessageType {
   // ===== 通联日志 =====
   QSO_RECORD_ADDED = 'qsoRecordAdded',
   LOGBOOK_UPDATED = 'logbookUpdated',
+  // 仅通知的日志本变更事件（专用于日志本WS）
+  LOGBOOK_CHANGE_NOTICE = 'logbookChangeNotice',
   
   // ===== 电台连接管理 =====
   RADIO_STATUS_CHANGED = 'radioStatusChanged',
@@ -201,6 +203,15 @@ export const WSErrorMessageSchema = WSBaseMessageSchema.extend({
     message: z.string(),
     code: z.string().optional(),
     details: z.any().optional(),
+  }),
+});
+
+// 日志本轻量变更通知（仅包含标识信息）
+export const WSLogbookChangeNoticeMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.LOGBOOK_CHANGE_NOTICE),
+  data: z.object({
+    logBookId: z.string(),
+    operatorId: z.string().optional(),
   }),
 });
 
@@ -642,6 +653,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSDecodeErrorMessageSchema,
   WSSystemStatusMessageSchema,
   WSErrorMessageSchema,
+  WSLogbookChangeNoticeMessageSchema,
   WSTransmissionLogMessageSchema,
   
   // 客户端到服务端

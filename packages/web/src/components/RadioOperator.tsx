@@ -630,26 +630,40 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
             {/* 重置按钮 - 仅在非TX6状态下显示 */}
             {operatorStatus.currentSlot !== 'TX6' && (
-              <Button
-                size="sm"
-                variant="light"
-                isIconOnly
-                onPress={() => {
-                  if (connection.state.radioService) {
-                    connection.state.radioService.sendUserCommand(
-                      operatorStatus.id,
-                      'set_state',
-                      'TX6'
-                    );
-                  }
-                }}
-                className="h-auto p-2 min-w-0 w-auto"
-                title="重置到TX6"
-                aria-label="重置到TX6"
-                isDisabled={!connection.state.isConnected}
-              >
-                <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
-              </Button>
+              <Tooltip content="重置到CQ" placement="top" offset={6}>
+                <Button
+                  size="sm"
+                  variant="light"
+                  isIconOnly
+                  onPress={() => {
+                    if (connection.state.radioService) {
+                      // 第1步：清理通联上下文
+                      connection.state.radioService.sendUserCommand(
+                        operatorStatus.id,
+                        'update_context',
+                        {
+                          targetCallsign: '',     // 清除目标呼号
+                          targetGrid: '',          // 清除目标网格
+                          reportSent: 0,           // 重置发送报告
+                          reportReceived: 0,       // 重置接收报告
+                        }
+                      );
+
+                      // 第2步：切换到 TX6 槽位
+                      connection.state.radioService.sendUserCommand(
+                        operatorStatus.id,
+                        'set_state',
+                        'TX6'
+                      );
+                    }
+                  }}
+                  className="h-auto p-2 min-w-0 w-auto"
+                  aria-label="重置到CQ"
+                  isDisabled={!connection.state.isConnected}
+                >
+                  <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
+                </Button>
+              </Tooltip>
             )}
           </div>
         </div>

@@ -30,8 +30,8 @@ import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash } from '@fortawesome/free-solid-svg-icons';
 import type { QSORecord, LogBookStatistics, WaveLogSyncResponse } from '@tx5dr/contracts';
-import { api } from '@tx5dr/core';
-import { useLogbook } from '../store/radioStore';
+import { api, WSClient } from '@tx5dr/core';
+import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
 
 interface LogbookViewerProps {
@@ -80,31 +80,32 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
   const effectiveLogBookId = logBookId || operatorId;
   
-  // 集成实时数据更新
-  const { getQSOsForOperator, getStatisticsForLogbook } = useLogbook();
-  
-  // 监听实时QSO更新
+  // 日志本专用WebSocket：只接收轻量通知，然后主动刷新
   useEffect(() => {
-    const realtimeQsos = getQSOsForOperator(operatorId);
-    if (realtimeQsos.length > 0) {
-      // 合并实时数据和本地数据，去重
-      setQsos(prevQsos => {
-        const combinedQsos = [...realtimeQsos, ...prevQsos];
-        const uniqueQsos = combinedQsos.filter((qso, index, arr) => 
-          arr.findIndex(q => q.id === qso.id) === index
-        );
-        return uniqueQsos.sort((a, b) => b.startTime - a.startTime);
-      });
-    }
-  }, [operatorId, getQSOsForOperator]);
-  
-  // 监听实时统计更新
-  useEffect(() => {
-    const realtimeStats = getStatisticsForLogbook(effectiveLogBookId);
-    if (realtimeStats) {
-      setStatistics(realtimeStats);
-    }
-  }, [effectiveLogBookId, getStatisticsForLogbook]);
+    // 仅按 operatorId 订阅，避免 logBookId 不一致导致过滤失败
+    const url = getLogbookWebSocketUrl({ operatorId });
+    const client = new WSClient({ url, reconnectAttempts: -1, reconnectDelay: 1000, heartbeatInterval: 30000 });
+    
+    const refresh = () => {
+      // 保持当前筛选与分页，重新加载
+      loadQSOs();
+      loadStatistics();
+    };
+    
+    client.onWSEvent('logbookChangeNotice' as any, (payload: { logBookId?: string; operatorId?: string }) => {
+      if (!payload) return;
+      // 以 operatorId 为主进行匹配；其次尝试 logBookId
+      if (payload.operatorId === operatorId || (payload.logBookId && payload.logBookId === effectiveLogBookId)) {
+        console.log('🔔 收到日志本变更通知，刷新数据');
+        refresh();
+      }
+    });
+    client.connect().catch(() => {});
+    
+    return () => {
+      client.disconnect();
+    };
+  }, [operatorId, effectiveLogBookId]);
 
   // 加载QSO记录
   const loadQSOs = async () => {
@@ -163,7 +164,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
-  // 初始加载
+  // 初始加载与筛选/分页变化时加载
   useEffect(() => {
     loadQSOs();
     loadStatistics();
