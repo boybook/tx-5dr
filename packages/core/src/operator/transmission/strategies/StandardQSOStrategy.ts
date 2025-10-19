@@ -188,13 +188,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
         async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 等待对方发送RRR或73
             const msgRRR = messages
-                .filter((msg) => 
-                    msg.message.type === FT8MessageType.RRR && 
-                    msg.message.senderCallsign === strategy.context.targetCallsign && 
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.RRR &&
+                    msg.message.senderCallsign === strategy.context.targetCallsign &&
                     msg.message.targetCallsign === strategy.context.config.myCallsign)
                 .sort((a, b) => a.snr - b.snr)
                 .pop();
-            
+
             if (msgRRR) {
                 const msg = msgRRR.message as FT8MessageRogerReport | FT8MessageSignalReport | FT8MessageRRR;
                 if (msg.type === FT8MessageType.RRR) {
@@ -261,8 +261,81 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 .pop();
 
             if (msg73) {
-                // 对方发送了73，QSO已完成，直接转到TX6
-                console.log(`[StandardQSOStrategy TX4] 收到对方73，QSO完成，转到TX6`);
+                // 对方发送了73，QSO已完成
+                console.log(`[StandardQSOStrategy TX4] 收到对方73，QSO完成`);
+
+                // 【修复】在转到TX6之前，先检查是否有新的直接呼叫
+                const directCalls = messages
+                    .filter((msg) =>
+                        (msg.message.type === FT8MessageType.CALL ||
+                         msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
+                        msg.message.targetCallsign === strategy.context.config.myCallsign &&
+                        msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除刚完成的QSO对象
+                    .sort((a, b) => b.snr - a.snr); // 降序排序: 信号最强的在前
+
+                if (directCalls.length > 0) {
+                    const newCall = directCalls[0];
+                    const msg = newCall.message;
+
+                    if (msg.type === FT8MessageType.CALL) {
+                        const callMsg = msg as FT8MessageCall;
+                        const newCallsign = callMsg.senderCallsign;
+
+                        // 检查是否已经通联过
+                        const hasWorked = await strategy.operator.hasWorkedCallsign(newCallsign);
+
+                        // 根据配置决定是否切换到新呼叫
+                        if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
+                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
+
+                            // 清空旧QSO上下文
+                            strategy.clearQSOContext();
+
+                            // 立即切换到新呼号
+                            strategy.context.targetCallsign = newCallsign;
+                            strategy.context.reportSent = newCall.snr;
+                            strategy.context.targetGrid = callMsg.grid;
+                            // 记录实际通联频率
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                            }
+                            strategy.updateSlots();
+                            return { changeState: 'TX2' };
+                        } else {
+                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新呼叫 ${newCallsign} 但已通联过且replyToWorkedStations=false`);
+                        }
+                    } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
+                        const reportMsg = msg as FT8MessageSignalReport;
+                        const newCallsign = reportMsg.senderCallsign;
+
+                        // 检查是否已经通联过
+                        const hasWorked = await strategy.operator.hasWorkedCallsign(newCallsign);
+
+                        // 根据配置决定是否切换到新呼叫
+                        if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
+                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
+
+                            // 清空旧QSO上下文
+                            strategy.clearQSOContext();
+
+                            // 立即切换到新呼号
+                            strategy.context.targetCallsign = newCallsign;
+                            strategy.context.reportReceived = reportMsg.report;
+                            strategy.context.reportSent = newCall.snr;
+                            // 记录实际通联频率
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                            }
+                            strategy.updateSlots();
+                            return { changeState: 'TX3' };
+                        } else {
+                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新信号报告 ${newCallsign} 但已通联过且replyToWorkedStations=false`);
+                        }
+                    }
+                }
+
+                // 没有新的直接呼叫，转到TX6
+                console.log(`[StandardQSOStrategy TX4] 没有新的直接呼叫，转到TX6`);
                 strategy.clearQSOContext();
                 return { changeState: 'TX6' };
             }
@@ -332,7 +405,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 .filter((msg) =>
                     (msg.message.type === FT8MessageType.CALL ||
                      msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
-                    msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    msg.message.targetCallsign === strategy.context.config.myCallsign &&
+                    msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除刚完成的QSO对象
                 .sort((a, b) => b.snr - a.snr);
 
             if (directCalls.length > 0) {
@@ -344,6 +418,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy TX5] 收到新的直接呼叫 ${callsign}，立即切换`);
+
+                        // 清空旧QSO上下文
+                        strategy.clearQSOContext();
+
                         strategy.context.targetCallsign = callsign;
                         strategy.context.reportSent = directCalls[0].snr;
                         strategy.context.targetGrid = (msg as FT8MessageCall).grid;
@@ -359,6 +437,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy TX5] 收到新的直接信号报告 ${callsign}，立即切换`);
+
+                        // 清空旧QSO上下文
+                        strategy.clearQSOContext();
+
                         strategy.context.targetCallsign = callsign;
                         strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
                         strategy.context.reportSent = directCalls[0].snr;

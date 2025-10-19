@@ -69,6 +69,9 @@ export enum WSMessageType {
   // ===== 频率管理 =====
   FREQUENCY_CHANGED = 'frequencyChanged',
 
+  // ===== PTT状态管理 =====
+  PTT_STATUS_CHANGED = 'pttStatusChanged',
+
   // ===== 极简文本消息 =====
   TEXT_MESSAGE = 'textMessage',
 }
@@ -122,11 +125,18 @@ export const FrequencyStateSchema = z.object({
   radioConnected: z.boolean(),
 });
 
+// PTT状态数据结构
+export const PTTStatusSchema = z.object({
+  isTransmitting: z.boolean(),
+  operatorIds: z.array(z.string()),
+});
+
 // ===== 导出共享类型 =====
 export type SystemStatus = z.infer<typeof SystemStatusSchema>;
 export type SubWindowInfo = z.infer<typeof SubWindowInfoSchema>;
 export type DecodeErrorInfo = z.infer<typeof DecodeErrorInfoSchema>;
 export type FrequencyState = z.infer<typeof FrequencyStateSchema>;
+export type PTTStatus = z.infer<typeof PTTStatusSchema>;
 
 // ===== WebSocket消息Schema定义 =====
 
@@ -609,6 +619,16 @@ export const WSFrequencyChangedMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSFrequencyChangedMessage = z.infer<typeof WSFrequencyChangedMessageSchema>;
 
+/**
+ * PTT状态变化消息（服务端到客户端）
+ */
+export const WSPTTStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PTT_STATUS_CHANGED),
+  data: PTTStatusSchema,
+});
+
+export type WSPTTStatusChangedMessage = z.infer<typeof WSPTTStatusChangedMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -666,6 +686,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 频率管理消息
   WSFrequencyChangedMessageSchema,
+
+  // PTT状态管理消息
+  WSPTTStatusChangedMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -756,4 +779,7 @@ export interface DigitalRadioEngineEvents {
 
   // 频率控制事件
   frequencyChanged: (data: FrequencyState) => void;
+
+  // PTT状态控制事件
+  pttStatusChanged: (data: PTTStatus) => void;
 } 

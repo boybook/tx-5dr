@@ -254,4 +254,193 @@ test('QSO通联周期测试', async (t) => {
         assert.ok(true, 'QSO测试完成');
     });
 
+    await t.test('TX4收到73时同时收到新直接呼叫，应优先回复直接呼叫', async () => {
+        console.log('⌛️ TX4收到73时同时收到新直接呼叫');
+        const dummyRadioEngine = new DummyRadioEngine();
+
+        // 我（BG5DRB）与JQ2LVH通联
+        const me = new RadioOperator({
+            id: 'BG5DRB',
+            mode: MODES.FT8,
+            myCallsign: 'BG5DRB',
+            myGrid: 'PL09',
+            frequency: 14074000,
+            transmitCycles: [0], // 偶数周期发射
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: true,
+            autoResumeCQAfterFail: true,
+            autoResumeCQAfterSuccess: true,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        // JQ2LVH（正在通联的对象）
+        const jq2lvh = new RadioOperator({
+            id: 'JQ2LVH',
+            mode: MODES.FT8,
+            myCallsign: 'JQ2LVH',
+            myGrid: 'PM95',
+            frequency: 14074000,
+            transmitCycles: [1], // 奇数周期发射
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        // JA0EPV（新的呼叫者）- 手动控制发射
+        const ja0epv = new RadioOperator({
+            id: 'JA0EPV',
+            mode: MODES.FT8,
+            myCallsign: 'JA0EPV',
+            myGrid: 'PM84',
+            frequency: 14074000,
+            transmitCycles: [1], // 奇数周期发射
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        // 设置JQ2LVH呼叫我
+        jq2lvh.userCommand({ command: 'update_context', args: { targetCallsign: 'BG5DRB' } });
+        jq2lvh.userCommand({ command: 'set_state', args: 'TX1' });
+
+        // 启动我和JQ2LVH
+        me.start();
+        jq2lvh.start();
+
+        // 周期1: JQ2LVH呼叫我
+        await dummyRadioEngine.nextCycle();
+        // 周期2: 我回复JQ2LVH信号报告
+        await dummyRadioEngine.nextCycle();
+        // 周期3: JQ2LVH发送R-XX
+        await dummyRadioEngine.nextCycle();
+        // 周期4: 我发送RR73
+        await dummyRadioEngine.nextCycle();
+
+        // 此时我处于TX4状态，等待JQ2LVH的73
+
+        // 周期5: 关键时刻 - JQ2LVH发送73，同时JA0EPV直接呼叫我
+        // 启动JA0EPV并让它呼叫我
+        ja0epv.userCommand({ command: 'update_context', args: { targetCallsign: 'BG5DRB' } });
+        ja0epv.userCommand({ command: 'set_state', args: 'TX1' });
+        ja0epv.start();
+
+        await dummyRadioEngine.nextCycle();
+
+        // 周期6: 我应该回复JA0EPV，而不是发送CQ
+        await dummyRadioEngine.nextCycle();
+
+        console.log('📋 消息历史:');
+        dummyRadioEngine.messagesLog.forEach((msg, i) => {
+            console.log(`  [${i}] ${msg}`);
+        });
+
+        // 验证最后一条消息应该是回复JA0EPV
+        const lastMessage = dummyRadioEngine.messagesLog[dummyRadioEngine.messagesLog.length - 1];
+        assert.ok(lastMessage.includes('JA0EPV') && lastMessage.includes('BG5DRB'),
+            `预期回复JA0EPV，但实际发送: ${lastMessage}`);
+        assert.ok(!lastMessage.startsWith('CQ'),
+            `不应该发送CQ，但实际发送: ${lastMessage}`);
+
+        console.log('✅ TX4优先级测试通过');
+    });
+
+    await t.test('TX5发送73后的下一个周期收到新直接呼叫，应优先回复直接呼叫', async () => {
+        console.log('⌛️ TX5发送73后的下一个周期收到新直接呼叫');
+        const dummyRadioEngine = new DummyRadioEngine();
+
+        // 我（BG5DRB）
+        const me = new RadioOperator({
+            id: 'BG5DRB',
+            mode: MODES.FT8,
+            myCallsign: 'BG5DRB',
+            myGrid: 'PL09',
+            frequency: 14074000,
+            transmitCycles: [1], // 奇数周期发射
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: true,
+            autoResumeCQAfterFail: true,
+            autoResumeCQAfterSuccess: true,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        // E6AD（正在通联的对象）
+        const e6ad = new RadioOperator({
+            id: 'E6AD',
+            mode: MODES.FT8,
+            myCallsign: 'E6AD',
+            myGrid: 'RG58',
+            frequency: 14074000,
+            transmitCycles: [0], // 偶数周期发射
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        // BD8CBQ（新的呼叫者，在我发送73的下一个周期才开始呼叫）
+        const bd8cbq = new RadioOperator({
+            id: 'BD8CBQ',
+            mode: MODES.FT8,
+            myCallsign: 'BD8CBQ',
+            myGrid: 'OM20',
+            frequency: 14074000,
+            transmitCycles: [0], // 偶数周期发射
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        // E6AD呼叫我
+        e6ad.userCommand({ command: 'update_context', args: { targetCallsign: 'BG5DRB' } });
+        e6ad.userCommand({ command: 'set_state', args: 'TX1' });
+
+        me.start();
+        e6ad.start();
+
+        // 完成与E6AD的QSO
+        await dummyRadioEngine.nextCycle(); // E6AD呼叫我
+        await dummyRadioEngine.nextCycle(); // 我回复
+        await dummyRadioEngine.nextCycle(); // E6AD发送R-XX
+        await dummyRadioEngine.nextCycle(); // 我发送RR73（TX4）
+        await dummyRadioEngine.nextCycle(); // E6AD发送RRR，我转到TX5
+        await dummyRadioEngine.nextCycle(); // 我发送73（TX5状态）
+
+        // 现在我刚发送完73，处于TX5→TX6转换阶段
+        // 下一个周期BD8CBQ开始呼叫我
+
+        bd8cbq.userCommand({ command: 'update_context', args: { targetCallsign: 'BG5DRB' } });
+        bd8cbq.userCommand({ command: 'set_state', args: 'TX1' });
+        bd8cbq.start();
+
+        await dummyRadioEngine.nextCycle(); // BD8CBQ呼叫我
+        await dummyRadioEngine.nextCycle(); // 我应该回复BD8CBQ
+
+        console.log('📋 消息历史:');
+        dummyRadioEngine.messagesLog.forEach((msg, i) => {
+            console.log(`  [${i}] ${msg}`);
+        });
+
+        // 验证我回复了BD8CBQ
+        const myMessages = dummyRadioEngine.messagesLog.filter(msg =>
+            msg.includes('BG5DRB') && msg.includes('BD8CBQ')
+        );
+        assert.ok(myMessages.length > 0,
+            `预期回复BD8CBQ，但没有找到相关消息`);
+
+        console.log('✅ TX5→TX6优先级测试通过');
+    });
+
 }); 
