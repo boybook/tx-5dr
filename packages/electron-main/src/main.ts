@@ -153,30 +153,71 @@ async function checkServerHealth(): Promise<boolean> {
 }
 
 // 清理函数
-function cleanup() {
+async function cleanup() {
   console.log('🧹 [清理] 正在清理资源...');
-  
+
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
-  
+
   // 清理服务器健康检查定时器
   if (serverCheckInterval) {
     clearInterval(serverCheckInterval);
     serverCheckInterval = null;
     console.log('🧹 [清理] 已清理健康检查定时器');
   }
-  
+
   // 生产模式：关闭子进程
   if (!isDevelopment) {
-    if (webProcess && !webProcess.killed) {
-      console.log('🧹 [清理] 关闭 web 子进程');
-      try { webProcess.kill(); } catch {}
+    const killProcess = (proc: import('node:child_process').ChildProcess | null, name: string): Promise<void> => {
+      return new Promise((resolve) => {
+        if (!proc || proc.killed) {
+          resolve();
+          return;
+        }
+
+        console.log(`🧹 [清理] 正在关闭 ${name} 子进程 (PID: ${proc.pid})...`);
+
+        // 设置超时:如果进程在5秒内没有退出,强制kill
+        const timeout = setTimeout(() => {
+          if (proc && !proc.killed) {
+            console.log(`🧹 [清理] ${name} 进程未响应,强制终止...`);
+            try {
+              proc.kill('SIGKILL');
+            } catch (err) {
+              console.error(`🧹 [清理] 强制终止 ${name} 进程失败:`, err);
+            }
+          }
+          resolve();
+        }, 5000);
+
+        // 监听进程退出
+        proc.once('exit', (code, signal) => {
+          clearTimeout(timeout);
+          console.log(`🧹 [清理] ${name} 子进程已退出 (code: ${code}, signal: ${signal})`);
+          resolve();
+        });
+
+        // 发送SIGTERM信号优雅关闭
+        try {
+          proc.kill('SIGTERM');
+        } catch (err) {
+          console.error(`🧹 [清理] 发送SIGTERM到 ${name} 进程失败:`, err);
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+    };
+
+    // 依次关闭进程
+    if (webProcess) {
+      await killProcess(webProcess, 'web');
       webProcess = null;
     }
-    if (serverProcess && !serverProcess.killed) {
-      console.log('🧹 [清理] 关闭 server 子进程');
-      try { serverProcess.kill(); } catch {}
+    if (serverProcess) {
+      await killProcess(serverProcess, 'server');
       serverProcess = null;
     }
+
+    console.log('🧹 [清理] 所有子进程已关闭');
   } else {
     console.log('🧹 [清理] 开发模式：无子进程可清理');
   }
@@ -384,17 +425,58 @@ const startApp = async () => {
   }, 500); // 延迟500ms确保所有初始化完成
 };
 
+// 跟踪清理状态,防止重复清理
+let isCleaningUp = false;
+let hasCleanedUp = false;
+
+// 统一的清理和退出处理函数
+async function cleanupAndQuit() {
+  if (hasCleanedUp || isCleaningUp) {
+    return;
+  }
+
+  isCleaningUp = true;
+  try {
+    await cleanup();
+    hasCleanedUp = true;
+    console.log('📱 [应用] 清理完成,正在退出...');
+  } catch (err) {
+    console.error('📱 [应用] 清理失败:', err);
+    hasCleanedUp = true;
+  } finally {
+    isCleaningUp = false;
+    app.quit();
+  }
+}
+
 // 应用退出事件处理
-app.on('before-quit', (event: any) => {
-  console.log('📱 [应用] 准备退出...');
-  cleanup();
+app.on('will-quit', (event) => {
+  console.log('📱 [应用] 即将退出 (will-quit)...');
+
+  // 如果还没有清理完成,阻止退出并执行清理
+  if (!hasCleanedUp && !isCleaningUp) {
+    event.preventDefault();
+    void cleanupAndQuit();
+  }
+});
+
+app.on('before-quit', (event) => {
+  console.log('📱 [应用] 准备退出 (before-quit)...');
+
+  // 如果还没有清理完成,阻止退出并执行清理
+  if (!hasCleanedUp && !isCleaningUp) {
+    event.preventDefault();
+    void cleanupAndQuit();
+  }
 });
 
 app.on('window-all-closed', () => {
   console.log('📱 [应用] 所有窗口已关闭');
-  cleanup();
+
+  // macOS上通常不在此时退出应用
   if (process.platform !== 'darwin') {
-    app.quit();
+    // 非macOS平台,所有窗口关闭后退出
+    void cleanupAndQuit();
   }
 });
 
@@ -402,7 +484,7 @@ app.on('activate', () => {
   // macOS: 当点击dock图标时
   if (BrowserWindow.getAllWindows().length === 0) {
     console.log('📱 [应用] activate事件：创建新窗口');
-    createWindow();
+    void createWindow();
   } else {
     // 如果已有窗口，显示并聚焦第一个窗口
     const existingWindow = BrowserWindow.getAllWindows()[0];
@@ -420,14 +502,16 @@ app.on('activate', () => {
 // 处理进程退出信号
 process.on('SIGINT', () => {
   console.log('📱 [进程] 收到 SIGINT 信号');
-  cleanup();
-  process.exit(0);
+  void cleanup().then(() => {
+    process.exit(0);
+  });
 });
 
 process.on('SIGTERM', () => {
   console.log('📱 [进程] 收到 SIGTERM 信号');
-  cleanup();
-  process.exit(0);
+  void cleanup().then(() => {
+    process.exit(0);
+  });
 });
 
 /**
@@ -435,7 +519,7 @@ process.on('SIGTERM', () => {
  */
 function setupIpcHandlers() {
   // 处理打开通联日志窗口的请求
-  ipcMain.handle('window:openLogbook', async (event, queryString: string) => {
+  ipcMain.handle('window:openLogbook', async (_event, queryString: string) => {
     console.log('📖 [IPC] 收到打开通联日志窗口请求:', queryString);
     
     try {
@@ -491,7 +575,7 @@ function setupIpcHandlers() {
   });
 
   // 处理打开外部链接的请求
-  ipcMain.handle('shell:openExternal', async (event, url: string) => {
+  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     console.log('🔗 [IPC] 收到打开外部链接请求:', url);
     
     try {
