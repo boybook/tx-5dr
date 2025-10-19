@@ -247,6 +247,12 @@ export class RadioService {
       (this.eventListeners as any).frequencyChanged?.forEach?.((listener: any) => listener(data));
     });
 
+    // 监听PTT状态变化
+    this.wsClient.onWSEvent('pttStatusChanged', (data: any) => {
+      console.log('📡 PTT状态变化:', data);
+      (this.eventListeners as any).pttStatusChanged?.forEach?.((listener: any) => listener(data));
+    });
+
     // 监听时隙开始事件
     this.wsClient.onWSEvent('slotStart', (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
       console.log('🎯 时隙开始:', slotInfo);

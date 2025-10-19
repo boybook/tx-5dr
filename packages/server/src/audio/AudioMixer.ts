@@ -603,4 +603,11 @@ export class AudioMixer extends EventEmitter {
       mixingWindowMs: this.mixingWindowMs
     };
   }
+
+  /**
+   * 获取当前正在播放的混音音频信息
+   */
+  public getCurrentMixedAudio(): MixedAudio | null {
+    return this.currentMixedAudio;
+  }
 } 

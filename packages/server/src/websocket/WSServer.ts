@@ -234,6 +234,17 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('qsoRecordAdded' as any, (data: { operatorId: string; logBookId: string; qsoRecord: any }) => {
       console.log(`📡 [WSServer] 收到QSO记录添加事件:`, data.qsoRecord.callsign);
       this.broadcastQSORecordAdded(data);
+      // 向启用了该操作员的客户端发送简洁的Toast消息
+      try {
+        const qso = data.qsoRecord;
+        const mhz = (qso.frequency / 1_000_000).toFixed(3);
+        const gridPart = qso.grid ? ` ${qso.grid}` : '';
+        const title = 'QSO已记录';
+        const text = `${qso.callsign}${gridPart} • ${mhz} MHz • ${qso.mode}`;
+        this.broadcastOperatorTextMessage(data.operatorId, title, text);
+      } catch (e) {
+        console.warn('⚠️ [WSServer] 发送QSO记录Toast失败:', e);
+      }
     });
 
     // 监听日志本更新事件
@@ -282,6 +293,12 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('frequencyChanged' as any, (data: any) => {
       console.log(`📡 [WSServer] 收到频率变化事件:`, data);
       this.broadcast(WSMessageType.FREQUENCY_CHANGED, data);
+    });
+
+    // 监听PTT状态变化事件
+    this.digitalRadioEngine.on('pttStatusChanged' as any, (data: any) => {
+      console.log(`📡 [WSServer] 收到PTT状态变化事件: ${data.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${data.operatorIds?.join(', ') || ''}]`);
+      this.broadcast(WSMessageType.PTT_STATUS_CHANGED, data);
     });
   }
 
@@ -636,6 +653,18 @@ export class WSServer extends WSMessageHandler {
   broadcastTextMessage(title: string, text: string): void {
     console.log("广播文本消息:", title, text);
     this.broadcast(WSMessageType.TEXT_MESSAGE, { title, text });
+  }
+
+  /**
+   * 仅向启用了指定操作员的客户端广播极简文本消息
+   */
+  broadcastOperatorTextMessage(operatorId: string, title: string, text: string): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    const targets = activeConnections.filter(conn => conn.isOperatorEnabled(operatorId));
+    targets.forEach(conn => {
+      conn.send(WSMessageType.TEXT_MESSAGE, { title, text });
+    });
+    console.log(`📡 [WSServer] 向 ${targets.length} 个启用操作员 ${operatorId} 的客户端发送文本消息: ${title} - ${text}`);
   }
 
   /**

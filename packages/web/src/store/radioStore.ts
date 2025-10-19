@@ -93,9 +93,14 @@ export interface RadioState {
     rigModel?: number;
   } | null;
   radioConfig: any;
+  // PTT状态
+  pttStatus: {
+    isTransmitting: boolean;
+    operatorIds: string[];
+  };
 }
 
-export type RadioAction = 
+export type RadioAction =
   | { type: 'modeChanged'; payload: ModeDescriptor }
   | { type: 'systemStatus'; payload: any }
   | { type: 'decodeError'; payload: any }
@@ -103,7 +108,8 @@ export type RadioAction =
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
-  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: any; radioConfig: any } };
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: any; radioConfig: any } }
+  | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -113,7 +119,11 @@ const initialRadioState: RadioState = {
   currentOperatorId: null,
   radioConnected: false,
   radioInfo: null,
-  radioConfig: { type: 'none' }
+  radioConfig: { type: 'none' },
+  pttStatus: {
+    isTransmitting: false,
+    operatorIds: []
+  }
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -199,11 +209,20 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         radioConnected: action.payload.radioConnected,
         radioInfo: action.payload.radioInfo,
         // 只有当payload中有有效的radioConfig时才更新，否则保持现有配置
-        radioConfig: (action.payload.radioConfig && action.payload.radioConfig.type !== 'none') 
-          ? action.payload.radioConfig 
+        radioConfig: (action.payload.radioConfig && action.payload.radioConfig.type !== 'none')
+          ? action.payload.radioConfig
           : state.radioConfig
       };
-    
+
+    case 'pttStatusChanged':
+      return {
+        ...state,
+        pttStatus: {
+          isTransmitting: action.payload.isTransmitting,
+          operatorIds: action.payload.operatorIds
+        }
+      };
+
     default:
       return state;
   }
@@ -457,6 +476,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       frequencyChanged: (_data: any) => {
         console.log('📻 [RadioProvider] 频率变化，清空本地时隙历史');
         slotPacksDispatch({ type: 'CLEAR_DATA' });
+      },
+      // PTT状态变化
+      pttStatusChanged: (data: { isTransmitting: boolean; operatorIds: string[] }) => {
+        console.log(`📡 [RadioProvider] PTT状态变化: ${data.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${data.operatorIds?.join(', ') || ''}]`);
+        radioDispatch({ type: 'pttStatusChanged', payload: data });
       },
       handshakeComplete: (data: any) => {
         console.log('🤝 [RadioProvider] 握手完成:', data);

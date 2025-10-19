@@ -385,7 +385,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         }
       }
     });
-    
+
     this.realEncodeQueue.on('encodeError', (error, request) => {
       console.error(`❌ [时钟管理器] 编码失败:`, error);
       this.emit('transmissionComplete', {
@@ -906,10 +906,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`📡 [PTT] radioManager.setPTT(true)完成，耗时: ${radioCallDuration}ms`);
         
         this.isPTTActive = true;
-        
+
         // 通知频谱调度器PTT状态改变
         this.spectrumScheduler.setPTTActive(true);
-        
+
+        // 获取当前正在播放的操作员信息并发射PTT状态变化事件
+        const currentAudio = this.audioMixer.getCurrentMixedAudio();
+        const operatorIds = currentAudio ? currentAudio.operatorIds : [];
+        this.emit('pttStatusChanged', {
+          isTransmitting: true,
+          operatorIds
+        });
+        console.log(`📡 [PTT] PTT状态广播: 开始发射, 操作员=[${operatorIds.join(', ')}]`);
+
         const pttEndTime = Date.now();
         const pttTotalDuration = pttEndTime - pttStartTime;
         console.log(`📡 [PTT] PTT启动成功，频谱分析已暂停，总耗时: ${pttTotalDuration}ms`);
@@ -941,10 +950,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       try {
         await this.radioManager.setPTT(false);
         this.isPTTActive = false;
-        
+
         // 通知频谱调度器PTT状态改变
         this.spectrumScheduler.setPTTActive(false);
-        
+
+        // 发射PTT停止事件
+        this.emit('pttStatusChanged', {
+          isTransmitting: false,
+          operatorIds: []
+        });
+        console.log(`📡 [PTT] PTT状态广播: 停止发射`);
+
         console.log('📡 [PTT] PTT停止成功，频谱分析已恢复');
       } catch (error) {
         console.error('📡 [PTT] PTT停止失败:', error);
