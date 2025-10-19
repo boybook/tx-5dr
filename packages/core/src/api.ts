@@ -88,7 +88,24 @@ export const api = {
     const baseUrl = apiBase || getConfiguredApiBase();
     const res = await fetch(`${baseUrl}/hello`);
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      let message = `HTTP ${res.status}: ${res.statusText}`;
+      try {
+        const proxyHeader = res.headers.get('x-proxy-error');
+        if (proxyHeader === 'backend_offline') {
+          message = '后端服务器未启动或不可达';
+        } else {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data?.code === 'BACKEND_OFFLINE') {
+              message = '后端服务器未启动或不可达';
+            } else if (typeof data?.message === 'string' && data.message) {
+              message = data.message;
+            }
+          }
+        }
+      } catch {}
+      throw new Error(message);
     }
     return (await res.json()) as HelloResponse;
   },

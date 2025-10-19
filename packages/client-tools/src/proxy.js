@@ -92,10 +92,22 @@ function proxyHttp(req, res) {
     res.writeHead(proxyRes.statusCode || 500);
     proxyRes.pipe(res, { end: true });
   });
-  proxyReq.on('error', () => {
-    res.statusCode = 502;
+  proxyReq.on('error', (err) => {
+    // 更明确地返回“后端未启动/不可达”的语义，便于前端识别
+    const offlineCodes = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET']);
+    const isOffline = offlineCodes.has(err && err.code);
+    const status = isOffline ? 503 : 502;
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'x-proxy-error': isOffline ? 'backend_offline' : 'proxy_error',
+    });
     addCors(res);
-    res.end('Bad Gateway');
+    const body = {
+      success: false,
+      code: isOffline ? 'BACKEND_OFFLINE' : 'PROXY_ERROR',
+      message: isOffline ? '后端服务器未启动或不可达（生产代理）' : '反向代理错误',
+    };
+    try { res.end(JSON.stringify(body)); } catch { res.end(); }
   });
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     req.pipe(proxyReq, { end: true });

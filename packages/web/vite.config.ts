@@ -37,8 +37,25 @@ export default defineConfig({
         secure: false,
         ws: true, // 支持WebSocket代理
         configure: (proxy, _options) => {
-          proxy.on('error', (err, _req, _res) => {
-            console.log('🚨 代理错误:', err);
+          proxy.on('error', (err: any, _req: any, res: any) => {
+            // 当后端未启动或不可达时，http-proxy 会抛出 ECONNREFUSED 等错误
+            const isBackendOffline = ['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET'].includes(err?.code);
+            if (res && !res.headersSent) {
+              res.writeHead(isBackendOffline ? 503 : 502, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'x-proxy-error': isBackendOffline ? 'backend_offline' : 'proxy_error',
+              });
+              const payload = {
+                success: false,
+                code: isBackendOffline ? 'BACKEND_OFFLINE' : 'PROXY_ERROR',
+                message: isBackendOffline
+                  ? '后端服务器未启动或不可达（开发代理）'
+                  : `代理错误: ${err?.message || '未知错误'}`,
+              };
+              try { res.end(JSON.stringify(payload)); } catch { res.end(); }
+            } else {
+              console.log('🚨 代理错误(无法回写响应):', err?.code || '', err?.message || err);
+            }
           });
           proxy.on('proxyReq', (proxyReq, req, _res) => {
             console.log('📤 代理请求:', req.method, req.url, '→', proxyReq.getHeader('host') + proxyReq.path);

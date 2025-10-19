@@ -23,6 +23,8 @@ export class WSClient extends WSMessageHandler {
   private isConnecting = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  // 标记本次关闭是否已安排过重连，避免 onerror/onclose 双重调度
+  private pendingReconnectScheduled = false;
 
   constructor(config: WSClientConfig) {
     super();
@@ -70,14 +72,19 @@ export class WSClient extends WSMessageHandler {
           this.emitWSEvent('disconnected');
           
           // 自动重连 (-1 表示无限重连)
-          if (this.config.reconnectAttempts === -1 || this.reconnectAttempts < this.config.reconnectAttempts) {
-            this.scheduleReconnect();
+          // 如果已经安排过重连，则不重复安排
+          if (!this.reconnectTimer && !this.pendingReconnectScheduled) {
+            if (this.config.reconnectAttempts === -1 || this.reconnectAttempts < this.config.reconnectAttempts) {
+              this.scheduleReconnect();
+            } else {
+              console.log('🛑 已达到最大重连次数，停止重连');
+              this.emitWSEvent('reconnectStopped' as any, {
+                reason: 'maxAttemptsReached',
+                finalAttempt: this.reconnectAttempts
+              });
+            }
           } else {
-            console.log('🛑 已达到最大重连次数，停止重连');
-            this.emitWSEvent('reconnectStopped' as any, {
-              reason: 'maxAttemptsReached',
-              finalAttempt: this.reconnectAttempts
-            });
+            // 已经有待执行的重连定时器或已调度，跳过重复调度
           }
         };
 
@@ -199,12 +206,20 @@ export class WSClient extends WSMessageHandler {
       nextAttemptAt: Date.now() + delay
     });
     
+    this.pendingReconnectScheduled = true;
     this.reconnectTimer = setTimeout(() => {
+      // 定时器触发即视为“当前没有挂起的重连计时器”
+      this.reconnectTimer = null;
+      this.pendingReconnectScheduled = false;
       this.connect().catch((error) => {
         console.error('重连失败:', error);
         
-        // 如果不是无限重连且达到最大重连次数，发射重连停止事件
-        if (this.config.reconnectAttempts !== -1 && this.reconnectAttempts >= this.config.reconnectAttempts) {
+        // 兜底：在 onclose 未触发或浏览器只触发 onerror 的情况下，继续按退避重试
+        if (this.config.reconnectAttempts === -1 || this.reconnectAttempts < this.config.reconnectAttempts) {
+          // 避免与 onclose 重复调度：若 onclose 随后触发，会因已有 pending 标记而跳过
+          this.scheduleReconnect();
+        } else {
+          // 如果不是无限重连且达到最大重连次数，发射重连停止事件
           this.emitWSEvent('reconnectStopped' as any, {
             reason: 'maxAttemptsReached',
             finalAttempt: this.reconnectAttempts
