@@ -97,11 +97,15 @@ function proxyHttp(req, res) {
     const offlineCodes = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET']);
     const isOffline = offlineCodes.has(err && err.code);
     const status = isOffline ? 503 : 502;
-    res.writeHead(status, {
+    // 需要在发送响应头之前设置所有 header，避免 headersSent 后再次 setHeader
+    const headers = {
       'Content-Type': 'application/json; charset=utf-8',
       'x-proxy-error': isOffline ? 'backend_offline' : 'proxy_error',
-    });
-    addCors(res);
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+    };
+    res.writeHead(status, headers);
     const body = {
       success: false,
       code: isOffline ? 'BACKEND_OFFLINE' : 'PROXY_ERROR',
