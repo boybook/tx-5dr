@@ -1,9 +1,11 @@
 import { AudioDevice } from '@tx5dr/contracts';
 import * as naudiodon from 'naudiodon2';
+import { ConfigManager } from '../config/config-manager.js';
 
 // 音频设备管理器
 export class AudioDeviceManager {
   private static instance: AudioDeviceManager;
+  private icomWlanConnectedCallback: (() => boolean) | null = null;
 
   private constructor() {
     // 初始化naudiodon
@@ -15,6 +17,34 @@ export class AudioDeviceManager {
       AudioDeviceManager.instance = new AudioDeviceManager();
     }
     return AudioDeviceManager.instance;
+  }
+
+  /**
+   * 设置 ICOM WLAN 连接状态检查回调
+   */
+  setIcomWlanConnectedCallback(callback: () => boolean): void {
+    this.icomWlanConnectedCallback = callback;
+  }
+
+  /**
+   * 检查是否应该显示 ICOM WLAN 虚拟设备
+   */
+  private shouldShowIcomWlanDevice(): boolean {
+    // 检查配置是否为 ICOM WLAN 模式
+    const configManager = ConfigManager.getInstance();
+    const radioConfig = configManager.getRadioConfig();
+
+    if (radioConfig.type !== 'icom-wlan') {
+      return false;
+    }
+
+    // 检查是否已连接（如果有回调）
+    if (this.icomWlanConnectedCallback) {
+      return this.icomWlanConnectedCallback();
+    }
+
+    // 如果配置为 ICOM WLAN 模式，即使未连接也显示虚拟设备
+    return true;
   }
 
   /**
@@ -127,6 +157,20 @@ export class AudioDeviceManager {
         });
       }
       
+      // 如果配置为 ICOM WLAN 模式，注入虚拟输入设备
+      if (this.shouldShowIcomWlanDevice()) {
+        console.log('📡 [AudioDeviceManager] 注入 ICOM WLAN 虚拟输入设备');
+        const icomWlanInputDevice: AudioDevice = {
+          id: 'icom-wlan-input',
+          name: 'ICOM WLAN',
+          isDefault: false,
+          channels: 1,
+          sampleRate: 12000,
+          type: 'input'
+        };
+        result.unshift(icomWlanInputDevice);
+      }
+
       console.log(`🎤 [AudioDeviceManager] 最终返回 ${result.length} 个输入设备:`, result.map(d => d.name));
       return result;
     } catch (error) {
@@ -215,6 +259,20 @@ export class AudioDeviceManager {
         });
       }
       
+      // 如果配置为 ICOM WLAN 模式，注入虚拟输出设备
+      if (this.shouldShowIcomWlanDevice()) {
+        console.log('📡 [AudioDeviceManager] 注入 ICOM WLAN 虚拟输出设备');
+        const icomWlanOutputDevice: AudioDevice = {
+          id: 'icom-wlan-output',
+          name: 'ICOM WLAN',
+          isDefault: false,
+          channels: 1,
+          sampleRate: 12000,
+          type: 'output'
+        };
+        result.unshift(icomWlanOutputDevice);
+      }
+
       console.log(`🔊 [AudioDeviceManager] 最终返回 ${result.length} 个输出设备:`, result.map(d => d.name));
       return result;
     } catch (error) {
@@ -246,6 +304,9 @@ export class AudioDeviceManager {
       this.getInputDevices(),
       this.getOutputDevices(),
     ]);
+
+    // 注意：ICOM WLAN 虚拟设备已经在 getInputDevices() 和 getOutputDevices() 中注入
+    // 这里不需要重复注入
 
     console.log(`📻 [AudioDeviceManager] 设备汇总: ${inputDevices.length} 个输入设备, ${outputDevices.length} 个输出设备`);
 

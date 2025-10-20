@@ -1,6 +1,6 @@
-import { 
-  SlotClock, 
-  SlotScheduler, 
+import {
+  SlotClock,
+  SlotScheduler,
   ClockSourceSystem
 } from '@tx5dr/core';
 import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type RadioOperatorConfig, type TransmissionCompleteInfo } from '@tx5dr/contracts';
@@ -16,6 +16,8 @@ import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
 import { printAppPaths } from './utils/debug-paths.js';
 import { PhysicalRadioManager } from './radio/PhysicalRadioManager.js';
 import { TransmissionTracker } from './transmission/TransmissionTracker.js';
+import { IcomWlanAudioAdapter } from './audio/IcomWlanAudioAdapter.js';
+import { AudioDeviceManager } from './audio/audio-device-manager.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -52,6 +54,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   // 传输跟踪器
   private transmissionTracker: TransmissionTracker;
+
+  // ICOM WLAN 音频适配器
+  private icomWlanAudioAdapter: IcomWlanAudioAdapter | null = null;
 
   // 编码状态跟踪（用于检测编码超时）
   private currentSlotExpectedEncodes: number = 0; // 当前时隙期望的编码数量
@@ -90,7 +95,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
     ANALYSIS_INTERVAL_MS: 150,    // 频谱分析间隔
-    FFT_SIZE: 4096,              // FFT大小
+    FFT_SIZE: 8192,              // FFT大小 (分辨率: 6000/8192 ≈ 0.73 Hz/bin)
     WINDOW_FUNCTION: 'hann' as const,
     WORKER_POOL_SIZE: 1,
     ENABLED: true,
@@ -629,7 +634,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     
     console.log(`🚀 [时钟管理器] 启动时钟，模式: ${this.currentMode.name}`);
-    
+
     // 启动音频流
     let audioStarted = false;
     try {
@@ -637,17 +642,49 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       const configManager = ConfigManager.getInstance();
       const audioConfig = configManager.getAudioConfig();
       const radioConfig = configManager.getRadioConfig();
-      
+
       console.log(`🎤 [时钟管理器] 使用音频设备配置:`, audioConfig);
-      
+
+      // 先连接物理电台（如果配置）- ICOM WLAN 模式需要先建立连接
+      await this.radioManager.applyConfig(radioConfig);
+      console.log(`📡 [时钟管理器] 物理电台配置已应用:`, radioConfig);
+
+      // 如果配置为 ICOM WLAN 模式，初始化音频适配器
+      if (radioConfig.type === 'icom-wlan') {
+        console.log(`📡 [时钟管理器] 检测到 ICOM WLAN 模式，初始化音频适配器`);
+
+        const icomWlanManager = this.radioManager.getIcomWlanManager();
+        if (icomWlanManager && icomWlanManager.isConnected()) {
+          // 创建 ICOM WLAN 音频适配器
+          this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(
+            icomWlanManager,
+            this.audioStreamManager.getSampleRate()
+          );
+
+          // 注入到 AudioStreamManager
+          this.audioStreamManager.setIcomWlanAudioAdapter(this.icomWlanAudioAdapter);
+
+          // 设置回调让 AudioDeviceManager 知道连接状态
+          const audioDeviceManager = AudioDeviceManager.getInstance();
+          audioDeviceManager.setIcomWlanConnectedCallback(() => {
+            return icomWlanManager.isConnected();
+          });
+
+          console.log(`✅ [时钟管理器] ICOM WLAN 音频适配器已初始化`);
+        } else {
+          console.warn(`⚠️ [时钟管理器] ICOM WLAN 未连接，音频适配器未初始化`);
+          throw new Error('ICOM WLAN 电台连接失败，无法启动音频流');
+        }
+      }
+
       // 启动音频输入 - 不需要传递设备ID，AudioStreamManager会从配置中自动解析设备名称
       await this.audioStreamManager.startStream();
       console.log(`🎤 [时钟管理器] 音频输入流启动成功`);
-      
+
       // 启动音频输出 - 不需要传递设备ID，AudioStreamManager会从配置中自动解析设备名称
       await this.audioStreamManager.startOutput();
       console.log(`🔊 [时钟管理器] 音频输出流启动成功`);
-      
+
       // 恢复上次设置的音量增益
       const lastVolumeGain = configManager.getLastVolumeGain();
       if (lastVolumeGain) {
@@ -657,10 +694,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       } else {
         console.log(`🔊 [时钟管理器] 使用默认音量增益: 0.0dB (1.000)`);
       }
-
-      // 连接物理电台（如果配置）
-      await this.radioManager.applyConfig(radioConfig);
-      console.log(`📡 [时钟管理器] 物理电台配置已应用:`, radioConfig);
 
       audioStarted = true;
     } catch (error) {
@@ -794,7 +827,15 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       } catch (error) {
         console.error(`❌ [时钟管理器] 音频流停止失败:`, error);
       }
-      
+
+      // 清理 ICOM WLAN 音频适配器
+      if (this.icomWlanAudioAdapter) {
+        this.icomWlanAudioAdapter.stopReceiving();
+        this.audioStreamManager.setIcomWlanAudioAdapter(null);
+        this.icomWlanAudioAdapter = null;
+        console.log(`🛑 [时钟管理器] ICOM WLAN 音频适配器已清理`);
+      }
+
       this.isRunning = false;
       this.audioStarted = false;
       

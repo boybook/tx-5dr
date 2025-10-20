@@ -22,6 +22,20 @@ export async function radioRoutes(fastify: FastifyInstance) {
     try {
       const config = HamlibConfigSchema.parse(req.body);
       await configManager.updateRadioConfig(config);
+
+      // 如果切换到 ICOM WLAN 模式，自动设置音频设备为 ICOM WLAN
+      if (config.type === 'icom-wlan') {
+        console.log('📡 [Radio Routes] 检测到 ICOM WLAN 模式，自动设置音频设备');
+        const audioConfig = configManager.getAudioConfig();
+        const updatedAudioConfig = {
+          ...audioConfig,
+          inputDeviceName: 'ICOM WLAN',
+          outputDeviceName: 'ICOM WLAN'
+        };
+        await configManager.updateAudioConfig(updatedAudioConfig);
+        console.log('✅ [Radio Routes] 音频设备已自动设置为 ICOM WLAN');
+      }
+
       if (engine.getStatus().isRunning) {
         await radioManager.applyConfig(config);
         // 立即更新 SlotClock 的发射补偿值

@@ -64,16 +64,40 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
     logger.restore();
   };
 
-  const handleSignal = (signal: NodeJS.Signals) => {
-    try { cleanup(); } catch {}
+  const handleSignal = async (signal: NodeJS.Signals) => {
+    console.log(`\n🛑 收到 ${signal} 信号，正在关闭服务器...`);
+
+    try {
+      // 停止 DigitalRadioEngine（这会关闭电台连接和音频流）
+      const engine = DigitalRadioEngine.getInstance();
+      if (engine.getStatus().isRunning) {
+        console.log('🛑 正在停止数字电台引擎...');
+        await engine.stop();
+        console.log('✅ 数字电台引擎已停止');
+      }
+    } catch (error) {
+      console.error('❌ 停止数字电台引擎失败:', error);
+    }
+
+    try {
+      cleanup();
+      console.log('✅ 清理完成');
+    } catch (error) {
+      console.error('❌ 清理失败:', error);
+    }
+
     // 确保进程在收到信号后真正退出
-    try { process.exit(0); } catch {}
+    process.exit(0);
   };
 
   process.on('SIGINT', () => handleSignal('SIGINT'));
   process.on('SIGTERM', () => handleSignal('SIGTERM'));
   // 'exit' 事件仅做清理，不再调用 process.exit()
-  process.on('exit', () => { try { cleanup(); } catch {} });
+  process.on('exit', () => {
+    try {
+      cleanup();
+    } catch {}
+  });
   
   console.log('🔧 日志维护任务已启动');
 }
