@@ -2,12 +2,24 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import type { FT8Spectrum } from '@tx5dr/contracts';
 import { useConnection, useOperators } from '../store/radioStore';
 import { WebGLWaterfall } from './WebGLWaterfall';
+import type { AutoRangeConfig } from './WebGLWaterfall';
 import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
 import { useTxFrequencies } from '../hooks/useTxFrequencies';
+import { Button, Popover, PopoverTrigger, PopoverContent, Tabs, Tab, Slider, Input } from '@heroui/react';
+import { Cog6ToothIcon } from '@heroicons/react/24/outline';
 
 // 瀑布图配置
 const WATERFALL_HISTORY = 120; // 保存120个历史数据点
 const WATERFALL_UPDATE_INTERVAL = 100;
+const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
+
+// 默认配置
+const DEFAULT_AUTO_CONFIG: AutoRangeConfig = {
+  updateInterval: 10,
+  minPercentile: 15,
+  maxPercentile: 99,
+  rangeExpansionFactor: 4.0,
+};
 
 interface SpectrumDisplayProps {
   className?: string;
@@ -18,6 +30,15 @@ interface WaterfallData {
   spectrumData: number[][];
   frequencies: number[];
   timeLabels: string[];
+}
+
+interface RangeSettings {
+  mode: 'auto' | 'manual';
+  manual: {
+    minDb: number;
+    maxDb: number;
+  };
+  auto: AutoRangeConfig;
 }
 
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
@@ -35,6 +56,36 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const lastUpdateRef = useRef<number>(0);
   const pendingDataRef = useRef<FT8Spectrum | null>(null);
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 范围设置状态
+  const [rangeSettings, setRangeSettings] = useState<RangeSettings>(() => {
+    // 从 localStorage 加载设置
+    const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved settings:', e);
+      }
+    }
+    // 默认设置
+    return {
+      mode: 'auto',
+      manual: {
+        minDb: -35,
+        maxDb: 10,
+      },
+      auto: DEFAULT_AUTO_CONFIG,
+    };
+  });
+
+  // 当前实际生效的范围（用于显示）
+  const [actualRange, setActualRange] = useState<{ min: number; max: number } | null>(null);
+
+  // 保存设置到 localStorage
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(rangeSettings));
+  }, [rangeSettings]);
 
   // 获取所有操作者的通联目标RX频率
   const rxFrequencies = useTargetRxFrequencies();
@@ -178,19 +229,184 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }
 
   return (
-    <div className={className}>
+    <div className={`relative ${className}`}>
       <WebGLWaterfall
         data={waterfallData.spectrumData}
         frequencies={waterfallData.frequencies}
         height={height}
-        minDb={-35}
-        maxDb={10}
-        autoRange={true}
+        minDb={rangeSettings.mode === 'manual' ? rangeSettings.manual.minDb : -35}
+        maxDb={rangeSettings.mode === 'manual' ? rangeSettings.manual.maxDb : 10}
+        autoRange={rangeSettings.mode === 'auto'}
+        autoRangeConfig={rangeSettings.auto}
         rxFrequencies={rxFrequencies}
         txFrequencies={txFrequencies}
         onTxFrequencyChange={handleTxFrequencyChange}
+        onActualRangeChange={setActualRange}
         className="bg-transparent"
       />
+
+      {/* 设置按钮和 Popover */}
+      <Popover placement="bottom-end">
+        <PopoverTrigger>
+          <Button
+            isIconOnly
+            size="sm"
+            variant="light"
+            className="absolute top-1 right-1 min-w-unit-8 w-8 h-8 hover:bg-black/60 hover:backdrop-blur-sm transition-colors"
+          >
+            <Cog6ToothIcon className="w-4 h-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-80 p-0">
+          <div className="w-full">
+            <div className="px-4 py-3 text-sm font-semibold border-b border-divider">
+              频谱范围设置
+            </div>
+
+            {/* 模式切换 - 使用 Tabs */}
+            <div className="px-4 py-3">
+              <Tabs
+                selectedKey={rangeSettings.mode}
+                onSelectionChange={(key) => {
+                  const newMode = key as 'auto' | 'manual';
+                  setRangeSettings(prev => {
+                    // 如果从自动切换到手动，并且有实际范围数据，则使用实际范围
+                    if (prev.mode === 'auto' && newMode === 'manual' && actualRange) {
+                      return {
+                        ...prev,
+                        mode: newMode,
+                        manual: {
+                          minDb: Math.round(actualRange.min),
+                          maxDb: Math.round(actualRange.max)
+                        }
+                      };
+                    }
+                    return { ...prev, mode: newMode };
+                  });
+                }}
+                fullWidth
+                size="sm"
+                classNames={{
+                  base: "w-full",
+                  tabList: "w-full",
+                  cursor: "w-full",
+                  tab: "w-full",
+                  panel: "w-full px-4 py-3"
+                }}
+              >
+                <Tab key="auto" title="自动模式">
+                  <div className="space-y-4">
+                    <Slider
+                      label="范围自动刷新频率（帧）"
+                      size="sm"
+                      step={1}
+                      minValue={1}
+                      maxValue={20}
+                      value={rangeSettings.auto.updateInterval}
+                      onChange={(value) => {
+                        setRangeSettings(prev => ({
+                          ...prev,
+                          auto: { ...prev.auto, updateInterval: value as number }
+                        }));
+                      }}
+                      getValue={(value) => `${value} 帧`}
+                    />
+                    <Slider
+                      label="最小值百分位数"
+                      size="sm"
+                      step={1}
+                      minValue={5}
+                      maxValue={50}
+                      value={rangeSettings.auto.minPercentile}
+                      onChange={(value) => {
+                        setRangeSettings(prev => ({
+                          ...prev,
+                          auto: { ...prev.auto, minPercentile: value as number }
+                        }));
+                      }}
+                      getValue={(value) => `${value}%`}
+                    />
+                    <Slider
+                      label="最大值百分位数"
+                      size="sm"
+                      step={1}
+                      minValue={90}
+                      maxValue={100}
+                      value={rangeSettings.auto.maxPercentile}
+                      onChange={(value) => {
+                        setRangeSettings(prev => ({
+                          ...prev,
+                          auto: { ...prev.auto, maxPercentile: value as number }
+                        }));
+                      }}
+                      getValue={(value) => `${value}%`}
+                    />
+                    <Slider
+                      label="范围扩展因子"
+                      size="sm"
+                      step={0.5}
+                      minValue={2}
+                      maxValue={8}
+                      value={rangeSettings.auto.rangeExpansionFactor}
+                      onChange={(value) => {
+                        setRangeSettings(prev => ({
+                          ...prev,
+                          auto: { ...prev.auto, rangeExpansionFactor: value as number }
+                        }));
+                      }}
+                      getValue={(value) => `${(typeof value === 'number' ? value : value[0]).toFixed(1)}x`}
+                    />
+                  </div>
+                </Tab>
+
+                <Tab key="manual" title="手动模式">
+                  <div className="space-y-3">
+                    <Input
+                      label="最小值 (dB)"
+                      type="number"
+                      size="sm"
+                      value={rangeSettings.manual.minDb.toString()}
+                      onValueChange={(value) => {
+                        const num = parseFloat(value);
+                        if (!isNaN(num) && num < rangeSettings.manual.maxDb) {  // 确保 min < max
+                          setRangeSettings(prev => ({
+                            ...prev,
+                            manual: { ...prev.manual, minDb: num }
+                          }));
+                        }
+                      }}
+                    />
+                    <Input
+                      label="最大值 (dB)"
+                      type="number"
+                      size="sm"
+                      value={rangeSettings.manual.maxDb.toString()}
+                      onValueChange={(value) => {
+                        const num = parseFloat(value);
+                        if (!isNaN(num) && num > rangeSettings.manual.minDb) {  // 确保 max > min
+                          setRangeSettings(prev => ({
+                            ...prev,
+                            manual: { ...prev.manual, maxDb: num }
+                          }));
+                        }
+                      }}
+                    />
+                  </div>
+                </Tab>
+              </Tabs>
+            </div>
+
+            {/* 当前范围显示 */}
+            {actualRange && (
+              <div className="px-4 py-3 border-t border-divider">
+                <div className="text-xs text-default-400">
+                  当前范围: {actualRange.min.toFixed(1)} ~ {actualRange.max.toFixed(1)} dB
+                </div>
+              </div>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }; 
