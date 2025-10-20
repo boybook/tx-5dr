@@ -6,6 +6,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
 import { once } from 'events';
 import { performance } from 'node:perf_hooks';
+import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
@@ -16,7 +17,7 @@ export interface AudioStreamEvents {
 
 /**
  * 音频流管理器 - 负责从音频设备捕获实时音频数据
- * 简化版本：只进行基本的数据验证和转换
+ * 支持传统声卡和 ICOM WLAN 虚拟设备
  */
 export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private audioInput: any = null;
@@ -34,6 +35,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private currentAudioData: Float32Array | null = null; // 当前正在播放的音频数据
   private currentSampleRate: number; // 当前音频的采样率
 
+  // ICOM WLAN 音频适配器（外部注入）
+  private icomWlanAudioAdapter: IcomWlanAudioAdapter | null = null;
+  private usingIcomWlanInput = false; // 是否使用 ICOM WLAN 输入
+  private usingIcomWlanOutput = false; // 是否使用 ICOM WLAN 输出
+
   // 播放状态跟踪（用于重新混音兜底方案）
   private playing: boolean = false;             // 是否正在播放
   private playbackStartTime: number = 0;        // 播放开始时间戳
@@ -42,19 +48,34 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   
   constructor() {
     super();
-    
+
     // 从配置管理器获取音频设置
     const configManager = ConfigManager.getInstance();
     const audioConfig = configManager.getAudioConfig();
-    
+
     this.sampleRate = audioConfig.sampleRate || 48000;
     this.bufferSize = audioConfig.bufferSize || 1024;
     this.currentSampleRate = this.sampleRate;
-    
+
     console.log(`🎵 [AudioStreamManager] 使用音频配置: 采样率=${this.sampleRate}Hz, 缓冲区=${this.bufferSize}帧`);
-    
+
     // 创建音频缓冲区提供者，使用配置的采样率
     this.audioProvider = new RingBufferAudioProvider(this.sampleRate, this.sampleRate * 5); // 5秒缓冲
+  }
+
+  /**
+   * 设置 ICOM WLAN 音频适配器（由 DigitalRadioEngine 注入）
+   */
+  setIcomWlanAudioAdapter(adapter: IcomWlanAudioAdapter | null): void {
+    this.icomWlanAudioAdapter = adapter;
+    console.log(`📡 [AudioStreamManager] ICOM WLAN 音频适配器已${adapter ? '设置' : '清除'}`);
+  }
+
+  /**
+   * 获取采样率（供外部使用）
+   */
+  getSampleRate(): number {
+    return this.sampleRate;
   }
   
   /**
@@ -76,27 +97,55 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       
       // 解析输入设备ID
       let actualDeviceId: number | undefined = undefined;
+      let resolvedDeviceId: string | undefined;
+
       if (deviceId) {
-        // 如果提供了设备ID，直接使用
-        if (deviceId.startsWith('input-')) {
-          actualDeviceId = parseInt(deviceId.replace('input-', ''));
-        } else {
-          actualDeviceId = parseInt(deviceId);
-        }
-        console.log(`🎯 使用指定音频输入设备 ID: ${actualDeviceId}`);
+        resolvedDeviceId = deviceId;
       } else {
         // 使用配置中的设备名称解析为ID
-        const resolvedDeviceId = await audioDeviceManager.resolveInputDeviceId(audioConfig.inputDeviceName);
-        if (resolvedDeviceId) {
-          if (resolvedDeviceId.startsWith('input-')) {
-            actualDeviceId = parseInt(resolvedDeviceId.replace('input-', ''));
-          } else {
-            actualDeviceId = parseInt(resolvedDeviceId);
-          }
-          console.log(`🎯 解析到音频输入设备: ${audioConfig.inputDeviceName || '默认设备'} -> ID ${actualDeviceId}`);
-        } else {
-          console.log('🎯 使用系统默认音频输入设备');
+        resolvedDeviceId = await audioDeviceManager.resolveInputDeviceId(audioConfig.inputDeviceName);
+      }
+
+      // 检测是否为 ICOM WLAN 虚拟设备
+      if (resolvedDeviceId === 'icom-wlan-input' || audioConfig.inputDeviceName === 'ICOM WLAN') {
+        console.log('📡 [AudioStreamManager] 检测到 ICOM WLAN 虚拟输入设备');
+
+        if (!this.icomWlanAudioAdapter) {
+          throw new Error('ICOM WLAN 音频适配器未设置，请先连接 ICOM 电台');
         }
+
+        // 使用 ICOM WLAN 音频适配器
+        this.usingIcomWlanInput = true;
+        this.icomWlanAudioAdapter.startReceiving();
+
+        // 订阅音频数据
+        this.icomWlanAudioAdapter.on('audioData', (samples: Float32Array) => {
+          this.audioProvider.writeAudio(samples);
+          this.emit('audioData', samples);
+        });
+
+        this.icomWlanAudioAdapter.on('error', (error: Error) => {
+          console.error('❌ [AudioStreamManager] ICOM WLAN 音频错误:', error);
+          this.emit('error', error);
+        });
+
+        this.deviceId = 'icom-wlan-input';
+        this.isStreaming = true;
+        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频输入启动成功 (12kHz → 48kHz)`);
+        this.emit('started');
+        return;
+      }
+
+      // 传统声卡模式：解析设备ID
+      if (resolvedDeviceId) {
+        if (resolvedDeviceId.startsWith('input-')) {
+          actualDeviceId = parseInt(resolvedDeviceId.replace('input-', ''));
+        } else if (!isNaN(parseInt(resolvedDeviceId))) {
+          actualDeviceId = parseInt(resolvedDeviceId);
+        }
+        console.log(`🎯 解析到音频输入设备: ${audioConfig.inputDeviceName || '默认设备'} -> ID ${actualDeviceId}`);
+      } else {
+        console.log('🎯 使用系统默认音频输入设备');
       }
       
       // 配置音频输入参数 - 使用配置的设置
@@ -146,24 +195,34 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       console.log('⚠️ 音频流未运行');
       return;
     }
-    
+
     try {
       console.log('🛑 停止音频流...');
-      
+
+      // 停止 ICOM WLAN 音频输入
+      if (this.usingIcomWlanInput && this.icomWlanAudioAdapter) {
+        this.icomWlanAudioAdapter.stopReceiving();
+        this.icomWlanAudioAdapter.removeAllListeners('audioData');
+        this.icomWlanAudioAdapter.removeAllListeners('error');
+        this.usingIcomWlanInput = false;
+        console.log('✅ ICOM WLAN 音频输入已停止');
+      }
+
+      // 停止传统声卡输入
       if (this.audioInput) {
         this.audioInput.quit();
         this.audioInput = null;
       }
-      
+
       // 清理重采样器缓存
       clearResamplerCache();
-      
+
       this.isStreaming = false;
       this.deviceId = null;
-      
+
       console.log('✅ 音频流停止成功');
       this.emit('stopped');
-      
+
     } catch (error) {
       console.error('停止音频流失败:', error);
       this.emit('error', error as Error);
@@ -285,27 +344,41 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       
       // 解析输出设备ID
       let actualOutputDeviceId: number | undefined = undefined;
+      let resolvedOutputDeviceId: string | undefined;
+
       if (outputDeviceId) {
-        // 如果提供了设备ID，直接使用
-        if (outputDeviceId.startsWith('output-')) {
-          actualOutputDeviceId = parseInt(outputDeviceId.replace('output-', ''));
-        } else {
-          actualOutputDeviceId = parseInt(outputDeviceId);
-        }
-        console.log(`🎯 使用指定音频输出设备 ID: ${actualOutputDeviceId}`);
+        resolvedOutputDeviceId = outputDeviceId;
       } else {
         // 使用配置中的设备名称解析为ID
-        const resolvedDeviceId = await audioDeviceManager.resolveOutputDeviceId(audioConfig.outputDeviceName);
-        if (resolvedDeviceId) {
-          if (resolvedDeviceId.startsWith('output-')) {
-            actualOutputDeviceId = parseInt(resolvedDeviceId.replace('output-', ''));
-          } else {
-            actualOutputDeviceId = parseInt(resolvedDeviceId);
-          }
-          console.log(`🎯 解析到音频输出设备: ${audioConfig.outputDeviceName || '默认设备'} -> ID ${actualOutputDeviceId}`);
-        } else {
-          console.log('🎯 使用系统默认音频输出设备');
+        resolvedOutputDeviceId = await audioDeviceManager.resolveOutputDeviceId(audioConfig.outputDeviceName);
+      }
+
+      // 检测是否为 ICOM WLAN 虚拟设备
+      if (resolvedOutputDeviceId === 'icom-wlan-output' || audioConfig.outputDeviceName === 'ICOM WLAN') {
+        console.log('📡 [AudioStreamManager] 检测到 ICOM WLAN 虚拟输出设备');
+
+        if (!this.icomWlanAudioAdapter) {
+          throw new Error('ICOM WLAN 音频适配器未设置，请先连接 ICOM 电台');
         }
+
+        // 标记使用 ICOM WLAN 输出
+        this.usingIcomWlanOutput = true;
+        this.outputDeviceId = 'icom-wlan-output';
+        this.isOutputting = true;
+        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频输出启动成功 (48kHz → 12kHz)`);
+        return;
+      }
+
+      // 传统声卡模式：解析设备ID
+      if (resolvedOutputDeviceId) {
+        if (resolvedOutputDeviceId.startsWith('output-')) {
+          actualOutputDeviceId = parseInt(resolvedOutputDeviceId.replace('output-', ''));
+        } else if (!isNaN(parseInt(resolvedOutputDeviceId))) {
+          actualOutputDeviceId = parseInt(resolvedOutputDeviceId);
+        }
+        console.log(`🎯 解析到音频输出设备: ${audioConfig.outputDeviceName || '默认设备'} -> ID ${actualOutputDeviceId}`);
+      } else {
+        console.log('🎯 使用系统默认音频输出设备');
       }
       
       // 配置音频输出参数 - 使用配置的设置
@@ -495,20 +568,27 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       console.log('⚠️ 音频输出未运行');
       return;
     }
-    
+
     try {
       console.log('🛑 停止音频输出...');
-      
+
+      // ICOM WLAN 输出只需要清除标志，不需要额外操作
+      if (this.usingIcomWlanOutput) {
+        this.usingIcomWlanOutput = false;
+        console.log('✅ ICOM WLAN 音频输出已停止');
+      }
+
+      // 停止传统声卡输出
       if (this.audioOutput) {
         this.audioOutput.quit();
         this.audioOutput = null;
       }
-      
+
       this.isOutputting = false;
       this.outputDeviceId = null;
-      
+
       console.log('✅ 音频输出停止成功');
-      
+
     } catch (error) {
       console.error('停止音频输出失败:', error);
       this.emit('error', error as Error);
@@ -634,6 +714,31 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000): Promise<void> {
     const playStartTime = Date.now();
 
+    // 检查是否使用 ICOM WLAN 输出
+    if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
+      console.log(`📡 [AudioStreamManager] 使用 ICOM WLAN 输出播放音频:`);
+      console.log(`   样本数: ${audioData.length}`);
+      console.log(`   采样率: ${targetSampleRate}Hz → 12kHz`);
+      console.log(`   时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
+
+      try {
+        // 应用音量增益
+        const gainedData = new Float32Array(audioData.length);
+        for (let i = 0; i < audioData.length; i++) {
+          gainedData[i] = audioData[i] * this.volumeGain;
+        }
+
+        // 发送到 ICOM WLAN（内部会进行重采样）
+        await this.icomWlanAudioAdapter.sendAudio(gainedData);
+        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频发送完成`);
+      } catch (error) {
+        console.error(`❌ [AudioStreamManager] ICOM WLAN 音频发送失败:`, error);
+        throw error;
+      }
+      return;
+    }
+
+    // 传统声卡输出
     if (!this.isOutputting || !this.audioOutput) {
       throw new Error('音频输出流未启动');
     }

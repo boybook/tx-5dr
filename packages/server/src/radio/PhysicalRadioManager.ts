@@ -2,6 +2,7 @@ import { HamLib } from 'hamlib';
 import { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { ConsoleLogger } from '../utils/console-logger.js';
+import { IcomWlanManager, IcomWlanConfig } from './IcomWlanManager.js';
 
 interface PhysicalRadioManagerEvents {
   connected: () => void;
@@ -14,11 +15,12 @@ interface PhysicalRadioManagerEvents {
 
 export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvents> {
   private logger = ConsoleLogger.getInstance();
-  
+
   constructor() {
     super();
   }
   private rig: HamLib | null = null;
+  private icomWlanManager: IcomWlanManager | null = null;
   private currentConfig: HamlibConfig = { type: 'none' };
   
   // 连接监控和重连机制
@@ -73,14 +75,60 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   async applyConfig(config: HamlibConfig): Promise<void> {
     await this.disconnect();
     this.currentConfig = config;
-    
+
     if (config.type === 'none') {
       return;
     }
-    
+
+    // 处理 ICOM WLAN 模式
+    if (config.type === 'icom-wlan') {
+      try {
+        console.log(`📡 [PhysicalRadioManager] 连接 ICOM WLAN 电台...`);
+
+        if (!config.ip || !config.wlanPort || !config.userName || !config.password) {
+          throw new Error('ICOM WLAN 配置不完整');
+        }
+
+        const icomConfig: IcomWlanConfig = {
+          ip: config.ip,
+          port: config.wlanPort,
+          userName: config.userName,
+          password: config.password
+        };
+
+        this.icomWlanManager = new IcomWlanManager();
+
+        // 转发 IcomWlanManager 事件
+        this.setupIcomWlanEventForwarding();
+
+        await this.icomWlanManager.connect(icomConfig);
+
+        console.log(`✅ [PhysicalRadioManager] ICOM WLAN 电台连接成功`);
+
+        // 连接成功后重置重连状态
+        this.resetReconnectAttempts();
+        this.lastSuccessfulOperation = Date.now();
+
+        // 启动连接监控
+        this.startConnectionMonitoring();
+
+        // 发射连接成功事件
+        this.emit('connected');
+
+      } catch (error) {
+        this.icomWlanManager = null;
+        console.error(`❌ [PhysicalRadioManager] ICOM WLAN 连接失败: ${(error as Error).message}`);
+        this.emit('error', new Error(`ICOM WLAN 连接失败: ${(error as Error).message}`));
+        // 总是抛出错误，让调用者知道连接失败
+        throw new Error(`ICOM WLAN 连接失败: ${(error as Error).message}`);
+      }
+      return;
+    }
+
+    // 处理 Hamlib 模式（network/serial）
     const port = config.type === 'network' ? `${config.host}:${config.port}` : config.path;
     const model = config.type === 'network' ? 2 : config.rigModel;
-    
+
     try {
       this.rig = new HamLib(model as any, port as any);
 
@@ -91,22 +139,22 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       // 异步打开连接，带超时保护
       await this.openWithTimeout();
-      
+
       console.log(`✅ [PhysicalRadioManager] 电台连接成功: ${config.type === 'network' ? 'Network' : 'Serial'} - ${port}`);
 
       const supportedModes = this.rig.getSupportedModes();
       console.log(`📡 [PhysicalRadioManager] 支持的模式: ${supportedModes.join(', ')}`);
-      
+
       // 连接成功后重置重连状态
       this.resetReconnectAttempts();
       this.lastSuccessfulOperation = Date.now();
-      
+
       // 启动连接监控
       this.startConnectionMonitoring();
-      
+
       // 发射连接成功事件
       this.emit('connected');
-      
+
     } catch (error) {
       this.rig = null;
       console.error(`❌ [PhysicalRadioManager] 电台连接失败: ${(error as Error).message}`);
@@ -117,6 +165,40 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
       return; // 只在非重连情况下避免进程崩溃
     }
+  }
+
+  /**
+   * 设置 ICOM WLAN 事件转发
+   */
+  private setupIcomWlanEventForwarding(): void {
+    if (!this.icomWlanManager) return;
+
+    this.icomWlanManager.on('connected', () => {
+      this.emit('connected');
+    });
+
+    this.icomWlanManager.on('disconnected', (reason) => {
+      this.emit('disconnected', reason);
+    });
+
+    this.icomWlanManager.on('reconnecting', (attempt) => {
+      this.emit('reconnecting', attempt);
+    });
+
+    this.icomWlanManager.on('reconnectFailed', (error, attempt) => {
+      this.emit('reconnectFailed', error, attempt);
+    });
+
+    this.icomWlanManager.on('error', (error) => {
+      this.emit('error', error);
+    });
+  }
+
+  /**
+   * 获取 ICOM WLAN 管理器（用于音频适配器）
+   */
+  getIcomWlanManager(): IcomWlanManager | null {
+    return this.icomWlanManager;
   }
 
   /**
@@ -197,21 +279,38 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     // 停止监控和重连
     this.stopConnectionMonitoring();
     this.stopReconnection();
-    
+
+    // 断开 ICOM WLAN
+    if (this.icomWlanManager) {
+      console.log('🔌 [PhysicalRadioManager] 正在断开 ICOM WLAN 连接...');
+      await this.icomWlanManager.disconnect(reason);
+      this.icomWlanManager = null;
+      console.log('✅ [PhysicalRadioManager] ICOM WLAN 连接已断开');
+      this.emit('disconnected', reason);
+      return;
+    }
+
+    // 断开 Hamlib
     if (this.rig && !this.isCleaningUp) {
       console.log('🔌 [PhysicalRadioManager] 正在断开电台连接...');
-      
+
       // 使用安全的清理连接方法
       await this.forceCleanupConnection();
-      
+
       console.log('✅ [PhysicalRadioManager] 电台连接已完全断开');
-      
+
       // 发射断开连接事件
       this.emit('disconnected', reason);
     }
   }
 
   async setFrequency(freq: number): Promise<boolean> {
+    // ICOM WLAN 模式
+    if (this.icomWlanManager) {
+      return await this.icomWlanManager.setFrequency(freq);
+    }
+
+    // Hamlib 模式
     if (!this.rig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法设置频率');
       return false;
@@ -221,11 +320,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 异步设置频率，带超时保护
       await Promise.race([
         this.rig.setFrequency(freq),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('设置频率超时')), 5000)
         )
       ]);
-      
+
       console.log(`🔊 [PhysicalRadioManager] 频率设置成功: ${(freq / 1000000).toFixed(3)} MHz`);
       this.lastSuccessfulOperation = Date.now();
       return true;
@@ -237,24 +336,31 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   async setPTT(state: boolean): Promise<void> {
+    // ICOM WLAN 模式
+    if (this.icomWlanManager) {
+      await this.icomWlanManager.setPTT(state);
+      return;
+    }
+
+    // Hamlib 模式
     if (!this.rig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法设置PTT');
       return;
     }
 
     const startTime = Date.now();
-    
+
     try {
       console.log(`📡 [PhysicalRadioManager] 开始PTT操作: ${state ? '启动发射' : '停止发射'}`);
-      
+
       // 异步设置PTT，带更短的超时保护
       await Promise.race([
         this.rig.setPtt(state),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('PTT操作超时')), 3000) // 缩短到3秒
         )
       ]);
-      
+
       const duration = Date.now() - startTime;
       console.log(`📡 [PhysicalRadioManager] PTT设置成功: ${state ? '发射' : '接收'} (耗时: ${duration}ms)`);
       this.lastSuccessfulOperation = Date.now();
@@ -262,9 +368,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       const duration = Date.now() - startTime;
       const errorMsg = (error as Error).message;
       console.error(`📡 [PhysicalRadioManager] PTT设置失败: ${state ? '发射' : '接收'} (耗时: ${duration}ms) - ${errorMsg}`);
-      
+
       // 特别检查PTT相关的错误
-      if (errorMsg.toLowerCase().includes('ptt') || 
+      if (errorMsg.toLowerCase().includes('ptt') ||
           errorMsg.toLowerCase().includes('transmit') ||
           state) { // 如果是启动发射时失败，更严格处理
         console.error(`🚨 [PhysicalRadioManager] PTT操作失败可能表示严重连接问题`);
@@ -279,7 +385,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   isConnected(): boolean {
-    return !!this.rig;
+    return !!(this.rig || this.icomWlanManager);
   }
 
   /**
@@ -287,6 +393,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 快速验证电台响应，不进行复杂操作
    */
   async testConnection(): Promise<void> {
+    // ICOM WLAN 模式
+    if (this.icomWlanManager) {
+      await this.icomWlanManager.testConnection();
+      return;
+    }
+
+    // Hamlib 模式
     if (!this.rig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法测试连接');
       return;
@@ -296,11 +409,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 异步获取当前频率来验证连接，带超时保护
       const currentFreq = await Promise.race([
         this.rig.getFrequency(),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('获取频率超时')), 5000)
         )
       ]) as number;
-      
+
       console.log(`✅ [PhysicalRadioManager] 连接测试成功，当前频率: ${(currentFreq / 1000000).toFixed(3)} MHz`);
       this.lastSuccessfulOperation = Date.now();
     } catch (error) {
@@ -313,6 +426,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取当前频率
    */
   async getFrequency(): Promise<number> {
+    // ICOM WLAN 模式
+    if (this.icomWlanManager) {
+      return await this.icomWlanManager.getFrequency();
+    }
+
+    // Hamlib 模式
     if (!this.rig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法获取频率');
       return 0; // 返回默认频率
@@ -321,11 +440,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       const frequency = await Promise.race([
         this.rig.getFrequency(),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('获取频率超时')), 5000)
         )
       ]) as number;
-      
+
       this.lastSuccessfulOperation = Date.now();
       return frequency;
     } catch (error) {
@@ -339,6 +458,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 设置模式
    */
   async setMode(mode: string, bandwidth?: 'narrow' | 'wide'): Promise<void> {
+    // ICOM WLAN 模式
+    if (this.icomWlanManager) {
+      const dataMode = mode.toUpperCase().includes('DATA') || mode.toUpperCase().includes('USB');
+      await this.icomWlanManager.setMode(mode, dataMode);
+      return;
+    }
+
+    // Hamlib 模式
     if (!this.rig) {
       throw new Error('电台未连接');
     }
@@ -346,11 +473,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       await Promise.race([
         this.rig.setMode(mode, bandwidth),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('设置模式超时')), 5000)
         )
       ]);
-      
+
       console.log(`📻 [PhysicalRadioManager] 模式设置成功: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`);
       this.lastSuccessfulOperation = Date.now();
     } catch (error) {
@@ -363,6 +490,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取当前模式
    */
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
+    // ICOM WLAN 模式
+    if (this.icomWlanManager) {
+      return await this.icomWlanManager.getMode();
+    }
+
+    // Hamlib 模式
     if (!this.rig) {
       throw new Error('电台未连接');
     }
@@ -370,11 +503,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       const modeInfo = await Promise.race([
         this.rig.getMode(),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('获取模式超时')), 5000)
         )
       ]) as { mode: string; bandwidth: string };
-      
+
       this.lastSuccessfulOperation = Date.now();
       return modeInfo;
     } catch (error) {

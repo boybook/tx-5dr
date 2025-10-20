@@ -26,10 +26,10 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型
-type SettingsTab = 'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'system' | 'advanced';
+type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'logbook_sync' | 'system' | 'advanced';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'audio');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'radio');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<'close' | 'changeTab' | null>(null);

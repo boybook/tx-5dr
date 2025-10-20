@@ -651,6 +651,152 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
               </CardBody>
             </Card>
           );
+        case 'icom-wlan':
+          return (
+            <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
+              <CardBody className="space-y-4 p-4">
+                <h4 className="font-semibold text-default-900">ICOM WLAN 电台</h4>
+                <p className="text-sm text-default-600">通过 ICOM WLAN 网络连接到电台，支持音频流和控制</p>
+                <Divider />
+                <div className="space-y-4">
+                  <Input
+                    label="IP 地址"
+                    placeholder="192.168.1.100"
+                    value={config.ip || ''}
+                    onChange={e => updateConfig({ ip: e.target.value })}
+                  />
+                  <Input
+                    label="端口"
+                    placeholder="50001"
+                    type="number"
+                    value={config.wlanPort || ''}
+                    onChange={e => updateConfig({ wlanPort: Number(e.target.value) })}
+                  />
+                  <Input
+                    label="用户名"
+                    placeholder="admin"
+                    value={config.userName || ''}
+                    onChange={e => updateConfig({ userName: e.target.value })}
+                  />
+                  <Input
+                    label="密码"
+                    placeholder="密码"
+                    type="password"
+                    value={config.password || ''}
+                    onChange={e => updateConfig({ password: e.target.value })}
+                  />
+                  <Divider />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="primary"
+                      onPress={handleTestConnection}
+                      isLoading={isTestingConnection}
+                      isDisabled={!config.ip || !config.wlanPort || !config.userName || !config.password}
+                    >
+                      {isTestingConnection ? '测试连接中...' : '测试连接'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color="secondary"
+                      onPress={handleTestPTT}
+                      isLoading={isTestingPTT}
+                      isDisabled={!config.ip || !config.wlanPort}
+                    >
+                      {isTestingPTT ? '测试PTT中...' : '测试PTT'}
+                    </Button>
+                  </div>
+                  {testResult && (
+                    <Chip
+                      color={testResult.type === 'success' ? 'success' : 'danger'}
+                      variant="flat"
+                      className="w-full"
+                    >
+                      {testResult.message}
+                    </Chip>
+                  )}
+
+                  <Divider />
+
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium text-default-700">
+                      ⏱️ 发射时序补偿
+                    </h5>
+                    <p className="text-xs text-default-500">
+                      补偿网络传输和电台处理延迟，确保发射时间精确对齐。正值表示提前发射，负值表示延后发射。
+                    </p>
+
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="number"
+                        label="补偿值"
+                        value={(config.transmitCompensationMs || 0).toString()}
+                        onChange={e => {
+                          const value = parseInt(e.target.value) || 0;
+                          updateConfig({ transmitCompensationMs: value });
+                        }}
+                        min="-1000"
+                        max="1000"
+                        endContent={<span className="text-small text-default-400">ms</span>}
+                        size="sm"
+                        className="w-40"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 flex-wrap">
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="default"
+                        onClick={() => updateConfig({ transmitCompensationMs: 0 })}
+                        className="cursor-pointer hover:bg-default-200"
+                      >
+                        0ms
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onClick={() => updateConfig({ transmitCompensationMs: 50 })}
+                        className="cursor-pointer hover:bg-primary-100"
+                      >
+                        50ms（有线）
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onClick={() => updateConfig({ transmitCompensationMs: 100 })}
+                        className="cursor-pointer hover:bg-primary-100"
+                      >
+                        100ms（推荐）
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onClick={() => updateConfig({ transmitCompensationMs: 200 })}
+                        className="cursor-pointer hover:bg-primary-100"
+                      >
+                        200ms（无线）
+                      </Chip>
+                    </div>
+
+                    <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
+                      <p className="font-medium">💡 使用建议：</p>
+                      <p>• ICOM WLAN 模式：通常需要 50-150ms 补偿</p>
+                      <p>• 本地网络：50-100ms</p>
+                      <p>• 远程网络：100-200ms</p>
+                      <p className="text-danger-600 font-semibold">⚠️ 设置过大（&gt;500ms）会压缩决策时间，可能影响自动回复功能</p>
+                      <p>• 音频由 ICOM WLAN 直接提供，无需单独配置音频设备</p>
+                    </div>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
+          );
         case 'none':
         default:
           return (
@@ -727,6 +873,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
             <Tab key="none" title="📻 无电台" />
             <Tab key="network" title="🌐 网络RigCtrl" />
             <Tab key="serial" title="🔌 串口Rig" />
+            <Tab key="icom-wlan" title="📡 ICOM WLAN" />
           </Tabs>
         </div>
 

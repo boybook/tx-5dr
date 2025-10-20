@@ -47,7 +47,7 @@ export const SerialConfigSchema = z.object({
  * Hamlib配置Schema
  */
 export const HamlibConfigSchema = z.object({
-  type: z.enum(['none', 'network', 'serial']),
+  type: z.enum(['none', 'network', 'serial', 'icom-wlan']),
   // 网络模式配置
   host: z.string().optional(),
   port: z.number().optional(),
@@ -55,6 +55,11 @@ export const HamlibConfigSchema = z.object({
   path: z.string().optional(),
   rigModel: z.number().optional(),
   serialConfig: SerialConfigSchema.optional(),
+  // ICOM WLAN 模式配置
+  ip: z.string().optional(),
+  wlanPort: z.number().optional(),
+  userName: z.string().optional(),
+  password: z.string().optional(),
   // 发射时序补偿（毫秒）- 用于补偿电台和网络的处理延迟
   // 正值表示提前发射，负值表示延后发射
   // 范围限制：-1000~1000ms，适用于各种网络和设备延迟场景
