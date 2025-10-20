@@ -1,6 +1,13 @@
 import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
 
+export interface AutoRangeConfig {
+  updateInterval: number;      // 更新频率（帧数），默认10
+  minPercentile: number;        // 最小值百分位数（0-100），默认15
+  maxPercentile: number;        // 最大值百分位数（0-100），默认99
+  rangeExpansionFactor: number; // 范围扩展因子，默认4.0
+}
+
 export interface RxFrequency {
   callsign: string;
   frequency: number;
@@ -19,9 +26,11 @@ interface WebGLWaterfallProps {
   minDb?: number;
   maxDb?: number;
   autoRange?: boolean;
+  autoRangeConfig?: AutoRangeConfig;
   rxFrequencies?: RxFrequency[];
   txFrequencies?: TxFrequency[];
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
+  onActualRangeChange?: (range: { min: number; max: number }) => void;
 }
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
@@ -32,9 +41,16 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   minDb = -35,
   maxDb = 10,
   autoRange = true,
+  autoRangeConfig = {
+    updateInterval: 10,
+    minPercentile: 15,
+    maxPercentile: 99,
+    rangeExpansionFactor: 4.0,
+  },
   rxFrequencies = [],
   txFrequencies = [],
   onTxFrequencyChange,
+  onActualRangeChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -65,10 +81,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const calculateDataRange = useCallback((spectrumData: number[][]) => {
     const calculateInternal = () => {
     if (spectrumData.length === 0) return { min: minDb, max: maxDb };
-    
-    // 每10帧更新一次范围，减少计算频率
+
+    // 每N帧更新一次范围，减少计算频率
     rangeUpdateCounterRef.current++;
-    if (rangeUpdateCounterRef.current % 10 !== 0 && cachedRangeRef.current) {
+    if (rangeUpdateCounterRef.current % autoRangeConfig.updateInterval !== 0 && cachedRangeRef.current) {
       return cachedRangeRef.current;
     }
     
@@ -103,16 +119,16 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     
     // 快速百分位数计算（使用部分排序）
     values.sort((a, b) => a - b);
-    const p15 = values[Math.floor(values.length * 0.15)];
+    const pMin = values[Math.floor(values.length * (autoRangeConfig.minPercentile / 100))];
     const p25 = values[Math.floor(values.length * 0.25)];
     const median = values[Math.floor(values.length * 0.5)];
     const p75 = values[Math.floor(values.length * 0.75)];
-    const p99 = values[Math.floor(values.length * 0.99)];
-    
+    const pMax = values[Math.floor(values.length * (autoRangeConfig.maxPercentile / 100))];
+
     // 使用优化的动态范围策略
     const medianRange = p75 - p25;
-    const dynamicMin = Math.max(p15, median - medianRange);
-    const dynamicMax = Math.max(p99, median + medianRange * 4.0);
+    const dynamicMin = Math.max(pMin, median - medianRange);
+    const dynamicMax = Math.max(pMax, median + medianRange * autoRangeConfig.rangeExpansionFactor);
     
     const result = {
       min: dynamicMin,
@@ -126,7 +142,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
 
     return calculateInternal();
-  }, [minDb, maxDb]);
+  }, [minDb, maxDb, autoRangeConfig]);
 
   // 瀑布图颜色映射 - 经典配色方案
   const colorMap = useMemo(() => {
@@ -408,24 +424,22 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     // 计算实际数据范围
     let currentMin = minDb;
     let currentMax = maxDb;
-    
+
     if (autoRange) {
       const range = calculateDataRange(spectrumData);
       currentMin = range.min;
       currentMax = range.max;
-      
-      // 只在范围变化显著时更新
-      if (!actualRange || 
-          Math.abs(actualRange.min - currentMin) > 0.5 || 
+
+      // 只在范围变化显著时更新状态和通知父组件
+      if (!actualRange ||
+          Math.abs(actualRange.min - currentMin) > 0.5 ||
           Math.abs(actualRange.max - currentMax) > 0.5) {
         setActualRange(range);
-        
-        // 更新着色器的uniform变量
-        gl.useProgram(program);
-        const minDbLocation = gl.getUniformLocation(program, 'u_minDb');
-        const maxDbLocation = gl.getUniformLocation(program, 'u_maxDb');
-        gl.uniform1f(minDbLocation, currentMin);
-        gl.uniform1f(maxDbLocation, currentMax);
+
+        // 通知父组件范围已更新
+        if (onActualRangeChange) {
+          onActualRangeChange(range);
+        }
       }
     }
 
@@ -591,6 +605,22 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     return () => clearTimeout(timer);
   }, [height, handleResize]);
+
+  // 监听 minDb 和 maxDb 变化，更新着色器 uniform（关键修复！）
+  useEffect(() => {
+    const gl = glRef.current;
+    const program = programRef.current;
+    if (!gl || !program) return;
+
+    gl.useProgram(program);
+    const minDbLocation = gl.getUniformLocation(program, 'u_minDb');
+    const maxDbLocation = gl.getUniformLocation(program, 'u_maxDb');
+    gl.uniform1f(minDbLocation, minDb);
+    gl.uniform1f(maxDbLocation, maxDb);
+
+    // 立即重新渲染以应用新的范围
+    render();
+  }, [minDb, maxDb, render]);
 
 
   if (!webglSupported || error) {
