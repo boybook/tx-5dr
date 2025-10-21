@@ -6001,7 +6001,7 @@ __metadata:
     fastify: "npm:^5.1.0"
     fft.js: "npm:^4.0.4"
     hamlib: "npm:^0.1.24"
-    icom-wlan-node: "npm:^0.1.1"
+    icom-wlan-node: "npm:^0.2.0"
     mic: "npm:^2.1.2"
     naudiodon2: "patch:naudiodon2@npm%3A2.5.0#~/.yarn/patches/naudiodon2-npm-2.5.0-b6b38720f9.patch"
     node-wav: "npm:^0.0.2"
@@ -9121,10 +9121,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"icom-wlan-node@npm:^0.1.1":
-  version: 0.1.1
-  resolution: "icom-wlan-node@npm:0.1.1"
-  checksum: 10c0/0f5ba0609faa29819e265c9154fe9dec5a3f0bb758d1ad08d44c7ef45dd2aab3e10f258de600b6de4a163ffd3423365882c439cad337dc889a5b34915770eb9b
+"icom-wlan-node@npm:^0.2.0":
+  version: 0.2.0
+  resolution: "icom-wlan-node@npm:0.2.0"
+  checksum: 10c0/64e479b88f94bc864916b76d594daf5db1c6e6f4a87f68d9429b346616391da9f4b66f27f02dc99338ff57638bf0a368971ec0ef583cdb58d1fdf894f47f614a
   languageName: node
   linkType: hard
 

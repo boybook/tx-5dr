@@ -105,21 +105,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
         console.log(`✅ [PhysicalRadioManager] ICOM WLAN 电台连接成功`);
 
-        // 连接成功后重置重连状态
-        this.resetReconnectAttempts();
-        this.lastSuccessfulOperation = Date.now();
-
-        // 启动连接监控
-        this.startConnectionMonitoring();
-
-        // 发射连接成功事件
-        this.emit('connected');
+        // ICOM WLAN 已内置自动重连，无需额外管理
+        // 事件由 IcomWlanManager 自动处理并转发
 
       } catch (error) {
         this.icomWlanManager = null;
         console.error(`❌ [PhysicalRadioManager] ICOM WLAN 连接失败: ${(error as Error).message}`);
         this.emit('error', new Error(`ICOM WLAN 连接失败: ${(error as Error).message}`));
-        // 总是抛出错误，让调用者知道连接失败
         throw new Error(`ICOM WLAN 连接失败: ${(error as Error).message}`);
       }
       return;
