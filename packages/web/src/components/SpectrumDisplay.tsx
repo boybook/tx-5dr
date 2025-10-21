@@ -252,7 +252,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             isIconOnly
             size="sm"
             variant="light"
-            className="absolute top-1 right-1 min-w-unit-8 w-8 h-8 hover:bg-black/60 hover:backdrop-blur-sm transition-colors"
+            className="absolute top-1 right-1 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
           >
             <Cog6ToothIcon className="w-4 h-4" />
           </Button>
