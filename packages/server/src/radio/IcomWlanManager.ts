@@ -26,16 +26,7 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
   private logger = ConsoleLogger.getInstance();
   private rig: IcomControl | null = null;
   private currentConfig: IcomWlanConfig | null = null;
-
-  // 连接状态管理
   private isConnecting = false;
-  private isReconnecting = false;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = -1; // -1 表示无上限
-  private reconnectDelay = 3000; // 固定3秒
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private connectionHealthy = true;
-  private lastSuccessfulOperation = Date.now();
 
   constructor() {
     super();
@@ -67,11 +58,17 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
       // 连接到电台
       await this.rig.connect();
 
-      console.log(`✅ [IcomWlanManager] ICOM 电台连接成功`);
+      // 配置连接监控和自动重连
+      this.rig.configureMonitoring({
+        timeout: 8000,              // 会话超时 8 秒
+        checkInterval: 1000,        // 每秒检查
+        autoReconnect: true,        // 启用自动重连
+        maxReconnectAttempts: undefined, // 无限重连
+        reconnectBaseDelay: 3000,   // 3 秒基础延迟
+        reconnectMaxDelay: 30000    // 最大 30 秒
+      });
 
-      this.connectionHealthy = true;
-      this.lastSuccessfulOperation = Date.now();
-      this.reconnectAttempts = 0;
+      console.log(`✅ [IcomWlanManager] ICOM 电台连接成功`);
       this.isConnecting = false;
 
       this.emit('connected');
@@ -89,8 +86,6 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
    * 断开连接
    */
   async disconnect(reason?: string): Promise<void> {
-    this.stopReconnection();
-
     if (this.rig) {
       console.log('🔌 [IcomWlanManager] 正在断开 ICOM 电台连接...');
 
@@ -138,13 +133,39 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
     this.rig.events.on('audio', (frame) => {
       // 转发音频数据给适配器
       this.emit('audioFrame', frame.pcm16);
-      this.lastSuccessfulOperation = Date.now();
+    });
+
+    // 连接丢失（库的自动重连会处理）
+    this.rig.events.on('connectionLost', (info) => {
+      console.warn(`🔌 [IcomWlanManager] 连接丢失: ${info.sessionType}, 空闲 ${info.timeSinceLastData}ms`);
+      this.emit('disconnected', `连接丢失: ${info.sessionType}`);
+    });
+
+    // 连接恢复
+    this.rig.events.on('connectionRestored', (info) => {
+      console.log(`✅ [IcomWlanManager] 连接已恢复，停机时间 ${info.downtime}ms`);
+      this.emit('connected');
+    });
+
+    // 重连尝试
+    this.rig.events.on('reconnectAttempting', (info) => {
+      console.log(`🔄 [IcomWlanManager] 重连尝试 #${info.attemptNumber}，延迟 ${info.delay}ms`);
+      this.emit('reconnecting', info.attemptNumber);
+    });
+
+    // 重连失败
+    this.rig.events.on('reconnectFailed', (info) => {
+      console.error(`❌ [IcomWlanManager] 重连尝试 #${info.attemptNumber} 失败: ${info.error.message}`);
+      if (!info.willRetry) {
+        console.error('🚨 [IcomWlanManager] 已达到最大重连次数，放弃重连');
+      }
+      this.emit('reconnectFailed', info.error, info.attemptNumber);
     });
 
     // 错误处理
     this.rig.events.on('error', (err) => {
       console.error('❌ [IcomWlanManager] ICOM UDP 错误:', err);
-      this.handleConnectionLoss(err.message);
+      this.emit('error', err);
     });
   }
 
@@ -160,11 +181,9 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
     try {
       await this.rig.setFrequency(freq);
       console.log(`🔊 [IcomWlanManager] 频率设置成功: ${(freq / 1000000).toFixed(3)} MHz`);
-      this.lastSuccessfulOperation = Date.now();
       return true;
     } catch (error) {
       console.error(`❌ [IcomWlanManager] 设置频率失败:`, error);
-      this.handleOperationError(error as Error, '设置频率');
       return false;
     }
   }
@@ -181,13 +200,11 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
     try {
       const freq = await this.rig.readOperatingFrequency({ timeout: 3000 });
       if (freq !== null) {
-        this.lastSuccessfulOperation = Date.now();
         return freq;
       }
       throw new Error('获取频率返回 null');
     } catch (error) {
       console.error(`❌ [IcomWlanManager] 获取频率失败:`, error);
-      this.handleOperationError(error as Error, '获取频率');
       return 0;
     }
   }
@@ -205,10 +222,8 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
       const modeCode = this.mapModeToIcom(mode);
       await this.rig.setMode(modeCode, { dataMode: dataMode ?? false });
       console.log(`📻 [IcomWlanManager] 模式设置成功: ${mode}${dataMode ? ' (Data)' : ''}`);
-      this.lastSuccessfulOperation = Date.now();
     } catch (error) {
       console.error(`❌ [IcomWlanManager] 设置模式失败:`, error);
-      this.handleOperationError(error as Error, '设置模式');
       throw error;
     }
   }
@@ -224,7 +239,6 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
     try {
       const result = await this.rig.readOperatingMode({ timeout: 3000 });
       if (result) {
-        this.lastSuccessfulOperation = Date.now();
         return {
           mode: result.modeName || `Mode ${result.mode}`,
           bandwidth: result.filterName || 'Normal'
@@ -233,7 +247,6 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
       throw new Error('获取模式返回 null');
     } catch (error) {
       console.error(`❌ [IcomWlanManager] 获取模式失败:`, error);
-      this.handleOperationError(error as Error, '获取模式');
       throw error;
     }
   }
@@ -251,10 +264,8 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
       console.log(`📡 [IcomWlanManager] PTT ${state ? '启动发射' : '停止发射'}`);
       await this.rig.setPtt(state);
       console.log(`✅ [IcomWlanManager] PTT ${state ? '已启动' : '已停止'}`);
-      this.lastSuccessfulOperation = Date.now();
     } catch (error) {
       console.error(`❌ [IcomWlanManager] PTT设置失败:`, error);
-      this.handleOperationError(error as Error, 'PTT设置');
     }
   }
 
@@ -287,13 +298,12 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
       const freq = await this.rig.readOperatingFrequency({ timeout: 5000 });
       if (freq !== null) {
         console.log(`✅ [IcomWlanManager] 连接测试成功，当前频率: ${(freq / 1000000).toFixed(3)} MHz`);
-        this.lastSuccessfulOperation = Date.now();
       } else {
         throw new Error('测试连接失败：无法获取频率');
       }
     } catch (error) {
       console.error(`❌ [IcomWlanManager] 连接测试失败:`, error);
-      this.handleOperationError(error as Error, '连接测试');
+      throw error;
     }
   }
 
@@ -301,137 +311,42 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
    * 检查是否已连接
    */
   isConnected(): boolean {
-    return !!this.rig;
+    if (!this.rig) return false;
+    const phase = this.rig.getConnectionPhase();
+    return phase === 'CONNECTED';
   }
 
   /**
-   * 获取重连状态
+   * 获取连接状态和指标
    */
   getReconnectInfo() {
+    if (!this.rig) {
+      return {
+        isReconnecting: false,
+        reconnectAttempts: 0,
+        maxReconnectAttempts: 0,
+        hasReachedMaxAttempts: false,
+        connectionHealthy: false,
+        nextReconnectDelay: 0,
+        phase: 'IDLE',
+        uptime: 0
+      };
+    }
+
+    const metrics = this.rig.getConnectionMetrics();
+    const phase = this.rig.getConnectionPhase();
+
     return {
-      isReconnecting: this.isReconnecting,
-      reconnectAttempts: this.reconnectAttempts,
-      maxReconnectAttempts: this.maxReconnectAttempts,
-      hasReachedMaxAttempts: this.maxReconnectAttempts > 0 && this.reconnectAttempts >= this.maxReconnectAttempts,
-      connectionHealthy: this.connectionHealthy,
-      nextReconnectDelay: this.reconnectDelay
+      isReconnecting: phase === 'RECONNECTING',
+      reconnectAttempts: 0, // 库内部管理，暂不暴露
+      maxReconnectAttempts: 0, // 配置为无限重连
+      hasReachedMaxAttempts: false,
+      connectionHealthy: phase === 'CONNECTED',
+      nextReconnectDelay: 3000, // 基础延迟
+      phase: metrics.phase,
+      uptime: metrics.uptime,
+      sessions: metrics.sessions
     };
-  }
-
-  /**
-   * 手动重连
-   */
-  async manualReconnect(): Promise<void> {
-    console.log('🔄 [IcomWlanManager] 手动重连请求');
-
-    // 停止自动重连
-    this.stopReconnection();
-
-    // 重置计数器
-    this.reconnectAttempts = 0;
-    this.isReconnecting = false;
-    this.connectionHealthy = true;
-
-    // 执行重连
-    if (this.currentConfig) {
-      await this.connect(this.currentConfig);
-    } else {
-      throw new Error('无法重连：缺少配置信息');
-    }
-  }
-
-  /**
-   * 处理操作错误
-   */
-  private handleOperationError(error: Error, operation: string): void {
-    console.warn(`⚠️ [IcomWlanManager] ${operation}失败:`, error.message);
-    this.connectionHealthy = false;
-
-    const errorMsg = error.message.toLowerCase();
-    const isCriticalError = errorMsg.includes('timeout') ||
-                           errorMsg.includes('connection') ||
-                           errorMsg.includes('disconnect');
-
-    if (isCriticalError) {
-      console.error(`🚨 [IcomWlanManager] 检测到严重错误，触发重连: ${error.message}`);
-      this.handleConnectionLoss();
-    }
-  }
-
-  /**
-   * 处理连接丢失
-   */
-  private handleConnectionLoss(reason?: string): void {
-    if (this.isReconnecting || !this.currentConfig) {
-      return;
-    }
-
-    console.warn('🔌 [IcomWlanManager] 检测到连接丢失，开始重连流程');
-
-    this.rig = null;
-    this.emit('disconnected', reason || '连接丢失');
-    this.startReconnection();
-  }
-
-  /**
-   * 开始重连流程
-   */
-  private startReconnection(): void {
-    if (this.isReconnecting || !this.currentConfig) {
-      return;
-    }
-
-    this.isReconnecting = true;
-    this.reconnectAttempts = 0;
-
-    console.log('🔄 [IcomWlanManager] 开始自动重连...');
-    this.attemptReconnection();
-  }
-
-  /**
-   * 尝试重连
-   */
-  private async attemptReconnection(): Promise<void> {
-    if (!this.isReconnecting || !this.currentConfig) {
-      this.stopReconnection();
-      return;
-    }
-
-    this.reconnectAttempts++;
-    console.log(`🔄 [IcomWlanManager] 重连尝试 第${this.reconnectAttempts}次`);
-
-    this.emit('reconnecting', this.reconnectAttempts);
-
-    try {
-      await this.connect(this.currentConfig);
-
-      console.log('✅ [IcomWlanManager] 重连成功');
-      this.isReconnecting = false;
-      this.connectionHealthy = true;
-
-    } catch (error) {
-      console.warn(`❌ [IcomWlanManager] 重连尝试 ${this.reconnectAttempts} 失败:`, (error as Error).message);
-      this.emit('reconnectFailed', error as Error, this.reconnectAttempts);
-
-      // 继续重连
-      console.log(`⏳ [IcomWlanManager] ${this.reconnectDelay}ms 后进行下次重连尝试`);
-
-      this.reconnectTimer = setTimeout(() => {
-        this.attemptReconnection();
-      }, this.reconnectDelay);
-    }
-  }
-
-  /**
-   * 停止重连
-   */
-  private stopReconnection(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    this.isReconnecting = false;
-    console.log('🛑 [IcomWlanManager] 已停止重连流程');
   }
 
   /**
