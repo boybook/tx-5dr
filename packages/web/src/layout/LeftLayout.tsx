@@ -5,11 +5,13 @@ import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/SpectrumDisplay';
 import { SlotPacksMessageDisplay } from '../components/SlotPacksMessageDisplay';
-import { useSlotPacks } from '../store/radioStore';
+import { RadioMetersDisplay } from '../components/RadioMetersDisplay';
+import { useSlotPacks, useRadioState } from '../store/radioStore';
 import { isElectron } from '../utils/config';
 
 export const LeftLayout: React.FC = () => {
   const slotPacks = useSlotPacks();
+  const radio = useRadioState();
   const [currentTime, setCurrentTime] = useState(new Date());
 
   // 更新当前时间
@@ -89,6 +91,14 @@ export const LeftLayout: React.FC = () => {
         <div className="bg-content2 rounded-lg shadow-sm overflow-hidden">
           <SpectrumDisplay height={128} />
         </div>
+
+        {/* 电台数值表（仅 ICOM WLAN 连接时显示） */}
+        {radio.state.radioConfig?.type === 'icom-wlan' && (
+          <RadioMetersDisplay
+            meterData={radio.state.meterData || { swr: null, alc: null, level: null, power: null }}
+            isPttActive={radio.state.pttStatus.isTransmitting}
+          />
+        )}
       </div>
     </div>
   );

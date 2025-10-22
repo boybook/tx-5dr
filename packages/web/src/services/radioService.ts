@@ -253,6 +253,12 @@ export class RadioService {
       (this.eventListeners as any).pttStatusChanged?.forEach?.((listener: any) => listener(data));
     });
 
+    // 监听电台数值表数据
+    this.wsClient.onWSEvent('meterData', (data: any) => {
+      // 数值表数据频率较高，不打印日志
+      (this.eventListeners as any).meterData?.forEach?.((listener: any) => listener(data));
+    });
+
     // 监听时隙开始事件
     this.wsClient.onWSEvent('slotStart', (slotInfo: SlotInfo, lastSlotPack: SlotPack | null) => {
       console.log('🎯 时隙开始:', slotInfo);

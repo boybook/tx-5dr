@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode } from 'react';
 import { addToast } from '@heroui/toast';
-import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus, QSORecord, LogBookStatistics } from '@tx5dr/contracts';
+import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus, QSORecord, LogBookStatistics, MeterData } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
 
@@ -99,6 +99,8 @@ export interface RadioState {
     isTransmitting: boolean;
     operatorIds: string[];
   };
+  // 电台数值表数据
+  meterData: MeterData | null;
 }
 
 export type RadioAction =
@@ -110,7 +112,8 @@ export type RadioAction =
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
   | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: any; radioConfig: any } }
-  | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } };
+  | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
+  | { type: 'meterData'; payload: MeterData };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -124,7 +127,8 @@ const initialRadioState: RadioState = {
   pttStatus: {
     isTransmitting: false,
     operatorIds: []
-  }
+  },
+  meterData: null
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -222,6 +226,12 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
           isTransmitting: action.payload.isTransmitting,
           operatorIds: action.payload.operatorIds
         }
+      };
+
+    case 'meterData':
+      return {
+        ...state,
+        meterData: action.payload
       };
 
     default:
@@ -482,6 +492,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       pttStatusChanged: (data: { isTransmitting: boolean; operatorIds: string[] }) => {
         console.log(`📡 [RadioProvider] PTT状态变化: ${data.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${data.operatorIds?.join(', ') || ''}]`);
         radioDispatch({ type: 'pttStatusChanged', payload: data });
+      },
+      // 电台数值表数据
+      meterData: (data: MeterData) => {
+        // 数值表数据频率较高，不打印日志
+        radioDispatch({ type: 'meterData', payload: data });
       },
       handshakeComplete: (data: any) => {
         console.log('🤝 [RadioProvider] 握手完成:', data);
