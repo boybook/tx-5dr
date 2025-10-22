@@ -78,7 +78,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       windowFunction: config.windowFunction ?? 'hann',
       workerPoolSize: config.workerPoolSize ?? 2,
       enabled: config.enabled ?? true,
-      targetSampleRate: config.targetSampleRate ?? 4000
+      targetSampleRate: config.targetSampleRate ?? 6000 // 12kHz降采样到6kHz，覆盖0-3kHz
     };
   }
 

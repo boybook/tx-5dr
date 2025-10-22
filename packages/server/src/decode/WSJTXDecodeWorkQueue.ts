@@ -68,15 +68,16 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
     // 将 ArrayBuffer 转换为 Float32Array
     const originalAudioData = new Float32Array(request.pcm);
 
-    // 步骤1: 重采样到 12kHz（FT8/FT4 标准采样率）
+    // 步骤1: 采样率验证（系统统一 12kHz，理论上不需要重采样）
+    // 保留此逻辑作为保险，以防特殊情况下传入非 12kHz 数据
     let resampledAudioData: Float32Array;
     if (request.sampleRate && request.sampleRate !== 12000) {
+      console.warn(`⚠️ [解码队列] 意外的采样率 ${request.sampleRate}Hz，重采样到 12kHz`);
       resampledAudioData = await resampleAudioProfessional(
         originalAudioData,
         request.sampleRate,
         12000,
-        1, // 单声道
-        1  // SRC_SINC_MEDIUM_QUALITY
+        1 // 单声道
       );
     } else {
       resampledAudioData = originalAudioData;

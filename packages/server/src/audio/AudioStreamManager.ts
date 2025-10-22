@@ -1,7 +1,7 @@
 import * as naudiodon from 'naudiodon2';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
-import { clearResamplerCache } from '../utils/audioUtils.js';
+import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
 import { once } from 'events';
@@ -59,8 +59,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     console.log(`🎵 [AudioStreamManager] 使用音频配置: 采样率=${this.sampleRate}Hz, 缓冲区=${this.bufferSize}帧`);
 
-    // 创建音频缓冲区提供者，使用配置的采样率
-    this.audioProvider = new RingBufferAudioProvider(this.sampleRate, this.sampleRate * 5); // 5秒缓冲
+    // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz）
+    const INTERNAL_SAMPLE_RATE = 12000;
+    this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5); // 5秒缓冲
+    console.log(`🎵 [AudioStreamManager] 音频缓冲区使用内部采样率: ${INTERNAL_SAMPLE_RATE}Hz`);
   }
 
   /**
@@ -76,6 +78,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   getSampleRate(): number {
     return this.sampleRate;
+  }
+
+  /**
+   * 获取内部处理采样率（固定12kHz）
+   * 用于频谱分析等内部处理模块
+   */
+  getInternalSampleRate(): number {
+    return 12000;
   }
   
   /**
@@ -460,17 +470,28 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                 }
                 
                 // 将 Buffer 转换为 Float32Array（已经是 float 格式）
-                const samples = this.convertBufferToFloat32(chunk);
-                
+                let samples = this.convertBufferToFloat32(chunk);
+
                 // 检查样本数据的有效性
                 if (samples.length === 0) {
                   console.warn('⚠️ 转换后的音频样本为空');
                   return;
                 }
-                
-                // 存储到环形缓冲区（保持原始采样率）
+
+                // 采样率判断：如果不是 12kHz，则重采样到 12kHz（统一内部采样率）
+                const INTERNAL_SAMPLE_RATE = 12000;
+                if (this.sampleRate !== INTERNAL_SAMPLE_RATE) {
+                  samples = await resampleAudioProfessional(
+                    samples,
+                    this.sampleRate,
+                    INTERNAL_SAMPLE_RATE,
+                    1 // 单声道
+                  );
+                }
+
+                // 存储到环形缓冲区（统一 12kHz 采样率）
                 this.audioProvider.writeAudio(samples);
-                
+
                 // 发出事件
                 this.emit('audioData', samples);
                 
@@ -714,11 +735,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000): Promise<void> {
     const playStartTime = Date.now();
 
-    // 检查是否使用 ICOM WLAN 输出
+    // 检查是否使用 ICOM WLAN 输出（零重采样优化）
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
-      console.log(`📡 [AudioStreamManager] 使用 ICOM WLAN 输出播放音频:`);
+      console.log(`📡 [AudioStreamManager] 使用 ICOM WLAN 输出播放音频（零重采样优化）:`);
       console.log(`   样本数: ${audioData.length}`);
-      console.log(`   采样率: ${targetSampleRate}Hz → 12kHz`);
+      console.log(`   采样率: ${targetSampleRate}Hz（已是 ICOM 原生 12kHz）`);
       console.log(`   时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
 
       try {
@@ -728,7 +749,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           gainedData[i] = audioData[i] * this.volumeGain;
         }
 
-        // 发送到 ICOM WLAN（内部会进行重采样）
+        // 直接发送到 ICOM WLAN（已经是 12kHz，零重采样优化）
         await this.icomWlanAudioAdapter.sendAudio(gainedData);
         console.log(`✅ [AudioStreamManager] ICOM WLAN 音频发送完成`);
       } catch (error) {
@@ -759,27 +780,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.currentPlaybackPromise = (async () => {
       try {
       let playbackData: Float32Array;
-      
-      // 检查是否需要重采样
+
+      // 检查是否需要重采样（12kHz → 设备采样率）
       if (targetSampleRate !== this.sampleRate) {
-        console.log(`🔄 [音频播放] 重采样: ${targetSampleRate}Hz -> ${this.sampleRate}Hz`);
-        // 使用更准确的重采样
-        const ratio = this.sampleRate / targetSampleRate;
-        const newLength = Math.floor(audioData.length * ratio);
-        playbackData = new Float32Array(newLength);
-        
-        for (let i = 0; i < newLength; i++) {
-          const sourceIndex = i / ratio;
-          const index = Math.floor(sourceIndex);
-          const fraction = sourceIndex - index;
-          
-          if (index + 1 < audioData.length) {
-            playbackData[i] = audioData[index] * (1 - fraction) + audioData[index + 1] * fraction;
-          } else {
-            playbackData[i] = audioData[index] || 0;
-          }
-        }
-        
+        console.log(`🔄 [音频播放] Soxr 重采样: ${targetSampleRate}Hz -> ${this.sampleRate}Hz`);
+        playbackData = await resampleAudioProfessional(
+          audioData,
+          targetSampleRate,
+          this.sampleRate,
+          1 // 单声道
+        );
         console.log(`🔄 [音频播放] 重采样完成: ${audioData.length} -> ${playbackData.length} 样本`);
       } else {
         console.log(`✅ [音频播放] 采样率匹配，无需重采样`);

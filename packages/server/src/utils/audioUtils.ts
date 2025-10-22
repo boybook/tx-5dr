@@ -357,45 +357,45 @@ export async function resampleAudioProfessional(
   inputSampleRate: number,
   outputSampleRate: number,
   channels: number = 1,
-  quality: number = 0 // SRC_SINC_BEST_QUALITY
+  quality: number = 2 // SRC_SINC_FASTEST - 最快速度，适合实时处理
 ): Promise<Float32Array> {
   if (inputSampleRate === outputSampleRate) {
     return samples; // 采样率相同，无需重采样
   }
-  
+
   // 创建缓存键
   const cacheKey = `${inputSampleRate}-${outputSampleRate}-${channels}-${quality}`;
-  
+
   try {
     const lib = await getLibSampleRate();
-    
+
     // 尝试从缓存获取重采样器
     let resampler = resamplerCache.get(cacheKey);
-    
+
     if (!resampler) {
       // 创建新的重采样器
       resampler = await lib.create(channels, inputSampleRate, outputSampleRate, {
         converterType: quality
       });
-      
+
       // 缓存重采样器（但限制缓存大小）
       if (resamplerCache.size < 10) {
         resamplerCache.set(cacheKey, resampler);
       }
-      
+
       console.log(`🔄 [音频工具] 创建新的重采样器: ${inputSampleRate}Hz -> ${outputSampleRate}Hz, 质量=${quality}`);
     }
-    
+
     // 执行重采样
     const resampled = resampler.simple(samples);
-    
+
     // console.log(`🔄 [音频工具] 重采样完成: ${samples.length} -> ${resampled.length} 样本`);
-    
+
     return resampled;
-    
+
   } catch (error) {
     console.error(`❌ [音频工具] 重采样失败:`, error);
-    
+
     // 如果专业重采样失败，回退到简单重采样
     console.log(`🔄 [音频工具] 回退到简单重采样`);
     return resampleAudioSimple(samples, inputSampleRate, outputSampleRate);
@@ -458,15 +458,10 @@ export async function resampleTo12kHz(
  * 清理重采样器缓存
  */
 export function clearResamplerCache(): void {
-  for (const resampler of resamplerCache.values()) {
-    try {
-      resampler.destroy();
-    } catch (error) {
-      console.warn('清理重采样器时出错:', error);
-    }
-  }
+  // Soxr 重采样器是 WASM 模块，通过垃圾回收自动清理
+  // 这里只需要清空缓存映射
   resamplerCache.clear();
-  console.log('🧹 [音频工具] 重采样器缓存已清理');
+  console.log('🧹 [音频工具] Soxr 重采样器缓存已清理');
 }
 
 /**

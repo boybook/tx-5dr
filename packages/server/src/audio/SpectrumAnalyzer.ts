@@ -22,7 +22,7 @@ export class SpectrumAnalyzer {
       fftSize: config.fftSize,
       windowFunction: config.windowFunction || 'hann',
       overlapRatio: config.overlapRatio || 0.5,
-      targetSampleRate: config.targetSampleRate || 8000 // 默认降到8kHz
+      targetSampleRate: config.targetSampleRate || 6000 // 默认降到6kHz（12kHz的一半，覆盖0-3kHz）
     };
 
     // 验证FFT大小是2的幂
