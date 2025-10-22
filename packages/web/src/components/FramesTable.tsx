@@ -43,8 +43,10 @@ interface FramesTableProps {
 
 export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '' }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [prevGroupsLength, setPrevGroupsLength] = useState(0);
+  const [isNarrow, setIsNarrow] = useState(false); // 是否为窄屏模式
   const { getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled } = useDisplayNotificationSettings();
 
   // 检查是否滚动到底部
@@ -89,6 +91,25 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         scrollToBottom();
       }, 0);
     }
+  }, []);
+
+  // 监听容器宽度变化，判断是否需要窄屏布局
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const width = entry.contentRect.width;
+        // 当容器宽度小于 600px 时启用窄屏模式
+        setIsNarrow(width < 600);
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
   }, []);
 
   const getGroupColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
@@ -231,6 +252,38 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     });
   };
 
+  // 格式化 UTC 时间
+  const formatUtcTime = (utc: string): string => {
+    if (!isNarrow) return utc; // 正常模式保持原格式：13:38:30
+    return utc.replace(/:/g, ''); // 窄屏模式去除冒号：133830
+  };
+
+  // 格式化位置信息
+  const formatLocation = (countryZh?: string, country?: string, flag?: string): React.ReactNode => {
+    if (!countryZh && !country) return null;
+
+    if (!isNarrow) {
+      // 正常模式：中国:湖南 🇨🇳
+      return (
+        <div className="flex items-center justify-end gap-1">
+          <span className="text-xs">
+            {countryZh || country}
+          </span>
+          {flag && <span>{flag}</span>}
+        </div>
+      );
+    }
+
+    // 窄屏模式：只显示省份（如果有）或国家 + 旗帜
+    const displayText = countryZh?.split(':')[1] || countryZh || country;
+    return (
+      <div className="flex items-center justify-end gap-1">
+        <span className="text-xs">{displayText}</span>
+        {flag && <span>{flag}</span>}
+      </div>
+    );
+  };
+
   const formatMessage = (messageObj: FrameDisplayMessage) => {
     // 如果是TX消息，忽略所有logbookAnalysis相关逻辑
     if (messageObj.db === 'TX') {
@@ -295,6 +348,11 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return null;
   }
 
+  // 定义响应式列宽配置
+  const gridCols = isNarrow
+    ? 'grid-cols-[42px_36px_52px_1fr_80px]'     // 窄屏模式：隐藏 DT 列
+    : 'grid-cols-[60px_48px_48px_80px_1fr_150px]'; // 正常模式
+
   return (
     <>
       {/* 添加呼吸发光动画 */}
@@ -308,16 +366,16 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           }
         }
       `}</style>
-      <div className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default`}>
+      <div ref={containerRef} className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default`}>
       {/* 固定表头 */}
       <div className="flex-shrink-0 cursor-default select-none">
-        <div className="grid grid-cols-[60px_48px_48px_80px_1fr_128px] gap-0 px-3 py-1">
-          <div className="text-left text-xs font-medium text-default-400 pl-1">UTC</div>
+        <div className={`grid ${gridCols} gap-0 ${isNarrow ? 'px-2' : 'px-3'} py-1`}>
+          <div className={`text-left text-xs font-medium text-default-400 ${isNarrow ? '' : 'pl-1'}`}>UTC</div>
           <div className="text-right text-xs font-medium text-default-400">dB</div>
-          <div className="text-right text-xs font-medium text-default-400">DT</div>
+          {!isNarrow && <div className="text-right text-xs font-medium text-default-400">DT</div>}
           <div className="text-center text-xs font-medium text-default-400">频率</div>
           <div className="text-left text-xs font-medium text-default-400">信息</div>
-          <div className="text-right text-xs font-medium text-default-400 pr-1">位置</div>
+          <div className={`text-right text-xs font-medium text-default-400 ${isNarrow ? '' : 'pr-1'}`}>位置</div>
         </div>
       </div>
 
@@ -352,7 +410,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                     ft8-row
                     ${message.db === 'TX' ? 'bg-danger-100/70' : ''}
                     transition-colors duration-150
-                    grid grid-cols-[60px_48px_48px_80px_1fr_128px] gap-0 px-3 py-0.5 ml-1 relative
+                    grid ${gridCols} gap-0 ${isNarrow ? 'px-2' : 'px-3'} py-0.5 ml-1 relative
                     ${message.db !== 'TX' ? 'hover:[background-color:var(--hover-bg)]' : ''}
                   `}
                   style={{
@@ -363,7 +421,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                 >
                   {/* 右侧颜色条（非特殊消息类型时显示） */}
                   {getRightBorderColor(message, group.type) && (
-                    <div 
+                    <div
                       className="absolute right-0 top-0 bottom-0 w-1"
                       style={{
                         backgroundColor: getRightBorderColor(message, group.type)!
@@ -371,7 +429,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                     />
                   )}
                   <div className="text-xs font-mono">
-                    {message.utc}
+                    {formatUtcTime(message.utc)}
                   </div>
                   <div className="text-xs text-right font-mono">
                     {message.db === 'TX' ? (
@@ -384,24 +442,19 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-right font-mono">
-                    {message.dt === '-' ? '-' : message.dt.toFixed(1)}
-                  </div>
+                  {!isNarrow && (
+                    <div className="text-xs text-right font-mono">
+                      {message.dt === '-' ? '-' : message.dt.toFixed(1)}
+                    </div>
+                  )}
                   <div className="text-xs text-center font-mono">
                     {message.freq}
                   </div>
                   <div className="text-xs font-mono">
                     {formatMessage(message)}
                   </div>
-                  <div className="text-xs text-right pr-1">
-                    {(message.country || message.countryZh) && (
-                      <div className="flex items-center justify-end gap-1">
-                        <span className="text-xs">
-                          {message.countryZh || message.country}
-                        </span>
-                        {message.flag && <span>{message.flag}</span>}
-                      </div>
-                    )}
+                  <div className={`text-xs text-right ${isNarrow ? '' : 'pr-1'}`}>
+                    {formatLocation(message.countryZh, message.country, message.flag)}
                   </div>
                 </div>
               ))}

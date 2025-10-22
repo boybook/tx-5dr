@@ -13,6 +13,7 @@ export const LeftLayout: React.FC = () => {
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [isMobile, setIsMobile] = useState(false);
 
   // 更新当前时间
   useEffect(() => {
@@ -21,6 +22,23 @@ export const LeftLayout: React.FC = () => {
     }, 1000);
 
     return () => clearInterval(timer);
+  }, []);
+
+  // 监听屏幕宽度变化
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+
+    setIsMobile(mediaQuery.matches);
+
+    const handleChange = (e: MediaQueryListEvent) => {
+      setIsMobile(e.matches);
+    };
+
+    mediaQuery.addEventListener('change', handleChange);
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+    };
   }, []);
 
   // 清空数据
@@ -34,11 +52,11 @@ export const LeftLayout: React.FC = () => {
   };
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-full flex flex-col">
       {/* 顶部空隙和UTC时间/清空按钮 */}
-      <div 
-        className="flex-shrink-0 flex justify-between items-center p-2 px-3 cursor-default select-none"
-        style={{ 
+      <div
+        className="flex-shrink-0 flex justify-between items-center p-1 px-2 md:p-2 md:px-3 cursor-default select-none"
+        style={{
           WebkitAppRegion: 'drag',
         } as React.CSSProperties & { WebkitAppRegion: string }}
       >
@@ -81,7 +99,7 @@ export const LeftLayout: React.FC = () => {
       </div>
 
       {/* 主要内容区域 */}
-      <div className="flex-1 px-5 pb-5 min-h-0 flex flex-col gap-4">
+      <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-4">
         {/* FT8解码消息表格 */}
         <div className="flex-1 min-h-0">
           <SlotPacksMessageDisplay className="h-full" />
@@ -89,7 +107,7 @@ export const LeftLayout: React.FC = () => {
 
         {/* 频谱显示 */}
         <div className="bg-content2 rounded-lg shadow-sm overflow-hidden">
-          <SpectrumDisplay height={128} />
+          <SpectrumDisplay height={isMobile ? 80 : 128} />
         </div>
 
         {/* 电台数值表（仅 ICOM WLAN 连接时显示） */}

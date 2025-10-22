@@ -4,6 +4,7 @@ import { parseFT8LocationInfo } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useRadioState, useSlotPacks } from '../store/radioStore';
 import type { FrameMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
+import { useSplitLayoutActions } from './SplitLayout';
 
 interface SlotPacksMessageDisplayProps {
   className?: string;
@@ -15,6 +16,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const slotPacks = useSlotPacks();
   const [frameGroups, setFrameGroups] = useState<FrameGroup[]>([]);
   const {currentOperatorId} = useCurrentOperatorId();
+  const splitLayoutActions = useSplitLayoutActions();
 
   // 获取所有启用操作员的呼号列表
   const getMyCallsigns = (): string[] => {
@@ -104,12 +106,14 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     setFrameGroups(groups);
   }, [slotPacks.state.slotPacks, radio.state.currentMode]);
 
-  
+
   const handleRowDoubleClick = (message: FrameDisplayMessage, group: FrameGroup) => {
     const callsign = message.logbookAnalysis?.callsign;
     if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
       if (connection.state.radioService) {
         connection.state.radioService.sendRequestCall(currentOperatorId, callsign);
+        // 在移动端双击后自动切换到"呼叫"tab
+        splitLayoutActions?.switchToRight();
       }
     }
   };
