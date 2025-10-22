@@ -26,7 +26,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型
-type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'logbook_sync' | 'system' | 'advanced';
+type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'logbook_sync' | 'system';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'radio');
@@ -34,6 +34,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<'close' | 'changeTab' | null>(null);
   const [pendingTab, setPendingTab] = useState<SettingsTab | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
   
   // 用于检查组件是否有未保存的更改
   const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
@@ -46,10 +47,27 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
     if (isOpen) {
-      setActiveTab(initialTab || 'audio');
+      setActiveTab(initialTab || 'radio');
       setHasUnsavedChanges(false);
     }
   }, [isOpen, initialTab]);
+
+  // 监听屏幕宽度变化，判断是否为移动端
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+
+    setIsMobile(mediaQuery.matches);
+
+    const handleChange = (e: MediaQueryListEvent) => {
+      setIsMobile(e.matches);
+    };
+
+    mediaQuery.addEventListener('change', handleChange);
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+    };
+  }, []);
 
   // 检查是否有未保存的更改
   const checkUnsavedChanges = useCallback(() => {
@@ -193,7 +211,28 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   }, []);
 
   // 获取标签页标题
-  const getTabTitle = (tab: SettingsTab) => {
+  const getTabTitle = (tab: SettingsTab, mobileMode: boolean = false) => {
+    // 移动端只返回emoji
+    if (mobileMode) {
+      switch (tab) {
+        case 'audio':
+          return '🎤';
+        case 'radio':
+          return '📻';
+        case 'operator':
+          return '👤';
+        case 'display':
+          return '🎨';
+        case 'logbook_sync':
+          return '📊';
+        case 'system':
+          return '⚙️';
+        default:
+          return '⚙️';
+      }
+    }
+
+    // 桌面端返回完整标题
     switch (tab) {
       case 'audio':
         return '🎤 音频设备';
@@ -207,8 +246,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return '📊 通联日志同步';
       case 'system':
         return '⚙️ 系统设置';
-      case 'advanced':
-        return '🔧 高级设置';
       default:
         return '设置';
     }
@@ -259,15 +296,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             onUnsavedChanges={setHasUnsavedChanges}
           />
         );
-      case 'advanced':
-        return (
-          <div className="flex items-center justify-center py-12">
-            <div className="text-center text-default-500">
-              <p>高级设置</p>
-              <p className="text-sm mt-2">即将开发...</p>
-            </div>
-          </div>
-        );
       default:
         return null;
     }
@@ -276,10 +304,10 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   return (
     <>
       {/* 主设置弹窗 */}
-      <Modal 
-        isOpen={isOpen} 
+      <Modal
+        isOpen={isOpen}
         onClose={handleClose}
-        size="5xl"
+        size={isMobile ? "full" : "5xl"}
         scrollBehavior="inside"
         placement="center"
         backdrop="blur"
@@ -298,66 +326,56 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           </ModalHeader>
           
           <ModalBody>
-            <div className="flex min-h-0" style={{ height: 'calc(95vh - 180px)', minHeight: '400px', maxHeight: '600px' }}>
-              {/* 左侧标签页菜单 */}
-              <div className="p-5 pr-1">
+            <div
+              className={`min-h-0 ${isMobile ? 'flex flex-col' : 'flex'}`}
+              style={{
+                height: isMobile ? 'calc(100vh - 180px)' : 'calc(95vh - 180px)',
+                minHeight: '400px',
+                maxHeight: isMobile ? 'none' : '600px'
+              }}
+            >
+              {/* 标签页菜单 */}
+              <div className={isMobile ? 'px-3 py-2 border-b border-divider' : 'p-5 pr-1'}>
                 <Tabs
                   selectedKey={activeTab}
                   onSelectionChange={handleTabChange}
-                  isVertical
+                  isVertical={!isMobile}
                   size='md'
-                  className="h-full"
+                  className={isMobile ? '' : 'h-full'}
                   classNames={{
-                    tab: "w-full h-10 sm:px-4",
-                    tabContent: "group-data-[selected=true]:text-primary-600 text-default-500",
+                    tab: isMobile ? "h-10" : "w-full h-10 sm:px-4",
+                    tabContent: `group-data-[selected=true]:text-primary-600 text-default-500 ${isMobile ? 'text-xl' : ''}`,
+                    tabList: isMobile ? 'overflow-x-auto' : '',
                   }}
                 >
-                  <Tab 
-                    key="audio" 
-                    title={
-                      getTabTitle('audio')
-                    } 
+                  <Tab
+                    key="radio"
+                    title={getTabTitle('radio', isMobile)}
                   />
-                  <Tab 
-                    key="radio" 
-                    title={
-                      getTabTitle('radio')
-                    } 
+                  <Tab
+                    key="audio"
+                    title={getTabTitle('audio', isMobile)}
                   />
-                  <Tab 
-                    key="operator" 
-                    title={
-                      getTabTitle('operator')
-                    } 
+                  <Tab
+                    key="operator"
+                    title={getTabTitle('operator', isMobile)}
                   />
-                  <Tab 
-                    key="display" 
-                    title={
-                      getTabTitle('display')
-                    } 
+                  <Tab
+                    key="display"
+                    title={getTabTitle('display', isMobile)}
                   />
                   <Tab
                     key="logbook_sync"
-                    title={
-                      getTabTitle('logbook_sync')
-                    }
+                    title={getTabTitle('logbook_sync', isMobile)}
                   />
                   <Tab
                     key="system"
-                    title={
-                      getTabTitle('system')
-                    }
-                  />
-                  <Tab
-                    key="advanced"
-                    title={
-                      getTabTitle('advanced')
-                    }
+                    title={getTabTitle('system', isMobile)}
                   />
                 </Tabs>
               </div>
 
-              {/* 右侧内容区域 */}
+              {/* 内容区域 */}
               <div className="flex-1 overflow-auto min-h-0">
                 <div className="p-3 sm:p-6">
                   {renderTabContent()}

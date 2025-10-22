@@ -27,7 +27,7 @@ export const RightLayout: React.FC = () => {
   const { currentOperatorId } = useCurrentOperatorId();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'advanced'>('audio');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'system'>('audio');
 
   // 判断是否为自动模式
   const isAutoMode = selectedMode.startsWith('auto');
@@ -62,11 +62,11 @@ export const RightLayout: React.FC = () => {
   };
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-full flex flex-col">
       {/* 顶部工具栏 */}
       <div
-        className="flex-shrink-0 flex justify-between items-center p-2 px-3"
-        style={{ 
+        className="flex-shrink-0 flex justify-between items-center p-1 px-2 md:p-2 md:px-3"
+        style={{
           WebkitAppRegion: 'drag',
         } as React.CSSProperties & { WebkitAppRegion: string }}
       >
@@ -127,7 +127,7 @@ export const RightLayout: React.FC = () => {
       </div>
       
       {/* 主内容区域 */}
-      <div className="flex-1 p-5 pt-0 flex flex-col gap-4 min-h-0">
+      <div className="flex-1 p-2 pt-0 md:p-5 md:pt-0 flex flex-col gap-2 md:gap-4 min-h-0">
         {/* 和我有关的通联信息 - 占据剩余空间 */}
         <div className="flex-1 min-h-0">
           <MyRelatedFramesTable className="h-full" />
