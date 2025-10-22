@@ -300,6 +300,12 @@ export class WSServer extends WSMessageHandler {
       console.log(`📡 [WSServer] 收到PTT状态变化事件: ${data.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${data.operatorIds?.join(', ') || ''}]`);
       this.broadcast(WSMessageType.PTT_STATUS_CHANGED, data);
     });
+
+    // 监听电台数值表数据事件
+    this.digitalRadioEngine.on('meterData' as any, (data: any) => {
+      // 数值表数据频率较高，使用静默广播（不打印日志）
+      this.broadcast(WSMessageType.METER_DATA, data);
+    });
   }
 
   /**

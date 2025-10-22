@@ -9,6 +9,13 @@ export interface IcomWlanConfig {
   password: string;
 }
 
+interface MeterData {
+  swr: { raw: number; swr: number; alert: boolean } | null;
+  alc: { raw: number; percent: number; alert: boolean } | null;
+  level: { raw: number; percent: number } | null;
+  power: { raw: number; percent: number } | null;
+}
+
 interface IcomWlanManagerEvents {
   connected: () => void;
   disconnected: (reason?: string) => void;
@@ -16,6 +23,7 @@ interface IcomWlanManagerEvents {
   reconnectFailed: (error: Error, attempt: number) => void;
   error: (error: Error) => void;
   audioFrame: (pcm16: Buffer) => void;
+  meterData: (data: MeterData) => void;
 }
 
 /**
@@ -27,6 +35,10 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
   private rig: IcomControl | null = null;
   private currentConfig: IcomWlanConfig | null = null;
   private isConnecting = false;
+
+  // 数值表轮询相关
+  private meterPollingInterval: NodeJS.Timeout | null = null;
+  private meterPollingIntervalMs = 300; // 300ms 轮询间隔
 
   constructor() {
     super();
@@ -71,6 +83,9 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
       console.log(`✅ [IcomWlanManager] ICOM 电台连接成功`);
       this.isConnecting = false;
 
+      // 启动数值表轮询
+      this.startMeterPolling();
+
       this.emit('connected');
 
     } catch (error) {
@@ -86,6 +101,9 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
    * 断开连接
    */
   async disconnect(reason?: string): Promise<void> {
+    // 停止数值表轮询
+    this.stopMeterPolling();
+
     if (this.rig) {
       console.log('🔌 [IcomWlanManager] 正在断开 ICOM 电台连接...');
 
@@ -375,5 +393,59 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
    */
   getAudioSampleRate(): number {
     return AUDIO_RATE; // 12000
+  }
+
+  /**
+   * 启动数值表轮询
+   */
+  private startMeterPolling(): void {
+    if (this.meterPollingInterval) {
+      console.log('⚠️ [IcomWlanManager] 数值表轮询已在运行');
+      return;
+    }
+
+    console.log(`📊 [IcomWlanManager] 启动数值表轮询，间隔 ${this.meterPollingIntervalMs}ms`);
+
+    this.meterPollingInterval = setInterval(async () => {
+      await this.pollMeters();
+    }, this.meterPollingIntervalMs);
+  }
+
+  /**
+   * 停止数值表轮询
+   */
+  private stopMeterPolling(): void {
+    if (this.meterPollingInterval) {
+      console.log('🛑 [IcomWlanManager] 停止数值表轮询');
+      clearInterval(this.meterPollingInterval);
+      this.meterPollingInterval = null;
+    }
+  }
+
+  /**
+   * 轮询数值表数据
+   */
+  private async pollMeters(): Promise<void> {
+    if (!this.rig) return;
+
+    try {
+      // 并行读取四个数值表
+      const [swr, alc, level, power] = await Promise.all([
+        this.rig.readSWR({ timeout: 200 }).catch(() => null),
+        this.rig.readALC({ timeout: 200 }).catch(() => null),
+        this.rig.getLevelMeter({ timeout: 200 }).catch(() => null),
+        this.rig.readPowerLevel({ timeout: 200 }).catch(() => null),
+      ]);
+
+      // 发射数值表数据事件
+      this.emit('meterData', {
+        swr,
+        alc,
+        level,
+        power,
+      });
+    } catch (error) {
+      // 静默失败，避免日志过多
+    }
   }
 }

@@ -74,6 +74,9 @@ export enum WSMessageType {
   // ===== PTT状态管理 =====
   PTT_STATUS_CHANGED = 'pttStatusChanged',
 
+  // ===== 电台数值表 =====
+  METER_DATA = 'meterData',
+
   // ===== 极简文本消息 =====
   TEXT_MESSAGE = 'textMessage',
 }
@@ -133,12 +136,35 @@ export const PTTStatusSchema = z.object({
   operatorIds: z.array(z.string()),
 });
 
+// 电台数值表数据结构
+export const MeterDataSchema = z.object({
+  swr: z.object({
+    raw: z.number(),
+    swr: z.number(),
+    alert: z.boolean(),
+  }).nullable(),
+  alc: z.object({
+    raw: z.number(),
+    percent: z.number(),
+    alert: z.boolean(),
+  }).nullable(),
+  level: z.object({
+    raw: z.number(),
+    percent: z.number(),
+  }).nullable(),
+  power: z.object({
+    raw: z.number(),
+    percent: z.number(),
+  }).nullable(),
+});
+
 // ===== 导出共享类型 =====
 export type SystemStatus = z.infer<typeof SystemStatusSchema>;
 export type SubWindowInfo = z.infer<typeof SubWindowInfoSchema>;
 export type DecodeErrorInfo = z.infer<typeof DecodeErrorInfoSchema>;
 export type FrequencyState = z.infer<typeof FrequencyStateSchema>;
 export type PTTStatus = z.infer<typeof PTTStatusSchema>;
+export type MeterData = z.infer<typeof MeterDataSchema>;
 
 // ===== WebSocket消息Schema定义 =====
 
@@ -640,6 +666,16 @@ export const WSPTTStatusChangedMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSPTTStatusChangedMessage = z.infer<typeof WSPTTStatusChangedMessageSchema>;
 
+/**
+ * 电台数值表数据消息（服务端到客户端）
+ */
+export const WSMeterDataMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.METER_DATA),
+  data: MeterDataSchema,
+});
+
+export type WSMeterDataMessage = z.infer<typeof WSMeterDataMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -701,6 +737,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // PTT状态管理消息
   WSPTTStatusChangedMessageSchema,
+
+  // 电台数值表消息
+  WSMeterDataMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -794,4 +833,7 @@ export interface DigitalRadioEngineEvents {
 
   // PTT状态控制事件
   pttStatusChanged: (data: PTTStatus) => void;
+
+  // 电台数值表事件
+  meterData: (data: MeterData) => void;
 } 

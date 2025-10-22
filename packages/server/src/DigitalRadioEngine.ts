@@ -1182,6 +1182,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
     });
+
+    // 监听电台数值表数据
+    this.radioManager.on('meterData' as any, (data: any) => {
+      // 转发数值表数据事件
+      this.emit('meterData' as any, data);
+    });
   }
 
   /**

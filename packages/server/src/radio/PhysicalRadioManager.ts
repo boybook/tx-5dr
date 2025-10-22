@@ -184,6 +184,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.icomWlanManager.on('error', (error) => {
       this.emit('error', error);
     });
+
+    this.icomWlanManager.on('meterData', (data) => {
+      this.emit('meterData' as any, data);
+    });
   }
 
   /**

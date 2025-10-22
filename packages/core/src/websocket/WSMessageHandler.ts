@@ -37,6 +37,9 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // PTT状态相关事件
   [WSMessageType.PTT_STATUS_CHANGED]: 'pttStatusChanged',
 
+  // 电台数值表相关事件
+  [WSMessageType.METER_DATA]: 'meterData',
+
   // 其他事件
   [WSMessageType.TRANSMISSION_LOG]: 'transmissionLog',
   [WSMessageType.VOLUME_GAIN_CHANGED]: 'volumeGainChanged',
