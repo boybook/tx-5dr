@@ -59,6 +59,7 @@ const Meter: React.FC<MeterProps> = ({
         maxValue={100}
         color={getColor()}
         size="sm"
+        aria-label={label}
         classNames={{
           base: 'max-w-full',
           track: 'bg-default-200 dark:bg-default-100',
