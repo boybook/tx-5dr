@@ -28,15 +28,10 @@ export class RingBuffer {
    */
   write(samples: Float32Array): void {
     const writeTimestamp = Date.now();
-    
-    // 音频质量检查
-    let validSamples = 0;
-    let clippedSamples = 0;
-    let maxLevel = 0;
-    
+
     for (let i = 0; i < samples.length; i++) {
       const sample = samples[i] || 0;
-      
+
       // 检查样本有效性
       if (isNaN(sample) || !isFinite(sample)) {
         // 无效样本，用0替换
@@ -45,29 +40,17 @@ export class RingBuffer {
         // 限制样本范围到 [-1, 1]
         const clampedSample = Math.max(-1, Math.min(1, sample));
         this.buffer[this.writeIndex] = clampedSample;
-        
-        validSamples++;
-        const absLevel = Math.abs(clampedSample);
-        if (absLevel > maxLevel) maxLevel = absLevel;
-        if (absLevel >= 0.99) clippedSamples++;
       }
-      
+
       this.writeIndex = (this.writeIndex + 1) % this.size;
       this.totalSamplesWritten++;
-      
+
       // 如果写入追上了读取，移动读取指针
       if (this.writeIndex === this.readIndex) {
         this.readIndex = (this.readIndex + 1) % this.size;
       }
     }
-    
-    // 音频质量日志（每1000次写入记录一次）
-    if (this.totalSamplesWritten % (this.sampleRate * 10) === 0) { // 每10秒记录一次
-      const validPercent = (validSamples / samples.length * 100).toFixed(1);
-      const clippedPercent = (clippedSamples / samples.length * 100).toFixed(1);
-      console.log(`🎵 [RingBuffer] 音频质量: 有效=${validPercent}%, 爆音=${clippedPercent}%, 峰值=${maxLevel.toFixed(3)}`);
-    }
-    
+
     // 更新最后写入时间（用于计算时间偏移）
     this.lastWriteTimestamp = writeTimestamp;
   }
