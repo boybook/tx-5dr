@@ -97,3 +97,81 @@ test('FT8 CQ 带区域标记的消息解析', () => {
   assert.equal(info.country, 'China');
   assert.equal(info.countryZh, '中国');
 });
+
+test('前缀冲突优先级 - LU前缀应优先匹配阿根廷', () => {
+  // LU 前缀被 5 个实体共享：
+  // - Argentina (代码 100, 11个前缀) ← 应优先
+  // - South Georgia Island (代码 235, 2个前缀)
+  // - South Orkney Islands (代码 238, 2个前缀)
+  // - South Sandwich Islands (代码 240, 2个前缀)
+  // - South Shetland Islands (代码 241, 5个前缀)
+
+  const testCases = ['LU6YR', 'LU1ABC', 'LU9ZZZ'];
+
+  for (const callsign of testCases) {
+    const info = getCallsignInfo(callsign);
+    assert.ok(info, `呼号 "${callsign}" 应能解析`);
+    assert.equal(info?.country, 'Argentina', `呼号 "${callsign}" 应解析为阿根廷`);
+    assert.equal(info?.countryZh, '阿根廷', `呼号 "${callsign}" 中文应为阿根廷`);
+    assert.equal(info?.flag, '🇦🇷', `呼号 "${callsign}" 国旗应为阿根廷`);
+    assert.equal(info?.entityCode, 100, `呼号 "${callsign}" 实体代码应为 100`);
+  }
+});
+
+test('前缀冲突优先级 - VP8前缀应优先匹配福克兰群岛', () => {
+  // VP8 前缀被 5 个实体共享：
+  // - Falkland Islands (代码 141, 1个前缀) ← 应优先（代码最小）
+  // - South Georgia Island (代码 235, 2个前缀)
+  // - South Orkney Islands (代码 238, 2个前缀)
+  // - South Sandwich Islands (代码 240, 2个前缀)
+  // - South Shetland Islands (代码 241, 5个前缀)
+
+  const testCases = ['VP8ABC', 'VP8XYZ'];
+
+  for (const callsign of testCases) {
+    const info = getCallsignInfo(callsign);
+    assert.ok(info, `呼号 "${callsign}" 应能解析`);
+    assert.equal(info?.country, 'Falkland Islands', `呼号 "${callsign}" 应解析为福克兰群岛`);
+    assert.equal(info?.countryZh, '福克兰群岛', `呼号 "${callsign}" 中文应为福克兰群岛`);
+    assert.equal(info?.flag, '🇫🇰', `呼号 "${callsign}" 国旗应为福克兰群岛`);
+    assert.equal(info?.entityCode, 141, `呼号 "${callsign}" 实体代码应为 141`);
+  }
+});
+
+test('前缀冲突优先级 - TX前缀应优先匹配法国', () => {
+  // TX 前缀被 6 个实体共享：
+  // - France (代码 227, 11个前缀) ← 应优先（前缀数量最多）
+  // - Clipperton Island (代码 36, 2个前缀)
+  // - New Caledonia (代码 162, 2个前缀)
+  // - French Polynesia (代码 175, 2个前缀)
+  // - Marquesas Islands (代码 509, 2个前缀)
+  // - Chesterfield Islands (代码 512, 2个前缀)
+
+  const testCases = ['TX5ABC', 'TX7XYZ'];
+
+  for (const callsign of testCases) {
+    const info = getCallsignInfo(callsign);
+    assert.ok(info, `呼号 "${callsign}" 应能解析`);
+    assert.equal(info?.country, 'France', `呼号 "${callsign}" 应解析为法国`);
+    assert.equal(info?.countryZh, '法国', `呼号 "${callsign}" 中文应为法国`);
+    assert.equal(info?.flag, '🇫🇷', `呼号 "${callsign}" 国旗应为法国`);
+    assert.equal(info?.entityCode, 227, `呼号 "${callsign}" 实体代码应为 227`);
+  }
+});
+
+test('前缀冲突优先级 - CE0前缀应优先匹配复活节岛', () => {
+  // CE0 前缀被 3 个实体共享：
+  // - Easter Island (代码 47) ← 应优先（代码最小）
+  // - Juan Fernández Islands (代码 125)
+  // - Desventuradas Islands (代码 217)
+
+  const testCases = ['CE0ABC', 'CE0XYZ'];
+
+  for (const callsign of testCases) {
+    const info = getCallsignInfo(callsign);
+    assert.ok(info, `呼号 "${callsign}" 应能解析`);
+    assert.equal(info?.country, 'Easter Island', `呼号 "${callsign}" 应解析为复活节岛`);
+    assert.equal(info?.countryZh, '复活节岛', `呼号 "${callsign}" 中文应为复活节岛`);
+    assert.equal(info?.entityCode, 47, `呼号 "${callsign}" 实体代码应为 47`);
+  }
+});

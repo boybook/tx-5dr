@@ -746,6 +746,8 @@ class DXCCIndex {
   // 结果缓存，减少重复解析成本
   private prefixLRU: LRU<string, string>;
   private entityLRU: LRU<string, any>;
+  // 实体优先级评分缓存（用于前缀冲突时的优先级排序）
+  private entityPriorityScores: Map<number, number>;
 
   constructor() {
     this.entityMap = new Map();
@@ -755,12 +757,83 @@ class DXCCIndex {
     this.prefixTrie = createTrieNode();
     this.prefixLRU = new LRU(5000);
     this.entityLRU = new LRU(5000);
+    this.entityPriorityScores = new Map();
 
     // 初始化索引
     this.initializeIndex();
   }
 
+  /**
+   * 预计算所有实体的优先级评分
+   * 用于解决前缀冲突时的优先级排序
+   *
+   * 核心原理：前缀越少的实体，每个前缀对它越重要（前缀独占度）
+   *
+   * 评分维度：
+   * 1. 前缀独占度 (60%)：前缀越少 = 该前缀越重要（反向权重）
+   * 2. 正则表达式复杂度 (20%)：越简单/宽松 = 主要使用范围
+   * 3. 实体代码权重 (10%)：代码越小 = 越早分配（参考性）
+   * 4. JSON顺序 (10%)：先出现的实体优先
+   */
+  private calculateEntityPriorities(): void {
+    const entities = dxccData.dxcc.filter((e: any) => !e.deleted);
+
+    // 计算归一化所需的最大最小值
+    const prefixCounts = entities.map((e: any) =>
+      e.prefix ? e.prefix.split(',').length : 0
+    );
+    const maxPrefixes = Math.max(...prefixCounts);
+
+    const entityCodes = entities.map((e: any) => e.entityCode);
+    const maxCode = Math.max(...entityCodes);
+    const minCode = Math.min(...entityCodes);
+
+    const regexLengths = entities
+      .map((e: any) => e.prefixRegex?.length || 0)
+      .filter((l: number) => l > 0);
+    const maxRegexLength = Math.max(...regexLengths);
+    const minRegexLength = Math.min(...regexLengths);
+
+    // 为每个实体计算优先级评分
+    entities.forEach((entity: any, index: number) => {
+      const prefixCount = entity.prefix ? entity.prefix.split(',').length : 0;
+
+      // 1. 前缀得分 (0-60)，混合策略
+      // - 主要国家（前缀≥10）：前缀越多得分越高，满分60（Argentina, France等）
+      // - 小实体（前缀<10）：前缀越少得分越高，但上限10，仅用于同级别实体间打破平局
+      let prefixScore = 0;
+      if (prefixCount >= 10) {
+        // 主要国家：正向评分，使用对数尺度，权重最高
+        prefixScore = 60 * Math.log(1 + prefixCount) / Math.log(1 + maxPrefixes);
+      } else if (prefixCount > 0) {
+        // 小实体：反向评分（前缀越少越专一），但限制上限为10分
+        // 确保主要国家的对数得分能够显著超过小实体
+        prefixScore = 10 * (1 - prefixCount / 10);
+      }
+
+      // 2. 正则表达式复杂度得分 (0-20)，长度越短（越简单）得分越高
+      const regexLength = entity.prefixRegex?.length || maxRegexLength;
+      const regexScore = maxRegexLength === minRegexLength ? 20 :
+        20 * (1 - (regexLength - minRegexLength) / (maxRegexLength - minRegexLength));
+
+      // 3. 实体代码得分 (0-10)，代码越小得分越高
+      const codeScore = maxCode === minCode ? 10 :
+        10 * (1 - (entity.entityCode - minCode) / (maxCode - minCode));
+
+      // 4. JSON顺序得分 (0-10)，先出现的得分越高
+      const orderScore = 10 * (1 - index / entities.length);
+
+      // 总分
+      const totalScore = prefixScore + regexScore + codeScore + orderScore;
+      this.entityPriorityScores.set(entity.entityCode, totalScore);
+    });
+  }
+
   private initializeIndex() {
+    // 第一步：预计算所有实体的优先级评分
+    this.calculateEntityPriorities();
+
+    // 第二步：构建索引和 Trie
     dxccData.dxcc.forEach(entity => {
       if (entity.deleted) return;
 
@@ -791,6 +864,10 @@ class DXCCIndex {
     });
   }
 
+  /**
+   * 向 Trie 中插入前缀和对应的实体
+   * 支持多实体共享同一前缀，使用优先级评分进行排序
+   */
   private insertIntoTrie(prefix: string, entity: any): void {
     let node = this.prefixTrie;
     for (let i = 0; i < prefix.length; i++) {
@@ -802,11 +879,38 @@ class DXCCIndex {
       }
       node = next;
     }
-    // 在终止节点记录命中的实体
-    node.e = entity;
+
+    // 在终止节点记录命中的实体（支持单实体或多实体数组）
+    if (!node.e) {
+      // 第一个实体，直接赋值
+      node.e = entity;
+    } else if (Array.isArray(node.e)) {
+      // 已经是数组，添加新实体并按优先级排序
+      node.e.push(entity);
+      this.sortEntitiesByPriority(node.e);
+    } else {
+      // 第二个实体，转为数组并排序
+      node.e = [node.e, entity];
+      this.sortEntitiesByPriority(node.e);
+    }
     node.p = prefix;
   }
 
+  /**
+   * 按优先级评分对实体数组进行排序（降序）
+   */
+  private sortEntitiesByPriority(entities: any[]): void {
+    entities.sort((a, b) => {
+      const scoreA = this.entityPriorityScores.get(a.entityCode) || 0;
+      const scoreB = this.entityPriorityScores.get(b.entityCode) || 0;
+      return scoreB - scoreA; // 降序排序，得分高的在前
+    });
+  }
+
+  /**
+   * 在 Trie 中进行最长前缀匹配
+   * 如果节点包含多个实体（数组），返回优先级最高的（数组第一个元素）
+   */
   private longestTrieMatch(callsign: string): { prefix: string | null; entity: any | null } {
     // 仅做一次清洗：转大写+去除 '/...'
     const upper = callsign.toUpperCase();
@@ -831,7 +935,8 @@ class DXCCIndex {
       node = next;
       if (node.e) {
         lastPrefix = node.p || null;
-        lastEntity = node.e;
+        // 如果是数组，取第一个（已按优先级排序）
+        lastEntity = Array.isArray(node.e) ? node.e[0] : node.e;
       }
     }
 
