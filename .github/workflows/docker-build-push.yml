@@ -23,11 +23,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.15.1'
-
       - name: Generate image tags
         id: tags
         run: |
@@ -77,17 +72,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
-
-      - name: Generate ICO file
-        run: |
-          echo "🎨 Generating ICO file..."
-          corepack enable
-          corepack prepare yarn@4.9.1 --activate
-          yarn install --immutable || yarn install
-          node scripts/generate-ico.js || {
-            echo "⚠️ ICO generation failed, continuing..."
-            exit 0
-          }
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
