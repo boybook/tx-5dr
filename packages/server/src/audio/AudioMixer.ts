@@ -1,5 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
-import libsamplerate from '@alexanderolsen/libsamplerate-js';
+import { resampleAudioProfessional } from '../utils/audioUtils.js';
 
 export interface MixedAudio {
   audioData: Float32Array;
@@ -182,17 +182,13 @@ export class AudioMixer extends EventEmitter {
         const resampleStartTime = Date.now();
         
         try {
-          // 使用libsamplerate-js进行高质量重采样
-          const resampler = await libsamplerate.create(
-            1, // 单声道
+          // 使用 Soxr (WASM) 进行高质量重采样
+          const resampled = await resampleAudioProfessional(
+            audio.audioData,
             audio.sampleRate,
             targetSampleRate,
-            {
-              converterType: libsamplerate.ConverterType.SRC_SINC_FASTEST // 最快但仍高质量的算法
-            }
+            1 // 单声道
           );
-          
-          const resampled = await resampler.simple(audio.audioData);
           const newDuration = resampled.length / targetSampleRate;
           
           const resampleEndTime = Date.now();
@@ -363,16 +359,13 @@ export class AudioMixer extends EventEmitter {
           const resampleStartTime = Date.now();
 
           try {
-            const resampler = await libsamplerate.create(
-              1,
+            // 使用 Soxr (WASM) 进行高质量重采样
+            const resampled = await resampleAudioProfessional(
+              remainingCurrentAudio,
               currentAudio.sampleRate,
               targetSampleRate,
-              {
-                converterType: libsamplerate.ConverterType.SRC_SINC_FASTEST
-              }
+              1 // 单声道
             );
-
-            const resampled = await resampler.simple(remainingCurrentAudio);
             const newDuration = resampled.length / targetSampleRate;
 
             const resampleEndTime = Date.now();
@@ -429,16 +422,13 @@ export class AudioMixer extends EventEmitter {
           const resampleStartTime = Date.now();
 
           try {
-            const resampler = await libsamplerate.create(
-              1,
+            // 使用 Soxr (WASM) 进行高质量重采样
+            const resampled = await resampleAudioProfessional(
+              audio.audioData,
               audio.sampleRate,
               targetSampleRate,
-              {
-                converterType: libsamplerate.ConverterType.SRC_SINC_FASTEST
-              }
+              1 // 单声道
             );
-
-            const resampled = await resampler.simple(audio.audioData);
             const newDuration = resampled.length / targetSampleRate;
 
             const resampleEndTime = Date.now();

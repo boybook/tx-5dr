@@ -1,5 +1,4 @@
 import { EventEmitter } from 'eventemitter3';
-import libsamplerate from '@alexanderolsen/libsamplerate-js';
 import { IcomWlanManager } from '../radio/IcomWlanManager.js';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 
@@ -10,25 +9,23 @@ export interface IcomWlanAudioAdapterEvents {
 
 /**
  * ICOM WLAN 音频适配器
- * 负责音频数据的接收、发送和采样率转换
+ * 负责音频数据的接收和发送（零重采样优化：ICOM 原生 12kHz）
  */
 export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvents> {
   private icomManager: IcomWlanManager;
   private audioProvider: RingBufferAudioProvider;
-  private targetSampleRate: number; // 系统采样率（48kHz）
   private icomSampleRate: number; // ICOM 采样率（12kHz）
   private isReceiving = false;
 
-  constructor(icomManager: IcomWlanManager, targetSampleRate: number = 48000) {
+  constructor(icomManager: IcomWlanManager) {
     super();
     this.icomManager = icomManager;
-    this.targetSampleRate = targetSampleRate;
     this.icomSampleRate = icomManager.getAudioSampleRate(); // 12000
 
-    // 创建音频缓冲区提供者
-    this.audioProvider = new RingBufferAudioProvider(this.targetSampleRate, this.targetSampleRate * 5);
+    // 创建音频缓冲区提供者（使用 ICOM 原生采样率 12kHz）
+    this.audioProvider = new RingBufferAudioProvider(this.icomSampleRate, this.icomSampleRate * 5);
 
-    console.log(`🎵 [IcomWlanAudioAdapter] 初始化完成: ${this.icomSampleRate}Hz → ${this.targetSampleRate}Hz`);
+    console.log(`🎵 [IcomWlanAudioAdapter] 初始化完成: 使用 ICOM 原生采样率 ${this.icomSampleRate}Hz（零重采样优化）`);
   }
 
   /**
@@ -68,21 +65,18 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
   }
 
   /**
-   * 处理 ICOM 音频帧
+   * 处理 ICOM 音频帧（零重采样优化）
    */
-  private async handleAudioFrame(pcm16: Buffer): Promise<void> {
+  private handleAudioFrame(pcm16: Buffer): void {
     try {
       // 将 PCM16 Buffer 转换为 Float32Array
       const samples12kHz = this.pcm16ToFloat32(pcm16);
 
-      // 重采样：12kHz → 48kHz
-      const samples48kHz = await this.resample(samples12kHz, this.icomSampleRate, this.targetSampleRate);
-
-      // 存储到环形缓冲区
-      this.audioProvider.writeAudio(samples48kHz);
+      // 直接存储到环形缓冲区（ICOM 原生 12kHz，无需重采样）
+      this.audioProvider.writeAudio(samples12kHz);
 
       // 发出事件
-      this.emit('audioData', samples48kHz);
+      this.emit('audioData', samples12kHz);
 
     } catch (error) {
       console.error('❌ [IcomWlanAudioAdapter] 处理音频帧失败:', error);
@@ -91,19 +85,14 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
   }
 
   /**
-   * 发送音频数据（用于发射）
+   * 发送音频数据（用于发射，零重采样优化）
    */
   async sendAudio(samples: Float32Array): Promise<void> {
     try {
-      console.log(`🔊 [IcomWlanAudioAdapter] 发送音频: ${samples.length} 样本 @ ${this.targetSampleRate}Hz`);
+      console.log(`🔊 [IcomWlanAudioAdapter] 发送音频: ${samples.length} 样本 @ ${this.icomSampleRate}Hz（零重采样优化）`);
 
-      // 重采样：48kHz → 12kHz
-      const samples12kHz = await this.resample(samples, this.targetSampleRate, this.icomSampleRate);
-
-      console.log(`🔄 [IcomWlanAudioAdapter] 重采样完成: ${samples.length} → ${samples12kHz.length} 样本`);
-
-      // 发送到 ICOM 电台
-      await this.icomManager.sendAudio(samples12kHz);
+      // 直接发送到 ICOM 电台（已经是 12kHz，无需重采样）
+      await this.icomManager.sendAudio(samples);
 
       console.log(`✅ [IcomWlanAudioAdapter] 音频发送成功`);
 
@@ -113,58 +102,6 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
     }
   }
 
-  /**
-   * 重采样音频
-   */
-  private async resample(samples: Float32Array, fromRate: number, toRate: number): Promise<Float32Array> {
-    if (fromRate === toRate) {
-      return samples;
-    }
-
-    try {
-      const resampler = await libsamplerate.create(
-        1, // 单声道
-        fromRate,
-        toRate,
-        {
-          converterType: libsamplerate.ConverterType.SRC_SINC_FASTEST
-        }
-      );
-
-      const resampled = await resampler.simple(samples);
-      return resampled;
-
-    } catch (error) {
-      console.error(`❌ [IcomWlanAudioAdapter] 重采样失败 (${fromRate}Hz → ${toRate}Hz):`, error);
-
-      // 备用方案：线性插值
-      console.log('🔄 [IcomWlanAudioAdapter] 使用备用重采样方案');
-      return this.linearResample(samples, fromRate, toRate);
-    }
-  }
-
-  /**
-   * 线性插值重采样（备用方案）
-   */
-  private linearResample(samples: Float32Array, fromRate: number, toRate: number): Float32Array {
-    const ratio = toRate / fromRate;
-    const newLength = Math.floor(samples.length * ratio);
-    const resampled = new Float32Array(newLength);
-
-    for (let i = 0; i < newLength; i++) {
-      const sourceIndex = i / ratio;
-      const index = Math.floor(sourceIndex);
-      const fraction = sourceIndex - index;
-
-      if (index + 1 < samples.length) {
-        resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction;
-      } else {
-        resampled[i] = samples[index] || 0;
-      }
-    }
-
-    return resampled;
-  }
 
   /**
    * PCM16 Buffer 转换为 Float32Array
@@ -204,16 +141,9 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
   }
 
   /**
-   * 获取目标采样率
+   * 获取 ICOM 采样率（即系统统一采样率 12kHz）
    */
-  getTargetSampleRate(): number {
-    return this.targetSampleRate;
-  }
-
-  /**
-   * 获取 ICOM 采样率
-   */
-  getIcomSampleRate(): number {
+  getSampleRate(): number {
     return this.icomSampleRate;
   }
 }

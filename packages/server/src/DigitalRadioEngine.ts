@@ -594,7 +594,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 初始化频谱调度器
     await this.spectrumScheduler.initialize(
       this.audioStreamManager.getAudioProvider(),
-      this.audioStreamManager.getCurrentSampleRate() // 使用音频流管理器的实际采样率
+      this.audioStreamManager.getInternalSampleRate() // 使用内部处理采样率（12kHz）
     );
     
     // 监听频谱调度器事件
@@ -655,10 +655,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
         const icomWlanManager = this.radioManager.getIcomWlanManager();
         if (icomWlanManager && icomWlanManager.isConnected()) {
-          // 创建 ICOM WLAN 音频适配器
+          // 创建 ICOM WLAN 音频适配器（原生 12kHz，零重采样优化）
           this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(
-            icomWlanManager,
-            this.audioStreamManager.getSampleRate()
+            icomWlanManager
           );
 
           // 注入到 AudioStreamManager

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
+import { resampleAudioProfessional } from '../utils/audioUtils.js';
 
 export interface EncodeRequest {
   message: string;
@@ -75,19 +76,29 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
 
       // 基于模式校验并必要时截断
       const expectedDuration = mode === WSJTXMode.FT8 ? 12.64 : 6.4;
-      const sampleRate = 48000; // FT8/FT4 均为48kHz
-      const actualDuration = audioFloat32.length / sampleRate;
-      const maxSamples = Math.floor(expectedDuration * sampleRate * 1.5);
+      const encodeSampleRate = 48000; // wsjtx-lib 编码输出为 48kHz
+      const actualDuration = audioFloat32.length / encodeSampleRate;
+      const maxSamples = Math.floor(expectedDuration * encodeSampleRate * 1.5);
       let finalAudio = audioFloat32;
       if (finalAudio.length > maxSamples) {
         console.warn(`⚠️ [编码队列] 音频过长，截断 ${finalAudio.length} -> ${maxSamples}`);
         finalAudio = finalAudio.slice(0, maxSamples);
       }
       if (Math.abs(actualDuration - expectedDuration) > 2 && actualDuration > expectedDuration * 2) {
-        const expectedSamples = Math.floor(expectedDuration * sampleRate);
+        const expectedSamples = Math.floor(expectedDuration * encodeSampleRate);
         console.log(`🔄 [编码队列] 再次截断到期望长度: ${expectedSamples}`);
         finalAudio = finalAudio.slice(0, expectedSamples);
       }
+
+      // 重采样到统一的内部采样率（12kHz）
+      const INTERNAL_SAMPLE_RATE = 12000;
+      console.log(`🔄 [编码队列] 重采样: ${encodeSampleRate}Hz -> ${INTERNAL_SAMPLE_RATE}Hz`);
+      finalAudio = await resampleAudioProfessional(
+        finalAudio,
+        encodeSampleRate,
+        INTERNAL_SAMPLE_RATE,
+        1 // 单声道
+      );
 
       // 统计振幅范围
       let minSample = finalAudio[0];
@@ -101,6 +112,8 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
         if (a > maxAmplitude) maxAmplitude = a;
       }
 
+      // 输出采样率固定为 12kHz（统一内部采样率）
+      const sampleRate = INTERNAL_SAMPLE_RATE;
       const duration = finalAudio.length / sampleRate;
       const processingTimeMs = performance.now() - startTime;
 

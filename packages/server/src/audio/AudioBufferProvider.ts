@@ -8,8 +8,8 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
   private ringBuffer: RingBuffer;
   private startTime: number;
   private sampleRate: number;
-  
-  constructor(sampleRate: number = 48000, maxDurationMs: number = 60000) {
+
+  constructor(sampleRate: number = 12000, maxDurationMs: number = 60000) {
     this.sampleRate = sampleRate;
     this.ringBuffer = new RingBuffer(sampleRate, maxDurationMs);
     this.startTime = Date.now();
