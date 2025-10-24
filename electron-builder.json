@@ -4,14 +4,16 @@
   "productName": "TX-5DR",
   "executableName": "tx-5dr",
   "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+  "asar": false,
+  "npmRebuild": false,
   "directories": {
     "output": "out/electron-builder",
     "buildResources": "packages/electron-main/assets"
   },
   "files": [
-    "packages/*/dist/**/*",
-    "packages/*/package.json",
-    "!packages/*/node_modules",
+    "packages/**/dist/**/*",
+    "packages/**/package.json",
+    "package.json",
     "node_modules/**/*",
     "!**/*.{ts,tsx}",
     "!**/tsconfig.json",
@@ -21,7 +23,10 @@
     "!**/.yarn",
     "!**/out",
     "!**/.electron-cache",
-    "!**/.electron-builder-cache"
+    "!**/.electron-builder-cache",
+    "!**/node-v*",
+    "!**/node-v*.tar.xz",
+    "!**/node-v*.zip"
   ],
   "extraResources": [
     {
@@ -38,12 +43,6 @@
       "from": "resources/README.txt",
       "to": "README.txt"
     }
-  ],
-  "asarUnpack": [
-    "node_modules/naudiodon2/**/*",
-    "node_modules/hamlib/**/*",
-    "node_modules/wsjtx-lib/**/*",
-    "node_modules/@serialport/**/*"
   ],
   "mac": {
     "target": [
@@ -125,6 +124,7 @@
       "libasound2"
     ]
   },
+  "afterPack": "scripts/after-pack.js",
   "afterSign": "scripts/notarize.js",
   "publish": {
     "provider": "github",
