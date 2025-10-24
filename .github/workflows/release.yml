@@ -200,7 +200,7 @@ jobs:
       # Package with electron-builder
       - name: Package application (macOS)
         if: matrix.platform == 'darwin'
-        run: yarn dist:mac --${{ matrix.arch }}
+        run: yarn dist:mac --${{ matrix.arch }} --publish never
         env:
           NODE_ENV: production
           # 签名配置
@@ -215,7 +215,7 @@ jobs:
 
       - name: Package application (Linux)
         if: matrix.platform == 'linux'
-        run: yarn dist:linux --${{ matrix.arch }}
+        run: yarn build && electron-builder --linux deb rpm AppImage --${{ matrix.arch }} --publish never
         env:
           NODE_ENV: production
 

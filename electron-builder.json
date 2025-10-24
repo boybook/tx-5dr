@@ -49,7 +49,7 @@
     "target": [
       {
         "target": "dmg",
-        "arch": ["arm64", "x64"]
+        "arch": ["arm64"]
       }
     ],
     "category": "public.app-category.utilities",
@@ -108,18 +108,9 @@
   },
   "linux": {
     "target": [
-      {
-        "target": "deb",
-        "arch": ["x64", "arm64"]
-      },
-      {
-        "target": "rpm",
-        "arch": ["x64", "arm64"]
-      },
-      {
-        "target": "AppImage",
-        "arch": ["x64", "arm64"]
-      }
+      "deb",
+      "rpm",
+      "AppImage"
     ],
     "category": "Utility;AudioVideo",
     "icon": "packages/electron-main/assets/icon.png",
