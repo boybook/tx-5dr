@@ -1,0 +1,357 @@
+name: Build, Sign and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: false
+        default: ''
+
+env:
+  NODE_VERSION: '22.15.1'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }} (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+            artifact_name: tx-5dr-macos-arm64
+
+          # Linux
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            artifact_name: tx-5dr-linux-x64
+
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            artifact_name: tx-5dr-linux-arm64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable Corepack and setup Yarn
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+          yarn --version
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Linux dependencies
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libpulse-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+            portaudio19-dev build-essential python3-dev pkg-config \
+            xz-utils rpm
+
+      # Install dependencies
+      - name: Install dependencies
+        run: yarn install
+        env:
+          npm_config_cache: .npm
+          ELECTRON_CACHE: .electron-cache
+          ELECTRON_BUILDER_CACHE: .electron-builder-cache
+
+      # Build
+      - name: Build application
+        run: yarn build
+        env:
+          NODE_ENV: production
+
+      # Prepare portable Node runtime
+      - name: Prepare portable Node runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_VERSION="${{ env.NODE_VERSION }}"
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${{ matrix.arch }}"
+          TRIPLET="${PLATFORM}-${ARCH}"
+          echo "Preparing portable node ${NODE_VERSION} for ${TRIPLET}"
+
+          mkdir -p resources/bin/${TRIPLET}
+          mkdir -p resources/licenses
+
+          if [ "${PLATFORM}" = "darwin" ]; then
+            PKG="node-v${NODE_VERSION}-darwin-${ARCH}.tar.xz"
+            URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
+            curl -fsSL -o ${PKG} ${URL}
+            tar -xJf ${PKG}
+            SRC_DIR="node-v${NODE_VERSION}-darwin-${ARCH}"
+            install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
+            cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+            rm -rf "${PKG}" "${SRC_DIR}"
+          elif [ "${PLATFORM}" = "linux" ]; then
+            PKG="node-v${NODE_VERSION}-linux-${ARCH}.tar.xz"
+            URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
+            curl -fsSL -o ${PKG} ${URL}
+            tar -xJf ${PKG}
+            SRC_DIR="node-v${NODE_VERSION}-linux-${ARCH}"
+            install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
+            strip resources/bin/${TRIPLET}/node || true
+            cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+            rm -rf "${PKG}" "${SRC_DIR}"
+          else
+            # Windows
+            PKG="node-v${NODE_VERSION}-win-${ARCH}.zip"
+            URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
+            curl -fsSL -o ${PKG} ${URL}
+            tar -xf ${PKG}
+            SRC_DIR="node-v${NODE_VERSION}-win-${ARCH}"
+            mkdir -p resources/bin/${TRIPLET}
+            cp -f ${SRC_DIR}/node.exe resources/bin/${TRIPLET}/node.exe
+            cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
+            rm -rf "${PKG}" "${SRC_DIR}"
+          fi
+
+          echo "Portable node prepared:"
+          ls -la resources/bin/${TRIPLET}
+
+      # macOS: Patch wsjtx-lib dylib install names
+      - name: Patch wsjtx-lib dylib (macOS)
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=$(pwd)
+          PREBUILT_DIR="$ROOT/node_modules/wsjtx-lib/prebuilds/darwin-${{ matrix.arch }}"
+
+          if [ ! -d "$PREBUILT_DIR" ]; then
+            echo "wsjtx-lib prebuild dir not found"
+            exit 0
+          fi
+
+          GCC_PREFIX=$(brew --prefix gcc@14 || brew --prefix gcc)
+          cp -Lv $(ls "$GCC_PREFIX"/lib/gcc/*/libquadmath.0.dylib | head -n1) "$PREBUILT_DIR" || true
+          cp -Lv $(ls "$GCC_PREFIX"/lib/gcc/*/libgcc_s.1.1.dylib | head -n1) "$PREBUILT_DIR" || true
+
+          pushd "$PREBUILT_DIR" >/dev/null
+          install_name_tool -id @loader_path/libfftw3f.3.dylib libfftw3f.3.dylib 2>/dev/null || true
+          install_name_tool -id @loader_path/libfftw3f_threads.3.dylib libfftw3f_threads.3.dylib 2>/dev/null || true
+          install_name_tool -id @loader_path/libgfortran.5.dylib libgfortran.5.dylib 2>/dev/null || true
+          [ -f libquadmath.0.dylib ] && install_name_tool -id @loader_path/libquadmath.0.dylib libquadmath.0.dylib || true
+          [ -f libgcc_s.1.1.dylib ] && install_name_tool -id @loader_path/libgcc_s.1.1.dylib libgcc_s.1.1.dylib || true
+
+          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f.3.dylib @loader_path/libfftw3f.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f_threads.3.dylib @loader_path/libfftw3f_threads.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          popd >/dev/null
+
+      # Import macOS certificates
+      - name: Import macOS certificates
+        if: matrix.platform == 'darwin' && github.event_name != 'pull_request'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # 创建临时 keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # 导入证书
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode --output $CERTIFICATE_PATH
+          security import $CERTIFICATE_PATH -k $KEYCHAIN_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # 设置为默认 keychain
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          security default-keychain -s $KEYCHAIN_PATH
+
+      # Package with electron-builder
+      - name: Package application (macOS)
+        if: matrix.platform == 'darwin'
+        run: yarn dist:mac --${{ matrix.arch }}
+        env:
+          NODE_ENV: production
+          # 签名配置
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # 公证配置 (只在非 PR 时启用)
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # 跳过 PR 的公证
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ github.event_name != 'pull_request' }}
+
+      - name: Package application (Linux)
+        if: matrix.platform == 'linux'
+        run: yarn dist:linux --${{ matrix.arch }}
+        env:
+          NODE_ENV: production
+
+      # Upload artifacts
+      - name: Upload artifacts (macOS)
+        if: matrix.platform == 'darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            out/electron-builder/*.dmg
+          retention-days: 30
+
+      - name: Upload artifacts (Linux)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            out/electron-builder/*.deb
+            out/electron-builder/*.rpm
+            out/electron-builder/*.AppImage
+          retention-days: 30
+
+  # Nightly Release
+  nightly-release:
+    name: Create Nightly Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Display structure of downloaded files
+        run: ls -R dist/
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Delete existing nightly release
+        run: |
+          gh release delete nightly --yes || true
+          git push origin :refs/tags/nightly || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: nightly
+          name: Nightly Build (${{ steps.date.outputs.date }})
+          body: |
+            ## 🌙 TX-5DR Nightly Build
+
+            **构建时间**: ${{ steps.date.outputs.date }}
+            **提交**: ${{ github.sha }}
+
+            ⚠️ **注意**: 这是自动构建的测试版本，可能不稳定。
+
+            ### 📦 下载说明
+
+            - **macOS (Apple Silicon)**: 下载 `TX-5DR-*-mac-arm64.dmg`
+            - **Linux x64**: 下载 `TX-5DR-*-linux-x64.deb`, `.rpm` 或 `.AppImage`
+            - **Linux ARM64**: 下载 `TX-5DR-*-linux-arm64.deb`, `.rpm` 或 `.AppImage`
+
+            ### 🔄 更新频率
+            每次推送到 `main` 分支时自动构建。
+          draft: false
+          prerelease: true
+          files: |
+            dist/**/*.dmg
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Stable Release (on tags)
+  stable-release:
+    name: Create Stable Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Display structure of downloaded files
+        run: ls -R dist/
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create stable release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: TX-5DR ${{ steps.version.outputs.version }}
+          body: |
+            ## 🚀 TX-5DR Release ${{ steps.version.outputs.version }}
+
+            ### 📦 下载说明
+
+            - **macOS (Apple Silicon)**: 下载 `TX-5DR-*-mac-arm64.dmg`
+            - **Linux x64**: 下载 `TX-5DR-*-linux-x64.deb`, `.rpm` 或 `.AppImage`
+            - **Linux ARM64**: 下载 `TX-5DR-*-linux-arm64.deb`, `.rpm` 或 `.AppImage`
+
+            ### 🔧 系统要求
+
+            - **macOS**: 11.0+ (Apple Silicon)
+            - **Linux**: Ubuntu 20.04+ 或等效发行版
+
+            ### 📝 更新日志
+
+            请查看 [CHANGELOG.md](https://github.com/boybook/tx-5dr/blob/main/CHANGELOG.md)
+          draft: false
+          prerelease: false
+          files: |
+            dist/**/*.dmg
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,143 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.tx5dr.app",
+  "productName": "TX-5DR",
+  "executableName": "tx-5dr",
+  "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+  "directories": {
+    "output": "out/electron-builder",
+    "buildResources": "packages/electron-main/assets"
+  },
+  "files": [
+    "packages/*/dist/**/*",
+    "packages/*/package.json",
+    "!packages/*/node_modules",
+    "node_modules/**/*",
+    "!**/*.{ts,tsx}",
+    "!**/tsconfig.json",
+    "!**/.turbo",
+    "!**/turbo.json",
+    "!**/.git",
+    "!**/.yarn",
+    "!**/out",
+    "!**/.electron-cache",
+    "!**/.electron-builder-cache"
+  ],
+  "extraResources": [
+    {
+      "from": "resources/bin",
+      "to": "bin",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "resources/licenses",
+      "to": "licenses",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "resources/README.txt",
+      "to": "README.txt"
+    }
+  ],
+  "asarUnpack": [
+    "node_modules/naudiodon2/**/*",
+    "node_modules/hamlib/**/*",
+    "node_modules/wsjtx-lib/**/*",
+    "node_modules/@serialport/**/*"
+  ],
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["arm64", "x64"]
+      }
+    ],
+    "category": "public.app-category.utilities",
+    "icon": "packages/electron-main/assets/icon.icns",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "scripts/entitlements.plist",
+    "entitlementsInherit": "scripts/entitlements.plist",
+    "darkModeSupport": true,
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "This app needs access to the microphone",
+      "NSCameraUsageDescription": "This app needs access to the camera",
+      "NSBluetoothAlwaysUsageDescription": "This app needs access to Bluetooth",
+      "NSBluetoothPeripheralUsageDescription": "This app needs access to Bluetooth"
+    },
+    "notarize": false
+  },
+  "dmg": {
+    "title": "${productName} ${version}",
+    "icon": "packages/electron-main/assets/icon.icns",
+    "backgroundColor": "#1a1a1a",
+    "window": {
+      "width": 540,
+      "height": 380
+    },
+    "contents": [
+      {
+        "x": 144,
+        "y": 150,
+        "type": "file"
+      },
+      {
+        "x": 396,
+        "y": 150,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ]
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "packages/electron-main/assets/icon.ico",
+    "requestedExecutionLevel": "asInvoker"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "TX-5DR"
+  },
+  "linux": {
+    "target": [
+      {
+        "target": "deb",
+        "arch": ["x64", "arm64"]
+      },
+      {
+        "target": "rpm",
+        "arch": ["x64", "arm64"]
+      },
+      {
+        "target": "AppImage",
+        "arch": ["x64", "arm64"]
+      }
+    ],
+    "category": "Utility;AudioVideo",
+    "icon": "packages/electron-main/assets/icon.png",
+    "maintainer": "BG5DRB <bg5drb@example.com>",
+    "vendor": "TX-5DR Team",
+    "synopsis": "TX-5DR Ham Radio FT8 Application",
+    "description": "TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio"
+  },
+  "deb": {
+    "depends": [
+      "libpulse0",
+      "libasound2"
+    ]
+  },
+  "afterSign": "scripts/notarize.js",
+  "publish": {
+    "provider": "github",
+    "owner": "boybook",
+    "repo": "tx-5dr"
+  }
+}

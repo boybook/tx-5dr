@@ -26,7 +26,12 @@
     "fresh-build": "yarn clean && yarn install && yarn build:package",
     "docker:build": "scripts/docker-quick-build.sh",
     "docker:build-multi": "scripts/build-docker.sh",
-    "docker:build-and-push": "scripts/build-docker.sh boybook tx-5dr latest true"
+    "docker:build-and-push": "scripts/build-docker.sh boybook tx-5dr latest true",
+    "dist": "yarn build && electron-builder",
+    "dist:mac": "yarn build && electron-builder --mac",
+    "dist:win": "yarn build && electron-builder --win",
+    "dist:linux": "yarn build && electron-builder --linux",
+    "dist:all": "yarn build && electron-builder -mwl"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.8.1",
@@ -35,8 +40,11 @@
     "@electron-forge/maker-squirrel": "^7.8.1",
     "@electron-forge/maker-zip": "^7.8.1",
     "@electron-forge/plugin-auto-unpack-natives": "^7.8.1",
+    "@electron/notarize": "^3.1.0",
+    "@electron/osx-sign": "^2.2.0",
     "@electron/rebuild": "^4.0.1",
     "electron": "^36.4.0",
+    "electron-builder": "26.0.12",
     "png-to-ico": "^2.1.8",
     "turbo": "^2.5.8"
   },
