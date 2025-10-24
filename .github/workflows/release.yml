@@ -215,7 +215,7 @@ jobs:
 
       - name: Package application (Linux)
         if: matrix.platform == 'linux'
-        run: yarn build && electron-builder --linux deb rpm AppImage --${{ matrix.arch }} --publish never
+        run: yarn dist:linux --${{ matrix.arch }} --publish never
         env:
           NODE_ENV: production
 
