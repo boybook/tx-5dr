@@ -12,7 +12,7 @@ on:
 
 env:
   DOCKER_IMAGE_NAME: tx-5dr
-  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v8
+  PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   build-and-push:
@@ -58,7 +58,7 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
-          platforms: linux/amd64,linux/arm64,linux/arm/v8
+          platforms: linux/amd64,linux/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -109,7 +109,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 镜像信息" >> $GITHUB_STEP_SUMMARY
           echo "- **仓库**: \`${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **架构**: \`linux/amd64, linux/arm64, linux/arm/v8 (树莓派)\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **架构**: \`linux/amd64, linux/arm64\`" >> $GITHUB_STEP_SUMMARY
           echo "- **提交**: \`${{ steps.tags.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🏷️ 标签" >> $GITHUB_STEP_SUMMARY
