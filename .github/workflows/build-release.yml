@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v1.0.0)'
+        description: 'Release version (e.g., v1.0.0, leave empty for nightly)'
         required: false
         default: ''
 
@@ -311,42 +311,81 @@ jobs:
           ls -la out/ || echo "No out/ directory found"
           find out/ -type f -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.tar.gz" || echo "No installable files found"
 
-      - name: Upload artifacts (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: |
-            out/make/**/*.exe
-            out/make/**/*.zip
-          retention-days: 30
+      - name: Prepare artifacts (rename for nightly if needed)
+        shell: bash
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${{ matrix.arch }}"
+          VERSION="${{ github.event.inputs.version }}"
 
-      - name: Upload artifacts (macOS)
-        if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: |
-            out/make/**/*.dmg
-            out/make/**/*.zip
-          retention-days: 30
+          # 创建统一的产物目录
+          mkdir -p release-artifacts
 
-      - name: Upload artifacts (Linux)
-        if: runner.os == 'Linux'
+          # 判断是否为 nightly 版本（无版本号输入时）
+          if [ -z "$VERSION" ]; then
+            echo "📦 准备 Nightly 版本产物..."
+            PREFIX="TX-5DR-nightly"
+          else
+            echo "📦 准备正式版本产物 ($VERSION)..."
+            PREFIX="TX-5DR-${VERSION}"
+          fi
+
+          if [ "$PLATFORM" = "darwin" ]; then
+            # macOS: 分别重命名 DMG 和 ZIP
+            find out/make -name "*.dmg" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-macos-${ARCH}.dmg"
+              echo "✅ 已准备: ${PREFIX}-macos-${ARCH}.dmg"
+            done
+
+            find out/make -name "*.zip" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-macos-${ARCH}.zip"
+              echo "✅ 已准备: ${PREFIX}-macos-${ARCH}.zip"
+            done
+          elif [ "$PLATFORM" = "linux" ]; then
+            # Linux: 分别重命名 DEB, RPM, ZIP
+            find out/make -name "*.deb" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-linux-${ARCH}.deb"
+              echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.deb"
+            done
+
+            find out/make -name "*.rpm" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-linux-${ARCH}.rpm"
+              echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.rpm"
+            done
+
+            find out/make -name "*.zip" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-linux-${ARCH}.zip"
+              echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.zip"
+            done
+          elif [ "$PLATFORM" = "win32" ]; then
+            # Windows: EXE 和 ZIP
+            find out/make -name "*.exe" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-windows-${ARCH}.exe"
+              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.exe"
+            done
+
+            find out/make -name "*.zip" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-windows-${ARCH}.zip"
+              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.zip"
+            done
+          fi
+
+          echo "=== 产物准备完成 ==="
+          ls -lh release-artifacts/
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            out/make/**/*.deb
-            out/make/**/*.rpm
-            out/make/**/*.zip
+          path: release-artifacts/*
           retention-days: 30
 
   create-release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
-    
+    # 仅在非 PR 时创建 release（push 或手动触发）
+    if: github.event_name != 'pull_request'
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -356,45 +395,111 @@ jobs:
         with:
           path: dist/
 
-      - name: Display structure of downloaded files
-        run: ls -R dist/
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          echo "=== 准备 release 产物 ==="
+          mkdir -p release-assets
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 将所有产物移到统一目录
+          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.exe" \) -exec cp {} release-assets/ \;
+
+          echo "=== Release 产物列表 ==="
+          ls -lh release-assets/
+
+      - name: Generate release info
+        id: release_info
+        run: |
+          echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+          echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      # Nightly Release: 仅在 push 到 main/develop 时（无版本号输入）
+      - name: Create or Update Nightly Release
+        if: github.event.inputs.version == ''
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          release_name: TX-5DR ${{ github.event.inputs.version }}
+          tag: nightly
+          name: "Nightly Build"
+          body: |
+            ## TX-5DR Nightly Build
+
+            **自动构建于**: ${{ steps.release_info.outputs.timestamp }}
+            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            **Branch**: ${{ github.ref_name }}
+
+            ### 📦 下载说明
+
+            #### macOS (ARM64)
+            - **DMG 安装包**: `TX-5DR-nightly-macos-arm64.dmg` - 推荐用于安装
+            - **ZIP 便携版**: `TX-5DR-nightly-macos-arm64.zip` - 解压即用
+
+            #### Linux (x64)
+            - **DEB 包** (Ubuntu/Debian): `TX-5DR-nightly-linux-x64.deb`
+            - **RPM 包** (Fedora/RHEL): `TX-5DR-nightly-linux-x64.rpm`
+            - **ZIP 便携版**: `TX-5DR-nightly-linux-x64.zip`
+
+            #### Linux (ARM64)
+            - **DEB 包** (Ubuntu/Debian): `TX-5DR-nightly-linux-arm64.deb`
+            - **RPM 包** (Fedora/RHEL): `TX-5DR-nightly-linux-arm64.rpm`
+            - **ZIP 便携版**: `TX-5DR-nightly-linux-arm64.zip`
+
+            ### ⚠️ 注意事项
+            - 这是开发版本，可能包含未经充分测试的新功能
+            - 每次推送到 main/develop 分支都会自动更新此版本
+            - 如需稳定版本，请下载正式 Release
+
+            ### 🔧 系统要求
+            - Node.js >= 22.15.1 (已内置便携版)
+            - macOS 11+ / Ubuntu 20.04+ / Fedora 35+
+          allowUpdates: true
+          removeArtifacts: true
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: true
+          makeLatest: false
+
+      # Official Release: 仅在手动触发且提供版本号时
+      - name: Create Official Release
+        if: github.event.inputs.version != ''
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.event.inputs.version }}
+          name: "TX-5DR ${{ github.event.inputs.version }}"
           body: |
             ## TX-5DR Release ${{ github.event.inputs.version }}
-            
+
+            **发布日期**: ${{ steps.release_info.outputs.date }}
+            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+
             ### 🚀 新功能
-            - Electron应用多平台自动构建
-            - 支持Windows、macOS、Linux平台
-            
+            - Electron 应用多平台自动构建
+            - 支持 macOS、Linux 平台
+
             ### 📦 下载说明
-            - **Windows (x64)**: 下载 `.exe` 或 `.msi` 文件
-            - **macOS (ARM64)**: 下载 `.dmg` 文件 
-            - **Linux (x64/ARM64)**: 下载 `.AppImage`、`.deb` 或 `.rpm` 文件
-            
+
+            #### macOS (ARM64)
+            - **DMG 安装包**: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg` - 推荐
+            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.zip`
+
+            #### Linux (x64)
+            - **DEB 包** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb`
+            - **RPM 包** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.rpm`
+            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-linux-x64.zip`
+
+            #### Linux (ARM64)
+            - **DEB 包** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.deb`
+            - **RPM 包** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm`
+            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip`
+
             ### 🔧 系统要求
-            - Node.js >= 22.15.1
-            - 操作系统: Windows 10+, macOS 11+, Ubuntu 20.04+
-            
+            - Node.js >= 22.15.1 (已内置便携版)
+            - 操作系统: macOS 11+, Ubuntu 20.04+, Fedora 35+
+
             ---
-            自动构建于: ${{ github.sha }}
+            构建于: ${{ steps.release_info.outputs.timestamp }}
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: false
-
-      - name: Upload Release Assets
-        run: |
-          for file in dist/**/*; do
-            if [ -f "$file" ]; then
-              echo "Uploading $file"
-              gh release upload ${{ github.event.inputs.version }} "$file" --clobber
-            fi
-          done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          makeLatest: true 
