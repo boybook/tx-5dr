@@ -160,29 +160,15 @@ export default {
       execSync('yarn build', { stdio: 'inherit' });
       console.log('✅ Build completed');
     },
-    // 打包后的处理：精简 node_modules 与平台特定清理
-    postPackage: async (forgeConfig, options) => {
-      console.log('📦 Post-package hook executed');
+    // 签名前的文件清理：在签名之前精简 node_modules 与平台特定清理
+    packageAfterCopy: async (forgeConfig, buildPath, electronVersion, platform, arch) => {
+      console.log('📦 Package-after-copy hook executed (before signing)');
 
       const { execSync } = await import('child_process');
       const { join } = await import('path');
 
-      const packagingResult = options.outputPaths[0];
-      // macOS: outputPaths[0] 指向目录（如 out/TX-5DR-darwin-arm64），需定位其中的 .app 目录
-      let base = packagingResult;
-      if (options.platform === 'darwin') {
-        const fsMod = await import('fs');
-        try {
-          const entries = fsMod.readdirSync(packagingResult);
-          const appDir = entries.find((n) => n.endsWith('.app'));
-          if (appDir) base = join(packagingResult, appDir);
-        } catch {}
-      }
-      // 不同平台 Resources 路径不同
-      const resourcesDir = options.platform === 'darwin'
-        ? join(base, 'Contents', 'Resources')
-        : join(base, 'resources');
-      const appRoot = join(resourcesDir, 'app');
+      // buildPath 直接指向 app 内容根目录
+      const appRoot = buildPath;
       const nm = join(appRoot, 'node_modules');
 
       // 通用：删除明显的开发/打包期依赖，保留运行期依赖（如 fastify/hamlib/serialport/wsjtx-lib/naudiodon2 等）
@@ -221,10 +207,9 @@ export default {
       }
 
       // 平台特定：清理跨架构预构建二进制，避免携带无用文件
-      if (options.platform === 'linux') {
+      if (platform === 'linux') {
         try {
           console.log('🧹 [Linux] 清理跨架构与非Linux二进制文件...');
-          const arch = options.arch || process.arch; // 'x64' | 'arm64'
           const keep = arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
 
           // wsjtx-lib 仅保留本平台预编译目录
@@ -239,18 +224,15 @@ export default {
           // naudiodon2: 删除Windows/MSVC目录与Windows二进制
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/msvc" 2>/dev/null || true`, { stdio: 'inherit' });
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/bin" 2>/dev/null || true`, { stdio: 'inherit' });
-          // 使用 -o 替代 \( \) 语法以兼容 dash shell
           execSync(`find "${appRoot}" -type f -name "*.dll" -delete 2>/dev/null || true`, { stdio: 'inherit' });
           execSync(`find "${appRoot}" -type f -name "*.exe" -delete 2>/dev/null || true`, { stdio: 'inherit' });
-
-          // 删除非目标架构的 naudiodon2 预编译二进制文件（包括所有 ARM 变体）
           execSync(`rm -rf "${appRoot}"/node_modules/naudiodon2/portaudio/bin_arm* 2>/dev/null || true`, { stdio: 'inherit' });
           console.log('✅ [Linux] 清理完成');
         } catch (error) {
           console.warn('⚠️ [Linux] 清理跨架构文件时出现警告:', error.message);
         }
       }
-      if (options.platform === 'darwin') {
+      if (platform === 'darwin') {
         try {
           console.log('🧹 [macOS] 清理非本平台预构建...');
           // 仅保留 darwin-arm64 的 wsjtx-lib 预构建
@@ -264,6 +246,29 @@ export default {
           console.warn('⚠️ [macOS] 清理跨架构文件时出现警告:', error.message);
         }
       }
+    },
+    // 打包后的处理：仅用于签名外部 Node 二进制（签名后执行）
+    postPackage: async (forgeConfig, options) => {
+      console.log('📦 Post-package hook executed (after signing)');
+
+      const { execSync } = await import('child_process');
+      const { join } = await import('path');
+
+      const packagingResult = options.outputPaths[0];
+      // macOS: outputPaths[0] 指向目录（如 out/TX-5DR-darwin-arm64），需定位其中的 .app 目录
+      let base = packagingResult;
+      if (options.platform === 'darwin') {
+        const fsMod = await import('fs');
+        try {
+          const entries = fsMod.readdirSync(packagingResult);
+          const appDir = entries.find((n) => n.endsWith('.app'));
+          if (appDir) base = join(packagingResult, appDir);
+        } catch {}
+      }
+      // 不同平台 Resources 路径不同
+      const resourcesDir = options.platform === 'darwin'
+        ? join(base, 'Contents', 'Resources')
+        : join(base, 'resources');
 
       // macOS: 签名外部 Node 二进制（electron-osx-sign 不会自动处理 extraResource）
       if (options.platform === 'darwin' && process.env.APPLE_IDENTITY) {
@@ -292,7 +297,7 @@ export default {
           throw error; // 签名失败应该中止构建
         }
       } else if (options.platform === 'darwin') {
-        console.log('✅ [macOS] electron-osx-sign 将自动处理所有原生模块的签名');
+        console.log('✅ [macOS] electron-osx-sign 已自动处理所有原生模块的签名');
       }
     }
   }
