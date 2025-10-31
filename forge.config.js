@@ -265,64 +265,10 @@ export default {
         }
       }
 
-      // macOS 深度签名:签名所有内部的 .node 和 .dylib 文件
-      if (options.platform === 'darwin' && process.env.CI && process.env.APPLE_TEAM_ID) {
-        try {
-          console.log('🔐 开始深度签名所有原生模块...');
-          const path = await import('path');
-          const fs = await import('fs');
-          const { glob } = await import('glob');
-
-          const identity = `Developer ID Application: ${process.env.APPLE_TEAM_ID}`;
-          const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
-
-          // 查找 app/node_modules 中所有需要签名的二进制文件
-          const patterns = [
-            '**/*.node',
-            '**/*.dylib'
-          ];
-
-          const filesToSign = [];
-          for (const pattern of patterns) {
-            const files = await glob(pattern, {
-              cwd: path.join(appRoot, 'node_modules'),
-              absolute: true,
-              nodir: true
-            });
-            filesToSign.push(...files);
-          }
-
-          console.log(`找到 ${filesToSign.length} 个二进制文件需要签名`);
-
-          let signedCount = 0;
-          let failedCount = 0;
-
-          for (const file of filesToSign) {
-            try {
-              // 检查文件是否存在
-              if (!fs.existsSync(file)) {
-                continue;
-              }
-
-              // 执行签名
-              execSync(
-                `codesign --force --sign "${identity}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${file}"`,
-                { stdio: 'pipe' }
-              );
-              signedCount++;
-              const relativePath = path.relative(appRoot, file);
-              console.log(`  ✅ ${relativePath}`);
-            } catch (err) {
-              failedCount++;
-              const relativePath = path.relative(appRoot, file);
-              console.warn(`  ⚠️  签名失败: ${relativePath} - ${err.message}`);
-            }
-          }
-
-          console.log(`✅ 深度签名完成: 成功 ${signedCount} 个, 失败 ${failedCount} 个`);
-        } catch (error) {
-          console.warn('⚠️ [macOS] 深度签名遇到问题:', error.message);
-        }
+      // macOS: electron-osx-sign 会自动递归签名所有 .node 和 .dylib 文件
+      // 不需要自定义深度签名 hook,避免冲突和 EMFILE 错误
+      if (options.platform === 'darwin') {
+        console.log('✅ [macOS] electron-osx-sign 将自动处理所有原生模块的签名');
       }
     }
   }
