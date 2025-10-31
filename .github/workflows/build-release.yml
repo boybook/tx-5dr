@@ -153,18 +153,9 @@ jobs:
           security set-keychain-settings -t 3600 -u temp.keychain
           rm -f certificate.p12
 
-          # 验证证书并提取 identity
           echo "=== 验证证书导入 ==="
           security find-identity -v -p codesigning temp.keychain
-
-          CERT_IDENTITY=$(security find-identity -v -p codesigning temp.keychain | grep "Developer ID Application" | head -1 | grep -o '"[^"]*"' | tr -d '"')
-          if [ -z "$CERT_IDENTITY" ]; then
-            echo "❌ 错误: 未找到 Developer ID Application 证书"
-            exit 1
-          fi
-
-          echo "✅ 找到证书: $CERT_IDENTITY"
-          echo "APPLE_IDENTITY=$CERT_IDENTITY" >> $GITHUB_ENV
+          echo "✅ 证书导入成功"
 
       - name: Build application
         run: yarn build
@@ -272,17 +263,33 @@ jobs:
           popd >/dev/null
 
       - name: Package application
-        run: yarn ${{ matrix.build_command }}
+        shell: bash
         env:
           NODE_ENV: production
-          CSC_IDENTITY_AUTO_DISCOVERY: false
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
-          # macOS 签名和公证配置
-          APPLE_IDENTITY: ${{ env.APPLE_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # macOS: 解锁钥匙串并提取证书 identity
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            echo "🔓 解锁钥匙串并提取证书..."
+            security unlock-keychain -p actions temp.keychain
+
+            CERT_IDENTITY=$(security find-identity -v -p codesigning temp.keychain | grep "Developer ID Application" | head -1 | grep -o '"[^"]*"' | tr -d '"')
+            if [ -z "$CERT_IDENTITY" ]; then
+              echo "❌ 错误: 未找到 Developer ID Application 证书"
+              exit 1
+            fi
+
+            echo "✅ 使用证书: $CERT_IDENTITY"
+            export APPLE_IDENTITY="$CERT_IDENTITY"
+          fi
+
+          # 执行打包
+          echo "📦 开始打包..."
+          yarn ${{ matrix.build_command }}
 
       - name: List build outputs (Debug)
         shell: bash
