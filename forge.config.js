@@ -5,6 +5,17 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// ========== DEBUG: macOS Signing Config ==========
+if (process.platform === 'darwin') {
+  console.log('========== DEBUG: macOS Signing Config ==========');
+  console.log('Platform:', process.platform);
+  console.log('APPLE_IDENTITY:', process.env.APPLE_IDENTITY);
+  console.log('CI:', process.env.CI);
+  console.log('CSC_IDENTITY_AUTO_DISCOVERY:', process.env.CSC_IDENTITY_AUTO_DISCOVERY);
+  console.log('All APPLE_* vars:', Object.keys(process.env).filter(k => k.startsWith('APPLE')));
+  console.log('=================================================');
+}
+
 export default {
   packagerConfig: {
     name: 'TX-5DR',
@@ -51,7 +62,9 @@ export default {
       hardenedRuntime: true,
       entitlements: 'build/entitlements.mac.plist',
       'entitlements-inherit': 'build/entitlements.mac.plist',
-      'signature-flags': 'library'
+      'signature-flags': 'library',
+      'gatekeeper-assess': false,
+      verbose: true
     }),
     // macOS 公证配置
     osxNotarize: (process.env.CI && process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID) ? {

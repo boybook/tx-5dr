@@ -271,6 +271,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DEBUG: electron-osx-sign*
         run: |
           # macOS: 解锁钥匙串并提取证书 identity
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
@@ -284,12 +285,17 @@ jobs:
             fi
 
             echo "✅ 使用证书: $CERT_IDENTITY"
-            export APPLE_IDENTITY="$CERT_IDENTITY"
-          fi
 
-          # 执行打包
-          echo "📦 开始打包..."
-          yarn ${{ matrix.build_command }}
+            # 方式 1: export (可能不生效)
+            export APPLE_IDENTITY="$CERT_IDENTITY"
+
+            # 方式 2: 直接在命令前设置 (更可靠)
+            echo "📦 开始打包 (使用环境变量)..."
+            APPLE_IDENTITY="$CERT_IDENTITY" yarn ${{ matrix.build_command }}
+          else
+            echo "📦 开始打包..."
+            yarn ${{ matrix.build_command }}
+          fi
 
       - name: List build outputs (Debug)
         shell: bash
