@@ -56,23 +56,23 @@ export default {
     prune: false,
     darwinDarkModeSupport: true,
     // macOS 签名配置
-    osxSign: (process.env.CSC_IDENTITY_AUTO_DISCOVERY === 'false' ? false : {
+    osxSign: {
       // 使用显式的 identity (CI 从证书提取) 或自动查找 (本地)
-      identity: process.env.APPLE_IDENTITY || undefined,
+      identity: process.env.APPLE_IDENTITY,
       hardenedRuntime: true,
       entitlements: 'build/entitlements.mac.plist',
       'entitlements-inherit': 'build/entitlements.mac.plist',
       'signature-flags': 'library',
       'gatekeeper-assess': false,
       verbose: true
-    }),
-    // macOS 公证配置
-    osxNotarize: (process.env.CI && process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID) ? {
+    },
+    // macOS 公证配置（本地和 CI 都启用）
+    osxNotarize: {
       tool: 'notarytool',
       appleId: process.env.APPLE_ID,
       appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD,
       teamId: process.env.APPLE_TEAM_ID
-    } : false, // 本地开发默认不公证
+    },
     // Windows 特定配置
     win32metadata: {
       CompanyName: 'TX-5DR Team',
