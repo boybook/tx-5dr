@@ -148,9 +148,23 @@ jobs:
           security create-keychain -p actions temp.keychain
           security default-keychain -s temp.keychain
           security unlock-keychain -p actions temp.keychain
-          security import certificate.p12 -k temp.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security import certificate.p12 -k temp.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/productbuild
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions temp.keychain
+          security set-keychain-settings -t 3600 -u temp.keychain
           rm -f certificate.p12
+
+          # 验证证书并提取 identity
+          echo "=== 验证证书导入 ==="
+          security find-identity -v -p codesigning temp.keychain
+
+          CERT_IDENTITY=$(security find-identity -v -p codesigning temp.keychain | grep "Developer ID Application" | head -1 | grep -o '"[^"]*"' | tr -d '"')
+          if [ -z "$CERT_IDENTITY" ]; then
+            echo "❌ 错误: 未找到 Developer ID Application 证书"
+            exit 1
+          fi
+
+          echo "✅ 找到证书: $CERT_IDENTITY"
+          echo "APPLE_IDENTITY=$CERT_IDENTITY" >> $GITHUB_ENV
 
       - name: Build application
         run: yarn build
@@ -265,6 +279,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
           # macOS 签名和公证配置
+          APPLE_IDENTITY: ${{ env.APPLE_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
