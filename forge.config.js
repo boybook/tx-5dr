@@ -265,9 +265,33 @@ export default {
         }
       }
 
-      // macOS: electron-osx-sign 会自动递归签名所有 .node 和 .dylib 文件
-      // 不需要自定义深度签名 hook,避免冲突和 EMFILE 错误
-      if (options.platform === 'darwin') {
+      // macOS: 签名外部 Node 二进制（electron-osx-sign 不会自动处理 extraResource）
+      if (options.platform === 'darwin' && process.env.APPLE_IDENTITY) {
+        try {
+          console.log('🔐 [macOS] 签名外部 Node 二进制...');
+          const path = await import('path');
+          const fs = await import('fs');
+
+          const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
+          const arch = options.arch || process.arch;
+          const triplet = `darwin-${arch}`;
+          const nodeBinaryPath = path.join(resourcesDir, 'bin', triplet, 'node');
+
+          if (fs.existsSync(nodeBinaryPath)) {
+            console.log(`  签名: ${nodeBinaryPath}`);
+            execSync(
+              `codesign --force --sign "${process.env.APPLE_IDENTITY}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${nodeBinaryPath}"`,
+              { stdio: 'inherit' }
+            );
+            console.log('✅ [macOS] Node 二进制签名完成');
+          } else {
+            console.log(`⚠️  [macOS] Node 二进制不存在: ${nodeBinaryPath}`);
+          }
+        } catch (error) {
+          console.error('❌ [macOS] Node 二进制签名失败:', error.message);
+          throw error; // 签名失败应该中止构建
+        }
+      } else if (options.platform === 'darwin') {
         console.log('✅ [macOS] electron-osx-sign 将自动处理所有原生模块的签名');
       }
     }
