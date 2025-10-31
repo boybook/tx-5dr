@@ -273,6 +273,13 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           DEBUG: electron-osx-sign*
         run: |
+          # macOS: 增加文件描述符限制,避免 EMFILE 错误
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            echo "🔧 增加文件描述符限制..."
+            ulimit -n 10240
+            echo "✅ 文件描述符限制已设置为: $(ulimit -n)"
+          fi
+
           # macOS: 解锁钥匙串并提取证书 identity
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
             echo "🔓 解锁钥匙串并提取证书..."
