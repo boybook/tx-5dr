@@ -44,9 +44,28 @@ export default {
     // 禁用依赖裁剪，避免工作区（monorepo）被按根 package.json 误裁导致运行时缺包
     prune: false,
     darwinDarkModeSupport: true,
-    // 平台特定配置
-    osxSign: false, // 暂时禁用签名
-    osxNotarize: false, // 暂时禁用公证
+    // macOS 签名配置
+    osxSign: process.env.CI ? {
+      // CI 环境:使用环境变量指定的团队 ID
+      identity: process.env.APPLE_TEAM_ID ? `Developer ID Application: ${process.env.APPLE_TEAM_ID}` : undefined,
+      hardenedRuntime: true,
+      entitlements: 'build/entitlements.mac.plist',
+      'entitlements-inherit': 'build/entitlements.mac.plist',
+      'signature-flags': 'library'
+    } : (process.env.CSC_IDENTITY_AUTO_DISCOVERY === 'false' ? false : {
+      // 本地环境:自动从钥匙串查找证书,或通过环境变量禁用
+      hardenedRuntime: true,
+      entitlements: 'build/entitlements.mac.plist',
+      'entitlements-inherit': 'build/entitlements.mac.plist',
+      'signature-flags': 'library'
+    }),
+    // macOS 公证配置
+    osxNotarize: (process.env.CI && process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID) ? {
+      tool: 'notarytool',
+      appleId: process.env.APPLE_ID,
+      appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD,
+      teamId: process.env.APPLE_TEAM_ID
+    } : false, // 本地开发默认不公证
     // Windows 特定配置
     win32metadata: {
       CompanyName: 'TX-5DR Team',
@@ -69,7 +88,16 @@ export default {
         iconUrl: 'https://raw.githubusercontent.com/boybook/tx-5dr/main/packages/electron-main/assets/icon.ico'
       }
     },
-    // macOS Packages
+    // macOS Packages - DMG 安装包
+    {
+      name: '@electron-forge/maker-dmg',
+      platforms: ['darwin'],
+      config: {
+        format: 'ULFO',
+        overwrite: true
+      }
+    },
+    // macOS Packages - ZIP 便携版
     {
       name: '@electron-forge/maker-zip',
       platforms: ['darwin'],
@@ -227,6 +255,66 @@ export default {
           console.log('✅ [macOS] 清理完成');
         } catch (error) {
           console.warn('⚠️ [macOS] 清理跨架构文件时出现警告:', error.message);
+        }
+      }
+
+      // macOS 深度签名:签名所有内部的 .node 和 .dylib 文件
+      if (options.platform === 'darwin' && process.env.CI && process.env.APPLE_TEAM_ID) {
+        try {
+          console.log('🔐 开始深度签名所有原生模块...');
+          const path = await import('path');
+          const fs = await import('fs');
+          const { glob } = await import('glob');
+
+          const identity = `Developer ID Application: ${process.env.APPLE_TEAM_ID}`;
+          const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
+
+          // 查找 app/node_modules 中所有需要签名的二进制文件
+          const patterns = [
+            '**/*.node',
+            '**/*.dylib'
+          ];
+
+          const filesToSign = [];
+          for (const pattern of patterns) {
+            const files = await glob(pattern, {
+              cwd: path.join(appRoot, 'node_modules'),
+              absolute: true,
+              nodir: true
+            });
+            filesToSign.push(...files);
+          }
+
+          console.log(`找到 ${filesToSign.length} 个二进制文件需要签名`);
+
+          let signedCount = 0;
+          let failedCount = 0;
+
+          for (const file of filesToSign) {
+            try {
+              // 检查文件是否存在
+              if (!fs.existsSync(file)) {
+                continue;
+              }
+
+              // 执行签名
+              execSync(
+                `codesign --force --sign "${identity}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${file}"`,
+                { stdio: 'pipe' }
+              );
+              signedCount++;
+              const relativePath = path.relative(appRoot, file);
+              console.log(`  ✅ ${relativePath}`);
+            } catch (err) {
+              failedCount++;
+              const relativePath = path.relative(appRoot, file);
+              console.warn(`  ⚠️  签名失败: ${relativePath} - ${err.message}`);
+            }
+          }
+
+          console.log(`✅ 深度签名完成: 成功 ${signedCount} 个, 失败 ${failedCount} 个`);
+        } catch (error) {
+          console.warn('⚠️ [macOS] 深度签名遇到问题:', error.message);
         }
       }
     }

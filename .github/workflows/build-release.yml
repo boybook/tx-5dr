@@ -138,6 +138,20 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: node scripts/generate-ico.js
 
+      - name: Import Code Signing Certificate (macOS)
+        if: matrix.os == 'macos-latest'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p actions temp.keychain
+          security default-keychain -s temp.keychain
+          security unlock-keychain -p actions temp.keychain
+          security import certificate.p12 -k temp.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions temp.keychain
+          rm -f certificate.p12
+
       - name: Build application
         run: yarn build
         env:
@@ -250,6 +264,10 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
+          # macOS 签名和公证配置
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: List build outputs (Debug)
         shell: bash
@@ -274,6 +292,7 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: |
+            out/make/**/*.dmg
             out/make/**/*.zip
           retention-days: 30
 
