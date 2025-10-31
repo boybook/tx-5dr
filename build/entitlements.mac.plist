@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 允许 JIT 编译 (Node.js/V8 需要) -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- 允许未签名的可执行内存 (某些原生模块需要) -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- 禁用库验证 (允许加载第三方动态库) -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- 音频输入权限 (naudiodon2 需要) -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- 网络客户端权限 -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>
