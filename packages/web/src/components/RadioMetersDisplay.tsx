@@ -1,6 +1,7 @@
 import React from 'react';
 import type { MeterData } from '@tx5dr/contracts';
 import { Progress } from '@heroui/react';
+import { useBufferedMeterData } from '../hooks/useBufferedMeterData';
 
 interface RadioMetersDisplayProps {
   meterData: MeterData;
@@ -10,9 +11,10 @@ interface RadioMetersDisplayProps {
 
 interface MeterProps {
   label: string;
-  value: number;
+  value: number | null;
   unit?: string;
   alert?: boolean;
+  isTimeout?: boolean;
   formatValue?: (value: number) => string;
 }
 
@@ -24,15 +26,20 @@ const Meter: React.FC<MeterProps> = ({
   value,
   unit = '%',
   alert = false,
+  isTimeout = false,
   formatValue
 }) => {
-  const displayValue = formatValue ? formatValue(value) : value.toFixed(1);
+  const displayValue = isTimeout || value === null
+    ? '--'
+    : formatValue ? formatValue(value) : value.toFixed(1);
 
-  // 根据值和告警状态确定颜色
+  const progressValue = value === null || isTimeout ? 0 : value;
+  const showUnit = displayValue !== '--';
+
   const getColor = () => {
     if (alert) return 'danger';
-    if (value > 80) return 'warning';
-    if (value > 50) return 'success';
+    if (progressValue > 80) return 'warning';
+    if (progressValue > 50) return 'success';
     return 'primary';
   };
 
@@ -42,6 +49,8 @@ const Meter: React.FC<MeterProps> = ({
         <span className={`text-xs font-semibold ${
           alert
             ? 'text-danger dark:text-danger-400'
+            : isTimeout
+            ? 'text-default-400 dark:text-default-500'
             : 'text-default-700 dark:text-default-300'
         }`}>
           {label}
@@ -49,13 +58,15 @@ const Meter: React.FC<MeterProps> = ({
         <span className={`text-xs font-mono tabular-nums ${
           alert
             ? 'text-danger font-bold animate-pulse'
+            : isTimeout
+            ? 'text-default-400 dark:text-default-500'
             : 'text-default-600 dark:text-default-400'
         }`}>
-          {displayValue}{unit}
+          {displayValue}{showUnit ? unit : ''}
         </span>
       </div>
       <Progress
-        value={value}
+        value={progressValue}
         maxValue={100}
         color={getColor()}
         size="sm"
@@ -72,76 +83,52 @@ const Meter: React.FC<MeterProps> = ({
 
 /**
  * 电台数值表显示组件
- * 显示 SWR、ALC、Level 三个仪表
+ * 显示 SWR、ALC、Level/Power 仪表（带 3 秒缓冲）
  */
 export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   meterData,
   isPttActive,
   className = ''
 }) => {
+  const buffered = useBufferedMeterData(meterData);
+
   return (
     <div className={`w-full px-2 py-2 pt-1.5 bg-default-50 dark:bg-default-100/50 rounded-lg border border-default-200 dark:border-default-100 ${className}`}>
       <div className="flex items-center gap-2">
         {/* 第一个仪表：根据 PTT 状态动态切换 Level/Power */}
-        {isPttActive ? (
-          // TX 模式：显示发射功率
-          meterData.power && (
-            <Meter
-              label="Power"
-              value={meterData.power.percent}
-              unit="%"
-            />
-          )
-        ) : (
-          // RX 模式：显示接收电平表
-          meterData.level && (
-            <Meter
-              label="Level"
-              value={meterData.level.percent}
-              unit="%"
-            />
-          )
-        )}
+        <Meter
+          label={isPttActive ? 'Power' : 'Level'}
+          value={isPttActive ? buffered.power.value?.percent ?? null : buffered.level.value?.percent ?? null}
+          unit="%"
+          isTimeout={isPttActive ? buffered.power.isTimeout : buffered.level.isTimeout}
+        />
 
         {/* SWR 驻波比表 */}
-        {meterData.swr && (
-          <Meter
-            label="SWR"
-            value={(meterData.swr.raw / 255) * 100}
-            unit=""
-            alert={meterData.swr.alert}
-            formatValue={() => {
-              if (!meterData.swr) return '0.0';
-              const raw = meterData.swr.raw;
-
-              // 0-128: 线性映射到 1.0-3.0
-              if (raw <= 128) {
-                const swr = 1.0 + (raw / 128) * 2.0; // 1.0 到 3.0
-                return swr.toFixed(1);
-              }
-
-              // 128-255: 显示为无穷大
-              return '∞';
-            }}
-          />
-        )}
+        <Meter
+          label="SWR"
+          value={buffered.swr.value ? (buffered.swr.value.raw / 255) * 100 : null}
+          unit=""
+          alert={buffered.swr.value?.alert}
+          isTimeout={buffered.swr.isTimeout || (!isPttActive && buffered.swr.value?.raw === 0)}
+          formatValue={(_value) => {
+            if (!buffered.swr.value) return '0.0';
+            const raw = buffered.swr.value.raw;
+            if (raw <= 128) {
+              const swr = 1.0 + (raw / 128) * 2.0;
+              return swr.toFixed(1);
+            }
+            return '∞';
+          }}
+        />
 
         {/* ALC 自动电平控制表 */}
-        {meterData.alc && (
-          <Meter
-            label="ALC"
-            value={meterData.alc.percent}
-            unit="%"
-            alert={meterData.alc.alert}
-          />
-        )}
-
-        {/* 如果所有数据都为 null，显示提示 */}
-        {!meterData.swr && !meterData.alc && !meterData.level && (
-          <div className="flex-1 text-center text-xs text-default-400 py-1">
-            等待数值表数据...
-          </div>
-        )}
+        <Meter
+          label="ALC"
+          value={buffered.alc.value?.percent ?? null}
+          unit="%"
+          alert={buffered.alc.value?.alert}
+          isTimeout={buffered.alc.isTimeout || !isPttActive}
+        />
       </div>
     </div>
   );
