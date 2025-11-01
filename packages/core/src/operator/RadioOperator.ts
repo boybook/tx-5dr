@@ -71,10 +71,6 @@ export class RadioOperator {
             if (!this._isTransmitting) {
                 return;
             }
-            // 如果当前不是发射时隙，则不处理
-            if (!this.isTransmitSlot(slotInfo)) {
-                return;
-            }
             if (lastSlotPack) {
                 const t0 = Date.now();
                 const parsedMessages = lastSlotPack.frames.map(frame => {
