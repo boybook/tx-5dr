@@ -295,41 +295,18 @@ export default {
           console.warn('⚠️ [macOS] 清理跨架构文件时出现警告:', error.message);
         }
       }
-    },
-    // 打包后的处理：仅用于签名外部 Node 二进制（签名后执行）
-    postPackage: async (forgeConfig, options) => {
-      console.log('📦 Post-package hook executed (after signing)');
 
-      const { execSync } = await import('child_process');
-      const { join } = await import('path');
-
-      const packagingResult = options.outputPaths[0];
-      // macOS: outputPaths[0] 指向目录（如 out/TX-5DR-darwin-arm64），需定位其中的 .app 目录
-      let base = packagingResult;
-      if (options.platform === 'darwin') {
-        const fsMod = await import('fs');
+      // macOS: 签名外部 Node 二进制 (必须在 electron-osx-sign 之前)
+      if (platform === 'darwin' && process.env.APPLE_IDENTITY) {
         try {
-          const entries = fsMod.readdirSync(packagingResult);
-          const appDir = entries.find((n) => n.endsWith('.app'));
-          if (appDir) base = join(packagingResult, appDir);
-        } catch {}
-      }
-      // 不同平台 Resources 路径不同
-      const resourcesDir = options.platform === 'darwin'
-        ? join(base, 'Contents', 'Resources')
-        : join(base, 'resources');
-
-      // macOS: 签名外部 Node 二进制（electron-osx-sign 不会自动处理 extraResource）
-      if (options.platform === 'darwin' && process.env.APPLE_IDENTITY) {
-        try {
-          console.log('🔐 [macOS] 签名外部 Node 二进制...');
+          console.log('🔐 [macOS] 签名外部 Node 二进制 (签名前)...');
           const path = await import('path');
           const fs = await import('fs');
 
           const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
-          const arch = options.arch || process.arch;
           const triplet = `darwin-${arch}`;
-          const nodeBinaryPath = path.join(resourcesDir, 'bin', triplet, 'node');
+          // buildPath 指向 app 内容根目录, 外部资源在 Resources/ 下
+          const nodeBinaryPath = path.join(buildPath, 'Resources', 'bin', triplet, 'node');
 
           if (fs.existsSync(nodeBinaryPath)) {
             console.log(`  签名: ${nodeBinaryPath}`);
@@ -337,7 +314,7 @@ export default {
               `codesign --force --sign "${process.env.APPLE_IDENTITY}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${nodeBinaryPath}"`,
               { stdio: 'inherit' }
             );
-            console.log('✅ [macOS] Node 二进制签名完成');
+            console.log('✅ [macOS] Node 二进制签名完成 (签名前)');
           } else {
             console.log(`⚠️  [macOS] Node 二进制不存在: ${nodeBinaryPath}`);
           }
@@ -345,8 +322,15 @@ export default {
           console.error('❌ [macOS] Node 二进制签名失败:', error.message);
           throw error; // 签名失败应该中止构建
         }
-      } else if (options.platform === 'darwin') {
-        console.log('✅ [macOS] electron-osx-sign 已自动处理所有原生模块的签名');
+      }
+    },
+    // 打包后的处理：用于验证和日志输出
+    postPackage: async (forgeConfig, options) => {
+      console.log('📦 Post-package hook executed (after signing)');
+
+      // macOS: 所有签名已在 packageAfterCopy hook 中完成
+      if (options.platform === 'darwin') {
+        console.log('✅ [macOS] 所有签名已在 packageAfterCopy hook 中完成');
       }
     }
   }
