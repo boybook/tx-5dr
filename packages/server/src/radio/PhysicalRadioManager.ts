@@ -11,6 +11,7 @@ interface PhysicalRadioManagerEvents {
   reconnectFailed: (error: Error, attempt: number) => void;
   reconnectStopped: (maxAttempts: number) => void;
   error: (error: Error) => void;
+  radioFrequencyChanged: (frequency: number) => void;
 }
 
 export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvents> {
@@ -19,7 +20,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   constructor() {
     super();
   }
-  private rig: HamLib | null = null;
+  private hamlibRig: HamLib | null = null;
   private icomWlanManager: IcomWlanManager | null = null;
   private currentConfig: HamlibConfig = { type: 'none' };
   
@@ -34,6 +35,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private connectionHealthy = true;
   private lastSuccessfulOperation = Date.now();
   private isCleaningUp = false; // 防止重复清理
+
+  // 频率监控
+  private frequencyPollingInterval: NodeJS.Timeout | null = null;
+  private lastKnownFrequency: number | null = null;
 
   getConfig(): HamlibConfig {
     return { ...this.currentConfig };
@@ -74,7 +79,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
   async applyConfig(config: HamlibConfig): Promise<void> {
     // 先断开现有连接，确保状态完全转换到 IDLE
-    if (this.icomWlanManager || this.rig) {
+    if (this.icomWlanManager || this.hamlibRig) {
       try {
         console.log('🔌 [PhysicalRadioManager] 断开现有连接...');
         await this.disconnect();
@@ -128,6 +133,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
         console.log(`✅ [PhysicalRadioManager] ICOM WLAN 电台连接成功`);
 
+        // 启动频率监控
+        this.startFrequencyMonitoring();
+
         // ICOM WLAN 已内置自动重连，无需额外管理
         // 事件由 IcomWlanManager 自动处理并转发
 
@@ -155,7 +163,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     const model = config.type === 'network' ? 2 : config.rigModel;
 
     try {
-      this.rig = new HamLib(model as any, port as any);
+      this.hamlibRig = new HamLib(model as any, port as any);
 
       // 如果是串口模式且有串口配置，应用串口参数
       if (config.type === 'serial' && config.serialConfig) {
@@ -167,7 +175,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       console.log(`✅ [PhysicalRadioManager] 电台连接成功: ${config.type === 'network' ? 'Network' : 'Serial'} - ${port}`);
 
-      const supportedModes = this.rig.getSupportedModes();
+      const supportedModes = this.hamlibRig.getSupportedModes();
       console.log(`📡 [PhysicalRadioManager] 支持的模式: ${supportedModes.join(', ')}`);
 
       // 连接成功后重置重连状态
@@ -177,11 +185,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 启动连接监控
       this.startConnectionMonitoring();
 
+      // 启动频率监控
+      this.startFrequencyMonitoring();
+
       // 发射连接成功事件
       this.emit('connected');
 
     } catch (error) {
-      this.rig = null;
+      this.hamlibRig = null;
       console.error(`❌ [PhysicalRadioManager] 电台连接失败: ${(error as Error).message}`);
       this.emit('error', new Error(`电台连接失败: ${(error as Error).message}`));
       // 在重连过程中需要抛出错误，让重连逻辑知道连接失败
@@ -234,7 +245,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 应用串口配置参数
    */
   private async applySerialConfig(serialConfig: SerialConfig): Promise<void> {
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       throw new Error('电台实例未初始化');
     }
 
@@ -262,7 +273,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         if (config.value !== undefined && config.value !== null) {
           console.log(`🔧 [PhysicalRadioManager] 设置 ${config.param}: ${config.value}`);
           await Promise.race([
-            this.rig.setSerialConfig(config.param as any, config.value),
+            this.hamlibRig.setSerialConfig(config.param as any, config.value),
             new Promise((_, reject) => 
               setTimeout(() => reject(new Error(`设置${config.param}超时`)), 3000)
             )
@@ -281,7 +292,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 带超时的连接打开
    */
   private async openWithTimeout(): Promise<void> {
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       throw new Error('电台实例未初始化');
     }
 
@@ -292,7 +303,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }, 10000);
       
       // 异步打开连接
-      this.rig!.open()
+      this.hamlibRig!.open()
         .then(() => {
           clearTimeout(timeout);
           resolve();
@@ -307,6 +318,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   async disconnect(reason?: string): Promise<void> {
     // 停止监控和重连
     this.stopConnectionMonitoring();
+    this.stopFrequencyMonitoring();
     this.stopReconnection();
 
     // 断开 ICOM WLAN
@@ -325,7 +337,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     // 断开 Hamlib
-    if (this.rig && !this.isCleaningUp) {
+    if (this.hamlibRig && !this.isCleaningUp) {
       console.log('🔌 [PhysicalRadioManager] 正在断开电台连接...');
 
       // 使用安全的清理连接方法
@@ -377,7 +389,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     // Hamlib 模式
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法设置频率');
       return false;
     }
@@ -385,7 +397,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       // 异步设置频率，带超时保护
       await Promise.race([
-        this.rig.setFrequency(freq),
+        this.hamlibRig.setFrequency(freq),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('设置频率超时')), 5000)
         )
@@ -409,7 +421,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     // Hamlib 模式
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法设置PTT');
       return;
     }
@@ -421,7 +433,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       // 异步设置PTT，带更短的超时保护
       await Promise.race([
-        this.rig.setPtt(state),
+        this.hamlibRig.setPtt(state),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('PTT操作超时')), 3000) // 缩短到3秒
         )
@@ -451,7 +463,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   isConnected(): boolean {
-    return !!(this.rig || this.icomWlanManager);
+    return !!(this.hamlibRig || this.icomWlanManager);
   }
 
   /**
@@ -466,7 +478,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     // Hamlib 模式
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法测试连接');
       return;
     }
@@ -474,7 +486,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       // 异步获取当前频率来验证连接，带超时保护
       const currentFreq = await Promise.race([
-        this.rig.getFrequency(),
+        this.hamlibRig.getFrequency(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('获取频率超时')), 5000)
         )
@@ -498,14 +510,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     // Hamlib 模式
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       console.error('❌ [PhysicalRadioManager] 电台未连接，无法获取频率');
       return 0; // 返回默认频率
     }
 
     try {
       const frequency = await Promise.race([
-        this.rig.getFrequency(),
+        this.hamlibRig.getFrequency(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('获取频率超时')), 5000)
         )
@@ -532,13 +544,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     // Hamlib 模式
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       throw new Error('电台未连接');
     }
 
     try {
       await Promise.race([
-        this.rig.setMode(mode, bandwidth),
+        this.hamlibRig.setMode(mode, bandwidth),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('设置模式超时')), 5000)
         )
@@ -562,13 +574,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     // Hamlib 模式
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       throw new Error('电台未连接');
     }
 
     try {
       const modeInfo = await Promise.race([
-        this.rig.getMode(),
+        this.hamlibRig.getMode(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('获取模式超时')), 5000)
         )
@@ -586,13 +598,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取信号强度
    */
   async getSignalStrength(): Promise<number> {
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       throw new Error('电台未连接');
     }
 
     try {
       const strength = await Promise.race([
-        this.rig.getStrength(),
+        this.hamlibRig.getStrength(),
         new Promise((_, reject) => 
           setTimeout(() => reject(new Error('获取信号强度超时')), 3000)
         )
@@ -614,7 +626,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     mode: { mode: string; bandwidth: string };
     signalStrength?: number;
   }> {
-    if (!this.rig) {
+    if (!this.hamlibRig) {
       throw new Error('电台未连接');
     }
 
@@ -650,14 +662,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     console.log('👁️ [PhysicalRadioManager] 启动连接监控 (每3秒检查)');
     
     this.monitoringInterval = setInterval(async () => {
-      if (!this.rig || this.isReconnecting) {
+      if (!this.hamlibRig || this.isReconnecting) {
         return;
       }
 
       try {
         // 使用更短的超时进行健康检查
         const frequency = await Promise.race([
-          this.rig.getFrequency(),
+          this.hamlibRig.getFrequency(),
           new Promise((_, reject) => 
             setTimeout(() => reject(new Error('健康检查超时')), 1500) // 进一步缩短超时时间
           )
@@ -867,13 +879,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 强制清理连接，避免内存损坏的安全清理方式
    */
   private async forceCleanupConnection(): Promise<void> {
-    if (!this.rig || this.isCleaningUp) return;
+    if (!this.hamlibRig || this.isCleaningUp) return;
 
     this.isCleaningUp = true;
     console.log('🧹 [PhysicalRadioManager] 开始安全清理连接...');
     
-    const rigToClean = this.rig;
-    this.rig = null; // 立即清空引用，避免重复操作
+    const rigToClean = this.hamlibRig;
+    this.hamlibRig = null; // 立即清空引用，避免重复操作
     
     try {
       // 按顺序执行清理操作，避免并行调用导致内存损坏
@@ -925,15 +937,82 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async manualReconnect(): Promise<void> {
     console.log('🔄 [PhysicalRadioManager] 手动重连请求');
-    
+
     // 停止自动重连
     this.stopReconnection();
-    
+
     // 重置计数器
     this.resetReconnectAttempts();
-    
+
     // 执行重连
     await this.applyConfig(this.currentConfig);
+  }
+
+  /**
+   * 启动频率监控（每5秒检查一次）
+   */
+  private startFrequencyMonitoring(): void {
+    // 如果已经在监控，先停止
+    if (this.frequencyPollingInterval) {
+      this.stopFrequencyMonitoring();
+    }
+
+    // 如果电台未连接，不启动监控
+    if (!this.hamlibRig && !this.icomWlanManager) {
+      return;
+    }
+
+    console.log('📡 [PhysicalRadioManager] 启动频率监控（每5秒检查）');
+
+    // 立即获取一次初始频率
+    this.checkFrequencyChange();
+
+    // 启动定时器
+    this.frequencyPollingInterval = setInterval(() => {
+      this.checkFrequencyChange();
+    }, 5000);
+  }
+
+  /**
+   * 停止频率监控
+   */
+  private stopFrequencyMonitoring(): void {
+    if (this.frequencyPollingInterval) {
+      clearInterval(this.frequencyPollingInterval);
+      this.frequencyPollingInterval = null;
+      console.log('📡 [PhysicalRadioManager] 已停止频率监控');
+    }
+    this.lastKnownFrequency = null;
+  }
+
+  /**
+   * 检查频率变化
+   */
+  private async checkFrequencyChange(): Promise<void> {
+    // 如果电台未连接或正在重连，跳过检查
+    if ((!this.hamlibRig && !this.icomWlanManager) || this.isReconnecting) {
+      return;
+    }
+
+    try {
+      const currentFrequency = await this.getFrequency();
+
+      // 频率有效且与上次不同
+      if (currentFrequency > 0 && currentFrequency !== this.lastKnownFrequency) {
+        console.log(`📡 [PhysicalRadioManager] 检测到频率变化: ${this.lastKnownFrequency ? (this.lastKnownFrequency / 1000000).toFixed(3) : 'N/A'} MHz → ${(currentFrequency / 1000000).toFixed(3)} MHz`);
+
+        this.lastKnownFrequency = currentFrequency;
+
+        // 发射频率变化事件
+        this.emit('radioFrequencyChanged', currentFrequency);
+      } else if (this.lastKnownFrequency === null && currentFrequency > 0) {
+        // 首次获取频率
+        console.log(`📡 [PhysicalRadioManager] 初始频率: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
+        this.lastKnownFrequency = currentFrequency;
+      }
+    } catch (error) {
+      // 静默处理错误，避免频繁日志（getFrequency 已经有错误处理）
+    }
   }
 
   static listSupportedRigs() {

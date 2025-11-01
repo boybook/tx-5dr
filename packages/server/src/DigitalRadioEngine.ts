@@ -15,6 +15,7 @@ import { AudioMixer, type MixedAudio } from './audio/AudioMixer.js';
 import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
 import { printAppPaths } from './utils/debug-paths.js';
 import { PhysicalRadioManager } from './radio/PhysicalRadioManager.js';
+import { FrequencyManager } from './radio/FrequencyManager.js';
 import { TransmissionTracker } from './transmission/TransmissionTracker.js';
 import { IcomWlanAudioAdapter } from './audio/IcomWlanAudioAdapter.js';
 import { AudioDeviceManager } from './audio/audio-device-manager.js';
@@ -48,6 +49,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   // 物理电台管理器
   private radioManager: PhysicalRadioManager;
+
+  // 频率管理器
+  private frequencyManager: FrequencyManager;
 
   // 电台操作员管理器
   private _operatorManager: RadioOperatorManager;
@@ -115,7 +119,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // 初始化物理电台管理器
     this.radioManager = new PhysicalRadioManager();
-    
+
+    // 初始化频率管理器
+    this.frequencyManager = new FrequencyManager();
+
     // 初始化传输跟踪器
     this.transmissionTracker = new TransmissionTracker();
     
@@ -1210,6 +1217,73 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.radioManager.on('meterData' as any, (data: any) => {
       // 转发数值表数据事件
       this.emit('meterData' as any, data);
+    });
+
+    // 监听电台频率变化（自动同步）
+    this.radioManager.on('radioFrequencyChanged', async (frequency: number) => {
+      console.log(`📡 [DigitalRadioEngine] 检测到电台频率变化: ${(frequency / 1000000).toFixed(3)} MHz`);
+
+      try {
+        // 1. 查找匹配的预设频率（容差 500 Hz）
+        const matchResult = this.frequencyManager.findMatchingPreset(frequency, 500);
+
+        let frequencyInfo: {
+          frequency: number;
+          mode: string;
+          band: string;
+          radioMode?: string;
+          description: string;
+        };
+
+        if (matchResult.preset) {
+          // 匹配到预设频率
+          console.log(`✅ [DigitalRadioEngine] 匹配到预设频率: ${matchResult.preset.description}`);
+          frequencyInfo = {
+            frequency: matchResult.preset.frequency,
+            mode: matchResult.preset.mode,
+            band: matchResult.preset.band,
+            radioMode: matchResult.preset.radioMode,
+            description: matchResult.preset.description || `${(matchResult.preset.frequency / 1000000).toFixed(3)} MHz`
+          };
+        } else {
+          // 自定义频率
+          console.log(`🔧 [DigitalRadioEngine] 未匹配预设，设为自定义频率`);
+          frequencyInfo = {
+            frequency: frequency,
+            mode: 'FT8', // 默认模式
+            band: 'Custom',
+            description: `自定义 ${(frequency / 1000000).toFixed(3)} MHz`
+          };
+        }
+
+        // 2. 更新配置管理器
+        const configManager = ConfigManager.getInstance();
+        configManager.updateLastSelectedFrequency({
+          frequency: frequencyInfo.frequency,
+          mode: frequencyInfo.mode,
+          radioMode: frequencyInfo.radioMode,
+          band: frequencyInfo.band,
+          description: frequencyInfo.description
+        });
+
+        // 3. 清空历史解码数据
+        this.slotPackManager.clearInMemory();
+        console.log(`🧹 [DigitalRadioEngine] 已清空历史解码数据`);
+
+        // 4. 广播频率变化事件
+        this.emit('frequencyChanged', {
+          frequency: frequencyInfo.frequency,
+          mode: frequencyInfo.mode,
+          band: frequencyInfo.band,
+          radioMode: frequencyInfo.radioMode,
+          description: frequencyInfo.description,
+          radioConnected: true
+        });
+
+        console.log(`📡 [DigitalRadioEngine] 频率自动同步完成: ${frequencyInfo.description}`);
+      } catch (error) {
+        console.error(`❌ [DigitalRadioEngine] 处理频率变化失败:`, error);
+      }
     });
   }
 
