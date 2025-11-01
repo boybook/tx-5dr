@@ -520,6 +520,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [customFrequencyError, setCustomFrequencyError] = useState('');
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
   const [customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
+  const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
 
   // 加载可用模式列表
   React.useEffect(() => {
@@ -895,11 +896,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
 
     const currentModeName = radio.state.currentMode.name;
-    const filtered = availableFrequencies.filter(freq => freq.mode === currentModeName);
+    let filtered = availableFrequencies.filter(freq => freq.mode === currentModeName);
 
-    console.log(`🔍 当前模式: ${currentModeName}, 筛选出 ${filtered.length} 个频率`);
+    // 如果存在自定义频率选项且模式匹配，添加到列表开头
+    if (customFrequencyOption && customFrequencyOption.mode === currentModeName) {
+      // 确保不重复添加
+      const exists = filtered.some(f => f.key === customFrequencyOption.key);
+      if (!exists) {
+        filtered = [customFrequencyOption, ...filtered];
+      }
+    }
+
+    console.log(`🔍 当前模式: ${currentModeName}, 筛选出 ${filtered.length} 个频率${customFrequencyOption ? ' (含自定义)' : ''}`);
     return filtered;
-  }, [availableFrequencies, radio.state.currentMode]);
+  }, [availableFrequencies, radio.state.currentMode, customFrequencyOption]);
 
   // 自动设置频率到后端（避免递归调用）
   const autoSetFrequency = async (frequency: FrequencyOption) => {
@@ -1131,17 +1141,30 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     const handleFrequencyChanged = (data: any) => {
       console.log('📻 收到频率变化广播:', data);
 
-      // 更新当前频率
-      setCurrentFrequency(String(data.frequency));
+      const frequencyKey = String(data.frequency);
+      setCurrentFrequency(frequencyKey);
 
-      // 判断是否是预设频率
-      const isPreset = filteredFrequencies.some(f => f.key === String(data.frequency));
+      // 检查是否是预设频率（在所有可用频率中查找，不仅仅是已筛选的）
+      const isPreset = availableFrequencies.some(f => f.key === frequencyKey);
+
       if (!isPreset) {
-        // 自定义频率,显示自定义标签
-        setCustomFrequencyLabel(data.description);
+        // 自定义频率：创建临时选项并添加到列表
+        const customOption: FrequencyOption = {
+          key: frequencyKey,
+          label: data.description || `${(data.frequency / 1000000).toFixed(3)} MHz`,
+          frequency: data.frequency,
+          band: data.band || '自定义',
+          mode: data.mode || 'FT8',
+          radioMode: data.radioMode
+        };
+        setCustomFrequencyOption(customOption);
+        setCustomFrequencyLabel(customOption.label);
+        console.log('📻 添加自定义频率选项:', customOption);
       } else {
-        // 预设频率,清除自定义标签
+        // 预设频率：清除自定义选项
+        setCustomFrequencyOption(null);
         setCustomFrequencyLabel('');
+        console.log('📻 切换到预设频率，清除自定义选项');
       }
     };
 
@@ -1150,7 +1173,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     return () => {
       wsClient.offWSEvent('frequencyChanged', handleFrequencyChanged as any);
     };
-  }, [connection.state.radioService, filteredFrequencies]);
+  }, [connection.state.radioService, availableFrequencies]);
 
   return (
     <div className="flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
@@ -1228,11 +1251,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             isLoading={isLoadingFrequencies}
             onSelectionChange={handleFrequencyChange}
             renderValue={(items: any) => {
-              // 如果选中的是自定义频率,显示自定义标签
-              if (customFrequencyLabel && !filteredFrequencies.find(f => f.key === currentFrequency)) {
-                return <span className="font-bold text-lg">{customFrequencyLabel}</span>;
-              }
-              // 否则显示预设频率的标签
+              // 直接在 filteredFrequencies 中查找（现在包含了自定义频率）
               const selectedFreq = filteredFrequencies.find(f => f.key === currentFrequency);
               return selectedFreq ? <span className="font-bold text-lg">{selectedFreq.label}</span> : null;
             }}

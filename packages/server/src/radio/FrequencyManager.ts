@@ -66,4 +66,32 @@ export class FrequencyManager {
     return [...new Set(this.presets.map(preset => preset.mode))];
   }
 
+  /**
+   * 根据频率查找匹配的预设频率
+   * @param frequency 要匹配的频率 (Hz)
+   * @param tolerance 容差 (Hz)，默认 500 Hz
+   * @returns 匹配结果，包括预设信息或自定义标记
+   */
+  findMatchingPreset(frequency: number, tolerance: number = 500): {
+    preset: PresetFrequency | null;
+    isCustom: boolean;
+  } {
+    let closestPreset: PresetFrequency | null = null;
+    let smallestDiff = Infinity;
+
+    // 遍历所有预设频率，查找最接近的
+    for (const preset of this.presets) {
+      const diff = Math.abs(preset.frequency - frequency);
+      if (diff <= tolerance && diff < smallestDiff) {
+        closestPreset = preset;
+        smallestDiff = diff;
+      }
+    }
+
+    return {
+      preset: closestPreset,
+      isCustom: closestPreset === null
+    };
+  }
+
 }

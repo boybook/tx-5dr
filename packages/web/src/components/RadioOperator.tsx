@@ -355,38 +355,26 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
 
     const transmitCycles = localTransmitCycles && localTransmitCycles.length > 0 ? localTransmitCycles : [0];
-    const now = Date.now();
-    const maxAgeMs = 5 * 60 * 1000; // 5分钟
 
     const candidates = [...(slotPacks.state.slotPacks || [])]
       .filter(sp => {
-        const recentEnough = (now - sp.endMs) <= maxAgeMs;
         const cycleMatch = CycleUtils.isOperatorTransmitCycleFromMs(transmitCycles, sp.startMs, mode.slotMs);
-        return recentEnough && cycleMatch && sp.frames && sp.frames.length > 0;
+        return cycleMatch && sp.frames && sp.frames.length > 0;
       })
       .sort((a, b) => b.endMs - a.endMs);
 
     if (candidates.length === 0) {
       addToast({
         title: '未找到可用时隙',
-        description: '5分钟内没有与当前发射周期一致的通联消息。请先取消发射，等待接收到该时隙的一组通联消息后再尝试。',
+        description: '没有与当前发射周期类型一致的解码数据。请先取消发射，等待接收到该周期类型的通联消息后再尝试。',
         color: 'warning'
       });
       return;
     }
 
     const latest = candidates[0];
-    const freqs = latest.frames.map(f => f.freq).filter(f => Number.isFinite(f)) as number[];
-
-    if (freqs.length < 2) {
-      addToast({
-        title: '数据不足',
-        description: '最近时隙的解码帧数量不足，无法计算空闲频率。请停止发射并接收一个周期以获取更多数据。',
-        color: 'warning'
-      });
-      return;
-    }
-
+    const freqs = [0, 3000];  // 默认添加边界值
+    freqs.push(...latest.frames.map(f => f.freq).filter(f => Number.isFinite(f)));
     freqs.sort((a, b) => a - b);
 
     let maxGap = -1;
