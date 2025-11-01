@@ -108,9 +108,21 @@ export class IcomWlanManager extends EventEmitter<IcomWlanManagerEvents> {
       console.log('🔌 [IcomWlanManager] 正在断开 ICOM 电台连接...');
 
       try {
+        // 先移除所有事件监听器，防止异步事件在断开过程中触发错误
+        if (this.rig.events) {
+          this.rig.events.removeAllListeners();
+          console.log('🔕 [IcomWlanManager] 已移除所有事件监听器');
+        }
+
         await this.rig.disconnect();
-      } catch (error) {
-        console.warn('⚠️ [IcomWlanManager] 断开连接时出错:', error);
+      } catch (error: any) {
+        // 增强错误日志记录
+        console.warn('⚠️ [IcomWlanManager] 断开连接时出错:', {
+          message: error?.message || error,
+          code: error?.code,
+          stack: error?.stack
+        });
+        // 即使断开失败，也继续清理流程
       }
 
       this.rig = null;

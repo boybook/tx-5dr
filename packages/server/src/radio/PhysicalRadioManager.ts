@@ -73,7 +73,28 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   async applyConfig(config: HamlibConfig): Promise<void> {
-    await this.disconnect();
+    // 先断开现有连接，确保状态完全转换到 IDLE
+    if (this.icomWlanManager || this.rig) {
+      try {
+        console.log('🔌 [PhysicalRadioManager] 断开现有连接...');
+        await this.disconnect();
+
+        // 等待 ICOM WLAN 状态完全转换到 IDLE（如果有的话）
+        const isIdle = await this.waitForIcomWlanIdle(5000);
+        if (!isIdle) {
+          console.warn('⚠️ [PhysicalRadioManager] ICOM WLAN 状态未能完全转换到 IDLE，但将继续尝试连接');
+        }
+
+        // 额外延迟，确保底层资源完全释放
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+      } catch (error: any) {
+        console.warn('⚠️ [PhysicalRadioManager] 断开现有连接时出错:', error?.message || error);
+        // 即使断开出错，也要等待一段时间让状态稳定
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
     this.currentConfig = config;
 
     if (config.type === 'none') {
@@ -96,11 +117,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           password: config.password
         };
 
+        // 创建全新的 IcomWlanManager 实例，避免状态污染
         this.icomWlanManager = new IcomWlanManager();
 
         // 转发 IcomWlanManager 事件
         this.setupIcomWlanEventForwarding();
 
+        console.log('🔗 [PhysicalRadioManager] 开始建立 ICOM WLAN 连接...');
         await this.icomWlanManager.connect(icomConfig);
 
         console.log(`✅ [PhysicalRadioManager] ICOM WLAN 电台连接成功`);
@@ -109,10 +132,20 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         // 事件由 IcomWlanManager 自动处理并转发
 
       } catch (error) {
-        this.icomWlanManager = null;
-        console.error(`❌ [PhysicalRadioManager] ICOM WLAN 连接失败: ${(error as Error).message}`);
-        this.emit('error', new Error(`ICOM WLAN 连接失败: ${(error as Error).message}`));
-        throw new Error(`ICOM WLAN 连接失败: ${(error as Error).message}`);
+        // 连接失败，清理实例
+        if (this.icomWlanManager) {
+          try {
+            await this.icomWlanManager.disconnect('连接失败，清理资源');
+          } catch (cleanupError) {
+            // 忽略清理错误
+          }
+          this.icomWlanManager = null;
+        }
+
+        const errorMessage = `ICOM WLAN 连接失败: ${(error as Error).message}`;
+        console.error(`❌ [PhysicalRadioManager] ${errorMessage}`);
+        this.emit('error', new Error(errorMessage));
+        throw new Error(errorMessage);
       }
       return;
     }
@@ -279,7 +312,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     // 断开 ICOM WLAN
     if (this.icomWlanManager) {
       console.log('🔌 [PhysicalRadioManager] 正在断开 ICOM WLAN 连接...');
-      await this.icomWlanManager.disconnect(reason);
+      try {
+        await this.icomWlanManager.disconnect(reason);
+      } catch (error: any) {
+        console.warn('⚠️ [PhysicalRadioManager] ICOM WLAN 断开时出错:', error?.message || error);
+        // 即使断开失败，也清空管理器以避免状态不一致
+      }
       this.icomWlanManager = null;
       console.log('✅ [PhysicalRadioManager] ICOM WLAN 连接已断开');
       this.emit('disconnected', reason);
@@ -298,6 +336,38 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 发射断开连接事件
       this.emit('disconnected', reason);
     }
+  }
+
+  /**
+   * 等待 ICOM WLAN 连接状态转换到 IDLE
+   * @param maxWaitMs 最大等待时间（毫秒），默认5秒
+   * @returns 是否成功转换到 IDLE 状态
+   */
+  private async waitForIcomWlanIdle(maxWaitMs: number = 5000): Promise<boolean> {
+    if (!this.icomWlanManager) {
+      return true; // 没有管理器，视为已经 IDLE
+    }
+
+    const startTime = Date.now();
+    const checkInterval = 100; // 每100ms检查一次
+
+    console.log('⏳ [PhysicalRadioManager] 等待 ICOM WLAN 状态转换到 IDLE...');
+
+    while (Date.now() - startTime < maxWaitMs) {
+      // 检查是否还连接着
+      if (!this.icomWlanManager.isConnected()) {
+        console.log('✅ [PhysicalRadioManager] ICOM WLAN 已断开，状态就绪');
+        return true;
+      }
+
+      // 等待一小段时间后再检查
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+
+    // 超时
+    const elapsedTime = Date.now() - startTime;
+    console.warn(`⚠️ [PhysicalRadioManager] 等待 ICOM WLAN 状态转换超时 (${elapsedTime}ms)`);
+    return false;
   }
 
   async setFrequency(freq: number): Promise<boolean> {
