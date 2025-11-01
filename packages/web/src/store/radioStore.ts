@@ -564,6 +564,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       radioDisconnectedDuringTransmission: (data: any) => {
         console.warn('🚨 [RadioProvider] 电台发射中断开连接:', data);
+      },
+      textMessage: (data: { title: string; text: string; color?: string; timeout?: number | null }) => {
+        console.log('📬 [RadioProvider] 收到文本消息:', data);
+        addToast({
+          title: data.title,
+          description: data.text,
+          color: (data.color as "default" | "foreground" | "primary" | "secondary" | "success" | "warning" | "danger" | undefined) || 'default',
+          timeout: data.timeout === null ? undefined : (data.timeout || 3000)
+        });
       }
     };
 

@@ -1069,7 +1069,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     /**
      * 从历史缓存恢复QSO上下文
      */
-    private restoreContext(targetCallsign: string): boolean {
+    public restoreContext(targetCallsign: string): boolean {
         const cached = this.qsoContextHistory.get(targetCallsign);
         if (cached) {
             this.context.targetGrid = cached.targetGrid;
