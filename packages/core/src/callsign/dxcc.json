@@ -2479,8 +2479,8 @@
       "name": "Hawaii",
       "notes": "",
       "outgoingQslService": true,
-      "prefix": "KH6,KH7",
-      "prefixRegex": "^KH[67][A-Z0-9/]*$",
+      "prefix": "KH6,KH7,AH6,WH6,NH6",
+      "prefixRegex": "^(KH[67]|[AWN]H6)[A-Z0-9/]*$",
       "thirdPartyTraffic": true,
       "validEnd": "",
       "validStart": ""
