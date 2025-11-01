@@ -676,6 +676,22 @@ export const WSMeterDataMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSMeterDataMessage = z.infer<typeof WSMeterDataMessageSchema>;
 
+/**
+ * 文本消息（Toast通知）
+ * 用于向客户端推送提示信息
+ */
+export const WSTextMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.TEXT_MESSAGE),
+  data: z.object({
+    title: z.string(),
+    text: z.string(),
+    color: z.enum(['success', 'warning', 'danger', 'default']).optional(),
+    timeout: z.number().nullable().optional(), // null 表示需要手动关闭，number 表示自动关闭的毫秒数
+  }),
+});
+
+export type WSTextMessage = z.infer<typeof WSTextMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -740,6 +756,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 电台数值表消息
   WSMeterDataMessageSchema,
+
+  // 文本消息（Toast通知）
+  WSTextMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====

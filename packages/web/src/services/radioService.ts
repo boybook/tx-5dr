@@ -193,14 +193,25 @@ export class RadioService {
     });
 
     // 监听极简文本消息，直接弹出Toast（标题+正文）
-    this.wsClient.onWSEvent('textMessage' as any, (payload: { title: string; text: string }) => {
+    this.wsClient.onWSEvent('textMessage' as any, (payload: {
+      title: string;
+      text: string;
+      color?: 'success' | 'warning' | 'danger' | 'default';
+      timeout?: number | null;
+    }) => {
       try {
         const title = payload?.title || '消息';
         const description = payload?.text || '';
-        console.log('💬 收到TEXT_MESSAGE消息:', title, description);
+        const color = payload?.color;
+        const timeout = payload?.timeout;
+
+        console.log(`💬 收到TEXT_MESSAGE消息: ${title} - ${description} (color=${color}, timeout=${timeout})`);
+
         addToast({
           title,
           description,
+          color,
+          timeout: timeout === null ? undefined : timeout, // null 表示不自动关闭（传 undefined 给 addToast）
         });
       } catch (e) {
         console.warn('⚠️ 处理TEXT_MESSAGE失败', e);
