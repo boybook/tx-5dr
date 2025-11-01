@@ -21,34 +21,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * 选择文件
      */
-    selectFile: async (options?: {
+    selectFile: async (_options?: {
       title?: string;
       filters?: Array<{ name: string; extensions: string[] }>;
     }) => {
-      return ipcRenderer.invoke('fs:selectFile', options);
+      return ipcRenderer.invoke('fs:selectFile', _options);
     },
-    
+
     /**
      * 选择目录
      */
-    selectDirectory: async (options?: {
+    selectDirectory: async (_options?: {
       title?: string;
     }) => {
-      return ipcRenderer.invoke('fs:selectDirectory', options);
+      return ipcRenderer.invoke('fs:selectDirectory', _options);
     },
-    
+
     /**
      * 读取文件
      */
-    readFile: async (filePath: string) => {
-      return ipcRenderer.invoke('fs:readFile', filePath);
+    readFile: async (_filePath: string) => {
+      return ipcRenderer.invoke('fs:readFile', _filePath);
     },
-    
+
     /**
      * 写入文件
      */
-    writeFile: async (filePath: string, data: string) => {
-      return ipcRenderer.invoke('fs:writeFile', filePath, data);
+    writeFile: async (_filePath: string, _data: string) => {
+      return ipcRenderer.invoke('fs:writeFile', _filePath, _data);
     }
   },
   
@@ -80,7 +80,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * 打开通联日志窗口
      */
-    openLogbookWindow: (queryString: string) => ipcRenderer.invoke('window:openLogbook', queryString)
+    openLogbookWindow: (_queryString: string) => ipcRenderer.invoke('window:openLogbook', _queryString)
   },
 
   // 系统集成
@@ -88,21 +88,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * 使用系统默认浏览器打开外部链接
      */
-    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url)
+    openExternal: (_url: string) => ipcRenderer.invoke('shell:openExternal', _url)
   },
-  
+
   // 配置管理
   config: {
     /**
      * 获取配置
      */
-    get: (key: string) => ipcRenderer.invoke('config:get', key),
-    
+    get: (_key: string) => ipcRenderer.invoke('config:get', _key),
+
     /**
      * 设置配置
      */
-    set: (key: string, value: any) => ipcRenderer.invoke('config:set', key, value),
-    
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    set: (_key: string, _value: any) => ipcRenderer.invoke('config:set', _key, _value),
+
     /**
      * 获取所有配置
      */
@@ -138,8 +139,11 @@ declare global {
         openExternal(url: string): Promise<void>;
       };
       config: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         get(key: string): Promise<any>;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         set(key: string, value: any): Promise<void>;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         getAll(): Promise<Record<string, any>>;
       };
     };

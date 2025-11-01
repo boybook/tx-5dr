@@ -166,7 +166,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const colorLUT = new Uint8Array(256 * 4);
     for (let i = 0; i < 256; i++) {
       const t = i / 255;
-      let r = 0, g = 0, b = 0, a = 255;
+      let r = 0, g = 0, b = 0;
+      const a = 255;
 
       // 在颜色节点之间插值
       for (let j = 0; j < colors.length - 1; j++) {

@@ -106,9 +106,7 @@ export class SlotScheduler {
       const decodeWindowMs = mode.slotMs;
       
       // 计算窗口的时间偏移（基于时隙结束时间）
-      let windowOffsetMs: number;
-      
-      windowOffsetMs = mode.windowTiming[windowIdx] || 0;
+      const windowOffsetMs = mode.windowTiming[windowIdx] || 0;
       console.log(`📡 [SlotScheduler] 使用窗口偏移: 窗口${windowIdx} = ${windowOffsetMs >= 0 ? '+' : ''}${windowOffsetMs}ms (基于时隙结束时间)`);
       
       // 计算解码窗口的起始时间（基于时隙结束时间 + 偏移）

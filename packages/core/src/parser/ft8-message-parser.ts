@@ -151,7 +151,7 @@ export class FT8MessageParser {
    * 格式: CQ [FLAG] CALLSIGN [GRID]
    * 说明: FLAG 常见为 DX/NA/EU/AS/AF/OC/SA/JA/TEST/POTA 等，仅由字母组成
    */
-  private static parseCQMessage(parts: string[], rawMessage: string): FT8Message {
+  private static parseCQMessage(parts: string[], __rawMessage: string): FT8Message {
     let callsignIndex = 1;
     let flag: string | undefined;
 
@@ -212,7 +212,7 @@ export class FT8MessageParser {
    * 解析响应消息
    * 格式: CALLSIGN1 CALLSIGN2 [GRID]
    */
-  private static parseResponseMessage(parts: string[], rawMessage: string): FT8Message {
+  private static parseResponseMessage(parts: string[], _rawMessage: string): FT8Message {
     const targetCallsign = parts[0];
     const senderCallsign = parts[1];
 
@@ -254,7 +254,7 @@ export class FT8MessageParser {
    * 解析信号报告消息
    * 格式: CALLSIGN1 CALLSIGN2 REPORT
    */
-  private static parseSignalReportMessage(parts: string[], rawMessage: string): FT8Message {
+  private static parseSignalReportMessage(parts: string[], _rawMessage: string): FT8Message {
     const targetCallsign = parts[0];
     const senderCallsign = parts[1];
     const report = parts[2];
@@ -291,7 +291,7 @@ export class FT8MessageParser {
    * 解析确认消息
    * 格式: CALLSIGN1 CALLSIGN2 RRR / RR73 / R-01 / R+05
    */
-  private static parseConfirmationMessage(parts: string[], rawMessage: string): FT8Message {
+  private static parseConfirmationMessage(parts: string[], _rawMessage: string): FT8Message {
     const targetCallsign = parts[0];
     const senderCallsign = parts[1];
     const lastPart = parts[parts.length - 1];
@@ -340,7 +340,7 @@ export class FT8MessageParser {
    * 解析73消息
    * 格式: CALLSIGN1 CALLSIGN2 73
    */
-  private static parse73Message(parts: string[], rawMessage: string): FT8Message {
+  private static parse73Message(parts: string[], _rawMessage: string): FT8Message {
     const targetCallsign = parts[0];
     const senderCallsign = parts[1];
 
