@@ -1,6 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import type { ClockSource } from './ClockSource.js';
-import type { ModeDescriptor, SlotInfo, SlotInfoSchema } from '@tx5dr/contracts';
+import type { ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
 import { CycleUtils } from '../utils/cycleUtils.js';
 
 export interface SlotClockEvents {

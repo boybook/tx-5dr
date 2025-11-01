@@ -1,18 +1,18 @@
-import { app, BrowserWindow, Menu, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { spawn } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 
-// 获取当前模块的目录（ESM中的__dirname替代方案）
+// 获取当前模块的目录(ESM中的__dirname替代方案)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let serverCheckInterval: any = null;
 let serverProcess: import('node:child_process').ChildProcess | null = null;
 let webProcess: import('node:child_process').ChildProcess | null = null;
@@ -44,6 +44,7 @@ async function findFreePort(start: number, maxStep = 50, avoid?: number, host = 
     srv.once('error', reject);
     srv.once('listening', () => {
       const addr = srv.address();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const port = typeof addr === 'object' && addr && 'port' in addr ? (addr as any).port : 0;
       srv.close(() => resolve(port || start));
     });
@@ -158,21 +159,24 @@ async function checkServerHealth(): Promise<boolean> {
     };
     
     console.log('🩺 [健康检查] 正在连接 http://localhost:4000/...');
-    
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const req = http.request(options, (res: any) => {
       console.log(`🩺 [健康检查] 收到响应，状态码: ${res.statusCode}`);
-      
+
       let data = '';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       res.on('data', (chunk: any) => {
         data += chunk;
       });
-      
+
       res.on('end', () => {
         console.log(`🩺 [健康检查] 响应数据: ${data}`);
         resolve((res.statusCode || 0) < 500);
       });
     });
-    
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     req.on('error', (err: any) => {
       console.log(`🩺 [健康检查] 连接错误: ${err.message}`);
       resolve(false);
@@ -341,16 +345,19 @@ async function createWindow() {
   });
 
   // 添加错误处理
-  mainWindow.webContents.on('did-fail-load', (event: any, errorCode: any, errorDescription: any, validatedURL: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mainWindow.webContents.on('did-fail-load', (_event: any, errorCode: any, errorDescription: any, validatedURL: any) => {
     console.error('Failed to load:', errorCode, errorDescription, validatedURL);
   });
 
-  mainWindow.webContents.on('render-process-gone', (event: any, details: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mainWindow.webContents.on('render-process-gone', (_event: any, details: any) => {
     console.error('Renderer process gone:', details);
   });
 
   // 添加控制台日志监听
-  mainWindow.webContents.on('console-message', (event: any, level: any, message: any, line: any, sourceId: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mainWindow.webContents.on('console-message', (_event: any, level: any, message: any, _line: any, _sourceId: any) => {
     console.log(`Console [${level}]:`, message);
   });
 

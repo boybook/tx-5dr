@@ -1,7 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
-import type { 
-  WSMessage, 
-  WSMessageType,
+import type {
+  WSMessage,
   DigitalRadioEngineEvents
 } from '@tx5dr/contracts';
 

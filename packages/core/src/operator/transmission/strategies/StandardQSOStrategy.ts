@@ -821,7 +821,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
 
     userCommand?(command: QSOCommand): any {
         switch (command.command) {
-            case 'update_context':
+            case 'update_context': {
                 // 更新context
                 this._context = {
                     ...this._context,
@@ -840,7 +840,8 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
                 }
 
                 return { success: true };
-            case 'set_state':
+            }
+            case 'set_state': {
                 const oldState = this.state;
                 this.state = command.args;
                 // 手动设置状态时也通知槽位更新
@@ -848,15 +849,17 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
                     this.notifyStateChanged();
                 }
                 return { success: true };
-            case 'set_slot_content':
+            }
+            case 'set_slot_content': {
                 // 设置指定时隙的内容
                 const { slot, content } = command.args;
-                if (slot && this.slots.hasOwnProperty(slot)) {
+                if (slot && Object.prototype.hasOwnProperty.call(this.slots, slot)) {
                     this.slots[slot as SlotsIndex] = content || '';
                     this.notifySlotsUpdated();
                     return { success: true };
                 }
                 return { error: 'Invalid slot or content' };
+            }
             case 'get_slots':
                 // 返回当前slots状态
                 return this.getSlots();
