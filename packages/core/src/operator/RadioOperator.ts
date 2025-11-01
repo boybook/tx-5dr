@@ -284,7 +284,7 @@ export class RadioOperator {
         return new Promise((resolve) => {
             // 生成唯一的请求ID
             const requestId = `${Date.now()}_${Math.random()}`;
-            
+
             // 设置一次性监听器等待响应
             const responseHandler = (data: { requestId: string; hasWorked: boolean }) => {
                 if (data.requestId === requestId) {
@@ -292,16 +292,16 @@ export class RadioOperator {
                     resolve(data.hasWorked);
                 }
             };
-            
+
             this._eventEmitter.on('hasWorkedCallsignResponse' as any, responseHandler);
-            
+
             // 发射查询事件
             this._eventEmitter.emit('checkHasWorkedCallsign' as any, {
                 operatorId: this._config.id,
                 callsign,
                 requestId
             });
-            
+
             // 设置超时（避免永久等待）
             setTimeout(() => {
                 this._eventEmitter.off('hasWorkedCallsignResponse' as any, responseHandler);
