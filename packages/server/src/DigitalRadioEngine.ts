@@ -649,6 +649,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       await this.radioManager.applyConfig(radioConfig);
       console.log(`📡 [时钟管理器] 物理电台配置已应用:`, radioConfig);
 
+      // 等待短暂时间，确保任何延迟错误被触发（例如网络超时）
+      await new Promise(resolve => setTimeout(resolve, 200));
+
       // 如果配置为 ICOM WLAN 模式，初始化音频适配器
       if (radioConfig.type === 'icom-wlan') {
         console.log(`📡 [时钟管理器] 检测到 ICOM WLAN 模式，初始化音频适配器`);
@@ -698,6 +701,15 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     } catch (error) {
       console.error(`❌ [时钟管理器] 音频流启动失败:`, error);
       console.warn(`⚠️ [时钟管理器] 将在没有音频输入/输出的情况下继续运行`);
+
+      // 清理可能残留的连接，确保状态一致
+      try {
+        console.log('🧹 [时钟管理器] 清理电台连接...');
+        await this.radioManager.disconnect('启动失败，清理连接');
+      } catch (cleanupError) {
+        console.warn('⚠️ [时钟管理器] 清理电台连接时出错:', cleanupError);
+        // 忽略清理错误，继续启动
+      }
     }
     
     this.slotClock.start();
