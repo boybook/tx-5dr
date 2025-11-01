@@ -50,7 +50,19 @@ export default {
       /^\/node-v[0-9]+\.[0-9]+\.[0-9]+[\w.-]*$/,                                // 解压目录
       /^\/node-v[0-9]+\.[0-9]+\.[0-9]+[\w.-]*\.(?:tar\.xz|tar\.gz|zip)$/,   // 压缩包
       // 避免把 resources/bin 作为应用源码打进 Contents/Resources/app/resources/bin
-      /^\/resources\/bin(\/|$)/
+      /^\/resources\/bin(\/|$)/,
+      // 文档和开发相关文件
+      /^\/docker(\/|$)/,            // Docker 相关目录
+      /^\/docs(\/|$)/,              // 文档目录
+      /^\/scripts(\/|$)/,           // 脚本目录
+      /^\/data(\/|$)/,              // 数据目录
+      /^\/Dockerfile$/,
+      /^\/docker-compose\.yml$/,
+      /^\/\.dockerignore$/,
+      /^\/CLAUDE\.md$/,
+      /^\/README\.md$/,
+      /^\/CertificateSigningRequest\.certSigningRequest$/,
+      /^\/\.github(\/|$)/           // GitHub workflows
     ],
     // 禁用依赖裁剪，避免工作区（monorepo）被按根 package.json 误裁导致运行时缺包
     prune: false,
@@ -179,6 +191,7 @@ export default {
           'electron', 'electron-winstaller', '@electron', '@electron-forge',
           // 构建工具/打包器
           'rollup', '@rollup', 'vite', '@vitejs', 'esbuild', '@esbuild', 'postject', 'sucrase',
+          'appdmg', 'jiti', '@swc',  // DMG 制作和编译工具
           // 代码质量/类型
           'typescript', '@types', 'eslint', '@eslint', '@eslint-community', '@typescript-eslint', 'prettier',
           // UI/前端开发依赖（运行时使用的是打包后的 web/dist，不需要包体）
@@ -204,6 +217,42 @@ export default {
         console.log('✅ node_modules 精简完成');
       } catch (err) {
         console.warn('⚠️ 精简 node_modules 遇到问题：', (err && err.message) || err);
+      }
+
+      // 清理 packages 子目录的 node_modules（最大的体积占用）
+      try {
+        console.log('🧹 正在清理 packages/*/node_modules...');
+        execSync(`find "${appRoot}/packages" -name "node_modules" -type d -prune -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
+        console.log('✅ packages/*/node_modules 清理完成');
+      } catch (err) {
+        console.warn('⚠️ 清理 packages/*/node_modules 遇到问题：', (err && err.message) || err);
+      }
+
+      // 清理 packages/web 的源码，只保留 dist 和 package.json
+      try {
+        console.log('🧹 正在清理 packages/web 源码...');
+        const webDir = join(appRoot, 'packages', 'web');
+        // 删除除了 dist 和 package.json 之外的所有内容
+        execSync(`cd "${webDir}" && find . -mindepth 1 -maxdepth 1 ! -name "dist" ! -name "package.json" -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
+        console.log('✅ packages/web 源码清理完成');
+      } catch (err) {
+        console.warn('⚠️ 清理 packages/web 源码遇到问题：', (err && err.message) || err);
+      }
+
+      // 清理其他 packages 的非必要文件（保留 dist, package.json, node 二进制）
+      try {
+        console.log('🧹 正在清理其他 packages 的源码...');
+        const packagesDir = join(appRoot, 'packages');
+        const packagesToClean = ['electron-main', 'electron-preload', 'server', 'core', 'contracts'];
+
+        for (const pkg of packagesToClean) {
+          const pkgDir = join(packagesDir, pkg);
+          // 保留 dist, package.json, 删除其他内容
+          execSync(`cd "${pkgDir}" && find . -mindepth 1 -maxdepth 1 ! -name "dist" ! -name "package.json" -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
+        }
+        console.log('✅ 其他 packages 源码清理完成');
+      } catch (err) {
+        console.warn('⚠️ 清理其他 packages 源码遇到问题：', (err && err.message) || err);
       }
 
       // 平台特定：清理跨架构预构建二进制，避免携带无用文件
