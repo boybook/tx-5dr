@@ -854,8 +854,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         if (response.radioConnected) {
           console.log(`✅ 自定义频率已设置: ${formatFrequencyDisplay(frequency)} MHz`);
           addToast({
-            title: '✅ 频率切换成功',
+            title: '频率切换成功',
             description: successMessage,
+            color: 'success',
             timeout: 3000
           });
         } else {
@@ -1010,8 +1011,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         if (response.radioConnected) {
           console.log(`✅ 频率已切换到: ${selectedFrequency.label}`);
           addToast({
-            title: '✅ 频率切换成功',
+            title: '频率切换成功',
             description: successMessage,
+            color: 'success',
             timeout: 3000
           });
         } else {

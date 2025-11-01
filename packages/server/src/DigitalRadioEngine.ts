@@ -700,7 +700,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       audioStarted = true;
     } catch (error) {
       console.error(`❌ [时钟管理器] 音频流启动失败:`, error);
-      console.warn(`⚠️ [时钟管理器] 将在没有音频输入/输出的情况下继续运行`);
 
       // 清理可能残留的连接，确保状态一致
       try {
@@ -708,8 +707,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         await this.radioManager.disconnect('启动失败，清理连接');
       } catch (cleanupError) {
         console.warn('⚠️ [时钟管理器] 清理电台连接时出错:', cleanupError);
-        // 忽略清理错误，继续启动
       }
+
+      // 电台连接失败时停止启动，让重连机制接管
+      throw error;
     }
     
     this.slotClock.start();
@@ -1104,13 +1105,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   private setupRadioManagerEventListeners(): void {
     // 监听电台连接成功
-    this.radioManager.on('connected', () => {
+    this.radioManager.on('connected', async () => {
       console.log('📡 [DigitalRadioEngine] 物理电台连接成功');
       // 广播电台状态更新事件
       this.emit('radioStatusChanged' as any, {
         connected: true,
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
+
+      // 重连成功后自动启动系统（仅在真正重连时，不在首次启动时）
+      const reconnectInfo = this.radioManager.getReconnectInfo();
+      if (!this.isRunning && reconnectInfo.reconnectAttempts > 0) {
+        console.log('🚀 [DigitalRadioEngine] 重连成功，自动启动系统');
+        try {
+          await this.start();
+        } catch (err) {
+          console.error('❌ [DigitalRadioEngine] 自动启动失败:', err);
+        }
+      }
     });
 
     // 监听电台断开连接

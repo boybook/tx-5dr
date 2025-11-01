@@ -13,7 +13,7 @@ configureApi(getApiBaseUrl());
 function ThemedApp() {
   return (
     <HeroUIProvider>
-      <ToastProvider />
+      <ToastProvider placement="top-center" toastOffset={60} />
       <App />
     </HeroUIProvider>
   );
