@@ -115,7 +115,10 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       // 电台状态变化 - 只处理本地UI状态，全局状态由radioStore处理
       connection.radioService.on('radioStatusChanged', (data: any) => {
         console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
-        
+
+        // 清除手动重连的loading状态
+        setIsConnectingRadio(false);
+
         if (data.connected) {
           // 连接成功，清除重连状态
           setRadioReconnectInfo(prev => ({
@@ -262,12 +265,8 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       }
     } catch (error) {
       console.error('手动重连电台失败:', error);
-    } finally {
-      // 延迟清除loading状态，给重连一些时间
-      setTimeout(() => {
-        setIsConnectingRadio(false);
-      }, 2000);
     }
+    // 注意：loading状态由 radioStatusChanged 事件清除，确保状态同步
   };
 
   const getServerStatusIcon = () => {
