@@ -261,12 +261,54 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
 ```
 
 #### 4. 前端接收处理 (web)
+
+**方式 A：在 RadioProvider 中订阅**（全局状态管理）
 ```typescript
-// packages/web/src/services/radioService.ts
-this.wsClient.onWSEvent('newEvent', (data: any) => {
-  console.log('📱 收到新事件:', data);
-  this.eventListeners.newEvent?.forEach(listener => listener(data));
-});
+// packages/web/src/store/radioStore.tsx
+useEffect(() => {
+  const wsClient = radioService.wsClientInstance;
+
+  const handleNewEvent = (data: NewEventData) => {
+    console.log('📱 收到新事件:', data);
+    radioDispatch({ type: 'UPDATE_EVENT', payload: data });
+  };
+
+  wsClient.onWSEvent('newEvent', handleNewEvent);
+
+  return () => {
+    wsClient.offWSEvent('newEvent', handleNewEvent);
+  };
+}, [radioService]);
+```
+
+**方式 B：在组件中直接订阅**（局部 UI 更新）
+```typescript
+// packages/web/src/components/MyComponent.tsx
+import { useConnection } from '../store/radioStore';
+
+function MyComponent() {
+  const connection = useConnection();
+
+  useEffect(() => {
+    const radioService = connection.state.radioService;
+    if (!radioService) return;
+
+    const wsClient = radioService.wsClientInstance;
+
+    const handleNewEvent = (data: NewEventData) => {
+      console.log('📱 收到新事件:', data);
+      // 本地状态更新
+    };
+
+    wsClient.onWSEvent('newEvent', handleNewEvent);
+
+    return () => {
+      wsClient.offWSEvent('newEvent', handleNewEvent);
+    };
+  }, [connection.state.radioService]);
+
+  return <div>...</div>;
+}
 ```
 
 #### 5. 构建更新

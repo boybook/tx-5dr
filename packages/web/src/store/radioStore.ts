@@ -567,8 +567,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     };
 
+    // 直接订阅 WSClient 事件，绕过 RadioService 的事件层
+    // 这样可以简化事件流：WSClient → RadioProvider → Components
+    const wsClient = radioService.wsClientInstance;
     Object.entries(eventMap).forEach(([event, handler]) => {
-      radioService.on(event as any, handler as any);
+      wsClient.onWSEvent(event as any, handler as any);
     });
 
     connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });
@@ -587,6 +590,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         clearInterval(connectionStatusTimerRef.current);
         connectionStatusTimerRef.current = null;
       }
+
+      // 取消所有 WSClient 事件订阅
+      if (radioServiceRef.current) {
+        const wsClient = radioServiceRef.current.wsClientInstance;
+        Object.entries(eventMap).forEach(([event, handler]) => {
+          wsClient.offWSEvent(event as any, handler as any);
+        });
+      }
+
       if (radioServiceRef.current) {
         radioServiceRef.current.disconnect();
         radioServiceRef.current = null;

@@ -206,14 +206,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     const radioService = connection.state.radioService;
     if (!radioService) return;
 
+    // 直接订阅 WSClient 事件
+    const wsClient = radioService.wsClientInstance;
+
     const handleSpectrumData = (newSpectrum: FT8Spectrum) => {
       updateWaterfallData(newSpectrum);
     };
 
-    radioService.on('spectrumData', handleSpectrumData);
+    wsClient.onWSEvent('spectrumData', handleSpectrumData);
 
     return () => {
-      radioService.off('spectrumData');
+      wsClient.offWSEvent('spectrumData', handleSpectrumData);
       if (updateTimerRef.current) {
         clearTimeout(updateTimerRef.current);
       }

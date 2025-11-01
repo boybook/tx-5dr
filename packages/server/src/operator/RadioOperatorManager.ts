@@ -659,7 +659,18 @@ export class RadioOperatorManager {
     const requests = [...this.pendingTransmissions];
     this.pendingTransmissions = []; // 清空队列
 
-    for (const request of requests) {
+    // 去重：相同操作员+相同消息只处理一次（防止重复发射）
+    const uniqueRequests = requests.filter((req, index, self) =>
+      index === self.findIndex(r =>
+        r.operatorId === req.operatorId && r.transmission === req.transmission
+      )
+    );
+
+    if (uniqueRequests.length < requests.length) {
+      console.warn(`⚠️ [RadioOperatorManager] 检测到重复发射请求: ${requests.length} → ${uniqueRequests.length}`);
+    }
+
+    for (const request of uniqueRequests) {
       const operatorId = request.operatorId;
       const transmission = request.transmission;
 
@@ -820,14 +831,9 @@ export class RadioOperatorManager {
       // 注释：不在发射过程中设置频率，避免电台在PTT状态下拒绝频率变更
       // 频率应该在发射前预先设置，而不是在发射过程中设置
 
-      // 广播发射日志
-      this.eventEmitter.emit('transmissionLog' as any, {
-        operatorId,
-        time: new Date(currentSlotStartMs).toISOString().slice(11, 19).replace(/:/g, ''),
-        message: transmission,
-        frequency: frequency,
-        slotStartMs: currentSlotStartMs
-      });
+      // 📝 注意：这里不发射 transmissionLog 事件
+      // 原因：该方法当前未被调用（旧代码路径），且会与 processPendingTransmissions() 产生重复发射
+      // transmissionLog 事件应该只在 processPendingTransmissions() 中统一发射
 
       // 启动传输跟踪
       if (this.transmissionTracker) {
