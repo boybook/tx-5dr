@@ -33,11 +33,14 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   // 监听服务端推送的发射日志
   useEffect(() => {
     const radioService = connection.state.radioService;
-    
+
     if (!radioService) {
       return;
     }
-    
+
+    // 直接订阅 WSClient 事件
+    const wsClient = radioService.wsClientInstance;
+
     const handleTransmissionLog = (data: {
       operatorId: string;
       time: string;
@@ -45,13 +48,28 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       frequency: number;
       slotStartMs: number;
     }) => {
-      setTransmissionLogs(prev => [...prev, data]);
+      setTransmissionLogs(prev => {
+        // 去重：检查是否已存在完全相同的发射日志
+        const isDuplicate = prev.some(log =>
+          log.operatorId === data.operatorId &&
+          log.slotStartMs === data.slotStartMs &&
+          log.message === data.message &&
+          log.frequency === data.frequency
+        );
+
+        if (isDuplicate) {
+          console.warn('⚠️ [MyRelatedFramesTable] 检测到重复的发射日志，已过滤:', data);
+          return prev; // 不添加重复的日志
+        }
+
+        return [...prev, data];
+      });
     };
-    
-    radioService.on('transmissionLog', handleTransmissionLog);
-    
+
+    wsClient.onWSEvent('transmissionLog', handleTransmissionLog);
+
     return () => {
-      radioService.off('transmissionLog', handleTransmissionLog as any);
+      wsClient.offWSEvent('transmissionLog', handleTransmissionLog as any);
     };
   }, [connection.state.radioService]);
 
@@ -60,6 +78,9 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     const radioService = connection.state.radioService;
     if (!radioService) return;
 
+    // 直接订阅 WSClient 事件
+    const wsClient = radioService.wsClientInstance;
+
     const handleFrequencyChanged = () => {
       setMyFrameGroups([]);
       setTransmissionLogs([]);
@@ -67,9 +88,9 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       setRecentSlotGroupKeys([]);
     };
 
-    radioService.on('frequencyChanged' as any, handleFrequencyChanged as any);
+    wsClient.onWSEvent('frequencyChanged' as any, handleFrequencyChanged as any);
     return () => {
-      radioService.off('frequencyChanged' as any, handleFrequencyChanged as any);
+      wsClient.offWSEvent('frequencyChanged' as any, handleFrequencyChanged as any);
     };
   }, [connection.state.radioService]);
 

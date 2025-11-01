@@ -97,106 +97,115 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
 
   // 监听电台重连事件（仅处理UI相关的本地状态，不处理全局状态）
   useEffect(() => {
-    if (connection.radioService) {
-      // 电台重连中
-      connection.radioService.on('radioReconnecting', (data: any) => {
-        console.log('🔄 [RadioControl] 电台重连中:', data);
-        const reconnectInfo = data.reconnectInfo || {};
-        setRadioReconnectInfo(prev => ({
-          ...prev,
-          isReconnecting: true,
-          reconnectAttempts: data.attempt || 0,
-          maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
-          hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
-          nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
-        }));
-      });
+    if (!connection.radioService) return;
 
-      // 电台状态变化 - 只处理本地UI状态，全局状态由radioStore处理
-      connection.radioService.on('radioStatusChanged', (data: any) => {
-        console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
+    // 直接订阅 WSClient 事件
+    const wsClient = connection.radioService.wsClientInstance;
 
-        // 清除手动重连的loading状态
-        setIsConnectingRadio(false);
+    // 电台重连中
+    const handleRadioReconnecting = (data: any) => {
+      console.log('🔄 [RadioControl] 电台重连中:', data);
+      const reconnectInfo = data.reconnectInfo || {};
+      setRadioReconnectInfo(prev => ({
+        ...prev,
+        isReconnecting: true,
+        reconnectAttempts: data.attempt || 0,
+        maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
+        hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
+        nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
+      }));
+    };
 
-        if (data.connected) {
-          // 连接成功，清除重连状态
-          setRadioReconnectInfo(prev => ({
-            ...prev,
-            isReconnecting: false,
-            reconnectAttempts: 0,
-            hasReachedMaxAttempts: false
-          }));
-        } else {
-          // 连接断开时，如果不在重连过程中，重置重连状态
-          setRadioReconnectInfo(prev => {
-            if (!data.reconnectInfo?.isReconnecting) {
-              return {
-                ...prev,
-                isReconnecting: false,
-                hasReachedMaxAttempts: false
-              };
-            }
-            return prev;
-          });
-        }
-      });
+    // 电台状态变化 - 只处理本地UI状态，全局状态由radioStore处理
+    const handleRadioStatusChanged = (data: any) => {
+      console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
 
-      // 电台重连停止
-      connection.radioService.on('radioReconnectStopped', (data: any) => {
-        console.log('⏹️ [RadioControl] 电台重连已停止:', data);
-        const reconnectInfo = data.reconnectInfo || {};
+      // 清除手动重连的loading状态
+      setIsConnectingRadio(false);
+
+      if (data.connected) {
+        // 连接成功，清除重连状态
         setRadioReconnectInfo(prev => ({
           ...prev,
           isReconnecting: false,
-          hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || true,
-          maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || prev.maxReconnectAttempts
+          reconnectAttempts: 0,
+          hasReachedMaxAttempts: false
         }));
-      });
-
-      // 电台重连失败
-      connection.radioService.on('radioReconnectFailed', (data: any) => {
-        console.log('❌ [RadioControl] 电台重连失败:', data);
-        const reconnectInfo = data.reconnectInfo || {};
-        setRadioReconnectInfo(prev => ({
-          ...prev,
-          reconnectAttempts: data.attempt || prev.reconnectAttempts,
-          maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
-          hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
-          nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
-        }));
-      });
-
-      // 电台发射中断开连接
-      connection.radioService.on('radioDisconnectedDuringTransmission', (data: any) => {
-        console.warn('🚨 [RadioControl] 电台发射中断开连接:', data);
-        
-        // 显示专门的错误提示
-        addToast({
-          title: '⚠️ 电台发射中断连接',
-          description: data.message,
-          timeout: 10000 // 10秒显示
+      } else {
+        // 连接断开时，如果不在重连过程中，重置重连状态
+        setRadioReconnectInfo(prev => {
+          if (!data.reconnectInfo?.isReconnecting) {
+            return {
+              ...prev,
+              isReconnecting: false,
+              hasReachedMaxAttempts: false
+            };
+          }
+          return prev;
         });
-        
-        // 再显示一个包含建议的提示
-        setTimeout(() => {
-          addToast({
-            title: '💡 建议',
-            description: data.recommendation,
-            timeout: 15000 // 15秒显示
-          });
-        }, 1000);
+      }
+    };
+
+    // 电台重连停止
+    const handleRadioReconnectStopped = (data: any) => {
+      console.log('⏹️ [RadioControl] 电台重连已停止:', data);
+      const reconnectInfo = data.reconnectInfo || {};
+      setRadioReconnectInfo(prev => ({
+        ...prev,
+        isReconnecting: false,
+        hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || true,
+        maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || prev.maxReconnectAttempts
+      }));
+    };
+
+    // 电台重连失败
+    const handleRadioReconnectFailed = (data: any) => {
+      console.log('❌ [RadioControl] 电台重连失败:', data);
+      const reconnectInfo = data.reconnectInfo || {};
+      setRadioReconnectInfo(prev => ({
+        ...prev,
+        reconnectAttempts: data.attempt || prev.reconnectAttempts,
+        maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
+        hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
+        nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
+      }));
+    };
+
+    // 电台发射中断开连接
+    const handleRadioDisconnectedDuringTransmission = (data: any) => {
+      console.warn('🚨 [RadioControl] 电台发射中断开连接:', data);
+
+      // 显示专门的错误提示
+      addToast({
+        title: '⚠️ 电台发射中断连接',
+        description: data.message,
+        timeout: 10000 // 10秒显示
       });
-    }
+
+      // 再显示一个包含建议的提示
+      setTimeout(() => {
+        addToast({
+          title: '💡 建议',
+          description: data.recommendation,
+          timeout: 15000 // 15秒显示
+        });
+      }, 1000);
+    };
+
+    // 注册所有事件监听器
+    wsClient.onWSEvent('radioReconnecting', handleRadioReconnecting);
+    wsClient.onWSEvent('radioStatusChanged', handleRadioStatusChanged);
+    wsClient.onWSEvent('radioReconnectStopped', handleRadioReconnectStopped);
+    wsClient.onWSEvent('radioReconnectFailed', handleRadioReconnectFailed);
+    wsClient.onWSEvent('radioDisconnectedDuringTransmission', handleRadioDisconnectedDuringTransmission);
 
     return () => {
-      if (connection.radioService) {
-        connection.radioService.off('radioReconnecting');
-        connection.radioService.off('radioStatusChanged');
-        connection.radioService.off('radioReconnectStopped');
-        connection.radioService.off('radioReconnectFailed');
-        connection.radioService.off('radioDisconnectedDuringTransmission');
-      }
+      // 取消所有事件订阅
+      wsClient.offWSEvent('radioReconnecting', handleRadioReconnecting);
+      wsClient.offWSEvent('radioStatusChanged', handleRadioStatusChanged);
+      wsClient.offWSEvent('radioReconnectStopped', handleRadioReconnectStopped);
+      wsClient.offWSEvent('radioReconnectFailed', handleRadioReconnectFailed);
+      wsClient.offWSEvent('radioDisconnectedDuringTransmission', handleRadioDisconnectedDuringTransmission);
     };
   }, [connection.radioService]);
 
@@ -1033,30 +1042,39 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   // 监听音量变化事件
   useEffect(() => {
-    if (connection.state.radioService) {
-      connection.state.radioService.on('volumeGainChanged', (data: any) => {
-        console.log('🔊 收到服务器音量变化:', data);
-        
-        // 处理新的数据格式（包含gain和gainDb）
-        if (data && typeof data === 'object' && data.gain !== undefined) {
-          // 新格式：{ gain: number, gainDb: number }
-          if (!isNaN(data.gain) && data.gain >= 0) {
-            setVolumeGain(data.gain);
-          } else {
-            console.warn('⚠️ 收到无效的音量增益值:', data);
-          }
-        } else if (typeof data === 'number') {
-          // 向后兼容：直接是gain数值
-          if (!isNaN(data) && data >= 0) {
-            setVolumeGain(data);
-          } else {
-            console.warn('⚠️ 收到无效的音量增益值:', data);
-          }
+    if (!connection.state.radioService) return;
+
+    // 直接订阅 WSClient 事件
+    const wsClient = connection.state.radioService.wsClientInstance;
+
+    const handleVolumeGainChanged = (data: any) => {
+      console.log('🔊 收到服务器音量变化:', data);
+
+      // 处理新的数据格式（包含gain和gainDb）
+      if (data && typeof data === 'object' && data.gain !== undefined) {
+        // 新格式：{ gain: number, gainDb: number }
+        if (!isNaN(data.gain) && data.gain >= 0) {
+          setVolumeGain(data.gain);
         } else {
-          console.warn('⚠️ 收到未知格式的音量增益数据:', data);
+          console.warn('⚠️ 收到无效的音量增益值:', data);
         }
-      });
-    }
+      } else if (typeof data === 'number') {
+        // 向后兼容：直接是gain数值
+        if (!isNaN(data) && data >= 0) {
+          setVolumeGain(data);
+        } else {
+          console.warn('⚠️ 收到无效的音量增益值:', data);
+        }
+      } else {
+        console.warn('⚠️ 收到未知格式的音量增益数据:', data);
+      }
+    };
+
+    wsClient.onWSEvent('volumeGainChanged', handleVolumeGainChanged);
+
+    return () => {
+      wsClient.offWSEvent('volumeGainChanged', handleVolumeGainChanged);
+    };
   }, [connection.state.radioService]);
 
   // 在连接成功后获取当前音量
@@ -1069,32 +1087,44 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   // 监听系统状态更新
   useEffect(() => {
-    if (connection.state.radioService) {
-      connection.state.radioService.on('systemStatus', (status: any) => {
-        if (status.volumeGain !== undefined) {
-          // 确保系统状态中的gain值有效
-          const gain = status.volumeGain;
-          if (!isNaN(gain) && gain >= 0) {
-            setVolumeGain(gain);
-          } else {
-            console.warn('⚠️ 系统状态中收到无效的音量增益值:', gain);
-          }
+    if (!connection.state.radioService) return;
+
+    // 直接订阅 WSClient 事件
+    const wsClient = connection.state.radioService.wsClientInstance;
+
+    const handleSystemStatus = (status: any) => {
+      if (status.volumeGain !== undefined) {
+        // 确保系统状态中的gain值有效
+        const gain = status.volumeGain;
+        if (!isNaN(gain) && gain >= 0) {
+          setVolumeGain(gain);
+        } else {
+          console.warn('⚠️ 系统状态中收到无效的音量增益值:', gain);
         }
-        // 支持dB格式的系统状态（如果后续添加）
-        if (status.volumeGainDb !== undefined) {
-          const gainDb = status.volumeGainDb;
-          if (!isNaN(gainDb) && gainDb >= -60 && gainDb <= 20) {
-            const gain = dbToGain(gainDb);
-            setVolumeGain(gain);
-          }
+      }
+      // 支持dB格式的系统状态（如果后续添加）
+      if (status.volumeGainDb !== undefined) {
+        const gainDb = status.volumeGainDb;
+        if (!isNaN(gainDb) && gainDb >= -60 && gainDb <= 20) {
+          const gain = dbToGain(gainDb);
+          setVolumeGain(gain);
         }
-      });
-    }
+      }
+    };
+
+    wsClient.onWSEvent('systemStatus', handleSystemStatus);
+
+    return () => {
+      wsClient.offWSEvent('systemStatus', handleSystemStatus);
+    };
   }, [connection.state.radioService]);
 
   // 监听频率变化事件
   useEffect(() => {
     if (!connection.state.radioService) return;
+
+    // 直接订阅 WSClient 事件
+    const wsClient = connection.state.radioService.wsClientInstance;
 
     const handleFrequencyChanged = (data: any) => {
       console.log('📻 收到频率变化广播:', data);
@@ -1113,10 +1143,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     };
 
-    connection.state.radioService.on('frequencyChanged', handleFrequencyChanged as any);
+    wsClient.onWSEvent('frequencyChanged', handleFrequencyChanged as any);
 
     return () => {
-      connection.state.radioService?.off('frequencyChanged', handleFrequencyChanged as any);
+      wsClient.offWSEvent('frequencyChanged', handleFrequencyChanged as any);
     };
   }, [connection.state.radioService, filteredFrequencies]);
 

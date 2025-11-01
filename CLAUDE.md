@@ -41,6 +41,24 @@ docker-compose up -d        # 启动服务
 后端: Fastify + naudiodon2 + WSJTX + WebSocket
 工具: Piscina 工作池 + Turborepo
 
+## 架构亮点
+
+### WebSocket 事件系统
+- **直接订阅**: 组件通过 `radioService.wsClientInstance` 直接访问 WSClient 订阅事件
+- **多监听器**: 同一事件支持多个监听器互不干扰
+- **轻量 Service**: RadioService 仅封装命令方法，暴露 wsClient 实例
+- **类型安全**: 基于 contracts 的 `DigitalRadioEngineEvents` 类型定义
+- **内存安全**: 必须配对调用 `onWSEvent` / `offWSEvent` 避免内存泄漏
+
+事件流：
+```
+WSClient → RadioProvider/Components (直接订阅)
+```
+
+详见：
+- `packages/web/CLAUDE.md` - WebSocket 事件订阅指南
+- `packages/core/CLAUDE.md` - 事件系统设计详解
+
 ## 开发规范
 1. 各包有专门 CLAUDE.md，修改时参考对应文档
 2. 新功能: contracts定义Schema → server实现 → web集成
