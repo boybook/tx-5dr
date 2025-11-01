@@ -12,6 +12,10 @@ on:
         required: false
         default: ''
 
+# 授予 GITHUB_TOKEN 写入权限以创建 release
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
