@@ -82,14 +82,22 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
 
-                        // 立即切换到新呼号
+                        // 清空旧上下文（自动保存到缓存）
+                        strategy.clearQSOContext();
+
+                        // 切换到新呼号
                         strategy.context.targetCallsign = newCallsign;
-                        strategy.context.reportSent = newCall.snr;
-                        strategy.context.targetGrid = callMsg.grid;
-                        // 记录实际通联频率
-                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                            strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+
+                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                        if (!strategy.restoreContext(newCallsign)) {
+                            strategy.context.reportSent = newCall.snr;
+                            strategy.context.targetGrid = callMsg.grid;
+                            // 记录实际通联频率
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                            }
                         }
+
                         strategy.updateSlots();
                         return { changeState: 'TX2' };
                     } else {
@@ -106,14 +114,22 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
 
-                        // 立即切换到新呼号
+                        // 清空旧上下文（自动保存到缓存）
+                        strategy.clearQSOContext();
+
+                        // 切换到新呼号
                         strategy.context.targetCallsign = newCallsign;
-                        strategy.context.reportReceived = reportMsg.report;
-                        strategy.context.reportSent = newCall.snr;
-                        // 记录实际通联频率
-                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                            strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+
+                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                        if (!strategy.restoreContext(newCallsign)) {
+                            strategy.context.reportReceived = reportMsg.report;
+                            strategy.context.reportSent = newCall.snr;
+                            // 记录实际通联频率
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                            }
                         }
+
                         strategy.updateSlots();
                         return { changeState: 'TX3' };
                     } else {
@@ -361,17 +377,22 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                             console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
 
-                            // 清空旧QSO上下文
+                            // 清空旧QSO上下文（自动保存到缓存）
                             strategy.clearQSOContext();
 
-                            // 立即切换到新呼号
+                            // 切换到新呼号
                             strategy.context.targetCallsign = newCallsign;
-                            strategy.context.reportSent = newCall.snr;
-                            strategy.context.targetGrid = callMsg.grid;
-                            // 记录实际通联频率
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+
+                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                            if (!strategy.restoreContext(newCallsign)) {
+                                strategy.context.reportSent = newCall.snr;
+                                strategy.context.targetGrid = callMsg.grid;
+                                // 记录实际通联频率
+                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                }
                             }
+
                             strategy.updateSlots();
                             return { changeState: 'TX2' };
                         } else {
@@ -388,17 +409,22 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                             console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
 
-                            // 清空旧QSO上下文
+                            // 清空旧QSO上下文（自动保存到缓存）
                             strategy.clearQSOContext();
 
-                            // 立即切换到新呼号
+                            // 切换到新呼号
                             strategy.context.targetCallsign = newCallsign;
-                            strategy.context.reportReceived = reportMsg.report;
-                            strategy.context.reportSent = newCall.snr;
-                            // 记录实际通联频率
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+
+                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                            if (!strategy.restoreContext(newCallsign)) {
+                                strategy.context.reportReceived = reportMsg.report;
+                                strategy.context.reportSent = newCall.snr;
+                                // 记录实际通联频率
+                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                }
                             }
+
                             strategy.updateSlots();
                             return { changeState: 'TX3' };
                         } else {
@@ -509,15 +535,21 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy TX5] 收到新的直接呼叫 ${callsign}，立即切换`);
 
-                        // 清空旧QSO上下文
+                        // 清空旧QSO上下文（自动保存到缓存）
                         strategy.clearQSOContext();
 
+                        // 切换到新呼号
                         strategy.context.targetCallsign = callsign;
-                        strategy.context.reportSent = directCalls[0].snr;
-                        strategy.context.targetGrid = (msg as FT8MessageCall).grid;
-                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                            strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+
+                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                        if (!strategy.restoreContext(callsign)) {
+                            strategy.context.reportSent = directCalls[0].snr;
+                            strategy.context.targetGrid = (msg as FT8MessageCall).grid;
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                            }
                         }
+
                         strategy.updateSlots();
                         return { changeState: 'TX2' };
                     }
@@ -528,15 +560,21 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy TX5] 收到新的直接信号报告 ${callsign}，立即切换`);
 
-                        // 清空旧QSO上下文
+                        // 清空旧QSO上下文（自动保存到缓存）
                         strategy.clearQSOContext();
 
+                        // 切换到新呼号
                         strategy.context.targetCallsign = callsign;
-                        strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
-                        strategy.context.reportSent = directCalls[0].snr;
-                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                            strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+
+                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                        if (!strategy.restoreContext(callsign)) {
+                            strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
+                            strategy.context.reportSent = directCalls[0].snr;
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                            }
                         }
+
                         strategy.updateSlots();
                         return { changeState: 'TX3' };
                     }
@@ -587,13 +625,18 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy] 回复直接呼叫: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCalls[0].snr})`);
                         strategy.context.targetCallsign = callsign;
-                        strategy.context.reportSent = directCalls[0].snr;
-                        strategy.context.targetGrid = msg.grid;
-                        // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
-                        // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
-                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                            strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+
+                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                        if (!strategy.restoreContext(callsign)) {
+                            strategy.context.reportSent = directCalls[0].snr;
+                            strategy.context.targetGrid = msg.grid;
+                            // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
+                            // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                            }
                         }
+
                         strategy.updateSlots();
                         return { changeState: 'TX2' };
                     } else {
@@ -609,13 +652,18 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
                         console.log(`[StandardQSOStrategy] 回复直接信号报告: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCalls[0].snr})`);
                         strategy.context.targetCallsign = callsign;
-                        strategy.context.reportReceived = msg.report;
-                        strategy.context.reportSent = directCalls[0].snr;
-                        // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
-                        // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
-                        if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                            strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+
+                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                        if (!strategy.restoreContext(callsign)) {
+                            strategy.context.reportReceived = msg.report;
+                            strategy.context.reportSent = directCalls[0].snr;
+                            // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
+                            // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                            }
                         }
+
                         strategy.updateSlots();
                         return { changeState: 'TX3' };
                     } else {
@@ -646,13 +694,18 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         if (!hasWorked) {
                             console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (未通联过, SNR: ${cqCall.snr}dB, 按信号强度优先)`);
                             strategy.context.targetCallsign = callsign;
-                            strategy.context.targetGrid = msg.grid;
-                            strategy.context.reportSent = cqCall.snr;
-                            // 记录实际通联频率 (基础频率 + CQ信号的频率偏移)
-                            // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + cqCall.df;
+
+                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                            if (!strategy.restoreContext(callsign)) {
+                                strategy.context.targetGrid = msg.grid;
+                                strategy.context.reportSent = cqCall.snr;
+                                // 记录实际通联频率 (基础频率 + CQ信号的频率偏移)
+                                // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
+                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                    strategy.context.actualFrequency = strategy.context.config.frequency + cqCall.df;
+                                }
                             }
+
                             strategy.updateSlots();
                             return { changeState: 'TX1' };
                         } else {
@@ -671,6 +724,15 @@ const states: { [key in SlotsIndex]: StandardState } = {
     }
 }
 
+// QSO上下文历史缓存数据结构
+interface CachedQSOContext {
+    targetGrid?: string;
+    reportSent?: number;
+    reportReceived?: number;
+    actualFrequency?: number;
+    lastUpdated: number;
+}
+
 export class StandardQSOStrategy implements ITransmissionStrategy {
     public readonly operator: RadioOperator;
     private state: SlotsIndex = 'TX6';
@@ -685,6 +747,11 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     private _context: QSOContext;
     private timeoutCycles: number = 0;
     public qsoStartTime?: number; // QSO开始时间
+
+    // QSO上下文历史缓存（呼号 -> 上下文）
+    private qsoContextHistory = new Map<string, CachedQSOContext>();
+    // 最大缓存数量，避免内存泄漏
+    private readonly MAX_CONTEXT_CACHE = 100;
 
     constructor(operator: RadioOperator) {
         this.operator = operator;
@@ -792,20 +859,55 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         // 包含 targetCallsign 的消息
         if (msg.type === FT8MessageType.SIGNAL_REPORT || msg.type === FT8MessageType.CALL || msg.type === FT8MessageType.ROGER_REPORT || msg.type === FT8MessageType.RRR || msg.type === FT8MessageType.SEVENTY_THREE) {
             if (msg.targetCallsign === this._context.config.myCallsign) {
-                // 和我有关，则设置当前状态到对应消息的上一步，然后立即执行原始 handleReceivedAndDicideNext
+                // 消息是发给我的，直接转到对应的回复状态
                 if (msg.type === FT8MessageType.CALL) {
-                    this.changeState('TX6');
+                    // 对方呼叫我，回复信号报告
+                    const callMsg = msg as FT8MessageCall;
+                    this.context.targetGrid = callMsg.grid;
+                    // 记录实际通联频率
+                    if (this.context.config.frequency && this.context.config.frequency > 1000000) {
+                        this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;
+                    }
+                    this.updateSlots();
+                    this.changeState('TX2');  // 下周期发送 SIGNAL_REPORT
+                    console.log(`[StandardQSOStrategy.requestCall] 收到 CALL，转到 TX2（发送信号报告）`);
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
-                    this.changeState('TX1');
+                    // 对方发了信号报告，回复 ROGER_REPORT
+                    const reportMsg = msg as FT8MessageSignalReport;
+                    this.context.reportReceived = reportMsg.report;
+                    // 记录实际通联频率
+                    if (this.context.config.frequency && this.context.config.frequency > 1000000) {
+                        this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;
+                    }
+                    this.updateSlots();
+                    this.changeState('TX3');  // 下周期发送 ROGER_REPORT
+                    console.log(`[StandardQSOStrategy.requestCall] 收到 SIGNAL_REPORT，转到 TX3（发送确认报告）`);
                 } else if (msg.type === FT8MessageType.ROGER_REPORT) {
-                    this.changeState('TX2');
+                    // 对方发了 ROGER_REPORT，回复 RR73
+                    const rogerMsg = msg as FT8MessageRogerReport;
+                    // 从 ROGER_REPORT 中提取对方给我们的信号报告
+                    if (this.context.reportReceived === undefined || this.context.reportReceived === null) {
+                        this.context.reportReceived = rogerMsg.report;
+                    }
+                    // 记录实际通联频率
+                    if (this.context.config.frequency && this.context.config.frequency > 1000000) {
+                        this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;
+                    }
+                    this.updateSlots();
+                    this.changeState('TX4');  // 下周期发送 RR73
+                    console.log(`[StandardQSOStrategy.requestCall] 收到 ROGER_REPORT，转到 TX4（发送 RR73）`);
                 } else if (msg.type === FT8MessageType.RRR) {
-                    this.changeState('TX3');
+                    // 对方发了 RRR，回复 73
+                    this.updateSlots();
+                    this.changeState('TX5');  // 下周期发送 73
+                    console.log(`[StandardQSOStrategy.requestCall] 收到 RRR，转到 TX5（发送 73）`);
                 } else if (msg.type === FT8MessageType.SEVENTY_THREE) {
-                    this.changeState('TX4');
+                    // 对方发了 73，QSO 完成，转到待机
+                    this.updateSlots();
+                    this.changeState('TX6');  // 待机
+                    console.log(`[StandardQSOStrategy.requestCall] 收到 73，转到 TX6（待机）`);
                 }
-                this.updateSlots();
-                this.handleReceivedAndDicideNext([parsedMessage]);
+                // 不再调用 handleReceivedAndDicideNext，避免状态机二次处理
                 return;
             } else {
                 // 和我无关，那么就正常CQ他
@@ -933,10 +1035,66 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     }
 
     /**
+     * 保存当前QSO上下文到历史缓存
+     */
+    private saveCurrentContext(): void {
+        if (!this.context.targetCallsign) {
+            return;
+        }
+
+        this.qsoContextHistory.set(this.context.targetCallsign, {
+            targetGrid: this.context.targetGrid,
+            reportSent: this.context.reportSent,
+            reportReceived: this.context.reportReceived,
+            actualFrequency: this.context.actualFrequency,
+            lastUpdated: Date.now()
+        });
+
+        // 限制缓存大小，删除最老的条目
+        if (this.qsoContextHistory.size > this.MAX_CONTEXT_CACHE) {
+            const entries = Array.from(this.qsoContextHistory.entries());
+            entries.sort((a, b) => a[1].lastUpdated - b[1].lastUpdated);
+            const oldestKey = entries[0][0];
+            this.qsoContextHistory.delete(oldestKey);
+            console.log(`[StandardQSOStrategy] 缓存已满，删除最旧条目: ${oldestKey}`);
+        }
+
+        console.log(`[StandardQSOStrategy] 保存上下文到缓存: ${this.context.targetCallsign}`, {
+            grid: this.context.targetGrid,
+            reportSent: this.context.reportSent,
+            reportReceived: this.context.reportReceived
+        });
+    }
+
+    /**
+     * 从历史缓存恢复QSO上下文
+     */
+    private restoreContext(targetCallsign: string): boolean {
+        const cached = this.qsoContextHistory.get(targetCallsign);
+        if (cached) {
+            this.context.targetGrid = cached.targetGrid;
+            this.context.reportSent = cached.reportSent;
+            this.context.reportReceived = cached.reportReceived;
+            this.context.actualFrequency = cached.actualFrequency;
+
+            console.log(`✅ [StandardQSOStrategy] 从缓存恢复上下文: ${targetCallsign}`, {
+                grid: cached.targetGrid,
+                reportSent: cached.reportSent,
+                reportReceived: cached.reportReceived
+            });
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * 清空QSO上下文
      * 在QSO结束时调用，确保干净的下一次通联
      */
     clearQSOContext(): void {
+        // 先保存当前上下文到历史缓存
+        this.saveCurrentContext();
+
         this.context.targetCallsign = undefined;
         this.context.targetGrid = undefined;
         this.context.reportSent = undefined;
