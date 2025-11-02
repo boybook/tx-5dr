@@ -787,8 +787,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
 
         // 过滤掉发送者是我自己的消息
         const filteredMessages = messages.filter((msg) => msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.senderCallsign !== this.operator.config.myCallsign);
-        
-        // console.log(this.context.config.id, "收到消息", filteredMessages);
+
         // 处理接收到的消息
         const result = await currentState.handle(this, filteredMessages);
         

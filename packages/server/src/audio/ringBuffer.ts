@@ -29,6 +29,18 @@ export class RingBuffer {
   write(samples: Float32Array): void {
     const writeTimestamp = Date.now();
 
+    // 在写入前一次性检查可用空间
+    const available = this.getAvailableSamples();
+    const freeSpace = this.size - available;
+
+    // 如果空间不足，批量移动读指针
+    if (samples.length > freeSpace) {
+      const needToDrop = samples.length - freeSpace;
+      console.warn(`⚠️ [RingBuffer] 缓冲区溢出，丢弃 ${needToDrop} 个样本`);
+      this.readIndex = (this.readIndex + needToDrop) % this.size;
+    }
+
+    // 批量写入所有样本
     for (let i = 0; i < samples.length; i++) {
       const sample = samples[i] || 0;
 
@@ -44,11 +56,6 @@ export class RingBuffer {
 
       this.writeIndex = (this.writeIndex + 1) % this.size;
       this.totalSamplesWritten++;
-
-      // 如果写入追上了读取，移动读取指针
-      if (this.writeIndex === this.readIndex) {
-        this.readIndex = (this.readIndex + 1) % this.size;
-      }
     }
 
     // 更新最后写入时间（用于计算时间偏移）
@@ -98,10 +105,7 @@ export class RingBuffer {
     
     // 计算起始位置（向前回溯 sampleCount 个样本）
     const startSample = Math.max(0, endSample - sampleCount);
-    
-    // console.log(`🔍 [RingBuffer] 时间计算: 时隙开始=${new Date(slotStartMs).toISOString()}, 请求时长=${durationMs}ms, 样本数=${sampleCount}`);
-    // console.log(`🔍 [RingBuffer] 位置计算: 总样本=${totalSamplesFromStart}, 已写入=${this.totalSamplesWritten}, 起始=${startSample}, 结束=${endSample}`);
-    
+
     // 从环形缓冲区读取数据
     for (let i = 0; i < sampleCount; i++) {
       const sampleIndex = startSample + i;
@@ -113,6 +117,32 @@ export class RingBuffer {
     return result.buffer;
   }
   
+  /**
+   * 连续读取音频数据（流式播放专用）
+   * 自动推进读指针，确保音频连续
+   * @param sampleCount 要读取的样本数
+   * @returns PCM 音频数据
+   */
+  readNext(sampleCount: number): ArrayBuffer {
+    const result = new Float32Array(sampleCount);
+    const available = this.getAvailableSamples();
+
+    // 读取可用的样本（如果不足，剩余部分填充静音）
+    const samplesToRead = Math.min(sampleCount, available);
+
+    for (let i = 0; i < samplesToRead; i++) {
+      result[i] = this.buffer[this.readIndex];
+      this.readIndex = (this.readIndex + 1) % this.size;
+    }
+
+    // 如果缓冲区不足，剩余部分填充静音
+    for (let i = samplesToRead; i < sampleCount; i++) {
+      result[i] = 0;
+    }
+
+    return result.buffer;
+  }
+
   /**
    * 获取当前可用的样本数量
    */

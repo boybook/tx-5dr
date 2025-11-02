@@ -19,6 +19,7 @@ import { FrequencyManager } from './radio/FrequencyManager.js';
 import { TransmissionTracker } from './transmission/TransmissionTracker.js';
 import { IcomWlanAudioAdapter } from './audio/IcomWlanAudioAdapter.js';
 import { AudioDeviceManager } from './audio/audio-device-manager.js';
+import { AudioMonitorService } from './audio/AudioMonitorService.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -62,6 +63,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // ICOM WLAN 音频适配器
   private icomWlanAudioAdapter: IcomWlanAudioAdapter | null = null;
 
+  // 音频监听服务
+  private audioMonitorService: AudioMonitorService | null = null;
+
   // 编码状态跟踪（用于检测编码超时）
   private currentSlotExpectedEncodes: number = 0; // 当前时隙期望的编码数量
   private currentSlotCompletedEncodes: number = 0; // 当前时隙已完成的编码数量
@@ -81,6 +85,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   /** 获取物理电台管理器 */
   public getRadioManager(): PhysicalRadioManager {
     return this.radioManager;
+  }
+
+  /** 获取音频监听服务 */
+  public getAudioMonitorService(): AudioMonitorService | null {
+    return this.audioMonitorService;
   }
 
   /**
@@ -705,6 +714,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
 
       audioStarted = true;
+
+      // 初始化音频监听服务
+      console.log('🎧 [时钟管理器] 初始化音频监听服务...');
+      const audioProvider = this.audioStreamManager.getAudioProvider();
+      this.audioMonitorService = new AudioMonitorService(audioProvider);
+      console.log('✅ [时钟管理器] 音频监听服务已初始化');
     } catch (error) {
       console.error(`❌ [时钟管理器] 音频流启动失败:`, error);
 
@@ -853,6 +868,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         this.audioStreamManager.setIcomWlanAudioAdapter(null);
         this.icomWlanAudioAdapter = null;
         console.log(`🛑 [时钟管理器] ICOM WLAN 音频适配器已清理`);
+      }
+
+      // 清理音频监听服务
+      if (this.audioMonitorService) {
+        this.audioMonitorService.destroy();
+        this.audioMonitorService = null;
+        console.log(`🛑 [时钟管理器] 音频监听服务已清理`);
       }
 
       this.isRunning = false;

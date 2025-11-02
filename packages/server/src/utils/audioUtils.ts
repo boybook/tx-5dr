@@ -311,8 +311,6 @@ export async function resampleAudioProfessional(
     // 执行重采样
     const resampled = resampler.simple(samples);
 
-    // console.log(`🔄 [音频工具] 重采样完成: ${samples.length} -> ${resampled.length} 样本`);
-
     return resampled;
 
   } catch (error) {

@@ -15,6 +15,7 @@ import { waveLogRoutes } from './routes/wavelog.js';
 import { settingsRoutes } from './routes/settings.js';
 import { WSServer } from './websocket/WSServer.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
+import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
 
 export async function createServer() {
   const fastify = Fastify({
@@ -64,8 +65,11 @@ export async function createServer() {
     fastify.log.info('WaveLog服务已禁用，跳过初始化');
   }
 
+  // 初始化音频监听WebSocket服务器
+  const audioMonitorWSServer = new AudioMonitorWSServer();
+
   // 初始化WebSocket服务器（集成业务逻辑）
-  const wsServer = new WSServer(digitalRadioEngine);
+  const wsServer = new WSServer(digitalRadioEngine, audioMonitorWSServer);
   const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
   fastify.log.info('WebSocket服务器初始化完成');
 
@@ -165,10 +169,31 @@ export async function createServer() {
     }
   });
 
+  // 音频监听专用 WebSocket endpoint（仅传输二进制音频数据）
+  fastify.get('/api/ws/audio-monitor', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const clientId = url.searchParams.get('clientId');
+
+      if (!clientId) {
+        fastify.log.warn('音频监听WS连接缺少clientId参数，拒绝连接');
+        socket.close();
+        return;
+      }
+
+      fastify.log.info(`🎧 音频监听WS客户端连接: clientId=${clientId}`);
+      audioMonitorWSServer.handleConnection(socket, clientId);
+    } catch (e) {
+      fastify.log.error('音频监听WS连接参数解析失败:', e);
+      socket.close();
+    }
+  });
+
   // 服务器关闭时清理WebSocket连接
   fastify.addHook('onClose', async () => {
     wsServer.cleanup();
     logbookWsServer.cleanup();
+    audioMonitorWSServer.closeAll();
   });
 
   return fastify;

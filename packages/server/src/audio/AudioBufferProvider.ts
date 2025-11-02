@@ -33,7 +33,6 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
     // 对于完整时隙请求，确保有足够的时间已经过去
     if (durationMs >= 10000) { // 如果请求的是长时间数据（如完整时隙）
       if (timeSinceSlotStart < durationMs) {
-        // console.log(`⏳ [AudioBufferProvider] 等待完整时隙数据: 需要=${durationMs}ms, 已过去=${timeSinceSlotStart}ms`);
         // 对于完整时隙，我们需要等待足够的时间
         const actualDurationMs = Math.min(durationMs, timeSinceSlotStart);
         return this.ringBuffer.readFromSlotStart(startMs, actualDurationMs);
@@ -42,9 +41,7 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
     
     // 确保不会读取超过实际可用的数据
     const actualDurationMs = Math.min(durationMs, timeSinceSlotStart);
-    
-    // console.log(`📖 [AudioBufferProvider] 读取音频数据: 时隙开始=${new Date(startMs).toISOString()}, 请求时长=${durationMs}ms, 实际时长=${actualDurationMs}ms`);
-    
+
     return this.ringBuffer.readFromSlotStart(startMs, actualDurationMs);
   }
   
@@ -66,7 +63,34 @@ export class RingBufferAudioProvider implements AudioBufferProvider {
       sampleRate: this.sampleRate
     };
   }
-  
+
+  /**
+   * 获取当前可用的音频数据时长（毫秒）
+   */
+  getAvailableMs(): number {
+    const availableSamples = this.ringBuffer.getAvailableSamples();
+    return (availableSamples / this.sampleRate) * 1000;
+  }
+
+  /**
+   * 检查是否有足够的音频数据可供读取
+   * @param durationMs 需要的时长（毫秒）
+   * @returns 是否有足够数据
+   */
+  hasEnoughData(durationMs: number): boolean {
+    return this.getAvailableMs() >= durationMs;
+  }
+
+  /**
+   * 读取下一段连续音频数据（流式播放专用）
+   * 自动推进读指针，确保音频连续
+   * @param sampleCount 要读取的样本数
+   * @returns PCM 音频数据
+   */
+  readNextChunk(sampleCount: number): ArrayBuffer {
+    return this.ringBuffer.readNext(sampleCount);
+  }
+
   /**
    * 清空缓冲区
    */

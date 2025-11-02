@@ -53,7 +53,7 @@ const DEFAULT_CONFIG: AppConfig = {
     inputDeviceName: undefined,  // 默认无设备名称，使用系统默认
     outputDeviceName: undefined, // 默认无设备名称，使用系统默认
     sampleRate: 48000,
-    bufferSize: 1024
+    bufferSize: 768
   },
   ft8: {
     myCallsign: '',

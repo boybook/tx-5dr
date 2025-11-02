@@ -80,6 +80,13 @@ export enum WSMessageType {
 
   // ===== 极简文本消息 =====
   TEXT_MESSAGE = 'textMessage',
+
+  // ===== 音频监听 =====
+  SUBSCRIBE_AUDIO_MONITOR = 'subscribeAudioMonitor',
+  UNSUBSCRIBE_AUDIO_MONITOR = 'unsubscribeAudioMonitor',
+  AUDIO_MONITOR_DATA = 'audioMonitorData',
+  SET_MONITOR_VOLUME_GAIN = 'setMonitorVolumeGain',
+  AUDIO_MONITOR_STATS = 'audioMonitorStats',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -159,6 +166,16 @@ export const MeterDataSchema = z.object({
   }).nullable(),
 });
 
+// 音频监听统计数据结构
+export const AudioMonitorStatsSchema = z.object({
+  latencyMs: z.number(), // 延迟（毫秒）
+  bufferFillPercent: z.number().min(0).max(100), // 缓冲区填充百分比
+  isActive: z.boolean(), // 是否有音频活动
+  audioLevel: z.number().min(0).max(1).optional(), // 音频电平（RMS）
+  droppedSamples: z.number().optional(), // 丢失的样本数
+  sampleRate: z.number(), // 当前采样率
+});
+
 // ===== 导出共享类型 =====
 export type SystemStatus = z.infer<typeof SystemStatusSchema>;
 export type SubWindowInfo = z.infer<typeof SubWindowInfoSchema>;
@@ -166,6 +183,7 @@ export type DecodeErrorInfo = z.infer<typeof DecodeErrorInfoSchema>;
 export type FrequencyState = z.infer<typeof FrequencyStateSchema>;
 export type PTTStatus = z.infer<typeof PTTStatusSchema>;
 export type MeterData = z.infer<typeof MeterDataSchema>;
+export type AudioMonitorStats = z.infer<typeof AudioMonitorStatsSchema>;
 
 // ===== WebSocket消息Schema定义 =====
 
@@ -704,6 +722,66 @@ export const WSTextMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSTextMessage = z.infer<typeof WSTextMessageSchema>;
 
+/**
+ * 订阅音频监听消息（客户端到服务端）
+ */
+export const WSSubscribeAudioMonitorMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SUBSCRIBE_AUDIO_MONITOR),
+  data: z.object({
+    sampleRate: z.number().optional(), // 可选采样率，默认使用原始采样率
+  }),
+});
+
+export type WSSubscribeAudioMonitorMessage = z.infer<typeof WSSubscribeAudioMonitorMessageSchema>;
+
+/**
+ * 取消订阅音频监听消息（客户端到服务端）
+ */
+export const WSUnsubscribeAudioMonitorMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.UNSUBSCRIBE_AUDIO_MONITOR),
+  data: z.object({}).optional(),
+});
+
+export type WSUnsubscribeAudioMonitorMessage = z.infer<typeof WSUnsubscribeAudioMonitorMessageSchema>;
+
+/**
+ * 音频监听数据消息（服务端到客户端）
+ * 注意：实际传输时data字段包含二进制ArrayBuffer，此Schema用于类型定义
+ */
+export const WSAudioMonitorDataMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUDIO_MONITOR_DATA),
+  data: z.object({
+    audioData: z.instanceof(ArrayBuffer).optional(), // ArrayBuffer包含Float32音频数据
+    sampleRate: z.number(), // 音频采样率
+    samples: z.number(), // 样本数量
+    timestamp: z.number(), // 音频数据时间戳
+  }),
+});
+
+export type WSAudioMonitorDataMessage = z.infer<typeof WSAudioMonitorDataMessageSchema>;
+
+/**
+ * 设置监听音量增益消息（客户端到服务端）
+ */
+export const WSSetMonitorVolumeGainMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_MONITOR_VOLUME_GAIN),
+  data: z.object({
+    gainDb: z.number().min(-60).max(20), // dB单位
+  }),
+});
+
+export type WSSetMonitorVolumeGainMessage = z.infer<typeof WSSetMonitorVolumeGainMessageSchema>;
+
+/**
+ * 音频监听统计消息（服务端到客户端）
+ */
+export const WSAudioMonitorStatsMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUDIO_MONITOR_STATS),
+  data: AudioMonitorStatsSchema,
+});
+
+export type WSAudioMonitorStatsMessage = z.infer<typeof WSAudioMonitorStatsMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -772,6 +850,13 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 文本消息（Toast通知）
   WSTextMessageSchema,
+
+  // 音频监听消息
+  WSSubscribeAudioMonitorMessageSchema,
+  WSUnsubscribeAudioMonitorMessageSchema,
+  WSAudioMonitorDataMessageSchema,
+  WSSetMonitorVolumeGainMessageSchema,
+  WSAudioMonitorStatsMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -868,4 +953,8 @@ export interface DigitalRadioEngineEvents {
 
   // 电台数值表事件
   meterData: (data: MeterData) => void;
+
+  // 音频监听事件
+  audioMonitorData: (data: { audioData: ArrayBuffer; sampleRate: number; samples: number; timestamp: number }) => void;
+  audioMonitorStats: (stats: AudioMonitorStats) => void;
 } 

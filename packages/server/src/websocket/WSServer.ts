@@ -124,12 +124,16 @@ export class WSServer extends WSMessageHandler {
   private connections = new Map<string, WSConnection>();
   private connectionIdCounter = 0;
   private digitalRadioEngine: DigitalRadioEngine;
+  private audioMonitorWSServer: any; // AudioMonitorWSServer实例
+  private audioMonitorListenersSetup = false; // 标记AudioMonitor监听器是否已设置
   private commandHandlers: Partial<Record<WSMessageType, (data: any, connectionId: string) => Promise<void> | void>>;
 
-  constructor(digitalRadioEngine: DigitalRadioEngine) {
+  constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: any) {
     super();
     this.digitalRadioEngine = digitalRadioEngine;
+    this.audioMonitorWSServer = audioMonitorWSServer;
     this.setupEngineEventListeners();
+    this.setupAudioMonitorEventListeners(); // 初始化时设置音频监听事件（广播模式）
 
     this.commandHandlers = {
       [WSMessageType.START_ENGINE]: () => this.handleStartEngine(),
@@ -193,6 +197,12 @@ export class WSServer extends WSMessageHandler {
     });
 
     this.digitalRadioEngine.on('systemStatus', (status) => {
+      // 如果引擎正在运行且AudioMonitor监听器未设置，尝试设置
+      if (status.isRunning && !this.audioMonitorListenersSetup) {
+        console.log('🔄 [WSServer] 检测到引擎启动，尝试设置AudioMonitor监听器');
+        this.setupAudioMonitorEventListeners();
+      }
+
       this.broadcastSystemStatus(status);
     });
 
@@ -675,8 +685,7 @@ export class WSServer extends WSMessageHandler {
    */
   broadcast(type: string, data?: any, id?: string): void {
     const activeConnections = this.getActiveConnections();
-    // console.log(`📡 [WSServer] 广播消息到 ${activeConnections.length} 个客户端: ${type}`);
-    
+
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
     });
@@ -1134,6 +1143,63 @@ export class WSServer extends WSMessageHandler {
         details: error instanceof Error ? error.message : String(error)
       });
     }
+  }
+
+  /**
+   * 设置AudioMonitorService事件监听器（广播模式）
+   * 支持延迟设置和自动重试
+   */
+  private setupAudioMonitorEventListeners(): void {
+    // 如果已经设置过，直接返回
+    if (this.audioMonitorListenersSetup) {
+      return;
+    }
+
+    const audioMonitorService = this.digitalRadioEngine.getAudioMonitorService();
+    if (!audioMonitorService) {
+      console.warn('⚠️ [WSServer] AudioMonitorService未初始化，监听器将在引擎启动时自动设置');
+      return;
+    }
+
+    console.log('🎧 [WSServer] 设置AudioMonitorService事件监听器（广播模式）');
+
+    // 监听音频数据事件（广播给所有已连接的客户端）
+    let audioDataCount = 0;
+    audioMonitorService.on('audioData', (data) => {
+      // 获取所有已连接的音频WebSocket客户端
+      const clientIds = this.audioMonitorWSServer.getAllClientIds();
+
+      if (clientIds.length === 0) {
+        return; // 没有客户端连接，跳过广播
+      }
+
+      // 每秒输出一次日志
+      audioDataCount++;
+      if (audioDataCount % 20 === 0) { // 50ms推送一次，20次=1秒
+        console.log(`📤 [WSServer] 向${clientIds.length}个客户端广播音频数据`);
+      }
+
+      // 1. 广播元数据到所有控制WebSocket（JSON）
+      this.broadcast(WSMessageType.AUDIO_MONITOR_DATA, {
+        sampleRate: data.sampleRate,
+        samples: data.samples,
+        timestamp: data.timestamp
+      });
+
+      // 2. 向每个音频WebSocket发送二进制数据
+      clientIds.forEach((clientId: string) => {
+        this.audioMonitorWSServer.sendAudioData(clientId, data.audioData);
+      });
+    });
+
+    // 监听统计信息事件（广播给所有客户端）
+    audioMonitorService.on('stats', (stats) => {
+      this.broadcast(WSMessageType.AUDIO_MONITOR_STATS, stats);
+    });
+
+    // 标记监听器已成功设置
+    this.audioMonitorListenersSetup = true;
+    console.log('✅ [WSServer] AudioMonitor事件监听器设置成功');
   }
 
   /**
