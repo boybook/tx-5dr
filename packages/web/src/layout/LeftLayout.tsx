@@ -14,6 +14,7 @@ export const LeftLayout: React.FC = () => {
   const radio = useRadioState();
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isMobile, setIsMobile] = useState(false);
+  const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
 
   // 更新当前时间
   useEffect(() => {
@@ -102,12 +103,18 @@ export const LeftLayout: React.FC = () => {
       <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-4">
         {/* FT8解码消息表格 */}
         <div className="flex-1 min-h-0">
-          <SlotPacksMessageDisplay className="h-full" />
+          <SlotPacksMessageDisplay
+            className="h-full"
+            onMessageHover={setHoveredMessageFreq}
+          />
         </div>
 
         {/* 频谱显示 */}
         <div className="bg-content2 rounded-lg shadow-sm overflow-hidden">
-          <SpectrumDisplay height={isMobile ? 80 : 128} />
+          <SpectrumDisplay
+            height={isMobile ? 80 : 128}
+            hoverFrequency={hoveredMessageFreq}
+          />
         </div>
 
         {/* 电台数值表（仅 ICOM WLAN 连接时显示） */}

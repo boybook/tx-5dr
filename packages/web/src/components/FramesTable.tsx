@@ -39,9 +39,10 @@ interface FramesTableProps {
   onRowDoubleClick?: (message: FrameDisplayMessage, group: FrameGroup) => void;
   myCallsigns?: string[]; // 自己的呼号列表
   targetCallsign?: string; // 当前选中操作员的目标呼号
+  onMessageHover?: (freq: number | null) => void; // 消息hover回调
 }
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '' }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
@@ -418,6 +419,18 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                     ...getLogbookAnalysisStyle(message, group.cycle, group.type)
                   }}
                   onDoubleClick={() => onRowDoubleClick?.(message, group)}
+                  onMouseEnter={() => {
+                    // 跳过TX消息
+                    if (message.db !== 'TX' && onMessageHover) {
+                      onMessageHover(message.freq);
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    // 跳过TX消息
+                    if (message.db !== 'TX' && onMessageHover) {
+                      onMessageHover(null);
+                    }
+                  }}
                 >
                   {/* 右侧颜色条（非特殊消息类型时显示） */}
                   {getRightBorderColor(message, group.type) && (
