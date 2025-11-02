@@ -149,6 +149,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: (data, id) => this.handleSetClientEnabledOperators(id, data),
       [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
+      [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
     };
   }
 
@@ -1106,6 +1107,31 @@ export class WSServer extends WSMessageHandler {
         connected: false,
         reason: '手动重连失败',
         reconnectInfo
+      });
+    }
+  }
+
+  /**
+   * 处理强制停止发射命令
+   */
+  private async handleForceStopTransmission(): Promise<void> {
+    try {
+      console.log('🛑 [WSServer] 收到强制停止发射命令');
+
+      await this.digitalRadioEngine.forceStopTransmission();
+
+      console.log('✅ [WSServer] 强制停止发射完成');
+
+      // PTT状态变化事件会自动通过 pttStatusChanged 广播
+
+    } catch (error) {
+      console.error('❌ [WSServer] 强制停止发射失败:', error);
+
+      // 发送错误事件
+      this.broadcast(WSMessageType.ERROR, {
+        message: '强制停止发射失败',
+        code: 'FORCE_STOP_FAILED',
+        details: error instanceof Error ? error.message : String(error)
       });
     }
   }

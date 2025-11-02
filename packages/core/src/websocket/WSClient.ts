@@ -158,6 +158,15 @@ export class WSClient extends WSMessageHandler {
   }
 
   /**
+   * 强制停止发射
+   * 立即停止PTT并清空音频播放队列
+   */
+  forceStopTransmission(): void {
+    console.log('📤 WSClient.forceStopTransmission() - 发送强制停止发射命令');
+    this.send(WSMessageType.FORCE_STOP_TRANSMISSION);
+  }
+
+  /**
    * 发送ping消息
    */
   ping(): void {

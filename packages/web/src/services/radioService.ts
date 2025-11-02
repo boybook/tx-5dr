@@ -205,6 +205,16 @@ export class RadioService {
   }
 
   /**
+   * 强制停止发射
+   * 立即停止PTT并清空音频播放队列
+   */
+  forceStopTransmission(): void {
+    if (this.isConnected) {
+      this.wsClient.forceStopTransmission();
+    }
+  }
+
+  /**
    * 设置音量增益（线性单位）
    */
   setVolumeGain(gain: number): void {

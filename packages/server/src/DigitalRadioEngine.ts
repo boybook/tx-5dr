@@ -1120,6 +1120,20 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
 
+      // 连接成功后自动设置频率（根据配置中保存的最后频率）
+      try {
+        const lastFrequency = ConfigManager.getInstance().getLastSelectedFrequency();
+        if (lastFrequency && lastFrequency.frequency) {
+          console.log(`📡 [DigitalRadioEngine] 自动设置频率: ${(lastFrequency.frequency / 1000000).toFixed(3)} MHz (${lastFrequency.description || lastFrequency.mode})`);
+          await this.radioManager.setFrequency(lastFrequency.frequency);
+        } else {
+          console.log('ℹ️ [DigitalRadioEngine] 未找到保存的频率配置，跳过自动设置');
+        }
+      } catch (err) {
+        console.error('❌ [DigitalRadioEngine] 自动设置频率失败:', err);
+        // 频率设置失败不影响后续流程
+      }
+
       // 重连成功后自动启动系统（仅在真正重连时，不在首次启动时）
       const reconnectInfo = this.radioManager.getReconnectInfo();
       if (!this.isRunning && reconnectInfo.reconnectAttempts > 0) {
@@ -1294,6 +1308,33 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (this.isPTTActive) {
       console.log('📡 [PTT] 强制停止PTT（时隙切换）');
       await this.stopPTT();
+    }
+  }
+
+  /**
+   * 强制停止当前发射（公开方法）
+   * 立即停止PTT并清空音频播放队列
+   * 用于用户主动中断发射周期
+   */
+  public async forceStopTransmission(): Promise<void> {
+    console.log('🛑 [DigitalRadioEngine] 强制停止发射');
+
+    try {
+      // 1. 停止当前音频播放
+      const stoppedBytes = await this.audioStreamManager.stopCurrentPlayback();
+      console.log(`🛑 [DigitalRadioEngine] 已停止音频播放，丢弃 ${stoppedBytes} 字节`);
+
+      // 2. 立即停止PTT
+      await this.forceStopPTT();
+
+      // 3. 清空音频混音器队列
+      this.audioMixer.clear();
+      console.log('🛑 [DigitalRadioEngine] 已清空音频混音器队列');
+
+      console.log('✅ [DigitalRadioEngine] 强制停止发射完成');
+    } catch (error) {
+      console.error('❌ [DigitalRadioEngine] 强制停止发射失败:', error);
+      throw error;
     }
   }
 

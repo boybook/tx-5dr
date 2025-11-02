@@ -73,6 +73,7 @@ export enum WSMessageType {
 
   // ===== PTT状态管理 =====
   PTT_STATUS_CHANGED = 'pttStatusChanged',
+  FORCE_STOP_TRANSMISSION = 'forceStopTransmission',
 
   // ===== 电台数值表 =====
   METER_DATA = 'meterData',
@@ -667,6 +668,17 @@ export const WSPTTStatusChangedMessageSchema = WSBaseMessageSchema.extend({
 export type WSPTTStatusChangedMessage = z.infer<typeof WSPTTStatusChangedMessageSchema>;
 
 /**
+ * 强制停止发射消息（客户端到服务端）
+ * 立即停止PTT并清空音频播放队列
+ */
+export const WSForceStopTransmissionMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.FORCE_STOP_TRANSMISSION),
+  data: z.object({}).optional(),
+});
+
+export type WSForceStopTransmissionMessage = z.infer<typeof WSForceStopTransmissionMessageSchema>;
+
+/**
  * 电台数值表数据消息（服务端到客户端）
  */
 export const WSMeterDataMessageSchema = WSBaseMessageSchema.extend({
@@ -753,6 +765,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // PTT状态管理消息
   WSPTTStatusChangedMessageSchema,
+  WSForceStopTransmissionMessageSchema,
 
   // 电台数值表消息
   WSMeterDataMessageSchema,
