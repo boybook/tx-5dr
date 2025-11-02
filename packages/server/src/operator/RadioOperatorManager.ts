@@ -156,7 +156,7 @@ export class RadioOperatorManager {
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
         let hasWorked = false;
         // 计算当前工作频段（用于按频段判重）：
-        // 优先从物理电台读频率；否则退回到“最后选择的频率”配置
+        // 优先从物理电台读频率；否则退回到"最后选择的频率"配置
         let baseFreq = 0;
         if (this.getRadioFrequency) {
           try {
@@ -174,7 +174,7 @@ export class RadioOperatorManager {
           } catch {}
         }
         const band = baseFreq > 1_000_000 ? getBandFromFrequency(baseFreq) : 'Unknown';
-        
+
         if (!logBook) {
           const callsign = this.logManager.getOperatorCallsign(data.operatorId);
           if (!callsign) {
@@ -187,7 +187,7 @@ export class RadioOperatorManager {
         } else {
           hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, { operatorId: data.operatorId, band });
         }
-        
+
         // 发送响应
         this.eventEmitter.emit('hasWorkedCallsignResponse' as any, {
           requestId: data.requestId,
@@ -309,7 +309,9 @@ export class RadioOperatorManager {
     const operator = new RadioOperator(
       operatorConfig,
       this.eventEmitter,
-      (op: RadioOperator) => new StandardQSOStrategy(op)
+      (op: RadioOperator) => new StandardQSOStrategy(op),
+      (myCallsign, targetCallsign, operatorId) =>
+        this.isTargetBeingWorkedByOtherOperators(myCallsign, targetCallsign, operatorId)
     );
     
     // 注册操作员的呼号到日志管理器
@@ -1069,6 +1071,55 @@ export class RadioOperatorManager {
    */
   getLogManager(): LogManager {
     return this.logManager;
+  }
+
+  /**
+   * 检查指定呼号是否正在被其他同呼号操作者通联
+   * @param myCallsign 自己的呼号
+   * @param targetCallsign 要检查的目标呼号
+   * @param currentOperatorId 当前操作者ID（排除自己）
+   * @returns true表示有冲突，不应回复
+   */
+  isTargetBeingWorkedByOtherOperators(
+    myCallsign: string,
+    targetCallsign: string,
+    currentOperatorId: string
+  ): boolean {
+    const normalizedMyCall = myCallsign.toUpperCase();
+    const normalizedTarget = targetCallsign.toUpperCase();
+
+    for (const [operatorId, operator] of this.operators.entries()) {
+      // 跳过自己
+      if (operatorId === currentOperatorId) continue;
+
+      // 只检查同呼号的操作者
+      if (operator.config.myCallsign.toUpperCase() !== normalizedMyCall) continue;
+
+      // 检查该操作者的传输策略上下文
+      const strategy = operator.transmissionStrategy as any;
+      if (!strategy?.context) continue;
+
+      // 检查是否正在通联目标呼号
+      const currentTarget = strategy.context.targetCallsign;
+      if (currentTarget && currentTarget.toUpperCase() === normalizedTarget) {
+        // 检查是否在活跃的QSO状态或正在转换状态
+        const currentState = strategy.getCurrentState?.();
+        if (currentState) {
+          // TX6状态下已设置目标 → 正在转换中 → 视为冲突
+          if (currentState === 'TX6' && currentTarget) {
+            console.log(`🚫 [操作员管理器] 检测到冲突: 操作者 ${operatorId} (${operator.config.myCallsign}) 正在转换到 ${targetCallsign} (状态: ${currentState})`);
+            return true;
+          }
+          // 非TX6状态（活跃QSO）→ 视为冲突
+          if (currentState !== 'TX6') {
+            console.log(`🚫 [操作员管理器] 检测到冲突: 操作者 ${operatorId} (${operator.config.myCallsign}) 正在与 ${targetCallsign} 通联 (状态: ${currentState})`);
+            return true;
+          }
+        }
+      }
+    }
+
+    return false; // 无冲突
   }
   
   /**

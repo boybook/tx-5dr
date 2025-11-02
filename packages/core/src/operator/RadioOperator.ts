@@ -8,9 +8,10 @@ export class RadioOperator {
     // 通联策略（自动化及用户交互）
     private _eventEmitter: EventEmitter<DigitalRadioEngineEvents>;
     private _transmissionStrategy?: ITransmissionStrategy;
-    private _config: OperatorConfig; 
+    private _config: OperatorConfig;
     private _stopped: boolean = false;
     private _isTransmitting: boolean = false; // 发射状态
+    private _checkTargetConflict?: (myCallsign: string, targetCallsign: string, operatorId: string) => boolean;
 
     private static readonly DEFAULT_CONFIG: OperatorConfig = {
         mode: MODES.FT8,
@@ -28,12 +29,18 @@ export class RadioOperator {
         prioritizeNewCalls: true,
     };
 
-    constructor(config: OperatorConfig, eventEmitter: EventEmitter<DigitalRadioEngineEvents>, strategyFactory: (operator: RadioOperator) => ITransmissionStrategy) {
+    constructor(
+        config: OperatorConfig,
+        eventEmitter: EventEmitter<DigitalRadioEngineEvents>,
+        strategyFactory: (operator: RadioOperator) => ITransmissionStrategy,
+        checkTargetConflict?: (myCallsign: string, targetCallsign: string, operatorId: string) => boolean
+    ) {
         this._eventEmitter = eventEmitter;
-        this._config = { 
-            ...RadioOperator.DEFAULT_CONFIG, 
-            ...config, 
+        this._config = {
+            ...RadioOperator.DEFAULT_CONFIG,
+            ...config,
         };
+        this._checkTargetConflict = checkTargetConflict;
         this._transmissionStrategy = strategyFactory(this);
         this.initEventListener(eventEmitter);
     }
@@ -307,6 +314,23 @@ export class RadioOperator {
                 resolve(false); // 默认返回false
             }, 1000);
         });
+    }
+
+    /**
+     * 检查指定呼号是否正在被其他同呼号操作者通联
+     * 直接同步调用检查函数
+     * @param targetCallsign 要检查的目标呼号
+     * @returns true表示有冲突，不应回复
+     */
+    isTargetBeingWorkedByOthers(targetCallsign: string): boolean {
+        if (!this._checkTargetConflict) {
+            return false; // 如果没有提供检查函数，默认无冲突
+        }
+        return this._checkTargetConflict(
+            this._config.myCallsign,
+            targetCallsign,
+            this._config.id
+        );
     }
     
     /**

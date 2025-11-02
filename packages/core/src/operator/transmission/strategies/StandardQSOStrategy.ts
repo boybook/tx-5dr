@@ -80,26 +80,33 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                     // 根据配置决定是否切换到新呼叫
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
+                        // 检查是否有其他同呼号操作者正在通联该目标
+                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
-                        // 清空旧上下文（自动保存到缓存）
-                        strategy.clearQSOContext();
+                        if (hasConflict) {
+                            console.log(`[StandardQSOStrategy TX1] 收到新呼叫 ${newCallsign} 但其他同呼号操作者正在通联，继续等待 ${strategy.context.targetCallsign}`);
+                        } else {
+                            console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
 
-                        // 切换到新呼号
-                        strategy.context.targetCallsign = newCallsign;
+                            // 清空旧上下文（自动保存到缓存）
+                            strategy.clearQSOContext();
 
-                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                        if (!strategy.restoreContext(newCallsign)) {
-                            strategy.context.reportSent = newCall.snr;
-                            strategy.context.targetGrid = callMsg.grid;
-                            // 记录实际通联频率
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                            // 切换到新呼号
+                            strategy.context.targetCallsign = newCallsign;
+
+                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                            if (!strategy.restoreContext(newCallsign)) {
+                                strategy.context.reportSent = newCall.snr;
+                                strategy.context.targetGrid = callMsg.grid;
+                                // 记录实际通联频率
+                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                }
                             }
-                        }
 
-                        strategy.updateSlots();
-                        return { changeState: 'TX2' };
+                            strategy.updateSlots();
+                            return { changeState: 'TX2' };
+                        }
                     } else {
                         console.log(`[StandardQSOStrategy TX1] 收到新呼叫 ${newCallsign} 但已通联过且replyToWorkedStations=false，继续等待 ${strategy.context.targetCallsign}`);
                     }
@@ -112,26 +119,33 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                     // 根据配置决定是否切换到新呼叫
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
+                        // 检查是否有其他同呼号操作者正在通联该目标
+                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
-                        // 清空旧上下文（自动保存到缓存）
-                        strategy.clearQSOContext();
+                        if (hasConflict) {
+                            console.log(`[StandardQSOStrategy TX1] 收到新信号报告 ${newCallsign} 但其他同呼号操作者正在通联，继续等待 ${strategy.context.targetCallsign}`);
+                        } else {
+                            console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
 
-                        // 切换到新呼号
-                        strategy.context.targetCallsign = newCallsign;
+                            // 清空旧上下文（自动保存到缓存）
+                            strategy.clearQSOContext();
 
-                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                        if (!strategy.restoreContext(newCallsign)) {
-                            strategy.context.reportReceived = reportMsg.report;
-                            strategy.context.reportSent = newCall.snr;
-                            // 记录实际通联频率
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                            // 切换到新呼号
+                            strategy.context.targetCallsign = newCallsign;
+
+                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                            if (!strategy.restoreContext(newCallsign)) {
+                                strategy.context.reportReceived = reportMsg.report;
+                                strategy.context.reportSent = newCall.snr;
+                                // 记录实际通联频率
+                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                }
                             }
-                        }
 
-                        strategy.updateSlots();
-                        return { changeState: 'TX3' };
+                            strategy.updateSlots();
+                            return { changeState: 'TX3' };
+                        }
                     } else {
                         console.log(`[StandardQSOStrategy TX1] 收到新信号报告 ${newCallsign} 但已通联过且replyToWorkedStations=false，继续等待 ${strategy.context.targetCallsign}`);
                     }
@@ -375,26 +389,33 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                         // 根据配置决定是否切换到新呼叫
                         if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
+                            // 检查是否有其他同呼号操作者正在通联该目标
+                            const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
-                            // 清空旧QSO上下文（自动保存到缓存）
-                            strategy.clearQSOContext();
+                            if (hasConflict) {
+                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新呼叫 ${newCallsign} 但其他同呼号操作者正在通联`);
+                            } else {
+                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
 
-                            // 切换到新呼号
-                            strategy.context.targetCallsign = newCallsign;
+                                // 清空旧QSO上下文（自动保存到缓存）
+                                strategy.clearQSOContext();
 
-                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                            if (!strategy.restoreContext(newCallsign)) {
-                                strategy.context.reportSent = newCall.snr;
-                                strategy.context.targetGrid = callMsg.grid;
-                                // 记录实际通联频率
-                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                // 切换到新呼号
+                                strategy.context.targetCallsign = newCallsign;
+
+                                // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                                if (!strategy.restoreContext(newCallsign)) {
+                                    strategy.context.reportSent = newCall.snr;
+                                    strategy.context.targetGrid = callMsg.grid;
+                                    // 记录实际通联频率
+                                    if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                        strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                    }
                                 }
-                            }
 
-                            strategy.updateSlots();
-                            return { changeState: 'TX2' };
+                                strategy.updateSlots();
+                                return { changeState: 'TX2' };
+                            }
                         } else {
                             console.log(`[StandardQSOStrategy TX4] QSO完成后收到新呼叫 ${newCallsign} 但已通联过且replyToWorkedStations=false`);
                         }
@@ -407,26 +428,33 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                         // 根据配置决定是否切换到新呼叫
                         if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
+                            // 检查是否有其他同呼号操作者正在通联该目标
+                            const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
-                            // 清空旧QSO上下文（自动保存到缓存）
-                            strategy.clearQSOContext();
+                            if (hasConflict) {
+                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新信号报告 ${newCallsign} 但其他同呼号操作者正在通联`);
+                            } else {
+                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
 
-                            // 切换到新呼号
-                            strategy.context.targetCallsign = newCallsign;
+                                // 清空旧QSO上下文（自动保存到缓存）
+                                strategy.clearQSOContext();
 
-                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                            if (!strategy.restoreContext(newCallsign)) {
-                                strategy.context.reportReceived = reportMsg.report;
-                                strategy.context.reportSent = newCall.snr;
-                                // 记录实际通联频率
-                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                    strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                // 切换到新呼号
+                                strategy.context.targetCallsign = newCallsign;
+
+                                // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                                if (!strategy.restoreContext(newCallsign)) {
+                                    strategy.context.reportReceived = reportMsg.report;
+                                    strategy.context.reportSent = newCall.snr;
+                                    // 记录实际通联频率
+                                    if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                        strategy.context.actualFrequency = strategy.context.config.frequency + newCall.df;
+                                    }
                                 }
-                            }
 
-                            strategy.updateSlots();
-                            return { changeState: 'TX3' };
+                                strategy.updateSlots();
+                                return { changeState: 'TX3' };
+                            }
                         } else {
                             console.log(`[StandardQSOStrategy TX4] QSO完成后收到新信号报告 ${newCallsign} 但已通联过且replyToWorkedStations=false`);
                         }
@@ -533,50 +561,64 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
 
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        console.log(`[StandardQSOStrategy TX5] 收到新的直接呼叫 ${callsign}，立即切换`);
+                        // 检查是否有其他同呼号操作者正在通联该目标
+                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
 
-                        // 清空旧QSO上下文（自动保存到缓存）
-                        strategy.clearQSOContext();
+                        if (hasConflict) {
+                            console.log(`[StandardQSOStrategy TX5] 收到新呼叫 ${callsign} 但其他同呼号操作者正在通联`);
+                        } else {
+                            console.log(`[StandardQSOStrategy TX5] 收到新的直接呼叫 ${callsign}，立即切换`);
 
-                        // 切换到新呼号
-                        strategy.context.targetCallsign = callsign;
+                            // 清空旧QSO上下文（自动保存到缓存）
+                            strategy.clearQSOContext();
 
-                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                        if (!strategy.restoreContext(callsign)) {
-                            strategy.context.reportSent = directCalls[0].snr;
-                            strategy.context.targetGrid = (msg as FT8MessageCall).grid;
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                            // 切换到新呼号
+                            strategy.context.targetCallsign = callsign;
+
+                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                            if (!strategy.restoreContext(callsign)) {
+                                strategy.context.reportSent = directCalls[0].snr;
+                                strategy.context.targetGrid = (msg as FT8MessageCall).grid;
+                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                                }
                             }
-                        }
 
-                        strategy.updateSlots();
-                        return { changeState: 'TX2' };
+                            strategy.updateSlots();
+                            return { changeState: 'TX2' };
+                        }
                     }
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                     const callsign = msg.senderCallsign;
                     const hasWorked = await strategy.operator.hasWorkedCallsign(callsign);
 
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        console.log(`[StandardQSOStrategy TX5] 收到新的直接信号报告 ${callsign}，立即切换`);
+                        // 检查是否有其他同呼号操作者正在通联该目标
+                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
 
-                        // 清空旧QSO上下文（自动保存到缓存）
-                        strategy.clearQSOContext();
+                        if (hasConflict) {
+                            console.log(`[StandardQSOStrategy TX5] 收到新信号报告 ${callsign} 但其他同呼号操作者正在通联`);
+                        } else {
+                            console.log(`[StandardQSOStrategy TX5] 收到新的直接信号报告 ${callsign}，立即切换`);
 
-                        // 切换到新呼号
-                        strategy.context.targetCallsign = callsign;
+                            // 清空旧QSO上下文（自动保存到缓存）
+                            strategy.clearQSOContext();
 
-                        // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
-                        if (!strategy.restoreContext(callsign)) {
-                            strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
-                            strategy.context.reportSent = directCalls[0].snr;
-                            if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                            // 切换到新呼号
+                            strategy.context.targetCallsign = callsign;
+
+                            // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
+                            if (!strategy.restoreContext(callsign)) {
+                                strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
+                                strategy.context.reportSent = directCalls[0].snr;
+                                if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
+                                    strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                                }
                             }
-                        }
 
-                        strategy.updateSlots();
-                        return { changeState: 'TX3' };
+                            strategy.updateSlots();
+                            return { changeState: 'TX3' };
+                        }
                     }
                 }
             }
@@ -611,9 +653,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     strategy.operator.config.autoReplyToCQ)
                 .sort((a, b) => a.snr - b.snr);
 
-            // 优先处理直接呼叫
-            if (directCalls.length > 0) {
-                const msg = directCalls[0].message;
+            // 优先处理直接呼叫 - 遍历所有直接呼叫，找到第一个没有冲突的
+            for (const directCall of directCalls) {
+                const msg = directCall.message;
 
                 if (msg.type === FT8MessageType.CALL) {
                     const callsign = msg.senderCallsign;
@@ -623,24 +665,32 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                     // 根据配置决定是否回复已通联过的直接呼叫
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        console.log(`[StandardQSOStrategy] 回复直接呼叫: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCalls[0].snr})`);
+                        // 检查是否有其他同呼号操作者正在通联该目标
+                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
+
+                        if (hasConflict) {
+                            console.log(`[StandardQSOStrategy] 跳过直接呼叫: ${callsign} (其他同呼号操作者正在通联, SNR: ${directCall.snr})`);
+                            continue; // 跳过这个，检查下一个直接呼叫
+                        }
+
+                        console.log(`[StandardQSOStrategy] 回复直接呼叫: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCall.snr})`);
                         strategy.context.targetCallsign = callsign;
 
                         // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
                         if (!strategy.restoreContext(callsign)) {
-                            strategy.context.reportSent = directCalls[0].snr;
-                            strategy.context.targetGrid = msg.grid;
+                            strategy.context.reportSent = directCall.snr;
+                            strategy.context.targetGrid = (msg as FT8MessageCall).grid;
                             // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
                             // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
                             if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                                strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
                             }
                         }
 
                         strategy.updateSlots();
                         return { changeState: 'TX2' };
                     } else {
-                        console.log(`[StandardQSOStrategy] 跳过直接呼叫: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCalls[0].snr})`);
+                        console.log(`[StandardQSOStrategy] 跳过直接呼叫: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCall.snr})`);
                     }
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                     const callsign = msg.senderCallsign;
@@ -650,24 +700,32 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                     // 根据配置决定是否回复已通联过的直接呼叫
                     if (!hasWorked || strategy.operator.config.replyToWorkedStations) {
-                        console.log(`[StandardQSOStrategy] 回复直接信号报告: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCalls[0].snr})`);
+                        // 检查是否有其他同呼号操作者正在通联该目标
+                        const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
+
+                        if (hasConflict) {
+                            console.log(`[StandardQSOStrategy] 跳过直接信号报告: ${callsign} (其他同呼号操作者正在通联, SNR: ${directCall.snr})`);
+                            continue; // 跳过这个，检查下一个直接呼叫
+                        }
+
+                        console.log(`[StandardQSOStrategy] 回复直接信号报告: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCall.snr})`);
                         strategy.context.targetCallsign = callsign;
 
                         // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
                         if (!strategy.restoreContext(callsign)) {
-                            strategy.context.reportReceived = msg.report;
-                            strategy.context.reportSent = directCalls[0].snr;
+                            strategy.context.reportReceived = (msg as FT8MessageSignalReport).report;
+                            strategy.context.reportSent = directCall.snr;
                             // 记录实际通联频率 (基础频率 + 对方信号的频率偏移)
                             // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
                             if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
-                                strategy.context.actualFrequency = strategy.context.config.frequency + directCalls[0].df;
+                                strategy.context.actualFrequency = strategy.context.config.frequency + directCall.df;
                             }
                         }
 
                         strategy.updateSlots();
                         return { changeState: 'TX3' };
                     } else {
-                        console.log(`[StandardQSOStrategy] 跳过直接信号报告: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCalls[0].snr})`);
+                        console.log(`[StandardQSOStrategy] 跳过直接信号报告: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCall.snr})`);
                     }
                 }
             }
@@ -692,6 +750,14 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                         // CQ呼叫只回复未通联过的电台(不受replyToWorkedStations配置影响)
                         if (!hasWorked) {
+                            // 检查是否有其他同呼号操作者正在通联该目标
+                            const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
+
+                            if (hasConflict) {
+                                console.log(`[StandardQSOStrategy] 跳过CQ: ${callsign} (其他同呼号操作者正在通联, SNR: ${cqCall.snr}dB)`);
+                                continue; // 跳过这个CQ，继续遍历下一个
+                            }
+
                             console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (未通联过, SNR: ${cqCall.snr}dB, 按信号强度优先)`);
                             strategy.context.targetCallsign = callsign;
 
