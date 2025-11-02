@@ -741,20 +741,75 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       console.log(`   样本数: ${audioData.length}`);
       console.log(`   采样率: ${targetSampleRate}Hz（已是 ICOM 原生 12kHz）`);
       console.log(`   时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
+      console.log(`   音量增益: ${this.volumeGain.toFixed(2)}`);
+
+      // 设置播放状态
+      this.playing = true;
+      this.playbackStartTime = playStartTime;
+      this.shouldStopPlayback = false;
 
       try {
-        // 应用音量增益
-        const gainedData = new Float32Array(audioData.length);
-        for (let i = 0; i < audioData.length; i++) {
-          gainedData[i] = audioData[i] * this.volumeGain;
+        // 分块发送音频，支持实时音量调整
+        // 块大小：1200样本（≈100ms @ 12kHz），与普通声卡路径保持一致的响应速度
+        const chunkSize = 1200;
+        const totalChunks = Math.ceil(audioData.length / chunkSize);
+
+        console.log(`🔊 [AudioStreamManager] ICOM WLAN 分块发送: ${totalChunks} 块，chunk=${chunkSize} 样本`);
+
+        const chunkStartTime = Date.now();
+        const hrStart = performance.now();
+        let samplesWritten = 0;
+
+        const wait = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
+
+        for (let i = 0; i < totalChunks; i++) {
+          // 检查是否需要停止播放
+          if (this.shouldStopPlayback) {
+            console.log(`🛑 [AudioStreamManager] ICOM WLAN 检测到停止信号,中断播放 (已发送${i}/${totalChunks}块)`);
+            throw new Error('播放已被中断');
+          }
+
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize, audioData.length);
+          const sourceChunk = audioData.subarray(start, end);
+
+          // 应用当前音量增益（每个chunk读取最新值，支持实时调整）
+          const chunk = new Float32Array(sourceChunk.length);
+          const gain = this.volumeGain;
+          for (let j = 0; j < sourceChunk.length; j++) {
+            const s = sourceChunk[j] * gain;
+            // 限幅保护，防止异常爆音
+            chunk[j] = s > 1 ? 1 : (s < -1 ? -1 : s);
+          }
+
+          // 节奏控制：确保按照实际播放速度发送，避免过度领先
+          const elapsedMs = performance.now() - hrStart;
+          const producedMs = (samplesWritten / targetSampleRate) * 1000;
+          const leadMs = producedMs - elapsedMs;
+
+          // 如果领先超过100ms，等待至合理窗口内
+          if (leadMs > 100) {
+            await wait(Math.min(20, Math.max(1, Math.floor(leadMs - 50))));
+          }
+
+          // 发送音频数据
+          await this.icomWlanAudioAdapter.sendAudio(chunk);
+
+          samplesWritten += chunk.length;
         }
 
-        // 直接发送到 ICOM WLAN（已经是 12kHz，零重采样优化）
-        await this.icomWlanAudioAdapter.sendAudio(gainedData);
-        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频发送完成`);
+        const chunkEndTime = Date.now();
+        const chunkDuration = chunkEndTime - chunkStartTime;
+        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频发送完成, 耗时: ${chunkDuration}ms`);
+
       } catch (error) {
         console.error(`❌ [AudioStreamManager] ICOM WLAN 音频发送失败:`, error);
         throw error;
+      } finally {
+        // 清理播放状态
+        this.playing = false;
+        this.currentAudioData = null;
+        this.currentSampleRate = 0;
       }
       return;
     }

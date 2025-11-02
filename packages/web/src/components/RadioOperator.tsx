@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection, Tooltip } from "@heroui/react";
+import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faWandMagicSparkles, faRepeat, faBook, faRotateLeft } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../store/radioStore';
@@ -20,7 +20,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const slotPacks = useSlotPacks();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
-  
+
+  // 判断当前卡片是否被选中
+  const isSelected = currentOperatorId === operatorStatus.id;
+
   // 调试：渲染计数器
   const renderCountRef = React.useRef(0);
   renderCountRef.current++;
@@ -79,6 +82,74 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   
   // 标记正在编辑的字段（避免服务端覆盖特定字段）
   const [editingFields, setEditingFields] = React.useState<Set<string>>(new Set());
+
+  // 立即停止发射Popover状态
+  const [isForceStopPopoverOpen, setIsForceStopPopoverOpen] = React.useState(false);
+
+  // 判断是否显示立即停止发射Popover
+  const shouldShowForceStopPopover = React.useCallback(() => {
+    const checks = {
+      operatorTransmitting: operatorStatus.isTransmitting,
+      pttActive: radio.state.pttStatus?.isTransmitting,
+      inTransmitCycle: operatorStatus.cycleInfo?.isTransmitCycle,
+      pttOperatorIds: radio.state.pttStatus?.operatorIds || [],
+      currentOperatorId: operatorStatus.id
+    };
+
+    console.log('🔍 [ForceStop] 检查条件:', checks);
+
+    // 1. 当前操作员已关闭发射开关
+    if (operatorStatus.isTransmitting) {
+      console.log('🔍 [ForceStop] 操作员还在发射，不显示');
+      return false;
+    }
+
+    // 2. PTT正在激活
+    if (!radio.state.pttStatus?.isTransmitting) {
+      console.log('🔍 [ForceStop] PTT未激活，不显示');
+      return false;
+    }
+
+    // 3. 当前在发射周期
+    if (!operatorStatus.cycleInfo?.isTransmitCycle) {
+      console.log('🔍 [ForceStop] 不在发射周期，不显示');
+      return false;
+    }
+
+    // 4. 检查PTT状态中的操作员列表
+    const pttStatus = radio.state.pttStatus;
+    if (!pttStatus) {
+      console.log('🔍 [ForceStop] PTT状态不存在，不显示');
+      return false;
+    }
+
+    // 5. 如果PTT状态中还有其他操作员,不显示(说明有其他操作员在发射)
+    const otherOperators = pttStatus.operatorIds?.filter(id => id !== operatorStatus.id) || [];
+    if (otherOperators.length > 0) {
+      console.log('🔍 [ForceStop] 其他操作员在发射，不显示:', otherOperators);
+      return false;
+    }
+
+    console.log('✅ [ForceStop] 所有条件满足，应该显示Popover');
+    return true;
+  }, [
+    operatorStatus.isTransmitting,
+    operatorStatus.cycleInfo?.isTransmitCycle,
+    operatorStatus.id,
+    radio.state.pttStatus
+  ]);
+
+  // 监听状态变化，自动打开/关闭Popover
+  React.useEffect(() => {
+    const shouldShow = shouldShowForceStopPopover();
+    if (shouldShow && !isForceStopPopoverOpen) {
+      console.log('✅ [ForceStop] 自动打开Popover');
+      setIsForceStopPopoverOpen(true);
+    } else if (!shouldShow && isForceStopPopoverOpen) {
+      console.log('❌ [ForceStop] 自动关闭Popover');
+      setIsForceStopPopoverOpen(false);
+    }
+  }, [shouldShowForceStopPopover, isForceStopPopoverOpen]);
 
   // 同步props到本地状态
   React.useEffect(() => {
@@ -302,6 +373,14 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     return '';
   };
 
+  // 处理立即停止发射
+  const handleForceStop = () => {
+    if (connection.state.radioService) {
+      connection.state.radioService.forceStopTransmission();
+      setIsForceStopPopoverOpen(false);
+    }
+  };
+
   // 获取进度条背景样式 - 完全依赖服务端推送的状态
   const getProgressBackgroundStyle = () => {
     const progress = realtimeProgress / 100;
@@ -465,31 +544,69 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               <FontAwesomeIcon icon={faBook} className="text-default-600" />
             </Button>
             <span className="text-sm text-default-600">发射</span>
-            <Switch 
-              isSelected={operatorStatus.isTransmitting} 
-              onValueChange={(isSelected) => {
-                if (connection.state.radioService) {
-                  if (isSelected) {
-                    connection.state.radioService.startOperator(operatorStatus.id);
-                  } else {
-                    connection.state.radioService.stopOperator(operatorStatus.id);
-                  }
-                }
-              }}
-              size="sm"
-              color="danger"
-              isDisabled={!connection.state.isConnected}
-              aria-label="切换发射状态"
-            />
+            <Popover
+              isOpen={isForceStopPopoverOpen}
+              onOpenChange={setIsForceStopPopoverOpen}
+              placement="top"
+              offset={10}
+            >
+              <PopoverTrigger>
+                <Switch
+                  isSelected={operatorStatus.isTransmitting}
+                  onValueChange={(isSelected) => {
+                    console.log('🔄 [Switch] 值变化:', { isSelected, operatorId: operatorStatus.id });
+                    if (connection.state.radioService) {
+                      if (isSelected) {
+                        connection.state.radioService.startOperator(operatorStatus.id);
+                      } else {
+                        console.log('🛑 [Switch] 关闭发射，检查是否需要显示Popover');
+                        connection.state.radioService.stopOperator(operatorStatus.id);
+                      }
+                    }
+                  }}
+                  size="sm"
+                  color="danger"
+                  isDisabled={!connection.state.isConnected}
+                  aria-label="切换发射状态"
+                />
+              </PopoverTrigger>
+              <PopoverContent>
+                <div className="px-3 py-2">
+                  <Button
+                    size="sm"
+                    color="danger"
+                    onPress={handleForceStop}
+                    fullWidth
+                  >
+                    立即停止发射
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
       </div>
       
-      {/* 分割线 */}
-      <div className="border-t border-divider"></div>
-      
-      {/* 下半部分 */}
-      <div className="p-4 flex flex-col gap-3">
+      {/* 分割线 - 随下半部分一起显示/隐藏 */}
+      <div
+        className={`border-t border-divider transition-opacity duration-[250ms] ${
+          isSelected ? 'opacity-100' : 'opacity-0'
+        }`}
+        style={{
+          transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
+        }}
+      ></div>
+
+      {/* 下半部分 - 带展开/收起动画 */}
+      <div
+        className={`overflow-hidden transition-all duration-[250ms] ${
+          isSelected ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'
+        }`}
+        style={{
+          transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
+        }}
+      >
+        <div className="p-4 flex flex-col gap-3">
         {/* 第一行 - 发射周期和发射槽位选择 */}
         <div className="flex gap-2 -my-1">
           <div className="flex items-center gap-0">
@@ -817,6 +934,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               </div>
             </div>
           )}
+        </div>
         </div>
       </div>
     </div>

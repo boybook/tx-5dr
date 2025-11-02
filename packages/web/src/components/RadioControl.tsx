@@ -1153,7 +1153,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           key: frequencyKey,
           label: data.description || `${(data.frequency / 1000000).toFixed(3)} MHz`,
           frequency: data.frequency,
-          band: data.band || '自定义',
+          band: data.band || '',
           mode: data.mode || 'FT8',
           radioMode: data.radioMode
         };
