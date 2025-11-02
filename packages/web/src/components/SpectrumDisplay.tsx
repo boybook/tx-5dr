@@ -24,6 +24,7 @@ const DEFAULT_AUTO_CONFIG: AutoRangeConfig = {
 interface SpectrumDisplayProps {
   className?: string;
   height?: number;
+  hoverFrequency?: number | null;
 }
 
 interface WaterfallData {
@@ -43,7 +44,8 @@ interface RangeSettings {
 
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
-  height = 200
+  height = 200,
+  hoverFrequency
 }) => {
   const [spectrum, setSpectrum] = useState<FT8Spectrum | null>(null);
   const [waterfallData, setWaterfallData] = useState<WaterfallData>({
@@ -245,6 +247,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         txFrequencies={txFrequencies}
         onTxFrequencyChange={handleTxFrequencyChange}
         onActualRangeChange={setActualRange}
+        hoverFrequency={hoverFrequency}
         className="bg-transparent"
       />
 

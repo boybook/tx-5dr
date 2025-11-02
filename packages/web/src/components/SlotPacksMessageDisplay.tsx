@@ -8,9 +8,10 @@ import { useSplitLayoutActions } from './SplitLayout';
 
 interface SlotPacksMessageDisplayProps {
   className?: string;
+  onMessageHover?: (freq: number | null) => void;
 }
 
-export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = ({ className = '' }) => {
+export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = ({ className = '', onMessageHover }) => {
   const connection = useConnection();
   const radio = useRadioState();
   const slotPacks = useSlotPacks();
@@ -141,6 +142,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       myCallsigns={getMyCallsigns()}
       targetCallsign={getTargetCallsign()}
       onRowDoubleClick={handleRowDoubleClick}
+      onMessageHover={onMessageHover}
     />
   );
 }; 

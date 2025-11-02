@@ -31,6 +31,7 @@ interface WebGLWaterfallProps {
   txFrequencies?: TxFrequency[];
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
   onActualRangeChange?: (range: { min: number; max: number }) => void;
+  hoverFrequency?: number | null;
 }
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
@@ -51,6 +52,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   txFrequencies = [],
   onTxFrequencyChange,
   onActualRangeChange,
+  hoverFrequency,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -764,6 +766,16 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
             </Popover>
           );
         })}
+
+        {/* Hover消息频率线 - 淡白色 */}
+        {hoverFrequency !== null && hoverFrequency !== undefined && (
+          <div
+            className="absolute top-0 h-full pointer-events-none"
+            style={{ left: `${getFrequencyPosition(hoverFrequency)}%`, transform: 'translateX(-50%)' }}
+          >
+            <div className="w-0.5 h-full bg-white/30" />
+          </div>
+        )}
       </div>
 
       {autoRange && actualRange && (
