@@ -27,7 +27,7 @@ export const RightLayout: React.FC = () => {
   const { currentOperatorId } = useCurrentOperatorId();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'system'>('audio');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'system'>('radio');
 
   // 判断是否为自动模式
   const isAutoMode = selectedMode.startsWith('auto');
@@ -40,7 +40,7 @@ export const RightLayout: React.FC = () => {
 
   // 打开设置弹窗
   const handleOpenSettings = () => {
-    setSettingsInitialTab('audio');
+    setSettingsInitialTab('radio');
     setIsSettingsOpen(true);
   };
 
