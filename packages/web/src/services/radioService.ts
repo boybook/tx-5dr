@@ -15,6 +15,9 @@ import type {
 export class RadioService {
   private wsClient: WSClient;
   private _isDecoding = false;
+  private audioMonitorWs: WebSocket | null = null; // 音频监听专用WebSocket
+  private audioMonitorDataHandler: ((buffer: ArrayBuffer) => void) | null = null; // 音频数据处理器
+  private audioMonitorClientId: string | null = null; // 音频监听客户端ID
 
   constructor() {
     // 创建WebSocket客户端
@@ -284,5 +287,76 @@ export class RadioService {
     } else {
       console.warn('⚠️ [RadioService] 未连接到服务器，无法手动重连电台');
     }
+  }
+
+  /**
+   * 连接音频监听（简化模式：连接即接收）
+   */
+  connectAudioMonitor(): void {
+    if (!this.isConnected) {
+      console.warn('⚠️ [RadioService] 未连接到服务器，无法连接音频监听');
+      return;
+    }
+
+    if (this.audioMonitorWs) {
+      console.warn('⚠️ [RadioService] 音频WebSocket已连接');
+      return;
+    }
+
+    // 生成客户端ID（用于音频WebSocket连接）
+    this.audioMonitorClientId = `audio_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    console.log(`🎧 [RadioService] 连接音频监听, clientId=${this.audioMonitorClientId}`);
+
+    // 连接音频WebSocket（连接后服务端自动开始广播）
+    const audioWsUrl = getWebSocketUrl().replace('/ws', `/ws/audio-monitor?clientId=${this.audioMonitorClientId}`);
+    console.log(`🎧 [RadioService] 连接音频WebSocket: ${audioWsUrl}`);
+
+    this.audioMonitorWs = new WebSocket(audioWsUrl);
+    this.audioMonitorWs.binaryType = 'arraybuffer';
+
+    this.audioMonitorWs.onopen = () => {
+      console.log('✅ [RadioService] 音频WebSocket已连接，开始接收音频数据');
+    };
+
+    this.audioMonitorWs.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        // 接收到二进制音频数据，调用处理器
+        if (this.audioMonitorDataHandler) {
+          this.audioMonitorDataHandler(event.data);
+        }
+      }
+    };
+
+    this.audioMonitorWs.onerror = (error) => {
+      console.error('❌ [RadioService] 音频WebSocket错误:', error);
+    };
+
+    this.audioMonitorWs.onclose = () => {
+      console.log('🔌 [RadioService] 音频WebSocket已关闭');
+      this.audioMonitorWs = null;
+    };
+  }
+
+  /**
+   * 断开音频监听
+   */
+  disconnectAudioMonitor(): void {
+    // 关闭音频WebSocket
+    if (this.audioMonitorWs) {
+      console.log('🎧 [RadioService] 关闭音频WebSocket');
+      this.audioMonitorWs.close();
+      this.audioMonitorWs = null;
+      this.audioMonitorClientId = null;
+    }
+  }
+
+  /**
+   * 设置音频监听数据处理器
+   * @param handler 处理器函数，接收ArrayBuffer音频数据
+   */
+  setAudioMonitorDataHandler(handler: ((buffer: ArrayBuffer) => void) | null): void {
+    this.audioMonitorDataHandler = handler;
+    console.log(`🎧 [RadioService] 音频数据处理器已${handler ? '设置' : '清除'}`);
   }
 }

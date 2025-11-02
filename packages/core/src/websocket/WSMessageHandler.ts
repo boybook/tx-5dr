@@ -45,7 +45,11 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.VOLUME_GAIN_CHANGED]: 'volumeGainChanged',
   [WSMessageType.SERVER_HANDSHAKE_COMPLETE]: 'handshakeComplete',
   // 极简文本消息
-  [WSMessageType.TEXT_MESSAGE]: 'textMessage'
+  [WSMessageType.TEXT_MESSAGE]: 'textMessage',
+
+  // 音频监听事件
+  [WSMessageType.AUDIO_MONITOR_DATA]: 'audioMonitorData',
+  [WSMessageType.AUDIO_MONITOR_STATS]: 'audioMonitorStats'
 };
 
 /**

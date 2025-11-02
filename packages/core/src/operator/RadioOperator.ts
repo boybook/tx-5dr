@@ -250,7 +250,6 @@ export class RadioOperator {
     }
 
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
-        // console.log(`[RadioOperator.requestCall] (${this.config.myCallsign}) 请求通联 ${callsign}`, lastMessage);
         // 启用发射
         this.start();
         // 切换周期

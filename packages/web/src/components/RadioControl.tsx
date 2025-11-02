@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle, faHeadphones } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api } from '@tx5dr/core';
 import type { ModeDescriptor } from '@tx5dr/contracts';
@@ -514,6 +514,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   const [volumeGain, setVolumeGain] = useState(1.0);
 
+  // 音频监听相关状态
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [monitorStats, setMonitorStats] = useState<{
+    latencyMs: number;
+    bufferFillPercent: number;
+    isActive: boolean;
+    audioLevel?: number;
+  } | null>(null);
+  const audioContextRef = React.useRef<AudioContext | null>(null);
+  const workletNodeRef = React.useRef<AudioWorkletNode | null>(null);
+  const isInitializingWorklet = React.useRef<boolean>(false); // 初始化锁，防止重复初始化
+
   // 自定义频率相关状态
   const [isCustomFrequencyModalOpen, setIsCustomFrequencyModalOpen] = useState(false);
   const [customFrequencyInput, setCustomFrequencyInput] = useState('');
@@ -771,6 +783,103 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   };
 
+  // 初始化AudioWorklet（动态采样率）
+  const initAudioWorklet = async (sampleRate: number) => {
+    // 设置初始化锁
+    isInitializingWorklet.current = true;
+
+    try {
+      console.log(`🎧 [AudioMonitor] 创建AudioContext，采样率=${sampleRate}Hz`);
+      const audioContext = new AudioContext({ sampleRate });
+      await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
+      const workletNode = new AudioWorkletNode(audioContext, 'audio-monitor-processor');
+      workletNode.connect(audioContext.destination);
+
+      // 监听来自worklet的统计信息
+      workletNode.port.onmessage = (e) => {
+        if (e.data.type === 'stats') {
+          setMonitorStats(e.data.data);
+        }
+      };
+
+      audioContextRef.current = audioContext;
+      workletNodeRef.current = workletNode;
+      console.log('✅ [AudioMonitor] AudioWorklet初始化成功');
+    } catch (error) {
+      console.error('❌ [AudioMonitor] AudioWorklet初始化失败:', error);
+      throw error;
+    } finally {
+      // 释放初始化锁
+      isInitializingWorklet.current = false;
+    }
+  };
+
+  // 开始监听（简化版：连接即接收）
+  const startMonitoring = async () => {
+    try {
+      console.log('🎧 [AudioMonitor] 开始监听...');
+
+      // 先设置isMonitoring为true，触发useEffect注册事件监听器和数据处理器
+      setIsMonitoring(true);
+
+      // 等待一个tick确保useEffect已执行
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // 然后连接音频WebSocket（连接后服务端自动广播）
+      connection.state.radioService?.connectAudioMonitor();
+
+      console.log('✅ [AudioMonitor] 监听已开启（等待音频数据以初始化AudioContext）');
+    } catch (error) {
+      console.error('❌ [AudioMonitor] 开始监听失败:', error);
+      addToast({
+        title: '监听启动失败',
+        description: error instanceof Error ? error.message : '未知错误',
+        color: 'danger'
+      });
+
+      // 清理资源
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      workletNodeRef.current = null;
+      isInitializingWorklet.current = false; // 重置初始化锁
+      setIsMonitoring(false);
+    }
+  };
+
+  // 停止监听
+  const stopMonitoring = () => {
+    try {
+      console.log('🛑 [AudioMonitor] 停止监听...');
+
+      // 断开音频WebSocket连接
+      connection.state.radioService?.disconnectAudioMonitor();
+
+      // 清理AudioWorklet
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      workletNodeRef.current = null;
+      isInitializingWorklet.current = false; // 重置初始化锁
+
+      setIsMonitoring(false);
+      setMonitorStats(null);
+      console.log('✅ [AudioMonitor] 监听已停止');
+    } catch (error) {
+      console.error('❌ [AudioMonitor] 停止监听失败:', error);
+    }
+  };
+
+  // 切换监听状态
+  const toggleMonitoring = async () => {
+    if (isMonitoring) {
+      stopMonitoring();
+    } else {
+      await startMonitoring();
+    }
+  };
 
   // 频率格式验证和转换
   const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
@@ -1097,6 +1206,131 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   }, [connection.state.isConnected]);
 
+  // 监听音频监听事件
+  useEffect(() => {
+    if (!connection.state.radioService || !isMonitoring) return;
+
+    const radioService = connection.state.radioService;
+    const wsClient = radioService.wsClientInstance;
+
+    // 用于存储当前采样率（从元数据获取）
+    let currentSampleRate: number | null = null;
+    let lastSequence = -1;
+    let frameCount = 0;
+    let droppedFrames = 0;
+
+    // 处理音频元数据（从控制WebSocket接收）
+    const handleAudioMonitorData = async (data: any) => {
+      const t_receive = performance.now(); // 接收时间戳
+
+      // 检测丢帧（通过序列号）
+      if (data.sequence !== undefined) {
+        if (lastSequence >= 0 && data.sequence !== lastSequence + 1) {
+          const dropped = data.sequence - lastSequence - 1;
+          droppedFrames += dropped;
+        }
+        lastSequence = data.sequence;
+      }
+
+      // 计算端到端延迟（服务端timestamp到客户端接收）
+      if (data.timestamp) {
+        const latency = Date.now() - data.timestamp;
+        frameCount++;
+      }
+
+      if (!data.sampleRate) {
+        console.warn('⚠️ [AudioMonitor] 元数据缺少采样率');
+        return;
+      }
+
+      // 更新当前采样率
+      currentSampleRate = data.sampleRate;
+
+      // 如果AudioContext还未创建，或采样率发生变化，则（重新）创建
+      if (!audioContextRef.current ||
+          (audioContextRef.current.sampleRate !== data.sampleRate)) {
+
+        // 如果正在初始化中，跳过（防止重复初始化）
+        if (isInitializingWorklet.current) {
+          console.log('⏭️ [AudioMonitor] 正在初始化中，跳过重复请求');
+          return;
+        }
+
+        // 清理旧的AudioContext
+        if (audioContextRef.current) {
+          console.log(`🔄 [AudioMonitor] 采样率变化，重新创建AudioContext`);
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+          workletNodeRef.current = null;
+        }
+
+        // 创建新的AudioContext
+        try {
+          console.log(`🎵 [AudioMonitor] 创建AudioContext，采样率=${data.sampleRate}Hz`);
+          await initAudioWorklet(data.sampleRate);
+        } catch (error) {
+          console.error('❌ [AudioMonitor] 创建AudioContext失败:', error);
+          return;
+        }
+      }
+    };
+
+    // 处理二进制音频数据（从音频专用WebSocket接收）
+    const handleBinaryAudioData = (buffer: ArrayBuffer) => {
+      const t_receive = performance.now(); // 接收时间戳
+
+      // 确保AudioContext和Worklet已就绪
+      if (!workletNodeRef.current) {
+        console.warn('⚠️ [AudioMonitor] AudioWorklet未就绪，丢弃音频数据');
+        return;
+      }
+
+      // 直接发送ArrayBuffer到AudioWorklet（零拷贝传输）
+      workletNodeRef.current.port.postMessage({
+        type: 'audioData',
+        buffer: buffer,
+        sampleRate: currentSampleRate || 48000,
+        clientTimestamp: t_receive // 添加客户端时间戳
+      }, [buffer]); // Transferable objects - 零拷贝传输
+    };
+
+    // 处理统计信息（可选，AudioWorklet也会生成统计）
+    const handleAudioMonitorStats = (stats: any) => {
+      // 服务端的统计信息可以作为补充
+    };
+
+    console.log('🔧 [AudioMonitor] 注册事件监听器和数据处理器');
+
+    // 订阅控制WebSocket的元数据事件
+    wsClient.onWSEvent('audioMonitorData', handleAudioMonitorData);
+    wsClient.onWSEvent('audioMonitorStats', handleAudioMonitorStats);
+
+    // 注册二进制音频数据处理器（音频专用WebSocket）
+    radioService.setAudioMonitorDataHandler(handleBinaryAudioData);
+
+    console.log('✅ [AudioMonitor] 事件监听器和数据处理器已注册');
+
+    return () => {
+      console.log('🧹 [AudioMonitor] 清理事件监听器和数据处理器');
+
+      // 清理控制WebSocket事件
+      wsClient.offWSEvent('audioMonitorData', handleAudioMonitorData);
+      wsClient.offWSEvent('audioMonitorStats', handleAudioMonitorStats);
+
+      // 清理音频数据处理器
+      radioService.setAudioMonitorDataHandler(null);
+    };
+  }, [connection.state.radioService, isMonitoring]);
+
+  // 组件卸载时清理
+  useEffect(() => {
+    return () => {
+      if (isMonitoring) {
+        stopMonitoring();
+      }
+    };
+  }, []);
+
   // 监听系统状态更新
   useEffect(() => {
     if (!connection.state.radioService) return;
@@ -1219,6 +1453,67 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 />
                 <div className="text-sm text-default-400 text-center font-mono">
                   {formatDbDisplay(gainToDb(volumeGain))}
+                </div>
+              </PopoverContent>
+            </Popover>
+            <Popover>
+              <PopoverTrigger>
+                <Button
+                  isIconOnly
+                  variant="light"
+                  size="sm"
+                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${isMonitoring ? 'text-success' : 'text-default-400'}`}
+                  aria-label="音频监听"
+                >
+                  <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="py-2 pt-3 space-y-2">
+                <div className="space-y-2">
+                  {/* 监听开关 */}
+                  <div className="flex items-center justify-center px-2 w-full">
+                    <Switch
+                      size="sm"
+                      isSelected={isMonitoring}
+                      onValueChange={toggleMonitoring}
+                      aria-label="音频监听开关"
+                    />
+                  </div>
+
+                  {/* 状态指示器 */}
+                  {isMonitoring && monitorStats && (
+                    <div className="space-y-1 pt-2 border-t border-divider text-xs">
+                      {/* 延迟显示 */}
+                      <div className="flex justify-between items-center">
+                        <span className="text-default-500 pr-1">延迟</span>
+                        <span className={`font-mono ${
+                          monitorStats.latencyMs < 50 ? 'text-success' :
+                          monitorStats.latencyMs < 100 ? 'text-warning' :
+                          'text-danger'
+                        }`}>
+                          {monitorStats.latencyMs.toFixed(0)}ms
+                        </span>
+                      </div>
+
+                      {/* 缓冲区状态 */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center">
+                          <span className="text-default-500 pr-1">缓冲</span>
+                          <span className="font-mono text-default-400">
+                            {monitorStats.bufferFillPercent.toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 音频活动指示 */}
+                      <div className="flex justify-between items-center">
+                        <span className="text-default-500 pr-1">活动</span>
+                        <div className={`w-2 h-2 rounded-full ${
+                          monitorStats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
+                        }`} />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </PopoverContent>
             </Popover>
