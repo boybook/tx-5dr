@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type { HelloResponse } from '@tx5dr/contracts';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
 import { ConfigManager } from './config/config-manager.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { audioRoutes } from './routes/audio.js';
@@ -16,6 +16,67 @@ import { settingsRoutes } from './routes/settings.js';
 import { WSServer } from './websocket/WSServer.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
+
+/**
+ * 📊 Day14：将 RadioErrorCode 映射到 HTTP 状态码
+ */
+function getHttpStatusCode(code: RadioErrorCode): number {
+  switch (code) {
+    // 4xx 客户端错误
+    case RadioErrorCode.INVALID_CONFIG:
+    case RadioErrorCode.MISSING_CONFIG:
+    case RadioErrorCode.INVALID_OPERATION:
+    case RadioErrorCode.INVALID_STATE:
+      return 400; // Bad Request
+
+    case RadioErrorCode.UNSUPPORTED_MODE:
+      return 400; // Bad Request
+
+    case RadioErrorCode.NOT_INITIALIZED:
+    case RadioErrorCode.NOT_RUNNING:
+      return 409; // Conflict
+
+    case RadioErrorCode.ALREADY_RUNNING:
+      return 409; // Conflict
+
+    case RadioErrorCode.DEVICE_NOT_FOUND:
+    case RadioErrorCode.RESOURCE_UNAVAILABLE:
+      return 404; // Not Found
+
+    case RadioErrorCode.DEVICE_BUSY:
+      return 503; // Service Unavailable
+
+    case RadioErrorCode.OPERATION_CANCELLED:
+      return 499; // Client Closed Request
+
+    // 5xx 服务器错误
+    case RadioErrorCode.CONNECTION_FAILED:
+    case RadioErrorCode.CONNECTION_TIMEOUT:
+    case RadioErrorCode.CONNECTION_LOST:
+    case RadioErrorCode.RECONNECT_FAILED:
+    case RadioErrorCode.RECONNECT_MAX_ATTEMPTS:
+      return 503; // Service Unavailable
+
+    case RadioErrorCode.DEVICE_ERROR:
+    case RadioErrorCode.AUDIO_DEVICE_ERROR:
+    case RadioErrorCode.PTT_ACTIVATION_FAILED:
+    case RadioErrorCode.OPERATION_TIMEOUT:
+      return 500; // Internal Server Error
+
+    case RadioErrorCode.RESOURCE_CLEANUP_FAILED:
+      return 500; // Internal Server Error
+
+    case RadioErrorCode.NETWORK_ERROR:
+    case RadioErrorCode.UDP_ERROR:
+    case RadioErrorCode.WEBSOCKET_ERROR:
+      return 500; // Internal Server Error
+
+    case RadioErrorCode.UNKNOWN_ERROR:
+    default:
+      return 500; // Internal Server Error
+  }
+}
 
 export async function createServer() {
   const fastify = Fastify({
@@ -85,6 +146,62 @@ export async function createServer() {
       maxPayload: 1048576, // 1MB 最大消息大小
       clientTracking: true, // 跟踪客户端连接
     }
+  });
+
+  // 📊 Day14：Fastify 全局错误处理器
+  // 根据 RadioError.code 返回友好错误并添加用户指导信息
+  fastify.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
+    fastify.log.error('API请求错误:', error);
+
+    // 如果是 RadioError，返回详细的错误信息
+    if (error instanceof RadioError) {
+      const statusCode = getHttpStatusCode(error.code);
+
+      reply.status(statusCode).send({
+        success: false,
+        error: {
+          code: error.code,
+          message: error.message,
+          userMessage: error.userMessage,
+          severity: error.severity,
+          suggestions: error.suggestions,
+          timestamp: error.timestamp,
+          context: error.context,
+        },
+      });
+      return;
+    }
+
+    // 如果是 Fastify 验证错误
+    if (error.validation) {
+      reply.status(400).send({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: '请求参数验证失败',
+          userMessage: '请检查请求参数是否正确',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查请求参数格式', '参考API文档'],
+          details: error.validation,
+        },
+      });
+      return;
+    }
+
+    // 其他错误：转换为通用错误响应
+    const statusCode = error.statusCode || 500;
+    reply.status(statusCode).send({
+      success: false,
+      error: {
+        code: RadioErrorCode.UNKNOWN_ERROR,
+        message: error.message || '服务器内部错误',
+        userMessage: statusCode === 500 ? '服务器遇到错误，请稍后重试' : error.message,
+        severity: statusCode === 500 ? RadioErrorSeverity.CRITICAL : RadioErrorSeverity.ERROR,
+        suggestions: statusCode === 500
+          ? ['请稍后重试', '如果问题持续，请联系技术支持']
+          : [],
+      },
+    });
   });
 
   // Try to load native addon (placeholder)

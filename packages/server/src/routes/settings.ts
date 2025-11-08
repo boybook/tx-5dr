@@ -1,6 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import { ConfigManager } from '../config/config-manager.js';
+import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
+/**
+ * 设置管理API路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
+ */
 export async function settingsRoutes(fastify: FastifyInstance) {
   const configManager = ConfigManager.getInstance();
 
@@ -13,11 +18,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         data: ft8Config,
       });
     } catch (error) {
-      fastify.log.error('获取FT8配置失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '获取配置失败',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -44,11 +46,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         data: configManager.getFT8Config(),
       });
     } catch (error) {
-      fastify.log.error('保存FT8配置失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '保存配置失败',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
 }

@@ -21,9 +21,11 @@ import {
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { LogQueryOptions } from "@tx5dr/core";
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
 /**
  * 日志本管理API路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
  */
 export async function logbookRoutes(fastify: FastifyInstance) {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
@@ -55,11 +57,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send(response);
     } catch (error) {
-      fastify.log.error('获取日志本列表失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '获取日志本列表失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -80,11 +79,15 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
         }
       }
-      
+
       if (!logBook) {
-        return reply.status(404).send({
-          success: false,
-          message: `日志本 ${id} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `日志本 ${id} 不存在`,
+          userMessage: '未找到指定的日志本',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
         });
       }
 
@@ -122,11 +125,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send(response);
     } catch (error) {
-      fastify.log.error('获取日志本详情失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '获取日志本详情失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -156,11 +156,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.status(201).send(response);
     } catch (error) {
-      fastify.log.error('创建日志本失败:', error);
-      return reply.status(400).send({
-        success: false,
-        message: error instanceof Error ? error.message : '创建日志本失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
 
@@ -183,11 +180,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
         }
       }
-      
+
+
       if (!logBook) {
-        return reply.status(404).send({
-          success: false,
-          message: `日志本 ${id} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `日志本 ${id} 不存在`,
+          userMessage: '未找到指定的日志本',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
         });
       }
 
@@ -218,11 +220,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send(response);
     } catch (error) {
-      fastify.log.error('更新日志本失败:', error);
-      return reply.status(400).send({
-        success: false,
-        message: error instanceof Error ? error.message : '更新日志本失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
 
@@ -241,11 +240,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         message: '日志本删除成功'
       });
     } catch (error) {
-      fastify.log.error('删除日志本失败:', error);
-      return reply.status(400).send({
-        success: false,
-        message: error instanceof Error ? error.message : '删除日志本失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -265,11 +261,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         message: `操作员 ${operatorId} 已连接到日志本 ${logBookId}`
       });
     } catch (error) {
-      fastify.log.error('连接操作员到日志本失败:', error);
-      return reply.status(400).send({
-        success: false,
-        message: error instanceof Error ? error.message : '连接操作员到日志本失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -288,11 +281,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         message: `操作员 ${operatorId} 已断开与日志本的连接`
       });
     } catch (error) {
-      fastify.log.error('断开操作员与日志本连接失败:', error);
-      return reply.status(400).send({
-        success: false,
-        message: error instanceof Error ? error.message : '断开操作员与日志本连接失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -315,11 +305,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
         }
       }
-      
+
+
       if (!logBook) {
-        return reply.status(404).send({
-          success: false,
-          message: `日志本 ${id} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `日志本 ${id} 不存在`,
+          userMessage: '未找到指定的日志本',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
         });
       }
 
@@ -424,11 +419,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         }
       });
     } catch (error) {
-      fastify.log.error('查询QSO记录失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '查询QSO记录失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -451,11 +443,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
         }
       }
-      
+
+
       if (!logBook) {
-        return reply.status(404).send({
-          success: false,
-          message: `日志本 ${id} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `日志本 ${id} 不存在`,
+          userMessage: '未找到指定的日志本',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
         });
       }
 
@@ -513,11 +510,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send(exportedData);
     } catch (error) {
-      fastify.log.error('导出日志本失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '导出日志本失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -542,9 +536,13 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       if (!logBook) {
-        return reply.status(404).send({
-          success: false,
-          message: `日志本 ${id} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `日志本 ${id} 不存在`,
+          userMessage: '未找到指定的日志本',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
         });
       }
 
@@ -555,11 +553,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         message: '数据导入成功'
       });
     } catch (error) {
-      fastify.log.error('导入数据到日志本失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '导入数据到日志本失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -584,9 +579,13 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       if (!logBook) {
-        return reply.status(404).send({
-          success: false,
-          message: `日志本 ${id} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `日志本 ${id} 不存在`,
+          userMessage: '未找到指定的日志本',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
         });
       }
 
@@ -597,9 +596,13 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const updatedQSO = await logBook.provider.getQSO(qsoId);
 
       if (!updatedQSO) {
-        return reply.status(404).send({
-          success: false,
-          message: `QSO记录 ${qsoId} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `QSO记录 ${qsoId} 不存在`,
+          userMessage: '未找到指定的QSO记录',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查QSO记录ID是否正确', '刷新日志本数据'],
         });
       }
 
@@ -609,11 +612,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         data: updatedQSO
       });
     } catch (error) {
-      fastify.log.error('更新QSO记录失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '更新QSO记录失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -637,9 +637,13 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       if (!logBook) {
-        return reply.status(404).send({
-          success: false,
-          message: `日志本 ${id} 不存在`
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `日志本 ${id} 不存在`,
+          userMessage: '未找到指定的日志本',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
         });
       }
 
@@ -651,11 +655,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         message: 'QSO记录删除成功'
       });
     } catch (error) {
-      fastify.log.error('删除QSO记录失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '删除QSO记录失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 } 

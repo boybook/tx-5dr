@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { 
+import {
   WaveLogConfig,
   WaveLogConfigSchema,
   WaveLogTestConnectionRequest,
@@ -14,6 +14,7 @@ import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { WaveLogService, WaveLogServiceManager } from '../services/WaveLogService.js';
 import { LogManager } from '../log/LogManager.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
 /**
  * 处理手动上传操作
@@ -92,6 +93,7 @@ async function handleManualUpload(waveLogService: WaveLogService) {
 
 /**
  * WaveLog同步API路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
  */
 export async function waveLogRoutes(fastify: FastifyInstance) {
   const configManager = ConfigManager.getInstance();
@@ -106,11 +108,8 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
       const config = configManager.getWaveLogConfig();
       return reply.send(config);
     } catch (error) {
-      fastify.log.error('获取WaveLog配置失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '获取配置失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -122,18 +121,15 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
     try {
       const updates = WaveLogConfigSchema.partial().parse(request.body);
       await configManager.updateWaveLogConfig(updates);
-      
+
       // 更新WaveLog服务实例
       const newConfig = configManager.getWaveLogConfig();
       waveLogManager.initializeService(newConfig);
-      
+
       return reply.send(newConfig);
     } catch (error) {
-      fastify.log.error('更新WaveLog配置失败:', error);
-      return reply.status(400).send({
-        success: false,
-        message: error instanceof Error ? error.message : '更新配置失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
 
@@ -144,7 +140,7 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
   fastify.post('/test', async (request: FastifyRequest<{ Body: WaveLogTestConnectionRequest }>, reply: FastifyReply) => {
     try {
       const testRequest = WaveLogTestConnectionRequestSchema.parse(request.body);
-      
+
       // 创建临时的WaveLog服务实例进行测试
       const testConfig: WaveLogConfig = {
         enabled: true,
@@ -154,18 +150,14 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
         radioName: 'TX5DR',
         autoUploadQSO: true
       };
-      
+
       const testService = new WaveLogService(testConfig);
       const result = await testService.testConnection();
-      
+
       return reply.send(result);
     } catch (error) {
-      fastify.log.error('测试WaveLog连接失败:', error);
-      const response: WaveLogTestConnectionResponse = {
-        success: false,
-        message: error instanceof Error ? error.message : '测试连接失败'
-      };
-      return reply.send(response);
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
     }
   });
 
@@ -177,17 +169,14 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
     try {
       await configManager.resetWaveLogConfig();
       const config = configManager.getWaveLogConfig();
-      
+
       // 重新初始化WaveLog服务
       waveLogManager.initializeService(config);
-      
+
       return reply.send(config);
     } catch (error) {
-      fastify.log.error('重置WaveLog配置失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '重置配置失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -198,29 +187,33 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
   fastify.post('/upload', async (request: FastifyRequest<{ Body: WaveLogQSOUploadRequest }>, reply: FastifyReply) => {
     try {
       const uploadRequest = WaveLogQSOUploadRequestSchema.parse(request.body);
-      
+
       const service = waveLogManager.getService();
       if (!service) {
-        return reply.status(400).send({
-          success: false,
-          message: 'WaveLog服务未初始化，请先配置WaveLog设置'
+        // 📊 Day14：服务未初始化使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.NOT_INITIALIZED,
+          message: 'WaveLog服务未初始化',
+          userMessage: '请先配置WaveLog设置',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['在设置页面配置WaveLog URL和API密钥', '确保WaveLog服务已启用'],
         });
       }
 
       // 获取要上传的QSO记录
       // 这需要从LogManager获取具体的QSO记录
       // TODO: 实现从LogManager获取QSO记录的逻辑
-      
-      return reply.status(501).send({
-        success: false,
-        message: '手动上传功能待实现'
+
+      throw new RadioError({
+        code: RadioErrorCode.UNSUPPORTED_MODE,
+        message: '手动上传功能待实现',
+        userMessage: '此功能正在开发中',
+        severity: RadioErrorSeverity.WARNING,
+        suggestions: ['使用自动同步功能', '等待后续版本更新'],
       });
     } catch (error) {
-      fastify.log.error('上传QSO到WaveLog失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '上传失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -231,12 +224,16 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
   fastify.post('/sync', async (request: FastifyRequest<{ Body: WaveLogSyncRequest }>, reply: FastifyReply) => {
     try {
       const syncRequest = WaveLogSyncRequestSchema.parse(request.body);
-      
+
       const service = waveLogManager.getService();
       if (!service) {
-        return reply.status(400).send({
-          success: false,
-          message: 'WaveLog服务未初始化，请先配置WaveLog设置'
+        // 📊 Day14：服务未初始化使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.NOT_INITIALIZED,
+          message: 'WaveLog服务未初始化',
+          userMessage: '请先配置WaveLog设置',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['在设置页面配置WaveLog URL和API密钥', '确保WaveLog服务已启用'],
         });
       }
 
@@ -259,7 +256,7 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
           // 双向完整同步：先下载后上传
           const downloadResult = await syncScheduler.triggerSync();
           const uploadResult = await handleManualUpload(service);
-          
+
           result = {
             success: downloadResult.success && uploadResult.success,
             message: `完整同步完成 - 下载: ${downloadResult.message}, 上传: ${uploadResult.message}`,
@@ -272,19 +269,20 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
           };
           break;
         default:
-          return reply.status(400).send({
-            success: false,
-            message: '不支持的同步操作类型'
+          // 📊 Day14：不支持的操作使用 RadioError
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_OPERATION,
+            message: `不支持的同步操作类型: ${syncRequest.operation}`,
+            userMessage: '不支持的同步操作类型',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['支持的操作类型：download（下载）、upload（上传）、full_sync（完整同步）'],
           });
       }
 
       return reply.send(result);
     } catch (error) {
-      fastify.log.error('WaveLog同步操作失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '同步操作失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -295,22 +293,22 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
   fastify.post('/diagnose', async (request: FastifyRequest<{ Body: WaveLogTestConnectionRequest }>, reply: FastifyReply) => {
     try {
       const testRequest = WaveLogTestConnectionRequestSchema.parse(request.body);
-      
+
       // 创建临时的WaveLog服务实例进行诊断
       const testConfig: WaveLogConfig = {
         enabled: true,
         url: testRequest.url,
         apiKey: testRequest.apiKey,
-        stationId: '', 
+        stationId: '',
         radioName: 'TX5DR',
         autoUploadQSO: true
       };
-      
+
       const testService = new WaveLogService(testConfig);
-      
+
       // 执行网络连接诊断
       const diagnosis = await testService.diagnoseConnection();
-      
+
       let additionalInfo = '';
       if (!diagnosis.reachable) {
         if (diagnosis.error?.includes('ENOTFOUND')) {
@@ -323,10 +321,10 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
           additionalInfo = '建议检查: 1) 网络连接 2) WaveLog服务器状态 3) URL配置';
         }
       }
-      
+
       return reply.send({
         success: diagnosis.reachable,
-        message: diagnosis.reachable ? 
+        message: diagnosis.reachable ?
           `连接诊断成功 - 响应时间: ${diagnosis.responseTime}ms, HTTP状态: ${diagnosis.httpStatus}` :
           `连接诊断失败 - ${diagnosis.error}`,
         diagnosis: {
@@ -335,11 +333,8 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
         }
       });
     } catch (error) {
-      fastify.log.error('WaveLog连接诊断失败:', error);
-      return reply.send({
-        success: false,
-        message: error instanceof Error ? error.message : '诊断失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
     }
   });
 
@@ -351,7 +346,7 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
     try {
       const config = configManager.getWaveLogConfig();
       const isServiceAvailable = waveLogManager.isServiceAvailable();
-      
+
       // 获取同步调度器状态
       let schedulerStatus = null;
       try {
@@ -361,7 +356,7 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
       } catch (error) {
         fastify.log.warn('获取同步调度器状态失败:', error);
       }
-      
+
       return reply.send({
         enabled: config.enabled,
         configured: !!(config.url && config.apiKey && config.stationId),
@@ -371,11 +366,8 @@ export async function waveLogRoutes(fastify: FastifyInstance) {
         scheduler: schedulerStatus
       });
     } catch (error) {
-      fastify.log.error('获取WaveLog状态失败:', error);
-      return reply.status(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '获取状态失败'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 }

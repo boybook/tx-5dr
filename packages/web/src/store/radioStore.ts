@@ -3,6 +3,13 @@ import { addToast } from '@heroui/toast';
 import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus, QSORecord, LogBookStatistics, MeterData } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
+import {
+  showErrorToast,
+  createRetryConnectionAction,
+  createRetryAction,
+  createRefreshStatusAction,
+  isRetryableError
+} from '../utils/errorToast';
 
 // ===== 连接状态管理 =====
 export interface ConnectionState {
@@ -463,8 +470,104 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       decodeError: (errorInfo: any) => {
         radioDispatch({ type: 'decodeError', payload: errorInfo });
       },
-      error: (error: Error) => {
-        radioDispatch({ type: 'error', payload: error });
+      error: (data: any) => {
+        // 适配新的增强错误格式
+        const {
+          message,            // 技术错误信息（供开发者/日志）
+          userMessage,        // 用户友好提示（供UI显示）⭐ 新增
+          suggestions = [],   // 操作建议数组 ⭐ 新增
+          severity = 'error', // 错误严重程度 ⭐ 新增
+          code,               // 错误代码 ⭐ 新增
+          timestamp,          // 时间戳
+          context             // 错误上下文 ⭐ 新增
+        } = data;
+
+        // 根据错误代码创建操作按钮
+        let action: { label: string; handler: () => void } | undefined;
+
+        // 处理连接失败错误
+        if (code === 'CONNECTION_FAILED' || code === 'RADIO_CONNECTION_FAILED') {
+          action = createRetryConnectionAction(() => {
+            console.log('🔄 用户点击重试连接');
+            if (radioServiceRef.current) {
+              // 尝试重新连接电台
+              radioServiceRef.current.wsClientInstance.send('connectRadio', {});
+            }
+          });
+        }
+        // 处理引擎启动失败
+        else if (code === 'ENGINE_START_FAILED') {
+          action = createRetryAction(() => {
+            console.log('🔄 用户点击重试启动引擎');
+            if (radioServiceRef.current) {
+              radioServiceRef.current.startDecoding();
+            }
+          });
+        }
+        // 处理超时错误
+        else if (code === 'TIMEOUT') {
+          action = createRetryAction(() => {
+            console.log('🔄 用户点击重试操作');
+            // 注意：这里需要记录上次失败的操作才能重试
+            // 暂时只是显示提示
+            addToast({
+              title: '提示',
+              description: '请手动重试刚才的操作',
+              color: 'primary',
+              timeout: 3000
+            });
+          });
+        }
+        // 处理状态冲突
+        else if (code === 'STATE_CONFLICT') {
+          action = createRefreshStatusAction(() => {
+            console.log('🔄 用户点击刷新状态');
+            if (radioServiceRef.current) {
+              radioServiceRef.current.getSystemStatus();
+            }
+          });
+        }
+        // 处理资源繁忙
+        else if (code === 'RESOURCE_BUSY') {
+          action = createRetryAction(() => {
+            console.log('🔄 用户点击重试（资源繁忙）');
+            addToast({
+              title: '提示',
+              description: '请稍后再试',
+              color: 'primary',
+              timeout: 2000
+            });
+          });
+        }
+        // 其他可重试错误
+        else if (isRetryableError(code)) {
+          action = createRetryAction(() => {
+            console.log(`🔄 用户点击重试（错误代码：${code}）`);
+            addToast({
+              title: '提示',
+              description: '请手动重试刚才的操作',
+              color: 'primary',
+              timeout: 3000
+            });
+          });
+        }
+
+        // 显示用户友好的错误 Toast
+        showErrorToast({
+          userMessage: userMessage || message || '发生未知错误',
+          suggestions,
+          severity,
+          code,
+          technicalDetails: message,
+          context,
+          action  // 传递操作按钮
+        });
+
+        // 保持向后兼容：dispatch error action（用于日志记录）
+        radioDispatch({
+          type: 'error',
+          payload: data instanceof Error ? data : new Error(message || '未知错误')
+        });
       },
       slotPackUpdated: (slotPack: SlotPack) => {
         slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });

@@ -32,7 +32,13 @@ jobs:
             arch: arm64
             build_command: make
             artifact_name: tx-5dr-macos-arm64
-            
+
+          - os: macos-15-intel
+            platform: darwin
+            arch: x64
+            build_command: make
+            artifact_name: tx-5dr-macos-x64
+
           - os: ubuntu-latest
             platform: linux
             arch: x64
@@ -143,7 +149,7 @@ jobs:
         run: node scripts/generate-ico.js
 
       - name: Import Code Signing Certificate (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.platform == 'darwin'
         env:
           MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -223,17 +229,29 @@ jobs:
 
       # macOS: fix wsjtx-lib prebuilt dylib install_names to load from its own folder
       - name: Patch wsjtx-lib dylib install names (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.platform == 'darwin'
         shell: bash
         run: |
           set -euo pipefail
           echo "Patching wsjtx-lib install names..."
           ROOT=$(pwd)
-          PREBUILT_DIR="$ROOT/node_modules/wsjtx-lib/prebuilds/darwin-arm64"
+          ARCH="${{ matrix.arch }}"
+          PREBUILT_DIR="$ROOT/node_modules/wsjtx-lib/prebuilds/darwin-${ARCH}"
           if [ ! -d "$PREBUILT_DIR" ]; then
             echo "wsjtx-lib prebuild dir not found: $PREBUILT_DIR"
             exit 0
           fi
+
+          # 自动检测 Homebrew 路径（Intel: /usr/local, Apple Silicon: /opt/homebrew）
+          if [ -d "/opt/homebrew" ]; then
+            HOMEBREW_PREFIX="/opt/homebrew"
+          elif [ -d "/usr/local/Homebrew" ]; then
+            HOMEBREW_PREFIX="/usr/local"
+          else
+            echo "⚠️ Warning: Homebrew not found, trying default paths..."
+            HOMEBREW_PREFIX="/opt/homebrew"  # 默认使用 ARM64 路径
+          fi
+          echo "✅ 使用 Homebrew 路径: $HOMEBREW_PREFIX"
 
           # Ensure libquadmath and libgcc_s are present (copy from Homebrew GCC)
           GCC_PREFIX=$(brew --prefix gcc@14 || brew --prefix gcc)
@@ -250,17 +268,17 @@ jobs:
           [ -f libquadmath.0.dylib ] && install_name_tool -id @loader_path/libquadmath.0.dylib libquadmath.0.dylib || true
           [ -f libgcc_s.1.1.dylib ] && install_name_tool -id @loader_path/libgcc_s.1.1.dylib libgcc_s.1.1.dylib || true
 
-          # Fix dependencies to @loader_path
-          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f.3.dylib @loader_path/libfftw3f.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
-          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f_threads.3.dylib @loader_path/libfftw3f_threads.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          # Fix dependencies to @loader_path (支持两种路径：/opt/homebrew 和 /usr/local)
+          install_name_tool -change ${HOMEBREW_PREFIX}/opt/fftw/lib/libfftw3f.3.dylib @loader_path/libfftw3f.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change ${HOMEBREW_PREFIX}/opt/fftw/lib/libfftw3f_threads.3.dylib @loader_path/libfftw3f_threads.3.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
           # GCC dylibs may vary by version; try both gcc@14 and generic gcc paths
-          install_name_tool -change /opt/homebrew/opt/gcc@14/lib/gcc/14/libgfortran.5.dylib @loader_path/libgfortran.5.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
-          install_name_tool -change /opt/homebrew/opt/gcc/lib/gcc/*/libgfortran.5.dylib @loader_path/libgfortran.5.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
-          install_name_tool -change /opt/homebrew/opt/gcc@14/lib/gcc/14/libquadmath.0.dylib @loader_path/libquadmath.0.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
-          install_name_tool -change /opt/homebrew/opt/gcc/lib/gcc/*/libquadmath.0.dylib @loader_path/libquadmath.0.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change ${HOMEBREW_PREFIX}/opt/gcc@14/lib/gcc/14/libgfortran.5.dylib @loader_path/libgfortran.5.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change ${HOMEBREW_PREFIX}/opt/gcc/lib/gcc/*/libgfortran.5.dylib @loader_path/libgfortran.5.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change ${HOMEBREW_PREFIX}/opt/gcc@14/lib/gcc/14/libquadmath.0.dylib @loader_path/libquadmath.0.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
+          install_name_tool -change ${HOMEBREW_PREFIX}/opt/gcc/lib/gcc/*/libquadmath.0.dylib @loader_path/libquadmath.0.dylib wsjtx_lib_nodejs.node 2>/dev/null || true
 
           # Fix secondary deps
-          install_name_tool -change /opt/homebrew/opt/fftw/lib/libfftw3f.3.dylib @loader_path/libfftw3f.3.dylib libfftw3f_threads.3.dylib 2>/dev/null || true
+          install_name_tool -change ${HOMEBREW_PREFIX}/opt/fftw/lib/libfftw3f.3.dylib @loader_path/libfftw3f.3.dylib libfftw3f_threads.3.dylib 2>/dev/null || true
           install_name_tool -change @rpath/libquadmath.0.dylib @loader_path/libquadmath.0.dylib libgfortran.5.dylib 2>/dev/null || true
           install_name_tool -change @rpath/libgcc_s.1.1.dylib @loader_path/libgcc_s.1.1.dylib libgfortran.5.dylib 2>/dev/null || true
           set -e
@@ -278,14 +296,14 @@ jobs:
           DEBUG: electron-osx-sign*
         run: |
           # macOS: 增加文件描述符限制,避免 EMFILE 错误
-          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+          if [ "${{ matrix.platform }}" = "darwin" ]; then
             echo "🔧 增加文件描述符限制..."
             ulimit -n 10240
             echo "✅ 文件描述符限制已设置为: $(ulimit -n)"
           fi
 
           # macOS: 解锁钥匙串并提取证书 identity
-          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+          if [ "${{ matrix.platform }}" = "darwin" ]; then
             echo "🔓 解锁钥匙串并提取证书..."
             security unlock-keychain -p actions temp.keychain
 
@@ -434,9 +452,13 @@ jobs:
 
             ### 📦 下载说明
 
-            #### macOS (ARM64)
+            #### macOS (ARM64 - Apple Silicon)
             - **DMG 安装包**: `TX-5DR-nightly-macos-arm64.dmg` - 推荐用于安装
             - **ZIP 便携版**: `TX-5DR-nightly-macos-arm64.zip` - 解压即用
+
+            #### macOS (x64 - Intel)
+            - **DMG 安装包**: `TX-5DR-nightly-macos-x64.dmg` - 推荐用于安装
+            - **ZIP 便携版**: `TX-5DR-nightly-macos-x64.zip` - 解压即用
 
             #### Linux (x64)
             - **DEB 包** (Ubuntu/Debian): `TX-5DR-nightly-linux-x64.deb`
@@ -482,9 +504,13 @@ jobs:
 
             ### 📦 下载说明
 
-            #### macOS (ARM64)
+            #### macOS (ARM64 - Apple Silicon)
             - **DMG 安装包**: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg` - 推荐
             - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.zip`
+
+            #### macOS (x64 - Intel)
+            - **DMG 安装包**: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.dmg` - 推荐
+            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.zip`
 
             #### Linux (x64)
             - **DEB 包** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb`

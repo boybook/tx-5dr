@@ -1,3 +1,7 @@
+/**
+ * 操作员管理API路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
+ */
 import { FastifyInstance } from 'fastify';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
@@ -13,6 +17,7 @@ import {
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
 /**
  * 智能分配音频频率
@@ -51,20 +56,16 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   fastify.get('/', async (request, reply) => {
     try {
       const operators = configManager.getOperatorsConfig();
-      
+
       const response = RadioOperatorListResponseSchema.parse({
         success: true,
         data: operators
       });
-      
+
       return reply.code(200).send(response);
     } catch (error: any) {
       fastify.log.error('获取操作员列表失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: '获取操作员列表失败',
-        error: error.message
-      });
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -73,27 +74,29 @@ export async function operatorRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       const operator = configManager.getOperatorConfig(id);
-      
+
       if (!operator) {
-        return reply.code(404).send({
-          success: false,
-          message: `操作员 ${id} 不存在`
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `操作员配置不存在: ${id}`,
+          userMessage: `操作员 ${id} 不存在`,
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            '检查操作员ID是否正确',
+            '使用 GET /api/operators 获取所有操作员列表'
+          ],
         });
       }
-      
+
       const response = RadioOperatorDetailResponseSchema.parse({
         success: true,
         data: operator
       });
-      
+
       return reply.code(200).send(response);
     } catch (error: any) {
       fastify.log.error('获取操作员详情失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: '获取操作员详情失败',
-        error: error.message
-      });
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -126,7 +129,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       };
 
       const newOperator = await configManager.addOperatorConfig(newOperatorData);
-      
+
       // 如果引擎正在运行，同步添加到引擎中
       try {
         await engine.operatorManager.syncAddOperator(newOperator);
@@ -134,30 +137,33 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       } catch (engineError) {
         fastify.log.warn(`📻 [API] 操作员配置已保存，但添加到引擎失败: ${engineError}`);
       }
-      
+
       const response = RadioOperatorActionResponseSchema.parse({
         success: true,
         message: '操作员创建成功',
         data: newOperator
       });
-      
+
       return reply.code(201).send(response);
     } catch (error: any) {
       fastify.log.error('创建操作员失败:', error);
-      
+
       if (error.name === 'ZodError') {
-        return reply.code(400).send({
-          success: false,
-          message: '请求数据格式错误',
-          errors: error.errors
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_CONFIG,
+          message: '操作员配置数据格式错误',
+          userMessage: '请求数据格式不正确',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            '检查必填字段: myCallsign',
+            '确保频率值在有效范围内 (0-4000 Hz)',
+            '参考 API 文档中的示例格式',
+          ],
+          context: { errors: error.errors },
         });
       }
-      
-      return reply.code(500).send({
-        success: false,
-        message: '创建操作员失败',
-        error: error.message
-      });
+
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -170,13 +176,13 @@ export async function operatorRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       const updates = UpdateRadioOperatorRequestSchema.parse(request.body);
-      
+
       // 移除呼号冲突检查 - 支持相同呼号的多操作员
       // 相同呼号的多操作员会共享同一个通联日志本
-      
+
       // 更新配置
       const updatedOperator = await configManager.updateOperatorConfig(id, updates);
-      
+
       // 同步更新到引擎中
       try {
         await engine.operatorManager.syncUpdateOperator(updatedOperator);
@@ -184,35 +190,45 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       } catch (engineError) {
         fastify.log.warn(`📻 [API] 操作员配置已更新，但同步到引擎失败: ${engineError}`);
       }
-      
+
       const response = RadioOperatorActionResponseSchema.parse({
         success: true,
         message: '操作员更新成功',
         data: updatedOperator
       });
-      
+
       return reply.code(200).send(response);
     } catch (error: any) {
       fastify.log.error('更新操作员失败:', error);
-      
+
       if (error.name === 'ZodError') {
-        return reply.code(400).send({
-          success: false,
-          message: '请求数据格式错误',
-          errors: error.errors
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_CONFIG,
+          message: '操作员更新数据格式错误',
+          userMessage: '请求数据格式不正确',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            '检查字段类型是否正确',
+            '确保频率值在有效范围内 (0-4000 Hz)',
+            '参考 API 文档中的更新示例',
+          ],
+          context: { errors: error.errors },
         });
-      } else if (error.message.includes('不存在')) {
-        return reply.code(404).send({
-          success: false,
-          message: error.message
-        });
-      } else {
-        return reply.code(500).send({
-          success: false,
-          message: '更新操作员失败',
-          error: error.message
+      } else if (error instanceof Error && error.message.includes('不存在')) {
+        const operatorId = (request.params as any).id;
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `操作员不存在: ${operatorId}`,
+          userMessage: error.message,
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            '检查操作员ID是否正确',
+            '使用 GET /api/operators 获取所有操作员列表',
+          ],
         });
       }
+
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -220,10 +236,10 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   fastify.delete<{ Params: { id: string } }>('/:id', async (request, reply) => {
     try {
       const { id } = request.params;
-      
+
       // 删除配置
       await configManager.deleteOperatorConfig(id);
-      
+
       // 从引擎中移除操作员
       try {
         await engine.operatorManager.syncRemoveOperator(id);
@@ -231,25 +247,40 @@ export async function operatorRoutes(fastify: FastifyInstance) {
       } catch (engineError) {
         fastify.log.warn(`📻 [API] 操作员配置已删除，但从引擎移除失败: ${engineError}`);
       }
-      
+
       return reply.code(200).send({
         success: true,
         message: '操作员删除成功'
       });
     } catch (error: any) {
       fastify.log.error('删除操作员失败:', error);
-      if (error.message.includes('不存在') || error.message.includes('不能删除')) {
-        return reply.code(400).send({
-          success: false,
-          message: error.message
+
+      if (error instanceof Error && error.message.includes('不存在')) {
+        const operatorId = (request.params as any).id;
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `操作员不存在: ${operatorId}`,
+          userMessage: error.message,
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            '检查操作员ID是否正确',
+            '使用 GET /api/operators 获取所有操作员列表',
+          ],
         });
-      } else {
-        return reply.code(500).send({
-          success: false,
-          message: '删除操作员失败',
-          error: error.message
+      } else if (error instanceof Error && error.message.includes('不能删除')) {
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_CONFIG,
+          message: `操作员删除受限: ${error.message}`,
+          userMessage: error.message,
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            '检查是否为默认操作员（默认操作员不能删除）',
+            '确保操作员未在运行中',
+          ],
         });
       }
+
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -257,20 +288,16 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string } }>('/:id/start', async (request, reply) => {
     try {
       const { id } = request.params;
-      
+
       engine.operatorManager.startOperator(id);
-      
+
       return reply.code(200).send({
         success: true,
         message: '操作员启动成功'
       });
     } catch (error: any) {
       fastify.log.error('启动操作员失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: '启动操作员失败',
-        error: error.message
-      });
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -278,20 +305,16 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { id: string } }>('/:id/stop', async (request, reply) => {
     try {
       const { id } = request.params;
-      
+
       engine.operatorManager.stopOperator(id);
-      
+
       return reply.code(200).send({
         success: true,
         message: '操作员停止成功'
       });
     } catch (error: any) {
       fastify.log.error('停止操作员失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: '停止操作员失败',
-        error: error.message
-      });
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -299,27 +322,30 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/:id/status', async (request, reply) => {
     try {
       const { id } = request.params;
-      
+
       const operatorStatus = engine.operatorManager.getOperatorsStatus().find(op => op.id === id);
-      
+
       if (!operatorStatus) {
-        return reply.code(404).send({
-          success: false,
-          message: `操作员 ${id} 不存在或未启动`
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `操作员状态不可用: ${id}`,
+          userMessage: `操作员 ${id} 不存在或未启动`,
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            '检查操作员ID是否正确',
+            '确保引擎已启动',
+            '使用 POST /api/operators/:id/start 启动操作员',
+          ],
         });
       }
-      
+
       return reply.code(200).send({
         success: true,
         data: operatorStatus
       });
     } catch (error: any) {
       fastify.log.error('获取操作员状态失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: '获取操作员状态失败',
-        error: error.message
-      });
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 } 

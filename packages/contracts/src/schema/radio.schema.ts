@@ -44,22 +44,59 @@ export const SerialConfigSchema = z.object({
 });
 
 /**
- * Hamlib配置Schema
+ * 网络 RigCtld 连接配置Schema
+ */
+export const NetworkConfigSchema = z.object({
+  host: z.string(),
+  port: z.number().int().min(1).max(65535),
+});
+
+/**
+ * ICOM WLAN 连接配置Schema
+ */
+export const IcomWlanConfigSchema = z.object({
+  ip: z.string(),
+  port: z.number().int().min(1).max(65535),
+  userName: z.string().optional(),
+  password: z.string().optional(),
+  /**
+   * 数据模式（Data Mode）
+   * 启用时使用 USB-D 等数字模式，适用于 FT8/FT4 等数字通信
+   * 默认值: true
+   */
+  dataMode: z.boolean().optional().default(true),
+});
+
+/**
+ * 串口连接配置Schema
+ */
+export const SerialConnectionConfigSchema = z.object({
+  path: z.string(),
+  rigModel: z.number().int(),
+  serialConfig: SerialConfigSchema.optional(),
+});
+
+/**
+ * Hamlib配置Schema - 嵌套对象结构
+ *
+ * 设计理念：
+ * - type: 当前使用的连接类型
+ * - network/icomWlan/serial: 各连接类型的独立配置对象
+ * - 所有配置对象共存，切换连接类型时保留历史配置
+ * - 根据 type 字段读取对应的配置对象
  */
 export const HamlibConfigSchema = z.object({
   type: z.enum(['none', 'network', 'serial', 'icom-wlan']),
+
   // 网络模式配置
-  host: z.string().optional(),
-  port: z.number().optional(),
-  // 串口模式配置
-  path: z.string().optional(),
-  rigModel: z.number().optional(),
-  serialConfig: SerialConfigSchema.optional(),
+  network: NetworkConfigSchema.optional(),
+
   // ICOM WLAN 模式配置
-  ip: z.string().optional(),
-  wlanPort: z.number().optional(),
-  userName: z.string().optional(),
-  password: z.string().optional(),
+  icomWlan: IcomWlanConfigSchema.optional(),
+
+  // 串口模式配置
+  serial: SerialConnectionConfigSchema.optional(),
+
   // 发射时序补偿（毫秒）- 用于补偿电台和网络的处理延迟
   // 正值表示提前发射，负值表示延后发射
   // 范围限制：-1000~1000ms，适用于各种网络和设备延迟场景
@@ -122,6 +159,9 @@ export const TestResponseSchema = z.object({
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;
 export type FrequencyListResponse = z.infer<typeof FrequencyListResponseSchema>;
 export type SerialConfig = z.infer<typeof SerialConfigSchema>;
+export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;
+export type IcomWlanConfig = z.infer<typeof IcomWlanConfigSchema>;
+export type SerialConnectionConfig = z.infer<typeof SerialConnectionConfigSchema>;
 export type HamlibConfig = z.infer<typeof HamlibConfigSchema>;
 export type RadioConfigResponse = z.infer<typeof RadioConfigResponseSchema>;
 export type SupportedRig = z.infer<typeof SupportedRigSchema>;

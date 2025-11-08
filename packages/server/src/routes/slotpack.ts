@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import type { SlotPack } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
 /**
  * 时隙包管理 API 路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
  */
 export async function slotpackRoutes(fastify: FastifyInstance) {
   const clockManager = DigitalRadioEngine.getInstance();
@@ -19,11 +21,8 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('获取时隙包失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
   
@@ -33,28 +32,29 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
       const { slotId } = request.params as { slotId: string };
       
       const slotPack = clockManager.getSlotPack(slotId);
-      
+
       if (!slotPack) {
-        return reply.status(404).send({
-          success: false,
-          error: '时隙包未找到'
+        // 📊 Day14：资源未找到使用 RadioError
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `时隙包 ${slotId} 未找到`,
+          userMessage: '未找到指定的时隙包',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['检查时隙ID是否正确', '查看活跃的时隙包列表'],
         });
       }
-      
+
       return {
         success: true,
         data: slotPack,
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('获取时隙包失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
-  
+
   // 获取时隙包统计信息
   fastify.get('/slotpacks/stats', async (request, reply) => {
     try {
@@ -76,11 +76,8 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('获取时隙包统计失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 } 

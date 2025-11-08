@@ -30,9 +30,10 @@ import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash } from '@fortawesome/free-solid-svg-icons';
 import type { QSORecord, LogBookStatistics, WaveLogSyncResponse } from '@tx5dr/contracts';
-import { api, WSClient } from '@tx5dr/core';
+import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
+import { showErrorToast } from '../utils/errorToast';
 
 interface LogbookViewerProps {
   operatorId: string;
@@ -227,33 +228,35 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setIsSyncing(true);
       setSyncError(null);
       setSyncSuccess(null);
-      
+
       // 调用WaveLog同步API
-      const response = await fetch('/api/wavelog/sync', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ operation })
-      });
-      
-      const result = await response.json() as WaveLogSyncResponse;
-      
+      const result = await api.syncWaveLog(operation) as WaveLogSyncResponse;
+
       if (result.success) {
         setSyncSuccess(result.message);
         // 同步成功后重新加载QSO数据
         await loadQSOs();
         await loadStatistics();
-        
+
         console.log(`📊 WaveLog同步成功: ${operation}`, result);
       } else {
         setSyncError(result.message || '同步失败');
       }
-      
+
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'WaveLog同步失败';
       console.error('WaveLog同步失败:', error);
-      setSyncError(errorMessage);
+      if (error instanceof ApiError) {
+        setSyncError(error.userMessage);
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code
+        });
+      } else {
+        const errorMessage = error instanceof Error ? error.message : 'WaveLog同步失败';
+        setSyncError(errorMessage);
+      }
     } finally {
       setIsSyncing(false);
     }

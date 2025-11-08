@@ -24,13 +24,57 @@ TX-5DR React 前端：现代化数字电台界面，实时频谱显示、FT8 监
 
 ### WebSocket 事件订阅指南
 
+#### 推荐方式: 使用 useWSEvent Hook (NEW ✨)
+
+**强烈推荐**使用 `useWSEvent` 和 `useWSEvents` Hook 来订阅事件，自动处理清理逻辑:
+
+```typescript
+import { useWSEvent, useWSEvents } from '../hooks/useWSEvent';
+import { useConnection } from '../store/radioStore';
+
+// 单事件订阅
+function MyComponent() {
+  const connection = useConnection();
+  const [data, setData] = useState(null);
+
+  useWSEvent(
+    connection.state.radioService,
+    'spectrumData',
+    (spectrum) => setData(spectrum)
+  );
+
+  return <div>{/* render */}</div>;
+}
+
+// 多事件批量订阅
+function MultiEventComponent() {
+  const connection = useConnection();
+
+  useWSEvents(connection.state.radioService, {
+    spectrumData: (data) => console.log('频谱:', data),
+    meterData: (data) => console.log('数值表:', data),
+    systemStatus: (status) => console.log('系统状态:', status)
+  });
+
+  return <div>{/* render */}</div>;
+}
+```
+
+**优势**:
+- ✅ 自动清理事件监听器,防止内存泄漏
+- ✅ 代码更简洁,减少样板代码
+- ✅ 完整的 TypeScript 类型支持
+- ✅ 支持依赖数组,灵活控制重新订阅
+
+详细用法请查看: `packages/web/src/hooks/useWSEvent.example.md`
+
 #### 架构原则
 - **RadioService** 是轻量级包装器，提供 wsClient 实例访问和命令方法
 - **组件直接订阅 WSClient 事件**，通过 `radioService.wsClientInstance`
 - **支持多监听器**，同一事件可被多个组件独立订阅（如 RadioProvider + 组件同时订阅）
-- **必须手动清理**，组件卸载时调用 `offWSEvent()` 避免内存泄漏
+- **内存安全**: 使用 `useWSEvent` Hook 自动清理,或手动配对调用 `onWSEvent` / `offWSEvent`
 
-#### 基本用法
+#### 传统方式 (手动管理)
 
 **1. 在 RadioProvider 中订阅全局状态事件**
 ```typescript

@@ -4,6 +4,8 @@ import {
   CardBody,
   Switch,
 } from '@heroui/react';
+import { api, ApiError } from '@tx5dr/core';
+import { showErrorToast } from '../utils/errorToast';
 
 export interface SystemSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -32,11 +34,7 @@ export const SystemSettings = forwardRef<
 
   const loadSettings = async () => {
     try {
-      const response = await fetch('/api/settings/ft8');
-      if (!response.ok) {
-        throw new Error('加载配置失败');
-      }
-      const result = await response.json();
+      const result = await api.getFT8Settings();
       const decodeValue = result.data?.decodeWhileTransmitting ?? false;
       const spectrumValue = result.data?.spectrumWhileTransmitting ?? true;
 
@@ -45,8 +43,18 @@ export const SystemSettings = forwardRef<
       setSpectrumWhileTransmitting(spectrumValue);
       setOriginalSpectrumValue(spectrumValue);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载配置失败');
       console.error('加载FT8配置失败:', err);
+      if (err instanceof ApiError) {
+        setError(err.userMessage);
+        showErrorToast({
+          userMessage: err.userMessage,
+          suggestions: err.suggestions,
+          severity: err.severity,
+          code: err.code
+        });
+      } else {
+        setError('加载配置失败');
+      }
     }
   };
 
@@ -63,20 +71,11 @@ export const SystemSettings = forwardRef<
     setIsSaving(true);
     setError('');
     try {
-      const response = await fetch('/api/settings/ft8', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          decodeWhileTransmitting,
-          spectrumWhileTransmitting,
-        }),
+      const result = await api.updateFT8Settings({
+        decodeWhileTransmitting,
+        spectrumWhileTransmitting,
       });
 
-      if (!response.ok) {
-        throw new Error('保存配置失败');
-      }
-
-      const result = await response.json();
       if (result.success) {
         setOriginalDecodeValue(decodeWhileTransmitting);
         setOriginalSpectrumValue(spectrumWhileTransmitting);
@@ -85,7 +84,18 @@ export const SystemSettings = forwardRef<
         throw new Error(result.message || '保存配置失败');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存配置失败');
+      console.error('保存FT8配置失败:', err);
+      if (err instanceof ApiError) {
+        setError(err.userMessage);
+        showErrorToast({
+          userMessage: err.userMessage,
+          suggestions: err.suggestions,
+          severity: err.severity,
+          code: err.code
+        });
+      } else {
+        setError(err instanceof Error ? err.message : '保存配置失败');
+      }
       throw err;
     } finally {
       setIsSaving(false);

@@ -5,6 +5,7 @@ import type { AudioBufferProvider } from '@tx5dr/core';
 import type { FFTWorkerTask, FFTWorkerResult } from './fft-worker.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { globalEventBus } from '../utils/EventBus.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -271,7 +272,17 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       this.stats.totalProcessingTime += result.processingTime;
       this.stats.averageProcessingTime = this.stats.totalProcessingTime / this.stats.totalAnalyses;
 
-      this.emit('spectrumReady', result.spectrum);
+      // 📝 EventBus 优化：双路径策略
+      // 原路径 (3层)：SpectrumScheduler → DigitalRadioEngine
+      //   - 用途：DigitalRadioEngine 健康检查（每100次采样）
+      //   - 事件名：spectrumReady
+      // EventBus (2层)：SpectrumScheduler → EventBus → WSServer
+      //   - 用途：WebSocket 广播到前端（~6.7Hz 高频）
+      //   - 事件名：bus:spectrumData
+      //   - 性能：直达，减少33%开销
+
+      this.emit('spectrumReady', result.spectrum);  // 原路径
+      globalEventBus.emit('bus:spectrumData', result.spectrum);  // EventBus 直达
     } catch (error) {
       console.error('频谱分析失败:', error);
       this.stats.errorCount++;

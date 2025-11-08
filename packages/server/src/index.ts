@@ -4,6 +4,21 @@ import { initializeConsoleLogger, ConsoleLogger } from './utils/console-logger.j
 
 const PORT = Number(process.env.PORT) || 4000;
 
+// ===== XState 可视化调试（仅开发环境） =====
+// XState v5 使用 @statelyai/inspect 和 inspect API
+if (process.env.NODE_ENV === 'development') {
+  import('@statelyai/inspect')
+    .then(({ createBrowserInspector }) => {
+      const inspector = createBrowserInspector();
+      console.log('📊 [XState Inspect] 可视化调试已启用 (XState v5)');
+      console.log('📊 [XState Inspect] 访问: https://stately.ai/inspect');
+      console.log('📊 [XState Inspect] 提示: 在浏览器中打开上述链接查看状态机可视化');
+    })
+    .catch((err) => {
+      console.warn('⚠️  [XState Inspect] 初始化失败（可忽略）:', err.message);
+    });
+}
+
 // ===== 全局错误处理器 =====
 // 防止未捕获的 Promise rejection 导致进程崩溃
 
@@ -35,7 +50,7 @@ function isRecoverableError(error: any): { recoverable: boolean; category: strin
   // 电台设备错误（可恢复）- 通过堆栈追踪识别而非关键词
   if (error.stack) {
     const isRadioError = error.stack.includes('PhysicalRadioManager') ||
-                        error.stack.includes('IcomWlanManager') ||
+                        error.stack.includes('IcomWlanConnection') ||
                         error.stack.includes('radio/');
     if (isRadioError) {
       return { recoverable: true, category: 'radio-device' };

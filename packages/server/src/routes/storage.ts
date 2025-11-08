@@ -1,8 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
 /**
  * 存储管理路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
  */
 export async function storageRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
@@ -13,7 +15,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
       const slotPackManager = engine.getSlotPackManager();
       const stats = await slotPackManager.getPersistenceStats();
       const isEnabled = slotPackManager.isPersistenceEnabled();
-      
+
       return {
         success: true,
         data: {
@@ -23,11 +25,8 @@ export async function storageRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('获取存储状态失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -35,17 +34,21 @@ export async function storageRoutes(fastify: FastifyInstance) {
   fastify.post('/storage/toggle', async (request, reply) => {
     try {
       const { enabled } = request.body as { enabled: boolean };
-      
+
+      // 📊 Day14：参数验证使用 RadioError
       if (typeof enabled !== 'boolean') {
-        return reply.status(400).send({
-          success: false,
-          error: '参数错误：enabled 必须是布尔值'
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_CONFIG,
+          message: '参数错误：enabled 必须是布尔值',
+          userMessage: '请提供有效的开关状态',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['enabled 参数应为 true 或 false'],
         });
       }
 
       const slotPackManager = engine.getSlotPackManager();
       slotPackManager.setPersistenceEnabled(enabled);
-      
+
       return {
         success: true,
         data: {
@@ -54,11 +57,8 @@ export async function storageRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('切换存储状态失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -66,7 +66,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   fastify.post('/storage/flush', async (request, reply) => {
     try {
       await engine.getSlotPackManager().flushPersistence();
-      
+
       return {
         success: true,
         data: {
@@ -75,11 +75,8 @@ export async function storageRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('刷新缓冲区失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -87,7 +84,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   fastify.get('/storage/dates', async (request, reply) => {
     try {
       const dates = await engine.getSlotPackManager().getAvailableStorageDates();
-      
+
       return {
         success: true,
         data: {
@@ -97,11 +94,8 @@ export async function storageRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('获取存储日期失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -109,17 +103,20 @@ export async function storageRoutes(fastify: FastifyInstance) {
   fastify.get('/storage/records/:date', async (request, reply) => {
     try {
       const { date } = request.params as { date: string };
-      
-      // 验证日期格式
+
+      // 📊 Day14：验证日期格式使用 RadioError
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        return reply.status(400).send({
-          success: false,
-          error: '日期格式错误，应为 YYYY-MM-DD'
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_CONFIG,
+          message: `日期格式错误: ${date}`,
+          userMessage: '日期格式不正确',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['日期格式应为 YYYY-MM-DD（例如：2025-11-02）'],
         });
       }
 
       const records = await engine.getSlotPackManager().readStoredRecords(date);
-      
+
       // 统计信息
       const totalSlots = records.length;
       const totalFrames = records.reduce((sum, record) => sum + record.slotPack.frames.length, 0);
@@ -143,11 +140,8 @@ export async function storageRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('读取存储记录失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -157,12 +151,12 @@ export async function storageRoutes(fastify: FastifyInstance) {
       const slotPackManager = engine.getSlotPackManager();
       const dates = await slotPackManager.getAvailableStorageDates();
       const stats = await slotPackManager.getPersistenceStats();
-      
+
       // 计算总体统计
       let totalRecords = 0;
       let totalFrames = 0;
       const recentDates = dates.slice(-7); // 最近7天
-      
+
       for (const date of recentDates) {
         try {
           const records = await slotPackManager.readStoredRecords(date);
@@ -187,11 +181,8 @@ export async function storageRoutes(fastify: FastifyInstance) {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error('获取存储摘要失败:', error);
-      return reply.status(500).send({
-        success: false,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 } 
