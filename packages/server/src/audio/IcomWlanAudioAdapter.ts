@@ -1,5 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
-import { IcomWlanManager } from '../radio/IcomWlanManager.js';
+import { IcomWlanConnection } from '../radio/connections/IcomWlanConnection.js';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 
 export interface IcomWlanAudioAdapterEvents {
@@ -12,15 +12,15 @@ export interface IcomWlanAudioAdapterEvents {
  * 负责音频数据的接收和发送（零重采样优化：ICOM 原生 12kHz）
  */
 export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvents> {
-  private icomManager: IcomWlanManager;
+  private icomConnection: IcomWlanConnection;
   private audioProvider: RingBufferAudioProvider;
   private icomSampleRate: number; // ICOM 采样率（12kHz）
   private isReceiving = false;
 
-  constructor(icomManager: IcomWlanManager) {
+  constructor(icomConnection: IcomWlanConnection) {
     super();
-    this.icomManager = icomManager;
-    this.icomSampleRate = icomManager.getAudioSampleRate(); // 12000
+    this.icomConnection = icomConnection;
+    this.icomSampleRate = icomConnection.getAudioSampleRate(); // 12000
 
     // 创建音频缓冲区提供者（使用 ICOM 原生采样率 12kHz）
     this.audioProvider = new RingBufferAudioProvider(this.icomSampleRate, this.icomSampleRate * 5);
@@ -40,7 +40,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
     console.log('🎤 [IcomWlanAudioAdapter] 开始接收音频...');
 
     // 订阅 ICOM 音频事件
-    this.icomManager.on('audioFrame', this.handleAudioFrame.bind(this));
+    this.icomConnection.on('audioFrame', this.handleAudioFrame.bind(this));
 
     this.isReceiving = true;
     console.log('✅ [IcomWlanAudioAdapter] 音频接收已启动');
@@ -58,7 +58,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
     console.log('🛑 [IcomWlanAudioAdapter] 停止接收音频...');
 
     // 取消订阅
-    this.icomManager.off('audioFrame', this.handleAudioFrame.bind(this));
+    this.icomConnection.off('audioFrame', this.handleAudioFrame.bind(this));
 
     this.isReceiving = false;
     console.log('✅ [IcomWlanAudioAdapter] 音频接收已停止');
@@ -92,7 +92,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
       console.log(`🔊 [IcomWlanAudioAdapter] 发送音频: ${samples.length} 样本 @ ${this.icomSampleRate}Hz（零重采样优化）`);
 
       // 直接发送到 ICOM 电台（已经是 12kHz，无需重采样）
-      await this.icomManager.sendAudio(samples);
+      await this.icomConnection.sendAudio(samples);
 
       console.log(`✅ [IcomWlanAudioAdapter] 音频发送成功`);
 

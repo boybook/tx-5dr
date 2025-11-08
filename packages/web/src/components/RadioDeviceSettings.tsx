@@ -75,9 +75,12 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
 
   // 更新串口配置
   const updateSerialConfig = (updates: Partial<SerialConfig>) => {
-    setConfig((prev: any) => ({ 
-      ...prev, 
-      serialConfig: { ...prev.serialConfig, ...updates }
+    setConfig((prev: any) => ({
+      ...prev,
+      serial: {
+        ...prev.serial,
+        serialConfig: { ...prev.serial?.serialConfig, ...updates }
+      }
     }));
     // 清除之前的测试结果
     setTestResult(null);
@@ -146,15 +149,15 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   <Input
                     label="主机地址"
                     placeholder="localhost"
-                    value={config.host || ''}
-                    onChange={e => updateConfig({ host: e.target.value })}
+                    value={config.network?.host || ''}
+                    onChange={e => updateConfig({ network: { ...config.network, host: e.target.value } })}
                   />
                   <Input
                     label="端口"
                     placeholder="4532"
                     type="number"
-                    value={config.port || ''}
-                    onChange={e => updateConfig({ port: Number(e.target.value) })}
+                    value={config.network?.port || ''}
+                    onChange={e => updateConfig({ network: { ...config.network, port: Number(e.target.value) } })}
                   />
                   <Divider />
                   <div className="flex gap-2">
@@ -164,7 +167,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="primary"
                       onPress={handleTestConnection}
                       isLoading={isTestingConnection}
-                      isDisabled={!config.host || !config.port}
+                      isDisabled={!config.network?.host || !config.network?.port}
                     >
                       {isTestingConnection ? '测试连接中...' : '测试连接'}
                     </Button>
@@ -174,7 +177,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.host || !config.port}
+                      isDisabled={!config.network?.host || !config.network?.port}
                     >
                       {isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>
@@ -279,11 +282,11 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   <Select
                     label="串口"
                     placeholder="选择串口"
-                    selectedKeys={config.path ? [config.path] : []}
+                    selectedKeys={config.serial?.path ? [config.serial.path] : []}
                     onSelectionChange={keys => {
                       const selectedKey = Array.from(keys)[0];
                       if (selectedKey) {
-                        updateConfig({ path: selectedKey });
+                        updateConfig({ serial: { ...config.serial, path: selectedKey as string } });
                       }
                     }}
                     variant="flat"
@@ -298,11 +301,11 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   <Autocomplete
                     label="电台型号"
                     placeholder="搜索或选择电台型号"
-                    selectedKey={config.rigModel ? String(config.rigModel) : null}
+                    selectedKey={config.serial?.rigModel ? String(config.serial.rigModel) : null}
                     onSelectionChange={selectedKey => {
                       if (selectedKey) {
                         console.log('📡 [RadioDeviceSettings] 选择电台型号:', selectedKey);
-                        updateConfig({ rigModel: Number(selectedKey) });
+                        updateConfig({ serial: { ...config.serial, rigModel: Number(selectedKey) } });
                       }
                     }}
                     variant="flat"
@@ -547,7 +550,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="primary"
                       onPress={handleTestConnection}
                       isLoading={isTestingConnection}
-                      isDisabled={!config.path || !config.rigModel}
+                      isDisabled={!config.serial?.path || !config.serial?.rigModel}
                     >
                       {isTestingConnection ? '测试连接中...' : '测试连接'}
                     </Button>
@@ -557,7 +560,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.path || !config.rigModel}
+                      isDisabled={!config.serial?.path || !config.serial?.rigModel}
                     >
                       {isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>
@@ -662,28 +665,28 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   <Input
                     label="IP 地址"
                     placeholder="192.168.1.100"
-                    value={config.ip || ''}
-                    onChange={e => updateConfig({ ip: e.target.value })}
+                    value={config.icomWlan?.ip || ''}
+                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, ip: e.target.value } })}
                   />
                   <Input
                     label="端口"
                     placeholder="50001"
                     type="number"
-                    value={config.wlanPort || ''}
-                    onChange={e => updateConfig({ wlanPort: Number(e.target.value) })}
+                    value={config.icomWlan?.port || ''}
+                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, port: Number(e.target.value) } })}
                   />
                   <Input
                     label="用户名"
                     placeholder="admin"
-                    value={config.userName || ''}
-                    onChange={e => updateConfig({ userName: e.target.value })}
+                    value={config.icomWlan?.userName || ''}
+                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, userName: e.target.value } })}
                   />
                   <Input
                     label="密码"
                     placeholder="密码"
                     type="password"
-                    value={config.password || ''}
-                    onChange={e => updateConfig({ password: e.target.value })}
+                    value={config.icomWlan?.password || ''}
+                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, password: e.target.value } })}
                   />
                   <Divider />
                   <div className="flex gap-2">
@@ -693,7 +696,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="primary"
                       onPress={handleTestConnection}
                       isLoading={isTestingConnection}
-                      isDisabled={!config.ip || !config.wlanPort || !config.userName || !config.password}
+                      isDisabled={!config.icomWlan?.ip || !config.icomWlan?.port || !config.icomWlan?.userName || !config.icomWlan?.password}
                     >
                       {isTestingConnection ? '测试连接中...' : '测试连接'}
                     </Button>
@@ -703,7 +706,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.ip || !config.wlanPort}
+                      isDisabled={!config.icomWlan?.ip || !config.icomWlan?.port}
                     >
                       {isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>

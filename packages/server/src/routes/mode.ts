@@ -2,7 +2,12 @@ import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ModeDescriptorSchema } from '@tx5dr/contracts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
+/**
+ * 模式管理API路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
+ */
 export async function modeRoutes(fastify: FastifyInstance) {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
 
@@ -15,11 +20,8 @@ export async function modeRoutes(fastify: FastifyInstance) {
         data: modes,
       });
     } catch (error) {
-      fastify.log.error('获取可用模式失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '未知错误',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -32,11 +34,8 @@ export async function modeRoutes(fastify: FastifyInstance) {
         data: status.currentMode,
       });
     } catch (error) {
-      fastify.log.error('获取当前模式失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '未知错误',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -78,19 +77,9 @@ export async function modeRoutes(fastify: FastifyInstance) {
         data: status.currentMode,
       });
     } catch (error) {
-      fastify.log.error('切换模式失败:', error);
-      
-      if (error instanceof Error && error.name === 'ZodError') {
-        return reply.code(400).send({
-          success: false,
-          message: '请求参数格式错误',
-        });
-      }
-      
-      return reply.code(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '未知错误',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      // Zod验证错误会被Fastify自动捕获，这里只处理操作失败
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 } 

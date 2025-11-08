@@ -1,14 +1,19 @@
 import { FastifyInstance } from 'fastify';
-import { 
-  AudioDevicesResponseSchema, 
-  AudioDeviceSettingsSchema, 
-  AudioDeviceSettingsResponseSchema 
+import {
+  AudioDevicesResponseSchema,
+  AudioDeviceSettingsSchema,
+  AudioDeviceSettingsResponseSchema
 } from '@tx5dr/contracts';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 
+/**
+ * 音频设备管理API路由
+ * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
+ */
 export async function audioRoutes(fastify: FastifyInstance) {
   const audioManager = AudioDeviceManager.getInstance();
   const configManager = ConfigManager.getInstance();
@@ -22,11 +27,8 @@ export async function audioRoutes(fastify: FastifyInstance) {
       const response = AudioDevicesResponseSchema.parse(devices);
       return reply.code(200).send(response);
     } catch (error) {
-      fastify.log.error('获取音频设备失败:', error);
-      return reply.code(500).send({
-        error: '获取音频设备失败',
-        message: error instanceof Error ? error.message : '未知错误',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.AUDIO_DEVICE_ERROR);
     }
   });
 
@@ -39,14 +41,11 @@ export async function audioRoutes(fastify: FastifyInstance) {
         success: true,
         currentSettings,
       });
-      
+
       return reply.code(200).send(response);
     } catch (error) {
-      fastify.log.error('获取音频设置失败:', error);
-      return reply.code(500).send({
-        error: '获取音频设置失败',
-        message: error instanceof Error ? error.message : '未知错误',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
@@ -63,19 +62,27 @@ export async function audioRoutes(fastify: FastifyInstance) {
       if (settings.inputDeviceName) {
         const inputDevice = await audioManager.getInputDeviceByName(settings.inputDeviceName);
         if (!inputDevice) {
-          return reply.code(400).send({
-            success: false,
+          // 📊 Day14：设备未找到使用 RadioError
+          throw new RadioError({
+            code: RadioErrorCode.DEVICE_NOT_FOUND,
             message: `指定的输入设备 "${settings.inputDeviceName}" 不存在`,
+            userMessage: '找不到指定的音频输入设备',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['检查设备名称是否正确', '查看可用的音频设备列表', '确保设备已连接'],
           });
         }
       }
-      
+
       if (settings.outputDeviceName) {
         const outputDevice = await audioManager.getOutputDeviceByName(settings.outputDeviceName);
         if (!outputDevice) {
-          return reply.code(400).send({
-            success: false,
+          // 📊 Day14：设备未找到使用 RadioError
+          throw new RadioError({
+            code: RadioErrorCode.DEVICE_NOT_FOUND,
             message: `指定的输出设备 "${settings.outputDeviceName}" 不存在`,
+            userMessage: '找不到指定的音频输出设备',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['检查设备名称是否正确', '查看可用的音频设备列表', '确保设备已连接'],
           });
         }
       }
@@ -108,22 +115,12 @@ export async function audioRoutes(fastify: FastifyInstance) {
           : '音频设备设置更新成功',
         currentSettings: updatedSettings,
       });
-      
+
       return reply.code(200).send(response);
     } catch (error) {
-      fastify.log.error('更新音频设置失败:', error);
-      
-      if (error instanceof Error && error.name === 'ZodError') {
-        return reply.code(400).send({
-          success: false,
-          message: '请求参数格式错误',
-        });
-      }
-      
-      return reply.code(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '未知错误',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      // Zod验证错误会被Fastify自动捕获，这里只处理操作失败
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
 
@@ -163,14 +160,11 @@ export async function audioRoutes(fastify: FastifyInstance) {
           : '音频设备设置已重置',
         currentSettings: resetSettings,
       });
-      
+
       return reply.code(200).send(response);
     } catch (error) {
-      fastify.log.error('重置音频设置失败:', error);
-      return reply.code(500).send({
-        success: false,
-        message: error instanceof Error ? error.message : '未知错误',
-      });
+      // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 } 

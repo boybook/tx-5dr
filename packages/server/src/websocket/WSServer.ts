@@ -1,25 +1,30 @@
 import { WSMessageType } from '@tx5dr/contracts';
-import type { 
-  DecodeErrorInfo, 
-  FT8Spectrum, 
-  ModeDescriptor, 
-  SlotInfo, 
-  SlotPack, 
-  SubWindowInfo, 
-  SystemStatus 
+import type {
+  DecodeErrorInfo,
+  FT8Spectrum,
+  ModeDescriptor,
+  SlotInfo,
+  SlotPack,
+  SubWindowInfo,
+  SystemStatus
 } from '@tx5dr/contracts';
 import { WSMessageHandler } from '@tx5dr/core';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import { globalEventBus } from '../utils/EventBus.js';
+import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
 /**
  * WebSocket连接包装器
  * 为每个客户端连接提供消息处理能力
  */
 export class WSConnection extends WSMessageHandler {
-  private ws: any; // WebSocket实例（支持不同的WebSocket库）
+  private ws: any; // WebSocket实例(支持不同的WebSocket库)
   private id: string;
   private enabledOperatorIds: Set<string> = new Set(); // 客户端启用的操作员ID列表
   private handshakeCompleted: boolean = false; // 握手是否完成
+
+  // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
+  private wsListeners: Map<string, (...args: any[]) => void> = new Map();
 
   constructor(ws: any, id: string) {
     super();
@@ -27,20 +32,26 @@ export class WSConnection extends WSMessageHandler {
     this.id = id;
 
     // 监听WebSocket消息
-    this.ws.on('message', (data: any) => {
+    const handleMessage = (data: any) => {
       const message = typeof data === 'string' ? data : data.toString();
       this.handleRawMessage(message);
-    });
+    };
+    this.ws.on('message', handleMessage);
+    this.wsListeners.set('message', handleMessage);
 
     // 监听WebSocket关闭
-    this.ws.on('close', () => {
+    const handleClose = () => {
       this.emitWSEvent('disconnected');
-    });
+    };
+    this.ws.on('close', handleClose);
+    this.wsListeners.set('close', handleClose);
 
     // 监听WebSocket错误
-    this.ws.on('error', (error: Error) => {
+    const handleError = (error: Error) => {
       this.emitWSEvent('error', error);
-    });
+    };
+    this.ws.on('error', handleError);
+    this.wsListeners.set('error', handleError);
   }
 
   /**
@@ -59,6 +70,14 @@ export class WSConnection extends WSMessageHandler {
    * 关闭连接
    */
   close(): void {
+    // 移除所有WebSocket事件监听器 (修复内存泄漏)
+    console.log(`🔧 [WSConnection] 连接 ${this.id} 移除 ${this.wsListeners.size} 个WebSocket监听器`);
+    for (const [eventName, handler] of this.wsListeners.entries()) {
+      this.ws.off(eventName, handler);
+    }
+    this.wsListeners.clear();
+
+    // 关闭WebSocket连接
     this.ws.close();
   }
 
@@ -188,7 +207,8 @@ export class WSServer extends WSMessageHandler {
       await this.broadcastSlotPackUpdated(slotPack);
     });
 
-    this.digitalRadioEngine.on('spectrumData', (spectrum) => {
+    // 监听频谱数据事件（通过事件总线，优化路径）
+    globalEventBus.on('bus:spectrumData', (spectrum) => {
       this.broadcastSpectrumData(spectrum);
     });
 
@@ -280,10 +300,22 @@ export class WSServer extends WSMessageHandler {
         );
       } else {
         // 连接断开 - 警告类型，10秒自动关闭
-        const reason = data.reason || '未知原因';
+        // 优先使用详细的 message + recommendation，否则使用简单的 reason
+        const title = data.message || '电台已断开';
+        let text = '';
+        if (data.recommendation) {
+          // 有详细指导信息
+          const reason = data.reason || '未知原因';
+          text = `${reason}\n\n💡 ${data.recommendation}`;
+        } else {
+          // 只有原因
+          const reason = data.reason || '未知原因';
+          text = `连接断开：${reason}`;
+        }
+
         this.broadcastTextMessage(
-          '电台已断开',
-          `连接断开：${reason}`,
+          title,
+          text,
           'warning',
           10000
         );
@@ -375,8 +407,8 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.PTT_STATUS_CHANGED, data);
     });
 
-    // 监听电台数值表数据事件
-    this.digitalRadioEngine.on('meterData' as any, (data: any) => {
+    // 监听电台数值表数据事件（通过事件总线，优化路径）
+    globalEventBus.on('bus:meterData', (data) => {
       // 数值表数据频率较高，使用静默广播（不打印日志）
       this.broadcast(WSMessageType.METER_DATA, data);
     });
@@ -396,7 +428,45 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
+   * 📊 Day14：统一的错误处理辅助方法
+   * 将错误转换为RadioError，广播错误信息和系统状态
+   */
+  private handleCommandError(
+    error: unknown,
+    commandName: string,
+    defaultErrorCode: RadioErrorCode = RadioErrorCode.INVALID_OPERATION
+  ): void {
+    console.error(`❌ ${commandName} 执行失败:`, error);
+
+    // 转换为RadioError以提供友好的错误信息
+    const radioError = error instanceof RadioError
+      ? error
+      : RadioError.from(error, defaultErrorCode);
+
+    // 广播详细的错误信息（包括用户消息和建议）
+    this.broadcast(WSMessageType.ERROR, {
+      message: radioError.message,
+      userMessage: radioError.userMessage,
+      code: radioError.code,
+      severity: radioError.severity,
+      suggestions: radioError.suggestions,
+      timestamp: radioError.timestamp,
+      context: { command: commandName }
+    });
+
+    // 错误后广播系统状态，确保前端状态同步
+    try {
+      const status = this.digitalRadioEngine.getStatus();
+      this.broadcastSystemStatus(status);
+      console.log('📡 已广播错误后的系统状态');
+    } catch (statusError) {
+      console.error('❌ 广播系统状态失败:', statusError);
+    }
+  }
+
+  /**
    * 处理启动引擎命令
+   * 📊 Day14优化：完善错误处理，添加错误后的状态广播和友好提示
    */
   private async handleStartEngine(): Promise<void> {
     console.log('📥 服务器收到startEngine命令');
@@ -404,22 +474,20 @@ export class WSServer extends WSMessageHandler {
       // 始终调用引擎方法，让引擎内部处理重复调用情况
       await this.digitalRadioEngine.start();
       console.log('✅ digitalRadioEngine.start() 执行完成');
-      
+
       // 强制发送最新状态确保同步
       const status = this.digitalRadioEngine.getStatus();
       this.broadcastSystemStatus(status);
       console.log('📡 已广播最新系统状态，isDecoding:', status.isDecoding);
     } catch (error) {
-      console.error('❌ digitalRadioEngine.start() 执行失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'START_ENGINE_ERROR'
-      });
+      // 📊 Day14：使用统一的错误处理方法
+      this.handleCommandError(error, 'startEngine', RadioErrorCode.INVALID_OPERATION);
     }
   }
 
   /**
    * 处理停止引擎命令
+   * 📊 Day14优化：完善错误处理，添加错误后的状态广播和友好提示
    */
   private async handleStopEngine(): Promise<void> {
     console.log('📥 服务器收到stopEngine命令');
@@ -427,17 +495,14 @@ export class WSServer extends WSMessageHandler {
       // 始终调用引擎方法，让引擎内部处理重复调用情况
       await this.digitalRadioEngine.stop();
       console.log('✅ digitalRadioEngine.stop() 执行完成');
-      
+
       // 强制发送最新状态确保同步
       const status = this.digitalRadioEngine.getStatus();
       this.broadcastSystemStatus(status);
       console.log('📡 已广播最新系统状态，isDecoding:', status.isDecoding);
     } catch (error) {
-      console.error('❌ digitalRadioEngine.stop() 执行失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'STOP_ENGINE_ERROR'
-      });
+      // 📊 Day14：使用统一的错误处理方法
+      this.handleCommandError(error, 'stopEngine', RadioErrorCode.INVALID_OPERATION);
     }
   }
 
@@ -451,78 +516,67 @@ export class WSServer extends WSMessageHandler {
 
   /**
    * 处理设置模式命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleSetMode(mode: ModeDescriptor): Promise<void> {
     try {
       await this.digitalRadioEngine.setMode(mode);
     } catch (error) {
-      console.error('❌ digitalRadioEngine.setMode() 执行失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'SET_MODE_ERROR'
-      });
+      this.handleCommandError(error, 'setMode', RadioErrorCode.UNSUPPORTED_MODE);
     }
   }
 
   /**
    * 处理获取操作员列表命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleGetOperators(): Promise<void> {
     console.log('📥 [WSServer] 收到 getOperators 请求');
     try {
       const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
-      
+
       // 只向已完成握手的客户端发送过滤后的操作员列表
       const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
       activeConnections.forEach(connection => {
         const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
         connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
       });
-      
+
       console.log(`📤 [WSServer] 已向 ${activeConnections.length} 个已握手的客户端发送过滤后的操作员列表`);
     } catch (error) {
-      console.error('❌ 获取操作员列表失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'GET_OPERATORS_ERROR'
-      });
+      this.handleCommandError(error, 'getOperators');
     }
   }
 
   /**
    * 处理设置操作员上下文命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleSetOperatorContext(data: any): Promise<void> {
     try {
       const { operatorId, context } = data;
       await this.digitalRadioEngine.operatorManager.updateOperatorContext(operatorId, context);
     } catch (error) {
-      console.error('❌ 设置操作员上下文失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'SET_OPERATOR_CONTEXT_ERROR'
-      });
+      this.handleCommandError(error, 'setOperatorContext');
     }
   }
 
   /**
    * 处理设置操作员时隙命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleSetOperatorSlot(data: any): Promise<void> {
     try {
       const { operatorId, slot } = data;
       this.digitalRadioEngine.operatorManager.setOperatorSlot(operatorId, slot);
     } catch (error) {
-      console.error('❌ 设置操作员时隙失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'SET_OPERATOR_SLOT_ERROR'
-      });
+      this.handleCommandError(error, 'setOperatorSlot');
     }
   }
 
   /**
    * 处理用户命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleUserCommand(data: any): Promise<void> {
     try {
@@ -542,16 +596,13 @@ export class WSServer extends WSMessageHandler {
       operator.userCommand({ command, args });
       console.log(`📻 [WSServer] 执行用户命令: 操作员=${operatorId}, 命令=${command}, 参数=`, args);
     } catch (error) {
-      console.error('❌ 执行用户命令失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'USER_COMMAND_ERROR'
-      });
+      this.handleCommandError(error, 'userCommand');
     }
   }
 
   /**
    * 处理启动操作员命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleStartOperator(data: any): Promise<void> {
     try {
@@ -559,16 +610,13 @@ export class WSServer extends WSMessageHandler {
       this.digitalRadioEngine.operatorManager.startOperator(operatorId);
       console.log(`📻 [WSServer] 启动操作员: ${operatorId}`);
     } catch (error) {
-      console.error('❌ 启动操作员失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'START_OPERATOR_ERROR'
-      });
+      this.handleCommandError(error, 'startOperator');
     }
   }
 
   /**
    * 处理停止操作员命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleStopOperator(data: any): Promise<void> {
     try {
@@ -576,14 +624,14 @@ export class WSServer extends WSMessageHandler {
       this.digitalRadioEngine.operatorManager.stopOperator(operatorId);
       console.log(`📻 [WSServer] 停止操作员: ${operatorId}`);
     } catch (error) {
-      console.error('❌ 停止操作员失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'STOP_OPERATOR_ERROR'
-      });
+      this.handleCommandError(error, 'stopOperator');
     }
   }
 
+  /**
+   * 处理操作员请求呼叫命令
+   * 📊 Day14优化：使用统一的错误处理方法
+   */
   private async handleOperatorRequestCall(data: any): Promise<void> {
     try {
       const { operatorId, callsign } = data;
@@ -596,11 +644,7 @@ export class WSServer extends WSMessageHandler {
       // 调用manager中的start，来启用中途发射
       this.digitalRadioEngine.operatorManager.startOperator(operatorId);
     } catch (error) {
-      console.error('❌ 处理操作员请求呼叫失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'OPERATOR_REQUEST_CALL_ERROR'
-      });
+      this.handleCommandError(error, 'operatorRequestCall');
     }
   }
 
@@ -1026,6 +1070,7 @@ export class WSServer extends WSMessageHandler {
 
   /**
    * 处理设置音量增益命令（线性单位）
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleSetVolumeGain(data: any): Promise<void> {
     try {
@@ -1033,16 +1078,13 @@ export class WSServer extends WSMessageHandler {
       console.log(`🔊 [WSServer] 设置音量增益 (线性): ${gain.toFixed(3)}`);
       this.digitalRadioEngine.setVolumeGain(gain);
     } catch (error) {
-      console.error('❌ 设置音量增益失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'SET_VOLUME_GAIN_ERROR'
-      });
+      this.handleCommandError(error, 'setVolumeGain', RadioErrorCode.AUDIO_DEVICE_ERROR);
     }
   }
 
   /**
    * 处理设置音量增益命令（dB单位）
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleSetVolumeGainDb(data: any): Promise<void> {
     try {
@@ -1050,16 +1092,13 @@ export class WSServer extends WSMessageHandler {
       console.log(`🔊 [WSServer] 设置音量增益 (dB): ${gainDb.toFixed(1)}dB`);
       this.digitalRadioEngine.setVolumeGainDb(gainDb);
     } catch (error) {
-      console.error('❌ 设置音量增益(dB)失败:', error);
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'SET_VOLUME_GAIN_DB_ERROR'
-      });
+      this.handleCommandError(error, 'setVolumeGainDb', RadioErrorCode.AUDIO_DEVICE_ERROR);
     }
   }
 
   /**
    * 处理设置客户端启用操作员命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleSetClientEnabledOperators(connectionId: string, data: any): Promise<void> {
     try {
@@ -1068,60 +1107,54 @@ export class WSServer extends WSMessageHandler {
       if (connection) {
         connection.setEnabledOperators(enabledOperatorIds);
         console.log(`🔧 [WSServer] 连接 ${connectionId} 设置启用操作员: [${enabledOperatorIds.join(', ')}]`);
-        
+
         // 立即发送过滤后的操作员列表给该客户端
         const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
         const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
         connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
       }
     } catch (error) {
-      console.error('❌ 设置客户端启用操作员失败:', error);
-      this.sendToConnection(connectionId, 'error', {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'SET_CLIENT_ENABLED_OPERATORS_ERROR'
-      });
+      this.handleCommandError(error, 'setClientEnabledOperators');
     }
   }
 
   /**
    * 处理手动重连电台命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleRadioManualReconnect(): Promise<void> {
     try {
       console.log('📥 [WSServer] 收到手动重连电台命令');
-      
+
       const radioManager = this.digitalRadioEngine.getRadioManager();
       await radioManager.manualReconnect();
-      
+
       console.log('✅ [WSServer] 电台手动重连成功');
-      
+
       // 广播最新的系统状态
       const status = this.digitalRadioEngine.getStatus();
       this.broadcastSystemStatus(status);
-      
-    } catch (error) {
-      console.error('❌ [WSServer] 电台手动重连失败:', error);
 
-      // 发送错误事件
-      this.broadcast(WSMessageType.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'RADIO_MANUAL_RECONNECT_ERROR'
-      });
+    } catch (error) {
+      this.handleCommandError(error, 'radioManualReconnect', RadioErrorCode.CONNECTION_FAILED);
 
       // 广播电台断开状态，确保前端状态同步
-      const radioManager = this.digitalRadioEngine.getRadioManager();
-      const reconnectInfo = radioManager.getReconnectInfo();
+      try {
+        const radioManager = this.digitalRadioEngine.getRadioManager();
+        const reconnectInfo = radioManager.getReconnectInfo();
 
-      this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, {
-        connected: false,
-        reason: '手动重连失败',
-        reconnectInfo
-      });
+        this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, {
+          connected: false,
+          reason: '手动重连失败',
+          reconnectInfo
+        });
+      } catch {}
     }
   }
 
   /**
    * 处理强制停止发射命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleForceStopTransmission(): Promise<void> {
     try {
@@ -1134,14 +1167,7 @@ export class WSServer extends WSMessageHandler {
       // PTT状态变化事件会自动通过 pttStatusChanged 广播
 
     } catch (error) {
-      console.error('❌ [WSServer] 强制停止发射失败:', error);
-
-      // 发送错误事件
-      this.broadcast(WSMessageType.ERROR, {
-        message: '强制停止发射失败',
-        code: 'FORCE_STOP_FAILED',
-        details: error instanceof Error ? error.message : String(error)
-      });
+      this.handleCommandError(error, 'forceStopTransmission', RadioErrorCode.PTT_ACTIVATION_FAILED);
     }
   }
 
@@ -1204,6 +1230,7 @@ export class WSServer extends WSMessageHandler {
 
   /**
    * 处理客户端握手命令
+   * 📊 Day14优化：使用统一的错误处理方法
    */
   private async handleClientHandshake(connectionId: string, data: any): Promise<void> {
     try {
@@ -1215,7 +1242,7 @@ export class WSServer extends WSMessageHandler {
 
       // 处理客户端发送的操作员偏好设置
       let finalEnabledOperatorIds: string[];
-      
+
       if (enabledOperatorIds === null) {
         // 新客户端：null表示没有本地偏好，默认启用所有操作员
         const allOperators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
@@ -1275,11 +1302,7 @@ export class WSServer extends WSMessageHandler {
       console.log(`✅ [WSServer] 连接 ${connectionId} 握手流程完成`);
 
     } catch (error) {
-      console.error('❌ 处理客户端握手失败:', error);
-      this.sendToConnection(connectionId, 'error', {
-        message: error instanceof Error ? error.message : String(error),
-        code: 'CLIENT_HANDSHAKE_ERROR'
-      });
+      this.handleCommandError(error, 'clientHandshake');
     }
   }
 

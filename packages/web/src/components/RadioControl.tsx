@@ -4,8 +4,9 @@ import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle, faHeadphones } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
-import { api } from '@tx5dr/core';
+import { api, ApiError } from '@tx5dr/core';
 import type { ModeDescriptor } from '@tx5dr/contracts';
+import { showErrorToast } from '../utils/errorToast';
 import { useState, useEffect } from 'react';
 
 interface FrequencyOption {
@@ -624,19 +625,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
       try {
         console.log('🔄 加载上次选择的频率...');
-        const baseUrl = '/api';
-        const res = await fetch(`${baseUrl}/radio/last-frequency`);
-        const response = await res.json();
-        
+        const response = await api.getLastFrequency();
+
         if (response.success && response.lastFrequency) {
           const lastFreq = response.lastFrequency;
           console.log('📦 找到上次选择的频率:', lastFreq);
-          
+
           // 查找匹配的频率选项
-          const matchingFreq = availableFrequencies.find(freq => 
+          const matchingFreq = availableFrequencies.find(freq =>
             freq.frequency === lastFreq.frequency && freq.mode === lastFreq.mode
           );
-          
+
           if (matchingFreq && radio.state.currentMode?.name === lastFreq.mode) {
             console.log(`🔄 自动恢复上次频率: ${matchingFreq.label}`);
             setCurrentFrequency(matchingFreq.key);
@@ -650,6 +649,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         }
       } catch (error) {
         console.error('❌ 加载上次选择的频率失败:', error);
+        // 静默失败，不影响用户体验
       }
     };
 
@@ -933,20 +933,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     try {
       console.log(`🔄 设置自定义频率: ${formatFrequencyDisplay(frequency)} MHz (${frequency} Hz)`);
 
-      const baseUrl = '/api';
-      const requestBody: any = {
+      const response = await api.setRadioFrequency({
         frequency: frequency,
         mode: radio.state.currentMode?.name || 'FT8',
         band: '自定义',
         description: `${formatFrequencyDisplay(frequency)} MHz (自定义)`
-      };
-
-      const res = await fetch(`${baseUrl}/radio/frequency`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
       });
-      const response = await res.json();
 
       if (response.success) {
         // 关闭模态框
@@ -983,7 +975,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     } catch (error) {
       console.error('❌ 设置自定义频率失败:', error);
-      setCustomFrequencyError('网络错误或服务器无响应');
+      if (error instanceof ApiError) {
+        setCustomFrequencyError(error.userMessage);
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code
+        });
+      } else {
+        setCustomFrequencyError('网络错误或服务器无响应');
+      }
     } finally {
       setIsSettingCustomFrequency(false);
     }
@@ -1023,27 +1025,22 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   // 自动设置频率到后端（避免递归调用）
   const autoSetFrequency = async (frequency: FrequencyOption) => {
     if (!connection.state.isConnected) return;
-    
+
     try {
       console.log(`🔄 自动设置频率: ${frequency.label} (${frequency.frequency} Hz)${frequency.radioMode ? ` [${frequency.radioMode}]` : ''}`);
-      const baseUrl = '/api';
-      const requestBody: any = { 
+
+      const params: any = {
         frequency: frequency.frequency,
         mode: frequency.mode,
         band: frequency.band,
         description: frequency.label
       };
       if (frequency.radioMode) {
-        requestBody.radioMode = frequency.radioMode;
+        params.radioMode = frequency.radioMode;
       }
-      
-      const res = await fetch(`${baseUrl}/radio/frequency`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-      const response = await res.json();
-      
+
+      const response = await api.setRadioFrequency(params);
+
       if (response.success) {
         console.log(`✅ 自动设置频率成功: ${frequency.label}`);
       } else {
@@ -1051,6 +1048,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     } catch (error) {
       console.error('❌ 自动设置频率失败:', error);
+      // 自动设置失败，静默处理，不影响用户体验
     }
   };
 
@@ -1098,26 +1096,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     try {
       console.log(`🔄 切换频率到: ${selectedFrequency.label} (${selectedFrequency.frequency} Hz)${selectedFrequency.radioMode ? ` [${selectedFrequency.radioMode}]` : ''}`);
-      
+
       // 设置频率和电台调制模式
-      const baseUrl = '/api';
-      const requestBody: any = { 
+      const params: any = {
         frequency: selectedFrequency.frequency,
         mode: selectedFrequency.mode,
         band: selectedFrequency.band,
         description: selectedFrequency.label
       };
       if (selectedFrequency.radioMode) {
-        requestBody.radioMode = selectedFrequency.radioMode;
+        params.radioMode = selectedFrequency.radioMode;
       }
-      
-      const res = await fetch(`${baseUrl}/radio/frequency`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-      const response = await res.json();
-      
+
+      const response = await api.setRadioFrequency(params);
+
       if (response.success) {
         setCurrentFrequency(selectedFrequencyKey);
         // 切换到预设频率时清除自定义频率标签
@@ -1153,11 +1145,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     } catch (error) {
       console.error('❌ 切换频率失败:', error);
-      addToast({
-        title: '❌ 频率切换失败',
-        description: '网络错误或服务器无响应',
-        timeout: 5000
-      });
+      if (error instanceof ApiError) {
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code
+        });
+      } else {
+        addToast({
+          title: '❌ 频率切换失败',
+          description: '网络错误或服务器无响应',
+          timeout: 5000
+        });
+      }
     }
   };
 

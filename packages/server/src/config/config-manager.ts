@@ -129,7 +129,24 @@ export class ConfigManager {
   private async loadConfig(): Promise<void> {
     const configData = await fs.readFile(this.configPath, 'utf-8');
     const parsedConfig = JSON.parse(configData);
-    
+
+    // 检测并迁移 radio 配置（如果需要）
+    if (parsedConfig.radio && this.needsMigration(parsedConfig.radio)) {
+      console.log('🔄 [配置管理器] 检测到旧版配置格式，开始迁移...');
+
+      // 备份旧配置
+      const backupPath = `${this.configPath}.backup`;
+      await fs.writeFile(backupPath, configData, 'utf-8');
+      console.log(`💾 [配置管理器] 已备份旧配置到: ${backupPath}`);
+
+      // 执行迁移
+      parsedConfig.radio = this.migrateRadioConfig(parsedConfig.radio);
+
+      // 保存新格式配置
+      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      console.log('✅ [配置管理器] 配置迁移完成');
+    }
+
     // 合并默认配置和加载的配置
     this.config = this.mergeConfig(DEFAULT_CONFIG, parsedConfig);
   }
@@ -147,7 +164,7 @@ export class ConfigManager {
    */
   private mergeConfig(defaultConfig: any, userConfig: any): any {
     const result = { ...defaultConfig };
-    
+
     for (const key in userConfig) {
       if (userConfig[key] !== null && typeof userConfig[key] === 'object' && !Array.isArray(userConfig[key])) {
         result[key] = this.mergeConfig(defaultConfig[key] || {}, userConfig[key]);
@@ -155,8 +172,76 @@ export class ConfigManager {
         result[key] = userConfig[key];
       }
     }
-    
+
     return result;
+  }
+
+  /**
+   * 检测配置是否需要迁移（旧格式 → 嵌套对象格式）
+   */
+  private needsMigration(radioConfig: any): boolean {
+    // 检测旧格式特征：存在扁平字段（host/port/ip/wlanPort 等）
+    const hasOldFlatFields =
+      radioConfig.host !== undefined ||
+      radioConfig.port !== undefined ||
+      radioConfig.ip !== undefined ||
+      radioConfig.wlanPort !== undefined ||
+      radioConfig.path !== undefined ||
+      radioConfig.rigModel !== undefined;
+
+    // 检测新格式特征：存在嵌套对象（network/icomWlan/serial）
+    const hasNewNestedFields =
+      radioConfig.network !== undefined ||
+      radioConfig.icomWlan !== undefined ||
+      radioConfig.serial !== undefined;
+
+    // 如果有旧字段且没有新字段 → 需要迁移
+    return hasOldFlatFields && !hasNewNestedFields;
+  }
+
+  /**
+   * 迁移电台配置（旧格式 → 嵌套对象格式）
+   */
+  private migrateRadioConfig(oldConfig: any): HamlibConfig {
+    const newConfig: HamlibConfig = {
+      type: oldConfig.type || 'none',
+      transmitCompensationMs: oldConfig.transmitCompensationMs,
+    };
+
+    console.log(`📝 [配置迁移] 当前连接类型: ${newConfig.type}`);
+
+    // 迁移 network 配置（保留所有历史配置）
+    if (oldConfig.host !== undefined || oldConfig.port !== undefined) {
+      newConfig.network = {
+        host: oldConfig.host || 'localhost',
+        port: oldConfig.port || 4532,
+      };
+      console.log(`  ✓ 迁移 network 配置: ${newConfig.network.host}:${newConfig.network.port}`);
+    }
+
+    // 迁移 icomWlan 配置（wlanPort → port）
+    if (oldConfig.ip !== undefined || oldConfig.wlanPort !== undefined) {
+      newConfig.icomWlan = {
+        ip: oldConfig.ip || '',
+        port: oldConfig.wlanPort || 50001,  // wlanPort → port
+        userName: oldConfig.userName,
+        password: oldConfig.password,
+        dataMode: true,  // 默认启用数据模式（适用于 FT8/FT4）
+      };
+      console.log(`  ✓ 迁移 icomWlan 配置: ${newConfig.icomWlan.ip}:${newConfig.icomWlan.port}`);
+    }
+
+    // 迁移 serial 配置（保留所有历史配置）
+    if (oldConfig.path !== undefined || oldConfig.rigModel !== undefined) {
+      newConfig.serial = {
+        path: oldConfig.path || '',
+        rigModel: oldConfig.rigModel || 0,
+        serialConfig: oldConfig.serialConfig,
+      };
+      console.log(`  ✓ 迁移 serial 配置: ${newConfig.serial.path} (rigModel: ${newConfig.serial.rigModel})`);
+    }
+
+    return newConfig;
   }
 
   /**

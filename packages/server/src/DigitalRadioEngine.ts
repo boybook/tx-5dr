@@ -20,6 +20,10 @@ import { TransmissionTracker } from './transmission/TransmissionTracker.js';
 import { IcomWlanAudioAdapter } from './audio/IcomWlanAudioAdapter.js';
 import { AudioDeviceManager } from './audio/audio-device-manager.js';
 import { AudioMonitorService } from './audio/AudioMonitorService.js';
+import { MemoryLeakDetector } from './utils/MemoryLeakDetector.js';
+import { createEngineActor, isEngineState, getEngineContext, type EngineActor } from './state-machines/engineStateMachine.js';
+import { EngineState, type EngineInput } from './state-machines/types.js';
+import { ResourceManager } from './utils/ResourceManager.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -70,6 +74,20 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private currentSlotExpectedEncodes: number = 0; // 当前时隙期望的编码数量
   private currentSlotCompletedEncodes: number = 0; // 当前时隙已完成的编码数量
   private currentSlotId: string = ''; // 当前时隙ID
+
+  // 高频事件采样监控（用于健康检查）
+  private spectrumEventCount: number = 0; // 频谱事件计数
+  private meterEventCount: number = 0; // 数值表事件计数
+  private lastHealthCheckTimestamp: number = Date.now(); // 上次健康检查时间
+
+  // 记录 radioManager 事件监听器，用于清理 (修复内存泄漏)
+  private radioManagerEventListeners: Map<string, (...args: any[]) => void> = new Map();
+
+  // 引擎状态机 (XState v5)
+  private engineStateMachineActor: EngineActor | null = null;
+
+  // 资源管理器 (Day6)
+  private resourceManager: ResourceManager;
 
   public get operatorManager(): RadioOperatorManager {
     return this._operatorManager;
@@ -134,7 +152,20 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // 初始化传输跟踪器
     this.transmissionTracker = new TransmissionTracker();
-    
+
+    // 注册内存泄漏检测 (仅在开发环境启用)
+    const leakDetector = MemoryLeakDetector.getInstance();
+    leakDetector.register('DigitalRadioEngine', this);
+
+    // 初始化资源管理器 (Day6)
+    this.resourceManager = new ResourceManager();
+
+    // 注册所有资源到资源管理器 (Day6)
+    this.registerResources();
+
+    // 初始化引擎状态机
+    this.initializeEngineStateMachine();
+
     // 监听物理电台管理器事件
     this.setupRadioManagerEventListeners();
     
@@ -615,8 +646,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     // 监听频谱调度器事件
     this.spectrumScheduler.on('spectrumReady', (spectrum) => {
-      // 发射频谱数据事件给WebSocket客户端
-      this.emit('spectrumData', spectrum);
+      // 📝 EventBus 优化：频谱数据已通过 EventBus 直达 WSServer（SpectrumScheduler.ts:279）
+      // 此处仅保留健康检查逻辑，不再转发事件
+
+      // 【采样监控】每100次检查一次健康状态
+      this.spectrumEventCount++;
+      if (this.spectrumEventCount % 100 === 0) {
+        this.checkHighFrequencyEventsHealth();
+      }
     });
     
     this.spectrumScheduler.on('error', (error) => {
@@ -633,132 +670,30 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   /**
-   * 启动时钟
+   * 启动时钟（外部API，委托给状态机）
    */
   async start(): Promise<void> {
-    if (this.isRunning) {
+    if (!this.engineStateMachineActor) {
+      throw new Error('引擎状态机未初始化');
+    }
+
+    // 如果已经在运行中，发送状态同步后返回
+    if (isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
       console.log('⚠️  [时钟管理器] 时钟已经在运行中，发送状态同步');
-      // 即使重复调用也发射状态事件确保前端同步
       const status = this.getStatus();
-      console.log(`📡 [时钟管理器] 发射systemStatus事件(重复调用): isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
       this.emit('systemStatus', status);
       return;
     }
-    
-    if (!this.slotClock) {
-      throw new Error('时钟管理器未初始化');
+
+    // 如果正在启动中，等待启动完成
+    if (isEngineState(this.engineStateMachineActor, EngineState.STARTING)) {
+      console.log('⚠️  [时钟管理器] 时钟正在启动中，等待启动完成...');
+      // TODO: 可以添加waitForEngineState等待逻辑
+      return;
     }
-    
-    console.log(`🚀 [时钟管理器] 启动时钟，模式: ${this.currentMode.name}`);
 
-    // 启动音频流
-    let audioStarted = false;
-    try {
-      // 从配置管理器获取音频设备设置
-      const configManager = ConfigManager.getInstance();
-      const audioConfig = configManager.getAudioConfig();
-      const radioConfig = configManager.getRadioConfig();
-
-      console.log(`🎤 [时钟管理器] 使用音频设备配置:`, audioConfig);
-
-      // 先连接物理电台（如果配置）- ICOM WLAN 模式需要先建立连接
-      await this.radioManager.applyConfig(radioConfig);
-      console.log(`📡 [时钟管理器] 物理电台配置已应用:`, radioConfig);
-
-      // 等待短暂时间，确保任何延迟错误被触发（例如网络超时）
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // 如果配置为 ICOM WLAN 模式，初始化音频适配器
-      if (radioConfig.type === 'icom-wlan') {
-        console.log(`📡 [时钟管理器] 检测到 ICOM WLAN 模式，初始化音频适配器`);
-
-        const icomWlanManager = this.radioManager.getIcomWlanManager();
-        if (icomWlanManager && icomWlanManager.isConnected()) {
-          // 创建 ICOM WLAN 音频适配器（原生 12kHz，零重采样优化）
-          this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(
-            icomWlanManager
-          );
-
-          // 注入到 AudioStreamManager
-          this.audioStreamManager.setIcomWlanAudioAdapter(this.icomWlanAudioAdapter);
-
-          // 设置回调让 AudioDeviceManager 知道连接状态
-          const audioDeviceManager = AudioDeviceManager.getInstance();
-          audioDeviceManager.setIcomWlanConnectedCallback(() => {
-            return icomWlanManager.isConnected();
-          });
-
-          console.log(`✅ [时钟管理器] ICOM WLAN 音频适配器已初始化`);
-        } else {
-          console.warn(`⚠️ [时钟管理器] ICOM WLAN 未连接，音频适配器未初始化`);
-          throw new Error('ICOM WLAN 电台连接失败，无法启动音频流');
-        }
-      }
-
-      // 启动音频输入 - 不需要传递设备ID，AudioStreamManager会从配置中自动解析设备名称
-      await this.audioStreamManager.startStream();
-      console.log(`🎤 [时钟管理器] 音频输入流启动成功`);
-
-      // 启动音频输出 - 不需要传递设备ID，AudioStreamManager会从配置中自动解析设备名称
-      await this.audioStreamManager.startOutput();
-      console.log(`🔊 [时钟管理器] 音频输出流启动成功`);
-
-      // 恢复上次设置的音量增益
-      const lastVolumeGain = configManager.getLastVolumeGain();
-      if (lastVolumeGain) {
-        console.log(`🔊 [时钟管理器] 恢复上次设置的音量增益: ${lastVolumeGain.gainDb.toFixed(1)}dB (${lastVolumeGain.gain.toFixed(3)})`);
-        // 直接设置到 audioStreamManager，不触发保存逻辑避免递归
-        this.audioStreamManager.setVolumeGainDb(lastVolumeGain.gainDb);
-      } else {
-        console.log(`🔊 [时钟管理器] 使用默认音量增益: 0.0dB (1.000)`);
-      }
-
-      audioStarted = true;
-
-      // 初始化音频监听服务
-      console.log('🎧 [时钟管理器] 初始化音频监听服务...');
-      const audioProvider = this.audioStreamManager.getAudioProvider();
-      this.audioMonitorService = new AudioMonitorService(audioProvider);
-      console.log('✅ [时钟管理器] 音频监听服务已初始化');
-    } catch (error) {
-      console.error(`❌ [时钟管理器] 音频流启动失败:`, error);
-
-      // 清理可能残留的连接，确保状态一致
-      try {
-        console.log('🧹 [时钟管理器] 清理电台连接...');
-        await this.radioManager.disconnect('启动失败，清理连接');
-      } catch (cleanupError) {
-        console.warn('⚠️ [时钟管理器] 清理电台连接时出错:', cleanupError);
-      }
-
-      // 电台连接失败时停止启动，让重连机制接管
-      throw error;
-    }
-    
-    this.slotClock.start();
-    
-    // 启动 SlotScheduler
-    if (this.slotScheduler) {
-      this.slotScheduler.start();
-      console.log(`📡 [时钟管理器] 启动解码调度器`);
-    }
-    
-    // 启动频谱调度器
-    if (this.spectrumScheduler) {
-      this.spectrumScheduler.start();
-      console.log(`📊 [时钟管理器] 启动频谱分析调度器`);
-    }
-    
-    // 启动操作员管理器
-    this.operatorManager.start();
-    
-    this.isRunning = true;
-    this.audioStarted = audioStarted;
-    
-    // 发射系统状态变化事件
-    const status = this.getStatus();
-    console.log(`📡 [时钟管理器] 发射systemStatus事件: isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
-    this.emit('systemStatus', status);
+    console.log('🎛️ [EngineStateMachine] 委托给状态机: START');
+    this.engineStateMachineActor.send({ type: 'START' });
   }
   
   /**
@@ -800,13 +735,23 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   /**
-   * 获取当前状态
+   * 获取当前状态（双轨运行：同时查询状态机和Manager）
    */
   public getStatus() {
     // 统一 isDecoding 语义：只有当引擎运行且时钟正在运行时才表示正在解码
     const isActuallyDecoding = this.isRunning && (this.slotClock?.isRunning ?? false);
-    
+
+    // 获取状态机状态
+    const engineState = this.engineStateMachineActor
+      ? (this.engineStateMachineActor.getSnapshot().value as EngineState)
+      : EngineState.IDLE;
+
+    const engineContext = this.engineStateMachineActor
+      ? getEngineContext(this.engineStateMachineActor)
+      : null;
+
     return {
+      // Manager状态（现有）
       isRunning: this.isRunning,
       isDecoding: isActuallyDecoding, // 明确语义：正在监听解码
       currentMode: this.currentMode,
@@ -817,83 +762,60 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       volumeGainDb: this.audioStreamManager.getVolumeGainDb(),
       isPTTActive: this.isPTTActive,
       radioConnected: this.radioManager.isConnected(),
-      radioReconnectInfo: this.radioManager.getReconnectInfo()
+      radioReconnectInfo: this.radioManager.getReconnectInfo(),
+
+      // 状态机状态（新增）
+      engineState,
+      engineContext: engineContext ? {
+        error: engineContext.error?.message,
+        startedResources: engineContext.startedResources,
+        forcedStop: engineContext.forcedStop,
+      } : null,
     };
   }
-  
+
   /**
-   * 停止时钟
+   * 停止引擎（外部API，委托给状态机）(Day7 改进)
+   *
+   * 状态机驱动的停止流程：
+   * 1. 清理所有事件监听器（避免停止过程中触发不必要的事件）
+   * 2. 按逆序停止所有资源（由 ResourceManager 管理）
+   * 3. 处理停止过程中的异常（确保资源清理完整）
    */
   async stop(): Promise<void> {
-    if (!this.isRunning) {
+    if (!this.engineStateMachineActor) {
+      throw new Error('引擎状态机未初始化');
+    }
+
+    // 如果已经在空闲状态，发送状态同步后返回
+    if (isEngineState(this.engineStateMachineActor, EngineState.IDLE)) {
       console.log('⚠️  [时钟管理器] 时钟已经停止，发送状态同步');
-      // 即使重复调用也发射状态事件确保前端同步
       const status = this.getStatus();
-      console.log(`📡 [时钟管理器] 发射systemStatus事件(重复调用): isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
       this.emit('systemStatus', status);
       return;
     }
-    
-    if (this.slotClock) {
-      console.log('🛑 [时钟管理器] 停止时钟');
-      this.slotClock.stop();
-      
-      // 确保PTT被停止
-      await this.stopPTT();
-      
-      // 停止 SlotScheduler
-      if (this.slotScheduler) {
-        this.slotScheduler.stop();
-        console.log(`🛑 [时钟管理器] 停止解码调度器`);
-      }
-      
-      // 停止音频流
+
+    // 如果正在停止中，等待停止完成 (Day7: 改进等待逻辑)
+    if (isEngineState(this.engineStateMachineActor, EngineState.STOPPING)) {
+      console.log('⚠️  [时钟管理器] 时钟正在停止中，等待停止完成...');
       try {
-        await this.audioStreamManager.stopStream();
-        console.log(`🛑 [时钟管理器] 音频输入流停止成功`);
-
-        await this.audioStreamManager.stopOutput();
-        console.log(`🛑 [时钟管理器] 音频输出流停止成功`);
-
-        // 断开物理电台
-        await this.radioManager.disconnect();
-        console.log(`🛑 [时钟管理器] 物理电台已断开`);
+        const { waitForEngineState } = await import('./state-machines/engineStateMachine.js');
+        await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 10000);
+        console.log('✅ [时钟管理器] 停止完成');
       } catch (error) {
-        console.error(`❌ [时钟管理器] 音频流停止失败:`, error);
+        console.error('❌ [时钟管理器] 等待停止超时:', error);
+        throw error;
       }
-
-      // 清理 ICOM WLAN 音频适配器
-      if (this.icomWlanAudioAdapter) {
-        this.icomWlanAudioAdapter.stopReceiving();
-        this.audioStreamManager.setIcomWlanAudioAdapter(null);
-        this.icomWlanAudioAdapter = null;
-        console.log(`🛑 [时钟管理器] ICOM WLAN 音频适配器已清理`);
-      }
-
-      // 清理音频监听服务
-      if (this.audioMonitorService) {
-        this.audioMonitorService.destroy();
-        this.audioMonitorService = null;
-        console.log(`🛑 [时钟管理器] 音频监听服务已清理`);
-      }
-
-      this.isRunning = false;
-      this.audioStarted = false;
-      
-      // 停止频谱调度器
-      if (this.spectrumScheduler) {
-        this.spectrumScheduler.stop();
-        console.log(`🛑 [时钟管理器] 停止频谱分析调度器`);
-      }
-
-      // 停止操作员管理器
-      this.operatorManager.stop();
-      
-      // 发射系统状态变化事件
-      const status = this.getStatus();
-      console.log(`📡 [时钟管理器] 发射systemStatus事件: isRunning=${status.isRunning}, isDecoding=${status.isDecoding}`);
-      this.emit('systemStatus', status);
+      return;
     }
+
+    // 如果在错误状态，先尝试清理
+    if (isEngineState(this.engineStateMachineActor, EngineState.ERROR)) {
+      console.warn('⚠️  [时钟管理器] 引擎处于错误状态，发送STOP事件尝试清理');
+    }
+
+    console.log('🎛️ [EngineStateMachine] 委托给状态机: STOP');
+    this.engineStateMachineActor.send({ type: 'STOP' });
   }
   
   /**
@@ -939,7 +861,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     this.slotScheduler = null;
     this.removeAllListeners();
-    
+
+    // 清理 RadioManager 事件监听器
+    console.log(`🗑️  [时钟管理器] 移除 ${this.radioManagerEventListeners.size} 个 RadioManager 事件监听器`);
+    for (const [eventName, handler] of this.radioManagerEventListeners.entries()) {
+      this.radioManager.off(eventName as any, handler);
+    }
+    this.radioManagerEventListeners.clear();
+
     // 清理操作员管理器
     this.operatorManager.cleanup();
     
@@ -948,7 +877,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.transmissionTracker.cleanup();
       console.log('🗑️  [时钟管理器] 传输跟踪器已清理');
     }
-    
+
+    // 停止并清理状态机
+    if (this.engineStateMachineActor) {
+      console.log('🗑️  [时钟管理器] 停止引擎状态机...');
+      this.engineStateMachineActor.stop();
+      this.engineStateMachineActor = null;
+      console.log('✅ [时钟管理器] 引擎状态机已停止');
+    }
+
+    // 取消注册内存泄漏检测
+    MemoryLeakDetector.getInstance().unregister('DigitalRadioEngine');
+
     console.log('✅ [时钟管理器] 销毁完成');
   }
 
@@ -1134,7 +1074,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   private setupRadioManagerEventListeners(): void {
     // 监听电台连接成功
-    this.radioManager.on('connected', async () => {
+    const handleConnected = async () => {
       console.log('📡 [DigitalRadioEngine] 物理电台连接成功');
       // 广播电台状态更新事件
       this.emit('radioStatusChanged' as any, {
@@ -1166,60 +1106,78 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           console.error('❌ [DigitalRadioEngine] 自动启动失败:', err);
         }
       }
-    });
+    };
+    this.radioManagerEventListeners.set('connected', handleConnected);
+    this.radioManager.on('connected', handleConnected);
 
     // 监听电台断开连接
-    this.radioManager.on('disconnected', async (reason) => {
+    const handleDisconnected = async (reason?: string) => {
       console.log(`📡 [DigitalRadioEngine] 物理电台断开连接: ${reason || '未知原因'}`);
-      
+
       // 立即停止所有操作员的发射
       this.operatorManager.stopAllOperators();
-      
+
       // 如果是在PTT激活时断开连接，立即停止PTT并停止引擎
       if (this.isPTTActive) {
         console.warn('⚠️ [DigitalRadioEngine] 电台在发射过程中断开连接，立即停止发射和监听');
-        
+
         // 强制停止PTT
         await this.forceStopPTT();
-        
-        // 停止引擎以防止继续尝试发射
-        if (this.isRunning) {
-          try {
-            await this.stop();
-            console.log('🛑 [DigitalRadioEngine] 因电台断开连接已停止监听');
-          } catch (error) {
-            console.error('❌ [DigitalRadioEngine] 停止引擎时出错:', error);
-          }
+
+        // 【状态机集成】发送RADIO_DISCONNECTED事件触发状态机停止
+        if (this.engineStateMachineActor && isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
+          console.log('🎛️ [EngineStateMachine] 发送 RADIO_DISCONNECTED 事件');
+          this.engineStateMachineActor.send({
+            type: 'RADIO_DISCONNECTED',
+            reason: reason || '电台在发射过程中断开连接'
+          });
         }
-        
+
         // 广播特殊的发射中断开连接事件
         this.emit('radioDisconnectedDuringTransmission' as any, {
           reason: reason || '电台在发射过程中断开连接',
           message: '电台在发射过程中断开连接，可能是发射功率过大导致USB通讯受到干扰。系统已自动停止发射和监听。',
           recommendation: '请检查电台设置，降低发射功率或改善通讯环境，然后重新连接电台。'
         });
+      } else if (this.isRunning) {
+        // 【状态机集成】非PTT激活时断开，也应该停止引擎
+        console.warn('⚠️ [DigitalRadioEngine] 电台断开连接，自动停止引擎');
+
+        if (this.engineStateMachineActor && isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
+          console.log('🎛️ [EngineStateMachine] 发送 RADIO_DISCONNECTED 事件');
+          this.engineStateMachineActor.send({
+            type: 'RADIO_DISCONNECTED',
+            reason: reason || '电台断开连接'
+          });
+        }
       }
-      
-      // 广播电台状态更新事件
+
+      // 广播电台状态更新事件（带用户指导）
       this.emit('radioStatusChanged' as any, {
         connected: false,
         reason,
+        message: '电台已断开连接',
+        recommendation: this.getDisconnectRecommendation(reason),
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
-    });
+    };
+    this.radioManagerEventListeners.set('disconnected', handleDisconnected);
+    this.radioManager.on('disconnected', handleDisconnected);
 
     // 监听重连开始
-    this.radioManager.on('reconnecting', (attempt) => {
+    const handleReconnecting = (attempt: number) => {
       console.log(`📡 [DigitalRadioEngine] 物理电台重连中 (第${attempt}次尝试)`);
       // 广播重连状态更新事件
       this.emit('radioReconnecting' as any, {
         attempt,
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
-    });
+    };
+    this.radioManagerEventListeners.set('reconnecting', handleReconnecting);
+    this.radioManager.on('reconnecting', handleReconnecting);
 
     // 监听重连失败
-    this.radioManager.on('reconnectFailed', (error, attempt) => {
+    const handleReconnectFailed = (error: Error, attempt: number) => {
       console.warn(`📡 [DigitalRadioEngine] 物理电台重连失败 (第${attempt}次): ${error.message}`);
       // 广播重连失败事件
       this.emit('radioReconnectFailed' as any, {
@@ -1227,36 +1185,50 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         attempt,
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
-    });
+    };
+    this.radioManagerEventListeners.set('reconnectFailed', handleReconnectFailed);
+    this.radioManager.on('reconnectFailed', handleReconnectFailed);
 
     // 监听重连停止
-    this.radioManager.on('reconnectStopped', (maxAttempts) => {
+    const handleReconnectStopped = (maxAttempts: number) => {
       console.error(`📡 [DigitalRadioEngine] 物理电台重连停止 (已达最大${maxAttempts}次尝试)`);
       // 广播重连停止事件
       this.emit('radioReconnectStopped' as any, {
         maxAttempts,
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
-    });
+    };
+    this.radioManagerEventListeners.set('reconnectStopped', handleReconnectStopped);
+    this.radioManager.on('reconnectStopped', handleReconnectStopped);
 
     // 监听电台错误
-    this.radioManager.on('error', (error) => {
+    const handleError = (error: Error) => {
       console.error(`📡 [DigitalRadioEngine] 物理电台错误: ${error.message}`);
       // 广播电台错误事件
       this.emit('radioError' as any, {
         error: error.message,
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
-    });
+    };
+    this.radioManagerEventListeners.set('error', handleError);
+    this.radioManager.on('error', handleError);
 
     // 监听电台数值表数据
-    this.radioManager.on('meterData' as any, (data: any) => {
-      // 转发数值表数据事件
-      this.emit('meterData' as any, data);
-    });
+    const handleMeterData = (data: any) => {
+      // 📝 EventBus 优化：数值表数据已通过 EventBus 直达 WSServer（IcomWlanConnection.ts:321）
+      // 此处仅保留健康检查逻辑，不再转发事件
+
+      // 【采样监控】每100次检查一次健康状态
+      this.meterEventCount++;
+      if (this.meterEventCount % 100 === 0) {
+        this.checkHighFrequencyEventsHealth();
+      }
+    };
+    this.radioManagerEventListeners.set('meterData', handleMeterData);
+    this.radioManager.on('meterData' as any, handleMeterData);
 
     // 监听电台频率变化（自动同步）
-    this.radioManager.on('radioFrequencyChanged', async (frequency: number) => {
+    const handleRadioFrequencyChanged = async (frequency: number) => {
       console.log(`📡 [DigitalRadioEngine] 检测到电台频率变化: ${(frequency / 1000000).toFixed(3)} MHz`);
 
       try {
@@ -1320,7 +1292,418 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       } catch (error) {
         console.error(`❌ [DigitalRadioEngine] 处理频率变化失败:`, error);
       }
+    };
+    this.radioManagerEventListeners.set('radioFrequencyChanged', handleRadioFrequencyChanged);
+    this.radioManager.on('radioFrequencyChanged', handleRadioFrequencyChanged);
+
+    console.log(`📡 [DigitalRadioEngine] 已注册 ${this.radioManagerEventListeners.size} 个 RadioManager 事件监听器`);
+  }
+
+  /**
+   * 清理所有事件监听器 (Day7)
+   *
+   * 在引擎停止时调用，确保所有监听器被正确移除，防止内存泄漏
+   * 按照以下顺序清理：
+   * 1. SlotClock 事件监听器
+   * 2. 编解码队列事件监听器
+   * 3. 音频混音器事件监听器
+   * 4. SlotPackManager 事件监听器
+   * 5. SpectrumScheduler 事件监听器
+   * 6. RadioManager 事件监听器（已有专门的 Map 管理）
+   */
+  private cleanupEventListeners(): void {
+    console.log('🧹 [DigitalRadioEngine] 开始清理所有事件监听器...');
+
+    let totalRemoved = 0;
+
+    try {
+      // 1. 清理 SlotClock 事件监听器
+      if (this.slotClock) {
+        const clockEvents = ['slotStart', 'encodeStart', 'transmitStart', 'subWindow'];
+        for (const event of clockEvents) {
+          this.slotClock.removeAllListeners(event as any);
+        }
+        totalRemoved += clockEvents.length;
+        console.log(`   ✓ 已清理 ${clockEvents.length} 个 SlotClock 事件监听器`);
+      }
+
+      // 2. 清理编解码队列事件监听器
+      if (this.realEncodeQueue) {
+        const encodeEvents = ['encodeComplete', 'encodeError'];
+        for (const event of encodeEvents) {
+          this.realEncodeQueue.removeAllListeners(event as any);
+        }
+        totalRemoved += encodeEvents.length;
+        console.log(`   ✓ 已清理 ${encodeEvents.length} 个 EncodeQueue 事件监听器`);
+      }
+
+      if (this.realDecodeQueue) {
+        const decodeEvents = ['decodeComplete', 'decodeError'];
+        for (const event of decodeEvents) {
+          this.realDecodeQueue.removeAllListeners(event as any);
+        }
+        totalRemoved += decodeEvents.length;
+        console.log(`   ✓ 已清理 ${decodeEvents.length} 个 DecodeQueue 事件监听器`);
+      }
+
+      // 3. 清理音频混音器事件监听器
+      if (this.audioMixer) {
+        this.audioMixer.removeAllListeners('mixedAudioReady');
+        totalRemoved += 1;
+        console.log(`   ✓ 已清理 1 个 AudioMixer 事件监听器`);
+      }
+
+      // 4. 清理 SlotPackManager 事件监听器
+      if (this.slotPackManager) {
+        this.slotPackManager.removeAllListeners('slotPackUpdated');
+        totalRemoved += 1;
+        console.log(`   ✓ 已清理 1 个 SlotPackManager 事件监听器`);
+      }
+
+      // 5. 清理 SpectrumScheduler 事件监听器
+      if (this.spectrumScheduler) {
+        const spectrumEvents = ['spectrumReady', 'error'];
+        for (const event of spectrumEvents) {
+          this.spectrumScheduler.removeAllListeners(event as any);
+        }
+        totalRemoved += spectrumEvents.length;
+        console.log(`   ✓ 已清理 ${spectrumEvents.length} 个 SpectrumScheduler 事件监听器`);
+      }
+
+      // 6. 清理 RadioManager 事件监听器（使用已有的 Map）
+      if (this.radioManagerEventListeners.size > 0) {
+        for (const [eventName, handler] of this.radioManagerEventListeners.entries()) {
+          this.radioManager.off(eventName as any, handler);
+        }
+        const radioListenersCount = this.radioManagerEventListeners.size;
+        this.radioManagerEventListeners.clear();
+        totalRemoved += radioListenersCount;
+        console.log(`   ✓ 已清理 ${radioListenersCount} 个 RadioManager 事件监听器`);
+      }
+
+      // 7. 清理 self 上的 transmissionLog 事件监听器
+      this.removeAllListeners('transmissionLog' as any);
+      totalRemoved += 1;
+      console.log(`   ✓ 已清理 1 个 self transmissionLog 事件监听器`);
+
+      console.log(`✅ [DigitalRadioEngine] 事件监听器清理完成，共清理 ${totalRemoved} 个监听器`);
+    } catch (error) {
+      console.error(`❌ [DigitalRadioEngine] 清理事件监听器时出错:`, error);
+      // 继续执行，不中断停止流程
+    }
+  }
+
+  /**
+   * 注册所有资源到 ResourceManager (Day6)
+   *
+   * 资源按优先级和依赖关系启动，失败时自动回滚
+   */
+  private registerResources(): void {
+    console.log('📦 [ResourceManager] 注册引擎资源...');
+
+    const configManager = ConfigManager.getInstance();
+
+    // 1. 物理电台 (优先级最高，最先启动)
+    this.resourceManager.register({
+      name: 'radio',
+      start: async () => {
+        const radioConfig = configManager.getRadioConfig();
+        console.log(`📡 [ResourceManager] 应用物理电台配置:`, radioConfig);
+        await this.radioManager.applyConfig(radioConfig);
+      },
+      stop: async () => {
+        await this.radioManager.disconnect('引擎停止');
+      },
+      priority: 1,
+      optional: false,
     });
+
+    // 2. ICOM WLAN 音频适配器 (仅在 ICOM WLAN 模式下需要)
+    this.resourceManager.register({
+      name: 'icomWlanAudioAdapter',
+      start: async () => {
+        const radioConfig = configManager.getRadioConfig();
+        if (radioConfig.type === 'icom-wlan') {
+          console.log(`📡 [ResourceManager] 初始化 ICOM WLAN 音频适配器`);
+          const icomWlanManager = this.radioManager.getIcomWlanManager();
+          if (icomWlanManager && icomWlanManager.isConnected()) {
+            this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(icomWlanManager);
+            this.audioStreamManager.setIcomWlanAudioAdapter(this.icomWlanAudioAdapter);
+
+            // 设置回调让 AudioDeviceManager 知道连接状态
+            const audioDeviceManager = AudioDeviceManager.getInstance();
+            audioDeviceManager.setIcomWlanConnectedCallback(() => {
+              return icomWlanManager.isConnected();
+            });
+
+            console.log(`✅ [ResourceManager] ICOM WLAN 音频适配器已初始化`);
+          } else {
+            throw new Error('ICOM WLAN 电台连接失败，无法启动音频流');
+          }
+        }
+      },
+      stop: async () => {
+        if (this.icomWlanAudioAdapter) {
+          this.icomWlanAudioAdapter.stopReceiving();
+          this.audioStreamManager.setIcomWlanAudioAdapter(null);
+          this.icomWlanAudioAdapter = null;
+          console.log(`🛑 [ResourceManager] ICOM WLAN 音频适配器已清理`);
+        }
+      },
+      priority: 2,
+      dependencies: ['radio'],
+      optional: true, // 可选资源，仅 ICOM WLAN 模式需要
+    });
+
+    // 3. 音频输入流
+    this.resourceManager.register({
+      name: 'audioInputStream',
+      start: async () => {
+        await this.audioStreamManager.startStream();
+        console.log(`🎤 [ResourceManager] 音频输入流启动成功`);
+      },
+      stop: async () => {
+        await this.audioStreamManager.stopStream();
+        console.log(`🛑 [ResourceManager] 音频输入流已停止`);
+      },
+      priority: 3,
+      dependencies: ['radio'],
+      optional: false,
+    });
+
+    // 4. 音频输出流
+    this.resourceManager.register({
+      name: 'audioOutputStream',
+      start: async () => {
+        await this.audioStreamManager.startOutput();
+        console.log(`🔊 [ResourceManager] 音频输出流启动成功`);
+
+        // 恢复上次设置的音量增益
+        const lastVolumeGain = configManager.getLastVolumeGain();
+        if (lastVolumeGain) {
+          console.log(`🔊 [ResourceManager] 恢复上次音量增益: ${lastVolumeGain.gainDb.toFixed(1)}dB`);
+          this.audioStreamManager.setVolumeGainDb(lastVolumeGain.gainDb);
+        } else {
+          console.log(`🔊 [ResourceManager] 使用默认音量增益: 0.0dB`);
+        }
+      },
+      stop: async () => {
+        await this.audioStreamManager.stopOutput();
+        console.log(`🛑 [ResourceManager] 音频输出流已停止`);
+      },
+      priority: 4,
+      dependencies: ['audioInputStream'],
+      optional: false,
+    });
+
+    // 5. 音频监听服务
+    this.resourceManager.register({
+      name: 'audioMonitorService',
+      start: async () => {
+        console.log('🎧 [ResourceManager] 初始化音频监听服务...');
+        const audioProvider = this.audioStreamManager.getAudioProvider();
+        this.audioMonitorService = new AudioMonitorService(audioProvider);
+        console.log('✅ [ResourceManager] 音频监听服务已初始化');
+      },
+      stop: async () => {
+        if (this.audioMonitorService) {
+          this.audioMonitorService.destroy();
+          this.audioMonitorService = null;
+          console.log(`🛑 [ResourceManager] 音频监听服务已清理`);
+        }
+      },
+      priority: 5,
+      dependencies: ['audioInputStream'],
+      optional: false,
+    });
+
+    // 6. 时钟
+    this.resourceManager.register({
+      name: 'clock',
+      start: async () => {
+        if (!this.slotClock) {
+          throw new Error('时钟未初始化');
+        }
+        this.slotClock.start();
+        console.log(`📡 [ResourceManager] 时钟已启动`);
+      },
+      stop: async () => {
+        if (this.slotClock) {
+          this.slotClock.stop();
+          // 确保PTT被停止
+          await this.stopPTT();
+          console.log(`🛑 [ResourceManager] 时钟已停止`);
+        }
+      },
+      priority: 6,
+      dependencies: ['audioOutputStream'],
+      optional: false,
+    });
+
+    // 7. 解码调度器
+    this.resourceManager.register({
+      name: 'slotScheduler',
+      start: async () => {
+        if (this.slotScheduler) {
+          this.slotScheduler.start();
+          console.log(`📡 [ResourceManager] 解码调度器已启动`);
+        }
+      },
+      stop: async () => {
+        if (this.slotScheduler) {
+          this.slotScheduler.stop();
+          console.log(`🛑 [ResourceManager] 解码调度器已停止`);
+        }
+      },
+      priority: 7,
+      dependencies: ['clock'],
+      optional: false,
+    });
+
+    // 8. 频谱调度器
+    this.resourceManager.register({
+      name: 'spectrumScheduler',
+      start: async () => {
+        if (this.spectrumScheduler) {
+          this.spectrumScheduler.start();
+          console.log(`📊 [ResourceManager] 频谱分析调度器已启动`);
+        }
+      },
+      stop: async () => {
+        if (this.spectrumScheduler) {
+          this.spectrumScheduler.stop();
+          console.log(`🛑 [ResourceManager] 频谱分析调度器已停止`);
+        }
+      },
+      priority: 8,
+      dependencies: ['clock'],
+      optional: false,
+    });
+
+    // 9. 操作员管理器
+    this.resourceManager.register({
+      name: 'operatorManager',
+      start: async () => {
+        this.operatorManager.start();
+        console.log(`📡 [ResourceManager] 操作员管理器已启动`);
+      },
+      stop: async () => {
+        this.operatorManager.stop();
+        console.log(`🛑 [ResourceManager] 操作员管理器已停止`);
+      },
+      priority: 9,
+      dependencies: ['clock'],
+      optional: false,
+    });
+
+    console.log('✅ [ResourceManager] 所有资源已注册');
+  }
+
+  /**
+   * 初始化引擎状态机 (XState v5)
+   */
+  private initializeEngineStateMachine(): void {
+    console.log('🎛️ [EngineStateMachine] 初始化引擎状态机...');
+
+    // 创建状态机输入回调
+    const engineInput: EngineInput = {
+      // 启动回调 - 执行实际的引擎启动逻辑
+      onStart: async () => {
+        console.log('🚀 [EngineStateMachine] 执行启动操作');
+        await this.doStart();
+      },
+
+      // 停止回调 - 执行实际的引擎停止逻辑
+      onStop: async () => {
+        console.log('🛑 [EngineStateMachine] 执行停止操作');
+        await this.doStop();
+      },
+
+      // 错误回调 - 处理状态机错误
+      onError: (error) => {
+        console.error('❌ [EngineStateMachine] 状态机错误:', error);
+        // 错误已经通过Manager事件系统广播,这里只记录日志
+      },
+
+      // 状态变化回调 - 广播状态变化
+      onStateChange: (state, context) => {
+        console.log(`🔄 [EngineStateMachine] 状态变化: ${state}`, {
+          error: context.error?.message,
+          forcedStop: context.forcedStop,
+          startedResources: context.startedResources,
+        });
+
+        // 发送systemStatus事件保持向后兼容
+        const status = this.getStatus();
+        this.emit('systemStatus', status);
+      },
+    };
+
+    // 创建并启动状态机actor
+    this.engineStateMachineActor = createEngineActor(engineInput);
+    this.engineStateMachineActor.start();
+
+    console.log('✅ [EngineStateMachine] 引擎状态机已初始化');
+  }
+
+  /**
+   * 执行实际的引擎启动逻辑（由状态机调用）
+   * 使用 ResourceManager 管理资源启动，失败时自动回滚 (Day6)
+   * @private
+   */
+  private async doStart(): Promise<void> {
+    if (!this.slotClock) {
+      throw new Error('时钟管理器未初始化');
+    }
+
+    console.log(`🚀 [时钟管理器] 启动引擎，模式: ${this.currentMode.name}`);
+
+    try {
+      // 使用 ResourceManager 启动所有资源
+      // 按优先级和依赖关系顺序启动，失败时自动回滚
+      await this.resourceManager.startAll();
+
+      // 设置状态标志
+      this.isRunning = true;
+      this.audioStarted = true;
+
+      console.log(`✅ [时钟管理器] 引擎启动完成`);
+    } catch (error) {
+      console.error(`❌ [时钟管理器] 引擎启动失败:`, error);
+      // ResourceManager 已自动回滚所有已启动的资源
+      throw error;
+    }
+  }
+
+  /**
+   * 执行实际的引擎停止逻辑（由状态机调用）
+   * 使用 ResourceManager 管理资源停止，按逆序清理 (Day6)
+   * @private
+   */
+  private async doStop(): Promise<void> {
+    console.log('🛑 [时钟管理器] 停止引擎');
+
+    try {
+      // 1. 先清理所有事件监听器（Day7）
+      // 这样可以避免在停止过程中触发不必要的事件处理
+      this.cleanupEventListeners();
+
+      // 2. 使用 ResourceManager 停止所有资源
+      // 按启动的逆序停止，确保依赖关系正确
+      await this.resourceManager.stopAll();
+
+      // 3. 清除状态标志
+      this.isRunning = false;
+      this.audioStarted = false;
+
+      console.log(`✅ [时钟管理器] 引擎停止完成`);
+    } catch (error) {
+      console.error(`❌ [时钟管理器] 引擎停止失败:`, error);
+      // 即使停止失败，也要清除状态标志
+      this.isRunning = false;
+      this.audioStarted = false;
+      throw error;
+    }
   }
 
   /**
@@ -1382,5 +1765,99 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     return shouldRemix;
+  }
+
+  /**
+   * 检查高频事件健康状态（采样监控）
+   * 每100次高频事件调用一次，避免性能影响
+   */
+  private checkHighFrequencyEventsHealth(): void {
+    const now = Date.now();
+    const timeSinceLastCheck = now - this.lastHealthCheckTimestamp;
+
+    // 只有运行状态才进行健康检查
+    if (!this.isRunning) {
+      return;
+    }
+
+    // 至少间隔10秒才检查一次（避免过于频繁）
+    if (timeSinceLastCheck < 10000) {
+      return;
+    }
+
+    // 检查电台连接健康状态（如果长时间没有meter事件，可能是连接问题）
+    const radioConnected = this.radioManager.isConnected();
+    if (!radioConnected && this.isRunning) {
+      console.warn('⚠️ [健康检查] 电台未连接，但引擎处于运行状态');
+    }
+
+    // 检查高频事件频率是否异常
+    const spectrumRate = timeSinceLastCheck > 0 ? (this.spectrumEventCount / timeSinceLastCheck) * 1000 : 0;
+    const meterRate = timeSinceLastCheck > 0 ? (this.meterEventCount / timeSinceLastCheck) * 1000 : 0;
+
+    // 如果频谱事件频率异常低（<1Hz），可能有问题
+    if (spectrumRate < 1 && this.isRunning) {
+      console.warn(`⚠️ [健康检查] 频谱事件频率异常低: ${spectrumRate.toFixed(2)} Hz`);
+    }
+
+    // 如果数值表事件频率异常低（<0.5Hz），可能有问题
+    if (meterRate < 0.5 && this.isRunning && radioConnected) {
+      console.warn(`⚠️ [健康检查] 数值表事件频率异常低: ${meterRate.toFixed(2)} Hz`);
+    }
+
+    // 输出采样统计
+    console.log(`📊 [健康检查] 高频事件采样统计 (${(timeSinceLastCheck / 1000).toFixed(1)}秒):`);
+    console.log(`   频谱事件: ${this.spectrumEventCount} 次 (${spectrumRate.toFixed(1)} Hz)`);
+    console.log(`   数值表事件: ${this.meterEventCount} 次 (${meterRate.toFixed(1)} Hz)`);
+
+    // 重置计数器
+    this.spectrumEventCount = 0;
+    this.meterEventCount = 0;
+    this.lastHealthCheckTimestamp = now;
+  }
+
+  /**
+   * 根据断开原因生成用户友好的解决建议
+   */
+  private getDisconnectRecommendation(reason?: string): string {
+    // 如果没有原因信息，返回通用建议
+    if (!reason) {
+      return '请检查电台是否开机，网络连接是否正常，然后尝试重新连接。';
+    }
+
+    const reasonLower = reason.toLowerCase();
+
+    // USB通信相关错误
+    if (reasonLower.includes('usb') || reasonLower.includes('通讯') || reasonLower.includes('通信')) {
+      return '可能是USB通讯不稳定。请检查USB线缆连接，尝试更换USB端口或使用更短的USB线。';
+    }
+
+    // 网络相关错误 (ICOM WLAN)
+    if (reasonLower.includes('network') || reasonLower.includes('网络') || reasonLower.includes('timeout') || reasonLower.includes('超时')) {
+      return '可能是网络连接问题。请检查WiFi连接，确认电台和电脑在同一网络，检查防火墙设置。';
+    }
+
+    // 用户主动断开
+    if (reasonLower.includes('disconnect()') || reasonLower.includes('用户') || reasonLower.includes('手动')) {
+      return '连接已按要求断开。如需重新连接，请点击"连接电台"按钮。';
+    }
+
+    // 超时相关
+    if (reasonLower.includes('timeout') || reasonLower.includes('超时') || reasonLower.includes('timed out')) {
+      return '连接超时。请检查电台是否开机，网络或串口连接是否正常，然后重试。';
+    }
+
+    // IO错误
+    if (reasonLower.includes('io error') || reasonLower.includes('i/o') || reasonLower.includes('设备')) {
+      return '设备IO错误。请检查电台连接（USB/网络），确认电台开机并工作正常，然后重新连接。';
+    }
+
+    // 发射功率相关
+    if (reasonLower.includes('功率') || reasonLower.includes('power') || reasonLower.includes('干扰')) {
+      return '可能是发射功率过大导致干扰。请降低发射功率（建议50W以下），改善通讯环境，然后重新连接。';
+    }
+
+    // 通用建议
+    return `连接已断开（${reason}）。请检查电台连接和设置，然后尝试重新连接。`;
   }
 }

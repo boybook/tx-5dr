@@ -19,6 +19,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
 import { WaveLogServiceManager } from '../services/WaveLogService.js';
+import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 
 export interface RadioOperatorManagerOptions {
   eventEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -47,6 +48,12 @@ export class RadioOperatorManager {
   private transmissionTracker: any; // TransmissionTracker实例
   private getRadioFrequency?: () => Promise<number | null>;
 
+  // 记录所有事件监听器,用于清理
+  private eventListeners: Map<string, (...args: any[]) => void> = new Map();
+
+  // 📊 Day13优化：记录上次发射的操作员状态哈希，用于去重
+  private lastEmittedStatusHash: Map<string, string> = new Map();
+
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
     this.encodeQueue = options.encodeQueue;
@@ -58,12 +65,14 @@ export class RadioOperatorManager {
     this.getRadioFrequency = options.getRadioFrequency;
 
     // 监听发射请求
-    this.eventEmitter.on('requestTransmit', (request: TransmitRequest) => {
+    const handleRequestTransmit = (request: TransmitRequest) => {
       this.pendingTransmissions.push(request);
-    });
-    
+    };
+    this.eventEmitter.on('requestTransmit', handleRequestTransmit);
+    this.eventListeners.set('requestTransmit', handleRequestTransmit);
+
     // 监听记录QSO事件
-    this.eventEmitter.on('recordQSO' as any, async (data: { operatorId: string; qsoRecord: QSORecord }) => {
+    const handleRecordQSO = async (data: { operatorId: string; qsoRecord: QSORecord }) => {
       try {
         console.log(`📝 [操作员管理器] 记录QSO: ${data.qsoRecord.callsign} (操作员: ${data.operatorId})`);
         
@@ -147,10 +156,12 @@ export class RadioOperatorManager {
       } catch (error) {
         console.error(`❌ [操作员管理器] 记录QSO失败:`, error);
       }
-    });
-    
+    };
+    this.eventEmitter.on('recordQSO' as any, handleRecordQSO);
+    this.eventListeners.set('recordQSO', handleRecordQSO);
+
     // 监听检查是否已通联事件
-    this.eventEmitter.on('checkHasWorkedCallsign' as any, async (data: { operatorId: string; callsign: string; requestId: string }) => {
+    const handleCheckHasWorkedCallsign = async (data: { operatorId: string; callsign: string; requestId: string }) => {
       try {
         // 获取操作员对应的日志本
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
@@ -201,28 +212,34 @@ export class RadioOperatorManager {
           hasWorked: false
         });
       }
-    });
-    
+    };
+    this.eventEmitter.on('checkHasWorkedCallsign' as any, handleCheckHasWorkedCallsign);
+    this.eventListeners.set('checkHasWorkedCallsign', handleCheckHasWorkedCallsign);
+
     // 监听操作员发射周期变更事件
-    this.eventEmitter.on('operatorTransmitCyclesChanged' as any, (data: { operatorId: string; transmitCycles: number[] }) => {
+    const handleOperatorTransmitCyclesChanged = (data: { operatorId: string; transmitCycles: number[] }) => {
       console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 发射周期变更: [${data.transmitCycles.join(', ')}]`);
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
-    });
-    
+    };
+    this.eventEmitter.on('operatorTransmitCyclesChanged' as any, handleOperatorTransmitCyclesChanged);
+    this.eventListeners.set('operatorTransmitCyclesChanged', handleOperatorTransmitCyclesChanged);
+
     // 监听操作员切换发射槽位事件
-    this.eventEmitter.on('operatorSlotChanged' as any, (data: { operatorId: string; slot: string }) => {
+    const handleOperatorSlotChanged = (data: { operatorId: string; slot: string }) => {
       console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 切换发射槽位: ${data.slot}`);
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
-    });
-    
+    };
+    this.eventEmitter.on('operatorSlotChanged' as any, handleOperatorSlotChanged);
+    this.eventListeners.set('operatorSlotChanged', handleOperatorSlotChanged);
+
     // 监听操作员发射内容变更事件
-    this.eventEmitter.on('operatorSlotContentChanged' as any, (data: { operatorId: string; slot: string; content: string }) => {
+    const handleOperatorSlotContentChanged = (data: { operatorId: string; slot: string; content: string }) => {
       console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 编辑发射内容: 槽位=${data.slot}`);
       // 立即检查并触发发射（如果当前正在该槽位发射）
       const operator = this.operators.get(data.operatorId);
@@ -235,7 +252,12 @@ export class RadioOperatorManager {
       }
       // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
-    });
+    };
+    this.eventEmitter.on('operatorSlotContentChanged' as any, handleOperatorSlotContentChanged);
+    this.eventListeners.set('operatorSlotContentChanged', handleOperatorSlotContentChanged);
+
+    // 注册内存泄漏检测 (仅在开发环境启用)
+    MemoryLeakDetector.getInstance().register('RadioOperatorManager', this.eventEmitter);
   }
 
   /**
@@ -1015,33 +1037,55 @@ export class RadioOperatorManager {
    */
   async cleanup(): Promise<void> {
     this.stop();
+
+    // 移除所有事件监听器 (修复内存泄漏)
+    console.log(`📻 [操作员管理器] 移除 ${this.eventListeners.size} 个事件监听器`);
+    for (const [eventName, handler] of this.eventListeners.entries()) {
+      this.eventEmitter.off(eventName as any, handler);
+    }
+    this.eventListeners.clear();
+
     this.operators.clear();
     this.pendingTransmissions = [];
-    
+
     // 关闭日志管理器
     await this.logManager.close();
-    
+
+    // 取消注册内存泄漏检测
+    MemoryLeakDetector.getInstance().unregister('RadioOperatorManager');
+
     console.log('📻 [操作员管理器] 清理完成');
   }
 
   /**
    * 发射操作员状态更新事件（触发前端更新）
+   * 📊 Day13优化：添加状态去重，避免发射重复的状态更新
    */
   emitOperatorStatusUpdate(operatorId: string): void {
     const operatorStatus = this.getOperatorsStatus().find(op => op.id === operatorId);
-    if (operatorStatus) {
+    if (!operatorStatus) return;
+
+    // 📊 计算状态哈希（仅包含关键字段）
+    const statusHash = this.hashOperatorStatus(operatorStatus);
+    const lastHash = this.lastEmittedStatusHash.get(operatorId);
+
+    // 📊 状态去重：仅在状态变化时发送
+    if (statusHash !== lastHash) {
       this.eventEmitter.emit('operatorStatusUpdate', operatorStatus);
+      this.lastEmittedStatusHash.set(operatorId, statusHash);
     }
   }
 
   /**
    * 广播所有操作员的状态更新
-   * 注意：这个方法只发射事件，实际的过滤逻辑在WSServer中处理
+   * 📊 Day13优化：使用去重方法，仅广播状态变化的操作员
+   * 注意：实际的过滤逻辑在WSServer中处理
    */
   broadcastAllOperatorStatusUpdates(): void {
     const operators = this.getOperatorsStatus();
     for (const operator of operators) {
-      this.eventEmitter.emit('operatorStatusUpdate', operator);
+      // 📊 使用去重的方法，避免发射重复状态
+      this.emitOperatorStatusUpdate(operator.id);
     }
   }
 
@@ -1052,6 +1096,39 @@ export class RadioOperatorManager {
     const operators = this.getOperatorsStatus();
     console.log(`📻 [操作员管理器] 广播操作员列表更新，包含 ${operators.length} 个操作员`);
     this.eventEmitter.emit('operatorsList', { operators });
+  }
+
+  /**
+   * 📊 Day13优化：计算操作员状态哈希（仅包含关键字段）
+   * 用于状态去重，避免发射重复的状态更新
+   *
+   * 关键字段：
+   * - isActive, isTransmitting, currentSlot（核心状态）
+   * - context（完整上下文）
+   * - strategy.state（策略状态）
+   * - cycleInfo（周期信息）
+   * - slots（时隙内容）
+   * - transmitCycles（发射周期）
+   *
+   * 排除字段：
+   * - id（标识符，非状态）
+   * - strategy.name, strategy.availableSlots（基本不变）
+   */
+  private hashOperatorStatus(status: any): string {
+    // 提取关键字段进行哈希
+    const keyFields = {
+      isActive: status.isActive,
+      isTransmitting: status.isTransmitting,
+      currentSlot: status.currentSlot,
+      context: status.context,
+      strategyState: status.strategy?.state,
+      cycleInfo: status.cycleInfo,
+      slots: status.slots,
+      transmitCycles: status.transmitCycles,
+    };
+
+    // 使用 JSON 序列化作为哈希（简单有效）
+    return JSON.stringify(keyFields);
   }
 
   /**
