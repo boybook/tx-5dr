@@ -270,6 +270,15 @@ export default {
             execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/linux-x64" 2>/dev/null || true`, { stdio: 'inherit' });
           }
 
+          // hamlib 仅保留本平台预编译目录
+          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/win32-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          if (keep === 'linux-x64') {
+            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/linux-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
+          } else {
+            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/linux-x64" 2>/dev/null || true`, { stdio: 'inherit' });
+          }
+
           // naudiodon2: 删除Windows/MSVC目录与Windows二进制
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/msvc" 2>/dev/null || true`, { stdio: 'inherit' });
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/bin" 2>/dev/null || true`, { stdio: 'inherit' });
@@ -283,10 +292,28 @@ export default {
       }
       if (platform === 'darwin') {
         try {
-          console.log('🧹 [macOS] 清理非本平台预构建...');
-          // 仅保留 darwin-arm64 的 wsjtx-lib 预构建
+          console.log(`🧹 [macOS] 清理非本平台预构建（保留 darwin-${arch}）...`);
+
+          // wsjtx-lib: 清理其他平台和架构
           execSync(`find "${appRoot}" -path "*/wsjtx-lib/prebuilds/linux-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
           execSync(`find "${appRoot}" -path "*/wsjtx-lib/prebuilds/win32-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          // 清理其他 macOS 架构
+          if (arch === 'arm64') {
+            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-x64" 2>/dev/null || true`, { stdio: 'inherit' });
+          } else {
+            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
+          }
+
+          // hamlib: 清理其他平台和架构
+          execSync(`find "${appRoot}" -path "*/hamlib/prebuilds/linux-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`find "${appRoot}" -path "*/hamlib/prebuilds/win32-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
+          // 清理其他 macOS 架构
+          if (arch === 'arm64') {
+            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-x64" 2>/dev/null || true`, { stdio: 'inherit' });
+          } else {
+            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
+          }
+
           // 清理 naudiodon2 Windows/MSVC 资源与 ARMHF 目录
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/msvc" 2>/dev/null || true`, { stdio: 'inherit' });
           execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/bin_arm*" 2>/dev/null || true`, { stdio: 'inherit' });
