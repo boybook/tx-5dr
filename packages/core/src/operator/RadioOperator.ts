@@ -58,6 +58,7 @@ export class RadioOperator {
     }
 
     stop() {
+        console.log(`[RadioOperator.stop] (${this._config.myCallsign}) 停止操作员，_stopped=${this._stopped} → true, _isTransmitting=${this._isTransmitting} → false`);
         this._stopped = true;
         this._isTransmitting = false;
         this.notifyStatusChanged();
@@ -109,6 +110,7 @@ export class RadioOperator {
                     }
                 } catch {}
                 if (result?.stop) {
+                    console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 收到停止指令，调用 stop()`);
                     this.stop();
                 }
                 console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 自动决策`, result);
@@ -118,9 +120,11 @@ export class RadioOperator {
         // 编码开始事件 - 提前触发编码准备（新时序系统）
         eventEmitter.on('encodeStart' as any, (slotInfo: SlotInfo) => {
             if (this._stopped) {
+                console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 操作员已停止，跳过编码`);
                 return;
             }
             if (!this._isTransmitting) {
+                console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 未处于发射状态，跳过编码`);
                 return;
             }
 

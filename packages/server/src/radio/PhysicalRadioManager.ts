@@ -498,7 +498,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       },
     };
 
-    this.radioActor = createRadioActor(radioInput, { id: 'physicalRadio' });
+    this.radioActor = createRadioActor(radioInput, {
+      id: 'physicalRadio',
+      devTools: process.env.NODE_ENV === 'development',
+    });
     this.radioActor.start();
 
     console.log('✅ [PhysicalRadioManager] 状态机已初始化');

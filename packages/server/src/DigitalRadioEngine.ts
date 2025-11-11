@@ -1640,7 +1640,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     };
 
     // 创建并启动状态机actor
-    this.engineStateMachineActor = createEngineActor(engineInput);
+    this.engineStateMachineActor = createEngineActor(engineInput, {
+      devTools: process.env.NODE_ENV === 'development',
+    });
     this.engineStateMachineActor.start();
 
     console.log('✅ [EngineStateMachine] 引擎状态机已初始化');

@@ -24,6 +24,7 @@ import {
   type StateMachineOptions,
 } from './types';
 import type { HamlibConfig } from '@tx5dr/contracts';
+import { globalInspector } from '../index.js';
 
 /**
  * 创建电台状态机
@@ -468,11 +469,13 @@ export function createRadioActor(
 
   const actor = createActor(machine, {
     input: input,
-    inspect: options.devTools
-      ? (inspectionEvent) => {
-          console.log('[XState Inspect]', inspectionEvent);
-        }
-      : undefined,
+    inspect:
+      globalInspector?.inspect ||
+      (options.devTools
+        ? (inspectionEvent) => {
+            console.log('[XState Inspect]', inspectionEvent);
+          }
+        : undefined),
   });
 
   return actor;
