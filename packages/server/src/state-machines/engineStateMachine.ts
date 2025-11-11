@@ -23,6 +23,7 @@ import {
   type EngineInput,
   type StateMachineOptions,
 } from './types';
+import { globalInspector } from '../index.js';
 
 /**
  * 创建引擎状态机
@@ -307,11 +308,13 @@ export function createEngineActor(
 
   const actor = createActor(machine, {
     input: { engineInput: input },
-    inspect: options.devTools
-      ? (inspectionEvent) => {
-          console.log('[XState Inspect]', inspectionEvent);
-        }
-      : undefined,
+    inspect:
+      globalInspector?.inspect ||
+      (options.devTools
+        ? (inspectionEvent) => {
+            console.log('[XState Inspect]', inspectionEvent);
+          }
+        : undefined),
   });
 
   return actor;

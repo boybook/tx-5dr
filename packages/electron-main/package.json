@@ -1,14 +1,14 @@
 {
   "name": "@tx5dr/electron-main",
   "version": "1.0.0",
-  "type": "module",
+  "type": "commonjs",
   "description": "TX-5DR Ham Radio FT8 Application",
   "author": "BG5DRB",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "dev": "wait-on http://localhost:4000 http://localhost:5173 && cd ../.. && node scripts/fix-naudiodon.js && NODE_ENV=development electron --experimental-specifier-resolution=node --enable-source-maps .",
-    "start": "cd ../.. && node scripts/fix-naudiodon.js && electron --experimental-specifier-resolution=node --enable-source-maps .",
+    "dev": "NODE_ENV=development electron --experimental-specifier-resolution=node --enable-source-maps .",
+    "start": "electron --experimental-specifier-resolution=node --enable-source-maps .",
     "lint": "eslint src/**/*.ts"
   },
   "dependencies": {

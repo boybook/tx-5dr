@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TX-5DR 启动日志</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* macOS 拖动条样式 */
+    .drag-bar {
+      -webkit-app-region: drag;
+      height: 20px;
+      width: 100%;
+      background: transparent;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1000;
+    }
+
+    .header {
+      background: rgba(255, 69, 58, 0.1);
+      border-bottom: 2px solid rgba(255, 69, 58, 0.3);
+      padding: 24px 32px;
+      flex-shrink: 0;
+      display: none; /* 默认隐藏 */
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #ff453a;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header .icon {
+      font-size: 32px;
+    }
+
+    .header .subtitle {
+      font-size: 14px;
+      color: #a0a0a0;
+      margin-left: 44px;
+    }
+
+    .error-type {
+      background: rgba(255, 69, 58, 0.15);
+      border-left: 4px solid #ff453a;
+      padding: 12px 16px;
+      margin: 16px 32px 0;
+      border-radius: 4px;
+      font-size: 14px;
+      color: #ffb3b3;
+      flex-shrink: 0;
+      display: none; /* 默认隐藏 */
+    }
+
+    .log-container {
+      flex: 1;
+      margin: 24px 32px;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    .log-header {
+      background: #161b22;
+      padding: 12px 16px;
+      border-bottom: 1px solid #30363d;
+      font-size: 13px;
+      color: #8b949e;
+      font-weight: 500;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .log-output {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #c9d1d9;
+    }
+
+    .log-line {
+      margin-bottom: 4px;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+
+    .log-line.error {
+      color: #ff7b72;
+      background: rgba(255, 123, 114, 0.1);
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+
+    .log-line.warning {
+      color: #ffd700;
+    }
+
+    .log-line.info {
+      color: #00bfff;
+    }
+
+    .suggestions {
+      margin: 16px 32px;
+      display: none; /* 默认隐藏 */
+    }
+
+    .suggestions h3 {
+      margin-bottom: 8px;
+      color: #ff6b6b;
+    }
+
+    .suggestion-item {
+      margin-bottom: 12px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+    }
+
+    .suggestion-title {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    .suggestion-text {
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .suggestion-text code {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+<!-- macOS 拖动条 -->
+<div class="drag-bar" id="dragBar"></div>
+
+<div class="header" id="headerSection">
+  <h1><span class="icon">⚠️</span> TX-5DR 启动失败</h1>
+  <p class="subtitle">请查看下方日志以了解详细信息</p>
+</div>
+
+<div class="error-type" id="errorTypeSection"></div>
+
+<div class="log-container">
+  <div class="log-header">
+    <span>启动日志</span>
+  </div>
+  <div class="log-output" id="logOutput"></div>
+</div>
+
+<div class="suggestions" id="suggestionsSection">
+  <h3>排查建议</h3>
+  <div id="suggestionsContent"></div>
+</div>
+
+<script>
+  const logOutput = document.getElementById('logOutput');
+  const errorTypeSection = document.getElementById('errorTypeSection');
+  const suggestionsSection = document.getElementById('suggestionsSection');
+  const headerSection = document.getElementById('headerSection');
+  const dragBar = document.getElementById('dragBar');
+
+  let isMacOS = false;
+
+  // 检测是否为 macOS
+  if (navigator.userAgent.indexOf('Mac') !== -1) {
+    isMacOS = true;
+    dragBar.style.display = 'block';
+  } else {
+    dragBar.style.display = 'none';
+  }
+
+  let autoScroll = true;
+
+  function addLogLine(log, type) {
+    const logElement = document.createElement('div');
+    logElement.className = `log-line log-line-${type}`;
+    logElement.textContent = log;
+    logOutput.appendChild(logElement);
+
+    // 自动滚动到底部
+    if (autoScroll) {
+      logOutput.scrollTop = logOutput.scrollHeight;
+    }
+  }
+
+  function classifyLogLine(log) {
+    if (log.includes('error') || log.includes('Error') || log.includes('ERROR')) {
+      return 'error';
+    } else if (log.includes('warn') || log.includes('Warn') || log.includes('WARN')) {
+      return 'warning';
+    } else if (log.includes('info') || log.includes('Info') || log.includes('INFO')) {
+      return 'info';
+    } else {
+      return 'normal';
+    }
+  }
+
+  function renderSuggestions(errorType) {
+    const suggestions = {
+      'PORT_IN_USE': [
+        { title: '端口占用', text: '请检查是否有其他程序占用了该端口' },
+        { title: '更换端口', text: '修改配置文件中的端口号' }
+      ],
+      'MODULE_NOT_FOUND': [
+        { title: '安装依赖', text: '运行 npm install 安装缺失的模块' },
+        { title: '检查版本', text: '确认 Node.js 版本兼容性' }
+      ],
+      'PERMISSION_DENIED': [
+        { title: '权限设置', text: '检查应用是否有足够的访问权限' },
+        { title: '运行方式', text: '尝试以管理员身份运行' }
+      ],
+      'TIMEOUT': [
+        { title: '等待时间', text: '增加启动超时时间配置' },
+        { title: '资源检查', text: '确认系统资源是否充足' }
+      ],
+      'CRASH': [
+        { title: '查看日志', text: '检查详细的错误日志信息' },
+        { title: '重启服务', text: '重启应用服务进程' }
+      ],
+      'UNKNOWN': [
+        { title: '详细查看', text: '滚动上方日志查看完整错误信息' },
+        { title: '联系支持', text: '如果问题持续存在,请将日志信息反馈给开发团队' }
+      ]
+    };
+
+    const config = suggestions[errorType] || suggestions['UNKNOWN'];
+
+    const suggestionsContent = document.getElementById('suggestionsContent');
+    suggestionsContent.innerHTML = config.map(item => `
+        <div class="suggestion-item">
+          <div class="suggestion-title">${item.title}</div>
+          <div class="suggestion-text">${item.text}</div>
+        </div>
+      `).join('');
+  }
+
+  function showErrorSection(errorType, message) {
+    // 显示标题区域
+    headerSection.style.display = 'block';
+
+    // 显示错误类型和建议区域
+    errorTypeSection.textContent = message;
+    errorTypeSection.style.display = 'block';
+    suggestionsSection.style.display = 'block';
+
+    renderSuggestions(errorType);
+  }
+
+  if (window.electronAPI) {
+    window.electronAPI.onLogUpdate((log) => {
+      const type = classifyLogLine(log);
+      addLogLine(log, type);
+    });
+
+    window.electronAPI.getErrorType().then(errorType => {
+      const errorMessages = {
+        'PORT_IN_USE': '🔴 端口占用 - 服务端口已被其他程序使用',
+        'MODULE_NOT_FOUND': '📦 依赖缺失 - 缺少必要的 Node.js 模块',
+        'PERMISSION_DENIED': '🔒 权限不足 - 应用没有足够的访问权限',
+        'TIMEOUT': '⏱️ 启动超时 - 服务未能在预期时间内启动',
+        'CRASH': '💥 进程崩溃 - 子进程意外退出',
+        'UNKNOWN': '❓ 未知错误 - 请查看日志详情'
+      };
+
+      showErrorSection(errorType, errorMessages[errorType] || errorMessages['UNKNOWN']);
+    });
+
+    window.electronAPI.getStartupLogs().then(logs => {
+      logs.forEach(log => {
+        const type = classifyLogLine(log);
+        addLogLine(log, type);
+      });
+    });
+  }
+
+  logOutput.addEventListener('scroll', () => {
+    const isAtBottom = logOutput.scrollHeight - logOutput.scrollTop <= logOutput.clientHeight + 50;
+    autoScroll = isAtBottom;
+  });
+</script>
+</body>
+</html>

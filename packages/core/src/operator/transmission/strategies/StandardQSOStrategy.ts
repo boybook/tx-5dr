@@ -159,13 +159,21 @@ const states: { [key in SlotsIndex]: StandardState } = {
             strategy.qsoStartTime = Date.now();
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            console.log(`[StandardQSOStrategy TX1.onTimeout] 呼叫超时，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
+
             // 清理QSO上下文
             strategy.clearQSOContext();
-            if (strategy.operator.config.autoReplyToCQ) {
+
+            // QSO失败，检查是否自动恢复CQ
+            if (strategy.operator.config.autoResumeCQAfterFail) {
+                console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
                 return { changeState: 'TX6' };
             }
+
+            console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
             return { stop: true };
         }
     },
@@ -244,13 +252,21 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            console.log(`[StandardQSOStrategy TX2.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
-            // 清理QSO上下文
+
+            // 清理QSO上下文（会调用updateSlots，清空TX1-TX5）
             strategy.clearQSOContext();
-            if (strategy.operator.config.autoReplyToCQ) {
+
+            // QSO失败，检查是否自动恢复CQ
+            if (strategy.operator.config.autoResumeCQAfterFail) {
+                console.log(`[StandardQSOStrategy TX2.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
                 return { changeState: 'TX6' };
             }
+
+            console.log(`[StandardQSOStrategy TX2.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
             return { stop: true };
         }
     },
@@ -316,13 +332,21 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return {}
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            console.log(`[StandardQSOStrategy TX3.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
+
             // 清理QSO上下文
             strategy.clearQSOContext();
-            if (strategy.operator.config.autoReplyToCQ) {
+
+            // QSO失败，检查是否自动恢复CQ
+            if (strategy.operator.config.autoResumeCQAfterFail) {
+                console.log(`[StandardQSOStrategy TX3.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
                 return { changeState: 'TX6' };
             }
+
+            console.log(`[StandardQSOStrategy TX3.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
             return { stop: true };
         }
     },
@@ -489,12 +513,21 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return {};
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            console.log(`[StandardQSOStrategy TX4.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
+
+            // 清理QSO上下文
             strategy.clearQSOContext();
-            if (strategy.operator.config.autoReplyToCQ) {
+
+            // QSO失败，检查是否自动恢复CQ
+            if (strategy.operator.config.autoResumeCQAfterFail) {
+                console.log(`[StandardQSOStrategy TX4.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
                 return { changeState: 'TX6' };
             }
+
+            console.log(`[StandardQSOStrategy TX4.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
             return { stop: true };
         }
     },
@@ -629,10 +662,19 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return { changeState: 'TX6' };
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+            console.log(`[StandardQSOStrategy TX5.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterSuccess: ${strategy.operator.config.autoResumeCQAfterSuccess}`);
+
+            // 清理QSO上下文
             strategy.clearQSOContext();
-            if (strategy.operator.config.autoReplyToCQ) {
+
+            // TX5超时表示QSO已成功（已记录日志），对方没有回复73
+            // 检查是否自动恢复CQ
+            if (strategy.operator.config.autoResumeCQAfterSuccess) {
+                console.log(`[StandardQSOStrategy TX5.onTimeout] autoResumeCQAfterSuccess=true，切换到TX6继续CQ`);
                 return { changeState: 'TX6' };
             }
+
+            console.log(`[StandardQSOStrategy TX5.onTimeout] autoResumeCQAfterSuccess=false，返回停止指令`);
             return { stop: true };
         }
     },
@@ -868,19 +910,18 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             this.timeoutCycles++;
             // 检查是否超时
             if (this.timeoutCycles >= this.operator.config.maxQSOTimeoutCycles) {
+                console.log(`[StandardQSOStrategy] 超时计数达到限制 (${this.timeoutCycles}/${this.operator.config.maxQSOTimeoutCycles})，当前状态: ${this.state}，触发超时处理`);
                 if (currentState.onTimeout) {
                     const timeoutResult = currentState.onTimeout(this);
+                    console.log(`[StandardQSOStrategy] 超时处理结果:`, timeoutResult);
+
+                    // 使用 changeState() 方法进行状态转换，确保完整的状态转换流程
                     if (timeoutResult.changeState) {
-                        const oldState = this.state;
-                        this.state = timeoutResult.changeState;
-                        this.timeoutCycles = 0;
-                        
-                        // 状态变化时通知槽位更新
-                        if (oldState !== this.state) {
-                            this.notifyStateChanged();
-                        }
+                        console.log(`[StandardQSOStrategy] 超时后切换状态: ${this.state} → ${timeoutResult.changeState}`);
+                        this.changeState(timeoutResult.changeState);
                     }
                     if (timeoutResult.stop) {
+                        console.log(`[StandardQSOStrategy] 超时后停止操作员`);
                         return { stop: true };
                     }
                 }
@@ -1157,6 +1198,9 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
      * 在QSO结束时调用，确保干净的下一次通联
      */
     clearQSOContext(): void {
+        const previousTarget = this.context.targetCallsign;
+        const currentState = this.state;
+
         // 先保存当前上下文到历史缓存
         this.saveCurrentContext();
 
@@ -1169,7 +1213,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         // 更新slots（TX1-TX5会变为空，只保留TX6的CQ）
         this.updateSlots();
 
-        console.log(`[StandardQSOStrategy] 已清空QSO上下文`);
+        console.log(`[StandardQSOStrategy] 已清空QSO上下文 (前目标: ${previousTarget}, 当前状态: ${currentState}, 超时计数: ${this.timeoutCycles})`);
     }
 
     /**
