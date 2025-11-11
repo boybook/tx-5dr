@@ -22,7 +22,7 @@ import {
   type EngineEvent,
   type EngineInput,
   type StateMachineOptions,
-} from './types';
+} from './types.js';
 import { globalInspector } from '../index.js';
 
 /**
