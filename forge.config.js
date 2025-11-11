@@ -28,7 +28,8 @@ export default {
     extraResource: [
       join(__dirname, 'resources', 'bin'),
       join(__dirname, 'resources', 'licenses'),
-      join(__dirname, 'resources', 'README.txt')
+      join(__dirname, 'resources', 'README.txt'),
+      join(__dirname, 'packages', 'electron-main', 'assets')
     ],
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
@@ -247,8 +248,8 @@ export default {
 
         for (const pkg of packagesToClean) {
           const pkgDir = join(packagesDir, pkg);
-          // 保留 dist, package.json, 删除其他内容
-          execSync(`cd "${pkgDir}" && find . -mindepth 1 -maxdepth 1 ! -name "dist" ! -name "package.json" -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
+          // 保留 dist, package.json, assets (仅 electron-main 需要), 删除其他内容
+          execSync(`cd "${pkgDir}" && find . -mindepth 1 -maxdepth 1 ! -name "dist" ! -name "package.json" ! -name "assets" -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
         }
         console.log('✅ 其他 packages 源码清理完成');
       } catch (err) {
