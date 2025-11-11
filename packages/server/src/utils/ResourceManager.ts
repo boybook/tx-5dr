@@ -10,7 +10,7 @@
  * 5. 检测循环依赖
  */
 
-import { RadioError, RadioErrorCode } from './errors/RadioError';
+import { RadioError, RadioErrorCode } from './errors/RadioError.js';
 
 /**
  * 资源接口

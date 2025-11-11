@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ResourceManager, IResource, ResourceState } from '../ResourceManager';
-import { RadioError, RadioErrorCode } from '../errors/RadioError';
+import { ResourceManager, IResource, ResourceState } from '../ResourceManager.js';
+import { RadioError, RadioErrorCode } from '../errors/RadioError.js';
 
 /**
  * 创建模拟资源

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { ErrorBoundary } from '../ErrorBoundary';
+import { ErrorBoundary } from '../ErrorBoundary.js';
 
 describe('ErrorBoundary', () => {
   describe('execute - 基本功能', () => {

@@ -8,6 +8,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 // 定义暴露给渲染进程的 API 类型
 interface ElectronAPI {
   onLogUpdate: (callback: (log: string) => void) => void;
+  onErrorDetected: (callback: (errorType: string) => void) => void;
   getStartupLogs: () => Promise<string[]>;
   getErrorType: () => Promise<string>;
 }
@@ -18,6 +19,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onLogUpdate: (callback: (log: string) => void) => {
     ipcRenderer.on('log-update', (_event, log: string) => {
       callback(log);
+    });
+  },
+
+  // 监听错误检测
+  onErrorDetected: (callback: (errorType: string) => void) => {
+    ipcRenderer.on('error-detected', (_event, errorType: string) => {
+      callback(errorType);
     });
   },
 

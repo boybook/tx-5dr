@@ -8,8 +8,8 @@ import {
   isEngineState,
   getEngineContext,
   waitForEngineState,
-} from '../engineStateMachine';
-import { EngineState, type EngineInput } from '../types';
+} from '../engineStateMachine.js';
+import { EngineState, type EngineInput } from '../types.js';
 
 describe('engineStateMachine', () => {
   let mockInput: EngineInput;

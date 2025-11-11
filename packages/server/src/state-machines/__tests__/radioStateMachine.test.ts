@@ -8,8 +8,8 @@ import {
   isRadioState,
   getRadioContext,
   waitForRadioState,
-} from '../radioStateMachine';
-import { RadioState, type RadioInput } from '../types';
+} from '../radioStateMachine.js';
+import { RadioState, type RadioInput } from '../types.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 
 describe('radioStateMachine', () => {
