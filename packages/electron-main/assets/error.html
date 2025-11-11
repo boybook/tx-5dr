@@ -21,7 +21,7 @@
 
     .drag-bar {
       -webkit-app-region: drag;
-      height: 20px;
+      height: 40px;
       width: 100%;
       background: transparent;
       position: absolute;
@@ -35,6 +35,11 @@
       display: flex;
       flex-direction: column;
       background: #0a0a0a;
+    }
+
+    /* macOS 顶部 padding，为窗口控制按钮留出空间 */
+    body.macos .log-container {
+      padding-top: 24px;
     }
 
     .error-banner {
@@ -86,7 +91,11 @@
   const errorBanner = document.getElementById('errorBanner');
   const dragBar = document.getElementById('dragBar');
 
-  if (navigator.userAgent.indexOf('Mac') === -1) {
+  // 检测 macOS 并添加相应的样式
+  const isMac = navigator.userAgent.indexOf('Mac') !== -1;
+  if (isMac) {
+    document.body.classList.add('macos');
+  } else {
     dragBar.style.display = 'none';
   }
 
