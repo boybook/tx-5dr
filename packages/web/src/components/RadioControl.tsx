@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle, faHeadphones } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle, faHeadphones, faBan, faRadio } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api, ApiError } from '@tx5dr/core';
 import type { ModeDescriptor } from '@tx5dr/contracts';
@@ -289,7 +289,8 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     } else if (connection.isConnecting) {
       return <Spinner size="sm" color="primary" />;
     } else {
-      return <FontAwesomeIcon icon={faWifi} className="text-default-400" />;
+      // 未连接后端使用禁止图标
+      return <FontAwesomeIcon icon={faBan} className="text-default-400" />;
     }
   };
 
@@ -297,19 +298,19 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     if (connection.isConnected) {
       return '服务器已连接';
     } else if (connection.isReconnecting) {
-      const nextAttemptIn = connection.lastReconnectInfo 
+      const nextAttemptIn = connection.lastReconnectInfo
         ? Math.max(0, Math.ceil((connection.lastReconnectInfo.nextAttemptAt - currentTime) / 1000))
         : 0;
-      const attemptText = connection.maxReconnectAttempts === -1 
-        ? `第${connection.reconnectAttempts}次` 
+      const attemptText = connection.maxReconnectAttempts === -1
+        ? `第${connection.reconnectAttempts}次`
         : `${connection.reconnectAttempts}/${connection.maxReconnectAttempts}`;
-      return `重连中 (${attemptText}) ${nextAttemptIn > 0 ? `${nextAttemptIn}s后重试` : ''}`;
+      return `服务器重连中 (${attemptText}) ${nextAttemptIn > 0 ? `${nextAttemptIn}s后重试` : ''}`;
     } else if (connection.hasReachedMaxAttempts) {
-      return '连接失败，已停止重试';
+      return '服务器连接失败';
     } else if (connection.isConnecting) {
-      return '连接中...';
+      return '正在连接服务器...';
     } else {
-      return '未连接';
+      return '服务器未连接';
     }
   };
 
@@ -366,6 +367,35 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     }
   };
 
+  // 调试日志：记录关键状态变化
+  useEffect(() => {
+    console.log('🔍 [RadioControl] 连接状态变化:', {
+      前端连接后端: connection.isConnected,
+      后端连接电台: radio.state.radioConnected,
+      电台配置类型: radio.state.radioConfig?.type,
+      电台重连状态: {
+        isReconnecting: radioReconnectInfo.isReconnecting,
+        hasReachedMaxAttempts: radioReconnectInfo.hasReachedMaxAttempts,
+        reconnectAttempts: radioReconnectInfo.reconnectAttempts
+      },
+      服务器重连状态: {
+        isReconnecting: connection.isReconnecting,
+        hasReachedMaxAttempts: connection.hasReachedMaxAttempts,
+        reconnectAttempts: connection.reconnectAttempts
+      }
+    });
+  }, [
+    connection.isConnected,
+    radio.state.radioConnected,
+    radio.state.radioConfig?.type,
+    radioReconnectInfo.isReconnecting,
+    radioReconnectInfo.hasReachedMaxAttempts,
+    radioReconnectInfo.reconnectAttempts,
+    connection.isReconnecting,
+    connection.hasReachedMaxAttempts,
+    connection.reconnectAttempts
+  ]);
+
   const getRadioDisplayText = () => {
     if (!connection.isConnected) {
       return null;
@@ -378,13 +408,16 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
 
     // 电台已连接 - 修复条件判断，只依赖radioConnected状态
     if (radio.state.radioConnected) {
-      const displayText = radio.state.radioInfo 
+      const displayText = radio.state.radioInfo
         ? `${radio.state.radioInfo.manufacturer} ${radio.state.radioInfo.model} 电台已连接`
         : '电台已连接';
       return (
-        <span className="text-sm text-default-500">
-          {displayText}
-        </span>
+        <div className="flex items-center gap-2">
+          <FontAwesomeIcon icon={faRadio} className="text-success text-ms -mt-0.5" />
+          <span className="text-sm text-default-500">
+            {displayText}
+          </span>
+        </div>
       );
     }
 
@@ -427,7 +460,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       return (
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1">
-            <FontAwesomeIcon icon={faExclamationTriangle} className="text-danger text-xs" />
+            <FontAwesomeIcon icon={faRadio} className="text-danger text-xs" />
             <span className="text-sm text-danger">{radioModelText} 连接失败</span>
           </div>
           <Button
@@ -447,7 +480,10 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     // 电台未连接（初始状态）
     return (
       <div className="flex items-center gap-2">
-        <span className="text-sm text-default-500">{radioModelText}</span>
+        <div className="flex items-center gap-1">
+          <FontAwesomeIcon icon={faRadio} className="text-default-400 text-xs" />
+          <span className="text-sm text-default-500">{radioModelText}</span>
+        </div>
         <Button
           size="sm"
           color="primary"

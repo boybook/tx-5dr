@@ -601,7 +601,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 数值表数据频率较高，不打印日志
         radioDispatch({ type: 'meterData', payload: data });
       },
-      handshakeComplete: (data: any) => {
+      handshakeComplete: async (data: any) => {
         console.log('🤝 [RadioProvider] 握手完成:', data);
         if (data.finalEnabledOperatorIds) {
           console.log('💾 [RadioProvider] 新客户端，保存默认操作员偏好:', data.finalEnabledOperatorIds);
@@ -609,6 +609,30 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             enabledOperatorIds: data.finalEnabledOperatorIds,
             lastUpdated: Date.now()
           });
+        }
+
+        // 握手完成后，主动请求电台状态以确保状态同步
+        console.log('🔄 [RadioProvider] 握手完成，主动请求电台状态');
+        try {
+          const { api } = await import('@tx5dr/core');
+          const status = await api.getRadioStatus();
+          if (status.success) {
+            console.log('✅ [RadioProvider] 电台状态已同步:', {
+              radioConnected: status.isConnected,
+              radioInfo: status.radioInfo,
+              configType: status.config?.type
+            });
+            radioDispatch({
+              type: 'radioStatusUpdate',
+              payload: {
+                radioConnected: status.isConnected,
+                radioInfo: status.radioInfo,
+                radioConfig: status.config
+              }
+            });
+          }
+        } catch (error) {
+          console.error('❌ [RadioProvider] 获取电台状态失败:', error);
         }
       },
       reconnecting: (reconnectInfo: any) => {
