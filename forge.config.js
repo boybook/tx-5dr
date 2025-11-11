@@ -68,8 +68,8 @@ export default {
     // 禁用依赖裁剪，避免工作区（monorepo）被按根 package.json 误裁导致运行时缺包
     prune: false,
     darwinDarkModeSupport: true,
-    // macOS 签名配置
-    osxSign: {
+    // macOS 签名配置（仅在有证书时启用）
+    osxSign: process.env.APPLE_IDENTITY ? {
       // 使用显式的 identity (CI 从证书提取) 或自动查找 (本地)
       identity: process.env.APPLE_IDENTITY,
       hardenedRuntime: true,
@@ -78,14 +78,14 @@ export default {
       'signature-flags': 'library',
       'gatekeeper-assess': false,
       verbose: true
-    },
-    // macOS 公证配置（本地和 CI 都启用）
-    osxNotarize: {
+    } : undefined,
+    // macOS 公证配置（仅在有凭证时启用）
+    osxNotarize: process.env.APPLE_ID ? {
       tool: 'notarytool',
       appleId: process.env.APPLE_ID,
       appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD,
       teamId: process.env.APPLE_TEAM_ID
-    },
+    } : undefined,
     // Windows 特定配置
     win32metadata: {
       CompanyName: 'TX-5DR Team',

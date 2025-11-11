@@ -22,7 +22,7 @@ import {
   type RadioEvent,
   type RadioInput,
   type StateMachineOptions,
-} from './types';
+} from './types.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import { globalInspector } from '../index.js';
 
