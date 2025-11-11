@@ -90,9 +90,12 @@ function detectError(log: string): string | null {
     return 'PORT_IN_USE';
   }
 
-  // 模块缺失
+  // 模块缺失（排除已知的可选依赖）
   if (lowerLog.includes('module_not_found') || lowerLog.includes('cannot find module')) {
-    return 'MODULE_NOT_FOUND';
+    // 排除已知的可选模块（如 segfault-handler）
+    if (!lowerLog.includes('segfault-handler')) {
+      return 'MODULE_NOT_FOUND';
+    }
   }
 
   // 权限问题
@@ -826,15 +829,33 @@ app.on('activate', () => {
     console.log('📱 [应用] activate事件：创建新窗口');
     void createWindow();
   } else {
-    // 如果已有窗口，显示并聚焦第一个窗口
-    const existingWindow = BrowserWindow.getAllWindows()[0];
-    if (existingWindow) {
-      console.log('📱 [应用] activate事件：显示现有窗口');
-      if (existingWindow.isMinimized()) {
-        existingWindow.restore();
+    // 优先显示主窗口
+    if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+      console.log('📱 [应用] activate事件：显示主窗口');
+      if (mainWindowInstance.isMinimized()) {
+        mainWindowInstance.restore();
       }
-      existingWindow.show();
-      existingWindow.focus();
+      mainWindowInstance.show();
+      mainWindowInstance.focus();
+    } else if (logWindowInstance && !logWindowInstance.isDestroyed()) {
+      // 如果只有日志窗口（启动失败场景），显示日志窗口
+      console.log('📱 [应用] activate事件：显示日志窗口（无主窗口）');
+      if (logWindowInstance.isMinimized()) {
+        logWindowInstance.restore();
+      }
+      logWindowInstance.show();
+      logWindowInstance.focus();
+    } else {
+      // 后备方案：显示第一个可用窗口
+      const existingWindow = BrowserWindow.getAllWindows()[0];
+      if (existingWindow) {
+        console.log('📱 [应用] activate事件：显示现有窗口（后备）');
+        if (existingWindow.isMinimized()) {
+          existingWindow.restore();
+        }
+        existingWindow.show();
+        existingWindow.focus();
+      }
     }
   }
 }); 

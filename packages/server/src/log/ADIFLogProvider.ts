@@ -232,7 +232,7 @@ export class ADIFLogProvider implements ILogProvider {
             // 直接传递record，而不是record.fields
             const qso = this.adifToQSORecord(record);
             this.qsoCache.set(qso.id, qso);
-            console.log(`[ADIFLogProvider] 加载QSO: ${qso.id} - ${qso.callsign}`);
+            console.debug(`[ADIFLogProvider] 加载QSO: ${qso.id} - ${qso.callsign}`);
           } catch (err) {
             console.error(`[ADIFLogProvider] 加载记录失败:`, err, record);
           }
