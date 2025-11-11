@@ -4,7 +4,7 @@
  * 提供 engineStateMachine 和 radioStateMachine 的类型定义
  */
 
-import type { RadioError } from '../utils/errors/RadioError';
+import type { RadioError } from '../utils/errors/RadioError.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 
 // ============================================================================

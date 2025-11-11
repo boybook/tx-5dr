@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../RadioError';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../RadioError.js';
 
 describe('RadioError', () => {
   describe('构造函数', () => {

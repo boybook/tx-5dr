@@ -21,7 +21,7 @@ let selectedServerPort: number | null = null;
 
 // 启动错误跟踪
 let startupLogs: string[] = []; // 存储启动日志
-let errorType: string = 'UNKNOWN'; // 错误类型
+let errorType: string = ''; // 错误类型，空字符串表示无错误
 let hasStartupError: boolean = false; // 是否发生启动错误
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let logWindowInstance: BrowserWindow | null = null; // 日志窗口实例
@@ -130,6 +130,11 @@ function addLog(log: string, source: string) {
     errorType = detectedError;
     hasStartupError = true;
     console.error(`🚨 检测到启动错误 [${detectedError}]:`, log);
+
+    // 实时推送错误通知到错误窗口
+    if (logWindowInstance && !logWindowInstance.isDestroyed()) {
+      logWindowInstance.webContents.send('error-detected', detectedError);
+    }
   }
 
   // 实时推送日志到错误窗口（如果已创建）
@@ -215,22 +220,35 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
 
     // 非零退出码视为错误
     if (code !== 0 && code !== null) {
-      errorType = 'CRASH';
+      // 如果还没有检测到具体错误类型，则标记为进程崩溃
+      if (!errorType) {
+        errorType = 'CRASH';
+        // 推送错误通知
+        if (logWindowInstance && !logWindowInstance.isDestroyed()) {
+          logWindowInstance.webContents.send('error-detected', 'CRASH');
+        }
+      }
       hasStartupError = true;
 
-      // 如果窗口已创建，根据窗口类型处理
-      if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-        const isLogWindow = mainWindowInstance.title?.includes('启动') || mainWindowInstance.title?.includes('正在');
-        if (isLogWindow) {
-          // 日志窗口：只修改标题
-          mainWindowInstance.setTitle('TX-5DR - 启动失败');
-        } else {
-          // 主窗口：关闭并创建日志窗口
-          mainWindowInstance.close();
-          void createLogWindow().then(logWin => {
-            logWin.setTitle('TX-5DR - 启动失败');
-          });
-        }
+      // 根据窗口类型分别处理
+      if (logWindowInstance && !logWindowInstance.isDestroyed()) {
+        // 日志窗口已存在：只修改标题
+        logWindowInstance.setTitle('TX-5DR - 启动失败');
+      } else if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+        // 主窗口已存在：关闭并创建日志窗口
+        mainWindowInstance.close();
+        void createLogWindow().then(logWin => {
+          logWin.setTitle('TX-5DR - 启动失败');
+        }).catch(err => {
+          console.error('创建日志窗口失败:', err);
+        });
+      } else {
+        // 没有窗口：创建日志窗口
+        void createLogWindow().then(logWin => {
+          logWin.setTitle('TX-5DR - 启动失败');
+        }).catch(err => {
+          console.error('创建日志窗口失败:', err);
+        });
       }
     }
   });
@@ -241,19 +259,25 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
     addLog(errorMsg, name);
     hasStartupError = true;
 
-    // 如果窗口已创建，根据窗口类型处理
-    if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-      const isLogWindow = mainWindowInstance.title?.includes('启动') || mainWindowInstance.title?.includes('正在');
-      if (isLogWindow) {
-        // 日志窗口：只修改标题
-        mainWindowInstance.setTitle('TX-5DR - 启动失败');
-      } else {
-        // 主窗口：关闭并创建日志窗口
-        mainWindowInstance.close();
-        void createLogWindow().then(logWin => {
-          logWin.setTitle('TX-5DR - 启动失败');
-        });
-      }
+    // 根据窗口类型分别处理
+    if (logWindowInstance && !logWindowInstance.isDestroyed()) {
+      // 日志窗口已存在：只修改标题
+      logWindowInstance.setTitle('TX-5DR - 启动失败');
+    } else if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+      // 主窗口已存在：关闭并创建日志窗口
+      mainWindowInstance.close();
+      void createLogWindow().then(logWin => {
+        logWin.setTitle('TX-5DR - 启动失败');
+      }).catch(err => {
+        console.error('创建日志窗口失败:', err);
+      });
+    } else {
+      // 没有窗口：创建日志窗口
+      void createLogWindow().then(logWin => {
+        logWin.setTitle('TX-5DR - 启动失败');
+      }).catch(err => {
+        console.error('创建日志窗口失败:', err);
+      });
     }
   });
 
@@ -298,10 +322,20 @@ async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Pr
  * 启动时立即显示，成功后关闭，失败时保持显示
  */
 async function createLogWindow(): Promise<BrowserWindow> {
-  if (logWindowInstance) {
+  // 检查实例是否存在且有效
+  if (logWindowInstance && !logWindowInstance.isDestroyed()) {
+    console.log('📋 日志窗口已存在，复用现有窗口');
+    logWindowInstance.show();
+    logWindowInstance.focus();
     return logWindowInstance;
   }
-  console.log('📋 创建日志窗口...');
+
+  // 清理已销毁的窗口引用
+  if (logWindowInstance) {
+    logWindowInstance = null;
+  }
+
+  console.log('📋 创建新的日志窗口...');
 
   const logPagePath = app.isPackaged
     ? `file://${path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'error.html')}`
@@ -348,6 +382,12 @@ async function createLogWindow(): Promise<BrowserWindow> {
   } catch (error) {
     console.error('❌ 加载日志页面失败:', error);
   }
+
+  // 监听窗口关闭事件，清理实例引用
+  logWindow.on('closed', () => {
+    console.log('📋 日志窗口已关闭，清理实例引用');
+    logWindowInstance = null;
+  });
 
   // 设置为全局实例，以便接收日志更新
   logWindowInstance = logWindow;
@@ -471,6 +511,24 @@ async function cleanup() {
 async function createWindow() {
   console.log('🔍 createWindow 函数开始执行...');
 
+  // 检查主窗口是否已存在且有效
+  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+    console.log('🪟 主窗口已存在，复用现有窗口');
+    mainWindowInstance.show();
+    mainWindowInstance.focus();
+    return mainWindowInstance;
+  }
+
+  // 清理已销毁的主窗口引用
+  if (mainWindowInstance) {
+    mainWindowInstance = null;
+  }
+
+  // 重置启动状态（支持重新启动场景）
+  hasStartupError = false;
+  errorType = '';
+  console.log('🔄 启动状态已重置');
+
   // ✅ 第一步：立即创建并显示日志窗口
   const logWindow = await createLogWindow();
 
@@ -582,6 +640,17 @@ async function createWindow() {
   // 设置主窗口实例
   mainWindowInstance = mainWindow;
 
+  // 监听窗口关闭事件，清理实例引用
+  mainWindow.on('closed', () => {
+    console.log('🪟 主窗口已关闭，清理实例引用');
+    mainWindowInstance = null;
+    // 清理服务器健康检查定时器
+    if (serverCheckInterval) {
+      clearInterval(serverCheckInterval);
+      serverCheckInterval = null;
+    }
+  });
+
   // 添加错误处理（仅用于运行时错误）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mainWindow.webContents.on('did-fail-load', (_event: any, errorCode: any, errorDescription: any, validatedURL: any) => {
@@ -591,10 +660,17 @@ async function createWindow() {
     addLog(`Page load failed: ${errorCode} - ${errorDescription} (${validatedURL})`, 'system');
 
     // 关闭主窗口并创建日志窗口显示错误
+    // 注意：mainWindowInstance 会在 'closed' 事件中自动清理
     mainWindow.close();
-    void createLogWindow().then(logWin => {
-      logWin.setTitle('TX-5DR - 启动失败');
-    });
+
+    // 创建日志窗口并处理错误
+    createLogWindow()
+      .then(logWin => {
+        logWin.setTitle('TX-5DR - 启动失败');
+      })
+      .catch(err => {
+        console.error('创建日志窗口失败:', err);
+      });
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
