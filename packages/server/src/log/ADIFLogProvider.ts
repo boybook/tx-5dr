@@ -627,10 +627,9 @@ export class ADIFLogProvider implements ILogProvider {
     }
     const lastQSO = info?.lastQSO;
     const qsoCount = info?.count || 0;
-    let isNewGrid = !!grid;
-    if (grid && info) {
-      isNewGrid = !info.grids.has(grid);
-    }
+    // 只有在"有网格 且 是新呼号"时才标记为新网格
+    // 根据需求：只要呼号不是新的，就不提示新网格
+    let isNewGrid = !!grid && !info;
     const isNewPrefix = !idx.prefixes.has(prefix);
     const isNewCQZone = cqZone !== null && !idx.cqZones.has(cqZone);
     const isNewITUZone = ituZone !== null && !idx.ituZones.has(ituZone);
