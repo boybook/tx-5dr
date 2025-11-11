@@ -121,16 +121,20 @@
   }
 
   function showError(errorType) {
+    // 只显示明确的关键错误，忽略未知错误
     const messages = {
       'PORT_IN_USE': '端口占用',
       'MODULE_NOT_FOUND': '依赖缺失',
       'PERMISSION_DENIED': '权限不足',
       'TIMEOUT': '启动超时',
-      'CRASH': '进程崩溃',
-      'UNKNOWN': '未知错误'
+      'CRASH': '进程崩溃'
     };
-    errorBanner.textContent = messages[errorType] || '启动错误';
-    errorBanner.style.display = 'block';
+
+    // 只有在已知错误列表中才显示错误横幅
+    if (messages[errorType]) {
+      errorBanner.textContent = messages[errorType];
+      errorBanner.style.display = 'block';
+    }
   }
 
   if (window.electronAPI) {
