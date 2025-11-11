@@ -26,6 +26,7 @@ export enum WSMessageType {
   SPECTRUM_DATA = 'spectrumData',
   DECODE_ERROR = 'decodeError',
   SYSTEM_STATUS = 'systemStatus',
+  CLIENT_COUNT_CHANGED = 'clientCountChanged',
   
   // ===== 电台操作员管理 =====
   GET_OPERATORS = 'getOperators',
@@ -240,6 +241,14 @@ export const WSDecodeErrorMessageSchema = WSBaseMessageSchema.extend({
 export const WSSystemStatusMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.SYSTEM_STATUS),
   data: SystemStatusSchema,
+});
+
+export const WSClientCountChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.CLIENT_COUNT_CHANGED),
+  data: z.object({
+    count: z.number(),
+    timestamp: z.number(),
+  }),
 });
 
 export const WSErrorMessageSchema = WSBaseMessageSchema.extend({
@@ -794,6 +803,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSpectrumDataMessageSchema,
   WSDecodeErrorMessageSchema,
   WSSystemStatusMessageSchema,
+  WSClientCountChangedMessageSchema,
   WSErrorMessageSchema,
   WSLogbookChangeNoticeMessageSchema,
   WSTransmissionLogMessageSchema,
@@ -873,6 +883,7 @@ export type WSSlotPackUpdatedMessage = z.infer<typeof WSSlotPackUpdatedMessageSc
 export type WSSpectrumDataMessage = z.infer<typeof WSSpectrumDataMessageSchema>;
 export type WSDecodeErrorMessage = z.infer<typeof WSDecodeErrorMessageSchema>;
 export type WSSystemStatusMessage = z.infer<typeof WSSystemStatusMessageSchema>;
+export type WSClientCountChangedMessage = z.infer<typeof WSClientCountChangedMessageSchema>;
 export type WSErrorMessage = z.infer<typeof WSErrorMessageSchema>;
 
 export type WSStartEngineMessage = z.infer<typeof WSStartEngineMessageSchema>;
@@ -936,7 +947,8 @@ export interface DigitalRadioEngineEvents {
   // 错误和状态事件
   decodeError: (errorInfo: DecodeErrorInfo) => void;
   systemStatus: (status: SystemStatus) => void;
-  
+  clientCountChanged: (data: { count: number; timestamp: number }) => void;
+
   // 连接事件
   connected: () => void;
   disconnected: () => void;

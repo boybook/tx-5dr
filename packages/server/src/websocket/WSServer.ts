@@ -707,6 +707,9 @@ export class WSServer extends WSMessageHandler {
       connection.removeAllListeners();
       this.connections.delete(id);
       console.log(`🔌 WebSocket连接已断开: ${id}`);
+
+      // 广播客户端数量变化（客户端断开连接）
+      this.broadcastClientCount();
     }
   }
 
@@ -732,6 +735,22 @@ export class WSServer extends WSMessageHandler {
 
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
+    });
+  }
+
+  /**
+   * 广播客户端连接数量变化
+   * 只统计已完成握手的活跃客户端
+   */
+  private broadcastClientCount(): void {
+    const activeConnections = this.getActiveConnections();
+    const handshakeCompletedCount = activeConnections.filter(conn => conn.isHandshakeCompleted()).length;
+
+    console.log(`📊 [WSServer] 广播客户端数量: ${handshakeCompletedCount} 个已连接客户端`);
+
+    this.broadcast(WSMessageType.CLIENT_COUNT_CHANGED, {
+      count: handshakeCompletedCount,
+      timestamp: Date.now()
     });
   }
 
@@ -1256,6 +1275,9 @@ export class WSServer extends WSMessageHandler {
 
       // 完成握手（此时finalEnabledOperatorIds已经是实际的操作员ID列表）
       connection.completeHandshake(finalEnabledOperatorIds);
+
+      // 广播客户端数量变化（新客户端握手完成）
+      this.broadcastClientCount();
 
       // 阶段2: 发送过滤后的完整数据
       console.log(`📤 [WSServer] 为连接 ${connectionId} 发送完整过滤数据...`);

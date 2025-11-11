@@ -932,7 +932,7 @@ function setupIpcHandlers() {
         logbookWindow.webContents.openDevTools();
       } else {
         // 生产模式：连接内置静态 web 服务
-        const fullUrl = `http://127.0.0.1:5173/logbook.html?${queryString}`;
+        const fullUrl = `http://127.0.0.1:${selectedWebPort || 5173}/logbook.html?${queryString}`;
         console.log('📖 [IPC] 加载生产URL:', fullUrl);
         await logbookWindow.loadURL(fullUrl);
       }
