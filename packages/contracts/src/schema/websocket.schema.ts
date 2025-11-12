@@ -145,6 +145,32 @@ export const PTTStatusSchema = z.object({
   operatorIds: z.array(z.string()),
 });
 
+/**
+ * S-meter (signal strength) level reading
+ * For CI-V 0x15/0x02 command
+ *
+ * Calibration (IC-705):
+ * - raw=0 → S0
+ * - raw=120 → S9
+ * - raw=241 → S9+60dB
+ */
+export const LevelMeterReadingSchema = z.object({
+  /** Raw 0-255 BCD value */
+  raw: z.number(),
+  /** Percentage (0-100%) */
+  percent: z.number(),
+  /** S-unit value (0-9+), supports decimal (e.g., 4.5 = S4.5) */
+  sUnits: z.number(),
+  /** dB above S9 (only when >S9, e.g., 20 means S9+20dB) */
+  dbAboveS9: z.number().optional(),
+  /** Estimated absolute power in dBm (based on HF standard S9 ≈ -73dBm) */
+  dBm: z.number(),
+  /** Human-readable formatted string (e.g., "S4", "S9+20dB") */
+  formatted: z.string(),
+});
+
+export type LevelMeterReading = z.infer<typeof LevelMeterReadingSchema>;
+
 // 电台数值表数据结构
 export const MeterDataSchema = z.object({
   swr: z.object({
@@ -157,10 +183,7 @@ export const MeterDataSchema = z.object({
     percent: z.number(),
     alert: z.boolean(),
   }).nullable(),
-  level: z.object({
-    raw: z.number(),
-    percent: z.number(),
-  }).nullable(),
+  level: LevelMeterReadingSchema.nullable(),
   power: z.object({
     raw: z.number(),
     percent: z.number(),

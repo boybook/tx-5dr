@@ -96,12 +96,26 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     <div className={`w-full px-2 py-2 pt-1.5 bg-default-50 dark:bg-default-100/50 rounded-lg border border-default-200 dark:border-default-100 ${className}`}>
       <div className="flex items-center gap-2">
         {/* 第一个仪表：根据 PTT 状态动态切换 Level/Power */}
-        <Meter
-          label={isPttActive ? 'Power' : 'Level'}
-          value={isPttActive ? buffered.power.value?.percent ?? null : buffered.level.value?.percent ?? null}
-          unit="%"
-          isTimeout={isPttActive ? buffered.power.isTimeout : buffered.level.isTimeout}
-        />
+        {isPttActive ? (
+          <Meter
+            label="Power"
+            value={buffered.power.value?.percent ?? null}
+            unit="%"
+            isTimeout={buffered.power.isTimeout}
+          />
+        ) : (
+          <Meter
+            label="Level"
+            value={buffered.level.value?.percent ?? null}
+            unit=""
+            isTimeout={buffered.level.isTimeout}
+            formatValue={(_value) => {
+              if (!buffered.level.value) return '--';
+              const { formatted, dBm } = buffered.level.value;
+              return `${formatted} / ${dBm.toFixed(1)}dBm`;
+            }}
+          />
+        )}
 
         {/* SWR 驻波比表 */}
         <Meter
