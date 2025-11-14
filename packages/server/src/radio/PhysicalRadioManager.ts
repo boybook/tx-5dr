@@ -73,6 +73,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private lastKnownFrequency: number | null = null;
 
   /**
+   * 断开保护标志（防止重复断开导致 hamlib 线程冲突）
+   */
+  private isDisconnecting = false;
+
+  /**
    * 连接事件清理器列表（用于断开时清理）
    */
   private connectionEventListeners: Map<string, (...args: any[]) => void> = new Map();
@@ -152,21 +157,35 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 断开连接（外部接口，会触发事件）
    */
   async disconnect(reason?: string): Promise<void> {
-    console.log(`🔌 [PhysicalRadioManager] 断开连接: ${reason || '用户请求'}`);
-
-    this.stopFrequencyMonitoring();
-
-    if (this.radioActor) {
-      this.radioActor.send({ type: 'DISCONNECT', reason });
-
-      // 等待状态机转换到 disconnected
-      await this.waitForState(RadioState.DISCONNECTED, 5000);
+    // 防重入保护：避免重复断开导致 hamlib 线程冲突
+    if (this.isDisconnecting) {
+      console.log('⚠️ [PhysicalRadioManager] 断开操作已在进行中，跳过');
+      return;
     }
 
-    await this.internalDisconnect(reason);
+    this.isDisconnecting = true;
 
-    // 触发断开事件（外部接口才触发）
-    this.emit('disconnected', reason);
+    try {
+      console.log(`🔌 [PhysicalRadioManager] 断开连接: ${reason || '用户请求'}`);
+
+      this.stopFrequencyMonitoring();
+
+      if (this.radioActor) {
+        this.radioActor.send({ type: 'DISCONNECT', reason });
+
+        // 等待状态机转换到 disconnected
+        await this.waitForState(RadioState.DISCONNECTED, 5000);
+      }
+
+      // ❌ 移除重复的 internalDisconnect 调用，让状态机回调处理
+      // await this.internalDisconnect(reason);
+
+      // 触发断开事件（外部接口才触发）
+      this.emit('disconnected', reason);
+    } finally {
+      // 确保标志位被重置
+      this.isDisconnecting = false;
+    }
   }
 
   /**
@@ -445,11 +464,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   /**
    * 列出支持的电台型号
    */
-  static listSupportedRigs(): Array<{ rigModel: number; mfgName: string; modelName: string }> {
+  static async listSupportedRigs(): Promise<Array<{ rigModel: number; mfgName: string; modelName: string }>> {
     // 这个方法依赖 HamLib，需要从 hamlib 包导入
     try {
-      // 导入 HamLib 以获取支持列表
-      const { HamLib } = require('hamlib');
+      // 使用 ES 模块动态导入 HamLib
+      const hamlibModule = await import('hamlib');
+      const { HamLib } = hamlibModule;
       return HamLib.getSupportedRigs();
     } catch (error) {
       console.warn('⚠️  [PhysicalRadioManager] 无法获取 HamLib 支持列表:', (error as Error).message);

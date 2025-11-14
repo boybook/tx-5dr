@@ -186,12 +186,18 @@ async function apiRequest<T = any>(
   const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
 
   try {
+    // 只在有 body 时才添加 Content-Type header（修复 PTT 测试报错）
+    const headers: HeadersInit = {
+      ...options?.headers,
+    };
+
+    if (options?.body) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const response = await fetch(fullUrl, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers,
     });
 
     if (!response.ok) {

@@ -45,6 +45,11 @@ export class HamlibConnection
    */
   private lastSuccessfulOperation: number = Date.now();
 
+  /**
+   * 清理保护标志（防止重复调用 rig.close() 导致 pthread 超时）
+   */
+  private isCleaningUp = false;
+
   constructor() {
     super();
   }
@@ -430,23 +435,37 @@ export class HamlibConnection
    * 清理资源
    */
   private async cleanup(): Promise<void> {
-    if (this.rig) {
-      try {
-        // hamlib close() 返回 Promise，不接受回调参数
-        await Promise.race([
-          this.rig.close(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('关闭连接超时')), 3000)
-          ),
-        ]);
-      } catch (error) {
-        console.warn(`⚠️ [HamlibConnection] 清理时断开连接失败:`, error);
-      }
-
-      this.rig = null;
+    // 防重入保护：避免重复调用 rig.close() 导致 pthread_join 超时
+    if (this.isCleaningUp) {
+      console.log('⚠️ [HamlibConnection] cleanup 已在进行中，跳过');
+      return;
     }
 
-    this.currentConfig = null;
+    this.isCleaningUp = true;
+
+    try {
+      if (this.rig) {
+        try {
+          // hamlib close() 返回 Promise，不接受回调参数
+          // 增加超时时间到 5 秒，给 pthread 清理更多时间
+          await Promise.race([
+            this.rig.close(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('关闭连接超时')), 5000)
+            ),
+          ]);
+        } catch (error) {
+          console.warn(`⚠️ [HamlibConnection] 清理时断开连接失败:`, error);
+        }
+
+        this.rig = null;
+      }
+
+      this.currentConfig = null;
+    } finally {
+      // 确保标志位被重置
+      this.isCleaningUp = false;
+    }
   }
 
   /**
