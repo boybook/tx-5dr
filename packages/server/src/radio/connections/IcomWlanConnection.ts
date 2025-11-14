@@ -51,6 +51,11 @@ export class IcomWlanConnection
    */
   private defaultDataMode = true;
 
+  /**
+   * 清理保护标志（防止重复清理导致资源泄漏或冲突）
+   */
+  private isCleaningUp = false;
+
   constructor() {
     super();
   }
@@ -553,27 +558,40 @@ export class IcomWlanConnection
    * 清理资源
    */
   private async cleanup(): Promise<void> {
-    // 停止数值表轮询
-    this.stopMeterPolling();
-
-    // 清理 rig 实例
-    if (this.rig) {
-      try {
-        // 移除所有事件监听器，防止异步事件触发错误
-        if (this.rig.events) {
-          this.rig.events.removeAllListeners();
-          console.log('🔕 [IcomWlanConnection] 已移除所有事件监听器');
-        }
-
-        await this.rig.disconnect();
-      } catch (error: any) {
-        console.warn('⚠️ [IcomWlanConnection] 清理时断开连接失败:', error);
-      }
-
-      this.rig = null;
+    // 防重入保护：避免重复清理导致资源泄漏或冲突
+    if (this.isCleaningUp) {
+      console.log('⚠️ [IcomWlanConnection] cleanup 已在进行中，跳过');
+      return;
     }
 
-    this.currentConfig = null;
+    this.isCleaningUp = true;
+
+    try {
+      // 停止数值表轮询
+      this.stopMeterPolling();
+
+      // 清理 rig 实例
+      if (this.rig) {
+        try {
+          // 移除所有事件监听器，防止异步事件触发错误
+          if (this.rig.events) {
+            this.rig.events.removeAllListeners();
+            console.log('🔕 [IcomWlanConnection] 已移除所有事件监听器');
+          }
+
+          await this.rig.disconnect();
+        } catch (error: any) {
+          console.warn('⚠️ [IcomWlanConnection] 清理时断开连接失败:', error);
+        }
+
+        this.rig = null;
+      }
+
+      this.currentConfig = null;
+    } finally {
+      // 确保标志位被重置
+      this.isCleaningUp = false;
+    }
   }
 
   /**

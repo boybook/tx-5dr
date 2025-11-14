@@ -1438,7 +1438,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
             console.log(`✅ [ResourceManager] ICOM WLAN 音频适配器已初始化`);
           } else {
-            throw new Error('ICOM WLAN 电台连接失败，无法启动音频流');
+            // ICOM 连接失败时记录警告，不抛出错误，允许回退到普通声卡
+            console.warn(`⚠️ [ResourceManager] ICOM WLAN 电台未连接，将回退到普通声卡输入`);
           }
         }
       },

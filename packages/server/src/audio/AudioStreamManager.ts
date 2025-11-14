@@ -121,7 +121,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         console.log('📡 [AudioStreamManager] 检测到 ICOM WLAN 虚拟输入设备');
 
         if (!this.icomWlanAudioAdapter) {
-          throw new Error('ICOM WLAN 音频适配器未设置，请先连接 ICOM 电台');
+          // ICOM 适配器未设置时，输出警告并跳过音频流启动
+          console.warn('⚠️ [AudioStreamManager] ICOM WLAN 音频适配器未设置，跳过音频流启动');
+
+          this.deviceId = 'icom-wlan-input';
+          this.usingIcomWlanInput = false;
+          this.isStreaming = true;
+          this.emit('started');
+          return;
         }
 
         // 使用 ICOM WLAN 音频适配器
@@ -239,7 +246,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       throw error;
     }
   }
-  
+
   /**
    * 获取音频缓冲区提供者
    */
@@ -368,15 +375,20 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         console.log('📡 [AudioStreamManager] 检测到 ICOM WLAN 虚拟输出设备');
 
         if (!this.icomWlanAudioAdapter) {
-          throw new Error('ICOM WLAN 音频适配器未设置，请先连接 ICOM 电台');
+          // ICOM 适配器未设置时，回退到默认声卡而不是抛出错误
+          console.warn('⚠️ [AudioStreamManager] ICOM WLAN 音频适配器未设置，回退到默认音频设备');
+          // 清除虚拟设备 ID，让后续代码使用传统声卡模式
+          resolvedOutputDeviceId = undefined;
+          actualOutputDeviceId = undefined;
+          // 继续执行传统声卡初始化逻辑，不 return
+        } else {
+          // 标记使用 ICOM WLAN 输出
+          this.usingIcomWlanOutput = true;
+          this.outputDeviceId = 'icom-wlan-output';
+          this.isOutputting = true;
+          console.log(`✅ [AudioStreamManager] ICOM WLAN 音频输出启动成功 (48kHz → 12kHz)`);
+          return;
         }
-
-        // 标记使用 ICOM WLAN 输出
-        this.usingIcomWlanOutput = true;
-        this.outputDeviceId = 'icom-wlan-output';
-        this.isOutputting = true;
-        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频输出启动成功 (48kHz → 12kHz)`);
-        return;
       }
 
       // 传统声卡模式：解析设备ID

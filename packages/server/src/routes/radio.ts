@@ -51,7 +51,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/rigs', async (_req, reply) => {
-    return reply.send({ rigs: PhysicalRadioManager.listSupportedRigs() });
+    return reply.send({ rigs: await PhysicalRadioManager.listSupportedRigs() });
   });
 
   fastify.get('/serial-ports', async (_req, reply) => {
