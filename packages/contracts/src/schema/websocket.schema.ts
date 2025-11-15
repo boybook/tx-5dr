@@ -4,6 +4,7 @@ import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
+import { RadioInfoSchema, HamlibConfigSchema } from './radio.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -578,7 +579,11 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.RADIO_STATUS_CHANGED),
   data: z.object({
     connected: z.boolean(),
+    radioInfo: RadioInfoSchema.nullable(), // 电台信息（连接时有值，断开时为null）
+    radioConfig: HamlibConfigSchema.optional(), // 电台配置（保持当前配置）
     reason: z.string().optional(),
+    message: z.string().optional(), // 用户友好的消息
+    recommendation: z.string().optional(), // 操作建议
     reconnectInfo: z.object({
       isReconnecting: z.boolean(),
       reconnectAttempts: z.number(),

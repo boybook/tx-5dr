@@ -187,8 +187,8 @@ async function apiRequest<T = any>(
 
   try {
     // 只在有 body 时才添加 Content-Type header（修复 PTT 测试报错）
-    const headers: HeadersInit = {
-      ...options?.headers,
+    const headers: Record<string, string> = {
+      ...(options?.headers as Record<string, string>),
     };
 
     if (options?.body) {

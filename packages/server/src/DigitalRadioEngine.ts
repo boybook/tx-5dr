@@ -1076,9 +1076,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 监听电台连接成功
     const handleConnected = async () => {
       console.log('📡 [DigitalRadioEngine] 物理电台连接成功');
+
+      // 获取完整的电台信息和配置
+      const radioInfo = await this.radioManager.getRadioInfo();
+      const radioConfig = this.radioManager.getConfig();
+
       // 广播电台状态更新事件
       this.emit('radioStatusChanged' as any, {
         connected: true,
+        radioInfo,
+        radioConfig,
         reconnectInfo: this.radioManager.getReconnectInfo()
       });
 
@@ -1155,6 +1162,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // 广播电台状态更新事件（带用户指导）
       this.emit('radioStatusChanged' as any, {
         connected: false,
+        radioInfo: null, // 断开时清空电台信息
+        radioConfig: this.radioManager.getConfig(), // 保留配置信息
         reason,
         message: '电台已断开连接',
         recommendation: this.getDisconnectRecommendation(reason),
