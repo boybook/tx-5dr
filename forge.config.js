@@ -324,6 +324,59 @@ export default {
         }
       }
 
+      // macOS: 修复 native 模块的重复 RPATH 问题 (必须在签名之前)
+      if (platform === 'darwin') {
+        try {
+          console.log('🔧 [macOS] 修复 native 模块 RPATH...');
+          const path = await import('path');
+          const { execSync: exec } = await import('child_process');
+
+          // 查找所有 .node 文件
+          const findCmd = `find "${appRoot}/node_modules" -name "*.node" -type f`;
+          let nodeFiles = [];
+          try {
+            const output = exec(findCmd, { encoding: 'utf8' });
+            nodeFiles = output.trim().split('\n').filter(Boolean);
+          } catch (e) {
+            console.log('  未找到 .node 文件');
+          }
+
+          let fixedCount = 0;
+          for (const nodeFile of nodeFiles) {
+            try {
+              // 检查是否有重复的 @loader_path/ RPATH
+              const rpaths = exec(
+                `otool -l "${nodeFile}" | grep -A 2 LC_RPATH | grep path | awk '{print $2}'`,
+                { encoding: 'utf8' }
+              ).trim().split('\n').filter(Boolean);
+
+              // 统计 @loader_path/ 出现次数
+              const loaderPathCount = rpaths.filter(p => p === '@loader_path/').length;
+
+              if (loaderPathCount > 1) {
+                console.log(`  修复: ${path.basename(nodeFile)} (发现 ${loaderPathCount} 个重复的 @loader_path/)`);
+
+                // 删除重复的 @loader_path/ (保留第一个，删除其余)
+                for (let i = 1; i < loaderPathCount; i++) {
+                  exec(`install_name_tool -delete_rpath "@loader_path/" "${nodeFile}"`, { stdio: 'pipe' });
+                }
+
+                // adhoc 重新签名
+                exec(`codesign -f -s - "${nodeFile}"`, { stdio: 'pipe' });
+                fixedCount++;
+              }
+            } catch (e) {
+              // 单个文件失败不影响其他文件
+              console.log(`  ⚠️  跳过: ${path.basename(nodeFile)} (${e.message})`);
+            }
+          }
+
+          console.log(`✅ [macOS] RPATH 修复完成 (处理 ${fixedCount}/${nodeFiles.length} 个文件)`);
+        } catch (error) {
+          console.warn('⚠️ [macOS] RPATH 修复遇到问题:', error.message);
+        }
+      }
+
       // macOS: 签名外部 Node 二进制 (必须在 electron-osx-sign 之前)
       if (platform === 'darwin' && process.env.APPLE_IDENTITY) {
         try {
