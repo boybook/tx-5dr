@@ -12,7 +12,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig } from '@tx5dr/contracts';
+import type { HamlibConfig, RadioInfo } from '@tx5dr/contracts';
 import { ConsoleLogger } from '../utils/console-logger.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
 import type { IRadioConnection, MeterData } from './connections/IRadioConnection.js';
@@ -264,6 +264,69 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   isConnected(): boolean {
     return this.connection !== null && this.radioActor !== null &&
            isRadioState(this.radioActor, RadioState.CONNECTED);
+  }
+
+  /**
+   * 获取电台信息
+   * 统一方法，根据不同电台模式返回标准化的 RadioInfo
+   */
+  async getRadioInfo(): Promise<RadioInfo | null> {
+    // 必须已连接才返回电台信息
+    if (!this.isConnected() || !this.connection) {
+      return null;
+    }
+
+    const config = this.currentConfig;
+
+    // 根据配置类型构建电台信息
+    switch (config.type) {
+      case 'serial': {
+        // 串口模式: 从 Hamlib 支持列表查找电台型号
+        if (!config.serial?.rigModel) {
+          return null;
+        }
+
+        const supportedRigs = await PhysicalRadioManager.listSupportedRigs();
+        const rigInfo = supportedRigs.find(r => r.rigModel === config.serial!.rigModel);
+
+        if (!rigInfo) {
+          console.warn(`⚠️ [PhysicalRadioManager] 未找到 rigModel ${config.serial.rigModel} 的电台信息`);
+          return null;
+        }
+
+        return {
+          manufacturer: rigInfo.mfgName,
+          model: rigInfo.modelName,
+          rigModel: rigInfo.rigModel,
+          connectionType: 'serial',
+        };
+      }
+
+      case 'network': {
+        // 网络模式: 返回基本信息
+        // TODO: 未来可通过 Hamlib get_info 命令获取真实电台型号
+        return {
+          manufacturer: 'Network',
+          model: 'RigCtrl',
+          rigModel: 2, // Hamlib NET rigctl 型号
+          connectionType: 'network',
+        };
+      }
+
+      case 'icom-wlan': {
+        // ICOM WLAN 模式: 返回基本信息
+        // TODO: 未来可通过 icom-wlan-node 库或 CI-V 命令获取具体型号
+        return {
+          manufacturer: 'ICOM',
+          model: 'ICOM WLAN',
+          connectionType: 'icom-wlan',
+        };
+      }
+
+      case 'none':
+      default:
+        return null;
+    }
   }
 
   // ==================== 电台操作 ====================

@@ -369,27 +369,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const config = configManager.getRadioConfig();
     const isConnected = radioManager.isConnected();
 
-    let radioInfo = null;
-    if (isConnected && config.type !== 'none') {
-      // 获取电台型号信息
-      if (config.type === 'serial' && config.serial?.rigModel) {
-        const supportedRigs = PhysicalRadioManager.listSupportedRigs();
-        const rigInfo = supportedRigs.find(r => r.rigModel === config.serial!.rigModel);
-        if (rigInfo) {
-          radioInfo = {
-            manufacturer: rigInfo.mfgName,
-            model: rigInfo.modelName,
-            rigModel: rigInfo.rigModel
-          };
-        }
-      } else if (config.type === 'network') {
-        radioInfo = {
-          manufacturer: 'Network',
-          model: 'RigCtrl',
-          rigModel: 2
-        };
-      }
-    }
+    // 使用统一的 getRadioInfo() 方法获取电台信息
+    const radioInfo = await radioManager.getRadioInfo();
 
     return reply.send({
       success: true,

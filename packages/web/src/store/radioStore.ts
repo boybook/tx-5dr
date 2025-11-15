@@ -220,10 +220,8 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         ...state,
         radioConnected: action.payload.radioConnected,
         radioInfo: action.payload.radioInfo,
-        // 只有当payload中有有效的radioConfig时才更新，否则保持现有配置
-        radioConfig: (action.payload.radioConfig && action.payload.radioConfig.type !== 'none')
-          ? action.payload.radioConfig
-          : state.radioConfig
+        // 如果事件中包含radioConfig则更新，否则保持现有配置
+        radioConfig: action.payload.radioConfig || state.radioConfig
       };
 
     case 'pttStatusChanged':
@@ -667,13 +665,13 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       radioStatusChanged: (data: any) => {
         console.log('📡 [RadioProvider] 电台状态变化:', data.connected ? '已连接' : '已断开', data.reason || '');
-        
-        radioDispatch({ 
+
+        radioDispatch({
           type: 'radioStatusUpdate',
           payload: {
             radioConnected: data.connected,
-            radioInfo: data.connected ? (data.radioInfo || null) : null, // 断开时清空radioInfo
-            radioConfig: data.radioConfig || { type: 'none' } // reducer会智能处理配置保持
+            radioInfo: data.radioInfo, // 直接使用事件中的完整数据（连接时有值，断开时为null）
+            radioConfig: data.radioConfig // 直接使用事件中的配置（始终包含完整配置）
           }
         });
       },

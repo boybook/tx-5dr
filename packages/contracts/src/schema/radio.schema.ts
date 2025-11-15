@@ -128,6 +128,25 @@ export const SupportedRigsResponseSchema = z.object({
 });
 
 /**
+ * 电台信息Schema
+ * 用于描述当前连接的电台的详细信息
+ */
+export const RadioInfoSchema = z.object({
+  /** 制造商名称，如 "Yaesu", "ICOM", "Network" */
+  manufacturer: z.string(),
+  /** 型号名称，如 "FT-991A", "IC-705", "RigCtrl" */
+  model: z.string(),
+  /** Hamlib 电台型号 ID (serial/network 模式使用，icom-wlan 模式可选) */
+  rigModel: z.number().optional(),
+  /** 连接类型 */
+  connectionType: z.enum(['serial', 'network', 'icom-wlan']),
+  /** 固件版本 (如果可获取) */
+  firmwareVersion: z.string().optional(),
+  /** 序列号 (如果可获取) */
+  serialNumber: z.string().optional(),
+});
+
+/**
  * 串口信息Schema
  */
 export const SerialPortSchema = z.object({
@@ -166,6 +185,7 @@ export type HamlibConfig = z.infer<typeof HamlibConfigSchema>;
 export type RadioConfigResponse = z.infer<typeof RadioConfigResponseSchema>;
 export type SupportedRig = z.infer<typeof SupportedRigSchema>;
 export type SupportedRigsResponse = z.infer<typeof SupportedRigsResponseSchema>;
+export type RadioInfo = z.infer<typeof RadioInfoSchema>;
 export type SerialPort = z.infer<typeof SerialPortSchema>;
 export type SerialPortsResponse = z.infer<typeof SerialPortsResponseSchema>;
 export type TestResponse = z.infer<typeof TestResponseSchema>;
