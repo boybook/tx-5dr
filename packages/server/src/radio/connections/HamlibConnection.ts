@@ -9,12 +9,14 @@ import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
 import type { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
+import { globalEventBus } from '../../utils/EventBus.js';
 import {
   RadioConnectionType,
   RadioConnectionState,
   type IRadioConnection,
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
+  type MeterData,
 } from './IRadioConnection.js';
 
 /**
@@ -49,6 +51,16 @@ export class HamlibConnection
    * 清理保护标志（防止重复调用 rig.close() 导致 pthread 超时）
    */
   private isCleaningUp = false;
+
+  /**
+   * 数值表轮询定时器
+   */
+  private meterPollingInterval: NodeJS.Timeout | null = null;
+
+  /**
+   * 数值表轮询间隔（毫秒）
+   */
+  private readonly meterPollingIntervalMs = 300;
 
   constructor() {
     super();
@@ -172,6 +184,9 @@ export class HamlibConnection
       this.lastSuccessfulOperation = Date.now();
       console.log(`✅ [HamlibConnection] Hamlib 电台连接成功`);
 
+      // 启动数值表轮询
+      this.startMeterPolling();
+
       // 触发连接成功事件
       this.emit('connected');
     } catch (error) {
@@ -189,6 +204,9 @@ export class HamlibConnection
    */
   async disconnect(reason?: string): Promise<void> {
     console.log(`🔌 [HamlibConnection] 断开连接: ${reason || '无原因'}`);
+
+    // 停止数值表轮询
+    this.stopMeterPolling();
 
     // 清理资源
     await this.cleanup();
@@ -557,6 +575,9 @@ export class HamlibConnection
 
     this.isCleaningUp = true;
 
+    // 停止数值表轮询
+    this.stopMeterPolling();
+
     try {
       if (this.rig) {
         try {
@@ -580,6 +601,136 @@ export class HamlibConnection
       // 确保标志位被重置
       this.isCleaningUp = false;
     }
+  }
+
+  /**
+   * 启动数值表轮询
+   */
+  private startMeterPolling(): void {
+    if (this.meterPollingInterval) {
+      console.log('⚠️ [HamlibConnection] 数值表轮询已在运行');
+      return;
+    }
+
+    console.log(`📊 [HamlibConnection] 启动数值表轮询，间隔 ${this.meterPollingIntervalMs}ms`);
+
+    this.meterPollingInterval = setInterval(async () => {
+      await this.pollMeters();
+    }, this.meterPollingIntervalMs);
+  }
+
+  /**
+   * 停止数值表轮询
+   */
+  private stopMeterPolling(): void {
+    if (this.meterPollingInterval) {
+      console.log('🛑 [HamlibConnection] 停止数值表轮询');
+      clearInterval(this.meterPollingInterval);
+      this.meterPollingInterval = null;
+    }
+  }
+
+  /**
+   * 轮询数值表数据
+   */
+  private async pollMeters(): Promise<void> {
+    if (!this.rig) return;
+
+    try {
+      // 并行读取四个数值表
+      const [strength, swr, alc, power] = await Promise.all([
+        this.rig.getLevel('STRENGTH').catch(() => null),
+        this.rig.getLevel('SWR').catch(() => null),
+        this.rig.getLevel('ALC').catch(() => null),
+        this.rig.getLevel('RFPOWER_METER').catch(() => null),
+      ]);
+
+      // 转换数据格式
+      const meterData: MeterData = {
+        level: strength !== null ? this.convertStrengthToLevel(strength) : null,
+        swr: swr !== null ? this.convertSWR(swr) : null,
+        alc: alc !== null ? this.convertALC(alc) : null,
+        power: power !== null ? this.convertPower(power) : null,
+      };
+
+      // 📝 EventBus 优化：双路径策略
+      // 原路径：用于 DigitalRadioEngine 健康检查
+      this.emit('meterData', meterData);
+
+      // EventBus 直达：用于 WebSocket 广播到前端
+      globalEventBus.emit('bus:meterData', meterData);
+    } catch (error) {
+      // 静默失败，避免日志过多
+    }
+  }
+
+  /**
+   * 将 Hamlib STRENGTH 转换为 Level 数据
+   * @param dbValue - Hamlib 返回的 dB 值（相对于 S9）
+   */
+  private convertStrengthToLevel(dbValue: number): { raw: number; percent: number } {
+    // S9 = -73 dBm（标准参考点）
+    // 每个 S 单位 = 6 dB
+    // S0 = -127 dBm, S9 = -73 dBm, S9+60 = -13 dBm
+
+    // 将 dB 值转换为绝对 dBm（假设 S9 = -73 dBm）
+    const dBm = -73 + dbValue;
+
+    // 映射到 0-100% 范围
+    // 范围：-127 dBm (0%) 到 -13 dBm (100%)
+    const minDbm = -127;
+    const maxDbm = -13;
+    const percent = Math.max(0, Math.min(100, ((dBm - minDbm) / (maxDbm - minDbm)) * 100));
+
+    // 模拟原始值（0-255 范围）
+    const raw = Math.round((percent / 100) * 255);
+
+    return { raw, percent };
+  }
+
+  /**
+   * 将 Hamlib SWR 转换为 SWR 数据
+   * @param swrValue - Hamlib 返回的 SWR 值（1.0-10.0）
+   */
+  private convertSWR(swrValue: number): { raw: number; swr: number; alert: boolean } {
+    // raw: 模拟 0-255 范围（SWR 10 对应 255）
+    const raw = Math.round(Math.min(swrValue / 10, 1) * 255);
+
+    // alert: SWR > 2.0 视为异常
+    const alert = swrValue > 2.0;
+
+    return { raw, swr: swrValue, alert };
+  }
+
+  /**
+   * 将 Hamlib ALC 转换为 ALC 数据
+   * @param alcValue - Hamlib 返回的 ALC 值（0.0-1.0）
+   */
+  private convertALC(alcValue: number): { raw: number; percent: number; alert: boolean } {
+    // raw: 0.0-1.0 映射到 0-255
+    const raw = Math.round(alcValue * 255);
+
+    // percent: 0.0-1.0 映射到 0-100
+    const percent = alcValue * 100;
+
+    // alert: ALC > 80% 视为过载告警
+    const alert = alcValue > 0.8;
+
+    return { raw, percent, alert };
+  }
+
+  /**
+   * 将 Hamlib RFPOWER_METER 转换为 Power 数据
+   * @param powerValue - Hamlib 返回的功率值（0.0-1.0，最大功率的百分比）
+   */
+  private convertPower(powerValue: number): { raw: number; percent: number } {
+    // raw: 0.0-1.0 映射到 0-255
+    const raw = Math.round(powerValue * 255);
+
+    // percent: 0.0-1.0 映射到 0-100
+    const percent = powerValue * 100;
+
+    return { raw, percent };
   }
 
   /**

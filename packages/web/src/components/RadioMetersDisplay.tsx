@@ -111,7 +111,14 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
             isTimeout={buffered.level.isTimeout}
             formatValue={(_value) => {
               if (!buffered.level.value) return '--';
-              const { formatted, dBm } = buffered.level.value;
+              const { formatted, dBm, percent } = buffered.level.value;
+
+              // 如果缺少完整数据（Hamlib 等），使用百分比显示
+              if (formatted === undefined || dBm === undefined) {
+                return `${percent.toFixed(1)}%`;
+              }
+
+              // 完整数据（ICOM WLAN），显示详细信息
               return `${formatted} / ${dBm.toFixed(1)}dBm`;
             }}
           />

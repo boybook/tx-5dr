@@ -146,8 +146,8 @@ export const LeftLayout: React.FC = () => {
           />
         </div>
 
-        {/* 电台数值表（仅 ICOM WLAN 连接时显示） */}
-        {radio.state.radioConfig?.type === 'icom-wlan' && (
+        {/* 电台数值表（所有连接类型） */}
+        {radio.state.radioConnected && (
           <RadioMetersDisplay
             meterData={radio.state.meterData || { swr: null, alc: null, level: null, power: null }}
             isPttActive={radio.state.pttStatus.isTransmitting}
