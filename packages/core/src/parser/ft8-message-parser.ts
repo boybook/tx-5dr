@@ -20,28 +20,61 @@ export class FT8MessageParser {
   
   /**
    * 判断是否为标准呼号
-   * 标准呼号规则：
-   * 1. 长度在2-6位之间
-   * 2. 只包含字母A-Z和数字0-9
-   * 3. 最多一个数字，且位于第2-4位
+   *
+   * 根据 FT8 协议的 28-bit 编码规则：
+   * 1. 找到最后一个（或唯一的）数字，将其对齐到第 3 位
+   * 2. 数字前最多 2 个字符
+   * 3. 数字后最多 3 个字符
+   * 4. 数字后的字符必须都是字母（第 4-6 位只允许字母或空格）
+   *
+   * 示例：
+   * - ✅ Z33Z → Z 3 3 Z _ _ (位置: 1字母, 2数字, 3数字, 4字母)
+   * - ✅ 4U1ITU → 4 U 1 I T U (位置: 1数字, 2字母, 3数字, 4-6字母)
+   * - ✅ BA1ABC → _ B A 1 A B C (位置: 1空格, 2字母, 3数字, 4-6字母)
+   * - ❌ Z3Z3Z → Z 3 Z 3 Z (最后数字后有 2 个字符，但倒数第二个是数字)
    */
   private static isStandardCallsign(callsign: string): boolean {
     // 移除可能存在的 <>
-    const cleanCallsign = callsign.replace(/[<>]/g, '');
-    
-    // 基本格式检查
-    if (!STANDARD_CALLSIGN_REGEX.test(cleanCallsign)) {
+    let cleanCallsign = callsign.replace(/[<>]/g, '');
+
+    // 检查后缀：只允许标准后缀（如 /P, /1），不允许复合呼号（如 /K1ABC）
+    const slashIndex = cleanCallsign.indexOf('/');
+    if (slashIndex !== -1) {
+      const suffix = cleanCallsign.substring(slashIndex + 1);
+      // 标准后缀只能是单个数字或单个字母
+      if (!/^[A-Z0-9]$/.test(suffix)) {
+        return false; // 复合呼号，非标准
+      }
+      cleanCallsign = cleanCallsign.substring(0, slashIndex);
+    }
+
+    // 基本格式检查：2-6位，只包含字母和数字
+    if (!/^[A-Z0-9]{2,6}$/.test(cleanCallsign)) {
       return false;
     }
 
-    // 检查数字位置
-    const digits = cleanCallsign.match(/\d/g);
-    if (!digits || digits.length > 1) {
+    // 找到最后一个数字的位置（FT8 对齐规则）
+    const lastDigitIndex = cleanCallsign.search(/\d(?=\D*$)/);
+    if (lastDigitIndex === -1) {
       return false;
     }
 
-    const digitIndex = cleanCallsign.search(/\d/);
-    return digitIndex >= 1 && digitIndex <= 3;
+    // 计算对齐后的位置
+    const beforeDigit = lastDigitIndex; // 数字前的字符数
+    const afterDigit = cleanCallsign.length - lastDigitIndex - 1; // 数字后的字符数
+
+    // 检查对齐规则：数字前最多 2 个字符，数字后最多 3 个字符
+    if (beforeDigit > 2 || afterDigit > 3) {
+      return false;
+    }
+
+    // 检查数字后的字符必须都是字母（FT8 协议第 4-6 位不允许数字）
+    const suffixAfterDigit = cleanCallsign.slice(lastDigitIndex + 1);
+    if (suffixAfterDigit && !/^[A-Z]+$/.test(suffixAfterDigit)) {
+      return false;
+    }
+
+    return true;
   }
 
   /**

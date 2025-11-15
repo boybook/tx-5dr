@@ -453,4 +453,69 @@ export async function radioRoutes(fastify: FastifyInstance) {
       isConnected: true
     });
   });
+
+  // ==================== 天线调谐器控制 ====================
+
+  /**
+   * 获取天线调谐器能力
+   * GET /radio/tuner/capabilities
+   */
+  fastify.get('/tuner/capabilities', async (_req, reply) => {
+    const capabilities = await radioManager.getTunerCapabilities();
+    return reply.send({
+      success: true,
+      capabilities,
+    });
+  });
+
+  /**
+   * 获取天线调谐器状态
+   * GET /radio/tuner/status
+   */
+  fastify.get('/tuner/status', async (_req, reply) => {
+    const status = await radioManager.getTunerStatus();
+    return reply.send({
+      success: true,
+      status,
+    });
+  });
+
+  /**
+   * 设置天线调谐器开关
+   * POST /radio/tuner
+   * Body: { enabled: boolean }
+   */
+  fastify.post('/tuner', async (req, reply) => {
+    const { enabled } = req.body as { enabled: boolean };
+
+    if (typeof enabled !== 'boolean') {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `无效的天调开关值: ${enabled}`,
+        userMessage: '请提供有效的天调开关状态',
+        severity: RadioErrorSeverity.WARNING,
+        suggestions: ['确认 enabled 参数是否为布尔类型 (true/false)'],
+      });
+    }
+
+    await radioManager.setTuner(enabled);
+
+    return reply.send({
+      success: true,
+      message: `天调已${enabled ? '启用' : '禁用'}`,
+    });
+  });
+
+  /**
+   * 启动手动调谐
+   * POST /radio/tuner/tune
+   */
+  fastify.post('/tuner/tune', async (_req, reply) => {
+    const result = await radioManager.startTuning();
+
+    return reply.send({
+      success: result,
+      message: result ? '调谐成功' : '调谐失败',
+    });
+  });
 }

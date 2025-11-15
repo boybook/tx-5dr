@@ -22,7 +22,9 @@ import type {
   QSOActionResponse,
   WaveLogConfig,
   WaveLogTestConnectionRequest,
-  WaveLogTestConnectionResponse
+  WaveLogTestConnectionResponse,
+  TunerCapabilities,
+  TunerStatus
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -547,6 +549,55 @@ export const api = {
     );
   },
 
+  // ========== 天调控制API ==========
+
+  /**
+   * 获取天调能力
+   */
+  async getTunerCapabilities(apiBase?: string): Promise<{ success: boolean; capabilities: TunerCapabilities }> {
+    return apiRequest<{ success: boolean; capabilities: TunerCapabilities }>(
+      '/radio/tuner/capabilities',
+      undefined,
+      apiBase
+    );
+  },
+
+  /**
+   * 获取天调状态
+   */
+  async getTunerStatus(apiBase?: string): Promise<{ success: boolean; status: TunerStatus }> {
+    return apiRequest<{ success: boolean; status: TunerStatus }>(
+      '/radio/tuner/status',
+      undefined,
+      apiBase
+    );
+  },
+
+  /**
+   * 设置天调开关
+   */
+  async setTuner(enabled: boolean, apiBase?: string): Promise<{ success: boolean; message: string }> {
+    return apiRequest<{ success: boolean; message: string }>(
+      '/radio/tuner',
+      {
+        method: 'POST',
+        body: JSON.stringify({ enabled }),
+      },
+      apiBase
+    );
+  },
+
+  /**
+   * 启动手动调谐
+   */
+  async startTuning(apiBase?: string): Promise<{ success: boolean; message: string }> {
+    return apiRequest<{ success: boolean; message: string }>(
+      '/radio/tuner/tune',
+      { method: 'POST' },
+      apiBase
+    );
+  },
+
   // ========== 模式管理API ==========
 
   /**
@@ -1057,4 +1108,9 @@ export const {
   ,getPresetFrequencies
   ,getLastFrequency
   ,setRadioFrequency
+  // 天调控制函数
+  ,getTunerCapabilities
+  ,getTunerStatus
+  ,setTuner
+  ,startTuning
 } = api;
