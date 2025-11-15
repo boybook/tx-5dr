@@ -12,7 +12,7 @@
       "Bash(yarn workspace @tx5dr/core:*)",
       "WebFetch(domain:www.heroui.com)",
       "WebSearch",
-      "Bash(cat node_modules/icom-wlan-node/dist/index.d.ts)"
+      "Bash(otool:*)"
     ],
     "deny": []
   }
