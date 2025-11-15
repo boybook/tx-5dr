@@ -174,6 +174,50 @@ export const TestResponseSchema = z.object({
   message: z.string().optional(),
 });
 
+/**
+ * 天调能力Schema
+ * 描述电台的天线调谐器功能支持情况
+ */
+export const TunerCapabilitiesSchema = z.object({
+  /** 是否支持天调功能 */
+  supported: z.boolean(),
+  /** 是否支持开关控制 */
+  hasSwitch: z.boolean(),
+  /** 是否支持手动调谐 */
+  hasManualTune: z.boolean(),
+});
+
+/**
+ * 天调状态Schema
+ * 描述天线调谐器的当前状态
+ */
+export const TunerStatusSchema = z.object({
+  /** 天调是否已启用 */
+  enabled: z.boolean(),
+  /** 是否正在调谐中 */
+  active: z.boolean(),
+  /** 驻波比 (SWR) 值 */
+  swr: z.number().optional(),
+  /** 调谐状态 */
+  status: z.enum(['idle', 'tuning', 'success', 'failed']).optional(),
+});
+
+/**
+ * 天调能力响应Schema
+ */
+export const TunerCapabilitiesResponseSchema = z.object({
+  success: z.boolean(),
+  capabilities: TunerCapabilitiesSchema,
+});
+
+/**
+ * 天调状态响应Schema
+ */
+export const TunerStatusResponseSchema = z.object({
+  success: z.boolean(),
+  status: TunerStatusSchema,
+});
+
 // 导出类型
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;
 export type FrequencyListResponse = z.infer<typeof FrequencyListResponseSchema>;
@@ -189,3 +233,7 @@ export type RadioInfo = z.infer<typeof RadioInfoSchema>;
 export type SerialPort = z.infer<typeof SerialPortSchema>;
 export type SerialPortsResponse = z.infer<typeof SerialPortsResponseSchema>;
 export type TestResponse = z.infer<typeof TestResponseSchema>;
+export type TunerCapabilities = z.infer<typeof TunerCapabilitiesSchema>;
+export type TunerStatus = z.infer<typeof TunerStatusSchema>;
+export type TunerCapabilitiesResponse = z.infer<typeof TunerCapabilitiesResponseSchema>;
+export type TunerStatusResponse = z.infer<typeof TunerStatusResponseSchema>;

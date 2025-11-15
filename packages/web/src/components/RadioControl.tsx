@@ -2,10 +2,10 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle, faHeadphones, faBan, faRadio } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle, faHeadphones, faBan, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor } from '@tx5dr/contracts';
+import type { ModeDescriptor, TunerStatus, TunerCapabilities } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { useState, useEffect } from 'react';
 
@@ -570,6 +570,15 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
   const [customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
+
+  // 天调相关状态
+  const [tunerCapabilities, setTunerCapabilities] = useState<TunerCapabilities | null>(null);
+  const [tunerStatus, setTunerStatus] = useState<TunerStatus>({
+    enabled: false,
+    active: false,
+    status: 'idle'
+  });
+  const [isTunerLoading, setIsTunerLoading] = useState(false);
 
   // 加载可用模式列表
   React.useEffect(() => {
@@ -1446,6 +1455,144 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     };
   }, [connection.state.radioService, availableFrequencies]);
 
+  // 加载天调能力
+  useEffect(() => {
+    const loadTunerCapabilities = async () => {
+      if (!connection.state.isConnected || !radio.state.radioConnected) {
+        setTunerCapabilities(null);
+        return;
+      }
+
+      try {
+        const response = await api.getTunerCapabilities();
+        if (response.success) {
+          console.log('📡 天调能力:', response.capabilities);
+          setTunerCapabilities(response.capabilities);
+
+          // 如果支持天调，获取当前状态
+          if (response.capabilities.supported) {
+            const statusResponse = await api.getTunerStatus();
+            if (statusResponse.success) {
+              setTunerStatus(statusResponse.status);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('❌ 获取天调能力失败:', error);
+        setTunerCapabilities(null);
+      }
+    };
+
+    loadTunerCapabilities();
+  }, [connection.state.isConnected, radio.state.radioConnected]);
+
+  // 监听天调状态变化事件
+  useEffect(() => {
+    if (!connection.state.radioService) return;
+
+    const wsClient = connection.state.radioService.wsClientInstance;
+
+    const handleTunerStatusChanged = (status: TunerStatus) => {
+      console.log('📡 收到天调状态变化:', status);
+      setTunerStatus(status);
+      setIsTunerLoading(false);
+    };
+
+    wsClient.onWSEvent('tunerStatusChanged', handleTunerStatusChanged);
+
+    return () => {
+      wsClient.offWSEvent('tunerStatusChanged', handleTunerStatusChanged);
+    };
+  }, [connection.state.radioService]);
+
+  // 天调控制方法
+  const handleTunerToggle = async () => {
+    if (!tunerCapabilities?.supported || !tunerCapabilities.hasSwitch) {
+      console.warn('⚠️ 天调不支持开关控制');
+      return;
+    }
+
+    setIsTunerLoading(true);
+
+    try {
+      const newEnabled = !tunerStatus.enabled;
+      await api.setTuner(newEnabled);
+      console.log(`✅ 天调已${newEnabled ? '启用' : '禁用'}`);
+
+      addToast({
+        title: `天调已${newEnabled ? '启用' : '禁用'}`,
+        color: 'success',
+        timeout: 2000
+      });
+    } catch (error) {
+      console.error('❌ 切换天调状态失败:', error);
+      setIsTunerLoading(false);
+
+      if (error instanceof ApiError) {
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code
+        });
+      } else {
+        addToast({
+          title: '切换天调状态失败',
+          description: '网络错误或服务器无响应',
+          timeout: 3000
+        });
+      }
+    }
+  };
+
+  const handleStartTuning = async () => {
+    if (!tunerCapabilities?.supported || !tunerCapabilities.hasManualTune) {
+      console.warn('⚠️ 天调不支持手动调谐');
+      return;
+    }
+
+    if (!tunerStatus.enabled) {
+      addToast({
+        title: '请先启用天调',
+        description: '需要先打开天调开关才能进行手动调谐',
+        timeout: 3000
+      });
+      return;
+    }
+
+    setIsTunerLoading(true);
+
+    try {
+      const response = await api.startTuning();
+      if (response.success) {
+        console.log('✅ 手动调谐已启动');
+        addToast({
+          title: '手动调谐已启动',
+          color: 'success',
+          timeout: 2000
+        });
+      }
+    } catch (error) {
+      console.error('❌ 启动手动调谐失败:', error);
+      setIsTunerLoading(false);
+
+      if (error instanceof ApiError) {
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code
+        });
+      } else {
+        addToast({
+          title: '启动手动调谐失败',
+          description: '网络错误或服务器无响应',
+          timeout: 3000
+        });
+      }
+    }
+  };
+
   return (
     <div className="flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
       {/* 顶部标题栏 */}
@@ -1554,10 +1701,82 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 </div>
               </PopoverContent>
             </Popover>
+            {/* 天调控制 */}
+            {tunerCapabilities?.supported && (
+              <Popover>
+                <PopoverTrigger>
+                  <Button
+                    isIconOnly
+                    variant="light"
+                    size="sm"
+                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${
+                      tunerStatus.status === 'tuning'
+                        ? 'text-success animate-pulse'
+                        : tunerStatus.enabled
+                        ? 'text-success'
+                        : 'text-default-400'
+                    }`}
+                    aria-label="天调控制"
+                  >
+                    <FontAwesomeIcon icon={faSlidersH} className="text-xs" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="py-4 space-y-2">
+                  <div className="space-y-2">
+                    {/* 天调开关 */}
+                    {tunerCapabilities.hasSwitch && (
+                      <div className="flex items-center justify-between px-2 gap-2">
+                        <span className="text-sm text-default-500">自动天调</span>
+                        <Switch
+                          size="sm"
+                          isSelected={tunerStatus.enabled}
+                          onValueChange={handleTunerToggle}
+                          isDisabled={isTunerLoading}
+                          aria-label="天调开关"
+                        />
+                      </div>
+                    )}
+
+                    {/* 手动调谐按钮 */}
+                    {tunerCapabilities.hasManualTune && (
+                      <div className="px-2">
+                        <Button
+                          size="sm"
+                          color="primary"
+                          variant="flat"
+                          className="w-full"
+                          onPress={handleStartTuning}
+                          isLoading={isTunerLoading && tunerStatus.status === 'tuning'}
+                          isDisabled={!tunerStatus.enabled || isTunerLoading}
+                        >
+                          {tunerStatus.status === 'tuning' ? '调谐中...' : '手动调谐'}
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* SWR显示（如果有） */}
+                    {tunerStatus.swr !== undefined && (
+                      <div className="space-y-1 pt-2 border-t border-divider text-xs px-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-default-500">SWR</span>
+                          <span className={`font-mono ${
+                            tunerStatus.swr < 1.5 ? 'text-success' :
+                            tunerStatus.swr < 2.0 ? 'text-warning' :
+                            'text-danger'
+                          }`}>
+                            {tunerStatus.swr.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
           </div>
         </div>
       </div>
-      
+
       {/* 主控制区域 */}
       <div className="flex items-center">
         {/* 左侧选择器 */}

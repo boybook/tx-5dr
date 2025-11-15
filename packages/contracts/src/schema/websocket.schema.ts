@@ -4,7 +4,7 @@ import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
-import { RadioInfoSchema, HamlibConfigSchema } from './radio.schema.js';
+import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema } from './radio.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -89,6 +89,9 @@ export enum WSMessageType {
   AUDIO_MONITOR_DATA = 'audioMonitorData',
   SET_MONITOR_VOLUME_GAIN = 'setMonitorVolumeGain',
   AUDIO_MONITOR_STATS = 'audioMonitorStats',
+
+  // ===== 天线调谐器 =====
+  TUNER_STATUS_CHANGED = 'tunerStatusChanged',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -819,6 +822,16 @@ export const WSAudioMonitorStatsMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSAudioMonitorStatsMessage = z.infer<typeof WSAudioMonitorStatsMessageSchema>;
 
+/**
+ * 天调状态变化消息（服务端到客户端）
+ */
+export const WSTunerStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.TUNER_STATUS_CHANGED),
+  data: TunerStatusSchema,
+});
+
+export type WSTunerStatusChangedMessage = z.infer<typeof WSTunerStatusChangedMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -895,6 +908,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSAudioMonitorDataMessageSchema,
   WSSetMonitorVolumeGainMessageSchema,
   WSAudioMonitorStatsMessageSchema,
+
+  // 天线调谐器消息
+  WSTunerStatusChangedMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -997,4 +1013,7 @@ export interface DigitalRadioEngineEvents {
   // 音频监听事件
   audioMonitorData: (data: { audioData: ArrayBuffer; sampleRate: number; samples: number; timestamp: number }) => void;
   audioMonitorStats: (stats: AudioMonitorStats) => void;
+
+  // 天线调谐器事件
+  tunerStatusChanged: (status: z.infer<typeof TunerStatusSchema>) => void;
 } 

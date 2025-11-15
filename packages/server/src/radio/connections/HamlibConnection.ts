@@ -331,6 +331,120 @@ export class HamlibConnection
     };
   }
 
+  // ===== 天线调谐器控制 =====
+
+  /**
+   * 获取天线调谐器能力
+   */
+  async getTunerCapabilities(): Promise<import('@tx5dr/contracts').TunerCapabilities> {
+    this.checkConnected();
+
+    try {
+      // 获取电台支持的功能列表
+      const supportedFunctions = await Promise.race([
+        this.rig!.getSupportedFunctions(),
+        new Promise<string[]>((_, reject) =>
+          setTimeout(() => reject(new Error('获取功能列表超时')), 5000)
+        ),
+      ]);
+
+      // 检查是否支持 TUNER 功能
+      const tunerSupported = supportedFunctions.includes('TUNER');
+
+      // 假设支持 TUNER 功能的电台都支持开关控制和手动调谐
+      // 实际支持情况可能因电台型号而异
+      const capabilities: import('@tx5dr/contracts').TunerCapabilities = {
+        supported: tunerSupported,
+        hasSwitch: tunerSupported,
+        hasManualTune: tunerSupported,
+      };
+
+      this.lastSuccessfulOperation = Date.now();
+      console.log(`📻 [HamlibConnection] 天调能力查询成功:`, capabilities);
+
+      return capabilities;
+    } catch (error) {
+      throw this.convertError(error, 'getTunerCapabilities');
+    }
+  }
+
+  /**
+   * 设置天线调谐器开关
+   */
+  async setTuner(enabled: boolean): Promise<void> {
+    this.checkConnected();
+
+    try {
+      await Promise.race([
+        this.rig!.setFunction('TUNER', enabled),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('设置天调超时')), 5000)
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+      console.log(
+        `📻 [HamlibConnection] 天调设置成功: ${enabled ? '已启用' : '已禁用'}`
+      );
+    } catch (error) {
+      throw this.convertError(error, 'setTuner');
+    }
+  }
+
+  /**
+   * 获取天线调谐器状态
+   */
+  async getTunerStatus(): Promise<import('@tx5dr/contracts').TunerStatus> {
+    this.checkConnected();
+
+    try {
+      const enabled = await Promise.race([
+        this.rig!.getFunction('TUNER'),
+        new Promise<boolean>((_, reject) =>
+          setTimeout(() => reject(new Error('获取天调状态超时')), 5000)
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+
+      // Hamlib 可能不提供调谐中状态和 SWR 值
+      // 返回基本状态信息
+      const status: import('@tx5dr/contracts').TunerStatus = {
+        enabled,
+        active: false,
+        status: 'idle',
+      };
+
+      return status;
+    } catch (error) {
+      throw this.convertError(error, 'getTunerStatus');
+    }
+  }
+
+  /**
+   * 启动手动调谐
+   */
+  async startTuning(): Promise<boolean> {
+    this.checkConnected();
+
+    try {
+      await Promise.race([
+        this.rig!.vfoOperation('TUNE'),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('启动调谐超时')), 10000) // 调谐可能需要较长时间
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+      console.log(`📻 [HamlibConnection] 手动调谐已启动`);
+
+      return true;
+    } catch (error) {
+      console.error(`❌ [HamlibConnection] 启动调谐失败:`, error);
+      throw this.convertError(error, 'startTuning');
+    }
+  }
+
   /**
    * 设置状态并触发事件
    */

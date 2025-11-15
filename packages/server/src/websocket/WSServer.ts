@@ -412,6 +412,13 @@ export class WSServer extends WSMessageHandler {
       // 数值表数据频率较高，使用静默广播（不打印日志）
       this.broadcast(WSMessageType.METER_DATA, data);
     });
+
+    // 监听天线调谐器状态变化事件
+    const radioManager = this.digitalRadioEngine.getRadioManager();
+    radioManager.on('tunerStatusChanged', (status: any) => {
+      console.log(`📻 [WSServer] 收到天调状态变化事件:`, status);
+      this.broadcast(WSMessageType.TUNER_STATUS_CHANGED, status);
+    });
   }
 
   /**

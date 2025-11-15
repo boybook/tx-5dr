@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig } from '@tx5dr/contracts';
+import type { HamlibConfig, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 
 /**
  * 电台连接类型
@@ -203,4 +203,41 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
     state: RadioConnectionState;
     config: Partial<RadioConnectionConfig>;
   };
+
+  // ===== 天线调谐器控制（可选功能） =====
+
+  /**
+   * 获取天线调谐器能力
+   *
+   * @returns 天调能力信息
+   * @optional 不是所有电台都支持此功能
+   */
+  getTunerCapabilities?(): Promise<TunerCapabilities>;
+
+  /**
+   * 设置天线调谐器开关状态
+   *
+   * @param enabled - true: 启用天调, false: 禁用天调
+   * @throws {RadioError} 设置失败时抛出
+   * @optional 仅支持天调的电台需要实现
+   */
+  setTuner?(enabled: boolean): Promise<void>;
+
+  /**
+   * 获取天线调谐器状态
+   *
+   * @returns 天调状态信息
+   * @throws {RadioError} 获取失败时抛出
+   * @optional 仅支持天调的电台需要实现
+   */
+  getTunerStatus?(): Promise<TunerStatus>;
+
+  /**
+   * 启动手动调谐
+   *
+   * @returns true: 调谐启动成功, false: 调谐失败
+   * @throws {RadioError} 启动失败时抛出
+   * @optional 仅支持手动调谐的电台需要实现
+   */
+  startTuning?(): Promise<boolean>;
 }

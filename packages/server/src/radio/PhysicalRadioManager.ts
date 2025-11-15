@@ -38,6 +38,7 @@ interface PhysicalRadioManagerEvents {
   error: (error: Error) => void;
   radioFrequencyChanged: (frequency: number) => void;
   meterData: (data: MeterData) => void; // 数值表数据
+  tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void; // 天调状态变化
 }
 
 /**
@@ -461,6 +462,188 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     } catch (error) {
       this.handleConnectionError(error as Error);
       throw new Error(`获取模式失败: ${(error as Error).message}`);
+    }
+  }
+
+  // ==================== 天线调谐器控制 ====================
+
+  /**
+   * 获取天线调谐器能力
+   */
+  async getTunerCapabilities(): Promise<import('@tx5dr/contracts').TunerCapabilities> {
+    if (!this.connection) {
+      console.error('❌ [PhysicalRadioManager] 电台未连接，无法获取天调能力');
+      // 返回默认值：不支持
+      return {
+        supported: false,
+        hasSwitch: false,
+        hasManualTune: false,
+      };
+    }
+
+    // 检查连接是否实现了天调方法
+    if (!this.connection.getTunerCapabilities) {
+      console.log('ℹ️ [PhysicalRadioManager] 当前电台连接不支持天调功能');
+      return {
+        supported: false,
+        hasSwitch: false,
+        hasManualTune: false,
+      };
+    }
+
+    try {
+      const capabilities = await this.connection.getTunerCapabilities();
+      console.log(`📻 [PhysicalRadioManager] 天调能力:`, capabilities);
+      return capabilities;
+    } catch (error) {
+      console.error(
+        `❌ [PhysicalRadioManager] 获取天调能力失败: ${(error as Error).message}`
+      );
+      this.handleConnectionError(error as Error);
+      // 发生错误时返回不支持
+      return {
+        supported: false,
+        hasSwitch: false,
+        hasManualTune: false,
+      };
+    }
+  }
+
+  /**
+   * 设置天线调谐器开关
+   */
+  async setTuner(enabled: boolean): Promise<void> {
+    if (!this.connection) {
+      throw new Error('电台未连接，无法控制天调');
+    }
+
+    if (!this.connection.setTuner) {
+      throw new Error('当前电台不支持天调控制');
+    }
+
+    try {
+      console.log(
+        `📻 [PhysicalRadioManager] ${enabled ? '启用' : '禁用'}天调...`
+      );
+
+      await this.connection.setTuner(enabled);
+
+      console.log(
+        `✅ [PhysicalRadioManager] 天调${enabled ? '已启用' : '已禁用'}`
+      );
+
+      // 获取更新后的状态并广播事件
+      const status = await this.getTunerStatus();
+      this.emit('tunerStatusChanged', status);
+    } catch (error) {
+      console.error(
+        `❌ [PhysicalRadioManager] 设置天调失败: ${(error as Error).message}`
+      );
+      this.handleConnectionError(error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取天线调谐器状态
+   */
+  async getTunerStatus(): Promise<import('@tx5dr/contracts').TunerStatus> {
+    if (!this.connection) {
+      console.error('❌ [PhysicalRadioManager] 电台未连接，无法获取天调状态');
+      // 返回默认状态
+      return {
+        enabled: false,
+        active: false,
+        status: 'idle',
+      };
+    }
+
+    if (!this.connection.getTunerStatus) {
+      console.log('ℹ️ [PhysicalRadioManager] 当前电台连接不支持天调状态查询');
+      return {
+        enabled: false,
+        active: false,
+        status: 'idle',
+      };
+    }
+
+    try {
+      const status = await this.connection.getTunerStatus();
+      return status;
+    } catch (error) {
+      console.error(
+        `❌ [PhysicalRadioManager] 获取天调状态失败: ${(error as Error).message}`
+      );
+      this.handleConnectionError(error as Error);
+      // 发生错误时返回默认状态
+      return {
+        enabled: false,
+        active: false,
+        status: 'idle',
+      };
+    }
+  }
+
+  /**
+   * 启动手动调谐
+   */
+  async startTuning(): Promise<boolean> {
+    if (!this.connection) {
+      throw new Error('电台未连接，无法启动调谐');
+    }
+
+    if (!this.connection.startTuning) {
+      throw new Error('当前电台不支持手动调谐');
+    }
+
+    try {
+      console.log(`📻 [PhysicalRadioManager] 启动手动调谐...`);
+
+      // 启动前先标记为调谐中（如果支持状态查询）
+      if (this.connection.getTunerStatus) {
+        const beforeStatus: import('@tx5dr/contracts').TunerStatus = {
+          enabled: true,
+          active: true,
+          status: 'tuning',
+        };
+        this.emit('tunerStatusChanged', beforeStatus);
+      }
+
+      const result = await this.connection.startTuning();
+
+      console.log(
+        `${result ? '✅' : '❌'} [PhysicalRadioManager] 调谐${
+          result ? '成功' : '失败'
+        }`
+      );
+
+      // 调谐完成后获取最新状态
+      if (this.connection.getTunerStatus) {
+        const afterStatus = await this.getTunerStatus();
+        // 根据结果更新状态
+        afterStatus.status = result ? 'success' : 'failed';
+        afterStatus.active = false;
+        this.emit('tunerStatusChanged', afterStatus);
+      }
+
+      return result;
+    } catch (error) {
+      console.error(
+        `❌ [PhysicalRadioManager] 启动调谐失败: ${(error as Error).message}`
+      );
+
+      // 调谐失败，广播失败状态
+      if (this.connection.getTunerStatus) {
+        const failedStatus: import('@tx5dr/contracts').TunerStatus = {
+          enabled: true,
+          active: false,
+          status: 'failed',
+        };
+        this.emit('tunerStatusChanged', failedStatus);
+      }
+
+      this.handleConnectionError(error as Error);
+      throw error;
     }
   }
 
