@@ -36,8 +36,21 @@ export async function radioRoutes(fastify: FastifyInstance) {
         inputDeviceName: 'ICOM WLAN',
         outputDeviceName: 'ICOM WLAN'
       };
+
+      // 重启引擎以应用音频配置（参考 POST /audio/settings 的实现）
+      const wasRunning = engine.getStatus().isRunning;
+      if (wasRunning) {
+        console.log('🔄 [Radio Routes] 停止引擎以应用音频配置');
+        await engine.stop();
+      }
+
       await configManager.updateAudioConfig(updatedAudioConfig);
       console.log('✅ [Radio Routes] 音频设备已自动设置为 ICOM WLAN');
+
+      if (wasRunning) {
+        console.log('🔄 [Radio Routes] 重新启动引擎');
+        await engine.start();
+      }
     }
 
     // 始终应用配置，确保旧状态机被正确清理（即使在 engine 启动期间）
