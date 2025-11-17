@@ -32,9 +32,6 @@ import { ConfigManager } from '../config/config-manager.js';
 interface PhysicalRadioManagerEvents {
   connected: () => void;
   disconnected: (reason?: string) => void;
-  reconnecting: (attempt: number) => void;
-  reconnectFailed: (error: Error, attempt: number) => void;
-  reconnectStopped: (maxAttempts: number) => void;
   error: (error: Error) => void;
   radioFrequencyChanged: (frequency: number) => void;
   meterData: (data: MeterData) => void; // 数值表数据
@@ -207,18 +204,23 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     await this.waitForConnected(30000);
   }
 
+
   /**
-   * 获取重连状态信息（兼容旧接口）
+   * 检查是否已连接
+   */
+  isConnected(): boolean {
+    return this.connection !== null && this.radioActor !== null &&
+           isRadioState(this.radioActor, RadioState.CONNECTED);
+  }
+
+  /**
+   * 获取重连信息（简化版，仅返回必要的连接状态）
    */
   getReconnectInfo() {
     if (!this.radioActor) {
       return {
         isReconnecting: false,
-        reconnectAttempts: 0,
-        maxReconnectAttempts: -1,
-        hasReachedMaxAttempts: false,
         connectionHealthy: false,
-        nextReconnectDelay: 3000,
       };
     }
 
@@ -227,44 +229,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     return {
       isReconnecting,
-      reconnectAttempts: context.reconnectAttempts,
-      maxReconnectAttempts: context.maxReconnectAttempts,
-      hasReachedMaxAttempts:
-        context.maxReconnectAttempts > 0 &&
-        context.reconnectAttempts >= context.maxReconnectAttempts,
       connectionHealthy: context.isHealthy,
-      nextReconnectDelay: 3000, // 从状态机计算
     };
-  }
-
-  /**
-   * 设置重连参数（兼容旧接口）
-   */
-  setReconnectParams(maxAttempts: number, delayMs: number) {
-    console.log(
-      `🔧 [PhysicalRadioManager] 重连参数设置请求: 最大${maxAttempts}次, 间隔${delayMs}ms`
-    );
-    console.warn('⚠️  重连参数应在创建状态机时配置，此方法仅用于兼容');
-    // 状态机的重连参数在创建时设置，运行时修改较复杂
-    // 这里保留接口仅用于兼容
-  }
-
-  /**
-   * 重置重连计数器（兼容旧接口）
-   */
-  resetReconnectAttempts() {
-    if (this.radioActor) {
-      this.radioActor.send({ type: 'RESET' });
-      console.log('🔄 [PhysicalRadioManager] 重连计数器已重置');
-    }
-  }
-
-  /**
-   * 检查是否已连接
-   */
-  isConnected(): boolean {
-    return this.connection !== null && this.radioActor !== null &&
-           isRadioState(this.radioActor, RadioState.CONNECTED);
   }
 
   /**
@@ -319,7 +285,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         // TODO: 未来可通过 icom-wlan-node 库或 CI-V 命令获取具体型号
         return {
           manufacturer: 'ICOM',
-          model: 'ICOM WLAN',
+          model: 'WLAN',
           connectionType: 'icom-wlan',
         };
       }
@@ -732,11 +698,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     console.log('🔧 [PhysicalRadioManager] 初始化状态机...');
 
     const radioInput: RadioInput = {
-      maxReconnectAttempts: -1, // 无限重连
-      reconnectDelay: 3000, // 3秒
       healthCheckInterval: 3000, // 3秒
 
-      // 连接回调 - 重连时从 ConfigManager 读取最新配置
+      // 连接回调 - 从 ConfigManager 读取最新配置
       onConnect: async (_cfg: HamlibConfig) => {
         console.log('🔌 [RadioStateMachine] 回调: onConnect - 从ConfigManager读取最新配置');
         const latestConfig = this.configManager.getRadioConfig();
@@ -859,28 +823,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     // 状态变化
     const onStateChanged = (state: RadioConnectionState) => {
       console.log(`🔄 [Connection] 状态变化: ${state}`);
-
-      // 根据连接状态触发状态机事件
-      switch (state) {
-        case RadioConnectionState.CONNECTED:
-          // 连接成功由状态机自动处理
-          break;
-        case RadioConnectionState.DISCONNECTED:
-          // 连接断开，触发重连
-          if (this.radioActor) {
-            this.radioActor.send({ type: 'CONNECTION_LOST', reason: '连接断开' });
-          }
-          break;
-        case RadioConnectionState.ERROR:
-          // 连接错误，触发重连
-          if (this.radioActor) {
-            this.radioActor.send({
-              type: 'HEALTH_CHECK_FAILED',
-              error: new Error('连接错误'),
-            });
-          }
-          break;
-      }
+      // 不再自动触发重连事件,由用户手动重连
     };
     this.connection.on('stateChanged', onStateChanged);
     this.connectionEventListeners.set('stateChanged', onStateChanged);
@@ -942,7 +885,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         break;
 
       case RadioState.RECONNECTING:
-        this.emit('reconnecting', context.reconnectAttempts);
+        // 重连状态仅记录,不发送事件
         break;
 
       case RadioState.ERROR:

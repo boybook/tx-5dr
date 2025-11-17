@@ -122,16 +122,6 @@ export interface RadioContext {
   error?: RadioError | Error;
 
   /**
-   * 重连尝试次数
-   */
-  reconnectAttempts: number;
-
-  /**
-   * 最大重连次数（-1 表示无限重连）
-   */
-  maxReconnectAttempts: number;
-
-  /**
    * 连接时间戳
    */
   connectedTimestamp?: number;
@@ -199,16 +189,6 @@ export interface RadioInput {
    * 回调函数：状态变化
    */
   onStateChange?: (state: RadioState, context: RadioContext) => void;
-
-  /**
-   * 最大重连次数（-1 表示无限重连）
-   */
-  maxReconnectAttempts?: number;
-
-  /**
-   * 重连延迟（毫秒）
-   */
-  reconnectDelay?: number;
 
   /**
    * 健康检查间隔（毫秒）

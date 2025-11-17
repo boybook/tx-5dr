@@ -53,23 +53,25 @@ export async function radioRoutes(fastify: FastifyInstance) {
       }
     }
 
-    // 始终应用配置，确保旧状态机被正确清理（即使在 engine 启动期间）
-    // 这解决了在启动过程中切换配置时，旧状态机继续重连的问题
-    try {
-      await radioManager.applyConfig(config);
-      console.log(`✅ [Radio Routes] 配置已应用: type=${config.type}`);
-
-      // 如果 engine 已运行，立即更新 SlotClock 的发射补偿值（热更新）
-      if (engine.getStatus().isRunning) {
-        const compensationMs = config.transmitCompensationMs || 0;
-        engine.updateTransmitCompensation(compensationMs);
-        console.log(`✅ [Radio Routes] 发射补偿已热更新为: ${compensationMs}ms`);
+    // 仅在引擎未运行时手动应用配置
+    // 如果引擎正在运行，radio 资源已在上面的 engine.start() 中自动应用了最新配置
+    // 这避免了双重连接问题（第一次：radio资源启动时应用，第二次：这里手动应用）
+    if (!engine.getStatus().isRunning) {
+      try {
+        await radioManager.applyConfig(config);
+        console.log(`✅ [Radio Routes] 配置已应用: type=${config.type}`);
+      } catch (error) {
+        console.error('❌ [Radio Routes] 应用配置时出错:', error);
       }
-    } catch (error) {
-      // 记录错误但不阻塞配置保存（配置已更新到 ConfigManager）
-      console.error('❌ [Radio Routes] 应用配置时出错:', error);
-      // 注意：配置已经保存到 ConfigManager，只是应用过程可能失败
-      // 如果是在 engine 启动期间，radio 资源会在启动时自动应用最新配置
+    } else {
+      console.log('📡 [Radio Routes] 引擎正在运行，radio 资源已自动应用配置');
+    }
+
+    // 如果 engine 已运行，立即更新 SlotClock 的发射补偿值（热更新）
+    if (engine.getStatus().isRunning) {
+      const compensationMs = config.transmitCompensationMs || 0;
+      engine.updateTransmitCompensation(compensationMs);
+      console.log(`✅ [Radio Routes] 发射补偿已热更新为: ${compensationMs}ms`);
     }
 
     // 广播配置变更事件，确保所有客户端同步最新配置

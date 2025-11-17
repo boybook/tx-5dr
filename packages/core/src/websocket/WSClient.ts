@@ -6,10 +6,7 @@ import { WSMessageHandler } from './WSMessageHandler.js';
  */
 export interface WSClientConfig {
   url: string;
-  reconnectAttempts?: number; // 设置为 -1 表示无限重连
-  reconnectDelay?: number;
   heartbeatInterval?: number;
-  maxReconnectDelay?: number; // 最大重连延迟，避免延迟过长
 }
 
 /**
@@ -19,22 +16,15 @@ export interface WSClientConfig {
 export class WSClient extends WSMessageHandler {
   private ws: WebSocket | null = null;
   private config: Required<WSClientConfig>;
-  private reconnectAttempts = 0;
   private isConnecting = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  // 标记本次关闭是否已安排过重连，避免 onerror/onclose 双重调度
-  private pendingReconnectScheduled = false;
 
   constructor(config: WSClientConfig) {
     super();
-    
+
     this.config = {
       url: config.url,
-      reconnectAttempts: config.reconnectAttempts ?? -1, // 默认无限重连
-      reconnectDelay: config.reconnectDelay ?? 1000,
       heartbeatInterval: config.heartbeatInterval ?? 30000,
-      maxReconnectDelay: config.maxReconnectDelay ?? 30000, // 最大30秒延迟
     };
   }
 
@@ -55,7 +45,6 @@ export class WSClient extends WSMessageHandler {
         this.ws.onopen = () => {
           console.log('🔗 WebSocket连接已建立');
           this.isConnecting = false;
-          this.reconnectAttempts = 0;
           this.startHeartbeat();
           this.emitWSEvent('connected');
           resolve();
@@ -70,22 +59,6 @@ export class WSClient extends WSMessageHandler {
           this.isConnecting = false;
           this.stopHeartbeat();
           this.emitWSEvent('disconnected');
-          
-          // 自动重连 (-1 表示无限重连)
-          // 如果已经安排过重连，则不重复安排
-          if (!this.reconnectTimer && !this.pendingReconnectScheduled) {
-            if (this.config.reconnectAttempts === -1 || this.reconnectAttempts < this.config.reconnectAttempts) {
-              this.scheduleReconnect();
-            } else {
-              console.log('🛑 已达到最大重连次数，停止重连');
-              this.emitWSEvent('reconnectStopped' as any, {
-                reason: 'maxAttemptsReached',
-                finalAttempt: this.reconnectAttempts
-              });
-            }
-          } else {
-            // 已经有待执行的重连定时器或已调度，跳过重复调度
-          }
         };
 
         this.ws.onerror = (error) => {
@@ -107,8 +80,7 @@ export class WSClient extends WSMessageHandler {
    */
   disconnect(): void {
     this.stopHeartbeat();
-    this.stopReconnect();
-    
+
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -193,69 +165,6 @@ export class WSClient extends WSMessageHandler {
     }
   }
 
-  /**
-   * 安排重连
-   */
-  private scheduleReconnect(): void {
-    this.stopReconnect();
-    this.reconnectAttempts++;
-    
-         // 计算延迟：指数退避，但限制最大延迟
-     const exponentialDelay = this.config.reconnectDelay * Math.pow(2, Math.min(this.reconnectAttempts - 1, 6)); // 最多2^6倍延迟
-     const delay = Math.min(exponentialDelay, this.config.maxReconnectDelay || 30000);
-    
-    const isInfiniteReconnect = this.config.reconnectAttempts === -1;
-    console.log(`🔄 ${delay}ms后尝试第${this.reconnectAttempts}次重连${isInfiniteReconnect ? ' (无限重连模式)' : ''}...`);
-    
-    // 发射重连开始事件
-    this.emitWSEvent('reconnecting' as any, {
-      attempt: this.reconnectAttempts,
-      maxAttempts: this.config.reconnectAttempts,
-      delay,
-      nextAttemptAt: Date.now() + delay
-    });
-    
-    this.pendingReconnectScheduled = true;
-    this.reconnectTimer = setTimeout(() => {
-      // 定时器触发即视为“当前没有挂起的重连计时器”
-      this.reconnectTimer = null;
-      this.pendingReconnectScheduled = false;
-      this.connect().catch((error) => {
-        console.error('重连失败:', error);
-        
-        // 兜底：在 onclose 未触发或浏览器只触发 onerror 的情况下，继续按退避重试
-        if (this.config.reconnectAttempts === -1 || this.reconnectAttempts < this.config.reconnectAttempts) {
-          // 避免与 onclose 重复调度：若 onclose 随后触发，会因已有 pending 标记而跳过
-          this.scheduleReconnect();
-        } else {
-          // 如果不是无限重连且达到最大重连次数，发射重连停止事件
-          this.emitWSEvent('reconnectStopped' as any, {
-            reason: 'maxAttemptsReached',
-            finalAttempt: this.reconnectAttempts
-          });
-        }
-      });
-    }, delay);
-  }
-
-  /**
-   * 停止重连
-   */
-  private stopReconnect(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-  }
-
-  /**
-   * 重置重连计数器，用于手动重试
-   */
-  resetReconnectAttempts(): void {
-    console.log('🔄 重置重连计数器');
-    this.reconnectAttempts = 0;
-    this.stopReconnect();
-  }
 
   /**
    * 获取连接状态
@@ -272,37 +181,12 @@ export class WSClient extends WSMessageHandler {
   }
 
   /**
-   * 获取是否正在重连
-   */
-  get isReconnecting(): boolean {
-    return this.reconnectTimer !== null;
-  }
-
-  /**
-   * 获取当前重连尝试次数
-   */
-  get currentReconnectAttempts(): number {
-    return this.reconnectAttempts;
-  }
-
-  /**
-   * 获取最大重连尝试次数
-   */
-  get maxReconnectAttempts(): number {
-    return this.config.reconnectAttempts;
-  }
-
-  /**
    * 获取连接状态信息
    */
   get connectionInfo() {
     return {
       isConnected: this.isConnected,
       isConnecting: this.connecting,
-      isReconnecting: this.isReconnecting,
-      reconnectAttempts: this.currentReconnectAttempts,
-      maxReconnectAttempts: this.maxReconnectAttempts,
-      hasReachedMaxAttempts: this.config.reconnectAttempts !== -1 && this.currentReconnectAttempts >= this.maxReconnectAttempts
     };
   }
 

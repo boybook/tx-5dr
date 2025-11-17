@@ -154,14 +154,11 @@ export class IcomWlanConnection
       // 设置事件监听器
       this.setupEventListeners();
 
-      // 配置连接监控和自动重连
+      // 配置连接监控(禁用自动重连)
       this.rig.configureMonitoring({
         timeout: 8000,              // 会话超时 8 秒
         checkInterval: 1000,        // 每秒检查
-        autoReconnect: true,        // 启用自动重连
-        maxReconnectAttempts: undefined, // 无限重连
-        reconnectBaseDelay: 3000,   // 3 秒基础延迟
-        reconnectMaxDelay: 30000    // 最大 30 秒
+        autoReconnect: false,       // 禁用自动重连
       });
 
       // 执行连接（带超时保护）
@@ -362,39 +359,6 @@ export class IcomWlanConnection
   }
 
   /**
-   * 获取连接状态和指标
-   */
-  getReconnectInfo() {
-    if (!this.rig) {
-      return {
-        isReconnecting: false,
-        reconnectAttempts: 0,
-        maxReconnectAttempts: 0,
-        hasReachedMaxAttempts: false,
-        connectionHealthy: false,
-        nextReconnectDelay: 0,
-        phase: 'IDLE',
-        uptime: 0
-      };
-    }
-
-    const metrics = this.rig.getConnectionMetrics();
-    const phase = this.rig.getConnectionPhase();
-
-    return {
-      isReconnecting: phase === 'RECONNECTING',
-      reconnectAttempts: 0, // 库内部管理，暂不暴露
-      maxReconnectAttempts: 0, // 配置为无限重连
-      hasReachedMaxAttempts: false,
-      connectionHealthy: phase === 'CONNECTED',
-      nextReconnectDelay: 3000, // 基础延迟
-      phase: metrics.phase,
-      uptime: metrics.uptime,
-      sessions: metrics.sessions
-    };
-  }
-
-  /**
    * 设置状态并触发事件
    */
   private setState(newState: RadioConnectionState): void {
@@ -450,27 +414,6 @@ export class IcomWlanConnection
       this.emit('disconnected', `连接丢失: ${info.sessionType}`);
     });
 
-    // 连接恢复
-    this.rig.events.on('connectionRestored', (info) => {
-      console.log(`✅ [IcomWlanConnection] 连接已恢复，停机时间 ${info.downtime}ms`);
-      this.setState(RadioConnectionState.CONNECTED);
-      this.emit('connected');
-    });
-
-    // 重连尝试
-    this.rig.events.on('reconnectAttempting', (info) => {
-      console.log(`🔄 [IcomWlanConnection] 重连尝试 #${info.attemptNumber}，延迟 ${info.delay}ms`);
-      this.emit('reconnecting', info.attemptNumber);
-    });
-
-    // 重连失败
-    this.rig.events.on('reconnectFailed', (info) => {
-      console.error(`❌ [IcomWlanConnection] 重连尝试 #${info.attemptNumber} 失败: ${info.error.message}`);
-      if (!info.willRetry) {
-        console.error('🚨 [IcomWlanConnection] 已达到最大重连次数，放弃重连');
-      }
-      this.emit('reconnectFailed', info.error, info.attemptNumber);
-    });
 
     // 错误处理
     this.rig.events.on('error', (err) => {

@@ -322,56 +322,6 @@ export class WSServer extends WSMessageHandler {
       }
     });
 
-    // 监听电台重连中事件
-    this.digitalRadioEngine.on('radioReconnecting' as any, (data: any) => {
-      console.log(`📡 [WSServer] 收到电台重连中事件:`, data);
-      this.broadcast(WSMessageType.RADIO_RECONNECTING, data);
-
-      // 推送 Toast 通知 - 警告类型，10秒自动关闭
-      const attempt = data.attempt || data.reconnectInfo?.reconnectAttempts || 0;
-      const maxAttempts = data.reconnectInfo?.maxReconnectAttempts || -1;
-      const attemptText = maxAttempts > 0 ? ` (${attempt}/${maxAttempts})` : ` (尝试 ${attempt})`;
-
-      this.broadcastTextMessage(
-        '正在重连电台',
-        `正在尝试重新连接电台${attemptText}`,
-        'warning',
-        10000
-      );
-    });
-
-    // 监听电台重连失败事件
-    this.digitalRadioEngine.on('radioReconnectFailed' as any, (data: any) => {
-      console.log(`📡 [WSServer] 收到电台重连失败事件:`, data);
-      this.broadcast(WSMessageType.RADIO_RECONNECT_FAILED, data);
-
-      // 推送 Toast 通知 - 错误类型，需要手动关闭
-      const error = data.error || '未知错误';
-      const attempt = data.attempt || data.reconnectInfo?.reconnectAttempts || 0;
-
-      this.broadcastTextMessage(
-        '电台重连失败',
-        `重连尝试 ${attempt} 失败：${error}`,
-        'danger',
-        null  // 需要手动关闭
-      );
-    });
-
-    // 监听电台重连停止事件
-    this.digitalRadioEngine.on('radioReconnectStopped' as any, (data: any) => {
-      console.log(`📡 [WSServer] 收到电台重连停止事件:`, data);
-      this.broadcast(WSMessageType.RADIO_RECONNECT_STOPPED, data);
-
-      // 推送 Toast 通知 - 错误类型，需要手动关闭
-      const maxAttempts = data.maxAttempts || data.reconnectInfo?.maxReconnectAttempts || 0;
-
-      this.broadcastTextMessage(
-        '电台重连已停止',
-        `已达到最大重连次数 (${maxAttempts})，重连已停止`,
-        'danger',
-        null  // 需要手动关闭
-      );
-    });
 
     // 监听电台错误事件
     this.digitalRadioEngine.on('radioError' as any, (data: any) => {

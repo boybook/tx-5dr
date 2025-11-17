@@ -1173,42 +1173,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.radioManagerEventListeners.set('disconnected', handleDisconnected);
     this.radioManager.on('disconnected', handleDisconnected);
 
-    // 监听重连开始
-    const handleReconnecting = (attempt: number) => {
-      console.log(`📡 [DigitalRadioEngine] 物理电台重连中 (第${attempt}次尝试)`);
-      // 广播重连状态更新事件
-      this.emit('radioReconnecting' as any, {
-        attempt,
-        reconnectInfo: this.radioManager.getReconnectInfo()
-      });
-    };
-    this.radioManagerEventListeners.set('reconnecting', handleReconnecting);
-    this.radioManager.on('reconnecting', handleReconnecting);
-
-    // 监听重连失败
-    const handleReconnectFailed = (error: Error, attempt: number) => {
-      console.warn(`📡 [DigitalRadioEngine] 物理电台重连失败 (第${attempt}次): ${error.message}`);
-      // 广播重连失败事件
-      this.emit('radioReconnectFailed' as any, {
-        error: error.message,
-        attempt,
-        reconnectInfo: this.radioManager.getReconnectInfo()
-      });
-    };
-    this.radioManagerEventListeners.set('reconnectFailed', handleReconnectFailed);
-    this.radioManager.on('reconnectFailed', handleReconnectFailed);
-
-    // 监听重连停止
-    const handleReconnectStopped = (maxAttempts: number) => {
-      console.error(`📡 [DigitalRadioEngine] 物理电台重连停止 (已达最大${maxAttempts}次尝试)`);
-      // 广播重连停止事件
-      this.emit('radioReconnectStopped' as any, {
-        maxAttempts,
-        reconnectInfo: this.radioManager.getReconnectInfo()
-      });
-    };
-    this.radioManagerEventListeners.set('reconnectStopped', handleReconnectStopped);
-    this.radioManager.on('reconnectStopped', handleReconnectStopped);
 
     // 监听电台错误
     const handleError = (error: Error) => {

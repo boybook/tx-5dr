@@ -166,7 +166,22 @@ export class ConfigManager {
     const result = { ...defaultConfig };
 
     for (const key in userConfig) {
-      if (userConfig[key] !== null && typeof userConfig[key] === 'object' && !Array.isArray(userConfig[key])) {
+      // 特殊处理 operators 数组：为每个操作员对象补全默认值
+      if (key === 'operators' && Array.isArray(userConfig[key])) {
+        result[key] = userConfig[key].map((operator: any) => {
+          // 为每个操作员对象补全所有字段的默认值
+          return {
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 3,
+            autoReplyToCQ: false,
+            autoResumeCQAfterFail: false,
+            autoResumeCQAfterSuccess: false,
+            replyToWorkedStations: false,
+            prioritizeNewCalls: true,
+            ...operator,  // 用户配置覆盖默认值
+          };
+        });
+      } else if (userConfig[key] !== null && typeof userConfig[key] === 'object' && !Array.isArray(userConfig[key])) {
         result[key] = this.mergeConfig(defaultConfig[key] || {}, userConfig[key]);
       } else {
         result[key] = userConfig[key];
