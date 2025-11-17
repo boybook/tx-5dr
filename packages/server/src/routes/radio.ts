@@ -40,13 +40,36 @@ export async function radioRoutes(fastify: FastifyInstance) {
       console.log('✅ [Radio Routes] 音频设备已自动设置为 ICOM WLAN');
     }
 
-    if (engine.getStatus().isRunning) {
+    // 始终应用配置，确保旧状态机被正确清理（即使在 engine 启动期间）
+    // 这解决了在启动过程中切换配置时，旧状态机继续重连的问题
+    try {
       await radioManager.applyConfig(config);
-      // 立即更新 SlotClock 的发射补偿值
-      const compensationMs = config.transmitCompensationMs || 0;
-      engine.updateTransmitCompensation(compensationMs);
-      console.log(`✅ [Radio Routes] 发射补偿已热更新为: ${compensationMs}ms`);
+      console.log(`✅ [Radio Routes] 配置已应用: type=${config.type}`);
+
+      // 如果 engine 已运行，立即更新 SlotClock 的发射补偿值（热更新）
+      if (engine.getStatus().isRunning) {
+        const compensationMs = config.transmitCompensationMs || 0;
+        engine.updateTransmitCompensation(compensationMs);
+        console.log(`✅ [Radio Routes] 发射补偿已热更新为: ${compensationMs}ms`);
+      }
+    } catch (error) {
+      // 记录错误但不阻塞配置保存（配置已更新到 ConfigManager）
+      console.error('❌ [Radio Routes] 应用配置时出错:', error);
+      // 注意：配置已经保存到 ConfigManager，只是应用过程可能失败
+      // 如果是在 engine 启动期间，radio 资源会在启动时自动应用最新配置
     }
+
+    // 广播配置变更事件，确保所有客户端同步最新配置
+    const radioInfo = await radioManager.getRadioInfo();
+    engine.emit('radioStatusChanged' as any, {
+      connected: radioManager.isConnected(),
+      radioInfo,
+      radioConfig: config,
+      reason: '配置已更新',
+      reconnectInfo: radioManager.getReconnectInfo()
+    });
+    console.log(`📡 [Radio Routes] 已广播配置变更事件: type=${config.type}, connected=${radioManager.isConnected()}`);
+
     return reply.send({ success: true, config });
   });
 

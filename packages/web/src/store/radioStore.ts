@@ -108,6 +108,15 @@ export interface RadioState {
   };
   // 电台数值表数据
   meterData: MeterData | null;
+  // 电台重连状态信息
+  radioReconnectInfo: {
+    isReconnecting: boolean;
+    reconnectAttempts: number;
+    maxReconnectAttempts: number;
+    hasReachedMaxAttempts: boolean;
+    connectionHealthy: boolean;
+    nextReconnectDelay: number;
+  } | null;
 }
 
 export type RadioAction =
@@ -118,7 +127,8 @@ export type RadioAction =
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
-  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: any; radioConfig: any } }
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: any; radioConfig: any; radioReconnectInfo?: any } }
+  | { type: 'updateReconnectInfo'; payload: any }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
   | { type: 'meterData'; payload: MeterData };
 
@@ -135,7 +145,8 @@ const initialRadioState: RadioState = {
     isTransmitting: false,
     operatorIds: []
   },
-  meterData: null
+  meterData: null,
+  radioReconnectInfo: null
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -221,7 +232,17 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         radioConnected: action.payload.radioConnected,
         radioInfo: action.payload.radioInfo,
         // 如果事件中包含radioConfig则更新，否则保持现有配置
-        radioConfig: action.payload.radioConfig || state.radioConfig
+        radioConfig: action.payload.radioConfig || state.radioConfig,
+        // 同步重连信息（如果事件中包含）
+        radioReconnectInfo: action.payload.radioReconnectInfo !== undefined
+          ? action.payload.radioReconnectInfo
+          : state.radioReconnectInfo
+      };
+
+    case 'updateReconnectInfo':
+      return {
+        ...state,
+        radioReconnectInfo: action.payload
       };
 
     case 'pttStatusChanged':
@@ -671,12 +692,20 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           payload: {
             radioConnected: data.connected,
             radioInfo: data.radioInfo, // 直接使用事件中的完整数据（连接时有值，断开时为null）
-            radioConfig: data.radioConfig // 直接使用事件中的配置（始终包含完整配置）
+            radioConfig: data.radioConfig, // 直接使用事件中的配置（始终包含完整配置）
+            radioReconnectInfo: data.reconnectInfo // 同步重连信息（连接成功后会重置为 isReconnecting: false）
           }
         });
       },
       radioReconnecting: (data: any) => {
         console.log('🔄 [RadioProvider] 电台重连中:', data);
+        // 更新重连状态到 Redux
+        if (data.reconnectInfo) {
+          radioDispatch({
+            type: 'updateReconnectInfo',
+            payload: data.reconnectInfo
+          });
+        }
       },
       radioReconnectFailed: (data: any) => {
         console.log('❌ [RadioProvider] 电台重连失败:', data);
