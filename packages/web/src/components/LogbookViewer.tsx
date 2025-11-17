@@ -22,7 +22,6 @@ import {
   ModalBody,
   ModalFooter,
   Tooltip,
-  ButtonGroup,
   Select,
   SelectItem,
 } from '@heroui/react';
@@ -34,6 +33,19 @@ import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
 import { showErrorToast } from '../utils/errorToast';
+
+// ElectronAPI 类型定义
+interface ElectronAPI {
+  shell?: {
+    openExternal: (url: string) => Promise<void>;
+  };
+}
+
+declare global {
+  interface Window {
+    electronAPI?: ElectronAPI;
+  }
+}
 
 interface LogbookViewerProps {
   operatorId: string;
@@ -85,24 +97,29 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   useEffect(() => {
     // 仅按 operatorId 订阅，避免 logBookId 不一致导致过滤失败
     const url = getLogbookWebSocketUrl({ operatorId });
-    const client = new WSClient({ url, reconnectAttempts: -1, reconnectDelay: 1000, heartbeatInterval: 30000 });
-    
+    const client = new WSClient({ url, heartbeatInterval: 30000 });
+
     const refresh = () => {
       // 保持当前筛选与分页，重新加载
       loadQSOs();
       loadStatistics();
     };
-    
-    client.onWSEvent('logbookChangeNotice' as any, (payload: { logBookId?: string; operatorId?: string }) => {
-      if (!payload) return;
+
+    // 类型断言：logbookChangeNotice 是日志本专用事件
+    const handleLogbookChange = (payload: unknown) => {
+      const data = payload as { logBookId?: string; operatorId?: string };
+      if (!data) return;
       // 以 operatorId 为主进行匹配；其次尝试 logBookId
-      if (payload.operatorId === operatorId || (payload.logBookId && payload.logBookId === effectiveLogBookId)) {
+      if (data.operatorId === operatorId || (data.logBookId && data.logBookId === effectiveLogBookId)) {
         console.log('🔔 收到日志本变更通知，刷新数据');
         refresh();
       }
-    });
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client.onWSEvent('logbookChangeNotice' as any, handleLogbookChange);
     client.connect().catch(() => {});
-    
+
     return () => {
       client.disconnect();
     };
@@ -369,8 +386,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const openExternalLink = (url: string) => {
     if (isElectron()) {
       // Electron环境：尝试使用shell.openExternal
-      if (typeof window !== 'undefined' && (window as any).electronAPI?.shell?.openExternal) {
-        (window as any).electronAPI.shell.openExternal(url);
+      if (typeof window !== 'undefined' && window.electronAPI?.shell?.openExternal) {
+        window.electronAPI.shell.openExternal(url);
       } else {
         // 如果shell API不可用，回退到window.open
         console.warn('Electron shell API不可用，回退到window.open');
@@ -906,7 +923,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         sortDescriptor={sortDescriptor}
         topContent={topContent}
         topContentPlacement="outside"
-        onSortChange={(descriptor) => setSortDescriptor(descriptor as any)}
+        onSortChange={(descriptor) => setSortDescriptor(descriptor as { column: string; direction: 'ascending' | 'descending' })}
       >
         <TableHeader columns={columns}>
           {(column) => (

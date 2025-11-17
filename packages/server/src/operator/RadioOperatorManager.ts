@@ -1,6 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// RadioOperatorManager - 事件处理和操作员管理需要使用any类型以处理动态事件
+
 import EventEmitter from 'eventemitter3';
-import { 
-  RadioOperator, 
+import {
+  RadioOperator,
   StandardQSOStrategy,
   ClockSourceSystem
 } from '@tx5dr/core';

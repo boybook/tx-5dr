@@ -24,7 +24,19 @@ import type {
   WaveLogTestConnectionRequest,
   WaveLogTestConnectionResponse,
   TunerCapabilities,
-  TunerStatus
+  TunerStatus,
+  RadioConfigResponse,
+  UpdateRadioConfigResponse,
+  SupportedRigsResponse,
+  SerialPortsResponse,
+  TestResponse,
+  RadioStatusResponse,
+  ConnectRadioResponse,
+  DisconnectRadioResponse,
+  FrequencyListResponse,
+  LastFrequencyResponse,
+  SetFrequencyResponse,
+  HamlibConfig,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -51,7 +63,7 @@ export class ApiError extends Error {
   httpStatus: number;
 
   /** 错误上下文 */
-  context?: Record<string, any>;
+  context?: Record<string, unknown>;
 
   constructor(
     message: string,
@@ -61,7 +73,7 @@ export class ApiError extends Error {
       code?: string;
       suggestions?: string[];
       severity?: 'info' | 'warning' | 'error' | 'critical';
-      context?: Record<string, any>;
+      context?: Record<string, unknown>;
     }
   ) {
     super(message);
@@ -84,15 +96,18 @@ export class ApiError extends Error {
  * @param httpStatus - HTTP 状态码
  * @returns ApiError 实例
  */
-export function handleApiError(errorData: any, httpStatus: number): ApiError {
-  const {
-    message = '操作失败',
-    userMessage,
-    code,
-    suggestions = [],
-    severity = 'error',
-    context
-  } = errorData || {};
+export function handleApiError(errorData: unknown, httpStatus: number): ApiError {
+  // 类型守卫：确保 errorData 是对象
+  const data = (typeof errorData === 'object' && errorData !== null) ? errorData as Record<string, unknown> : {};
+
+  const message = typeof data.message === 'string' ? data.message : '操作失败';
+  const userMessage = typeof data.userMessage === 'string' ? data.userMessage : undefined;
+  const code = typeof data.code === 'string' ? data.code : undefined;
+  const suggestions = Array.isArray(data.suggestions) ? data.suggestions.filter((s): s is string => typeof s === 'string') : [];
+  const severity = (data.severity === 'info' || data.severity === 'warning' || data.severity === 'error' || data.severity === 'critical')
+    ? data.severity
+    : 'error';
+  const context = (typeof data.context === 'object' && data.context !== null) ? data.context as Record<string, unknown> : undefined;
 
   // 记录技术日志
   console.error('[API 错误]', {
@@ -179,9 +194,9 @@ function getConfiguredApiBase(): string {
  * @returns 响应数据
  * @throws ApiError - 包含用户友好消息的错误
  */
-async function apiRequest<T = any>(
+async function apiRequest<T = unknown>(
   url: string,
-  options?: RequestInit,
+  options?: globalThis.RequestInit,
   apiBase?: string
 ): Promise<T> {
   const baseUrl = apiBase || getConfiguredApiBase();
@@ -267,7 +282,7 @@ async function apiRequest<T = any>(
     }
 
     // 非 JSON 响应（如文本）
-    return (await response.text()) as any;
+    return (await response.text()) as T;
 
   } catch (error) {
     // 网络错误（fetch 失败）
@@ -471,12 +486,12 @@ export const api = {
 
   // ========== 电台控制API ==========
 
-  async getRadioConfig(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/config', undefined, apiBase);
+  async getRadioConfig(apiBase?: string): Promise<RadioConfigResponse> {
+    return apiRequest<RadioConfigResponse>('/radio/config', undefined, apiBase);
   },
 
-  async updateRadioConfig(config: any, apiBase?: string): Promise<any> {
-    return apiRequest(
+  async updateRadioConfig(config: HamlibConfig, apiBase?: string): Promise<UpdateRadioConfigResponse> {
+    return apiRequest<UpdateRadioConfigResponse>(
       '/radio/config',
       {
         method: 'POST',
@@ -486,16 +501,16 @@ export const api = {
     );
   },
 
-  async getSupportedRigs(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/rigs', undefined, apiBase);
+  async getSupportedRigs(apiBase?: string): Promise<SupportedRigsResponse> {
+    return apiRequest<SupportedRigsResponse>('/radio/rigs', undefined, apiBase);
   },
 
-  async getSerialPorts(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/serial-ports', undefined, apiBase);
+  async getSerialPorts(apiBase?: string): Promise<SerialPortsResponse> {
+    return apiRequest<SerialPortsResponse>('/radio/serial-ports', undefined, apiBase);
   },
 
-  async testRadio(config: any, apiBase?: string): Promise<any> {
-    return apiRequest(
+  async testRadio(config: HamlibConfig, apiBase?: string): Promise<TestResponse> {
+    return apiRequest<TestResponse>(
       '/radio/test',
       {
         method: 'POST',
@@ -505,28 +520,28 @@ export const api = {
     );
   },
 
-  async testPTT(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/test-ptt', { method: 'POST' }, apiBase);
+  async testPTT(apiBase?: string): Promise<TestResponse> {
+    return apiRequest<TestResponse>('/radio/test-ptt', { method: 'POST' }, apiBase);
   },
 
-  async getRadioStatus(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/status', undefined, apiBase);
+  async getRadioStatus(apiBase?: string): Promise<RadioStatusResponse> {
+    return apiRequest<RadioStatusResponse>('/radio/status', undefined, apiBase);
   },
 
-  async connectRadio(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/connect', { method: 'POST' }, apiBase);
+  async connectRadio(apiBase?: string): Promise<ConnectRadioResponse> {
+    return apiRequest<ConnectRadioResponse>('/radio/connect', { method: 'POST' }, apiBase);
   },
 
-  async disconnectRadio(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/disconnect', { method: 'POST' }, apiBase);
+  async disconnectRadio(apiBase?: string): Promise<DisconnectRadioResponse> {
+    return apiRequest<DisconnectRadioResponse>('/radio/disconnect', { method: 'POST' }, apiBase);
   },
 
-  async getPresetFrequencies(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/frequencies', undefined, apiBase);
+  async getPresetFrequencies(apiBase?: string): Promise<FrequencyListResponse> {
+    return apiRequest<FrequencyListResponse>('/radio/frequencies', undefined, apiBase);
   },
 
-  async getLastFrequency(apiBase?: string): Promise<any> {
-    return apiRequest('/radio/last-frequency', undefined, apiBase);
+  async getLastFrequency(apiBase?: string): Promise<LastFrequencyResponse> {
+    return apiRequest<LastFrequencyResponse>('/radio/last-frequency', undefined, apiBase);
   },
 
   async setRadioFrequency(
@@ -538,8 +553,8 @@ export const api = {
       radioMode?: string;
     },
     apiBase?: string
-  ): Promise<any> {
-    return apiRequest(
+  ): Promise<SetFrequencyResponse> {
+    return apiRequest<SetFrequencyResponse>(
       '/radio/frequency',
       {
         method: 'POST',
@@ -635,13 +650,17 @@ export const api = {
 
   /**
    * 获取FT8配置
+   *
+   * 注意：FT8Settings 类型尚未在 contracts 中定义
    */
-  async getFT8Settings(apiBase?: string): Promise<{ success: boolean; data: any }> {
-    return apiRequest<{ success: boolean; data: any }>('/settings/ft8', undefined, apiBase);
+  async getFT8Settings(apiBase?: string): Promise<{ success: boolean; data: unknown }> {
+    return apiRequest<{ success: boolean; data: unknown }>('/settings/ft8', undefined, apiBase);
   },
 
   /**
    * 更新FT8配置
+   *
+   * 注意：FT8Settings 类型尚未在 contracts 中定义
    */
   async updateFT8Settings(
     settings: Partial<{
@@ -655,8 +674,8 @@ export const api = {
       spectrumWhileTransmitting: boolean;
     }>,
     apiBase?: string
-  ): Promise<{ success: boolean; message: string; data: any }> {
-    return apiRequest<{ success: boolean; message: string; data: any }>(
+  ): Promise<{ success: boolean; message: string; data: unknown }> {
+    return apiRequest<{ success: boolean; message: string; data: unknown }>(
       '/settings/ft8',
       {
         method: 'PUT',
@@ -1029,8 +1048,8 @@ export const api = {
   async syncWaveLog(
     operation: 'download' | 'upload' | 'full_sync',
     apiBase?: string
-  ): Promise<any> {
-    return apiRequest(
+  ): Promise<{ success: boolean; message: string }> {
+    return apiRequest<{ success: boolean; message: string }>(
       '/wavelog/sync',
       {
         method: 'POST',

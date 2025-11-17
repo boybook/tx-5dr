@@ -96,7 +96,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
 
     // 转换为FT8Group数组并按时间排序
     const groups: FrameGroup[] = Array.from(groupsMap.entries())
-      .map(([time, { messages, cycle, hasTransmission }]) => ({
+      .map(([time, { messages, cycle, hasTransmission: _hasTransmission }]) => ({
         time,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
         type: 'receive' as const, // 如果有发射帧，组类型为transmit
@@ -108,7 +108,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   }, [slotPacks.state.slotPacks, radio.state.currentMode]);
 
 
-  const handleRowDoubleClick = (message: FrameDisplayMessage, group: FrameGroup) => {
+  const handleRowDoubleClick = (message: FrameDisplayMessage, _group: FrameGroup) => {
     const callsign = message.logbookAnalysis?.callsign;
     if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
       if (connection.state.radioService) {

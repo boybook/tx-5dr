@@ -32,8 +32,6 @@ describe('radioStateMachine', () => {
       onHealthCheck: vi.fn().mockResolvedValue(true),
       onError: vi.fn(),
       onStateChange: vi.fn(),
-      maxReconnectAttempts: 3,
-      reconnectDelay: 100, // 测试用更短延迟
       healthCheckInterval: 500,
     };
   });
@@ -53,13 +51,11 @@ describe('radioStateMachine', () => {
       actor.stop();
     });
 
-    it('初始上下文应包含重连配置', () => {
+    it('初始上下文应包含健康状态', () => {
       const actor = createRadioActor(mockInput);
       actor.start();
 
       const context = getRadioContext(actor);
-      expect(context.reconnectAttempts).toBe(0);
-      expect(context.maxReconnectAttempts).toBe(3);
       expect(context.isHealthy).toBe(false);
 
       actor.stop();
@@ -91,27 +87,8 @@ describe('radioStateMachine', () => {
       actor.stop();
     });
 
-    it('连接失败且无法重连：disconnected → connecting → error', async () => {
+    it('连接失败应进入重连：disconnected → connecting → reconnecting', async () => {
       const testError = new Error('连接失败');
-      mockInput.onConnect = vi.fn().mockRejectedValue(testError);
-      mockInput.maxReconnectAttempts = 0; // 不允许重连
-
-      const actor = createRadioActor(mockInput);
-      actor.start();
-
-      actor.send({ type: 'CONNECT', config: mockConfig });
-
-      // 等待转换到 error 状态
-      await waitForRadioState(actor, RadioState.ERROR, 1000);
-
-      expect(isRadioState(actor, RadioState.ERROR)).toBe(true);
-      expect(mockInput.onError).toHaveBeenCalledWith(testError);
-
-      actor.stop();
-    });
-
-    it('首次连接失败应进入重连：disconnected → connecting → reconnecting', async () => {
-      const testError = new Error('首次连接失败');
       mockInput.onConnect = vi.fn().mockRejectedValue(testError);
 
       const actor = createRadioActor(mockInput);
@@ -124,11 +101,9 @@ describe('radioStateMachine', () => {
 
       expect(isRadioState(actor, RadioState.RECONNECTING)).toBe(true);
 
-      const context = getRadioContext(actor);
-      expect(context.reconnectAttempts).toBe(1);
-
       actor.stop();
     });
+
   });
 
   describe('断开流程', () => {
@@ -165,7 +140,6 @@ describe('radioStateMachine', () => {
       await waitForRadioState(actor, RadioState.RECONNECTING, 1000);
 
       const context = getRadioContext(actor);
-      expect(context.reconnectAttempts).toBe(1);
       expect(context.disconnectReason).toBe('网络中断');
 
       actor.stop();
@@ -190,68 +164,14 @@ describe('radioStateMachine', () => {
       actor.send({ type: 'CONNECT', config: mockConfig });
       await waitForRadioState(actor, RadioState.RECONNECTING, 1000);
 
-      // 等待自动重连（延迟100ms）
+      // 等待自动重连
       await waitForRadioState(actor, RadioState.CONNECTED, 2000);
 
       expect(isRadioState(actor, RadioState.CONNECTED)).toBe(true);
 
-      const context = getRadioContext(actor);
-      expect(context.reconnectAttempts).toBe(0); // 成功后重置
-
       actor.stop();
     });
 
-    it('达到最大重连次数：reconnecting → ... → error', async () => {
-      mockInput.onConnect = vi.fn().mockRejectedValue(new Error('持续失败'));
-      mockInput.maxReconnectAttempts = 2;
-
-      const actor = createRadioActor(mockInput);
-      actor.start();
-
-      actor.send({ type: 'CONNECT', config: mockConfig });
-
-      // 首次失败 → reconnecting (attempts=1)
-      await waitForRadioState(actor, RadioState.RECONNECTING, 1000);
-
-      // 第2次失败 → reconnecting (attempts=2)
-      await vi.waitFor(
-        () => {
-          const context = getRadioContext(actor);
-          return context.reconnectAttempts === 2;
-        },
-        { timeout: 2000 }
-      );
-
-      // 第3次失败 → error (达到最大次数)
-      await waitForRadioState(actor, RadioState.ERROR, 2000);
-
-      actor.stop();
-    }, 10000); // 增加超时时间
-
-    it('无限重连模式不应进入 error 状态', async () => {
-      mockInput.onConnect = vi.fn().mockRejectedValue(new Error('持续失败'));
-      mockInput.maxReconnectAttempts = -1; // 无限重连
-
-      const actor = createRadioActor(mockInput);
-      actor.start();
-
-      actor.send({ type: 'CONNECT', config: mockConfig });
-
-      // 应该一直在 reconnecting/connecting 状态循环
-      await waitForRadioState(actor, RadioState.RECONNECTING, 1000);
-
-      // 等待一段时间，验证不会进入 error 状态
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      expect(
-        isRadioState(actor, [
-          RadioState.RECONNECTING,
-          RadioState.CONNECTING,
-        ])
-      ).toBe(true);
-
-      actor.stop();
-    });
 
     it('可以手动停止重连', async () => {
       mockInput.onConnect = vi.fn().mockRejectedValue(new Error('持续失败'));
@@ -291,50 +211,21 @@ describe('radioStateMachine', () => {
   });
 
   describe('错误状态', () => {
-    it('从错误状态可以 RESET 回到 disconnected', async () => {
+    it('可以手动停止重连回到 disconnected', async () => {
       mockInput.onConnect = vi.fn().mockRejectedValue(new Error('连接失败'));
-      mockInput.maxReconnectAttempts = 0;
 
       const actor = createRadioActor(mockInput);
       actor.start();
 
       actor.send({ type: 'CONNECT', config: mockConfig });
-      await waitForRadioState(actor, RadioState.ERROR, 1000);
+      await waitForRadioState(actor, RadioState.RECONNECTING, 1000);
 
-      // 重置
-      actor.send({ type: 'RESET' });
+      // 停止重连
+      actor.send({ type: 'STOP_RECONNECTING' });
       await waitForRadioState(actor, RadioState.DISCONNECTED, 1000);
 
       const context = getRadioContext(actor);
       expect(context.error).toBeUndefined();
-      expect(context.reconnectAttempts).toBe(0);
-
-      actor.stop();
-    });
-
-    it('从错误状态可以 RECONNECT 重新连接', async () => {
-      let failOnce = true;
-      mockInput.onConnect = vi.fn().mockImplementation(() => {
-        if (failOnce) {
-          failOnce = false;
-          return Promise.reject(new Error('首次失败'));
-        }
-        return Promise.resolve();
-      });
-      mockInput.maxReconnectAttempts = 0;
-
-      const actor = createRadioActor(mockInput);
-      actor.start();
-
-      // 首次连接失败 → error
-      actor.send({ type: 'CONNECT', config: mockConfig });
-      await waitForRadioState(actor, RadioState.ERROR, 1000);
-
-      // 重新连接
-      actor.send({ type: 'RECONNECT' });
-      await waitForRadioState(actor, RadioState.CONNECTED, 2000);
-
-      expect(isRadioState(actor, RadioState.CONNECTED)).toBe(true);
 
       actor.stop();
     });
@@ -377,7 +268,6 @@ describe('radioStateMachine', () => {
 
       const context = getRadioContext(actor);
       expect(context).toBeDefined();
-      expect(context.reconnectAttempts).toBe(0);
       expect(context.isHealthy).toBe(false);
 
       actor.stop();

@@ -554,7 +554,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       handleResize();
     }
 
-    const resizeObserver = new ResizeObserver((entries) => {
+    const resizeObserver = new ResizeObserver((_entries) => {
       // 防抖处理，避免频繁调用
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);

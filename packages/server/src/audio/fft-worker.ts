@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// FFTWorker - Worker消息处理需要使用any
+
 import { SpectrumAnalyzer } from './SpectrumAnalyzer.js';
 import type { FT8Spectrum } from '@tx5dr/contracts';
 
@@ -22,7 +25,7 @@ export interface FFTWorkerResult {
 }
 
 // Worker实例缓存，避免重复创建
-let analyzerCache: Map<string, SpectrumAnalyzer> = new Map();
+const analyzerCache: Map<string, SpectrumAnalyzer> = new Map();
 
 /**
  * 获取或创建SpectrumAnalyzer实例

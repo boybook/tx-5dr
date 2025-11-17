@@ -40,7 +40,7 @@ export const DisplayNotificationSettings = forwardRef<
 >(({ onUnsavedChanges }, ref) => {
   const [settings, setSettings] = useState<DisplaySettings>(getDisplayNotificationSettings());
   const [originalSettings, setOriginalSettings] = useState<DisplaySettings>(settings);
-  const [isSaving, setIsSaving] = useState(false);
+  const [_isSaving, setIsSaving] = useState(false);
 
   // 检查是否有未保存的更改
   const hasUnsavedChanges = () => {

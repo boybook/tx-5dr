@@ -260,8 +260,8 @@ export function createRadioStateMachine(
             // 连接失败，进入错误状态，等待用户手动重试
             target: RadioState.ERROR,
             actions: [
-              ({ event, context }: { event: any; context: RadioContext }) => {
-                context.error = event.error as Error;
+              ({ event, context }: any) => {
+                context.error = event.error;
                 console.error(
                   '❌ [RadioStateMachine] 连接失败:',
                   event.error

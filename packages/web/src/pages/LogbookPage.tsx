@@ -39,7 +39,8 @@ const LogbookContent: React.FC = () => {
       try {
         if (opId) {
           const detail = await api.getOperator(opId);
-          setOperatorCallsign(detail.data?.context?.myCall || opId);
+          // 使用 myCallsign 而不是 context.myCall
+          setOperatorCallsign(detail.data?.myCallsign || opId);
         }
       } catch (e) {
         setOperatorCallsign(opId || '');

@@ -81,12 +81,15 @@ export class WSMessageHandler extends WSEventEmitter {
    * @param data 待验证的数据
    * @returns 验证后的消息对象，如果验证失败返回null
    */
-  private validateMessage(data: any): any | null {
+  private validateMessage(data: unknown): Record<string, unknown> | null {
     // 简化验证，只检查基本结构
-    if (data && typeof data === 'object' && typeof data.type === 'string' && typeof data.timestamp === 'string') {
-      return data;
+    if (data && typeof data === 'object' && data !== null) {
+      const msg = data as Record<string, unknown>;
+      if (typeof msg.type === 'string' && typeof msg.timestamp === 'string') {
+        return msg;
+      }
     }
-    
+
     console.error('WebSocket消息验证失败: 缺少必要字段');
     this.emitWSEvent('error', new Error('消息验证失败'));
     return null;
@@ -96,19 +99,21 @@ export class WSMessageHandler extends WSEventEmitter {
    * 处理验证后的消息
    * @param message 验证后的消息对象
    */
-  private handleMessage(message: any): void {
-    // 发射原始消息事件（用于调试和扩展）
-    this.emitRawMessage(message);
-
+  private handleMessage(message: Record<string, unknown>): void {
     const messageType = message.type;
-    
+
     // 检查是否是已知的消息类型
-    if (Object.values(WSMessageType).includes(messageType)) {
+    if (typeof messageType === 'string' && Object.values(WSMessageType).includes(messageType as WSMessageType)) {
+      // 注意：这里需要使用 any 因为 message 是动态验证的运行时数据
+      // 在实际使用中，每个事件的 data 字段会在运行时通过 Zod schema 验证
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      this.emitRawMessage(message as any);
+
       // 根据消息类型分发事件
       this.dispatchMessageEvent(messageType, message);
     } else {
       console.warn('未知的WebSocket消息类型:', messageType);
-      this.emitWSEvent('error', new Error(`未知的消息类型: ${messageType}`));
+      this.emitWSEvent('error', new Error(`未知的消息类型: ${String(messageType)}`));
     }
   }
 
@@ -117,14 +122,16 @@ export class WSMessageHandler extends WSEventEmitter {
    * @param messageType 消息类型
    * @param message 消息对象
    */
-  private dispatchMessageEvent(messageType: string, message: any): void {
+  private dispatchMessageEvent(messageType: string, message: Record<string, unknown>): void {
     const eventName = WS_MESSAGE_EVENT_MAP[messageType];
     if (eventName) {
       // 动态发射事件
-      this.emitWSEvent(eventName as any, message.data);
+      this.emitWSEvent(eventName as keyof import('@tx5dr/contracts').DigitalRadioEngineEvents, message.data as never);
     } else if (messageType === WSMessageType.ERROR) {
       // 特殊处理错误消息
-      this.emitWSEvent('error', new Error(message.data?.message || 'Unknown error'));
+      const errorData = message.data as Record<string, unknown> | undefined;
+      const errorMessage = typeof errorData?.message === 'string' ? errorData.message : 'Unknown error';
+      this.emitWSEvent('error', new Error(errorMessage));
     }
     // 对于其他消息类型（如ping/pong等），不需要特殊处理
   }
@@ -138,10 +145,10 @@ export class WSMessageHandler extends WSEventEmitter {
    */
   createMessage(
     type: string,
-    data?: any,
+    data?: unknown,
     id?: string
-  ): any {
-    const message: any = {
+  ): Record<string, unknown> {
+    const message: Record<string, unknown> = {
       type,
       timestamp: new Date().toISOString(),
       ...(data !== undefined && { data }),
@@ -156,7 +163,7 @@ export class WSMessageHandler extends WSEventEmitter {
    * @param message 消息对象
    * @returns JSON字符串
    */
-  serializeMessage(message: any): string {
+  serializeMessage(message: Record<string, unknown>): string {
     try {
       return JSON.stringify(message);
     } catch (error) {
@@ -174,7 +181,7 @@ export class WSMessageHandler extends WSEventEmitter {
    */
   createAndSerializeMessage(
     type: string,
-    data?: any,
+    data?: unknown,
     id?: string
   ): string {
     const message = this.createMessage(type, data, id);

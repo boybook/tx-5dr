@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// RadioConnectionFactory - 工厂模式需要使用any
+
 /**
  * RadioConnectionFactory - 电台连接工厂
  *

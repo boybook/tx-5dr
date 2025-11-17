@@ -1,15 +1,9 @@
 import React, { useState } from 'react';
-import { 
+import {
   Button,
-  Dropdown,
-  DropdownItem,
-  DropdownMenu,
-  DropdownTrigger,
   Popover,
   PopoverContent,
-  PopoverTrigger,
-  Select,
-  SelectItem
+  PopoverTrigger
 } from '@heroui/react';
 import { useCurrentOperatorId, useOperators, useRadioState } from '../store/radioStore';
 import { RadioControl } from '../components/RadioControl';
@@ -22,7 +16,7 @@ import { faChevronDown, faCog } from '@fortawesome/free-solid-svg-icons';
 import { AutomationSettingsPanel } from '../components/AutomationSettingsPanel';
 
 export const RightLayout: React.FC = () => {
-  const radio = useRadioState();
+  const _radio = useRadioState();
   const { operators } = useOperators();
   const { currentOperatorId } = useCurrentOperatorId();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
@@ -33,7 +27,8 @@ export const RightLayout: React.FC = () => {
   const isAutoMode = selectedMode.startsWith('auto');
 
   // 处理模式选择变化
-  const handleModeChange = (keys: any) => {
+  const _handleModeChange = (keys: Set<string> | 'all') => {
+    if (keys === 'all') return;
     const selectedKey = Array.from(keys)[0] as string;
     setSelectedMode(selectedKey);
   };

@@ -9,11 +9,9 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
-import type { 
-  AudioDevice, 
-  AudioDevicesResponse, 
-  AudioDeviceSettings as AudioDeviceSettingsType,
-  AudioDeviceSettingsResponse 
+import type {
+  AudioDevice,
+  AudioDeviceSettings as AudioDeviceSettingsType
 } from '@tx5dr/contracts';
 
 interface AudioDeviceSettingsProps {
@@ -175,31 +173,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     } catch (err) {
       setError(err instanceof Error ? err.message : '更新音频设备设置失败');
       console.error('更新音频设备设置失败:', err);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleReset = async () => {
-    try {
-      setSaving(true);
-      setError(null);
-      setSuccessMessage(null);
-
-      const response = await api.resetAudioSettings();
-      
-      if (response.success) {
-        setCurrentSettings(response.currentSettings);
-        setSelectedInputDeviceName(response.currentSettings.inputDeviceName || '');
-        setSelectedOutputDeviceName(response.currentSettings.outputDeviceName || '');
-        setSampleRate(response.currentSettings.sampleRate || 48000);
-        setBufferSize(response.currentSettings.bufferSize || 1024);
-        setSuccessMessage(response.message || '音频设备设置已重置');
-      }
-
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '重置音频设备设置失败');
-      console.error('重置音频设备设置失败:', err);
     } finally {
       setSaving(false);
     }

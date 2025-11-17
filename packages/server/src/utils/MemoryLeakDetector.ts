@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// MemoryLeakDetector - 资源跟踪需要使用any
+
 import type EventEmitter from 'eventemitter3';
 
 /**

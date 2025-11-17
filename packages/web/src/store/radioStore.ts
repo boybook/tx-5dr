@@ -1,8 +1,18 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode } from 'react';
 import { addToast } from '@heroui/toast';
-import type { SlotPack, ModeDescriptor, DigitalRadioEngineEvents, OperatorStatus, QSORecord, LogBookStatistics, MeterData } from '@tx5dr/contracts';
+import type {
+  SlotPack,
+  ModeDescriptor,
+  OperatorStatus,
+  QSORecord,
+  LogBookStatistics,
+  MeterData,
+  SystemStatus,
+  HamlibConfig,
+  RadioInfo
+} from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
-import { getEnabledOperatorIds, getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
+import { getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
 import {
   showErrorToast,
   createRetryConnectionAction,
@@ -50,17 +60,13 @@ function connectionReducer(state: ConnectionState, action: ConnectionAction): Co
 export interface RadioState {
   isDecoding: boolean;
   currentMode: ModeDescriptor | null;
-  systemStatus: any;
+  systemStatus: SystemStatus | null;
   operators: OperatorStatus[];
   currentOperatorId: string | null;
   // 电台连接状态
   radioConnected: boolean;
-  radioInfo: {
-    manufacturer?: string;
-    model?: string;
-    rigModel?: number;
-  } | null;
-  radioConfig: any;
+  radioInfo: RadioInfo | null;
+  radioConfig: HamlibConfig;
   // PTT状态
   pttStatus: {
     isTransmitting: boolean;
@@ -75,16 +81,45 @@ export interface RadioState {
   } | null;
 }
 
+// 错误事件数据结构
+export interface ErrorEventData {
+  message: string;
+  userMessage?: string;
+  suggestions?: string[];
+  severity?: 'info' | 'warning' | 'error' | 'critical';
+  code?: string;
+  timestamp?: string;
+  context?: Record<string, unknown>;
+}
+
+// 解码错误数据结构
+export interface DecodeErrorData {
+  error: {
+    message: string;
+    stack?: string;
+  };
+  request: {
+    slotId: string;
+    windowIdx: number;
+  };
+}
+
+// 重连信息数据结构
+export interface ReconnectInfo {
+  isReconnecting: boolean;
+  connectionHealthy: boolean;
+}
+
 export type RadioAction =
   | { type: 'modeChanged'; payload: ModeDescriptor }
-  | { type: 'systemStatus'; payload: any }
-  | { type: 'decodeError'; payload: any }
+  | { type: 'systemStatus'; payload: SystemStatus }
+  | { type: 'decodeError'; payload: DecodeErrorData }
   | { type: 'error'; payload: Error }
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
-  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: any; radioConfig: any; radioReconnectInfo?: any } }
-  | { type: 'updateReconnectInfo'; payload: any }
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: RadioInfo | null; radioConfig: HamlibConfig; radioReconnectInfo?: ReconnectInfo } }
+  | { type: 'updateReconnectInfo'; payload: ReconnectInfo }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
   | { type: 'meterData'; payload: MeterData };
 
@@ -422,9 +457,9 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     
     const radioService = new RadioService();
     radioServiceRef.current = radioService;
-    
+
     // 设置事件监听器 - 分发到不同的reducer
-    const eventMap: Record<string, (...args: any[]) => void> = {
+    const eventMap: Record<string, (data?: unknown) => void> = {
       connected: () => {
         connectionDispatch({ type: 'connected' });
         const handshakeOperatorIds = getHandshakeOperatorIds();
@@ -436,26 +471,27 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       disconnected: () => {
         connectionDispatch({ type: 'disconnected' });
       },
-      modeChanged: (mode: ModeDescriptor) => {
-        radioDispatch({ type: 'modeChanged', payload: mode });
+      modeChanged: (data: unknown) => {
+        radioDispatch({ type: 'modeChanged', payload: data as ModeDescriptor });
       },
-      systemStatus: (status: any) => {
-        radioDispatch({ type: 'systemStatus', payload: status });
+      systemStatus: (data: unknown) => {
+        radioDispatch({ type: 'systemStatus', payload: data as SystemStatus });
       },
-      decodeError: (errorInfo: any) => {
-        radioDispatch({ type: 'decodeError', payload: errorInfo });
+      decodeError: (data: unknown) => {
+        radioDispatch({ type: 'decodeError', payload: data as DecodeErrorData });
       },
-      error: (data: any) => {
+      error: (data: unknown) => {
         // 适配新的增强错误格式
+        const errorData = data as ErrorEventData;
         const {
           message,            // 技术错误信息（供开发者/日志）
           userMessage,        // 用户友好提示（供UI显示）⭐ 新增
           suggestions = [],   // 操作建议数组 ⭐ 新增
           severity = 'error', // 错误严重程度 ⭐ 新增
           code,               // 错误代码 ⭐ 新增
-          timestamp,          // 时间戳
+          timestamp: _timestamp,  // 时间戳
           context             // 错误上下文 ⭐ 新增
-        } = data;
+        } = errorData;
 
         // 根据错误代码创建操作按钮
         let action: { label: string; handler: () => void } | undefined;
@@ -541,47 +577,52 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 保持向后兼容：dispatch error action（用于日志记录）
         radioDispatch({
           type: 'error',
-          payload: data instanceof Error ? data : new Error(message || '未知错误')
+          payload: new Error(message || '未知错误')
         });
       },
-      slotPackUpdated: (slotPack: SlotPack) => {
-        slotPacksDispatch({ type: 'slotPackUpdated', payload: slotPack });
+      slotPackUpdated: (data: unknown) => {
+        slotPacksDispatch({ type: 'slotPackUpdated', payload: data as SlotPack });
       },
-      qsoRecordAdded: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
-        console.log('📝 [RadioProvider] 收到QSO记录添加事件:', data);
-        logbookDispatch({ type: 'qsoRecordAdded', payload: data });
+      qsoRecordAdded: (data: unknown) => {
+        const qsoData = data as { operatorId: string; logBookId: string; qsoRecord: QSORecord };
+        console.log('📝 [RadioProvider] 收到QSO记录添加事件:', qsoData);
+        logbookDispatch({ type: 'qsoRecordAdded', payload: qsoData });
       },
-      logbookUpdated: (data: { logBookId: string; statistics: LogBookStatistics }) => {
-        console.log('📊 [RadioProvider] 收到日志本更新事件:', data);
-        logbookDispatch({ type: 'logbookUpdated', payload: data });
+      logbookUpdated: (data: unknown) => {
+        const logbookData = data as { logBookId: string; statistics: LogBookStatistics };
+        console.log('📊 [RadioProvider] 收到日志本更新事件:', logbookData);
+        logbookDispatch({ type: 'logbookUpdated', payload: logbookData });
       },
-      operatorsList: (data: { operators: OperatorStatus[] }) => {
-        radioDispatch({ type: 'operatorsList', payload: data.operators });
+      operatorsList: (data: unknown) => {
+        const operatorsData = data as { operators: OperatorStatus[] };
+        radioDispatch({ type: 'operatorsList', payload: operatorsData.operators });
       },
-      operatorStatusUpdate: (operatorStatus: OperatorStatus) => {
-        radioDispatch({ type: 'operatorStatusUpdate', payload: operatorStatus });
+      operatorStatusUpdate: (data: unknown) => {
+        radioDispatch({ type: 'operatorStatusUpdate', payload: data as OperatorStatus });
       },
       // 频率变化：清空本地 SlotPack 历史
-      frequencyChanged: (_data: any) => {
+      frequencyChanged: () => {
         console.log('📻 [RadioProvider] 频率变化，清空本地时隙历史');
         slotPacksDispatch({ type: 'CLEAR_DATA' });
       },
       // PTT状态变化
-      pttStatusChanged: (data: { isTransmitting: boolean; operatorIds: string[] }) => {
-        console.log(`📡 [RadioProvider] PTT状态变化: ${data.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${data.operatorIds?.join(', ') || ''}]`);
-        radioDispatch({ type: 'pttStatusChanged', payload: data });
+      pttStatusChanged: (data: unknown) => {
+        const pttData = data as { isTransmitting: boolean; operatorIds: string[] };
+        console.log(`📡 [RadioProvider] PTT状态变化: ${pttData.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${pttData.operatorIds?.join(', ') || ''}]`);
+        radioDispatch({ type: 'pttStatusChanged', payload: pttData });
       },
       // 电台数值表数据
-      meterData: (data: MeterData) => {
+      meterData: (data: unknown) => {
         // 数值表数据频率较高，不打印日志
-        radioDispatch({ type: 'meterData', payload: data });
+        radioDispatch({ type: 'meterData', payload: data as MeterData });
       },
-      handshakeComplete: async (data: any) => {
-        console.log('🤝 [RadioProvider] 握手完成:', data);
-        if (data.finalEnabledOperatorIds) {
-          console.log('💾 [RadioProvider] 新客户端，保存默认操作员偏好:', data.finalEnabledOperatorIds);
+      handshakeComplete: async (data: unknown) => {
+        const handshakeData = data as { finalEnabledOperatorIds?: string[] };
+        console.log('🤝 [RadioProvider] 握手完成:', handshakeData);
+        if (handshakeData.finalEnabledOperatorIds) {
+          console.log('💾 [RadioProvider] 新客户端，保存默认操作员偏好:', handshakeData.finalEnabledOperatorIds);
           setOperatorPreferences({
-            enabledOperatorIds: data.finalEnabledOperatorIds,
+            enabledOperatorIds: handshakeData.finalEnabledOperatorIds,
             lastUpdated: Date.now()
           });
         }
@@ -591,18 +632,18 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         try {
           const { api } = await import('@tx5dr/core');
           const status = await api.getRadioStatus();
-          if (status.success) {
+          if (status.success && status.status) {
             console.log('✅ [RadioProvider] 电台状态已同步:', {
-              radioConnected: status.isConnected,
-              radioInfo: status.radioInfo,
-              configType: status.config?.type
+              radioConnected: status.status.connected,
+              radioInfo: status.status.radioInfo,
+              configType: status.status.radioConfig?.type
             });
             radioDispatch({
               type: 'radioStatusUpdate',
               payload: {
-                radioConnected: status.isConnected,
-                radioInfo: status.radioInfo,
-                radioConfig: status.config
+                radioConnected: status.status.connected,
+                radioInfo: status.status.radioInfo,
+                radioConfig: status.status.radioConfig || { type: 'none' }
               }
             });
           }
@@ -610,48 +651,57 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           console.error('❌ [RadioProvider] 获取电台状态失败:', error);
         }
       },
-      radioStatusChanged: (data: any) => {
-        console.log('📡 [RadioProvider] 电台状态变化:', data.connected ? '已连接' : '已断开', data.reason || '');
+      radioStatusChanged: (data: unknown) => {
+        const radioData = data as {
+          connected: boolean;
+          radioInfo: RadioInfo | null;
+          radioConfig: HamlibConfig;
+          reconnectInfo?: ReconnectInfo;
+          reason?: string;
+        };
+        console.log('📡 [RadioProvider] 电台状态变化:', radioData.connected ? '已连接' : '已断开', radioData.reason || '');
 
         radioDispatch({
           type: 'radioStatusUpdate',
           payload: {
-            radioConnected: data.connected,
-            radioInfo: data.radioInfo, // 直接使用事件中的完整数据（连接时有值，断开时为null）
-            radioConfig: data.radioConfig, // 直接使用事件中的配置（始终包含完整配置）
-            radioReconnectInfo: data.reconnectInfo // 同步重连信息（连接成功后会重置为 isReconnecting: false）
+            radioConnected: radioData.connected,
+            radioInfo: radioData.radioInfo, // 直接使用事件中的完整数据（连接时有值，断开时为null）
+            radioConfig: radioData.radioConfig, // 直接使用事件中的配置（始终包含完整配置）
+            radioReconnectInfo: radioData.reconnectInfo // 同步重连信息（连接成功后会重置为 isReconnecting: false）
           }
         });
       },
-      radioReconnecting: (data: any) => {
-        console.log('🔄 [RadioProvider] 电台重连中:', data);
+      radioReconnecting: (data: unknown) => {
+        const reconnectData = data as { reconnectInfo?: ReconnectInfo };
+        console.log('🔄 [RadioProvider] 电台重连中:', reconnectData);
         // 更新重连状态到 Redux
-        if (data.reconnectInfo) {
+        if (reconnectData.reconnectInfo) {
           radioDispatch({
             type: 'updateReconnectInfo',
-            payload: data.reconnectInfo
+            payload: reconnectData.reconnectInfo
           });
         }
       },
-      radioReconnectFailed: (data: any) => {
+      radioReconnectFailed: (data: unknown) => {
         console.log('❌ [RadioProvider] 电台重连失败:', data);
       },
-      radioReconnectStopped: (data: any) => {
+      radioReconnectStopped: (data: unknown) => {
         console.log('⏹️ [RadioProvider] 电台重连已停止:', data);
       },
-      radioError: (data: any) => {
+      radioError: (data: unknown) => {
         console.log('⚠️ [RadioProvider] 电台错误:', data);
       },
-      radioDisconnectedDuringTransmission: (data: any) => {
+      radioDisconnectedDuringTransmission: (data: unknown) => {
         console.warn('🚨 [RadioProvider] 电台发射中断开连接:', data);
       },
-      textMessage: (data: { title: string; text: string; color?: string; timeout?: number | null }) => {
-        console.log('📬 [RadioProvider] 收到文本消息:', data);
+      textMessage: (data: unknown) => {
+        const msgData = data as { title: string; text: string; color?: string; timeout?: number | null };
+        console.log('📬 [RadioProvider] 收到文本消息:', msgData);
         addToast({
-          title: data.title,
-          description: data.text,
-          color: (data.color as "default" | "foreground" | "primary" | "secondary" | "success" | "warning" | "danger" | undefined) || 'default',
-          timeout: data.timeout === null ? undefined : (data.timeout || 3000)
+          title: msgData.title,
+          description: msgData.text,
+          color: (msgData.color as "default" | "foreground" | "primary" | "secondary" | "success" | "warning" | "danger" | undefined) || 'default',
+          timeout: msgData.timeout === null ? undefined : (msgData.timeout || 3000)
         });
       }
     };
@@ -660,6 +710,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     // 这样可以简化事件流：WSClient → RadioProvider → Components
     const wsClient = radioService.wsClientInstance;
     Object.entries(eventMap).forEach(([event, handler]) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       wsClient.onWSEvent(event as any, handler as any);
     });
 
@@ -677,6 +728,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (radioServiceRef.current) {
         const wsClient = radioServiceRef.current.wsClientInstance;
         Object.entries(eventMap).forEach(([event, handler]) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           wsClient.offWSEvent(event as any, handler as any);
         });
       }

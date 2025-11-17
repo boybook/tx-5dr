@@ -1,7 +1,22 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle, useMemo } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip } from '@heroui/react';
 import { api } from '@tx5dr/core';
-import { SerialConfig } from '@tx5dr/contracts';
+import type { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
+
+interface RigInfo {
+  rigModel: number;
+  mfgName: string;
+  modelName: string;
+}
+
+interface PortInfo {
+  path: string;
+  manufacturer?: string;
+  serialNumber?: string;
+  pnpId?: string;
+  vendorId?: string;
+  productId?: string;
+}
 
 export interface RadioDeviceSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -14,11 +29,11 @@ interface RadioDeviceSettingsProps {
 
 export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDeviceSettingsProps>(
   ({ onUnsavedChanges }, ref) => {
-  const [config, setConfig] = useState<any>({ type: 'none' });
-  const [originalConfig, setOriginalConfig] = useState<any>({ type: 'none' });
-  const [rigs, setRigs] = useState<any[]>([]);
-  const [ports, setPorts] = useState<any[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
+  const [config, setConfig] = useState<HamlibConfig>({ type: 'none' } as HamlibConfig);
+  const [originalConfig, setOriginalConfig] = useState<HamlibConfig>({ type: 'none' } as HamlibConfig);
+  const [rigs, setRigs] = useState<RigInfo[]>([]);
+  const [ports, setPorts] = useState<PortInfo[]>([]);
+  const [_isSaving, setIsSaving] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isTestingPTT, setIsTestingPTT] = useState(false);
   const [testResult, setTestResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -67,15 +82,15 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
 
 
       // 更新配置
-  const updateConfig = (updates: Partial<any>) => {
-    setConfig((prev: any) => ({ ...prev, ...updates }));
+  const updateConfig = (updates: Partial<HamlibConfig>) => {
+    setConfig((prev) => ({ ...prev, ...updates }));
     // 清除之前的测试结果
     setTestResult(null);
   };
 
   // 更新串口配置
   const updateSerialConfig = (updates: Partial<SerialConfig>) => {
-    setConfig((prev: any) => ({
+    setConfig((prev) => ({
       ...prev,
       serial: {
         ...prev.serial,
@@ -314,7 +329,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     showScrollIndicators={false}
                     defaultItems={rigs}
                   >
-                    {(item: any) => (
+                    {(item: RigInfo) => (
                       <AutocompleteItem 
                         key={String(item.rigModel)}
                         textValue={`${item.mfgName} ${item.modelName}`}

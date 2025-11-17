@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ColorPicker, useColor } from 'react-color-palette';
+import { ColorPicker, useColor, type IColor } from 'react-color-palette';
 import {
   Popover,
   PopoverTrigger,
@@ -24,7 +24,7 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
   const [color, setColor] = useColor(value);
   const [isOpen, setIsOpen] = useState(false);
 
-  const handleColorChange = (newColor: any) => {
+  const handleColorChange = (newColor: IColor) => {
     setColor(newColor);
     onChange(newColor.hex);
   };
@@ -59,14 +59,14 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
           <div className="text-sm font-medium text-default-900">
             选择颜色
           </div>
-          <div 
+          <div
             className="react-color-palette-container"
             style={{
               '--rcp-bg': 'white',
               '--rcp-border': '#e4e4e7',
               '--rcp-input-border': '#d4d4d8',
               '--rcp-input-label': '#71717a',
-            } as any}
+            } as React.CSSProperties}
           >
             <ColorPicker
               color={color}

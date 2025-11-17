@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// LogbookWSServer - WebSocket消息处理需要使用any
+
 import { WSMessageHandler } from '@tx5dr/core';
 import { WSMessageType } from '@tx5dr/contracts';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';

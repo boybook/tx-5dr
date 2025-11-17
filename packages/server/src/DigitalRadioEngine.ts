@@ -3,7 +3,7 @@ import {
   SlotScheduler,
   ClockSourceSystem
 } from '@tx5dr/core';
-import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type RadioOperatorConfig, type TransmissionCompleteInfo } from '@tx5dr/contracts';
+import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
@@ -16,7 +16,7 @@ import { RadioOperatorManager } from './operator/RadioOperatorManager.js';
 import { printAppPaths } from './utils/debug-paths.js';
 import { PhysicalRadioManager } from './radio/PhysicalRadioManager.js';
 import { FrequencyManager } from './radio/FrequencyManager.js';
-import { TransmissionTracker } from './transmission/TransmissionTracker.js';
+import { TransmissionTracker, TransmissionPhase } from './transmission/TransmissionTracker.js';
 import { IcomWlanAudioAdapter } from './audio/IcomWlanAudioAdapter.js';
 import { AudioDeviceManager } from './audio/audio-device-manager.js';
 import { AudioMonitorService } from './audio/AudioMonitorService.js';
@@ -81,7 +81,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private lastHealthCheckTimestamp: number = Date.now(); // 上次健康检查时间
 
   // 记录 radioManager 事件监听器，用于清理 (修复内存泄漏)
-  private radioManagerEventListeners: Map<string, (...args: any[]) => void> = new Map();
+  private radioManagerEventListeners: Map<string, (...args: unknown[]) => void> = new Map();
 
   // 引擎状态机 (XState v5)
   private engineStateMachineActor: EngineActor | null = null;
@@ -215,10 +215,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`📊 [编码跟踪] 时隙 ${this.currentSlotId}: 已完成 ${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes}`);
 
         // 先记录编码完成，进入混音阶段
-        this.transmissionTracker.updatePhase(result.operatorId, 'mixing' as any);
-        
+        this.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.MIXING, {});
+
         // 然后记录音频准备就绪时间
-        this.transmissionTracker.updatePhase(result.operatorId, 'ready' as any, {
+        this.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.READY, {
           audioData: result.audioData,
           sampleRate: result.sampleRate,
           duration: result.duration
@@ -230,7 +230,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         let audioData = result.audioData;
         
         // 获取编码请求中的时间信息
-        const request = (result as any).request;
+        const request = (result as { request?: { timeSinceSlotStartMs?: number } }).request;
         const timeSinceSlotStartMs = request?.timeSinceSlotStartMs || 0;
         
         // 获取当前时隙信息
@@ -514,6 +514,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 监听编码开始事件 (提前触发，留出编码时间)
     this.slotClock.on('encodeStart', (slotInfo) => {
       console.log(`🔧 [编码时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 提前量: ${this.currentMode.encodeAdvance}ms`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emit('encodeStart' as any, slotInfo);
 
       // 重置当前时隙的编码跟踪
@@ -546,6 +547,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.warn(`⚠️ [编码超时] 发射时刻到达但编码未完成！期望 ${this.currentSlotExpectedEncodes} 个，已完成 ${this.currentSlotCompletedEncodes} 个，缺少 ${missingCount} 个`);
 
         // 发出警告事件到前端
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.emit('timingWarning' as any, {
           title: '⚠️ 编码超时警告',
           text: `发射时刻已到达，但仍有 ${missingCount} 个编码任务未完成。这可能导致发射延迟或失败。建议检查发射补偿设置或减少同时发射的操作员数量。`
@@ -554,6 +556,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`✅ [编码跟踪] 所有编码任务已按时完成 (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);
       }
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emit('transmitStart' as any, slotInfo);
       // 此时编码应该已经完成或接近完成，音频即将播放
     });
@@ -576,7 +579,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 监听解码结果并通过 SlotPackManager 处理
     this.realDecodeQueue.on('decodeComplete', (result) => {
       // 通过 SlotPackManager 处理解码结果
-      const updatedSlotPack = this.slotPackManager.processDecodeResult(result);
+      this.slotPackManager.processDecodeResult(result);
     });
     
     this.realDecodeQueue.on('decodeError', (error, request) => {
@@ -585,6 +588,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     
     // 监听发射日志事件，将发射信息添加到SlotPackManager
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.on('transmissionLog' as any, (data: {
       operatorId: string;
       time: string;
@@ -645,7 +649,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     );
     
     // 监听频谱调度器事件
-    this.spectrumScheduler.on('spectrumReady', (spectrum) => {
+    this.spectrumScheduler.on('spectrumReady', (_spectrum) => {
       // 📝 EventBus 优化：频谱数据已通过 EventBus 直达 WSServer（SpectrumScheduler.ts:279）
       // 此处仅保留健康检查逻辑，不再转发事件
 
@@ -865,6 +869,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 清理 RadioManager 事件监听器
     console.log(`🗑️  [时钟管理器] 移除 ${this.radioManagerEventListeners.size} 个 RadioManager 事件监听器`);
     for (const [eventName, handler] of this.radioManagerEventListeners.entries()) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.radioManager.off(eventName as any, handler);
     }
     this.radioManagerEventListeners.clear();
@@ -904,10 +909,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   setVolumeGain(gain: number): void {
     this.audioStreamManager.setVolumeGain(gain);
-    
+
     // 保存到配置文件
     const currentGain = this.audioStreamManager.getVolumeGain();
     const currentGainDb = this.audioStreamManager.getVolumeGainDb();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ConfigManager.getInstance().updateLastVolumeGain(currentGain, currentGainDb).catch((error: any) => {
       console.warn('⚠️ [DigitalRadioEngine] 保存音量增益配置失败:', error);
     });
@@ -924,10 +930,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
    */
   setVolumeGainDb(gainDb: number): void {
     this.audioStreamManager.setVolumeGainDb(gainDb);
-    
+
     // 保存到配置文件
     const currentGain = this.audioStreamManager.getVolumeGain();
     const currentGainDb = this.audioStreamManager.getVolumeGainDb();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ConfigManager.getInstance().updateLastVolumeGain(currentGain, currentGainDb).catch((error: any) => {
       console.warn('⚠️ [DigitalRadioEngine] 保存音量增益配置失败:', error);
     });
@@ -1082,6 +1089,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       const radioConfig = this.radioManager.getConfig();
 
       // 广播电台状态更新事件
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emit('radioStatusChanged' as any, {
         connected: true,
         radioInfo,
@@ -1105,7 +1113,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       // 重连成功后自动启动系统（仅在真正重连时，不在首次启动时）
       const reconnectInfo = this.radioManager.getReconnectInfo();
-      if (!this.isRunning && reconnectInfo.reconnectAttempts > 0) {
+      // 使用 isReconnecting 判断是否为重连场景（而非首次连接）
+      if (!this.isRunning && reconnectInfo.isReconnecting) {
         console.log('🚀 [DigitalRadioEngine] 重连成功，自动启动系统');
         try {
           await this.start();
@@ -1118,7 +1127,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.radioManager.on('connected', handleConnected);
 
     // 监听电台断开连接
-    const handleDisconnected = async (reason?: string) => {
+    const handleDisconnected = async (...args: unknown[]) => {
+      const reason = args[0] as string | undefined;
       console.log(`📡 [DigitalRadioEngine] 物理电台断开连接: ${reason || '未知原因'}`);
 
       // 立即停止所有操作员的发射
@@ -1141,6 +1151,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         }
 
         // 广播特殊的发射中断开连接事件
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.emit('radioDisconnectedDuringTransmission' as any, {
           reason: reason || '电台在发射过程中断开连接',
           message: '电台在发射过程中断开连接，可能是发射功率过大导致USB通讯受到干扰。系统已自动停止发射和监听。',
@@ -1160,6 +1171,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
 
       // 广播电台状态更新事件（带用户指导）
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emit('radioStatusChanged' as any, {
         connected: false,
         radioInfo: null, // 断开时清空电台信息
@@ -1175,9 +1187,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
 
     // 监听电台错误
-    const handleError = (error: Error) => {
+    const handleError = (...args: unknown[]) => {
+      const error = args[0] as Error;
       console.error(`📡 [DigitalRadioEngine] 物理电台错误: ${error.message}`);
       // 广播电台错误事件
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emit('radioError' as any, {
         error: error.message,
         reconnectInfo: this.radioManager.getReconnectInfo()
@@ -1187,7 +1201,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.radioManager.on('error', handleError);
 
     // 监听电台数值表数据
-    const handleMeterData = (data: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handleMeterData = (_data: any) => {
       // 📝 EventBus 优化：数值表数据已通过 EventBus 直达 WSServer（IcomWlanConnection.ts:321）
       // 此处仅保留健康检查逻辑，不再转发事件
 
@@ -1198,10 +1213,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
     };
     this.radioManagerEventListeners.set('meterData', handleMeterData);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.radioManager.on('meterData' as any, handleMeterData);
 
     // 监听电台频率变化（自动同步）
-    const handleRadioFrequencyChanged = async (frequency: number) => {
+    const handleRadioFrequencyChanged = async (...args: unknown[]) => {
+      const frequency = args[0] as number;
       console.log(`📡 [DigitalRadioEngine] 检测到电台频率变化: ${(frequency / 1000000).toFixed(3)} MHz`);
 
       try {
@@ -1294,6 +1311,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (this.slotClock) {
         const clockEvents = ['slotStart', 'encodeStart', 'transmitStart', 'subWindow'];
         for (const event of clockEvents) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           this.slotClock.removeAllListeners(event as any);
         }
         totalRemoved += clockEvents.length;
@@ -1304,6 +1322,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (this.realEncodeQueue) {
         const encodeEvents = ['encodeComplete', 'encodeError'];
         for (const event of encodeEvents) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           this.realEncodeQueue.removeAllListeners(event as any);
         }
         totalRemoved += encodeEvents.length;
@@ -1313,6 +1332,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (this.realDecodeQueue) {
         const decodeEvents = ['decodeComplete', 'decodeError'];
         for (const event of decodeEvents) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           this.realDecodeQueue.removeAllListeners(event as any);
         }
         totalRemoved += decodeEvents.length;
@@ -1337,6 +1357,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (this.spectrumScheduler) {
         const spectrumEvents = ['spectrumReady', 'error'];
         for (const event of spectrumEvents) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           this.spectrumScheduler.removeAllListeners(event as any);
         }
         totalRemoved += spectrumEvents.length;
@@ -1346,6 +1367,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // 6. 清理 RadioManager 事件监听器（使用已有的 Map）
       if (this.radioManagerEventListeners.size > 0) {
         for (const [eventName, handler] of this.radioManagerEventListeners.entries()) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           this.radioManager.off(eventName as any, handler);
         }
         const radioListenersCount = this.radioManagerEventListeners.size;
@@ -1355,6 +1377,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
 
       // 7. 清理 self 上的 transmissionLog 事件监听器
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.removeAllListeners('transmissionLog' as any);
       totalRemoved += 1;
       console.log(`   ✓ 已清理 1 个 self transmissionLog 事件监听器`);

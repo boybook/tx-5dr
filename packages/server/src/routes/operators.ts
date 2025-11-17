@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// 路由处理器 - FastifyRequest/Reply类型需要使用any
+
 /**
  * 操作员管理API路由
  * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器

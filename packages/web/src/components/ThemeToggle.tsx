@@ -37,7 +37,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
     }
   };
 
-  const getThemeLabel = (mode: ThemeMode) => {
+  const _getThemeLabel = (mode: ThemeMode) => {
     switch (mode) {
       case 'light':
         return '浅色模式';

@@ -2,9 +2,9 @@
  * ResourceManager 单元测试
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ResourceManager, IResource, ResourceState } from '../ResourceManager.js';
-import { RadioError, RadioErrorCode } from '../errors/RadioError.js';
+
 
 /**
  * 创建模拟资源

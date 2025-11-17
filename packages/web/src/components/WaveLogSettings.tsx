@@ -8,19 +8,16 @@ import {
   Card,
   CardBody,
   CardHeader,
-  Divider,
   Chip,
-  Tooltip,
   Spinner,
   Alert
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlug, faServer, faSync, faCheck, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
-import type { 
+import type {
   WaveLogConfig,
-  WaveLogStation,
-  WaveLogTestConnectionResponse
+  WaveLogStation
 } from '@tx5dr/contracts';
 
 export interface WaveLogSettingsRef {
@@ -87,7 +84,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
     }, [config, originalConfig, onUnsavedChanges]);
 
     // 更新配置字段
-    const updateConfig = (field: keyof WaveLogConfig, value: any) => {
+    const updateConfig = (field: keyof WaveLogConfig, value: string | boolean | number) => {
       setConfig(prev => ({
         ...prev,
         [field]: value

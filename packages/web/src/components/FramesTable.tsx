@@ -49,7 +49,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [prevGroupsLength, setPrevGroupsLength] = useState(0);
   const [isNarrow, setIsNarrow] = useState(false); // 是否为窄屏模式
-  const { getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled } = useDisplayNotificationSettings();
+  const { getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
 
   // 检查是否滚动到底部
   const checkIfAtBottom = () => {

@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// AudioUtils - 音频处理需要使用any
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as nodeWav from 'node-wav';

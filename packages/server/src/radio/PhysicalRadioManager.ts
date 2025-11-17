@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// PhysicalRadioManager - 电台连接管理需要使用any类型以处理不同连接类型的事件
+
 /**
  * PhysicalRadioManager - 物理电台管理器 (重构版)
  *

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Card, CardBody, Select, SelectItem, Input, Progress, Button, Chip, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
+import { Select, SelectItem, Input, Button, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faWandMagicSparkles, faRepeat, faBook, faRotateLeft } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../store/radioStore';
@@ -11,8 +11,6 @@ import { addToast } from '@heroui/toast';
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
 }
-
-const SLOT_OPTIONS = ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'];
 
 export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operatorStatus }) => {
   const connection = useConnection();
@@ -266,14 +264,14 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   }, []);
 
   // 发送用户命令
-  const sendUserCommand = (command: string, args: any) => {
+  const sendUserCommand = (command: string, args: Record<string, unknown> | string) => {
     if (connection.state.radioService) {
       connection.state.radioService.sendUserCommand(operatorStatus.id, command, args);
     }
   };
 
   // 处理上下文更新
-  const handleContextUpdate = (field: string, value: any) => {
+  const handleContextUpdate = (field: string, value: string | number) => {
     // 立即更新本地状态
     const newContext = { ...localContext, [field]: value };
     setLocalContext(newContext);
@@ -322,7 +320,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   };
 
   // 获取当前发射周期设置
-  const getCurrentTransmitCycle = () => {
+  const _getCurrentTransmitCycle = () => {
     const transmitCycles = operatorStatus.transmitCycles || [0];
     
     if (transmitCycles.length === 0) {
@@ -341,7 +339,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   };
 
   // 处理发射周期变化
-  const handleTransmitCycleChange = (keys: Selection) => {
+  const _handleTransmitCycleChange = (keys: Selection) => {
     const selectedKey = Array.from(keys as Set<string>)[0];
     let transmitCycles: number[] = [];
     

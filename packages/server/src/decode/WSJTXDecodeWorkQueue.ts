@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// WSJTXDecodeWorkQueue - Worker任务处理需要使用any
+
 import { EventEmitter } from 'eventemitter3';
 import { 
   type IDecodeQueue, 

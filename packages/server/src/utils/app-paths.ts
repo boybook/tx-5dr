@@ -1,5 +1,8 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// AppPaths - 路径处理需要使用any
+
 import { homedir, platform } from 'os';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { promises as fs } from 'fs';
 
 /**

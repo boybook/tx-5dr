@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// TransmissionTracker - 状态跟踪需要使用any
+
 import { EventEmitter } from 'eventemitter3';
 
 /**

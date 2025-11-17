@@ -48,7 +48,7 @@ export interface ErrorInfo {
   technicalDetails?: string;
 
   /** 错误上下文 */
-  context?: Record<string, any>;
+  context?: Record<string, unknown>;
 
   /** 错误时间戳 */
   timestamp?: string;

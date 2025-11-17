@@ -35,7 +35,7 @@ export interface ErrorToastOptions {
   technicalDetails?: string;
 
   /** 错误上下文（可选） */
-  context?: Record<string, any>;
+  context?: Record<string, unknown>;
 }
 
 /**

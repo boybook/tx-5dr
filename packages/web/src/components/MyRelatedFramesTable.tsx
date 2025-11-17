@@ -69,7 +69,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     wsClient.onWSEvent('transmissionLog', handleTransmissionLog);
 
     return () => {
-      wsClient.offWSEvent('transmissionLog', handleTransmissionLog as any);
+      wsClient.offWSEvent('transmissionLog', handleTransmissionLog);
     };
   }, [connection.state.radioService]);
 
@@ -88,9 +88,11 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       setRecentSlotGroupKeys([]);
     };
 
-    wsClient.onWSEvent('frequencyChanged' as any, handleFrequencyChanged as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wsClient.onWSEvent('frequencyChanged' as any, handleFrequencyChanged);
     return () => {
-      wsClient.offWSEvent('frequencyChanged' as any, handleFrequencyChanged as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      wsClient.offWSEvent('frequencyChanged' as any, handleFrequencyChanged);
     };
   }, [connection.state.radioService]);
 
@@ -361,7 +363,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   }, [slotPacks.state.slotPacks, transmissionLogs, radio.state.operators, radio.state.currentMode, frozenFrameGroups, recentSlotGroupKeys]);
 
   // 清空我的通联数据
-  const handleClearMyData = () => {
+  const _handleClearMyData = () => {
     setMyFrameGroups([]);
     setTransmissionLogs([]);
     setFrozenFrameGroups([]);
