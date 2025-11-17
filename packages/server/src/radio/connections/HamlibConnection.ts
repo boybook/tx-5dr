@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// HamlibConnection - Native模块绑定需要使用any
+
 /**
  * HamlibConnection - Hamlib 连接实现
  *

@@ -2,8 +2,6 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -536,7 +534,6 @@ async function createWindow() {
   const logWindow = await createLogWindow();
 
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
-  const isPackaged = app.isPackaged;
   console.log('🔍 isDevelopment:', isDevelopment);
 
   if (isDevelopment) {

@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
+
 import { WSMessageType } from '@tx5dr/contracts';
 import type {
   DecodeErrorInfo,
@@ -17,22 +20,34 @@ import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
  * WebSocket连接包装器
  * 为每个客户端连接提供消息处理能力
  */
+/**
+ * WebSocket 实例接口
+ */
+interface WebSocketInstance {
+  on(event: string, listener: (...args: unknown[]) => void): void;
+  off(event: string, listener: (...args: unknown[]) => void): void;
+  send(data: string): void;
+  close(): void;
+  readyState: number;
+}
+
 export class WSConnection extends WSMessageHandler {
-  private ws: any; // WebSocket实例(支持不同的WebSocket库)
+  private ws: WebSocketInstance; // WebSocket实例(支持不同的WebSocket库)
   private id: string;
   private enabledOperatorIds: Set<string> = new Set(); // 客户端启用的操作员ID列表
   private handshakeCompleted: boolean = false; // 握手是否完成
 
   // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
-  private wsListeners: Map<string, (...args: any[]) => void> = new Map();
+  private wsListeners: Map<string, (...args: unknown[]) => void> = new Map();
 
-  constructor(ws: any, id: string) {
+  constructor(ws: WebSocketInstance, id: string) {
     super();
     this.ws = ws;
     this.id = id;
 
     // 监听WebSocket消息
-    const handleMessage = (data: any) => {
+    const handleMessage = (...args: unknown[]) => {
+      const data = args[0] as string | Buffer;
       const message = typeof data === 'string' ? data : data.toString();
       this.handleRawMessage(message);
     };
@@ -47,7 +62,8 @@ export class WSConnection extends WSMessageHandler {
     this.wsListeners.set('close', handleClose);
 
     // 监听WebSocket错误
-    const handleError = (error: Error) => {
+    const handleError = (...args: unknown[]) => {
+      const error = args[0] as Error;
       this.emitWSEvent('error', error);
     };
     this.ws.on('error', handleError);
@@ -139,15 +155,23 @@ export class WSConnection extends WSMessageHandler {
  * WebSocket服务器
  * 管理多个客户端连接和消息广播，集成业务逻辑处理
  */
+/**
+ * AudioMonitorWSServer 接口定义
+ */
+interface AudioMonitorWSServer {
+  getAllClientIds(): string[];
+  sendAudioData(clientId: string, audioData: ArrayBuffer): void;
+}
+
 export class WSServer extends WSMessageHandler {
   private connections = new Map<string, WSConnection>();
   private connectionIdCounter = 0;
   private digitalRadioEngine: DigitalRadioEngine;
-  private audioMonitorWSServer: any; // AudioMonitorWSServer实例
+  private audioMonitorWSServer: AudioMonitorWSServer; // AudioMonitorWSServer实例
   private audioMonitorListenersSetup = false; // 标记AudioMonitor监听器是否已设置
-  private commandHandlers: Partial<Record<WSMessageType, (data: any, connectionId: string) => Promise<void> | void>>;
+  private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
-  constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: any) {
+  constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: AudioMonitorWSServer) {
     super();
     this.digitalRadioEngine = digitalRadioEngine;
     this.audioMonitorWSServer = audioMonitorWSServer;
@@ -158,7 +182,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.START_ENGINE]: () => this.handleStartEngine(),
       [WSMessageType.STOP_ENGINE]: () => this.handleStopEngine(),
       [WSMessageType.GET_STATUS]: () => this.handleGetStatus(),
-      [WSMessageType.SET_MODE]: (data) => this.handleSetMode(data?.mode),
+      [WSMessageType.SET_MODE]: (data) => this.handleSetMode((data as any)?.mode),
       [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data) => this.handleSetOperatorContext(data),
       [WSMessageType.SET_OPERATOR_SLOT]: (data) => this.handleSetOperatorSlot(data),
@@ -374,7 +398,7 @@ export class WSServer extends WSMessageHandler {
   /**
    * 处理客户端命令
    */
-  private async handleClientCommand(connectionId: string, message: any): Promise<void> {
+  private async handleClientCommand(connectionId: string, message: { type: string; data: unknown }): Promise<void> {
     console.log(`📥 [WSServer] 收到客户端命令: ${message.type}, 连接: ${connectionId}`);
     const handler = this.commandHandlers[message.type as WSMessageType];
     if (handler) {
@@ -619,7 +643,7 @@ export class WSServer extends WSMessageHandler {
 
     // 监听客户端消息并处理
     connection.onRawMessage((message) => {
-      this.handleClientCommand(id, message);
+      this.handleClientCommand(id, message as { type: string; data: unknown });
     });
 
     this.connections.set(id, connection);

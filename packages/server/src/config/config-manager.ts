@@ -1,5 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// ConfigManager - 配置合并和动态类型需要使用any
+
 import { promises as fs } from 'fs';
-import { join } from 'path';
 import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';

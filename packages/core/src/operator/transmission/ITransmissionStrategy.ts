@@ -24,9 +24,9 @@ export interface ITransmissionStrategy {
      * 当用户手动设置了下一条要发送的消息时调用此方法。
      * 策略可以选择基于此手动消息更新其内部状态或行为。
      * @param command 用户设置的手动消息。
-     * @returns 返回值可以是任何类型，用于与前端通信。
+     * @returns 返回值用于与前端通信（可选）
      */
-    userCommand?(command: QSOCommand): any;
+    userCommand?(command: QSOCommand): unknown;
 
     /**
      * 处理发射时隙

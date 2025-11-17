@@ -1,4 +1,4 @@
-import { WSMessageType } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 
 /**
@@ -90,7 +90,7 @@ export class WSClient extends WSMessageHandler {
   /**
    * 发送消息到服务器
    */
-  send(type: string, data?: any, id?: string): void {
+  send(type: string, data?: unknown, id?: string): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const messageStr = this.createAndSerializeMessage(type, data, id);
       this.ws.send(messageStr);
@@ -125,7 +125,7 @@ export class WSClient extends WSMessageHandler {
   /**
    * 设置模式
    */
-  setMode(mode: any): void {
+  setMode(mode: ModeDescriptor): void {
     this.send(WSMessageType.SET_MODE, { mode });
   }
 

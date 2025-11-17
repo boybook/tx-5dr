@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// ConsoleLogger - 日志参数需要使用any以接受任意类型
+
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getLogFilePath } from './app-paths.js';

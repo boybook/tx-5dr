@@ -16,12 +16,38 @@ export interface AudioStreamEvents {
 }
 
 /**
+ * AudioIO 配置接口
+ */
+interface AudioIOOptions {
+  channelCount: number;
+  sampleFormat: number;
+  sampleRate: number;
+  deviceId?: number;
+  framesPerBuffer: number;
+  suggestedLatency: number;
+}
+
+/**
+ * AudioIO 实例接口
+ */
+interface AudioIOInstance {
+  on(event: 'data', listener: (chunk: Buffer) => void): void;
+  on(event: 'error', listener: (error: Error) => void): void;
+  on(event: 'drain', listener: () => void): void;
+  off(event: string, listener: (...args: unknown[]) => void): void;
+  start(): void;
+  write(buffer: Buffer): boolean;
+  quit(): void;
+  readyState: number;
+}
+
+/**
  * 音频流管理器 - 负责从音频设备捕获实时音频数据
  * 支持传统声卡和 ICOM WLAN 虚拟设备
  */
 export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
-  private audioInput: any = null;
-  private audioOutput: any = null;
+  private audioInput: AudioIOInstance | null = null;
+  private audioOutput: AudioIOInstance | null = null;
   private isStreaming = false;
   private isOutputting = false;
   private audioProvider: RingBufferAudioProvider;
@@ -166,7 +192,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
       
       // 配置音频输入参数 - 使用配置的设置
-      const inputOptions: any = {
+      const inputOptions: AudioIOOptions = {
         channelCount: this.channels,
         sampleFormat: naudiodon.SampleFormatFloat32, // 使用 float32 格式
         sampleRate: this.sampleRate,
@@ -404,7 +430,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
       
       // 配置音频输出参数 - 使用配置的设置
-      const outputOptions: any = {
+      const outputOptions: AudioIOOptions = {
         channelCount: this.channels,
         sampleFormat: naudiodon.SampleFormatFloat32,
         sampleRate: this.sampleRate,
@@ -445,7 +471,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * 带超时保护的音频输入创建和启动
    */
-  private async createAndStartInputWithTimeout(inputOptions: any, deviceId?: string): Promise<void> {
+  private async createAndStartInputWithTimeout(inputOptions: AudioIOOptions, deviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         console.error('⏰ 音频输入创建/启动超时 (15秒)');
@@ -459,7 +485,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             console.log('🔄 执行音频输入创建...');
             
             // 创建 AudioIO 实例
-            this.audioInput = new (naudiodon as any).AudioIO({
+            this.audioInput = new (naudiodon as unknown as { AudioIO: new (options: { inOptions: AudioIOOptions }) => AudioIOInstance }).AudioIO({
               inOptions: inputOptions
             });
             
@@ -544,7 +570,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * 带超时保护的音频输出创建和启动
    */
-  private async createAndStartOutputWithTimeout(outputOptions: any, outputDeviceId?: string): Promise<void> {
+  private async createAndStartOutputWithTimeout(outputOptions: AudioIOOptions, outputDeviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         console.error('⏰ 音频输出创建/启动超时 (15秒)');
@@ -558,7 +584,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             console.log('🔄 执行音频输出创建...');
             
             // 创建 AudioIO 实例
-            this.audioOutput = new (naudiodon as any).AudioIO({
+            this.audioOutput = new (naudiodon as unknown as { AudioIO: new (options: { outOptions: AudioIOOptions }) => AudioIOInstance }).AudioIO({
               outOptions: outputOptions
             });
             
@@ -914,11 +940,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
 
         // 背压控制：当 write 返回 false 时等待 'drain'，若无 drain 则兜底短暂等待
+        if (!this.audioOutput) {
+          throw new Error('音频输出未初始化');
+        }
         const ok: boolean = this.audioOutput.write(buffer);
         if (!ok) {
           try {
             await Promise.race<unknown>([
-              once(this.audioOutput, 'drain') as unknown as Promise<unknown>,
+              once(this.audioOutput as any, 'drain'),
               wait(25),
             ]);
           } catch {

@@ -1,11 +1,5 @@
 import { api, WSClient } from '@tx5dr/core';
-import { addToast } from '@heroui/toast';
 import { getWebSocketUrl, getApiBaseUrl } from '../utils/config';
-import type { 
-  DigitalRadioEngineEvents, 
-  SlotPack, 
-  SlotInfo 
-} from '@tx5dr/contracts';
 
 /**
  * 无线电数据服务
@@ -25,14 +19,13 @@ export class RadioService {
     console.log('🔧 RadioService WebSocket URL:', wsUrl);
     this.wsClient = new WSClient({
       url: wsUrl,
-      reconnectAttempts: -1, // 无限重连
-      reconnectDelay: 1000,
       heartbeatInterval: 30000
     });
 
     // 监听系统状态变化以更新内部解码状态
-    this.wsClient.onWSEvent('systemStatus', (status: any) => {
-      this._isDecoding = status.isDecoding || false;
+    this.wsClient.onWSEvent('systemStatus', (status: unknown) => {
+      const systemStatus = status as { isDecoding?: boolean };
+      this._isDecoding = systemStatus.isDecoding || false;
     });
 
     // 自动尝试连接
@@ -57,18 +50,13 @@ export class RadioService {
    * 连接到服务器
    */
   async connect(): Promise<void> {
-    try {
-      // 首先测试REST API连接
-      const apiBase = getApiBaseUrl();
-      await api.getHello(apiBase);
-      console.log('✅ REST API连接成功');
-      
-      // 然后建立WebSocket连接
-      await this.wsClient.connect();
-      
-    } catch (error) {
-      throw error;
-    }
+    // 首先测试REST API连接
+    const apiBase = getApiBaseUrl();
+    await api.getHello(apiBase);
+    console.log('✅ REST API连接成功');
+
+    // 然后建立WebSocket连接
+    await this.wsClient.connect();
   }
 
   /**
@@ -165,7 +153,7 @@ export class RadioService {
   /**
    * 设置操作员上下文
    */
-  setOperatorContext(operatorId: string, context: any): void {
+  setOperatorContext(operatorId: string, context: Record<string, unknown>): void {
     if (this.isConnected) {
       this.wsClient.send('setOperatorContext', { operatorId, context });
     }
@@ -183,7 +171,7 @@ export class RadioService {
   /**
    * 发送用户命令到操作员
    */
-  sendUserCommand(operatorId: string, command: string, args: any): void {
+  sendUserCommand(operatorId: string, command: string, args: Record<string, unknown> | string): void {
     if (this.isConnected) {
       this.wsClient.send('userCommand', { operatorId, command, args });
     }

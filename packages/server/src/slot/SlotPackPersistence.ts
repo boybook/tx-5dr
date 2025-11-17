@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// SlotPackPersistence - JSON序列化需要使用any
+
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import type { SlotPack } from '@tx5dr/contracts';

@@ -1,4 +1,4 @@
-import { OperatorConfig, QSORecord, ParsedFT8Message, SlotPack, DigitalRadioEngineEvents, SlotInfo, MODES, QSOCommand, FrameMessage } from '@tx5dr/contracts';
+import { OperatorConfig, QSORecord, ParsedFT8Message, SlotPack, DigitalRadioEngineEvents, SlotInfo, MODES, QSOCommand, FrameMessage, OperatorSlots } from '@tx5dr/contracts';
 import { CycleUtils } from '../utils/cycleUtils.js';
 import { ITransmissionStrategy } from './transmission/ITransmissionStrategy';
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
@@ -98,11 +98,13 @@ export class RadioOperator {
                 const elapsed = Date.now() - t0;
                 try {
                     // 计算从slotStart到encodeStart的预算时间：transmitTiming - encodeAdvance
-                    const transmitTiming = (this._config.mode as any).transmitTiming || 0;
-                    const encodeAdvance = (this._config.mode as any).encodeAdvance || 0;
+                    const mode = this._config.mode;
+                    const transmitTiming = ('transmitTiming' in mode ? mode.transmitTiming : 0) || 0;
+                    const encodeAdvance = ('encodeAdvance' in mode ? mode.encodeAdvance : 0) || 0;
                     const budget = Math.max(0, transmitTiming - encodeAdvance);
                     if (elapsed > budget) {
                         // 决策耗时超过预算，可能赶不上本周期发射，广播告警（由WSServer转成TEXT_MESSAGE）
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         this._eventEmitter.emit('timingWarning' as any, {
                             title: '⚠️ 时序告警',
                             text: `决策耗时 ${elapsed}ms 超过预算 ${budget}ms，可能赶不上本周期发射（${this._config.myCallsign}）`
@@ -118,6 +120,7 @@ export class RadioOperator {
         });
         
         // 编码开始事件 - 提前触发编码准备（新时序系统）
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         eventEmitter.on('encodeStart' as any, (slotInfo: SlotInfo) => {
             if (this._stopped) {
                 console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 操作员已停止，跳过编码`);
@@ -147,6 +150,7 @@ export class RadioOperator {
         });
 
         // 目标播放时机事件 - 仅用于日志记录
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         eventEmitter.on('transmitStart' as any, (slotInfo: SlotInfo) => {
             if (this._stopped || !this._isTransmitting) {
                 return;
@@ -188,6 +192,7 @@ export class RadioOperator {
             // 通知状态变化
             this.notifyStatusChanged();
             // 发射事件通知发射周期已更改
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this._eventEmitter.emit('operatorTransmitCyclesChanged' as any, {
                 operatorId: this._config.id,
                 transmitCycles: this._config.transmitCycles
@@ -237,27 +242,27 @@ export class RadioOperator {
             // 通知状态变化
             this.notifyStatusChanged();
         }
-        
+
         // 其他命令转发给transmission strategy
-        const result = this._transmissionStrategy?.userCommand?.(command);
-        
+        this._transmissionStrategy?.userCommand?.(command);
+
         // 检查特定命令，发射相应事件以触发立即发射
         if (command.command === 'set_state') {
             // 切换发射槽位时，发射事件
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this._eventEmitter.emit('operatorSlotChanged' as any, {
                 operatorId: this._config.id,
                 slot: command.args
             });
         } else if (command.command === 'set_slot_content') {
             // 编辑发射内容时，发射事件
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this._eventEmitter.emit('operatorSlotContentChanged' as any, {
                 operatorId: this._config.id,
                 slot: command.args.slot,
                 content: command.args.content
             });
         }
-        
-        return result;
     }
 
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
@@ -280,6 +285,7 @@ export class RadioOperator {
 
     recordQSOLog(qsoRecord: QSORecord): void {
         // 发射记录QSO日志的事件
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this._eventEmitter.emit('recordQSO' as any, {
             operatorId: this._config.id,
             qsoRecord
@@ -298,14 +304,17 @@ export class RadioOperator {
             // 设置一次性监听器等待响应
             const responseHandler = (data: { requestId: string; hasWorked: boolean }) => {
                 if (data.requestId === requestId) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     this._eventEmitter.off('hasWorkedCallsignResponse' as any, responseHandler);
                     resolve(data.hasWorked);
                 }
             };
 
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this._eventEmitter.on('hasWorkedCallsignResponse' as any, responseHandler);
 
             // 发射查询事件
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this._eventEmitter.emit('checkHasWorkedCallsign' as any, {
                 operatorId: this._config.id,
                 callsign,
@@ -314,6 +323,7 @@ export class RadioOperator {
 
             // 设置超时（避免永久等待）
             setTimeout(() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 this._eventEmitter.off('hasWorkedCallsignResponse' as any, responseHandler);
                 resolve(false); // 默认返回false
             }, 1000);
@@ -339,32 +349,44 @@ export class RadioOperator {
     
     /**
      * 通知slots更新
+     *
+     * 注意：这个事件不在 DigitalRadioEngineEvents 中定义，因为它是内部操作员事件
      */
-    notifySlotsUpdated(slots: any): void {
+    notifySlotsUpdated(slots: OperatorSlots): void {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this._eventEmitter.emit('operatorSlotsUpdated' as any, {
             operatorId: this._config.id,
             slots
         });
     }
-    
+
     /**
      * 添加slots更新监听器
+     *
+     * 注意：这个事件不在 DigitalRadioEngineEvents 中定义，因为它是内部操作员事件
      */
-    addSlotsUpdateListener(callback: (data: { operatorId: string; slots: any }) => void): void {
+    addSlotsUpdateListener(callback: (data: { operatorId: string; slots: OperatorSlots }) => void): void {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this._eventEmitter.on('operatorSlotsUpdated' as any, callback);
     }
-    
+
     /**
      * 添加状态变化监听器
+     *
+     * 注意：这个事件不在 DigitalRadioEngineEvents 中定义，因为它是内部操作员事件
      */
     addStateChangeListener(callback: (data: { operatorId: string; state: string }) => void): void {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this._eventEmitter.on('operatorStateChanged' as any, callback);
     }
 
     /**
      * 通知状态变化（发射状态等）
+     *
+     * 注意：这个事件不在 DigitalRadioEngineEvents 中定义，因为它是内部操作员事件
      */
     private notifyStatusChanged(): void {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this._eventEmitter.emit('operatorStatusChanged' as any, {
             operatorId: this._config.id,
             isTransmitting: this._isTransmitting,
@@ -374,8 +396,11 @@ export class RadioOperator {
 
     /**
      * 通知状态变化
+     *
+     * 注意：这个事件不在 DigitalRadioEngineEvents 中定义，因为它是内部操作员事件
      */
     notifyStateChanged(state: string): void {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this._eventEmitter.emit('operatorStateChanged' as any, {
             operatorId: this._config.id,
             state

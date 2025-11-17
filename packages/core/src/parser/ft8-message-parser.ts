@@ -6,9 +6,6 @@ const BASE_CALLSIGN_REGEX = /^[A-Z0-9]{1,6}$/;
 // 完整呼号正则表达式（包括前缀和后缀）
 const FULL_CALLSIGN_REGEX = /^[A-Z0-9]{1,8}(\/[A-Z0-9]{1,8})*$/;
 
-// 标准呼号正则表达式（2-6位，最多一个数字位于第2-4位，支持/数字或/字母后缀）
-const STANDARD_CALLSIGN_REGEX = /^[A-Z0-9]{2,6}(\/[0-9]|\/[A-Z])?$/;
-
 // 网格定位正则表达式（4位或6位）
 const GRID_REGEX = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
 
@@ -93,7 +90,7 @@ export class FT8MessageParser {
     switch (message.type) {
       case FT8MessageType.CQ:
         // CQ 消息中，如果包含网格，非标准呼号需要包裹
-        return !!(message as any).grid;
+        return !!('grid' in message && message.grid);
 
       case FT8MessageType.CALL:
       case FT8MessageType.SIGNAL_REPORT:
@@ -101,7 +98,7 @@ export class FT8MessageParser {
       case FT8MessageType.RRR:
       case FT8MessageType.SEVENTY_THREE:
         // 其他消息类型中，如果包含网格或报告，非标准呼号需要包裹
-        return !!((message as any).grid || (message as any).report);
+        return !!(('grid' in message && message.grid) || ('report' in message && message.report));
 
       default:
         return false;
@@ -184,7 +181,7 @@ export class FT8MessageParser {
    * 格式: CQ [FLAG] CALLSIGN [GRID]
    * 说明: FLAG 常见为 DX/NA/EU/AS/AF/OC/SA/JA/TEST/POTA 等，仅由字母组成
    */
-  private static parseCQMessage(parts: string[], __rawMessage: string): FT8Message {
+  private static parseCQMessage(parts: string[], _rawMessage: string): FT8Message {
     let callsignIndex = 1;
     let flag: string | undefined;
 

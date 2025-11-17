@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// AudioMonitorWSServer - WebSocket消息处理需要使用any
+
 /**
  * 音频监听WebSocket服务器
  * 专门用于传输二进制音频数据，与控制WebSocket分离
@@ -41,7 +44,7 @@ export class AudioMonitorWSServer {
     });
 
     // 音频WebSocket只接收二进制数据，不处理文本消息
-    ws.on('message', (data: any) => {
+    ws.on('message', (_data: any) => {
       console.warn(`⚠️ [AudioMonitorWS] 客户端 ${clientId} 发送了消息（音频WS不应接收消息）`);
     });
   }

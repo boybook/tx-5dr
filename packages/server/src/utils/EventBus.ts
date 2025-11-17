@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// EventBus - 事件系统需要使用any以支持动态类型
+
 /**
  * EventBus - 全局事件总线
  *

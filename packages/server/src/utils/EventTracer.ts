@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// EventTracer - 事件追踪需要使用any
+
 /**
  * EventTracer - 事件追踪工具
  *

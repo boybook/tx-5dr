@@ -45,8 +45,8 @@ export class SpectrumAnalyzer {
     
     // 确保数据长度是FFT大小的整数倍
     const numSegments = Math.floor(resampledData.length / this.config.fftSize);
-    const processLength = numSegments * this.config.fftSize;
-    
+    const _processLength = numSegments * this.config.fftSize;
+
     // 取最后一个完整的FFT段
     const processData = resampledData.slice(-this.config.fftSize);
 

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
-import { useRadioState, useConnection, useOperators, useCurrentOperatorId } from '../store/radioStore';
+import { useRadioState, useConnection } from '../store/radioStore';
 import { RadioOperator } from './RadioOperator';
 import { hasOperatorPreferences } from '../utils/operatorPreferences';
 

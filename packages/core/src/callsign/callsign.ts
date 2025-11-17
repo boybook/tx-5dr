@@ -405,10 +405,24 @@ class LRU<K, V> {
   }
 }
 
+// DXCC 实体接口定义
+interface DXCCEntity {
+  entityCode: number;
+  name: string;
+  prefix?: string;
+  prefixRegex?: string;
+  flag?: string;
+  continent?: string[];
+  cqZone?: number;
+  ituZone?: number;
+  deleted?: boolean;
+  countryZh?: string;
+}
+
 // 前缀Trie结构（字符图）
 interface PrefixTrieNode {
   c: Map<string, PrefixTrieNode>; // children
-  e?: any; // entity at terminal
+  e?: DXCCEntity | DXCCEntity[]; // entity or entities at terminal (支持单个或多个实体)
   p?: string; // prefix at terminal
 }
 function createTrieNode(): PrefixTrieNode {
@@ -737,15 +751,15 @@ class RussiaCallsignParser {
 
 // DXCC 数据索引
 class DXCCIndex {
-  private entityMap: Map<number, any>;
-  private prefixRegexMap: Map<RegExp, any>;
-  private prefixMap: Map<string, any>;
-  private countryNameMap: Map<string, any>;
+  private entityMap: Map<number, DXCCEntity>;
+  private prefixRegexMap: Map<RegExp, DXCCEntity>;
+  private prefixMap: Map<string, DXCCEntity>;
+  private countryNameMap: Map<string, DXCCEntity>;
   // 基于字符的前缀Trie，用于最长前缀匹配（比遍历更高效）
   private prefixTrie: PrefixTrieNode;
   // 结果缓存，减少重复解析成本
   private prefixLRU: LRU<string, string>;
-  private entityLRU: LRU<string, any>;
+  private entityLRU: LRU<string, DXCCEntity>;
   // 实体优先级评分缓存（用于前缀冲突时的优先级排序）
   private entityPriorityScores: Map<number, number>;
 
@@ -776,26 +790,26 @@ class DXCCIndex {
    * 4. JSON顺序 (10%)：先出现的实体优先
    */
   private calculateEntityPriorities(): void {
-    const entities = dxccData.dxcc.filter((e: any) => !e.deleted);
+    const entities = (dxccData.dxcc as DXCCEntity[]).filter((e) => !e.deleted);
 
     // 计算归一化所需的最大最小值
-    const prefixCounts = entities.map((e: any) =>
+    const prefixCounts = entities.map((e) =>
       e.prefix ? e.prefix.split(',').length : 0
     );
     const maxPrefixes = Math.max(...prefixCounts);
 
-    const entityCodes = entities.map((e: any) => e.entityCode);
+    const entityCodes = entities.map((e) => e.entityCode);
     const maxCode = Math.max(...entityCodes);
     const minCode = Math.min(...entityCodes);
 
     const regexLengths = entities
-      .map((e: any) => e.prefixRegex?.length || 0)
-      .filter((l: number) => l > 0);
+      .map((e) => e.prefixRegex?.length || 0)
+      .filter((l) => l > 0);
     const maxRegexLength = Math.max(...regexLengths);
     const minRegexLength = Math.min(...regexLengths);
 
     // 为每个实体计算优先级评分
-    entities.forEach((entity: any, index: number) => {
+    entities.forEach((entity, index: number) => {
       const prefixCount = entity.prefix ? entity.prefix.split(',').length : 0;
 
       // 1. 前缀得分 (0-60)，混合策略
@@ -855,7 +869,7 @@ class DXCCIndex {
 
       // 前缀索引（在初始化阶段完成 split/trim 并构建 Trie）
       if (entity.prefix) {
-        const prefixes = entity.prefix.split(',').map((p: string) => p.trim()).filter(Boolean);
+        const prefixes = entity.prefix.split(',').map((p) => p.trim()).filter(Boolean);
         for (const prefix of prefixes) {
           this.prefixMap.set(prefix, entity);
           this.insertIntoTrie(prefix, entity);
@@ -868,7 +882,7 @@ class DXCCIndex {
    * 向 Trie 中插入前缀和对应的实体
    * 支持多实体共享同一前缀，使用优先级评分进行排序
    */
-  private insertIntoTrie(prefix: string, entity: any): void {
+  private insertIntoTrie(prefix: string, entity: DXCCEntity): void {
     let node = this.prefixTrie;
     for (let i = 0; i < prefix.length; i++) {
       const ch = prefix[i];
@@ -899,7 +913,7 @@ class DXCCIndex {
   /**
    * 按优先级评分对实体数组进行排序（降序）
    */
-  private sortEntitiesByPriority(entities: any[]): void {
+  private sortEntitiesByPriority(entities: DXCCEntity[]): void {
     entities.sort((a, b) => {
       const scoreA = this.entityPriorityScores.get(a.entityCode) || 0;
       const scoreB = this.entityPriorityScores.get(b.entityCode) || 0;
@@ -911,7 +925,7 @@ class DXCCIndex {
    * 在 Trie 中进行最长前缀匹配
    * 如果节点包含多个实体（数组），返回优先级最高的（数组第一个元素）
    */
-  private longestTrieMatch(callsign: string): { prefix: string | null; entity: any | null } {
+  private longestTrieMatch(callsign: string): { prefix: string | null; entity: DXCCEntity | null } {
     // 仅做一次清洗：转大写+去除 '/...'
     const upper = callsign.toUpperCase();
     const slashIdx = upper.indexOf('/');
@@ -926,7 +940,7 @@ class DXCCIndex {
 
     let node = this.prefixTrie;
     let lastPrefix: string | null = null;
-    let lastEntity: any | null = null;
+    let lastEntity: DXCCEntity | null = null;
 
     for (let i = 0; i < clean.length; i++) {
       const ch = clean[i];
@@ -949,7 +963,7 @@ class DXCCIndex {
     return prefix || null;
   }
 
-  public findEntityByCallsign(callsign: string): any {
+  public findEntityByCallsign(callsign: string): DXCCEntity | null {
     if (!callsign) return null;
 
     const upperCallsign = callsign.toUpperCase();
@@ -1032,15 +1046,15 @@ class DXCCIndex {
     return null;
   }
 
-  public getEntityByCode(code: number): any {
+  public getEntityByCode(code: number): DXCCEntity | undefined {
     return this.entityMap.get(code);
   }
 
-  public getEntityByName(name: string): any {
+  public getEntityByName(name: string): DXCCEntity | undefined {
     return this.countryNameMap.get(name);
   }
 
-  public getAllEntities(): any[] {
+  public getAllEntities(): DXCCEntity[] {
     return Array.from(this.entityMap.values());
   }
 }
@@ -1296,7 +1310,7 @@ export function parseCountryFlag(message: string): string | undefined {
 export function getSupportedPrefixes(): string[] {
   return Array.from(dxccIndex.getAllEntities())
     .filter(entity => !entity.deleted && entity.prefix)
-    .flatMap(entity => entity.prefix.split(',').map((p: string) => p.trim()));
+    .flatMap(entity => entity.prefix!.split(',').map((p: string) => p.trim()));
 }
 
 /**
@@ -1308,8 +1322,8 @@ export function getSupportedCountries(): Array<{ country: string; flag: string; 
     .filter(entity => !entity.deleted)
     .map(entity => ({
       country: entity.name,
-      flag: entity.flag,
-      prefixes: entity.prefix ? entity.prefix.split(',').map((p: string) => p.trim()) : []
+      flag: entity.flag || '',
+      prefixes: entity.prefix ? entity.prefix.split(',').map((p) => p.trim()) : []
     }));
 }
 
@@ -1318,7 +1332,7 @@ export function getSupportedCountries(): Array<{ country: string; flag: string; 
  * @param callsign 呼号
  * @returns 前缀信息
  */
-export function getPrefixInfo(callsign: string): any | null {
+export function getPrefixInfo(callsign: string): DXCCEntity | null {
   if (!callsign) return null;
   const entity = dxccIndex.findEntityByCallsign(callsign);
   return entity;

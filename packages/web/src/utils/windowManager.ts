@@ -44,7 +44,9 @@ export function openLogbookWindow(options: LogbookWindowOptions): void {
 function openElectronLogbookWindow(queryString: string): void {
   try {
     // 检查是否有可用的Electron IPC
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof window !== 'undefined' && (window as any).electronAPI?.window?.openLogbookWindow) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).electronAPI.window.openLogbookWindow(queryString);
     } else {
       console.warn('Electron IPC不可用，回退到Web模式');

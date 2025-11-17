@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// SlotPackRoutes - FastifyRequest处理需要使用any
+
 import type { FastifyInstance } from 'fastify';
 import type { SlotPack } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';

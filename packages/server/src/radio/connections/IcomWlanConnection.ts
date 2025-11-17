@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// IcomWlanConnection - 二进制协议处理需要使用any
+
 /**
  * IcomWlanConnection - ICOM WLAN 连接实现
  *

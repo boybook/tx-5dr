@@ -2,10 +2,10 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faWifi, faExclamationTriangle, faHeadphones, faBan, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faBan, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState } from '../store/radioStore';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor, TunerStatus, TunerCapabilities } from '@tx5dr/contracts';
+import type { ModeDescriptor, TunerStatus, TunerCapabilities, ConnectionState, RadioState } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { useState, useEffect } from 'react';
 
@@ -18,16 +18,17 @@ interface FrequencyOption {
   radioMode?: string; // 电台调制模式，如 USB, LSB
 }
 
-export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
+export const SelectorIcon = (_props: React.SVGProps<SVGSVGElement>) => {
   return (
     <FontAwesomeIcon icon={faChevronDown} className="text-default-400" />
   );
 };
 
 // 服务器和电台连接状态指示器组件
-const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ connection, radio }) => {
+const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState }; radio: { state: RadioState } }> = ({ connection, radio }) => {
   const [isConnectingRadio, setIsConnectingRadio] = useState(false);
   const [isManualServerConnecting, setIsManualServerConnecting] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
 
   // 加载支持的电台列表
@@ -81,6 +82,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     const wsClient = connection.radioService.wsClientInstance;
 
     // 电台状态变化 - 只处理本地UI状态，全局状态由radioStore处理
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleRadioStatusChanged = (data: any) => {
       console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
 
@@ -89,6 +91,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     };
 
     // 电台发射中断开连接
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleRadioDisconnectedDuringTransmission = (data: any) => {
       console.warn('🚨 [RadioControl] 电台发射中断开连接:', data);
 
@@ -191,6 +194,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     setIsManualServerConnecting(true);
     try {
       await connection.radioService.connect();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       console.error('手动重新连接服务器失败:', error);
       // 组合更明确的引导文案
@@ -332,7 +336,7 @@ interface RadioControlProps {
 export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings }) => {
   const connection = useConnection();
   const radio = useRadioState();
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [_isConnecting, setIsConnecting] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeDescriptor[]>([]);
   const [isLoadingModes, setIsLoadingModes] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -362,7 +366,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [customFrequencyInput, setCustomFrequencyInput] = useState('');
   const [customFrequencyError, setCustomFrequencyError] = useState('');
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
-  const [customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
+  const [_customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
 
   // 天调相关状态
@@ -431,6 +435,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         console.log('📦 收到频率列表响应:', response);
         
         if (response.success && Array.isArray(response.presets)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const frequencyOptions: FrequencyOption[] = response.presets.map((preset: any) => ({
             key: String(preset.frequency),
             label: preset.description || `${preset.band} ${(preset.frequency / 1000000).toFixed(3)} MHz`,
@@ -501,7 +506,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
 
   // 连接到服务器
-  const handleConnect = async () => {
+  const _handleConnect = async () => {
     if (!connection.state.radioService) {
       console.warn('⚠️ RadioService未初始化');
       return;
@@ -555,6 +560,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   };
 
   // 处理模式切换
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleModeChange = async (keys: any) => {
     if (!connection.state.isConnected) {
       console.warn('⚠️ 未连接到服务器，无法切换模式');
@@ -862,6 +868,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     try {
       console.log(`🔄 自动设置频率: ${frequency.label} (${frequency.frequency} Hz)${frequency.radioMode ? ` [${frequency.radioMode}]` : ''}`);
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const params: any = {
         frequency: frequency.frequency,
         mode: frequency.mode,
@@ -902,6 +909,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   }, [filteredFrequencies]);
 
   // 处理频率切换
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFrequencyChange = async (keys: any) => {
     if (!connection.state.isConnected) {
       console.warn('⚠️ 未连接到服务器，无法切换频率');
@@ -931,6 +939,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       console.log(`🔄 切换频率到: ${selectedFrequency.label} (${selectedFrequency.frequency} Hz)${selectedFrequency.radioMode ? ` [${selectedFrequency.radioMode}]` : ''}`);
 
       // 设置频率和电台调制模式
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const params: any = {
         frequency: selectedFrequency.frequency,
         mode: selectedFrequency.mode,
@@ -1002,6 +1011,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     // 直接订阅 WSClient 事件
     const wsClient = connection.state.radioService.wsClientInstance;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleVolumeGainChanged = (data: any) => {
       console.log('🔊 收到服务器音量变化:', data);
 
@@ -1050,26 +1060,27 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     // 用于存储当前采样率（从元数据获取）
     let currentSampleRate: number | null = null;
     let lastSequence = -1;
-    let frameCount = 0;
-    let droppedFrames = 0;
+    let _frameCount = 0;
+    let _droppedFrames = 0;
 
     // 处理音频元数据（从控制WebSocket接收）
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleAudioMonitorData = async (data: any) => {
-      const t_receive = performance.now(); // 接收时间戳
+      const _t_receive = performance.now(); // 接收时间戳
 
       // 检测丢帧（通过序列号）
       if (data.sequence !== undefined) {
         if (lastSequence >= 0 && data.sequence !== lastSequence + 1) {
           const dropped = data.sequence - lastSequence - 1;
-          droppedFrames += dropped;
+          _droppedFrames += dropped;
         }
         lastSequence = data.sequence;
       }
 
       // 计算端到端延迟（服务端timestamp到客户端接收）
       if (data.timestamp) {
-        const latency = Date.now() - data.timestamp;
-        frameCount++;
+        const _latency = Date.now() - data.timestamp;
+        _frameCount++;
       }
 
       if (!data.sampleRate) {
@@ -1111,7 +1122,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     // 处理二进制音频数据（从音频专用WebSocket接收）
     const handleBinaryAudioData = (buffer: ArrayBuffer) => {
-      const t_receive = performance.now(); // 接收时间戳
+      const _t_receive = performance.now(); // 接收时间戳
 
       // 确保AudioContext和Worklet已就绪
       if (!workletNodeRef.current) {
@@ -1124,12 +1135,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         type: 'audioData',
         buffer: buffer,
         sampleRate: currentSampleRate || 48000,
-        clientTimestamp: t_receive // 添加客户端时间戳
+        clientTimestamp: _t_receive // 添加客户端时间戳
       }, [buffer]); // Transferable objects - 零拷贝传输
     };
 
     // 处理统计信息（可选，AudioWorklet也会生成统计）
-    const handleAudioMonitorStats = (stats: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handleAudioMonitorStats = (_stats: any) => {
       // 服务端的统计信息可以作为补充
     };
 
@@ -1172,6 +1184,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     // 直接订阅 WSClient 事件
     const wsClient = connection.state.radioService.wsClientInstance;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleSystemStatus = (status: any) => {
       if (status.volumeGain !== undefined) {
         // 确保系统状态中的gain值有效
@@ -1206,6 +1219,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     // 直接订阅 WSClient 事件
     const wsClient = connection.state.radioService.wsClientInstance;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleFrequencyChanged = (data: any) => {
       console.log('📻 收到频率变化广播:', data);
 
@@ -1236,9 +1250,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wsClient.onWSEvent('frequencyChanged', handleFrequencyChanged as any);
 
     return () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       wsClient.offWSEvent('frequencyChanged', handleFrequencyChanged as any);
     };
   }, [connection.state.radioService, availableFrequencies]);
@@ -1589,7 +1605,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             isDisabled={!connection.state.isConnected || isLoadingFrequencies || !radio.state.currentMode}
             isLoading={isLoadingFrequencies}
             onSelectionChange={handleFrequencyChange}
-            renderValue={(items: any) => {
+            renderValue={(_items: FrequencyOption) => {
               // 直接在 filteredFrequencies 中查找（现在包含了自定义频率）
               const selectedFreq = filteredFrequencies.find(f => f.key === currentFrequency);
               return selectedFreq ? <span className="font-bold text-lg">{selectedFreq.label}</span> : null;

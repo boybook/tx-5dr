@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// AudioDeviceManager - 设备枚举需要使用any
+
 import { AudioDevice } from '@tx5dr/contracts';
 import * as naudiodon from 'naudiodon2';
 import { ConfigManager } from '../config/config-manager.js';

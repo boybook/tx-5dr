@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useEffect, useRef } from 'react';
 import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import type { RadioService } from '../services/radioService';
@@ -36,7 +37,8 @@ export function useWSEvent<K extends keyof DigitalRadioEngineEvents>(
     const wsClient = radioService.wsClientInstance;
 
     // 创建包装函数，使用最新的 handler
-    const wrappedHandler: DigitalRadioEngineEvents[K] = ((...args: any[]) => {
+    const wrappedHandler: DigitalRadioEngineEvents[K] = ((...args: unknown[]) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (handlerRef.current as any)(...args);
     }) as DigitalRadioEngineEvents[K];
 
@@ -47,7 +49,7 @@ export function useWSEvent<K extends keyof DigitalRadioEngineEvents>(
     return () => {
       wsClient.offWSEvent(eventName, wrappedHandler);
     };
-  }, [radioService, eventName, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [radioService, eventName, ...deps]);
 }
 
 /**
@@ -82,26 +84,29 @@ export function useWSEvents(
     }
 
     const wsClient = radioService.wsClientInstance;
-    const wrappedHandlers = new Map<keyof DigitalRadioEngineEvents, (...args: any[]) => void>();
+    const wrappedHandlers = new Map<keyof DigitalRadioEngineEvents, (...args: unknown[]) => void>();
 
     // 为每个事件创建包装函数并订阅
-    Object.entries(eventHandlers).forEach(([eventName, handler]) => {
-      const wrappedHandler = (...args: any[]) => {
+    Object.entries(eventHandlers).forEach(([eventName, _handler]) => {
+      const wrappedHandler = (...args: unknown[]) => {
         const currentHandler = handlersRef.current[eventName as keyof DigitalRadioEngineEvents];
         if (currentHandler) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (currentHandler as any)(...args);
         }
       };
 
       wrappedHandlers.set(eventName as keyof DigitalRadioEngineEvents, wrappedHandler);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       wsClient.onWSEvent(eventName as keyof DigitalRadioEngineEvents, wrappedHandler as any);
     });
 
     // 清理函数：组件卸载或依赖变化时取消所有订阅
     return () => {
       wrappedHandlers.forEach((handler, eventName) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         wsClient.offWSEvent(eventName, handler as any);
       });
     };
-  }, [radioService, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [radioService, ...deps]);
 }

@@ -1050,7 +1050,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         this.changeState('TX1');  // 呼叫他
     }
 
-    userCommand?(command: QSOCommand): any {
+    userCommand?(command: QSOCommand): unknown {
         switch (command.command) {
             case 'update_context': {
                 // 更新context

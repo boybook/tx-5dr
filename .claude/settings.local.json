@@ -12,7 +12,8 @@
       "Bash(yarn workspace @tx5dr/core:*)",
       "WebFetch(domain:www.heroui.com)",
       "WebSearch",
-      "Bash(otool:*)"
+      "Bash(otool:*)",
+      "Bash(yarn tsc:*)"
     ],
     "deny": []
   }

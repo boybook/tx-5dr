@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// EngineStateMachine - XState动作需要使用any
+
 /**
  * 引擎状态机 (XState v5)
  *

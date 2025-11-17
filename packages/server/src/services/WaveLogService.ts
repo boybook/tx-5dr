@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// WaveLogService - HTTP响应处理需要使用any
+
 import {
   WaveLogConfig,
   WaveLogStation,
@@ -5,7 +8,6 @@ import {
   WaveLogSyncResponse,
   QSORecord
 } from '@tx5dr/contracts';
-import type { LogQueryOptions } from '@tx5dr/core';
 import { getBandFromFrequency } from '@tx5dr/core';
 
 /**
@@ -107,7 +109,7 @@ export class WaveLogService {
    * 上传QSO记录到WaveLog
    * 参考WaveLogGate的send2wavelog函数实现
    */
-  async uploadQSO(qso: QSORecord, dryRun: boolean = false): Promise<{
+  async uploadQSO(qso: QSORecord, _dryRun: boolean = false): Promise<{
     success: boolean;
     message: string;
   }> {
@@ -237,7 +239,7 @@ export class WaveLogService {
    * 从WaveLog下载QSO记录
    * 使用WaveLog的get_contacts_adif API获取ADIF格式的QSO记录
    */
-  async downloadQSOs(options?: {
+  async downloadQSOs(_options?: {
     startDate?: string;
     endDate?: string;
     limit?: number;

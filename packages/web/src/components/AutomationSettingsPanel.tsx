@@ -1,10 +1,7 @@
 import * as React from 'react';
 import { Listbox, ListboxItem } from "@heroui/react";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faRobot } from '@fortawesome/free-solid-svg-icons';
 import { useOperators, useCurrentOperatorId } from '../store/radioStore';
 import { api } from '@tx5dr/core';
-import type { OperatorStatus } from '@tx5dr/contracts';
 import type { Selection } from "@heroui/react";
 
 interface AutomationSettingsPanelProps {
@@ -12,7 +9,7 @@ interface AutomationSettingsPanelProps {
   onClose: () => void;
 }
 
-export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ isOpen, onClose }) => {
+export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ isOpen, _onClose }) => {
   const { operators } = useOperators();
   const { currentOperatorId } = useCurrentOperatorId();
   const [loading, setLoading] = React.useState(false);

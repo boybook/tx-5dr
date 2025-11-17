@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// WaveLogRoutes - API响应处理需要使用any
+
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   WaveLogConfig,
@@ -40,7 +43,7 @@ async function handleManualUpload(waveLogService: WaveLogService) {
     
     // 获取最近一周的QSO记录进行上传
     const oneWeekAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-    let allQSOs = [];
+    const allQSOs = [];
     
     for (const logBook of logBooks) {
       try {

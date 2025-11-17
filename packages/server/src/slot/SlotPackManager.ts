@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// SlotPackManager - 事件处理需要使用any
+
 import { EventEmitter } from 'eventemitter3';
 import type { SlotPack, DecodeResult, FrameMessage, ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
@@ -270,9 +273,9 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     for (let i = 0; i < frames.length; i++) {
       const frame = frames[i];
       if (!frame) continue; // 跳过 undefined 帧
-      
+
       const message = frame.message.trim();
-      
+
       if (!messageGroups.has(message)) {
         messageGroups.set(message, { frames: [], firstIndex: i });
       }

@@ -1,5 +1,5 @@
 import { ILogProvider, CallsignAnalysis } from '@tx5dr/core';
-import { QSORecord } from '@tx5dr/contracts';
+
 import { ADIFLogProvider } from './ADIFLogProvider.js';
 import { getDataFilePath } from '../utils/app-paths.js';
 

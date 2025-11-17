@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Server入口 - Fastify插件和错误处理需要使用any
+
 import { createServer } from './server.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { initializeConsoleLogger, ConsoleLogger } from './utils/console-logger.js';

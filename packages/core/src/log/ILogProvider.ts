@@ -164,7 +164,7 @@ export interface ILogProvider {
    * 初始化日志Provider
    * @param options 初始化选项
    */
-  initialize(options?: any): Promise<void>;
+  initialize(options?: Record<string, unknown>): Promise<void>;
   
   /**
    * 添加QSO记录

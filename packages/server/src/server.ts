@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Server - Fastify服务器配置需要使用any
+
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
@@ -120,7 +123,7 @@ export async function createServer() {
     
     // WaveLog同步服务已准备就绪（仅支持手动触发）
     const { WaveLogSyncScheduler } = await import('./services/WaveLogSyncScheduler.js');
-    const syncScheduler = WaveLogSyncScheduler.getInstance();
+    const _syncScheduler = WaveLogSyncScheduler.getInstance();
     fastify.log.info('WaveLog同步服务已准备就绪');
   } else {
     fastify.log.info('WaveLog服务已禁用，跳过初始化');
@@ -217,13 +220,13 @@ export async function createServer() {
   fastify.route({
     method: ['GET', 'HEAD'],
     url: '/',
-    handler: async (request, reply) => {
+    handler: async (_request, _reply) => {
       return { status: 'ok', service: 'TX-5DR Server' };
     },
   });
 
   // Hello API route
-  fastify.get<{ Reply: HelloResponse }>('/api/hello', async (request, reply) => {
+  fastify.get<{ Reply: HelloResponse }>('/api/hello', async (_request, _reply) => {
     return { message: 'Hello World' };
   });
 

@@ -196,14 +196,17 @@ export class ResourceManager {
   /**
    * 注册资源（IResource形式）
    */
+  // eslint-disable-next-line no-dupe-class-members
   register(config: ResourceConfig): void;
   /**
    * 注册资源（简化的函数形式）
    */
+  // eslint-disable-next-line no-dupe-class-members
   register(config: SimplifiedResourceConfig): void;
   /**
    * 注册资源（实现）
    */
+  // eslint-disable-next-line no-dupe-class-members
   register(config: ResourceConfig | SimplifiedResourceConfig): void {
     let resource: IResource;
     let name: string;

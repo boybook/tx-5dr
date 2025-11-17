@@ -2,8 +2,6 @@ import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'rea
 import {
   Button,
   Input,
-  Select,
-  SelectItem,
   Switch,
   Card,
   CardBody,
@@ -21,19 +19,17 @@ import {
   Tab
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faEdit, faTrash, faPlay, faStop, faSave, faTimes, faUsers, faToggleOn, faToggleOff, faCog } from '@fortawesome/free-solid-svg-icons';
+import { faPlus, faEdit, faTrash, faSave, faTimes, faUsers, faToggleOn, faToggleOff, faCog } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
-import type { 
-  RadioOperatorConfig, 
+import type {
+  RadioOperatorConfig,
   CreateRadioOperatorRequest,
   UpdateRadioOperatorRequest
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { useConnection } from '../store/radioStore';
 import {
-  getOperatorPreferences,
   setOperatorEnabled,
-  setAllOperatorsEnabled,
   isOperatorEnabled,
   getEnabledOperatorIds
 } from '../utils/operatorPreferences';
@@ -240,7 +236,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     };
 
     // 更新编辑表单数据
-    const updateEditFormData = (operatorId: string, field: string, value: any) => {
+    const updateEditFormData = (operatorId: string, field: string, value: string | number | boolean) => {
       setEditFormData(prev => ({
         ...prev,
         [operatorId]: {
