@@ -26,32 +26,9 @@ export const SelectorIcon = (props: React.SVGProps<SVGSVGElement>) => {
 
 // 服务器和电台连接状态指示器组件
 const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ connection, radio }) => {
-  const [currentTime, setCurrentTime] = useState(Date.now());
   const [isConnectingRadio, setIsConnectingRadio] = useState(false);
   const [isManualServerConnecting, setIsManualServerConnecting] = useState(false);
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
-  
-  // 电台重连状态
-  const [radioReconnectInfo, setRadioReconnectInfo] = useState({
-    isReconnecting: false,
-    reconnectAttempts: 0,
-    maxReconnectAttempts: 5,
-    hasReachedMaxAttempts: false,
-    nextAttemptAt: 0
-  });
-
-  // 每秒更新当前时间，用于重连倒计时
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (connection.isReconnecting && connection.lastReconnectInfo) {
-      timer = setInterval(() => {
-        setCurrentTime(Date.now());
-      }, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [connection.isReconnecting, connection.lastReconnectInfo]);
 
   // 加载支持的电台列表
   useEffect(() => {
@@ -96,80 +73,19 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     loadRadioStatus();
   }, [connection.isConnected, connection.radioService]);
 
-  // 监听电台重连事件（仅处理UI相关的本地状态，不处理全局状态）
+  // 监听电台状态变化事件
   useEffect(() => {
     if (!connection.radioService) return;
 
     // 直接订阅 WSClient 事件
     const wsClient = connection.radioService.wsClientInstance;
 
-    // 电台重连中
-    const handleRadioReconnecting = (data: any) => {
-      console.log('🔄 [RadioControl] 电台重连中:', data);
-      const reconnectInfo = data.reconnectInfo || {};
-      setRadioReconnectInfo(prev => ({
-        ...prev,
-        isReconnecting: true,
-        reconnectAttempts: data.attempt || 0,
-        maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
-        hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
-        nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
-      }));
-    };
-
     // 电台状态变化 - 只处理本地UI状态，全局状态由radioStore处理
     const handleRadioStatusChanged = (data: any) => {
       console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
 
-      // 清除手动重连的loading状态
+      // 清除手动连接的loading状态
       setIsConnectingRadio(false);
-
-      if (data.connected) {
-        // 连接成功，清除重连状态
-        setRadioReconnectInfo(prev => ({
-          ...prev,
-          isReconnecting: false,
-          reconnectAttempts: 0,
-          hasReachedMaxAttempts: false
-        }));
-      } else {
-        // 连接断开时，如果不在重连过程中，重置重连状态
-        setRadioReconnectInfo(prev => {
-          if (!data.reconnectInfo?.isReconnecting) {
-            return {
-              ...prev,
-              isReconnecting: false,
-              hasReachedMaxAttempts: false
-            };
-          }
-          return prev;
-        });
-      }
-    };
-
-    // 电台重连停止
-    const handleRadioReconnectStopped = (data: any) => {
-      console.log('⏹️ [RadioControl] 电台重连已停止:', data);
-      const reconnectInfo = data.reconnectInfo || {};
-      setRadioReconnectInfo(prev => ({
-        ...prev,
-        isReconnecting: false,
-        hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || true,
-        maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || prev.maxReconnectAttempts
-      }));
-    };
-
-    // 电台重连失败
-    const handleRadioReconnectFailed = (data: any) => {
-      console.log('❌ [RadioControl] 电台重连失败:', data);
-      const reconnectInfo = data.reconnectInfo || {};
-      setRadioReconnectInfo(prev => ({
-        ...prev,
-        reconnectAttempts: data.attempt || prev.reconnectAttempts,
-        maxReconnectAttempts: reconnectInfo.maxReconnectAttempts || -1,
-        hasReachedMaxAttempts: reconnectInfo.hasReachedMaxAttempts || false,
-        nextAttemptAt: Date.now() + (reconnectInfo.nextReconnectDelay || 3000)
-      }));
     };
 
     // 电台发射中断开连接
@@ -193,35 +109,16 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       }, 1000);
     };
 
-    // 注册所有事件监听器
-    wsClient.onWSEvent('radioReconnecting', handleRadioReconnecting);
+    // 注册事件监听器
     wsClient.onWSEvent('radioStatusChanged', handleRadioStatusChanged);
-    wsClient.onWSEvent('radioReconnectStopped', handleRadioReconnectStopped);
-    wsClient.onWSEvent('radioReconnectFailed', handleRadioReconnectFailed);
     wsClient.onWSEvent('radioDisconnectedDuringTransmission', handleRadioDisconnectedDuringTransmission);
 
     return () => {
-      // 取消所有事件订阅
-      wsClient.offWSEvent('radioReconnecting', handleRadioReconnecting);
+      // 取消事件订阅
       wsClient.offWSEvent('radioStatusChanged', handleRadioStatusChanged);
-      wsClient.offWSEvent('radioReconnectStopped', handleRadioReconnectStopped);
-      wsClient.offWSEvent('radioReconnectFailed', handleRadioReconnectFailed);
       wsClient.offWSEvent('radioDisconnectedDuringTransmission', handleRadioDisconnectedDuringTransmission);
     };
   }, [connection.radioService]);
-
-  // 电台重连倒计时更新
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (radioReconnectInfo.isReconnecting && radioReconnectInfo.nextAttemptAt > Date.now()) {
-      timer = setInterval(() => {
-        setCurrentTime(Date.now());
-      }, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [radioReconnectInfo.isReconnecting, radioReconnectInfo.nextAttemptAt]);
 
   // 连接电台
   const handleConnectRadio = async () => {
@@ -257,35 +154,10 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     }
   };
 
-  // 手动重连电台
-  const handleManualReconnectRadio = async () => {
-    setIsConnectingRadio(true);
-    try {
-      if (connection.radioService) {
-        // 通过WebSocket发送手动重连命令
-        connection.radioService.radioManualReconnect();
-        
-        // 清除所有重连状态
-        setRadioReconnectInfo(prev => ({
-          ...prev,
-          isReconnecting: false,
-          hasReachedMaxAttempts: false,
-          reconnectAttempts: 0
-        }));
-      }
-    } catch (error) {
-      console.error('手动重连电台失败:', error);
-    }
-    // 注意：loading状态由 radioStatusChanged 事件清除，确保状态同步
-  };
 
   const getServerStatusIcon = () => {
     if (connection.isConnected) {
       return undefined;
-    } else if (connection.isReconnecting) {
-      return <Spinner size="sm" color="warning" />;
-    } else if (connection.hasReachedMaxAttempts) {
-      return <FontAwesomeIcon icon={faExclamationTriangle} className="text-danger" />;
     } else if (connection.isConnecting) {
       return <Spinner size="sm" color="primary" />;
     } else {
@@ -297,16 +169,6 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
   const getServerStatusText = () => {
     if (connection.isConnected) {
       return '服务器已连接';
-    } else if (connection.isReconnecting) {
-      const nextAttemptIn = connection.lastReconnectInfo
-        ? Math.max(0, Math.ceil((connection.lastReconnectInfo.nextAttemptAt - currentTime) / 1000))
-        : 0;
-      const attemptText = connection.maxReconnectAttempts === -1
-        ? `第${connection.reconnectAttempts}次`
-        : `${connection.reconnectAttempts}/${connection.maxReconnectAttempts}`;
-      return `服务器重连中 (${attemptText}) ${nextAttemptIn > 0 ? `${nextAttemptIn}s后重试` : ''}`;
-    } else if (connection.hasReachedMaxAttempts) {
-      return '服务器连接失败';
     } else if (connection.isConnecting) {
       return '正在连接服务器...';
     } else {
@@ -317,10 +179,6 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
   const getServerStatusColor = () => {
     if (connection.isConnected) {
       return 'text-default-500';
-    } else if (connection.isReconnecting) {
-      return 'text-warning';
-    } else if (connection.hasReachedMaxAttempts) {
-      return 'text-danger';
     } else if (connection.isConnecting) {
       return 'text-primary';
     } else {
@@ -332,10 +190,6 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     if (!connection.radioService) return;
     setIsManualServerConnecting(true);
     try {
-      // 若已停止重试或累计多次失败，重置计数器
-      if (connection.hasReachedMaxAttempts || connection.reconnectAttempts > 0) {
-        connection.radioService.resetReconnectAttempts();
-      }
       await connection.radioService.connect();
     } catch (error: any) {
       console.error('手动重新连接服务器失败:', error);
@@ -372,28 +226,12 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
     console.log('🔍 [RadioControl] 连接状态变化:', {
       前端连接后端: connection.isConnected,
       后端连接电台: radio.state.radioConnected,
-      电台配置类型: radio.state.radioConfig?.type,
-      电台重连状态: {
-        isReconnecting: radioReconnectInfo.isReconnecting,
-        hasReachedMaxAttempts: radioReconnectInfo.hasReachedMaxAttempts,
-        reconnectAttempts: radioReconnectInfo.reconnectAttempts
-      },
-      服务器重连状态: {
-        isReconnecting: connection.isReconnecting,
-        hasReachedMaxAttempts: connection.hasReachedMaxAttempts,
-        reconnectAttempts: connection.reconnectAttempts
-      }
+      电台配置类型: radio.state.radioConfig?.type
     });
   }, [
     connection.isConnected,
     radio.state.radioConnected,
-    radio.state.radioConfig?.type,
-    radioReconnectInfo.isReconnecting,
-    radioReconnectInfo.hasReachedMaxAttempts,
-    radioReconnectInfo.reconnectAttempts,
-    connection.isReconnecting,
-    connection.hasReachedMaxAttempts,
-    connection.reconnectAttempts
+    radio.state.radioConfig?.type
   ]);
 
   const getRadioDisplayText = () => {
@@ -406,7 +244,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       return <span className="text-sm text-default-500">无电台模式</span>;
     }
 
-    // 电台已连接 - 修复条件判断，只依赖radioConnected状态
+    // 电台已连接
     if (radio.state.radioConnected) {
       const displayText = radio.state.radioInfo
         ? `${radio.state.radioInfo.manufacturer} ${radio.state.radioInfo.model} 电台已连接`
@@ -436,48 +274,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
       radioModelText = '已配置电台';
     }
 
-    // 电台正在重连中
-    if (radioReconnectInfo.isReconnecting) {
-      const nextAttemptIn = radioReconnectInfo.nextAttemptAt > currentTime 
-        ? Math.ceil((radioReconnectInfo.nextAttemptAt - currentTime) / 1000) 
-        : 0;
-      const attemptText = `第${radioReconnectInfo.reconnectAttempts}次`;
-      
-      return (
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <Spinner size="sm" color="warning" />
-            <span className="text-sm text-warning">
-              电台重连中 ({attemptText}) {nextAttemptIn > 0 ? `${nextAttemptIn}s后重试` : ''}
-            </span>
-          </div>
-        </div>
-      );
-    }
-
-    // 电台重连已达最大次数
-    if (radioReconnectInfo.hasReachedMaxAttempts) {
-      return (
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <FontAwesomeIcon icon={faRadio} className="text-danger text-xs" />
-            <span className="text-sm text-danger">{radioModelText} 连接失败</span>
-          </div>
-          <Button
-            size="sm"
-            color="warning"
-            variant="flat"
-            onPress={handleManualReconnectRadio}
-            isLoading={isConnectingRadio}
-            className="h-6 px-2 text-xs"
-          >
-            {isConnectingRadio ? '重连中' : '手动重连'}
-          </Button>
-        </div>
-      );
-    }
-
-    // 电台未连接（初始状态）
+    // 电台未连接
     return (
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-1">
@@ -510,10 +307,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
           <span className={`text-sm ${getServerStatusColor()}`}>
             {getServerStatusText()}
           </span>
-          {(
-            // 当已停止自动重试，或当前既不在重连也不在连接中（包括卡住未推进的情况）时，提供手动按钮
-            connection.hasReachedMaxAttempts || (!connection.isReconnecting && !connection.isConnecting)
-          ) && (
+          {!connection.isConnecting && (
             <Button
               size="sm"
               color="primary"
@@ -522,7 +316,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: any; radio: any }> = ({ c
               isLoading={isManualServerConnecting}
               className="h-6 px-2 text-xs"
             >
-              {isManualServerConnecting ? '重连中' : '重新连接'}
+              {isManualServerConnecting ? '连接中' : '连接'}
             </Button>
           )}
         </div>
@@ -712,16 +506,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       console.warn('⚠️ RadioService未初始化');
       return;
     }
-    
+
     setIsConnecting(true);
     try {
       console.log('🔗 开始手动连接到服务器...');
-      
-      // 如果达到最大重连次数，需要重置重连计数器
-      if (connection.state.hasReachedMaxAttempts) {
-        connection.state.radioService.resetReconnectAttempts();
-      }
-      
       await connection.state.radioService.connect();
       console.log('✅ 手动连接成功');
     } catch (error) {

@@ -63,9 +63,6 @@ export enum WSMessageType {
   
   // ===== 电台连接管理 =====
   RADIO_STATUS_CHANGED = 'radioStatusChanged',
-  RADIO_RECONNECTING = 'radioReconnecting',
-  RADIO_RECONNECT_FAILED = 'radioReconnectFailed',
-  RADIO_RECONNECT_STOPPED = 'radioReconnectStopped',
   RADIO_ERROR = 'radioError',
   RADIO_MANUAL_RECONNECT = 'radioManualReconnect',
   RADIO_DISCONNECTED_DURING_TRANSMISSION = 'radioDisconnectedDuringTransmission',
@@ -107,11 +104,7 @@ export const SystemStatusSchema = z.object({
   radioConnected: z.boolean().optional(),
   radioReconnectInfo: z.object({
     isReconnecting: z.boolean(),
-    reconnectAttempts: z.number(),
-    maxReconnectAttempts: z.number(),
-    hasReachedMaxAttempts: z.boolean(),
     connectionHealthy: z.boolean(),
-    nextReconnectDelay: z.number(),
   }).optional(),
 });
 
@@ -589,77 +582,13 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
     recommendation: z.string().optional(), // 操作建议
     reconnectInfo: z.object({
       isReconnecting: z.boolean(),
-      reconnectAttempts: z.number(),
-      maxReconnectAttempts: z.number(),
-      hasReachedMaxAttempts: z.boolean(),
       connectionHealthy: z.boolean(),
-      nextReconnectDelay: z.number(),
     }),
   }),
 });
 
 export type WSRadioStatusChangedMessage = z.infer<typeof WSRadioStatusChangedMessageSchema>;
 
-/**
- * 电台重连中消息
- */
-export const WSRadioReconnectingMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.RADIO_RECONNECTING),
-  data: z.object({
-    attempt: z.number(),
-    reconnectInfo: z.object({
-      isReconnecting: z.boolean(),
-      reconnectAttempts: z.number(),
-      maxReconnectAttempts: z.number(),
-      hasReachedMaxAttempts: z.boolean(),
-      connectionHealthy: z.boolean(),
-      nextReconnectDelay: z.number(),
-    }),
-  }),
-});
-
-export type WSRadioReconnectingMessage = z.infer<typeof WSRadioReconnectingMessageSchema>;
-
-/**
- * 电台重连失败消息
- */
-export const WSRadioReconnectFailedMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.RADIO_RECONNECT_FAILED),
-  data: z.object({
-    error: z.string(),
-    attempt: z.number(),
-    reconnectInfo: z.object({
-      isReconnecting: z.boolean(),
-      reconnectAttempts: z.number(),
-      maxReconnectAttempts: z.number(),
-      hasReachedMaxAttempts: z.boolean(),
-      connectionHealthy: z.boolean(),
-      nextReconnectDelay: z.number(),
-    }),
-  }),
-});
-
-export type WSRadioReconnectFailedMessage = z.infer<typeof WSRadioReconnectFailedMessageSchema>;
-
-/**
- * 电台重连停止消息
- */
-export const WSRadioReconnectStoppedMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.RADIO_RECONNECT_STOPPED),
-  data: z.object({
-    maxAttempts: z.number(),
-    reconnectInfo: z.object({
-      isReconnecting: z.boolean(),
-      reconnectAttempts: z.number(),
-      maxReconnectAttempts: z.number(),
-      hasReachedMaxAttempts: z.boolean(),
-      connectionHealthy: z.boolean(),
-      nextReconnectDelay: z.number(),
-    }),
-  }),
-});
-
-export type WSRadioReconnectStoppedMessage = z.infer<typeof WSRadioReconnectStoppedMessageSchema>;
 
 /**
  * 电台错误消息
@@ -670,11 +599,7 @@ export const WSRadioErrorMessageSchema = WSBaseMessageSchema.extend({
     error: z.string(),
     reconnectInfo: z.object({
       isReconnecting: z.boolean(),
-      reconnectAttempts: z.number(),
-      maxReconnectAttempts: z.number(),
-      hasReachedMaxAttempts: z.boolean(),
       connectionHealthy: z.boolean(),
-      nextReconnectDelay: z.number(),
     }),
   }),
 });
@@ -882,9 +807,6 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   
   // 电台连接管理消息
   WSRadioStatusChangedMessageSchema,
-  WSRadioReconnectingMessageSchema,
-  WSRadioReconnectFailedMessageSchema,
-  WSRadioReconnectStoppedMessageSchema,
   WSRadioErrorMessageSchema,
   WSRadioManualReconnectMessageSchema,
   WSRadioDisconnectedDuringTransmissionMessageSchema,

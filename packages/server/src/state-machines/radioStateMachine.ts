@@ -5,14 +5,12 @@
  * - disconnected: 断开连接
  * - connecting: 连接中
  * - connected: 已连接
- * - reconnecting: 重连中
+ * - reconnecting: 重连中（仅手动触发）
  * - error: 错误状态
  *
  * 核心特性：
- * 1. 自动重连机制（支持无限重连或有限次数）
+ * 1. 手动触发重连（用户点击连接按钮）
  * 2. 连接健康检查
- * 3. 指数退避重连延迟
- * 4. 首次连接失败也能进入重连循环
  */
 
 import { setup, createActor, fromPromise, type ActorRefFrom } from 'xstate';
@@ -33,8 +31,6 @@ export function createRadioStateMachine(
   input: RadioInput,
   options: StateMachineOptions = {}
 ) {
-  const maxReconnectAttempts = input.maxReconnectAttempts ?? -1; // -1 表示无限重连
-  const reconnectDelay = input.reconnectDelay ?? 3000; // 默认3秒
   const healthCheckInterval = input.healthCheckInterval ?? 3000; // 默认3秒
 
   const machine = setup({
@@ -102,7 +98,6 @@ export function createRadioStateMachine(
       recordConnectedTime: ({ context }) => {
         context.connectedTimestamp = Date.now();
         context.isHealthy = true;
-        context.reconnectAttempts = 0; // 重置重连次数
         console.log('⏱️  [RadioStateMachine] 记录连接时间');
       },
 
@@ -122,27 +117,6 @@ export function createRadioStateMachine(
         }
       },
 
-      /**
-       * 增加重连次数
-       */
-      incrementReconnectAttempts: ({ context }) => {
-        context.reconnectAttempts += 1;
-        console.log(
-          `🔄 [RadioStateMachine] 重连尝试 ${context.reconnectAttempts}/${
-            context.maxReconnectAttempts === -1
-              ? '∞'
-              : context.maxReconnectAttempts
-          }`
-        );
-      },
-
-      /**
-       * 重置重连次数
-       */
-      resetReconnectAttempts: ({ context }) => {
-        context.reconnectAttempts = 0;
-        console.log('🔄 [RadioStateMachine] 重置重连次数');
-      },
 
       /**
        * 设置错误
@@ -220,26 +194,6 @@ export function createRadioStateMachine(
     },
     guards: {
       /**
-       * 检查是否可以重连
-       */
-      canReconnect: ({ context }) => {
-        if (context.maxReconnectAttempts === -1) {
-          return true; // 无限重连
-        }
-        return context.reconnectAttempts < context.maxReconnectAttempts;
-      },
-
-      /**
-       * 检查是否达到最大重连次数
-       */
-      hasReachedMaxAttempts: ({ context }) => {
-        if (context.maxReconnectAttempts === -1) {
-          return false; // 无限重连永远不会达到最大次数
-        }
-        return context.reconnectAttempts >= context.maxReconnectAttempts;
-      },
-
-      /**
        * 检查是否有错误
        */
       hasError: ({ context }) => {
@@ -247,21 +201,6 @@ export function createRadioStateMachine(
       },
     },
     delays: {
-      /**
-       * 重连延迟（指数退避）
-       */
-      reconnectDelay: ({ context }) => {
-        // 指数退避: 3s → 6s → 12s → 24s → 30s (最大)
-        const baseDelay = reconnectDelay;
-        const maxDelay = 30000;
-        const delay = Math.min(
-          baseDelay * Math.pow(2, context.reconnectAttempts - 1),
-          maxDelay
-        );
-        console.log(`⏰ [RadioStateMachine] 重连延迟: ${delay}ms`);
-        return delay;
-      },
-
       /**
        * 健康检查间隔
        */
@@ -271,8 +210,6 @@ export function createRadioStateMachine(
     id: options.id || 'radioStateMachine',
     initial: RadioState.DISCONNECTED,
     context: {
-      reconnectAttempts: 0,
-      maxReconnectAttempts,
       isHealthy: false,
     },
     states: {
@@ -289,7 +226,7 @@ export function createRadioStateMachine(
         on: {
           CONNECT: {
             target: RadioState.CONNECTING,
-            actions: ['saveConfig', 'resetReconnectAttempts'],
+            actions: ['saveConfig'],
           },
         },
       },
@@ -319,38 +256,20 @@ export function createRadioStateMachine(
             target: RadioState.CONNECTED,
             actions: ['recordConnectedTime'],
           },
-          onError: [
-            {
-              // 首次连接失败，如果可以重连，进入重连状态
-              guard: 'canReconnect',
-              target: RadioState.RECONNECTING,
-              actions: [
-                ({ event, context }: { event: any; context: RadioContext }) => {
-                  context.error = event.error as Error;
-                  console.warn(
-                    '⚠️  [RadioStateMachine] 首次连接失败，准备重连:',
-                    event.error
-                  );
-                },
-                'incrementReconnectAttempts',
-                { type: 'invokeErrorHandler', params: { input } },
-              ],
-            },
-            {
-              // 无法重连，进入错误状态
-              target: RadioState.ERROR,
-              actions: [
-                ({ event, context }: { event: any; context: RadioContext }) => {
-                  context.error = event.error as Error;
-                  console.error(
-                    '❌ [RadioStateMachine] 连接失败且无法重连:',
-                    event.error
-                  );
-                },
-                { type: 'invokeErrorHandler', params: { input } },
-              ],
-            },
-          ],
+          onError: {
+            // 连接失败，进入错误状态，等待用户手动重试
+            target: RadioState.ERROR,
+            actions: [
+              ({ event, context }: { event: any; context: RadioContext }) => {
+                context.error = event.error as Error;
+                console.error(
+                  '❌ [RadioStateMachine] 连接失败:',
+                  event.error
+                );
+              },
+              { type: 'invokeErrorHandler', params: { input } },
+            ],
+          },
         },
         on: {
           DISCONNECT: {
@@ -371,28 +290,15 @@ export function createRadioStateMachine(
             actions: ['recordDisconnectReason'],
           },
           CONNECTION_LOST: {
-            target: RadioState.RECONNECTING,
-            actions: [
-              'recordDisconnectReason',
-              'resetReconnectAttempts',
-              'incrementReconnectAttempts',
-            ],
+            // 连接丢失，进入断开状态，不自动重连
+            target: RadioState.DISCONNECTED,
+            actions: ['recordDisconnectReason'],
           },
-          HEALTH_CHECK_FAILED: [
-            {
-              guard: 'canReconnect',
-              target: RadioState.RECONNECTING,
-              actions: [
-                'setError',
-                'resetReconnectAttempts',
-                'incrementReconnectAttempts',
-              ],
-            },
-            {
-              target: RadioState.ERROR,
-              actions: ['setError', { type: 'invokeErrorHandler', params: { input } }],
-            },
-          ],
+          HEALTH_CHECK_FAILED: {
+            // 健康检查失败，进入错误状态，不自动重连
+            target: RadioState.ERROR,
+            actions: ['setError', { type: 'invokeErrorHandler', params: { input } }],
+          },
         },
         // 定期健康检查
         after: {
@@ -404,19 +310,18 @@ export function createRadioStateMachine(
       },
 
       /**
-       * 重连中状态
+       * 重连中状态（仅供手动触发，不自动转换）
        */
       [RadioState.RECONNECTING]: {
         entry: [
           'markUnhealthy',
           { type: 'notifyStateChange', params: { input } },
         ],
-        after: {
-          reconnectDelay: {
+        on: {
+          RECONNECT: {
+            // 用户手动触发重连
             target: RadioState.CONNECTING,
           },
-        },
-        on: {
           STOP_RECONNECTING: {
             target: RadioState.DISCONNECTED,
           },
@@ -440,11 +345,11 @@ export function createRadioStateMachine(
         on: {
           RESET: {
             target: RadioState.DISCONNECTED,
-            actions: ['clearError', 'resetReconnectAttempts'],
+            actions: ['clearError'],
           },
           RECONNECT: {
             target: RadioState.CONNECTING,
-            actions: ['clearError', 'resetReconnectAttempts'],
+            actions: ['clearError'],
           },
           DISCONNECT: {
             target: RadioState.DISCONNECTED,

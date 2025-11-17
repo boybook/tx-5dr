@@ -260,13 +260,6 @@ export class RadioService {
   }
 
   /**
-   * 重置重连计数器
-   */
-  resetReconnectAttempts(): void {
-    this.wsClient.resetReconnectAttempts();
-  }
-  
-  /**
    * 操作员请求呼叫某人
    * @param operatorId 操作员ID
    * @param callsign 呼号
