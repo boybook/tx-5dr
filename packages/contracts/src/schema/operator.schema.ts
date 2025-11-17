@@ -9,7 +9,7 @@ export const RadioOperatorConfigSchema = z.object({
   frequency: z.number().min(0).max(1000000000, '频率必须在0-1GHz之间').default(1000), // 音频偏移频率（Hz），默认1000Hz，创建时自动分配不重复值
   transmitCycles: z.array(z.number().min(0).max(1)).default([0]), // 0=偶数周期，1=奇数周期
   maxQSOTimeoutCycles: z.number().min(1).max(50).default(10),
-  maxCallAttempts: z.number().min(1).max(10).default(3),
+  maxCallAttempts: z.number().min(1).max(1000).default(3),
   autoReplyToCQ: z.boolean().default(false),
   autoResumeCQAfterFail: z.boolean().default(false),
   autoResumeCQAfterSuccess: z.boolean().default(false),

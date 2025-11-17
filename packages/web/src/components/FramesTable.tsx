@@ -40,9 +40,10 @@ interface FramesTableProps {
   myCallsigns?: string[]; // 自己的呼号列表
   targetCallsign?: string; // 当前选中操作员的目标呼号
   onMessageHover?: (freq: number | null) => void; // 消息hover回调
+  showLogbookAnalysisVisuals?: boolean; // 是否显示日志本分析的视觉效果（划线、标签等）
 }
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
@@ -142,7 +143,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
       return {};
     }
     // 检查是否为特殊消息且有日志本分析
-    if (message && message.logbookAnalysis && isSpecialMessageType(message.message)) {
+    if (showLogbookAnalysisVisuals && message && message.logbookAnalysis && isSpecialMessageType(message.message)) {
       const highlightType = getHighestPriorityHighlight(message.logbookAnalysis);
       if (highlightType) {
         const baseColor = getHighlightColor(highlightType);
@@ -176,7 +177,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
   // 根据日志本分析获取背景色（仅特殊消息类型使用全行背景色）
   const getLogbookAnalysisStyle = (message: FrameDisplayMessage, cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
-    if (type === 'transmit' || message.db === 'TX' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
+    if (!showLogbookAnalysisVisuals || type === 'transmit' || message.db === 'TX' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
       return {};
     }
 
@@ -236,21 +237,23 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
     const upperTarget = targetCallsign.toUpperCase().trim();
 
-    // 检查是否来自目标呼号
-    if (messageObj.logbookAnalysis?.callsign) {
-      const upperCallsign = messageObj.logbookAnalysis.callsign.toUpperCase().trim();
-      if (upperCallsign === upperTarget) {
-        return true;
-      }
+    // 1. 发射消息（TX）：检查消息内容是否包含目标呼号
+    if (messageObj.db === 'TX') {
+      const upperMessage = messageObj.message.toUpperCase();
+      const words = upperMessage.split(/\s+/);
+      return words.some(word => {
+        const cleanWord = cleanCallsignForMatching(word);
+        return cleanWord === upperTarget;
+      });
     }
 
-    // 检查消息文本是否包含目标呼号
-    const upperMessage = messageObj.message.toUpperCase();
-    const words = upperMessage.split(/\s+/);
-    return words.some(word => {
-      const cleanWord = cleanCallsignForMatching(word);
-      return cleanWord === upperTarget;
-    });
+    // 2. 接收消息：只检查消息是否来自目标呼号（发送者）
+    if (messageObj.logbookAnalysis?.callsign) {
+      const upperCallsign = messageObj.logbookAnalysis.callsign.toUpperCase().trim();
+      return upperCallsign === upperTarget;
+    }
+
+    return false;
   };
 
   // 格式化 UTC 时间
@@ -286,20 +289,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   };
 
   const formatMessage = (messageObj: FrameDisplayMessage) => {
-    // 如果是TX消息，忽略所有logbookAnalysis相关逻辑
-    if (messageObj.db === 'TX') {
-      return <span>{messageObj.message}</span>;
-    }
-
-    // 检查是否包含自己的呼号
-    const hasMyCallsign = containsMyCallsign(messageObj.message);
+    // 检查是否包含自己的呼号（TX 消息跳过此检查）
+    const hasMyCallsign = messageObj.db !== 'TX' && containsMyCallsign(messageObj.message);
     // 是否已通联过（根据日志本分析：非新呼号即已通联）
-    const isWorkedCallsign = messageObj.logbookAnalysis?.isNewCallsign === false;
-    // 检查是否与目标呼号相关
+    const isWorkedCallsign = showLogbookAnalysisVisuals && messageObj.logbookAnalysis?.isNewCallsign === false;
+    // 检查是否与目标呼号相关（TX 消息会检查内容是否包含目标呼号）
     const isTarget = isTargetRelated(messageObj);
 
-    // 基础消息文本
-    const showChips = messageObj.logbookAnalysis && isSpecialMessageType(messageObj.message);
+    // 基础消息文本（TX 消息不显示 logbookAnalysis chip）
+    const showChips = showLogbookAnalysisVisuals && messageObj.db !== 'TX' && messageObj.logbookAnalysis && isSpecialMessageType(messageObj.message);
 
     return (
       <span className="flex items-center gap-1">

@@ -155,26 +155,43 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return {}
         },
         onEnter(strategy: StandardQSOStrategy) {
+            // 每次进入TX1时重置呼叫计数器（新的呼叫开始）
+            strategy.callAttempts = 0;
             // 记录QSO开始时间
             strategy.qsoStartTime = Date.now();
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
-            console.log(`[StandardQSOStrategy TX1.onTimeout] 呼叫超时，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+            // 增加呼叫尝试次数
+            strategy.callAttempts++;
 
-            // 清理QSO开始时间
-            strategy.qsoStartTime = undefined;
+            console.log(`[StandardQSOStrategy TX1.onTimeout] 呼叫超时，当前目标: ${strategy.context.targetCallsign}, 尝试次数: ${strategy.callAttempts}/${strategy.operator.config.maxCallAttempts}`);
 
-            // 清理QSO上下文
-            strategy.clearQSOContext();
+            // 检查是否达到最大呼叫次数
+            if (strategy.callAttempts >= strategy.operator.config.maxCallAttempts) {
+                console.log(`[StandardQSOStrategy TX1.onTimeout] 达到最大呼叫尝试次数(${strategy.operator.config.maxCallAttempts})，放弃呼叫 ${strategy.context.targetCallsign}`);
 
-            // QSO失败，检查是否自动恢复CQ
-            if (strategy.operator.config.autoResumeCQAfterFail) {
-                console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
-                return { changeState: 'TX6' };
+                // 清理QSO开始时间
+                strategy.qsoStartTime = undefined;
+
+                // 清理QSO上下文
+                strategy.clearQSOContext();
+
+                // 重置呼叫计数器
+                strategy.callAttempts = 0;
+
+                // QSO失败，检查是否自动恢复CQ
+                if (strategy.operator.config.autoResumeCQAfterFail) {
+                    console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
+                    return { changeState: 'TX6' };
+                }
+
+                console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
+                return { stop: true };
             }
 
-            console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
-            return { stop: true };
+            // 未达到最大次数，继续呼叫（保持TX1状态）
+            console.log(`[StandardQSOStrategy TX1.onTimeout] 未达到最大次数，继续呼叫，保持TX1状态`);
+            return {}; // 返回空对象，保持当前状态，继续呼叫
         }
     },
     TX2: {
@@ -854,6 +871,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     };
     private _context: QSOContext;
     private timeoutCycles: number = 0;
+    public callAttempts: number = 0; // 呼叫尝试次数计数器（TX1状态专用）
     public qsoStartTime?: number; // QSO开始时间
 
     // QSO上下文历史缓存（呼号 -> 上下文）
@@ -877,12 +895,17 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         const oldState = this.state;
         this.state = state;
         this.timeoutCycles = 0;
-        
+
+        // 从TX1转换到其他状态时，重置呼叫计数器（表示已成功建立通联）
+        if (oldState === 'TX1' && state !== 'TX1') {
+            this.callAttempts = 0;
+        }
+
         // 状态变化时通知槽位更新
         if (oldState !== this.state) {
             this.notifyStateChanged();
         }
-        
+
         // 调用新状态的onEnter
         const newState = states[this.state];
         if (newState.onEnter) {

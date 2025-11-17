@@ -290,7 +290,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           message: frame.message,
           ...(locationInfo.country && { country: locationInfo.country }),
           ...(locationInfo.countryZh && { countryZh: locationInfo.countryZh }),
-          ...(locationInfo.flag && { flag: locationInfo.flag })
+          ...(locationInfo.flag && { flag: locationInfo.flag }),
+          ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis })
         };
         
         const group = groupsMap.get(groupKey)!;
@@ -382,6 +383,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           className="h-full"
           myCallsigns={getMyCallsigns()}
           targetCallsign={getCurrentOperatorTargetCallsign()}
+          showLogbookAnalysisVisuals={false}
         />
       )}
     </div>

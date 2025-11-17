@@ -502,6 +502,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             <Input
               type="number"
               label="最大QSO超时周期"
+              description="QSO进行中（已收到对方回复、正在交换信号报告），等待对方响应的最大周期数"
               value={formData.maxQSOTimeoutCycles?.toString() || ''}
               onChange={(e) => {
                 const value = parseInt(e.target.value) || 10;
@@ -515,10 +516,11 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               max={50}
               size="sm"
             />
-            
+
             <Input
               type="number"
               label="最大呼叫尝试次数"
+              description="主动呼叫他人时，对方未回复的情况下，最多重试的次数"
               value={formData.maxCallAttempts?.toString() || ''}
               onChange={(e) => {
                 const value = parseInt(e.target.value) || 3;
@@ -529,7 +531,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 }
               }}
               min={1}
-              max={10}
+              max={1000}
               size="sm"
             />
           </div>

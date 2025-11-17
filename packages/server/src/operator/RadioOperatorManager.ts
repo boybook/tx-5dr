@@ -128,7 +128,7 @@ export class RadioOperatorManager {
 
         console.log(`📝 [操作员管理器] 记录QSO到日志本 ${logBook.name}: ${qsoToSave.callsign} @ ${new Date(qsoToSave.startTime).toISOString()} (${qsoToSave.frequency}Hz)`);
         await logBook.provider.addQSO(qsoToSave, data.operatorId);
-        
+
         // QSO记录成功后，发射事件通知上层系统
         this.eventEmitter.emit('qsoRecordAdded' as any, {
           operatorId: data.operatorId,
@@ -136,9 +136,9 @@ export class RadioOperatorManager {
           qsoRecord: qsoToSave
         });
         console.log(`📡 [操作员管理器] 已发射 qsoRecordAdded 事件: ${data.qsoRecord.callsign}`);
-        
-        // 自动上传到WaveLog（如果已启用）
-        await this.handleWaveLogAutoUpload(data.qsoRecord, data.operatorId);
+
+        // 自动上传到WaveLog（如果已启用）- 使用修正后的频率数据
+        await this.handleWaveLogAutoUpload(qsoToSave, data.operatorId);
         
         // 获取更新的统计信息并发射日志本更新事件
         try {
