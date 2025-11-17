@@ -1417,14 +1417,20 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       name: 'radio',
       start: async () => {
         const radioConfig = configManager.getRadioConfig();
+        if (radioConfig.type === 'none') {
+          console.log('📡 [ResourceManager] 无电台模式，跳过电台初始化');
+          return;
+        }
         console.log(`📡 [ResourceManager] 应用物理电台配置:`, radioConfig);
         await this.radioManager.applyConfig(radioConfig);
       },
       stop: async () => {
-        await this.radioManager.disconnect('引擎停止');
+        if (this.radioManager.isConnected()) {
+          await this.radioManager.disconnect('引擎停止');
+        }
       },
       priority: 1,
-      optional: false,
+      optional: true,
     });
 
     // 2. ICOM WLAN 音频适配器 (仅在 ICOM WLAN 模式下需要)
@@ -1432,25 +1438,28 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       name: 'icomWlanAudioAdapter',
       start: async () => {
         const radioConfig = configManager.getRadioConfig();
-        if (radioConfig.type === 'icom-wlan') {
-          console.log(`📡 [ResourceManager] 初始化 ICOM WLAN 音频适配器`);
-          const icomWlanManager = this.radioManager.getIcomWlanManager();
-          if (icomWlanManager && icomWlanManager.isConnected()) {
-            this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(icomWlanManager);
-            this.audioStreamManager.setIcomWlanAudioAdapter(this.icomWlanAudioAdapter);
-
-            // 设置回调让 AudioDeviceManager 知道连接状态
-            const audioDeviceManager = AudioDeviceManager.getInstance();
-            audioDeviceManager.setIcomWlanConnectedCallback(() => {
-              return icomWlanManager.isConnected();
-            });
-
-            console.log(`✅ [ResourceManager] ICOM WLAN 音频适配器已初始化`);
-          } else {
-            // ICOM 连接失败时记录警告，不抛出错误，允许回退到普通声卡
-            console.warn(`⚠️ [ResourceManager] ICOM WLAN 电台未连接，将回退到普通声卡输入`);
-          }
+        if (radioConfig.type !== 'icom-wlan') {
+          console.log('ℹ️ [ResourceManager] 非 ICOM WLAN 模式，跳过适配器初始化');
+          return;
         }
+
+        console.log(`📡 [ResourceManager] 初始化 ICOM WLAN 音频适配器`);
+        const icomWlanManager = this.radioManager.getIcomWlanManager();
+        if (!icomWlanManager || !icomWlanManager.isConnected()) {
+          console.warn(`⚠️ [ResourceManager] ICOM WLAN 电台未连接，将回退到普通声卡输入`);
+          return;
+        }
+
+        this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(icomWlanManager);
+        this.audioStreamManager.setIcomWlanAudioAdapter(this.icomWlanAudioAdapter);
+
+        // 设置回调让 AudioDeviceManager 知道连接状态
+        const audioDeviceManager = AudioDeviceManager.getInstance();
+        audioDeviceManager.setIcomWlanConnectedCallback(() => {
+          return icomWlanManager.isConnected();
+        });
+
+        console.log(`✅ [ResourceManager] ICOM WLAN 音频适配器已初始化`);
       },
       stop: async () => {
         if (this.icomWlanAudioAdapter) {
@@ -1461,7 +1470,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         }
       },
       priority: 2,
-      dependencies: ['radio'],
+      dependencies: [],
       optional: true, // 可选资源，仅 ICOM WLAN 模式需要
     });
 
@@ -1477,7 +1486,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`🛑 [ResourceManager] 音频输入流已停止`);
       },
       priority: 3,
-      dependencies: ['radio'],
+      dependencies: [],
       optional: false,
     });
 
