@@ -1,11 +1,12 @@
-import { 
-  WaveLogConfig, 
-  WaveLogStation, 
+import {
+  WaveLogConfig,
+  WaveLogStation,
   WaveLogTestConnectionResponse,
   WaveLogSyncResponse,
   QSORecord
 } from '@tx5dr/contracts';
 import type { LogQueryOptions } from '@tx5dr/core';
+import { getBandFromFrequency } from '@tx5dr/core';
 
 /**
  * WaveLog服务类
@@ -448,7 +449,13 @@ export class WaveLogService {
     // 频率 - 转换为MHz
     const freqMHz = (qso.frequency / 1000000).toFixed(6);
     adifFields.push(`<freq:${freqMHz.length}>${freqMHz}`);
-    
+
+    // 频段 - 根据频率计算（WaveLog 2.0+ 要求必须提供 band 字段）
+    const band = getBandFromFrequency(qso.frequency);
+    if (band !== 'Unknown') {
+      adifFields.push(`<band:${band.length}>${band}`);
+    }
+
     // 网格坐标
     if (qso.grid) {
       adifFields.push(`<gridsquare:${qso.grid.length}>${qso.grid}`);
