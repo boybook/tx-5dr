@@ -23,7 +23,8 @@ export default {
     icon: join(__dirname, 'packages', 'electron-main', 'assets', 'AppIcon'),
     // macOS 26+ 使用 CFBundleIconName 引用 Assets.car 中的图标
     extendInfo: {
-      CFBundleIconName: 'AppIcon'
+      CFBundleIconName: 'AppIcon',
+      CFBundleIconFile: 'AppIcon.icns'
     },
     appBundleId: 'com.tx5dr.app',
     appCategoryType: 'public.app-category.utilities',
@@ -33,7 +34,10 @@ export default {
       join(__dirname, 'resources', 'bin'),
       join(__dirname, 'resources', 'licenses'),
       join(__dirname, 'resources', 'README.txt'),
-      join(__dirname, 'packages', 'electron-main', 'assets')
+      join(__dirname, 'packages', 'electron-main', 'assets'),
+      // macOS 26+ Assets.car 和 AppIcon.icns 必须在 Resources 根目录
+      join(__dirname, 'packages', 'electron-main', 'assets', 'Assets.car'),
+      join(__dirname, 'packages', 'electron-main', 'assets', 'AppIcon.icns')
     ],
     // 动态设置架构（用于CI/CD环境）
     arch: process.env.ARCH || undefined,
