@@ -409,7 +409,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                     ${message.db !== 'TX' ? 'hover:[background-color:var(--hover-bg)]' : ''}
                   `}
                   style={{
-                    ...(message.db === 'TX' ? { backgroundColor: 'rgba(255, 246, 75, 0.7)' } : {}),
+                    ...(message.db === 'TX' ? { backgroundColor: 'var(--ft8-tx-row-bg)' } : {}),
                     ...getRowHoverStyle(group.cycle, group.type, message),
                     ...getLogbookAnalysisStyle(message, group.cycle, group.type)
                   }}
