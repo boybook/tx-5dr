@@ -1,8 +1,8 @@
 {
   "fill" : {
     "linear-gradient" : [
-      "display-p3:0.13333,0.37647,0.70196,1.00000",
-      "srgb:0.10196,0.27059,0.54902,1.00000"
+      "gray:0.09693,1.00000",
+      "srgb:0.14902,0.14902,0.14902,1.00000"
     ],
     "orientation" : {
       "start" : {
@@ -19,36 +19,36 @@
     {
       "layers" : [
         {
-          "image-name" : "TX-5DR.png",
-          "name" : "TX-5DR",
+          "image-name" : "TX.png",
+          "name" : "TX",
           "position" : {
-            "scale" : 0.3,
+            "scale" : 0.66,
             "translation-in-points" : [
-              0,
-              308.4834424053397
+              -61.80302587031497,
+              -206.90000000000032
             ]
           }
         },
         {
-          "glass" : true,
-          "image-name" : "earth.png",
-          "name" : "earth",
+          "image-name" : "5DR.png",
+          "name" : "5DR",
           "position" : {
-            "scale" : 0.32,
+            "scale" : 0.66,
             "translation-in-points" : [
-              0,
-              232.1228125
+              -13.603025870314923,
+              214.5191828837318
             ]
           }
         },
         {
-          "image-name" : "tower.png",
-          "name" : "tower",
+          "glass" : false,
+          "image-name" : "Earth.png",
+          "name" : "Earth",
           "position" : {
-            "scale" : 0.33,
+            "scale" : 0.66,
             "translation-in-points" : [
               0,
-              -236.31506434855635
+              144.0999999999998
             ]
           }
         }
@@ -64,6 +64,9 @@
     }
   ],
   "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
     "squares" : "shared"
   }
 }
