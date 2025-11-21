@@ -55,9 +55,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     };
   });
 
-  // 实时进度状态
-  const [realtimeProgress, setRealtimeProgress] = React.useState(0);
-  
   // 展开/收起时隙内容的状态
   const [isSlotContentExpanded, setIsSlotContentExpanded] = React.useState(false);
   
@@ -65,15 +62,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const [localTransmitCycles, setLocalTransmitCycles] = React.useState<number[]>(() => {
     return operatorStatus.transmitCycles || [0];
   });
-  
-  // 用于存储周期信息的ref（仅用于进度条动画）
-  const cycleInfoRef = React.useRef<{
-    cycleStartMs: number;
-    cycleDurationMs: number;
-  } | null>(null);
-
-  // 动画控制ref
-  const animationFrameRef = React.useRef<number | null>(null);
   
   // 防抖定时器ref
   const debounceTimerRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -191,67 +179,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       setLocalTransmitCycles(operatorStatus.transmitCycles);
     }
   }, [operatorStatus.transmitCycles]);
-
-  // 更新周期信息（仅用于进度条动画）
-  React.useEffect(() => {
-    if (operatorStatus.cycleInfo && radio.state.currentMode) {
-      const { cycleProgress } = operatorStatus.cycleInfo;
-      const cycleDurationMs = radio.state.currentMode.slotMs;
-      
-      // 根据当前进度反推周期开始时间（仅用于进度条动画）
-      const now = Date.now();
-      const cycleStartMs = now - (cycleProgress * cycleDurationMs);
-      
-      cycleInfoRef.current = {
-        cycleStartMs,
-        cycleDurationMs,
-      };
-    }
-  }, [operatorStatus.cycleInfo, radio.state.currentMode]);
-
-  // 使用requestAnimationFrame实现60fps平滑进度条动画
-  React.useEffect(() => {
-    if (!cycleInfoRef.current) return;
-
-    let lastProgress = -1;
-
-    const updateProgress = () => {
-      if (!cycleInfoRef.current) return;
-      
-      const now = Date.now();
-      const { cycleStartMs, cycleDurationMs } = cycleInfoRef.current;
-      
-      // 计算当前周期经过的时间
-      const elapsedMs = now - cycleStartMs;
-      let progress = (elapsedMs % cycleDurationMs) / cycleDurationMs;
-      
-      // 确保进度在0-1范围内
-      if (progress < 0) progress = 0;
-      if (progress > 1) progress = 1;
-      
-      const progressPercent = Math.round(progress * 1000) / 10; // 精确到0.1%
-      
-      // 只在值实际变化时才更新状态，避免不必要的重新渲染
-      if (progressPercent !== lastProgress) {
-        setRealtimeProgress(progressPercent);
-        lastProgress = progressPercent;
-      }
-      
-      // 继续下一帧动画
-      animationFrameRef.current = requestAnimationFrame(updateProgress);
-    };
-
-    // 开始动画循环
-    animationFrameRef.current = requestAnimationFrame(updateProgress);
-    
-    // 清理函数
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-    };
-  }, [operatorStatus.cycleInfo]); // 只依赖于cycleInfo的变化
 
   // 组件卸载时清理防抖定时器
   React.useEffect(() => {
@@ -379,44 +306,46 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
   };
 
-  // 获取进度条背景样式 - 完全依赖服务端推送的状态
-  const getProgressBackgroundStyle = () => {
-    const progress = realtimeProgress / 100;
-    
+  // 获取进度条样式 - 使用 CSS animation 实现平滑动画
+  const getProgressStyle = (): { backgroundColor: string; animation: string } => {
     if (!operatorStatus.cycleInfo || !radio.state.currentMode) {
-      // 默认状态 - 使用CSS变量适配暗黑模式
       return {
-        background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
+        backgroundColor: 'var(--ft8-cycle-even-bg)',
+        animation: 'none',
       };
     }
-    
-    const { currentCycle, isTransmitCycle } = operatorStatus.cycleInfo;
-    
-    // 检查是否实际在发射：发射开关开启 && 服务端判断当前为发射周期
+
+    const { cycleProgress, currentCycle, isTransmitCycle } = operatorStatus.cycleInfo;
+    const cycleDurationMs = radio.state.currentMode.slotMs;
+
+    // 超过120%表示服务端可能掉线，显示空条
+    if (cycleProgress > 1.2) {
+      return {
+        backgroundColor: 'var(--ft8-cycle-even-bg)',
+        animation: 'none',
+      };
+    }
+
+    // 确定进度条颜色
     const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
-    
+    let bgColor: string;
     if (isActuallyTransmitting) {
-      // 实际发射时为红色渐变 - 使用danger色彩适配暗黑模式
-      return {
-        background: `linear-gradient(to right, hsl(var(--heroui-danger) / 0.1) 0%, hsl(var(--heroui-danger) / 0.1) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-      };
+      bgColor = 'hsl(var(--heroui-danger) / 0.15)';
     } else {
-      // 其他情况：根据当前周期类型显示对应颜色
-      // 使用统一的周期计算方法
       const isEvenCycle = CycleUtils.isEvenCycle(currentCycle);
-      
-      if (isEvenCycle) {
-        // 偶数周期：使用CSS变量适配暗黑模式
-        return {
-          background: `linear-gradient(to right, var(--ft8-cycle-even-bg) 0%, var(--ft8-cycle-even-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-        };
-      } else {
-        // 奇数周期：使用CSS变量适配暗黑模式
-        return {
-          background: `linear-gradient(to right, var(--ft8-cycle-odd-bg) 0%, var(--ft8-cycle-odd-bg) ${progress * 100}%, hsl(var(--heroui-background)) ${progress * 100}%, hsl(var(--heroui-background)) 100%)`
-        };
-      }
+      bgColor = isEvenCycle ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)';
     }
+
+    // 计算动画参数：从当前进度开始，到周期结束
+    const remainingMs = Math.max(0, cycleDurationMs * (1 - cycleProgress));
+    const startPercent = Math.min(cycleProgress * 100, 100);
+
+    return {
+      backgroundColor: bgColor,
+      animation: `progress-bar ${remainingMs}ms linear forwards`,
+      // @ts-expect-error CSS custom property for animation start position
+      '--progress-start': `${startPercent}%`,
+    };
   };
 
   // 选择空闲频率
@@ -493,11 +422,14 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       }}
     >
       {/* 上半部分 - 进度条背景 */}
-      <div 
-        className="relative h-12 p-4 transition-all duration-75 ease-linear"
-        style={getProgressBackgroundStyle()}
-      >
-        <div className="flex items-center justify-between h-full">
+      <div className="relative h-12 p-4">
+        {/* 进度条 - 使用 CSS animation 动画，key 确保周期变化时重建触发动画 */}
+        <div
+          key={operatorStatus.cycleInfo?.currentCycle ?? 'idle'}
+          className="absolute inset-0 progress-bar-animated"
+          style={getProgressStyle()}
+        />
+        <div className="relative flex items-center justify-between h-full">
           {/* 左侧 - 发射内容或监听状态 */}
           <div className="flex-1">
             {(() => {
@@ -587,8 +519,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       
       {/* 分割线 - 随下半部分一起显示/隐藏 */}
       <div
-        className={`border-t border-divider transition-opacity duration-[250ms] ${
-          isSelected ? 'opacity-100' : 'opacity-0'
+        className={`border-divider transition-opacity duration-[250ms] ${
+          isSelected ? 'border-t opacity-100' : 'border-t-0 opacity-0'
         }`}
         style={{
           transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'

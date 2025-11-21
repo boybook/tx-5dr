@@ -77,8 +77,7 @@ export const RadioStatusResponseSchema = z.object({
     connected: z.boolean(),
     radioInfo: RadioInfoSchema.nullable(),
     radioConfig: HamlibConfigSchema.optional(),
-    reconnectInfo: z.object({
-      isReconnecting: z.boolean(),
+    connectionHealth: z.object({
       connectionHealthy: z.boolean(),
     }).optional(),
   }),

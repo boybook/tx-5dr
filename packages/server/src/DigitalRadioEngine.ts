@@ -36,6 +36,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private clockSource: ClockSourceSystem;
   private currentMode: ModeDescriptor = MODES.FT8;
   private isRunning = false;
+  private wasRunningBeforeDisconnect = false;  // 记录断开前是否在运行
   private audioStarted = false;
   
   // PTT状态管理
@@ -82,6 +83,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   // 记录 radioManager 事件监听器，用于清理 (修复内存泄漏)
   private radioManagerEventListeners: Map<string, (...args: unknown[]) => void> = new Map();
+
+  // 保存 transmissionLog 监听器引用，用于精确清理（避免清除 WSServer 的监听器）
+  private transmissionLogHandler: ((data: { operatorId: string; time: string; message: string; frequency: number; slotStartMs: number }) => void) | null = null;
 
   // 引擎状态机 (XState v5)
   private engineStateMachineActor: EngineActor | null = null;
@@ -586,28 +590,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       console.error(`💥 [时钟管理器] 解码错误: 时隙=${request.slotId}, 窗口=${request.windowIdx}:`, error.message);
       this.emit('decodeError', { error, request });
     });
-    
-    // 监听发射日志事件，将发射信息添加到SlotPackManager
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.on('transmissionLog' as any, (data: {
-      operatorId: string;
-      time: string;
-      message: string;
-      frequency: number;
-      slotStartMs: number;
-    }) => {
-      // 生成时隙ID（与解码结果一致的格式）
-      const slotId = `slot-${data.slotStartMs}`;
-      
-      // 添加发射帧到SlotPackManager
-      this.slotPackManager.addTransmissionFrame(
-        slotId,
-        data.operatorId,
-        data.message,
-        data.frequency,
-        data.slotStartMs
-      );
-    });
+
+    // 注意：transmissionLog 事件监听器已移至 setupCoreEventListeners()
+    // 在 doStart() 时统一注册，避免重复注册问题
 
     // 监听 SlotPackManager 事件
     this.slotPackManager.on('slotPackUpdated', async (slotPack) => {
@@ -766,7 +751,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       volumeGainDb: this.audioStreamManager.getVolumeGainDb(),
       isPTTActive: this.isPTTActive,
       radioConnected: this.radioManager.isConnected(),
-      radioReconnectInfo: this.radioManager.getReconnectInfo(),
+      radioConnectionHealth: this.radioManager.getConnectionHealth(),
 
       // 状态机状态（新增）
       engineState,
@@ -1094,7 +1079,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         connected: true,
         radioInfo,
         radioConfig,
-        reconnectInfo: this.radioManager.getReconnectInfo()
+        connectionHealth: this.radioManager.getConnectionHealth()
       });
 
       // 连接成功后自动设置频率（根据配置中保存的最后频率）
@@ -1111,11 +1096,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         // 频率设置失败不影响后续流程
       }
 
-      // 重连成功后自动启动系统（仅在真正重连时，不在首次启动时）
-      const reconnectInfo = this.radioManager.getReconnectInfo();
-      // 使用 isReconnecting 判断是否为重连场景（而非首次连接）
-      if (!this.isRunning && reconnectInfo.isReconnecting) {
-        console.log('🚀 [DigitalRadioEngine] 重连成功，自动启动系统');
+      // 连接成功后恢复之前的运行状态
+      // 如果之前引擎在运行中断开，连接后自动恢复
+      if (!this.isRunning && this.wasRunningBeforeDisconnect) {
+        console.log('🚀 [DigitalRadioEngine] 电台连接成功，恢复之前的运行状态');
+        this.wasRunningBeforeDisconnect = false;
         try {
           await this.start();
         } catch (err) {
@@ -1130,6 +1115,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const handleDisconnected = async (...args: unknown[]) => {
       const reason = args[0] as string | undefined;
       console.log(`📡 [DigitalRadioEngine] 物理电台断开连接: ${reason || '未知原因'}`);
+
+      // 记录断开前是否在运行，用于重连后恢复
+      if (this.isRunning) {
+        this.wasRunningBeforeDisconnect = true;
+        console.log('📝 [DigitalRadioEngine] 记录断开前运行状态，等待重连后恢复');
+      }
 
       // 立即停止所有操作员的发射
       this.operatorManager.stopAllOperators();
@@ -1179,7 +1170,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         reason,
         message: '电台已断开连接',
         recommendation: this.getDisconnectRecommendation(reason),
-        reconnectInfo: this.radioManager.getReconnectInfo()
+        connectionHealth: this.radioManager.getConnectionHealth()
       });
     };
     this.radioManagerEventListeners.set('disconnected', handleDisconnected);
@@ -1194,7 +1185,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emit('radioError' as any, {
         error: error.message,
-        reconnectInfo: this.radioManager.getReconnectInfo()
+        connectionHealth: this.radioManager.getConnectionHealth()
       });
     };
     this.radioManagerEventListeners.set('error', handleError);
@@ -1376,16 +1367,340 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         console.log(`   ✓ 已清理 ${radioListenersCount} 个 RadioManager 事件监听器`);
       }
 
-      // 7. 清理 self 上的 transmissionLog 事件监听器
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.removeAllListeners('transmissionLog' as any);
-      totalRemoved += 1;
-      console.log(`   ✓ 已清理 1 个 self transmissionLog 事件监听器`);
+      // 7. 清理 self 上的 transmissionLog 事件监听器（精确移除，不影响 WSServer 的监听器）
+      if (this.transmissionLogHandler) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.off('transmissionLog' as any, this.transmissionLogHandler);
+        this.transmissionLogHandler = null;
+        totalRemoved += 1;
+        console.log(`   ✓ 已清理 1 个 self transmissionLog 事件监听器`);
+      }
 
       console.log(`✅ [DigitalRadioEngine] 事件监听器清理完成，共清理 ${totalRemoved} 个监听器`);
     } catch (error) {
       console.error(`❌ [DigitalRadioEngine] 清理事件监听器时出错:`, error);
       // 继续执行，不中断停止流程
+    }
+  }
+
+  /**
+   * 重新设置核心事件监听器（在引擎重启时调用）
+   * 这些监听器在 cleanupEventListeners() 中被清除，需要在 doStart() 时重新设置
+   * @private
+   */
+  private setupCoreEventListeners(): void {
+    console.log('🔧 [DigitalRadioEngine] 设置核心事件监听器...');
+
+    // 先清理已有监听器，避免重复注册
+    this.cleanupEventListeners();
+
+    // 1. SlotClock 事件监听器
+    if (this.slotClock) {
+      this.slotClock.on('slotStart', async (slotInfo) => {
+        console.log(`🎯 [时隙开始] ID: ${slotInfo.id}, 开始时间: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
+        await this.forceStopPTT();
+        this.emit('slotStart', slotInfo, this.slotPackManager.getLatestSlotPack());
+        this.operatorManager.broadcastAllOperatorStatusUpdates();
+      });
+
+      this.slotClock.on('encodeStart', (slotInfo) => {
+        console.log(`🔧 [编码时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 提前量: ${this.currentMode.encodeAdvance}ms`);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.emit('encodeStart' as any, slotInfo);
+        this.currentSlotId = slotInfo.id;
+        this.currentSlotExpectedEncodes = 0;
+        this.currentSlotCompletedEncodes = 0;
+        const pendingCount = this.operatorManager.getPendingTransmissionsCount();
+        this.operatorManager.processPendingTransmissions(slotInfo);
+        this.currentSlotExpectedEncodes = pendingCount;
+        if (this.currentSlotExpectedEncodes > 0) {
+          console.log(`📊 [编码跟踪] 时隙 ${slotInfo.id}: 期望 ${this.currentSlotExpectedEncodes} 个编码任务`);
+        }
+      });
+
+      this.slotClock.on('transmitStart', (slotInfo) => {
+        console.log(`📡 [目标播放时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 延迟: ${this.currentMode.transmitTiming}ms`);
+        if (this.currentSlotExpectedEncodes > 0 && this.currentSlotCompletedEncodes < this.currentSlotExpectedEncodes) {
+          const missingCount = this.currentSlotExpectedEncodes - this.currentSlotCompletedEncodes;
+          console.warn(`⚠️ [编码超时] 发射时刻到达但编码未完成！期望 ${this.currentSlotExpectedEncodes} 个，已完成 ${this.currentSlotCompletedEncodes} 个，缺少 ${missingCount} 个`);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          this.emit('timingWarning' as any, {
+            title: '⚠️ 编码超时警告',
+            text: `发射时刻已到达，但仍有 ${missingCount} 个编码任务未完成。这可能导致发射延迟或失败。建议检查发射补偿设置或减少同时发射的操作员数量。`
+          });
+        } else if (this.currentSlotExpectedEncodes > 0) {
+          console.log(`✅ [编码跟踪] 所有编码任务已按时完成 (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.emit('transmitStart' as any, slotInfo);
+      });
+
+      this.slotClock.on('subWindow', (slotInfo, windowIdx) => {
+        const totalWindows = this.currentMode.windowTiming?.length || 0;
+        console.log(`🔍 [子窗口] 时隙: ${slotInfo.id}, 窗口: ${windowIdx}/${totalWindows}, 开始: ${new Date(slotInfo.startMs).toISOString()}`);
+        this.emit('subWindow', { slotInfo, windowIdx });
+      });
+    }
+
+    // 2. DecodeQueue 事件监听器
+    if (this.realDecodeQueue) {
+      this.realDecodeQueue.on('decodeComplete', (result) => {
+        this.slotPackManager.processDecodeResult(result);
+      });
+
+      this.realDecodeQueue.on('decodeError', (error, request) => {
+        console.error(`💥 [时钟管理器] 解码错误: 时隙=${request.slotId}, 窗口=${request.windowIdx}:`, error.message);
+        this.emit('decodeError', { error, request });
+      });
+    }
+
+    // 3. SlotPackManager 事件监听器
+    if (this.slotPackManager) {
+      this.slotPackManager.on('slotPackUpdated', async (slotPack) => {
+        console.log(`📦 [时钟管理器] 时隙包更新事件: ${slotPack.slotId}`);
+        console.log(`   当前状态: ${slotPack.frames.length}个信号, 解码${slotPack.stats.totalDecodes}次`);
+        if (slotPack.frames.length > 0) {
+          const slotStartTime = new Date(slotPack.startMs);
+          for (const frame of slotPack.frames) {
+            const utcTime = slotStartTime.toISOString().slice(11, 19).replace(/:/g, '').slice(0, 6);
+            if (frame.snr === -999) {
+              console.log(` - ${utcTime}  TX  ${frame.dt.toFixed(1).padStart(5)} ${Math.round(frame.freq).toString().padStart(4)} ~  ${frame.message}`);
+            } else {
+              const snr = frame.snr >= 0 ? ` ${frame.snr}` : `${frame.snr}`;
+              const dt = frame.dt.toFixed(1).padStart(5);
+              const freq = Math.round(frame.freq).toString().padStart(4);
+              console.log(` - ${utcTime} ${snr.padStart(3)} ${dt} ${freq} ~  ${frame.message}`);
+            }
+          }
+        }
+        this.emit('slotPackUpdated', slotPack);
+      });
+    }
+
+    // 4. SpectrumScheduler 事件监听器
+    if (this.spectrumScheduler) {
+      this.spectrumScheduler.on('spectrumReady', () => {
+        this.spectrumEventCount++;
+        if (this.spectrumEventCount % 100 === 0) {
+          this.checkHighFrequencyEventsHealth();
+        }
+      });
+
+      this.spectrumScheduler.on('error', (error) => {
+        console.error('📊 [时钟管理器] 频谱分析错误:', error);
+      });
+    }
+
+    // 5. EncodeQueue 事件监听器
+    if (this.realEncodeQueue) {
+      this.realEncodeQueue.on('encodeComplete', async (result) => {
+        await this.handleEncodeComplete(result);
+      });
+
+      this.realEncodeQueue.on('encodeError', (error, request) => {
+        console.error(`❌ [时钟管理器] 编码失败: 操作员=${request.operatorId}:`, error.message);
+        this.emit('transmissionComplete', {
+          operatorId: request.operatorId,
+          success: false,
+          error: error.message
+        });
+      });
+    }
+
+    // 6. AudioMixer 事件监听器
+    if (this.audioMixer) {
+      this.audioMixer.on('mixedAudioReady', async (mixedAudio: MixedAudio) => {
+        await this.handleMixedAudioReady(mixedAudio);
+      });
+    }
+
+    // 7. self transmissionLog 事件监听器（保存引用以便精确清理）
+    this.transmissionLogHandler = (data: {
+      operatorId: string;
+      time: string;
+      message: string;
+      frequency: number;
+      slotStartMs: number;
+    }) => {
+      const slotId = `slot-${data.slotStartMs}`;
+      this.slotPackManager.addTransmissionFrame(
+        slotId,
+        data.operatorId,
+        data.message,
+        data.frequency,
+        data.slotStartMs
+      );
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.on('transmissionLog' as any, this.transmissionLogHandler);
+
+    console.log('✅ [DigitalRadioEngine] 核心事件监听器设置完成');
+  }
+
+  /**
+   * 处理编码完成事件
+   * @private
+   */
+  private async handleEncodeComplete(result: {
+    operatorId: string;
+    audioData: Float32Array;
+    sampleRate: number;
+    duration: number;
+    request?: { timeSinceSlotStartMs?: number };
+  }): Promise<void> {
+    try {
+      console.log(`🎵 [时钟管理器] 编码完成，提交到混音器`, {
+        operatorId: result.operatorId,
+        duration: result.duration
+      });
+
+      this.currentSlotCompletedEncodes++;
+      console.log(`📊 [编码跟踪] 时隙 ${this.currentSlotId}: 已完成 ${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes}`);
+
+      this.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.MIXING, {});
+      this.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.READY, {
+        audioData: result.audioData,
+        sampleRate: result.sampleRate,
+        duration: result.duration
+      });
+
+      const slotDurationSec = this.currentMode.slotMs / 1000;
+      let audioDurationSec = result.duration;
+      let audioData = result.audioData;
+
+      const request = result.request;
+      const timeSinceSlotStartMs = request?.timeSinceSlotStartMs || 0;
+
+      const now = this.clockSource.now();
+      const currentSlotStartMs = Math.floor(now / this.currentMode.slotMs) * this.currentMode.slotMs;
+      const currentTimeSinceSlotStartMs = now - currentSlotStartMs;
+
+      console.log(`⏰ [时钟管理器] 播放时序计算: 周期时长=${slotDurationSec}s, 音频时长=${audioDurationSec.toFixed(2)}s`);
+
+      this.audioMixer.clearOperatorAudio(result.operatorId);
+
+      let playbackStartMs: number;
+      let audioSkipMs = 0;
+      const transmitStartFromSlotMs = this.currentMode.transmitTiming || 0;
+      const isMidSlotSwitch = timeSinceSlotStartMs > 0 && Math.abs(timeSinceSlotStartMs - transmitStartFromSlotMs) > 100;
+
+      if (isMidSlotSwitch) {
+        if (currentTimeSinceSlotStartMs >= transmitStartFromSlotMs) {
+          playbackStartMs = now;
+          audioSkipMs = currentTimeSinceSlotStartMs - transmitStartFromSlotMs;
+        } else {
+          playbackStartMs = currentSlotStartMs + transmitStartFromSlotMs;
+          audioSkipMs = 0;
+        }
+      } else {
+        playbackStartMs = now;
+        audioSkipMs = 0;
+      }
+
+      if (audioSkipMs > 0 && audioSkipMs < audioDurationSec * 1000) {
+        const skipSamples = Math.floor((audioSkipMs / 1000) * result.sampleRate);
+        if (skipSamples < audioData.length) {
+          audioData = audioData.slice(skipSamples);
+          audioDurationSec = audioData.length / result.sampleRate;
+          console.log(`✂️ [时钟管理器] 裁剪音频: 跳过=${audioSkipMs}ms, 剩余=${audioDurationSec.toFixed(2)}s`);
+        } else {
+          console.warn(`❌ [时钟管理器] 需要跳过的时间超过音频长度，取消播放`);
+          this.emit('transmissionComplete', { operatorId: result.operatorId, success: false, error: '错过播放窗口' });
+          return;
+        }
+      }
+
+      const targetPlaybackTime = currentSlotStartMs + (this.currentMode.transmitTiming || 0);
+      const delayMs = playbackStartMs - now;
+
+      if (delayMs > 0) {
+        this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, playbackStartMs, targetPlaybackTime);
+      } else {
+        this.audioMixer.addAudio(result.operatorId, audioData, result.sampleRate, now, targetPlaybackTime);
+      }
+
+      this.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
+
+      if (this.shouldTriggerRemix()) {
+        console.log(`🔄 [时钟管理器] 检测到需要重新混音`);
+        try {
+          const elapsedTimeMs = await this.audioStreamManager.stopCurrentPlayback();
+          const remixedAudio = await this.audioMixer.remixWithNewAudio(elapsedTimeMs);
+          if (remixedAudio) {
+            await this.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
+            this.schedulePTTStop(remixedAudio.duration * 1000 + 200);
+          }
+        } catch (remixError) {
+          console.error(`❌ [时钟管理器] 重新混音失败:`, remixError);
+        }
+      }
+    } catch (error) {
+      console.error(`❌ [时钟管理器] 编码结果处理失败:`, error);
+      this.emit('transmissionComplete', {
+        operatorId: result.operatorId,
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  /**
+   * 处理混音完成事件
+   * @private
+   */
+  private async handleMixedAudioReady(mixedAudio: MixedAudio): Promise<void> {
+    try {
+      console.log(`🎵 [时钟管理器] 混音完成，开始播放:`);
+      console.log(`   操作员: [${mixedAudio.operatorIds.join(', ')}]`);
+      console.log(`   混音时长: ${mixedAudio.duration.toFixed(2)}s`);
+      console.log(`   采样率: ${mixedAudio.sampleRate}Hz`);
+
+      for (const operatorId of mixedAudio.operatorIds) {
+        this.transmissionTracker.recordMixedAudioReady(operatorId);
+      }
+
+      console.log(`📡 [时钟管理器] 并行启动PTT和音频播放`);
+
+      for (const operatorId of mixedAudio.operatorIds) {
+        this.transmissionTracker.recordAudioPlaybackStart(operatorId);
+      }
+
+      const pttPromise = this.startPTT().then(() => {
+        for (const operatorId of mixedAudio.operatorIds) {
+          this.transmissionTracker.recordPTTStart(operatorId);
+        }
+      });
+
+      const audioPromise = this.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
+      const actualPlaybackTimeMs = mixedAudio.duration * 1000;
+      const pttHoldTimeMs = 200;
+      const totalPTTTimeMs = actualPlaybackTimeMs + pttHoldTimeMs;
+
+      console.log(`📡 [时钟管理器] PTT时序: 音频=${actualPlaybackTimeMs.toFixed(0)}ms, PTT延迟=${pttHoldTimeMs}ms, 总计=${totalPTTTimeMs.toFixed(0)}ms`);
+
+      this.schedulePTTStop(totalPTTTimeMs);
+      await Promise.all([pttPromise, audioPromise]);
+
+      for (const operatorId of mixedAudio.operatorIds) {
+        this.emit('transmissionComplete', {
+          operatorId,
+          success: true,
+          duration: mixedAudio.duration,
+          mixedWith: mixedAudio.operatorIds.filter(id => id !== operatorId)
+        });
+      }
+
+      console.log(`✅ [时钟管理器] 混音播放完成，通知 ${mixedAudio.operatorIds.length} 个操作员`);
+    } catch (error) {
+      console.error(`❌ [时钟管理器] 混音播放失败:`, error);
+      await this.stopPTT();
+      for (const operatorId of mixedAudio.operatorIds) {
+        this.emit('transmissionComplete', {
+          operatorId,
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
     }
   }
 
@@ -1408,6 +1723,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           console.log('📡 [ResourceManager] 无电台模式，跳过电台初始化');
           return;
         }
+
+        // 验证 ICOM WLAN 配置完整性
+        if (radioConfig.type === 'icom-wlan') {
+          if (!radioConfig.icomWlan?.ip || !radioConfig.icomWlan?.port) {
+            console.error('❌ [ResourceManager] ICOM WLAN 配置不完整:', radioConfig.icomWlan);
+            throw new Error('ICOM WLAN IP 或端口缺失');
+          }
+          console.log(`📡 [ResourceManager] ICOM WLAN 配置验证通过: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
+        }
+
         console.log(`📡 [ResourceManager] 应用物理电台配置:`, radioConfig);
         await this.radioManager.applyConfig(radioConfig);
       },
@@ -1667,6 +1992,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     console.log(`🚀 [时钟管理器] 启动引擎，模式: ${this.currentMode.name}`);
 
     try {
+      // 重新设置核心事件监听器（在 doStop 时被清理）
+      this.setupCoreEventListeners();
+
       // 使用 ResourceManager 启动所有资源
       // 按优先级和依赖关系顺序启动，失败时自动回滚
       await this.resourceManager.startAll();

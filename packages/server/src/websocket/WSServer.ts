@@ -1127,7 +1127,7 @@ export class WSServer extends WSMessageHandler {
       console.log('📥 [WSServer] 收到手动重连电台命令');
 
       const radioManager = this.digitalRadioEngine.getRadioManager();
-      await radioManager.manualReconnect();
+      await radioManager.reconnect();
 
       console.log('✅ [WSServer] 电台手动重连成功');
 
@@ -1141,12 +1141,12 @@ export class WSServer extends WSMessageHandler {
       // 广播电台断开状态，确保前端状态同步
       try {
         const radioManager = this.digitalRadioEngine.getRadioManager();
-        const reconnectInfo = radioManager.getReconnectInfo();
+        const connectionHealth = radioManager.getConnectionHealth();
 
         this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, {
           connected: false,
           reason: '手动重连失败',
-          reconnectInfo
+          connectionHealth
         });
       } catch {}
     }

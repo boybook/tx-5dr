@@ -109,12 +109,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     const oldConfig = this.currentConfig;
     console.log(`📡 [PhysicalRadioManager] 应用配置: ${config.type}`);
 
+    // 防止重复连接：如果配置未改变且已连接，跳过
+    if (this.isConfigIdentical(oldConfig, config) && this.isConnected()) {
+      console.log('⏩ [PhysicalRadioManager] 配置未改变且已连接，跳过重复连接');
+      return;
+    }
+
     // 记录配置变化详情（用于调试配置更新问题）
     if (oldConfig.type !== config.type) {
       console.log(`🔄 [PhysicalRadioManager] 配置类型变化: ${oldConfig.type} → ${config.type}`);
     } else if (config.type === 'icom-wlan') {
-      const oldIp = (oldConfig as any).ip;
-      const newIp = (config as any).ip;
+      const oldIp = oldConfig.icomWlan?.ip;
+      const newIp = config.icomWlan?.ip;
       if (oldIp !== newIp) {
         console.log(`🔄 [PhysicalRadioManager] ICOM WLAN IP变化: ${oldIp} → ${newIp}`);
       }
@@ -190,18 +196,23 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   /**
-   * 手动重连
+   * 重新连接（统一的连接方法）
+   * 使用当前配置重新连接电台
    */
-  async manualReconnect(): Promise<void> {
-    console.log('🔄 [PhysicalRadioManager] 手动重连请求');
+  async reconnect(): Promise<void> {
+    console.log('🔄 [PhysicalRadioManager] 重新连接请求');
 
     if (!this.radioActor) {
       console.error('❌ [PhysicalRadioManager] 状态机未初始化');
       throw new Error('状态机未初始化');
     }
 
-    // 重置状态机并重新连接
-    this.radioActor.send({ type: 'RECONNECT' });
+    if (!this.currentConfig || this.currentConfig.type === 'none') {
+      throw new Error('无有效配置，无法重新连接');
+    }
+
+    // 使用 CONNECT 事件重新连接
+    this.radioActor.send({ type: 'CONNECT', config: this.currentConfig });
 
     // 等待连接成功
     await this.waitForConnected(30000);
@@ -217,23 +228,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   /**
-   * 获取重连信息（简化版，仅返回必要的连接状态）
+   * 获取连接健康状态（简化版）
    */
-  getReconnectInfo() {
+  getConnectionHealth(): { connectionHealthy: boolean } {
     if (!this.radioActor) {
-      return {
-        isReconnecting: false,
-        connectionHealthy: false,
-      };
+      return { connectionHealthy: false };
     }
 
     const context = getRadioContext(this.radioActor);
-    const isReconnecting = isRadioState(this.radioActor, RadioState.RECONNECTING);
-
-    return {
-      isReconnecting,
-      connectionHealthy: context.isHealthy,
-    };
+    return { connectionHealthy: context.isHealthy };
   }
 
   /**
@@ -697,19 +700,23 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   /**
    * 初始化状态机
    */
-  private async initializeStateMachine(config: HamlibConfig): Promise<void> {
+  private async initializeStateMachine(_config: HamlibConfig): Promise<void> {
     console.log('🔧 [PhysicalRadioManager] 初始化状态机...');
 
     const radioInput: RadioInput = {
       healthCheckInterval: 3000, // 3秒
 
-      // 连接回调 - 从 ConfigManager 读取最新配置
-      onConnect: async (_cfg: HamlibConfig) => {
-        console.log('🔌 [RadioStateMachine] 回调: onConnect - 从ConfigManager读取最新配置');
-        const latestConfig = this.configManager.getRadioConfig();
-        console.log(`🔧 [PhysicalRadioManager] 使用配置类型: ${latestConfig.type}`,
-                    latestConfig.type === 'icom-wlan' ? { ip: (latestConfig as any).ip } : {});
-        await this.doConnect(latestConfig);
+      // 连接回调 - 使用传入的配置参数
+      onConnect: async (cfg: HamlibConfig) => {
+        console.log('🔌 [RadioStateMachine] 回调: onConnect');
+        // 如果未传入配置，回退到从 ConfigManager 读取
+        if (!cfg) {
+          console.error('❌ [PhysicalRadioManager] onConnect 未收到配置参数，回退到 ConfigManager');
+          cfg = this.configManager.getRadioConfig();
+        }
+        console.log(`🔧 [PhysicalRadioManager] 使用配置类型: ${cfg.type}`,
+                    cfg.type === 'icom-wlan' ? { ip: cfg.icomWlan?.ip, port: cfg.icomWlan?.port } : {});
+        await this.doConnect(cfg);
       },
 
       // 断开回调
@@ -885,10 +892,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       case RadioState.DISCONNECTED:
         // 内部断开不触发事件（在外部方法中触发）
-        break;
-
-      case RadioState.RECONNECTING:
-        // 重连状态仅记录,不发送事件
         break;
 
       case RadioState.ERROR:
@@ -1070,5 +1073,46 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     } catch (error) {
       // 静默处理错误（getFrequency 已经有错误处理）
     }
+  }
+
+  /**
+   * 比较两个配置是否相同
+   * 用于防止重复连接相同的配置
+   */
+  private isConfigIdentical(a: HamlibConfig, b: HamlibConfig): boolean {
+    if (a.type !== b.type) {
+      return false;
+    }
+
+    // 比较 ICOM WLAN 配置
+    if (a.type === 'icom-wlan' && b.type === 'icom-wlan') {
+      return (
+        a.icomWlan?.ip === b.icomWlan?.ip &&
+        a.icomWlan?.port === b.icomWlan?.port
+      );
+    }
+
+    // 比较网络配置
+    if (a.type === 'network' && b.type === 'network') {
+      return (
+        a.network?.host === b.network?.host &&
+        a.network?.port === b.network?.port
+      );
+    }
+
+    // 比较串口配置
+    if (a.type === 'serial' && b.type === 'serial') {
+      return (
+        a.serial?.path === b.serial?.path &&
+        a.serial?.rigModel === b.serial?.rigModel
+      );
+    }
+
+    // none 类型总是相同
+    if (a.type === 'none' && b.type === 'none') {
+      return true;
+    }
+
+    return false;
   }
 }
