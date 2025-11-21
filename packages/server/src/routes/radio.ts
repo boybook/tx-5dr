@@ -30,6 +30,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const config = HamlibConfigSchema.parse(req.body);
     await configManager.updateRadioConfig(config);
 
+    // 标记是否刚刚触发了引擎重启（用于避免重复调用 applyConfig）
+    let engineRestarted = false;
+
     // 如果切换到 ICOM WLAN 模式，自动设置音频设备为 ICOM WLAN
     if (config.type === 'icom-wlan') {
       console.log('📡 [Radio Routes] 检测到 ICOM WLAN 模式，自动设置音频设备');
@@ -53,19 +56,22 @@ export async function radioRoutes(fastify: FastifyInstance) {
       if (wasRunning) {
         console.log('🔄 [Radio Routes] 重新启动引擎');
         await engine.start();
+        engineRestarted = true; // 标记已触发重启，radio 资源会自动应用配置
       }
     }
 
-    // 仅在引擎未运行时手动应用配置
-    // 如果引擎正在运行，radio 资源已在上面的 engine.start() 中自动应用了最新配置
-    // 这避免了双重连接问题（第一次：radio资源启动时应用，第二次：这里手动应用）
-    if (!engine.getStatus().isRunning) {
+    // 仅在引擎未运行 且 没有刚刚触发重启 时手动应用配置
+    // 如果刚触发重启，radio 资源会在 ResourceManager 启动时自动应用配置
+    // 这避免了竞态条件（engine.start() 是非阻塞的，检查 isRunning 可能还是 STARTING 状态）
+    if (!engine.getStatus().isRunning && !engineRestarted) {
       try {
         await radioManager.applyConfig(config);
         console.log(`✅ [Radio Routes] 配置已应用: type=${config.type}`);
       } catch (error) {
         console.error('❌ [Radio Routes] 应用配置时出错:', error);
       }
+    } else if (engineRestarted) {
+      console.log('📡 [Radio Routes] 引擎正在重启，radio 资源会自动应用配置');
     } else {
       console.log('📡 [Radio Routes] 引擎正在运行，radio 资源已自动应用配置');
     }
@@ -84,7 +90,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       radioInfo,
       radioConfig: config,
       reason: '配置已更新',
-      reconnectInfo: radioManager.getReconnectInfo()
+      connectionHealth: radioManager.getConnectionHealth()
     });
     console.log(`📡 [Radio Routes] 已广播配置变更事件: type=${config.type}, connected=${radioManager.isConnected()}`);
 
@@ -486,7 +492,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     }
 
     // 执行手动重连
-    await radioManager.manualReconnect();
+    await radioManager.reconnect();
 
     return reply.send({
       success: true,

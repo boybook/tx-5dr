@@ -89,12 +89,12 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
    */
   async sendAudio(samples: Float32Array): Promise<void> {
     try {
-      console.log(`🔊 [IcomWlanAudioAdapter] 发送音频: ${samples.length} 样本 @ ${this.icomSampleRate}Hz（零重采样优化）`);
+      console.debug(`🔊 [IcomWlanAudioAdapter] 发送音频: ${samples.length} 样本 @ ${this.icomSampleRate}Hz（零重采样优化）`);
 
       // 直接发送到 ICOM 电台（已经是 12kHz，无需重采样）
       await this.icomConnection.sendAudio(samples);
 
-      console.log(`✅ [IcomWlanAudioAdapter] 音频发送成功`);
+      console.debug(`✅ [IcomWlanAudioAdapter] 音频发送成功`);
 
     } catch (error) {
       console.error('❌ [IcomWlanAudioAdapter] 发送音频失败:', error);

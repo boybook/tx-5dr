@@ -1,15 +1,14 @@
 /**
  * 电台状态机
  *
- * 管理物理电台的连接状态转换
+ * 管理物理电台的连接状态转换（简化版）
  * - disconnected: 断开连接
  * - connecting: 连接中
  * - connected: 已连接
- * - reconnecting: 重连中（仅手动触发）
  * - error: 错误状态
  *
  * 核心特性：
- * 1. 手动触发重连（用户点击连接按钮）
+ * 1. 统一的连接概念（不区分首次连接和重连）
  * 2. 连接健康检查
  */
 
@@ -124,7 +123,6 @@ export function createRadioStateMachine(
       setError: ({ context, event }) => {
         if (
           event.type === 'CONNECT_FAILURE' ||
-          event.type === 'RECONNECT_FAILURE' ||
           event.type === 'HEALTH_CHECK_FAILED'
         ) {
           context.error = event.error;
@@ -310,30 +308,8 @@ export function createRadioStateMachine(
       },
 
       /**
-       * 重连中状态（仅供手动触发，不自动转换）
-       */
-      [RadioState.RECONNECTING]: {
-        entry: [
-          'markUnhealthy',
-          { type: 'notifyStateChange', params: { input } },
-        ],
-        on: {
-          RECONNECT: {
-            // 用户手动触发重连
-            target: RadioState.CONNECTING,
-          },
-          STOP_RECONNECTING: {
-            target: RadioState.DISCONNECTED,
-          },
-          DISCONNECT: {
-            target: RadioState.DISCONNECTED,
-            actions: ['recordDisconnectReason'],
-          },
-        },
-      },
-
-      /**
        * 错误状态
+       * 用户可以通过 RESET 返回断开状态，或通过 CONNECT 重新连接
        */
       [RadioState.ERROR]: {
         entry: [
@@ -347,9 +323,10 @@ export function createRadioStateMachine(
             target: RadioState.DISCONNECTED,
             actions: ['clearError'],
           },
-          RECONNECT: {
+          CONNECT: {
+            // 允许从错误状态直接重新连接
             target: RadioState.CONNECTING,
-            actions: ['clearError'],
+            actions: ['clearError', 'saveConfig'],
           },
           DISCONNECT: {
             target: RadioState.DISCONNECTED,

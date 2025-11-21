@@ -102,8 +102,7 @@ export const SystemStatusSchema = z.object({
   nextSlotIn: z.number(),
   audioStarted: z.boolean(),
   radioConnected: z.boolean().optional(),
-  radioReconnectInfo: z.object({
-    isReconnecting: z.boolean(),
+  radioConnectionHealth: z.object({
     connectionHealthy: z.boolean(),
   }).optional(),
 });
@@ -580,10 +579,9 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
     reason: z.string().optional(),
     message: z.string().optional(), // 用户友好的消息
     recommendation: z.string().optional(), // 操作建议
-    reconnectInfo: z.object({
-      isReconnecting: z.boolean(),
+    connectionHealth: z.object({
       connectionHealthy: z.boolean(),
-    }),
+    }).optional(),
   }),
 });
 
@@ -597,10 +595,9 @@ export const WSRadioErrorMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.RADIO_ERROR),
   data: z.object({
     error: z.string(),
-    reconnectInfo: z.object({
-      isReconnecting: z.boolean(),
+    connectionHealth: z.object({
       connectionHealthy: z.boolean(),
-    }),
+    }).optional(),
   }),
 });
 

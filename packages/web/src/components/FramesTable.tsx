@@ -115,16 +115,13 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   }, []);
 
   const getGroupColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
-    if (type === 'transmit') {
-      return 'bg-danger-50';
-    }
-    // 使用CSS变量设置背景颜色
+    // 不使用 Tailwind 类，统一用 getGroupStyle 处理
     return '';
   };
 
   const getGroupStyle = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
     if (type === 'transmit') {
-      return {};
+      return { backgroundColor: 'rgba(255, 246, 75, 0.3)' }; // 亮黄色 #FFF64B
     }
     return {
       backgroundColor: cycle === 'even' ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)'
@@ -133,7 +130,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
   const getBorderColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
     if (type === 'transmit') {
-      return '#f31260'; // 使用danger红色
+      return '#f31260'; // 红色边框标记
     }
     return cycle === 'even' ? 'var(--ft8-cycle-even)' : 'var(--ft8-cycle-odd)';
   };
@@ -407,12 +404,12 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                   key={`${message.utc}-${messageIndex}`}
                   className={`
                     ft8-row
-                    ${message.db === 'TX' ? 'bg-danger-100/70' : ''}
                     transition-colors duration-150
                     grid ${gridCols} gap-0 ${isNarrow ? 'px-2' : 'px-3'} py-0.5 ml-1 relative
                     ${message.db !== 'TX' ? 'hover:[background-color:var(--hover-bg)]' : ''}
                   `}
                   style={{
+                    ...(message.db === 'TX' ? { backgroundColor: 'rgba(255, 246, 75, 0.7)' } : {}),
                     ...getRowHoverStyle(group.cycle, group.type, message),
                     ...getLogbookAnalysisStyle(message, group.cycle, group.type)
                   }}

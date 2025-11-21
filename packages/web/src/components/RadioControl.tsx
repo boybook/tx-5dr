@@ -275,7 +275,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState 
     } else if (config.type === 'network') {
       radioModelText = 'Network RigCtrl';
     } else {
-      radioModelText = '已配置电台';
+      radioModelText = '已配置电台 待连接';
     }
 
     // 电台未连接

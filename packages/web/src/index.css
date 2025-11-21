@@ -142,4 +142,18 @@ textarea.font-mono,
   background-color: inherit;
   color: inherit;
   transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+
+/* 进度条动画 - 从服务端同步的当前进度开始，平滑过渡到100% */
+@keyframes progress-bar {
+  from {
+    width: var(--progress-start, 0%);
+  }
+  to {
+    width: 100%;
+  }
+}
+
+.progress-bar-animated {
+  width: 0%;
 } 

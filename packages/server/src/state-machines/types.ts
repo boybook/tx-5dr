@@ -98,12 +98,12 @@ export interface EngineInput {
 
 /**
  * 电台状态枚举
+ * 简化版：移除 RECONNECTING 状态，统一为"连接"概念
  */
 export enum RadioState {
   DISCONNECTED = 'disconnected',
   CONNECTING = 'connecting',
   CONNECTED = 'connected',
-  RECONNECTING = 'reconnecting',
   ERROR = 'error',
 }
 
@@ -144,6 +144,7 @@ export interface RadioContext {
 
 /**
  * 电台状态机事件
+ * 简化版：移除 RECONNECT 相关事件
  */
 export type RadioEvent =
   | { type: 'CONNECT'; config: HamlibConfig }
@@ -152,10 +153,6 @@ export type RadioEvent =
   | { type: 'DISCONNECT'; reason?: string }
   | { type: 'DISCONNECT_SUCCESS' }
   | { type: 'CONNECTION_LOST'; reason?: string }
-  | { type: 'RECONNECT' }
-  | { type: 'RECONNECT_SUCCESS' }
-  | { type: 'RECONNECT_FAILURE'; error: RadioError | Error }
-  | { type: 'STOP_RECONNECTING' }
   | { type: 'HEALTH_CHECK' }
   | { type: 'HEALTH_CHECK_PASSED' }
   | { type: 'HEALTH_CHECK_FAILED'; error: RadioError | Error }

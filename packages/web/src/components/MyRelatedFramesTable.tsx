@@ -286,8 +286,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         
         const ft8Message: FrameDisplayMessage = {
           utc: utcSeconds,
-          db: frame.snr,
-          dt: frame.dt,
+          db: frame.snr === -999 ? 'TX' : frame.snr,
+          dt: frame.snr === -999 ? '-' : frame.dt,
           freq: Math.round(frame.freq),
           message: frame.message,
           ...(locationInfo.country && { country: locationInfo.country }),
