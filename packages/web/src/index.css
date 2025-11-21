@@ -144,16 +144,19 @@ textarea.font-mono,
   transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
 }
 
-/* 进度条动画 - 从服务端同步的当前进度开始，平滑过渡到100% */
+/* 进度条遮罩动画 - 遮罩从右侧缩小，露出下方颜色层 */
 @keyframes progress-bar {
   from {
-    width: var(--progress-start, 0%);
+    width: var(--progress-start, 100%);
   }
   to {
-    width: 100%;
+    width: 0%;
   }
 }
 
-.progress-bar-animated {
-  width: 0%;
+.progress-bar-mask {
+  background-color: hsl(var(--heroui-background));
+  width: 100%;
+  left: auto;
+  right: 0;
 } 

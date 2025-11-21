@@ -306,47 +306,48 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
   };
 
-  // 获取进度条样式 - 使用 CSS animation 实现平滑动画
-  const getProgressStyle = (): { backgroundColor: string; animation: string } => {
-    if (!operatorStatus.cycleInfo || !radio.state.currentMode) {
-      return {
-        backgroundColor: 'var(--ft8-cycle-even-bg)',
-        animation: 'none',
-      };
+  // 获取进度条颜色 - 颜色变化用 CSS transition 平滑过渡
+  const getProgressColor = (): string => {
+    if (!operatorStatus.cycleInfo) {
+      return 'var(--ft8-cycle-even-bg)';
     }
 
-    const { cycleProgress, currentCycle, isTransmitCycle } = operatorStatus.cycleInfo;
+    const { currentCycle, isTransmitCycle } = operatorStatus.cycleInfo;
+    const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
+
+    if (isActuallyTransmitting) {
+      return 'hsl(var(--heroui-danger) / 0.15)';
+    }
+
+    const isEvenCycle = CycleUtils.isEvenCycle(currentCycle);
+    return isEvenCycle ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)';
+  };
+
+  // 进度条动画样式 - 只在周期变化时重新计算，避免发射状态变化时重新触发动画
+  const progressAnimation = React.useMemo((): React.CSSProperties => {
+    if (!operatorStatus.cycleInfo || !radio.state.currentMode) {
+      return { animation: 'none' };
+    }
+
+    const { cycleProgress } = operatorStatus.cycleInfo;
     const cycleDurationMs = radio.state.currentMode.slotMs;
 
     // 超过120%表示服务端可能掉线，显示空条
     if (cycleProgress > 1.2) {
-      return {
-        backgroundColor: 'var(--ft8-cycle-even-bg)',
-        animation: 'none',
-      };
+      return { animation: 'none' };
     }
 
-    // 确定进度条颜色
-    const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
-    let bgColor: string;
-    if (isActuallyTransmitting) {
-      bgColor = 'hsl(var(--heroui-danger) / 0.15)';
-    } else {
-      const isEvenCycle = CycleUtils.isEvenCycle(currentCycle);
-      bgColor = isEvenCycle ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)';
-    }
-
-    // 计算动画参数：从当前进度开始，到周期结束
+    // 计算动画参数：遮罩从 (100% - 当前进度) 缩小到 0%
     const remainingMs = Math.max(0, cycleDurationMs * (1 - cycleProgress));
-    const startPercent = Math.min(cycleProgress * 100, 100);
+    const maskStartPercent = Math.max(0, 100 - cycleProgress * 100);
 
     return {
-      backgroundColor: bgColor,
       animation: `progress-bar ${remainingMs}ms linear forwards`,
       // @ts-expect-error CSS custom property for animation start position
-      '--progress-start': `${startPercent}%`,
+      '--progress-start': `${maskStartPercent}%`,
     };
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operatorStatus.cycleInfo?.currentCycle, radio.state.currentMode?.slotMs]);
 
   // 选择空闲频率
   const pickIdleFrequency = () => {
@@ -423,11 +424,16 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     >
       {/* 上半部分 - 进度条背景 */}
       <div className="relative h-12 p-4">
-        {/* 进度条 - 使用 CSS animation 动画，key 确保周期变化时重建触发动画 */}
+        {/* 进度条颜色层 - 颜色变化用 transition 平滑过渡 */}
+        <div
+          className="absolute inset-0 transition-colors duration-200"
+          style={{ backgroundColor: getProgressColor() }}
+        />
+        {/* 进度条遮罩层 - 从右侧遮盖，宽度动画控制可见进度 */}
         <div
           key={operatorStatus.cycleInfo?.currentCycle ?? 'idle'}
-          className="absolute inset-0 progress-bar-animated"
-          style={getProgressStyle()}
+          className="absolute inset-0 progress-bar-mask"
+          style={progressAnimation}
         />
         <div className="relative flex items-center justify-between h-full">
           {/* 左侧 - 发射内容或监听状态 */}

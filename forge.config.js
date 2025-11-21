@@ -20,7 +20,11 @@ export default {
   packagerConfig: {
     name: 'TX-5DR',
     executableName: 'tx-5dr',
-    icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon'),
+    icon: join(__dirname, 'packages', 'electron-main', 'assets', 'AppIcon'),
+    // macOS 26+ 使用 CFBundleIconName 引用 Assets.car 中的图标
+    extendInfo: {
+      CFBundleIconName: 'AppIcon'
+    },
     appBundleId: 'com.tx5dr.app',
     appCategoryType: 'public.app-category.utilities',
     asar: false,
