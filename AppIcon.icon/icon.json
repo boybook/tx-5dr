@@ -19,13 +19,14 @@
     {
       "layers" : [
         {
+          "fill" : "automatic",
           "image-name" : "TX.png",
           "name" : "TX",
           "position" : {
             "scale" : 0.66,
             "translation-in-points" : [
               -61.80302587031497,
-              -206.90000000000032
+              -226.90000000000032
             ]
           }
         },
