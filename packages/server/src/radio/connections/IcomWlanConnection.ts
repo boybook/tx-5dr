@@ -10,6 +10,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { IcomControl, AUDIO_RATE } from 'icom-wlan-node';
+import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import {
@@ -58,6 +59,11 @@ export class IcomWlanConnection
    * 清理保护标志（防止重复清理导致资源泄漏或冲突）
    */
   private isCleaningUp = false;
+
+  /**
+   * 天调启用状态（本地跟踪，简化版实现）
+   */
+  private tunerEnabled = false;
 
   constructor() {
     super();
@@ -359,6 +365,71 @@ export class IcomWlanConnection
    */
   getAudioSampleRate(): number {
     return AUDIO_RATE; // 12000
+  }
+
+  // ===== 天线调谐器控制 =====
+
+  /**
+   * 获取天线调谐器能力
+   * ICOM 电台通常都支持内置天调
+   */
+  async getTunerCapabilities(): Promise<TunerCapabilities> {
+    return {
+      supported: true,
+      hasSwitch: true,
+      hasManualTune: true,
+    };
+  }
+
+  /**
+   * 获取天线调谐器状态（简化版：使用本地状态跟踪）
+   */
+  async getTunerStatus(): Promise<TunerStatus> {
+    return {
+      enabled: this.tunerEnabled,
+      active: false,
+      status: 'idle',
+    };
+  }
+
+  /**
+   * 设置天线调谐器开关
+   * 使用 CI-V 命令 1C 01 00/01 设置
+   */
+  async setTuner(enabled: boolean): Promise<void> {
+    this.checkConnected();
+
+    try {
+      // CI-V: 1C 01 <00/01>
+      const data = Buffer.from([0x1C, 0x01, enabled ? 0x01 : 0x00]);
+      this.rig!.sendCiv(data);
+
+      // 更新本地状态
+      this.tunerEnabled = enabled;
+      console.log(`✅ [IcomWlanConnection] 天调已${enabled ? '启用' : '禁用'}`);
+    } catch (error) {
+      console.error('❌ [IcomWlanConnection] 设置天调失败:', error);
+      throw this.convertError(error, 'setTuner');
+    }
+  }
+
+  /**
+   * 启动手动调谐
+   * 使用 CI-V 命令 1C 01 02 启动
+   */
+  async startTuning(): Promise<boolean> {
+    this.checkConnected();
+
+    try {
+      // CI-V: 1C 01 02
+      const data = Buffer.from([0x1C, 0x01, 0x02]);
+      this.rig!.sendCiv(data);
+      console.log('✅ [IcomWlanConnection] 手动调谐已启动');
+      return true;
+    } catch (error) {
+      console.error('❌ [IcomWlanConnection] 启动调谐失败:', error);
+      return false;
+    }
   }
 
   /**
