@@ -9,6 +9,7 @@ export interface EncodeRequest {
   mode?: 'FT8' | 'FT4';
   slotStartMs?: number; // 时隙开始时间戳
   timeSinceSlotStartMs?: number; // 从时隙开始到现在经过的时间（毫秒）
+  requestId?: string; // 编码请求唯一ID（用于去重和追踪）
 }
 
 export interface EncodeResult {
