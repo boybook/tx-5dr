@@ -727,6 +727,9 @@ export class RadioOperatorManager {
         this.transmissionTracker.updatePhase(operatorId, 'preparing' as any);
       }
 
+      // 生成唯一的编码请求ID（用于去重和追踪）
+      const requestId = `${operatorId}-${slotStartMs}-${Date.now()}`;
+
       // 提交到编码队列
       this.encodeQueue.push({
         operatorId,
@@ -734,10 +737,11 @@ export class RadioOperatorManager {
         frequency,
         mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
         slotStartMs: slotStartMs,
-        timeSinceSlotStartMs: timeSinceSlotStartMs
+        timeSinceSlotStartMs: timeSinceSlotStartMs,
+        requestId
       });
 
-      console.log(`📡 [RadioOperatorManager] 已处理操作员 ${operatorId} 的发射请求: "${transmission}"`);
+      console.log(`📡 [RadioOperatorManager] 已处理操作员 ${operatorId} 的发射请求: "${transmission}", requestId=${requestId}`);
     }
   }
 
@@ -870,6 +874,9 @@ export class RadioOperatorManager {
         this.transmissionTracker.updatePhase(operatorId, 'preparing' as any);
       }
 
+      // 生成唯一的编码请求ID（用于去重和追踪）
+      const requestId = `${operatorId}-${currentSlotStartMs}-${Date.now()}`;
+
       // 提交到编码队列
       this.encodeQueue.push({
         operatorId,
@@ -877,8 +884,11 @@ export class RadioOperatorManager {
         frequency,
         mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
         slotStartMs: currentSlotStartMs,
-        timeSinceSlotStartMs: currentTimeSinceSlotStartMs
+        timeSinceSlotStartMs: currentTimeSinceSlotStartMs,
+        requestId
       });
+
+      console.log(`📻 [操作员管理器] 中途触发发射: ${operatorId}, requestId=${requestId}`);
     });
   }
 
