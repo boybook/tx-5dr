@@ -468,10 +468,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       console.log(`📻 [PhysicalRadioManager] 天调能力:`, capabilities);
       return capabilities;
     } catch (error) {
-      console.error(
-        `❌ [PhysicalRadioManager] 获取天调能力失败: ${(error as Error).message}`
+      // 天调能力查询失败不影响主连接状态（某些电台不支持 TUNER 功能查询）
+      console.warn(
+        `⚠️ [PhysicalRadioManager] 获取天调能力失败（不影响主连接）: ${(error as Error).message}`
       );
-      this.handleConnectionError(error as Error);
       // 发生错误时返回不支持
       return {
         supported: false,
@@ -508,10 +508,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       const status = await this.getTunerStatus();
       this.emit('tunerStatusChanged', status);
     } catch (error) {
+      // 天调设置失败不影响主连接状态
       console.error(
         `❌ [PhysicalRadioManager] 设置天调失败: ${(error as Error).message}`
       );
-      this.handleConnectionError(error as Error);
       throw error;
     }
   }
@@ -543,10 +543,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       const status = await this.connection.getTunerStatus();
       return status;
     } catch (error) {
-      console.error(
-        `❌ [PhysicalRadioManager] 获取天调状态失败: ${(error as Error).message}`
+      // 天调状态查询失败不影响主连接状态（某些电台不支持 TUNER 功能查询）
+      console.warn(
+        `⚠️ [PhysicalRadioManager] 获取天调状态失败（不影响主连接）: ${(error as Error).message}`
       );
-      this.handleConnectionError(error as Error);
       // 发生错误时返回默认状态
       return {
         enabled: false,
@@ -600,6 +600,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       return result;
     } catch (error) {
+      // 调谐失败不影响主连接状态
       console.error(
         `❌ [PhysicalRadioManager] 启动调谐失败: ${(error as Error).message}`
       );
@@ -614,7 +615,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         this.emit('tunerStatusChanged', failedStatus);
       }
 
-      this.handleConnectionError(error as Error);
       throw error;
     }
   }
