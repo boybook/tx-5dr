@@ -67,9 +67,8 @@ export class AudioDeviceManager {
    */
   private convertNaudiodonDevice(device: any, type: 'input' | 'output', isSystemDefault: boolean = false): AudioDevice {
     const channels = type === 'input' ? device.maxInputChannels : device.maxOutputChannels;
-    // 如果没有通道信息，根据类型设置默认值
-    const defaultChannels = type === 'input' ? 1 : 2;
-    const finalChannels = channels && channels > 0 ? channels : defaultChannels;
+    // 保留真实通道数，不伪造默认值（上层可据此检测设备是否可用）
+    const finalChannels = channels && channels > 0 ? channels : 0;
     
     console.log(`🔄 [AudioDeviceManager] 转换设备 ${device.name} (${type}): 原始通道=${channels}, 最终通道=${finalChannels}`);
     
@@ -103,35 +102,16 @@ export class AudioDeviceManager {
         });
       });
       
-      // 过滤输入设备 - 严格基于输入通道数筛选
+      // 过滤输入设备 - 严格基于输入通道数筛选（不使用关键词匹配，避免误判）
       const inputDevices = devices.filter((device, index) => {
-        // 主要条件：必须有输入通道
         const hasInputChannels = device.maxInputChannels && device.maxInputChannels > 0;
-        
-        // 特殊情况：包含明确输入关键词的设备，即使通道数为0也保留（某些驱动可能报告不准确）
-        const isInputKeyword = device.name && (
-          device.name.toLowerCase().includes('input') ||
-          device.name.toLowerCase().includes('capture') ||
-          device.name.toLowerCase().includes('mic') ||
-          device.name.toLowerCase().includes('record')
-        );
-        
-        // 默认设备：包含 default 关键词且不是明确的输出设备
-        const isDefaultInputDevice = device.name && (
-          device.name.toLowerCase().includes('default') || 
-          device.name.toLowerCase().includes('sysdefault')
-        ) && !device.name.toLowerCase().includes('output');
-        
-        const shouldKeep = hasInputChannels || isInputKeyword || isDefaultInputDevice;
-        
-        console.log(`🎤 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${shouldKeep}`, {
-          hasInputChannels,
+
+        console.log(`🎤 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${hasInputChannels}`, {
           maxInputChannels: device.maxInputChannels,
-          isInputKeyword,
-          isDefaultInputDevice
+          maxOutputChannels: device.maxOutputChannels
         });
-        
-        return shouldKeep;
+
+        return hasInputChannels;
       });
       
       console.log(`🎤 [AudioDeviceManager] 过滤后找到 ${inputDevices.length} 个输入设备`);
@@ -210,30 +190,12 @@ export class AudioDeviceManager {
         // 主要条件：必须有输出通道
         const hasOutputChannels = device.maxOutputChannels && device.maxOutputChannels > 0;
         
-        // 特殊情况：包含明确输出关键词的设备，即使通道数为0也保留（某些驱动可能报告不准确）
-        const isOutputKeyword = device.name && (
-          device.name.toLowerCase().includes('output') ||
-          device.name.toLowerCase().includes('playback') ||
-          device.name.toLowerCase().includes('speaker') ||
-          device.name.toLowerCase().includes('headphone')
-        );
-        
-        // 默认设备：包含 default 关键词且不是明确的输入设备
-        const isDefaultOutputDevice = device.name && (
-          device.name.toLowerCase().includes('default') || 
-          device.name.toLowerCase().includes('sysdefault')
-        ) && !device.name.toLowerCase().includes('input');
-        
-        const shouldKeep = hasOutputChannels || isOutputKeyword || isDefaultOutputDevice;
-        
-        console.log(`🔊 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${shouldKeep}`, {
-          hasOutputChannels,
-          maxOutputChannels: device.maxOutputChannels,
-          isOutputKeyword,
-          isDefaultOutputDevice
+        console.log(`🔊 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${hasOutputChannels}`, {
+          maxInputChannels: device.maxInputChannels,
+          maxOutputChannels: device.maxOutputChannels
         });
-        
-        return shouldKeep;
+
+        return hasOutputChannels;
       });
       
       console.log(`🔊 [AudioDeviceManager] 过滤后找到 ${outputDevices.length} 个输出设备`);

@@ -204,7 +204,19 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       };
       
       console.log('音频输入配置:', inputOptions);
-      
+
+      // 创建前验证设备能力：检查目标设备的 maxInputChannels
+      if (actualDeviceId !== undefined) {
+        const allDevices = naudiodon.getDevices();
+        const targetDevice = allDevices.find((d: any) => d.id === actualDeviceId);
+        if (targetDevice && targetDevice.maxInputChannels < (this.channels || 1)) {
+          throw new Error(
+            `输入设备 "${targetDevice.name}" (ID ${actualDeviceId}) 不支持 ${this.channels} 通道输入` +
+            ` (最大输入通道数: ${targetDevice.maxInputChannels})。请在设置中选择正确的音频输入设备。`
+          );
+        }
+      }
+
       // 创建和启动音频输入流（带超时保护）
       await this.createAndStartInputWithTimeout(inputOptions, deviceId);
       
