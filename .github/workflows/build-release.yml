@@ -109,6 +109,14 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: microsoft/setup-msbuild@v1
 
+      - name: Verify WiX Toolset (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          echo "Verifying WiX Toolset v3..."
+          where candle.exe && echo "✅ candle.exe found" || echo "❌ candle.exe not found"
+          where light.exe && echo "✅ light.exe found" || echo "❌ light.exe not found"
+
       - name: Verify Yarn version
         run: |
           echo "Node version: $(node --version)"
@@ -332,7 +340,7 @@ jobs:
         run: |
           echo "=== Build Output Directory ==="
           ls -la out/ || echo "No out/ directory found"
-          find out/ -type f -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.tar.gz" || echo "No installable files found"
+          find out/ -type f -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.tar.gz" || echo "No installable files found"
 
       - name: Prepare artifacts (rename for nightly if needed)
         shell: bash
@@ -381,10 +389,10 @@ jobs:
               echo "✅ 已准备: ${PREFIX}-linux-${ARCH}.zip"
             done
           elif [ "$PLATFORM" = "win32" ]; then
-            # Windows: EXE 和 ZIP
-            find out/make -name "*.exe" -type f | while read -r file; do
-              cp "$file" "release-artifacts/${PREFIX}-windows-${ARCH}.exe"
-              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.exe"
+            # Windows: MSI 安装包和 ZIP 便携版
+            find out/make -name "*.msi" -type f | while read -r file; do
+              cp "$file" "release-artifacts/${PREFIX}-windows-${ARCH}.msi"
+              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.msi"
             done
 
             find out/make -name "*.zip" -type f | while read -r file; do
@@ -425,7 +433,7 @@ jobs:
           mkdir -p release-assets
 
           # 将所有产物移到统一目录
-          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.exe" \) -exec cp {} release-assets/ \;
+          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" \) -exec cp {} release-assets/ \;
 
           echo "=== Release 产物列表 ==="
           ls -lh release-assets/
@@ -454,7 +462,7 @@ jobs:
             ### 📦 下载说明
 
             #### Windows (x64)
-            - **EXE 安装包**: `TX-5DR-nightly-windows-x64.exe` - 推荐用于安装
+            - **MSI 安装包**: `TX-5DR-nightly-windows-x64.msi` - 推荐用于安装（支持自定义安装目录）
             - **ZIP 便携版**: `TX-5DR-nightly-windows-x64.zip` - 解压即用
 
             #### macOS (ARM64 - Apple Silicon)
@@ -510,7 +518,7 @@ jobs:
             ### 📦 下载说明
 
             #### Windows (x64)
-            - **EXE 安装包**: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.exe` - 推荐
+            - **MSI 安装包**: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.msi` - 推荐（支持自定义安装目录）
             - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip`
 
             #### macOS (ARM64 - Apple Silicon)
