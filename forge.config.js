@@ -177,16 +177,24 @@ module.exports = {
   },
   rebuildConfig: {},
   makers: [
-    // Windows Installers
+    // Windows MSI Installer (WiX)
     {
-      name: '@electron-forge/maker-squirrel',
+      name: '@electron-forge/maker-wix',
       platforms: ['win32'],
       config: {
-        name: 'TX5DR',
-        authors: 'BG5DRB',
+        name: 'TX-5DR',
+        manufacturer: 'TX-5DR Team',
         description: 'TX-5DR Ham Radio FT8 Application',
-        setupIcon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.ico'),
-        iconUrl: 'https://raw.githubusercontent.com/boybook/tx-5dr/main/packages/electron-main/assets/icon.ico'
+        icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.ico'),
+        ui: {
+          chooseDirectory: true  // 用户可选择安装目录
+        },
+        programFilesFolderName: 'TX-5DR',
+        shortcutFolderName: 'TX-5DR',
+        shortcutName: 'TX-5DR',
+        appUserModelId: 'com.tx5dr.app',
+        // MSI 升级链路标识 - 发布后永不更改
+        upgradeCode: '77C3C854-49C2-4650-A366-D4CD08EDDF96'
       }
     },
     // macOS Packages - DMG 安装包
