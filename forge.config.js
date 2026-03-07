@@ -1,9 +1,4 @@
-import { join } from 'path';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const { join, dirname } = require('path');
 
 // ========== DEBUG: macOS Signing Config ==========
 if (process.platform === 'darwin') {
@@ -16,7 +11,7 @@ if (process.platform === 'darwin') {
   console.log('=================================================');
 }
 
-export default {
+module.exports = {
   packagerConfig: {
     name: 'TX-5DR',
     executableName: 'tx-5dr',
@@ -177,7 +172,7 @@ export default {
     // 打包前构建所有项目
     generateAssets: async () => {
       console.log('🔨 Building all packages...');
-      const { execSync } = await import('child_process');
+      const { execSync } = require('child_process');
       execSync('yarn build', { stdio: 'inherit' });
       console.log('✅ Build completed');
     },
@@ -185,8 +180,8 @@ export default {
     packageAfterCopy: async (forgeConfig, buildPath, electronVersion, platform, arch) => {
       console.log('📦 Package-after-copy hook executed (before signing)');
 
-      const { execSync } = await import('child_process');
-      const { join } = await import('path');
+      const { execSync } = require('child_process');
+      // join already imported at top level
 
       // buildPath 直接指向 app 内容根目录
       const appRoot = buildPath;
@@ -332,12 +327,33 @@ export default {
         }
       }
 
+      if (platform === 'win32') {
+        try {
+          console.log(`🧹 [Windows] 清理非本平台预构建（保留 win32-${arch}）...`);
+
+          // wsjtx-lib: 清理其他平台
+          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/linux-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
+
+          // hamlib: 清理其他平台
+          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/linux-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
+
+          // naudiodon2: 清理 Linux/macOS 相关文件
+          execSync(`rm -rf "${appRoot}"/node_modules/naudiodon2/portaudio/bin_arm* 2>/dev/null || true`, { stdio: 'inherit' });
+
+          console.log('✅ [Windows] 清理完成');
+        } catch (error) {
+          console.warn('⚠️ [Windows] 清理跨架构文件时出现警告:', error.message);
+        }
+      }
+
       // macOS: 修复 native 模块的重复 RPATH 问题 (必须在签名之前)
       if (platform === 'darwin') {
         try {
           console.log('🔧 [macOS] 修复 native 模块 RPATH...');
-          const path = await import('path');
-          const { execSync: exec } = await import('child_process');
+          const path = require('path');
+          const { execSync: exec } = require('child_process');
 
           // 查找所有 .node 文件
           const findCmd = `find "${appRoot}/node_modules" -name "*.node" -type f`;
@@ -389,8 +405,8 @@ export default {
       if (platform === 'darwin' && process.env.APPLE_IDENTITY) {
         try {
           console.log('🔐 [macOS] 签名外部 Node 二进制 (签名前)...');
-          const path = await import('path');
-          const fs = await import('fs');
+          const path = require('path');
+          const fs = require('fs');
 
           const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
           const triplet = `darwin-${arch}`;
