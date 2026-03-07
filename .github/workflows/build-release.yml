@@ -215,8 +215,8 @@ jobs:
             URL="https://nodejs.org/dist/v${NODE_VERSION}/${PKG}"
             echo "Downloading ${URL}"
             curl -fsSL -o ${PKG} ${URL}
-            # Use bsdtar to extract zip on Windows runner
-            tar -xf ${PKG}
+            # Use 7z to extract zip on Windows runner (tar may not handle zip)
+            7z x -y "${PKG}"
             SRC_DIR=$(echo node-v${NODE_VERSION}-win-${ARCH})
             mkdir -p resources/bin/${TRIPLET}
             cp -f ${SRC_DIR}/node.exe resources/bin/${TRIPLET}/node.exe
