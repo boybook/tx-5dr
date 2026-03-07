@@ -1,4 +1,82 @@
-const { join, dirname } = require('path');
+const { join, dirname, basename } = require('path');
+const fs = require('fs');
+
+// ========== 跨平台文件操作工具 ==========
+
+/** 递归删除目录或文件（跨平台，静默忽略不存在的路径） */
+function rmrf(target) {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+}
+
+/** 删除目录下匹配 glob 前缀的子目录（如 'linux-*' 匹配 'linux-x64', 'linux-arm64'） */
+function rmGlob(parentDir, prefix) {
+  try {
+    if (!fs.existsSync(parentDir)) return;
+    for (const entry of fs.readdirSync(parentDir)) {
+      if (entry.startsWith(prefix)) {
+        rmrf(join(parentDir, entry));
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** 删除目录下除了 keepNames 以外的所有一级子项 */
+function cleanDirKeep(dir, keepNames) {
+  try {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir)) {
+      if (!keepNames.includes(entry)) {
+        rmrf(join(dir, entry));
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** 递归查找指定目录下名为 targetName 的目录并删除 */
+function findAndRemoveDirs(rootDir, targetName) {
+  try {
+    if (!fs.existsSync(rootDir)) return;
+    for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+      const fullPath = join(rootDir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === targetName) {
+          rmrf(fullPath);
+        } else {
+          findAndRemoveDirs(fullPath, targetName);
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** 递归查找所有匹配扩展名的文件 */
+function findFilesByExt(dir, ext) {
+  const results = [];
+  try {
+    if (!fs.existsSync(dir)) return results;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...findFilesByExt(fullPath, ext));
+      } else if (entry.name.endsWith(ext)) {
+        results.push(fullPath);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return results;
+}
 
 // ========== DEBUG: macOS Signing Config ==========
 if (process.platform === 'darwin') {
@@ -181,146 +259,123 @@ module.exports = {
       console.log('📦 Package-after-copy hook executed (before signing)');
 
       const { execSync } = require('child_process');
-      // join already imported at top level
 
       // buildPath 直接指向 app 内容根目录
       const appRoot = buildPath;
       const nm = join(appRoot, 'node_modules');
 
-      // 通用：删除明显的开发/打包期依赖，保留运行期依赖（如 fastify/hamlib/serialport/wsjtx-lib/naudiodon2 等）
+      // ====== 通用：删除明显的开发/打包期依赖 ======
       try {
         console.log('🧹 正在精简 node_modules...');
-        const toRemove = [
+        const toRemoveExact = [
           // Electron 打包相关 & 自身
           'electron', 'electron-winstaller', '@electron', '@electron-forge',
           // 构建工具/打包器
           'rollup', '@rollup', 'vite', '@vitejs', 'esbuild', '@esbuild', 'postject', 'sucrase',
-          'appdmg', 'jiti', '@swc',  // DMG 制作和编译工具
+          'appdmg', 'jiti', '@swc',
           // 代码质量/类型
           'typescript', '@types', 'eslint', '@eslint', '@eslint-community', '@typescript-eslint', 'prettier',
-          // UI/前端开发依赖（运行时使用的是打包后的 web/dist，不需要包体）
+          // UI/前端开发依赖（运行时使用的是打包后的 web/dist）
           '@heroui', '@heroicons', '@fortawesome', 'caniuse-lite', 'tailwindcss', 'tailwind-merge', 'tailwind-variants',
           '@react-aria', '@react-stately', '@react-types', '@formatjs', 'react', 'react-dom', 'framer-motion', 'rxjs', '@babel',
-          // monorepo/开发辅助
-          /^turbo.*/,
           // 其他只在构建期使用
           'png-to-ico', 'vitest', '@vitest', 'tsx', 'node-gyp', 'electron-installer-redhat', 'electron-installer-debian', 'segfault-handler'
         ];
 
-        for (const item of toRemove) {
-          const pattern = typeof item === 'string' ? item : item.source; // 日志友好
-          try {
-            const cmd = typeof item === 'string'
-              ? `rm -rf "${join(nm, item)}"`
-              : `ls "${nm}" | grep -E "${item.source}" | xargs -I{} rm -rf "${join(nm, '{}')}"`;
-            execSync(cmd, { stdio: 'inherit', env: process.env });
-          } catch {
-            // ignore
-          }
+        // 删除精确匹配的包
+        for (const pkg of toRemoveExact) {
+          rmrf(join(nm, pkg));
         }
+
+        // 删除 turbo* 开头的包
+        rmGlob(nm, 'turbo');
+
         console.log('✅ node_modules 精简完成');
       } catch (err) {
         console.warn('⚠️ 精简 node_modules 遇到问题：', (err && err.message) || err);
       }
 
-      // 清理 packages 子目录的 node_modules（最大的体积占用）
+      // ====== 清理 packages 子目录的 node_modules ======
       try {
         console.log('🧹 正在清理 packages/*/node_modules...');
-        execSync(`find "${appRoot}/packages" -name "node_modules" -type d -prune -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
+        findAndRemoveDirs(join(appRoot, 'packages'), 'node_modules');
         console.log('✅ packages/*/node_modules 清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 packages/*/node_modules 遇到问题：', (err && err.message) || err);
       }
 
-      // 清理 packages/web 的源码，只保留 dist 和 package.json
+      // ====== 清理 packages/web 的源码，只保留 dist 和 package.json ======
       try {
         console.log('🧹 正在清理 packages/web 源码...');
-        const webDir = join(appRoot, 'packages', 'web');
-        // 删除除了 dist 和 package.json 之外的所有内容
-        execSync(`cd "${webDir}" && find . -mindepth 1 -maxdepth 1 ! -name "dist" ! -name "package.json" -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
+        cleanDirKeep(join(appRoot, 'packages', 'web'), ['dist', 'package.json']);
         console.log('✅ packages/web 源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 packages/web 源码遇到问题：', (err && err.message) || err);
       }
 
-      // 清理其他 packages 的非必要文件（保留 dist, package.json, node 二进制）
+      // ====== 清理其他 packages 的非必要文件 ======
       try {
         console.log('🧹 正在清理其他 packages 的源码...');
-        const packagesDir = join(appRoot, 'packages');
         const packagesToClean = ['electron-main', 'electron-preload', 'server', 'core', 'contracts'];
-
         for (const pkg of packagesToClean) {
-          const pkgDir = join(packagesDir, pkg);
-          // 保留 dist, package.json, assets (仅 electron-main 需要), 删除其他内容
-          execSync(`cd "${pkgDir}" && find . -mindepth 1 -maxdepth 1 ! -name "dist" ! -name "package.json" ! -name "assets" -exec rm -rf {} + 2>/dev/null || true`, { stdio: 'inherit' });
+          cleanDirKeep(join(appRoot, 'packages', pkg), ['dist', 'package.json', 'assets']);
         }
         console.log('✅ 其他 packages 源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理其他 packages 源码遇到问题：', (err && err.message) || err);
       }
 
-      // 平台特定：清理跨架构预构建二进制，避免携带无用文件
+      // ====== 平台特定：清理跨架构预构建二进制 ======
+      const wsjtxPrebuilds = join(nm, 'wsjtx-lib', 'prebuilds');
+      const hamlibPrebuilds = join(nm, 'hamlib', 'prebuilds');
+      const naudiodonDir = join(nm, 'naudiodon2', 'portaudio');
+
       if (platform === 'linux') {
         try {
           console.log('🧹 [Linux] 清理跨架构与非Linux二进制文件...');
-          const keep = arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+          const keepArch = arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+          const removeArch = arch === 'arm64' ? 'linux-x64' : 'linux-arm64';
 
-          // wsjtx-lib 仅保留本平台预编译目录
-          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/win32-*" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
-          if (keep === 'linux-x64') {
-            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/linux-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
-          } else {
-            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/linux-x64" 2>/dev/null || true`, { stdio: 'inherit' });
-          }
+          // wsjtx-lib: 仅保留本平台
+          rmGlob(wsjtxPrebuilds, 'win32-');
+          rmGlob(wsjtxPrebuilds, 'darwin-');
+          rmrf(join(wsjtxPrebuilds, removeArch));
 
-          // hamlib 仅保留本平台预编译目录
-          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/win32-*" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
-          if (keep === 'linux-x64') {
-            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/linux-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
-          } else {
-            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/linux-x64" 2>/dev/null || true`, { stdio: 'inherit' });
-          }
+          // hamlib: 仅保留本平台
+          rmGlob(hamlibPrebuilds, 'win32-');
+          rmGlob(hamlibPrebuilds, 'darwin-');
+          rmrf(join(hamlibPrebuilds, removeArch));
 
-          // naudiodon2: 删除Windows/MSVC目录与Windows二进制
-          execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/msvc" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/bin" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`find "${appRoot}" -type f -name "*.dll" -delete 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`find "${appRoot}" -type f -name "*.exe" -delete 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`rm -rf "${appRoot}"/node_modules/naudiodon2/portaudio/bin_arm* 2>/dev/null || true`, { stdio: 'inherit' });
+          // naudiodon2: 删除 Windows/MSVC 目录
+          rmrf(join(naudiodonDir, 'msvc'));
+          rmrf(join(naudiodonDir, 'bin'));
+          rmGlob(naudiodonDir, 'bin_arm');
+
           console.log('✅ [Linux] 清理完成');
         } catch (error) {
           console.warn('⚠️ [Linux] 清理跨架构文件时出现警告:', error.message);
         }
       }
+
       if (platform === 'darwin') {
         try {
           console.log(`🧹 [macOS] 清理非本平台预构建（保留 darwin-${arch}）...`);
+          const removeArch = arch === 'arm64' ? 'darwin-x64' : 'darwin-arm64';
 
           // wsjtx-lib: 清理其他平台和架构
-          execSync(`find "${appRoot}" -path "*/wsjtx-lib/prebuilds/linux-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`find "${appRoot}" -path "*/wsjtx-lib/prebuilds/win32-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
-          // 清理其他 macOS 架构
-          if (arch === 'arm64') {
-            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-x64" 2>/dev/null || true`, { stdio: 'inherit' });
-          } else {
-            execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
-          }
+          rmGlob(wsjtxPrebuilds, 'linux-');
+          rmGlob(wsjtxPrebuilds, 'win32-');
+          rmrf(join(wsjtxPrebuilds, removeArch));
 
           // hamlib: 清理其他平台和架构
-          execSync(`find "${appRoot}" -path "*/hamlib/prebuilds/linux-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`find "${appRoot}" -path "*/hamlib/prebuilds/win32-*/*" -type f -delete 2>/dev/null || true`, { stdio: 'inherit' });
-          // 清理其他 macOS 架构
-          if (arch === 'arm64') {
-            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-x64" 2>/dev/null || true`, { stdio: 'inherit' });
-          } else {
-            execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-arm64" 2>/dev/null || true`, { stdio: 'inherit' });
-          }
+          rmGlob(hamlibPrebuilds, 'linux-');
+          rmGlob(hamlibPrebuilds, 'win32-');
+          rmrf(join(hamlibPrebuilds, removeArch));
 
           // 清理 naudiodon2 Windows/MSVC 资源与 ARMHF 目录
-          execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/msvc" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`rm -rf "${appRoot}/node_modules/naudiodon2/portaudio/bin_arm*" 2>/dev/null || true`, { stdio: 'inherit' });
+          rmrf(join(naudiodonDir, 'msvc'));
+          rmGlob(naudiodonDir, 'bin_arm');
+
           console.log('✅ [macOS] 清理完成');
         } catch (error) {
           console.warn('⚠️ [macOS] 清理跨架构文件时出现警告:', error.message);
@@ -332,15 +387,15 @@ module.exports = {
           console.log(`🧹 [Windows] 清理非本平台预构建（保留 win32-${arch}）...`);
 
           // wsjtx-lib: 清理其他平台
-          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/linux-*" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`rm -rf "${appRoot}/node_modules/wsjtx-lib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          rmGlob(wsjtxPrebuilds, 'linux-');
+          rmGlob(wsjtxPrebuilds, 'darwin-');
 
           // hamlib: 清理其他平台
-          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/linux-*" 2>/dev/null || true`, { stdio: 'inherit' });
-          execSync(`rm -rf "${appRoot}/node_modules/hamlib/prebuilds/darwin-*" 2>/dev/null || true`, { stdio: 'inherit' });
+          rmGlob(hamlibPrebuilds, 'linux-');
+          rmGlob(hamlibPrebuilds, 'darwin-');
 
-          // naudiodon2: 清理 Linux/macOS 相关文件
-          execSync(`rm -rf "${appRoot}"/node_modules/naudiodon2/portaudio/bin_arm* 2>/dev/null || true`, { stdio: 'inherit' });
+          // naudiodon2: 清理非 Windows 相关文件
+          rmGlob(naudiodonDir, 'bin_arm');
 
           console.log('✅ [Windows] 清理完成');
         } catch (error) {
@@ -353,23 +408,15 @@ module.exports = {
         try {
           console.log('🔧 [macOS] 修复 native 模块 RPATH...');
           const path = require('path');
-          const { execSync: exec } = require('child_process');
 
-          // 查找所有 .node 文件
-          const findCmd = `find "${appRoot}/node_modules" -name "*.node" -type f`;
-          let nodeFiles = [];
-          try {
-            const output = exec(findCmd, { encoding: 'utf8' });
-            nodeFiles = output.trim().split('\n').filter(Boolean);
-          } catch (e) {
-            console.log('  未找到 .node 文件');
-          }
+          // 查找所有 .node 文件（使用跨平台方法）
+          const nodeFiles = findFilesByExt(join(appRoot, 'node_modules'), '.node');
 
           let fixedCount = 0;
           for (const nodeFile of nodeFiles) {
             try {
               // 检查是否有重复的 @loader_path/ RPATH
-              const rpaths = exec(
+              const rpaths = execSync(
                 `otool -l "${nodeFile}" | grep -A 2 LC_RPATH | grep path | awk '{print $2}'`,
                 { encoding: 'utf8' }
               ).trim().split('\n').filter(Boolean);
@@ -382,11 +429,11 @@ module.exports = {
 
                 // 删除重复的 @loader_path/ (保留第一个，删除其余)
                 for (let i = 1; i < loaderPathCount; i++) {
-                  exec(`install_name_tool -delete_rpath "@loader_path/" "${nodeFile}"`, { stdio: 'pipe' });
+                  execSync(`install_name_tool -delete_rpath "@loader_path/" "${nodeFile}"`, { stdio: 'pipe' });
                 }
 
                 // adhoc 重新签名
-                exec(`codesign -f -s - "${nodeFile}"`, { stdio: 'pipe' });
+                execSync(`codesign -f -s - "${nodeFile}"`, { stdio: 'pipe' });
                 fixedCount++;
               }
             } catch (e) {
@@ -406,7 +453,6 @@ module.exports = {
         try {
           console.log('🔐 [macOS] 签名外部 Node 二进制 (签名前)...');
           const path = require('path');
-          const fs = require('fs');
 
           const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
           const triplet = `darwin-${arch}`;
@@ -439,4 +485,4 @@ module.exports = {
       }
     }
   }
-}; 
+};

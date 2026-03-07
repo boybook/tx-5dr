@@ -21,12 +21,12 @@ jobs:
     strategy:
       matrix:
         include:
-#          - os: windows-latest
-#            platform: win32
-#            arch: x64
-#            build_command: make
-#            artifact_name: tx-5dr-windows-x64
-            
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            build_command: make
+            artifact_name: tx-5dr-windows-x64
+
           - os: macos-latest
             platform: darwin
             arch: arm64
@@ -44,7 +44,7 @@ jobs:
             arch: x64
             build_command: make
             artifact_name: tx-5dr-linux-x64
-            
+
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
@@ -104,7 +104,7 @@ jobs:
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
             portaudio19-dev build-essential python3-dev pkg-config \
             xz-utils rpm
-          
+
       - name: Setup MSBuild (Windows)
         if: matrix.os == 'windows-latest'
         uses: microsoft/setup-msbuild@v1
@@ -116,6 +116,7 @@ jobs:
           echo "Package manager in package.json: $(grep packageManager package.json)"
 
       - name: Install dependencies
+        shell: bash
         run: |
           echo "=== Installing dependencies with Yarn 4 (node-modules mode) ==="
           echo "Note: Using node-modules linker instead of PnP for better compatibility"
@@ -138,9 +139,9 @@ jobs:
           ELECTRON_BUILDER_CACHE: .electron-builder-cache
           # Try to use prebuilt binaries first
           npm_config_build_from_source: false
-          # Ensure proper build environment
-          CC: gcc
-          CXX: g++
+          # Ensure proper build environment (only for non-Windows)
+          CC: ${{ matrix.platform != 'win32' && 'gcc' || '' }}
+          CXX: ${{ matrix.platform != 'win32' && 'g++' || '' }}
           # Force Yarn to use node-modules linker (should be in .yarnrc.yml)
           YARN_NODE_LINKER: node-modules
 
@@ -452,6 +453,10 @@ jobs:
 
             ### 📦 下载说明
 
+            #### Windows (x64)
+            - **EXE 安装包**: `TX-5DR-nightly-windows-x64.exe` - 推荐用于安装
+            - **ZIP 便携版**: `TX-5DR-nightly-windows-x64.zip` - 解压即用
+
             #### macOS (ARM64 - Apple Silicon)
             - **DMG 安装包**: `TX-5DR-nightly-macos-arm64.dmg` - 推荐用于安装
             - **ZIP 便携版**: `TX-5DR-nightly-macos-arm64.zip` - 解压即用
@@ -477,7 +482,7 @@ jobs:
 
             ### 🔧 系统要求
             - Node.js >= 22.15.1 (已内置便携版)
-            - macOS 11+ / Ubuntu 20.04+ / Fedora 35+
+            - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
           allowUpdates: true
           removeArtifacts: true
           artifacts: "release-assets/*"
@@ -500,9 +505,13 @@ jobs:
 
             ### 🚀 新功能
             - Electron 应用多平台自动构建
-            - 支持 macOS、Linux 平台
+            - 支持 Windows、macOS、Linux 平台
 
             ### 📦 下载说明
+
+            #### Windows (x64)
+            - **EXE 安装包**: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.exe` - 推荐
+            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip`
 
             #### macOS (ARM64 - Apple Silicon)
             - **DMG 安装包**: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg` - 推荐
@@ -524,7 +533,7 @@ jobs:
 
             ### 🔧 系统要求
             - Node.js >= 22.15.1 (已内置便携版)
-            - 操作系统: macOS 11+, Ubuntu 20.04+, Fedora 35+
+            - 操作系统: Windows 10+, macOS 11+, Ubuntu 20.04+, Fedora 35+
 
             ---
             构建于: ${{ steps.release_info.outputs.timestamp }}
@@ -532,4 +541,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: false
-          makeLatest: true 
+          makeLatest: true

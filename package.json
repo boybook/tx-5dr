@@ -21,6 +21,7 @@
     "make": "electron-forge make",
     "make:mac": "PLATFORM=darwin ARCH=arm64 electron-forge make",
     "make:mac:x64": "PLATFORM=darwin ARCH=x64 electron-forge make",
+    "make:win": "PLATFORM=win32 ARCH=x64 electron-forge make",
     "make:mac:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false yarn make:mac",
     "publish": "electron-forge publish",
     "start": "electron-forge start",
