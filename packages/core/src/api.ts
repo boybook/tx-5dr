@@ -37,6 +37,8 @@ import type {
   LastFrequencyResponse,
   SetFrequencyResponse,
   HamlibConfig,
+  PSKReporterConfig,
+  PSKReporterStatus,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -1075,6 +1077,69 @@ export const api = {
 
     return await res.json();
   },
+
+  // ========== PSKReporter API ==========
+
+  /**
+   * 获取 PSKReporter 配置
+   */
+  async getPSKReporterConfig(apiBase?: string): Promise<{ success: boolean; data: PSKReporterConfig }> {
+    return apiRequest<{ success: boolean; data: PSKReporterConfig }>(
+      '/pskreporter/config',
+      undefined,
+      apiBase
+    );
+  },
+
+  /**
+   * 更新 PSKReporter 配置
+   */
+  async updatePSKReporterConfig(
+    config: Partial<PSKReporterConfig>,
+    apiBase?: string
+  ): Promise<{ success: boolean; message: string; data: PSKReporterConfig }> {
+    return apiRequest<{ success: boolean; message: string; data: PSKReporterConfig }>(
+      '/pskreporter/config',
+      {
+        method: 'PUT',
+        body: JSON.stringify(config),
+      },
+      apiBase
+    );
+  },
+
+  /**
+   * 获取 PSKReporter 运行状态
+   */
+  async getPSKReporterStatus(apiBase?: string): Promise<{ success: boolean; data: PSKReporterStatus }> {
+    return apiRequest<{ success: boolean; data: PSKReporterStatus }>(
+      '/pskreporter/status',
+      undefined,
+      apiBase
+    );
+  },
+
+  /**
+   * 手动触发 PSKReporter 上报
+   */
+  async triggerPSKReport(apiBase?: string): Promise<{ success: boolean; message: string; data: PSKReporterStatus }> {
+    return apiRequest<{ success: boolean; message: string; data: PSKReporterStatus }>(
+      '/pskreporter/report',
+      { method: 'POST' },
+      apiBase
+    );
+  },
+
+  /**
+   * 重置 PSKReporter 统计信息
+   */
+  async resetPSKReporterStats(apiBase?: string): Promise<{ success: boolean; message: string }> {
+    return apiRequest<{ success: boolean; message: string }>(
+      '/pskreporter/reset-stats',
+      { method: 'POST' },
+      apiBase
+    );
+  },
 }
 
 // 为了向后兼容,也导出单独的函数
@@ -1132,4 +1197,10 @@ export const {
   ,getTunerStatus
   ,setTuner
   ,startTuning
+  // PSKReporter 函数
+  ,getPSKReporterConfig
+  ,updatePSKReporterConfig
+  ,getPSKReporterStatus
+  ,triggerPSKReport
+  ,resetPSKReporterStats
 } = api;

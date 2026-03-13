@@ -13,7 +13,8 @@
       "WebFetch(domain:www.heroui.com)",
       "WebSearch",
       "Bash(otool:*)",
-      "Bash(yarn tsc:*)"
+      "Bash(yarn tsc:*)",
+      "WebFetch(domain:pskreporter.info)"
     ],
     "deny": []
   }

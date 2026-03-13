@@ -24,6 +24,7 @@ import { MemoryLeakDetector } from './utils/MemoryLeakDetector.js';
 import { createEngineActor, isEngineState, getEngineContext, type EngineActor } from './state-machines/engineStateMachine.js';
 import { EngineState, type EngineInput } from './state-machines/types.js';
 import { ResourceManager } from './utils/ResourceManager.js';
+import { getPSKReporterService, initializePSKReporterService, type PSKReporterService } from './services/PSKReporterService.js';
 
 /**
  * 时钟管理器 - 管理 TX-5DR 的时钟系统
@@ -92,6 +93,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   // 资源管理器 (Day6)
   private resourceManager: ResourceManager;
+
+  // PSKReporter 服务
+  private pskreporterService: PSKReporterService | null = null;
 
   public get operatorManager(): RadioOperatorManager {
     return this._operatorManager;
@@ -543,16 +547,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.slotPackManager.on('slotPackUpdated', async (slotPack) => {
       console.log(`📦 [时钟管理器] 时隙包更新事件: ${slotPack.slotId}`);
       console.log(`   当前状态: ${slotPack.frames.length}个信号, 解码${slotPack.stats.totalDecodes}次`);
-      
+
       // 如果有解码结果，显示标准格式的解码输出
       if (slotPack.frames.length > 0) {
         // 使用时隙开始时间而不是当前时间
         const slotStartTime = new Date(slotPack.startMs);
-        
+
         for (const frame of slotPack.frames) {
-          // 格式: HHMMSS SNR DT FREQ ~ MESSAGE  
+          // 格式: HHMMSS SNR DT FREQ ~ MESSAGE
           const utcTime = slotStartTime.toISOString().slice(11, 19).replace(/:/g, '').slice(0, 6); // HHMMSS
-          
+
           // 检查是否为发射帧
           if (frame.snr === -999) {
             // 发射帧显示为 TX
@@ -563,12 +567,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
             const dt = frame.dt.toFixed(1).padStart(5); // 时间偏移，1位小数，5位宽度
             const freq = Math.round(frame.freq).toString().padStart(4); // 频率，4位宽度
             const message = frame.message; // 消息不需要填充
-            
+
             console.log(` - ${utcTime} ${snr.padStart(3)} ${dt} ${freq} ~  ${message}`);
           }
         }
       }
-      
+
+      // PSKReporter: 将解码结果发送给 PSKReporter 服务
+      if (this.pskreporterService) {
+        const lastFreq = ConfigManager.getInstance().getLastSelectedFrequency();
+        const rfFrequency = lastFreq?.frequency ?? 0;
+        if (rfFrequency < 1_000_000) {
+          // 小于 1 MHz 表示未选择频率或频率无效，跳过上报避免写入错误数据
+          console.warn(`⚠️ [PSKReporter] 跳过上报：RF 频率无效 (${rfFrequency} Hz)，请先选择操作频率`);
+        } else {
+          this.pskreporterService.processSlotPack(slotPack, rfFrequency);
+        }
+      }
+
       this.emit('slotPackUpdated', slotPack);
     });
     
@@ -599,7 +615,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     
     // 初始化操作员管理器
     await this.operatorManager.initialize();
-    
+
+    // 初始化 PSKReporter 服务
+    try {
+      this.pskreporterService = await initializePSKReporterService();
+      // 设置当前模式
+      this.pskreporterService.setMode(this.currentMode.name);
+      console.log('✅ [时钟管理器] PSKReporter服务初始化完成');
+    } catch (error) {
+      console.warn('⚠️ [时钟管理器] PSKReporter服务初始化失败:', error);
+    }
+
     console.log(`✅ [时钟管理器] 初始化完成，当前模式: ${this.currentMode.name}`);
   }
 
@@ -663,6 +689,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // 更新 SlotPackManager 的模式
     this.slotPackManager.setMode(mode);
+
+    // 更新 PSKReporter 的模式
+    if (this.pskreporterService) {
+      this.pskreporterService.setMode(mode.name);
+    }
 
     // 发射模式变化事件
     this.emit('modeChanged', mode);

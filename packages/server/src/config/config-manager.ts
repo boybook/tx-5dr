@@ -2,7 +2,7 @@
 // ConfigManager - 配置合并和动态类型需要使用any
 
 import { promises as fs } from 'fs';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 
@@ -39,6 +39,7 @@ export interface AppConfig {
   radio: HamlibConfig;
   operators: RadioOperatorConfig[];
   wavelog: WaveLogConfig;
+  pskreporter: PSKReporterConfig;
 }
 
 // 音频处理配置接口
@@ -86,6 +87,20 @@ const DEFAULT_CONFIG: AppConfig = {
     stationId: '',
     radioName: 'TX5DR',
     autoUploadQSO: true,
+  },
+  pskreporter: {
+    enabled: false,
+    receiverCallsign: '',
+    receiverLocator: '',
+    decodingSoftware: 'TX-5DR',
+    antennaInformation: '',
+    reportIntervalSeconds: 30,
+    useTestServer: false,
+    stats: {
+      todayReportCount: 0,
+      totalReportCount: 0,
+      consecutiveFailures: 0,
+    },
   },
 };
 
@@ -540,6 +555,37 @@ export class ConfigManager {
    */
   async clearLastVolumeGain(): Promise<void> {
     this.config.lastVolumeGain = null;
+    await this.saveConfig();
+  }
+
+  /**
+   * 获取 PSKReporter 配置
+   */
+  getPSKReporterConfig(): PSKReporterConfig {
+    return { ...this.config.pskreporter };
+  }
+
+  /**
+   * 更新 PSKReporter 配置
+   */
+  async updatePSKReporterConfig(config: Partial<PSKReporterConfig>): Promise<void> {
+    this.config.pskreporter = { ...this.config.pskreporter, ...config };
+    await this.saveConfig();
+  }
+
+  /**
+   * 更新 PSKReporter 统计信息（不触发完整保存，仅更新统计）
+   */
+  async updatePSKReporterStats(stats: Partial<PSKReporterConfig['stats']>): Promise<void> {
+    this.config.pskreporter.stats = { ...this.config.pskreporter.stats, ...stats };
+    await this.saveConfig();
+  }
+
+  /**
+   * 重置 PSKReporter 配置为默认值
+   */
+  async resetPSKReporterConfig(): Promise<void> {
+    this.config.pskreporter = { ...DEFAULT_CONFIG.pskreporter };
     await this.saveConfig();
   }
 } 
