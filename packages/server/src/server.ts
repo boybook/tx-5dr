@@ -267,6 +267,11 @@ export async function createServer() {
   await fastify.register(settingsRoutes, { prefix: '/api/settings' });
   fastify.log.info('设置管理API路由注册完成');
 
+  // 注册PSKReporter管理API路由
+  const { pskreporterRoutes } = await import('./routes/pskreporter.js');
+  await fastify.register(pskreporterRoutes, { prefix: '/api' });
+  fastify.log.info('PSKReporter管理API路由注册完成');
+
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
     fastify.log.info('WebSocket客户端已连接');

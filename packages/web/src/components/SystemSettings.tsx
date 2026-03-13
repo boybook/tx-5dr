@@ -1,10 +1,16 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
 import {
   Card,
   CardBody,
   Switch,
+  Input,
+  Select,
+  SelectItem,
+  Chip,
+  Divider,
 } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
+import type { PSKReporterConfig, PSKReporterStatus } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 
 export interface SystemSettingsRef {
@@ -15,6 +21,14 @@ export interface SystemSettingsRef {
 interface SystemSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
+
+// 上报间隔选项（高实时性，10-60秒）
+const REPORT_INTERVAL_OPTIONS = [
+  { value: '10', label: '10 秒' },
+  { value: '15', label: '15 秒' },
+  { value: '30', label: '30 秒' },
+  { value: '60', label: '60 秒' },
+];
 
 export const SystemSettings = forwardRef<
   SystemSettingsRef,
@@ -27,9 +41,18 @@ export const SystemSettings = forwardRef<
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>('');
 
+  // PSKReporter 状态
+  const [pskrConfig, setPskrConfig] = useState<PSKReporterConfig | null>(null);
+  const [originalPskrConfig, setOriginalPskrConfig] = useState<PSKReporterConfig | null>(null);
+  const [pskrStatus, setPskrStatus] = useState<PSKReporterStatus | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_pskrStatusLoading, setPskrStatusLoading] = useState(false);
+
   // 加载配置
   useEffect(() => {
     loadSettings();
+    loadPSKReporterConfig();
+    loadPSKReporterStatus();
   }, []);
 
   const loadSettings = async () => {
@@ -58,11 +81,61 @@ export const SystemSettings = forwardRef<
     }
   };
 
+  // 加载 PSKReporter 配置
+  const loadPSKReporterConfig = async () => {
+    try {
+      const result = await api.getPSKReporterConfig();
+      if (result.success && result.data) {
+        setPskrConfig(result.data);
+        setOriginalPskrConfig(result.data);
+      }
+    } catch (err) {
+      console.error('加载 PSKReporter 配置失败:', err);
+    }
+  };
+
+  // 加载 PSKReporter 状态
+  const loadPSKReporterStatus = useCallback(async () => {
+    setPskrStatusLoading(true);
+    try {
+      const result = await api.getPSKReporterStatus();
+      if (result.success && result.data) {
+        setPskrStatus(result.data);
+      }
+    } catch (err) {
+      console.error('加载 PSKReporter 状态失败:', err);
+    } finally {
+      setPskrStatusLoading(false);
+    }
+  }, []);
+
+  // 定期刷新 PSKReporter 状态
+  useEffect(() => {
+    if (!pskrConfig?.enabled) return;
+
+    const interval = setInterval(loadPSKReporterStatus, 30000); // 每30秒刷新
+    return () => clearInterval(interval);
+  }, [pskrConfig?.enabled, loadPSKReporterStatus]);
+
+  // 检查 PSKReporter 配置是否有变化
+  const hasPskrChanges = () => {
+    if (!pskrConfig || !originalPskrConfig) return false;
+    return (
+      pskrConfig.enabled !== originalPskrConfig.enabled ||
+      pskrConfig.receiverCallsign !== originalPskrConfig.receiverCallsign ||
+      pskrConfig.receiverLocator !== originalPskrConfig.receiverLocator ||
+      pskrConfig.antennaInformation !== originalPskrConfig.antennaInformation ||
+      pskrConfig.reportIntervalSeconds !== originalPskrConfig.reportIntervalSeconds ||
+      pskrConfig.useTestServer !== originalPskrConfig.useTestServer
+    );
+  };
+
   // 检查是否有未保存的更改
   const hasUnsavedChanges = () => {
     return (
       decodeWhileTransmitting !== originalDecodeValue ||
-      spectrumWhileTransmitting !== originalSpectrumValue
+      spectrumWhileTransmitting !== originalSpectrumValue ||
+      hasPskrChanges()
     );
   };
 
@@ -71,6 +144,7 @@ export const SystemSettings = forwardRef<
     setIsSaving(true);
     setError('');
     try {
+      // 保存 FT8 设置
       const result = await api.updateFT8Settings({
         decodeWhileTransmitting,
         spectrumWhileTransmitting,
@@ -79,12 +153,34 @@ export const SystemSettings = forwardRef<
       if (result.success) {
         setOriginalDecodeValue(decodeWhileTransmitting);
         setOriginalSpectrumValue(spectrumWhileTransmitting);
-        onUnsavedChanges?.(false);
       } else {
         throw new Error(result.message || '保存配置失败');
       }
+
+      // 保存 PSKReporter 设置
+      if (pskrConfig && hasPskrChanges()) {
+        const pskrResult = await api.updatePSKReporterConfig({
+          enabled: pskrConfig.enabled,
+          receiverCallsign: pskrConfig.receiverCallsign,
+          receiverLocator: pskrConfig.receiverLocator,
+          antennaInformation: pskrConfig.antennaInformation,
+          reportIntervalSeconds: pskrConfig.reportIntervalSeconds,
+          useTestServer: pskrConfig.useTestServer,
+        });
+
+        if (pskrResult.success && pskrResult.data) {
+          setPskrConfig(pskrResult.data);
+          setOriginalPskrConfig(pskrResult.data);
+          // 刷新状态
+          loadPSKReporterStatus();
+        } else {
+          throw new Error(pskrResult.message || '保存 PSKReporter 配置失败');
+        }
+      }
+
+      onUnsavedChanges?.(false);
     } catch (err) {
-      console.error('保存FT8配置失败:', err);
+      console.error('保存配置失败:', err);
       if (err instanceof ApiError) {
         setError(err.userMessage);
         showErrorToast({
@@ -112,7 +208,35 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, pskrConfig, originalPskrConfig, onUnsavedChanges]);
+
+  // PSKReporter 配置更新辅助函数
+  const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
+    if (pskrConfig) {
+      setPskrConfig({ ...pskrConfig, ...updates });
+    }
+  };
+
+  // 格式化时间显示
+  const formatTime = (timestamp: number | undefined) => {
+    if (!timestamp) return '-';
+    return new Date(timestamp).toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  };
+
+  // 格式化下次上报时间
+  const formatNextReport = (seconds: number | undefined) => {
+    if (!seconds || seconds <= 0) return '即将上报';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins > 0) {
+      return `${mins}分${secs}秒后`;
+    }
+    return `${secs}秒后`;
+  };
 
   return (
     <div className="space-y-6">
@@ -186,6 +310,208 @@ export const SystemSettings = forwardRef<
           </div>
         </CardBody>
       </Card>
+
+      {/* PSKReporter 设置分隔 */}
+      <Divider className="my-4" />
+
+      {/* PSKReporter 启用开关卡片 */}
+      <Card shadow="none" radius="lg" classNames={{
+        base: "border border-divider bg-content1"
+      }}>
+        <CardBody className="p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <h4 className="font-semibold text-default-900">PSKReporter 上报</h4>
+                {pskrConfig?.enabled && pskrStatus && (
+                  <div className="flex gap-1">
+                    {pskrStatus.configValid ? (
+                      <Chip size="sm" color="success" variant="flat">配置有效</Chip>
+                    ) : (
+                      <Chip size="sm" color="warning" variant="flat">配置不完整</Chip>
+                    )}
+                    {pskrStatus.pendingSpots > 0 && (
+                      <Chip size="sm" color="primary" variant="flat">
+                        待上报: {pskrStatus.pendingSpots}
+                      </Chip>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="text-sm text-default-600 space-y-1">
+                <p>
+                  将解码到的 FT8/FT4 信号自动上报到 <a href="https://pskreporter.info" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">PSKReporter</a> 网络
+                </p>
+                {pskrConfig?.enabled && pskrStatus?.activeCallsign && (
+                  <p className="text-default-500">
+                    当前使用: <strong>{pskrStatus.activeCallsign}</strong> @ <strong>{pskrStatus.activeLocator || '未设置网格'}</strong>
+                  </p>
+                )}
+              </div>
+            </div>
+            <Switch
+              isSelected={pskrConfig?.enabled ?? false}
+              onValueChange={(enabled) => updatePskrConfig({ enabled })}
+              isDisabled={isSaving || !pskrConfig}
+              size="lg"
+              color={pskrConfig?.enabled ? 'success' : 'default'}
+            />
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* PSKReporter 详细配置（启用后显示） */}
+      {pskrConfig?.enabled && (
+        <>
+          {/* 接收站信息卡片 */}
+          <Card shadow="none" radius="lg" classNames={{
+            base: "border border-divider bg-content1"
+          }}>
+            <CardBody className="p-4 space-y-4">
+              <div>
+                <h4 className="font-semibold text-default-900 mb-1">接收站信息</h4>
+                <p className="text-sm text-default-500">
+                  留空时将自动使用第一个操作员的呼号和网格
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Input
+                  label="接收电台呼号"
+                  placeholder="如 BV2ABC"
+                  value={pskrConfig.receiverCallsign}
+                  onValueChange={(v) => updatePskrConfig({ receiverCallsign: v.toUpperCase() })}
+                  isDisabled={isSaving}
+                  size="sm"
+                  variant="bordered"
+                  description={pskrStatus?.activeCallsign && !pskrConfig.receiverCallsign
+                    ? `将使用: ${pskrStatus.activeCallsign}`
+                    : undefined}
+                />
+                <Input
+                  label="接收电台网格"
+                  placeholder="如 PL05qb"
+                  value={pskrConfig.receiverLocator}
+                  onValueChange={(v) => updatePskrConfig({ receiverLocator: v.toUpperCase() })}
+                  isDisabled={isSaving}
+                  size="sm"
+                  variant="bordered"
+                  description={pskrStatus?.activeLocator && !pskrConfig.receiverLocator
+                    ? `将使用: ${pskrStatus.activeLocator}`
+                    : undefined}
+                />
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* 可选配置卡片 */}
+          <Card shadow="none" radius="lg" classNames={{
+            base: "border border-divider bg-content1"
+          }}>
+            <CardBody className="p-4 space-y-4">
+              <div>
+                <h4 className="font-semibold text-default-900 mb-1">可选配置</h4>
+              </div>
+
+              <Input
+                label="天线信息"
+                placeholder="如 Dipole, Yagi 3el, Vertical"
+                value={pskrConfig.antennaInformation}
+                onValueChange={(v) => updatePskrConfig({ antennaInformation: v })}
+                isDisabled={isSaving}
+                size="sm"
+                variant="bordered"
+                maxLength={64}
+              />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select
+                  label="上报间隔"
+                  selectedKeys={[String(pskrConfig.reportIntervalSeconds)]}
+                  onSelectionChange={(keys) => {
+                    const value = Array.from(keys)[0] as string;
+                    if (value) {
+                      updatePskrConfig({ reportIntervalSeconds: parseInt(value) });
+                    }
+                  }}
+                  isDisabled={isSaving}
+                  size="sm"
+                  variant="bordered"
+                >
+                  {REPORT_INTERVAL_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value}>{opt.label}</SelectItem>
+                  ))}
+                </Select>
+
+                <div className="flex items-center justify-between p-3 border border-divider rounded-lg">
+                  <div>
+                    <p className="text-sm font-medium text-default-700">测试服务器</p>
+                    <p className="text-xs text-default-500">仅用于调试</p>
+                  </div>
+                  <Switch
+                    isSelected={pskrConfig.useTestServer}
+                    onValueChange={(v) => updatePskrConfig({ useTestServer: v })}
+                    isDisabled={isSaving}
+                    size="sm"
+                    color="warning"
+                  />
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* 统计信息卡片 */}
+          <Card shadow="none" radius="lg" classNames={{
+            base: "border border-divider bg-content1"
+          }}>
+            <CardBody className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-default-900">运行状态</h4>
+                <Chip
+                  size="sm"
+                  color={pskrStatus?.isReporting ? 'primary' : 'default'}
+                  variant="flat"
+                >
+                  {pskrStatus?.isReporting ? '正在上报...' : '等待中'}
+                </Chip>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <p className="text-default-500">今日上报</p>
+                  <p className="font-semibold text-default-900">
+                    {pskrConfig.stats?.todayReportCount ?? 0}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-default-500">总计上报</p>
+                  <p className="font-semibold text-default-900">
+                    {pskrConfig.stats?.totalReportCount ?? 0}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-default-500">上次上报</p>
+                  <p className="font-semibold text-default-900">
+                    {formatTime(pskrStatus?.lastReportTime)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-default-500">下次上报</p>
+                  <p className="font-semibold text-default-900">
+                    {formatNextReport(pskrStatus?.nextReportIn)}
+                  </p>
+                </div>
+              </div>
+
+              {pskrStatus?.lastError && (
+                <div className="mt-3 p-2 bg-danger-50 border border-danger-200 rounded-lg">
+                  <p className="text-sm text-danger-700">{pskrStatus.lastError}</p>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        </>
+      )}
 
       {/* 提示信息 */}
       {hasUnsavedChanges() && (
