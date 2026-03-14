@@ -294,6 +294,7 @@ export function createRadioStateMachine(
             {
               guard: 'hasRetriesRemaining',
               target: RadioState.RECONNECTING,
+              reenter: true,
             },
             {
               target: RadioState.DISCONNECTED,
