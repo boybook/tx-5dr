@@ -5,6 +5,7 @@ import { SplitLayout } from './components/SplitLayout';
 import { RadioProvider, useRadioState, useProfiles, useConnection } from './store/radioStore';
 import { useTheme } from './hooks/useTheme';
 import { ProfileSetupOverlay } from './components/ProfileSetupOverlay';
+import { ServerDisconnectedOverlay } from './components/ServerDisconnectedOverlay';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -35,6 +36,13 @@ function AppContent() {
         defaultLeftWidth={50}
         minLeftWidth={25}
         maxLeftWidth={75}
+      />
+
+      {/* 服务器断连蒙层 */}
+      <ServerDisconnectedOverlay
+        isConnected={connectionState.isConnected}
+        isConnecting={connectionState.isConnecting}
+        radioService={connectionState.radioService}
       />
 
       {/* 首次使用引导 */}
