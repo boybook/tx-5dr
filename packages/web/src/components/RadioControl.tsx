@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faBan, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useRadioState, useProfiles, useRadioErrors } from '../store/radioStore';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { api, ApiError } from '@tx5dr/core';
@@ -27,9 +27,8 @@ export const SelectorIcon = (_props: React.SVGProps<SVGSVGElement>) => {
   );
 };
 
-// 服务器和电台连接状态指示器组件
-const ConnectionAndRadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null }> = ({ connection, radio, profileName }) => {
-  const [isManualServerConnecting, setIsManualServerConnecting] = useState(false);
+// 电台连接状态指示器组件
+const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null }> = ({ connection, radio, profileName }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
 
@@ -51,138 +50,37 @@ const ConnectionAndRadioStatus: React.FC<{ connection: ConnectionState; radio: {
     loadSupportedRigs();
   }, [connection.isConnected]);
 
-  // 电台状态已通过 WSServer addConnection 的 radioStatusChanged 初始同步完成，
-  // 后续状态变化通过 radioStatusChanged 事件实时推送，无需重复 API 请求。
-
   // 监听电台状态变化事件
   useEffect(() => {
     if (!connection.radioService) return;
 
-    // 直接订阅 WSClient 事件
     const wsClient = connection.radioService.wsClientInstance;
 
-    // 电台状态变化 - 只处理本地UI状态，全局状态由radioStore处理
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleRadioStatusChanged = (data: any) => {
-      console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
-    };
-
-    // 电台发射中断开连接
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleRadioDisconnectedDuringTransmission = (data: any) => {
       console.warn('🚨 [RadioControl] 电台发射中断开连接:', data);
-
-      // 显示专门的错误提示
       addToast({
         title: '⚠️ 电台发射中断连接',
         description: data.message,
-        timeout: 10000 // 10秒显示
+        timeout: 10000
       });
-
-      // 再显示一个包含建议的提示
       setTimeout(() => {
         addToast({
           title: '💡 建议',
           description: data.recommendation,
-          timeout: 15000 // 15秒显示
+          timeout: 15000
         });
       }, 1000);
     };
 
-    // 注册事件监听器
-    wsClient.onWSEvent('radioStatusChanged', handleRadioStatusChanged);
     wsClient.onWSEvent('radioDisconnectedDuringTransmission', handleRadioDisconnectedDuringTransmission);
 
     return () => {
-      // 取消事件订阅
-      wsClient.offWSEvent('radioStatusChanged', handleRadioStatusChanged);
       wsClient.offWSEvent('radioDisconnectedDuringTransmission', handleRadioDisconnectedDuringTransmission);
     };
   }, [connection.radioService]);
 
-
-
-  const getServerStatusIcon = () => {
-    if (connection.isConnected) {
-      return undefined;
-    } else if (connection.isConnecting) {
-      return <Spinner size="sm" color="primary" />;
-    } else {
-      // 未连接后端使用禁止图标
-      return <FontAwesomeIcon icon={faBan} className="text-default-400" />;
-    }
-  };
-
-  const getServerStatusText = () => {
-    if (connection.isConnected) {
-      return '服务器已连接';
-    } else if (connection.isConnecting) {
-      return '正在连接服务器...';
-    } else {
-      return '服务器未连接';
-    }
-  };
-
-  const getServerStatusColor = () => {
-    if (connection.isConnected) {
-      return 'text-default-500';
-    } else if (connection.isConnecting) {
-      return 'text-primary';
-    } else {
-      return 'text-default-400';
-    }
-  };
-
-  const handleManualServerReconnect = async () => {
-    if (!connection.radioService) return;
-    setIsManualServerConnecting(true);
-    try {
-      await connection.radioService.connect();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-      console.error('手动重新连接服务器失败:', error);
-      // 组合更明确的引导文案
-      const env = import.meta.env.DEV ? 'development' : 'production';
-      const isInElectron = (() => {
-        try { return typeof window !== 'undefined' && window.navigator.userAgent.includes('Electron'); } catch { return false; }
-      })();
-      const baseLines: string[] = [];
-      const errMsg = error?.message || '未知错误';
-      if (errMsg.includes('未启动') || errMsg.includes('不可达')) {
-        baseLines.push('原因：后端服务未启动或不可达');
-      }
-      if (env === 'development') {
-        baseLines.push('排查：请先启动后端服务：yarn workspace @tx5dr/server dev');
-        baseLines.push('查看：终端窗口中的后端日志，确认4000端口是否监听');
-      } else if (isInElectron) {
-        baseLines.push('排查：请重启应用；若仍失败，请在系统日志/控制台查看 Electron 主进程与后端日志');
-      } else {
-        baseLines.push('排查：确认部署环境中的后端服务进程已运行并监听 /api');
-        baseLines.push('Docker：使用 docker-compose logs -f 查看容器日志');
-      }
-      addToast({
-        title: '连接失败',
-        description: `无法连接到服务器：${errMsg}。\n${baseLines.join('\n')}`,
-      });
-    } finally {
-      setIsManualServerConnecting(false);
-    }
-  };
-
-  // 调试日志：记录关键状态变化
-  useEffect(() => {
-    console.log('🔍 [RadioControl] 连接状态变化:', {
-      前端连接后端: connection.isConnected,
-      后端连接电台: radio.state.radioConnected,
-      电台配置类型: radio.state.radioConfig?.type
-    });
-  }, [
-    connection.isConnected,
-    radio.state.radioConnected,
-    radio.state.radioConfig?.type
-  ]);
-
-  // 获取电台型号文本（供状态显示使用）
+  // 获取电台型号文本
   const getRadioModelText = () => {
     const config = radio.state.radioConfig;
     if (radio.state.radioInfo) {
@@ -198,14 +96,14 @@ const ConnectionAndRadioStatus: React.FC<{ connection: ConnectionState; radio: {
     return '电台';
   };
 
-  const getRadioDisplayText = () => {
-    if (!connection.isConnected) {
-      return null;
-    }
+  if (!connection.isConnected) {
+    return null;
+  }
 
-    const status = radio.state.radioConnectionStatus;
-    const profileLabel = profileName ? `${profileName} | ` : '';
+  const status = radio.state.radioConnectionStatus;
+  const profileLabel = profileName ? `${profileName} | ` : '';
 
+  const renderStatus = () => {
     switch (status) {
       case RadioConnectionStatus.NOT_CONFIGURED:
         return <span className="text-sm text-default-500">{profileLabel}无电台模式</span>;
@@ -290,30 +188,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: ConnectionState; radio: {
 
   return (
     <div className="flex items-center gap-2">
-      {connection.isConnected ? (
-        // 服务器已连接时，只显示电台连接状态
-        getRadioDisplayText()
-      ) : (
-        // 服务器未连接时，显示服务器连接状态
-        <>
-          {getServerStatusIcon()}
-          <span className={`text-sm ${getServerStatusColor()}`}>
-            {getServerStatusText()}
-          </span>
-          {!connection.isConnecting && (
-            <Button
-              size="sm"
-              color="primary"
-              variant="flat"
-              onPress={handleManualServerReconnect}
-              isLoading={isManualServerConnecting}
-              className="h-6 px-2 text-xs"
-            >
-              {isManualServerConnecting ? '连接中' : '连接'}
-            </Button>
-          )}
-        </>
-      )}
+      {renderStatus()}
     </div>
   );
 };
@@ -1374,7 +1249,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ConnectionAndRadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} />
+          <RadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} />
           <div className="flex items-center gap-0">
             <Button
               isIconOnly
