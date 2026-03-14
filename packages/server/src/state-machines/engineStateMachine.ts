@@ -9,10 +9,9 @@
  * - starting: 启动中（资源初始化）
  * - running: 运行中
  * - stopping: 停止中（资源清理）
- * - error: 错误状态
  *
  * 核心特性：
- * 1. 启动失败自动回滚已启动的资源
+ * 1. 启动/停止失败直接回到 IDLE（context.error 记录错误信息）
  * 2. 电台断开时自动停止引擎
  * 3. 保证状态转换的原子性
  * 4. 可视化调试（XState Inspect）
@@ -114,18 +113,7 @@ export function createEngineStateMachine(
       }),
 
       /**
-       * 设置错误
-       */
-      setError: assign(({ event }) => {
-        if (event.type === 'START_FAILURE' || event.type === 'STOP_FAILURE') {
-          console.error(`❌ [EngineStateMachine] 错误: ${event.error.message}`);
-          return { error: event.error };
-        }
-        return {};
-      }),
-
-      /**
-       * 清除错误和forcedStop标志
+       * 清除错误
        */
       clearError: assign({
         error: undefined,
@@ -149,19 +137,13 @@ export function createEngineStateMachine(
 
       /**
        * 调用状态变化回调
+       * 注意：XState v5 中 entry action 内 self.getSnapshot().value 返回的是上一个状态，
+       * 因此必须通过 params.state 显式传入当前目标状态。
        */
-      notifyStateChange: ({ context, self }, params: { engineInput: EngineInput }) => {
-        const state = self.getSnapshot().value as EngineState;
+      notifyStateChange: ({ context }, params: { engineInput: EngineInput; state: EngineState }) => {
         if (params.engineInput.onStateChange) {
-          params.engineInput.onStateChange(state, context);
+          params.engineInput.onStateChange(params.state, context);
         }
-      },
-
-      /**
-       * 日志: 清除错误状态
-       */
-      logClearError: () => {
-        console.log('🧹 [EngineStateMachine] 清除错误状态');
       },
     },
   }).createMachine({
@@ -177,9 +159,7 @@ export function createEngineStateMachine(
        */
       [EngineState.IDLE]: {
         entry: [
-          'logClearError',
-          'clearError',
-          { type: 'notifyStateChange', params: { engineInput: input } },
+          { type: 'notifyStateChange', params: { engineInput: input, state: EngineState.IDLE } },
         ],
         on: {
           START: {
@@ -194,8 +174,9 @@ export function createEngineStateMachine(
       [EngineState.STARTING]: {
         entry: [
           'clearForcedStop',
+          'clearError',
           'recordStartTime',
-          { type: 'notifyStateChange', params: { engineInput: input } },
+          { type: 'notifyStateChange', params: { engineInput: input, state: EngineState.STARTING } },
         ],
         invoke: {
           src: 'startActor',
@@ -204,7 +185,7 @@ export function createEngineStateMachine(
             target: EngineState.RUNNING,
           },
           onError: {
-            target: EngineState.ERROR,
+            target: EngineState.IDLE,
             actions: [
               assign(({ event }) => ({
                 error: event.error as Error,
@@ -229,7 +210,7 @@ export function createEngineStateMachine(
        * 运行中状态
        */
       [EngineState.RUNNING]: {
-        entry: [{ type: 'notifyStateChange', params: { engineInput: input } }],
+        entry: [{ type: 'notifyStateChange', params: { engineInput: input, state: EngineState.RUNNING } }],
         on: {
           STOP: {
             target: EngineState.STOPPING,
@@ -251,7 +232,7 @@ export function createEngineStateMachine(
       [EngineState.STOPPING]: {
         entry: [
           'recordStopTime',
-          { type: 'notifyStateChange', params: { engineInput: input } },
+          { type: 'notifyStateChange', params: { engineInput: input, state: EngineState.STOPPING } },
         ],
         invoke: {
           src: 'stopActor',
@@ -260,37 +241,13 @@ export function createEngineStateMachine(
             target: EngineState.IDLE,
           },
           onError: {
-            target: EngineState.ERROR,
+            target: EngineState.IDLE,
             actions: [
               assign(({ event }) => ({
                 error: event.error as Error,
               })),
               { type: 'invokeErrorHandler', params: { engineInput: input } },
             ],
-          },
-        },
-      },
-
-      /**
-       * 错误状态
-       */
-      [EngineState.ERROR]: {
-        entry: [
-          'setError',
-          { type: 'invokeErrorHandler', params: { engineInput: input } },
-          { type: 'notifyStateChange', params: { engineInput: input } },
-        ],
-        on: {
-          RESET: {
-            target: EngineState.IDLE,
-            actions: ['clearError'],
-          },
-          RETRY: {
-            target: EngineState.STARTING,
-            actions: ['clearError'],
-          },
-          STOP: {
-            target: EngineState.STOPPING,
           },
         },
       },

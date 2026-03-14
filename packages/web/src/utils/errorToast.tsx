@@ -212,16 +212,6 @@ export function showCriticalError(message: string, suggestions?: string[]): void
 // ========== 错误代码特殊处理辅助函数 ==========
 
 /**
- * 创建"重试连接"操作
- */
-export function createRetryConnectionAction(onRetry: () => void) {
-  return {
-    label: '重试连接',
-    handler: onRetry
-  };
-}
-
-/**
  * 创建"前往设置"操作
  */
 export function createGoToSettingsAction(navigate: (path: string) => void, tab?: string) {

@@ -61,6 +61,12 @@ export class IcomWlanConnection
   private isCleaningUp = false;
 
   /**
+   * 数值表轮询连续失败计数（用于断线检测）
+   */
+  private meterPollFailCount = 0;
+  private readonly METER_POLL_FAIL_THRESHOLD = 3;
+
+  /**
    * 天调启用状态（本地跟踪，简化版实现）
    */
   private tunerEnabled = false;
@@ -481,10 +487,10 @@ export class IcomWlanConnection
       this.emit('audioFrame', frame.pcm16);
     });
 
-    // 连接丢失（库的自动重连会处理）
+    // 连接丢失 → 只 emit disconnected，不直接改状态（让上层状态机管理）
     this.rig.events.on('connectionLost', (info) => {
       console.warn(`🔌 [IcomWlanConnection] 连接丢失: ${info.sessionType}, 空闲 ${info.timeSinceLastData}ms`);
-      this.setState(RadioConnectionState.DISCONNECTED);
+      this.stopMeterPolling();
       this.emit('disconnected', `连接丢失: ${info.sessionType}`);
     });
 
@@ -539,6 +545,22 @@ export class IcomWlanConnection
         this.rig.readPowerLevel({ timeout: 200 }).catch(() => null),
       ]);
 
+      // 检查是否所有读取都失败
+      const allFailed = swr === null && alc === null && level === null && power === null;
+
+      if (allFailed) {
+        this.meterPollFailCount++;
+        if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+          console.warn(`⚠️ [IcomWlanConnection] 数值表轮询连续失败 ${this.meterPollFailCount} 次，判定为断线`);
+          this.stopMeterPolling();
+          this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
+          return;
+        }
+      } else {
+        // 有任一成功，重置计数
+        this.meterPollFailCount = 0;
+      }
+
       const meterData: MeterData = {
         swr,
         alc,
@@ -553,7 +575,13 @@ export class IcomWlanConnection
       // EventBus 直达：用于 WebSocket 广播到前端
       globalEventBus.emit('bus:meterData', meterData);
     } catch (error) {
-      // 静默失败，避免日志过多
+      // Promise.all 本身抛异常（不应发生，因为内部都有 catch）
+      this.meterPollFailCount++;
+      if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+        console.warn(`⚠️ [IcomWlanConnection] 数值表轮询异常失败 ${this.meterPollFailCount} 次，判定为断线`);
+        this.stopMeterPolling();
+        this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
+      }
     }
   }
 
@@ -605,6 +633,7 @@ export class IcomWlanConnection
       }
 
       this.currentConfig = null;
+      this.removeAllListeners();
     } finally {
       // 确保标志位被重置
       this.isCleaningUp = false;

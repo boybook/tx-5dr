@@ -1,11 +1,14 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faBan, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useRadioState } from '../store/radioStore';
+import { useConnection, useRadioState, useProfiles, useRadioErrors } from '../store/radioStore';
+import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor, TunerStatus, TunerCapabilities, ConnectionState, RadioState } from '@tx5dr/contracts';
+import type { ModeDescriptor, TunerStatus, TunerCapabilities } from '@tx5dr/contracts';
+import type { ConnectionState, RadioState } from '../store/radioStore';
+import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { useState, useEffect } from 'react';
 
@@ -25,8 +28,7 @@ export const SelectorIcon = (_props: React.SVGProps<SVGSVGElement>) => {
 };
 
 // 服务器和电台连接状态指示器组件
-const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState }; radio: { state: RadioState } }> = ({ connection, radio }) => {
-  const [isConnectingRadio, setIsConnectingRadio] = useState(false);
+const ConnectionAndRadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null }> = ({ connection, radio, profileName }) => {
   const [isManualServerConnecting, setIsManualServerConnecting] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
@@ -49,30 +51,8 @@ const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState 
     loadSupportedRigs();
   }, [connection.isConnected]);
 
-  // 加载电台状态
-  useEffect(() => {
-    const loadRadioStatus = async () => {
-      if (connection.isConnected && connection.radioService) {
-        try {
-          const status = await api.getRadioStatus();
-          if (status.success) {
-            radio.dispatch({
-              type: 'radioStatusUpdate',
-              payload: {
-                radioConnected: status.isConnected,
-                radioInfo: status.radioInfo,
-                radioConfig: status.config
-              }
-            });
-          }
-        } catch (error) {
-          console.error('获取电台状态失败:', error);
-        }
-      }
-    };
-
-    loadRadioStatus();
-  }, [connection.isConnected, connection.radioService]);
+  // 电台状态已通过 WSServer addConnection 的 radioStatusChanged 初始同步完成，
+  // 后续状态变化通过 radioStatusChanged 事件实时推送，无需重复 API 请求。
 
   // 监听电台状态变化事件
   useEffect(() => {
@@ -85,9 +65,6 @@ const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleRadioStatusChanged = (data: any) => {
       console.log('📡 [RadioControl] 电台状态变化（仅更新本地UI状态）:', data);
-
-      // 清除手动连接的loading状态
-      setIsConnectingRadio(false);
     };
 
     // 电台发射中断开连接
@@ -123,39 +100,6 @@ const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState 
     };
   }, [connection.radioService]);
 
-  // 连接电台
-  const handleConnectRadio = async () => {
-    setIsConnectingRadio(true);
-    try {
-      const result = await api.connectRadio();
-      if (result.success) {
-        radio.dispatch({
-          type: 'radioStatusUpdate',
-          payload: {
-            radioConnected: result.isConnected,
-            radioInfo: null,
-            radioConfig: radio.state.radioConfig
-          }
-        });
-        // 重新获取状态以获取电台信息
-        const status = await api.getRadioStatus();
-        if (status.success) {
-          radio.dispatch({
-            type: 'radioStatusUpdate',
-            payload: {
-              radioConnected: status.isConnected,
-              radioInfo: status.radioInfo,
-              radioConfig: status.config
-            }
-          });
-        }
-      }
-    } catch (error) {
-      console.error('连接电台失败:', error);
-    } finally {
-      setIsConnectingRadio(false);
-    }
-  };
 
 
   const getServerStatusIcon = () => {
@@ -238,65 +182,110 @@ const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState 
     radio.state.radioConfig?.type
   ]);
 
+  // 获取电台型号文本（供状态显示使用）
+  const getRadioModelText = () => {
+    const config = radio.state.radioConfig;
+    if (radio.state.radioInfo) {
+      return `${radio.state.radioInfo.manufacturer} ${radio.state.radioInfo.model}`;
+    }
+    if (config.type === 'serial' && config.serial?.rigModel) {
+      const rigInfo = supportedRigs.find((r: { rigModel: number }) => r.rigModel === config.serial!.rigModel);
+      if (rigInfo) return `${rigInfo.mfgName} ${rigInfo.modelName}`;
+      return `电台型号 ${config.serial.rigModel}`;
+    }
+    if (config.type === 'network') return 'Network RigCtrl';
+    if (config.type === 'icom-wlan') return 'ICOM WLAN';
+    return '电台';
+  };
+
   const getRadioDisplayText = () => {
     if (!connection.isConnected) {
       return null;
     }
 
-    const config = radio.state.radioConfig;
-    if (config.type === 'none') {
-      return <span className="text-sm text-default-500">无电台模式</span>;
-    }
+    const status = radio.state.radioConnectionStatus;
+    const profileLabel = profileName ? `${profileName} | ` : '';
 
-    // 电台已连接
-    if (radio.state.radioConnected) {
-      const displayText = radio.state.radioInfo
-        ? `${radio.state.radioInfo.manufacturer} ${radio.state.radioInfo.model} 电台已连接`
-        : '电台已连接';
-      return (
-        <div className="flex items-center gap-2">
-          <FontAwesomeIcon icon={faRadio} className="text-success text-ms -mt-0.5" />
-          <span className="text-sm text-default-500">
-            {displayText}
-          </span>
-        </div>
-      );
-    }
+    switch (status) {
+      case RadioConnectionStatus.NOT_CONFIGURED:
+        return <span className="text-sm text-default-500">{profileLabel}无电台模式</span>;
 
-    // 获取电台型号文本
-    let radioModelText = '';
-    if (config.type === 'serial' && config.rigModel) {
-      const rigInfo = supportedRigs.find(r => r.rigModel === config.rigModel);
-      if (rigInfo) {
-        radioModelText = `${rigInfo.mfgName} ${rigInfo.modelName}`;
-      } else {
-        radioModelText = `电台型号 ${config.rigModel}`;
+      case RadioConnectionStatus.CONNECTING:
+        return (
+          <div className="flex items-center gap-2">
+            <Spinner size="sm" color="primary" />
+            <span className="text-sm text-primary">{getRadioModelText()} 连接中...</span>
+          </div>
+        );
+
+      case RadioConnectionStatus.CONNECTED:
+        return (
+          <div className="flex items-center gap-2">
+            <FontAwesomeIcon icon={faRadio} className="text-success text-ms -mt-0.5" />
+            <span className="text-sm text-default-500">
+              {getRadioModelText()} 已连接
+            </span>
+          </div>
+        );
+
+      case RadioConnectionStatus.RECONNECTING: {
+        const progress = radio.state.reconnectProgress;
+        return (
+          <div className="flex items-center gap-2">
+            <Spinner size="sm" color="warning" />
+            <span className="text-sm text-warning">
+              重连中{progress ? ` (${progress.attempt}/${progress.maxAttempts})` : ''}...
+            </span>
+            <Button
+              size="sm"
+              color="warning"
+              variant="flat"
+              onPress={() => connection.radioService?.stopReconnect()}
+              className="h-6 px-2 text-xs"
+            >
+              停止
+            </Button>
+          </div>
+        );
       }
-    } else if (config.type === 'network') {
-      radioModelText = 'Network RigCtrl';
-    } else {
-      radioModelText = '已配置电台 待连接';
-    }
 
-    // 电台未连接
-    return (
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1">
-          <FontAwesomeIcon icon={faRadio} className="text-default-400 text-xs" />
-          <span className="text-sm text-default-500">{radioModelText}</span>
-        </div>
-        <Button
-          size="sm"
-          color="primary"
-          variant="flat"
-          onPress={handleConnectRadio}
-          isLoading={isConnectingRadio}
-          className="h-6 px-2 text-xs"
-        >
-          {isConnectingRadio ? '连接中' : '连接'}
-        </Button>
-      </div>
-    );
+      case RadioConnectionStatus.CONNECTION_LOST:
+        return (
+          <div className="flex items-center gap-2">
+            <FontAwesomeIcon icon={faRadio} className="text-danger text-xs" />
+            <span className="text-sm text-danger">连接丢失</span>
+            <Button
+              size="sm"
+              color="danger"
+              variant="flat"
+              onPress={() => connection.radioService?.startDecoding()}
+              className="h-6 px-2 text-xs"
+            >
+              重连
+            </Button>
+          </div>
+        );
+
+      case RadioConnectionStatus.DISCONNECTED:
+      default:
+        return (
+          <div className="flex items-center gap-2">
+            <FontAwesomeIcon icon={faRadio} className="text-default-400 text-xs" />
+            <span className="text-sm text-default-500">{getRadioModelText()} 未连接</span>
+            {radio.state.radioConfig?.type && radio.state.radioConfig.type !== 'none' && !radio.state.isDecoding && (
+              <Button
+                size="sm"
+                color="primary"
+                variant="flat"
+                onPress={() => connection.radioService?.startDecoding()}
+                className="h-6 px-2 text-xs"
+              >
+                连接
+              </Button>
+            )}
+          </div>
+        );
+    }
   };
 
   return (
@@ -306,7 +295,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState 
         getRadioDisplayText()
       ) : (
         // 服务器未连接时，显示服务器连接状态
-        <div className="flex items-center gap-2">
+        <>
           {getServerStatusIcon()}
           <span className={`text-sm ${getServerStatusColor()}`}>
             {getServerStatusText()}
@@ -323,7 +312,7 @@ const ConnectionAndRadioStatus: React.FC<{ connection: { state: ConnectionState 
               {isManualServerConnecting ? '连接中' : '连接'}
             </Button>
           )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -336,7 +325,9 @@ interface RadioControlProps {
 export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings }) => {
   const connection = useConnection();
   const radio = useRadioState();
-  const [_isConnecting, setIsConnecting] = useState(false);
+  const { activeProfile } = useProfiles();
+  const { latestError } = useRadioErrors();
+  const [isErrorHistoryOpen, setIsErrorHistoryOpen] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeDescriptor[]>([]);
   const [isLoadingModes, setIsLoadingModes] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -504,25 +495,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   }, [availableFrequencies, radio.state.currentMode, connection.state.isConnected]);
 
 
-
-  // 连接到服务器
-  const _handleConnect = async () => {
-    if (!connection.state.radioService) {
-      console.warn('⚠️ RadioService未初始化');
-      return;
-    }
-
-    setIsConnecting(true);
-    try {
-      console.log('🔗 开始手动连接到服务器...');
-      await connection.state.radioService.connect();
-      console.log('✅ 手动连接成功');
-    } catch (error) {
-      console.error('❌ 手动连接失败:', error);
-    } finally {
-      setIsConnecting(false);
-    }
-  };
 
   // 简化的监听开关控制
   const handleListenToggle = async (isSelected: boolean) => {
@@ -1402,7 +1374,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ConnectionAndRadioStatus connection={connection.state} radio={radio} />
+          <ConnectionAndRadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} />
           <div className="flex items-center gap-0">
             <Button
               isIconOnly
@@ -1581,6 +1553,37 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         </div>
       </div>
 
+      {/* 电台错误内联提示 */}
+      {connection.state.isConnected && latestError && [
+        RadioConnectionStatus.DISCONNECTED,
+        RadioConnectionStatus.CONNECTION_LOST,
+        RadioConnectionStatus.RECONNECTING,
+      ].includes(radio.state.radioConnectionStatus) && (
+        <Alert
+          color="danger"
+          variant="flat"
+          className="mt-1.5 -mx-1"
+          classNames={{ base: 'py-1 px-2 min-h-0 items-center', mainWrapper: 'ms-0 min-h-0', iconWrapper: 'w-5 h-5', alertIcon: 'w-3' }}
+          endContent={
+            <Button
+              size="sm"
+              variant="light"
+              color="danger"
+              className="h-5 px-2 text-xs min-w-0 shrink-0"
+              onPress={() => setIsErrorHistoryOpen(true)}
+            >
+              详情
+            </Button>
+          }
+        >
+          <span className="text-xs">{latestError.userMessage}</span>
+        </Alert>
+      )}
+      <RadioErrorHistoryModal
+        isOpen={isErrorHistoryOpen}
+        onClose={() => setIsErrorHistoryOpen(false)}
+      />
+
       {/* 主控制区域 */}
       <div className="flex items-center">
         {/* 左侧选择器 */}
@@ -1605,7 +1608,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             isDisabled={!connection.state.isConnected || isLoadingFrequencies || !radio.state.currentMode}
             isLoading={isLoadingFrequencies}
             onSelectionChange={handleFrequencyChange}
-            renderValue={(_items: FrequencyOption) => {
+            renderValue={() => {
               // 直接在 filteredFrequencies 中查找（现在包含了自定义频率）
               const selectedFreq = filteredFrequencies.find(f => f.key === currentFrequency);
               return selectedFreq ? <span className="font-bold text-lg">{selectedFreq.label}</span> : null;

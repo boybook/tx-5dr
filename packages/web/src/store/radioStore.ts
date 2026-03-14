@@ -9,13 +9,17 @@ import type {
   MeterData,
   SystemStatus,
   HamlibConfig,
-  RadioInfo
+  RadioInfo,
+  RadioProfile,
+  ProfileChangedEvent,
+  ReconnectProgress,
+  RadioErrorEventData
 } from '@tx5dr/contracts';
+import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 import { getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
 import {
   showErrorToast,
-  createRetryConnectionAction,
   createRetryAction,
   createRefreshStatusAction,
   isRetryableError
@@ -65,6 +69,7 @@ export interface RadioState {
   currentOperatorId: string | null;
   // 电台连接状态
   radioConnected: boolean;
+  radioConnectionStatus: RadioConnectionStatus;
   radioInfo: RadioInfo | null;
   radioConfig: HamlibConfig;
   // PTT状态
@@ -74,10 +79,18 @@ export interface RadioState {
   };
   // 电台数值表数据
   meterData: MeterData | null;
+  // 电台重连进度
+  reconnectProgress: ReconnectProgress | null;
   // 电台连接健康状态
   radioConnectionHealth: {
     connectionHealthy: boolean;
   } | null;
+  // Profile 管理
+  profiles: RadioProfile[];
+  activeProfileId: string | null;
+  // 电台错误频道
+  radioErrors: RadioErrorRecord[];
+  latestRadioError: RadioErrorRecord | null;
 }
 
 // 错误事件数据结构
@@ -89,6 +102,22 @@ export interface ErrorEventData {
   code?: string;
   timestamp?: string;
   context?: Record<string, unknown>;
+}
+
+// 电台错误记录（带 Profile 信息，用于错误历史列表）
+export interface RadioErrorRecord {
+  id: string;
+  message: string;
+  userMessage: string;
+  suggestions: string[];
+  severity: 'info' | 'warning' | 'error' | 'critical';
+  code?: string;
+  timestamp: string;
+  context?: Record<string, unknown>;
+  stack?: string;
+  connectionHealth?: { connectionHealthy: boolean };
+  profileId: string | null;
+  profileName: string | null;
 }
 
 // 解码错误数据结构
@@ -116,9 +145,14 @@ export type RadioAction =
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
-  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; radioInfo: RadioInfo | null; radioConfig: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo } }
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null } }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
-  | { type: 'meterData'; payload: MeterData };
+  | { type: 'meterData'; payload: MeterData }
+  | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
+  | { type: 'profileChanged'; payload: ProfileChangedEvent }
+  | { type: 'profileListUpdated'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
+  | { type: 'radioError'; payload: RadioErrorRecord }
+  | { type: 'clearRadioErrors' };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -127,14 +161,20 @@ const initialRadioState: RadioState = {
   operators: [],
   currentOperatorId: null,
   radioConnected: false,
+  radioConnectionStatus: RadioConnectionStatus.DISCONNECTED,
   radioInfo: null,
   radioConfig: { type: 'none' },
+  reconnectProgress: null,
   pttStatus: {
     isTransmitting: false,
     operatorIds: []
   },
   meterData: null,
-  radioConnectionHealth: null
+  radioConnectionHealth: null,
+  profiles: [],
+  activeProfileId: null,
+  radioErrors: [],
+  latestRadioError: null
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -218,9 +258,12 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return {
         ...state,
         radioConnected: action.payload.radioConnected,
+        radioConnectionStatus: action.payload.status,
         radioInfo: action.payload.radioInfo,
         // 如果事件中包含radioConfig则更新，否则保持现有配置
         radioConfig: action.payload.radioConfig || state.radioConfig,
+        // 同步重连进度
+        reconnectProgress: action.payload.reconnectProgress ?? null,
         // 同步连接健康状态（如果事件中包含）
         radioConnectionHealth: action.payload.radioConnectionHealth !== undefined
           ? action.payload.radioConnectionHealth
@@ -241,6 +284,40 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         ...state,
         meterData: action.payload
       };
+
+    case 'setProfiles':
+      return {
+        ...state,
+        profiles: action.payload.profiles,
+        activeProfileId: action.payload.activeProfileId
+      };
+
+    case 'profileChanged': {
+      const { profileId, profile } = action.payload;
+      return {
+        ...state,
+        activeProfileId: profileId,
+        // 更新 radioConfig 为新 Profile 的配置
+        radioConfig: profile.radio,
+        // 更新 profiles 列表中对应的 Profile
+        profiles: state.profiles.map(p => p.id === profileId ? profile : p)
+      };
+    }
+
+    case 'profileListUpdated':
+      return {
+        ...state,
+        profiles: action.payload.profiles,
+        activeProfileId: action.payload.activeProfileId
+      };
+
+    case 'radioError': {
+      const newErrors = [action.payload, ...state.radioErrors].slice(0, 100);
+      return { ...state, radioErrors: newErrors, latestRadioError: action.payload };
+    }
+
+    case 'clearRadioErrors':
+      return { ...state, radioErrors: [], latestRadioError: null };
 
     default:
       return state;
@@ -487,13 +564,12 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 根据错误代码创建操作按钮
         let action: { label: string; handler: () => void } | undefined;
 
-        // 处理连接失败错误
-        if (code === 'CONNECTION_FAILED' || code === 'RADIO_CONNECTION_FAILED') {
-          action = createRetryConnectionAction(() => {
-            console.log('🔄 用户点击重试连接');
+        // 处理连接失败 / 超时错误 → 重试启动引擎
+        if (code === 'CONNECTION_FAILED' || code === 'RADIO_CONNECTION_FAILED' || code === 'CONNECTION_TIMEOUT') {
+          action = createRetryAction(() => {
+            console.log('🔄 用户点击重试启动');
             if (radioServiceRef.current) {
-              // 尝试重新连接电台
-              radioServiceRef.current.wsClientInstance.send('connectRadio', {});
+              radioServiceRef.current.startDecoding();
             }
           });
         }
@@ -505,6 +581,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               radioServiceRef.current.startDecoding();
             }
           });
+        }
+        // 处理设备未找到 / 配置无效 → 提示打开配置
+        else if (code === 'DEVICE_NOT_FOUND' || code === 'INVALID_CONFIG') {
+          action = {
+            label: '打开设置',
+            handler: () => {
+              window.dispatchEvent(new CustomEvent('openProfileModal'));
+            }
+          };
         }
         // 处理超时错误
         else if (code === 'TIMEOUT') {
@@ -618,52 +703,78 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           });
         }
 
-        // 握手完成后，主动请求电台状态以确保状态同步
-        console.log('🔄 [RadioProvider] 握手完成，主动请求电台状态');
+        // 握手完成后，请求 Profile 列表
+        // 注意：电台状态已通过 WSServer addConnection 的 radioStatusChanged 初始同步完成，
+        // 后续状态变化通过 radioStatusChanged 事件实时推送，无需重复 API 请求。
+        console.log('🔄 [RadioProvider] 握手完成，请求 Profile 列表');
         try {
           const { api } = await import('@tx5dr/core');
-          const status = await api.getRadioStatus();
-          if (status.success && status.status) {
-            console.log('✅ [RadioProvider] 电台状态已同步:', {
-              radioConnected: status.status.connected,
-              radioInfo: status.status.radioInfo,
-              configType: status.status.radioConfig?.type
-            });
-            radioDispatch({
-              type: 'radioStatusUpdate',
-              payload: {
-                radioConnected: status.status.connected,
-                radioInfo: status.status.radioInfo,
-                radioConfig: status.status.radioConfig || { type: 'none' }
-              }
-            });
-          }
+          const profilesResponse = await api.getProfiles();
+          console.log('✅ [RadioProvider] Profile 列表已同步:', profilesResponse.profiles.length, '个 Profile');
+          radioDispatch({
+            type: 'setProfiles',
+            payload: {
+              profiles: profilesResponse.profiles,
+              activeProfileId: profilesResponse.activeProfileId
+            }
+          });
         } catch (error) {
-          console.error('❌ [RadioProvider] 获取电台状态失败:', error);
+          console.error('❌ [RadioProvider] 获取 Profile 列表失败:', error);
         }
       },
       radioStatusChanged: (data: unknown) => {
         const radioData = data as {
           connected: boolean;
+          status: RadioConnectionStatus;
           radioInfo: RadioInfo | null;
-          radioConfig: HamlibConfig;
+          radioConfig?: HamlibConfig;
           connectionHealth?: ConnectionHealthInfo;
+          reconnectProgress?: ReconnectProgress | null;
           reason?: string;
+          message?: string;
         };
-        console.log('📡 [RadioProvider] 电台状态变化:', radioData.connected ? '已连接' : '已断开', radioData.reason || '');
+        console.log('📡 [RadioProvider] 电台状态变化:', radioData.status || (radioData.connected ? 'connected' : 'disconnected'), radioData.reason || '');
 
         radioDispatch({
           type: 'radioStatusUpdate',
           payload: {
             radioConnected: radioData.connected,
-            radioInfo: radioData.radioInfo, // 直接使用事件中的完整数据（连接时有值，断开时为null）
-            radioConfig: radioData.radioConfig, // 直接使用事件中的配置（始终包含完整配置）
-            radioConnectionHealth: radioData.connectionHealth // 同步连接健康状态
+            status: radioData.status,
+            radioInfo: radioData.radioInfo,
+            radioConfig: radioData.radioConfig,
+            radioConnectionHealth: radioData.connectionHealth,
+            reconnectProgress: radioData.reconnectProgress ?? null
           }
         });
+
+        // 重连成功 toast
+        if (radioData.status === RadioConnectionStatus.CONNECTED && radioData.connected) {
+          // 仅在之前是 RECONNECTING 或 CONNECTION_LOST 状态时显示
+          // 通过检查 reconnectProgress 是否从有值变为 null 来判断
+        }
+
+        // CONNECTION_LOST 状态不再推送 Toast，由 RadioControl Alert 内联展示
       },
       radioError: (data: unknown) => {
-        console.log('⚠️ [RadioProvider] 电台错误:', data);
+        const errorData = data as RadioErrorEventData;
+        console.log('⚠️ [RadioProvider] 电台错误:', errorData);
+
+        const record: RadioErrorRecord = {
+          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          message: errorData.message,
+          userMessage: errorData.userMessage || errorData.message,
+          suggestions: errorData.suggestions || [],
+          severity: (errorData.severity as RadioErrorRecord['severity']) || 'error',
+          code: errorData.code,
+          timestamp: errorData.timestamp || new Date().toISOString(),
+          context: errorData.context as Record<string, unknown> | undefined,
+          stack: errorData.stack,
+          connectionHealth: errorData.connectionHealth,
+          profileId: errorData.profileId ?? null,
+          profileName: errorData.profileName ?? null,
+        };
+
+        radioDispatch({ type: 'radioError', payload: record });
       },
       radioDisconnectedDuringTransmission: (data: unknown) => {
         console.warn('🚨 [RadioProvider] 电台发射中断开连接:', data);
@@ -677,6 +788,17 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           color: (msgData.color as "default" | "foreground" | "primary" | "secondary" | "success" | "warning" | "danger" | undefined) || 'default',
           timeout: msgData.timeout === null ? undefined : (msgData.timeout || 3000)
         });
+      },
+      // Profile 管理事件
+      profileChanged: (data: unknown) => {
+        const profileData = data as ProfileChangedEvent;
+        console.log('📋 [RadioProvider] Profile 已切换:', profileData.profileId, profileData.profile.name);
+        radioDispatch({ type: 'profileChanged', payload: profileData });
+      },
+      profileListUpdated: (data: unknown) => {
+        const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null };
+        console.log('📋 [RadioProvider] Profile 列表已更新:', listData.profiles.length, '个 Profile');
+        radioDispatch({ type: 'profileListUpdated', payload: listData });
       }
     };
 
@@ -801,5 +923,24 @@ export const useLogbook = () => {
     loadQSOs: (operatorId: string, qsos: QSORecord[]) => {
       dispatch.logbookDispatch({ type: 'loadQSOs', payload: { operatorId, qsos } });
     }
+  };
+};
+
+export const useProfiles = () => {
+  const { state } = useRadio();
+  const activeProfile = state.radio.profiles.find(p => p.id === state.radio.activeProfileId) ?? null;
+  return {
+    profiles: state.radio.profiles,
+    activeProfileId: state.radio.activeProfileId,
+    activeProfile,
+  };
+};
+
+export const useRadioErrors = () => {
+  const { state, dispatch } = useRadio();
+  return {
+    errors: state.radio.radioErrors,
+    latestError: state.radio.latestRadioError,
+    clearErrors: () => dispatch.radioDispatch({ type: 'clearRadioErrors' }),
   };
 };

@@ -3,12 +3,16 @@
 
 import { promises as fs } from 'fs';
 import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig } from '@tx5dr/contracts';
+import type { RadioProfile } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 
 // 应用配置接口
 export interface AppConfig {
-  audio: AudioDeviceSettings;
+  // Profile 系统（取代旧的顶层 radio/audio）
+  profiles: RadioProfile[];
+  activeProfileId: string | null;
+
   ft8: {
     myCallsign: string;
     myGrid: string;
@@ -36,7 +40,6 @@ export interface AppConfig {
     port: number;
     host: string;
   };
-  radio: HamlibConfig;
   operators: RadioOperatorConfig[];
   wavelog: WaveLogConfig;
   pskreporter: PSKReporterConfig;
@@ -52,12 +55,8 @@ export interface AudioConfig {
 
 // 默认配置
 const DEFAULT_CONFIG: AppConfig = {
-  audio: {
-    inputDeviceName: undefined,  // 默认无设备名称，使用系统默认
-    outputDeviceName: undefined, // 默认无设备名称，使用系统默认
-    sampleRate: 48000,
-    bufferSize: 768
-  },
+  profiles: [],
+  activeProfileId: null,
   ft8: {
     myCallsign: '',
     myGrid: '',
@@ -73,9 +72,6 @@ const DEFAULT_CONFIG: AppConfig = {
   server: {
     port: 3000,
     host: '0.0.0.0',
-  },
-  radio: {
-    type: 'none',
   },
   operators: [
     // 从空操作员列表开始，等待用户创建
@@ -104,6 +100,17 @@ const DEFAULT_CONFIG: AppConfig = {
   },
 };
 
+// 默认音频配置（无 Profile 时的兜底值）
+const DEFAULT_AUDIO: AudioDeviceSettings = {
+  sampleRate: 48000,
+  bufferSize: 768,
+};
+
+// 默认电台配置（无 Profile 时的兜底值）
+const DEFAULT_RADIO: HamlibConfig = {
+  type: 'none',
+};
+
 // 配置管理器
 export class ConfigManager {
   private static instance: ConfigManager;
@@ -130,7 +137,7 @@ export class ConfigManager {
       // 设置配置文件路径
       this.configPath = await getConfigFilePath('config.json');
       console.log(`📁 [配置管理器] 配置文件路径: ${this.configPath}`);
-      
+
       await this.loadConfig();
       console.log('✅ [配置管理器] 配置文件加载成功');
     } catch (error) {
@@ -147,21 +154,37 @@ export class ConfigManager {
     const configData = await fs.readFile(this.configPath, 'utf-8');
     const parsedConfig = JSON.parse(configData);
 
-    // 检测并迁移 radio 配置（如果需要）
-    if (parsedConfig.radio && this.needsMigration(parsedConfig.radio)) {
-      console.log('🔄 [配置管理器] 检测到旧版配置格式，开始迁移...');
+    // 检测并迁移旧版 radio 配置格式（扁平 → 嵌套对象）
+    if (parsedConfig.radio && this.needsRadioFormatMigration(parsedConfig.radio)) {
+      console.log('🔄 [配置管理器] 检测到旧版电台配置格式，开始迁移...');
 
       // 备份旧配置
       const backupPath = `${this.configPath}.backup`;
       await fs.writeFile(backupPath, configData, 'utf-8');
       console.log(`💾 [配置管理器] 已备份旧配置到: ${backupPath}`);
 
-      // 执行迁移
-      parsedConfig.radio = this.migrateRadioConfig(parsedConfig.radio);
+      // 执行格式迁移
+      parsedConfig.radio = this.migrateRadioConfigFormat(parsedConfig.radio);
 
       // 保存新格式配置
       await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
-      console.log('✅ [配置管理器] 配置迁移完成');
+      console.log('✅ [配置管理器] 电台配置格式迁移完成');
+    }
+
+    // 迁移到 Profile 系统（旧 radio+audio → profiles）
+    if (this.needsProfileMigration(parsedConfig)) {
+      console.log('🔄 [配置管理器] 检测到旧版配置（独立 radio/audio），开始迁移到 Profile 系统...');
+
+      // 备份旧配置
+      const backupPath = `${this.configPath}.profile-migration.backup`;
+      await fs.writeFile(backupPath, configData, 'utf-8');
+      console.log(`💾 [配置管理器] 已备份旧配置到: ${backupPath}`);
+
+      this.migrateToProfiles(parsedConfig);
+
+      // 保存迁移后的配置
+      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      console.log('✅ [配置管理器] Profile 迁移完成');
     }
 
     // 合并默认配置和加载的配置
@@ -198,6 +221,9 @@ export class ConfigManager {
             ...operator,  // 用户配置覆盖默认值
           };
         });
+      // 特殊处理 profiles 数组：直接使用用户配置
+      } else if (key === 'profiles' && Array.isArray(userConfig[key])) {
+        result[key] = userConfig[key];
       } else if (userConfig[key] !== null && typeof userConfig[key] === 'object' && !Array.isArray(userConfig[key])) {
         result[key] = this.mergeConfig(defaultConfig[key] || {}, userConfig[key]);
       } else {
@@ -208,11 +234,71 @@ export class ConfigManager {
     return result;
   }
 
+  // ===== Profile 迁移 =====
+
   /**
-   * 检测配置是否需要迁移（旧格式 → 嵌套对象格式）
+   * 检测是否需要从旧版 radio/audio 迁移到 Profile 系统
    */
-  private needsMigration(radioConfig: any): boolean {
-    // 检测旧格式特征：存在扁平字段（host/port/ip/wlanPort 等）
+  private needsProfileMigration(parsedConfig: any): boolean {
+    // 已有 profiles 数组且非空 → 不需要迁移
+    if (Array.isArray(parsedConfig.profiles) && parsedConfig.profiles.length > 0) {
+      return false;
+    }
+    // 已有 profiles 字段（空数组）且无旧字段 → 不需要迁移（全新安装）
+    if (Array.isArray(parsedConfig.profiles) && !parsedConfig.radio && !parsedConfig.audio) {
+      return false;
+    }
+    // 存在旧的顶层 radio 或 audio → 需要迁移
+    return parsedConfig.radio !== undefined || parsedConfig.audio !== undefined;
+  }
+
+  /**
+   * 将旧的 radio+audio 配置迁移为 Profile
+   */
+  private migrateToProfiles(parsedConfig: any): void {
+    const oldRadio: HamlibConfig = parsedConfig.radio || DEFAULT_RADIO;
+    const oldAudio: AudioDeviceSettings = parsedConfig.audio || DEFAULT_AUDIO;
+
+    // 根据电台类型生成默认名称
+    let profileName = '默认配置';
+    if (oldRadio.type === 'icom-wlan') {
+      profileName = `ICOM WLAN ${oldRadio.icomWlan?.ip || ''}`.trim();
+    } else if (oldRadio.type === 'serial') {
+      profileName = `串口 ${oldRadio.serial?.path || ''}`.trim();
+    } else if (oldRadio.type === 'network') {
+      profileName = `RigCtld ${oldRadio.network?.host || 'localhost'}`.trim();
+    } else if (oldRadio.type === 'none') {
+      profileName = '纯监听';
+    }
+
+    const now = Date.now();
+    const defaultProfile: RadioProfile = {
+      id: `profile-${now}-${Math.random().toString(36).substr(2, 9)}`,
+      name: profileName,
+      radio: oldRadio,
+      audio: oldAudio,
+      audioLockedToRadio: oldRadio.type === 'icom-wlan',
+      createdAt: now,
+      updatedAt: now,
+      description: '从旧版配置自动迁移',
+    };
+
+    parsedConfig.profiles = [defaultProfile];
+    parsedConfig.activeProfileId = defaultProfile.id;
+
+    // 删除旧的顶层字段
+    delete parsedConfig.radio;
+    delete parsedConfig.audio;
+
+    console.log(`  ✓ 创建默认 Profile: "${profileName}" (id: ${defaultProfile.id})`);
+  }
+
+  // ===== 旧版电台配置格式迁移 =====
+
+  /**
+   * 检测电台配置是否需要格式迁移（旧扁平格式 → 嵌套对象格式）
+   */
+  private needsRadioFormatMigration(radioConfig: any): boolean {
     const hasOldFlatFields =
       radioConfig.host !== undefined ||
       radioConfig.port !== undefined ||
@@ -221,20 +307,18 @@ export class ConfigManager {
       radioConfig.path !== undefined ||
       radioConfig.rigModel !== undefined;
 
-    // 检测新格式特征：存在嵌套对象（network/icomWlan/serial）
     const hasNewNestedFields =
       radioConfig.network !== undefined ||
       radioConfig.icomWlan !== undefined ||
       radioConfig.serial !== undefined;
 
-    // 如果有旧字段且没有新字段 → 需要迁移
     return hasOldFlatFields && !hasNewNestedFields;
   }
 
   /**
-   * 迁移电台配置（旧格式 → 嵌套对象格式）
+   * 迁移电台配置格式（旧扁平格式 → 嵌套对象格式）
    */
-  private migrateRadioConfig(oldConfig: any): HamlibConfig {
+  private migrateRadioConfigFormat(oldConfig: any): HamlibConfig {
     const newConfig: HamlibConfig = {
       type: oldConfig.type || 'none',
       transmitCompensationMs: oldConfig.transmitCompensationMs,
@@ -242,7 +326,6 @@ export class ConfigManager {
 
     console.log(`📝 [配置迁移] 当前连接类型: ${newConfig.type}`);
 
-    // 迁移 network 配置（保留所有历史配置）
     if (oldConfig.host !== undefined || oldConfig.port !== undefined) {
       newConfig.network = {
         host: oldConfig.host || 'localhost',
@@ -251,19 +334,17 @@ export class ConfigManager {
       console.log(`  ✓ 迁移 network 配置: ${newConfig.network.host}:${newConfig.network.port}`);
     }
 
-    // 迁移 icomWlan 配置（wlanPort → port）
     if (oldConfig.ip !== undefined || oldConfig.wlanPort !== undefined) {
       newConfig.icomWlan = {
         ip: oldConfig.ip || '',
-        port: oldConfig.wlanPort || 50001,  // wlanPort → port
+        port: oldConfig.wlanPort || 50001,
         userName: oldConfig.userName,
         password: oldConfig.password,
-        dataMode: true,  // 默认启用数据模式（适用于 FT8/FT4）
+        dataMode: true,
       };
       console.log(`  ✓ 迁移 icomWlan 配置: ${newConfig.icomWlan.ip}:${newConfig.icomWlan.port}`);
     }
 
-    // 迁移 serial 配置（保留所有历史配置）
     if (oldConfig.path !== undefined || oldConfig.rigModel !== undefined) {
       newConfig.serial = {
         path: oldConfig.path || '',
@@ -276,6 +357,90 @@ export class ConfigManager {
     return newConfig;
   }
 
+  // ===== Profile 管理方法 =====
+
+  /**
+   * 获取所有 Profile
+   */
+  getProfiles(): RadioProfile[] {
+    return [...this.config.profiles];
+  }
+
+  /**
+   * 获取当前激活的 Profile ID
+   */
+  getActiveProfileId(): string | null {
+    return this.config.activeProfileId;
+  }
+
+  /**
+   * 获取当前激活的 Profile
+   */
+  getActiveProfile(): RadioProfile | null {
+    if (!this.config.activeProfileId) return null;
+    return this.config.profiles.find(p => p.id === this.config.activeProfileId) || null;
+  }
+
+  /**
+   * 获取指定 Profile
+   */
+  getProfile(id: string): RadioProfile | null {
+    return this.config.profiles.find(p => p.id === id) || null;
+  }
+
+  /**
+   * 添加 Profile
+   */
+  async addProfile(profile: RadioProfile): Promise<void> {
+    this.config.profiles.push(profile);
+    await this.saveConfig();
+  }
+
+  /**
+   * 更新 Profile
+   */
+  async updateProfile(id: string, updates: Partial<Omit<RadioProfile, 'id' | 'createdAt'>>): Promise<RadioProfile> {
+    const index = this.config.profiles.findIndex(p => p.id === id);
+    if (index === -1) {
+      throw new Error(`Profile ${id} 不存在`);
+    }
+
+    this.config.profiles[index] = {
+      ...this.config.profiles[index],
+      ...updates,
+      updatedAt: Date.now(),
+    };
+
+    await this.saveConfig();
+    return this.config.profiles[index];
+  }
+
+  /**
+   * 删除 Profile
+   */
+  async deleteProfile(id: string): Promise<void> {
+    const index = this.config.profiles.findIndex(p => p.id === id);
+    if (index === -1) {
+      throw new Error(`Profile ${id} 不存在`);
+    }
+
+    this.config.profiles.splice(index, 1);
+    await this.saveConfig();
+  }
+
+  /**
+   * 设置激活的 Profile ID
+   */
+  async setActiveProfileId(id: string | null): Promise<void> {
+    if (id !== null && !this.config.profiles.find(p => p.id === id)) {
+      throw new Error(`Profile ${id} 不存在`);
+    }
+    this.config.activeProfileId = id;
+    await this.saveConfig();
+  }
+
+  // ===== 配置派生方法（从 activeProfile 派生，签名不变） =====
+
   /**
    * 获取完整配置
    */
@@ -284,18 +449,23 @@ export class ConfigManager {
   }
 
   /**
-   * 获取音频配置
+   * 获取音频配置（从 activeProfile 派生）
    */
   getAudioConfig(): AudioDeviceSettings {
-    return { ...this.config.audio };
+    const profile = this.getActiveProfile();
+    return profile?.audio ? { ...profile.audio } : { ...DEFAULT_AUDIO };
   }
 
   /**
-   * 更新音频配置
+   * 更新音频配置（写入 activeProfile）
    */
   async updateAudioConfig(audioConfig: Partial<AudioDeviceSettings>): Promise<void> {
-    this.config.audio = { ...this.config.audio, ...audioConfig };
-    await this.saveConfig();
+    const profile = this.getActiveProfile();
+    if (profile) {
+      profile.audio = { ...profile.audio, ...audioConfig };
+      profile.updatedAt = Date.now();
+      await this.saveConfig();
+    }
   }
 
   /**
@@ -329,18 +499,23 @@ export class ConfigManager {
   }
 
   /**
-   * 获取电台(Hamlib)配置
+   * 获取电台(Hamlib)配置（从 activeProfile 派生）
    */
   getRadioConfig(): HamlibConfig {
-    return { ...this.config.radio } as HamlibConfig;
+    const profile = this.getActiveProfile();
+    return profile?.radio ? { ...profile.radio } as HamlibConfig : { ...DEFAULT_RADIO };
   }
 
   /**
-   * 更新电台(Hamlib)配置
+   * 更新电台(Hamlib)配置（写入 activeProfile）
    */
   async updateRadioConfig(radioConfig: Partial<HamlibConfig>): Promise<void> {
-    this.config.radio = { ...this.config.radio, ...radioConfig } as HamlibConfig;
-    await this.saveConfig();
+    const profile = this.getActiveProfile();
+    if (profile) {
+      profile.radio = { ...profile.radio, ...radioConfig } as HamlibConfig;
+      profile.updatedAt = Date.now();
+      await this.saveConfig();
+    }
   }
 
   /**
@@ -588,4 +763,4 @@ export class ConfigManager {
     this.config.pskreporter = { ...DEFAULT_CONFIG.pskreporter };
     await this.saveConfig();
   }
-} 
+}

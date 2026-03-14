@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   HamlibConfigSchema,
   RadioInfoSchema,
+  RadioConnectionStatusSchema,
   PresetFrequencySchema,
   SupportedRigSchema,
   SerialPortSchema,
@@ -75,6 +76,7 @@ export const RadioStatusResponseSchema = z.object({
   success: z.boolean(),
   status: z.object({
     connected: z.boolean(),
+    connectionStatus: RadioConnectionStatusSchema.optional(),
     radioInfo: RadioInfoSchema.nullable(),
     radioConfig: HamlibConfigSchema.optional(),
     connectionHealth: z.object({
@@ -125,6 +127,7 @@ export const SetFrequencyResponseSchema = z.object({
   mode: z.string().optional(),
   band: z.string().optional(),
   radioMode: z.string().optional(),
+  radioConnected: z.boolean().optional(),
 });
 
 // ========== 时隙包相关响应 ==========

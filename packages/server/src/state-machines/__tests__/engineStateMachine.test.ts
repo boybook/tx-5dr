@@ -72,7 +72,7 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('启动失败：idle → starting → error', async () => {
+    it('启动失败：idle → starting → idle', async () => {
       const testError = new Error('启动失败');
       mockInput.onStart = vi.fn().mockRejectedValue(testError);
 
@@ -81,14 +81,44 @@ describe('engineStateMachine', () => {
 
       actor.send({ type: 'START' });
 
-      // 等待转换到 error 状态
-      await waitForEngineState(actor, EngineState.ERROR, 1000);
+      // 等待回到 idle 状态（不再进入 error）
+      await waitForEngineState(actor, EngineState.IDLE, 1000);
 
-      expect(isEngineState(actor, EngineState.ERROR)).toBe(true);
+      expect(isEngineState(actor, EngineState.IDLE)).toBe(true);
       expect(mockInput.onError).toHaveBeenCalledWith(testError);
 
+      // context.error 保留（在 IDLE 中不清除，下次 START 时清除）
       const context = getEngineContext(actor);
       expect(context.error).toBeDefined();
+
+      actor.stop();
+    });
+
+    it('启动失败后可以直接重新启动', async () => {
+      let failOnce = true;
+      mockInput.onStart = vi.fn().mockImplementation(() => {
+        if (failOnce) {
+          failOnce = false;
+          return Promise.reject(new Error('首次失败'));
+        }
+        return Promise.resolve();
+      });
+
+      const actor = createEngineActor(mockInput);
+      actor.start();
+
+      // 首次启动失败 → 回到 idle
+      actor.send({ type: 'START' });
+      await waitForEngineState(actor, EngineState.IDLE, 1000);
+
+      // 直接重新启动（不需要 RESET）
+      actor.send({ type: 'START' });
+      await waitForEngineState(actor, EngineState.RUNNING, 1000);
+
+      expect(isEngineState(actor, EngineState.RUNNING)).toBe(true);
+      // 重新启动时 error 应被清除
+      const context = getEngineContext(actor);
+      expect(context.error).toBeUndefined();
 
       actor.stop();
     });
@@ -128,7 +158,7 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('停止失败：running → stopping → error', async () => {
+    it('停止失败：running → stopping → idle', async () => {
       const testError = new Error('停止失败');
       mockInput.onStop = vi.fn().mockRejectedValue(testError);
 
@@ -139,12 +169,16 @@ describe('engineStateMachine', () => {
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
-      // 再停止（失败）
+      // 再停止（失败，但仍回到 idle）
       actor.send({ type: 'STOP' });
-      await waitForEngineState(actor, EngineState.ERROR, 1000);
+      await waitForEngineState(actor, EngineState.IDLE, 1000);
 
-      expect(isEngineState(actor, EngineState.ERROR)).toBe(true);
+      expect(isEngineState(actor, EngineState.IDLE)).toBe(true);
       expect(mockInput.onError).toHaveBeenCalledWith(testError);
+
+      // context.error 保留
+      const context = getEngineContext(actor);
+      expect(context.error).toBeDefined();
 
       actor.stop();
     });
@@ -227,69 +261,6 @@ describe('engineStateMachine', () => {
 
       // 应该转到 stopping 状态
       await waitForEngineState(actor, EngineState.STOPPING, 1000);
-
-      actor.stop();
-    });
-  });
-
-  describe('错误状态', () => {
-    it('从错误状态可以 RESET 回到 idle', async () => {
-      const testError = new Error('启动失败');
-      mockInput.onStart = vi.fn().mockRejectedValue(testError);
-
-      const actor = createEngineActor(mockInput);
-      actor.start();
-
-      actor.send({ type: 'START' });
-      await waitForEngineState(actor, EngineState.ERROR, 1000);
-
-      // 重置
-      actor.send({ type: 'RESET' });
-      await waitForEngineState(actor, EngineState.IDLE, 1000);
-
-      const context = getEngineContext(actor);
-      expect(context.error).toBeUndefined();
-
-      actor.stop();
-    });
-
-    it('从错误状态可以 RETRY 重新启动', async () => {
-      let failOnce = true;
-      mockInput.onStart = vi.fn().mockImplementation(() => {
-        if (failOnce) {
-          failOnce = false;
-          return Promise.reject(new Error('首次失败'));
-        }
-        return Promise.resolve();
-      });
-
-      const actor = createEngineActor(mockInput);
-      actor.start();
-
-      // 首次启动失败
-      actor.send({ type: 'START' });
-      await waitForEngineState(actor, EngineState.ERROR, 1000);
-
-      // 重试
-      actor.send({ type: 'RETRY' });
-      await waitForEngineState(actor, EngineState.RUNNING, 1000);
-
-      expect(isEngineState(actor, EngineState.RUNNING)).toBe(true);
-
-      actor.stop();
-    });
-
-    it('错误状态下调用 onError 回调', async () => {
-      const testError = new Error('测试错误');
-      mockInput.onStart = vi.fn().mockRejectedValue(testError);
-
-      const actor = createEngineActor(mockInput);
-      actor.start();
-
-      actor.send({ type: 'START' });
-      await waitForEngineState(actor, EngineState.ERROR, 1000);
-
-      expect(mockInput.onError).toHaveBeenCalledWith(testError);
 
       actor.stop();
     });

@@ -4,7 +4,8 @@ import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
-import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema } from './radio.schema.js';
+import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, RadioConnectionStatusSchema, ReconnectProgressSchema } from './radio.schema.js';
+import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -89,6 +90,13 @@ export enum WSMessageType {
 
   // ===== 天线调谐器 =====
   TUNER_STATUS_CHANGED = 'tunerStatusChanged',
+
+  // ===== 电台重连控制 =====
+  RADIO_STOP_RECONNECT = 'radioStopReconnect',
+
+  // ===== Profile 管理 =====
+  PROFILE_CHANGED = 'profileChanged',
+  PROFILE_LIST_UPDATED = 'profileListUpdated',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -574,11 +582,13 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.RADIO_STATUS_CHANGED),
   data: z.object({
     connected: z.boolean(),
+    status: RadioConnectionStatusSchema, // 精细化连接状态（必填）
     radioInfo: RadioInfoSchema.nullable(), // 电台信息（连接时有值，断开时为null）
     radioConfig: HamlibConfigSchema.optional(), // 电台配置（保持当前配置）
     reason: z.string().optional(),
     message: z.string().optional(), // 用户友好的消息
     recommendation: z.string().optional(), // 操作建议
+    reconnectProgress: ReconnectProgressSchema.optional(), // 重连进度
     connectionHealth: z.object({
       connectionHealthy: z.boolean(),
     }).optional(),
@@ -589,16 +599,44 @@ export type WSRadioStatusChangedMessage = z.infer<typeof WSRadioStatusChangedMes
 
 
 /**
+ * 电台错误事件数据（专用错误频道）
+ * 包含完整的错误信息、解决建议、Profile 关联等
+ */
+export const RadioErrorEventDataSchema = z.object({
+  /** 技术错误消息 */
+  message: z.string(),
+  /** 用户友好的错误消息 */
+  userMessage: z.string(),
+  /** 解决建议列表 */
+  suggestions: z.array(z.string()).default([]),
+  /** 错误代码（RadioErrorCode） */
+  code: z.string().optional(),
+  /** 严重程度 */
+  severity: z.enum(['info', 'warning', 'error', 'critical']).default('error'),
+  /** ISO 时间戳（服务端生成） */
+  timestamp: z.string(),
+  /** 错误堆栈（仅非生产环境） */
+  stack: z.string().optional(),
+  /** 错误上下文 */
+  context: z.record(z.unknown()).optional(),
+  /** 连接健康状态 */
+  connectionHealth: z.object({
+    connectionHealthy: z.boolean(),
+  }).optional(),
+  /** 关联的 Profile ID */
+  profileId: z.string().nullable(),
+  /** 关联的 Profile 名称 */
+  profileName: z.string().nullable(),
+});
+
+export type RadioErrorEventData = z.infer<typeof RadioErrorEventDataSchema>;
+
+/**
  * 电台错误消息
  */
 export const WSRadioErrorMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.RADIO_ERROR),
-  data: z.object({
-    error: z.string(),
-    connectionHealth: z.object({
-      connectionHealthy: z.boolean(),
-    }).optional(),
-  }),
+  data: RadioErrorEventDataSchema,
 });
 
 export type WSRadioErrorMessage = z.infer<typeof WSRadioErrorMessageSchema>;
@@ -626,6 +664,16 @@ export const WSRadioDisconnectedDuringTransmissionMessageSchema = WSBaseMessageS
 });
 
 export type WSRadioDisconnectedDuringTransmissionMessage = z.infer<typeof WSRadioDisconnectedDuringTransmissionMessageSchema>;
+
+/**
+ * 停止电台重连消息（客户端到服务端）
+ */
+export const WSRadioStopReconnectMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_STOP_RECONNECT),
+  data: z.object({}).optional(),
+});
+
+export type WSRadioStopReconnectMessage = z.infer<typeof WSRadioStopReconnectMessageSchema>;
 
 /**
  * 频率变化消息（服务端到客户端）
@@ -806,6 +854,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSRadioStatusChangedMessageSchema,
   WSRadioErrorMessageSchema,
   WSRadioManualReconnectMessageSchema,
+  WSRadioStopReconnectMessageSchema,
   WSRadioDisconnectedDuringTransmissionMessageSchema,
 
   // 频率管理消息
@@ -935,4 +984,13 @@ export interface DigitalRadioEngineEvents {
 
   // 天线调谐器事件
   tunerStatusChanged: (status: z.infer<typeof TunerStatusSchema>) => void;
+
+  // 电台连接状态事件
+  radioStatusChanged: (data: z.infer<typeof WSRadioStatusChangedMessageSchema>['data']) => void;
+  radioError: (data: z.infer<typeof RadioErrorEventDataSchema>) => void;
+  radioDisconnectedDuringTransmission: (data: z.infer<typeof WSRadioDisconnectedDuringTransmissionMessageSchema>['data']) => void;
+
+  // Profile 管理事件
+  profileChanged: (data: z.infer<typeof ProfileChangedEventSchema>) => void;
+  profileListUpdated: (data: { profiles: z.infer<typeof RadioProfileSchema>[]; activeProfileId: string | null }) => void;
 } 

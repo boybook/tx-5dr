@@ -8,7 +8,7 @@
 import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { HamlibConfigSchema } from '@tx5dr/contracts';
+import { HamlibConfigSchema, RadioConnectionStatus } from '@tx5dr/contracts';
 import serialport from 'serialport';
 const { SerialPort } = serialport;
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
@@ -85,8 +85,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     // 广播配置变更事件，确保所有客户端同步最新配置
     const radioInfo = await radioManager.getRadioInfo();
-    engine.emit('radioStatusChanged' as any, {
+    engine.emit('radioStatusChanged', {
       connected: radioManager.isConnected(),
+      status: radioManager.getConnectionStatus(),
       radioInfo,
       radioConfig: config,
       reason: '配置已更新',
@@ -415,16 +416,20 @@ export async function radioRoutes(fastify: FastifyInstance) {
   fastify.get('/status', async (_req, reply) => {
     const config = configManager.getRadioConfig();
     const isConnected = radioManager.isConnected();
+    const connectionStatus = radioManager.getConnectionStatus();
 
     // 使用统一的 getRadioInfo() 方法获取电台信息
     const radioInfo = await radioManager.getRadioInfo();
 
     return reply.send({
       success: true,
-      config,
-      isConnected,
-      radioInfo,
-      connectionType: config.type
+      status: {
+        connected: isConnected,
+        connectionStatus,
+        radioInfo,
+        radioConfig: config,
+        connectionHealth: radioManager.getConnectionHealth(),
+      },
     });
   });
 

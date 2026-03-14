@@ -19,7 +19,6 @@ export enum EngineState {
   STARTING = 'starting',
   RUNNING = 'running',
   STOPPING = 'stopping',
-  ERROR = 'error',
 }
 
 /**
@@ -27,7 +26,7 @@ export enum EngineState {
  */
 export interface EngineContext {
   /**
-   * 错误信息（当状态为 error 时）
+   * 最近一次错误信息（不影响状态，仅供查询）
    */
   error?: RadioError | Error;
 
@@ -63,9 +62,7 @@ export type EngineEvent =
   | { type: 'FORCE_STOP'; reason?: string }
   | { type: 'STOP_SUCCESS' }
   | { type: 'STOP_FAILURE'; error: RadioError | Error }
-  | { type: 'RADIO_DISCONNECTED'; reason?: string }
-  | { type: 'RETRY' }
-  | { type: 'RESET' };
+  | { type: 'RADIO_DISCONNECTED'; reason?: string };
 
 /**
  * 引擎状态机输入
@@ -98,13 +95,12 @@ export interface EngineInput {
 
 /**
  * 电台状态枚举
- * 简化版：移除 RECONNECTING 状态，统一为"连接"概念
  */
 export enum RadioState {
   DISCONNECTED = 'disconnected',
   CONNECTING = 'connecting',
   CONNECTED = 'connected',
-  ERROR = 'error',
+  RECONNECTING = 'reconnecting',
 }
 
 /**
@@ -140,11 +136,30 @@ export interface RadioContext {
    * 连接健康状态
    */
   isHealthy: boolean;
+
+  /**
+   * 是否曾经成功连接过（区分首次失败 vs 运行中断连）
+   */
+  wasEverConnected: boolean;
+
+  /**
+   * 当前重连次数
+   */
+  reconnectAttempt: number;
+
+  /**
+   * 最大重连次数
+   */
+  maxReconnectAttempts: number;
+
+  /**
+   * 当前退避延迟（毫秒）
+   */
+  reconnectDelayMs?: number;
 }
 
 /**
  * 电台状态机事件
- * 简化版：移除 RECONNECT 相关事件
  */
 export type RadioEvent =
   | { type: 'CONNECT'; config: HamlibConfig }
@@ -156,7 +171,7 @@ export type RadioEvent =
   | { type: 'HEALTH_CHECK' }
   | { type: 'HEALTH_CHECK_PASSED' }
   | { type: 'HEALTH_CHECK_FAILED'; error: RadioError | Error }
-  | { type: 'RESET' };
+  | { type: 'STOP_RECONNECT' };
 
 /**
  * 电台状态机输入

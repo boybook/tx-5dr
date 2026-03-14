@@ -1,15 +1,17 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * 电台状态机
  *
- * 管理物理电台的连接状态转换（简化版）
+ * 管理物理电台的连接状态转换
  * - disconnected: 断开连接
  * - connecting: 连接中
  * - connected: 已连接
- * - error: 错误状态
+ * - reconnecting: 自动重连中
  *
  * 核心特性：
- * 1. 统一的连接概念（不区分首次连接和重连）
- * 2. 连接健康检查
+ * 1. 首次连接失败 → 回到 DISCONNECTED + 错误通知
+ * 2. 运行中断连 → 自动重连（指数退避，最多5次）
+ * 3. 连接健康检查
  */
 
 import { setup, createActor, fromPromise, type ActorRefFrom } from 'xstate';
@@ -23,6 +25,9 @@ import {
 import type { HamlibConfig } from '@tx5dr/contracts';
 import { globalInspector } from '../index.js';
 
+/** 指数退避延迟序列（毫秒） */
+const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];
+
 /**
  * 创建电台状态机
  */
@@ -30,7 +35,7 @@ export function createRadioStateMachine(
   input: RadioInput,
   options: StateMachineOptions = {}
 ) {
-  const healthCheckInterval = input.healthCheckInterval ?? 3000; // 默认3秒
+  const healthCheckInterval = input.healthCheckInterval ?? 3000;
 
   const machine = setup({
     types: {
@@ -45,14 +50,9 @@ export function createRadioStateMachine(
       connectActor: fromPromise<void, { radioInput: RadioInput; config: HamlibConfig }>(
         async ({ input: { radioInput, config } }) => {
           console.log('🔌 [RadioStateMachine] 调用 onConnect()');
-
-          // 验证 config 是否存在
           if (!config) {
-            const error = new Error('电台配置缺失：无法进行连接操作');
-            console.error('❌ [RadioStateMachine] onConnect() 失败:', error);
-            throw error;
+            throw new Error('电台配置缺失：无法进行连接操作');
           }
-
           try {
             await radioInput.onConnect(config);
             console.log('✅ [RadioStateMachine] onConnect() 成功');
@@ -64,26 +64,19 @@ export function createRadioStateMachine(
       ),
 
       /**
-       * 断开 Actor（异步操作）
+       * 重连 Actor（带退避延迟的连接尝试）
        */
-      disconnectActor: fromPromise<void, { radioInput: RadioInput; reason?: string }>(
-        async ({ input: { radioInput, reason } }) => {
-          console.log(`🔌 [RadioStateMachine] 调用 onDisconnect(${reason || ''})`);
-          try {
-            await radioInput.onDisconnect(reason);
-            console.log('✅ [RadioStateMachine] onDisconnect() 成功');
-          } catch (error) {
-            console.error('❌ [RadioStateMachine] onDisconnect() 失败:', error);
-            throw error;
-          }
+      reconnectActor: fromPromise<void, { radioInput: RadioInput; config: HamlibConfig; delayMs: number }>(
+        async ({ input: { radioInput, config, delayMs } }) => {
+          console.log(`🔄 [RadioStateMachine] 等待 ${delayMs}ms 后重连...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          console.log('🔌 [RadioStateMachine] 开始重连尝试');
+          await radioInput.onConnect(config);
+          console.log('✅ [RadioStateMachine] 重连成功');
         }
       ),
     },
     actions: {
-
-      /**
-       * 保存配置
-       */
       saveConfig: ({ context, event }) => {
         if (event.type === 'CONNECT') {
           context.config = event.config;
@@ -91,117 +84,84 @@ export function createRadioStateMachine(
         }
       },
 
-      /**
-       * 记录连接时间
-       */
       recordConnectedTime: ({ context }) => {
         context.connectedTimestamp = Date.now();
         context.isHealthy = true;
         console.log('⏱️  [RadioStateMachine] 记录连接时间');
       },
 
-      /**
-       * 记录断开原因
-       */
       recordDisconnectReason: ({ context, event }) => {
-        if (
-          event.type === 'DISCONNECT' ||
-          event.type === 'CONNECTION_LOST'
-        ) {
+        if (event.type === 'DISCONNECT' || event.type === 'CONNECTION_LOST') {
           context.disconnectReason = event.reason;
           context.isHealthy = false;
-          console.log(
-            `⚠️  [RadioStateMachine] 记录断开原因: ${event.reason || '未知'}`
-          );
+          console.log(`⚠️  [RadioStateMachine] 记录断开原因: ${event.reason || '未知'}`);
         }
       },
 
-
-      /**
-       * 设置错误
-       */
       setError: ({ context, event }) => {
-        if (
-          event.type === 'CONNECT_FAILURE' ||
-          event.type === 'HEALTH_CHECK_FAILED'
-        ) {
+        if (event.type === 'CONNECT_FAILURE' || event.type === 'HEALTH_CHECK_FAILED') {
           context.error = event.error;
           context.isHealthy = false;
-          console.error(
-            `❌ [RadioStateMachine] 错误: ${event.error.message}`
-          );
+          console.error(`❌ [RadioStateMachine] 错误: ${event.error.message}`);
         }
       },
 
-      /**
-       * 清除错误
-       */
       clearError: ({ context }) => {
         context.error = undefined;
         console.log('🧹 [RadioStateMachine] 清除错误状态');
       },
 
-      /**
-       * 更新健康检查时间
-       */
       updateHealthCheckTime: ({ context }) => {
         context.lastHealthCheckTimestamp = Date.now();
       },
 
-      /**
-       * 标记健康
-       */
       markHealthy: ({ context }) => {
         context.isHealthy = true;
       },
 
-      /**
-       * 标记不健康
-       */
       markUnhealthy: ({ context }) => {
         context.isHealthy = false;
       },
 
-      /**
-       * 通知状态变化
-       */
-      notifyStateChange: ({ context, self }, params: { input: RadioInput }) => {
-        const state = self.getSnapshot().value as RadioState;
-        if (params.input.onStateChange) {
-          params.input.onStateChange(state, context);
-        }
+      /** 标记曾经成功连接过 */
+      markEverConnected: ({ context }) => {
+        context.wasEverConnected = true;
+        console.log('✅ [RadioStateMachine] 标记: 已成功连接过');
       },
 
-      /**
-       * 调用错误处理
-       */
+      /** 递增重连次数 */
+      incrementReconnectAttempt: ({ context }) => {
+        context.reconnectAttempt++;
+        console.log(`🔄 [RadioStateMachine] 重连尝试: ${context.reconnectAttempt}/${context.maxReconnectAttempts}`);
+      },
+
+      /** 计算退避延迟 */
+      calculateReconnectDelay: ({ context }) => {
+        const idx = Math.min(context.reconnectAttempt - 1, RECONNECT_DELAYS.length - 1);
+        context.reconnectDelayMs = RECONNECT_DELAYS[idx];
+        console.log(`⏳ [RadioStateMachine] 退避延迟: ${context.reconnectDelayMs}ms`);
+      },
+
+      /** 重置重连状态 */
+      resetReconnectState: ({ context }) => {
+        context.reconnectAttempt = 0;
+        context.reconnectDelayMs = undefined;
+      },
+
       invokeErrorHandler: ({ context }, params: { input: RadioInput }) => {
         if (params.input.onError && context.error) {
           params.input.onError(context.error);
         }
       },
-
-      /**
-       * 调用断开连接处理
-       */
-      invokeDisconnectHandler: ({ context }, params: { input: RadioInput }) => {
-        if (params.input.onDisconnect) {
-          params.input.onDisconnect(context.disconnectReason);
-        }
-      },
     },
     guards: {
-      /**
-       * 检查是否有错误
-       */
-      hasError: ({ context }) => {
-        return context.error !== undefined;
-      },
+      /** 是否应该自动重连（曾经成功连接过） */
+      shouldAutoReconnect: ({ context }) => context.wasEverConnected === true,
+
+      /** 是否还有重试次数 */
+      hasRetriesRemaining: ({ context }) => context.reconnectAttempt < context.maxReconnectAttempts,
     },
     delays: {
-      /**
-       * 健康检查间隔
-       */
       healthCheckInterval: () => healthCheckInterval,
     },
   }).createMachine({
@@ -209,6 +169,9 @@ export function createRadioStateMachine(
     initial: RadioState.DISCONNECTED,
     context: {
       isHealthy: false,
+      wasEverConnected: false,
+      reconnectAttempt: 0,
+      maxReconnectAttempts: 5,
     },
     states: {
       /**
@@ -218,8 +181,7 @@ export function createRadioStateMachine(
         entry: [
           'clearError',
           'recordDisconnectReason',
-          { type: 'invokeDisconnectHandler', params: { input } },
-          { type: 'notifyStateChange', params: { input } },
+          'resetReconnectState',
         ],
         on: {
           CONNECT: {
@@ -233,37 +195,27 @@ export function createRadioStateMachine(
        * 连接中状态
        */
       [RadioState.CONNECTING]: {
-        entry: [{ type: 'notifyStateChange', params: { input } }],
         invoke: {
           src: 'connectActor',
           input: ({ context, event }) => {
-            // 优先使用事件中的 config（首次连接），如果没有则使用 context 中保存的 config（重连）
             const eventConfig = (event as Extract<RadioEvent, { type: 'CONNECT' }>).config;
             const config = eventConfig || context.config;
-
             if (!config) {
-              console.error('❌ [RadioStateMachine] 无法获取电台配置，event 和 context 中都没有 config');
+              console.error('❌ [RadioStateMachine] 无法获取电台配置');
             }
-
-            return {
-              radioInput: input,
-              config: config!,
-            };
+            return { radioInput: input, config: config! };
           },
           onDone: {
             target: RadioState.CONNECTED,
-            actions: ['recordConnectedTime'],
+            actions: ['recordConnectedTime', 'markEverConnected'],
           },
           onError: {
-            // 连接失败，进入错误状态，等待用户手动重试
-            target: RadioState.ERROR,
+            // 首次连接失败 → 回到 DISCONNECTED（不进 ERROR）
+            target: RadioState.DISCONNECTED,
             actions: [
               ({ event, context }: any) => {
                 context.error = event.error;
-                console.error(
-                  '❌ [RadioStateMachine] 连接失败:',
-                  event.error
-                );
+                console.error('❌ [RadioStateMachine] 连接失败:', event.error);
               },
               { type: 'invokeErrorHandler', params: { input } },
             ],
@@ -281,24 +233,35 @@ export function createRadioStateMachine(
        * 已连接状态
        */
       [RadioState.CONNECTED]: {
-        entry: ['markHealthy', { type: 'notifyStateChange', params: { input } }],
+        entry: ['markHealthy', 'markEverConnected'],
         on: {
           DISCONNECT: {
             target: RadioState.DISCONNECTED,
             actions: ['recordDisconnectReason'],
           },
-          CONNECTION_LOST: {
-            // 连接丢失，进入断开状态，不自动重连
-            target: RadioState.DISCONNECTED,
-            actions: ['recordDisconnectReason'],
-          },
-          HEALTH_CHECK_FAILED: {
-            // 健康检查失败，进入错误状态，不自动重连
-            target: RadioState.ERROR,
-            actions: ['setError', { type: 'invokeErrorHandler', params: { input } }],
-          },
+          CONNECTION_LOST: [
+            {
+              guard: 'shouldAutoReconnect',
+              target: RadioState.RECONNECTING,
+              actions: ['recordDisconnectReason'],
+            },
+            {
+              target: RadioState.DISCONNECTED,
+              actions: ['recordDisconnectReason'],
+            },
+          ],
+          HEALTH_CHECK_FAILED: [
+            {
+              guard: 'shouldAutoReconnect',
+              target: RadioState.RECONNECTING,
+              actions: ['setError'],
+            },
+            {
+              target: RadioState.DISCONNECTED,
+              actions: ['setError', { type: 'invokeErrorHandler', params: { input } }],
+            },
+          ],
         },
-        // 定期健康检查
         after: {
           healthCheckInterval: {
             actions: ['updateHealthCheckTime'],
@@ -308,32 +271,48 @@ export function createRadioStateMachine(
       },
 
       /**
-       * 错误状态
-       * 用户可以通过 RESET 返回断开状态，或通过 CONNECT 重新连接
+       * 自动重连状态
+       * XState 在 re-enter 时会先 exit 再 entry，invoke 的 actor 会被取消并重新创建
        */
-      [RadioState.ERROR]: {
+      [RadioState.RECONNECTING]: {
         entry: [
-          'setError',
-          'markUnhealthy',
-          { type: 'invokeErrorHandler', params: { input } },
-          { type: 'notifyStateChange', params: { input } },
+          'incrementReconnectAttempt',
+          'calculateReconnectDelay',
         ],
-        on: {
-          RESET: {
-            target: RadioState.DISCONNECTED,
-            actions: ['clearError'],
+        invoke: {
+          src: 'reconnectActor',
+          input: ({ context }) => ({
+            radioInput: input,
+            config: context.config!,
+            delayMs: context.reconnectDelayMs || 2000,
+          }),
+          onDone: {
+            target: RadioState.CONNECTED,
+            actions: ['recordConnectedTime', 'resetReconnectState'],
           },
-          CONNECT: {
-            // 允许从错误状态直接重新连接
-            target: RadioState.CONNECTING,
-            actions: ['clearError', 'saveConfig'],
+          onError: [
+            {
+              guard: 'hasRetriesRemaining',
+              target: RadioState.RECONNECTING,
+            },
+            {
+              target: RadioState.DISCONNECTED,
+              actions: ['resetReconnectState'],
+            },
+          ],
+        },
+        on: {
+          STOP_RECONNECT: {
+            target: RadioState.DISCONNECTED,
+            actions: ['resetReconnectState'],
           },
           DISCONNECT: {
             target: RadioState.DISCONNECTED,
-            actions: ['clearError'],
+            actions: ['resetReconnectState', 'recordDisconnectReason'],
           },
         },
       },
+
     },
   });
 
@@ -414,7 +393,6 @@ export function waitForRadioState(
       }
     });
 
-    // 立即检查当前状态
     if (actor.getSnapshot().value === targetState) {
       clearTimeout(timeoutId);
       subscription.unsubscribe();

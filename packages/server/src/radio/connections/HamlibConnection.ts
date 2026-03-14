@@ -65,6 +65,12 @@ export class HamlibConnection
    */
   private readonly meterPollingIntervalMs = 300;
 
+  /**
+   * 数值表轮询连续失败计数（用于断线检测）
+   */
+  private meterPollFailCount = 0;
+  private readonly METER_POLL_FAIL_THRESHOLD = 3;
+
   constructor() {
     super();
   }
@@ -600,6 +606,8 @@ export class HamlibConnection
       }
 
       this.currentConfig = null;
+      this.meterPollFailCount = 0;
+      this.removeAllListeners();
     } finally {
       // 确保标志位被重置
       this.isCleaningUp = false;
@@ -656,6 +664,10 @@ export class HamlibConnection
         power: power !== null ? this.convertPower(power) : null,
       };
 
+      // 成功：重置失败计数
+      this.meterPollFailCount = 0;
+      this.lastSuccessfulOperation = Date.now();
+
       // 📝 EventBus 优化：双路径策略
       // 原路径：用于 DigitalRadioEngine 健康检查
       this.emit('meterData', meterData);
@@ -663,7 +675,13 @@ export class HamlibConnection
       // EventBus 直达：用于 WebSocket 广播到前端
       globalEventBus.emit('bus:meterData', meterData);
     } catch (error) {
-      // 静默失败，避免日志过多
+      this.meterPollFailCount++;
+      if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+        console.error(`❌ [HamlibConnection] 数值表轮询连续失败 ${this.meterPollFailCount} 次，检测到断线`);
+        // 只 emit 事件，不直接修改 state —— 让上层状态机决定状态转换
+        this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
+        this.stopMeterPolling();
+      }
     }
   }
 

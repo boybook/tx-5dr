@@ -218,6 +218,37 @@ export const TunerStatusResponseSchema = z.object({
   status: TunerStatusSchema,
 });
 
+/**
+ * 电台连接状态枚举
+ * 精细化的连接状态，贯穿 server → contracts → web
+ */
+export enum RadioConnectionStatus {
+  /** 未配置电台 (type=none) */
+  NOT_CONFIGURED = 'not_configured',
+  /** 已断开 (type!=none, 但未连接/初始状态) */
+  DISCONNECTED = 'disconnected',
+  /** 连接中 */
+  CONNECTING = 'connecting',
+  /** 已连接 */
+  CONNECTED = 'connected',
+  /** 自动重连中（运行中断线后自动重连） */
+  RECONNECTING = 'reconnecting',
+  /** 连接丢失（重连耗尽或运行中断连后停止重连） */
+  CONNECTION_LOST = 'connection_lost',
+}
+
+/**
+ * 重连进度信息
+ */
+export const ReconnectProgressSchema = z.object({
+  attempt: z.number(),
+  maxAttempts: z.number(),
+  nextRetryMs: z.number().optional(),
+});
+export type ReconnectProgress = z.infer<typeof ReconnectProgressSchema>;
+
+export const RadioConnectionStatusSchema = z.nativeEnum(RadioConnectionStatus);
+
 // 导出类型
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;
 export type FrequencyListResponse = z.infer<typeof FrequencyListResponseSchema>;

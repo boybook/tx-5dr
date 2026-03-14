@@ -39,6 +39,11 @@ import type {
   HamlibConfig,
   PSKReporterConfig,
   PSKReporterStatus,
+  ProfileListResponse,
+  ProfileActionResponse,
+  ActivateProfileResponse,
+  CreateProfileRequest,
+  UpdateProfileRequest,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -1140,6 +1145,50 @@ export const api = {
       apiBase
     );
   },
+
+  // ========== Profile 管理 API ==========
+
+  async getProfiles(apiBase?: string): Promise<ProfileListResponse> {
+    return apiRequest<ProfileListResponse>('/profiles', undefined, apiBase);
+  },
+
+  async createProfile(data: CreateProfileRequest, apiBase?: string): Promise<ProfileActionResponse> {
+    return apiRequest<ProfileActionResponse>(
+      '/profiles',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+      apiBase
+    );
+  },
+
+  async updateProfile(id: string, data: UpdateProfileRequest, apiBase?: string): Promise<ProfileActionResponse> {
+    return apiRequest<ProfileActionResponse>(
+      `/profiles/${encodeURIComponent(id)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      },
+      apiBase
+    );
+  },
+
+  async deleteProfile(id: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(
+      `/profiles/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      apiBase
+    );
+  },
+
+  async activateProfile(id: string, apiBase?: string): Promise<ActivateProfileResponse> {
+    return apiRequest<ActivateProfileResponse>(
+      `/profiles/${encodeURIComponent(id)}/activate`,
+      { method: 'POST' },
+      apiBase
+    );
+  },
 }
 
 // 为了向后兼容,也导出单独的函数
@@ -1203,4 +1252,10 @@ export const {
   ,getPSKReporterStatus
   ,triggerPSKReport
   ,resetPSKReporterStats
+  // Profile 管理函数
+  ,getProfiles
+  ,createProfile
+  ,updateProfile: updateProfile
+  ,deleteProfile
+  ,activateProfile
 } = api;

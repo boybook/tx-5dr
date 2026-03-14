@@ -1,6 +1,5 @@
 /**
  * radioStateMachine 单元测试
- * 简化版：移除 RECONNECTING 状态相关测试
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -88,7 +87,7 @@ describe('radioStateMachine', () => {
       actor.stop();
     });
 
-    it('连接失败应进入错误状态：disconnected → connecting → error', async () => {
+    it('连接失败应回到 disconnected', async () => {
       const testError = new Error('连接失败');
       mockInput.onConnect = vi.fn().mockRejectedValue(testError);
 
@@ -97,14 +96,13 @@ describe('radioStateMachine', () => {
 
       actor.send({ type: 'CONNECT', config: mockConfig });
 
-      // 等待转换到 error 状态
-      await waitForRadioState(actor, RadioState.ERROR, 1000);
+      // 首次连接失败直接回到 disconnected（不进入 error）
+      await waitForRadioState(actor, RadioState.DISCONNECTED, 1000);
 
-      expect(isRadioState(actor, RadioState.ERROR)).toBe(true);
+      expect(isRadioState(actor, RadioState.DISCONNECTED)).toBe(true);
 
       actor.stop();
     });
-
   });
 
   describe('断开流程', () => {
@@ -120,15 +118,13 @@ describe('radioStateMachine', () => {
       actor.send({ type: 'DISCONNECT', reason: '用户主动断开' });
       await waitForRadioState(actor, RadioState.DISCONNECTED, 1000);
 
-      expect(mockInput.onDisconnect).toHaveBeenCalledWith('用户主动断开');
-
       const context = getRadioContext(actor);
       expect(context.disconnectReason).toBe('用户主动断开');
 
       actor.stop();
     });
 
-    it('连接丢失：connected → disconnected', async () => {
+    it('连接丢失（曾连接过）：connected → reconnecting', async () => {
       const actor = createRadioActor(mockInput);
       actor.start();
 
@@ -136,9 +132,9 @@ describe('radioStateMachine', () => {
       actor.send({ type: 'CONNECT', config: mockConfig });
       await waitForRadioState(actor, RadioState.CONNECTED, 1000);
 
-      // 连接丢失
+      // 连接丢失 → wasEverConnected=true → 自动重连
       actor.send({ type: 'CONNECTION_LOST', reason: '网络中断' });
-      await waitForRadioState(actor, RadioState.DISCONNECTED, 1000);
+      await waitForRadioState(actor, RadioState.RECONNECTING, 1000);
 
       const context = getRadioContext(actor);
       expect(context.disconnectReason).toBe('网络中断');
@@ -148,7 +144,7 @@ describe('radioStateMachine', () => {
   });
 
   describe('重新连接机制', () => {
-    it('从错误状态可以重新连接：error → connecting → connected', async () => {
+    it('连接失败后可以重新连接：disconnected → connecting → connected', async () => {
       let failOnce = true;
       mockInput.onConnect = vi.fn().mockImplementation(() => {
         if (failOnce) {
@@ -161,9 +157,9 @@ describe('radioStateMachine', () => {
       const actor = createRadioActor(mockInput);
       actor.start();
 
-      // 首次连接失败
+      // 首次连接失败 → 回到 disconnected
       actor.send({ type: 'CONNECT', config: mockConfig });
-      await waitForRadioState(actor, RadioState.ERROR, 1000);
+      await waitForRadioState(actor, RadioState.DISCONNECTED, 1000);
 
       // 重新连接
       actor.send({ type: 'CONNECT', config: mockConfig });
@@ -173,29 +169,10 @@ describe('radioStateMachine', () => {
 
       actor.stop();
     });
-
-    it('从错误状态可以重置为断开状态', async () => {
-      mockInput.onConnect = vi.fn().mockRejectedValue(new Error('连接失败'));
-
-      const actor = createRadioActor(mockInput);
-      actor.start();
-
-      actor.send({ type: 'CONNECT', config: mockConfig });
-      await waitForRadioState(actor, RadioState.ERROR, 1000);
-
-      // 重置
-      actor.send({ type: 'RESET' });
-      await waitForRadioState(actor, RadioState.DISCONNECTED, 1000);
-
-      const context = getRadioContext(actor);
-      expect(context.error).toBeUndefined();
-
-      actor.stop();
-    });
   });
 
   describe('健康检查', () => {
-    it('健康检查失败应进入错误状态', async () => {
+    it('健康检查失败（曾连接过）应进入重连状态', async () => {
       const actor = createRadioActor(mockInput);
       actor.start();
 
@@ -203,12 +180,12 @@ describe('radioStateMachine', () => {
       actor.send({ type: 'CONNECT', config: mockConfig });
       await waitForRadioState(actor, RadioState.CONNECTED, 1000);
 
-      // 健康检查失败
+      // 健康检查失败 → wasEverConnected=true → 自动重连
       actor.send({
         type: 'HEALTH_CHECK_FAILED',
         error: new Error('健康检查失败'),
       });
-      await waitForRadioState(actor, RadioState.ERROR, 1000);
+      await waitForRadioState(actor, RadioState.RECONNECTING, 1000);
 
       actor.stop();
     });
@@ -238,7 +215,7 @@ describe('radioStateMachine', () => {
       expect(
         isRadioState(actor, [
           RadioState.CONNECTING,
-          RadioState.ERROR,
+          RadioState.RECONNECTING,
         ])
       ).toBe(false);
 

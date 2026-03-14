@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Button,
   Popover,
@@ -9,6 +9,7 @@ import { useCurrentOperatorId, useOperators, useRadioState } from '../store/radi
 import { RadioControl } from '../components/RadioControl';
 import { RadioOperatorList } from '../components/RadioOperatorList';
 import { SettingsModal } from '../components/SettingsModal';
+import { ProfileModal } from '../components/ProfileModal';
 import { MyRelatedFramesTable } from '../components/MyRelatedFramesTable';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -22,6 +23,7 @@ export const RightLayout: React.FC = () => {
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'system'>('radio');
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   // 判断是否为自动模式
   const isAutoMode = selectedMode.startsWith('auto');
@@ -50,11 +52,17 @@ export const RightLayout: React.FC = () => {
     setIsSettingsOpen(true);
   };
 
-  // 处理打开电台设置
+  // 处理打开电台设置（Profile Modal）
   const handleOpenRadioSettings = () => {
-    setSettingsInitialTab('radio');
-    setIsSettingsOpen(true);
+    setIsProfileModalOpen(true);
   };
+
+  // 监听全局 openProfileModal 事件（来自错误 toast 的"打开设置"按钮）
+  useEffect(() => {
+    const handler = () => setIsProfileModalOpen(true);
+    window.addEventListener('openProfileModal', handler);
+    return () => window.removeEventListener('openProfileModal', handler);
+  }, []);
 
   return (
     <div className="h-full flex flex-col">
@@ -140,10 +148,16 @@ export const RightLayout: React.FC = () => {
       </div>
 
       {/* 设置弹窗 */}
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
+      <SettingsModal
+        isOpen={isSettingsOpen}
         onClose={handleCloseSettings}
         initialTab={settingsInitialTab}
+      />
+
+      {/* Profile 管理弹窗 */}
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
       />
     </div>
   );
