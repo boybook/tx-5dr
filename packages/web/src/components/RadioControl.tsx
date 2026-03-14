@@ -28,7 +28,7 @@ export const SelectorIcon = (_props: React.SVGProps<SVGSVGElement>) => {
 };
 
 // 电台连接状态指示器组件
-const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null }> = ({ connection, radio, profileName }) => {
+const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null; onPress?: () => void }> = ({ connection, radio, profileName, onPress }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
 
@@ -101,18 +101,18 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
   }
 
   const status = radio.state.radioConnectionStatus;
-  const profileLabel = profileName ? `${profileName} | ` : '';
+  const label = profileName || getRadioModelText();
 
   const renderStatus = () => {
     switch (status) {
       case RadioConnectionStatus.NOT_CONFIGURED:
-        return <span className="text-sm text-default-500">{profileLabel}无电台模式</span>;
+        return <span className="text-sm text-default-500">{label} | 无电台模式</span>;
 
       case RadioConnectionStatus.CONNECTING:
         return (
           <div className="flex items-center gap-2">
             <Spinner size="sm" color="primary" />
-            <span className="text-sm text-primary">{getRadioModelText()} 连接中...</span>
+            <span className="text-sm text-primary">{label} 连接中...</span>
           </div>
         );
 
@@ -121,7 +121,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-success text-ms -mt-0.5" />
             <span className="text-sm text-default-500">
-              {getRadioModelText()} 已连接
+              {label} 已连接
             </span>
           </div>
         );
@@ -132,17 +132,19 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
           <div className="flex items-center gap-2">
             <Spinner size="sm" color="warning" />
             <span className="text-sm text-warning">
-              重连中{progress ? ` (${progress.attempt}/${progress.maxAttempts})` : ''}...
+              {label} 重连中{progress ? ` (${progress.attempt}/${progress.maxAttempts})` : ''}...
             </span>
-            <Button
-              size="sm"
-              color="warning"
-              variant="flat"
-              onPress={() => connection.radioService?.stopReconnect()}
-              className="h-6 px-2 text-xs"
-            >
-              停止
-            </Button>
+            <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+              <Button
+                size="sm"
+                color="warning"
+                variant="flat"
+                onPress={() => connection.radioService?.stopReconnect()}
+                className="h-6 px-2 text-xs"
+              >
+                停止
+              </Button>
+            </span>
           </div>
         );
       }
@@ -151,16 +153,18 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
         return (
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-danger text-xs" />
-            <span className="text-sm text-danger">连接丢失</span>
-            <Button
-              size="sm"
-              color="danger"
-              variant="flat"
-              onPress={() => connection.radioService?.startDecoding()}
-              className="h-6 px-2 text-xs"
-            >
-              重连
-            </Button>
+            <span className="text-sm text-danger">{label} 连接丢失</span>
+            <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+              <Button
+                size="sm"
+                color="danger"
+                variant="flat"
+                onPress={() => connection.radioService?.startDecoding()}
+                className="h-6 px-2 text-xs"
+              >
+                重连
+              </Button>
+            </span>
           </div>
         );
 
@@ -169,17 +173,19 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
         return (
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-default-400 text-xs" />
-            <span className="text-sm text-default-500">{getRadioModelText()} 未连接</span>
+            <span className="text-sm text-default-500">{label} 未连接</span>
             {radio.state.radioConfig?.type && radio.state.radioConfig.type !== 'none' && !radio.state.isDecoding && (
-              <Button
-                size="sm"
-                color="primary"
-                variant="flat"
-                onPress={() => connection.radioService?.startDecoding()}
-                className="h-6 px-2 text-xs"
-              >
-                连接
-              </Button>
+              <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                <Button
+                  size="sm"
+                  color="primary"
+                  variant="flat"
+                  onPress={() => connection.radioService?.startDecoding()}
+                  className="h-6 px-2 text-xs"
+                >
+                  连接
+                </Button>
+              </span>
             )}
           </div>
         );
@@ -187,7 +193,13 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div
+      role="button"
+      tabIndex={0}
+      className="flex items-center gap-2 rounded-md px-2 -mx-2 py-1 -my-1 transition-colors hover:bg-default-100 active:bg-default-200 cursor-pointer"
+      onClick={onPress}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress?.(); } }}
+    >
       {renderStatus()}
     </div>
   );
@@ -1249,7 +1261,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <RadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} />
+          <RadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} onPress={onOpenRadioSettings} />
           <div className="flex items-center gap-0">
             <Button
               isIconOnly
