@@ -618,13 +618,18 @@ export class IcomWlanConnection
       // 清理 rig 实例
       if (this.rig) {
         try {
-          // 移除所有事件监听器，防止异步事件触发错误
           if (this.rig.events) {
+            // 先移除所有业务监听器，防止 disconnect 过程中触发真实操作
             this.rig.events.removeAllListeners();
-            console.log('🔕 [IcomWlanConnection] 已移除所有事件监听器');
+            // 注册持久的 error 静默处理器，吞掉 disconnect 后异步 UDP 回调的错误
+            // 关闭 UDP socket 后，已排队的 send 回调仍会在事件循环中触发
+            // 如果 EventEmitter 上没有 'error' 监听器，Node.js 会抛出 uncaughtException
+            // 不可再次调用 removeAllListeners，否则会移除此处理器
+            this.rig.events.on('error', () => {});
           }
 
           await this.rig.disconnect();
+          console.log('🔕 [IcomWlanConnection] 已清理事件监听器并断开连接');
         } catch (error: any) {
           console.warn('⚠️ [IcomWlanConnection] 清理时断开连接失败:', error);
         }

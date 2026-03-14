@@ -793,11 +793,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 通过 subscribe 监听状态变化（替代 notifyStateChange action）
     // XState v5 中 subscribe 回调在状态完全稳定后触发，snapshot.value 保证正确
+    // 注意：RECONNECTING 自转（retry 2→3→4→5）时 snapshot.value 不变，
+    // 需要额外检测 reconnectAttempt 变化来识别重入
     let prevState: string | undefined;
+    let prevReconnectAttempt: number = 0;
     this.radioActor.subscribe((snapshot) => {
       const state = snapshot.value as RadioState;
-      if (state !== prevState) {
+      const reconnectAttempt = snapshot.context.reconnectAttempt ?? 0;
+
+      if (state !== prevState ||
+          (state === RadioState.RECONNECTING && reconnectAttempt !== prevReconnectAttempt)) {
         prevState = state;
+        prevReconnectAttempt = reconnectAttempt;
         console.log(`🔄 [RadioStateMachine] 状态变化: ${state}`);
         this.handleStateChange(state, snapshot.context);
       }
@@ -820,6 +827,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       this.cleanupConnectionListeners();
       try { await this.connection.disconnect('准备新连接'); } catch {}
       this.connection = null;
+
+      // ICOM WLAN 需要等待电台释放旧连接资源后才能接受新连接
+      if (config.type === 'icom-wlan') {
+        console.log('⏳ [PhysicalRadioManager] 等待 ICOM 电台释放旧连接...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
     }
 
     // 创建连接实例
@@ -901,9 +914,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.connection.on('disconnected', onDisconnected);
     this.connectionEventListeners.set('disconnected', onDisconnected);
 
-    // 错误 → 通知状态机（而非直接 emit）
+    // 错误 → 转发给上层（RadioBridge）+ 通知状态机
     const onError = (error: Error) => {
       console.error(`❌ [Connection] 错误: ${error.message}`);
+      // 向上层转发错误（RadioBridge 监听此事件推送到前端）
+      this.emit('error', error);
+      // 同时通知状态机触发重连逻辑
       if (this.radioActor && !this.isDisconnecting) {
         this.radioActor.send({ type: 'HEALTH_CHECK_FAILED', error });
       }

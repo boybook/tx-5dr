@@ -202,9 +202,9 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
         <div className="space-y-3">
           {profiles.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-default-500 mb-4">还没有 Profile，请创建一个</p>
+              <p className="text-default-500 mb-4">还没有电台配置，请创建一个</p>
               <Button color="primary" onPress={handleStartCreate} startContent={<FontAwesomeIcon icon={faPlus} />}>
-                新建 Profile
+                新建电台配置
               </Button>
             </div>
           ) : (
@@ -273,7 +273,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                 startContent={<FontAwesomeIcon icon={faPlus} />}
                 className="mt-2"
               >
-                新建 Profile
+                新建电台配置
               </Button>
             </>
           )}
@@ -411,7 +411,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             </h2>
             <p className="text-sm text-default-500 font-normal mt-1">
               {mode === 'list'
-                ? '管理电台和音频配置组合，快速切换不同的工作场景'
+                ? '管理电台和音频配置组合，快速切换不同的物理电台'
                 : mode === 'create'
                   ? '创建新的电台配置组合'
                   : `编辑「${editName}」`
