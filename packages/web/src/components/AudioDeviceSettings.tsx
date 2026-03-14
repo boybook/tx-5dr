@@ -16,6 +16,10 @@ import type {
 
 interface AudioDeviceSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
+  /** 受控模式：传入初始配置时不从 API 加载设置 */
+  initialConfig?: AudioDeviceSettingsType;
+  /** 受控模式：配置变更回调 */
+  onChange?: (config: AudioDeviceSettingsType) => void;
 }
 
 export interface AudioDeviceSettingsRef {
@@ -23,15 +27,16 @@ export interface AudioDeviceSettingsRef {
   save: () => Promise<void>;
 }
 
-export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges }, ref) => {
+export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges, initialConfig, onChange }, ref) => {
+  const isControlled = initialConfig !== undefined;
   // 状态管理
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
-  const [currentSettings, setCurrentSettings] = useState<AudioDeviceSettingsType>({});
-  const [selectedInputDeviceName, setSelectedInputDeviceName] = useState<string>('');
-  const [selectedOutputDeviceName, setSelectedOutputDeviceName] = useState<string>('');
-  const [sampleRate, setSampleRate] = useState<number>(48000);
-  const [bufferSize, setBufferSize] = useState<number>(1024);
+  const [currentSettings, setCurrentSettings] = useState<AudioDeviceSettingsType>(initialConfig ?? {});
+  const [selectedInputDeviceName, setSelectedInputDeviceName] = useState<string>(initialConfig?.inputDeviceName || '');
+  const [selectedOutputDeviceName, setSelectedOutputDeviceName] = useState<string>(initialConfig?.outputDeviceName || '');
+  const [sampleRate, setSampleRate] = useState<number>(initialConfig?.sampleRate || 48000);
+  const [bufferSize, setBufferSize] = useState<number>(initialConfig?.bufferSize || 1024);
   
   // 加载状态
   const [loading, setLoading] = useState(true);
@@ -82,6 +87,17 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     onUnsavedChanges?.(hasUnsavedChanges());
   }, [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, currentSettings, onUnsavedChanges]);
 
+  // 受控模式：配置变更时通知父组件
+  useEffect(() => {
+    if (!isControlled || loading) return;
+    onChange?.({
+      inputDeviceName: selectedInputDeviceName || undefined,
+      outputDeviceName: selectedOutputDeviceName || undefined,
+      sampleRate,
+      bufferSize,
+    });
+  }, [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize]);
+
   // 加载音频设备和当前设置
   useEffect(() => {
     loadAudioData();
@@ -92,23 +108,30 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       setLoading(true);
       setError(null);
 
-      // 并行获取设备列表和当前设置
-      const [devicesResponse, settingsResponse] = await Promise.all([
-        api.getAudioDevices(),
-        api.getAudioSettings()
-      ]);
+      if (isControlled) {
+        // 受控模式：只加载设备列表，不加载设置
+        const devicesResponse = await api.getAudioDevices();
+        setInputDevices(devicesResponse.inputDevices);
+        setOutputDevices(devicesResponse.outputDevices);
+      } else {
+        // 并行获取设备列表和当前设置
+        const [devicesResponse, settingsResponse] = await Promise.all([
+          api.getAudioDevices(),
+          api.getAudioSettings()
+        ]);
 
-      // 设置设备列表
-      setInputDevices(devicesResponse.inputDevices);
-      setOutputDevices(devicesResponse.outputDevices);
+        // 设置设备列表
+        setInputDevices(devicesResponse.inputDevices);
+        setOutputDevices(devicesResponse.outputDevices);
 
-      // 设置当前配置
-      const settings = settingsResponse.currentSettings;
-      setCurrentSettings(settings);
-      setSelectedInputDeviceName(settings.inputDeviceName || '');
-      setSelectedOutputDeviceName(settings.outputDeviceName || '');
-      setSampleRate(settings.sampleRate || 48000);
-      setBufferSize(settings.bufferSize || 1024);
+        // 设置当前配置
+        const settings = settingsResponse.currentSettings;
+        setCurrentSettings(settings);
+        setSelectedInputDeviceName(settings.inputDeviceName || '');
+        setSelectedOutputDeviceName(settings.outputDeviceName || '');
+        setSampleRate(settings.sampleRate || 48000);
+        setBufferSize(settings.bufferSize || 1024);
+      }
 
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载音频设备失败');

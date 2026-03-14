@@ -206,6 +206,15 @@ export class RadioService {
   }
 
   /**
+   * 停止自动重连
+   */
+  stopReconnect(): void {
+    if (this.isConnected) {
+      this.wsClient.stopReconnect();
+    }
+  }
+
+  /**
    * 设置音量增益（线性单位）
    */
   setVolumeGain(gain: number): void {

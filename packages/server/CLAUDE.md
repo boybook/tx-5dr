@@ -4,8 +4,34 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 
 ## 核心架构
 
-### DigitalRadioEngine (单例)
-系统控制器，管理生命周期：配置 → 音频设备 → 解码队列 → WebSocket，支持优雅关闭和错误恢复。
+### DigitalRadioEngine (单例 Facade)
+系统控制器 Facade，所有领域逻辑已拆分至子系统 (`src/subsystems/`)。对外 API 完全不变（WSServer、路由、index.ts 零改动）。
+
+#### 子系统架构
+
+| 子系统 | 文件 | 职责 |
+|--------|------|------|
+| `TransmissionPipeline` | `subsystems/TransmissionPipeline.ts` | encode→mix→PTT→play 全流程、编码跟踪 |
+| `RadioBridge` | `subsystems/RadioBridge.ts` | 电台事件转发、频率同步、断线恢复、健康检查 |
+| `ClockCoordinator` | `subsystems/ClockCoordinator.ts` | 时钟/解码/频谱/SlotPack 事件桥接、PSKReporter 转发 |
+| `AudioVolumeController` | `subsystems/AudioVolumeController.ts` | 音量读写 + ConfigManager 持久化 + 事件广播 |
+| `EngineLifecycle` | `subsystems/EngineLifecycle.ts` | 资源注册、XState 状态机、doStart/doStop、状态标志 |
+| `ListenerManager` | `subsystems/ListenerManager.ts` | 监听器注册/批量精确清理工具类 |
+
+#### 事件注册位置
+
+- **永久监听器**（整个引擎生命周期）：RadioBridge（电台事件）、RadioOperatorManager（操作员事件）
+- **start/stop 循环监听器**：ClockCoordinator.setup/teardown()（时钟/解码/频谱）、TransmissionPipeline.setup/teardown()（编码/混音）
+- **高频数据**（spectrum/meter）：走 `globalEventBus` 直达 WSServer，不经过引擎
+
+#### 添加新功能指南
+
+- 发射相关逻辑 → `TransmissionPipeline`
+- 电台连接/断线处理 → `RadioBridge`
+- 新的时钟/解码事件 → `ClockCoordinator`
+- 音量控制 → `AudioVolumeController`
+- 资源启停顺序 → `EngineLifecycle.registerResources()`
+- 对外 API（路由/WSServer 调用）→ `DigitalRadioEngine` Facade 委托方法
 
 ### 发射时序系统 ⭐
 

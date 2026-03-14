@@ -13,6 +13,7 @@ import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import type { IRadioConnection, RadioConnectionConfig } from './IRadioConnection.js';
 import { IcomWlanConnection } from './IcomWlanConnection.js';
 import { HamlibConnection } from './HamlibConnection.js';
+import { NullConnection } from './NullConnection.js';
 
 /**
  * 电台连接工厂类
@@ -48,12 +49,8 @@ export class RadioConnectionFactory {
         return new HamlibConnection();
 
       case 'none':
-        throw new RadioError({
-          code: RadioErrorCode.INVALID_CONFIG,
-          message: '连接类型为 none，无法创建连接实例',
-          userMessage: '未配置电台连接',
-          suggestions: ['请在配置中选择电台连接类型'],
-        });
+        console.log('🏭 [RadioConnectionFactory] 创建 NullConnection 实例（无电台模式）');
+        return new NullConnection();
 
       default:
         throw new RadioError({

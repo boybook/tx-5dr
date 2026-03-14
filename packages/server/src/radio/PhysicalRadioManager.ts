@@ -15,11 +15,12 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, RadioInfo } from '@tx5dr/contracts';
+import type { HamlibConfig, RadioInfo, ReconnectProgress } from '@tx5dr/contracts';
+import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { ConsoleLogger } from '../utils/console-logger.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
 import type { IRadioConnection, MeterData } from './connections/IRadioConnection.js';
-import { RadioConnectionState, RadioConnectionType } from './connections/IRadioConnection.js';
+import { RadioConnectionType } from './connections/IRadioConnection.js';
 import {
   createRadioActor,
   isRadioState,
@@ -33,12 +34,14 @@ import { ConfigManager } from '../config/config-manager.js';
  * PhysicalRadioManager 事件接口
  */
 interface PhysicalRadioManagerEvents {
+  connecting: () => void;
   connected: () => void;
   disconnected: (reason?: string) => void;
+  reconnecting: (attempt: number, maxAttempts: number, delayMs?: number) => void;
   error: (error: Error) => void;
   radioFrequencyChanged: (frequency: number) => void;
-  meterData: (data: MeterData) => void; // 数值表数据
-  tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void; // 天调状态变化
+  meterData: (data: MeterData) => void;
+  tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void;
 }
 
 /**
@@ -130,19 +133,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     if (this.connection || this.radioActor) {
       console.log('🔌 [PhysicalRadioManager] 断开现有连接...');
       await this.internalDisconnect('切换配置');
-
-      // 等待状态稳定
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // doConnect() 会在开头清理旧连接，不需要额外等待
     }
 
     this.currentConfig = config;
 
-    if (config.type === 'none') {
-      console.log('📡 [PhysicalRadioManager] 配置类型为 none，跳过连接');
-      return;
-    }
-
-    // 创建状态机 Actor
+    // 创建状态机 Actor（包括 none 类型，NullConnection 会瞬间成功）
     await this.initializeStateMachine(config);
 
     // 触发连接（状态机会管理整个连接过程和重连）
@@ -154,8 +150,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       await this.waitForConnected(30000); // 30秒超时
       console.log('✅ [PhysicalRadioManager] 连接成功');
     } catch (error) {
-      // 如果超时，状态机可能已经进入重连状态，这是正常的
-      console.warn('⚠️  [PhysicalRadioManager] 初始连接超时，状态机将继续重连');
+      // 首次连接失败，不自动重连，由用户手动重试
+      console.warn('⚠️  [PhysicalRadioManager] 初始连接失败或超时');
       throw error;
     }
   }
@@ -177,22 +173,45 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       this.stopFrequencyMonitoring();
 
-      if (this.radioActor) {
-        this.radioActor.send({ type: 'DISCONNECT', reason });
-
-        // 等待状态机转换到 disconnected
-        await this.waitForState(RadioState.DISCONNECTED, 5000);
+      // 先主动清理连接资源
+      if (this.connection) {
+        try { await this.connection.disconnect(reason); } catch {}
+        this.cleanupConnectionListeners();
+        this.connection = null;
       }
 
-      // ❌ 移除重复的 internalDisconnect 调用，让状态机回调处理
-      // await this.internalDisconnect(reason);
-
-      // 触发断开事件（外部接口才触发）
-      this.emit('disconnected', reason);
+      // 然后通知状态机
+      if (this.radioActor) {
+        this.radioActor.send({ type: 'DISCONNECT', reason });
+        try { await this.waitForState(RadioState.DISCONNECTED, 5000); } catch {}
+      }
     } finally {
-      // 确保标志位被重置
       this.isDisconnecting = false;
     }
+
+    // isDisconnecting 已恢复 false，手动发出事件（单一事件出口）
+    this.emit('disconnected', reason);
+  }
+
+  /**
+   * 停止自动重连
+   */
+  stopReconnect(): void {
+    this.radioActor?.send({ type: 'STOP_RECONNECT' });
+  }
+
+  /**
+   * 获取重连进度
+   */
+  getReconnectProgress(): ReconnectProgress | undefined {
+    if (!this.radioActor) return undefined;
+    const ctx = getRadioContext(this.radioActor);
+    if (ctx.reconnectAttempt === 0) return undefined;
+    return {
+      attempt: ctx.reconnectAttempt,
+      maxAttempts: ctx.maxReconnectAttempts,
+      nextRetryMs: ctx.reconnectDelayMs,
+    };
   }
 
   /**
@@ -207,8 +226,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       throw new Error('状态机未初始化');
     }
 
-    if (!this.currentConfig || this.currentConfig.type === 'none') {
+    if (!this.currentConfig) {
       throw new Error('无有效配置，无法重新连接');
+    }
+
+    if (this.currentConfig.type === 'none') {
+      console.log('📡 [PhysicalRadioManager] 无电台模式，无需重连');
+      return;
     }
 
     // 使用 CONNECT 事件重新连接
@@ -225,6 +249,32 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   isConnected(): boolean {
     return this.connection !== null && this.radioActor !== null &&
            isRadioState(this.radioActor, RadioState.CONNECTED);
+  }
+
+  /**
+   * 获取精细化连接状态
+   */
+  getConnectionStatus(): RadioConnectionStatus {
+    if (this.currentConfig.type === 'none') {
+      return RadioConnectionStatus.NOT_CONFIGURED;
+    }
+    if (!this.radioActor) {
+      return RadioConnectionStatus.DISCONNECTED;
+    }
+
+    const snapshot = this.radioActor.getSnapshot();
+    switch (snapshot.value) {
+      case RadioState.DISCONNECTED:
+        return RadioConnectionStatus.DISCONNECTED;
+      case RadioState.CONNECTING:
+        return RadioConnectionStatus.CONNECTING;
+      case RadioState.CONNECTED:
+        return RadioConnectionStatus.CONNECTED;
+      case RadioState.RECONNECTING:
+        return RadioConnectionStatus.RECONNECTING;
+      default:
+        return RadioConnectionStatus.DISCONNECTED;
+    }
   }
 
   /**
@@ -250,6 +300,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     const config = this.currentConfig;
+
+    // NullConnection 无电台信息
+    if (config.type === 'none') {
+      return null;
+    }
 
     // 根据配置类型构建电台信息
     switch (config.type) {
@@ -296,7 +351,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         };
       }
 
-      case 'none':
       default:
         return null;
     }
@@ -725,12 +779,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         await this.doDisconnect(_reason);
       },
 
-      // 状态变化回调
-      onStateChange: (state: RadioState, context: any) => {
-        console.log(`🔄 [RadioStateMachine] 状态变化: ${state}`);
-        this.handleStateChange(state, context);
-      },
-
       // 错误回调
       onError: (error: Error) => {
         console.error(`❌ [RadioStateMachine] 错误: ${error.message}`);
@@ -742,6 +790,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       id: 'physicalRadio',
       devTools: process.env.NODE_ENV === 'development',
     });
+
+    // 通过 subscribe 监听状态变化（替代 notifyStateChange action）
+    // XState v5 中 subscribe 回调在状态完全稳定后触发，snapshot.value 保证正确
+    let prevState: string | undefined;
+    this.radioActor.subscribe((snapshot) => {
+      const state = snapshot.value as RadioState;
+      if (state !== prevState) {
+        prevState = state;
+        console.log(`🔄 [RadioStateMachine] 状态变化: ${state}`);
+        this.handleStateChange(state, snapshot.context);
+      }
+    });
+
     this.radioActor.start();
 
     console.log('✅ [PhysicalRadioManager] 状态机已初始化');
@@ -753,13 +814,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private async doConnect(config: HamlibConfig): Promise<void> {
     console.log(`🔗 [PhysicalRadioManager] 执行连接: ${config.type}`);
 
-    // 详细记录连接配置（用于验证重连时使用的是最新配置）
-    if (config.type === 'icom-wlan') {
-      console.log(`📍 [PhysicalRadioManager] ICOM WLAN 连接配置: IP=${(config as any).ip}, Port=${(config as any).port || 50001}`);
-    } else if (config.type === 'serial') {
-      console.log(`📍 [PhysicalRadioManager] 串口连接配置: ${(config as any).serialPort}`);
-    } else if (config.type === 'network') {
-      console.log(`📍 [PhysicalRadioManager] 网络连接配置: ${(config as any).networkAddress}:${(config as any).networkPort}`);
+    // 总是先清理旧连接（解决重连时资源竞争）
+    if (this.connection) {
+      console.log('🧹 [PhysicalRadioManager] 清理旧连接...');
+      this.cleanupConnectionListeners();
+      try { await this.connection.disconnect('准备新连接'); } catch {}
+      this.connection = null;
     }
 
     // 创建连接实例
@@ -830,13 +890,26 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     console.log('🔗 [PhysicalRadioManager] 设置事件转发');
 
-    // 状态变化
-    const onStateChanged = (state: RadioConnectionState) => {
-      console.log(`🔄 [Connection] 状态变化: ${state}`);
-      // 不再自动触发重连事件,由用户手动重连
+    // 监听 connection 的 disconnected 事件 → 通知状态机
+    const onDisconnected = (...args: any[]) => {
+      const reason = args[0] as string | undefined;
+      console.warn(`🔌 [Connection] 连接断开: ${reason || '未知'}`);
+      if (this.radioActor && !this.isDisconnecting) {
+        this.radioActor.send({ type: 'CONNECTION_LOST', reason });
+      }
     };
-    this.connection.on('stateChanged', onStateChanged);
-    this.connectionEventListeners.set('stateChanged', onStateChanged);
+    this.connection.on('disconnected', onDisconnected);
+    this.connectionEventListeners.set('disconnected', onDisconnected);
+
+    // 错误 → 通知状态机（而非直接 emit）
+    const onError = (error: Error) => {
+      console.error(`❌ [Connection] 错误: ${error.message}`);
+      if (this.radioActor && !this.isDisconnecting) {
+        this.radioActor.send({ type: 'HEALTH_CHECK_FAILED', error });
+      }
+    };
+    this.connection.on('error', onError);
+    this.connectionEventListeners.set('error', onError);
 
     // 频率变化（来自 IRadioConnection）
     const onFrequencyChanged = (frequency: number) => {
@@ -854,14 +927,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     };
     this.connection.on('meterData', onMeterData);
     this.connectionEventListeners.set('meterData', onMeterData);
-
-    // 错误
-    const onError = (error: Error) => {
-      console.error(`❌ [Connection] 错误: ${error.message}`);
-      this.emit('error', error);
-    };
-    this.connection.on('error', onError);
-    this.connectionEventListeners.set('error', onError);
   }
 
   /**
@@ -886,19 +951,39 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     console.log(`🔄 [PhysicalRadioManager] 状态机状态: ${state}`);
 
     switch (state) {
+      case RadioState.CONNECTING:
+        this.emit('connecting');
+        break;
+
       case RadioState.CONNECTED:
         this.emit('connected');
         break;
 
       case RadioState.DISCONNECTED:
-        // 内部断开不触发事件（在外部方法中触发）
+        // 被动断线时（非用户主动 disconnect），清理资源并发出事件
+        if (!this.isDisconnecting) {
+          this.cleanupAfterDisconnect();
+          this.emit('disconnected', context.disconnectReason);
+        }
+        // 用户主动 disconnect() 时，isDisconnecting=true，事件由 disconnect() 方法发出
         break;
 
-      case RadioState.ERROR:
-        if (context.error) {
-          this.emit('error', context.error);
-        }
+      case RadioState.RECONNECTING:
+        this.emit('reconnecting', context.reconnectAttempt, context.maxReconnectAttempts, context.reconnectDelayMs);
         break;
+
+    }
+  }
+
+  /**
+   * 被动断线后清理连接资源
+   */
+  private cleanupAfterDisconnect(): void {
+    this.stopFrequencyMonitoring();
+    if (this.connection) {
+      this.cleanupConnectionListeners();
+      // 不调用 connection.disconnect()，因为连接已断（被动断线）
+      this.connection = null;
     }
   }
 
@@ -931,23 +1016,34 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         reject(new Error('等待连接超时'));
       }, timeout);
 
+      // 注意：此方法在 CONNECT 事件发送之后调用，此时状态已经是 CONNECTING 或更后面。
+      // XState v5 的 subscribe 不会对当前状态触发回调，只对后续状态变化触发。
+      // 因此任何 DISCONNECTED 状态都意味着连接失败（不需要 hasSeenConnecting 守卫）。
       const subscription = this.radioActor!.subscribe((snapshot) => {
         if (snapshot.value === RadioState.CONNECTED) {
           clearTimeout(timeoutId);
           subscription?.unsubscribe();
           resolve();
-        } else if (snapshot.value === RadioState.ERROR) {
+        } else if (snapshot.value === RadioState.DISCONNECTED) {
+          // 连接失败回到 DISCONNECTED，立即 reject（不等 30 秒超时）
           clearTimeout(timeoutId);
           subscription?.unsubscribe();
           reject(snapshot.context.error || new Error('连接失败'));
         }
       });
 
-      // 立即检查当前状态
-      if (this.radioActor!.getSnapshot().value === RadioState.CONNECTED) {
+      // 立即检查当前状态（处理极快连接成功或已失败的情况）
+      const currentState = this.radioActor!.getSnapshot().value;
+      if (currentState === RadioState.CONNECTED) {
         clearTimeout(timeoutId);
         subscription?.unsubscribe();
         resolve();
+      } else if (currentState === RadioState.DISCONNECTED) {
+        // 连接已经失败（比 subscribe 创建还快）
+        const ctx = this.radioActor!.getSnapshot().context;
+        clearTimeout(timeoutId);
+        subscription?.unsubscribe();
+        reject(ctx.error || new Error('连接失败'));
       }
     });
   }

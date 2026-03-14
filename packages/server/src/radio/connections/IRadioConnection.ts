@@ -13,6 +13,11 @@ import type { HamlibConfig, TunerCapabilities, TunerStatus } from '@tx5dr/contra
  */
 export enum RadioConnectionType {
   /**
+   * 无电台模式（NullConnection 空对象）
+   */
+  NONE = 'none',
+
+  /**
    * ICOM WLAN 网络连接
    */
   ICOM_WLAN = 'icom-wlan',

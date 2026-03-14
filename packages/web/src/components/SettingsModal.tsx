@@ -11,8 +11,6 @@ import {
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSave } from '@fortawesome/free-solid-svg-icons';
-import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
-import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 import { LogbookSyncSettings, type LogbookSyncSettingsRef } from './LogbookSyncSettings';
@@ -24,20 +22,20 @@ interface SettingsModalProps {
   initialTab?: SettingsTab; // 可选的初始标签页
 }
 
-// 设置标签页类型
+// 设置标签页类型（radio 和 audio 已迁移到 ProfileModal）
 type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'logbook_sync' | 'system';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'radio');
+  // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator
+  const effectiveInitialTab = (initialTab === 'radio' || initialTab === 'audio') ? 'operator' : (initialTab || 'operator');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(effectiveInitialTab);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<'close' | 'changeTab' | null>(null);
   const [pendingTab, setPendingTab] = useState<SettingsTab | null>(null);
   const [isMobile, setIsMobile] = useState(false);
-  
+
   // 用于检查组件是否有未保存的更改
-  const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
-  const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
   const logbookSyncSettingsRef = useRef<LogbookSyncSettingsRef | null>(null);
@@ -46,7 +44,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
     if (isOpen) {
-      setActiveTab(initialTab || 'radio');
+      const tab = (initialTab === 'radio' || initialTab === 'audio') ? 'operator' : (initialTab || 'operator');
+      setActiveTab(tab);
       setHasUnsavedChanges(false);
     }
   }, [isOpen, initialTab]);
@@ -72,10 +71,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const checkUnsavedChanges = useCallback(() => {
     // 根据当前活动标签页检查对应的组件
     switch (activeTab) {
-      case 'audio':
-        return audioSettingsRef.current?.hasUnsavedChanges() || false;
-      case 'radio':
-        return radioSettingsRef.current?.hasUnsavedChanges() || false;
       case 'operator':
         return operatorSettingsRef.current?.hasUnsavedChanges() || false;
       case 'display':
@@ -120,16 +115,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     try {
       // 根据当前活动标签页调用对应组件的保存方法
       switch (activeTab) {
-        case 'audio':
-          if (audioSettingsRef.current) {
-            await audioSettingsRef.current.save();
-          }
-          break;
-        case 'radio':
-          if (radioSettingsRef.current) {
-            await radioSettingsRef.current.save();
-          }
-          break;
         case 'operator':
           if (operatorSettingsRef.current) {
             await operatorSettingsRef.current.save();
@@ -214,10 +199,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     // 移动端只返回emoji
     if (mobileMode) {
       switch (tab) {
-        case 'audio':
-          return '🎤';
-        case 'radio':
-          return '📻';
         case 'operator':
           return '👤';
         case 'display':
@@ -233,10 +214,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
 
     // 桌面端返回完整标题
     switch (tab) {
-      case 'audio':
-        return '🎤 音频设备';
-      case 'radio':
-        return '📻 电台设备';
       case 'operator':
         return '👤 操作员';
       case 'display':
@@ -253,20 +230,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // 渲染标签页内容
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'audio':
-        return (
-          <AudioDeviceSettings
-            ref={audioSettingsRef}
-            onUnsavedChanges={setHasUnsavedChanges}
-          />
-        );
-      case 'radio':
-        return (
-          <RadioDeviceSettings
-            ref={radioSettingsRef}
-            onUnsavedChanges={setHasUnsavedChanges}
-          />
-        );
       case 'operator':
         return (
           <OperatorSettings
@@ -347,14 +310,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     tabList: isMobile ? 'overflow-x-auto' : '',
                   }}
                 >
-                  <Tab
-                    key="radio"
-                    title={getTabTitle('radio', isMobile)}
-                  />
-                  <Tab
-                    key="audio"
-                    title={getTabTitle('audio', isMobile)}
-                  />
                   <Tab
                     key="operator"
                     title={getTabTitle('operator', isMobile)}

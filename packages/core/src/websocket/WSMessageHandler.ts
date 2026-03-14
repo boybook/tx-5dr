@@ -50,7 +50,11 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.AUDIO_MONITOR_STATS]: 'audioMonitorStats',
 
   // 天调相关事件
-  [WSMessageType.TUNER_STATUS_CHANGED]: 'tunerStatusChanged'
+  [WSMessageType.TUNER_STATUS_CHANGED]: 'tunerStatusChanged',
+
+  // Profile 管理事件
+  [WSMessageType.PROFILE_CHANGED]: 'profileChanged',
+  [WSMessageType.PROFILE_LIST_UPDATED]: 'profileListUpdated'
 };
 
 /**

@@ -139,6 +139,14 @@ export class WSClient extends WSMessageHandler {
   }
 
   /**
+   * 停止自动重连
+   */
+  stopReconnect(): void {
+    console.log('📤 WSClient.stopReconnect() - 发送停止重连命令');
+    this.send(WSMessageType.RADIO_STOP_RECONNECT);
+  }
+
+  /**
    * 发送ping消息
    */
   ping(): void {

@@ -16,6 +16,7 @@ import { operatorRoutes } from './routes/operators.js';
 import { radioRoutes } from './routes/radio.js';
 import { waveLogRoutes } from './routes/wavelog.js';
 import { settingsRoutes } from './routes/settings.js';
+import { profileRoutes } from './routes/profiles.js';
 import { WSServer } from './websocket/WSServer.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
@@ -266,6 +267,10 @@ export async function createServer() {
   // 注册设置管理API路由
   await fastify.register(settingsRoutes, { prefix: '/api/settings' });
   fastify.log.info('设置管理API路由注册完成');
+
+  // 注册 Profile 管理API路由
+  await fastify.register(profileRoutes, { prefix: '/api/profiles' });
+  fastify.log.info('Profile管理API路由注册完成');
 
   // 注册PSKReporter管理API路由
   const { pskreporterRoutes } = await import('./routes/pskreporter.js');

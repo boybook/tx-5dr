@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { WSMessageType } from '@tx5dr/contracts';
+import { WSMessageType, RadioConnectionStatus } from '@tx5dr/contracts';
 import type {
   DecodeErrorInfo,
   FT8Spectrum,
@@ -196,6 +196,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: (data, id) => this.handleSetClientEnabledOperators(id, data),
       [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
+      [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
     };
   }
@@ -309,74 +310,41 @@ export class WSServer extends WSMessageHandler {
     });
 
     // 监听电台状态变化事件
-    this.digitalRadioEngine.on('radioStatusChanged' as any, (data: any) => {
+    this.digitalRadioEngine.on('radioStatusChanged', (data) => {
       console.log(`📡 [WSServer] 收到电台状态变化事件:`, data);
       this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, data);
 
-      // 推送 Toast 通知
+      // 仅连接成功时推送 Toast（断开/失败由前端 RadioControl Alert 展示）
       if (data.connected) {
-        // 连接成功 - 成功类型，3秒自动关闭
         this.broadcastTextMessage(
           '电台已连接',
           data.reason || '电台连接成功',
           'success',
           3000
         );
-      } else {
-        // 连接断开 - 警告类型，10秒自动关闭
-        // 优先使用详细的 message + recommendation，否则使用简单的 reason
-        const title = data.message || '电台已断开';
-        let text = '';
-        if (data.recommendation) {
-          // 有详细指导信息
-          const reason = data.reason || '未知原因';
-          text = `${reason}\n\n💡 ${data.recommendation}`;
-        } else {
-          // 只有原因
-          const reason = data.reason || '未知原因';
-          text = `连接断开：${reason}`;
-        }
-
-        this.broadcastTextMessage(
-          title,
-          text,
-          'warning',
-          10000
-        );
       }
     });
 
-
-    // 监听电台错误事件
-    this.digitalRadioEngine.on('radioError' as any, (data: any) => {
+    // 监听电台错误事件（通过专用 RADIO_ERROR 频道推送，不再使用 Toast）
+    this.digitalRadioEngine.on('radioError', (data) => {
       console.log(`📡 [WSServer] 收到电台错误事件:`, data);
       this.broadcast(WSMessageType.RADIO_ERROR, data);
-
-      // 推送 Toast 通知 - 错误类型，需要手动关闭
-      const error = data.error || '未知错误';
-
-      this.broadcastTextMessage(
-        '电台错误',
-        `电台发生错误：${error}`,
-        'danger',
-        null  // 需要手动关闭
-      );
     });
 
     // 监听电台发射中断开连接事件
-    this.digitalRadioEngine.on('radioDisconnectedDuringTransmission' as any, (data: any) => {
+    this.digitalRadioEngine.on('radioDisconnectedDuringTransmission', (data) => {
       console.log(`⚠️ [WSServer] 收到电台发射中断开连接事件:`, data);
       this.broadcast(WSMessageType.RADIO_DISCONNECTED_DURING_TRANSMISSION, data);
     });
 
     // 监听频率变化事件
-    this.digitalRadioEngine.on('frequencyChanged' as any, (data: any) => {
+    this.digitalRadioEngine.on('frequencyChanged', (data) => {
       console.log(`📡 [WSServer] 收到频率变化事件:`, data);
       this.broadcast(WSMessageType.FREQUENCY_CHANGED, data);
     });
 
     // 监听PTT状态变化事件
-    this.digitalRadioEngine.on('pttStatusChanged' as any, (data: any) => {
+    this.digitalRadioEngine.on('pttStatusChanged', (data) => {
       console.log(`📡 [WSServer] 收到PTT状态变化事件: ${data.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${data.operatorIds?.join(', ') || ''}]`);
       this.broadcast(WSMessageType.PTT_STATUS_CHANGED, data);
     });
@@ -392,6 +360,18 @@ export class WSServer extends WSMessageHandler {
     radioManager.on('tunerStatusChanged', (status: any) => {
       console.log(`📻 [WSServer] 收到天调状态变化事件:`, status);
       this.broadcast(WSMessageType.TUNER_STATUS_CHANGED, status);
+    });
+
+    // 监听 Profile 变更事件
+    this.digitalRadioEngine.on('profileChanged', (data: any) => {
+      console.log(`📡 [WSServer] Profile 已切换: ${data.profile?.name} (id: ${data.profileId})`);
+      this.broadcast(WSMessageType.PROFILE_CHANGED, data);
+    });
+
+    // 监听 Profile 列表更新事件
+    this.digitalRadioEngine.on('profileListUpdated', (data: any) => {
+      console.log(`📡 [WSServer] Profile 列表已更新: ${data.profiles?.length} 个 Profile`);
+      this.broadcast(WSMessageType.PROFILE_LIST_UPDATED, data);
     });
   }
 
@@ -665,15 +645,31 @@ export class WSServer extends WSMessageHandler {
     try {
       const volumeGain = this.digitalRadioEngine.getVolumeGain();
       const volumeGainDb = this.digitalRadioEngine.getVolumeGainDb();
-      connection.send(WSMessageType.VOLUME_GAIN_CHANGED, { 
-        gain: volumeGain, 
-        gainDb: volumeGainDb 
+      connection.send(WSMessageType.VOLUME_GAIN_CHANGED, {
+        gain: volumeGain,
+        gainDb: volumeGainDb
       });
       console.log(`📤 [WSServer] 已发送音量增益: ${volumeGain.toFixed(3)} (${volumeGainDb.toFixed(1)}dB)`);
     } catch (error) {
       console.error('❌ 发送音量增益失败:', error);
     }
-    
+
+    // 4. 发送当前电台连接状态（确保前端获取 connecting/reconnecting 等中间状态）
+    try {
+      const radioManager = this.digitalRadioEngine.getRadioManager();
+      const radioConnectionStatus = radioManager.getConnectionStatus();
+      connection.send(WSMessageType.RADIO_STATUS_CHANGED, {
+        connected: radioManager.isConnected(),
+        status: radioConnectionStatus,
+        radioInfo: null,
+        radioConfig: radioManager.getConfig(),
+        connectionHealth: radioManager.getConnectionHealth(),
+      });
+      console.log(`📤 [WSServer] 已发送电台连接状态: ${radioConnectionStatus}`);
+    } catch (error) {
+      console.error('❌ 发送电台连接状态失败:', error);
+    }
+
     console.log(`✅ [WSServer] 新连接 ${id} 的基础状态发送完成，等待客户端握手`);
 
     return connection;
@@ -1145,11 +1141,23 @@ export class WSServer extends WSMessageHandler {
 
         this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, {
           connected: false,
+          status: RadioConnectionStatus.DISCONNECTED,
           reason: '手动重连失败',
+          radioInfo: null,
+          radioConfig: radioManager.getConfig(),
           connectionHealth
         });
       } catch {}
     }
+  }
+
+  /**
+   * 处理停止自动重连命令
+   */
+  private handleRadioStopReconnect(): void {
+    console.log('📥 [WSServer] 收到停止重连命令');
+    const radioManager = this.digitalRadioEngine.getRadioManager();
+    radioManager.stopReconnect();
   }
 
   /**

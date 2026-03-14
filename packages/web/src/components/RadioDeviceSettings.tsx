@@ -25,12 +25,17 @@ export interface RadioDeviceSettingsRef {
 
 interface RadioDeviceSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
+  /** 受控模式：传入初始配置时不从 API 加载 */
+  initialConfig?: HamlibConfig;
+  /** 受控模式：配置变更回调 */
+  onChange?: (config: HamlibConfig) => void;
 }
 
 export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDeviceSettingsProps>(
-  ({ onUnsavedChanges }, ref) => {
-  const [config, setConfig] = useState<HamlibConfig>({ type: 'none' } as HamlibConfig);
-  const [originalConfig, setOriginalConfig] = useState<HamlibConfig>({ type: 'none' } as HamlibConfig);
+  ({ onUnsavedChanges, initialConfig, onChange }, ref) => {
+  const isControlled = initialConfig !== undefined;
+  const [config, setConfig] = useState<HamlibConfig>(initialConfig ?? { type: 'none' } as HamlibConfig);
+  const [originalConfig, setOriginalConfig] = useState<HamlibConfig>(initialConfig ?? { type: 'none' } as HamlibConfig);
   const [rigs, setRigs] = useState<RigInfo[]>([]);
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [_isSaving, setIsSaving] = useState(false);
@@ -43,15 +48,25 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     }, []);
 
     const loadData = async () => {
-      const [cfg, rigList, portList] = await Promise.all([
-        api.getRadioConfig(),
-        api.getSupportedRigs(),
-        api.getSerialPorts(),
-      ]);
-      setConfig(cfg.config);
-      setOriginalConfig(cfg.config);
-      setRigs(rigList.rigs || []);
-      setPorts(portList.ports || []);
+      if (isControlled) {
+        // 受控模式：只加载 rigs 和 ports 列表，不加载配置
+        const [rigList, portList] = await Promise.all([
+          api.getSupportedRigs(),
+          api.getSerialPorts(),
+        ]);
+        setRigs(rigList.rigs || []);
+        setPorts(portList.ports || []);
+      } else {
+        const [cfg, rigList, portList] = await Promise.all([
+          api.getRadioConfig(),
+          api.getSupportedRigs(),
+          api.getSerialPorts(),
+        ]);
+        setConfig(cfg.config);
+        setOriginalConfig(cfg.config);
+        setRigs(rigList.rigs || []);
+        setPorts(portList.ports || []);
+      }
     };
 
     // 检查是否有未保存的更改
@@ -83,20 +98,29 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
 
       // 更新配置
   const updateConfig = (updates: Partial<HamlibConfig>) => {
-    setConfig((prev) => ({ ...prev, ...updates }));
+    setConfig((prev) => {
+      const next = { ...prev, ...updates };
+      onChange?.(next);
+      return next;
+    });
     // 清除之前的测试结果
     setTestResult(null);
   };
 
   // 更新串口配置
   const updateSerialConfig = (updates: Partial<SerialConfig>) => {
-    setConfig((prev) => ({
-      ...prev,
-      serial: {
-        ...prev.serial,
-        serialConfig: { ...prev.serial?.serialConfig, ...updates }
-      }
-    }));
+    setConfig((prev) => {
+      const next = {
+        ...prev,
+        serial: {
+          path: prev.serial?.path ?? '',
+          rigModel: prev.serial?.rigModel ?? 0,
+          serialConfig: { ...prev.serial?.serialConfig, ...updates }
+        }
+      };
+      onChange?.(next);
+      return next;
+    });
     // 清除之前的测试结果
     setTestResult(null);
   };
@@ -165,14 +189,14 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     label="主机地址"
                     placeholder="localhost"
                     value={config.network?.host || ''}
-                    onChange={e => updateConfig({ network: { ...config.network, host: e.target.value } })}
+                    onChange={e => updateConfig({ network: { host: e.target.value, port: config.network?.port ?? 4532 } })}
                   />
                   <Input
                     label="端口"
                     placeholder="4532"
                     type="number"
                     value={config.network?.port || ''}
-                    onChange={e => updateConfig({ network: { ...config.network, port: Number(e.target.value) } })}
+                    onChange={e => updateConfig({ network: { host: config.network?.host ?? 'localhost', port: Number(e.target.value) } })}
                   />
                   <Divider />
                   <div className="flex gap-2">
@@ -301,7 +325,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     onSelectionChange={keys => {
                       const selectedKey = Array.from(keys)[0];
                       if (selectedKey) {
-                        updateConfig({ serial: { ...config.serial, path: selectedKey as string } });
+                        updateConfig({ serial: { path: selectedKey as string, rigModel: config.serial?.rigModel ?? 0, serialConfig: config.serial?.serialConfig } });
                       }
                     }}
                     variant="flat"
@@ -320,7 +344,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     onSelectionChange={selectedKey => {
                       if (selectedKey) {
                         console.log('📡 [RadioDeviceSettings] 选择电台型号:', selectedKey);
-                        updateConfig({ serial: { ...config.serial, rigModel: Number(selectedKey) } });
+                        updateConfig({ serial: { path: config.serial?.path ?? '', rigModel: Number(selectedKey), serialConfig: config.serial?.serialConfig } });
                       }
                     }}
                     variant="flat"
@@ -355,7 +379,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         <Select 
                           label="波特率" 
                           size="sm"
-                          selectedKeys={config.serialConfig?.rate ? [config.serialConfig.rate.toString()] : ['9600']}
+                          selectedKeys={config.serial?.serialConfig?.rate ? [config.serial?.serialConfig.rate.toString()] : ['9600']}
                           onSelectionChange={keys => {
                             const value = Array.from(keys)[0] as string;
                             updateSerialConfig({ rate: parseInt(value) });
@@ -376,7 +400,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         <Select 
                           label="数据位" 
                           size="sm"
-                          selectedKeys={config.serialConfig?.data_bits ? [config.serialConfig.data_bits] : ['8']}
+                          selectedKeys={config.serial?.serialConfig?.data_bits ? [config.serial?.serialConfig.data_bits] : ['8']}
                           onSelectionChange={keys => {
                             const value = Array.from(keys)[0] as string;
                             updateSerialConfig({ data_bits: value as '5' | '6' | '7' | '8' });
@@ -393,7 +417,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         <Select 
                           label="停止位"
                           size="sm" 
-                          selectedKeys={config.serialConfig?.stop_bits ? [config.serialConfig.stop_bits] : ['1']}
+                          selectedKeys={config.serial?.serialConfig?.stop_bits ? [config.serial?.serialConfig.stop_bits] : ['1']}
                           onSelectionChange={keys => {
                             const value = Array.from(keys)[0] as string;
                             updateSerialConfig({ stop_bits: value as '1' | '2' });
@@ -408,7 +432,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         <Select 
                           label="奇偶校验"
                           size="sm"
-                          selectedKeys={config.serialConfig?.serial_parity ? [config.serialConfig.serial_parity] : ['None']}
+                          selectedKeys={config.serial?.serialConfig?.serial_parity ? [config.serial?.serialConfig.serial_parity] : ['None']}
                           onSelectionChange={keys => {
                             const value = Array.from(keys)[0] as string;
                             updateSerialConfig({ serial_parity: value as 'None' | 'Even' | 'Odd' | 'Mark' | 'Space' });
@@ -432,7 +456,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         <Select 
                           label="流控方式"
                           size="sm"
-                          selectedKeys={config.serialConfig?.serial_handshake ? [config.serialConfig.serial_handshake] : ['None']}
+                          selectedKeys={config.serial?.serialConfig?.serial_handshake ? [config.serial?.serialConfig.serial_handshake] : ['None']}
                           onSelectionChange={keys => {
                             const value = Array.from(keys)[0] as string;
                             updateSerialConfig({ serial_handshake: value as 'None' | 'Hardware' | 'Software' });
@@ -448,7 +472,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         <Select 
                           label="RTS控制"
                           size="sm"
-                          selectedKeys={config.serialConfig?.rts_state ? [config.serialConfig.rts_state] : ['UNSET']}
+                          selectedKeys={config.serial?.serialConfig?.rts_state ? [config.serial?.serialConfig.rts_state] : ['UNSET']}
                           onSelectionChange={keys => {
                             const value = Array.from(keys)[0] as string;
                             updateSerialConfig({ rts_state: value === 'UNSET' ? undefined : value as 'ON' | 'OFF' | 'UNSET' });
@@ -464,7 +488,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                         <Select 
                           label="DTR控制"
                           size="sm"
-                          selectedKeys={config.serialConfig?.dtr_state ? [config.serialConfig.dtr_state] : ['UNSET']}
+                          selectedKeys={config.serial?.serialConfig?.dtr_state ? [config.serial?.serialConfig.dtr_state] : ['UNSET']}
                           onSelectionChange={keys => {
                             const value = Array.from(keys)[0] as string;
                             updateSerialConfig({ dtr_state: value === 'UNSET' ? undefined : value as 'ON' | 'OFF' | 'UNSET' });
@@ -489,7 +513,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                           type="number"
                           min="0"
                           max="60000"
-                          value={config.serialConfig?.timeout?.toString() || ''}
+                          value={config.serial?.serialConfig?.timeout?.toString() || ''}
                           onChange={e => {
                             const value = e.target.value;
                             updateSerialConfig({ timeout: value ? parseInt(value) : undefined });
@@ -505,7 +529,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                           type="number"
                           min="0"
                           max="10"
-                          value={config.serialConfig?.retry?.toString() || ''}
+                          value={config.serial?.serialConfig?.retry?.toString() || ''}
                           onChange={e => {
                             const value = e.target.value;
                             updateSerialConfig({ retry: value ? parseInt(value) : undefined });
@@ -521,7 +545,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                           type="number"
                           min="0"
                           max="1000"
-                          value={config.serialConfig?.write_delay?.toString() || ''}
+                          value={config.serial?.serialConfig?.write_delay?.toString() || ''}
                           onChange={e => {
                             const value = e.target.value;
                             updateSerialConfig({ write_delay: value ? parseInt(value) : undefined });
@@ -537,7 +561,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                           type="number"
                           min="0"
                           max="5000"
-                          value={config.serialConfig?.post_write_delay?.toString() || ''}
+                          value={config.serial?.serialConfig?.post_write_delay?.toString() || ''}
                           onChange={e => {
                             const value = e.target.value;
                             updateSerialConfig({ post_write_delay: value ? parseInt(value) : undefined });
@@ -681,27 +705,27 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     label="IP 地址"
                     placeholder="192.168.1.100"
                     value={config.icomWlan?.ip || ''}
-                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, ip: e.target.value } })}
+                    onChange={e => updateConfig({ icomWlan: { ip: e.target.value, port: config.icomWlan?.port ?? 50001, userName: config.icomWlan?.userName, password: config.icomWlan?.password } })}
                   />
                   <Input
                     label="端口"
                     placeholder="50001"
                     type="number"
                     value={config.icomWlan?.port || ''}
-                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, port: Number(e.target.value) } })}
+                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: Number(e.target.value), userName: config.icomWlan?.userName, password: config.icomWlan?.password } })}
                   />
                   <Input
                     label="用户名"
                     placeholder="admin"
                     value={config.icomWlan?.userName || ''}
-                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, userName: e.target.value } })}
+                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: config.icomWlan?.port ?? 50001, userName: e.target.value, password: config.icomWlan?.password } })}
                   />
                   <Input
                     label="密码"
                     placeholder="密码"
                     type="password"
                     value={config.icomWlan?.password || ''}
-                    onChange={e => updateConfig({ icomWlan: { ...config.icomWlan, password: e.target.value } })}
+                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: config.icomWlan?.port ?? 50001, userName: config.icomWlan?.userName, password: e.target.value } })}
                   />
                   <Divider />
                   <div className="flex gap-2">
@@ -885,7 +909,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         <div>
           <Tabs
             selectedKey={config.type}
-            onSelectionChange={(key) => updateConfig({ type: key })}
+            onSelectionChange={(key) => updateConfig({ type: key as HamlibConfig['type'] })}
             size="lg"
           >
             <Tab key="none" title="📻 无电台" />

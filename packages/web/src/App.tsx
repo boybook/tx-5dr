@@ -2,12 +2,18 @@ import './App.css';
 import { LeftLayout } from './layout/LeftLayout';
 import { RightLayout } from './layout/RightLayout';
 import { SplitLayout } from './components/SplitLayout';
-import { RadioProvider, useRadioState } from './store/radioStore';
+import { RadioProvider, useRadioState, useProfiles, useConnection } from './store/radioStore';
 import { useTheme } from './hooks/useTheme';
+import { ProfileSetupOverlay } from './components/ProfileSetupOverlay';
 
 function AppContent() {
   const { state } = useRadioState();
   const { pttStatus } = state;
+  const { profiles } = useProfiles();
+  const { state: connectionState } = useConnection();
+
+  // 首次使用引导：已连接服务器且 Profile 为空时显示
+  const showSetupOverlay = connectionState.isConnected && profiles.length === 0;
 
   return (
     <div className="App h-screen w-full overflow-hidden relative">
@@ -30,6 +36,9 @@ function AppContent() {
         minLeftWidth={25}
         maxLeftWidth={75}
       />
+
+      {/* 首次使用引导 */}
+      <ProfileSetupOverlay isOpen={showSetupOverlay} />
     </div>
   );
 }

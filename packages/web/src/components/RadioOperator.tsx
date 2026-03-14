@@ -424,22 +424,35 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     >
       {/* 上半部分 - 进度条背景 */}
       <div className="relative h-12 p-4">
-        {/* 进度条颜色层 - 颜色变化用 transition 平滑过渡 */}
-        <div
-          className="absolute inset-0 transition-colors duration-200"
-          style={{ backgroundColor: getProgressColor() }}
-        />
-        {/* 进度条遮罩层 - 从右侧遮盖，宽度动画控制可见进度 */}
-        <div
-          key={operatorStatus.cycleInfo?.currentCycle ?? 'idle'}
-          className="absolute inset-0 progress-bar-mask"
-          style={progressAnimation}
-        />
+        {/* 进度条颜色层 - 仅在解码时显示 */}
+        {radio.state.isDecoding && (
+          <div
+            className="absolute inset-0 transition-colors duration-200"
+            style={{ backgroundColor: getProgressColor() }}
+          />
+        )}
+        {/* 进度条遮罩层 - 仅在解码时显示 */}
+        {radio.state.isDecoding && (
+          <div
+            key={operatorStatus.cycleInfo?.currentCycle ?? 'idle'}
+            className="absolute inset-0 progress-bar-mask"
+            style={progressAnimation}
+          />
+        )}
         <div className="relative flex items-center justify-between h-full">
           {/* 左侧 - 发射内容或监听状态 */}
           <div className="flex-1">
             {(() => {
-              // 完全依赖服务端推送的状态
+              // 未在解码时，显示操作员呼号
+              if (!radio.state.isDecoding) {
+                return (
+                  <div className="text-foreground opacity-65 font-bold text-lg">
+                    {operatorStatus.context.myCall || 'N0CALL'}
+                  </div>
+                );
+              }
+
+              // 解码中但无周期信息
               if (!operatorStatus.cycleInfo) {
                 return (
                   <div className="text-foreground opacity-65 font-bold text-lg">
@@ -447,10 +460,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   </div>
                 );
               }
-              
+
               const { isTransmitCycle } = operatorStatus.cycleInfo;
               const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
-              
+
               return isActuallyTransmitting ? (
                 <div className="font-bold font-mono text-lg text-danger">
                   {getCurrentTransmissionContent() || '准备发射...'}
