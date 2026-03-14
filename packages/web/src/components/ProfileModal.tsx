@@ -18,7 +18,8 @@ import { faPlus, faTrash, faPen, faArrowLeft, faCheck } from '@fortawesome/free-
 import { addToast } from '@heroui/toast';
 import { api } from '@tx5dr/core';
 import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType } from '@tx5dr/contracts';
-import { useProfiles } from '../store/radioStore';
+import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { useProfiles, useRadioState } from '../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 
@@ -31,6 +32,7 @@ type ModalMode = 'list' | 'create' | 'edit';
 
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const { profiles, activeProfileId } = useProfiles();
+  const radio = useRadioState();
   const [mode, setMode] = useState<ModalMode>('list');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [isActivating, setIsActivating] = useState(false);
@@ -64,6 +66,13 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       case 'icom-wlan': return `ICOM WLAN | ${config.icomWlan?.ip || ''}`;
       default: return '未知类型';
     }
+  };
+
+  // 获取指示器颜色：绿色=激活已连接，蓝色=激活未连接，灰色=非激活
+  const getIndicatorColor = (profileId: string) => {
+    if (profileId !== activeProfileId) return 'bg-default-200';
+    if (radio.state.radioConnectionStatus === RadioConnectionStatus.CONNECTED) return 'bg-success';
+    return 'bg-primary';
   };
 
   // 进入创建模式
@@ -156,27 +165,24 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     }
   };
 
-  // 应用选中的 Profile
+  // 应用选中的 Profile（始终可用，后端会自动启动引擎并连接）
   const handleApply = async () => {
-    if (!selectedProfileId || selectedProfileId === activeProfileId) {
-      onClose();
-      return;
-    }
+    if (!selectedProfileId) return;
 
     setIsActivating(true);
     try {
       const result = await api.activateProfile(selectedProfileId);
       const profileName = result.profile?.name || '';
+      const isSameProfile = selectedProfileId === activeProfileId;
       addToast({
-        title: `已切换到「${profileName}」`,
-        description: result.wasRunning ? '引擎已停止，请点击「启动」重新开始' : undefined,
+        title: isSameProfile ? `正在重新连接「${profileName}」` : `已切换到「${profileName}」`,
         color: 'success',
-        timeout: 4000
+        timeout: 3000
       });
       onClose();
     } catch (error) {
       addToast({
-        title: 'Profile 切换失败',
+        title: selectedProfileId !== activeProfileId ? 'Profile 切换失败' : '连接失败',
         description: error instanceof Error ? error.message : '请重试',
         color: 'danger',
         timeout: 5000
@@ -203,62 +209,62 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             </div>
           ) : (
             <>
-              {profiles.map(profile => (
-                <Card
-                  key={profile.id}
-                  isPressable
-                  onPress={() => setSelectedProfileId(profile.id)}
-                  shadow="none"
-                  radius="lg"
-                  classNames={{
-                    base: `border ${selectedProfileId === profile.id ? 'border-primary bg-primary-50/50' : 'border-divider bg-content1'} transition-colors`
-                  }}
-                >
-                  <CardBody className="p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className={`w-3 h-3 rounded-full flex-shrink-0 ${
-                          profile.id === activeProfileId ? 'bg-success' : 'bg-default-300'
-                        }`} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-default-900 truncate">{profile.name}</span>
-                            {profile.id === activeProfileId && (
-                              <Chip size="sm" color="success" variant="flat">当前</Chip>
-                            )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {profiles.map(profile => (
+                  <Card
+                    key={profile.id}
+                    isPressable
+                    onPress={() => setSelectedProfileId(profile.id)}
+                    shadow="none"
+                    radius="lg"
+                    classNames={{
+                      base: `border overflow-hidden ${selectedProfileId === profile.id ? 'border-primary bg-primary-50/50' : 'border-divider bg-content1'} transition-colors`
+                    }}
+                  >
+                    <div className="flex">
+                      <div className={`w-1 flex-shrink-0 ${getIndicatorColor(profile.id)}`} />
+                      <CardBody className="p-3 flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-default-900 truncate">{profile.name}</span>
+                              {profile.id === activeProfileId && (
+                                <Chip size="sm" color="success" variant="flat">当前</Chip>
+                              )}
+                            </div>
+                            <p className="text-xs text-default-500 truncate mt-0.5">
+                              {getRadioTypeLabel(profile.radio)}
+                            </p>
                           </div>
-                          <p className="text-xs text-default-500 truncate mt-0.5">
-                            {getRadioTypeLabel(profile.radio)}
-                          </p>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <Button
+                              size="sm"
+                              variant="light"
+                              isIconOnly
+                              onPress={() => handleStartEdit(profile)}
+                              title="编辑"
+                            >
+                              <FontAwesomeIcon icon={faPen} className="text-default-400 text-xs" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="light"
+                              isIconOnly
+                              color="danger"
+                              isDisabled={profile.id === activeProfileId}
+                              isLoading={isDeleting === profile.id}
+                              onPress={() => handleDelete(profile.id)}
+                              title={profile.id === activeProfileId ? '无法删除当前激活的 Profile' : '删除'}
+                            >
+                              <FontAwesomeIcon icon={faTrash} className="text-xs" />
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <Button
-                          size="sm"
-                          variant="light"
-                          isIconOnly
-                          onPress={() => handleStartEdit(profile)}
-                          title="编辑"
-                        >
-                          <FontAwesomeIcon icon={faPen} className="text-default-400 text-xs" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="light"
-                          isIconOnly
-                          color="danger"
-                          isDisabled={profile.id === activeProfileId}
-                          isLoading={isDeleting === profile.id}
-                          onPress={() => handleDelete(profile.id)}
-                          title={profile.id === activeProfileId ? '无法删除当前激活的 Profile' : '删除'}
-                        >
-                          <FontAwesomeIcon icon={faTrash} className="text-xs" />
-                        </Button>
-                      </div>
+                      </CardBody>
                     </div>
-                  </CardBody>
-                </Card>
-              ))}
+                  </Card>
+                ))}
+              </div>
 
               <Button
                 fullWidth
@@ -277,7 +283,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       <ModalFooter>
         <div className="flex justify-between items-center w-full">
           <div className="text-sm text-default-400">
-            {selectedProfileId && selectedProfileId !== activeProfileId && '点击「应用」切换 Profile'}
+            {selectedProfileId && selectedProfileId !== activeProfileId && '切换 Profile 并连接电台'}
+            {selectedProfileId && selectedProfileId === activeProfileId && '重新连接电台'}
           </div>
           <div className="flex gap-2">
             <Button variant="flat" onPress={onClose}>关闭</Button>
@@ -285,10 +292,10 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
               color="primary"
               onPress={handleApply}
               isLoading={isActivating}
-              isDisabled={!selectedProfileId || selectedProfileId === activeProfileId}
+              isDisabled={!selectedProfileId}
               startContent={!isActivating ? <FontAwesomeIcon icon={faCheck} /> : undefined}
             >
-              应用
+              {selectedProfileId && selectedProfileId === activeProfileId ? '重新连接' : '应用'}
             </Button>
           </div>
         </div>
@@ -391,7 +398,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       placement="center"
       backdrop="blur"
       classNames={{
-        body: "px-4 sm:px-6",
+        body: "px-4 sm:px-6 py-4 sm:py-5",
         header: "border-b border-divider px-4 sm:px-6 py-3 sm:py-4",
         footer: "border-t border-divider px-4 sm:px-6 py-3 sm:py-4",
       }}

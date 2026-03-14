@@ -11,7 +11,7 @@
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
 import type { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
-import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import {
   RadioConnectionType,
@@ -188,7 +188,10 @@ export class HamlibConnection
         ),
       ]);
 
-      // 连接成功
+      // 验证与电台的实际通信（状态仍为 CONNECTING）
+      await this.verifyRadioCommunication();
+
+      // 通信验证成功，才转为 CONNECTED
       this.setState(RadioConnectionState.CONNECTED);
       this.lastSuccessfulOperation = Date.now();
       console.log(`✅ [HamlibConnection] Hamlib 电台连接成功`);
@@ -201,7 +204,7 @@ export class HamlibConnection
     } catch (error) {
       // 连接失败，清理资源
       await this.cleanup();
-      this.setState(RadioConnectionState.ERROR);
+      this.setState(RadioConnectionState.DISCONNECTED);
 
       // 转换错误
       throw this.convertError(error, 'connect');
@@ -498,6 +501,57 @@ export class HamlibConnection
 
     // hamlib open() 返回 Promise，不接受回调参数
     await this.rig.open();
+  }
+
+  /**
+   * 验证与电台的实际通信
+   *
+   * 在 rig.open() 成功后、设置 CONNECTED 状态前调用。
+   * rig.open() 只是打开串口设备文件，不验证 CI-V 握手，
+   * 因此需要尝试实际通信（读取频率）来确认电台在线。
+   *
+   * 此时状态仍为 CONNECTING，不能使用 this.getFrequency()（会 checkConnected 失败），
+   * 直接调用 this.rig.getFrequency()。
+   */
+  private async verifyRadioCommunication(): Promise<void> {
+    if (!this.rig) {
+      throw new Error('电台实例未初始化');
+    }
+
+    const VERIFY_TIMEOUT = 5000;
+
+    try {
+      console.log(`🔍 [HamlibConnection] 验证电台通信...`);
+
+      await Promise.race([
+        this.rig.getFrequency(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('通信验证超时')), VERIFY_TIMEOUT)
+        ),
+      ]);
+
+      console.log(`✅ [HamlibConnection] 通信验证成功`);
+    } catch (error) {
+      throw new RadioError({
+        code: RadioErrorCode.CONNECTION_FAILED,
+        message: `串口已打开但无法与电台通信: ${(error as Error).message}`,
+        userMessage: '串口已打开，但无法与电台建立通信',
+        severity: RadioErrorSeverity.ERROR,
+        suggestions: [
+          '检查电台是否已开机',
+          '检查串口线缆（CI-V/CAT）是否正确连接',
+          '确认电台型号选择正确',
+          '检查波特率等串口参数是否匹配',
+          '某些电台需要开启 CI-V/CAT 功能',
+        ],
+        cause: error,
+        context: {
+          operation: 'verifyRadioCommunication',
+          port: this.currentConfig?.serial?.path,
+          rigModel: this.currentConfig?.serial?.rigModel,
+        },
+      });
+    }
   }
 
   /**

@@ -161,16 +161,14 @@ export class ProfileManager {
       wasRunning,
     });
 
-    // 阶段4：如果之前在运行，自动重启引擎（使用新 Profile 配置）
-    if (wasRunning) {
-      try {
-        console.log('🚀 [ProfileManager] 之前引擎在运行，自动重启...');
-        await engine.start();
-        console.log('✅ [ProfileManager] 引擎已自动重启');
-      } catch (startError) {
-        console.error('❌ [ProfileManager] 引擎自动重启失败:', startError);
-        // 启动失败不影响 Profile 切换结果，错误会通过引擎事件通知前端
-      }
+    // 阶段4：始终启动引擎（使用新 Profile 配置）
+    try {
+      console.log('🚀 [ProfileManager] 启动引擎（新 Profile 配置）...');
+      await engine.start();
+      console.log('✅ [ProfileManager] 引擎已启动');
+    } catch (startError) {
+      console.error('❌ [ProfileManager] 引擎启动失败:', startError);
+      // 启动失败不影响 Profile 切换结果，错误会通过引擎事件通知前端
     }
 
     return {
