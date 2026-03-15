@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'eventemitter3';
 import { RadioOperator } from '../src/operator/RadioOperator';
+import { StandardQSOStrategy } from '../src/operator/transmission/strategies/StandardQSOStrategy';
 import { MODES, type DigitalRadioEngineEvents, type SlotInfo, type SlotPack, TransmitRequest } from '@tx5dr/contracts';
 
 class DummyRadioEngine {
@@ -91,7 +92,7 @@ test('自动回复应跳过带标记的CQ (CQ NA ...)', async () => {
     autoReplyToCQ: true,
     autoResumeCQAfterFail: true,
     autoResumeCQAfterSuccess: true
-  }, dummy.sharedEventEmitter);
+  }, dummy.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
 
   // 远端电台，强制设置其TX6内容为带标记CQ
   const remote = new RadioOperator({
@@ -106,7 +107,7 @@ test('自动回复应跳过带标记的CQ (CQ NA ...)', async () => {
     autoReplyToCQ: false,
     autoResumeCQAfterFail: true,
     autoResumeCQAfterSuccess: true
-  }, dummy.sharedEventEmitter);
+  }, dummy.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
 
   // 覆盖其发射槽位内容，注入带标记CQ
   remote.userCommand?.({ command: 'set_state', args: 'TX6' } as any);

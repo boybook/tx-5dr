@@ -14,7 +14,7 @@
     "dev:prof": "NODE_ENV=development tsx --prof src/index.ts",
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts",
-    "test": "vitest"
+    "test": "vitest run"
   },
   "dependencies": {
     "@alexanderolsen/libsamplerate-js": "^2.1.2",
@@ -32,7 +32,6 @@
     "icom-wlan-node": "^0.2.6",
     "mic": "^2.1.2",
     "node-wav": "^0.0.2",
-    "piscina": "^5.0.0",
     "serialport": "^13.0.0",
     "wav": "^1.0.2",
     "wsjtx-lib": "^1.2.1",

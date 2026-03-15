@@ -23,7 +23,7 @@ import {
   type StateMachineOptions,
 } from './types.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
-import { globalInspector } from '../index.js';
+import { globalInspector } from './inspector.js';
 
 /** 指数退避延迟序列（毫秒） */
 const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];

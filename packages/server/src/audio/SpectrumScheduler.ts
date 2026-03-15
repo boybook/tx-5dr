@@ -1,14 +1,8 @@
-import Piscina from 'piscina';
 import { EventEmitter } from 'eventemitter3';
 import type { FT8Spectrum } from '@tx5dr/contracts';
 import type { AudioBufferProvider } from '@tx5dr/core';
-import type { FFTWorkerTask, FFTWorkerResult } from './fft-worker.js';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { SpectrumAnalyzer } from './SpectrumAnalyzer.js';
 import { globalEventBus } from '../utils/EventBus.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 /**
  * 频谱分析配置
@@ -20,8 +14,6 @@ export interface SpectrumConfig {
   fftSize: number;
   /** 窗口函数，默认'hann' */
   windowFunction: 'hann' | 'hamming' | 'blackman' | 'none';
-  /** Worker池大小，默认2 */
-  workerPoolSize: number;
   /** 是否启用频谱分析，默认true */
   enabled: boolean;
   /** 目标采样率，默认8000Hz */
@@ -43,7 +35,7 @@ export interface SpectrumSchedulerEvents {
 export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   private config: SpectrumConfig;
   private audioProvider: AudioBufferProvider | null = null;
-  private workerPool: Piscina | null = null;
+  private analyzer: SpectrumAnalyzer | null = null;
   private analysisTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
   private sampleRate = 48000; // 默认采样率
@@ -60,8 +52,6 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     totalAnalyses: 0,
     totalProcessingTime: 0,
     averageProcessingTime: 0,
-    queuedTasks: 0,
-    completedTasks: 0,
     errorCount: 0
   };
 
@@ -72,12 +62,11 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     super();
 
     this.shouldSpectrumWhileTransmitting = shouldSpectrumWhileTransmitting;
-    
+
     this.config = {
       analysisInterval: config.analysisInterval ?? 100, // 100ms间隔
       fftSize: config.fftSize ?? 2048,
       windowFunction: config.windowFunction ?? 'hann',
-      workerPoolSize: config.workerPoolSize ?? 2,
       enabled: config.enabled ?? true,
       targetSampleRate: config.targetSampleRate ?? 6000 // 12kHz降采样到6kHz，覆盖0-3kHz
     };
@@ -89,25 +78,24 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   async initialize(audioProvider: AudioBufferProvider, sampleRate: number): Promise<void> {
     this.audioProvider = audioProvider;
     this.sampleRate = sampleRate;
-    
+
     if (!this.config.enabled) {
       console.log('📊 [频谱调度器] 频谱分析已禁用');
       return;
     }
 
-    // 创建Worker池
-    this.workerPool = new Piscina({
-      filename: join(__dirname, 'fft-worker.js'),
-      maxThreads: this.config.workerPoolSize,
-      minThreads: 1,
-      idleTimeout: 30000, // 30秒空闲超时
+    // 创建原生 FFT 分析器（替代 Piscina worker）
+    this.analyzer = new SpectrumAnalyzer({
+      sampleRate: this.sampleRate,
+      fftSize: this.config.fftSize,
+      windowFunction: this.config.windowFunction,
+      targetSampleRate: this.config.targetSampleRate,
     });
 
     console.log(`📊 [频谱调度器] 初始化完成:`);
     console.log(`   - 分析间隔: ${this.config.analysisInterval}ms`);
     console.log(`   - FFT大小: ${this.config.fftSize}`);
     console.log(`   - 窗口函数: ${this.config.windowFunction}`);
-    console.log(`   - Worker池大小: ${this.config.workerPoolSize}`);
     console.log(`   - 采样率: ${this.sampleRate}Hz`);
   }
 
@@ -115,20 +103,20 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
    * 启动频谱分析
    */
   start(): void {
-    if (!this.config.enabled || this.isRunning || !this.audioProvider || !this.workerPool) {
+    if (!this.config.enabled || this.isRunning || !this.audioProvider || !this.analyzer) {
       return;
     }
 
     console.log(`📊 [频谱调度器] 启动频谱分析，间隔: ${this.config.analysisInterval}ms`);
-    
+
     this.isRunning = true;
     this.resetStats();
-    
+
     // 启动定时分析
     this.analysisTimer = setInterval(() => {
       this.performAnalysis();
     }, this.config.analysisInterval);
-    
+
     // 立即执行一次分析
     this.performAnalysis();
   }
@@ -142,15 +130,15 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     }
 
     console.log('📊 [频谱调度器] 停止频谱分析');
-    
+
     this.isRunning = false;
     this.pausedDueToPTT = false; // 重置暂停状态
-    
+
     if (this.analysisTimer) {
       clearInterval(this.analysisTimer);
       this.analysisTimer = null;
     }
-    
+
     this.logStats();
   }
 
@@ -204,7 +192,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       this.analysisTimer = setInterval(() => {
         this.performAnalysis();
       }, this.config.analysisInterval);
-      
+
       // 立即执行一次分析
       this.performAnalysis();
       console.log('📊 [频谱调度器] 频谱分析已恢复（PTT停止）');
@@ -215,7 +203,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
    * 执行一次频谱分析
    */
   private async performAnalysis(): Promise<void> {
-    if (!this.audioProvider || !this.workerPool || !this.isRunning) {
+    if (!this.audioProvider || !this.analyzer || !this.isRunning) {
       return;
     }
 
@@ -228,15 +216,16 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     }
 
     try {
-      const timestamp = Date.now();
-      
+      const startTime = performance.now();
+
       // 计算需要的音频样本数（基于分析间隔）
       const durationMs = this.config.analysisInterval;
-      
+      const timestamp = Date.now();
+
       // 从音频缓冲区获取最新的音频数据
       const startMs = timestamp - durationMs;
       const audioBuffer = await this.audioProvider.getBuffer(startMs, durationMs);
-      
+
       if (!audioBuffer || audioBuffer.byteLength === 0) {
         return;
       }
@@ -244,32 +233,12 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       // 将ArrayBuffer转换为Float32Array
       const audioData = new Float32Array(audioBuffer);
 
-      // 如果音频数据不足FFT大小，用零填充
-      let processData: Float32Array;
-      if (audioData.length < this.config.fftSize) {
-        processData = new Float32Array(this.config.fftSize);
-        processData.set(audioData);
-      } else {
-        processData = audioData.slice(-this.config.fftSize);
-      }
+      // 使用原生 SpectrumAnalyzer 执行 FFT
+      const spectrum = this.analyzer.analyze(audioData);
 
-      // 创建FFT任务
-      const task: FFTWorkerTask = {
-        audioData: processData,
-        sampleRate: this.sampleRate,
-        fftSize: this.config.fftSize,
-        windowFunction: this.config.windowFunction,
-        timestamp,
-        targetSampleRate: this.config.targetSampleRate // 添加目标采样率
-      };
-
-      this.stats.queuedTasks++;
-
-      const result = await this.workerPool.run(task) as FFTWorkerResult;
-      
-      this.stats.completedTasks++;
+      const processingTime = performance.now() - startTime;
       this.stats.totalAnalyses++;
-      this.stats.totalProcessingTime += result.processingTime;
+      this.stats.totalProcessingTime += processingTime;
       this.stats.averageProcessingTime = this.stats.totalProcessingTime / this.stats.totalAnalyses;
 
       // 📝 EventBus 优化：双路径策略
@@ -281,8 +250,8 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       //   - 事件名：bus:spectrumData
       //   - 性能：直达，减少33%开销
 
-      this.emit('spectrumReady', result.spectrum);  // 原路径
-      globalEventBus.emit('bus:spectrumData', result.spectrum);  // EventBus 直达
+      this.emit('spectrumReady', spectrum);  // 原路径
+      globalEventBus.emit('bus:spectrumData', spectrum);  // EventBus 直达
     } catch (error) {
       console.error('频谱分析失败:', error);
       this.stats.errorCount++;
@@ -294,15 +263,25 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
    */
   updateConfig(newConfig: Partial<SpectrumConfig>): void {
     const wasRunning = this.isRunning;
-    
+
     if (wasRunning) {
       this.stop();
     }
-    
+
     Object.assign(this.config, newConfig);
-    
+
+    // 重建分析器以应用新配置
+    if (this.analyzer) {
+      this.analyzer = new SpectrumAnalyzer({
+        sampleRate: this.sampleRate,
+        fftSize: this.config.fftSize,
+        windowFunction: this.config.windowFunction,
+        targetSampleRate: this.config.targetSampleRate,
+      });
+    }
+
     console.log('📊 [频谱调度器] 配置已更新:', newConfig);
-    
+
     if (wasRunning && this.config.enabled) {
       this.start();
     }
@@ -324,12 +303,6 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       isRunning: this.isRunning,
       isPTTActive: this.isPTTActive,
       pausedDueToPTT: this.pausedDueToPTT,
-      workerPoolStats: this.workerPool ? {
-        threads: this.workerPool.threads.length,
-        queueSize: this.workerPool.queueSize,
-        completed: this.workerPool.completed,
-        duration: this.workerPool.duration
-      } : null
     };
   }
 
@@ -341,8 +314,6 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       totalAnalyses: 0,
       totalProcessingTime: 0,
       averageProcessingTime: 0,
-      queuedTasks: 0,
-      completedTasks: 0,
       errorCount: 0
     };
   }
@@ -355,8 +326,6 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       console.log('📊 [频谱调度器] 性能统计:');
       console.log(`   - 总分析次数: ${this.stats.totalAnalyses}`);
       console.log(`   - 平均处理时间: ${this.stats.averageProcessingTime.toFixed(2)}ms`);
-      console.log(`   - 队列任务: ${this.stats.queuedTasks}`);
-      console.log(`   - 完成任务: ${this.stats.completedTasks}`);
       console.log(`   - 错误次数: ${this.stats.errorCount}`);
     }
   }
@@ -366,13 +335,8 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
    */
   async destroy(): Promise<void> {
     this.stop();
-    
-    if (this.workerPool) {
-      await this.workerPool.destroy();
-      this.workerPool = null;
-    }
-    
+    this.analyzer = null;
     this.removeAllListeners();
     console.log('📊 [频谱调度器] 已销毁');
   }
-} 
+}

@@ -7,7 +7,7 @@
     "dev": "vite",
     "preview": "vite preview",
     "lint": "eslint src/**/*.{ts,tsx}",
-    "test": "vitest"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^6.7.2",
