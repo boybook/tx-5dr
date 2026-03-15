@@ -77,6 +77,16 @@ export const SerialConnectionConfigSchema = z.object({
 });
 
 /**
+ * PTT (Push-to-Talk) 方法Schema
+ *
+ * - cat: 通过 CAT 命令控制 PTT（Hamlib RIG 类型，推荐）
+ * - vox: 不主动控制 PTT，电台通过检测音频信号自动发射（适用于 SignaLink USB 等）
+ * - dtr: 通过 RS-232 DTR 引脚控制 PTT（适用于古老电台或外部功放）
+ * - rts: 通过 RS-232 RTS 引脚控制 PTT（适用于古老电台或外部功放）
+ */
+export const PttMethodSchema = z.enum(['cat', 'vox', 'dtr', 'rts']);
+
+/**
  * Hamlib配置Schema - 嵌套对象结构
  *
  * 设计理念：
@@ -101,6 +111,14 @@ export const HamlibConfigSchema = z.object({
   // 正值表示提前发射，负值表示延后发射
   // 范围限制：-1000~1000ms，适用于各种网络和设备延迟场景
   transmitCompensationMs: z.number().int().min(-1000).max(1000).optional(),
+
+  // PTT 方法（默认 'cat'，即 Hamlib RIG 类型）
+  // 仅对 network 和 serial 连接类型有效，icom-wlan 固定使用 CI-V PTT
+  pttMethod: PttMethodSchema.optional(),
+
+  // PTT 独立串口路径（仅当 pttMethod 为 dtr/rts 时有效）
+  // 留空则复用 CAT 同一串口
+  pttPort: z.string().optional(),
 });
 
 /**
@@ -256,6 +274,7 @@ export type SerialConfig = z.infer<typeof SerialConfigSchema>;
 export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;
 export type IcomWlanConfig = z.infer<typeof IcomWlanConfigSchema>;
 export type SerialConnectionConfig = z.infer<typeof SerialConnectionConfigSchema>;
+export type PttMethod = z.infer<typeof PttMethodSchema>;
 export type HamlibConfig = z.infer<typeof HamlibConfigSchema>;
 export type RadioConfigResponse = z.infer<typeof RadioConfigResponseSchema>;
 export type SupportedRig = z.infer<typeof SupportedRigSchema>;

@@ -330,20 +330,16 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           <Divider />
 
           {/* 电台设置 */}
-          <div>
-            <h4 className="font-semibold text-default-900 mb-3">电台设置</h4>
-            <RadioDeviceSettings
-              ref={radioSettingsRef}
-              initialConfig={editRadioConfig}
-              onChange={setEditRadioConfig}
-            />
-          </div>
+          <RadioDeviceSettings
+            ref={radioSettingsRef}
+            initialConfig={editRadioConfig}
+            onChange={setEditRadioConfig}
+          />
 
           <Divider />
 
           {/* 音频设置 */}
           <div>
-            <h4 className="font-semibold text-default-900 mb-3">音频设置</h4>
             {isIcomWlan ? (
               <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1' }}>
                 <CardBody className="p-4">
