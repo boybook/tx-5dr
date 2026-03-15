@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme } from 'electron';
 import log from 'electron-log/main';
 import { homedir } from 'node:os';
 import net from 'node:net';
@@ -275,10 +275,11 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     width: 1200,
     height: 800,
     show: true,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#ffffff',
     titleBarStyle: 'hiddenInset',
     titleBarOverlay: process.platform === 'win32' ? {
-      color: '#ffffff',
-      symbolColor: '#000000'
+      color: nativeTheme.shouldUseDarkColors ? '#000000' : '#ffffff',
+      symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000'
     } : false,
     frame: process.platform !== 'darwin',
     webPreferences: {
@@ -341,6 +342,13 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     }
   }, 10000);
 
+  // 先加载本地 loading 页面，避免白屏
+  const loadingPath = app.isPackaged
+    ? join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'loading.html')
+    : join(__dirname, '../assets/loading.html');
+  await mainWindow.loadFile(loadingPath);
+
+  // 显示窗口（此时展示 loading 动画）
   mainWindow.show();
   mainWindow.focus();
   mainWindow.moveTop();
@@ -352,20 +360,10 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     }
   }
 
-  // 加载 web 页面
+  // 导航到前端服务页面（加载完成后自然替换 loading 页面）
   const webUrl = getWebUrl();
   console.log('Loading URL:', webUrl);
   await mainWindow.loadURL(webUrl);
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-    mainWindow.focus();
-    mainWindow.moveTop();
-    if (process.platform === 'darwin') {
-      app.focus({ steal: true });
-      app.show();
-    }
-  });
 
   setupIpcHandlers();
   return mainWindow;
