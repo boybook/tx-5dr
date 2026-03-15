@@ -61,27 +61,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     save: handleSubmit
   }), [selectedInputDeviceName, selectedOutputDeviceName, sampleRate, bufferSize, currentSettings]);
 
-  // 检查是否选择了相同的设备
-  const isSameDevice = () => {
-    if (!selectedInputDeviceName || !selectedOutputDeviceName) {
-      return false;
-    }
-    
-    // 根据设备名称找到对应的设备对象，比较它们的底层ID
-    const inputDevice = inputDevices.find(device => device.name === selectedInputDeviceName);
-    const outputDevice = outputDevices.find(device => device.name === selectedOutputDeviceName);
-    
-    if (!inputDevice || !outputDevice) {
-      return false;
-    }
-    
-    // 提取实际的设备ID进行比较（去除 input- 和 output- 前缀）
-    const inputDeviceId = inputDevice.id.replace('input-', '');
-    const outputDeviceId = outputDevice.id.replace('output-', '');
-    
-    return inputDeviceId === outputDeviceId;
-  };
-
   // 监听更改并通知父组件
   useEffect(() => {
     onUnsavedChanges?.(hasUnsavedChanges());
@@ -228,16 +207,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         </Alert>
       )}
 
-      {/* 相同设备警告 */}
-      {isSameDevice() && (
-        <Alert color="warning" variant="flat" title="您选择了相同的音频设备作为输入和输出设备。">
-          <ul className="text-sm list-disc list-inside space-y-1 ml-2 pt-2">
-            <li>可能导致音频流冲突，导致输入数据接收不稳定</li>
-            <li>可能出现音频暂停或断续现象</li>
-          </ul>
-        </Alert>
-      )}
-
       {/* 设备配置表单 */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
@@ -376,7 +345,6 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             <li>• 输出设备：用于发送FT8音频信号的设备</li>
             <li>• 采样率：建议使用48kHz以获得最佳音质</li>
             <li>• 缓冲区：较大的缓冲区可以减少音频爆音，但会增加延迟</li>
-            <li>• ⚠️ 避免选择相同设备：输入输出使用同一设备可能导致音频冲突</li>
           </ul>
         </div>
       </div>

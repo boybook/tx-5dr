@@ -38,7 +38,7 @@ docker-compose up -d        # 启动服务
 
 ## 技术栈
 前端: React 18 + TypeScript + HeroUI + WebGL
-后端: Fastify + naudiodon2 + WSJTX + WebSocket
+后端: Fastify + Audify (RtAudio) + WSJTX + WebSocket
 工具: Piscina 工作池 + Turborepo + XState v5 状态机
 
 ## 核心架构

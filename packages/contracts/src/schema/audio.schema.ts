@@ -31,10 +31,10 @@ export const AudioDeviceSettingsResponseSchema = z.object({
   currentSettings: AudioDeviceSettingsSchema,
 });
 
-// 音频流配置参数 (用于 naudiodon2)
+// 音频流配置参数 (用于 Audify/RtAudio)
 export const AudioStreamConfigSchema = z.object({
   channelCount: z.number().int().min(1).max(32),
-  sampleFormat: z.number().int(), // naudiodon SampleFormat 枚举值
+  sampleFormat: z.number().int(), // RtAudio SampleFormat 枚举值
   sampleRate: z.number().int().min(8000).max(192000),
   deviceId: z.string().optional(),
   maxQueue: z.number().int().optional(),
