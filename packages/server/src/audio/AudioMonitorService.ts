@@ -40,8 +40,8 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   private audioProvider: RingBufferAudioProvider;
   private pushInterval: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 10;      // 检查间隔：10ms（高频检查）
-  private readonly TARGET_BUFFER_MS = 120;      // 目标缓冲区水位：120ms
-  private readonly TARGET_CHUNK_MS = 60;        // 目标发送块大小：60ms
+  private readonly TARGET_BUFFER_MS = 40;       // 目标缓冲区水位：40ms（小块高频发送）
+  private readonly TARGET_CHUNK_MS = 20;        // 目标发送块大小：20ms（VoIP标准帧大小）
   private readonly TARGET_SAMPLE_RATE = 48000;  // 目标采样率：48kHz（浏览器标准）
 
   // 统计信息
@@ -163,7 +163,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       });
 
       // 每秒输出一次统计日志
-      if (this.sequenceNumber % 20 === 0) {
+      if (this.sequenceNumber % 50 === 0) {
         const availableMs = this.audioProvider.getAvailableMs();
         const pushInterval = this.lastPushStartTime > 0 ? t0 - this.lastPushStartTime : 0;
 

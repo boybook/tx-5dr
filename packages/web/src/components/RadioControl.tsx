@@ -196,7 +196,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
     <div
       role="button"
       tabIndex={0}
-      className="flex items-center gap-2 rounded-md px-2 -mx-2 py-1 -my-1 transition-colors hover:bg-default-100 active:bg-default-200 cursor-pointer"
+      className="flex items-center gap-2 rounded-md px-2 -mx-2 py-1 -my-1 transition-colors hover:bg-default-200 active:bg-default-300 cursor-pointer"
       onClick={onPress}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress?.(); } }}
     >
@@ -517,7 +517,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     try {
       console.log('🎧 [AudioMonitor] 开始监听...');
 
-      // 先设置isMonitoring为true，触发useEffect注册事件监听器和数据处理器
+      // 在用户点击回调中立即创建 AudioContext（浏览器自动播放策略要求）
+      // 使用 48kHz 采样率（与服务端 AudioMonitorService 的 TARGET_SAMPLE_RATE 匹配）
+      await initAudioWorklet(48000);
+
+      // 设置isMonitoring为true，触发useEffect注册事件监听器和数据处理器
       setIsMonitoring(true);
 
       // 等待一个tick确保useEffect已执行
@@ -526,7 +530,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       // 然后连接音频WebSocket（连接后服务端自动广播）
       connection.state.radioService?.connectAudioMonitor();
 
-      console.log('✅ [AudioMonitor] 监听已开启（等待音频数据以初始化AudioContext）');
+      console.log('✅ [AudioMonitor] 监听已开启');
     } catch (error) {
       console.error('❌ [AudioMonitor] 开始监听失败:', error);
       addToast({
@@ -923,10 +927,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     let _droppedFrames = 0;
 
     // 处理音频元数据（从控制WebSocket接收）
+    // AudioContext 已在用户点击 startMonitoring() 时创建，这里仅处理采样率变化和统计
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleAudioMonitorData = async (data: any) => {
-      const _t_receive = performance.now(); // 接收时间戳
-
       // 检测丢帧（通过序列号）
       if (data.sequence !== undefined) {
         if (lastSequence >= 0 && data.sequence !== lastSequence + 1) {
@@ -938,7 +941,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
       // 计算端到端延迟（服务端timestamp到客户端接收）
       if (data.timestamp) {
-        const _latency = Date.now() - data.timestamp;
         _frameCount++;
       }
 
@@ -950,31 +952,34 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       // 更新当前采样率
       currentSampleRate = data.sampleRate;
 
-      // 如果AudioContext还未创建，或采样率发生变化，则（重新）创建
-      if (!audioContextRef.current ||
-          (audioContextRef.current.sampleRate !== data.sampleRate)) {
+      // 确保 AudioContext 处于 running 状态（可能被浏览器挂起）
+      if (audioContextRef.current?.state === 'suspended') {
+        try {
+          await audioContextRef.current.resume();
+          console.log('▶️ [AudioMonitor] AudioContext 已恢复');
+        } catch (error) {
+          console.error('❌ [AudioMonitor] AudioContext 恢复失败:', error);
+        }
+      }
 
-        // 如果正在初始化中，跳过（防止重复初始化）
+      // 如果采样率发生变化，重新创建 AudioContext
+      if (audioContextRef.current &&
+          audioContextRef.current.sampleRate !== data.sampleRate) {
+
         if (isInitializingWorklet.current) {
           console.log('⏭️ [AudioMonitor] 正在初始化中，跳过重复请求');
           return;
         }
 
-        // 清理旧的AudioContext
-        if (audioContextRef.current) {
-          console.log(`🔄 [AudioMonitor] 采样率变化，重新创建AudioContext`);
-          audioContextRef.current.close();
-          audioContextRef.current = null;
-          workletNodeRef.current = null;
-        }
+        console.log(`🔄 [AudioMonitor] 采样率变化 ${audioContextRef.current.sampleRate} → ${data.sampleRate}，重新创建AudioContext`);
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+        workletNodeRef.current = null;
 
-        // 创建新的AudioContext
         try {
-          console.log(`🎵 [AudioMonitor] 创建AudioContext，采样率=${data.sampleRate}Hz`);
           await initAudioWorklet(data.sampleRate);
         } catch (error) {
-          console.error('❌ [AudioMonitor] 创建AudioContext失败:', error);
-          return;
+          console.error('❌ [AudioMonitor] 重建AudioContext失败:', error);
         }
       }
     };

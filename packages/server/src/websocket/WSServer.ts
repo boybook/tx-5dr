@@ -248,6 +248,12 @@ export class WSServer extends WSMessageHandler {
         this.setupAudioMonitorEventListeners();
       }
 
+      // 引擎停止时重置标志，确保下次启动时重新注册监听器到新的 AudioMonitorService 实例
+      if (!status.isRunning && this.audioMonitorListenersSetup) {
+        console.log('🔄 [WSServer] 检测到引擎停止，重置AudioMonitor监听器标志');
+        this.audioMonitorListenersSetup = false;
+      }
+
       this.broadcastSystemStatus(status);
     });
 
