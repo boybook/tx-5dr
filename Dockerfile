@@ -25,7 +25,6 @@ RUN apt-get update && apt-get install -y \
     libxinerama-dev \
     libxcursor-dev \
     libjack-jackd2-dev \
-    portaudio19-dev \
     libxi-dev \
     libxext-dev \
     libhamlib-dev \
@@ -74,9 +73,6 @@ RUN echo "Installing dependencies for $(uname -m)..." && \
 # 复制源代码
 COPY . .
 
-# 运行naudiodon修复脚本
-RUN node scripts/fix-naudiodon.js
-
 # 生成ICO文件（如果需要）
 RUN node scripts/generate-ico.js || true
 
@@ -88,7 +84,7 @@ RUN echo "Building application for $(uname -m)..." && \
 RUN yarn cache clean && \
     rm -rf .yarn/cache .yarn/unplugged && \
     rm -rf packages/*/src packages/*/test && \
-    rm -rf scripts/generate-ico.js scripts/fix-naudiodon.js && \
+    rm -rf scripts/generate-ico.js && \
     rm -rf node_modules/.cache \
     packages/*/node_modules/.cache
 
@@ -108,7 +104,6 @@ RUN apt-get update && apt-get install -y \
     libxinerama1 \
     libxcursor1 \
     libjack-jackd2-0 \
-    libportaudio2 \
     libxi6 \
     libxext6 \
     libhamlib4 \

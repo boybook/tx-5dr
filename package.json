@@ -25,7 +25,6 @@
     "make:mac:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false yarn make:mac",
     "publish": "electron-forge publish",
     "start": "electron-forge start",
-    "postinstall": "node scripts/fix-naudiodon.js",
     "build:package": "yarn build && yarn package",
     "build:make": "yarn build && yarn make",
     "clean": "rm -rf out/ && find packages -name dist -type d -exec rm -rf {} + || true",

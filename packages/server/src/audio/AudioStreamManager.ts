@@ -1,10 +1,14 @@
-import * as naudiodon from 'naudiodon2';
+import audify from 'audify';
+const { RtAudio } = audify;
+type RtAudioInstance = InstanceType<typeof RtAudio>;
+
+// RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
+const RTAUDIO_FLOAT32 = 0x10;
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
-import { once } from 'events';
 import { performance } from 'node:perf_hooks';
 import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
 
@@ -16,38 +20,12 @@ export interface AudioStreamEvents {
 }
 
 /**
- * AudioIO 配置接口
- */
-interface AudioIOOptions {
-  channelCount: number;
-  sampleFormat: number;
-  sampleRate: number;
-  deviceId?: number;
-  framesPerBuffer: number;
-  suggestedLatency: number;
-}
-
-/**
- * AudioIO 实例接口
- */
-interface AudioIOInstance {
-  on(event: 'data', listener: (chunk: Buffer) => void): void;
-  on(event: 'error', listener: (error: Error) => void): void;
-  on(event: 'drain', listener: () => void): void;
-  off(event: string, listener: (...args: unknown[]) => void): void;
-  start(): void;
-  write(buffer: Buffer): boolean;
-  quit(): void;
-  readyState: number;
-}
-
-/**
  * 音频流管理器 - 负责从音频设备捕获实时音频数据
- * 支持传统声卡和 ICOM WLAN 虚拟设备
+ * 支持传统声卡（Audify/RtAudio）和 ICOM WLAN 虚拟设备
  */
 export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
-  private audioInput: AudioIOInstance | null = null;
-  private audioOutput: AudioIOInstance | null = null;
+  private rtAudioInput: RtAudioInstance | null = null;
+  private rtAudioOutput: RtAudioInstance | null = null;
   private isStreaming = false;
   private isOutputting = false;
   private audioProvider: RingBufferAudioProvider;
@@ -190,50 +168,33 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       } else {
         console.log('🎯 使用系统默认音频输入设备');
       }
-      
-      // 配置音频输入参数 - 使用配置的设置
-      const inputOptions: AudioIOOptions = {
-        channelCount: this.channels,
-        sampleFormat: naudiodon.SampleFormatFloat32, // 使用 float32 格式
-        sampleRate: this.sampleRate,
-        deviceId: actualDeviceId,
-        // 使用配置的缓冲区大小
-        framesPerBuffer: this.bufferSize,
-        // 根据缓冲区大小计算建议延迟
-        suggestedLatency: (this.bufferSize / this.sampleRate) * 2 // 缓冲区大小的2倍作为延迟
-      };
-      
-      console.log('音频输入配置:', inputOptions);
 
-      // 创建前验证设备能力：检查目标设备的 maxInputChannels
-      if (actualDeviceId !== undefined) {
-        const allDevices = naudiodon.getDevices();
-        const targetDevice = allDevices.find((d: any) => d.id === actualDeviceId);
-        if (targetDevice && targetDevice.maxInputChannels < (this.channels || 1)) {
-          throw new Error(
-            `输入设备 "${targetDevice.name}" (ID ${actualDeviceId}) 不支持 ${this.channels} 通道输入` +
-            ` (最大输入通道数: ${targetDevice.maxInputChannels})。请在设置中选择正确的音频输入设备。`
-          );
-        }
-      }
+      console.log('音频输入配置:', {
+        deviceId: actualDeviceId,
+        channels: this.channels,
+        sampleRate: this.sampleRate,
+        frameSize: this.bufferSize,
+        format: 'Float32'
+      });
 
       // 创建和启动音频输入流（带超时保护）
-      await this.createAndStartInputWithTimeout(inputOptions, deviceId);
+      await this.createAndStartInputWithTimeout(actualDeviceId, deviceId);
       
       this.isStreaming = true;
-      console.log(`✅ 音频流启动成功 (${this.sampleRate}Hz, 缓冲区: ${inputOptions.framesPerBuffer} 帧)`);
+      console.log(`✅ 音频流启动成功 (${this.sampleRate}Hz, 缓冲区: ${this.bufferSize} 帧)`);
       this.emit('started');
       
     } catch (error) {
       console.error('启动音频流失败:', error);
       // 清理失败的输入流
-      if (this.audioInput) {
+      if (this.rtAudioInput) {
         try {
-          this.audioInput.quit();
+          this.rtAudioInput.stop();
+          this.rtAudioInput.closeStream();
         } catch (cleanupError) {
           console.error('清理音频输入流失败:', cleanupError);
         }
-        this.audioInput = null;
+        this.rtAudioInput = null;
       }
       this.isStreaming = false;
       this.deviceId = null;
@@ -264,9 +225,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       // 停止传统声卡输入
-      if (this.audioInput) {
-        this.audioInput.quit();
-        this.audioInput = null;
+      if (this.rtAudioInput) {
+        try {
+          this.rtAudioInput.stop();
+          this.rtAudioInput.closeStream();
+        } catch (e) {
+          console.error('清理音频输入流失败:', e);
+        }
+        this.rtAudioInput = null;
       }
 
       // 清理重采样器缓存
@@ -441,23 +407,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         console.log('🎯 使用系统默认音频输出设备');
       }
       
-      // 配置音频输出参数 - 使用配置的设置
-      const outputOptions: AudioIOOptions = {
-        channelCount: this.channels,
-        sampleFormat: naudiodon.SampleFormatFloat32,
-        sampleRate: this.sampleRate,
+      console.log('音频输出配置:', {
         deviceId: actualOutputDeviceId,
-        // 使用配置的缓冲区大小
-        framesPerBuffer: this.bufferSize,
-        // 根据缓冲区大小计算建议延迟
-        suggestedLatency: (this.bufferSize / this.sampleRate) * 2
-      };
-      
-      console.log('音频输出配置:', outputOptions);
-      
+        channels: this.channels,
+        sampleRate: this.sampleRate,
+        frameSize: this.bufferSize,
+        format: 'Float32'
+      });
+
       // 创建和启动音频输出流（带超时保护）
       console.log('🔧 创建音频输出流...');
-      await this.createAndStartOutputWithTimeout(outputOptions, outputDeviceId);
+      await this.createAndStartOutputWithTimeout(actualOutputDeviceId, outputDeviceId);
       
       this.isOutputting = true;
       console.log(`✅ 音频输出启动成功 (${this.sampleRate}Hz)`);
@@ -465,13 +425,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     } catch (error) {
       console.error('启动音频输出失败:', error);
       // 清理失败的输出流
-      if (this.audioOutput) {
+      if (this.rtAudioOutput) {
         try {
-          this.audioOutput.quit();
+          this.rtAudioOutput.stop();
+          this.rtAudioOutput.closeStream();
         } catch (cleanupError) {
           console.error('清理音频输出流失败:', cleanupError);
         }
-        this.audioOutput = null;
+        this.rtAudioOutput = null;
       }
       this.isOutputting = false;
       this.outputDeviceId = null;
@@ -483,89 +444,91 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * 带超时保护的音频输入创建和启动
    */
-  private async createAndStartInputWithTimeout(inputOptions: AudioIOOptions, deviceId?: string): Promise<void> {
+  private async createAndStartInputWithTimeout(actualDeviceId: number | undefined, deviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         console.error('⏰ 音频输入创建/启动超时 (15秒)');
         reject(new Error('音频输入创建/启动超时'));
-      }, 15000); // 15秒超时
-      
+      }, 15000);
+
       try {
-        // 使用 setImmediate 异步化整个创建和启动过程
         setImmediate(() => {
           try {
-            console.log('🔄 执行音频输入创建...');
-            
-            // 创建 AudioIO 实例
-            this.audioInput = new (naudiodon as unknown as { AudioIO: new (options: { inOptions: AudioIOOptions }) => AudioIOInstance }).AudioIO({
-              inOptions: inputOptions
-            });
-            
+            console.log('🔄 执行音频输入创建 (Audify/RtAudio)...');
+
+            this.rtAudioInput = new RtAudio();
+
+            // 验证设备能力
+            if (actualDeviceId !== undefined) {
+              const allDevices = this.rtAudioInput.getDevices();
+              const targetDevice = allDevices.find((d: any) => d.id === actualDeviceId);
+              if (targetDevice && targetDevice.inputChannels < (this.channels || 1)) {
+                throw new Error(
+                  `输入设备 "${targetDevice.name}" (ID ${actualDeviceId}) 不支持 ${this.channels} 通道输入` +
+                  ` (输入通道数: ${targetDevice.inputChannels})。请在设置中选择正确的音频输入设备。`
+                );
+              }
+            }
+
+            // 确定设备 ID
+            const inputDeviceId = actualDeviceId ?? this.rtAudioInput.getDefaultInputDevice();
+
+            // 打开输入流（回调式 API）
+            this.rtAudioInput.openStream(
+              null, // 无输出
+              { deviceId: inputDeviceId, nChannels: this.channels, firstChannel: 0 },
+              RTAUDIO_FLOAT32,
+              this.sampleRate,
+              this.bufferSize,
+              'TX5DR-Input',
+              (pcm: Buffer) => {
+                // 音频数据回调 — 替代原来的 on('data') 事件
+                try {
+                  if (!pcm || pcm.length === 0) return;
+                  if (pcm.length % 4 !== 0) {
+                    console.warn(`⚠️ 音频数据长度不是4的倍数: ${pcm.length}`);
+                    return;
+                  }
+
+                  let samples = this.convertBufferToFloat32(pcm);
+                  if (samples.length === 0) return;
+
+                  const INTERNAL_SAMPLE_RATE = 12000;
+                  if (this.sampleRate !== INTERNAL_SAMPLE_RATE) {
+                    resampleAudioProfessional(
+                      samples,
+                      this.sampleRate,
+                      INTERNAL_SAMPLE_RATE,
+                      1
+                    ).then((resampled) => {
+                      this.audioProvider.writeAudio(resampled);
+                      this.emit('audioData', resampled);
+                    }).catch((error) => {
+                      console.error('音频重采样错误:', error);
+                      this.emit('error', error as Error);
+                    });
+                  } else {
+                    this.audioProvider.writeAudio(samples);
+                    this.emit('audioData', samples);
+                  }
+                } catch (error) {
+                  console.error('音频数据处理错误:', error);
+                  this.emit('error', error as Error);
+                }
+              },
+              null // frameOutputCallback
+            );
+
             console.log('✅ 音频输入流创建成功');
             this.deviceId = deviceId || 'default';
-            
-            // 监听音频数据
-            this.audioInput.on('data', async (chunk: Buffer) => {
-              try {
-                // 检查数据完整性
-                if (!chunk || chunk.length === 0) {
-                  console.warn('⚠️ 收到空音频数据块');
-                  return;
-                }
-                
-                // 确保数据长度是4的倍数（Float32）
-                if (chunk.length % 4 !== 0) {
-                  console.warn(`⚠️ 音频数据长度不是4的倍数: ${chunk.length}`);
-                  return;
-                }
-                
-                // 将 Buffer 转换为 Float32Array（已经是 float 格式）
-                let samples = this.convertBufferToFloat32(chunk);
 
-                // 检查样本数据的有效性
-                if (samples.length === 0) {
-                  console.warn('⚠️ 转换后的音频样本为空');
-                  return;
-                }
-
-                // 采样率判断：如果不是 12kHz，则重采样到 12kHz（统一内部采样率）
-                const INTERNAL_SAMPLE_RATE = 12000;
-                if (this.sampleRate !== INTERNAL_SAMPLE_RATE) {
-                  samples = await resampleAudioProfessional(
-                    samples,
-                    this.sampleRate,
-                    INTERNAL_SAMPLE_RATE,
-                    1 // 单声道
-                  );
-                }
-
-                // 存储到环形缓冲区（统一 12kHz 采样率）
-                this.audioProvider.writeAudio(samples);
-
-                // 发出事件
-                this.emit('audioData', samples);
-                
-              } catch (error) {
-                console.error('音频数据处理错误:', error);
-                this.emit('error', error as Error);
-              }
-            });
-            
-            // 设置错误监听器
-            this.audioInput.on('error', (error: Error) => {
-              console.error('音频输入错误:', error);
-              this.emit('error', error);
-            });
-            
             console.log('🚀 启动音频输入流...');
-            
-            // 启动音频输入流
-            this.audioInput.start();
-            
+            this.rtAudioInput.start();
+
             console.log('✅ 音频输入流启动成功');
             clearTimeout(timeout);
             resolve();
-            
+
           } catch (error) {
             console.error('❌ 音频输入创建/启动失败:', error);
             clearTimeout(timeout);
@@ -582,42 +545,43 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * 带超时保护的音频输出创建和启动
    */
-  private async createAndStartOutputWithTimeout(outputOptions: AudioIOOptions, outputDeviceId?: string): Promise<void> {
+  private async createAndStartOutputWithTimeout(actualOutputDeviceId: number | undefined, outputDeviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         console.error('⏰ 音频输出创建/启动超时 (15秒)');
         reject(new Error('音频输出创建/启动超时'));
-      }, 15000); // 15秒超时，给创建过程更多时间
-      
+      }, 15000);
+
       try {
-        // 使用 setImmediate 异步化整个创建和启动过程
         setImmediate(() => {
           try {
-            console.log('🔄 执行音频输出创建...');
-            
-            // 创建 AudioIO 实例
-            this.audioOutput = new (naudiodon as unknown as { AudioIO: new (options: { outOptions: AudioIOOptions }) => AudioIOInstance }).AudioIO({
-              outOptions: outputOptions
-            });
-            
+            console.log('🔄 执行音频输出创建 (Audify/RtAudio)...');
+
+            this.rtAudioOutput = new RtAudio();
+
+            const outputId = actualOutputDeviceId ?? this.rtAudioOutput.getDefaultOutputDevice();
+
+            this.rtAudioOutput.openStream(
+              { deviceId: outputId, nChannels: this.channels, firstChannel: 0 },
+              null, // 无输入
+              RTAUDIO_FLOAT32,
+              this.sampleRate,
+              this.bufferSize,
+              'TX5DR-Output',
+              null, // 纯输出，无输入回调
+              null  // frameOutputCallback
+            );
+
             console.log('✅ 音频输出流创建成功');
             this.outputDeviceId = outputDeviceId || 'default';
-            
-            // 设置错误监听器
-            this.audioOutput.on('error', (error: Error) => {
-              console.error('音频输出错误:', error);
-              this.emit('error', error);
-            });
-            
+
             console.log('🚀 启动音频输出流...');
-            
-            // 启动音频输出流
-            this.audioOutput.start();
-            
+            this.rtAudioOutput.start();
+
             console.log('✅ 音频输出流启动成功');
             clearTimeout(timeout);
             resolve();
-            
+
           } catch (error) {
             console.error('❌ 音频输出创建/启动失败:', error);
             clearTimeout(timeout);
@@ -650,9 +614,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
 
       // 停止传统声卡输出
-      if (this.audioOutput) {
-        this.audioOutput.quit();
-        this.audioOutput = null;
+      if (this.rtAudioOutput) {
+        try {
+          this.rtAudioOutput.stop();
+          this.rtAudioOutput.closeStream();
+        } catch (e) {
+          console.error('清理音频输出流失败:', e);
+        }
+        this.rtAudioOutput = null;
       }
 
       this.isOutputting = false;
@@ -865,7 +834,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     // 传统声卡输出
-    if (!this.isOutputting || !this.audioOutput) {
+    if (!this.isOutputting || !this.rtAudioOutput) {
       throw new Error('音频输出流未启动');
     }
 
@@ -951,20 +920,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           buffer.writeFloatLE(clamped, j * 4);
         }
 
-        // 背压控制：当 write 返回 false 时等待 'drain'，若无 drain 则兜底短暂等待
-        if (!this.audioOutput) {
+        // 写入音频数据（Audify 无背压机制，依赖时间节拍控制流速）
+        if (!this.rtAudioOutput) {
           throw new Error('音频输出未初始化');
         }
-        const ok: boolean = this.audioOutput.write(buffer);
-        if (!ok) {
-          try {
-            await Promise.race<unknown>([
-              once(this.audioOutput as any, 'drain'),
-              wait(25),
-            ]);
-          } catch {
-            // 忽略事件等待中的异常（如流被停止）
-          }
+        try {
+          this.rtAudioOutput.write(buffer);
+        } catch {
+          // write 异常时短暂等待后继续（缓冲区满等情况）
+          await wait(5);
         }
 
         samplesWritten += chunk.length;

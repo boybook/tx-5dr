@@ -255,7 +255,7 @@ RadioOperatorManager.checkAndTriggerTransmission(operatorId)
 ```
 
 ### 音频链路
-- **AudioStreamManager**: naudiodon2 低延迟 I/O，多设备动态切换，实时状态监控
+- **AudioStreamManager**: Audify (RtAudio) 低延迟 I/O，多设备动态切换，实时状态监控
 - **AudioMixer**: 多操作员混音，独立音量控制，PTT 逻辑
 - **SpectrumAnalyzer**: WebWorker 并行 FFT，瀑布图数据，自适应调度
 
@@ -410,4 +410,4 @@ private commandHandlers = {
 `yarn dev` (开发) | `yarn build` (构建) | `yarn start` (启动)
 
 ## 依赖
-依赖: @tx5dr/contracts + naudiodon2 + fastify + piscina
+依赖: @tx5dr/contracts + audify + fastify + piscina

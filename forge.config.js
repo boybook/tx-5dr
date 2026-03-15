@@ -336,7 +336,6 @@ module.exports = {
       // ====== 平台特定：清理跨架构预构建二进制 ======
       const wsjtxPrebuilds = join(nm, 'wsjtx-lib', 'prebuilds');
       const hamlibPrebuilds = join(nm, 'hamlib', 'prebuilds');
-      const naudiodonDir = join(nm, 'naudiodon2', 'portaudio');
 
       if (platform === 'linux') {
         try {
@@ -353,11 +352,6 @@ module.exports = {
           rmGlob(hamlibPrebuilds, 'win32-');
           rmGlob(hamlibPrebuilds, 'darwin-');
           rmrf(join(hamlibPrebuilds, removeArch));
-
-          // naudiodon2: 删除 Windows/MSVC 目录
-          rmrf(join(naudiodonDir, 'msvc'));
-          rmrf(join(naudiodonDir, 'bin'));
-          rmGlob(naudiodonDir, 'bin_arm');
 
           console.log('✅ [Linux] 清理完成');
         } catch (error) {
@@ -380,10 +374,6 @@ module.exports = {
           rmGlob(hamlibPrebuilds, 'win32-');
           rmrf(join(hamlibPrebuilds, removeArch));
 
-          // 清理 naudiodon2 Windows/MSVC 资源与 ARMHF 目录
-          rmrf(join(naudiodonDir, 'msvc'));
-          rmGlob(naudiodonDir, 'bin_arm');
-
           console.log('✅ [macOS] 清理完成');
         } catch (error) {
           console.warn('⚠️ [macOS] 清理跨架构文件时出现警告:', error.message);
@@ -401,9 +391,6 @@ module.exports = {
           // hamlib: 清理其他平台
           rmGlob(hamlibPrebuilds, 'linux-');
           rmGlob(hamlibPrebuilds, 'darwin-');
-
-          // naudiodon2: 清理非 Windows 相关文件
-          rmGlob(naudiodonDir, 'bin_arm');
 
           console.log('✅ [Windows] 清理完成');
         } catch (error) {
