@@ -6,6 +6,8 @@ import {
   CardBody,
 } from '@heroui/react';
 import { WaveLogSettings, type WaveLogSettingsRef } from './WaveLogSettings';
+import { QRZSettings, type QRZSettingsRef } from './QRZSettings';
+import { LoTWSettings, type LoTWSettingsRef } from './LoTWSettings';
 
 export interface LogbookSyncSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -25,9 +27,8 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
     
     // 各个同步服务的引用
     const waveLogRef = React.useRef<WaveLogSettingsRef>(null);
-    // 未来的其他服务引用...
-    // const qrzRef = React.useRef<QRZSettingsRef>(null);
-    // const lotwRef = React.useRef<LOTWSettingsRef>(null);
+    const qrzRef = React.useRef<QRZSettingsRef>(null);
+    const lotwRef = React.useRef<LoTWSettingsRef>(null);
 
     // 暴露给父组件的方法
     useImperativeHandle(ref, () => ({
@@ -35,10 +36,10 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
         switch (activeTab) {
           case 'wavelog':
             return waveLogRef.current?.hasUnsavedChanges() || false;
-          // case 'qrz':
-          //   return qrzRef.current?.hasUnsavedChanges() || false;
-          // case 'lotw':
-          //   return lotwRef.current?.hasUnsavedChanges() || false;
+          case 'qrz':
+            return qrzRef.current?.hasUnsavedChanges() || false;
+          case 'lotw':
+            return lotwRef.current?.hasUnsavedChanges() || false;
           default:
             return false;
         }
@@ -50,16 +51,16 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
               await waveLogRef.current.save();
             }
             break;
-          // case 'qrz':
-          //   if (qrzRef.current) {
-          //     await qrzRef.current.save();
-          //   }
-          //   break;
-          // case 'lotw':
-          //   if (lotwRef.current) {
-          //     await lotwRef.current.save();
-          //   }
-          //   break;
+          case 'qrz':
+            if (qrzRef.current) {
+              await qrzRef.current.save();
+            }
+            break;
+          case 'lotw':
+            if (lotwRef.current) {
+              await lotwRef.current.save();
+            }
+            break;
           default:
             break;
         }
@@ -74,12 +75,12 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
         case 'wavelog':
           currentHasChanges = waveLogRef.current?.hasUnsavedChanges() || false;
           break;
-        // case 'qrz':
-        //   currentHasChanges = qrzRef.current?.hasUnsavedChanges() || false;
-        //   break;
-        // case 'lotw':
-        //   currentHasChanges = lotwRef.current?.hasUnsavedChanges() || false;
-        //   break;
+        case 'qrz':
+          currentHasChanges = qrzRef.current?.hasUnsavedChanges() || false;
+          break;
+        case 'lotw':
+          currentHasChanges = lotwRef.current?.hasUnsavedChanges() || false;
+          break;
         default:
           currentHasChanges = false;
       }
@@ -134,25 +135,17 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
           );
         case 'qrz':
           return (
-            <div className="text-center py-12">
-              <div className="text-6xl mb-4">🔍</div>
-              <h3 className="text-lg font-semibold text-default-700 mb-2">QRZ.com 同步</h3>
-              <p className="text-default-500 mb-4">即将推出...</p>
-              <p className="text-sm text-default-400">
-                QRZ.com 是全球最大的业余无线电操作员数据库，将支持联络人信息查询和日志上传功能。
-              </p>
-            </div>
+            <QRZSettings
+              ref={qrzRef}
+              onUnsavedChanges={handleChildUnsavedChanges}
+            />
           );
         case 'lotw':
           return (
-            <div className="text-center py-12">
-              <div className="text-6xl mb-4">📋</div>
-              <h3 className="text-lg font-semibold text-default-700 mb-2">LoTW 同步</h3>
-              <p className="text-default-500 mb-4">即将推出...</p>
-              <p className="text-sm text-default-400">
-                ARRL 的 Logbook of The World 是官方的QSL确认系统，将支持联络确认和奖状申请功能。
-              </p>
-            </div>
+            <LoTWSettings
+              ref={lotwRef}
+              onUnsavedChanges={handleChildUnsavedChanges}
+            />
           );
         default:
           return null;
@@ -204,15 +197,14 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
                     <span className="text-lg">{getTabInfo('qrz').icon}</span>
                     <div className="flex flex-col items-start">
                       <span className="text-sm font-medium">{getTabInfo('qrz').title}</span>
-                      <span className="text-xs text-default-400">即将推出</span>
+                      <span className="text-xs text-default-400">QRZ.com Logbook</span>
                     </div>
                   </div>
                 }
-                isDisabled
               >
                 {renderTabContent()}
               </Tab>
-              
+
               <Tab
                 key="lotw"
                 title={
@@ -220,11 +212,10 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
                     <span className="text-lg">{getTabInfo('lotw').icon}</span>
                     <div className="flex flex-col items-start">
                       <span className="text-sm font-medium">{getTabInfo('lotw').title}</span>
-                      <span className="text-xs text-default-400">即将推出</span>
+                      <span className="text-xs text-default-400">Logbook of The World</span>
                     </div>
                   </div>
                 }
-                isDisabled
               >
                 {renderTabContent()}
               </Tab>
@@ -243,13 +234,13 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
               </div>
             </li>
             <li className="flex items-start gap-2">
-              <span className="text-default-400">●</span>
+              <span className="text-primary-500">●</span>
               <div>
                 <strong>QRZ.com</strong> - 全球业余无线电数据库，用于联络人信息查询和验证
               </div>
             </li>
             <li className="flex items-start gap-2">
-              <span className="text-default-400">●</span>
+              <span className="text-primary-500">●</span>
               <div>
                 <strong>LoTW</strong> - ARRL官方QSL确认系统，用于奖状申请和联络确认
               </div>

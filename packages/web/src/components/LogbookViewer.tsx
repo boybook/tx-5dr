@@ -27,8 +27,8 @@ import {
 } from '@heroui/react';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, WaveLogSyncResponse } from '@tx5dr/contracts';
+import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen } from '@fortawesome/free-solid-svg-icons';
+import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, QRZConfig, LoTWConfig } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
@@ -38,6 +38,7 @@ import { showErrorToast } from '../utils/errorToast';
 interface ElectronAPI {
   shell?: {
     openExternal: (url: string) => Promise<void>;
+    openPath: (path: string) => Promise<string>;
   };
 }
 
@@ -188,6 +189,25 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     loadStatistics();
   }, [effectiveLogBookId, filters, currentPage]);
 
+  // 加载QRZ和LoTW启用状态
+  useEffect(() => {
+    const loadSyncConfigs = async () => {
+      try {
+        const qrzConfig = await api.getQRZConfig();
+        setIsQRZEnabled(qrzConfig.enabled);
+      } catch {
+        // QRZ配置加载失败，保持禁用
+      }
+      try {
+        const lotwConfig = await api.getLoTWConfig();
+        setIsLoTWEnabled(lotwConfig.enabled);
+      } catch {
+        // LoTW配置加载失败，保持禁用
+      }
+    };
+    loadSyncConfigs();
+  }, []);
+
   // 总页数计算 - 基于筛选后的记录数
   const totalPages = useMemo(() => {
     const pages = Math.ceil(totalRecords / itemsPerPage);
@@ -202,6 +222,20 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSuccess, setSyncSuccess] = useState<string | null>(null);
+
+  // QRZ同步状态
+  const [isQRZSyncing, setIsQRZSyncing] = useState(false);
+  const [qrzSyncError, setQrzSyncError] = useState<string | null>(null);
+  const [qrzSyncSuccess, setQrzSyncSuccess] = useState<string | null>(null);
+
+  // LoTW同步状态
+  const [isLoTWSyncing, setIsLoTWSyncing] = useState(false);
+  const [lotwSyncError, setLotwSyncError] = useState<string | null>(null);
+  const [lotwSyncSuccess, setLotwSyncSuccess] = useState<string | null>(null);
+
+  // 平台启用状态
+  const [isQRZEnabled, setIsQRZEnabled] = useState(false);
+  const [isLoTWEnabled, setIsLoTWEnabled] = useState(false);
   
   const handleExport = async (format: 'adif' | 'csv') => {
     if (isExporting) return;
@@ -279,6 +313,90 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
+  // QRZ.com同步功能
+  const handleQRZSync = async (operation: 'download' | 'upload' | 'full_sync') => {
+    if (isQRZSyncing) return;
+
+    try {
+      setIsQRZSyncing(true);
+      setQrzSyncError(null);
+      setQrzSyncSuccess(null);
+
+      const result = await api.syncQRZ(operation) as QRZSyncResponse;
+
+      if (result.success) {
+        setQrzSyncSuccess(result.message);
+        await loadQSOs();
+        await loadStatistics();
+      } else {
+        setQrzSyncError(result.message || 'QRZ同步失败');
+      }
+    } catch (error) {
+      console.error('QRZ同步失败:', error);
+      if (error instanceof ApiError) {
+        setQrzSyncError(error.userMessage);
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code
+        });
+      } else {
+        setQrzSyncError(error instanceof Error ? error.message : 'QRZ同步失败');
+      }
+    } finally {
+      setIsQRZSyncing(false);
+    }
+  };
+
+  // LoTW同步功能
+  const handleLoTWSync = async (operation: 'upload' | 'download_confirmations') => {
+    if (isLoTWSyncing) return;
+
+    try {
+      setIsLoTWSyncing(true);
+      setLotwSyncError(null);
+      setLotwSyncSuccess(null);
+
+      const result = await api.syncLoTW(operation) as LoTWSyncResponse;
+
+      if (result.success) {
+        setLotwSyncSuccess(result.message);
+        await loadQSOs();
+        await loadStatistics();
+      } else {
+        setLotwSyncError(result.message || 'LoTW同步失败');
+      }
+    } catch (error) {
+      console.error('LoTW同步失败:', error);
+      if (error instanceof ApiError) {
+        setLotwSyncError(error.userMessage);
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code
+        });
+      } else {
+        setLotwSyncError(error instanceof Error ? error.message : 'LoTW同步失败');
+      }
+    } finally {
+      setIsLoTWSyncing(false);
+    }
+  };
+
+  // 打开日志文件目录（仅Electron）
+  const handleOpenDataDir = async () => {
+    try {
+      const result = await api.getLogbookDataPath();
+      if (isElectron() && window.electronAPI?.shell?.openPath) {
+        await window.electronAPI.shell.openPath(result.path);
+      }
+    } catch (error) {
+      console.error('打开日志目录失败:', error);
+    }
+  };
+
   // 自动清除成功/错误消息
   useEffect(() => {
     if (syncSuccess) {
@@ -293,6 +411,34 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       return () => clearTimeout(timer);
     }
   }, [syncError]);
+
+  useEffect(() => {
+    if (qrzSyncSuccess) {
+      const timer = setTimeout(() => setQrzSyncSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [qrzSyncSuccess]);
+
+  useEffect(() => {
+    if (qrzSyncError) {
+      const timer = setTimeout(() => setQrzSyncError(null), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [qrzSyncError]);
+
+  useEffect(() => {
+    if (lotwSyncSuccess) {
+      const timer = setTimeout(() => setLotwSyncSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [lotwSyncSuccess]);
+
+  useEffect(() => {
+    if (lotwSyncError) {
+      const timer = setTimeout(() => setLotwSyncError(null), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [lotwSyncError]);
 
   // 筛选控制
   const handleFilterChange = (key: keyof QSOFilters, value: string | undefined) => {
@@ -716,7 +862,90 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 </DropdownItem>
               </DropdownMenu>
             </Dropdown>
-            
+
+            {/* QRZ.com同步按钮 - 仅在QRZ启用时显示 */}
+            {isQRZEnabled && (
+              <Dropdown>
+                <DropdownTrigger>
+                  <Button
+                    color="warning"
+                    variant="bordered"
+                    size="sm"
+                    isLoading={isQRZSyncing}
+                    startContent={<FontAwesomeIcon icon={faSync} className={isQRZSyncing ? 'animate-spin' : ''} />}
+                    className="min-w-0"
+                  >
+                    <span className="hidden lg:inline">QRZ.com</span>
+                    <span className="lg:hidden hidden md:inline">QRZ</span>
+                  </Button>
+                </DropdownTrigger>
+                <DropdownMenu
+                  aria-label="QRZ.com同步操作"
+                  onAction={(key) => handleQRZSync(key as 'download' | 'upload' | 'full_sync')}
+                >
+                  <DropdownItem
+                    key="upload"
+                    startContent={<FontAwesomeIcon icon={faUpload} className="text-warning" />}
+                    description="上传本地QSO记录到QRZ.com Logbook"
+                  >
+                    上传到 QRZ.com
+                  </DropdownItem>
+                  <DropdownItem
+                    key="download"
+                    startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
+                    description="从QRZ.com Logbook下载QSO记录"
+                  >
+                    从 QRZ.com 下载
+                  </DropdownItem>
+                  <DropdownItem
+                    key="full_sync"
+                    startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
+                    description="双向完整同步"
+                  >
+                    完整同步
+                  </DropdownItem>
+                </DropdownMenu>
+              </Dropdown>
+            )}
+
+            {/* LoTW同步按钮 - 仅在LoTW启用时显示 */}
+            {isLoTWEnabled && (
+              <Dropdown>
+                <DropdownTrigger>
+                  <Button
+                    color="success"
+                    variant="bordered"
+                    size="sm"
+                    isLoading={isLoTWSyncing}
+                    startContent={<FontAwesomeIcon icon={faSync} className={isLoTWSyncing ? 'animate-spin' : ''} />}
+                    className="min-w-0"
+                  >
+                    <span className="hidden lg:inline">LoTW</span>
+                    <span className="lg:hidden hidden md:inline">LoTW</span>
+                  </Button>
+                </DropdownTrigger>
+                <DropdownMenu
+                  aria-label="LoTW同步操作"
+                  onAction={(key) => handleLoTWSync(key as 'upload' | 'download_confirmations')}
+                >
+                  <DropdownItem
+                    key="upload"
+                    startContent={<FontAwesomeIcon icon={faUpload} className="text-success" />}
+                    description="通过本地TQSL工具签名上传到LoTW"
+                  >
+                    上传到 LoTW
+                  </DropdownItem>
+                  <DropdownItem
+                    key="download_confirmations"
+                    startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
+                    description="从LoTW下载QSL确认记录"
+                  >
+                    下载 LoTW 确认
+                  </DropdownItem>
+                </DropdownMenu>
+              </Dropdown>
+            )}
+
             <Dropdown>
               <DropdownTrigger>
                 <Button
@@ -739,6 +968,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 <DropdownItem key="csv">CSV 格式</DropdownItem>
               </DropdownMenu>
             </Dropdown>
+
+            {/* 打开日志文件目录按钮 - 仅Electron */}
+            {isElectron() && (
+              <Tooltip content="在文件管理器中打开日志文件目录">
+                <Button
+                  variant="flat"
+                  size="sm"
+                  isIconOnly
+                  onPress={handleOpenDataDir}
+                  className="min-w-0"
+                >
+                  <FontAwesomeIcon icon={faFolderOpen} />
+                </Button>
+              </Tooltip>
+            )}
           </div>
         </div>
 
@@ -765,7 +1009,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     operatorCallsign,
     isSearchExpanded,
     filters.callsign,
-    filters.band, 
+    filters.band,
     filters.mode,
     totalRecords,
     actualTotalRecords,
@@ -774,7 +1018,13 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     isExporting,
     handleFilterChange,
     clearFilters,
-    handleExport
+    handleExport,
+    isQRZSyncing,
+    isLoTWSyncing,
+    isQRZEnabled,
+    isLoTWEnabled,
+    handleQRZSync,
+    handleLoTWSync
   ]);
 
   // 底部内容：分页
@@ -896,7 +1146,55 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           onClose={() => setSyncError(null)}
         />
       )}
-      
+
+      {qrzSyncSuccess && (
+        <Alert
+          color="success"
+          variant="flat"
+          className="w-full mb-4"
+          title="QRZ.com 同步成功"
+          description={qrzSyncSuccess}
+          isClosable
+          onClose={() => setQrzSyncSuccess(null)}
+        />
+      )}
+
+      {qrzSyncError && (
+        <Alert
+          color="danger"
+          variant="flat"
+          className="w-full mb-4"
+          title="QRZ.com 同步失败"
+          description={qrzSyncError}
+          isClosable
+          onClose={() => setQrzSyncError(null)}
+        />
+      )}
+
+      {lotwSyncSuccess && (
+        <Alert
+          color="success"
+          variant="flat"
+          className="w-full mb-4"
+          title="LoTW 同步成功"
+          description={lotwSyncSuccess}
+          isClosable
+          onClose={() => setLotwSyncSuccess(null)}
+        />
+      )}
+
+      {lotwSyncError && (
+        <Alert
+          color="danger"
+          variant="flat"
+          className="w-full mb-4"
+          title="LoTW 同步失败"
+          description={lotwSyncError}
+          isClosable
+          onClose={() => setLotwSyncError(null)}
+        />
+      )}
+
       {exportError && (
         <Alert
           color="danger"

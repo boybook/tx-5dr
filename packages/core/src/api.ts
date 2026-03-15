@@ -23,6 +23,16 @@ import type {
   WaveLogConfig,
   WaveLogTestConnectionRequest,
   WaveLogTestConnectionResponse,
+  QRZConfig,
+  QRZTestConnectionRequest,
+  QRZTestConnectionResponse,
+  QRZSyncResponse,
+  LoTWConfig,
+  LoTWTestConnectionRequest,
+  LoTWTestConnectionResponse,
+  LoTWTQSLDetectRequest,
+  LoTWTQSLDetectResponse,
+  LoTWSyncResponse,
   TunerCapabilities,
   TunerStatus,
   RadioConfigResponse,
@@ -1090,6 +1100,104 @@ export const api = {
     return await res.json();
   },
 
+  // ========== QRZ.com Logbook API ==========
+
+  async getQRZConfig(apiBase?: string): Promise<QRZConfig> {
+    return apiRequest<QRZConfig>('/qrz/config', undefined, apiBase);
+  },
+
+  async updateQRZConfig(config: Partial<QRZConfig>, apiBase?: string): Promise<QRZConfig> {
+    return apiRequest<QRZConfig>(
+      '/qrz/config',
+      { method: 'PUT', body: JSON.stringify(config) },
+      apiBase
+    );
+  },
+
+  async testQRZConnection(request: QRZTestConnectionRequest, apiBase?: string): Promise<QRZTestConnectionResponse> {
+    return apiRequest<QRZTestConnectionResponse>(
+      '/qrz/test',
+      { method: 'POST', body: JSON.stringify(request) },
+      apiBase
+    );
+  },
+
+  async syncQRZ(
+    operation: 'upload' | 'download' | 'full_sync',
+    apiBase?: string
+  ): Promise<QRZSyncResponse> {
+    return apiRequest<QRZSyncResponse>(
+      '/qrz/sync',
+      { method: 'POST', body: JSON.stringify({ operation }) },
+      apiBase
+    );
+  },
+
+  async resetQRZConfig(apiBase?: string): Promise<QRZConfig> {
+    return apiRequest<QRZConfig>(
+      '/qrz/config/reset',
+      { method: 'POST' },
+      apiBase
+    );
+  },
+
+  // ========== LoTW API ==========
+
+  async getLoTWConfig(apiBase?: string): Promise<LoTWConfig> {
+    return apiRequest<LoTWConfig>('/lotw/config', undefined, apiBase);
+  },
+
+  async updateLoTWConfig(config: Partial<LoTWConfig>, apiBase?: string): Promise<LoTWConfig> {
+    return apiRequest<LoTWConfig>(
+      '/lotw/config',
+      { method: 'PUT', body: JSON.stringify(config) },
+      apiBase
+    );
+  },
+
+  async testLoTWConnection(request: LoTWTestConnectionRequest, apiBase?: string): Promise<LoTWTestConnectionResponse> {
+    return apiRequest<LoTWTestConnectionResponse>(
+      '/lotw/test',
+      { method: 'POST', body: JSON.stringify(request) },
+      apiBase
+    );
+  },
+
+  async detectTQSL(request?: LoTWTQSLDetectRequest, apiBase?: string): Promise<LoTWTQSLDetectResponse> {
+    return apiRequest<LoTWTQSLDetectResponse>(
+      '/lotw/detect-tqsl',
+      { method: 'POST', body: JSON.stringify(request || {}) },
+      apiBase
+    );
+  },
+
+  async syncLoTW(
+    operation: 'upload' | 'download_confirmations',
+    since?: string,
+    apiBase?: string
+  ): Promise<LoTWSyncResponse> {
+    return apiRequest<LoTWSyncResponse>(
+      '/lotw/sync',
+      { method: 'POST', body: JSON.stringify({ operation, since }) },
+      apiBase
+    );
+  },
+
+  async resetLoTWConfig(apiBase?: string): Promise<LoTWConfig> {
+    return apiRequest<LoTWConfig>(
+      '/lotw/config/reset',
+      { method: 'POST' },
+      apiBase
+    );
+  },
+
+  /**
+   * 获取日志本数据目录路径
+   */
+  async getLogbookDataPath(apiBase?: string): Promise<{ path: string }> {
+    return apiRequest<{ path: string }>('/logbooks/data-path', undefined, apiBase);
+  },
+
   // ========== PSKReporter API ==========
 
   /**
@@ -1238,7 +1346,22 @@ export const {
   updateWaveLogConfig,
   testWaveLogConnection,
   syncWaveLog,
-  resetWaveLogConfig
+  resetWaveLogConfig,
+  // QRZ.com同步函数
+  getQRZConfig,
+  updateQRZConfig,
+  testQRZConnection,
+  syncQRZ,
+  resetQRZConfig,
+  // LoTW同步函数
+  getLoTWConfig,
+  updateLoTWConfig,
+  testLoTWConnection,
+  detectTQSL,
+  syncLoTW,
+  resetLoTWConfig,
+  // 日志本数据路径
+  getLogbookDataPath
   ,getRadioConfig
   ,updateRadioConfig
   ,getSupportedRigs

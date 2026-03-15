@@ -15,6 +15,8 @@ import { modeRoutes } from './routes/mode.js';
 import { operatorRoutes } from './routes/operators.js';
 import { radioRoutes } from './routes/radio.js';
 import { waveLogRoutes } from './routes/wavelog.js';
+import { qrzRoutes } from './routes/qrz.js';
+import { lotwRoutes } from './routes/lotw.js';
 import { settingsRoutes } from './routes/settings.js';
 import { profileRoutes } from './routes/profiles.js';
 import { WSServer } from './websocket/WSServer.js';
@@ -253,6 +255,14 @@ export async function createServer() {
   // 注册WaveLog同步API路由
   await fastify.register(waveLogRoutes, { prefix: '/api/wavelog' });
   fastify.log.info('WaveLog同步API路由注册完成');
+
+  // 注册QRZ.com同步API路由
+  await fastify.register(qrzRoutes, { prefix: '/api/qrz' });
+  fastify.log.info('QRZ.com同步API路由注册完成');
+
+  // 注册LoTW同步API路由
+  await fastify.register(lotwRoutes, { prefix: '/api/lotw' });
+  fastify.log.info('LoTW同步API路由注册完成');
 
   // 注册日志本管理API路由
   const { logbookRoutes } = await import('./routes/logbooks.js');

@@ -102,3 +102,9 @@ export * from './schema/pskreporter.schema.js';
 
 // Radio Profile Schema
 export * from './schema/radio-profile.schema.js';
+
+// QRZ.com Schema
+export * from './schema/qrz.schema.js';
+
+// LoTW Schema
+export * from './schema/lotw.schema.js';
