@@ -112,25 +112,36 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
 
   const cwd = path.dirname(entryAbs);
 
-  // 子进程通过 ConsoleLogger 独立写入日志文件，无需转发 stdout/stderr
+  // 使用 pipe 捕获子进程输出，转发到 electron-log（GUI 模式下 inherit 的输出不可见）
   const child = spawn(NODE, [entryAbs], {
     cwd,
     env,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  child.on('exit', (code) => {
-    log.info(`[child:${name}] exited with code ${code}`);
+  // 转发子进程 stdout/stderr 到主进程日志
+  child.stdout?.on('data', (data: Buffer) => {
+    const lines = data.toString().trimEnd();
+    if (lines) log.info(`[child:${name}] ${lines}`);
+  });
+  child.stderr?.on('data', (data: Buffer) => {
+    const lines = data.toString().trimEnd();
+    if (lines) log.error(`[child:${name}] ${lines}`);
+  });
 
-    // 非零退出码视为错误
-    if (code !== 0 && code !== null) {
+  child.on('exit', (code, signal) => {
+    log.info(`[child:${name}] exited with code ${code}, signal ${signal}`);
+
+    // 非正常退出：非零退出码 或 被信号杀死（code=null, signal='SIGSEGV' 等）
+    if (code !== 0) {
       if (!errorType) {
         errorType = 'CRASH';
       }
       hasStartupError = true;
       const logPath = log.transports.file.getFile().path;
+      const reason = signal ? `被信号 ${signal} 终止` : `异常退出 (code: ${code})`;
       dialog.showErrorBox('TX-5DR - 启动失败',
-        `${name} 进程异常退出 (code: ${code})\n\n详细日志: ${logPath}`);
+        `${name} 进程${reason}\n\n详细日志: ${logPath}`);
     }
   });
 
