@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@tx5dr/server": "workspace:*",
+    "electron-log": "^5.4.3",
     "esbuild": "^0.20.0"
   },
   "devDependencies": {
