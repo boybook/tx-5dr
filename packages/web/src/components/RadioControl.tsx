@@ -235,8 +235,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     isActive: boolean;
     audioLevel?: number;
   } | null>(null);
+  const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
   const audioContextRef = React.useRef<AudioContext | null>(null);
   const workletNodeRef = React.useRef<AudioWorkletNode | null>(null);
+  const monitorGainNodeRef = React.useRef<GainNode | null>(null);
   const isInitializingWorklet = React.useRef<boolean>(false); // 初始化锁，防止重复初始化
 
   // 自定义频率相关状态
@@ -491,7 +493,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       const audioContext = new AudioContext({ sampleRate });
       await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
       const workletNode = new AudioWorkletNode(audioContext, 'audio-monitor-processor');
-      workletNode.connect(audioContext.destination);
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = monitorVolume;
+      workletNode.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      monitorGainNodeRef.current = gainNode;
 
       // 监听来自worklet的统计信息
       workletNode.port.onmessage = (e) => {
@@ -564,6 +570,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         audioContextRef.current = null;
       }
       workletNodeRef.current = null;
+      monitorGainNodeRef.current?.disconnect();
+      monitorGainNodeRef.current = null;
       isInitializingWorklet.current = false; // 重置初始化锁
 
       setIsMonitoring(false);
@@ -571,6 +579,25 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       console.log('✅ [AudioMonitor] 监听已停止');
     } catch (error) {
       console.error('❌ [AudioMonitor] 停止监听失败:', error);
+    }
+  };
+
+  // 监听音量变化（使用 exponentialRampToValueAtTime 平滑过渡，避免咔嗒声）
+  const handleMonitorVolumeChange = (value: number | number[]) => {
+    const dbValue = Array.isArray(value) ? value[0] : value;
+    if (!isNaN(dbValue) && dbValue >= -60 && dbValue <= 20) {
+      const gainValue = dbToGain(dbValue);
+      setMonitorVolume(gainValue);
+      if (monitorGainNodeRef.current && audioContextRef.current) {
+        const now = audioContextRef.current.currentTime;
+        monitorGainNodeRef.current.gain.cancelScheduledValues(now);
+        // exponentialRamp 不接受 0，用极小值代替
+        const safeValue = Math.max(gainValue, 1e-6);
+        monitorGainNodeRef.current.gain.setValueAtTime(
+          Math.max(monitorGainNodeRef.current.gain.value, 1e-6), now
+        );
+        monitorGainNodeRef.current.gain.exponentialRampToValueAtTime(safeValue, now + 0.02);
+      }
     }
   };
 
@@ -1322,14 +1349,21 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               </PopoverTrigger>
               <PopoverContent className="py-2 pt-3 space-y-2">
                 <div className="space-y-2">
-                  {/* 监听开关 */}
-                  <div className="flex items-center justify-center px-2 w-full">
-                    <Switch
-                      size="sm"
-                      isSelected={isMonitoring}
-                      onValueChange={toggleMonitoring}
-                      aria-label="音频监听开关"
+                  {/* 监听音量滑块 */}
+                  <div className="flex flex-col items-center px-2">
+                    <Slider
+                      orientation="vertical"
+                      minValue={-60}
+                      maxValue={20}
+                      step={0.1}
+                      value={[gainToDb(monitorVolume)]}
+                      onChange={handleMonitorVolumeChange}
+                      style={{ height: '120px' }}
+                      aria-label="监听音量"
                     />
+                    <div className="text-sm text-default-400 text-center font-mono">
+                      {formatDbDisplay(gainToDb(monitorVolume))}
+                    </div>
                   </div>
 
                   {/* 状态指示器 */}
@@ -1366,6 +1400,16 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                       </div>
                     </div>
                   )}
+
+                  {/* 监听开关 */}
+                  <div className="flex items-center justify-center px-2 w-full pt-2 border-t border-divider">
+                    <Switch
+                      size="sm"
+                      isSelected={isMonitoring}
+                      onValueChange={toggleMonitoring}
+                      aria-label="音频监听开关"
+                    />
+                  </div>
                 </div>
               </PopoverContent>
             </Popover>
