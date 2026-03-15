@@ -1,4 +1,6 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog } from 'electron';
+import log from 'electron-log/main';
+import { homedir } from 'node:os';
 import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
@@ -18,11 +20,10 @@ let selectedWebPort: number | null = null;
 let selectedServerPort: number | null = null;
 
 // 启动错误跟踪
-let startupLogs: string[] = []; // 存储启动日志
 let errorType: string = ''; // 错误类型，空字符串表示无错误
 let hasStartupError: boolean = false; // 是否发生启动错误
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
-let logWindowInstance: BrowserWindow | null = null; // 日志窗口实例
+let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 
 // 寻找可用端口（从起始端口开始递增尝试），可选避免指定端口冲突
 async function findFreePort(start: number, maxStep = 50, avoid?: number, host = '0.0.0.0'): Promise<number> {
@@ -77,88 +78,14 @@ function nodePath() {
 
 // no quarantine/permission fallbacks; we assume portable node file is valid
 
-/**
- * 检测错误类型
- */
-function detectError(log: string): string | null {
-  const lowerLog = log.toLowerCase();
-
-  // 端口占用
-  if (lowerLog.includes('eaddrinuse') || lowerLog.includes('port') && lowerLog.includes('in use')) {
-    return 'PORT_IN_USE';
-  }
-
-  // 模块缺失（排除已知的可选依赖）
-  if (lowerLog.includes('module_not_found') || lowerLog.includes('cannot find module')) {
-    // 排除已知的可选模块（如 segfault-handler）
-    if (!lowerLog.includes('segfault-handler')) {
-      return 'MODULE_NOT_FOUND';
-    }
-  }
-
-  // 权限问题
-  if (lowerLog.includes('eacces') || lowerLog.includes('eperm') || lowerLog.includes('permission denied')) {
-    return 'PERMISSION_DENIED';
-  }
-
-  // 通用错误
-  if (lowerLog.includes('error:') || lowerLog.includes('exception') || lowerLog.includes('failed')) {
-    return 'UNKNOWN';
-  }
-
-  return null;
-}
-
-/**
- * 添加日志并检测错误
- */
-function addLog(log: string, source: string) {
-  const timestamp = new Date().toISOString().substring(11, 19);
-  const formattedLog = `[${timestamp}] [${source}] ${log}`;
-
-  console.log('[Electron.addLog] ' + formattedLog);
-
-  startupLogs.push(formattedLog);
-
-  // 限制日志数量，保留最新的 500 条
-  if (startupLogs.length > 500) {
-    startupLogs = startupLogs.slice(-500);
-  }
-
-  // 检测错误
-  const detectedError = detectError(log);
-  if (detectedError) {
-    errorType = detectedError;
-    hasStartupError = true;
-    console.error(`🚨 检测到启动错误 [${detectedError}]:`, log);
-
-    // 实时推送错误通知到错误窗口
-    if (logWindowInstance && !logWindowInstance.isDestroyed()) {
-      logWindowInstance.webContents.send('error-detected', detectedError);
-    }
-  }
-
-  // 实时推送日志到错误窗口（如果已创建）
-  if (logWindowInstance && !logWindowInstance.isDestroyed()) {
-    console.log(`正在推送日志到日志窗口: ${formattedLog}`);
-    logWindowInstance.webContents.send('log-update', formattedLog);
-  } else {
-    console.log('窗口还未启动');
-  }
-}
-
 function runChild(name: string, entryAbs: string, extraEnv: Record<string, string> = {}) {
   const res = resourcesRoot();
   const NODE = nodePath();
   if (!fs.existsSync(NODE)) {
-    const errorMsg = `node binary not found: ${NODE}`;
-    console.error(`[child:${name}]`, errorMsg);
-    addLog(errorMsg, name);
+    log.error(`[child:${name}] node binary not found: ${NODE}`);
   }
   if (!fs.existsSync(entryAbs)) {
-    const errorMsg = `entry not found: ${entryAbs}`;
-    console.error(`[child:${name}]`, errorMsg);
-    addLog(errorMsg, name);
+    log.error(`[child:${name}] entry not found: ${entryAbs}`);
   }
   const wsjtxPrebuildDir = path.join(res, 'app', 'node_modules', 'wsjtx-lib', 'prebuilds', triplet());
   const env = {
@@ -185,101 +112,34 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
 
   const cwd = path.dirname(entryAbs);
 
-  // 修改 stdio 配置以捕获输出
+  // 子进程通过 ConsoleLogger 独立写入日志文件，无需转发 stdout/stderr
   const child = spawn(NODE, [entryAbs], {
     cwd,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'] // 捕获 stdout 和 stderr
+    stdio: 'inherit',
   });
 
-  // 监听 stdout 输出
-  if (child.stdout) {
-    child.stdout.on('data', (data) => {
-      const text = data.toString().trim();
-      if (text) {
-        console.log(`[child:${name}]`, text);
-        text.split('\n').forEach((line: string) => addLog(line, name));
-      }
-    });
-  }
-
-  // 监听 stderr 输出
-  if (child.stderr) {
-    child.stderr.on('data', (data) => {
-      const text = data.toString().trim();
-      if (text) {
-        console.error(`[child:${name}]`, text);
-        text.split('\n').forEach((line: string) => addLog(line, name));
-      }
-    });
-  }
-
   child.on('exit', (code) => {
-    const exitMsg = `exited with code ${code}`;
-    console.log(`[child:${name}]`, exitMsg);
-    addLog(exitMsg, name);
+    log.info(`[child:${name}] exited with code ${code}`);
 
     // 非零退出码视为错误
     if (code !== 0 && code !== null) {
-      // 如果还没有检测到具体错误类型，则标记为进程崩溃
       if (!errorType) {
         errorType = 'CRASH';
-        // 推送错误通知
-        if (logWindowInstance && !logWindowInstance.isDestroyed()) {
-          logWindowInstance.webContents.send('error-detected', 'CRASH');
-        }
       }
       hasStartupError = true;
-
-      // 根据窗口类型分别处理
-      if (logWindowInstance && !logWindowInstance.isDestroyed()) {
-        // 日志窗口已存在：只修改标题
-        logWindowInstance.setTitle('TX-5DR - 启动失败');
-      } else if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-        // 主窗口已存在：关闭并创建日志窗口
-        mainWindowInstance.close();
-        void createLogWindow().then(logWin => {
-          logWin.setTitle('TX-5DR - 启动失败');
-        }).catch(err => {
-          console.error('创建日志窗口失败:', err);
-        });
-      } else {
-        // 没有窗口：创建日志窗口
-        void createLogWindow().then(logWin => {
-          logWin.setTitle('TX-5DR - 启动失败');
-        }).catch(err => {
-          console.error('创建日志窗口失败:', err);
-        });
-      }
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - 启动失败',
+        `${name} 进程异常退出 (code: ${code})\n\n详细日志: ${logPath}`);
     }
   });
 
   child.on('error', (err) => {
-    const errorMsg = `failed to start: ${err.message}`;
-    console.error(`[child:${name}]`, errorMsg);
-    addLog(errorMsg, name);
+    log.error(`[child:${name}] failed to start: ${err.message}`);
     hasStartupError = true;
-
-    // 根据窗口类型分别处理
-    if (logWindowInstance && !logWindowInstance.isDestroyed()) {
-      // 日志窗口已存在：只修改标题
-      logWindowInstance.setTitle('TX-5DR - 启动失败');
-    } else if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-      // 主窗口已存在：关闭并创建日志窗口
-      mainWindowInstance.close();
-      void createLogWindow().then(logWin => {
-        logWin.setTitle('TX-5DR - 启动失败');
-      }).catch(err => {
-        console.error('创建日志窗口失败:', err);
-      });
-    } else {
-      // 没有窗口：创建日志窗口
-      void createLogWindow().then(logWin => {
-        logWin.setTitle('TX-5DR - 启动失败');
-      }).catch(err => {
-        console.error('创建日志窗口失败:', err);
-      });
-    }
+    const logPath = log.transports.file.getFile().path;
+    dialog.showErrorBox('TX-5DR - 启动失败',
+      `${name} 进程启动失败: ${err.message}\n\n详细日志: ${logPath}`);
   });
 
   return child;
@@ -319,80 +179,278 @@ async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Pr
 }
 
 /**
- * 创建日志/启动窗口
- * 启动时立即显示，成功后关闭，失败时保持显示
+ * 构建右键菜单（托盘和 Dock 共用）
  */
-async function createLogWindow(): Promise<BrowserWindow> {
-  // 检查实例是否存在且有效
-  if (logWindowInstance && !logWindowInstance.isDestroyed()) {
-    console.log('📋 日志窗口已存在，复用现有窗口');
-    logWindowInstance.show();
-    logWindowInstance.focus();
-    return logWindowInstance;
+function buildContextMenu(includQuit: boolean): Menu {
+  const template: Parameters<typeof Menu.buildFromTemplate>[0] = [
+    { label: '打开主窗口', click: () => showMainWindow() },
+    { label: '日志查看器', click: () => openLogInTerminal() },
+    { type: 'separator' },
+    { label: '在浏览器中打开', click: () => openInBrowser() },
+  ];
+
+  if (includQuit) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          void cleanupAndQuit();
+        },
+      },
+    );
   }
 
-  // 清理已销毁的窗口引用
-  if (logWindowInstance) {
-    logWindowInstance = null;
+  return Menu.buildFromTemplate(template);
+}
+
+/**
+ * 创建 Windows/Linux 系统托盘
+ */
+function createTray() {
+  if (process.platform === 'darwin') return;
+  if (trayInstance) return;
+
+  const iconPath = process.platform === 'win32'
+    ? (app.isPackaged
+        ? path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'icon.ico')
+        : path.join(__dirname, '..', 'assets', 'icon.ico'))
+    : (app.isPackaged
+        ? path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'icon.png')
+        : path.join(__dirname, '..', 'assets', 'icon.png'));
+
+  trayInstance = new Tray(iconPath);
+  trayInstance.setToolTip('TX-5DR 数字电台');
+  trayInstance.setContextMenu(buildContextMenu(true));
+
+  // 双击托盘图标打开主窗口（Windows 惯例）
+  trayInstance.on('double-click', () => {
+    showMainWindow();
+  });
+
+  console.log('🔔 系统托盘已创建');
+}
+
+/**
+ * 创建 macOS Dock 菜单
+ */
+function createDockMenu() {
+  if (process.platform !== 'darwin') return;
+  if (!app.dock) return;
+
+  // Dock 菜单不含"退出"（macOS 有标准退出方式 Cmd+Q）
+  app.dock.setMenu(buildContextMenu(false));
+  console.log('🍎 Dock 菜单已创建');
+}
+
+/**
+ * 获取当前 web 界面 URL
+ */
+function getWebUrl(): string {
+  if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
+    return 'http://localhost:5173';
+  }
+  return `http://127.0.0.1:${selectedWebPort || 5173}`;
+}
+
+/**
+ * 仅创建主窗口（不启动子进程），用于托盘/Dock恢复窗口
+ */
+async function createMainWindowOnly(): Promise<BrowserWindow> {
+  // 检查主窗口是否已存在且有效
+  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+    mainWindowInstance.show();
+    mainWindowInstance.focus();
+    return mainWindowInstance;
   }
 
-  console.log('📋 创建新的日志窗口...');
+  // 清理已销毁的主窗口引用
+  if (mainWindowInstance) {
+    mainWindowInstance = null;
+  }
 
-  const logPagePath = app.isPackaged
-    ? `file://${path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'error.html')}`
-    : `file://${path.join(__dirname, '..', 'assets', 'error.html')}`;
+  const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
 
-  const logWindow = new BrowserWindow({
+  const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: 'TX-5DR - 正在启动',
-    show: true,  // 立即显示
+    show: true,
     titleBarStyle: 'hiddenInset',
     titleBarOverlay: process.platform === 'win32' ? {
-      color: '#1a1a2e',
-      symbolColor: '#e0e0e0'
+      color: '#ffffff',
+      symbolColor: '#000000'
     } : false,
     frame: process.platform !== 'darwin',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
       preload: app.isPackaged
-        ? join(process.resourcesPath, 'app', 'packages', 'electron-main', 'dist', 'preload-error.js')
-        : join(__dirname, 'preload-error.js'),
+        ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
+        : join(__dirname, '../../electron-preload/dist/preload.js'),
     },
   });
 
-  // 隐藏菜单栏
+  mainWindowInstance = mainWindow;
+
+  mainWindow.on('closed', () => {
+    console.log('🪟 主窗口已关闭，清理实例引用');
+    mainWindowInstance = null;
+    if (serverCheckInterval) {
+      clearInterval(serverCheckInterval);
+      serverCheckInterval = null;
+    }
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mainWindow.webContents.on('did-fail-load', (_event: any, errorCode: any, errorDescription: any, validatedURL: any) => {
+    log.error('Failed to load:', errorCode, errorDescription, validatedURL);
+    errorType = 'UNKNOWN';
+    hasStartupError = true;
+    log.error(`[system] Page load failed: ${errorCode} - ${errorDescription} (${validatedURL})`);
+    mainWindow.close();
+    const logPath = log.transports.file.getFile().path;
+    dialog.showErrorBox('TX-5DR - 页面加载失败',
+      `错误 ${errorCode}: ${errorDescription}\nURL: ${validatedURL}\n\n详细日志: ${logPath}`);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mainWindow.webContents.on('render-process-gone', (_event: any, details: any) => {
+    console.error('Renderer process gone:', details);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mainWindow.webContents.on('console-message', (_event: any, level: any, message: any, _line: any, _sourceId: any) => {
+    console.log(`Console [${level}]:`, message);
+  });
+
   if (process.platform === 'win32' || process.platform === 'linux') {
-    logWindow.setMenuBarVisibility(false);
+    mainWindow.setMenuBarVisibility(false);
   }
 
-  // 立即显示窗口
-  logWindow.show();
-  logWindow.focus();
-  logWindow.moveTop();
+  // 定期检查服务器健康状态
+  serverCheckInterval = setInterval(async () => {
+    const isHealthy = await checkServerHealth();
+    if (!isHealthy) {
+      if (isDevelopment) {
+        console.log('⚠️ 外部服务器连接丢失 (开发模式)');
+      } else {
+        console.log('⚠️ 嵌入式服务器连接丢失');
+      }
+    }
+  }, 10000);
+
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.moveTop();
 
   if (process.platform === 'darwin') {
     app.focus({ steal: true });
+    if (app.dock) {
+      app.dock.bounce('critical');
+    }
   }
 
-  // 加载日志页面
-  try {
-    await logWindow.loadURL(logPagePath);
-    console.log('✅ 日志页面加载成功');
-  } catch (error) {
-    console.error('❌ 加载日志页面失败:', error);
-  }
+  // 加载 web 页面
+  const webUrl = getWebUrl();
+  console.log('Loading URL:', webUrl);
+  await mainWindow.loadURL(webUrl);
 
-  // 监听窗口关闭事件，清理实例引用
-  logWindow.on('closed', () => {
-    console.log('📋 日志窗口已关闭，清理实例引用');
-    logWindowInstance = null;
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.moveTop();
+    if (process.platform === 'darwin') {
+      app.focus({ steal: true });
+      app.show();
+    }
   });
 
-  // 设置为全局实例，以便接收日志更新
-  logWindowInstance = logWindow;
-  return logWindow;
+  setupIpcHandlers();
+  return mainWindow;
+}
+
+/**
+ * 显示主窗口，若已销毁则重新创建（不重启子进程）
+ */
+function showMainWindow() {
+  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+    mainWindowInstance.show();
+    mainWindowInstance.focus();
+    if (mainWindowInstance.isMinimized()) {
+      mainWindowInstance.restore();
+    }
+  } else {
+    void createMainWindowOnly();
+  }
+}
+
+/**
+ * 在系统原生终端中打开日志（tail -f）
+ * 同时监控 electron 主进程日志和 server 日志
+ */
+function openLogInTerminal() {
+  const electronLogPath = log.transports.file.getFile().path;
+  const logDir = path.dirname(electronLogPath);
+  const serverLogPath = path.join(logDir, 'tx5dr-server.log');
+  log.info(`在原生终端中打开日志: ${logDir}`);
+
+  // 收集存在的日志文件
+  const logFiles = [electronLogPath];
+  if (fs.existsSync(serverLogPath)) {
+    logFiles.push(serverLogPath);
+  }
+  const tailTarget = logFiles.map(f => `"${f}"`).join(' ');
+
+  try {
+    if (process.platform === 'darwin') {
+      const script = path.join(app.getPath('temp'), 'tx5dr-tail.sh');
+      fs.writeFileSync(script, [
+        '#!/bin/bash',
+        `echo "TX-5DR 日志查看器"`,
+        `echo "日志目录: ${logDir}"`,
+        `echo "监控文件: ${logFiles.map(f => path.basename(f)).join(', ')}"`,
+        `echo "按 Ctrl+C 退出"`,
+        `echo ""`,
+        `tail -f ${tailTarget}`,
+      ].join('\n'), { mode: 0o755 });
+      spawn('open', ['-a', 'Terminal', script]);
+    } else if (process.platform === 'win32') {
+      // Windows: PowerShell 的 Get-Content 支持多文件
+      const psFiles = logFiles.map(f => `'${f}'`).join(', ');
+      spawn('cmd', ['/c', 'start', 'cmd', '/k',
+        `title TX-5DR 日志查看器 && powershell -Command "Get-Content ${psFiles} -Wait -Tail 50"`
+      ], { shell: true });
+    } else {
+      const tailCmd = `tail -f ${tailTarget}`;
+      const terminals = [
+        { bin: '/usr/bin/x-terminal-emulator', args: ['-e', tailCmd] },
+        { bin: '/usr/bin/gnome-terminal', args: ['--', 'bash', '-c', tailCmd] },
+        { bin: '/usr/bin/konsole', args: ['-e', 'bash', '-c', tailCmd] },
+        { bin: '/usr/bin/xfce4-terminal', args: ['-e', tailCmd] },
+        { bin: '/usr/bin/xterm', args: ['-e', tailCmd] },
+      ];
+
+      const found = terminals.find(t => fs.existsSync(t.bin));
+      if (found) {
+        spawn(found.bin, found.args, { detached: true, stdio: 'ignore' });
+      } else {
+        log.warn('未找到可用终端模拟器');
+        dialog.showErrorBox('TX-5DR', `未找到终端模拟器\n\n日志目录: ${logDir}`);
+      }
+    }
+  } catch (err) {
+    log.error('打开终端失败:', err);
+    dialog.showErrorBox('TX-5DR', `打开终端失败\n\n日志目录: ${logDir}`);
+  }
+}
+
+/**
+ * 在系统浏览器中打开 web 界面
+ */
+function openInBrowser() {
+  void shell.openExternal(getWebUrl());
 }
 
 async function checkServerHealth(): Promise<boolean> {
@@ -507,6 +565,14 @@ async function cleanup() {
   } else {
     console.log('🧹 [清理] 开发模式：无子进程可清理');
   }
+
+  // 清理系统托盘
+  if (trayInstance) {
+    trayInstance.destroy();
+    trayInstance = null;
+    console.log('🧹 [清理] 已清理系统托盘');
+  }
+
 }
 
 async function createWindow() {
@@ -530,8 +596,7 @@ async function createWindow() {
   errorType = '';
   console.log('🔄 启动状态已重置');
 
-  // ✅ 第一步：立即创建并显示日志窗口
-  const logWindow = await createLogWindow();
+  // 日志窗口不再在启动时自动显示，仅在出错时创建
 
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
   console.log('🔍 isDevelopment:', isDevelopment);
@@ -551,14 +616,14 @@ async function createWindow() {
     }
 
     if (!serverReady) {
-      console.error('❌ 无法连接到外部服务器 (http://localhost:4000)');
+      log.error('无法连接到外部服务器 (http://localhost:4000)');
       errorType = 'TIMEOUT';
       hasStartupError = true;
-      addLog('Development server connection timeout after 30 seconds', 'system');
-
-      // ❌ 失败：修改标题并保持日志窗口显示
-      logWindow.setTitle('TX-5DR - 启动失败');
-      return logWindow;
+      log.error('[system] Development server connection timeout after 30 seconds');
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - 启动失败',
+        `无法连接到开发服务器 (http://localhost:4000)\n请确保已运行 yarn dev\n\n详细日志: ${logPath}`);
+      return;
     }
 
     console.log('✅ 外部服务器连接成功！');
@@ -588,14 +653,14 @@ async function createWindow() {
 
     const webOk = await waitForHttp(`http://127.0.0.1:${selectedWebPort}`);
     if (!webOk) {
-      console.error('❌ web 服务启动等待超时');
+      log.error('web 服务启动等待超时');
       errorType = 'TIMEOUT';
       hasStartupError = true;
-      addLog('web service startup timeout after 15 seconds', 'system');
-
-      // ❌ 失败：修改标题并保持日志窗口显示
-      logWindow.setTitle('TX-5DR - 启动失败');
-      return logWindow;
+      log.error('[system] web service startup timeout after 15 seconds');
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - 启动失败',
+        `Web 服务启动超时\n\n详细日志: ${logPath}`);
+      return;
     } else {
       console.log('✅ web 服务已就绪');
     }
@@ -603,150 +668,16 @@ async function createWindow() {
 
   // 最后检查：如果子进程已经崩溃
   if (hasStartupError) {
-    console.log('🚨 检测到启动错误，保持日志窗口显示');
-    logWindow.setTitle('TX-5DR - 启动失败');
-    return logWindow;
+    log.error('检测到启动错误');
+    const logPath = log.transports.file.getFile().path;
+    dialog.showErrorBox('TX-5DR - 启动失败',
+      `启动过程中检测到错误 (${errorType})\n\n详细日志: ${logPath}`);
+    return;
   }
 
-  // ✅ 成功：关闭日志窗口并创建主窗口
+  // ✅ 成功：直接创建主窗口
   console.log('✅ 服务启动成功，创建主窗口...');
-  setTimeout(() => addLog("✅ 服务启动成功，创建主窗口...", 'main'), 2000);
-  if (process.env.NODE_ENV !== 'development') {
-    // logWindow.close();
-  }
-
-  const mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    show: true, // 立即显示窗口
-    titleBarStyle: 'hiddenInset', // macOS 下隐藏标题栏但保留交通灯按钮
-    titleBarOverlay: process.platform === 'win32' ? {
-      color: '#ffffff',
-      symbolColor: '#000000'
-    } : false,
-    frame: process.platform !== 'darwin', // macOS 下无边框，其他平台保留边框
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false, // 在开发环境中禁用 web 安全策略
-      allowRunningInsecureContent: true,
-      // 使用预加载脚本
-      preload: app.isPackaged
-        ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
-        : join(__dirname, '../../electron-preload/dist/preload.js'),
-    },
-  });
-
-  // 设置主窗口实例
-  mainWindowInstance = mainWindow;
-
-  // 监听窗口关闭事件，清理实例引用
-  mainWindow.on('closed', () => {
-    console.log('🪟 主窗口已关闭，清理实例引用');
-    mainWindowInstance = null;
-    // 清理服务器健康检查定时器
-    if (serverCheckInterval) {
-      clearInterval(serverCheckInterval);
-      serverCheckInterval = null;
-    }
-  });
-
-  // 添加错误处理（仅用于运行时错误）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mainWindow.webContents.on('did-fail-load', (_event: any, errorCode: any, errorDescription: any, validatedURL: any) => {
-    console.error('Failed to load:', errorCode, errorDescription, validatedURL);
-    errorType = 'UNKNOWN';
-    hasStartupError = true;
-    addLog(`Page load failed: ${errorCode} - ${errorDescription} (${validatedURL})`, 'system');
-
-    // 关闭主窗口并创建日志窗口显示错误
-    // 注意：mainWindowInstance 会在 'closed' 事件中自动清理
-    mainWindow.close();
-
-    // 创建日志窗口并处理错误
-    createLogWindow()
-      .then(logWin => {
-        logWin.setTitle('TX-5DR - 启动失败');
-      })
-      .catch(err => {
-        console.error('创建日志窗口失败:', err);
-      });
-  });
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mainWindow.webContents.on('render-process-gone', (_event: any, details: any) => {
-    console.error('Renderer process gone:', details);
-  });
-
-  // 添加控制台日志监听
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mainWindow.webContents.on('console-message', (_event: any, level: any, message: any, _line: any, _sourceId: any) => {
-    console.log(`Console [${level}]:`, message);
-  });
-
-  // 在 Windows 和 Linux 下隐藏菜单栏
-  if (process.platform === 'win32' || process.platform === 'linux') {
-    mainWindow.setMenuBarVisibility(false);
-  }
-
-  // 定期检查服务器健康状态
-  serverCheckInterval = setInterval(async () => {
-    const isHealthy = await checkServerHealth();
-    if (!isHealthy) {
-      if (isDevelopment) {
-        console.log('⚠️ 外部服务器连接丢失 (开发模式)');
-      } else {
-        console.log('⚠️ 嵌入式服务器连接丢失');
-      }
-    }
-  }, 10000); // 每10秒检查一次
-
-  // 立即聚焦窗口并激活应用
-  console.log('🎉 正在显示和聚焦窗口...');
-  mainWindow.show();
-  mainWindow.focus();
-  mainWindow.moveTop();
-  
-  // macOS特殊处理：确保应用激活到前台
-  if (process.platform === 'darwin') {
-    app.focus({ steal: true });
-    // 额外的macOS激活步骤
-    if (app.dock) {
-      app.dock.bounce('critical');
-    }
-  }
-
-  // Load the app
-  if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
-    console.log('Loading development URL: http://localhost:5173');
-    await mainWindow.loadURL('http://localhost:5173');
-  } else {
-    // 生产模式：连接内置静态 web 服务（使用上面选择的 webPort）
-    const indexPath = `http://127.0.0.1:${selectedWebPort || 5173}`;
-    console.log('Loading production URL:', indexPath);
-    await mainWindow.loadURL(indexPath);
-  }
-  
-  // 页面加载完成后再次确保聚焦
-  mainWindow.once('ready-to-show', () => {
-    console.log('🎉 页面加载完成，确保窗口聚焦...');
-    mainWindow.show();
-    mainWindow.focus();
-    mainWindow.moveTop();
-    
-    if (process.platform === 'darwin') {
-      app.focus({ steal: true });
-      // 强制将应用带到前台
-      app.show();
-    }
-  });
-  
-  // 设置IPC处理器
-  setupIpcHandlers();
-  
-  // 确保窗口返回以便后续使用
-  console.log('🔍 createWindow 函数准备返回窗口:', mainWindow ? 'BrowserWindow实例' : 'undefined');
-  return mainWindow;
+  return createMainWindowOnly();
 }
 
 // 启动应用
@@ -755,10 +686,28 @@ const startApp = async () => {
 
   console.log("startApp");
 
+  // 初始化 electron-log：统一日志目录到与 server AppPaths 一致的位置
+  // macOS: ~/Library/Logs/TX-5DR/, Windows: %LOCALAPPDATA%\TX-5DR\logs\, Linux: ~/.local/share/TX-5DR/logs/
+  const APP_NAME = 'TX-5DR';
+  const logsDir = process.platform === 'darwin'
+    ? path.join(homedir(), 'Library', 'Logs', APP_NAME)
+    : process.platform === 'win32'
+      ? path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_NAME, 'logs')
+      : path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'), APP_NAME, 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+  log.transports.file.resolvePathFn = () => path.join(logsDir, 'electron-main.log');
+  log.initialize();
+  Object.assign(console, log.functions);
+  log.errorHandler.startCatching();
+
   // macOS: 确保应用有权限激活到前台
   if (process.platform === 'darwin' && app.dock) {
     app.dock.show();
   }
+
+  // 创建系统托盘（Windows/Linux）或 Dock 菜单（macOS）
+  createTray();
+  createDockMenu();
 
   console.log('🔍 正在调用 createWindow...');
   await createWindow();
@@ -802,7 +751,6 @@ app.on('will-quit', (event) => {
 
 app.on('before-quit', (event) => {
   console.log('📱 [应用] 准备退出 (before-quit)...');
-
   // 如果还没有清理完成,阻止退出并执行清理
   if (!hasCleanedUp && !isCleaningUp) {
     event.preventDefault();
@@ -812,50 +760,14 @@ app.on('before-quit', (event) => {
 
 app.on('window-all-closed', () => {
   console.log('📱 [应用] 所有窗口已关闭');
-
-  // macOS上通常不在此时退出应用
-  if (process.platform !== 'darwin') {
-    // 非macOS平台,所有窗口关闭后退出
-    void cleanupAndQuit();
-  }
+  // 所有平台都不在此退出，通过托盘/Dock菜单的"退出"来真正退出
+  // Windows/Linux 有托盘常驻，macOS 有 Dock 常驻
 });
 
 app.on('activate', () => {
-  // macOS: 当点击dock图标时
-  if (BrowserWindow.getAllWindows().length === 0) {
-    console.log('📱 [应用] activate事件：创建新窗口');
-    void createWindow();
-  } else {
-    // 优先显示主窗口
-    if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-      console.log('📱 [应用] activate事件：显示主窗口');
-      if (mainWindowInstance.isMinimized()) {
-        mainWindowInstance.restore();
-      }
-      mainWindowInstance.show();
-      mainWindowInstance.focus();
-    } else if (logWindowInstance && !logWindowInstance.isDestroyed()) {
-      // 如果只有日志窗口（启动失败场景），显示日志窗口
-      console.log('📱 [应用] activate事件：显示日志窗口（无主窗口）');
-      if (logWindowInstance.isMinimized()) {
-        logWindowInstance.restore();
-      }
-      logWindowInstance.show();
-      logWindowInstance.focus();
-    } else {
-      // 后备方案：显示第一个可用窗口
-      const existingWindow = BrowserWindow.getAllWindows()[0];
-      if (existingWindow) {
-        console.log('📱 [应用] activate事件：显示现有窗口（后备）');
-        if (existingWindow.isMinimized()) {
-          existingWindow.restore();
-        }
-        existingWindow.show();
-        existingWindow.focus();
-      }
-    }
-  }
-}); 
+  // macOS: 当点击dock图标时，恢复或创建主窗口
+  showMainWindow();
+});
 
 // 处理进程退出信号
 process.on('SIGINT', () => {
@@ -876,18 +788,6 @@ process.on('SIGTERM', () => {
  * 设置IPC处理器
  */
 function setupIpcHandlers() {
-  // 获取启动日志
-  ipcMain.handle('get-startup-logs', async () => {
-    console.log('📋 [IPC] 获取启动日志，共', startupLogs.length, '条');
-    return startupLogs;
-  });
-
-  // 获取错误类型
-  ipcMain.handle('get-error-type', async () => {
-    console.log('🔍 [IPC] 获取错误类型:', errorType);
-    return errorType;
-  });
-
   // 处理打开通联日志窗口的请求
   ipcMain.handle('window:openLogbook', async (_event, queryString: string) => {
     console.log('📖 [IPC] 收到打开通联日志窗口请求:', queryString);
