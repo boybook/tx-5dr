@@ -15,7 +15,7 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 | `RadioBridge` | `subsystems/RadioBridge.ts` | 电台事件转发、频率同步、断线恢复、健康检查 |
 | `ClockCoordinator` | `subsystems/ClockCoordinator.ts` | 时钟/解码/频谱/SlotPack 事件桥接、PSKReporter 转发 |
 | `AudioVolumeController` | `subsystems/AudioVolumeController.ts` | 音量读写 + ConfigManager 持久化 + 事件广播 |
-| `EngineLifecycle` | `subsystems/EngineLifecycle.ts` | 资源注册、XState 状态机、doStart/doStop、状态标志 |
+| `EngineLifecycle` | `subsystems/EngineLifecycle.ts` | 资源注册、XState 引擎状态机、doStart/doStop、状态标志 |
 | `ListenerManager` | `subsystems/ListenerManager.ts` | 监听器注册/批量精确清理工具类 |
 
 #### 事件注册位置
@@ -31,7 +31,35 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 - 新的时钟/解码事件 → `ClockCoordinator`
 - 音量控制 → `AudioVolumeController`
 - 资源启停顺序 → `EngineLifecycle.registerResources()`
+- Profile 管理 → `config/ProfileManager.ts`
+- 状态机逻辑 → `state-machines/engineStateMachine.ts` / `radioStateMachine.ts`
 - 对外 API（路由/WSServer 调用）→ `DigitalRadioEngine` Facade 委托方法
+
+### 电台连接与状态机
+
+详细架构见根目录 `CLAUDE.md` 的「双状态机架构」和「电台连接层」章节。
+
+**关键文件导航**:
+```
+config/
+  ├─ ProfileManager.ts         ← Profile CRUD + 激活流程
+  └─ config-manager.ts         ← 配置持久化
+radio/connections/
+  ├─ IRadioConnection.ts       ← 统一连接接口
+  ├─ RadioConnectionFactory.ts ← 工厂（按 HamlibConfig.type 创建）
+  ├─ HamlibConnection.ts       ← Hamlib 网络/串口实现
+  ├─ IcomWlanConnection.ts     ← ICOM WLAN 实现
+  └─ NullConnection.ts         ← 空对象模式
+radio/
+  ├─ PhysicalRadioManager.ts   ← 编排器（驱动电台状态机）
+  └─ FrequencyManager.ts       ← 频率管理
+state-machines/
+  ├─ types.ts                  ← EngineState/RadioState 枚举 + Context/Event 类型
+  ├─ engineStateMachine.ts     ← 引擎状态机 (IDLE↔STARTING→RUNNING→STOPPING)
+  └─ radioStateMachine.ts      ← 电台状态机 (DISCONNECTED↔CONNECTING↔CONNECTED↔RECONNECTING)
+routes/
+  └─ profiles.ts               ← Profile REST API
+```
 
 ### 发射时序系统 ⭐
 
