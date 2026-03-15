@@ -311,8 +311,8 @@ export async function resampleAudioProfessional(
       console.log(`🔄 [音频工具] 创建新的重采样器: ${inputSampleRate}Hz -> ${outputSampleRate}Hz, 质量=${quality}`);
     }
 
-    // 执行重采样
-    const resampled = resampler.simple(samples);
+    // 执行流式重采样（full API 保留跨块滤波器状态，避免块边界爆音）
+    const resampled = resampler.full(samples);
 
     return resampled;
 

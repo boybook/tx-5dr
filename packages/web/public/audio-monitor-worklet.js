@@ -32,11 +32,12 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
     this.underrunCount = 0; // 欠载（缓冲区空）次数
     this.overflowCount = 0; // 溢出次数
     this.frameCount = 0; // 帧计数器
+    this.consecutiveUnderrunFrames = 0; // 连续欠载帧计数
 
     // 播放状态控制
     this.isPlaying = false;
-    this.PREFILL_MS = 180;      // 预填充目标：180ms
-    this.MIN_BUFFER_MS = 100;   // 低水位阈值：100ms
+    this.PREFILL_MS = 80;       // 预填充目标：80ms（约4个20ms包）
+    this.MIN_BUFFER_MS = 30;    // 低水位阈值：30ms（仅用于日志）
     this.prefillComplete = false;
 
     // 接收来自主线程的消息
@@ -110,6 +111,7 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
       if (bufferMs >= this.PREFILL_MS) {
         this.isPlaying = true;
         this.prefillComplete = true;
+        this.consecutiveUnderrunFrames = 0;
         console.log(`▶️ [Worklet] 预填充完成 (${bufferMs.toFixed(1)}ms)，开始播放`);
       } else {
         // 继续静音，等待预填充
@@ -120,31 +122,21 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
       }
     }
 
-    // 低水位检查（只在预填充完成后才检查）
-    if (this.prefillComplete && bufferMs < this.MIN_BUFFER_MS) {
-      this.isPlaying = false;
-      console.warn(`⏸️ [Worklet] 缓冲区过低 (${bufferMs.toFixed(1)}ms)，暂停播放`);
-      for (let i = 0; i < samples; i++) {
-        output[i] = 0;
-      }
-      return;
-    }
-
-    // 正常播放
+    // 正常播放 — 不再有低水位硬暂停，缓冲区有数据就读，没数据用衰减填充
     let totalSquare = 0;
     let hadUnderrun = false;
-    let lastValidSample = 0;  // 记录上一个有效样本，用于平滑过渡
+    let lastValidSample = 0;
 
     for (let i = 0; i < samples; i++) {
       if (this.availableSamples > 0) {
         const sample = this.ringBuffer[this.readIndex];
         output[i] = sample;
-        lastValidSample = sample;  // 更新最后有效样本
+        lastValidSample = sample;
         totalSquare += sample * sample;
         this.readIndex = (this.readIndex + 1) % this.ringBufferSize;
         this.availableSamples--;
       } else {
-        // 使用平滑衰减代替直接填0，避免波形突变导致爆音
+        // 平滑衰减，避免波形突变导致爆音
         output[i] = lastValidSample * 0.9;
         lastValidSample *= 0.9;
         hadUnderrun = true;
@@ -153,6 +145,15 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
 
     if (hadUnderrun) {
       this.underrunCount++;
+      this.consecutiveUnderrunFrames++;
+      // 极端保护：连续欠载超过10帧（~27ms），暂停等待预填充
+      if (this.consecutiveUnderrunFrames > 10) {
+        this.isPlaying = false;
+        this.consecutiveUnderrunFrames = 0;
+        console.warn(`⏸️ [Worklet] 连续欠载，暂停等待预填充`);
+      }
+    } else {
+      this.consecutiveUnderrunFrames = 0;
     }
 
     if (samples > 0) {
