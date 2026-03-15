@@ -303,6 +303,15 @@ module.exports = {
         console.warn('⚠️ 精简 node_modules 遇到问题：', (err && err.message) || err);
       }
 
+      // ====== 清理 node_modules 内的 .npm 缓存（prebuild 下载缓存，含未签名二进制） ======
+      try {
+        console.log('🧹 正在清理 node_modules 内的 .npm 缓存...');
+        findAndRemoveDirs(nm, '.npm');
+        console.log('✅ .npm 缓存清理完成');
+      } catch (err) {
+        console.warn('⚠️ 清理 .npm 缓存遇到问题：', (err && err.message) || err);
+      }
+
       // ====== 清理 packages 子目录的 node_modules ======
       try {
         console.log('🧹 正在清理 packages/*/node_modules...');
