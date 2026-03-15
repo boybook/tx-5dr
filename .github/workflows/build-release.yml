@@ -202,7 +202,8 @@ jobs:
             tar -xJf ${PKG}
             SRC_DIR=$(echo node-v${NODE_VERSION}-darwin-${ARCH})
             install -m 0755 ${SRC_DIR}/bin/node resources/bin/${TRIPLET}/node
-            strip resources/bin/${TRIPLET}/node || true
+            # macOS strip -x: 只删除本地符号，保留 N-API 等导出符号（native 模块需要）
+            strip -x resources/bin/${TRIPLET}/node || true
             cp -f ${SRC_DIR}/LICENSE resources/licenses/nodejs-LICENSE || true
             # Clean up temporary archive and extracted directory to avoid packaging them
             rm -rf "${PKG}" "${SRC_DIR}"
