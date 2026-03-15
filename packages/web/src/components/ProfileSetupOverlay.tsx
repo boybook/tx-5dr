@@ -43,13 +43,19 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
   const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
 
-  const totalSteps = selectedType === 'icom-wlan' ? 3 : 4; // ICOM WLAN 跳过音频步骤
+  const totalSteps = 4;
   const progressValue = ((step + 1) / totalSteps) * 100;
 
   // 步骤1：选择类型后
   const handleSelectType = (type: RadioType) => {
     setSelectedType(type);
     setRadioConfig({ type } as HamlibConfig);
+    // ICOM WLAN 默认使用电台音频设备
+    if (type === 'icom-wlan') {
+      setAudioConfig({ inputDeviceName: 'ICOM WLAN', outputDeviceName: 'ICOM WLAN' });
+    } else {
+      setAudioConfig({});
+    }
     if (type === 'none') {
       // 无电台模式直接跳到音频
       setStep(2);
@@ -61,12 +67,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   // 下一步
   const handleNext = () => {
     if (step === 1) {
-      // 电台配置 → 音频 or 命名
-      if (selectedType === 'icom-wlan') {
-        setStep(3); // 跳过音频
-      } else {
-        setStep(2);
-      }
+      setStep(2);
     } else if (step === 2) {
       setStep(3);
     }
@@ -75,11 +76,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   // 上一步
   const handleBack = () => {
     if (step === 3) {
-      if (selectedType === 'icom-wlan') {
-        setStep(1);
-      } else {
-        setStep(2);
-      }
+      setStep(2);
     } else if (step === 2) {
       if (selectedType === 'none') {
         setStep(0);
@@ -216,8 +213,8 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
       placement="center"
       backdrop="blur"
       classNames={{
-        body: "px-4 sm:px-6",
-        header: "px-4 sm:px-6 py-3 sm:py-4",
+        body: "px-4 sm:px-6 pt-3 sm:pt-4 pb-5 sm:pb-6",
+        header: "px-4 sm:px-6 pt-5 sm:pt-6 pb-3 sm:pb-4",
         footer: "border-t border-divider px-4 sm:px-6 py-3 sm:py-4",
       }}
     >

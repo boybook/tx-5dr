@@ -6,6 +6,7 @@ import { QSORecordSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
 import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, RadioConnectionStatusSchema, ReconnectProgressSchema } from './radio.schema.js';
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
+import { UserRole } from './auth.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -97,6 +98,13 @@ export enum WSMessageType {
   // ===== Profile 管理 =====
   PROFILE_CHANGED = 'profileChanged',
   PROFILE_LIST_UPDATED = 'profileListUpdated',
+
+  // ===== 认证 =====
+  AUTH_REQUIRED = 'authRequired',
+  AUTH_TOKEN = 'authToken',
+  AUTH_PUBLIC_VIEWER = 'authPublicViewer',
+  AUTH_RESULT = 'authResult',
+  AUTH_EXPIRED = 'authExpired',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -802,6 +810,70 @@ export const WSTunerStatusChangedMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSTunerStatusChangedMessage = z.infer<typeof WSTunerStatusChangedMessageSchema>;
 
+// ===== 认证相关消息 =====
+
+/**
+ * 服务端要求认证（连接建立后发送）
+ */
+export const WSAuthRequiredMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUTH_REQUIRED),
+  data: z.object({
+    allowPublicViewing: z.boolean(),
+  }),
+});
+
+export type WSAuthRequiredMessage = z.infer<typeof WSAuthRequiredMessageSchema>;
+
+/**
+ * 客户端发送 JWT 进行认证（登录或权限升级）
+ */
+export const WSAuthTokenMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUTH_TOKEN),
+  data: z.object({
+    jwt: z.string(),
+  }),
+});
+
+export type WSAuthTokenMessage = z.infer<typeof WSAuthTokenMessageSchema>;
+
+/**
+ * 客户端选择公开观察者模式
+ */
+export const WSAuthPublicViewerMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUTH_PUBLIC_VIEWER),
+  data: z.object({}).optional(),
+});
+
+export type WSAuthPublicViewerMessage = z.infer<typeof WSAuthPublicViewerMessageSchema>;
+
+/**
+ * 认证结果（服务端到客户端）
+ */
+export const WSAuthResultMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUTH_RESULT),
+  data: z.object({
+    success: z.boolean(),
+    role: z.nativeEnum(UserRole).optional(),
+    label: z.string().optional(),
+    operatorIds: z.array(z.string()).optional(),
+    error: z.string().optional(),
+  }),
+});
+
+export type WSAuthResultMessage = z.infer<typeof WSAuthResultMessageSchema>;
+
+/**
+ * JWT 过期通知（服务端到客户端）
+ */
+export const WSAuthExpiredMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUTH_EXPIRED),
+  data: z.object({
+    reason: z.string().optional(),
+  }),
+});
+
+export type WSAuthExpiredMessage = z.infer<typeof WSAuthExpiredMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -879,6 +951,13 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 天线调谐器消息
   WSTunerStatusChangedMessageSchema,
+
+  // 认证消息
+  WSAuthRequiredMessageSchema,
+  WSAuthTokenMessageSchema,
+  WSAuthPublicViewerMessageSchema,
+  WSAuthResultMessageSchema,
+  WSAuthExpiredMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -993,4 +1072,9 @@ export interface DigitalRadioEngineEvents {
   // Profile 管理事件
   profileChanged: (data: z.infer<typeof ProfileChangedEventSchema>) => void;
   profileListUpdated: (data: { profiles: z.infer<typeof RadioProfileSchema>[]; activeProfileId: string | null }) => void;
+
+  // 认证事件
+  authRequired: (data: { allowPublicViewing: boolean }) => void;
+  authResult: (data: { success: boolean; role?: UserRole; label?: string; operatorIds?: string[]; error?: string }) => void;
+  authExpired: (data: { reason?: string }) => void;
 } 

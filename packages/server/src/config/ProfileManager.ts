@@ -28,11 +28,11 @@ export class ProfileManager {
     const configManager = ConfigManager.getInstance();
     const now = Date.now();
 
-    // ICOM WLAN 模式下自动锁定音频
+    // ICOM WLAN 模式下，仅在用户未指定音频设备时默认使用 ICOM WLAN 虚拟设备
     const audioLockedToRadio = data.radio.type === 'icom-wlan';
     let audio: AudioDeviceSettings = data.audio || { sampleRate: 48000, bufferSize: 768 };
 
-    if (audioLockedToRadio) {
+    if (audioLockedToRadio && !audio.inputDeviceName && !audio.outputDeviceName) {
       audio = {
         ...audio,
         inputDeviceName: 'ICOM WLAN',
@@ -66,22 +66,19 @@ export class ProfileManager {
   async updateProfile(id: string, updates: UpdateProfileRequest): Promise<RadioProfile> {
     const configManager = ConfigManager.getInstance();
 
-    // 如果更新了电台类型为 icom-wlan，自动锁定音频
+    // 如果更新了电台类型为 icom-wlan，标记锁定但不强制覆盖用户的音频设备选择
     if (updates.radio?.type === 'icom-wlan') {
       updates.audioLockedToRadio = true;
+      // 仅在未提供音频配置时默认设置 ICOM WLAN 虚拟设备
       if (!updates.audio) {
         const existing = configManager.getProfile(id);
-        updates.audio = {
-          ...(existing?.audio || { sampleRate: 48000, bufferSize: 768 }),
-          inputDeviceName: 'ICOM WLAN',
-          outputDeviceName: 'ICOM WLAN',
-        };
-      } else {
-        updates.audio = {
-          ...updates.audio,
-          inputDeviceName: 'ICOM WLAN',
-          outputDeviceName: 'ICOM WLAN',
-        };
+        if (!existing?.audio?.inputDeviceName && !existing?.audio?.outputDeviceName) {
+          updates.audio = {
+            ...(existing?.audio || { sampleRate: 48000, bufferSize: 768 }),
+            inputDeviceName: 'ICOM WLAN',
+            outputDeviceName: 'ICOM WLAN',
+          };
+        }
       }
     }
 
@@ -176,6 +173,16 @@ export class ProfileManager {
       profile,
       wasRunning,
     };
+  }
+
+  /**
+   * 重排 Profile 顺序
+   */
+  async reorderProfiles(orderedIds: string[]): Promise<void> {
+    const configManager = ConfigManager.getInstance();
+    await configManager.reorderProfiles(orderedIds);
+    console.log(`✅ [ProfileManager] Profile 顺序已更新`);
+    this.broadcastProfileListUpdated();
   }
 
   /**

@@ -3,18 +3,20 @@ import { LeftLayout } from './layout/LeftLayout';
 import { RightLayout } from './layout/RightLayout';
 import { SplitLayout } from './components/SplitLayout';
 import { RadioProvider, useRadioState, useProfiles, useConnection } from './store/radioStore';
+import { AuthProvider, useAuth } from './store/authStore';
 import { useTheme } from './hooks/useTheme';
 import { ProfileSetupOverlay } from './components/ProfileSetupOverlay';
 import { ServerDisconnectedOverlay } from './components/ServerDisconnectedOverlay';
+import { LoginPage } from './pages/LoginPage';
 
 function AppContent() {
   const { state } = useRadioState();
   const { pttStatus } = state;
-  const { profiles } = useProfiles();
+  const { profiles, profilesLoaded } = useProfiles();
   const { state: connectionState } = useConnection();
 
-  // 首次使用引导：已连接服务器且 Profile 为空时显示
-  const showSetupOverlay = connectionState.isConnected && profiles.length === 0;
+  // 首次使用引导：已连接服务器且 Profile 数据已加载且为空时显示
+  const showSetupOverlay = connectionState.isConnected && profilesLoaded && profiles.length === 0;
 
   return (
     <div className="App h-screen w-full overflow-hidden relative">
@@ -38,16 +40,45 @@ function AppContent() {
         maxLeftWidth={75}
       />
 
-      {/* 服务器断连蒙层 */}
-      <ServerDisconnectedOverlay
-        isConnected={connectionState.isConnected}
-        isConnecting={connectionState.isConnecting}
-        radioService={connectionState.radioService}
-      />
+      {/* 服务器断连蒙层：仅在曾经连接成功后断线时显示，避免首次加载闪烁 */}
+      {connectionState.wasEverConnected && (
+        <ServerDisconnectedOverlay
+          isConnected={connectionState.isConnected}
+          isConnecting={connectionState.isConnecting}
+          radioService={connectionState.radioService}
+        />
+      )}
 
       {/* 首次使用引导 */}
       <ProfileSetupOverlay isOpen={showSetupOverlay} />
     </div>
+  );
+}
+
+/**
+ * 认证门户：根据认证状态决定显示登录页还是主界面
+ */
+function AuthGate() {
+  const { state, requiresLogin } = useAuth();
+
+  // 初始化中 — 显示空白（避免闪烁）
+  if (!state.initialized) {
+    return null;
+  }
+
+  // 需要登录（认证启用 + 不允许公开查看 + 未认证）
+  if (requiresLogin) {
+    return <LoginPage />;
+  }
+
+  // 已认证或公开观察者模式 — 显示主界面
+  // key 随身份变化：jwt 变化或 publicViewer 切换时强制重建 RadioProvider（重连 WebSocket）
+  const authKey = state.jwt || (state.isPublicViewer ? 'public' : 'anon');
+
+  return (
+    <RadioProvider key={authKey}>
+      <AppContent />
+    </RadioProvider>
   );
 }
 
@@ -56,10 +87,10 @@ function App() {
   useTheme();
 
   return (
-    <RadioProvider>
-      <AppContent />
-    </RadioProvider>
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }
 
-export default App; 
+export default App;

@@ -444,6 +444,23 @@ export class ConfigManager {
   }
 
   /**
+   * 重排 Profile 顺序
+   */
+  async reorderProfiles(orderedIds: string[]): Promise<void> {
+    const profileMap = new Map(this.config.profiles.map(p => [p.id, p]));
+    const reordered = orderedIds
+      .map(id => profileMap.get(id))
+      .filter((p): p is RadioProfile => p !== undefined);
+
+    if (reordered.length !== this.config.profiles.length) {
+      throw new Error('排序列表与现有 Profile 不匹配');
+    }
+
+    this.config.profiles = reordered;
+    await this.saveConfig();
+  }
+
+  /**
    * 设置激活的 Profile ID
    */
   async setActiveProfileId(id: string | null): Promise<void> {

@@ -9,6 +9,10 @@ import type { HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
 import { ConfigManager } from './config/config-manager.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
+import { UserRole } from '@tx5dr/contracts';
+import { AuthManager } from './auth/AuthManager.js';
+import { authPlugin, withRole } from './auth/authPlugin.js';
+import { authRoutes } from './routes/auth.js';
 import { audioRoutes } from './routes/audio.js';
 import { slotpackRoutes } from './routes/slotpack.js';
 import { modeRoutes } from './routes/mode.js';
@@ -110,6 +114,15 @@ export async function createServer() {
   const configManager = ConfigManager.getInstance();
   await configManager.initialize();
   fastify.log.info('配置管理器初始化完成');
+
+  // 初始化认证管理器
+  const authManager = AuthManager.getInstance();
+  await authManager.initialize();
+  fastify.log.info('认证管理器初始化完成');
+
+  // 注册认证插件（全局 JWT 验证）
+  await fastify.register(authPlugin);
+  fastify.log.info('认证插件注册完成');
 
   // 初始化数字无线电引擎
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
@@ -233,59 +246,39 @@ export async function createServer() {
     return { message: 'Hello World' };
   });
 
-  // 注册音频设备API路由
-  await fastify.register(audioRoutes, { prefix: '/api/audio' });
-  fastify.log.info('音频设备API路由注册完成');
+  // ===== 路由注册（带权限保护） =====
 
-  // 注册时隙包管理API路由
-  await fastify.register(slotpackRoutes, { prefix: '/api/slotpack' });
-  fastify.log.info('时隙包管理API路由注册完成');
+  // Admin 路由：音频、Profile、设置、存储、第三方服务
+  await fastify.register(async (scope) => {
+    await scope.register(withRole(UserRole.ADMIN));
+    await scope.register(audioRoutes, { prefix: '/api/audio' });
+    await scope.register(profileRoutes, { prefix: '/api/profiles' });
+    await scope.register(settingsRoutes, { prefix: '/api/settings' });
+    const { storageRoutes } = await import('./routes/storage.js');
+    await scope.register(storageRoutes, { prefix: '/api/storage' });
+    await scope.register(waveLogRoutes, { prefix: '/api/wavelog' });
+    await scope.register(qrzRoutes, { prefix: '/api/qrz' });
+    await scope.register(lotwRoutes, { prefix: '/api/lotw' });
+    const { pskreporterRoutes } = await import('./routes/pskreporter.js');
+    await scope.register(pskreporterRoutes, { prefix: '/api' });
+  });
+  fastify.log.info('Admin 路由注册完成（audio, profiles, settings, storage, wavelog, qrz, lotw, pskreporter）');
 
-  // 注册模式管理API路由
-  await fastify.register(modeRoutes, { prefix: '/api/mode' });
-  fastify.log.info('模式管理API路由注册完成');
+  // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、日志本
+  await fastify.register(async (scope) => {
+    await scope.register(withRole(UserRole.VIEWER));
+    await scope.register(operatorRoutes, { prefix: '/api/operators' });
+    await scope.register(radioRoutes, { prefix: '/api/radio' });
+    await scope.register(modeRoutes, { prefix: '/api/mode' });
+    await scope.register(slotpackRoutes, { prefix: '/api/slotpack' });
+    const { logbookRoutes } = await import('./routes/logbooks.js');
+    await scope.register(logbookRoutes, { prefix: '/api/logbooks' });
+  });
+  fastify.log.info('Viewer+ 路由注册完成（operators, radio, mode, slotpack, logbooks）');
 
-  // 注册操作员管理API路由
-  await fastify.register(operatorRoutes, { prefix: '/api/operators' });
-  fastify.log.info('操作员管理API路由注册完成');
-
-  await fastify.register(radioRoutes, { prefix: '/api/radio' });
-  fastify.log.info('电台控制API路由注册完成');
-
-  // 注册WaveLog同步API路由
-  await fastify.register(waveLogRoutes, { prefix: '/api/wavelog' });
-  fastify.log.info('WaveLog同步API路由注册完成');
-
-  // 注册QRZ.com同步API路由
-  await fastify.register(qrzRoutes, { prefix: '/api/qrz' });
-  fastify.log.info('QRZ.com同步API路由注册完成');
-
-  // 注册LoTW同步API路由
-  await fastify.register(lotwRoutes, { prefix: '/api/lotw' });
-  fastify.log.info('LoTW同步API路由注册完成');
-
-  // 注册日志本管理API路由
-  const { logbookRoutes } = await import('./routes/logbooks.js');
-  await fastify.register(logbookRoutes, { prefix: '/api/logbooks' });
-  fastify.log.info('日志本管理API路由注册完成');
-
-  // 注册存储管理API路由
-  const { storageRoutes } = await import('./routes/storage.js');
-  await fastify.register(storageRoutes, { prefix: '/api/storage' });
-  fastify.log.info('存储管理API路由注册完成');
-
-  // 注册设置管理API路由
-  await fastify.register(settingsRoutes, { prefix: '/api/settings' });
-  fastify.log.info('设置管理API路由注册完成');
-
-  // 注册 Profile 管理API路由
-  await fastify.register(profileRoutes, { prefix: '/api/profiles' });
-  fastify.log.info('Profile管理API路由注册完成');
-
-  // 注册PSKReporter管理API路由
-  const { pskreporterRoutes } = await import('./routes/pskreporter.js');
-  await fastify.register(pskreporterRoutes, { prefix: '/api' });
-  fastify.log.info('PSKReporter管理API路由注册完成');
+  // 公开路由：认证
+  await fastify.register(authRoutes, { prefix: '/api/auth' });
+  fastify.log.info('认证路由注册完成');
 
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {

@@ -4,6 +4,7 @@ import { ModeDescriptorSchema } from './mode.schema.js';
 // 操作员配置 Schema (重命名以避免冲突)
 export const RadioOperatorConfigSchema = z.object({
   id: z.string().min(1, '操作员ID不能为空'),
+  createdByTokenId: z.string().optional(), // 创建者 Token ID（仅用于审计，不参与权限判断）
   myCallsign: z.string().min(1, '呼号不能为空').max(10, '呼号不能超过10个字符'),
   myGrid: z.string().min(4, '网格坐标至少4位').max(8, '网格坐标不能超过8位').optional(),
   frequency: z.number().min(0).max(1000000000, '频率必须在0-1GHz之间').default(1000), // 音频偏移频率（Hz），默认1000Hz，创建时自动分配不重复值
@@ -19,14 +20,16 @@ export const RadioOperatorConfigSchema = z.object({
   logBookId: z.string().optional(), // 连接的日志本ID，如果未指定则使用默认日志本
 });
 
-// 创建操作员请求
+// 创建操作员请求（客户端不能指定 id 和 createdByTokenId，由服务端自动设置）
 export const CreateRadioOperatorRequestSchema = RadioOperatorConfigSchema.omit({
   id: true,
+  createdByTokenId: true,
 });
 
-// 更新操作员请求
+// 更新操作员请求（客户端不能修改 id 和 createdByTokenId）
 export const UpdateRadioOperatorRequestSchema = RadioOperatorConfigSchema.partial().omit({
   id: true,
+  createdByTokenId: true,
 });
 
 // 操作员列表响应

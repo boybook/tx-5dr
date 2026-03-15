@@ -8,8 +8,9 @@ import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { api, ApiError } from '@tx5dr/core';
 import type { ModeDescriptor, TunerStatus, TunerCapabilities } from '@tx5dr/contracts';
 import type { ConnectionState, RadioState } from '../store/radioStore';
-import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
+import { useHasMinRole } from '../store/authStore';
 import { useState, useEffect } from 'react';
 
 interface FrequencyOption {
@@ -28,7 +29,7 @@ export const SelectorIcon = (_props: React.SVGProps<SVGSVGElement>) => {
 };
 
 // 电台连接状态指示器组件
-const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null; onPress?: () => void }> = ({ connection, radio, profileName, onPress }) => {
+const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null; onPress?: () => void; canConfigure?: boolean; canOperate?: boolean }> = ({ connection, radio, profileName, onPress, canConfigure = true, canOperate = true }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
 
@@ -134,17 +135,19 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
             <span className="text-sm text-warning">
               {label} 重连中{progress ? ` (${progress.attempt}/${progress.maxAttempts})` : ''}...
             </span>
-            <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
-              <Button
-                size="sm"
-                color="warning"
-                variant="flat"
-                onPress={() => connection.radioService?.stopReconnect()}
-                className="h-6 px-2 text-xs"
-              >
-                停止
-              </Button>
-            </span>
+            {canOperate && (
+              <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                <Button
+                  size="sm"
+                  color="warning"
+                  variant="flat"
+                  onPress={() => connection.radioService?.stopReconnect()}
+                  className="h-6 px-2 text-xs"
+                >
+                  停止
+                </Button>
+              </span>
+            )}
           </div>
         );
       }
@@ -154,17 +157,19 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-danger text-xs" />
             <span className="text-sm text-danger">{label} 连接丢失</span>
-            <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
-              <Button
-                size="sm"
-                color="danger"
-                variant="flat"
-                onPress={() => connection.radioService?.startDecoding()}
-                className="h-6 px-2 text-xs"
-              >
-                重连
-              </Button>
-            </span>
+            {canOperate && (
+              <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                <Button
+                  size="sm"
+                  color="danger"
+                  variant="flat"
+                  onPress={() => connection.radioService?.startDecoding()}
+                  className="h-6 px-2 text-xs"
+                >
+                  重连
+                </Button>
+              </span>
+            )}
           </div>
         );
 
@@ -174,7 +179,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-default-400 text-xs" />
             <span className="text-sm text-default-500">{label} 未连接</span>
-            {radio.state.radioConfig?.type && radio.state.radioConfig.type !== 'none' && !radio.state.isDecoding && (
+            {canOperate && radio.state.radioConfig?.type && radio.state.radioConfig.type !== 'none' && !radio.state.isDecoding && (
               <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
                 <Button
                   size="sm"
@@ -192,14 +197,22 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
     }
   };
 
+  if (canConfigure) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        className="flex items-center gap-2 rounded-md px-2 -mx-2 py-1 -my-1 transition-colors hover:bg-default-200 active:bg-default-300 cursor-pointer"
+        onClick={onPress}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress?.(); } }}
+      >
+        {renderStatus()}
+      </div>
+    );
+  }
+
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      className="flex items-center gap-2 rounded-md px-2 -mx-2 py-1 -my-1 transition-colors hover:bg-default-200 active:bg-default-300 cursor-pointer"
-      onClick={onPress}
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress?.(); } }}
-    >
+    <div className="flex items-center gap-2 px-2 -mx-2 py-1 -my-1">
       {renderStatus()}
     </div>
   );
@@ -214,6 +227,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const radio = useRadioState();
   const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
+  const isOperator = useHasMinRole(UserRole.OPERATOR);
   const [isErrorHistoryOpen, setIsErrorHistoryOpen] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeDescriptor[]>([]);
   const [isLoadingModes, setIsLoadingModes] = useState(false);
@@ -1293,48 +1308,52 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <RadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} onPress={onOpenRadioSettings} />
+          <RadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} onPress={isAdmin ? onOpenRadioSettings : undefined} canConfigure={isAdmin} canOperate={isOperator} />
           <div className="flex items-center gap-0">
-            <Button
-              isIconOnly
-              variant="light"
-              size="sm"
-              className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
-              aria-label="电台设置"
-              onPress={onOpenRadioSettings}
-            >
-              <FontAwesomeIcon icon={faCog} className="text-xs" />
-            </Button>
-            <Popover>
-              <PopoverTrigger>
-                <Button
-                  isIconOnly
-                  variant="light"
-                  size="sm"
-                  className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
-                  aria-label="发射音量增益"
-                >
-                  <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="py-2 pt-3 space-y-1">
-                <Slider
-                  orientation="vertical"
-                  minValue={-60}
-                  maxValue={20}
-                  step={0.1}
-                  value={[gainToDb(volumeGain)]}
-                  onChange={handleVolumeChange}
-                  style={{
-                    height: '120px'
-                  }}
-                  aria-label='音量控制'
-                />
-                <div className="text-sm text-default-400 text-center font-mono">
-                  {formatDbDisplay(gainToDb(volumeGain))}
-                </div>
-              </PopoverContent>
-            </Popover>
+            {isAdmin && (
+              <Button
+                isIconOnly
+                variant="light"
+                size="sm"
+                className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
+                aria-label="电台设置"
+                onPress={onOpenRadioSettings}
+              >
+                <FontAwesomeIcon icon={faCog} className="text-xs" />
+              </Button>
+            )}
+            {isOperator && (
+              <Popover>
+                <PopoverTrigger>
+                  <Button
+                    isIconOnly
+                    variant="light"
+                    size="sm"
+                    className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
+                    aria-label="发射音量增益"
+                  >
+                    <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="py-2 pt-3 space-y-1">
+                  <Slider
+                    orientation="vertical"
+                    minValue={-60}
+                    maxValue={20}
+                    step={0.1}
+                    value={[gainToDb(volumeGain)]}
+                    onChange={handleVolumeChange}
+                    style={{
+                      height: '120px'
+                    }}
+                    aria-label='音量控制'
+                  />
+                  <div className="text-sm text-default-400 text-center font-mono">
+                    {formatDbDisplay(gainToDb(volumeGain))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
             <Popover>
               <PopoverTrigger>
                 <Button
@@ -1524,72 +1543,88 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       <div className="flex items-center">
         {/* 左侧选择器 */}
         <div className="flex gap-1 flex-1 -ml-3">
-          <Select
-            disableSelectorIconRotation
-            className="w-[200px]"
-            labelPlacement="outside"
-            placeholder={radio.state.currentMode ? `${radio.state.currentMode.name} 频率` : "频率"}
-            selectorIcon={<SelectorIcon />}
-            selectedKeys={[currentFrequency]}
-            variant="flat"
-            size="md"
-            radius="md"
-            aria-label="选择频率"
-            classNames={{
-              trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
-              value: "font-bold text-lg",
-              innerWrapper: "shadow-none",
-              mainWrapper: "shadow-none"
-            }}
-            isDisabled={!connection.state.isConnected || isLoadingFrequencies || !radio.state.currentMode}
-            isLoading={isLoadingFrequencies}
-            onSelectionChange={handleFrequencyChange}
-            renderValue={() => {
-              // 直接在 filteredFrequencies 中查找（现在包含了自定义频率）
-              const selectedFreq = filteredFrequencies.find(f => f.key === currentFrequency);
-              return selectedFreq ? <span className="font-bold text-lg">{selectedFreq.label}</span> : null;
-            }}
-          >
-            {[...filteredFrequencies.map((frequency) => (
-              <SelectItem key={frequency.key} textValue={frequency.label}>
-                {frequency.label}
-              </SelectItem>
-            )),
-            <SelectItem key="__custom__" textValue="自定义频率..." className="text-primary">
-              自定义频率...
-            </SelectItem>]}
-          </Select>
-          <Select
-            disableSelectorIconRotation
-            className="w-[88px]"
-            labelPlacement="outside"
-            placeholder={modeError || "通联模式"}
-            selectorIcon={<SelectorIcon />}
-            selectedKeys={radio.state.currentMode ? [radio.state.currentMode.name] : []}
-            variant="flat"
-            size="md"
-            radius="md"
-            aria-label="选择通联模式"
-            classNames={{
-              trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
-              value: "font-bold text-lg",
-              innerWrapper: "shadow-none",
-              mainWrapper: "shadow-none"
-            }}
-            isDisabled={!connection.state.isConnected || isLoadingModes}
-            onSelectionChange={handleModeChange}
-            isLoading={isLoadingModes}
-          >
-            {availableModes?.filter(mode => mode && mode.name).map((mode) => (
-              <SelectItem 
-                key={mode.name} 
-                textValue={mode.name}
-                className="text-xs py-1 px-2 min-h-6"
-              >
-                {mode.name}
-              </SelectItem>
-            ))}
-          </Select>
+          {isAdmin ? (
+            <Select
+              disableSelectorIconRotation
+              className="w-[200px]"
+              labelPlacement="outside"
+              placeholder={radio.state.currentMode ? `${radio.state.currentMode.name} 频率` : "频率"}
+              selectorIcon={<SelectorIcon />}
+              selectedKeys={[currentFrequency]}
+              variant="flat"
+              size="md"
+              radius="md"
+              aria-label="选择频率"
+              classNames={{
+                trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
+                value: "font-bold text-lg",
+                innerWrapper: "shadow-none",
+                mainWrapper: "shadow-none"
+              }}
+              isDisabled={!connection.state.isConnected || isLoadingFrequencies || !radio.state.currentMode}
+              isLoading={isLoadingFrequencies}
+              onSelectionChange={handleFrequencyChange}
+              renderValue={() => {
+                // 直接在 filteredFrequencies 中查找（现在包含了自定义频率）
+                const selectedFreq = filteredFrequencies.find(f => f.key === currentFrequency);
+                return selectedFreq ? <span className="font-bold text-lg">{selectedFreq.label}</span> : null;
+              }}
+            >
+              {[...filteredFrequencies.map((frequency) => (
+                <SelectItem key={frequency.key} textValue={frequency.label}>
+                  {frequency.label}
+                </SelectItem>
+              )),
+              <SelectItem key="__custom__" textValue="自定义频率..." className="text-primary">
+                自定义频率...
+              </SelectItem>]}
+            </Select>
+          ) : (
+            <div className="flex items-center pl-3 pr-2 h-10 cursor-not-allowed">
+              <span className="font-bold text-lg text-default-foreground truncate">
+                {filteredFrequencies.find(f => f.key === currentFrequency)?.label || ''}
+              </span>
+            </div>
+          )}
+          {isAdmin ? (
+            <Select
+              disableSelectorIconRotation
+              className="w-[88px]"
+              labelPlacement="outside"
+              placeholder={modeError || "通联模式"}
+              selectorIcon={<SelectorIcon />}
+              selectedKeys={radio.state.currentMode ? [radio.state.currentMode.name] : []}
+              variant="flat"
+              size="md"
+              radius="md"
+              aria-label="选择通联模式"
+              classNames={{
+                trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
+                value: "font-bold text-lg",
+                innerWrapper: "shadow-none",
+                mainWrapper: "shadow-none"
+              }}
+              isDisabled={!connection.state.isConnected || isLoadingModes}
+              onSelectionChange={handleModeChange}
+              isLoading={isLoadingModes}
+            >
+              {availableModes?.filter(mode => mode && mode.name).map((mode) => (
+                <SelectItem
+                  key={mode.name}
+                  textValue={mode.name}
+                  className="text-xs py-1 px-2 min-h-6"
+                >
+                  {mode.name}
+                </SelectItem>
+              ))}
+            </Select>
+          ) : (
+            <div className="flex items-center px-2 h-10 cursor-not-allowed">
+              <span className="font-bold text-lg text-default-foreground">
+                {radio.state.currentMode?.name || ''}
+              </span>
+            </div>
+          )}
         </div>
         
         {/* 右侧开关 */}

@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { WSMessageType, RadioConnectionStatus } from '@tx5dr/contracts';
+import { WSMessageType, RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type {
   DecodeErrorInfo,
   FT8Spectrum,
+  JWTPayload,
   ModeDescriptor,
   SlotInfo,
   SlotPack,
@@ -15,6 +16,7 @@ import { WSMessageHandler } from '@tx5dr/core';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { globalEventBus } from '../utils/EventBus.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
+import { AuthManager } from '../auth/AuthManager.js';
 
 /**
  * WebSocket连接包装器
@@ -36,6 +38,13 @@ export class WSConnection extends WSMessageHandler {
   private id: string;
   private enabledOperatorIds: Set<string> = new Set(); // 客户端启用的操作员ID列表
   private handshakeCompleted: boolean = false; // 握手是否完成
+
+  // 认证状态
+  private authenticated: boolean = false;
+  private userRole: UserRole | null = null;
+  private authorizedOperatorIds: Set<string> = new Set(); // Token 授予的操作员权限
+  private authLabel: string = '';
+  private tokenId: string | null = null; // 用于懒查询最新权限
 
   // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
   private wsListeners: Map<string, (...args: unknown[]) => void> = new Map();
@@ -149,6 +158,109 @@ export class WSConnection extends WSMessageHandler {
   isHandshakeCompleted(): boolean {
     return this.handshakeCompleted;
   }
+
+  // ===== 认证方法 =====
+
+  /**
+   * 设置为已认证用户
+   */
+  setAuthenticated(role: UserRole, operatorIds: string[], label: string, tokenId?: string): void {
+    this.authenticated = true;
+    this.userRole = role;
+    this.authorizedOperatorIds = new Set(operatorIds);
+    this.authLabel = label;
+    if (tokenId) this.tokenId = tokenId;
+    console.log(`🔑 [WSConnection] 连接 ${this.id} 已认证: role=${role}, label=${label}, operators=[${operatorIds.join(', ')}]`);
+  }
+
+  /**
+   * 设置为公开观察者（未认证但允许查看）
+   */
+  setPublicViewer(): void {
+    this.authenticated = false;
+    this.userRole = UserRole.VIEWER;
+    this.authorizedOperatorIds = new Set(); // 公开观察者无操作员权限
+    this.authLabel = '公开观察者';
+    console.log(`👁️ [WSConnection] 连接 ${this.id} 设置为公开观察者`);
+  }
+
+  /**
+   * 设置为 Admin（认证未启用时）
+   */
+  setAdminBypass(): void {
+    this.authenticated = true;
+    this.userRole = UserRole.ADMIN;
+    this.authorizedOperatorIds = new Set();
+    this.authLabel = '本地管理员';
+  }
+
+  isAuthenticated(): boolean { return this.authenticated; }
+  getUserRole(): UserRole | null { return this.userRole; }
+  getAuthLabel(): string { return this.authLabel; }
+  getAuthorizedOperatorIds(): string[] { return Array.from(this.authorizedOperatorIds); }
+
+  /**
+   * 检查是否有最低角色权限
+   */
+  hasMinRole(minRole: UserRole): boolean {
+    if (!this.userRole) return false;
+    return AuthManager.hasMinRole(this.userRole, minRole);
+  }
+
+  /**
+   * 检查是否有操作员访问权限（懒查询：实时从 AuthManager 获取最新 operatorIds）
+   */
+  hasOperatorAccess(operatorId: string): boolean {
+    if (!this.userRole) return false;
+    if (this.userRole === UserRole.ADMIN) return true;
+
+    // 懒查询：优先使用 AuthManager 中的最新权限（处理操作员增删后的动态变化）
+    if (this.tokenId) {
+      const authManager = AuthManager.getInstance();
+      const perms = authManager.getTokenCurrentPermissions(this.tokenId);
+      if (perms) {
+        return perms.operatorIds.includes(operatorId);
+      }
+    }
+
+    // 降级：使用认证时的快照
+    return this.authorizedOperatorIds.has(operatorId);
+  }
+
+  getTokenId(): string | null { return this.tokenId; }
+
+  /**
+   * 完成握手（考虑权限过滤）
+   * Admin 不做交集过滤，其他角色取 requestedIds ∩ authorizedOperatorIds
+   */
+  completeHandshakeWithAuth(requestedIds: string[]): void {
+    if (this.userRole === UserRole.ADMIN) {
+      // Admin: 直接使用请求的 ID（不限制）
+      this.enabledOperatorIds = new Set(requestedIds);
+    } else {
+      // 其他角色: 取交集（使用懒查询获取最新权限）
+      const currentAuthorized = this.getCurrentAuthorizedOperatorIds();
+      this.enabledOperatorIds = new Set(
+        requestedIds.filter(id => currentAuthorized.has(id))
+      );
+    }
+    this.handshakeCompleted = true;
+    console.log(`🤝 [WSConnection] 连接 ${this.id} 握手完成（含权限），启用操作员: [${this.getEnabledOperatorIds().join(', ')}]`);
+  }
+
+  /**
+   * 获取当前最新的授权操作员 ID（优先从 AuthManager 懒查询）
+   */
+  private getCurrentAuthorizedOperatorIds(): Set<string> {
+    if (this.tokenId) {
+      const authManager = AuthManager.getInstance();
+      const perms = authManager.getTokenCurrentPermissions(this.tokenId);
+      if (perms) {
+        return new Set(perms.operatorIds);
+      }
+    }
+    return this.authorizedOperatorIds;
+  }
 }
 
 /**
@@ -198,6 +310,8 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
+      [WSMessageType.AUTH_TOKEN]: (data, id) => this.handleAuthToken(id, data),
+      [WSMessageType.AUTH_PUBLIC_VIEWER]: (_data, id) => this.handleAuthPublicViewer(id),
     };
   }
 
@@ -381,12 +495,78 @@ export class WSServer extends WSMessageHandler {
     });
   }
 
+  // WebSocket 命令所需的最低角色
+  private static readonly COMMAND_ROLES: Partial<Record<WSMessageType, UserRole>> = {
+    [WSMessageType.START_ENGINE]: UserRole.ADMIN,
+    [WSMessageType.STOP_ENGINE]: UserRole.ADMIN,
+    [WSMessageType.SET_MODE]: UserRole.ADMIN,
+    [WSMessageType.SET_VOLUME_GAIN]: UserRole.OPERATOR,
+    [WSMessageType.SET_VOLUME_GAIN_DB]: UserRole.OPERATOR,
+    [WSMessageType.RADIO_MANUAL_RECONNECT]: UserRole.ADMIN,
+    [WSMessageType.RADIO_STOP_RECONNECT]: UserRole.ADMIN,
+    [WSMessageType.FORCE_STOP_TRANSMISSION]: UserRole.ADMIN,
+    [WSMessageType.START_OPERATOR]: UserRole.OPERATOR,
+    [WSMessageType.STOP_OPERATOR]: UserRole.OPERATOR,
+    [WSMessageType.SET_OPERATOR_CONTEXT]: UserRole.OPERATOR,
+    [WSMessageType.SET_OPERATOR_SLOT]: UserRole.OPERATOR,
+    [WSMessageType.USER_COMMAND]: UserRole.OPERATOR,
+    [WSMessageType.OPERATOR_REQUEST_CALL]: UserRole.OPERATOR,
+  };
+
+  // 需要操作员访问权限检查的命令
+  private static readonly OPERATOR_ACCESS_COMMANDS = new Set([
+    WSMessageType.START_OPERATOR,
+    WSMessageType.STOP_OPERATOR,
+    WSMessageType.SET_OPERATOR_CONTEXT,
+    WSMessageType.SET_OPERATOR_SLOT,
+    WSMessageType.USER_COMMAND,
+    WSMessageType.OPERATOR_REQUEST_CALL,
+  ]);
+
   /**
-   * 处理客户端命令
+   * 处理客户端命令（含权限检查）
    */
   private async handleClientCommand(connectionId: string, message: { type: string; data: unknown }): Promise<void> {
     console.log(`📥 [WSServer] 收到客户端命令: ${message.type}, 连接: ${connectionId}`);
-    const handler = this.commandHandlers[message.type as WSMessageType];
+
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+
+    const msgType = message.type as WSMessageType;
+
+    // 认证命令始终允许
+    if (msgType === WSMessageType.AUTH_TOKEN || msgType === WSMessageType.AUTH_PUBLIC_VIEWER) {
+      const handler = this.commandHandlers[msgType];
+      if (handler) await handler(message.data, connectionId);
+      return;
+    }
+
+    // 角色权限检查
+    const requiredRole = WSServer.COMMAND_ROLES[msgType];
+    if (requiredRole && !connection.hasMinRole(requiredRole)) {
+      connection.send(WSMessageType.ERROR, {
+        message: '权限不足',
+        code: 'FORBIDDEN',
+        details: { command: message.type, requiredRole },
+      });
+      return;
+    }
+
+    // 操作员访问权限检查
+    if (WSServer.OPERATOR_ACCESS_COMMANDS.has(msgType)) {
+      const data = message.data as any;
+      const operatorId = data?.operatorId;
+      if (operatorId && !connection.hasOperatorAccess(operatorId)) {
+        connection.send(WSMessageType.ERROR, {
+          message: '无该操作员的访问权限',
+          code: 'FORBIDDEN',
+          details: { operatorId },
+        });
+        return;
+      }
+    }
+
+    const handler = this.commandHandlers[msgType];
     if (handler) {
       await handler(message.data, connectionId);
     } else {
@@ -676,7 +856,19 @@ export class WSServer extends WSMessageHandler {
       console.error('❌ 发送电台连接状态失败:', error);
     }
 
-    console.log(`✅ [WSServer] 新连接 ${id} 的基础状态发送完成，等待客户端握手`);
+    // 认证流程
+    const authManager = AuthManager.getInstance();
+    if (!authManager.isAuthEnabled()) {
+      // 认证未启用 → 直接作为 Admin（向后兼容）
+      connection.setAdminBypass();
+      console.log(`✅ [WSServer] 新连接 ${id} 的基础状态发送完成（认证未启用，Admin 模式），等待客户端握手`);
+    } else {
+      // 认证已启用 → 发送 AUTH_REQUIRED
+      connection.send(WSMessageType.AUTH_REQUIRED, {
+        allowPublicViewing: authManager.isPublicViewingAllowed(),
+      });
+      console.log(`🔑 [WSServer] 新连接 ${id} 已发送 AUTH_REQUIRED，等待客户端认证`);
+    }
 
     return connection;
   }
@@ -1255,21 +1447,22 @@ export class WSServer extends WSMessageHandler {
       }
 
       // 处理客户端发送的操作员偏好设置
-      let finalEnabledOperatorIds: string[];
+      let requestedOperatorIds: string[];
 
       if (enabledOperatorIds === null) {
         // 新客户端：null表示没有本地偏好，默认启用所有操作员
         const allOperators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
-        finalEnabledOperatorIds = allOperators.map(op => op.id);
-        console.log(`🆕 [WSServer] 新客户端 ${connectionId}，默认启用所有操作员: [${finalEnabledOperatorIds.join(', ')}]`);
+        requestedOperatorIds = allOperators.map(op => op.id);
+        console.log(`🆕 [WSServer] 新客户端 ${connectionId}，默认启用所有操作员: [${requestedOperatorIds.join(', ')}]`);
       } else {
         // 已配置的客户端：直接使用发送的列表（可能为空数组表示全部禁用）
-        finalEnabledOperatorIds = enabledOperatorIds;
+        requestedOperatorIds = enabledOperatorIds;
         console.log(`🔧 [WSServer] 已配置客户端 ${connectionId}，启用操作员: [${enabledOperatorIds.join(', ')}]`);
       }
 
-      // 完成握手（此时finalEnabledOperatorIds已经是实际的操作员ID列表）
-      connection.completeHandshake(finalEnabledOperatorIds);
+      // 完成握手（带权限过滤：requestedIds ∩ authorizedOperatorIds）
+      connection.completeHandshakeWithAuth(requestedOperatorIds);
+      const finalEnabledOperatorIds = connection.getEnabledOperatorIds();
 
       // 广播客户端数量变化（新客户端握手完成）
       this.broadcastClientCount();
@@ -1321,6 +1514,99 @@ export class WSServer extends WSMessageHandler {
     } catch (error) {
       this.handleCommandError(error, 'clientHandshake');
     }
+  }
+
+  // ===== 认证处理 =====
+
+  /**
+   * 处理客户端发送 JWT 进行认证
+   */
+  private async handleAuthToken(connectionId: string, data: any): Promise<void> {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+
+    const { jwt } = data;
+    if (!jwt) {
+      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '缺少 JWT' });
+      return;
+    }
+
+    try {
+      const authManager = AuthManager.getInstance();
+
+      // 使用 @fastify/jwt 的验证逻辑无法直接在 WS 层使用，手动验证
+      // 简单导入 jsonwebtoken 来验证
+      const { default: fjwt } = await import('fast-jwt');
+      const verifier = fjwt.createVerifier({ key: authManager.getJwtSecret() });
+      const decoded = verifier(jwt) as JWTPayload;
+
+      // 检查引用的 token 是否仍有效
+      if (!authManager.isTokenStillValid(decoded.tokenId)) {
+        connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '令牌已被撤销或过期' });
+        return;
+      }
+
+      // 获取最新权限
+      const perms = authManager.getTokenCurrentPermissions(decoded.tokenId);
+      if (!perms) {
+        connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '令牌无效' });
+        return;
+      }
+
+      const tokenInfo = authManager.getTokenById(decoded.tokenId);
+      const label = tokenInfo?.label || '';
+
+      // 更新连接的认证状态
+      const wasAuthenticated = connection.isAuthenticated();
+      connection.setAuthenticated(perms.role, perms.operatorIds, label, decoded.tokenId);
+
+      connection.send(WSMessageType.AUTH_RESULT, {
+        success: true,
+        role: perms.role,
+        label,
+        operatorIds: perms.operatorIds,
+      });
+
+      // 如果是在线升级（之前已经握手完成），重新发送操作员列表
+      if (wasAuthenticated || connection.isHandshakeCompleted()) {
+        // 重新应用权限过滤（hasOperatorAccess 会懒查询最新权限）
+        const allOperators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
+        const visibleOps = perms.role === UserRole.ADMIN
+          ? allOperators
+          : allOperators.filter(op => connection.hasOperatorAccess(op.id));
+        connection.send(WSMessageType.OPERATORS_LIST, { operators: visibleOps });
+      }
+
+      console.log(`✅ [WSServer] 连接 ${connectionId} 认证成功: ${label} (${perms.role})`);
+    } catch (error) {
+      console.error(`❌ [WSServer] 连接 ${connectionId} JWT 验证失败:`, error);
+      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'JWT 无效或已过期' });
+    }
+  }
+
+  /**
+   * 处理客户端选择公开观察者模式
+   */
+  private handleAuthPublicViewer(connectionId: string): void {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+
+    const authManager = AuthManager.getInstance();
+    if (!authManager.isPublicViewingAllowed()) {
+      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '不允许公开查看' });
+      connection.close();
+      return;
+    }
+
+    connection.setPublicViewer();
+    connection.send(WSMessageType.AUTH_RESULT, {
+      success: true,
+      role: UserRole.VIEWER,
+      label: '公开观察者',
+      operatorIds: [],
+    });
+
+    console.log(`👁️ [WSServer] 连接 ${connectionId} 进入公开观察者模式`);
   }
 
   /**

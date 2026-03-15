@@ -146,8 +146,8 @@ export const LeftLayout: React.FC = () => {
           />
         </div>
 
-        {/* 电台数值表（所有连接类型） */}
-        {radio.state.radioConnected && (
+        {/* 电台数值表（无电台模式下隐藏） */}
+        {radio.state.radioConnected && radio.state.radioConfig?.type !== 'none' && (
           <RadioMetersDisplay
             meterData={radio.state.meterData || { swr: null, alc: null, level: null, power: null }}
             isPttActive={radio.state.pttStatus.isTransmitting}
