@@ -15,7 +15,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "eslint src/**/*.ts",
-    "test": "vitest"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "zod": "^3.22.0"

@@ -25,7 +25,7 @@ import {
   type EngineInput,
   type StateMachineOptions,
 } from './types.js';
-import { globalInspector } from '../index.js';
+import { globalInspector } from './inspector.js';
 
 /**
  * 创建引擎状态机

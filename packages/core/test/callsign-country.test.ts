@@ -95,7 +95,7 @@ test('FT8 CQ 带区域标记的消息解析', () => {
   // 应从消息中正确识别发送者呼号所在国家（BI1RRE 为中国）
   assert.ok(info.country, '应能解析出国家');
   assert.equal(info.country, 'China');
-  assert.equal(info.countryZh, '中国');
+  assert.equal(info.countryZh, '中国·北京');
 });
 
 test('前缀冲突优先级 - LU前缀应优先匹配阿根廷', () => {

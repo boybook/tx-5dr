@@ -71,7 +71,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     ANALYSIS_INTERVAL_MS: 150,
     FFT_SIZE: 8192,
     WINDOW_FUNCTION: 'hann' as const,
-    WORKER_POOL_SIZE: 1,
     ENABLED: true,
     TARGET_SAMPLE_RATE: 6000
   };
@@ -119,7 +118,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       analysisInterval: DigitalRadioEngine.SPECTRUM_CONFIG.ANALYSIS_INTERVAL_MS,
       fftSize: DigitalRadioEngine.SPECTRUM_CONFIG.FFT_SIZE,
       windowFunction: DigitalRadioEngine.SPECTRUM_CONFIG.WINDOW_FUNCTION,
-      workerPoolSize: DigitalRadioEngine.SPECTRUM_CONFIG.WORKER_POOL_SIZE,
       enabled: DigitalRadioEngine.SPECTRUM_CONFIG.ENABLED,
       targetSampleRate: DigitalRadioEngine.SPECTRUM_CONFIG.TARGET_SAMPLE_RATE
     }, () => ConfigManager.getInstance().getFT8Config().spectrumWhileTransmitting ?? true);
