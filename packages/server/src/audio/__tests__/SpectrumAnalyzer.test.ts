@@ -72,9 +72,9 @@ describe('SpectrumAnalyzer', () => {
       expect(spectrum.binaryData.format.type).toBe('int16');
       expect(spectrum.binaryData.format.length).toBe(defaultConfig.fftSize / 2);
       expect(spectrum.binaryData.data).toBeTypeOf('string'); // base64
-      expect(spectrum.summary.peakFrequency).toBeTypeOf('number');
-      expect(spectrum.summary.peakMagnitude).toBeTypeOf('number');
-      expect(spectrum.summary.averageMagnitude).toBeTypeOf('number');
+      expect(spectrum.summary!.peakFrequency).toBeTypeOf('number');
+      expect(spectrum.summary!.peakMagnitude).toBeTypeOf('number');
+      expect(spectrum.summary!.averageMagnitude).toBeTypeOf('number');
     });
 
     it('静音输入的峰值幅度应极低', () => {
@@ -82,7 +82,7 @@ describe('SpectrumAnalyzer', () => {
       const silence = generateSilence(defaultConfig.sampleRate, 0.5);
       const spectrum = analyzer.analyze(silence);
 
-      expect(spectrum.summary.peakMagnitude).toBeLessThan(-80);
+      expect(spectrum.summary!.peakMagnitude).toBeLessThan(-80);
     });
 
     it('正弦波的峰值频率应接近输入频率', () => {
@@ -97,8 +97,8 @@ describe('SpectrumAnalyzer', () => {
       const spectrum = analyzer.analyze(audio);
 
       // 频率分辨率 = 6000 / 4096 ≈ 1.46Hz，容许误差 ±10Hz
-      expect(spectrum.summary.peakFrequency).toBeGreaterThan(targetFreq - 10);
-      expect(spectrum.summary.peakFrequency).toBeLessThan(targetFreq + 10);
+      expect(spectrum.summary!.peakFrequency).toBeGreaterThan(targetFreq - 10);
+      expect(spectrum.summary!.peakFrequency).toBeLessThan(targetFreq + 10);
     });
 
     it('正弦波的峰值幅度应明显高于静音', () => {
@@ -109,7 +109,7 @@ describe('SpectrumAnalyzer', () => {
       const specSine = analyzer.analyze(sine);
       const specSilence = analyzer.analyze(silence);
 
-      expect(specSine.summary.peakMagnitude).toBeGreaterThan(specSilence.summary.peakMagnitude + 30);
+      expect(specSine.summary!.peakMagnitude).toBeGreaterThan(specSilence.summary!.peakMagnitude + 30);
     });
   });
 
@@ -139,8 +139,8 @@ describe('SpectrumAnalyzer', () => {
 
       expect(spectrum.sampleRate).toBe(6000);
       // 降采样后峰值频率仍应接近 1kHz，容许误差 ±100Hz（线性插值降采样有精度损失）
-      expect(spectrum.summary.peakFrequency).toBeGreaterThan(900);
-      expect(spectrum.summary.peakFrequency).toBeLessThan(1100);
+      expect(spectrum.summary!.peakFrequency).toBeGreaterThan(900);
+      expect(spectrum.summary!.peakFrequency).toBeLessThan(1100);
     });
   });
 
@@ -155,7 +155,7 @@ describe('SpectrumAnalyzer', () => {
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = analyzer.analyze(audio);
 
-      expect(spectrum.summary.peakMagnitude).toBeGreaterThan(-60);
+      expect(spectrum.summary!.peakMagnitude).toBeGreaterThan(-60);
       expect(spectrum.binaryData.format.length).toBeGreaterThan(0);
     });
   });
@@ -236,7 +236,7 @@ describe('SpectrumAnalyzer', () => {
       // 仍能正常分析
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = analyzer.analyze(audio);
-      expect(spectrum.summary.peakMagnitude).toBeGreaterThan(-60);
+      expect(spectrum.summary!.peakMagnitude).toBeGreaterThan(-60);
     });
 
     it('更新 FFT 大小后应生效', () => {
@@ -272,10 +272,10 @@ describe('SpectrumAnalyzer', () => {
       const spec800 = analyzer.analyze(audio800);
       const spec1000 = analyzer.analyze(audio1000);
 
-      expect(Math.abs(spec800.summary.peakFrequency - 800)).toBeLessThan(10);
-      expect(Math.abs(spec1000.summary.peakFrequency - 1000)).toBeLessThan(10);
+      expect(Math.abs(spec800.summary!.peakFrequency - 800)).toBeLessThan(10);
+      expect(Math.abs(spec1000.summary!.peakFrequency - 1000)).toBeLessThan(10);
       // 两个峰值频率应明显不同
-      expect(Math.abs(spec800.summary.peakFrequency - spec1000.summary.peakFrequency)).toBeGreaterThan(150);
+      expect(Math.abs(spec800.summary!.peakFrequency - spec1000.summary!.peakFrequency)).toBeGreaterThan(150);
     });
   });
 });
