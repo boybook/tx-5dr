@@ -234,7 +234,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       const audioData = new Float32Array(audioBuffer);
 
       // 使用原生 SpectrumAnalyzer 执行 FFT
-      const spectrum = this.analyzer.analyze(audioData);
+      const spectrum = await this.analyzer.analyze(audioData);
 
       const processingTime = performance.now() - startTime;
       this.stats.totalAnalyses++;

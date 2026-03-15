@@ -4,23 +4,23 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as nodeWav from 'node-wav';
+import { Resampler } from 'rubato-fft-node';
 
 /**
  * 音频工具函数集合
  */
 
-// 缓存重采样器实例以提高性能
-const resamplerCache = new Map<string, any>();
+// rubato-fft-node ResamplerQuality values (const enum can't be imported with isolatedModules)
+const Quality = {
+  Best: 0,
+  High: 1,
+  Medium: 2,
+  Low: 3,
+  Fastest: 4,
+} as const;
 
-// 动态导入 libsamplerate-js
-let LibSampleRate: any = null;
-export async function getLibSampleRate() {
-  if (!LibSampleRate) {
-    const module = await import('@alexanderolsen/libsamplerate-js');
-    LibSampleRate = module.default || module;
-  }
-  return LibSampleRate;
-}
+// 缓存重采样器实例以提高性能
+const resamplerCache = new Map<string, Resampler>();
 
 /**
  * 保存音频数据为 WAV 文件
@@ -269,12 +269,26 @@ export function cleanupOldAudioFiles(
 }
 
 /**
- * 使用 libsamplerate 进行高质量重采样
+ * 将 libsamplerate 质量常数映射到 rubato-fft-node 质量值
+ */
+function mapQuality(quality: number): number {
+  switch (quality) {
+    case 0: return Quality.Best;     // SRC_SINC_BEST_QUALITY
+    case 1: return Quality.High;     // SRC_SINC_MEDIUM_QUALITY
+    case 2: return Quality.Medium;   // SRC_SINC_FASTEST
+    case 3: return Quality.Low;      // SRC_ZERO_ORDER_HOLD
+    case 4: return Quality.Fastest;  // SRC_LINEAR
+    default: return Quality.Medium;
+  }
+}
+
+/**
+ * 使用 rubato-fft-node (Rust) 进行高质量重采样
  * @param samples 输入音频样本
  * @param inputSampleRate 输入采样率
  * @param outputSampleRate 输出采样率
  * @param channels 声道数，默认 1
- * @param quality 重采样质量，默认最高质量
+ * @param quality 重采样质量，默认中等质量
  * @returns 重采样后的音频数据
  */
 export async function resampleAudioProfessional(
@@ -282,44 +296,33 @@ export async function resampleAudioProfessional(
   inputSampleRate: number,
   outputSampleRate: number,
   channels: number = 1,
-  quality: number = 2 // SRC_SINC_FASTEST - 最快速度，适合实时处理
+  quality: number = 2
 ): Promise<Float32Array> {
   if (inputSampleRate === outputSampleRate) {
     return samples; // 采样率相同，无需重采样
   }
 
-  // 创建缓存键
-  const cacheKey = `${inputSampleRate}-${outputSampleRate}-${channels}-${quality}`;
+  const nativeQuality = mapQuality(quality);
+  const cacheKey = `${inputSampleRate}-${outputSampleRate}-${channels}-${nativeQuality}`;
 
   try {
-    const lib = await getLibSampleRate();
-
-    // 尝试从缓存获取重采样器
     let resampler = resamplerCache.get(cacheKey);
 
     if (!resampler) {
-      // 创建新的重采样器
-      resampler = await lib.create(channels, inputSampleRate, outputSampleRate, {
-        converterType: quality
-      });
+      resampler = new Resampler(inputSampleRate, outputSampleRate, channels, nativeQuality);
 
-      // 缓存重采样器（但限制缓存大小）
       if (resamplerCache.size < 10) {
         resamplerCache.set(cacheKey, resampler);
       }
 
-      console.log(`🔄 [音频工具] 创建新的重采样器: ${inputSampleRate}Hz -> ${outputSampleRate}Hz, 质量=${quality}`);
+      console.log(`🔄 [音频工具] 创建新的 Rust 重采样器: ${inputSampleRate}Hz -> ${outputSampleRate}Hz, 质量=${nativeQuality}`);
     }
 
-    // 执行流式重采样（full API 保留跨块滤波器状态，避免块边界爆音）
-    const resampled = resampler.full(samples);
-
+    const resampled = await resampler.process(samples);
     return resampled;
 
   } catch (error) {
     console.error(`❌ [音频工具] 重采样失败:`, error);
-
-    // 如果专业重采样失败，回退到简单重采样
     console.log(`🔄 [音频工具] 回退到简单重采样`);
     return resampleAudioSimple(samples, inputSampleRate, outputSampleRate);
   }
@@ -381,10 +384,11 @@ export async function resampleTo12kHz(
  * 清理重采样器缓存
  */
 export function clearResamplerCache(): void {
-  // Soxr 重采样器是 WASM 模块，通过垃圾回收自动清理
-  // 这里只需要清空缓存映射
+  for (const resampler of resamplerCache.values()) {
+    resampler.dispose();
+  }
   resamplerCache.clear();
-  console.log('🧹 [音频工具] Soxr 重采样器缓存已清理');
+  console.log('🧹 [音频工具] Rust 重采样器缓存已清理');
 }
 
 /**

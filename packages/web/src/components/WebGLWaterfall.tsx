@@ -461,6 +461,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
     
     // 只在纹理大小改变时设置参数

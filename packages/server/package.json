@@ -21,7 +21,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@alexanderolsen/libsamplerate-js": "^2.1.2",
     "@fastify/cors": "^11.0.1",
     "@fastify/websocket": "^11.1.0",
     "@tx5dr/contracts": "workspace:*",
@@ -31,11 +30,11 @@
     "audify": "^1.10.1",
     "eventemitter3": "^5.0.1",
     "fastify": "^5.1.0",
-    "fft.js": "^4.0.4",
     "hamlib": "^0.2.0",
     "icom-wlan-node": "^0.2.6",
     "mic": "^2.1.2",
     "node-wav": "^0.0.2",
+    "rubato-fft-node": "^0.1.0",
     "serialport": "^13.0.0",
     "wav": "^1.0.2",
     "wsjtx-lib": "^1.2.1",
