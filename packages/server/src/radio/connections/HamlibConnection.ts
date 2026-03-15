@@ -10,6 +10,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
+import type { PttType } from 'hamlib';
 import type { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
@@ -49,6 +50,11 @@ export class HamlibConnection
    * 最后成功操作时间（用于健康检查）
    */
   private lastSuccessfulOperation: number = Date.now();
+
+  /**
+   * 当前 PTT 方法（cat/vox/dtr/rts）
+   */
+  private pttMethod: string = 'cat';
 
   /**
    * 清理保护标志（防止重复调用 rig.close() 导致 pthread 超时）
@@ -170,6 +176,18 @@ export class HamlibConnection
       // 创建 HamLib 实例
       this.rig = new HamLib(model as any, port as any);
 
+      // 配置 PTT 类型（必须在 open() 前调用）
+      this.pttMethod = config.pttMethod || 'cat';
+      const pttTypeMap: Record<string, PttType> = {
+        'cat': 'RIG',
+        'vox': 'NONE',
+        'dtr': 'DTR',
+        'rts': 'RTS',
+      };
+      const hamlibPttType = pttTypeMap[this.pttMethod] || 'RIG';
+      console.log(`🔧 [HamlibConnection] 配置 PTT 类型: ${this.pttMethod} → ${hamlibPttType}`);
+      await this.rig.setPttType(hamlibPttType);
+
       // 应用串口配置（如果有）
       if (config.type === 'serial' && config.serial?.serialConfig) {
         await this.applySerialConfig(config.serial.serialConfig);
@@ -281,6 +299,11 @@ export class HamlibConnection
    */
   async setPTT(enabled: boolean): Promise<void> {
     this.checkConnected();
+
+    // VOX 模式：电台通过检测音频信号自动切换发射/接收，不需要软件控制 PTT
+    if (this.pttMethod === 'vox') {
+      return;
+    }
 
     try {
       await Promise.race([
@@ -660,6 +683,7 @@ export class HamlibConnection
       }
 
       this.currentConfig = null;
+      this.pttMethod = 'cat';
       this.meterPollFailCount = 0;
       this.removeAllListeners();
     } finally {

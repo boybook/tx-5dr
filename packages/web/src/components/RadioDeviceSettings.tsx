@@ -1,7 +1,7 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip } from '@heroui/react';
+import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip } from '@heroui/react';
 import { api } from '@tx5dr/core';
-import type { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
+import type { HamlibConfig, SerialConfig, PttMethod } from '@tx5dr/contracts';
 
 interface RigInfo {
   rigModel: number;
@@ -41,6 +41,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
   const [_isSaving, setIsSaving] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isTestingPTT, setIsTestingPTT] = useState(false);
+  const [isRefreshingPorts, setIsRefreshingPorts] = useState(false);
   const [testResult, setTestResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     useEffect(() => {
@@ -66,6 +67,19 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         setOriginalConfig(cfg.config);
         setRigs(rigList.rigs || []);
         setPorts(portList.ports || []);
+      }
+    };
+
+    // 刷新串口列表
+    const refreshPorts = async () => {
+      setIsRefreshingPorts(true);
+      try {
+        const portList = await api.getSerialPorts();
+        setPorts(portList.ports || []);
+      } catch (error) {
+        console.error('刷新串口列表失败:', error);
+      } finally {
+        setIsRefreshingPorts(false);
       }
     };
 
@@ -174,6 +188,81 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     }
   };
 
+    // 渲染 PTT 配置区块（仅 serial / network 模式）
+    const renderPttConfig = () => {
+      const currentMethod = config.pttMethod || 'cat';
+      const isNetwork = config.type === 'network';
+
+      return (
+        <div className="space-y-3">
+          <h5 className="text-sm font-medium text-default-700">PTT 方法</h5>
+          <Select
+            label="PTT 方法"
+            size="sm"
+            selectedKeys={[currentMethod]}
+            onSelectionChange={keys => {
+              const method = Array.from(keys)[0] as PttMethod;
+              if (method === 'cat' || method === 'vox') {
+                updateConfig({ pttMethod: method, pttPort: undefined });
+              } else {
+                updateConfig({ pttMethod: method });
+              }
+            }}
+            variant="flat"
+          >
+            <SelectItem key="cat" textValue="CAT 命令（推荐）">CAT 命令（推荐）</SelectItem>
+            <SelectItem key="vox" textValue="VOX 声控">VOX 声控</SelectItem>
+            {isNetwork ? (
+              <SelectItem key="dtr" textValue="DTR 引脚（需串口）" isDisabled>DTR 引脚（需串口连接）</SelectItem>
+            ) : (
+              <SelectItem key="dtr" textValue="DTR 引脚">DTR 引脚</SelectItem>
+            )}
+            {isNetwork ? (
+              <SelectItem key="rts" textValue="RTS 引脚（需串口）" isDisabled>RTS 引脚（需串口连接）</SelectItem>
+            ) : (
+              <SelectItem key="rts" textValue="RTS 引脚">RTS 引脚</SelectItem>
+            )}
+          </Select>
+
+          {/* 仅 DTR/RTS 时显示独立 PTT 串口选择（支持手动输入） */}
+          {(currentMethod === 'dtr' || currentMethod === 'rts') && (
+            <Autocomplete
+              label="PTT 串口"
+              size="sm"
+              allowsCustomValue
+              inputValue={config.pttPort || ''}
+              selectedKey={config.pttPort || null}
+              onInputChange={value => {
+                updateConfig({ pttPort: value || undefined });
+              }}
+              onSelectionChange={key => {
+                if (key !== null) {
+                  updateConfig({ pttPort: String(key) || undefined });
+                }
+              }}
+              variant="flat"
+              placeholder="使用 CAT 串口（默认）"
+              description="指定独立的 PTT 控制串口，留空则复用 CAT 串口，可手动输入路径"
+              defaultItems={ports}
+            >
+              {(item: PortInfo) => (
+                <AutocompleteItem key={item.path} textValue={item.path}>
+                  {item.path}
+                </AutocompleteItem>
+              )}
+            </Autocomplete>
+          )}
+
+          <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
+            <p className="font-medium">PTT 方法说明：</p>
+            <p>• <strong>CAT</strong>：通过 CAT 命令控制，适用于大多数现代电台（推荐）</p>
+            <p>• <strong>VOX</strong>：电台自动检测音频信号发射，适用于 SignaLink USB 等声卡接口</p>
+            <p>• <strong>DTR/RTS</strong>：通过串口引脚控制，适用于古老电台或外部功放切换</p>
+          </div>
+        </div>
+      );
+    };
+
     // 渲染配置内容
     const renderConfigContent = () => {
       switch (config.type) {
@@ -199,6 +288,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     onChange={e => updateConfig({ network: { host: config.network?.host ?? 'localhost', port: Number(e.target.value) } })}
                   />
                   <Divider />
+                  {renderPttConfig()}
+                  <Divider />
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -216,9 +307,9 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.network?.host || !config.network?.port}
+                      isDisabled={!config.network?.host || !config.network?.port || config.pttMethod === 'vox'}
                     >
-                      {isTestingPTT ? '测试PTT中...' : '测试PTT'}
+                      {config.pttMethod === 'vox' ? 'VOX 模式无需测试' : isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>
                   </div>
                   {testResult && (
@@ -314,29 +405,47 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
           return (
             <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
               <CardBody className="space-y-4 p-4">
-                <h4 className="font-semibold text-default-900">串口Rig设置</h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-default-900">串口Rig设置</h4>
+                  <Tooltip content="刷新串口列表" placement="left">
+                    <Button
+                      size="sm"
+                      variant="light"
+                      isIconOnly
+                      onPress={refreshPorts}
+                      isLoading={isRefreshingPorts}
+                    >
+                      {isRefreshingPorts ? '' : '↻'}
+                    </Button>
+                  </Tooltip>
+                </div>
                 <p className="text-sm text-default-600">通过串口直接连接电台</p>
                 <Divider />
                 <div className="space-y-4">
-                  <Select
+                  <Autocomplete
                     label="串口"
-                    placeholder="选择串口"
-                    selectedKeys={config.serial?.path ? [config.serial.path] : []}
-                    onSelectionChange={keys => {
-                      const selectedKey = Array.from(keys)[0];
-                      if (selectedKey) {
-                        updateConfig({ serial: { path: selectedKey as string, rigModel: config.serial?.rigModel ?? 0, serialConfig: config.serial?.serialConfig } });
+                    placeholder="选择或输入串口路径"
+                    allowsCustomValue
+                    inputValue={config.serial?.path || ''}
+                    selectedKey={config.serial?.path || null}
+                    onInputChange={value => {
+                      updateConfig({ serial: { path: value, rigModel: config.serial?.rigModel ?? 0, serialConfig: config.serial?.serialConfig } });
+                    }}
+                    onSelectionChange={selectedKey => {
+                      if (selectedKey !== null) {
+                        updateConfig({ serial: { path: String(selectedKey), rigModel: config.serial?.rigModel ?? 0, serialConfig: config.serial?.serialConfig } });
                       }
                     }}
                     variant="flat"
                     size="md"
+                    defaultItems={ports}
                   >
-                    {ports.map(p => (
-                      <SelectItem key={p.path}>
-                        {p.path}
-                      </SelectItem>
-                    ))}
-                  </Select>
+                    {(item: PortInfo) => (
+                      <AutocompleteItem key={item.path} textValue={item.path}>
+                        {item.path}
+                      </AutocompleteItem>
+                    )}
+                  </Autocomplete>
                   <Autocomplete
                     label="电台型号"
                     placeholder="搜索或选择电台型号"
@@ -582,6 +691,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   </div>
 
                   <Divider />
+                  {renderPttConfig()}
+                  <Divider />
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -599,9 +710,9 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.serial?.path || !config.serial?.rigModel}
+                      isDisabled={!config.serial?.path || !config.serial?.rigModel || config.pttMethod === 'vox'}
                     >
-                      {isTestingPTT ? '测试PTT中...' : '测试PTT'}
+                      {config.pttMethod === 'vox' ? 'VOX 模式无需测试' : isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>
                   </div>
                   {testResult && (
