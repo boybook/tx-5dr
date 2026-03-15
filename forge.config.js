@@ -59,6 +59,41 @@ function findAndRemoveDirs(rootDir, targetName) {
   }
 }
 
+/** 递归删除目录下所有匹配扩展名的文件 */
+function removeFilesByExt(dir, ext) {
+  try {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        removeFilesByExt(fullPath, ext);
+      } else if (entry.name.endsWith(ext)) {
+        try { fs.unlinkSync(fullPath); } catch { /* ignore */ }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** 递归删除目录下所有匹配前缀的文件（不区分大小写） */
+function removeFilesByPrefix(dir, prefix) {
+  const lowerPrefix = prefix.toLowerCase();
+  try {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        removeFilesByPrefix(fullPath, prefix);
+      } else if (entry.name.toLowerCase().startsWith(lowerPrefix)) {
+        try { fs.unlinkSync(fullPath); } catch { /* ignore */ }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 /** 递归查找所有匹配扩展名的文件 */
 function findFilesByExt(dir, ext) {
   const results = [];
@@ -287,7 +322,32 @@ module.exports = {
           '@heroui', '@heroicons', '@fortawesome', 'caniuse-lite', 'tailwindcss', 'tailwind-merge', 'tailwind-variants',
           '@react-aria', '@react-stately', '@react-types', '@formatjs', 'react', 'react-dom', 'framer-motion', 'rxjs', '@babel',
           // 其他只在构建期使用
-          'png-to-ico', 'vitest', '@vitest', 'tsx', 'node-gyp', 'electron-installer-redhat', 'electron-installer-debian', 'segfault-handler'
+          'png-to-ico', 'vitest', '@vitest', 'tsx', 'node-gyp', 'electron-installer-redhat', 'electron-installer-debian', 'segfault-handler',
+          // === 以下为体积优化新增 ===
+          // 已确认无源码引用的间接依赖
+          'superjson', 'lodash', 'axios',
+          // 前端构建/CSS 工具链（web 已构建为 dist，不需要）
+          'postcss', 'autoprefixer', 'lilconfig', 'postcss-load-config',
+          'react-refresh', 'react-is', 'scheduler',
+          '@jridgewell', 'yaml', 'csstype',
+          // framer-motion 子包（主包已删除）
+          'motion-dom', 'motion-utils',
+          // @heroui 间接依赖（主包已删除）
+          '@internationalized',
+          // ESLint/代码分析工具链残留
+          'esquery', 'graphemer', 'espree', 'esrecurse', 'estraverse', 'estree-walker', 'esutils',
+          'acorn', 'acorn-jsx', 'acorn-walk', 'doctrine', 'optionator',
+          // 测试/性能分析工具
+          'chai', '@statelyai', 'autocannon', 'clinic',
+          // 构建辅助（source-map 等）
+          'source-map', 'pngjs', 'bluebird',
+          // Electron Forge 打包工具链残留
+          'electron-installer-common', 'resedit', 'pe-library',
+          'dir-compare', 'flora-colossus', 'galactus',
+          'got', 'global-agent', 'global-dirs', 'roarr', 'serialize-error',
+          'listr2', 'ora', 'log-symbols', 'log-update',
+          'sudo-prompt', 'cross-zip', 'sumchecker',
+          '@malept', '@gar', '@hapi', '@jest'
         ];
 
         // 删除精确匹配的包
@@ -301,6 +361,21 @@ module.exports = {
         console.log('✅ node_modules 精简完成');
       } catch (err) {
         console.warn('⚠️ 精简 node_modules 遇到问题：', (err && err.message) || err);
+      }
+
+      // ====== 清理 native 模块的编译源码（运行时只需编译产物） ======
+      try {
+        console.log('🧹 正在清理 native 模块编译源码...');
+        // audify: vendor/ 含 opus+rtaudio 源码 (~17MB)，运行时只需 build/Release/
+        rmrf(join(nm, 'audify', 'vendor'));
+        rmrf(join(nm, 'audify', 'src'));
+        rmrf(join(nm, 'audify', 'binding.gyp'));
+        // naudiodon2: 清理编译源码
+        rmrf(join(nm, 'naudiodon2', 'src'));
+        rmrf(join(nm, 'naudiodon2', 'binding.gyp'));
+        console.log('✅ native 模块编译源码清理完成');
+      } catch (err) {
+        console.warn('⚠️ 清理 native 模块编译源码遇到问题：', (err && err.message) || err);
       }
 
       // ====== 清理 node_modules 内的 .npm 缓存（prebuild 下载缓存，含未签名二进制） ======
@@ -342,9 +417,34 @@ module.exports = {
         console.warn('⚠️ 清理其他 packages 源码遇到问题：', (err && err.message) || err);
       }
 
+      // ====== 清理 node_modules 中的非运行时文件（文档/测试/类型/sourcemap） ======
+      try {
+        console.log('🧹 正在清理 node_modules 中的非运行时文件...');
+        // 删除测试、文档、示例目录
+        for (const dirName of ['test', 'tests', '__tests__', 'docs', 'doc', 'example', 'examples', '.github']) {
+          findAndRemoveDirs(nm, dirName);
+        }
+        // 删除 source map 文件
+        removeFilesByExt(nm, '.map');
+        // 删除 TypeScript 类型定义（运行时不需要）
+        removeFilesByExt(nm, '.d.ts');
+        removeFilesByExt(nm, '.d.ts.map');
+        // 删除文档和配置文件
+        removeFilesByPrefix(nm, 'README');
+        removeFilesByPrefix(nm, 'CHANGELOG');
+        removeFilesByPrefix(nm, 'HISTORY');
+        removeFilesByPrefix(nm, '.eslintrc');
+        removeFilesByPrefix(nm, 'tsconfig');
+        removeFilesByPrefix(nm, '.prettierrc');
+        console.log('✅ 非运行时文件清理完成');
+      } catch (err) {
+        console.warn('⚠️ 清理非运行时文件遇到问题：', (err && err.message) || err);
+      }
+
       // ====== 平台特定：清理跨架构预构建二进制 ======
       const wsjtxPrebuilds = join(nm, 'wsjtx-lib', 'prebuilds');
       const hamlibPrebuilds = join(nm, 'hamlib', 'prebuilds');
+      const serialportPrebuilds = join(nm, '@serialport', 'bindings-cpp', 'prebuilds');
 
       if (platform === 'linux') {
         try {
@@ -361,6 +461,12 @@ module.exports = {
           rmGlob(hamlibPrebuilds, 'win32-');
           rmGlob(hamlibPrebuilds, 'darwin-');
           rmrf(join(hamlibPrebuilds, removeArch));
+
+          // @serialport: 仅保留本平台
+          rmGlob(serialportPrebuilds, 'win32-');
+          rmGlob(serialportPrebuilds, 'darwin-');
+          rmGlob(serialportPrebuilds, 'android-');
+          rmrf(join(serialportPrebuilds, removeArch));
 
           console.log('✅ [Linux] 清理完成');
         } catch (error) {
@@ -383,6 +489,11 @@ module.exports = {
           rmGlob(hamlibPrebuilds, 'win32-');
           rmrf(join(hamlibPrebuilds, removeArch));
 
+          // @serialport: 清理非 darwin 平台
+          rmGlob(serialportPrebuilds, 'linux-');
+          rmGlob(serialportPrebuilds, 'win32-');
+          rmGlob(serialportPrebuilds, 'android-');
+
           console.log('✅ [macOS] 清理完成');
         } catch (error) {
           console.warn('⚠️ [macOS] 清理跨架构文件时出现警告:', error.message);
@@ -400,6 +511,11 @@ module.exports = {
           // hamlib: 清理其他平台
           rmGlob(hamlibPrebuilds, 'linux-');
           rmGlob(hamlibPrebuilds, 'darwin-');
+
+          // @serialport: 清理非 win32 平台
+          rmGlob(serialportPrebuilds, 'linux-');
+          rmGlob(serialportPrebuilds, 'darwin-');
+          rmGlob(serialportPrebuilds, 'android-');
 
           console.log('✅ [Windows] 清理完成');
         } catch (error) {
