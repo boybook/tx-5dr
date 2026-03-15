@@ -8,28 +8,6 @@ import { setGlobalInspector } from './state-machines/inspector.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 
-// ===== XState 可视化调试（仅开发环境） =====
-// XState v5 使用 @statelyai/inspect 和 inspect API
-// 使用 createSkyInspector 支持 Node.js 后端环境
-if (process.env.NODE_ENV === 'development') {
-  import('@statelyai/inspect')
-    .then(({ createSkyInspector }) => {
-      const inspector = createSkyInspector({
-        onerror: (error) => {
-          console.error('❌ [XState Inspect] 错误:', error.message);
-        },
-      });
-      setGlobalInspector(inspector);
-      console.log('📊 [XState Inspect] 可视化调试已启用 (XState v5 - Node.js)');
-      console.log('📊 [XState Inspect] 访问: https://stately.ai/inspect');
-      console.log('📊 [XState Inspect] 提示: 在浏览器中打开上述链接查看状态机可视化');
-      console.log('📊 [XState Inspect] Inspector 实例:', inspector ? '✓ 已创建' : '✗ 创建失败');
-    })
-    .catch((err) => {
-      console.warn('⚠️  [XState Inspect] 初始化失败（可忽略）:', err.message);
-    });
-}
-
 // ===== 全局错误处理器 =====
 // 防止未捕获的 Promise rejection 导致进程崩溃
 
@@ -105,7 +83,24 @@ process.on('uncaughtException', (error: Error) => {
 
 async function start() {
   try {
-    // 首先初始化Console日志系统
+    // 初始化 XState Inspector（必须在引擎启动前，否则状态机 actor 无法连接）
+    if (process.env.NODE_ENV === 'development') {
+      try {
+        const { createSkyInspector } = await import('@statelyai/inspect');
+        const inspector = createSkyInspector({
+          onerror: (error) => {
+            console.error('❌ [XState Inspect] 错误:', error.message);
+          },
+        });
+        setGlobalInspector(inspector);
+        console.log('📊 [XState Inspect] 可视化调试已启用');
+        console.log('📊 [XState Inspect] 访问: https://stately.ai/inspect');
+      } catch (err: any) {
+        console.warn('⚠️  [XState Inspect] 初始化失败（可忽略）:', err.message);
+      }
+    }
+
+    // 初始化Console日志系统
     const consoleLogger = await initializeConsoleLogger();
     console.log('🔧 Console日志系统已初始化');
     console.log(`📋 日志文件位置: ${consoleLogger.getLogFilePath()}`);

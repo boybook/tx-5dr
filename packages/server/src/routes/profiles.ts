@@ -44,6 +44,25 @@ export async function profileRoutes(fastify: FastifyInstance) {
   });
 
   /**
+   * PUT /profiles/reorder - 重排 Profile 顺序
+   */
+  fastify.put('/reorder', async (req, reply) => {
+    const { profileIds } = req.body as { profileIds: string[] };
+
+    if (!Array.isArray(profileIds) || profileIds.length === 0) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: 'profileIds 必须是非空数组',
+        userMessage: '排序参数无效',
+        severity: RadioErrorSeverity.WARNING,
+      });
+    }
+
+    await profileManager.reorderProfiles(profileIds);
+    return reply.send({ success: true });
+  });
+
+  /**
    * PUT /profiles/:id - 更新 Profile
    */
   fastify.put<{ Params: { id: string } }>('/:id', async (req, reply) => {

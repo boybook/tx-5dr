@@ -15,6 +15,9 @@ import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 import { LogbookSyncSettings, type LogbookSyncSettingsRef } from './LogbookSyncSettings';
 import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
+import { TokenManagement } from './TokenManagement';
+import { useHasMinRole } from '../store/authStore';
+import { UserRole } from '@tx5dr/contracts';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -23,9 +26,10 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal）
-type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'logbook_sync' | 'system';
+type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'logbook_sync' | 'system' | 'tokens';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
   // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator
   const effectiveInitialTab = (initialTab === 'radio' || initialTab === 'audio') ? 'operator' : (initialTab || 'operator');
   const [activeTab, setActiveTab] = useState<SettingsTab>(effectiveInitialTab);
@@ -203,10 +207,14 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           return '👤';
         case 'display':
           return '🎨';
+        case 'radio_profile':
+          return '📻';
         case 'logbook_sync':
           return '📊';
         case 'system':
           return '⚙️';
+        case 'tokens':
+          return '🔑';
         default:
           return '⚙️';
       }
@@ -218,10 +226,14 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return '👤 操作员';
       case 'display':
         return '🎨 显示通知';
+      case 'radio_profile':
+        return '📻 电台配置';
       case 'logbook_sync':
         return '📊 通联日志同步';
       case 'system':
         return '⚙️ 系统设置';
+      case 'tokens':
+        return '🔑 用户管理';
       default:
         return '设置';
     }
@@ -258,6 +270,30 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             onUnsavedChanges={setHasUnsavedChanges}
           />
         );
+      case 'radio_profile':
+        return (
+          <div className="flex flex-col items-center justify-center py-12 gap-4 text-center">
+            <p className="text-lg text-default-600">
+              电台连接和音频设备在 <strong>电台配置 Profile</strong> 中设置。
+            </p>
+            <p className="text-sm text-default-400">
+              每个 Profile 包含独立的电台和音频配置，支持快速切换不同方案。
+            </p>
+            <Button
+              color="primary"
+              size="lg"
+              className="mt-4"
+              onPress={() => {
+                onClose();
+                window.dispatchEvent(new Event('openProfileModal'));
+              }}
+            >
+              前往电台配置
+            </Button>
+          </div>
+        );
+      case 'tokens':
+        return <TokenManagement />;
       default:
         return null;
     }
@@ -318,14 +354,30 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     key="display"
                     title={getTabTitle('display', isMobile)}
                   />
-                  <Tab
-                    key="logbook_sync"
-                    title={getTabTitle('logbook_sync', isMobile)}
-                  />
-                  <Tab
-                    key="system"
-                    title={getTabTitle('system', isMobile)}
-                  />
+                  {isAdmin && (
+                    <Tab
+                      key="radio_profile"
+                      title={getTabTitle('radio_profile', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="logbook_sync"
+                      title={getTabTitle('logbook_sync', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="system"
+                      title={getTabTitle('system', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="tokens"
+                      title={getTabTitle('tokens', isMobile)}
+                    />
+                  )}
                 </Tabs>
               </div>
 

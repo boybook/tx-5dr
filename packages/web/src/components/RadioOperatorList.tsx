@@ -3,6 +3,7 @@ import { Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import { useRadioState, useConnection } from '../store/radioStore';
+import { useAuth } from '../store/authStore';
 import { RadioOperator } from './RadioOperator';
 import { hasOperatorPreferences } from '../utils/operatorPreferences';
 
@@ -13,6 +14,7 @@ interface RadioOperatorListProps {
 export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOperator }) => {
   const radio = useRadioState();
   const connection = useConnection();
+  const { state: authState } = useAuth();
 
   // 连接后请求操作员列表
   React.useEffect(() => {
@@ -47,17 +49,14 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
       <div className="flex items-center justify-center">
         <div className="text-center w-full">
           {connection.state.isConnected ? (
-            // 区分"服务端没有操作员"和"客户端禁用了所有操作员"
-            hasOperatorPreferences() ? (
-              // 用户有偏好设置但所有操作员都被禁用了
-              <div className="cursor-default select-none space-y-3">
-                <div className="text-xs text-default-400">
-                  <FontAwesomeIcon icon={faEyeSlash} className="mr-2" />
-                  <span>所有操作员均已隐藏</span>
-                </div>
+            // 优先判断角色权限，再判断客户端偏好设置
+            authState.role === 'viewer' || authState.isPublicViewer ? (
+              // 仅查看权限
+              <div className="cursor-default select-none">
+                <div className="text-xs text-default-400">当前为仅查看权限</div>
               </div>
-            ) : (
-              // 服务端真的没有操作员，显示创建按钮
+            ) : authState.operatorIds.length === 0 && (authState.role === 'admin' || authState.role === 'operator') ? (
+              // 有操作权限但无操作员，显示创建按钮
               <Button
                 onPress={onCreateOperator}
                 variant="bordered"
@@ -67,6 +66,19 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
                 <FontAwesomeIcon icon={faPlus} className="mr-2" />
                 创建第一个操作员
               </Button>
+            ) : hasOperatorPreferences() ? (
+              // 有操作权限的用户，客户端偏好设置隐藏了所有操作员
+              <div className="cursor-default select-none space-y-3">
+                <div className="text-xs text-default-400">
+                  <FontAwesomeIcon icon={faEyeSlash} className="mr-2" />
+                  <span>所有操作员均已隐藏</span>
+                </div>
+              </div>
+            ) : (
+              // 其他情况（不应发生）
+              <div className="cursor-default select-none">
+                <div className="text-xs text-default-400">暂无可用的操作员</div>
+              </div>
             )
           ) : (
             // 未连接时的提示

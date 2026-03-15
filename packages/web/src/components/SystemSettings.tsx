@@ -10,7 +10,7 @@ import {
   Divider,
 } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { PSKReporterConfig, PSKReporterStatus } from '@tx5dr/contracts';
+import type { PSKReporterConfig, PSKReporterStatus, AuthStatus } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 
 export interface SystemSettingsRef {
@@ -41,6 +41,10 @@ export const SystemSettings = forwardRef<
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>('');
 
+  // 认证配置
+  const [authConfig, setAuthConfig] = useState<AuthStatus | null>(null);
+  const [originalAuthConfig, setOriginalAuthConfig] = useState<AuthStatus | null>(null);
+
   // PSKReporter 状态
   const [pskrConfig, setPskrConfig] = useState<PSKReporterConfig | null>(null);
   const [originalPskrConfig, setOriginalPskrConfig] = useState<PSKReporterConfig | null>(null);
@@ -51,6 +55,7 @@ export const SystemSettings = forwardRef<
   // 加载配置
   useEffect(() => {
     loadSettings();
+    loadAuthConfig();
     loadPSKReporterConfig();
     loadPSKReporterStatus();
   }, []);
@@ -78,6 +83,17 @@ export const SystemSettings = forwardRef<
       } else {
         setError('加载配置失败');
       }
+    }
+  };
+
+  // 加载认证配置
+  const loadAuthConfig = async () => {
+    try {
+      const status = await api.getAuthStatus();
+      setAuthConfig(status);
+      setOriginalAuthConfig(status);
+    } catch (err) {
+      console.error('加载认证配置失败:', err);
     }
   };
 
@@ -130,11 +146,18 @@ export const SystemSettings = forwardRef<
     );
   };
 
+  // 检查认证配置是否有变化
+  const hasAuthChanges = () => {
+    if (!authConfig || !originalAuthConfig) return false;
+    return authConfig.allowPublicViewing !== originalAuthConfig.allowPublicViewing;
+  };
+
   // 检查是否有未保存的更改
   const hasUnsavedChanges = () => {
     return (
       decodeWhileTransmitting !== originalDecodeValue ||
       spectrumWhileTransmitting !== originalSpectrumValue ||
+      hasAuthChanges() ||
       hasPskrChanges()
     );
   };
@@ -155,6 +178,15 @@ export const SystemSettings = forwardRef<
         setOriginalSpectrumValue(spectrumWhileTransmitting);
       } else {
         throw new Error(result.message || '保存配置失败');
+      }
+
+      // 保存认证配置
+      if (authConfig && hasAuthChanges()) {
+        const authResult = await api.updateAuthConfig({
+          allowPublicViewing: authConfig.allowPublicViewing,
+        });
+        setAuthConfig(authResult);
+        setOriginalAuthConfig(authResult);
       }
 
       // 保存 PSKReporter 设置
@@ -208,7 +240,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, pskrConfig, originalPskrConfig, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, onUnsavedChanges]);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -254,6 +286,37 @@ export const SystemSettings = forwardRef<
           <p className="text-danger-700 text-sm">{error}</p>
         </div>
       )}
+
+      {/* 公开查看权限 */}
+      {authConfig && (
+        <Card shadow="none" radius="lg" classNames={{
+          base: "border border-divider bg-content1"
+        }}>
+          <CardBody className="p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <h4 className="font-semibold text-default-900 mb-1">允许公开查看</h4>
+                <div className="text-sm text-default-600 space-y-1">
+                  <p>
+                    <strong>开启</strong>：未登录用户可以以观察者身份查看界面，但无法操作
+                  </p>
+                  <p>
+                    <strong>关闭</strong>：未登录用户必须输入令牌登录后才能访问
+                  </p>
+                </div>
+              </div>
+              <Switch
+                isSelected={authConfig.allowPublicViewing}
+                onValueChange={(v) => setAuthConfig({ ...authConfig, allowPublicViewing: v })}
+                isDisabled={isSaving}
+                size="lg"
+              />
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      <Divider className="my-4" />
 
       {/* 发射时解码设置 */}
       <Card shadow="none" radius="lg" classNames={{

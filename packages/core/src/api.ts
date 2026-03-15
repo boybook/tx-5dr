@@ -54,6 +54,14 @@ import type {
   ActivateProfileResponse,
   CreateProfileRequest,
   UpdateProfileRequest,
+  LoginResponse,
+  AuthStatus,
+  AuthMeResponse,
+  TokenInfo,
+  CreateTokenRequest,
+  CreateTokenResponse,
+  UpdateTokenRequest,
+  UpdateAuthConfigRequest,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -153,6 +161,7 @@ export function handleApiError(errorData: unknown, httpStatus: number): ApiError
 class ApiConfig {
   private static instance: ApiConfig;
   private apiBase: string = '/api';
+  private jwtToken: string | null = null;
 
   private constructor() {}
 
@@ -177,6 +186,20 @@ class ApiConfig {
   getApiBase(): string {
     return this.apiBase;
   }
+
+  /**
+   * 设置 JWT Token（用于认证请求）
+   */
+  setJwtToken(token: string | null): void {
+    this.jwtToken = token;
+  }
+
+  /**
+   * 获取当前 JWT Token
+   */
+  getJwtToken(): string | null {
+    return this.jwtToken;
+  }
 }
 
 /**
@@ -185,6 +208,13 @@ class ApiConfig {
  */
 export function configureApi(apiBase: string): void {
   ApiConfig.getInstance().setApiBase(apiBase);
+}
+
+/**
+ * 设置 API JWT Token（登录成功后调用）
+ */
+export function configureAuthToken(token: string | null): void {
+  ApiConfig.getInstance().setJwtToken(token);
 }
 
 /**
@@ -227,6 +257,12 @@ async function apiRequest<T = unknown>(
 
     if (options?.body) {
       headers['Content-Type'] = 'application/json';
+    }
+
+    // 自动注入 JWT Token（如果已配置）
+    const jwt = ApiConfig.getInstance().getJwtToken();
+    if (jwt && !headers['Authorization']) {
+      headers['Authorization'] = `Bearer ${jwt}`;
     }
 
     const response = await fetch(fullUrl, {
@@ -455,6 +491,110 @@ export const api = {
         }
       );
     }
+  },
+
+  // ========== 认证API ==========
+
+  /**
+   * 获取认证状态（是否启用、是否允许公开查看）
+   * 无需认证
+   */
+  async getAuthStatus(apiBase?: string): Promise<AuthStatus> {
+    return apiRequest<AuthStatus>('/auth/status', undefined, apiBase);
+  },
+
+  /**
+   * Token 登录（返回 JWT）
+   * 无需认证
+   */
+  async login(token: string, apiBase?: string): Promise<LoginResponse> {
+    return apiRequest<LoginResponse>(
+      '/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      },
+      apiBase
+    );
+  },
+
+  /**
+   * 获取当前用户信息
+   * 需要认证
+   */
+  async getAuthMe(apiBase?: string): Promise<AuthMeResponse> {
+    return apiRequest<AuthMeResponse>('/auth/me', undefined, apiBase);
+  },
+
+  /**
+   * 获取所有 Token 列表（Admin）
+   */
+  async getTokens(apiBase?: string): Promise<TokenInfo[]> {
+    return apiRequest<TokenInfo[]>('/auth/tokens', undefined, apiBase);
+  },
+
+  /**
+   * 创建新 Token（Admin）
+   */
+  async createToken(req: CreateTokenRequest, apiBase?: string): Promise<CreateTokenResponse> {
+    return apiRequest<CreateTokenResponse>(
+      '/auth/tokens',
+      {
+        method: 'POST',
+        body: JSON.stringify(req),
+      },
+      apiBase
+    );
+  },
+
+  /**
+   * 更新 Token（Admin）
+   */
+  async updateToken(tokenId: string, updates: UpdateTokenRequest, apiBase?: string): Promise<TokenInfo> {
+    return apiRequest<TokenInfo>(
+      `/auth/tokens/${encodeURIComponent(tokenId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(updates),
+      },
+      apiBase
+    );
+  },
+
+  /**
+   * 撤销 Token（Admin）
+   */
+  async revokeToken(tokenId: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(
+      `/auth/tokens/${encodeURIComponent(tokenId)}`,
+      { method: 'DELETE' },
+      apiBase
+    );
+  },
+
+  /**
+   * 重新生成系统令牌（Admin）
+   */
+  async regenerateToken(tokenId: string, apiBase?: string): Promise<CreateTokenResponse> {
+    return apiRequest<CreateTokenResponse>(
+      `/auth/tokens/${encodeURIComponent(tokenId)}/regenerate`,
+      { method: 'POST' },
+      apiBase
+    );
+  },
+
+  /**
+   * 更新认证配置（Admin）
+   */
+  async updateAuthConfig(updates: UpdateAuthConfigRequest, apiBase?: string): Promise<AuthStatus> {
+    return apiRequest<AuthStatus>(
+      '/auth/config',
+      {
+        method: 'PATCH',
+        body: JSON.stringify(updates),
+      },
+      apiBase
+    );
   },
 
   // ========== 音频设备API ==========
@@ -1297,6 +1437,17 @@ export const api = {
     );
   },
 
+  async reorderProfiles(profileIds: string[], apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(
+      '/profiles/reorder',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ profileIds }),
+      },
+      apiBase
+    );
+  },
+
   async activateProfile(id: string, apiBase?: string): Promise<ActivateProfileResponse> {
     return apiRequest<ActivateProfileResponse>(
       `/profiles/${encodeURIComponent(id)}/activate`,
@@ -1308,6 +1459,15 @@ export const api = {
 
 // 为了向后兼容,也导出单独的函数
 export const {
+  // 认证函数
+  getAuthStatus,
+  login,
+  getAuthMe,
+  getTokens,
+  createToken,
+  updateToken: updateAuthToken,
+  revokeToken,
+  regenerateToken,
   getHello,
   getAudioDevices,
   getAudioSettings,
@@ -1387,5 +1547,6 @@ export const {
   ,createProfile
   ,updateProfile: updateProfile
   ,deleteProfile
+  ,reorderProfiles
   ,activateProfile
 } = api;

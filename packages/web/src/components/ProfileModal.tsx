@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Modal,
   ModalContent,
@@ -14,8 +14,9 @@ import {
   Textarea
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faTrash, faPen, faArrowLeft, faCheck } from '@fortawesome/free-solid-svg-icons';
+import { faPlus, faTrash, faPen, faArrowLeft, faCheck, faGripVertical } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
+import { Reorder } from 'framer-motion';
 import { api } from '@tx5dr/core';
 import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
@@ -46,8 +47,17 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // 本地排序状态（用于即时 UI 反馈）
+  const [localProfiles, setLocalProfiles] = useState<RadioProfile[]>(profiles);
+  const reorderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const radioSettingsRef = useRef<RadioDeviceSettingsRef | null>(null);
   const audioSettingsRef = useRef<AudioDeviceSettingsRef | null>(null);
+
+  // 同步 profiles 到本地状态
+  useEffect(() => {
+    setLocalProfiles(profiles);
+  }, [profiles]);
 
   // 重置到列表模式
   useEffect(() => {
@@ -56,6 +66,37 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       setSelectedProfileId(activeProfileId);
     }
   }, [isOpen, activeProfileId]);
+
+  // 拖拽排序处理：即时更新 UI，debounce 保存到后端
+  const handleReorder = useCallback((newOrder: RadioProfile[]) => {
+    setLocalProfiles(newOrder);
+
+    if (reorderTimeoutRef.current) {
+      clearTimeout(reorderTimeoutRef.current);
+    }
+
+    reorderTimeoutRef.current = setTimeout(async () => {
+      try {
+        await api.reorderProfiles(newOrder.map(p => p.id));
+      } catch (error) {
+        addToast({
+          title: '排序保存失败',
+          description: error instanceof Error ? error.message : '请重试',
+          color: 'danger',
+          timeout: 3000,
+        });
+      }
+    }, 500);
+  }, []);
+
+  // 清理 timeout
+  useEffect(() => {
+    return () => {
+      if (reorderTimeoutRef.current) {
+        clearTimeout(reorderTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // 获取电台类型显示文本
   const getRadioTypeLabel = (config: HamlibConfig) => {
@@ -209,62 +250,66 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {profiles.map(profile => (
-                  <Card
-                    key={profile.id}
-                    isPressable
-                    onPress={() => setSelectedProfileId(profile.id)}
-                    shadow="none"
-                    radius="lg"
-                    classNames={{
-                      base: `border overflow-hidden ${selectedProfileId === profile.id ? 'border-primary bg-primary-50/50' : 'border-divider bg-content1'} transition-colors`
-                    }}
-                  >
-                    <div className="flex">
-                      <div className={`w-1 flex-shrink-0 ${getIndicatorColor(profile.id)}`} />
-                      <CardBody className="p-3 flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-default-900 truncate">{profile.name}</span>
-                              {profile.id === activeProfileId && (
-                                <Chip size="sm" color="success" variant="flat">当前</Chip>
-                              )}
-                            </div>
-                            <p className="text-xs text-default-500 truncate mt-0.5">
-                              {getRadioTypeLabel(profile.radio)}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <Button
-                              size="sm"
-                              variant="light"
-                              isIconOnly
-                              onPress={() => handleStartEdit(profile)}
-                              title="编辑"
-                            >
-                              <FontAwesomeIcon icon={faPen} className="text-default-400 text-xs" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="light"
-                              isIconOnly
-                              color="danger"
-                              isDisabled={profile.id === activeProfileId}
-                              isLoading={isDeleting === profile.id}
-                              onPress={() => handleDelete(profile.id)}
-                              title={profile.id === activeProfileId ? '无法删除当前激活的 Profile' : '删除'}
-                            >
-                              <FontAwesomeIcon icon={faTrash} className="text-xs" />
-                            </Button>
-                          </div>
+              <Reorder.Group axis="y" values={localProfiles} onReorder={handleReorder} className="space-y-2" as="div">
+                {localProfiles.map(profile => (
+                  <Reorder.Item key={profile.id} value={profile} as="div" className="w-full">
+                    <Card
+                      isPressable
+                      onPress={() => setSelectedProfileId(profile.id)}
+                      shadow="none"
+                      radius="lg"
+                      classNames={{
+                        base: `border overflow-hidden w-full ${selectedProfileId === profile.id ? 'border-primary bg-primary-50/50' : 'border-divider bg-content1'} transition-colors`
+                      }}
+                    >
+                      <div className="flex">
+                        <div className={`w-1 flex-shrink-0 ${getIndicatorColor(profile.id)}`} />
+                        <div className="flex items-center pl-2 cursor-grab active:cursor-grabbing text-default-300 hover:text-default-500 transition-colors">
+                          <FontAwesomeIcon icon={faGripVertical} className="text-xs" />
                         </div>
-                      </CardBody>
-                    </div>
-                  </Card>
+                        <CardBody className="p-3 flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-default-900 truncate">{profile.name}</span>
+                                {profile.id === activeProfileId && (
+                                  <Chip size="sm" color="success" variant="flat">当前</Chip>
+                                )}
+                              </div>
+                              <p className="text-xs text-default-500 truncate mt-0.5">
+                                {getRadioTypeLabel(profile.radio)}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <Button
+                                size="sm"
+                                variant="light"
+                                isIconOnly
+                                onPress={() => handleStartEdit(profile)}
+                                title="编辑"
+                              >
+                                <FontAwesomeIcon icon={faPen} className="text-default-400 text-xs" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="light"
+                                isIconOnly
+                                color="danger"
+                                isDisabled={profile.id === activeProfileId}
+                                isLoading={isDeleting === profile.id}
+                                onPress={() => handleDelete(profile.id)}
+                                title={profile.id === activeProfileId ? '无法删除当前激活的 Profile' : '删除'}
+                              >
+                                <FontAwesomeIcon icon={faTrash} className="text-xs" />
+                              </Button>
+                            </div>
+                          </div>
+                        </CardBody>
+                      </div>
+                    </Card>
+                  </Reorder.Item>
                 ))}
-              </div>
+              </Reorder.Group>
 
               <Button
                 fullWidth
@@ -340,22 +385,21 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
           {/* 音频设置 */}
           <div>
-            {isIcomWlan ? (
-              <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1' }}>
-                <CardBody className="p-4">
+            {isIcomWlan && (
+              <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1 mb-3' }}>
+                <CardBody className="p-3">
                   <div className="flex items-center gap-2 text-primary">
-                    <Chip size="sm" color="primary" variant="flat">自动</Chip>
-                    <span className="text-sm">ICOM WLAN 模式下音频由电台直接提供，无需手动配置</span>
+                    <Chip size="sm" color="primary" variant="flat">默认</Chip>
+                    <span className="text-sm">ICOM WLAN 模式默认使用电台音频，如有特殊音频路由可手动更改</span>
                   </div>
                 </CardBody>
               </Card>
-            ) : (
-              <AudioDeviceSettings
-                ref={audioSettingsRef}
-                initialConfig={editAudioConfig}
-                onChange={setEditAudioConfig}
-              />
             )}
+            <AudioDeviceSettings
+              ref={audioSettingsRef}
+              initialConfig={editAudioConfig}
+              onChange={setEditAudioConfig}
+            />
           </div>
         </div>
       </ModalBody>

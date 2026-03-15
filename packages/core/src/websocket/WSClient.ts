@@ -18,6 +18,7 @@ export class WSClient extends WSMessageHandler {
   private config: Required<WSClientConfig>;
   private isConnecting = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private jwt: string | null = null;
 
   constructor(config: WSClientConfig) {
     super();
@@ -239,5 +240,35 @@ export class WSClient extends WSMessageHandler {
    */
   requestCall(operatorId: string, callsign: string): void {
     this.send(WSMessageType.OPERATOR_REQUEST_CALL, { operatorId, callsign });
+  }
+
+  // ===== 认证相关方法 =====
+
+  /**
+   * 设置 JWT（登录成功后调用，下次连接/重连时自动发送）
+   */
+  setAuthToken(jwt: string | null): void {
+    this.jwt = jwt;
+  }
+
+  /**
+   * 获取当前 JWT
+   */
+  getAuthToken(): string | null {
+    return this.jwt;
+  }
+
+  /**
+   * 发送 JWT 进行认证（登录或在线权限升级）
+   */
+  sendAuthToken(jwt: string): void {
+    this.send(WSMessageType.AUTH_TOKEN, { jwt });
+  }
+
+  /**
+   * 请求以公开观察者模式接入（无需 Token）
+   */
+  sendAuthPublicViewer(): void {
+    this.send(WSMessageType.AUTH_PUBLIC_VIEWER);
   }
 } 

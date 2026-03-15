@@ -108,3 +108,6 @@ export * from './schema/qrz.schema.js';
 
 // LoTW Schema
 export * from './schema/lotw.schema.js';
+
+// Auth Schema
+export * from './schema/auth.schema.js';

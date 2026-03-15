@@ -15,9 +15,10 @@ import type {
   ReconnectProgress,
   RadioErrorEventData
 } from '@tx5dr/contracts';
-import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
 import { getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
+import { useAuth } from './authStore';
 import {
   showErrorToast,
   createRetryAction,
@@ -29,6 +30,7 @@ import {
 export interface ConnectionState {
   isConnected: boolean;
   isConnecting: boolean;
+  wasEverConnected: boolean;
   radioService: RadioService | null;
 }
 
@@ -39,7 +41,8 @@ export type ConnectionAction =
 
 const initialConnectionState: ConnectionState = {
   isConnected: false,
-  isConnecting: false,
+  isConnecting: true,
+  wasEverConnected: false,
   radioService: null
 };
 
@@ -50,9 +53,10 @@ function connectionReducer(state: ConnectionState, action: ConnectionAction): Co
         ...state,
         isConnected: true,
         isConnecting: false,
+        wasEverConnected: true,
       };
     case 'disconnected':
-      return { ...state, isConnected: false, isConnecting: false };
+      return { ...state, isConnected: false, isConnecting: !state.wasEverConnected };
     case 'SET_RADIO_SERVICE':
       return { ...state, radioService: action.payload };
     default:
@@ -88,6 +92,7 @@ export interface RadioState {
   // Profile 管理
   profiles: RadioProfile[];
   activeProfileId: string | null;
+  profilesLoaded: boolean;
   // 电台错误频道
   radioErrors: RadioErrorRecord[];
   latestRadioError: RadioErrorRecord | null;
@@ -173,6 +178,7 @@ const initialRadioState: RadioState = {
   radioConnectionHealth: null,
   profiles: [],
   activeProfileId: null,
+  profilesLoaded: false,
   radioErrors: [],
   latestRadioError: null
 };
@@ -289,7 +295,8 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return {
         ...state,
         profiles: action.payload.profiles,
-        activeProfileId: action.payload.activeProfileId
+        activeProfileId: action.payload.activeProfileId,
+        profilesLoaded: true
       };
 
     case 'profileChanged': {
@@ -511,7 +518,12 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [radioState, radioDispatch] = useReducer(radioReducer, initialRadioState);
   const [slotPacksState, slotPacksDispatch] = useReducer(slotPacksReducer, initialSlotPacksState);
   const [logbookState, logbookDispatch] = useReducer(logbookReducer, initialLogbookState);
-  
+
+  // 认证状态引用（用于事件回调中读取最新认证状态）
+  const { state: authState } = useAuth();
+  const authStateRef = useRef(authState);
+  authStateRef.current = authState;
+
   // 使用 useRef 确保 RadioService 单例，避免 StrictMode 导致的重复创建
   const radioServiceRef = useRef<RadioService | null>(null);
   const connectionStatusTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -530,11 +542,55 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const eventMap: Record<string, (data?: unknown) => void> = {
       connected: () => {
         connectionDispatch({ type: 'connected' });
-        const handshakeOperatorIds = getHandshakeOperatorIds();
-        console.log('🤝 [RadioProvider] 连接成功，发送握手消息:', {
-          enabledOperatorIds: handshakeOperatorIds
+        // 当认证未启用时，服务端不会发 AUTH_REQUIRED，直接握手
+        // 当认证启用时，等待 authResult 成功后再握手
+        if (!authStateRef.current.authEnabled) {
+          const handshakeOperatorIds = getHandshakeOperatorIds();
+          console.log('🤝 [RadioProvider] 认证未启用，直接发送握手消息:', {
+            enabledOperatorIds: handshakeOperatorIds
+          });
+          radioService.sendHandshake(handshakeOperatorIds);
+        }
+        // else: 等待 authRequired → 发送 token/publicViewer → authResult → 握手
+      },
+      // 认证：服务端要求认证
+      authRequired: (data: unknown) => {
+        const authData = data as { allowPublicViewing: boolean };
+        console.log('🔐 [RadioProvider] 收到 AUTH_REQUIRED:', authData);
+        const wsClient = radioService.wsClientInstance;
+        const jwt = authStateRef.current.jwt;
+        if (jwt) {
+          console.log('🔑 [RadioProvider] 发送 JWT 进行认证');
+          wsClient.sendAuthToken(jwt);
+        } else if (authData.allowPublicViewing) {
+          console.log('👀 [RadioProvider] 以公开观察者模式接入');
+          wsClient.sendAuthPublicViewer();
+        } else {
+          console.warn('⚠️ [RadioProvider] 需要认证但无 JWT');
+        }
+      },
+      // 认证结果
+      authResult: (data: unknown) => {
+        const result = data as { success: boolean; role?: UserRole; label?: string; operatorIds?: string[]; error?: string };
+        if (result.success) {
+          console.log('✅ [RadioProvider] 认证成功, role:', result.role);
+          // 认证成功后发送握手
+          const handshakeOperatorIds = getHandshakeOperatorIds();
+          radioService.sendHandshake(handshakeOperatorIds);
+        } else {
+          console.error('❌ [RadioProvider] 认证失败:', result.error);
+        }
+      },
+      // JWT 过期通知
+      authExpired: (data: unknown) => {
+        const expData = data as { reason?: string };
+        console.warn('⏰ [RadioProvider] JWT 已过期:', expData.reason);
+        addToast({
+          title: '认证已过期',
+          description: '请重新登录',
+          color: 'warning',
+          timeout: 5000,
         });
-        radioService.sendHandshake(handshakeOperatorIds);
       },
       disconnected: () => {
         connectionDispatch({ type: 'disconnected' });
@@ -933,6 +989,7 @@ export const useProfiles = () => {
     profiles: state.radio.profiles,
     activeProfileId: state.radio.activeProfileId,
     activeProfile,
+    profilesLoaded: state.radio.profilesLoaded,
   };
 };
 

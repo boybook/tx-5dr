@@ -8,7 +8,8 @@
 import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { HamlibConfigSchema, RadioConnectionStatus } from '@tx5dr/contracts';
+import { HamlibConfigSchema, RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
+import { requireRole } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
 const { SerialPort } = serialport;
@@ -152,7 +153,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
     });
   });
 
-  fastify.post('/frequency', async (req, reply) => {
+  fastify.post('/frequency', {
+    preHandler: [requireRole(UserRole.ADMIN)],
+  }, async (req, reply) => {
     const { frequency, radioMode, mode, band, description } = req.body as {
       frequency: number;
       radioMode?: string;

@@ -6,7 +6,7 @@ const { contextBridge, ipcRenderer } = require('electron');
  */
 
 // 设置 API 基础 URL 环境变量
-const API_BASE = process.env.EMBEDDED === 'true' 
+const API_BASE = process.env.EMBEDDED === 'true'
   ? `http://127.0.0.1:${process.env.SERVER_PORT || 4000}`
   : 'http://localhost:4000';
 

@@ -25,6 +25,51 @@ let hasStartupError: boolean = false; // 是否发生启动错误
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 
+// ===== 认证 Token 管理 =====
+let embeddedAdminToken: string | null = null;
+
+/**
+ * 与 Server AppPaths 保持一致的路径工具
+ * 必须使用 'TX-5DR' 而非 app.getPath('userData')，因为后者的 app name
+ * 来自 package.json 的 name 字段（'tx-5dr' 小写），在大小写敏感的文件系统上会不一致
+ */
+const APP_DIR_NAME = 'TX-5DR';
+
+function getAppConfigDir(): string {
+  if (process.platform === 'darwin') {
+    return path.join(homedir(), 'Library', 'Application Support', APP_DIR_NAME);
+  } else if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(homedir(), 'AppData', 'Roaming'), APP_DIR_NAME);
+  } else {
+    const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config');
+    return path.join(xdgConfig, APP_DIR_NAME);
+  }
+}
+
+function getAppLogsDir(): string {
+  if (process.platform === 'darwin') {
+    return path.join(homedir(), 'Library', 'Logs', APP_DIR_NAME);
+  } else if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_DIR_NAME, 'logs');
+  } else {
+    return path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'), APP_DIR_NAME, 'logs');
+  }
+}
+
+/**
+ * 从 Server 配置目录读取 .admin-token 文件
+ * Server 启动时会在配置目录写入该文件
+ */
+function readAdminTokenFile(): string | null {
+  const tokenPath = path.join(getAppConfigDir(), '.admin-token');
+  try {
+    const token = fs.readFileSync(tokenPath, 'utf-8').trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
 // 寻找可用端口（从起始端口开始递增尝试），可选避免指定端口冲突
 async function findFreePort(start: number, maxStep = 50, avoid?: number, host = '0.0.0.0'): Promise<number> {
   function tryPort(port: number): Promise<boolean> {
@@ -371,10 +416,13 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     }
   }
 
-  // 导航到前端服务页面（加载完成后自然替换 loading 页面）
+  // 导航到前端服务页面（通过 URL 参数传递 auth token 实现自动登录）
   const webUrl = getWebUrl();
-  console.log('Loading URL:', webUrl);
-  await mainWindow.loadURL(webUrl);
+  const urlWithAuth = embeddedAdminToken
+    ? `${webUrl}?auth_token=${encodeURIComponent(embeddedAdminToken)}`
+    : webUrl;
+  console.log('Loading URL:', urlWithAuth);
+  await mainWindow.loadURL(urlWithAuth);
 
   setupIpcHandlers();
   return mainWindow;
@@ -456,10 +504,14 @@ function openLogInTerminal() {
 }
 
 /**
- * 在系统浏览器中打开 web 界面
+ * 在系统浏览器中打开 web 界面（附带认证 token）
  */
 function openInBrowser() {
-  void shell.openExternal(getWebUrl());
+  const base = getWebUrl();
+  const url = embeddedAdminToken
+    ? `${base}?auth_token=${encodeURIComponent(embeddedAdminToken)}`
+    : base;
+  void shell.openExternal(url);
 }
 
 async function checkServerHealth(): Promise<boolean> {
@@ -610,6 +662,9 @@ async function createWindow() {
   const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
   console.log('🔍 isDevelopment:', isDevelopment);
 
+  // Admin Token 将从 Server 生成的 .admin-token 文件中读取
+  // 在 server 就绪后轮询获取
+
   if (isDevelopment) {
     console.log('🛠️ 开发模式：使用外部服务器 (http://localhost:4000)');
     console.log('📋 请确保已经启动开发服务器：yarn dev');
@@ -651,7 +706,9 @@ async function createWindow() {
 
     console.log(`🔎 端口选择：server=${serverPort}, web=${webPort}`);
 
-    serverProcess = runChild('server', serverEntry, { PORT: String(serverPort) });
+    serverProcess = runChild('server', serverEntry, {
+      PORT: String(serverPort),
+    });
     webProcess = runChild('client-tools', webEntry, {
       PORT: String(webPort),
       STATIC_DIR: join(res, 'app', 'packages', 'web', 'dist'),
@@ -684,6 +741,19 @@ async function createWindow() {
     return;
   }
 
+  // 从 Server 生成的 .admin-token 文件读取管理员令牌
+  for (let i = 0; i < 30; i++) {
+    embeddedAdminToken = readAdminTokenFile();
+    if (embeddedAdminToken) break;
+    console.log(`⏳ 等待 .admin-token 文件... (${i + 1}/30)`);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  if (embeddedAdminToken) {
+    log.info(`🔑 Admin Token 已就绪: ${embeddedAdminToken.slice(0, 15)}...`);
+  } else {
+    log.warn('⚠️ 未能读取到 .admin-token 文件，将以无认证模式启动');
+  }
+
   // ✅ 成功：直接创建主窗口
   console.log('✅ 服务启动成功，创建主窗口...');
   return createMainWindowOnly();
@@ -696,13 +766,7 @@ const startApp = async () => {
   console.log("startApp");
 
   // 初始化 electron-log：统一日志目录到与 server AppPaths 一致的位置
-  // macOS: ~/Library/Logs/TX-5DR/, Windows: %LOCALAPPDATA%\TX-5DR\logs\, Linux: ~/.local/share/TX-5DR/logs/
-  const APP_NAME = 'TX-5DR';
-  const logsDir = process.platform === 'darwin'
-    ? path.join(homedir(), 'Library', 'Logs', APP_NAME)
-    : process.platform === 'win32'
-      ? path.join(process.env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local'), APP_NAME, 'logs')
-      : path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'), APP_NAME, 'logs');
+  const logsDir = getAppLogsDir();
   fs.mkdirSync(logsDir, { recursive: true });
   log.transports.file.resolvePathFn = () => path.join(logsDir, 'electron-main.log');
   log.initialize();
@@ -829,16 +893,19 @@ function setupIpcHandlers() {
         logbookWindow.setMenuBarVisibility(false);
       }
 
+      // auth token 参数（通过 URL 参数传递，与主窗口一致）
+      const authParam = embeddedAdminToken ? `&auth_token=${encodeURIComponent(embeddedAdminToken)}` : '';
+
       // 加载通联日志页面
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
         // 开发模式：使用 Vite
-        const logbookUrl = `http://localhost:5173/logbook.html?${queryString}`;
+        const logbookUrl = `http://localhost:5173/logbook.html?${queryString}${authParam}`;
         console.log('📖 [IPC] 加载开发URL:', logbookUrl);
         await logbookWindow.loadURL(logbookUrl);
         logbookWindow.webContents.openDevTools();
       } else {
         // 生产模式：连接内置静态 web 服务
-        const fullUrl = `http://127.0.0.1:${selectedWebPort || 5173}/logbook.html?${queryString}`;
+        const fullUrl = `http://127.0.0.1:${selectedWebPort || 5173}/logbook.html?${queryString}${authParam}`;
         console.log('📖 [IPC] 加载生产URL:', fullUrl);
         await logbookWindow.loadURL(fullUrl);
       }
