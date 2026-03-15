@@ -73,56 +73,35 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const [isForceStopPopoverOpen, setIsForceStopPopoverOpen] = React.useState(false);
 
   // 判断是否显示立即停止发射Popover
+  // 条件：所有操作者都已关闭发射开关，且当前周期PTT仍在进行中
   const shouldShowForceStopPopover = React.useCallback(() => {
-    const checks = {
-      operatorTransmitting: operatorStatus.isTransmitting,
-      pttActive: radio.state.pttStatus?.isTransmitting,
-      inTransmitCycle: operatorStatus.cycleInfo?.isTransmitCycle,
-      pttOperatorIds: radio.state.pttStatus?.operatorIds || [],
-      currentOperatorId: operatorStatus.id
-    };
-
-    console.log('🔍 [ForceStop] 检查条件:', checks);
-
     // 1. 当前操作员已关闭发射开关
     if (operatorStatus.isTransmitting) {
-      console.log('🔍 [ForceStop] 操作员还在发射，不显示');
       return false;
     }
 
     // 2. PTT正在激活
     if (!radio.state.pttStatus?.isTransmitting) {
-      console.log('🔍 [ForceStop] PTT未激活，不显示');
       return false;
     }
 
     // 3. 当前在发射周期
     if (!operatorStatus.cycleInfo?.isTransmitCycle) {
-      console.log('🔍 [ForceStop] 不在发射周期，不显示');
       return false;
     }
 
-    // 4. 检查PTT状态中的操作员列表
-    const pttStatus = radio.state.pttStatus;
-    if (!pttStatus) {
-      console.log('🔍 [ForceStop] PTT状态不存在，不显示');
+    // 4. 所有操作者都已关闭发射开关（不仅是当前操作者）
+    const anyOperatorTransmitting = radio.state.operators.some(op => op.isTransmitting);
+    if (anyOperatorTransmitting) {
       return false;
     }
 
-    // 5. 如果PTT状态中还有其他操作员,不显示(说明有其他操作员在发射)
-    const otherOperators = pttStatus.operatorIds?.filter(id => id !== operatorStatus.id) || [];
-    if (otherOperators.length > 0) {
-      console.log('🔍 [ForceStop] 其他操作员在发射，不显示:', otherOperators);
-      return false;
-    }
-
-    console.log('✅ [ForceStop] 所有条件满足，应该显示Popover');
     return true;
   }, [
     operatorStatus.isTransmitting,
     operatorStatus.cycleInfo?.isTransmitCycle,
-    operatorStatus.id,
-    radio.state.pttStatus
+    radio.state.pttStatus,
+    radio.state.operators
   ]);
 
   // 监听状态变化，自动打开/关闭Popover
