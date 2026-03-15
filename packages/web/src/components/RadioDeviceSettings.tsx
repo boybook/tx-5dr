@@ -172,7 +172,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     setTestResult(null);
 
     try {
-      const response = await api.testPTT();
+      const response = await api.testPTT(config);
       if (response.success) {
         setTestResult({ type: 'success', message: 'PTT测试成功！电台已切换发射状态 0.5 秒。' });
       } else {
@@ -297,7 +297,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="primary"
                       onPress={handleTestConnection}
                       isLoading={isTestingConnection}
-                      isDisabled={!config.network?.host || !config.network?.port}
+                      isDisabled={!config.network?.host || !config.network?.port || isTestingPTT}
                     >
                       {isTestingConnection ? '测试连接中...' : '测试连接'}
                     </Button>
@@ -307,7 +307,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.network?.host || !config.network?.port || config.pttMethod === 'vox'}
+                      isDisabled={!config.network?.host || !config.network?.port || config.pttMethod === 'vox' || isTestingConnection}
                     >
                       {config.pttMethod === 'vox' ? 'VOX 模式无需测试' : isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>
@@ -700,7 +700,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="primary"
                       onPress={handleTestConnection}
                       isLoading={isTestingConnection}
-                      isDisabled={!config.serial?.path || !config.serial?.rigModel}
+                      isDisabled={!config.serial?.path || !config.serial?.rigModel || isTestingPTT}
                     >
                       {isTestingConnection ? '测试连接中...' : '测试连接'}
                     </Button>
@@ -710,7 +710,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.serial?.path || !config.serial?.rigModel || config.pttMethod === 'vox'}
+                      isDisabled={!config.serial?.path || !config.serial?.rigModel || config.pttMethod === 'vox' || isTestingConnection}
                     >
                       {config.pttMethod === 'vox' ? 'VOX 模式无需测试' : isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>
@@ -846,7 +846,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="primary"
                       onPress={handleTestConnection}
                       isLoading={isTestingConnection}
-                      isDisabled={!config.icomWlan?.ip || !config.icomWlan?.port || !config.icomWlan?.userName || !config.icomWlan?.password}
+                      isDisabled={!config.icomWlan?.ip || !config.icomWlan?.port || !config.icomWlan?.userName || !config.icomWlan?.password || isTestingPTT}
                     >
                       {isTestingConnection ? '测试连接中...' : '测试连接'}
                     </Button>
@@ -856,7 +856,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.icomWlan?.ip || !config.icomWlan?.port}
+                      isDisabled={!config.icomWlan?.ip || !config.icomWlan?.port || isTestingConnection}
                     >
                       {isTestingPTT ? '测试PTT中...' : '测试PTT'}
                     </Button>
