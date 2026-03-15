@@ -9,12 +9,45 @@ import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { HamlibConfigSchema, RadioConnectionStatus } from '@tx5dr/contracts';
+import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
 const { SerialPort } = serialport;
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+
+/** 判断两个配置是否指向同一硬件目标（用于复用判断） */
+function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
+  if (a.type !== b.type) return false;
+  switch (a.type) {
+    case 'serial': return a.serial?.path === b.serial?.path;
+    case 'network': return a.network?.host === b.network?.host && a.network?.port === b.network?.port;
+    case 'icom-wlan': return a.icomWlan?.ip === b.icomWlan?.ip && a.icomWlan?.port === b.icomWlan?.port;
+    default: return true;
+  }
+}
+
+/** 判断测试配置是否与已有连接存在硬件冲突（串口独占 / ICOM WLAN 单客户端） */
+function isHardwareConflict(active: HamlibConfig, test: HamlibConfig): boolean {
+  // 串口：同一 path 就冲突（OS 独占）
+  if (test.type === 'serial' && active.type === 'serial'
+      && active.serial?.path === test.serial?.path) return true;
+  // ICOM WLAN：同一 IP 就冲突（单客户端限制）
+  if (test.type === 'icom-wlan' && active.type === 'icom-wlan'
+      && active.icomWlan?.ip === test.icomWlan?.ip) return true;
+  return false;
+}
+
+/** 返回硬件描述文本（用于冲突提示消息） */
+function describeHardware(config: HamlibConfig): string {
+  switch (config.type) {
+    case 'serial': return `串口 ${config.serial?.path || ''}`;
+    case 'network': return `网络 ${config.network?.host || ''}:${config.network?.port || ''}`;
+    case 'icom-wlan': return `ICOM WLAN ${config.icomWlan?.ip || ''}`;
+    default: return '未知';
+  }
+}
 
 export async function radioRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
@@ -255,52 +288,57 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
   fastify.post('/test', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
     const config = HamlibConfigSchema.parse(req.body);
-    const tester = new PhysicalRadioManager();
 
+    if (config.type === 'none') {
+      return reply.send({ success: true, message: '无电台模式，无需测试连接' });
+    }
+
+    // 智能复用：检查引擎是否已连接同一硬件
+    if (radioManager.isConnected()) {
+      const activeConfig = radioManager.getConfig();
+
+      if (isHardwareSameTarget(activeConfig, config)) {
+        // 硬件目标相同 → 复用已有连接进行健康检查
+        console.log('🔄 [Radio Routes] 复用已有连接进行测试');
+        try {
+          await radioManager.testConnection();
+          return reply.send({ success: true, message: '连接测试成功！电台响应正常。' });
+        } catch (error) {
+          throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
+        }
+      }
+
+      // 硬件冲突检测：串口独占 / ICOM WLAN 单客户端
+      if (isHardwareConflict(activeConfig, config)) {
+        return reply.send({
+          success: false,
+          message: `引擎正在使用${describeHardware(activeConfig)}，无法同时测试。请先停止引擎或使用不同的硬件。`
+        });
+      }
+    }
+
+    // 创建临时连接，同步等待真实结果
+    const tester = new PhysicalRadioManager();
     try {
       await tester.applyConfig(config);
-
-      // 立即返回成功，然后在后台执行测试
-      reply.send({ success: true, message: '连接测试已启动，正在验证电台响应...' });
-
-      // 在后台异步执行连接测试
-      setImmediate(async () => {
-        try {
-          console.log('🔄 [Radio Routes] 开始连接测试...');
-
-          // 测试基本功能：尝试获取频率来验证连接
-          await tester.testConnection();
-          console.log('✅ [Radio Routes] 连接测试成功');
-
-        } catch (error) {
-          console.error('❌ [Radio Routes] 连接测试失败:', error);
-        } finally {
-          // 无论成功失败都要清理连接
-          try {
-            await tester.disconnect();
-            console.log('🧹 [Radio Routes] 测试连接已清理');
-          } catch (error) {
-            console.warn('❌ [Radio Routes] 清理测试连接失败:', error);
-          }
-        }
-      });
-
+      await tester.testConnection();
+      console.log('✅ [Radio Routes] 连接测试成功');
+      return reply.send({ success: true, message: '连接测试成功！电台响应正常。' });
     } catch (e) {
-      // 配置失败时立即清理并返回错误
-      setTimeout(async () => {
-        try {
-          await tester.disconnect();
-        } catch (error) {
-          console.warn('❌ [Radio Routes] 配置失败后清理实例失败:', error);
-        }
-      }, 0);
-
-      throw RadioError.from(e, RadioErrorCode.INVALID_CONFIG);
+      console.error('❌ [Radio Routes] 连接测试失败:', e);
+      throw RadioError.from(e, RadioErrorCode.CONNECTION_FAILED);
+    } finally {
+      try {
+        await tester.disconnect();
+        console.log('🧹 [Radio Routes] 测试连接已清理');
+      } catch (error) {
+        console.warn('⚠️ [Radio Routes] 清理测试连接失败:', error);
+      }
     }
   });
 
-  fastify.post('/test-ptt', async (_req, reply) => {
-    const config = configManager.getRadioConfig();
+  fastify.post('/test-ptt', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
+    const config = HamlibConfigSchema.parse(req.body);
 
     if (config.type === 'none') {
       throw new RadioError({
@@ -315,100 +353,60 @@ export async function radioRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // 检查主程序是否已有电台连接
+    // PTT 测试辅助：开启 → 等 500ms → 关闭，确保异常时 PTT 关闭
+    const doPttTest = async (manager: PhysicalRadioManager) => {
+      try {
+        await manager.setPTT(true);
+        console.log('📡 [Radio Routes] PTT已开启，电台处于发射状态');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await manager.setPTT(false);
+        console.log('✅ [Radio Routes] PTT测试完成，已恢复接收状态');
+      } catch (error) {
+        // 确保 PTT 关闭
+        try { await manager.setPTT(false); } catch { /* ignore */ }
+        throw error;
+      }
+    };
+
+    // 智能复用：检查引擎是否已连接同一硬件
     if (radioManager.isConnected()) {
-      console.log('🔄 [Radio Routes] 使用已有电台连接进行PTT测试');
-      
-      // 立即返回成功，然后在后台执行PTT测试
-      reply.send({ success: true, message: 'PTT测试已启动，正在切换发射状态0.5秒' });
-      
-      // 在后台异步执行PTT测试流程
-      setImmediate(async () => {
+      const activeConfig = radioManager.getConfig();
+
+      if (isHardwareSameTarget(activeConfig, config)) {
+        console.log('🔄 [Radio Routes] 复用已有连接进行PTT测试');
         try {
-          console.log('🔄 [Radio Routes] 开始PTT测试 (使用已有连接)...');
-          
-          // 开启PTT
-          await radioManager.setPTT(true);
-          console.log('📡 [Radio Routes] PTT已开启，电台处于发射状态');
-          
-          // 等待0.5秒后关闭PTT
-          setTimeout(async () => {
-            try {
-              await radioManager.setPTT(false);
-              console.log('✅ [Radio Routes] PTT测试完成，已恢复接收状态');
-            } catch (error) {
-              console.warn('❌ [Radio Routes] PTT关闭失败:', error);
-            }
-          }, 500);
-          
+          await doPttTest(radioManager);
+          return reply.send({ success: true, message: 'PTT 测试成功！已切换发射状态 0.5 秒。' });
         } catch (error) {
-          console.error('❌ [Radio Routes] PTT测试失败:', error);
+          throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
         }
-      });
-      
-      return;
+      }
+
+      if (isHardwareConflict(activeConfig, config)) {
+        return reply.send({
+          success: false,
+          message: `引擎正在使用${describeHardware(activeConfig)}，无法同时测试 PTT。请先停止引擎或使用不同的硬件。`
+        });
+      }
     }
 
-    // 主程序未连接，创建临时测试实例
+    // 创建临时连接，同步等待 PTT 测试结果
     console.log('🔄 [Radio Routes] 创建临时连接进行PTT测试');
     const tester = new PhysicalRadioManager();
-    
     try {
-      // 应用配置并连接
       await tester.applyConfig(config);
-      
-      // 立即返回成功，然后在后台执行PTT测试
-      reply.send({ success: true, message: 'PTT测试已启动，正在切换发射状态0.5秒' });
-      
-      // 在后台异步执行PTT测试流程
-      setImmediate(async () => {
-        try {
-          console.log('🔄 [Radio Routes] 开始PTT测试 (临时连接)...');
-          
-          // 开启PTT
-          await tester.setPTT(true);
-          console.log('📡 [Radio Routes] PTT已开启，电台处于发射状态');
-          
-          // 等待0.5秒后关闭PTT
-          setTimeout(async () => {
-            try {
-              await tester.setPTT(false);
-              console.log('✅ [Radio Routes] PTT测试完成，已恢复接收状态');
-            } catch (error) {
-              console.warn('❌ [Radio Routes] PTT关闭失败:', error);
-            } finally {
-              // 清理测试连接
-              try {
-                await tester.disconnect();
-                console.log('🧹 [Radio Routes] PTT测试连接已清理');
-              } catch (error) {
-                console.warn('❌ [Radio Routes] 清理PTT测试连接失败:', error);
-              }
-            }
-          }, 500);
-          
-        } catch (error) {
-          console.error('❌ [Radio Routes] PTT测试失败:', error);
-          // 清理测试连接
-          try {
-            await tester.disconnect();
-          } catch (cleanupError) {
-            console.warn('❌ [Radio Routes] 清理PTT测试连接失败:', cleanupError);
-          }
-        }
-      });
-      
+      await doPttTest(tester);
+      return reply.send({ success: true, message: 'PTT 测试成功！已切换发射状态 0.5 秒。' });
     } catch (e) {
-      // 配置失败时立即清理并返回错误
-      setTimeout(async () => {
-        try {
-          await tester.disconnect();
-        } catch (error) {
-          console.warn('❌ [Radio Routes] PTT配置失败后清理实例失败:', error);
-        }
-      }, 0);
-
+      console.error('❌ [Radio Routes] PTT测试失败:', e);
       throw RadioError.from(e, RadioErrorCode.INVALID_OPERATION);
+    } finally {
+      try {
+        await tester.disconnect();
+        console.log('🧹 [Radio Routes] PTT测试连接已清理');
+      } catch (error) {
+        console.warn('⚠️ [Radio Routes] 清理PTT测试连接失败:', error);
+      }
     }
   });
 

@@ -527,8 +527,15 @@ export const api = {
     );
   },
 
-  async testPTT(apiBase?: string): Promise<TestResponse> {
-    return apiRequest<TestResponse>('/radio/test-ptt', { method: 'POST' }, apiBase);
+  async testPTT(config: HamlibConfig, apiBase?: string): Promise<TestResponse> {
+    return apiRequest<TestResponse>(
+      '/radio/test-ptt',
+      {
+        method: 'POST',
+        body: JSON.stringify(config),
+      },
+      apiBase
+    );
   },
 
   async getRadioStatus(apiBase?: string): Promise<RadioStatusResponse> {
