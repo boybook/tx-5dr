@@ -88,7 +88,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * 使用系统默认浏览器打开外部链接
      */
-    openExternal: (_url: string) => ipcRenderer.invoke('shell:openExternal', _url)
+    openExternal: (_url: string) => ipcRenderer.invoke('shell:openExternal', _url),
+
+    /**
+     * 在系统文件管理器中打开目录
+     */
+    openPath: (_path: string) => ipcRenderer.invoke('shell:openPath', _path)
   },
 
   // 配置管理
@@ -137,6 +142,7 @@ declare global {
       };
       shell: {
         openExternal(url: string): Promise<void>;
+        openPath(path: string): Promise<string>;
       };
       config: {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

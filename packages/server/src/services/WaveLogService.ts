@@ -8,7 +8,10 @@ import {
   WaveLogSyncResponse,
   QSORecord
 } from '@tx5dr/contracts';
-import { getBandFromFrequency } from '@tx5dr/core';
+import {
+  convertQSOToADIF,
+  parseADIFContent as parseADIFContentUtil,
+} from '../utils/adif-utils.js';
 
 /**
  * WaveLog服务类
@@ -118,7 +121,7 @@ export class WaveLogService {
     }
 
     // 转换QSO记录为ADIF格式
-    const adifString = this.convertQSOToADIF(qso);
+    const adifString = convertQSOToADIF(qso);
 
     const payload = {
       key: this.config.apiKey,
@@ -307,7 +310,7 @@ export class WaveLogService {
       }
 
       // 解析ADIF内容为QSORecord数组
-      const qsoRecords = this.parseADIFContent(adifContent);
+      const qsoRecords = parseADIFContentUtil(adifContent, 'wavelog');
       console.log(`📊 [WaveLog] 从服务器下载了 ${qsoRecords.length} 条QSO记录 (exported_qsos: ${result.exported_qsos || 0})`);
       
       return qsoRecords;
@@ -317,201 +320,7 @@ export class WaveLogService {
     }
   }
 
-  /**
-   * 解析ADIF内容为QSORecord数组
-   * 基本的ADIF解析器，处理WaveLog导出的标准格式
-   */
-  private parseADIFContent(adifContent: string): QSORecord[] {
-    const records: QSORecord[] = [];
-    
-    try {
-      // 按记录分割（<eor> 标记）
-      const recordStrings = adifContent.split(/<eor>/i).filter(r => r.trim().length > 0);
-      
-      for (const recordStr of recordStrings) {
-        const qso = this.parseADIFRecord(recordStr);
-        if (qso) {
-          records.push(qso);
-        }
-      }
-    } catch (error) {
-      console.error('解析ADIF内容失败:', error);
-      throw new Error('ADIF格式解析错误');
-    }
-    
-    return records;
-  }
-
-  /**
-   * 解析单个ADIF记录
-   */
-  private parseADIFRecord(recordStr: string): QSORecord | null {
-    const fields: Record<string, string> = {};
-    
-    // 匹配ADIF字段模式: <field:length>value
-    const fieldRegex = /<(\w+):(\d+)>([^<]*)/gi;
-    let match;
-    
-    while ((match = fieldRegex.exec(recordStr)) !== null) {
-      const fieldName = match[1].toLowerCase();
-      const fieldLength = parseInt(match[2]);
-      const fieldValue = match[3].substring(0, fieldLength);
-      fields[fieldName] = fieldValue;
-    }
-    
-    // 检查必需字段
-    if (!fields.call || !fields.qso_date || !fields.time_on) {
-      console.warn('ADIF记录缺少必需字段，跳过:', fields);
-      return null;
-    }
-    
-    try {
-      // 构建QSORecord
-      const qsoDate = fields.qso_date; // YYYYMMDD
-      const timeOn = fields.time_on; // HHMMSS
-      const timeOff = fields.time_off || timeOn; // 如果没有结束时间，使用开始时间
-      
-      // 转换日期时间为ISO格式
-      const startTime = this.parseADIFDateTime(qsoDate, timeOn);
-      const endTime = this.parseADIFDateTime(fields.qso_date_off || qsoDate, timeOff);
-      
-      const qsoRecord: QSORecord = {
-        id: `wavelog-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        callsign: fields.call.toUpperCase(),
-        startTime: new Date(startTime).getTime(),
-        endTime: new Date(endTime).getTime(),
-        frequency: fields.freq ? Math.round(parseFloat(fields.freq) * 1000000) : 14074000, // 转换MHz到Hz
-        mode: fields.mode || 'FT8',
-        reportSent: fields.rst_sent || '',
-        reportReceived: fields.rst_rcvd || '',
-        grid: fields.gridsquare || '',
-        messages: [`QSO imported from WaveLog at ${new Date().toISOString()}`]
-      };
-      
-      return qsoRecord;
-    } catch (error) {
-      console.warn('解析ADIF记录时出错:', error, fields);
-      return null;
-    }
-  }
-
-  /**
-   * 解析ADIF日期时间格式为ISO字符串
-   */
-  private parseADIFDateTime(dateStr: string, timeStr: string): string {
-    // ADIF日期格式: YYYYMMDD
-    // ADIF时间格式: HHMMSS
-    const year = dateStr.substring(0, 4);
-    const month = dateStr.substring(4, 6);
-    const day = dateStr.substring(6, 8);
-    
-    const hour = timeStr.substring(0, 2);
-    const minute = timeStr.substring(2, 4);
-    const second = timeStr.substring(4, 6) || '00';
-    
-    return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`).toISOString();
-  }
-
-  /**
-   * 将QSO记录转换为ADIF格式
-   * 参考WaveLogGate中的ADIF处理逻辑
-   */
-  private convertQSOToADIF(qso: QSORecord): string {
-    const adifFields: string[] = [];
-    
-    // 必需字段
-    adifFields.push(`<call:${qso.callsign.length}>${qso.callsign}`);
-    
-    // QSO时间 - 转换为UTC
-    const startTime = new Date(qso.startTime);
-    const qsoDate = this.formatADIFDate(startTime);
-    const qsoTime = this.formatADIFTime(startTime);
-    
-    adifFields.push(`<qso_date:8>${qsoDate}`);
-    adifFields.push(`<time_on:6>${qsoTime}`);
-    
-    // 如果有结束时间
-    if (qso.endTime) {
-      const endTime = new Date(qso.endTime);
-      const endDate = this.formatADIFDate(endTime);
-      const endTimeStr = this.formatADIFTime(endTime);
-      adifFields.push(`<qso_date_off:8>${endDate}`);
-      adifFields.push(`<time_off:6>${endTimeStr}`);
-    } else {
-      // 如果没有结束时间，使用开始时间
-      adifFields.push(`<qso_date_off:8>${qsoDate}`);
-      adifFields.push(`<time_off:6>${qsoTime}`);
-    }
-    
-    // 模式
-    if (qso.mode) {
-      adifFields.push(`<mode:${qso.mode.length}>${qso.mode}`);
-    }
-    
-    // 频率 - 转换为MHz
-    const freqMHz = (qso.frequency / 1000000).toFixed(6);
-    adifFields.push(`<freq:${freqMHz.length}>${freqMHz}`);
-
-    // 频段 - 根据频率计算（WaveLog 2.0+ 要求必须提供 band 字段）
-    const band = getBandFromFrequency(qso.frequency);
-    if (band !== 'Unknown') {
-      adifFields.push(`<band:${band.length}>${band}`);
-    }
-
-    // 网格坐标
-    if (qso.grid) {
-      adifFields.push(`<gridsquare:${qso.grid.length}>${qso.grid}`);
-    }
-    
-    // 信号报告
-    if (qso.reportSent) {
-      adifFields.push(`<rst_sent:${qso.reportSent.length}>${qso.reportSent}`);
-    }
-
-    if (qso.reportReceived) {
-      adifFields.push(`<rst_rcvd:${qso.reportReceived.length}>${qso.reportReceived}`);
-    }
-
-    // 注意：station_callsign 处理
-    // 默认不发送 station_callsign，让 WaveLog 自动使用 Station Profile 中配置的呼号
-    // 如果 QSO 记录包含 myCallsign 且您确认它与 WaveLog Station Profile 的呼号一致，
-    // 可以取消下面的注释来发送 station_callsign 字段
-    /*
-    if (qso.myCallsign) {
-      adifFields.push(`<station_callsign:${qso.myCallsign.length}>${qso.myCallsign}`);
-    }
-    */
-
-    // 我的网格坐标（操作员网格）
-    if (qso.myGrid) {
-      adifFields.push(`<my_gridsquare:${qso.myGrid.length}>${qso.myGrid}`);
-    }
-
-    // 结束标记
-    adifFields.push('<eor>');
-    
-    return adifFields.join(' ');
-  }
-
-  /**
-   * 格式化ADIF日期 (YYYYMMDD)
-   */
-  private formatADIFDate(date: Date): string {
-    const year = date.getUTCFullYear().toString().padStart(4, '0');
-    const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-    const day = date.getUTCDate().toString().padStart(2, '0');
-    return `${year}${month}${day}`;
-  }
-
-  /**
-   * 格式化ADIF时间 (HHMMSS)
-   */
-  private formatADIFTime(date: Date): string {
-    const hours = date.getUTCHours().toString().padStart(2, '0');
-    const minutes = date.getUTCMinutes().toString().padStart(2, '0');
-    const seconds = date.getUTCSeconds().toString().padStart(2, '0');
-    return `${hours}${minutes}${seconds}`;
-  }
+  // ADIF 解析和生成方法已提取到 ../utils/adif-utils.ts 公共模块
 
   /**
    * 处理网络连接错误

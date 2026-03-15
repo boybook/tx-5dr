@@ -842,6 +842,31 @@ function setupIpcHandlers() {
     }
   });
 
+  // 处理打开目录的请求（在系统文件管理器中打开）
+  ipcMain.handle('shell:openPath', async (_event, dirPath: string) => {
+    console.log('📁 [IPC] 收到打开目录请求:', dirPath);
+
+    try {
+      // 验证路径存在
+      if (!fs.existsSync(dirPath)) {
+        // 尝试创建目录
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
+
+      // 使用系统文件管理器打开目录
+      const result = await shell.openPath(dirPath);
+      if (result) {
+        console.error('❌ [IPC] 打开目录失败:', result);
+        throw new Error(result);
+      }
+      console.log('✅ [IPC] 目录打开成功');
+      return result;
+    } catch (error) {
+      console.error('❌ [IPC] 打开目录失败:', error);
+      throw error;
+    }
+  });
+
   // 处理打开外部链接的请求
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     console.log('🔗 [IPC] 收到打开外部链接请求:', url);

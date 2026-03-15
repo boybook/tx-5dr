@@ -2,7 +2,7 @@
 // ConfigManager - 配置合并和动态类型需要使用any
 
 import { promises as fs } from 'fs';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig } from '@tx5dr/contracts';
 import type { RadioProfile } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
@@ -42,6 +42,8 @@ export interface AppConfig {
   };
   operators: RadioOperatorConfig[];
   wavelog: WaveLogConfig;
+  qrz: QRZConfig;
+  lotw: LoTWConfig;
   pskreporter: PSKReporterConfig;
 }
 
@@ -83,6 +85,19 @@ const DEFAULT_CONFIG: AppConfig = {
     stationId: '',
     radioName: 'TX5DR',
     autoUploadQSO: true,
+  },
+  qrz: {
+    enabled: false,
+    apiKey: '',
+    autoUploadQSO: false,
+  },
+  lotw: {
+    enabled: false,
+    username: '',
+    password: '',
+    tqslPath: '',
+    stationCallsign: '',
+    autoUploadQSO: false,
   },
   pskreporter: {
     enabled: false,
@@ -676,6 +691,52 @@ export class ConfigManager {
    */
   async resetWaveLogConfig(): Promise<void> {
     this.config.wavelog = { ...DEFAULT_CONFIG.wavelog };
+    await this.saveConfig();
+  }
+
+  /**
+   * 获取QRZ配置
+   */
+  getQRZConfig(): QRZConfig {
+    return { ...this.config.qrz };
+  }
+
+  /**
+   * 更新QRZ配置
+   */
+  async updateQRZConfig(qrzConfig: Partial<QRZConfig>): Promise<void> {
+    this.config.qrz = { ...this.config.qrz, ...qrzConfig };
+    await this.saveConfig();
+  }
+
+  /**
+   * 重置QRZ配置为默认值
+   */
+  async resetQRZConfig(): Promise<void> {
+    this.config.qrz = { ...DEFAULT_CONFIG.qrz };
+    await this.saveConfig();
+  }
+
+  /**
+   * 获取LoTW配置
+   */
+  getLoTWConfig(): LoTWConfig {
+    return { ...this.config.lotw };
+  }
+
+  /**
+   * 更新LoTW配置
+   */
+  async updateLoTWConfig(lotwConfig: Partial<LoTWConfig>): Promise<void> {
+    this.config.lotw = { ...this.config.lotw, ...lotwConfig };
+    await this.saveConfig();
+  }
+
+  /**
+   * 重置LoTW配置为默认值
+   */
+  async resetLoTWConfig(): Promise<void> {
+    this.config.lotw = { ...DEFAULT_CONFIG.lotw };
     await this.saveConfig();
   }
 

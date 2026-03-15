@@ -659,4 +659,23 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
-} 
+
+  /**
+   * 获取日志本数据目录路径
+   * GET /api/logbooks/data-path
+   */
+  fastify.get('/data-path', async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { tx5drPaths } = await import('../utils/app-paths.js');
+      const dataDir = await tx5drPaths.getDataDir();
+      const logbookDir = (await import('path')).join(dataDir, 'logbook');
+
+      return reply.send({
+        success: true,
+        path: logbookDir
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+}
