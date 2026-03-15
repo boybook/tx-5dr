@@ -54,7 +54,8 @@ COPY .yarn/patches ./.yarn/patches/
 COPY scripts ./scripts/
 
 # 创建packages目录结构并复制package.json文件
-RUN mkdir -p packages/contracts packages/core packages/electron-main packages/electron-preload packages/server packages/shared-config packages/web
+RUN mkdir -p packages/client-tools packages/contracts packages/core packages/electron-main packages/electron-preload packages/server packages/shared-config packages/web
+COPY packages/client-tools/package.json ./packages/client-tools/
 COPY packages/contracts/package.json ./packages/contracts/
 COPY packages/core/package.json ./packages/core/
 COPY packages/electron-main/package.json ./packages/electron-main/

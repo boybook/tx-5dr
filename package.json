@@ -49,5 +49,10 @@
   "packageManager": "yarn@4.9.1",
   "optionalDependencies": {
     "segfault-handler": "^1.3.0"
+  },
+  "dependenciesMeta": {
+    "hamlib": {
+      "built": false
+    }
   }
 }
