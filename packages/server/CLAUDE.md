@@ -67,7 +67,7 @@ routes/
 1. **音频居中播放**: 通过 `transmitTiming` 配置使12.64秒的FT8音频在15秒时隙中居中
 2. **提前编码**: 通过 `encodeAdvance` 提前触发编码，补偿编码+混音时间(~400ms)
 3. **周期判断**: RadioOperator 在 `encodeStart` 事件中判断周期并加入队列
-4. **发射执行**: RadioOperatorManager 处理队列，使用 slotInfo 的准确时间戳
+4. **子系统编排**: ClockCoordinator 桥接时钟事件，TransmissionPipeline 编排发射管线
 5. **智能调度**: AudioMixer 根据目标播放时间动态调整混音窗口
 
 #### 时间线图解
@@ -75,70 +75,80 @@ routes/
 ```mermaid
 sequenceDiagram
     participant Clock as SlotClock
-    participant Engine as DigitalRadioEngine
+    participant Coord as ClockCoordinator
+    participant Pipeline as TransmissionPipeline
     participant Operator as RadioOperator
     participant Manager as RadioOperatorManager
-    participant EncQueue as WSJTXEncodeQueue
+    participant EncQueue as WSJTXEncodeWorkQueue
     participant Mixer as AudioMixer
-    participant PTT as PhysicalRadio
-    participant Audio as AudioStream
+    participant PTT as PhysicalRadioManager
+    participant Audio as AudioStreamManager
 
     Note over Clock,Audio: ═══ 时隙开始 (T0) ═══
-    Clock->>Engine: slotStart 事件
-    Engine->>Engine: 广播时隙包
-    Engine->>Engine: 更新操作员状态
+    Clock->>Coord: slotStart 事件
+    Coord->>Pipeline: forceStopPTT() + onSlotStart()
+    Pipeline->>Mixer: clearSlotCache()
+    Coord->>Manager: broadcastAllOperatorStatusUpdates()
+    Coord->>Coord: engineEmitter.emit('slotStart', slotInfo, slotPack)
 
     Note over Clock,Audio: ═══ 编码时机 (T0 + 780ms = transmitTiming - encodeAdvance) ═══
-    Clock->>Engine: encodeStart(slotInfo)
-    Engine->>Operator: emit('encodeStart', slotInfo)
+    Clock->>Coord: encodeStart(slotInfo)
+    Coord->>Coord: engineEmitter.emit('encodeStart', slotInfo)
+    Coord->>Pipeline: onEncodeStart(slotInfo)
+
+    Note over Operator,Manager: RadioOperator 监听 engineEmitter 的 encodeStart
+    Operator->>Operator: isTransmitSlot(slotInfo) via CycleUtils
 
     alt 在发射周期
-        Operator->>Operator: isTransmitCycle(slotInfo.utcSeconds) ✓
-        Operator->>Operator: 生成发射内容
-        Operator->>Manager: requestTransmit 事件 → 加入队列
+        Operator->>Operator: transmissionStrategy.handleTransmitSlot()
+        Operator->>Manager: emit('requestTransmit', {operatorId, transmission})
         Note right of Manager: pendingTransmissions.push()
     else 非发射周期
-        Operator->>Operator: isTransmitCycle() ✗
-        Note right of Operator: 跳过发射
+        Operator->>Operator: isTransmitSlot() ✗ → 跳过
     end
 
-    Engine->>Manager: processPendingTransmissions(slotInfo)
-    Manager->>Manager: 使用 slotInfo.startMs 准确时间戳
+    Pipeline->>Manager: processPendingTransmissions(slotInfo)
+    Manager->>Manager: 去重 + 使用 slotInfo.startMs 计算时间戳
 
     loop 处理队列中的每个请求
-        Manager->>EncQueue: push(编码请求)
+        Manager->>EncQueue: push({message, frequency, slotStartMs, requestId})
     end
 
     Note over Clock,Audio: ═══ 音频编码 (100-200ms) ═══
-    EncQueue->>EncQueue: 生成 FT8 音频波形
-    EncQueue->>Engine: encodeComplete 事件
-    Engine->>Mixer: addAudio(音频数据, targetPlaybackTime=T0+1180ms)
+    EncQueue->>EncQueue: wsjtx-lib 生成 FT8 音频 + 重采样到 12kHz
+    EncQueue->>Pipeline: encodeComplete 事件
+    Pipeline->>Pipeline: transmissionTracker 记录编码完成
+    Pipeline->>Mixer: addOperatorAudio(operatorId, audioData, sampleRate, slotStartMs)
+    Pipeline->>Mixer: scheduleMixing(targetPlaybackTime = T0 + 1180ms)
 
     Note over Clock,Audio: ═══ 目标播放时机 (T0 + 1180ms) ═══
-    Clock->>Engine: transmitStart(slotInfo)
-    Engine->>Engine: 日志记录（编码应已完成）
+    Clock->>Coord: transmitStart(slotInfo)
+    Coord->>Pipeline: onTransmitStart(slotInfo)
+    Pipeline->>Pipeline: 检查编码是否超时（未完成则发出 timingWarning）
 
     Note over Clock,Audio: ═══ 混音器智能调度 (动态窗口) ═══
-    Mixer->>Mixer: 计算到目标时间的延迟
-    Mixer->>Mixer: 如果时间充裕，等待到接近目标时间
-    Mixer->>Mixer: 如果时间紧迫，立即混音
-    Mixer->>Mixer: 合并混音
-    Mixer->>Engine: mixedAudioReady 事件
+    Mixer->>Mixer: 定时器触发 triggerMixing()
+    Mixer->>Mixer: mixAllOperatorAudios() → 重采样/裁剪/合并/归一化
+    Mixer->>Pipeline: emit('mixedAudioReady', {audioData, sampleRate, duration, operatorIds})
 
     Note over Clock,Audio: ═══ 并行启动发射 ═══
     par PTT 激活
-        Engine->>PTT: setPTT(true)
-        PTT-->>Engine: PTT 激活完成
+        Pipeline->>PTT: setPTT(true)
+        Pipeline->>Pipeline: spectrumScheduler.setPTTActive(true)
+        Pipeline->>Pipeline: emit('pttStatusChanged', {isTransmitting: true})
+        PTT-->>Pipeline: PTT 激活完成
     and 音频播放
-        Engine->>Audio: playAudio(混音数据)
-        Audio-->>Engine: 播放中... (12.64秒)
+        Pipeline->>Audio: playAudio(mixedAudio)
+        Audio-->>Audio: 分块写入 RtAudio/ICOM (12.64秒)
     end
+    Pipeline->>Pipeline: schedulePTTStop(duration + 200ms)
 
     Note over Clock,Audio: ═══ 发射完成 ═══
-    Audio-->>Engine: 播放完成
-    Engine->>PTT: setPTT(false) 延迟停止
-    PTT-->>Engine: PTT 停止
-    Engine->>Manager: transmissionComplete 事件
+    Audio-->>Pipeline: playAudio() Promise 完成
+    Pipeline->>PTT: setPTT(false) (定时器延迟停止)
+    Pipeline->>Pipeline: spectrumScheduler.setPTTActive(false)
+    Pipeline->>Pipeline: emit('pttStatusChanged', {isTransmitting: false})
+    Pipeline->>Pipeline: emit('transmissionComplete', {operatorId, success, duration})
 ```
 
 #### 时序配置参数 (mode.schema.ts)
