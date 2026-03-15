@@ -29,6 +29,16 @@ const PSKREPORTER_TEST_PORT = 14739;
 // 队列限制
 const MAX_PENDING_SPOTS = 1000;
 
+// UDP 最大负载长度（避免 MTU 分片）
+const MAX_PAYLOAD_LENGTH = 1400;
+
+// PSKReporter Private Enterprise Number (IANA PEN: 30351 = 0x768F)
+const ENTERPRISE_NUM = 30351;
+
+// Template IDs（必须 >= 256，使用 PSKReporter 约定值）
+const RX_TEMPLATE_ID = 0x50E2; // 20706 - 接收站模板
+const TX_TEMPLATE_ID = 0x50E3; // 20707 - 发送站模板
+
 // 随机ID生成（用于IPFIX会话标识）
 const generateRandomId = (): number => {
   return Math.floor(Math.random() * 0xFFFFFFFF);
@@ -306,10 +316,12 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
       const host = config.useTestServer ? PSKREPORTER_TEST_HOST : PSKREPORTER_HOST;
       const port = config.useTestServer ? PSKREPORTER_TEST_PORT : PSKREPORTER_PORT;
 
-      // 构建 IPFIX 数据包
-      const packet = this.buildIPFIXPacket(spotsToSend);
+      // 构建 IPFIX 数据包（可能拆分为多个包）
+      const packets = this.buildIPFIXPackets(spotsToSend);
 
-      await this.sendUDPPacket(packet, host, port);
+      for (const packet of packets) {
+        await this.sendUDPPacket(packet, host, port);
+      }
 
       this.lastReportTime = Date.now();
 
@@ -343,132 +355,182 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
   }
 
   /**
-   * 构建 IPFIX 数据包
-   * 参考 PSKReporter 协议文档和 WSJT-X 开源实现
+   * 构建 IPFIX 数据包（可能返回多个包，受 MAX_PAYLOAD_LENGTH 限制）
+   * 参考 JTDX/WSJT-X 开源实现
+   *
+   * 包结构: Header(16B) → RxDescriptor → TxDescriptor → RxData → TxData
    */
-  private buildIPFIXPacket(spots: PSKReporterSpot[]): Buffer {
+  private buildIPFIXPackets(spots: PSKReporterSpot[]): Buffer[] {
     const config = this.configManager.getPSKReporterConfig();
 
-    // 递增序列号
-    this.sequenceNumber++;
-
-    // 构建各部分：合并模板集合 + 两个数据集合
-    const combinedTemplates = this.buildCombinedTemplateSet();
+    // 构建固定部分（每个包都包含）
+    const rxDescriptor = this.buildRxOptionsTemplateSet();
+    const txDescriptor = this.buildTxTemplateSet();
     const receiverData = this.buildReceiverData(config);
-    const senderData = this.buildSenderData(spots);
 
-    // 计算总长度
-    const dataLength = combinedTemplates.length + receiverData.length + senderData.length;
-    const totalLength = 16 + dataLength; // 16字节头部 + 数据
+    const fixedSize = 16 + rxDescriptor.length + txDescriptor.length + receiverData.length;
 
-    // 构建头部
-    const header = Buffer.alloc(16);
-    header.writeUInt16BE(10, 0);                                    // IPFIX Version
-    header.writeUInt16BE(totalLength, 2);                           // Length
-    header.writeUInt32BE(Math.floor(Date.now() / 1000), 4);         // Export Time
-    header.writeUInt32BE(this.sequenceNumber, 8);                   // Sequence Number
-    header.writeUInt32BE(this.sessionId, 12);                       // Observation Domain ID
+    // 将 spots 按 MAX_PAYLOAD_LENGTH 分批
+    const packets: Buffer[] = [];
+    let remaining = [...spots];
 
-    return Buffer.concat([header, combinedTemplates, receiverData, senderData]);
+    while (remaining.length > 0) {
+      this.sequenceNumber++;
+
+      // 逐条添加 spot，直到接近 MAX_PAYLOAD_LENGTH
+      const batch: PSKReporterSpot[] = [];
+      let estimatedSize = fixedSize + 4 + 2; // +4 for Tx data set header, +2 for trailing 0x0000
+
+      for (let i = 0; i < remaining.length; i++) {
+        const spot = remaining[i];
+        // 估算单条 spot 的大小
+        const spotSize =
+          1 + Buffer.byteLength(spot.senderCallsign, 'utf8') + // callsign (variable)
+          4 +  // frequency
+          1 +  // snr
+          1 + Buffer.byteLength(spot.mode, 'utf8') + // mode (variable)
+          1 + Buffer.byteLength(spot.senderLocator || '', 'utf8') + // grid (variable)
+          1 +  // infoSource
+          4;   // flowStartSeconds
+
+        if (estimatedSize + spotSize > MAX_PAYLOAD_LENGTH && batch.length > 0) {
+          break;
+        }
+        batch.push(spot);
+        estimatedSize += spotSize;
+      }
+
+      remaining = remaining.slice(batch.length);
+
+      const senderData = this.buildSenderData(batch);
+
+      // 计算总长度
+      const totalLength = 16 + rxDescriptor.length + txDescriptor.length + receiverData.length + senderData.length;
+
+      // 构建 IPFIX 头部
+      const header = Buffer.alloc(16);
+      header.writeUInt16BE(10, 0);                                    // IPFIX Version = 10
+      header.writeUInt16BE(totalLength, 2);                           // Length
+      header.writeUInt32BE(Math.floor(Date.now() / 1000), 4);         // Export Time
+      header.writeUInt32BE(this.sequenceNumber, 8);                   // Sequence Number
+      header.writeUInt32BE(this.sessionId, 12);                       // Observation Domain ID
+
+      packets.push(Buffer.concat([header, rxDescriptor, txDescriptor, receiverData, senderData]));
+    }
+
+    return packets;
   }
 
   /**
-   * 构建合并的模板集合（接收站模板 + 发送站模板放在同一个 Template Set 中）
+   * 构建 Rx Options Template Set (Set ID=3)
    *
-   * 按照 PSKReporter 协议规范（参考 WSJT-X 实现）：
-   * - 接收站模板 Template ID = 2
-   * - 发送站模板 Template ID = 3
-   * - 两个模板必须在同一个 Template Set (Set ID = 2) 中
+   * 参考 JTDX: "0003002C50E200040000" + 4 enterprise fields + "0000"
    *
-   * Enterprise 字段格式（RFC 5101）：每个字段占 8 字节：
-   *   [2B: E bit + Field ID] [2B: Length] [4B: Enterprise Number]
-   * 标准字段 (E bit = 0) 占 4 字节：
-   *   [2B: Field ID] [2B: Length]
-   *
-   * PSKReporter Enterprise Number = 44261 (0x0000ACE5)
+   * 格式:
+   *   [SetID=3 (2B)] [Length (2B)]
+   *   [TemplateID=0x50E2 (2B)] [FieldCount=4 (2B)] [ScopeFieldCount=0 (2B)]
+   *   [4 × Enterprise Field Specifier (8B each)]
+   *   [Padding 0x0000 (2B)]
    */
-  private buildCombinedTemplateSet(): Buffer {
-    const ENTERPRISE_NUM = 44261; // PSKReporter Private Enterprise Number
-
-    // --- 接收站模板记录 (Template ID=2, 4 个 Enterprise 字段) ---
-    const receiverTemplateHeader = Buffer.alloc(4);
-    receiverTemplateHeader.writeUInt16BE(2, 0);  // Template ID = 2
-    receiverTemplateHeader.writeUInt16BE(4, 2);  // Field Count = 4
-
-    // 4 个 Enterprise 字段，各 8 字节 = 32 字节
-    const receiverFields = Buffer.alloc(32);
-    const rDefs = [
-      { id: 0x01, len: 0xFFFF }, // receiverCallsign (variable)
-      { id: 0x02, len: 0xFFFF }, // receiverLocator (variable)
-      { id: 0x03, len: 0xFFFF }, // decodingSoftware (variable)
-      { id: 0x04, len: 0xFFFF }, // antennaInformation (variable)
+  private buildRxOptionsTemplateSet(): Buffer {
+    // Rx 字段定义（参考 JTDX 的 field ID）
+    const rxFields = [
+      { id: 0x02, len: 0xFFFF }, // Rx Call (variable)
+      { id: 0x04, len: 0xFFFF }, // Rx Grid (variable)
+      { id: 0x08, len: 0xFFFF }, // Rx Software (variable)
+      { id: 0x09, len: 0xFFFF }, // Rx Antenna (variable)
     ];
-    for (let i = 0; i < rDefs.length; i++) {
+
+    // 4 enterprise fields × 8B = 32B
+    const fieldsData = Buffer.alloc(rxFields.length * 8);
+    for (let i = 0; i < rxFields.length; i++) {
       const off = i * 8;
-      receiverFields.writeUInt16BE(0x8000 | rDefs[i].id, off);      // E bit + Field ID
-      receiverFields.writeUInt16BE(rDefs[i].len, off + 2);           // Length
-      receiverFields.writeUInt32BE(ENTERPRISE_NUM, off + 4);          // Enterprise Number
+      fieldsData.writeUInt16BE(0x8000 | rxFields[i].id, off);     // E bit + Field ID
+      fieldsData.writeUInt16BE(rxFields[i].len, off + 2);          // Length
+      fieldsData.writeUInt32BE(ENTERPRISE_NUM, off + 4);            // Enterprise Number
     }
 
-    // --- 发送站模板记录 (Template ID=3, 5 个 Enterprise 字段 + 1 个标准字段) ---
-    const senderTemplateHeader = Buffer.alloc(4);
-    senderTemplateHeader.writeUInt16BE(3, 0);  // Template ID = 3
-    senderTemplateHeader.writeUInt16BE(6, 2);  // Field Count = 6
+    // Template record header: TemplateID(2B) + FieldCount(2B) + ScopeFieldCount(2B) = 6B
+    const templateHeader = Buffer.alloc(6);
+    templateHeader.writeUInt16BE(RX_TEMPLATE_ID, 0);  // Template ID = 0x50E2
+    templateHeader.writeUInt16BE(4, 2);                // Field Count = 4
+    templateHeader.writeUInt16BE(0, 4);                // Scope Field Count = 0
 
-    // 5 个 Enterprise 字段 * 8B + 1 个标准字段 * 4B = 44 字节
-    const senderFields = Buffer.alloc(44);
-    // senderCallsign (Enterprise, variable)
-    senderFields.writeUInt16BE(0x8000 | 0x05, 0);
-    senderFields.writeUInt16BE(0xFFFF, 2);
-    senderFields.writeUInt32BE(ENTERPRISE_NUM, 4);
-    // frequency (Enterprise, 4 bytes)
-    senderFields.writeUInt16BE(0x8000 | 0x06, 8);
-    senderFields.writeUInt16BE(4, 10);
-    senderFields.writeUInt32BE(ENTERPRISE_NUM, 12);
-    // sNR (Enterprise, 1 byte)
-    senderFields.writeUInt16BE(0x8000 | 0x07, 16);
-    senderFields.writeUInt16BE(1, 18);
-    senderFields.writeUInt32BE(ENTERPRISE_NUM, 20);
-    // mode (Enterprise, variable)
-    senderFields.writeUInt16BE(0x8000 | 0x0A, 24);
-    senderFields.writeUInt16BE(0xFFFF, 26);
-    senderFields.writeUInt32BE(ENTERPRISE_NUM, 28);
-    // informationSource (Enterprise, 1 byte)
-    senderFields.writeUInt16BE(0x8000 | 0x0B, 32);
-    senderFields.writeUInt16BE(1, 34);
-    senderFields.writeUInt32BE(ENTERPRISE_NUM, 36);
-    // flowStartSeconds (标准 IPFIX 字段 0x0096，无 Enterprise Number)
-    senderFields.writeUInt16BE(0x0096, 40);
-    senderFields.writeUInt16BE(4, 42);
+    const padding = Buffer.alloc(2, 0); // trailing 0x0000
 
-    // 合并两个模板记录：36B (接收站) + 48B (发送站) = 84B
-    const allTemplateRecords = Buffer.concat([
-      receiverTemplateHeader, receiverFields,  // 4 + 32 = 36B
-      senderTemplateHeader, senderFields,      // 4 + 44 = 48B
-    ]);
+    // Total record: 6 + 32 + 2 = 40B
+    const totalRecordLength = templateHeader.length + fieldsData.length + padding.length;
 
-    // Template Set 头部：Set ID=2，Length = 4 (头部) + 84 (模板记录) = 88
+    // Set header: SetID(2B) + Length(2B) = 4B
     const setHeader = Buffer.alloc(4);
-    setHeader.writeUInt16BE(2, 0);                                // Set ID = 2 (Template Set)
-    setHeader.writeUInt16BE(4 + allTemplateRecords.length, 2);   // Length
+    setHeader.writeUInt16BE(3, 0);                              // Set ID = 3 (Options Template Set)
+    setHeader.writeUInt16BE(4 + totalRecordLength, 2);          // Length = 4 + 40 = 44
 
-    return Buffer.concat([setHeader, allTemplateRecords]);
+    return Buffer.concat([setHeader, templateHeader, fieldsData, padding]);
+  }
+
+  /**
+   * 构建 Tx Template Set (Set ID=2)
+   *
+   * 参考 JTDX: "0002003C50E30007" + 6 enterprise fields + 1 standard field
+   *
+   * 格式:
+   *   [SetID=2 (2B)] [Length (2B)]
+   *   [TemplateID=0x50E3 (2B)] [FieldCount=7 (2B)]
+   *   [6 × Enterprise Field Specifier (8B each)]
+   *   [1 × Standard Field Specifier (4B)]
+   */
+  private buildTxTemplateSet(): Buffer {
+    // Template record header: TemplateID(2B) + FieldCount(2B) = 4B
+    const templateHeader = Buffer.alloc(4);
+    templateHeader.writeUInt16BE(TX_TEMPLATE_ID, 0);  // Template ID = 0x50E3
+    templateHeader.writeUInt16BE(7, 2);                // Field Count = 7
+
+    // 6 enterprise fields × 8B + 1 standard field × 4B = 52B
+    const fieldsData = Buffer.alloc(52);
+    let off = 0;
+
+    // 1. Tx Call (Enterprise, variable) — Field ID 0x01
+    fieldsData.writeUInt16BE(0x8000 | 0x01, off); fieldsData.writeUInt16BE(0xFFFF, off + 2); fieldsData.writeUInt32BE(ENTERPRISE_NUM, off + 4); off += 8;
+    // 5. Tx Freq (Enterprise, 4 bytes) — Field ID 0x05
+    fieldsData.writeUInt16BE(0x8000 | 0x05, off); fieldsData.writeUInt16BE(4, off + 2); fieldsData.writeUInt32BE(ENTERPRISE_NUM, off + 4); off += 8;
+    // 6. Tx SNR (Enterprise, 1 byte) — Field ID 0x06
+    fieldsData.writeUInt16BE(0x8000 | 0x06, off); fieldsData.writeUInt16BE(1, off + 2); fieldsData.writeUInt32BE(ENTERPRISE_NUM, off + 4); off += 8;
+    // 10. Tx Mode (Enterprise, variable) — Field ID 0x0A
+    fieldsData.writeUInt16BE(0x8000 | 0x0A, off); fieldsData.writeUInt16BE(0xFFFF, off + 2); fieldsData.writeUInt32BE(ENTERPRISE_NUM, off + 4); off += 8;
+    // 3. Tx Grid (Enterprise, variable) — Field ID 0x03
+    fieldsData.writeUInt16BE(0x8000 | 0x03, off); fieldsData.writeUInt16BE(0xFFFF, off + 2); fieldsData.writeUInt32BE(ENTERPRISE_NUM, off + 4); off += 8;
+    // 11. Tx Info Source (Enterprise, 1 byte) — Field ID 0x0B
+    fieldsData.writeUInt16BE(0x8000 | 0x0B, off); fieldsData.writeUInt16BE(1, off + 2); fieldsData.writeUInt32BE(ENTERPRISE_NUM, off + 4); off += 8;
+    // Report time (Standard IPFIX field 0x0096 = flowStartSeconds, 4 bytes)
+    fieldsData.writeUInt16BE(0x0096, off); fieldsData.writeUInt16BE(4, off + 2);
+
+    // Total record: 4 + 52 = 56B
+    const totalRecordLength = templateHeader.length + fieldsData.length;
+
+    // Set header: SetID(2B) + Length(2B) = 4B
+    const setHeader = Buffer.alloc(4);
+    setHeader.writeUInt16BE(2, 0);                              // Set ID = 2 (Template Set)
+    setHeader.writeUInt16BE(4 + totalRecordLength, 2);          // Length = 4 + 56 = 60
+
+    return Buffer.concat([setHeader, templateHeader, fieldsData]);
   }
 
   /**
    * 构建接收站数据记录
+   * Set ID = 0x50E2（对应 Rx Template ID），末尾加 0x0000 填充
    */
   private buildReceiverData(config: PSKReporterConfig): Buffer {
     const callsign = this.encodeVariableString(this.activeCallsign);
     const locator = this.encodeVariableString(this.activeLocator);
     const software = this.encodeVariableString(config.decodingSoftware || 'TX-5DR');
     const antenna = this.encodeVariableString(config.antennaInformation || '');
+    const padding = Buffer.alloc(2, 0); // trailing 0x0000
 
-    const data = Buffer.concat([callsign, locator, software, antenna]);
+    const data = Buffer.concat([callsign, locator, software, antenna, padding]);
 
-    // 数据集合头部：Set ID 必须与接收站模板 Template ID 一致 (= 2)
     const setHeader = Buffer.alloc(4);
-    setHeader.writeUInt16BE(2, 0);  // Set ID = 2（对应接收站 Template ID）
+    setHeader.writeUInt16BE(RX_TEMPLATE_ID, 0);  // Set ID = 0x50E2
     setHeader.writeUInt16BE(4 + data.length, 2);
 
     return Buffer.concat([setHeader, data]);
@@ -476,6 +538,8 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
 
   /**
    * 构建发送站数据记录
+   * 字段顺序必须与模板定义一致: call, freq, snr, mode, grid, infoSource, flowStart
+   * Set ID = 0x50E3（对应 Tx Template ID），末尾加 0x0000 填充
    */
   private buildSenderData(spots: PSKReporterSpot[]): Buffer {
     if (spots.length === 0) {
@@ -495,20 +559,23 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
 
       const mode = this.encodeVariableString(spot.mode);
 
+      const grid = this.encodeVariableString(spot.senderLocator || '');
+
       const infoSource = Buffer.alloc(1);
       infoSource.writeUInt8(spot.informationSource, 0);
 
       const flowStart = Buffer.alloc(4);
       flowStart.writeUInt32BE(spot.flowStartSeconds, 0);
 
-      records.push(Buffer.concat([callsign, frequency, snr, mode, infoSource, flowStart]));
+      // 顺序: call, freq, snr, mode, grid, infoSource, flowStart（与模板一致）
+      records.push(Buffer.concat([callsign, frequency, snr, mode, grid, infoSource, flowStart]));
     }
 
-    const data = Buffer.concat(records);
+    const padding = Buffer.alloc(2, 0); // trailing 0x0000
+    const data = Buffer.concat([...records, padding]);
 
-    // 数据集合头部：Set ID 必须与发送站模板 Template ID 一致 (= 3)
     const setHeader = Buffer.alloc(4);
-    setHeader.writeUInt16BE(3, 0);  // Set ID = 3（对应发送站 Template ID）
+    setHeader.writeUInt16BE(TX_TEMPLATE_ID, 0);  // Set ID = 0x50E3
     setHeader.writeUInt16BE(4 + data.length, 2);
 
     return Buffer.concat([setHeader, data]);
