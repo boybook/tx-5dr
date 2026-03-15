@@ -12822,6 +12822,8 @@ __metadata:
     segfault-handler: "npm:^1.3.0"
     turbo: "npm:^2.5.8"
   dependenciesMeta:
+    hamlib:
+      built: false
     segfault-handler:
       optional: true
   languageName: unknown
