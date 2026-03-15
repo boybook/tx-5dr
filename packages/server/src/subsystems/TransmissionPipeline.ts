@@ -172,7 +172,7 @@ export class TransmissionPipeline {
 
   // ─── 内部方法 ────────────────────────────────────
 
-  private async startPTT(): Promise<void> {
+  private async startPTT(operatorIds: string[]): Promise<void> {
     const pttStartTime = Date.now();
     console.log(`📡 [PTT] 开始启动PTT (${new Date(pttStartTime).toISOString()})`);
 
@@ -200,8 +200,6 @@ export class TransmissionPipeline {
 
         this.deps.spectrumScheduler.setPTTActive(true);
 
-        const currentAudio = this.deps.audioMixer.getCurrentMixedAudio();
-        const operatorIds = currentAudio ? currentAudio.operatorIds : [];
         this.deps.engineEmitter.emit('pttStatusChanged', {
           isTransmitting: true,
           operatorIds
@@ -329,6 +327,11 @@ export class TransmissionPipeline {
           const remixedAudio = await this.deps.audioMixer.remixAfterUpdate(elapsedTimeMs);
           if (remixedAudio) {
             console.log(`🎵 [TransmissionPipeline] 重新混音完成: 操作员=[${remixedAudio.operatorIds.join(', ')}], 时长=${remixedAudio.duration.toFixed(2)}s`);
+            // 重混音后操作者列表可能变化，更新前端
+            this.deps.engineEmitter.emit('pttStatusChanged', {
+              isTransmitting: true,
+              operatorIds: remixedAudio.operatorIds
+            });
             this.deps.audioMixer.markPlaybackStart();
             await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
             this.schedulePTTStop(remixedAudio.duration * 1000 + 200);
@@ -374,7 +377,7 @@ export class TransmissionPipeline {
         this.deps.transmissionTracker.recordAudioPlaybackStart(operatorId);
       }
 
-      const pttPromise = this.startPTT().then(() => {
+      const pttPromise = this.startPTT(mixedAudio.operatorIds).then(() => {
         for (const operatorId of mixedAudio.operatorIds) {
           this.deps.transmissionTracker.recordPTTStart(operatorId);
         }
