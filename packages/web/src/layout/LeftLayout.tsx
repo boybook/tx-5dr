@@ -19,6 +19,19 @@ export const LeftLayout: React.FC = () => {
   const [clientCount, setClientCount] = useState(0);
   const [isSpectrumPopedOut, setIsSpectrumPopedOut] = useState(false);
 
+  // 监听频谱独立窗口关闭，恢复主窗口内的频谱显示
+  // 注意：SpectrumDisplay 弹出后会被卸载，只有 LeftLayout 始终存活，因此监听必须在此处
+  useEffect(() => {
+    if (!isElectron() || !isSpectrumPopedOut) return;
+    const handleClosed = () => setIsSpectrumPopedOut(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).electronAPI.window.onSpectrumWindowClosed(handleClosed);
+    return () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electronAPI.window.offSpectrumWindowClosed(handleClosed);
+    };
+  }, [isSpectrumPopedOut]);
+
   // 更新当前时间
   useEffect(() => {
     const timer = setInterval(() => {

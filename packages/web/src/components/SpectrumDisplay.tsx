@@ -69,32 +69,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const isElectron = typeof window !== 'undefined' && typeof (window as any).electronAPI !== 'undefined';
   const canPopOut = showPopOut && isElectron;
-  const [isPopedOut, setIsPopedOut] = useState(false);
 
+  // 弹出后此组件会被父层卸载，关窗监听由始终存活的 LeftLayout 负责
   const handlePopOut = useCallback(async () => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (window as any).electronAPI.window.openSpectrumWindow();
-      setIsPopedOut(true);
       onPopOutChange?.(true);
     } catch (error) {
       console.error('打开频谱窗口失败:', error);
     }
   }, [onPopOutChange]);
-
-  useEffect(() => {
-    if (!canPopOut || !isPopedOut) return;
-    const handleClosed = () => {
-      setIsPopedOut(false);
-      onPopOutChange?.(false);
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).electronAPI.window.onSpectrumWindowClosed(handleClosed);
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).electronAPI.window.offSpectrumWindowClosed(handleClosed);
-    };
-  }, [canPopOut, isPopedOut, onPopOutChange]);
 
   // 范围设置状态
   const [rangeSettings, setRangeSettings] = useState<RangeSettings>(() => {
