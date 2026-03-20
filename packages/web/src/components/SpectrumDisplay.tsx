@@ -277,6 +277,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         maxDb={rangeSettings.mode === 'manual' ? rangeSettings.manual.maxDb : 10}
         autoRange={rangeSettings.mode === 'auto'}
         autoRangeConfig={rangeSettings.auto}
+        totalRows={WATERFALL_HISTORY}
         rxFrequencies={rxFrequencies}
         txFrequencies={txFrequencies}
         onTxFrequencyChange={handleTxFrequencyChange}

@@ -25,15 +25,19 @@ const SpectrumContent: React.FC = () => {
   return (
     <div className="w-full h-screen overflow-hidden bg-background">
       {showTitlebar && (
-        /* 透明拖拽条：fixed 浮于顶部，不占布局空间，左侧 80px no-drag 避免遮挡交通灯 */
+        /* 透明拖拽条：fixed 浮于顶部，不占布局空间
+           外层 pointer-events:none，使左右两侧鼠标事件穿透到下方按钮；
+           仅中间拖拽区域恢复 pointer-events:auto + webkit-app-region:drag */
         <div
-          className="fixed top-0 left-0 right-0 z-50"
-          style={{ height: 28, WebkitAppRegion: 'drag' } as React.CSSProperties}
+          className="fixed top-0 left-0 right-0 z-50 flex"
+          style={{ height: 28, pointerEvents: 'none' } as React.CSSProperties}
         >
+          <div className="h-full" style={{ width: 80 }} />
           <div
-            className="h-full"
-            style={{ width: 80, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            className="flex-1 h-full"
+            style={{ pointerEvents: 'auto', WebkitAppRegion: 'drag' } as React.CSSProperties}
           />
+          <div className="h-full" style={{ width: 80 }} />
         </div>
       )}
       <SpectrumDisplay height={windowHeight} showPopOut={false} />

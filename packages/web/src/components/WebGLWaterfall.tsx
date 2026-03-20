@@ -32,6 +32,8 @@ interface WebGLWaterfallProps {
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
   onActualRangeChange?: (range: { min: number; max: number }) => void;
   hoverFrequency?: number | null;
+  /** 纹理总行数，不足时底部用暗色填充，实现从顶部逐渐填充的效果 */
+  totalRows?: number;
 }
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
@@ -53,6 +55,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   onTxFrequencyChange,
   onActualRangeChange,
   hoverFrequency,
+  totalRows,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -78,6 +81,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const rangeUpdateCounterRef = useRef<number>(0);
   const cachedRangeRef = useRef<{min: number, max: number} | null>(null);
   const textureDataRef = useRef<Uint8Array | null>(null);
+  const dataAnimRef = useRef<number>();
+  const heightRef = useRef(height);
+  useEffect(() => { heightRef.current = height; }, [height]);
 
   // 优化后的数据范围计算 - 使用采样和缓存
   const calculateDataRange = useCallback((spectrumData: number[][]) => {
@@ -415,8 +421,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (!gl || !texture || !program || spectrumData.length === 0) return;
 
     const width = spectrumData[0].length;
-    const height = spectrumData.length;
-    const dataSize = width * height;
+    const actualHeight = spectrumData.length;
+    // 纹理总高度：满足 totalRows 时底部填 0（暗色），实现从顶部逐渐填充效果
+    const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : actualHeight;
+    const dataSize = width * textureHeight;
 
     // 重用或创建纹理数据数组
     if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
@@ -424,7 +432,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
     const textureData = textureDataRef.current;
 
-    // 计算实际数据范围
+    // 计算实际数据范围（仅对真实数据行，不含底部填充行）
     let currentMin = minDb;
     let currentMax = maxDb;
 
@@ -446,23 +454,27 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       }
     }
 
-    // 优化的数据转换循环
+    // 优化的数据转换循环（仅处理实际数据行）
     const range = currentMax - currentMin;
     const scale = range > 0 ? 255 / range : 1;
-    
+
     let index = 0;
-    for (let y = 0; y < height; y++) {
+    for (let y = 0; y < actualHeight; y++) {
       const row = spectrumData[y];
       for (let x = 0; x < width; x++) {
         const normalizedValue = (row[x] - currentMin) * scale;
         textureData[index++] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
       }
     }
-    
+    // 底部填充行置 0（映射到颜色表最暗端）
+    if (index < dataSize) {
+      textureData.fill(0, index);
+    }
+
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
     
     // 只在纹理大小改变时设置参数
     if (lastDataLengthRef.current !== dataSize) {
@@ -499,9 +511,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const containerRect = container.getBoundingClientRect();
     const pixelRatio = window.devicePixelRatio || 1;
     
-    // 使用容器的宽度和传入的height
+    // 使用容器的宽度和传入的height（通过 ref 读取，避免 handleResize 随 height 变化重建）
     const canvasWidth = containerRect.width;
-    const canvasHeight = height;
+    const canvasHeight = heightRef.current;
     
     // 只在尺寸真正改变时更新
     if (canvas.width === canvasWidth * pixelRatio && 
@@ -547,7 +559,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       // 立即重新渲染
       render();
     }
-  }, [render, height]);
+  }, [render]);
 
   // 初始化
   useEffect(() => {
@@ -579,24 +591,21 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
   }, [initWebGL, handleResize]);
 
-  // 数据更新时重新渲染
+  // 数据更新时重新渲染（使用独立的 dataAnimRef，避免被 setup effect cleanup 误取消）
   useEffect(() => {
     if (data.length > 0) {
-      // 取消之前的动画帧
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      if (dataAnimRef.current) {
+        cancelAnimationFrame(dataAnimRef.current);
       }
-      
-      // 使用requestAnimationFrame批量处理更新
-      animationRef.current = requestAnimationFrame(() => {
+      dataAnimRef.current = requestAnimationFrame(() => {
         updateTexture(data);
         render();
       });
     }
-    
+
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      if (dataAnimRef.current) {
+        cancelAnimationFrame(dataAnimRef.current);
       }
     };
   }, [data, updateTexture, render]);
