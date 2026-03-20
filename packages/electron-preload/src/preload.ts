@@ -80,7 +80,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * 打开通联日志窗口
      */
-    openLogbookWindow: (_queryString: string) => ipcRenderer.invoke('window:openLogbook', _queryString)
+    openLogbookWindow: (_queryString: string) => ipcRenderer.invoke('window:openLogbook', _queryString),
+
+    /**
+     * 打开独立频谱图窗口
+     */
+    openSpectrumWindow: () => ipcRenderer.invoke('window:openSpectrumWindow'),
+
+    /**
+     * 监听频谱窗口关闭事件
+     */
+    onSpectrumWindowClosed: (callback: () => void) => {
+      ipcRenderer.on('spectrum-window-closed', callback);
+    },
+
+    /**
+     * 取消监听频谱窗口关闭事件
+     */
+    offSpectrumWindowClosed: (callback: () => void) => {
+      ipcRenderer.removeListener('spectrum-window-closed', callback);
+    }
   },
 
   // 系统集成
@@ -139,6 +158,9 @@ declare global {
       };
       window: {
         openLogbookWindow(queryString: string): Promise<void>;
+        openSpectrumWindow(): Promise<void>;
+        onSpectrumWindowClosed(callback: () => void): void;
+        offSpectrumWindowClosed(callback: () => void): void;
       };
       shell: {
         openExternal(url: string): Promise<void>;

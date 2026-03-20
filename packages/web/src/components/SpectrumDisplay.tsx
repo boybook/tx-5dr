@@ -6,7 +6,7 @@ import type { AutoRangeConfig } from './WebGLWaterfall';
 import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
 import { useTxFrequencies } from '../hooks/useTxFrequencies';
 import { Button, Popover, PopoverTrigger, PopoverContent, Tabs, Tab, Slider, Input } from '@heroui/react';
-import { Cog6ToothIcon } from '@heroicons/react/24/outline';
+import { Cog6ToothIcon, ArrowsPointingOutIcon } from '@heroicons/react/24/outline';
 
 // 瀑布图配置
 const WATERFALL_HISTORY = 120; // 保存120个历史数据点
@@ -25,6 +25,10 @@ interface SpectrumDisplayProps {
   className?: string;
   height?: number;
   hoverFrequency?: number | null;
+  /** 是否显示"弹出到独立窗口"按钮（仅 Electron 环境生效），独立频谱窗口中应传 false */
+  showPopOut?: boolean;
+  /** 弹出状态变化时的回调，父组件可据此整体隐藏频谱区块 */
+  onPopOutChange?: (isPopedOut: boolean) => void;
 }
 
 interface WaterfallData {
@@ -45,7 +49,9 @@ interface RangeSettings {
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
   height = 200,
-  hoverFrequency
+  hoverFrequency,
+  showPopOut = true,
+  onPopOutChange,
 }) => {
   const [spectrum, setSpectrum] = useState<FT8Spectrum | null>(null);
   const [waterfallData, setWaterfallData] = useState<WaterfallData>({
@@ -58,6 +64,37 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const lastUpdateRef = useRef<number>(0);
   const pendingDataRef = useRef<FT8Spectrum | null>(null);
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 弹出到独立窗口
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isElectron = typeof window !== 'undefined' && typeof (window as any).electronAPI !== 'undefined';
+  const canPopOut = showPopOut && isElectron;
+  const [isPopedOut, setIsPopedOut] = useState(false);
+
+  const handlePopOut = useCallback(async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (window as any).electronAPI.window.openSpectrumWindow();
+      setIsPopedOut(true);
+      onPopOutChange?.(true);
+    } catch (error) {
+      console.error('打开频谱窗口失败:', error);
+    }
+  }, [onPopOutChange]);
+
+  useEffect(() => {
+    if (!canPopOut || !isPopedOut) return;
+    const handleClosed = () => {
+      setIsPopedOut(false);
+      onPopOutChange?.(false);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).electronAPI.window.onSpectrumWindowClosed(handleClosed);
+    return () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electronAPI.window.offSpectrumWindowClosed(handleClosed);
+    };
+  }, [canPopOut, isPopedOut, onPopOutChange]);
 
   // 范围设置状态
   const [rangeSettings, setRangeSettings] = useState<RangeSettings>(() => {
@@ -227,8 +264,20 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
   if (!spectrum || waterfallData.spectrumData.length === 0) {
     return (
-      <div className={`flex items-center justify-center ${className}`} style={{ height }}>
+      <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
         <div className="text-default-400">等待频谱数据...</div>
+        {canPopOut && (
+          <Button
+            isIconOnly
+            size="sm"
+            variant="light"
+            onPress={handlePopOut}
+            className="absolute top-1 right-1 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
+            title="在独立窗口中显示"
+          >
+            <ArrowsPointingOutIcon className="w-4 h-4" />
+          </Button>
+        )}
       </div>
     );
   }
@@ -250,6 +299,20 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         hoverFrequency={hoverFrequency}
         className="bg-transparent"
       />
+
+      {/* 弹出到独立窗口按钮 */}
+      {canPopOut && (
+        <Button
+          isIconOnly
+          size="sm"
+          variant="light"
+          onPress={handlePopOut}
+          className="absolute top-1 right-9 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
+          title="在独立窗口中显示"
+        >
+          <ArrowsPointingOutIcon className="w-4 h-4" />
+        </Button>
+      )}
 
       {/* 设置按钮和 Popover */}
       <Popover placement="bottom-end">
