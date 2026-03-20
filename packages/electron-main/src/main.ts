@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker } from 'electron';
 import log from 'electron-log/main';
 import { homedir } from 'node:os';
 import net from 'node:net';
@@ -24,6 +24,11 @@ let errorType: string = ''; // 错误类型，空字符串表示无错误
 let hasStartupError: boolean = false; // 是否发生启动错误
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
+
+// ===== macOS 后台节流防护 =====
+// 必须在 app.whenReady() 之前调用，阻止 App Nap 降低渲染进程定时器精度
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
 
 // ===== 认证 Token 管理 =====
 let embeddedAdminToken: string | null = null;
@@ -343,6 +348,7 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
       nodeIntegration: false,
       webSecurity: false,
       allowRunningInsecureContent: true,
+      backgroundThrottling: false,
       preload: app.isPackaged
         ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
         : join(__dirname, '../../electron-preload/dist/preload.js'),
@@ -773,6 +779,9 @@ const startApp = async () => {
   Object.assign(console, log.functions);
   log.errorHandler.startCatching();
 
+  // 阻止 macOS App Nap 挂起进程（不阻止屏保，仅保证进程调度持续）
+  powerSaveBlocker.start('prevent-app-suspension');
+
   // macOS: 确保应用有权限激活到前台
   if (process.platform === 'darwin' && app.dock) {
     app.dock.show();
@@ -882,6 +891,7 @@ function setupIpcHandlers() {
           nodeIntegration: false,
           webSecurity: false,
           allowRunningInsecureContent: true,
+          backgroundThrottling: false,
           preload: app.isPackaged
             ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
             : join(__dirname, '../../electron-preload/dist/preload.js'),

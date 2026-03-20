@@ -127,11 +127,15 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     const now = this.clockSource.now();
     const phaseMs = now - slotStartTime;
     
+    if (phaseMs > 100) {
+      console.warn(`⚠️ [SlotClock] 时隙触发漂移 ${phaseMs.toFixed(1)}ms（可能受 CPU 节流影响），已自动修正子事件时序`);
+    }
+
     const slotInfo: SlotInfo = {
       id: slotId,
       startMs: slotStartTime,
       phaseMs,
-      driftMs: 0, // 可以在后续版本中实现漂移检测
+      driftMs: phaseMs,
       cycleNumber,
       utcSeconds,
       mode: this.mode.name
@@ -146,9 +150,10 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     const encodeDelay = transmitDelay - encodeAdvance; // 原始编码延迟
 
     // 应用时序补偿（正值表示提前发射，负值表示延后发射）
+    // 同时减去 phaseMs（时隙触发漂移），使子事件仍在绝对时间正确位置触发
     // 独立计算两个延迟的补偿，避免级联效应
-    const adjustedTransmitDelay = Math.max(0, transmitDelay - this.compensationMs);
-    const adjustedEncodeDelay = Math.max(0, encodeDelay - this.compensationMs);
+    const adjustedTransmitDelay = Math.max(0, transmitDelay - this.compensationMs - phaseMs);
+    const adjustedEncodeDelay = Math.max(0, encodeDelay - this.compensationMs - phaseMs);
 
     if (this.compensationMs !== 0) {
       console.log(`⚙️ [SlotClock] 应用发射补偿: ${this.compensationMs}ms, 调整后编码延迟=${adjustedEncodeDelay}ms, 发射延迟=${adjustedTransmitDelay}ms`);
