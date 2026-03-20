@@ -17,6 +17,7 @@ export const LeftLayout: React.FC = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
   const [clientCount, setClientCount] = useState(0);
+  const [isSpectrumPopedOut, setIsSpectrumPopedOut] = useState(false);
 
   // 更新当前时间
   useEffect(() => {
@@ -138,13 +139,16 @@ export const LeftLayout: React.FC = () => {
           />
         </div>
 
-        {/* 频谱显示 */}
-        <div className="bg-content2 rounded-lg shadow-sm overflow-hidden">
-          <SpectrumDisplay
-            height={isMobile ? 80 : 128}
-            hoverFrequency={hoveredMessageFreq}
-          />
-        </div>
+        {/* 频谱显示：弹出到独立窗口后整体隐藏 */}
+        {!isSpectrumPopedOut && (
+          <div className="bg-content2 rounded-lg shadow-sm overflow-hidden">
+            <SpectrumDisplay
+              height={isMobile ? 80 : 128}
+              hoverFrequency={hoveredMessageFreq}
+              onPopOutChange={setIsSpectrumPopedOut}
+            />
+          </div>
+        )}
 
         {/* 电台数值表（无电台模式下隐藏） */}
         {radio.state.radioConnected && radio.state.radioConfig?.type !== 'none' && (

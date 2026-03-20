@@ -930,6 +930,72 @@ function setupIpcHandlers() {
     }
   });
 
+  // 处理打开独立频谱图窗口的请求
+  ipcMain.handle('window:openSpectrumWindow', async (_event) => {
+    console.log('📊 [IPC] 收到打开频谱图窗口请求');
+
+    try {
+      const spectrumWindow = new BrowserWindow({
+        width: 1200,
+        height: 500,
+        minWidth: 600,
+        minHeight: 200,
+        show: true,
+        titleBarStyle: 'hiddenInset',
+        titleBarOverlay: process.platform === 'win32' ? {
+          color: '#ffffff',
+          symbolColor: '#000000'
+        } : false,
+        frame: process.platform !== 'darwin',
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          webSecurity: false,
+          allowRunningInsecureContent: true,
+          backgroundThrottling: false,
+          preload: app.isPackaged
+            ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
+            : join(__dirname, '../../electron-preload/dist/preload.js'),
+        },
+      });
+
+      // 在 Windows 和 Linux 下隐藏菜单栏
+      if (process.platform === 'win32' || process.platform === 'linux') {
+        spectrumWindow.setMenuBarVisibility(false);
+      }
+
+      // auth token 参数（通过 URL 参数传递，与主窗口一致）
+      const authParam = embeddedAdminToken ? `?auth_token=${encodeURIComponent(embeddedAdminToken)}` : '';
+
+      // 加载频谱图页面
+      if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
+        const spectrumUrl = `http://localhost:5173/spectrum.html${authParam}`;
+        console.log('📊 [IPC] 加载开发URL:', spectrumUrl);
+        await spectrumWindow.loadURL(spectrumUrl);
+        spectrumWindow.webContents.openDevTools();
+      } else {
+        const fullUrl = `http://127.0.0.1:${selectedWebPort || 5173}/spectrum.html${authParam}`;
+        console.log('📊 [IPC] 加载生产URL:', fullUrl);
+        await spectrumWindow.loadURL(fullUrl);
+      }
+
+      // 聚焦新窗口
+      spectrumWindow.focus();
+
+      // 窗口关闭时通知主窗口，以便主窗口恢复显示频谱图
+      spectrumWindow.on('closed', () => {
+        if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+          mainWindowInstance.webContents.send('spectrum-window-closed');
+        }
+      });
+
+      console.log('✅ [IPC] 频谱图窗口创建成功');
+    } catch (error) {
+      console.error('❌ [IPC] 创建频谱图窗口失败:', error);
+      throw error;
+    }
+  });
+
   // 处理打开目录的请求（在系统文件管理器中打开）
   ipcMain.handle('shell:openPath', async (_event, dirPath: string) => {
     console.log('📁 [IPC] 收到打开目录请求:', dirPath);

@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         logbook: resolve(__dirname, 'logbook.html'),
+        spectrum: resolve(__dirname, 'spectrum.html'),
       },
     },
   },
