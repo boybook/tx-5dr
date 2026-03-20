@@ -672,31 +672,25 @@ async function createWindow() {
   // 在 server 就绪后轮询获取
 
   if (isDevelopment) {
-    console.log('🛠️ 开发模式：使用外部服务器 (http://localhost:4000)');
+    console.log('🛠️ 开发模式：使用外部服务器 (http://localhost:5173)');
     console.log('📋 请确保已经启动开发服务器：yarn dev');
 
-    // 在开发模式下，等待外部服务器准备就绪
-    console.log('⏳ 等待外部服务器启动...');
-    let serverReady = false;
-    for (let i = 0; i < 30; i++) { // 最多等待30秒
-      serverReady = await checkServerHealth();
-      if (serverReady) break;
-      console.log(`⏳ 等待外部服务器... (${i + 1}/30)`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
+    // 在开发模式下，等待前端 Vite 服务器准备就绪
+    console.log('⏳ 等待前端服务器启动...');
+    const webReady = await waitForHttp('http://localhost:5173', 30000, 500);
 
-    if (!serverReady) {
-      log.error('无法连接到外部服务器 (http://localhost:4000)');
+    if (!webReady) {
+      log.error('无法连接到前端服务器 (http://localhost:5173)');
       errorType = 'TIMEOUT';
       hasStartupError = true;
       log.error('[system] Development server connection timeout after 30 seconds');
       const logPath = log.transports.file.getFile().path;
       dialog.showErrorBox('TX-5DR - 启动失败',
-        `无法连接到开发服务器 (http://localhost:4000)\n请确保已运行 yarn dev\n\n详细日志: ${logPath}`);
+        `无法连接到开发服务器 (http://localhost:5173)\n请确保已运行 yarn dev\n\n详细日志: ${logPath}`);
       return;
     }
 
-    console.log('✅ 外部服务器连接成功！');
+    console.log('✅ 前端服务器连接成功！');
   } else {
     // 生产模式：使用便携 Node 启动子进程（server + web）
     console.log('🚀 生产模式：使用便携 Node 启动子进程...');
