@@ -34,7 +34,7 @@
     "fast-jwt": "^6.1.0",
     "fastify": "^5.1.0",
     "fastify-plugin": "^5.1.0",
-    "hamlib": "^0.2.0",
+    "hamlib": "^0.2.2",
     "icom-wlan-node": "^0.2.6",
     "mic": "^2.1.2",
     "node-wav": "^0.0.2",

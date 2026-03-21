@@ -206,6 +206,13 @@ export class HamlibConnection
         ),
       ]);
 
+      // 等待电台初始化完成后再验证通信
+      const POST_OPEN_DELAY = 100;
+      console.log(
+        `⏳ [HamlibConnection] 等待 ${POST_OPEN_DELAY}ms 让电台完成初始化...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, POST_OPEN_DELAY));
+
       // 验证与电台的实际通信（状态仍为 CONNECTING）
       await this.verifyRadioCommunication();
 
@@ -258,7 +265,7 @@ export class HamlibConnection
 
     try {
       await Promise.race([
-        this.rig!.setFrequency(frequency),
+        this.rig!.setFrequency(frequency, 'VFO-A'),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('设置频率超时')), 5000)
         ),
@@ -281,7 +288,7 @@ export class HamlibConnection
 
     try {
       const frequency = (await Promise.race([
-        this.rig!.getFrequency(),
+        this.rig!.getFrequency('VFO-A'),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('获取频率超时')), 5000)
         ),
@@ -522,7 +529,6 @@ export class HamlibConnection
       throw new Error('电台实例未初始化');
     }
 
-    // hamlib open() 返回 Promise，不接受回调参数
     await this.rig.open();
   }
 
@@ -547,7 +553,7 @@ export class HamlibConnection
       console.log(`🔍 [HamlibConnection] 验证电台通信...`);
 
       await Promise.race([
-        this.rig.getFrequency(),
+        this.rig.getFrequency('VFO-A'),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('通信验证超时')), VERIFY_TIMEOUT)
         ),
