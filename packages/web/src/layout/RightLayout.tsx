@@ -33,7 +33,7 @@ export const RightLayout: React.FC = () => {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'logbook_sync' | 'system'>('radio');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system'>('radio');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);

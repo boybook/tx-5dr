@@ -159,6 +159,61 @@ export function requireLogbookAccess(logManager: import('../log/LogManager.js').
 }
 
 /**
+ * 呼号级别的访问控制中间件
+ * ADMIN 可以访问任何呼号的同步配置
+ * OPERATOR 只能访问自己操作员关联的呼号
+ */
+export function requireCallsignAccess() {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!request.authUser) {
+      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: '未认证' } });
+    }
+    if (request.authUser.role === UserRole.ADMIN) return; // admin 放行
+
+    const rawCallsign = (request.params as Record<string, string>).callsign;
+    if (!rawCallsign) return; // 无参数，放行（由路由处理）
+
+    // 归一化请求的呼号
+    const targetBase = normalizeCallsign(rawCallsign);
+
+    // 检查用户的操作员是否有该呼号
+    const { ConfigManager } = await import('../config/config-manager.js');
+    const configManager = ConfigManager.getInstance();
+    const operatorsConfig = configManager.getOperatorsConfig();
+    const userOperatorCallsigns = new Set<string>();
+    for (const op of operatorsConfig) {
+      if (request.authUser.operatorIds.includes(op.id)) {
+        userOperatorCallsigns.add(normalizeCallsign(op.myCallsign));
+      }
+    }
+
+    if (!userOperatorCallsigns.has(targetBase)) {
+      return reply.code(403).send({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '无权访问该呼号的同步配置' },
+      });
+    }
+  };
+}
+
+/**
+ * 从呼号中提取基础呼号（去除前后缀）
+ * 与 ConfigManager.normalizeCallsign 保持一致
+ */
+function normalizeCallsign(callsign: string): string {
+  const upper = callsign.toUpperCase().trim();
+  if (!upper.includes('/')) return upper;
+  const parts = upper.split('/');
+  let best = parts[0];
+  for (const part of parts) {
+    if (part.length > best.length && /[A-Z]/.test(part) && /\d/.test(part)) {
+      best = part;
+    }
+  }
+  return best;
+}
+
+/**
  * 要求对指定操作员有访问权限
  */
 export function requireOperatorAccess(getOperatorId: (request: FastifyRequest) => string) {

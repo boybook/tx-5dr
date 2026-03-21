@@ -13,7 +13,6 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSave } from '@fortawesome/free-solid-svg-icons';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
-import { LogbookSyncSettings, type LogbookSyncSettingsRef } from './LogbookSyncSettings';
 import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
 import { TokenManagement } from './TokenManagement';
 import { useHasMinRole } from '../store/authStore';
@@ -25,8 +24,8 @@ interface SettingsModalProps {
   initialTab?: SettingsTab; // 可选的初始标签页
 }
 
-// 设置标签页类型（radio 和 audio 已迁移到 ProfileModal）
-type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'logbook_sync' | 'system' | 'tokens';
+// 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
+type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'tokens';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -42,7 +41,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // 用于检查组件是否有未保存的更改
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
-  const logbookSyncSettingsRef = useRef<LogbookSyncSettingsRef | null>(null);
   const systemSettingsRef = useRef<SystemSettingsRef | null>(null);
 
   // 当弹窗打开时，重置到初始标签页
@@ -79,8 +77,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return operatorSettingsRef.current?.hasUnsavedChanges() || false;
       case 'display':
         return displaySettingsRef.current?.hasUnsavedChanges() || false;
-      case 'logbook_sync':
-        return logbookSyncSettingsRef.current?.hasUnsavedChanges() || false;
       case 'system':
         return systemSettingsRef.current?.hasUnsavedChanges() || false;
       default:
@@ -127,11 +123,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         case 'display':
           if (displaySettingsRef.current) {
             await displaySettingsRef.current.save();
-          }
-          break;
-        case 'logbook_sync':
-          if (logbookSyncSettingsRef.current) {
-            await logbookSyncSettingsRef.current.save();
           }
           break;
         case 'system':
@@ -209,8 +200,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           return '🎨';
         case 'radio_profile':
           return '📻';
-        case 'logbook_sync':
-          return '📊';
         case 'system':
           return '⚙️';
         case 'tokens':
@@ -228,8 +217,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return '🎨 显示通知';
       case 'radio_profile':
         return '📻 电台配置';
-      case 'logbook_sync':
-        return '📊 通联日志同步';
       case 'system':
         return '⚙️ 系统设置';
       case 'tokens':
@@ -253,13 +240,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return (
           <DisplayNotificationSettings
             ref={displaySettingsRef}
-            onUnsavedChanges={setHasUnsavedChanges}
-          />
-        );
-      case 'logbook_sync':
-        return (
-          <LogbookSyncSettings
-            ref={logbookSyncSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
           />
         );
@@ -358,12 +338,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     <Tab
                       key="radio_profile"
                       title={getTabTitle('radio_profile', isMobile)}
-                    />
-                  )}
-                  {isAdmin && (
-                    <Tab
-                      key="logbook_sync"
-                      title={getTabTitle('logbook_sync', isMobile)}
                     />
                   )}
                   {isAdmin && (

@@ -2,7 +2,7 @@
 // ConfigManager - 配置合并和动态类型需要使用any
 
 import { promises as fs } from 'fs';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary } from '@tx5dr/contracts';
 import type { RadioProfile } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
@@ -41,6 +41,8 @@ export interface AppConfig {
     host: string;
   };
   operators: RadioOperatorConfig[];
+  // 按呼号绑定的同步配置（替代旧的全局 wavelog/qrz/lotw）
+  callsignSyncConfigs: Record<string, CallsignSyncConfig>;
   wavelog: WaveLogConfig;
   qrz: QRZConfig;
   lotw: LoTWConfig;
@@ -78,8 +80,8 @@ const DEFAULT_CONFIG: AppConfig = {
   operators: [
     // 从空操作员列表开始，等待用户创建
   ],
+  callsignSyncConfigs: {},
   wavelog: {
-    enabled: false,
     url: '',
     apiKey: '',
     stationId: '',
@@ -87,12 +89,10 @@ const DEFAULT_CONFIG: AppConfig = {
     autoUploadQSO: true,
   },
   qrz: {
-    enabled: false,
     apiKey: '',
     autoUploadQSO: false,
   },
   lotw: {
-    enabled: false,
     username: '',
     password: '',
     tqslPath: '',
@@ -202,6 +202,14 @@ export class ConfigManager {
       console.log('✅ [配置管理器] Profile 迁移完成');
     }
 
+    // 迁移全局同步配置到按呼号的 callsignSyncConfigs
+    if (this.needsSyncConfigMigration(parsedConfig)) {
+      console.log('🔄 [配置管理器] 检测到全局同步配置，开始迁移到按呼号同步配置...');
+      this.migrateSyncConfigs(parsedConfig);
+      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      console.log('✅ [配置管理器] 同步配置迁移完成');
+    }
+
     // 合并默认配置和加载的配置
     this.config = this.mergeConfig(DEFAULT_CONFIG, parsedConfig);
   }
@@ -236,6 +244,9 @@ export class ConfigManager {
             ...operator,  // 用户配置覆盖默认值
           };
         });
+      // 特殊处理 callsignSyncConfigs：直接使用用户配置（不深度合并）
+      } else if (key === 'callsignSyncConfigs' && typeof userConfig[key] === 'object') {
+        result[key] = userConfig[key];
       // 特殊处理 profiles 数组：直接使用用户配置
       } else if (key === 'profiles' && Array.isArray(userConfig[key])) {
         result[key] = userConfig[key];
@@ -840,5 +851,128 @@ export class ConfigManager {
   async resetPSKReporterConfig(): Promise<void> {
     this.config.pskreporter = { ...DEFAULT_CONFIG.pskreporter };
     await this.saveConfig();
+  }
+
+  // ===== 按呼号的同步配置 =====
+
+  /**
+   * 从呼号中提取基础呼号（去除前后缀）
+   */
+  private normalizeCallsign(callsign: string): string {
+    const upper = callsign.toUpperCase().trim();
+    if (!upper.includes('/')) return upper;
+    const parts = upper.split('/');
+    let best = parts[0];
+    for (const part of parts) {
+      if (part.length > best.length && /[A-Z]/.test(part) && /\d/.test(part)) {
+        best = part;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * 检测是否需要从全局同步配置迁移到按呼号配置
+   */
+  private needsSyncConfigMigration(parsedConfig: any): boolean {
+    // 已有 callsignSyncConfigs → 不需要迁移
+    if (parsedConfig.callsignSyncConfigs && Object.keys(parsedConfig.callsignSyncConfigs).length > 0) {
+      return false;
+    }
+    // 有全局同步配置且至少一个启用了 → 需要迁移
+    const hasWavelog = parsedConfig.wavelog?.url && parsedConfig.wavelog?.apiKey;
+    const hasQrz = parsedConfig.qrz?.apiKey;
+    const hasLotw = parsedConfig.lotw?.username || parsedConfig.lotw?.tqslPath;
+    return !!(hasWavelog || hasQrz || hasLotw);
+  }
+
+  /**
+   * 将全局同步配置迁移到按呼号配置
+   */
+  private migrateSyncConfigs(parsedConfig: any): void {
+    const callsignSyncConfigs: Record<string, any> = {};
+
+    // 收集所有操作员的唯一基础呼号
+    const callsigns = new Set<string>();
+    if (Array.isArray(parsedConfig.operators)) {
+      for (const op of parsedConfig.operators) {
+        if (op.myCallsign) {
+          callsigns.add(this.normalizeCallsign(op.myCallsign));
+        }
+      }
+    }
+
+    // 如果没有操作员，不迁移
+    if (callsigns.size === 0) return;
+
+    // 将全局配置复制到每个呼号
+    for (const callsign of callsigns) {
+      const config: any = { callsign };
+      if (parsedConfig.wavelog) {
+        config.wavelog = { ...parsedConfig.wavelog };
+      }
+      if (parsedConfig.qrz) {
+        config.qrz = { ...parsedConfig.qrz };
+      }
+      if (parsedConfig.lotw) {
+        config.lotw = { ...parsedConfig.lotw, stationCallsign: callsign };
+      }
+      callsignSyncConfigs[callsign] = config;
+    }
+
+    parsedConfig.callsignSyncConfigs = callsignSyncConfigs;
+
+    // 清除旧的全局同步配置
+    delete parsedConfig.wavelog;
+    delete parsedConfig.qrz;
+    delete parsedConfig.lotw;
+
+    console.log(`📋 [配置管理器] 已迁移同步配置到 ${callsigns.size} 个呼号: ${[...callsigns].join(', ')}`);
+  }
+
+  /**
+   * 获取指定呼号的同步配置
+   */
+  getCallsignSyncConfig(callsign: string): CallsignSyncConfig | null {
+    const key = this.normalizeCallsign(callsign);
+    return this.config.callsignSyncConfigs[key] || null;
+  }
+
+  /**
+   * 更新指定呼号的同步配置
+   */
+  async updateCallsignSyncConfig(callsign: string, updates: Partial<CallsignSyncConfig>): Promise<void> {
+    const key = this.normalizeCallsign(callsign);
+    const existing = this.config.callsignSyncConfigs[key] || { callsign: key };
+    this.config.callsignSyncConfigs[key] = { ...existing, ...updates, callsign: key };
+    await this.saveConfig();
+  }
+
+  /**
+   * 删除指定呼号的同步配置
+   */
+  async deleteCallsignSyncConfig(callsign: string): Promise<void> {
+    const key = this.normalizeCallsign(callsign);
+    delete this.config.callsignSyncConfigs[key];
+    await this.saveConfig();
+  }
+
+  /**
+   * 获取所有呼号的同步配置
+   */
+  getAllCallsignSyncConfigs(): Record<string, CallsignSyncConfig> {
+    return { ...this.config.callsignSyncConfigs };
+  }
+
+  /**
+   * 获取指定呼号的同步摘要（哪些服务已启用）
+   */
+  getCallsignSyncSummary(callsign: string): SyncSummary {
+    const config = this.getCallsignSyncConfig(callsign);
+    return {
+      wavelog: !!(config?.wavelog?.url && config?.wavelog?.apiKey),
+      qrz: !!(config?.qrz?.apiKey),
+      lotw: !!(config?.lotw?.username || config?.lotw?.tqslPath),
+    };
   }
 }

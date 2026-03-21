@@ -26,6 +26,7 @@ import type {
   CreateRadioOperatorRequest,
   UpdateRadioOperatorRequest
 } from '@tx5dr/contracts';
+import { SyncConfigModal } from './SyncConfigModal';
 import { MODES } from '@tx5dr/contracts';
 import { useConnection } from '../store/radioStore';
 import {
@@ -79,6 +80,12 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [operatorToDelete, setOperatorToDelete] = useState<RadioOperatorConfig | null>(null);
 
+    // 同步配置状态
+    const [syncSummaries, setSyncSummaries] = useState<Record<string, { wavelog: boolean; qrz: boolean; lotw: boolean }>>({});
+    const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+    const [syncModalCallsign, setSyncModalCallsign] = useState('');
+    const [syncModalInitialTab, setSyncModalInitialTab] = useState<'wavelog' | 'qrz' | 'lotw'>('wavelog');
+
     // 暴露给父组件的方法
     useImperativeHandle(ref, () => ({
       hasUnsavedChanges: () => hasChanges || preferencesHasChanges,
@@ -116,6 +123,46 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         setIsCreating(true);
       }
     }, [loading, operators.length, isCreating]);
+
+    // 加载操作员同步配置摘要
+    useEffect(() => {
+      const loadSyncSummaries = async () => {
+        const summaries: Record<string, { wavelog: boolean; qrz: boolean; lotw: boolean }> = {};
+        for (const operator of operators) {
+          try {
+            const res = await api.getCallsignSyncSummary(operator.myCallsign) as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
+            if (res.success && res.summary) {
+              summaries[operator.myCallsign] = res.summary;
+            }
+          } catch {
+            // 忽略加载失败
+          }
+        }
+        setSyncSummaries(summaries);
+      };
+      if (operators.length > 0) {
+        loadSyncSummaries();
+      }
+    }, [operators]);
+
+    // 打开同步配置弹窗
+    const openSyncModal = (callsign: string, tab: 'wavelog' | 'qrz' | 'lotw') => {
+      setSyncModalCallsign(callsign);
+      setSyncModalInitialTab(tab);
+      setIsSyncModalOpen(true);
+    };
+
+    // 刷新某个呼号的同步摘要
+    const refreshSyncSummary = async (callsign: string) => {
+      try {
+        const res = await api.getCallsignSyncSummary(callsign) as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
+        if (res.success && res.summary) {
+          setSyncSummaries(prev => ({ ...prev, [callsign]: res.summary! }));
+        }
+      } catch {
+        // 忽略刷新失败
+      }
+    };
 
     // 初始化操作员偏好设置
     useEffect(() => {
@@ -302,8 +349,26 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       }
     };
 
+    // SyncServiceCard 内联组件
+    const SyncServiceCard = ({ name, enabled, onConfigure }: { name: string; enabled: boolean; onConfigure: () => void }) => (
+      <div className={`border rounded-lg p-2 flex-1 min-w-[100px] ${enabled ? 'border-success' : 'border-default-200'}`}>
+        <p className="text-xs font-medium">{name}</p>
+        <div className="flex items-center justify-between mt-1">
+          <Chip size="sm" color={enabled ? 'success' : 'default'} variant="flat">
+            {enabled ? '已配置' : '未配置'}
+          </Chip>
+          <Button size="sm" variant="light" onPress={onConfigure}>
+            {enabled ? '修改' : '配置'}
+          </Button>
+        </div>
+      </div>
+    );
+
     // 渲染展示模式的内容
     const renderDisplayMode = (operator: RadioOperatorConfig) => {
+      const syncSummary = syncSummaries[operator.myCallsign] || { wavelog: false, qrz: false, lotw: false };
+      const hasSyncConfig = syncSummary.wavelog || syncSummary.qrz || syncSummary.lotw;
+
       return (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -311,11 +376,37 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               <span className="text-xs text-default-500 uppercase tracking-wide">呼号</span>
               <p className="text-sm font-medium">{operator.myCallsign}</p>
             </div>
-            
+
             <div>
               <span className="text-xs text-default-500 uppercase tracking-wide">网格坐标</span>
               <p className="text-sm font-medium">{operator.myGrid || '未设置'}</p>
             </div>
+          </div>
+
+          {/* 通联日志同步 */}
+          <Divider className="my-3" />
+          <p className="text-sm font-medium mb-2">通联日志同步</p>
+          {!hasSyncConfig && (
+            <p className="text-xs text-default-400 mb-2">
+              配置同步服务后，通联记录可自动上传到 WaveLog、QRZ.com 或 LoTW
+            </p>
+          )}
+          <div className="flex gap-2 flex-wrap">
+            <SyncServiceCard
+              name="WaveLog"
+              enabled={syncSummary.wavelog}
+              onConfigure={() => openSyncModal(operator.myCallsign, 'wavelog')}
+            />
+            <SyncServiceCard
+              name="QRZ.com"
+              enabled={syncSummary.qrz}
+              onConfigure={() => openSyncModal(operator.myCallsign, 'qrz')}
+            />
+            <SyncServiceCard
+              name="LoTW"
+              enabled={syncSummary.lotw}
+              onConfigure={() => openSyncModal(operator.myCallsign, 'lotw')}
+            />
           </div>
 
           {/* 自动化配置展示 */}
@@ -949,6 +1040,15 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             </ModalFooter>
           </ModalContent>
         </Modal>
+
+        {/* 同步配置弹窗 */}
+        <SyncConfigModal
+          isOpen={isSyncModalOpen}
+          onClose={() => setIsSyncModalOpen(false)}
+          callsign={syncModalCallsign}
+          initialTab={syncModalInitialTab}
+          onSaved={() => refreshSyncSummary(syncModalCallsign)}
+        />
       </div>
     );
   }

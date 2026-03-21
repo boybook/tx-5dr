@@ -26,13 +26,13 @@ export interface WaveLogSettingsRef {
 }
 
 interface WaveLogSettingsProps {
+  callsign: string;
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
 export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsProps>(
-  ({ onUnsavedChanges }, ref) => {
+  ({ callsign, onUnsavedChanges }, ref) => {
     const [config, setConfig] = useState<WaveLogConfig>({
-      enabled: false,
       url: '',
       apiKey: '',
       stationId: '',
@@ -62,9 +62,12 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
       try {
         setLoading(true);
         setError('');
-        const response = await api.getWaveLogConfig();
-        setConfig(response);
-        setOriginalConfig(response);
+        const response = await api.getWaveLogConfig(callsign) as any;
+        const data = response?.config || response;
+        if (data && typeof data === 'object') {
+          setConfig(prev => ({ ...prev, ...data }));
+          setOriginalConfig(prev => ({ ...prev, ...data }));
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载配置失败');
       } finally {
@@ -112,7 +115,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
       setError('');
 
       try {
-        const response = await api.testWaveLogConnection({
+        const response = await api.testWaveLogConnection(callsign, {
           url: config.url,
           apiKey: config.apiKey
         });
@@ -143,7 +146,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
     const handleSave = async () => {
       try {
         setError('');
-        await api.updateWaveLogConfig(config);
+        await api.updateWaveLogConfig(callsign, config);
         setOriginalConfig({ ...config });
         setHasChanges(false);
         onUnsavedChanges?.(false);
@@ -210,28 +213,6 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
           </Alert>
         )}
 
-        {/* 启用开关 */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <FontAwesomeIcon icon={faPlug} className="text-primary" />
-              <span className="font-medium">启用WaveLog同步</span>
-            </div>
-          </CardHeader>
-          <CardBody>
-            <Switch
-              isSelected={config.enabled}
-              onValueChange={(enabled) => updateConfig('enabled', enabled)}
-              size="md"
-            >
-              {config.enabled ? '已启用' : '已禁用'}
-            </Switch>
-            <p className="text-xs text-default-500 mt-2">
-              启用后将自动与WaveLog服务器同步通联日志
-            </p>
-          </CardBody>
-        </Card>
-
         {/* 连接设置 */}
         <Card>
           <CardHeader>
@@ -246,7 +227,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
               placeholder="https://your-wavelog.domain.com"
               value={config.url}
               onChange={(e) => updateConfig('url', e.target.value)}
-              isDisabled={!config.enabled}
+
               isRequired
               type="url"
               description="完整的WaveLog服务器地址，包含协议(https://)"
@@ -257,7 +238,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
               placeholder="在WaveLog中生成的API密钥"
               value={config.apiKey}
               onChange={(e) => updateConfig('apiKey', e.target.value)}
-              isDisabled={!config.enabled}
+
               isRequired
               type="password"
               description="在WaveLog右侧菜单 → API Keys 中生成"
@@ -269,7 +250,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
                 variant="flat"
                 onPress={testConnection}
                 isLoading={testing}
-                isDisabled={!config.enabled || !config.url || !config.apiKey}
+                isDisabled={!config.url || !config.apiKey}
                 startContent={!testing && <FontAwesomeIcon icon={faPlug} />}
                 className="flex-shrink-0"
               >
@@ -303,7 +284,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
                   const selected = Array.from(keys as Set<string>)[0] || '';
                   updateConfig('stationId', selected);
                 }}
-                isDisabled={!config.enabled}
+  
                 isRequired
                 description="选择在WaveLog中创建的Station配置"
               >
@@ -320,7 +301,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
               placeholder="TX5DR"
               value={config.radioName}
               onChange={(e) => updateConfig('radioName', e.target.value)}
-              isDisabled={!config.enabled}
+
               description="在WaveLog中显示的电台设备名称"
             />
           </CardBody>
@@ -338,7 +319,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
             <Switch
               isSelected={config.autoUploadQSO}
               onValueChange={(enabled) => updateConfig('autoUploadQSO', enabled)}
-              isDisabled={!config.enabled}
+
               size="sm"
             >
               自动上传新QSO

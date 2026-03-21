@@ -18,9 +18,6 @@ import { slotpackRoutes } from './routes/slotpack.js';
 import { modeRoutes } from './routes/mode.js';
 import { operatorRoutes } from './routes/operators.js';
 import { radioRoutes } from './routes/radio.js';
-import { waveLogRoutes } from './routes/wavelog.js';
-import { qrzRoutes } from './routes/qrz.js';
-import { lotwRoutes } from './routes/lotw.js';
 import { settingsRoutes } from './routes/settings.js';
 import { profileRoutes } from './routes/profiles.js';
 import { WSServer } from './websocket/WSServer.js';
@@ -129,21 +126,11 @@ export async function createServer() {
   await digitalRadioEngine.initialize();
   fastify.log.info('数字无线电引擎初始化完成');
 
-  // 初始化WaveLog服务
-  const { WaveLogServiceManager } = await import('./services/WaveLogService.js');
-  const waveLogManager = WaveLogServiceManager.getInstance();
-  const waveLogConfig = configManager.getWaveLogConfig();
-  if (waveLogConfig.enabled) {
-    waveLogManager.initializeService(waveLogConfig);
-    fastify.log.info('WaveLog服务初始化完成');
-    
-    // WaveLog同步服务已准备就绪（仅支持手动触发）
-    const { WaveLogSyncScheduler } = await import('./services/WaveLogSyncScheduler.js');
-    const _syncScheduler = WaveLogSyncScheduler.getInstance();
-    fastify.log.info('WaveLog同步服务已准备就绪');
-  } else {
-    fastify.log.info('WaveLog服务已禁用，跳过初始化');
-  }
+  // 初始化按呼号的同步服务注册表（替代旧的全局 WaveLog/QRZ/LoTW 服务）
+  const { SyncServiceRegistry } = await import('./services/SyncServiceRegistry.js');
+  const syncRegistry = SyncServiceRegistry.getInstance();
+  syncRegistry.initializeAll();
+  fastify.log.info('同步服务注册表初始化完成');
 
   // 初始化音频监听WebSocket服务器
   const audioMonitorWSServer = new AudioMonitorWSServer();
@@ -256,13 +243,10 @@ export async function createServer() {
     await scope.register(settingsRoutes, { prefix: '/api/settings' });
     const { storageRoutes } = await import('./routes/storage.js');
     await scope.register(storageRoutes, { prefix: '/api/storage' });
-    await scope.register(waveLogRoutes, { prefix: '/api/wavelog' });
-    await scope.register(qrzRoutes, { prefix: '/api/qrz' });
-    await scope.register(lotwRoutes, { prefix: '/api/lotw' });
     const { pskreporterRoutes } = await import('./routes/pskreporter.js');
     await scope.register(pskreporterRoutes, { prefix: '/api' });
   });
-  fastify.log.info('Admin 路由注册完成（audio, profiles, settings, storage, wavelog, qrz, lotw, pskreporter）');
+  fastify.log.info('Admin 路由注册完成（audio, profiles, settings, storage, pskreporter）');
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包
   await fastify.register(async (scope) => {
@@ -281,6 +265,14 @@ export async function createServer() {
     await scope.register(logbookRoutes, { prefix: '/api/logbooks' });
   });
   fastify.log.info('Operator+ 路由注册完成（logbooks）');
+
+  // Operator+ 同步路由：按呼号的同步配置（细粒度权限由 requireCallsignAccess 控制）
+  await fastify.register(async (scope) => {
+    await scope.register(withRole(UserRole.OPERATOR));
+    const { syncRoutes } = await import('./routes/sync.js');
+    await scope.register(syncRoutes, { prefix: '/api/sync' });
+  });
+  fastify.log.info('Operator+ 路由注册完成（sync）');
 
   // 公开路由：认证
   await fastify.register(authRoutes, { prefix: '/api/auth' });

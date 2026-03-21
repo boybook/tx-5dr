@@ -6,7 +6,6 @@ import { z } from 'zod';
  * LoTW 配置 Schema
  */
 export const LoTWConfigSchema = z.object({
-  enabled: z.boolean().default(false),
   // 下载确认用
   username: z.string().default(''),
   password: z.string().default(''),

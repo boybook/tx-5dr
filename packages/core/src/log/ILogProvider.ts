@@ -34,7 +34,15 @@ export interface LogQueryOptions {
    * 模式（FT8, FT4等）
    */
   mode?: string;
-  
+
+  /**
+   * QSL 确认状态筛选
+   * confirmed: 至少一个平台已确认 (lotwQslReceived='Y'|'V' 或 qrzQslReceived='Y')
+   * uploaded: 至少一个平台已上传但无确认
+   * none: 未上传到任何平台
+   */
+  qslStatus?: 'confirmed' | 'uploaded' | 'none';
+
   /**
    * 操作员ID（用于多操作员场景）
    */

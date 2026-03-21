@@ -539,11 +539,33 @@ export class ADIFLogProvider implements ILogProvider {
         results = results.filter(qso => qso.mode === options.mode);
       }
       
+      // QSL 确认状态过滤
+      if (options.qslStatus) {
+        results = results.filter(qso => {
+          const isConfirmed =
+            (qso.lotwQslReceived === 'Y' || qso.lotwQslReceived === 'V') ||
+            qso.qrzQslReceived === 'Y';
+          const isUploaded =
+            qso.lotwQslSent === 'Y' || qso.qrzQslSent === 'Y';
+
+          switch (options.qslStatus) {
+            case 'confirmed':
+              return isConfirmed;
+            case 'uploaded':
+              return isUploaded && !isConfirmed;
+            case 'none':
+              return !isUploaded && !isConfirmed;
+            default:
+              return true;
+          }
+        });
+      }
+
       // 操作员过滤
       if (options.operatorId) {
         results = results.filter(qso => this.isQSOBelongsToOperator(qso.id, options.operatorId));
       }
-      
+
       // 排序
       const orderBy = options.orderBy || 'time';
       const orderDir = options.orderDirection || 'desc';

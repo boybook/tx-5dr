@@ -1163,71 +1163,67 @@ export const api = {
     return await res.json();
   },
 
-  // ========== WaveLog同步API ==========
+  // ========== 按呼号同步配置 API ==========
+
+  /**
+   * 获取呼号的同步配置总览
+   */
+  async getCallsignSyncConfig(callsign: string, apiBase?: string): Promise<unknown> {
+    return apiRequest(`/sync/${encodeURIComponent(callsign)}/config`, undefined, apiBase);
+  },
+
+  /**
+   * 获取呼号的同步摘要
+   */
+  async getCallsignSyncSummary(callsign: string, apiBase?: string): Promise<unknown> {
+    return apiRequest(`/sync/${encodeURIComponent(callsign)}/summary`, undefined, apiBase);
+  },
+
+  // ========== WaveLog同步API（按呼号） ==========
 
   /**
    * 获取WaveLog配置
    */
-  async getWaveLogConfig(apiBase?: string): Promise<WaveLogConfig> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/wavelog/config`);
-    if (!res.ok) {
-      throw new Error(`获取WaveLog配置失败: ${res.status} ${res.statusText}`);
-    }
-    return (await res.json()) as WaveLogConfig;
+  async getWaveLogConfig(callsign: string, apiBase?: string): Promise<WaveLogConfig> {
+    return apiRequest<WaveLogConfig>(
+      `/sync/${encodeURIComponent(callsign)}/wavelog/config`,
+      undefined,
+      apiBase
+    );
   },
 
   /**
    * 更新WaveLog配置
    */
-  async updateWaveLogConfig(config: Partial<WaveLogConfig>, apiBase?: string): Promise<WaveLogConfig> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/wavelog/config`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(config),
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `更新WaveLog配置失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+  async updateWaveLogConfig(callsign: string, config: Partial<WaveLogConfig>, apiBase?: string): Promise<WaveLogConfig> {
+    return apiRequest<WaveLogConfig>(
+      `/sync/${encodeURIComponent(callsign)}/wavelog/config`,
+      { method: 'PUT', body: JSON.stringify(config) },
+      apiBase
+    );
   },
 
   /**
    * 测试WaveLog连接
    */
-  async testWaveLogConnection(request: WaveLogTestConnectionRequest, apiBase?: string): Promise<WaveLogTestConnectionResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/wavelog/test`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request),
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `测试WaveLog连接失败: ${res.status} ${res.statusText}`);
-    }
-    
-    return await res.json();
+  async testWaveLogConnection(callsign: string, request: WaveLogTestConnectionRequest, apiBase?: string): Promise<WaveLogTestConnectionResponse> {
+    return apiRequest<WaveLogTestConnectionResponse>(
+      `/sync/${encodeURIComponent(callsign)}/wavelog/test`,
+      { method: 'POST', body: JSON.stringify(request) },
+      apiBase
+    );
   },
 
   /**
    * 同步WaveLog数据
    */
   async syncWaveLog(
+    callsign: string,
     operation: 'download' | 'upload' | 'full_sync',
     apiBase?: string
   ): Promise<{ success: boolean; message: string }> {
     return apiRequest<{ success: boolean; message: string }>(
-      '/wavelog/sync',
+      `/sync/${encodeURIComponent(callsign)}/wavelog/sync`,
       {
         method: 'POST',
         body: JSON.stringify({ operation }),
@@ -1237,111 +1233,109 @@ export const api = {
   },
 
   /**
-   * 重置WaveLog配置
+   * 获取WaveLog同步状态
    */
-  async resetWaveLogConfig(apiBase?: string): Promise<WaveLogConfig> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/wavelog/config/reset`, {
-      method: 'POST',
-    });
-
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `重置WaveLog配置失败: ${res.status} ${res.statusText}`);
-    }
-
-    return await res.json();
+  async getWaveLogSyncStatus(callsign: string, apiBase?: string): Promise<unknown> {
+    return apiRequest(`/sync/${encodeURIComponent(callsign)}/wavelog/status`, undefined, apiBase);
   },
 
-  // ========== QRZ.com Logbook API ==========
+  // ========== QRZ.com Logbook API（按呼号） ==========
 
-  async getQRZConfig(apiBase?: string): Promise<QRZConfig> {
-    return apiRequest<QRZConfig>('/qrz/config', undefined, apiBase);
-  },
-
-  async updateQRZConfig(config: Partial<QRZConfig>, apiBase?: string): Promise<QRZConfig> {
+  async getQRZConfig(callsign: string, apiBase?: string): Promise<QRZConfig> {
     return apiRequest<QRZConfig>(
-      '/qrz/config',
+      `/sync/${encodeURIComponent(callsign)}/qrz/config`,
+      undefined,
+      apiBase
+    );
+  },
+
+  async updateQRZConfig(callsign: string, config: Partial<QRZConfig>, apiBase?: string): Promise<QRZConfig> {
+    return apiRequest<QRZConfig>(
+      `/sync/${encodeURIComponent(callsign)}/qrz/config`,
       { method: 'PUT', body: JSON.stringify(config) },
       apiBase
     );
   },
 
-  async testQRZConnection(request: QRZTestConnectionRequest, apiBase?: string): Promise<QRZTestConnectionResponse> {
+  async testQRZConnection(callsign: string, request: QRZTestConnectionRequest, apiBase?: string): Promise<QRZTestConnectionResponse> {
     return apiRequest<QRZTestConnectionResponse>(
-      '/qrz/test',
+      `/sync/${encodeURIComponent(callsign)}/qrz/test`,
       { method: 'POST', body: JSON.stringify(request) },
       apiBase
     );
   },
 
   async syncQRZ(
+    callsign: string,
     operation: 'upload' | 'download' | 'full_sync',
     apiBase?: string
   ): Promise<QRZSyncResponse> {
     return apiRequest<QRZSyncResponse>(
-      '/qrz/sync',
+      `/sync/${encodeURIComponent(callsign)}/qrz/sync`,
       { method: 'POST', body: JSON.stringify({ operation }) },
       apiBase
     );
   },
 
-  async resetQRZConfig(apiBase?: string): Promise<QRZConfig> {
-    return apiRequest<QRZConfig>(
-      '/qrz/config/reset',
-      { method: 'POST' },
+  /**
+   * 获取QRZ同步状态
+   */
+  async getQRZSyncStatus(callsign: string, apiBase?: string): Promise<unknown> {
+    return apiRequest(`/sync/${encodeURIComponent(callsign)}/qrz/status`, undefined, apiBase);
+  },
+
+  // ========== LoTW API（按呼号） ==========
+
+  async getLoTWConfig(callsign: string, apiBase?: string): Promise<LoTWConfig> {
+    return apiRequest<LoTWConfig>(
+      `/sync/${encodeURIComponent(callsign)}/lotw/config`,
+      undefined,
       apiBase
     );
   },
 
-  // ========== LoTW API ==========
-
-  async getLoTWConfig(apiBase?: string): Promise<LoTWConfig> {
-    return apiRequest<LoTWConfig>('/lotw/config', undefined, apiBase);
-  },
-
-  async updateLoTWConfig(config: Partial<LoTWConfig>, apiBase?: string): Promise<LoTWConfig> {
+  async updateLoTWConfig(callsign: string, config: Partial<LoTWConfig>, apiBase?: string): Promise<LoTWConfig> {
     return apiRequest<LoTWConfig>(
-      '/lotw/config',
+      `/sync/${encodeURIComponent(callsign)}/lotw/config`,
       { method: 'PUT', body: JSON.stringify(config) },
       apiBase
     );
   },
 
-  async testLoTWConnection(request: LoTWTestConnectionRequest, apiBase?: string): Promise<LoTWTestConnectionResponse> {
+  async testLoTWConnection(callsign: string, request: LoTWTestConnectionRequest, apiBase?: string): Promise<LoTWTestConnectionResponse> {
     return apiRequest<LoTWTestConnectionResponse>(
-      '/lotw/test',
+      `/sync/${encodeURIComponent(callsign)}/lotw/test`,
       { method: 'POST', body: JSON.stringify(request) },
       apiBase
     );
   },
 
-  async detectTQSL(request?: LoTWTQSLDetectRequest, apiBase?: string): Promise<LoTWTQSLDetectResponse> {
+  async detectTQSL(callsign: string, request?: LoTWTQSLDetectRequest, apiBase?: string): Promise<LoTWTQSLDetectResponse> {
     return apiRequest<LoTWTQSLDetectResponse>(
-      '/lotw/detect-tqsl',
+      `/sync/${encodeURIComponent(callsign)}/lotw/detect-tqsl`,
       { method: 'POST', body: JSON.stringify(request || {}) },
       apiBase
     );
   },
 
   async syncLoTW(
+    callsign: string,
     operation: 'upload' | 'download_confirmations',
     since?: string,
     apiBase?: string
   ): Promise<LoTWSyncResponse> {
     return apiRequest<LoTWSyncResponse>(
-      '/lotw/sync',
+      `/sync/${encodeURIComponent(callsign)}/lotw/sync`,
       { method: 'POST', body: JSON.stringify({ operation, since }) },
       apiBase
     );
   },
 
-  async resetLoTWConfig(apiBase?: string): Promise<LoTWConfig> {
-    return apiRequest<LoTWConfig>(
-      '/lotw/config/reset',
-      { method: 'POST' },
-      apiBase
-    );
+  /**
+   * 获取LoTW同步状态
+   */
+  async getLoTWSyncStatus(callsign: string, apiBase?: string): Promise<unknown> {
+    return apiRequest(`/sync/${encodeURIComponent(callsign)}/lotw/status`, undefined, apiBase);
   },
 
   /**
@@ -1514,25 +1508,28 @@ export const {
   importToLogBook,
   updateQSO,
   deleteQSO,
+  // 按呼号同步配置函数
+  getCallsignSyncConfig,
+  getCallsignSyncSummary,
   // WaveLog同步函数
   getWaveLogConfig,
   updateWaveLogConfig,
   testWaveLogConnection,
   syncWaveLog,
-  resetWaveLogConfig,
+  getWaveLogSyncStatus,
   // QRZ.com同步函数
   getQRZConfig,
   updateQRZConfig,
   testQRZConnection,
   syncQRZ,
-  resetQRZConfig,
+  getQRZSyncStatus,
   // LoTW同步函数
   getLoTWConfig,
   updateLoTWConfig,
   testLoTWConnection,
   detectTQSL,
   syncLoTW,
-  resetLoTWConfig,
+  getLoTWSyncStatus,
   // 日志本数据路径
   getLogbookDataPath
   ,getRadioConfig

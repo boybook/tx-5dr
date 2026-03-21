@@ -21,13 +21,13 @@ export interface QRZSettingsRef {
 }
 
 interface QRZSettingsProps {
+  callsign: string;
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
 export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
-  ({ onUnsavedChanges }, ref) => {
+  ({ callsign, onUnsavedChanges }, ref) => {
     const [config, setConfig] = useState<QRZConfig>({
-      enabled: false,
       apiKey: '',
       autoUploadQSO: false,
     });
@@ -55,9 +55,12 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
       try {
         setLoading(true);
         setError('');
-        const response = await api.getQRZConfig();
-        setConfig(response);
-        setOriginalConfig(response);
+        const response = await api.getQRZConfig(callsign) as any;
+        const data = response?.config || response;
+        if (data && typeof data === 'object') {
+          setConfig(prev => ({ ...prev, ...data }));
+          setOriginalConfig(prev => ({ ...prev, ...data }));
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载配置失败');
       } finally {
@@ -104,7 +107,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
       setError('');
 
       try {
-        const response = await api.testQRZConnection({
+        const response = await api.testQRZConnection(callsign, {
           apiKey: config.apiKey
         });
 
@@ -128,7 +131,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
     const handleSave = async () => {
       try {
         setError('');
-        await api.updateQRZConfig(config);
+        await api.updateQRZConfig(callsign, config);
         setOriginalConfig({ ...config });
         setHasChanges(false);
         onUnsavedChanges?.(false);
@@ -161,28 +164,6 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
             <p className="font-medium">{error}</p>
           </Alert>
         )}
-
-        {/* 启用开关 */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <FontAwesomeIcon icon={faPlug} className="text-primary" />
-              <span className="font-medium">启用QRZ.com同步</span>
-            </div>
-          </CardHeader>
-          <CardBody>
-            <Switch
-              isSelected={config.enabled}
-              onValueChange={(enabled) => updateConfig('enabled', enabled)}
-              size="md"
-            >
-              {config.enabled ? '已启用' : '已禁用'}
-            </Switch>
-            <p className="text-xs text-default-500 mt-2">
-              启用后将自动与QRZ.com Logbook同步通联日志
-            </p>
-          </CardBody>
-        </Card>
 
         {/* API密钥设置 */}
         <Card>

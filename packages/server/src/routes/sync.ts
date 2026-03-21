@@ -1,0 +1,730 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// SyncRoutes - API响应处理需要使用any
+
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import {
+  CallsignSyncConfigSchema,
+  WaveLogConfig,
+  WaveLogConfigSchema,
+  WaveLogTestConnectionRequestSchema,
+  WaveLogSyncRequestSchema,
+  QRZConfig,
+  QRZConfigSchema,
+  QRZTestConnectionRequestSchema,
+  QRZSyncRequestSchema,
+  LoTWConfig,
+  LoTWConfigSchema,
+  LoTWTestConnectionRequestSchema,
+  LoTWTQSLDetectRequestSchema,
+  LoTWSyncRequestSchema,
+} from '@tx5dr/contracts';
+import { ConfigManager } from '../config/config-manager.js';
+import { SyncServiceRegistry } from '../services/SyncServiceRegistry.js';
+import { WaveLogService } from '../services/WaveLogService.js';
+import { QRZService } from '../services/QRZService.js';
+import { LoTWService } from '../services/LoTWService.js';
+import { LogManager } from '../log/LogManager.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+import { requireCallsignAccess } from '../auth/authPlugin.js';
+
+/**
+ * 通用：根据呼号和时间范围在本地日志本中查找匹配的 QSO
+ */
+async function findMatchingLocalQSO(
+  callsign: string,
+  startTime: number,
+  logManager: LogManager
+): Promise<{ qsoId: string; logBookProvider: any } | null> {
+  const logBooks = logManager.getLogBooks();
+  // 允许 ±30 秒的时间偏差
+  const timeTolerance = 30000;
+
+  for (const logBook of logBooks) {
+    try {
+      const matches = await logBook.provider.queryQSOs({
+        callsign,
+        timeRange: {
+          start: startTime - timeTolerance,
+          end: startTime + timeTolerance,
+        },
+        limit: 5,
+      });
+      // 精确匹配呼号
+      const exact = matches.find(
+        (q: any) => q.callsign.toUpperCase() === callsign.toUpperCase()
+      );
+      if (exact) {
+        return { qsoId: exact.id, logBookProvider: logBook.provider };
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+/**
+ * 通用：批量标记本地 QSO 的上传状态
+ */
+async function markQSOsAsSent(
+  qsos: any[],
+  platform: 'lotw' | 'qrz',
+  logManager: LogManager
+): Promise<number> {
+  let marked = 0;
+  const now = Date.now();
+  for (const qso of qsos) {
+    const match = await findMatchingLocalQSO(qso.callsign, qso.startTime, logManager);
+    if (match) {
+      try {
+        const updates: any = {};
+        if (platform === 'lotw') {
+          updates.lotwQslSent = 'Y';
+          updates.lotwQslSentDate = now;
+        } else {
+          updates.qrzQslSent = 'Y';
+          updates.qrzQslSentDate = now;
+        }
+        await match.logBookProvider.updateQSO(match.qsoId, updates);
+        marked++;
+      } catch {
+        // ignore individual failures
+      }
+    }
+  }
+  return marked;
+}
+
+/**
+ * 通用：获取本地 QSO 记录（最近一周，最多 1000 条）
+ */
+async function getRecentQSOs() {
+  const logManager = LogManager.getInstance();
+  const logBooks = logManager.getLogBooks();
+
+  if (logBooks.length === 0) return [];
+
+  const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const allQSOs: any[] = [];
+
+  for (const logBook of logBooks) {
+    try {
+      const qsos = await logBook.provider.queryQSOs({
+        timeRange: { start: oneWeekAgo, end: Date.now() },
+        limit: 1000,
+      });
+      allQSOs.push(...qsos);
+    } catch (error) {
+      console.warn(`[Sync] 从日志本 ${logBook.name} 获取QSO记录失败:`, error);
+    }
+  }
+
+  return allQSOs;
+}
+
+/**
+ * 同步路由
+ * 前缀: /api/sync
+ */
+export async function syncRoutes(fastify: FastifyInstance) {
+  const configManager = ConfigManager.getInstance();
+  const registry = SyncServiceRegistry.getInstance();
+  const callsignAccess = requireCallsignAccess();
+
+  // =====================
+  // GET /callsigns — 列出所有已配置同步的呼号
+  // =====================
+  fastify.get('/callsigns', async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const allConfigs = configManager.getAllCallsignSyncConfigs();
+      const callsigns = Object.keys(allConfigs);
+      return reply.send({ success: true, callsigns });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // =====================
+  // GET /:callsign/config — 获取指定呼号的全部同步配置
+  // =====================
+  fastify.get('/:callsign/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const config = configManager.getCallsignSyncConfig(callsign);
+      if (!config) {
+        return reply.send({ success: true, config: { callsign: callsign.toUpperCase().trim() } });
+      }
+      return reply.send({ success: true, config });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // =====================
+  // PUT /:callsign/config — 更新指定呼号的全部同步配置
+  // =====================
+  fastify.put('/:callsign/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const updates = CallsignSyncConfigSchema.partial().parse(request.body);
+      await configManager.updateCallsignSyncConfig(callsign, updates);
+
+      // 更新服务注册表
+      const newConfig = configManager.getCallsignSyncConfig(callsign);
+      if (newConfig) {
+        registry.updateServicesForCallsign(callsign, newConfig);
+      }
+
+      return reply.send({ success: true, config: newConfig });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  // =====================
+  // GET /:callsign/summary — 获取同步摘要
+  // =====================
+  fastify.get('/:callsign/summary', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const summary = configManager.getCallsignSyncSummary(callsign);
+      return reply.send({ success: true, summary });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // =============================================
+  //  WaveLog 子路由
+  // =============================================
+
+  // GET /:callsign/wavelog/config
+  fastify.get('/:callsign/wavelog/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const config = configManager.getCallsignSyncConfig(callsign);
+      return reply.send({ success: true, config: config?.wavelog || null });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // PUT /:callsign/wavelog/config
+  fastify.put('/:callsign/wavelog/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const wavelogUpdates = WaveLogConfigSchema.partial().parse(request.body);
+      const existing = configManager.getCallsignSyncConfig(callsign);
+      const mergedWavelog = { ...(existing?.wavelog || {}), ...wavelogUpdates } as WaveLogConfig;
+      await configManager.updateCallsignSyncConfig(callsign, { wavelog: mergedWavelog });
+
+      // 更新服务注册表
+      const newConfig = configManager.getCallsignSyncConfig(callsign);
+      if (newConfig) {
+        registry.updateServicesForCallsign(callsign, newConfig);
+      }
+
+      return reply.send({ success: true, config: newConfig?.wavelog });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  // POST /:callsign/wavelog/test
+  fastify.post('/:callsign/wavelog/test', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const testRequest = WaveLogTestConnectionRequestSchema.parse(request.body);
+      const testConfig: WaveLogConfig = {
+        url: testRequest.url,
+        apiKey: testRequest.apiKey,
+        stationId: '',
+        radioName: 'TX5DR',
+        autoUploadQSO: true,
+      };
+
+      const testService = new WaveLogService(testConfig);
+      const result = await testService.testConnection();
+      return reply.send(result);
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
+    }
+  });
+
+  // POST /:callsign/wavelog/sync
+  fastify.post('/:callsign/wavelog/sync', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const syncRequest = WaveLogSyncRequestSchema.parse(request.body);
+
+      const service = registry.getWaveLogService(callsign);
+      if (!service) {
+        throw new RadioError({
+          code: RadioErrorCode.NOT_INITIALIZED,
+          message: `呼号 ${callsign} 的WaveLog服务未初始化`,
+          userMessage: '请先配置该呼号的WaveLog设置',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['在同步设置页面配置WaveLog URL和API密钥', '确保WaveLog服务已启用'],
+        });
+      }
+
+      let result;
+
+      switch (syncRequest.operation) {
+        case 'download': {
+          // 手动触发下载同步 — 复用 WaveLogSyncScheduler 逻辑
+          const { WaveLogSyncScheduler } = await import('../services/WaveLogSyncScheduler.js');
+          const syncScheduler = WaveLogSyncScheduler.getInstance();
+          result = await syncScheduler.triggerSync();
+          break;
+        }
+        case 'upload': {
+          const allQSOs = await getRecentQSOs();
+          if (allQSOs.length === 0) {
+            result = {
+              success: true,
+              message: '没有找到需要上传的QSO记录',
+              uploadedCount: 0, downloadedCount: 0, skippedCount: 0, errorCount: 0,
+              syncTime: Date.now(),
+            };
+          } else {
+            console.log(`[Sync] 准备上传 ${allQSOs.length} 条QSO到WaveLog (${callsign})`);
+            result = await service.uploadMultipleQSOs(allQSOs);
+          }
+          break;
+        }
+        case 'full_sync': {
+          const { WaveLogSyncScheduler } = await import('../services/WaveLogSyncScheduler.js');
+          const syncScheduler = WaveLogSyncScheduler.getInstance();
+          const downloadResult = await syncScheduler.triggerSync();
+
+          const qsos = await getRecentQSOs();
+          let uploadResult: any = { success: true, message: '无QSO', uploadedCount: 0, skippedCount: 0, errorCount: 0, errors: [] };
+          if (qsos.length > 0) {
+            uploadResult = await service.uploadMultipleQSOs(qsos);
+          }
+
+          result = {
+            success: downloadResult.success && uploadResult.success,
+            message: `完整同步完成 - 下载: ${downloadResult.message}, 上传: ${uploadResult.message}`,
+            uploadedCount: uploadResult.uploadedCount,
+            downloadedCount: downloadResult.downloadedCount,
+            skippedCount: downloadResult.skippedCount + uploadResult.skippedCount,
+            errorCount: downloadResult.errorCount + uploadResult.errorCount,
+            errors: [...(downloadResult.errors || []), ...(uploadResult.errors || [])],
+            syncTime: Date.now(),
+          };
+          break;
+        }
+        default:
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_OPERATION,
+            message: `不支持的同步操作类型: ${syncRequest.operation}`,
+            userMessage: '不支持的同步操作类型',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['支持的操作类型：download、upload、full_sync'],
+          });
+      }
+
+      return reply.send(result);
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // GET /:callsign/wavelog/status
+  fastify.get('/:callsign/wavelog/status', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const config = configManager.getCallsignSyncConfig(callsign);
+      const wavelogConfig = config?.wavelog;
+      const service = registry.getWaveLogService(callsign);
+
+      return reply.send({
+        configured: !!(wavelogConfig?.url && wavelogConfig?.apiKey && wavelogConfig?.stationId),
+        serviceAvailable: !!service,
+        lastSyncTime: wavelogConfig?.lastSyncTime,
+        autoUpload: wavelogConfig?.autoUploadQSO,
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // =============================================
+  //  QRZ 子路由
+  // =============================================
+
+  // GET /:callsign/qrz/config
+  fastify.get('/:callsign/qrz/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const config = configManager.getCallsignSyncConfig(callsign);
+      return reply.send({ success: true, config: config?.qrz || null });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // PUT /:callsign/qrz/config
+  fastify.put('/:callsign/qrz/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const qrzUpdates = QRZConfigSchema.partial().parse(request.body);
+      const existing = configManager.getCallsignSyncConfig(callsign);
+      const mergedQrz = { ...(existing?.qrz || {}), ...qrzUpdates } as QRZConfig;
+      await configManager.updateCallsignSyncConfig(callsign, { qrz: mergedQrz });
+
+      const newConfig = configManager.getCallsignSyncConfig(callsign);
+      if (newConfig) {
+        registry.updateServicesForCallsign(callsign, newConfig);
+      }
+
+      return reply.send({ success: true, config: newConfig?.qrz });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  // POST /:callsign/qrz/test
+  fastify.post('/:callsign/qrz/test', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const testRequest = QRZTestConnectionRequestSchema.parse(request.body);
+      const testConfig: QRZConfig = {
+        apiKey: testRequest.apiKey,
+        autoUploadQSO: false,
+      };
+
+      const testService = new QRZService(testConfig);
+      const result = await testService.testConnection();
+      return reply.send(result);
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
+    }
+  });
+
+  // POST /:callsign/qrz/sync
+  fastify.post('/:callsign/qrz/sync', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const syncRequest = QRZSyncRequestSchema.parse(request.body);
+
+      const service = registry.getQRZService(callsign);
+      if (!service) {
+        throw new RadioError({
+          code: RadioErrorCode.NOT_INITIALIZED,
+          message: `呼号 ${callsign} 的QRZ服务未初始化`,
+          userMessage: '请先配置该呼号的QRZ设置',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['在同步设置页面配置QRZ API密钥', '确保QRZ服务已启用'],
+        });
+      }
+
+      let result;
+
+      switch (syncRequest.operation) {
+        case 'download': {
+          const qsos = await service.downloadQSOs();
+          result = {
+            success: true,
+            message: `下载完成: ${qsos.length}条QSO记录`,
+            uploadedCount: 0, downloadedCount: qsos.length, skippedCount: 0, errorCount: 0,
+            syncTime: Date.now(),
+          };
+          break;
+        }
+        case 'upload': {
+          const allQSOs = await getRecentQSOs();
+          if (allQSOs.length === 0) {
+            result = {
+              success: true,
+              message: '没有找到需要上传的QSO记录',
+              uploadedCount: 0, downloadedCount: 0, skippedCount: 0, errorCount: 0,
+              syncTime: Date.now(),
+            };
+          } else {
+            console.log(`[Sync] 准备上传 ${allQSOs.length} 条QSO到QRZ (${callsign})`);
+            result = await service.uploadMultipleQSOs(allQSOs);
+            // 上传成功后标记本地 QSO 的 qrzQslSent
+            if (result.success && result.uploadedCount > 0) {
+              const logManager = LogManager.getInstance();
+              const markedCount = await markQSOsAsSent(allQSOs, 'qrz', logManager);
+              console.log(`[Sync] 已标记 ${markedCount} 条QSO的QRZ上传状态`);
+            }
+          }
+          break;
+        }
+        case 'full_sync': {
+          let downloadedCount = 0;
+          const downloadErrors: string[] = [];
+
+          try {
+            const qsos = await service.downloadQSOs();
+            downloadedCount = qsos.length;
+          } catch (error) {
+            downloadErrors.push(error instanceof Error ? error.message : '下载失败');
+          }
+
+          const allQSOs = await getRecentQSOs();
+          let uploadResult: any = { success: true, message: '无QSO', uploadedCount: 0, skippedCount: 0, errorCount: 0, errors: [] };
+          if (allQSOs.length > 0) {
+            uploadResult = await service.uploadMultipleQSOs(allQSOs);
+            // 上传成功后标记本地 QSO 的 qrzQslSent
+            if (uploadResult.success && uploadResult.uploadedCount > 0) {
+              const logManager = LogManager.getInstance();
+              await markQSOsAsSent(allQSOs, 'qrz', logManager);
+            }
+          }
+
+          result = {
+            success: downloadErrors.length === 0 && uploadResult.success,
+            message: `完整同步完成 - 下载: ${downloadedCount}条, 上传: ${uploadResult.message}`,
+            uploadedCount: uploadResult.uploadedCount,
+            downloadedCount,
+            skippedCount: uploadResult.skippedCount,
+            errorCount: uploadResult.errorCount + downloadErrors.length,
+            errors: [...downloadErrors, ...(uploadResult.errors || [])],
+            syncTime: Date.now(),
+          };
+          break;
+        }
+        default:
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_OPERATION,
+            message: `不支持的同步操作类型: ${syncRequest.operation}`,
+            userMessage: '不支持的同步操作类型',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['支持的操作类型：download、upload、full_sync'],
+          });
+      }
+
+      return reply.send(result);
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // GET /:callsign/qrz/status
+  fastify.get('/:callsign/qrz/status', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const config = configManager.getCallsignSyncConfig(callsign);
+      const qrzConfig = config?.qrz;
+      const service = registry.getQRZService(callsign);
+
+      return reply.send({
+        configured: !!qrzConfig?.apiKey,
+        serviceAvailable: !!service,
+        lastSyncTime: qrzConfig?.lastSyncTime,
+        autoUpload: qrzConfig?.autoUploadQSO,
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // =============================================
+  //  LoTW 子路由
+  // =============================================
+
+  // GET /:callsign/lotw/config
+  fastify.get('/:callsign/lotw/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const config = configManager.getCallsignSyncConfig(callsign);
+      return reply.send({ success: true, config: config?.lotw || null });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // PUT /:callsign/lotw/config
+  fastify.put('/:callsign/lotw/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const lotwUpdates = LoTWConfigSchema.partial().parse(request.body);
+      const existing = configManager.getCallsignSyncConfig(callsign);
+      const mergedLotw = { ...(existing?.lotw || {}), ...lotwUpdates } as LoTWConfig;
+      await configManager.updateCallsignSyncConfig(callsign, { lotw: mergedLotw });
+
+      const newConfig = configManager.getCallsignSyncConfig(callsign);
+      if (newConfig) {
+        registry.updateServicesForCallsign(callsign, newConfig);
+      }
+
+      return reply.send({ success: true, config: newConfig?.lotw });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  // POST /:callsign/lotw/test
+  fastify.post('/:callsign/lotw/test', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const testRequest = LoTWTestConnectionRequestSchema.parse(request.body);
+      const testConfig: LoTWConfig = {
+        username: testRequest.username,
+        password: testRequest.password,
+        tqslPath: '',
+        stationCallsign: '',
+        autoUploadQSO: false,
+      };
+
+      const testService = new LoTWService(testConfig);
+      const result = await testService.testConnection();
+      return reply.send(result);
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
+    }
+  });
+
+  // POST /:callsign/lotw/detect-tqsl
+  fastify.post('/:callsign/lotw/detect-tqsl', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const detectRequest = LoTWTQSLDetectRequestSchema.parse(request.body);
+
+      // 使用注册表中的服务或创建临时实例
+      const existingService = registry.getLoTWService(callsign);
+      const config = configManager.getCallsignSyncConfig(callsign);
+      const service = existingService || new LoTWService(config?.lotw || {
+        username: '',
+        password: '',
+        tqslPath: '',
+        stationCallsign: '',
+        autoUploadQSO: false,
+      });
+      const result = await service.detectTQSL(detectRequest.tqslPath);
+
+      // 如果检测到TQSL，自动保存路径到配置
+      if (result.found && result.path) {
+        const existing = configManager.getCallsignSyncConfig(callsign);
+        const mergedLotw = { ...(existing?.lotw || {}), tqslPath: result.path } as LoTWConfig;
+        await configManager.updateCallsignSyncConfig(callsign, { lotw: mergedLotw });
+        const newConfig = configManager.getCallsignSyncConfig(callsign);
+        if (newConfig) {
+          registry.updateServicesForCallsign(callsign, newConfig);
+        }
+      }
+
+      return reply.send(result);
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // POST /:callsign/lotw/sync
+  fastify.post('/:callsign/lotw/sync', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const syncRequest = LoTWSyncRequestSchema.parse(request.body);
+
+      const service = registry.getLoTWService(callsign);
+      if (!service) {
+        throw new RadioError({
+          code: RadioErrorCode.NOT_INITIALIZED,
+          message: `呼号 ${callsign} 的LoTW服务未初始化`,
+          userMessage: '请先配置该呼号的LoTW设置',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['在同步设置页面配置LoTW用户名和密码', '确保LoTW服务已启用'],
+        });
+      }
+
+      let result;
+
+      switch (syncRequest.operation) {
+        case 'upload': {
+          const allQSOs = await getRecentQSOs();
+          if (allQSOs.length === 0) {
+            result = {
+              success: true,
+              message: '没有找到需要上传的QSO记录',
+              uploadedCount: 0, downloadedCount: 0, confirmedCount: 0, errorCount: 0,
+              syncTime: Date.now(),
+            };
+          } else {
+            console.log(`[Sync] 准备上传 ${allQSOs.length} 条QSO到LoTW (${callsign})`);
+            result = await service.uploadQSOs(allQSOs);
+            // 上传成功后标记本地 QSO 的 lotwQslSent
+            if (result.success && result.uploadedCount > 0) {
+              const logManager = LogManager.getInstance();
+              const markedCount = await markQSOsAsSent(allQSOs, 'lotw', logManager);
+              console.log(`[Sync] 已标记 ${markedCount} 条QSO的LoTW上传状态`);
+            }
+          }
+          break;
+        }
+
+        case 'download_confirmations': {
+          const { records, confirmedCount } = await service.downloadConfirmations(syncRequest.since);
+          // 将确认状态回写到本地 QSO
+          const logManager = LogManager.getInstance();
+          let updatedCount = 0;
+          for (const record of records) {
+            const match = await findMatchingLocalQSO(record.callsign, record.startTime, logManager);
+            if (match) {
+              try {
+                const updates: any = {
+                  lotwQslReceived: record.lotwQslReceived || 'Y',
+                  lotwQslReceivedDate: record.lotwQslReceivedDate || Date.now(),
+                };
+                // 同时标记 sent（确认的前提是已上传）
+                if (!record.lotwQslSent) {
+                  updates.lotwQslSent = 'Y';
+                }
+                await match.logBookProvider.updateQSO(match.qsoId, updates);
+                updatedCount++;
+              } catch {
+                // ignore individual failures
+              }
+            }
+          }
+          console.log(`[Sync] LoTW确认回写: ${updatedCount}/${records.length} 条QSO已更新`);
+          result = {
+            success: true,
+            message: `下载了 ${confirmedCount} 条LoTW确认记录，已更新 ${updatedCount} 条本地QSO`,
+            uploadedCount: 0,
+            downloadedCount: records.length,
+            confirmedCount: updatedCount,
+            errorCount: 0,
+            syncTime: Date.now(),
+          };
+          break;
+        }
+
+        default:
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_OPERATION,
+            message: `不支持的同步操作类型: ${(syncRequest as any).operation}`,
+            userMessage: '不支持的同步操作类型',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['支持的操作类型：upload、download_confirmations'],
+          });
+      }
+
+      return reply.send(result);
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // GET /:callsign/lotw/status
+  fastify.get('/:callsign/lotw/status', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      const config = configManager.getCallsignSyncConfig(callsign);
+      const lotwConfig = config?.lotw;
+      const service = registry.getLoTWService(callsign);
+
+      return reply.send({
+        configured: !!(lotwConfig?.username && lotwConfig?.password),
+        tqslConfigured: !!lotwConfig?.tqslPath,
+        serviceAvailable: !!service,
+        lastUploadTime: lotwConfig?.lastUploadTime,
+        lastDownloadTime: lotwConfig?.lastDownloadTime,
+        autoUpload: lotwConfig?.autoUploadQSO,
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+}

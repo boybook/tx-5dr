@@ -90,6 +90,7 @@ export const LogBookQSOQueryOptionsSchema = z.object({
   mode: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  qslStatus: z.enum(['confirmed', 'uploaded', 'none']).optional(),
   limit: z.coerce.number().optional().default(100),
   offset: z.coerce.number().optional().default(0),
 });
@@ -117,6 +118,15 @@ export const UpdateQSORequestSchema = z.object({
   reportSent: z.string().optional(),
   reportReceived: z.string().optional(),
   messages: z.array(z.string()).optional(),
+  // QSL 确认状态
+  lotwQslSent: z.enum(['Y', 'N', 'R', 'Q', 'I']).optional(),
+  lotwQslReceived: z.enum(['Y', 'N', 'R', 'I', 'V']).optional(),
+  lotwQslSentDate: z.number().optional(),
+  lotwQslReceivedDate: z.number().optional(),
+  qrzQslSent: z.enum(['Y', 'N']).optional(),
+  qrzQslReceived: z.enum(['Y', 'N']).optional(),
+  qrzQslSentDate: z.number().optional(),
+  qrzQslReceivedDate: z.number().optional(),
 });
 
 /**
