@@ -227,6 +227,16 @@ function getConfiguredApiBase(): string {
 // ========== API 请求辅助函数 ==========
 
 /**
+ * 返回带 Authorization 头的对象（如已设置 JWT）
+ * 用于那些未走 apiRequest 的裸 fetch 调用
+ */
+function getAuthHeaders(): Record<string, string> {
+  const jwt = ApiConfig.getInstance().getJwtToken();
+  return jwt ? { Authorization: `Bearer ${jwt}` } : {};
+}
+
+
+/**
  * 通用 API 请求函数
  *
  * 封装了所有 HTTP 请求的通用逻辑：
@@ -1057,7 +1067,7 @@ export const api = {
     
     const url = `${baseUrl}/logbooks/${id}/qsos${params.toString() ? '?' + params.toString() : ''}`;
     console.log('📊 [API Client] 请求URL:', url);
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: getAuthHeaders() });
     
     if (!res.ok) {
       throw new Error(`查询QSO记录失败: ${res.status} ${res.statusText}`);
@@ -1082,7 +1092,7 @@ export const api = {
     }
     
     const url = `${baseUrl}/logbooks/${id}/export${params.toString() ? '?' + params.toString() : ''}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: getAuthHeaders() });
     
     if (!res.ok) {
       throw new Error(`导出日志本失败: ${res.status} ${res.statusText}`);
@@ -1100,6 +1110,7 @@ export const api = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders(),
       },
       body: JSON.stringify({ adifContent, operatorId }),
     });
@@ -1121,6 +1132,7 @@ export const api = {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders(),
       },
       body: JSON.stringify(updates),
     });
@@ -1140,6 +1152,7 @@ export const api = {
     const baseUrl = apiBase || getConfiguredApiBase();
     const res = await fetch(`${baseUrl}/logbooks/${logbookId}/qsos/${qsoId}`, {
       method: 'DELETE',
+      headers: getAuthHeaders(),
     });
 
     if (!res.ok) {

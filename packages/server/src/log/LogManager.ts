@@ -295,6 +295,43 @@ export class LogManager {
   }
   
   /**
+   * 反向查找：给定 logBookId，找出所有关联的 operatorId
+   */
+  getOperatorIdsForLogBook(logBookId: string): string[] {
+    const matchingCallsigns: string[] = [];
+    for (const [callsign, bookId] of this.callsignLogBookMap.entries()) {
+      if (bookId === logBookId) matchingCallsigns.push(callsign);
+    }
+    const result: string[] = [];
+    for (const [operatorId, callsign] of this.operatorCallsignMap.entries()) {
+      if (matchingCallsigns.includes(callsign)) result.push(operatorId);
+    }
+    return result;
+  }
+
+  /**
+   * 根据真实 ID 或呼号字符串解析 logBookId，仅查询不创建，找不到返回 null
+   */
+  resolveLogBookId(idOrCallsign: string): string | null {
+    if (this.logBooks.has(idOrCallsign)) return idOrCallsign;
+    const normalized = idOrCallsign.toUpperCase();
+    return this.callsignLogBookMap.get(normalized) ?? null;
+  }
+
+  /**
+   * 返回与 operatorIds 有交集的日志本列表（孤儿日志本不包含，admin 另走 getLogBooks）
+   */
+  getAccessibleLogBooks(operatorIds: string[]): LogBookInstance[] {
+    const result: LogBookInstance[] = [];
+    for (const logBook of this.logBooks.values()) {
+      const associated = this.getOperatorIdsForLogBook(logBook.id);
+      if (associated.length === 0) continue;
+      if (associated.some(id => operatorIds.includes(id))) result.push(logBook);
+    }
+    return result;
+  }
+
+  /**
    * 获取操作员对应的日志本
    */
   async getOperatorLogBook(operatorId: string): Promise<LogBookInstance | null> {

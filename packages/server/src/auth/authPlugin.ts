@@ -112,6 +112,53 @@ export function withRole(minRole: UserRole) {
 }
 
 /**
+ * 要求对指定日志本有访问权限（基于 operatorId → callsign → logBookId 归属链）
+ * 孤儿日志本（无关联操作员）仅 ADMIN 可访问
+ */
+export function requireLogbookAccess(logManager: import('../log/LogManager.js').LogManager) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!request.authUser) {
+      return reply.code(401).send({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: '需要认证', userMessage: '请先登录' },
+      });
+    }
+
+    // ADMIN 直接放行
+    if (request.authUser.role === UserRole.ADMIN) return;
+
+    const rawId = (request.params as Record<string, string>).id;
+    if (!rawId) return; // 无 id 参数，交由路由处理
+
+    // 解析为真实 logBookId（若日志本尚不存在则放行，由路由层处理）
+    const logBookId = logManager.resolveLogBookId(rawId);
+    if (!logBookId) return; // 日志本还不存在，放行让路由处理 404 或创建
+
+    // 反向查找关联的 operatorId 列表
+    const associated = logManager.getOperatorIdsForLogBook(logBookId);
+
+    // 孤儿日志本（无关联操作员）：仅 ADMIN 可访问，此处直接拒绝
+    if (associated.length === 0) {
+      return reply.code(403).send({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '无日志本访问权限', userMessage: '您没有访问该日志本的权限' },
+      });
+    }
+
+    // 检查用户 token 的 operatorIds 与日志本关联 operatorIds 是否有交集
+    const hasAccess = associated.some(opId =>
+      AuthManager.hasOperatorAccess(request.authUser!.role, request.authUser!.operatorIds, opId)
+    );
+    if (!hasAccess) {
+      return reply.code(403).send({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '无日志本访问权限', userMessage: '您没有访问该日志本的权限' },
+      });
+    }
+  };
+}
+
+/**
  * 要求对指定操作员有访问权限
  */
 export function requireOperatorAccess(getOperatorId: (request: FastifyRequest) => string) {

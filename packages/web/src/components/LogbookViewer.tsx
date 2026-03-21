@@ -97,7 +97,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 日志本专用WebSocket：只接收轻量通知，然后主动刷新
   useEffect(() => {
     // 仅按 operatorId 订阅，避免 logBookId 不一致导致过滤失败
-    const url = getLogbookWebSocketUrl({ operatorId });
+    // 浏览器 WebSocket 不支持自定义请求头，通过 token 参数传递 JWT
+    const wsJwt = localStorage.getItem('tx5dr_jwt') || undefined;
+    const url = getLogbookWebSocketUrl({ operatorId, token: wsJwt });
     const client = new WSClient({ url, heartbeatInterval: 30000 });
 
     const refresh = () => {
