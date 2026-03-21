@@ -1,0 +1,120 @@
+{
+  "severity": {
+    "critical": "⚠️ Critical Error",
+    "error": "Error",
+    "warning": "⚠️ Warning",
+    "info": "Info"
+  },
+  "copyLabel": {
+    "errorCode": "Error Code",
+    "severity": "Severity",
+    "message": "Message",
+    "suggestions": "Suggestions"
+  },
+  "code": {
+    "CONNECTION_FAILED": {
+      "userMessage": "Failed to connect to radio",
+      "suggestions": ["Check if radio is powered on", "Check network connection", "Verify configuration", "Try restarting the radio"]
+    },
+    "CONNECTION_TIMEOUT": {
+      "userMessage": "Connection timed out",
+      "suggestions": ["Check network connectivity", "Verify radio address and port", "Increase connection timeout"]
+    },
+    "CONNECTION_LOST": {
+      "userMessage": "Connection to radio lost",
+      "suggestions": ["Check if radio is still running", "Check network connection", "System will attempt to reconnect automatically"]
+    },
+    "RECONNECT_FAILED": {
+      "userMessage": "Reconnection failed",
+      "suggestions": ["Check if radio is working properly", "Check network connection", "Try reconnecting manually"]
+    },
+    "RECONNECT_MAX_ATTEMPTS": {
+      "userMessage": "Unable to reconnect to radio",
+      "suggestions": ["Check if radio is working properly", "Check network connection", "Try restarting the system", "Contact technical support"]
+    },
+    "INVALID_CONFIG": {
+      "userMessage": "Invalid configuration",
+      "suggestions": ["Check configuration parameters", "Go to settings to reconfigure", "Reset to default configuration"]
+    },
+    "MISSING_CONFIG": {
+      "userMessage": "Missing required configuration",
+      "suggestions": ["Go to settings to complete configuration", "Check all required fields"]
+    },
+    "UNSUPPORTED_MODE": {
+      "userMessage": "Unsupported operating mode",
+      "suggestions": ["Check if radio supports this mode", "Try switching to another mode"]
+    },
+    "DEVICE_NOT_FOUND": {
+      "userMessage": "Device not found",
+      "suggestions": ["Check if device is connected", "Refresh device list", "Select another available device"]
+    },
+    "DEVICE_BUSY": {
+      "userMessage": "Device is busy",
+      "suggestions": ["Close other programs using this device", "Try again later", "Restart the device"]
+    },
+    "DEVICE_ERROR": {
+      "userMessage": "Device error",
+      "suggestions": ["Check device connection", "Restart the device", "Reinstall drivers"]
+    },
+    "AUDIO_DEVICE_ERROR": {
+      "userMessage": "Audio device operation failed",
+      "suggestions": ["Check if audio device is available", "Try selecting another device", "Restart the application"]
+    },
+    "INVALID_OPERATION": {
+      "userMessage": "Invalid operation",
+      "suggestions": ["This operation is not allowed in the current state", "Please try again later"]
+    },
+    "OPERATION_TIMEOUT": {
+      "userMessage": "Operation timed out",
+      "suggestions": ["Check if system is running normally", "Try again later"]
+    },
+    "OPERATION_CANCELLED": {
+      "userMessage": "Operation cancelled",
+      "suggestions": []
+    },
+    "PTT_ACTIVATION_FAILED": {
+      "userMessage": "Failed to activate PTT",
+      "suggestions": ["Check radio connection", "Ensure radio is not in use by another program", "Check PTT configuration"]
+    },
+    "INVALID_STATE": {
+      "userMessage": "Operation not allowed in current state",
+      "suggestions": ["Wait for current operation to complete and retry"]
+    },
+    "NOT_INITIALIZED": {
+      "userMessage": "System not yet initialized",
+      "suggestions": ["Wait for system startup to complete", "If waiting too long, restart the application"]
+    },
+    "ALREADY_RUNNING": {
+      "userMessage": "System is already running",
+      "suggestions": []
+    },
+    "NOT_RUNNING": {
+      "userMessage": "System is not running",
+      "suggestions": ["Start the system before performing this operation"]
+    },
+    "RESOURCE_UNAVAILABLE": {
+      "userMessage": "Required resource unavailable",
+      "suggestions": ["Check system resources", "Close other resource-intensive programs"]
+    },
+    "RESOURCE_CLEANUP_FAILED": {
+      "userMessage": "Resource cleanup failed",
+      "suggestions": ["Restart the application"]
+    },
+    "NETWORK_ERROR": {
+      "userMessage": "Network error",
+      "suggestions": ["Check network connection", "Check firewall settings", "Verify server address"]
+    },
+    "UDP_ERROR": {
+      "userMessage": "UDP communication error",
+      "suggestions": ["Check if UDP port is in use", "Check if firewall allows UDP traffic"]
+    },
+    "WEBSOCKET_ERROR": {
+      "userMessage": "WebSocket connection error",
+      "suggestions": ["Check network connection", "Refresh page and retry"]
+    },
+    "UNKNOWN_ERROR": {
+      "userMessage": "An unknown error occurred",
+      "suggestions": ["View error details", "Retry the operation", "If problem persists, contact technical support"]
+    }
+  }
+}

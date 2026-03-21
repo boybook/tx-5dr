@@ -12,6 +12,7 @@ import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { useHasMinRole } from '../store/authStore';
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface FrequencyOption {
   key: string;
@@ -30,6 +31,7 @@ export const SelectorIcon = (_props: React.SVGProps<SVGSVGElement>) => {
 
 // 电台连接状态指示器组件
 const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: RadioState }; profileName?: string | null; onPress?: () => void; canConfigure?: boolean; canOperate?: boolean }> = ({ connection, radio, profileName, onPress, canConfigure = true, canOperate = true }) => {
+  const { t } = useTranslation('radio');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [supportedRigs, setSupportedRigs] = useState<any[]>([]);
 
@@ -61,13 +63,13 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
     const handleRadioDisconnectedDuringTransmission = (data: any) => {
       console.warn('🚨 [RadioControl] 电台发射中断开连接:', data);
       addToast({
-        title: '⚠️ 电台发射中断连接',
+        title: t('status.txDisconnected'),
         description: data.message,
         timeout: 10000
       });
       setTimeout(() => {
         addToast({
-          title: '💡 建议',
+          title: t('status.suggestion'),
           description: data.recommendation,
           timeout: 15000
         });
@@ -90,11 +92,11 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
     if (config.type === 'serial' && config.serial?.rigModel) {
       const rigInfo = supportedRigs.find((r: { rigModel: number }) => r.rigModel === config.serial!.rigModel);
       if (rigInfo) return `${rigInfo.mfgName} ${rigInfo.modelName}`;
-      return `电台型号 ${config.serial.rigModel}`;
+      return t('status.rigModel', { model: config.serial.rigModel });
     }
     if (config.type === 'network') return 'Network RigCtrl';
     if (config.type === 'icom-wlan') return 'ICOM WLAN';
-    return '电台';
+    return t('status.radio');
   };
 
   if (!connection.isConnected) {
@@ -107,13 +109,13 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
   const renderStatus = () => {
     switch (status) {
       case RadioConnectionStatus.NOT_CONFIGURED:
-        return <span className="text-sm text-default-500">{label} | 无电台模式</span>;
+        return <span className="text-sm text-default-500">{label} | {t('connection.none')}</span>;
 
       case RadioConnectionStatus.CONNECTING:
         return (
           <div className="flex items-center gap-2">
             <Spinner size="sm" color="primary" />
-            <span className="text-sm text-primary">{label} 连接中...</span>
+            <span className="text-sm text-primary">{label} {t('connection.connecting')}</span>
           </div>
         );
 
@@ -122,7 +124,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-success text-ms -mt-0.5" />
             <span className="text-sm text-default-500">
-              {label} 已连接
+              {label} {t('connection.connected')}
             </span>
           </div>
         );
@@ -133,7 +135,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
           <div className="flex items-center gap-2">
             <Spinner size="sm" color="warning" />
             <span className="text-sm text-warning">
-              {label} 重连中{progress ? ` (${progress.attempt}/${progress.maxAttempts})` : ''}...
+              {label} {t('connection.reconnecting')}{progress ? ` (${progress.attempt}/${progress.maxAttempts})` : ''}
             </span>
             {canOperate && (
               <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
@@ -144,7 +146,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
                   onPress={() => connection.radioService?.stopReconnect()}
                   className="h-6 px-2 text-xs"
                 >
-                  停止
+                  {t('status.stop')}
                 </Button>
               </span>
             )}
@@ -156,7 +158,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
         return (
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-danger text-xs" />
-            <span className="text-sm text-danger">{label} 连接丢失</span>
+            <span className="text-sm text-danger">{label} {t('connection.disconnected')}</span>
             {canOperate && (
               <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
                 <Button
@@ -166,7 +168,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
                   onPress={() => connection.radioService?.startDecoding()}
                   className="h-6 px-2 text-xs"
                 >
-                  重连
+                  {t('status.reconnect')}
                 </Button>
               </span>
             )}
@@ -178,7 +180,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
         return (
           <div className="flex items-center gap-2">
             <FontAwesomeIcon icon={faRadio} className="text-default-400 text-xs" />
-            <span className="text-sm text-default-500">{label} 未连接</span>
+            <span className="text-sm text-default-500">{label} {t('status.notConnected')}</span>
             {canOperate && radio.state.radioConfig?.type && radio.state.radioConfig.type !== 'none' && !radio.state.isDecoding && (
               <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
                 <Button
@@ -188,7 +190,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
                   onPress={() => connection.radioService?.startDecoding()}
                   className="h-6 px-2 text-xs"
                 >
-                  连接
+                  {t('status.connect')}
                 </Button>
               </span>
             )}
@@ -223,6 +225,7 @@ interface RadioControlProps {
 }
 
 export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings }) => {
+  const { t } = useTranslation('radio');
   const connection = useConnection();
   const radio = useRadioState();
   const { activeProfile } = useProfiles();
@@ -293,18 +296,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         if (response.success && Array.isArray(response.data)) {
           if (response.data.length === 0) {
             console.warn('⚠️ 模式列表为空');
-            setModeError('没有可用的模式');
+            setModeError(t('mode.noModes'));
           } else {
             console.log(`✅ 成功加载 ${response.data.length} 个模式:`, response.data.map(m => m.name).join(', '));
             setAvailableModes(response.data);
           }
         } else {
           console.error('❌ 加载模式列表失败: 返回数据格式错误', response);
-          setModeError('加载模式列表失败: 数据格式错误');
+          setModeError(t('mode.loadFailed'));
         }
       } catch (error) {
         console.error('❌ 加载模式列表失败:', error);
-        setModeError('加载模式列表失败: ' + (error instanceof Error ? error.message : '未知错误'));
+        setModeError(t('mode.loadFailedDetail', { detail: error instanceof Error ? error.message : t('error.unknown') }));
       } finally {
         setIsLoadingModes(false);
       }
@@ -555,8 +558,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     } catch (error) {
       console.error('❌ [AudioMonitor] 开始监听失败:', error);
       addToast({
-        title: '监听启动失败',
-        description: error instanceof Error ? error.message : '未知错误',
+        title: t('monitor.startFailed'),
+        description: error instanceof Error ? error.message : t('error.unknown'),
         color: 'danger'
       });
 
@@ -629,13 +632,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
     const trimmed = input.trim();
     if (!trimmed) {
-      return { frequency: 0, error: '请输入频率' };
+      return { frequency: 0, error: t('frequency.inputRequired') };
     }
 
     // 尝试解析为数字
     const value = parseFloat(trimmed);
     if (isNaN(value) || value <= 0) {
-      return { frequency: 0, error: '请输入有效的数字' };
+      return { frequency: 0, error: t('frequency.invalidNumber') };
     }
 
     let frequencyHz: number;
@@ -644,13 +647,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     if (trimmed.includes('.')) {
       // MHz 格式
       if (value < 1 || value > 1000) {
-        return { frequency: 0, error: '频率范围: 1-1000 MHz' };
+        return { frequency: 0, error: t('frequency.outOfRange') };
       }
       frequencyHz = Math.round(value * 1000000);
     } else {
       // Hz 格式
       if (value < 1000000 || value > 1000000000) {
-        return { frequency: 0, error: '频率范围: 1-1000 MHz (1000000-1000000000 Hz)' };
+        return { frequency: 0, error: t('frequency.outOfRange') };
       }
       frequencyHz = Math.round(value);
     }
@@ -667,7 +670,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const handleCustomFrequencyConfirm = async () => {
     const result = parseFrequencyInput(customFrequencyInput);
     if (!result || result.error) {
-      setCustomFrequencyError(result?.error || '输入无效');
+      setCustomFrequencyError(result?.error || t('frequency.invalidInput'));
       return;
     }
 
@@ -680,8 +683,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       const response = await api.setRadioFrequency({
         frequency: frequency,
         mode: radio.state.currentMode?.name || 'FT8',
-        band: '自定义',
-        description: `${formatFrequencyDisplay(frequency)} MHz (自定义)`
+        band: t('frequency.custom'),
+        description: `${formatFrequencyDisplay(frequency)} MHz (${t('frequency.custom')})`
       });
 
       if (response.success) {
@@ -691,31 +694,31 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         setCustomFrequencyError('');
 
         // 更新当前频率显示
-        const frequencyLabel = `${formatFrequencyDisplay(frequency)} MHz (自定义)`;
+        const frequencyLabel = `${formatFrequencyDisplay(frequency)} MHz (${t('frequency.custom')})`;
         setCurrentFrequency(String(frequency));
         setCustomFrequencyLabel(frequencyLabel);
 
-        const successMessage = `已切换到 ${formatFrequencyDisplay(frequency)} MHz`;
+        const successMessage = t('frequency.switched', { freq: formatFrequencyDisplay(frequency) });
 
         if (response.radioConnected) {
-          console.log(`✅ 自定义频率已设置: ${formatFrequencyDisplay(frequency)} MHz`);
+          console.log(`✅ Custom frequency set: ${formatFrequencyDisplay(frequency)} MHz`);
           addToast({
-            title: '频率切换成功',
+            title: t('frequency.switchSuccess'),
             description: successMessage,
             color: 'success',
             timeout: 3000
           });
         } else {
-          console.log(`📝 自定义频率已记录: ${formatFrequencyDisplay(frequency)} MHz (电台未连接)`);
+          console.log(`📝 Custom frequency recorded: ${formatFrequencyDisplay(frequency)} MHz (radio not connected)`);
           addToast({
-            title: '📝 频率已记录',
-            description: `${successMessage} (电台未连接)`,
+            title: t('frequency.recorded'),
+            description: t('frequency.recordedDetail', { message: successMessage }),
             timeout: 4000
           });
         }
       } else {
-        console.error('❌ 设置自定义频率失败:', response.message);
-        setCustomFrequencyError(response.message || '设置失败');
+        console.error('❌ Custom frequency set failed:', response.message);
+        setCustomFrequencyError(response.message || t('frequency.setFailed'));
       }
     } catch (error) {
       console.error('❌ 设置自定义频率失败:', error);
@@ -728,7 +731,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           code: error.code
         });
       } else {
-        setCustomFrequencyError('网络错误或服务器无响应');
+        setCustomFrequencyError(t('error.networkError'));
       }
     } finally {
       setIsSettingCustomFrequency(false);
@@ -863,35 +866,35 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         setCustomFrequencyLabel('');
 
         const successMessage = selectedFrequency.radioMode
-          ? `已切换到 ${selectedFrequency.label} (${selectedFrequency.radioMode})`
-          : `已切换到 ${selectedFrequency.label}`;
+          ? t('frequency.switchedWithMode', { label: selectedFrequency.label, mode: selectedFrequency.radioMode })
+          : t('frequency.switchedLabel', { label: selectedFrequency.label });
 
         if (response.radioConnected) {
-          console.log(`✅ 频率已切换到: ${selectedFrequency.label}`);
+          console.log(`✅ Frequency switched to: ${selectedFrequency.label}`);
           addToast({
-            title: '频率切换成功',
+            title: t('frequency.switchSuccess'),
             description: successMessage,
             color: 'success',
             timeout: 3000
           });
         } else {
-          console.log(`📝 频率已记录: ${selectedFrequency.label} (电台未连接)`);
+          console.log(`📝 Frequency recorded: ${selectedFrequency.label} (radio not connected)`);
           addToast({
-            title: '📝 频率已记录',
-            description: `${successMessage} (电台未连接)`,
+            title: t('frequency.recorded'),
+            description: t('frequency.recordedDetail', { message: successMessage }),
             timeout: 4000
           });
         }
       } else {
-        console.error('❌ 切换频率失败:', response.message);
+        console.error('❌ Frequency switch failed:', response.message);
         addToast({
-          title: '❌ 频率切换失败',
+          title: t('frequency.switchFailed'),
           description: response.message,
           timeout: 5000
         });
       }
     } catch (error) {
-      console.error('❌ 切换频率失败:', error);
+      console.error('❌ Frequency switch failed:', error);
       if (error instanceof ApiError) {
         showErrorToast({
           userMessage: error.userMessage,
@@ -901,8 +904,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         });
       } else {
         addToast({
-          title: '❌ 频率切换失败',
-          description: '网络错误或服务器无响应',
+          title: t('frequency.switchFailed'),
+          description: t('error.networkError'),
           timeout: 5000
         });
       }
@@ -1230,12 +1233,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       console.log(`✅ 天调已${newEnabled ? '启用' : '禁用'}`);
 
       addToast({
-        title: `天调已${newEnabled ? '启用' : '禁用'}`,
+        title: newEnabled ? t('tuner.enabled') : t('tuner.disabled'),
         color: 'success',
         timeout: 2000
       });
     } catch (error) {
-      console.error('❌ 切换天调状态失败:', error);
+      console.error('❌ Tuner toggle failed:', error);
       setIsTunerLoading(false);
 
       if (error instanceof ApiError) {
@@ -1247,8 +1250,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         });
       } else {
         addToast({
-          title: '切换天调状态失败',
-          description: '网络错误或服务器无响应',
+          title: t('tuner.toggleFailed'),
+          description: t('error.networkError'),
           timeout: 3000
         });
       }
@@ -1257,14 +1260,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   const handleStartTuning = async () => {
     if (!tunerCapabilities?.supported || !tunerCapabilities.hasManualTune) {
-      console.warn('⚠️ 天调不支持手动调谐');
+      console.warn('⚠️ Tuner does not support manual tuning');
       return;
     }
 
     if (!tunerStatus.enabled) {
       addToast({
-        title: '请先启用天调',
-        description: '需要先打开天调开关才能进行手动调谐',
+        title: t('tuner.enableFirst'),
+        description: t('tuner.enableFirstDesc'),
         timeout: 3000
       });
       return;
@@ -1275,15 +1278,15 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     try {
       const response = await api.startTuning();
       if (response.success) {
-        console.log('✅ 手动调谐已启动');
+        console.log('✅ Manual tuning started');
         addToast({
-          title: '手动调谐已启动',
+          title: t('tuner.tuningStarted'),
           color: 'success',
           timeout: 2000
         });
       }
     } catch (error) {
-      console.error('❌ 启动手动调谐失败:', error);
+      console.error('❌ Manual tuning failed:', error);
       setIsTunerLoading(false);
 
       if (error instanceof ApiError) {
@@ -1295,8 +1298,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         });
       } else {
         addToast({
-          title: '启动手动调谐失败',
-          description: '网络错误或服务器无响应',
+          title: t('tuner.startFailed'),
+          description: t('error.networkError'),
           timeout: 3000
         });
       }
@@ -1316,7 +1319,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 variant="light"
                 size="sm"
                 className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
-                aria-label="电台设置"
+                aria-label={t('control.radioSettings')}
                 onPress={onOpenRadioSettings}
               >
                 <FontAwesomeIcon icon={faCog} className="text-xs" />
@@ -1330,7 +1333,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     variant="light"
                     size="sm"
                     className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
-                    aria-label="发射音量增益"
+                    aria-label={t('control.txVolumeGain')}
                   >
                     <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
                   </Button>
@@ -1346,7 +1349,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     style={{
                       height: '120px'
                     }}
-                    aria-label='音量控制'
+                    aria-label={t('control.volumeControl')}
                   />
                   <div className="text-sm text-default-400 text-center font-mono">
                     {formatDbDisplay(gainToDb(volumeGain))}
@@ -1361,7 +1364,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                   variant="light"
                   size="sm"
                   className={`min-w-unit-6 min-w-6 w-6 h-6 ${isMonitoring ? 'text-success' : 'text-default-400'}`}
-                  aria-label="音频监听"
+                  aria-label={t('monitor.audioMonitor')}
                 >
                   <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
                 </Button>
@@ -1378,7 +1381,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                       value={[gainToDb(monitorVolume)]}
                       onChange={handleMonitorVolumeChange}
                       style={{ height: '120px' }}
-                      aria-label="监听音量"
+                      aria-label={t('monitor.monitorVolume')}
                     />
                     <div className="text-sm text-default-400 text-center font-mono">
                       {formatDbDisplay(gainToDb(monitorVolume))}
@@ -1390,7 +1393,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     <div className="space-y-1 pt-2 border-t border-divider text-xs">
                       {/* 延迟显示 */}
                       <div className="flex justify-between items-center">
-                        <span className="text-default-500 pr-1">延迟</span>
+                        {t('monitor.latency')}
                         <span className={`font-mono ${
                           monitorStats.latencyMs < 50 ? 'text-success' :
                           monitorStats.latencyMs < 100 ? 'text-warning' :
@@ -1403,7 +1406,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                       {/* 缓冲区状态 */}
                       <div className="space-y-1">
                         <div className="flex justify-between items-center">
-                          <span className="text-default-500 pr-1">缓冲</span>
+                          {t('monitor.buffer')}
                           <span className="font-mono text-default-400">
                             {monitorStats.bufferFillPercent.toFixed(0)}%
                           </span>
@@ -1412,7 +1415,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
                       {/* 音频活动指示 */}
                       <div className="flex justify-between items-center">
-                        <span className="text-default-500 pr-1">活动</span>
+                        {t('monitor.active')}
                         <div className={`w-2 h-2 rounded-full ${
                           monitorStats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
                         }`} />
@@ -1426,7 +1429,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                       size="sm"
                       isSelected={isMonitoring}
                       onValueChange={toggleMonitoring}
-                      aria-label="音频监听开关"
+                      aria-label={t('monitor.monitorSwitch')}
                     />
                   </div>
                 </div>
@@ -1447,7 +1450,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                         ? 'text-success'
                         : 'text-default-400'
                     }`}
-                    aria-label="天调控制"
+                    aria-label={t('tuner.control')}
                   >
                     <FontAwesomeIcon icon={faSlidersH} className="text-xs" />
                   </Button>
@@ -1457,13 +1460,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     {/* 天调开关 */}
                     {tunerCapabilities.hasSwitch && (
                       <div className="flex items-center justify-between px-2 gap-2">
-                        <span className="text-sm text-default-500">自动天调</span>
+                        <span className="text-sm text-default-500">{t('tuner.auto')}</span>
                         <Switch
                           size="sm"
                           isSelected={tunerStatus.enabled}
                           onValueChange={handleTunerToggle}
                           isDisabled={isTunerLoading}
-                          aria-label="天调开关"
+                          aria-label={t('tuner.switch')}
                         />
                       </div>
                     )}
@@ -1480,7 +1483,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                           isLoading={isTunerLoading && tunerStatus.status === 'tuning'}
                           isDisabled={!tunerStatus.enabled || isTunerLoading}
                         >
-                          {tunerStatus.status === 'tuning' ? '调谐中...' : '手动调谐'}
+                          {tunerStatus.status === 'tuning' ? t('tuner.tuning') : t('tuner.manual')}
                         </Button>
                       </div>
                     )}
@@ -1527,7 +1530,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               className="h-5 px-2 text-xs min-w-0 shrink-0"
               onPress={() => setIsErrorHistoryOpen(true)}
             >
-              详情
+              {t('error.details')}
             </Button>
           }
         >
@@ -1548,13 +1551,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               disableSelectorIconRotation
               className="w-[200px]"
               labelPlacement="outside"
-              placeholder={radio.state.currentMode ? `${radio.state.currentMode.name} 频率` : "频率"}
+              placeholder={radio.state.currentMode ? `${radio.state.currentMode.name} ${t('control.frequency')}` : t('control.frequency')}
               selectorIcon={<SelectorIcon />}
               selectedKeys={[currentFrequency]}
               variant="flat"
               size="md"
               radius="md"
-              aria-label="选择频率"
+              aria-label={t('control.selectFrequency')}
               classNames={{
                 trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
                 value: "font-bold text-lg",
@@ -1575,8 +1578,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                   {frequency.label}
                 </SelectItem>
               )),
-              <SelectItem key="__custom__" textValue="自定义频率..." className="text-primary">
-                自定义频率...
+              <SelectItem key="__custom__" textValue={t('frequency.customOption')} className="text-primary">
+                {t('frequency.customOption')}
               </SelectItem>]}
             </Select>
           ) : (
@@ -1591,13 +1594,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               disableSelectorIconRotation
               className="w-[88px]"
               labelPlacement="outside"
-              placeholder={modeError || "通联模式"}
+              placeholder={modeError || t('mode.placeholder')}
               selectorIcon={<SelectorIcon />}
               selectedKeys={radio.state.currentMode ? [radio.state.currentMode.name] : []}
               variant="flat"
               size="md"
               radius="md"
-              aria-label="选择通联模式"
+              aria-label={t('control.selectMode')}
               classNames={{
                 trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
                 value: "font-bold text-lg",
@@ -1631,7 +1634,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <span className={`text-sm text-default-600`}>
-              监听
+              {t('monitor.listen')}
             </span>
             <Switch 
               isSelected={radio.state.isDecoding} 
@@ -1639,7 +1642,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               size="sm"
               color="primary"
               isDisabled={!connection.state.isConnected || isTogglingListen}
-              aria-label="切换监听状态"
+              aria-label={t('monitor.toggleListen')}
               className={isTogglingListen ? 'opacity-50 pointer-events-none' : ''}
             />
           </div>
@@ -1659,13 +1662,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       >
         <ModalContent>
           <ModalHeader>
-            <h3 className="text-lg font-semibold">自定义频率</h3>
+            <h3 className="text-lg font-semibold">{t('frequency.customTitle')}</h3>
           </ModalHeader>
           <ModalBody>
             <Input
               autoFocus
-              label="频率"
-              placeholder="例如: 14.074 或 14074000"
+              label={t('control.frequency')}
+              placeholder={t('frequency.inputPlaceholder')}
               value={customFrequencyInput}
               onValueChange={handleCustomFrequencyInputChange}
               variant="flat"
@@ -1673,8 +1676,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               errorMessage={customFrequencyError}
               description={
                 customFrequencyInput && !customFrequencyError && parseFrequencyInput(customFrequencyInput)?.frequency
-                  ? `将设置为 ${formatFrequencyDisplay(parseFrequencyInput(customFrequencyInput)!.frequency)} MHz`
-                  : '支持 MHz (如 14.074) 或 Hz (如 14074000) 格式'
+                  ? t('frequency.willSet', { freq: formatFrequencyDisplay(parseFrequencyInput(customFrequencyInput)!.frequency) })
+                  : t('frequency.inputHint')
               }
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !isSettingCustomFrequency) {
@@ -1698,7 +1701,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               }}
               isDisabled={isSettingCustomFrequency}
             >
-              取消
+              {t('common:button.cancel')}
             </Button>
             <Button
               color="primary"
@@ -1706,7 +1709,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               isLoading={isSettingCustomFrequency}
               isDisabled={!customFrequencyInput.trim()}
             >
-              确认
+              {t('frequency.confirm')}
             </Button>
           </ModalFooter>
         </ModalContent>

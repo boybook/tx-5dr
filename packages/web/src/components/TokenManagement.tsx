@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Button,
   Card,
@@ -26,25 +27,11 @@ import { UserRole } from '@tx5dr/contracts';
 import type { TokenInfo, CreateTokenRequest, CreateTokenResponse } from '@tx5dr/contracts';
 import { useOperators } from '../store/radioStore';
 
-const ROLE_LABELS: Record<string, string> = {
-  viewer: '查看者',
-  operator: '操作员',
-  admin: '管理员',
-};
-
 const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
   viewer: 'default',
   operator: 'primary',
   admin: 'warning',
 };
-
-const EXPIRY_OPTIONS = [
-  { key: 'never', label: '永久有效' },
-  { key: '1d', label: '1 天' },
-  { key: '7d', label: '7 天' },
-  { key: '30d', label: '30 天' },
-  { key: '90d', label: '90 天' },
-];
 
 function expiryKeyToTimestamp(key: string): number | undefined {
   if (key === 'never') return undefined;
@@ -60,6 +47,12 @@ interface TokenCardProps {
 }
 
 function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps) {
+  const { t } = useTranslation();
+  const roleLabels: Record<string, string> = {
+    viewer: t('common:role.viewer'),
+    operator: t('common:role.operator'),
+    admin: t('common:role.admin'),
+  };
   return (
     <Card className={token.revoked ? 'opacity-50' : ''}>
       <CardBody className="p-3 gap-2">
@@ -68,21 +61,21 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
             <div className={`w-2 h-2 rounded-full ${token.revoked ? 'bg-danger' : 'bg-success'}`} />
             <span className="font-medium text-sm">{token.label}</span>
             <Chip size="sm" variant="flat" color={ROLE_COLORS[token.role]}>
-              {ROLE_LABELS[token.role]}
+              {roleLabels[token.role]}
             </Chip>
             {token.system && (
               <Chip size="sm" variant="flat" color="default" startContent={<FontAwesomeIcon icon={faLock} className="text-[10px]" />}>
-                系统
+                {t('auth:token.system')}
               </Chip>
             )}
             {token.operatorIds.length > 0 && (
               <span className="text-xs text-default-400">
-                {token.operatorIds.length} 个操作员
+                {t('auth:token.operatorCount', { count: token.operatorIds.length })}
               </span>
             )}
             {token.maxOperators !== undefined && token.role !== 'admin' && (
               <span className="text-xs text-default-400">
-                上限 {token.maxOperators === 0 ? '无限制' : token.maxOperators}
+                {t('auth:token.maxOperators', { max: token.maxOperators === 0 ? t('auth:token.unlimited') : token.maxOperators })}
               </span>
             )}
           </div>
@@ -94,7 +87,7 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
                 color="warning"
                 isIconOnly
                 onPress={() => onRegenerate(token.id)}
-                title="重新生成令牌"
+                title={t('auth:token.regenerate')}
               >
                 <FontAwesomeIcon icon={faRotate} />
               </Button>
@@ -106,7 +99,7 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
                 color="danger"
                 isIconOnly
                 onPress={() => onRevoke(token.id)}
-                title="撤销令牌"
+                title={t('auth:token.revoke')}
               >
                 <FontAwesomeIcon icon={faTrash} />
               </Button>
@@ -114,18 +107,18 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
           </div>
         </div>
         <div className="text-xs text-default-400 flex gap-3">
-          <span>创建于 {new Date(token.createdAt).toLocaleDateString()}</span>
+          <span>{t('auth:token.createdAt', { date: new Date(token.createdAt).toLocaleDateString() })}</span>
           {token.lastUsedAt && (
-            <span>最近使用 {new Date(token.lastUsedAt).toLocaleDateString()}</span>
+            <span>{t('auth:token.lastUsed', { date: new Date(token.lastUsedAt).toLocaleDateString() })}</span>
           )}
           {token.expiresAt && (
-            <span>过期: {new Date(token.expiresAt).toLocaleDateString()}</span>
+            <span>{t('auth:token.expiresAt', { date: new Date(token.expiresAt).toLocaleDateString() })}</span>
           )}
-          {token.revoked && <span className="text-danger">已撤销</span>}
+          {token.revoked && <span className="text-danger">{t('auth:token.revoked')}</span>}
         </div>
         {token.operatorIds.length > 0 && (
           <div className="text-xs text-default-500">
-            操作员: {token.operatorIds.map((id) => {
+            {t('auth:token.operators')}: {token.operatorIds.map((id) => {
               const op = operators.find((o) => o.id === id);
               return op ? `${op.context.myCall}(${op.context.txFrequency}Hz)` : id;
             }).join(', ')}
@@ -137,6 +130,19 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
 }
 
 export function TokenManagement() {
+  const { t } = useTranslation();
+  const ROLE_LABELS = useMemo(() => ({
+    viewer: t('common:role.viewer'),
+    operator: t('common:role.operator'),
+    admin: t('common:role.admin'),
+  }), [t]);
+  const EXPIRY_OPTIONS = useMemo(() => [
+    { key: 'never', label: t('auth:token.expiryOptions.never') },
+    { key: '1d', label: t('auth:token.expiryOptions.1d') },
+    { key: '7d', label: t('auth:token.expiryOptions.7d') },
+    { key: '30d', label: t('auth:token.expiryOptions.30d') },
+    { key: '90d', label: t('auth:token.expiryOptions.90d') },
+  ], [t]);
   const { operators } = useOperators();
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -194,8 +200,8 @@ export function TokenManagement() {
       await loadTokens();
     } catch (err) {
       addToast({
-        title: '创建失败',
-        description: err instanceof Error ? err.message : '未知错误',
+        title: t('auth:token.createFailed'),
+        description: err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
         color: 'danger',
         timeout: 5000,
       });
@@ -208,29 +214,29 @@ export function TokenManagement() {
   const handleRevoke = useCallback(async (tokenId: string) => {
     try {
       await api.revokeToken(tokenId);
-      addToast({ title: '令牌已撤销', color: 'success', timeout: 3000 });
+      addToast({ title: t('auth:token.revokeSuccess'), color: 'success', timeout: 3000 });
       await loadTokens();
     } catch (err) {
       addToast({
-        title: '撤销失败',
-        description: err instanceof Error ? err.message : '未知错误',
+        title: t('auth:token.revokeFailed'),
+        description: err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
         color: 'danger',
         timeout: 5000,
       });
     }
-  }, [loadTokens]);
+  }, [loadTokens, t]);
 
   // 重新生成系统令牌
   const handleRegenerate = useCallback(async (tokenId: string) => {
     try {
       const resp = await api.regenerateToken(tokenId);
       setCreatedToken(resp);
-      addToast({ title: '令牌已重新生成', color: 'success', timeout: 3000 });
+      addToast({ title: t('auth:token.regenerated'), color: 'success', timeout: 3000 });
       await loadTokens();
     } catch (err) {
       addToast({
-        title: '重新生成失败',
-        description: err instanceof Error ? err.message : '未知错误',
+        title: t('auth:token.regenerateFailed'),
+        description: err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
         color: 'danger',
         timeout: 5000,
       });
@@ -244,7 +250,7 @@ export function TokenManagement() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      addToast({ title: '复制失败', color: 'danger', timeout: 2000 });
+      addToast({ title: t('auth:token.copyFailed'), color: 'danger', timeout: 2000 });
     }
   }, []);
 
@@ -259,14 +265,14 @@ export function TokenManagement() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">访问令牌管理</h3>
+        <h3 className="text-lg font-semibold">{t('auth:token.title')}</h3>
         <Button
           size="sm"
           color="primary"
           startContent={<FontAwesomeIcon icon={faPlus} />}
           onPress={() => setCreateModalOpen(true)}
         >
-          创建新令牌
+          {t('auth:token.createNew')}
         </Button>
       </div>
 
@@ -278,7 +284,7 @@ export function TokenManagement() {
         return (
           <div className="space-y-2">
             {tokens.length === 0 && (
-              <p className="text-default-400 text-sm text-center py-8">暂无令牌</p>
+              <p className="text-default-400 text-sm text-center py-8">{t('auth:token.noTokens')}</p>
             )}
             {activeTokens.map((token) => (
               <TokenCard
@@ -299,7 +305,7 @@ export function TokenManagement() {
                     icon={faChevronDown}
                     className={`transition-transform text-[10px] ${showRevoked ? '' : '-rotate-90'}`}
                   />
-                  <span>已撤销的令牌 ({revokedTokens.length})</span>
+                  <span>{t('auth:token.revokedList', { count: revokedTokens.length })}</span>
                 </button>
                 {showRevoked && revokedTokens.map((token) => (
                   <TokenCard
@@ -319,28 +325,28 @@ export function TokenManagement() {
       {/* 创建 Token 弹窗 */}
       <Modal isOpen={createModalOpen} onClose={() => setCreateModalOpen(false)} size="md">
         <ModalContent>
-          <ModalHeader>创建访问令牌</ModalHeader>
+          <ModalHeader>{t('auth:token.createModal.title')}</ModalHeader>
           <ModalBody className="gap-4">
             <Input
-              label="标签名称"
-              placeholder="例如：张三的操作权限"
+              label={t('auth:token.createModal.labelName')}
+              placeholder={t('auth:token.createModal.labelPlaceholder')}
               value={newLabel}
               onValueChange={setNewLabel}
               isRequired
             />
             <RadioGroup
-              label="角色"
+              label={t('auth:token.createModal.roleLabel')}
               value={newRole}
               onValueChange={(v) => setNewRole(v as UserRole)}
             >
-              <Radio value={UserRole.VIEWER} description="只能查看，不能操作">查看者</Radio>
-              <Radio value={UserRole.OPERATOR} description="可操作被授权的操作员">操作员</Radio>
-              <Radio value={UserRole.ADMIN} description="完全控制权限">管理员</Radio>
+              <Radio value={UserRole.VIEWER} description={t('auth:token.createModal.roleViewerDesc')}>{t('auth:token.createModal.roleViewer')}</Radio>
+              <Radio value={UserRole.OPERATOR} description={t('auth:token.createModal.roleOperatorDesc')}>{t('auth:token.createModal.roleOperator')}</Radio>
+              <Radio value={UserRole.ADMIN} description={t('auth:token.createModal.roleAdminDesc')}>{t('auth:token.createModal.roleAdmin')}</Radio>
             </RadioGroup>
 
             {newRole !== UserRole.ADMIN && operators.length > 0 && (
               <CheckboxGroup
-                label="授权操作员"
+                label={t('auth:token.createModal.authorizedOperators')}
                 value={newOperatorIds}
                 onValueChange={setNewOperatorIds}
               >
@@ -353,7 +359,7 @@ export function TokenManagement() {
             )}
 
             <Select
-              label="有效期"
+              label={t('auth:token.createModal.expiryLabel')}
               selectedKeys={new Set([newExpiry])}
               onSelectionChange={(keys) => {
                 const arr = Array.from(keys);
@@ -368,8 +374,8 @@ export function TokenManagement() {
             {newRole !== UserRole.ADMIN && (
               <Input
                 type="number"
-                label="操作员上限"
-                description="该令牌可拥有的操作员总数（0 表示不限制）"
+                label={t('auth:token.createModal.maxOperatorsLabel')}
+                description={t('auth:token.createModal.maxOperatorsDesc')}
                 value={newMaxOperators}
                 onValueChange={setNewMaxOperators}
                 min={0}
@@ -377,14 +383,14 @@ export function TokenManagement() {
             )}
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={() => setCreateModalOpen(false)}>取消</Button>
+            <Button variant="flat" onPress={() => setCreateModalOpen(false)}>{t('common:button.cancel')}</Button>
             <Button
               color="primary"
               onPress={handleCreate}
               isLoading={creating}
               isDisabled={!newLabel.trim()}
             >
-              创建令牌
+              {t('auth:token.create')}
             </Button>
           </ModalFooter>
         </ModalContent>
@@ -393,10 +399,10 @@ export function TokenManagement() {
       {/* 创建成功弹窗 */}
       <Modal isOpen={!!createdToken} onClose={() => setCreatedToken(null)} size="md">
         <ModalContent>
-          <ModalHeader>令牌已生成</ModalHeader>
+          <ModalHeader>{t('auth:token.created.title')}</ModalHeader>
           <ModalBody className="gap-3">
             <p className="text-sm text-default-600">
-              请妥善保管以下令牌，此令牌仅显示一次，之后无法再次查看：
+              {t('auth:token.created.warning')}
             </p>
             <div className="flex items-center gap-2 bg-default-100 rounded-lg p-3">
               <code className="flex-1 text-sm break-all">{createdToken?.token}</code>
@@ -405,21 +411,21 @@ export function TokenManagement() {
                 variant="flat"
                 isIconOnly
                 onPress={() => handleCopy(createdToken?.token || '')}
-                title="复制令牌"
+                title={t('auth:token.copy')}
               >
                 <FontAwesomeIcon icon={copied ? faCheck : faCopy} />
               </Button>
             </div>
             <div className="text-xs text-default-400">
-              <p>标签: {createdToken?.label}</p>
-              <p>角色: {ROLE_LABELS[createdToken?.role || '']}</p>
+              <p>{t('auth:token.created.labelInfo', { label: createdToken?.label })}</p>
+              <p>{t('auth:token.created.roleInfo', { role: ROLE_LABELS[createdToken?.role || ''] })}</p>
               {createdToken?.operatorIds && createdToken.operatorIds.length > 0 && (
-                <p>操作员: {createdToken.operatorIds.join(', ')}</p>
+                <p>{t('auth:token.created.operatorsInfo', { ids: createdToken.operatorIds.join(', ') })}</p>
               )}
             </div>
           </ModalBody>
           <ModalFooter>
-            <Button color="primary" onPress={() => setCreatedToken(null)}>完成</Button>
+            <Button color="primary" onPress={() => setCreatedToken(null)}>{t('auth:token.created.done')}</Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

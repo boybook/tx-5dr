@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useReducer, useEffect, useCallback, ReactNode } from 'react';
 import { api, configureAuthToken } from '@tx5dr/core';
 import type { UserRole, AuthStatus, AuthMeResponse } from '@tx5dr/contracts';
+import i18n from '../i18n';
 
 // ===== 认证状态 =====
 
@@ -324,7 +325,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
       return true;
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '登录失败';
+      const message = err instanceof Error ? err.message : i18n.t('auth:login.failed');
       dispatch({ type: 'LOGIN_FAIL', payload: message });
       return false;
     }

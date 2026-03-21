@@ -1,4 +1,5 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Button,
   Input,
@@ -46,6 +47,7 @@ interface OperatorSettingsProps {
 
 export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettingsProps>(
   ({ onUnsavedChanges }, ref) => {
+    const { t } = useTranslation('radio');
     const [operators, setOperators] = useState<RadioOperatorConfig[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
@@ -107,7 +109,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         const response = await api.getOperators();
         setOperators(response.data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '加载操作员列表失败');
+        setError(err instanceof Error ? err.message : t('settings.loadFailed'));
       } finally {
         setLoading(false);
       }
@@ -278,7 +280,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         cancelEditing(operatorId);
         updateUnsavedChanges(false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '保存失败');
+        setError(err instanceof Error ? err.message : t('settings.saveFailed'));
       }
     };
 
@@ -328,7 +330,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         });
         updateUnsavedChanges(false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '创建失败');
+        setError(err instanceof Error ? err.message : t('settings.createFailed'));
       }
     };
 
@@ -342,7 +344,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         setDeleteConfirmOpen(false);
         setOperatorToDelete(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '删除失败');
+        setError(err instanceof Error ? err.message : t('settings.deleteFailed'));
         // 即使删除失败，也关闭对话框让用户看到错误信息
         setDeleteConfirmOpen(false);
         setOperatorToDelete(null);
@@ -355,10 +357,10 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         <p className="text-xs font-medium">{name}</p>
         <div className="flex items-center justify-between mt-1">
           <Chip size="sm" color={enabled ? 'success' : 'default'} variant="flat">
-            {enabled ? '已配置' : '未配置'}
+            {enabled ? t('settings.configured') : t('settings.notConfigured')}
           </Chip>
           <Button size="sm" variant="light" onPress={onConfigure}>
-            {enabled ? '修改' : '配置'}
+            {enabled ? t('settings.modify') : t('settings.configure')}
           </Button>
         </div>
       </div>
@@ -373,22 +375,22 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <span className="text-xs text-default-500 uppercase tracking-wide">呼号</span>
+              <span className="text-xs text-default-500 uppercase tracking-wide">{t('settings.callsign')}</span>
               <p className="text-sm font-medium">{operator.myCallsign}</p>
             </div>
 
             <div>
-              <span className="text-xs text-default-500 uppercase tracking-wide">网格坐标</span>
-              <p className="text-sm font-medium">{operator.myGrid || '未设置'}</p>
+              <span className="text-xs text-default-500 uppercase tracking-wide">{t('settings.grid')}</span>
+              <p className="text-sm font-medium">{operator.myGrid || t('settings.notSet')}</p>
             </div>
           </div>
 
           {/* 通联日志同步 */}
           <Divider className="my-3" />
-          <p className="text-sm font-medium mb-2">通联日志同步</p>
+          <p className="text-sm font-medium mb-2">{t('settings.logSync')}</p>
           {!hasSyncConfig && (
             <p className="text-xs text-default-400 mb-2">
-              配置同步服务后，通联记录可自动上传到 WaveLog、QRZ.com 或 LoTW
+              {t('settings.logSyncDesc')}
             </p>
           )}
           <div className="flex gap-2 flex-wrap">
@@ -412,40 +414,40 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           {/* 自动化配置展示 */}
           <Divider />
           <div className="space-y-3">
-            <h5 className="text-sm font-medium text-default-700">自动化设置</h5>
+            <h5 className="text-sm font-medium text-default-700">{t('settings.automation')}</h5>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">自动回复CQ</span>
+                <span className="text-sm">{t('settings.autoReplyToCQ')}</span>
                 <Chip size="sm" variant="flat" color={operator.autoReplyToCQ ? "success" : "default"}>
-                  {operator.autoReplyToCQ ? "启用" : "禁用"}
+                  {operator.autoReplyToCQ ? t('settings.enabled') : t('settings.disabled')}
                 </Chip>
               </div>
-              
+
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">失败后自动恢复CQ</span>
+                <span className="text-sm">{t('settings.autoResumeCQAfterFail')}</span>
                 <Chip size="sm" variant="flat" color={operator.autoResumeCQAfterFail ? "success" : "default"}>
-                  {operator.autoResumeCQAfterFail ? "启用" : "禁用"}
+                  {operator.autoResumeCQAfterFail ? t('settings.enabled') : t('settings.disabled')}
                 </Chip>
               </div>
-              
+
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">成功后自动恢复CQ</span>
+                <span className="text-sm">{t('settings.autoResumeCQAfterSuccess')}</span>
                 <Chip size="sm" variant="flat" color={operator.autoResumeCQAfterSuccess ? "success" : "default"}>
-                  {operator.autoResumeCQAfterSuccess ? "启用" : "禁用"}
+                  {operator.autoResumeCQAfterSuccess ? t('settings.enabled') : t('settings.disabled')}
                 </Chip>
               </div>
-              
+
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">回复已通联过的电台</span>
+                <span className="text-sm">{t('settings.replyToWorked')}</span>
                 <Chip size="sm" variant="flat" color={operator.replyToWorkedStations ? "success" : "default"}>
-                  {operator.replyToWorkedStations ? "启用" : "禁用"}
+                  {operator.replyToWorkedStations ? t('settings.enabled') : t('settings.disabled')}
                 </Chip>
               </div>
-              
+
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">优先选择新呼号</span>
+                <span className="text-sm">{t('settings.prioritizeNewCalls')}</span>
                 <Chip size="sm" variant="flat" color={operator.prioritizeNewCalls ? "success" : "default"}>
-                  {operator.prioritizeNewCalls ? "启用" : "禁用"}
+                  {operator.prioritizeNewCalls ? t('settings.enabled') : t('settings.disabled')}
                 </Chip>
               </div>
             </div>
@@ -454,16 +456,16 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           {/* 高级设置展示 */}
           <Divider />
           <div className="space-y-3">
-            <h5 className="text-sm font-medium text-default-700">高级设置</h5>
+            <h5 className="text-sm font-medium text-default-700">{t('settings.advanced')}</h5>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">最大QSO超时周期</span>
-                <span className="text-sm font-medium text-primary">{operator.maxQSOTimeoutCycles} 周期</span>
+                <span className="text-sm">{t('settings.maxQSOTimeout')}</span>
+                <span className="text-sm font-medium text-primary">{t('settings.cycles', { count: operator.maxQSOTimeoutCycles })}</span>
               </div>
-              
+
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">最大呼叫尝试次数</span>
-                <span className="text-sm font-medium text-primary">{operator.maxCallAttempts} 次</span>
+                <span className="text-sm">{t('settings.maxCallAttempts')}</span>
+                <span className="text-sm font-medium text-primary">{t('settings.times', { count: operator.maxCallAttempts })}</span>
               </div>
             </div>
           </div>
@@ -479,8 +481,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
-              label="呼号"
-              placeholder="例如: BG5DRB"
+              label={t('settings.callsign')}
+              placeholder={t('settings.callsignPlaceholder')}
               value={formData.myCallsign || ''}
               onChange={(e) => {
                 if (isNewOperator) {
@@ -491,10 +493,10 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               }}
               isRequired
             />
-            
+
             <Input
-              label="网格坐标"
-              placeholder="例如: PL09"
+              label={t('settings.grid')}
+              placeholder={t('settings.gridPlaceholder')}
               value={formData.myGrid || ''}
               onChange={(e) => {
                 if (isNewOperator) {
@@ -509,7 +511,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           {/* 自动化配置 */}
           <Divider />
           <div className="space-y-3">
-            <h5 className="text-sm font-medium text-default-700">自动化设置</h5>
+            <h5 className="text-sm font-medium text-default-700">{t('settings.automation')}</h5>
             <div className="grid grid-cols-1 gap-3">
               <Switch
                 isSelected={formData.autoReplyToCQ || false}
@@ -522,9 +524,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 }}
                 size="sm"
               >
-                自动回复CQ
+                {t('settings.autoReplyToCQ')}
               </Switch>
-              
+
               <Switch
                 isSelected={formData.autoResumeCQAfterFail || false}
                 onValueChange={(checked) => {
@@ -536,9 +538,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 }}
                 size="sm"
               >
-                失败后自动恢复CQ
+                {t('settings.autoResumeCQAfterFail')}
               </Switch>
-              
+
               <Switch
                 isSelected={formData.autoResumeCQAfterSuccess || false}
                 onValueChange={(checked) => {
@@ -550,9 +552,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 }}
                 size="sm"
               >
-                成功后自动恢复CQ
+                {t('settings.autoResumeCQAfterSuccess')}
               </Switch>
-              
+
               <Switch
                 isSelected={formData.replyToWorkedStations || false}
                 onValueChange={(checked) => {
@@ -564,9 +566,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 }}
                 size="sm"
               >
-                回复已通联过的电台
+                {t('settings.replyToWorked')}
               </Switch>
-              
+
               <Switch
                 isSelected={formData.prioritizeNewCalls !== false}
                 onValueChange={(checked) => {
@@ -578,7 +580,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 }}
                 size="sm"
               >
-                优先选择新呼号
+                {t('settings.prioritizeNewCalls')}
               </Switch>
             </div>
           </div>
@@ -588,8 +590,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
               type="number"
-              label="最大QSO超时周期"
-              description="QSO进行中（已收到对方回复、正在交换信号报告），等待对方响应的最大周期数"
+              label={t('settings.maxQSOTimeout')}
+              description={t('settings.maxQSOTimeoutDesc')}
               value={formData.maxQSOTimeoutCycles?.toString() || ''}
               onChange={(e) => {
                 const value = parseInt(e.target.value) || 10;
@@ -606,8 +608,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
             <Input
               type="number"
-              label="最大呼叫尝试次数"
-              description="主动呼叫他人时，对方未回复的情况下，最多重试的次数"
+              label={t('settings.maxCallAttempts')}
+              description={t('settings.maxCallAttemptsDesc')}
               value={formData.maxCallAttempts?.toString() || ''}
               onChange={(e) => {
                 const value = parseInt(e.target.value) || 3;
@@ -656,29 +658,29 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                     onPress={() => saveEditing(operator.id)}
                     startContent={<FontAwesomeIcon icon={faSave} />}
                   >
-                    保存
+                    {t('common:button.save')}
                   </Button>
                   <Button
                     variant="flat"
                     onPress={() => cancelEditing(operator.id)}
                     startContent={<FontAwesomeIcon icon={faTimes} />}
                   >
-                    取消
+                    {t('common:button.cancel')}
                   </Button>
                 </ButtonGroup>
               ) : (
                 <ButtonGroup size="sm">
-                  <Tooltip content="编辑">
+                  <Tooltip content={t('common:button.edit')}>
                     <Button
                       variant="flat"
                       onPress={() => startEditing(operator)}
                       startContent={<FontAwesomeIcon icon={faEdit} />}
                     >
-                      编辑
+                      {t('common:button.edit')}
                     </Button>
                   </Tooltip>
-                  
-                  <Tooltip content="删除操作员">
+
+                  <Tooltip content={t('settings.deleteOperator')}>
                     <Button
                       variant="flat"
                       color="danger"
@@ -688,7 +690,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                       }}
                       startContent={<FontAwesomeIcon icon={faTrash} />}
                     >
-                      删除
+                      {t('common:button.delete')}
                     </Button>
                   </Tooltip>
                 </ButtonGroup>
@@ -711,9 +713,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       return (
         <div className="space-y-6">
           <div>
-            <h4 className="text-md font-semibold text-default-700 mb-2">操作员显示偏好</h4>
+            <h4 className="text-md font-semibold text-default-700 mb-2">{t('settings.displayPrefs')}</h4>
             <p className="text-sm text-default-500 mb-4">
-              选择在此客户端中显示哪些操作员。未启用的操作员将不会在界面中显示，也不会接收其相关事件。
+              {t('settings.displayPrefsDesc')}
             </p>
           </div>
 
@@ -723,9 +725,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               <div className="flex justify-between items-center w-full">
                 <div className="flex items-center gap-2">
                   <FontAwesomeIcon icon={faUsers} className="text-primary" />
-                  <span className="font-medium">操作员列表</span>
+                  <span className="font-medium">{t('settings.operatorList')}</span>
                   <Chip size="sm" variant="flat" color="primary">
-                    {enabledCount}/{totalCount} 已启用
+                    {t('settings.enabledCount', { enabled: enabledCount, total: totalCount })}
                   </Chip>
                 </div>
                 <div className="flex gap-2">
@@ -736,7 +738,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                     isDisabled={enabledCount === totalCount}
                   >
                     <FontAwesomeIcon icon={faToggleOn} className="mr-1" />
-                    全部启用
+                    {t('settings.enableAll')}
                   </Button>
                   <Button
                     size="sm"
@@ -746,7 +748,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                     isDisabled={enabledCount === 0}
                   >
                     <FontAwesomeIcon icon={faToggleOff} className="mr-1" />
-                    全部禁用
+                    {t('settings.disableAll')}
                   </Button>
                 </div>
               </div>
@@ -756,8 +758,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               {operators.length === 0 ? (
                 <div className="text-center py-8 text-default-500">
                   <FontAwesomeIcon icon={faUsers} className="text-4xl mb-3 opacity-50" />
-                  <p>暂无操作员</p>
-                  <p className="text-sm mt-1">请先在"操作员管理"选项卡中创建操作员</p>
+                  <p>{t('settings.noOperators')}</p>
+                  <p className="text-sm mt-1">{t('settings.noOperatorsHint')}</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -774,7 +776,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                               {operator.myCallsign || operator.id}
                             </div>
                             <div className="text-sm text-default-500">
-                              {operator.myGrid && `网格: ${operator.myGrid}`}
+                              {operator.myGrid && t('settings.gridValue', { grid: operator.myGrid })}
                             </div>
                             {operator.frequency && (
                               <Chip size="sm" variant="flat" color="secondary">
@@ -802,12 +804,12 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
           {/* 说明信息 */}
           <div className="p-4 bg-default-50 rounded-lg">
-            <h5 className="text-sm font-medium text-default-700 mb-2">设置说明</h5>
+            <h5 className="text-sm font-medium text-default-700 mb-2">{t('settings.hint')}</h5>
             <ul className="text-xs text-default-600 space-y-1">
-              <li>• 禁用的操作员不会在操作员列表中显示</li>
-              <li>• 禁用的操作员的状态更新和事件不会发送到此客户端</li>
-              <li>• 设置仅影响当前客户端，不影响服务器上的操作员运行</li>
-              <li>• 设置会保存在浏览器本地存储中，下次打开时会自动恢复</li>
+              <li>• {t('settings.hintDisabledHide')}</li>
+              <li>• {t('settings.hintDisabledEvents')}</li>
+              <li>• {t('settings.hintLocalOnly')}</li>
+              <li>• {t('settings.hintPersisted')}</li>
             </ul>
           </div>
         </div>
@@ -824,7 +826,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       return (
         <Card className="w-full border-2 border-dashed border-primary-300">
           <CardHeader className="flex justify-between items-center">
-            <h4 className="text-lg font-semibold text-primary">新建操作员</h4>
+            <h4 className="text-lg font-semibold text-primary">{t('settings.newOperator')}</h4>
             <ButtonGroup size="sm">
               <Button
                 color="primary"
@@ -832,7 +834,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 isDisabled={!newOperatorData.myCallsign}
                 startContent={<FontAwesomeIcon icon={faSave} />}
               >
-                创建
+                {t('common:button.create')}
               </Button>
               {showCancelButton && (
                 <Button
@@ -840,7 +842,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                   onPress={() => setIsCreating(false)}
                   startContent={<FontAwesomeIcon icon={faTimes} />}
                 >
-                  取消
+                  {t('common:button.cancel')}
                 </Button>
               )}
             </ButtonGroup>
@@ -856,9 +858,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     return (
       <div className="space-y-6">
         <div>
-          <h3 className="text-lg font-semibold">电台操作员设置</h3>
+          <h3 className="text-lg font-semibold">{t('settings.title')}</h3>
           <p className="text-sm text-default-500 mt-1">
-            管理操作员配置和显示偏好
+            {t('settings.subtitle')}
           </p>
         </div>
 
@@ -873,9 +875,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <div>
-                <h4 className="text-md font-semibold">操作员配置</h4>
+                <h4 className="text-md font-semibold">{t('settings.operatorConfig')}</h4>
                 <p className="text-sm text-default-500 mt-1">
-                  创建和管理多个电台操作员配置
+                  {t('settings.operatorConfigDesc')}
                 </p>
               </div>
               {/* 当没有操作员且已在创建模式时，隐藏新建按钮 */}
@@ -887,7 +889,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                   startContent={<FontAwesomeIcon icon={faPlus} />}
                   isDisabled={isCreating}
                 >
-                  新建操作员
+                  {t('settings.newOperator')}
                 </Button>
               )}
             </div>
@@ -896,14 +898,14 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               <div className="flex justify-center py-8">
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-                  <p className="text-sm text-default-500 mt-2">加载中...</p>
+                  <p className="text-sm text-default-500 mt-2">{t('common:status.loading')}</p>
                 </div>
               </div>
             ) : (
               <div className="space-y-4">
                 {/* 新建操作员卡片 */}
                 {renderNewOperatorCard()}
-                
+
                 {/* 现有操作员卡片 */}
                 {operators.length > 0 && operators.map(renderOperatorCard)}
               </div>
@@ -917,21 +919,21 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             size="md"
             className="w-full"
           >
-            <Tab 
-              key="manage" 
+            <Tab
+              key="manage"
               title={
                 <div className="flex items-center gap-2">
                   <FontAwesomeIcon icon={faCog} />
-                  <span>操作员管理</span>
+                  <span>{t('settings.tabManage')}</span>
                 </div>
               }
             >
             <div className="space-y-6 pt-4">
               <div className="flex justify-between items-center">
                 <div>
-                  <h4 className="text-md font-semibold">操作员配置</h4>
+                  <h4 className="text-md font-semibold">{t('settings.operatorConfig')}</h4>
                   <p className="text-sm text-default-500 mt-1">
-                    创建和管理多个电台操作员配置
+                    {t('settings.operatorConfigDesc')}
                   </p>
                 </div>
                 {/* 当没有操作员且已在创建模式时，隐藏新建按钮 */}
@@ -943,7 +945,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                     startContent={<FontAwesomeIcon icon={faPlus} />}
                     isDisabled={isCreating}
                   >
-                    新建操作员
+                    {t('settings.newOperator')}
                   </Button>
                 )}
               </div>
@@ -952,14 +954,14 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 <div className="flex justify-center py-8">
                   <div className="text-center">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-                    <p className="text-sm text-default-500 mt-2">加载中...</p>
+                    <p className="text-sm text-default-500 mt-2">{t('common:status.loading')}</p>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-4">
                   {/* 新建操作员卡片 */}
                   {renderNewOperatorCard()}
-                  
+
                   {/* 现有操作员卡片 */}
                   {operators.length > 0 && operators.map(renderOperatorCard)}
                 </div>
@@ -967,15 +969,15 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             </div>
           </Tab>
           
-          <Tab 
-            key="preferences" 
+          <Tab
+            key="preferences"
             title={
               <div className="flex items-center gap-2">
                 <FontAwesomeIcon icon={faUsers} />
-                <span>显示偏好</span>
+                <span>{t('settings.tabPreferences')}</span>
                 {preferencesHasChanges && (
                   <Chip size="sm" color="warning" variant="flat">
-                    有更改
+                    {t('settings.hasChanges')}
                   </Chip>
                 )}
               </div>
@@ -1000,17 +1002,17 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         >
           <ModalContent>
             <ModalHeader className="flex flex-col gap-1">
-              <h3 className="text-lg font-semibold text-danger">删除操作员</h3>
+              <h3 className="text-lg font-semibold text-danger">{t('settings.deleteOperator')}</h3>
             </ModalHeader>
             <ModalBody>
               {operatorToDelete && (
                 <div className="space-y-3">
                   <p className="text-default-600">
-                    确定要删除操作员 <span className="font-semibold text-danger">"{operatorToDelete.myCallsign}"</span> 吗？
+                    {t('settings.deleteConfirm', { callsign: operatorToDelete.myCallsign })}
                   </p>
                   <div className="p-3 bg-warning-50 border border-warning-200 rounded-lg">
                     <p className="text-warning-700 text-sm">
-                      ⚠️ 此操作无法撤销，删除后该操作员的所有配置将丢失。
+                      {t('settings.deleteWarning')}
                     </p>
                   </div>
                 </div>
@@ -1024,7 +1026,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                   setOperatorToDelete(null);
                 }}
               >
-                取消
+                {t('common:button.cancel')}
               </Button>
               <Button
                 color="danger"
@@ -1035,7 +1037,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                   setDeleteConfirmOpen(false);
                 }}
               >
-                确认删除
+                {t('settings.confirmDelete')}
               </Button>
             </ModalFooter>
           </ModalContent>

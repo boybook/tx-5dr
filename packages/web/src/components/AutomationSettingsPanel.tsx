@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Listbox, ListboxItem } from "@heroui/react";
 import { useOperators, useCurrentOperatorId } from '../store/radioStore';
 import { api } from '@tx5dr/core';
@@ -10,6 +11,7 @@ interface AutomationSettingsPanelProps {
 }
 
 export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ isOpen, _onClose }) => {
+  const { t } = useTranslation('settings');
   const { operators } = useOperators();
   const { currentOperatorId } = useCurrentOperatorId();
   const [loading, setLoading] = React.useState(false);
@@ -36,7 +38,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   if (!currentOperatorId || !currentOperator) {
     return (
       <div className="text-center text-gray-500">
-        请先选择一个操作员
+        {t('automation.noOperator')}
       </div>
     );
   }
@@ -70,7 +72,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       setSelectedKeys(keys);
       
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新设置失败');
+      setError(err instanceof Error ? err.message : t('automation.updateFailed'));
     } finally {
       setLoading(false);
     }
@@ -86,7 +88,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       
       <Listbox
         disallowEmptySelection
-        aria-label="自动化设置"
+        aria-label={t('automation.ariaLabel')}
         selectedKeys={selectedKeys}
         selectionMode="multiple"
         variant="flat"
@@ -94,19 +96,19 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         className="max-h-[300px] overflow-y-auto"
       >
         <ListboxItem key="autoReplyToCQ">
-          自动回复CQ
+          {t('automation.autoReplyToCQ')}
         </ListboxItem>
         <ListboxItem key="autoResumeCQAfterFail">
-          失败后自动恢复CQ
+          {t('automation.autoResumeCQAfterFail')}
         </ListboxItem>
         <ListboxItem key="autoResumeCQAfterSuccess">
-          成功后自动恢复CQ
+          {t('automation.autoResumeCQAfterSuccess')}
         </ListboxItem>
         <ListboxItem key="replyToWorkedStations">
-          回复已通联电台
+          {t('automation.replyToWorkedStations')}
         </ListboxItem>
         <ListboxItem key="prioritizeNewCalls">
-          优先选择新呼号
+          {t('automation.prioritizeNewCalls')}
         </ListboxItem>
       </Listbox>
     </div>

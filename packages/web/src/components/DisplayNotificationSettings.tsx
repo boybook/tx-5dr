@@ -1,4 +1,5 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Card,
   CardBody,
@@ -8,15 +9,18 @@ import {
   Input,
   Tooltip,
   Chip,
+  Select,
+  SelectItem,
 } from '@heroui/react';
+import { useLanguage, type LanguageMode } from '../hooks/useLanguage';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotateLeft, faPalette } from '@fortawesome/free-solid-svg-icons';
 import { InteractiveColorPicker } from './InteractiveColorPicker';
 import {
   type DisplayNotificationSettings as DisplaySettings,
   HighlightType,
-  HIGHLIGHT_TYPE_LABELS,
-  HIGHLIGHT_TYPE_DESCRIPTIONS,
+  getHighlightTypeLabels,
+  getHighlightTypeDescriptions,
   PRESET_COLORS,
   getDisplayNotificationSettings,
   saveDisplayNotificationSettings,
@@ -38,6 +42,10 @@ export const DisplayNotificationSettings = forwardRef<
   DisplayNotificationSettingsRef,
   DisplayNotificationSettingsProps
 >(({ onUnsavedChanges }, ref) => {
+  const { t } = useTranslation();
+  const { languageMode, setLanguageMode } = useLanguage();
+  const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
+  const highlightTypeDescriptions = useMemo(() => getHighlightTypeDescriptions(t), [t]);
   const [settings, setSettings] = useState<DisplaySettings>(getDisplayNotificationSettings());
   const [originalSettings, setOriginalSettings] = useState<DisplaySettings>(settings);
   const [_isSaving, setIsSaving] = useState(false);
@@ -138,7 +146,7 @@ export const DisplayNotificationSettings = forwardRef<
         
         {/* 预设颜色 */}
         <div>
-          <p className="text-sm text-default-600 mb-2">预设颜色</p>
+          <p className="text-sm text-default-600 mb-2">{t('settings:display.presetColors')}</p>
           <div className="flex flex-wrap gap-2">
             {PRESET_COLORS.map((color) => (
               <Tooltip key={color} content={color}>
@@ -179,10 +187,10 @@ export const DisplayNotificationSettings = forwardRef<
               />
               <div>
                 <h4 className="font-semibold text-default-900">
-                  {HIGHLIGHT_TYPE_LABELS[type]}
+                  {highlightTypeLabels[type]}
                 </h4>
                 <p className="text-sm text-default-600">
-                  {HIGHLIGHT_TYPE_DESCRIPTIONS[type]}
+                  {highlightTypeDescriptions[type]}
                 </p>
               </div>
             </div>
@@ -207,11 +215,35 @@ export const DisplayNotificationSettings = forwardRef<
 
   return (
     <div className="space-y-6">
+      {/* 语言设置 */}
+      <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
+        <CardBody className="p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h4 className="font-semibold text-default-900">{t('settings:language.label')}</h4>
+            </div>
+            <Select
+              size="sm"
+              className="max-w-[160px]"
+              selectedKeys={new Set([languageMode])}
+              onSelectionChange={(keys) => {
+                const arr = Array.from(keys);
+                if (arr.length > 0) setLanguageMode(arr[0] as LanguageMode);
+              }}
+            >
+              <SelectItem key="system">{t('settings:language.system')}</SelectItem>
+              <SelectItem key="zh">{t('settings:language.zh')}</SelectItem>
+              <SelectItem key="en">{t('settings:language.en')}</SelectItem>
+            </Select>
+          </div>
+        </CardBody>
+      </Card>
+
       {/* 页面标题和描述 */}
       <div>
-        <h3 className="text-xl font-bold text-default-900 mb-2">显示通知设置</h3>
+        <h3 className="text-xl font-bold text-default-900 mb-2">{t('settings:display.title')}</h3>
         <p className="text-default-600">
-          配置FT8消息的高亮显示，帮助您快速识别新的呼号、前缀和网格。
+          {t('settings:display.description')}
         </p>
       </div>
 
@@ -222,9 +254,9 @@ export const DisplayNotificationSettings = forwardRef<
         <CardBody className="p-4">
           <div className="flex items-center justify-between">
             <div>
-              <h4 className="font-semibold text-default-900">启用高亮显示</h4>
+              <h4 className="font-semibold text-default-900">{t('settings:display.enableHighlight')}</h4>
               <p className="text-sm text-default-600">
-                开启后将根据日志本分析结果高亮显示新的呼号、前缀和网格
+                {t('settings:display.enableHighlightDesc')}
               </p>
             </div>
             <Switch
@@ -238,7 +270,7 @@ export const DisplayNotificationSettings = forwardRef<
 
       {/* 高亮类型设置 */}
       <div>
-        <h4 className="font-semibold text-default-900 mb-4">高亮类型配置</h4>
+        <h4 className="font-semibold text-default-900 mb-4">{t('settings:display.highlightTypeConfig')}</h4>
         <div className="space-y-4">
           {Object.values(HighlightType).map(type => renderHighlightCard(type))}
         </div>
@@ -250,7 +282,7 @@ export const DisplayNotificationSettings = forwardRef<
           base: "border border-divider bg-content1"
         }}>
           <CardBody className="p-4">
-            <h4 className="font-semibold text-default-900 mb-4">效果预览</h4>
+            <h4 className="font-semibold text-default-900 mb-4">{t('settings:display.preview')}</h4>
             <div className="space-y-2">
               {Object.values(HighlightType).map(type => {
                 const config = settings.highlights[type];
@@ -263,7 +295,7 @@ export const DisplayNotificationSettings = forwardRef<
                       style={{ backgroundColor: config.color }}
                     />
                     <span className="text-sm">
-                      示例FT8消息 - {HIGHLIGHT_TYPE_LABELS[type]}
+                      {t('settings:highlight.exampleFT8')} - {highlightTypeLabels[type]}
                     </span>
                     <Chip
                       size="sm"
@@ -274,7 +306,7 @@ export const DisplayNotificationSettings = forwardRef<
                       }}
                       variant="bordered"
                     >
-                      {HIGHLIGHT_TYPE_LABELS[type]}
+                      {highlightTypeLabels[type]}
                     </Chip>
                   </div>
                 );
@@ -292,11 +324,11 @@ export const DisplayNotificationSettings = forwardRef<
           onPress={handleReset}
           isDisabled={isDefaultSettings(settings)}
         >
-          重置为默认值
+          {t('settings:display.resetToDefault')}
         </Button>
         
         <div className="text-sm text-default-500">
-          {hasUnsavedChanges() && "● 设置已修改，请保存更改"}
+          {hasUnsavedChanges() && t('settings:unsavedChanges')}
         </div>
       </div>
     </div>

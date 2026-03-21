@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Modal,
   ModalContent,
@@ -28,6 +29,7 @@ interface SettingsModalProps {
 type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'tokens';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
+  const { t } = useTranslation('settings');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator
   const effectiveInitialTab = (initialTab === 'radio' || initialTab === 'audio') ? 'operator' : (initialTab || 'operator');
@@ -212,17 +214,17 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     // 桌面端返回完整标题
     switch (tab) {
       case 'operator':
-        return '👤 操作员';
+        return `👤 ${t('modal.tabOperator')}`;
       case 'display':
-        return '🎨 显示通知';
+        return `🎨 ${t('modal.tabDisplay')}`;
       case 'radio_profile':
-        return '📻 电台配置';
+        return `📻 ${t('modal.tabRadioProfile')}`;
       case 'system':
-        return '⚙️ 系统设置';
+        return `⚙️ ${t('modal.tabSystem')}`;
       case 'tokens':
-        return '🔑 用户管理';
+        return `🔑 ${t('modal.tabTokens')}`;
       default:
-        return '设置';
+        return t('modal.defaultTab');
     }
   };
 
@@ -254,10 +256,10 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return (
           <div className="flex flex-col items-center justify-center py-12 gap-4 text-center">
             <p className="text-lg text-default-600">
-              电台连接和音频设备在 <strong>电台配置 Profile</strong> 中设置。
+              {t('modal.radioProfileDesc1')}
             </p>
             <p className="text-sm text-default-400">
-              每个 Profile 包含独立的电台和音频配置，支持快速切换不同方案。
+              {t('modal.radioProfileDesc2')}
             </p>
             <Button
               color="primary"
@@ -268,7 +270,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 window.dispatchEvent(new Event('openProfileModal'));
               }}
             >
-              前往电台配置
+              {t('modal.goToRadioProfile')}
             </Button>
           </div>
         );
@@ -297,9 +299,9 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       >
         <ModalContent>
           <ModalHeader className="flex flex-col gap-1">
-            <h2 className="text-xl font-bold">TX5DR 设置</h2>
+            <h2 className="text-xl font-bold">{t('modal.title')}</h2>
             <p className="text-sm text-default-500 font-normal">
-              配置应用程序的各种设置选项
+              {t('modal.subtitle')}
             </p>
           </ModalHeader>
           
@@ -368,7 +370,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             <div className="flex justify-between items-center w-full">
               <div className="text-sm text-default-400">
                 {hasUnsavedChanges && (
-                  <span className="text-warning-600">● 有未保存的更改</span>
+                  <span className="text-warning-600">{t('hasUnsavedChanges')}</span>
                 )}
               </div>
               <div className="flex gap-3">
@@ -379,7 +381,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   className="bg-content1 border border-divider hover:bg-content2"
                 >
                   <FontAwesomeIcon icon={faSave} className="mr-2" />
-                  保存设置
+                  {t('modal.saveSettings')}
                 </Button>
               </div>
             </div>
@@ -397,32 +399,32 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       >
         <ModalContent>
           <ModalHeader>
-            <h3 className="text-lg font-semibold">未保存的更改</h3>
+            <h3 className="text-lg font-semibold">{t('confirmDialog.title')}</h3>
           </ModalHeader>
           <ModalBody>
             <p className="text-default-600">
-              您有未保存的设置更改。您希望保存这些更改吗？
+              {t('confirmDialog.message')}
             </p>
           </ModalBody>
           <ModalFooter>
-            <Button 
+            <Button
               variant="flat"
               onPress={handleConfirmCancel}
             >
-              取消
+              {t('common:button.cancel')}
             </Button>
-            <Button 
+            <Button
               color="danger"
               variant="flat"
               onPress={handleConfirmDiscard}
             >
-              不保存
+              {t('confirmDialog.discard')}
             </Button>
-            <Button 
+            <Button
               color="primary"
               onPress={handleConfirmSave}
             >
-              保存
+              {t('common:button.save')}
             </Button>
           </ModalFooter>
         </ModalContent>

@@ -3,6 +3,7 @@ import { Button, Spinner } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlug } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
+import { useTranslation } from 'react-i18next';
 import type { RadioService } from '@tx5dr/core';
 
 interface ServerDisconnectedOverlayProps {
@@ -12,6 +13,7 @@ interface ServerDisconnectedOverlayProps {
 }
 
 export function ServerDisconnectedOverlay({ isConnected, isConnecting, radioService }: ServerDisconnectedOverlayProps) {
+  const { t } = useTranslation();
   const [isManualConnecting, setIsManualConnecting] = useState(false);
   // 控制动画：visible 决定是否渲染，shown 控制 opacity
   const [visible, setVisible] = useState(!isConnected);
@@ -48,27 +50,28 @@ export function ServerDisconnectedOverlay({ isConnected, isConnecting, radioServ
     try {
       await radioService.connect();
     } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : '未知错误';
+      const errMsg = error instanceof Error ? error.message : t('errors:code.UNKNOWN_ERROR.userMessage');
       const env = import.meta.env.DEV ? 'development' : 'production';
       const isInElectron = (() => {
         try { return typeof window !== 'undefined' && window.navigator.userAgent.includes('Electron'); } catch { return false; }
       })();
       const lines: string[] = [];
-      if (errMsg.includes('未启动') || errMsg.includes('不可达')) {
-        lines.push('原因：后端服务未启动或不可达');
+      if (errMsg.toLowerCase().includes('refused') || errMsg.toLowerCase().includes('unavailable') ||
+          errMsg.toLowerCase().includes('econnrefused') || errMsg.toLowerCase().includes('failed to fetch')) {
+        lines.push(t('common:serverError.diagnose.serviceUnavailable'));
       }
       if (env === 'development') {
-        lines.push('排查：请先启动后端服务：yarn workspace @tx5dr/server dev');
-        lines.push('查看：终端窗口中的后端日志，确认4000端口是否监听');
+        lines.push(t('common:serverError.diagnose.devCheck'));
+        lines.push(t('common:serverError.diagnose.devLog'));
       } else if (isInElectron) {
-        lines.push('排查：请重启应用；若仍失败，请在系统日志/控制台查看 Electron 主进程与后端日志');
+        lines.push(t('common:serverError.diagnose.electronCheck'));
       } else {
-        lines.push('排查：确认部署环境中的后端服务进程已运行并监听 /api');
-        lines.push('Docker：使用 docker-compose logs -f 查看容器日志');
+        lines.push(t('common:serverError.diagnose.prodCheck'));
+        lines.push(t('common:serverError.diagnose.dockerCheck'));
       }
       addToast({
-        title: '连接失败',
-        description: `无法连接到服务器：${errMsg}。\n${lines.join('\n')}`,
+        title: t('common:serverError.title'),
+        description: `${t('common:serverError.description', { errMsg })}。\n${lines.join('\n')}`,
       });
     } finally {
       setIsManualConnecting(false);
@@ -88,7 +91,7 @@ export function ServerDisconnectedOverlay({ isConnected, isConnecting, radioServ
         {connecting ? (
           <>
             <Spinner size="lg" color="primary" />
-            <p className="text-default-500 text-sm">正在连接服务器...</p>
+            <p className="text-default-500 text-sm">{t('common:serverError.connecting')}</p>
           </>
         ) : (
           <>
@@ -96,8 +99,8 @@ export function ServerDisconnectedOverlay({ isConnected, isConnecting, radioServ
               <FontAwesomeIcon icon={faPlug} className="text-default-400 text-2xl" />
             </div>
             <div>
-              <p className="text-default-700 font-medium">与服务器的连接已断开</p>
-              <p className="text-default-400 text-sm mt-1">请检查网络或后端服务状态</p>
+              <p className="text-default-700 font-medium">{t('common:serverError.disconnected')}</p>
+              <p className="text-default-400 text-sm mt-1">{t('common:serverError.checkNetwork')}</p>
             </div>
             <Button
               color="primary"
@@ -105,7 +108,7 @@ export function ServerDisconnectedOverlay({ isConnected, isConnecting, radioServ
               onPress={handleReconnect}
               className="mt-2"
             >
-              重新连接
+              {t('common:serverError.reconnect')}
             </Button>
           </>
         )}

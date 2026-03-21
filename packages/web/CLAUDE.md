@@ -208,6 +208,19 @@ Tailwind 优先 + HeroUI 组件 + 响应式 + 主题切换
 ### WebGL
 资源管理 + 错误恢复 + 性能监控 + Canvas 降级
 
+---
+
+## i18n 开发指南
+
+**禁止硬编码中文字符串，修改前端后必须运行：`node scripts/check-i18n.mjs`**
+
+- React 组件：`const { t } = useTranslation()` → `t('namespace:key')`
+- 非组件（store/utils）：`import i18n from '../i18n'` → `i18n.t('...')`
+- 模块级常量有中文：改为 `getXxx(t)` 工厂函数 + `useMemo(() => getXxx(t), [t])`
+- 动态字符串：`t('key', { name })` + 语言文件写 `"key": "...{{name}}..."`
+- 3 个 Vite 入口（main/spectrum/logbook）首行均须 `import './i18n/index'`
+- 新增翻译键：同时更新 `locales/zh/` 和 `locales/en/` 对应文件
+
 ## 开发构建
 
 ### 命令

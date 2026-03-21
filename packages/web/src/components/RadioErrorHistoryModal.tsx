@@ -1,4 +1,6 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { formatTime, formatDateTime } from '../utils/dateFormatting';
 import {
   Modal,
   ModalContent,
@@ -24,15 +26,6 @@ const severityColorMap: Record<string, 'danger' | 'warning' | 'primary' | 'defau
   info: 'primary',
 };
 
-function formatTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function formatDateTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  return date.toLocaleString('zh-CN');
-}
 
 function ErrorItemTitle({ error }: { error: RadioErrorRecord }) {
   return (
@@ -54,16 +47,17 @@ function ErrorItemTitle({ error }: { error: RadioErrorRecord }) {
 }
 
 function ErrorItemDetail({ error }: { error: RadioErrorRecord }) {
+  const { t } = useTranslation('radio');
   return (
     <div className="space-y-2 text-sm">
-      <p><span className="text-default-500">时间：</span>{formatDateTime(error.timestamp)}</p>
-      <p><span className="text-default-500">技术信息：</span>{error.message}</p>
+      <p><span className="text-default-500">{t('errorHistory.time')}：</span>{formatDateTime(error.timestamp)}</p>
+      <p><span className="text-default-500">{t('errorHistory.technical')}：</span>{error.message}</p>
       {error.code && (
-        <p><span className="text-default-500">错误代码：</span><code className="text-xs">{error.code}</code></p>
+        <p><span className="text-default-500">{t('errorHistory.code')}：</span><code className="text-xs">{error.code}</code></p>
       )}
       {error.suggestions.length > 0 && (
         <div>
-          <span className="text-default-500">建议：</span>
+          <span className="text-default-500">{t('errorHistory.suggestions')}：</span>
           <ul className="list-disc list-inside ml-2 mt-1 space-y-0.5">
             {error.suggestions.map((s, i) => <li key={i}>{s}</li>)}
           </ul>
@@ -71,7 +65,7 @@ function ErrorItemDetail({ error }: { error: RadioErrorRecord }) {
       )}
       {error.stack && (
         <details>
-          <summary className="text-default-400 cursor-pointer text-xs">堆栈信息</summary>
+          <summary className="text-default-400 cursor-pointer text-xs">{t('errorHistory.stack')}</summary>
           <pre className="text-xs bg-default-100 p-2 rounded overflow-auto max-h-32 mt-1">
             {error.stack}
           </pre>
@@ -83,6 +77,7 @@ function ErrorItemDetail({ error }: { error: RadioErrorRecord }) {
 
 export const RadioErrorHistoryModal: React.FC<RadioErrorHistoryModalProps> = ({ isOpen, onClose }) => {
   const { errors, clearErrors } = useRadioErrors();
+  const { t } = useTranslation('radio');
 
   const handleClear = () => {
     clearErrors();
@@ -92,16 +87,16 @@ export const RadioErrorHistoryModal: React.FC<RadioErrorHistoryModalProps> = ({ 
     <Modal isOpen={isOpen} onClose={onClose} size="2xl" scrollBehavior="inside">
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1">
-          电台错误历史
+          {t('errorHistory.title')}
           {errors.length > 0 && (
             <span className="text-xs text-default-400 font-normal">
-              共 {errors.length} 条记录
+              {t('errorHistory.count', { count: errors.length })}
             </span>
           )}
         </ModalHeader>
         <ModalBody>
           {errors.length === 0 ? (
-            <p className="text-default-500 text-center py-8">暂无错误记录</p>
+            <p className="text-default-500 text-center py-8">{t('errorHistory.empty')}</p>
           ) : (
             <Accordion variant="splitted" selectionMode="multiple">
               {errors.map((error) => (
@@ -119,10 +114,10 @@ export const RadioErrorHistoryModal: React.FC<RadioErrorHistoryModalProps> = ({ 
         <ModalFooter>
           {errors.length > 0 && (
             <Button color="danger" variant="flat" size="sm" onPress={handleClear}>
-              清空记录
+              {t('errorHistory.clear')}
             </Button>
           )}
-          <Button onPress={onClose} size="sm">关闭</Button>
+          <Button onPress={onClose} size="sm">{t('common:button.close')}</Button>
         </ModalFooter>
       </ModalContent>
     </Modal>

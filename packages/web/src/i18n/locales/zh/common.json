@@ -1,0 +1,182 @@
+{
+  "button": {
+    "save": "保存",
+    "cancel": "取消",
+    "close": "关闭",
+    "confirm": "确认",
+    "delete": "删除",
+    "edit": "编辑",
+    "add": "添加",
+    "create": "新建",
+    "copy": "复制",
+    "refresh": "刷新"
+  },
+  "action": {
+    "goToSettings": "前往设置",
+    "refreshStatus": "刷新状态",
+    "retry": "重试",
+    "openSettings": "打开设置",
+    "clearData": "清空数据"
+  },
+  "role": {
+    "viewer": "观察者",
+    "operator": "操作员",
+    "admin": "管理员"
+  },
+  "status": {
+    "loading": "加载中...",
+    "connected": "已连接",
+    "disconnected": "已断开",
+    "connecting": "连接中...",
+    "none": "暂无"
+  },
+  "serverError": {
+    "title": "连接失败",
+    "description": "无法连接到服务器：{{errMsg}}",
+    "connecting": "正在连接服务器...",
+    "disconnected": "与服务器的连接已断开",
+    "checkNetwork": "请检查网络或后端服务状态",
+    "reconnect": "重新连接",
+    "diagnose": {
+      "serviceUnavailable": "原因：后端服务未启动或不可达",
+      "devCheck": "排查：请先启动后端服务：yarn workspace @tx5dr/server dev",
+      "devLog": "查看：终端窗口中的后端日志，确认4000端口是否监听",
+      "electronCheck": "排查：请重启应用；若仍失败，请在系统日志/控制台查看 Electron 主进程与后端日志",
+      "prodCheck": "排查：确认部署环境中的后端服务进程已运行并监听 /api",
+      "dockerCheck": "Docker：使用 docker-compose logs -f 查看容器日志"
+    }
+  },
+  "auth": {
+    "user": "用户",
+    "role": "角色",
+    "login": "登录",
+    "logout": "登出",
+    "enterToken": "输入访问令牌",
+    "pasteToken": "粘贴令牌...",
+    "accessToken": "访问令牌"
+  },
+  "login": {
+    "subtitle": "数字电台远程控制"
+  },
+  "automation": {
+    "title": "自动化程序"
+  },
+  "theme": {
+    "toggle": "切换主题",
+    "select": "选择主题",
+    "light": "浅色模式",
+    "dark": "深色模式",
+    "system": "跟随系统",
+    "lightDesc": "使用浅色主题",
+    "darkDesc": "使用深色主题",
+    "systemDesc": "跟随系统设置",
+    "switchToLight": "切换到浅色模式",
+    "switchToDark": "切换到深色模式"
+  },
+  "colorPicker": {
+    "selectColor": "选择颜色",
+    "currentColor": "当前颜色: {{value}}"
+  },
+  "slotPacks": {
+    "noMessages": "暂无解码消息",
+    "connectFirst": "请先连接到TX5DR服务器",
+    "startEngine": "请启动解码引擎",
+    "waitingSignal": "等待信号..."
+  },
+  "framesTable": {
+    "freq": "频率",
+    "message": "信息",
+    "location": "位置"
+  },
+  "myFrames": {
+    "noRecords": "暂无相关通联记录",
+    "hint": "与我有关的消息将在这里显示"
+  },
+  "spectrum": {
+    "waiting": "等待频谱数据...",
+    "popOut": "在独立窗口中显示",
+    "rangeSettings": "频谱范围设置",
+    "autoMode": "自动模式",
+    "manualMode": "手动模式",
+    "updateInterval": "范围自动刷新频率（帧）",
+    "frames": "{{count}} 帧",
+    "minPercentile": "最小值百分位数",
+    "maxPercentile": "最大值百分位数",
+    "expansionFactor": "范围扩展因子",
+    "minDb": "最小值 (dB)",
+    "maxDb": "最大值 (dB)",
+    "currentRange": "当前范围: {{min}} ~ {{max}} dB"
+  },
+  "splitLayout": {
+    "decode": "解码",
+    "call": "呼叫",
+    "pageSwitch": "页面切换"
+  },
+  "webgl": {
+    "notSupported": "WebGL不被支持",
+    "initFailed": "WebGL初始化失败: {{message}}",
+    "unknownError": "未知错误",
+    "renderFailed": "WebGL瀑布图渲染失败"
+  },
+  "errorDialog": {
+    "time": "时间",
+    "userMessage": "用户提示",
+    "suggestions": "操作建议",
+    "technicalDetails": "技术详情",
+    "context": "上下文",
+    "techInfo": "技术信息",
+    "copied": "已复制",
+    "copyError": "复制错误信息",
+    "detailedContext": "详细上下文"
+  },
+  "system": {
+    "title": "系统设置",
+    "description": "配置系统级别的功能选项。",
+    "loadFailed": "加载配置失败",
+    "saveFailed": "保存配置失败",
+    "pskrSaveFailed": "保存 PSKReporter 配置失败",
+    "reportSoon": "即将上报",
+    "reportInMins": "{{mins}}分{{secs}}秒后",
+    "reportInSecs": "{{secs}}秒后",
+    "on": "开启",
+    "off": "关闭",
+    "recommended": "推荐",
+    "advanced": "高级",
+    "allowPublicViewing": "允许公开查看",
+    "allowPublicViewingOnDesc": "未登录用户可以以观察者身份查看界面，但无法操作",
+    "allowPublicViewingOffDesc": "未登录用户必须输入令牌登录后才能访问",
+    "decodeWhileTransmitting": "发射时允许解码",
+    "decodeWhileTransmittingOffDesc": "任何操作员发射时停止解码，避免误解码残留信号",
+    "decodeWhileTransmittingOnDesc": "发射周期继续解码，支持双周期异地收发",
+    "spectrumWhileTransmitting": "发射时允许频谱分析",
+    "spectrumWhileTransmittingOnDesc": "发射时继续显示频谱图，实时监控发射信号",
+    "spectrumWhileTransmittingOffDesc": "发射时暂停频谱分析，降低CPU占用",
+    "configValid": "配置有效",
+    "configIncomplete": "配置不完整",
+    "pendingSpots": "待上报: {{count}}",
+    "receiverInfo": "接收站信息",
+    "receiverInfoDesc": "留空时将自动使用第一个操作员的呼号和网格",
+    "pskrTitle": "PSKReporter 上报",
+    "pskrDesc": "将解码到的 FT8/FT4 信号自动上报到",
+    "pskrActiveInfo": "当前使用: {{callsign}} @ {{locator}}",
+    "gridNotSet": "未设置网格",
+    "rxCallsign": "接收电台呼号",
+    "rxCallsignPlaceholder": "如 BV2ABC",
+    "rxLocator": "接收电台网格",
+    "rxLocatorPlaceholder": "如 PL05qb",
+    "willUse": "将使用: {{val}}",
+    "optionalConfig": "可选配置",
+    "antennaInfo": "天线信息",
+    "antennaInfoPlaceholder": "如 Dipole, Yagi 3el, Vertical",
+    "reportInterval": "上报间隔",
+    "testServer": "测试服务器",
+    "testServerDesc": "仅用于调试",
+    "runningStatus": "运行状态",
+    "reporting": "正在上报...",
+    "waiting": "等待中",
+    "todayCount": "今日上报",
+    "totalCount": "总计上报",
+    "lastReport": "上次上报",
+    "nextReport": "下次上报"
+  }
+}

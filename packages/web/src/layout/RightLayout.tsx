@@ -18,15 +18,15 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faCog, faKey, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { AutomationSettingsPanel } from '../components/AutomationSettingsPanel';
-
-// 角色中文标签
-const ROLE_LABELS: Record<string, string> = {
-  viewer: '观察者',
-  operator: '操作员',
-  admin: '管理员',
-};
+import { useTranslation } from 'react-i18next';
 
 export const RightLayout: React.FC = () => {
+  const { t } = useTranslation('common');
+  const ROLE_LABELS: Record<string, string> = {
+    viewer: t('common:role.viewer'),
+    operator: t('common:role.operator'),
+    admin: t('common:role.admin'),
+  };
   const _radio = useRadioState();
   const { operators } = useOperators();
   const { state: authState, login, logout } = useAuth();
@@ -96,7 +96,7 @@ export const RightLayout: React.FC = () => {
           WebkitAppRegion: 'drag',
         } as React.CSSProperties & { WebkitAppRegion: string }}
       >
-        <div></div> {/* 左侧空白 */}
+        <div></div>
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           <div className="flex items-center gap-1">
             {/* 自动化程序（有操作员时才显示） */}
@@ -106,12 +106,12 @@ export const RightLayout: React.FC = () => {
                   <Button
                     variant="light"
                     size="sm"
-                    title="自动化程序"
+                    title={t('automation.title')}
                     className={`${isAutoMode ? 'bg-success-50 select-auto-mode' : 'bg-content2 select-manual-mode'} rounded-md px-3 h-6 text-xs font-mono text-default-600 leading-none`}
                   >
                     <div className="flex items-center gap-1">
                       <div className="w-2 h-2 bg-success-500 rounded-full flex-shrink-0"></div>
-                      <span className="truncate">自动化程序</span>
+                      <span className="truncate">{t('automation.title')}</span>
                       <FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs -mr-1" />
                     </div>
                   </Button>
@@ -136,12 +136,12 @@ export const RightLayout: React.FC = () => {
                       className="bg-content2 rounded-md px-3 h-6 text-xs text-default-500 leading-none"
                     >
                       <FontAwesomeIcon icon={faUser} className="text-default-400 text-xs" />
-                      {authState.role === 'admin' ? '管理员' : (authState.label || ROLE_LABELS[authState.role || ''] || '用户')}
+                      {authState.role === 'admin' ? t('role.admin') : (authState.label || ROLE_LABELS[authState.role || ''] || t('auth.user'))}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="p-3 gap-2">
                     <div className="text-sm font-medium">{authState.label}</div>
-                    <div className="text-xs text-default-500">角色: {ROLE_LABELS[authState.role || ''] || authState.role}</div>
+                    <div className="text-xs text-default-500">{t('auth.role')}: {ROLE_LABELS[authState.role || ''] || authState.role}</div>
                     <Button
                       size="sm"
                       variant="flat"
@@ -150,7 +150,7 @@ export const RightLayout: React.FC = () => {
                       onPress={logout}
                       className="mt-1"
                     >
-                      登出
+                      {t('auth.logout')}
                     </Button>
                   </PopoverContent>
                 </Popover>
@@ -164,15 +164,15 @@ export const RightLayout: React.FC = () => {
                   <PopoverTrigger>
                     <Button variant="light" size="sm" className="bg-content2 rounded-md px-3 h-6 text-xs text-default-500 leading-none">
                       <FontAwesomeIcon icon={faKey} className="text-default-400 text-xs" />
-                      登录
+                      {t('auth.login')}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="p-3 gap-2 w-64">
-                    <div className="text-sm font-medium">输入访问令牌</div>
+                    <div className="text-sm font-medium">{t('auth.enterToken')}</div>
                     <Input
                       size="sm"
                       type="password"
-                      placeholder="粘贴令牌..."
+                      placeholder={t('auth.pasteToken')}
                       value={loginToken}
                       onValueChange={setLoginToken}
                       onKeyDown={(e) => e.key === 'Enter' && handlePopoverLogin()}
@@ -189,7 +189,7 @@ export const RightLayout: React.FC = () => {
                       isDisabled={!loginToken.trim()}
                       fullWidth
                     >
-                      登录
+                      {t('auth.login')}
                     </Button>
                   </PopoverContent>
                 </Popover>
@@ -203,8 +203,8 @@ export const RightLayout: React.FC = () => {
               isIconOnly
               variant="light"
               size="sm"
-              title="设置"
-              aria-label="打开设置"
+              title={t('action.openSettings')}
+              aria-label={t('action.openSettings')}
             >
               <FontAwesomeIcon icon={faCog} className="text-default-400 text-sm" />
             </Button>

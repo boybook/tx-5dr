@@ -1,0 +1,29 @@
+{
+  "severity": {
+    "info": "提示",
+    "warning": "⚠️ 警告",
+    "error": "错误",
+    "critical": "⚠️ 严重错误"
+  },
+  "suggestion": {
+    "label": "建议："
+  },
+  "hint": {
+    "retryManually": "请手动重试刚才的操作",
+    "tryLater": "请稍后再试"
+  },
+  "serverMessage": {
+    "timingAlert": {
+      "title": "时序告警",
+      "description": "操作员自动决策可能赶不上此发射时隙的编码"
+    },
+    "radioConnected": {
+      "title": "电台已连接",
+      "description": "电台连接成功"
+    },
+    "qsoLogged": {
+      "title": "QSO已记录",
+      "description": ""
+    }
+  }
+}

@@ -25,6 +25,7 @@ import {
   createRefreshStatusAction,
   isRetryableError
 } from '../utils/errorToast';
+import i18n from '../i18n';
 
 // ===== 连接状态管理 =====
 export interface ConnectionState {
@@ -578,7 +579,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const handshakeOperatorIds = getHandshakeOperatorIds();
           radioService.sendHandshake(handshakeOperatorIds);
         } else {
-          console.error('❌ [RadioProvider] 认证失败:', result.error);
+          const errorCode = result.error;
+          const localizedError = errorCode
+            ? i18n.t(`auth:errors.${errorCode}`, { defaultValue: errorCode })
+            : i18n.t('auth:login.failed');
+          console.error('❌ [RadioProvider] 认证失败:', errorCode, '→', localizedError);
         }
       },
       // JWT 过期通知
@@ -586,8 +591,8 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const expData = data as { reason?: string };
         console.warn('⏰ [RadioProvider] JWT 已过期:', expData.reason);
         addToast({
-          title: '认证已过期',
-          description: '请重新登录',
+          title: i18n.t('auth:expired.title'),
+          description: i18n.t('auth:expired.description'),
           color: 'warning',
           timeout: 5000,
         });
@@ -641,7 +646,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 处理设备未找到 / 配置无效 → 提示打开配置
         else if (code === 'DEVICE_NOT_FOUND' || code === 'INVALID_CONFIG') {
           action = {
-            label: '打开设置',
+            label: i18n.t('common:action.openSettings'),
             handler: () => {
               window.dispatchEvent(new CustomEvent('openProfileModal'));
             }
@@ -651,11 +656,9 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         else if (code === 'TIMEOUT') {
           action = createRetryAction(() => {
             console.log('🔄 用户点击重试操作');
-            // 注意：这里需要记录上次失败的操作才能重试
-            // 暂时只是显示提示
             addToast({
-              title: '提示',
-              description: '请手动重试刚才的操作',
+              title: i18n.t('toast:severity.info'),
+              description: i18n.t('toast:hint.retryManually'),
               color: 'primary',
               timeout: 3000
             });
@@ -675,8 +678,8 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           action = createRetryAction(() => {
             console.log('🔄 用户点击重试（资源繁忙）');
             addToast({
-              title: '提示',
-              description: '请稍后再试',
+              title: i18n.t('toast:severity.info'),
+              description: i18n.t('toast:hint.tryLater'),
               color: 'primary',
               timeout: 2000
             });
@@ -687,8 +690,8 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           action = createRetryAction(() => {
             console.log(`🔄 用户点击重试（错误代码：${code}）`);
             addToast({
-              title: '提示',
-              description: '请手动重试刚才的操作',
+              title: i18n.t('toast:severity.info'),
+              description: i18n.t('toast:hint.retryManually'),
               color: 'primary',
               timeout: 3000
             });
@@ -697,7 +700,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         // 显示用户友好的错误 Toast
         showErrorToast({
-          userMessage: userMessage || message || '发生未知错误',
+          userMessage: userMessage || message || i18n.t('errors:code.UNKNOWN_ERROR.userMessage'),
           suggestions,
           severity,
           code,
@@ -709,7 +712,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 保持向后兼容：dispatch error action（用于日志记录）
         radioDispatch({
           type: 'error',
-          payload: new Error(message || '未知错误')
+          payload: new Error(message || i18n.t('errors:code.UNKNOWN_ERROR.userMessage'))
         });
       },
       slotPackUpdated: (data: unknown) => {
@@ -836,11 +839,18 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         console.warn('🚨 [RadioProvider] 电台发射中断开连接:', data);
       },
       textMessage: (data: unknown) => {
-        const msgData = data as { title: string; text: string; color?: string; timeout?: number | null };
+        const msgData = data as { title: string; text: string; color?: string; timeout?: number | null; key?: string; params?: Record<string, string> };
         console.log('📬 [RadioProvider] 收到文本消息:', msgData);
+        // 有 key 时优先使用翻译，兜底使用原始 title/text
+        const title = msgData.key
+          ? i18n.t(`toast:serverMessage.${msgData.key}.title`, msgData.params || {})
+          : msgData.title;
+        const description = msgData.key
+          ? i18n.t(`toast:serverMessage.${msgData.key}.description`, { ...msgData.params, defaultValue: msgData.text })
+          : msgData.text;
         addToast({
-          title: msgData.title,
-          description: msgData.text,
+          title,
+          description,
           color: (msgData.color as "default" | "foreground" | "primary" | "secondary" | "success" | "warning" | "danger" | undefined) || 'default',
           timeout: msgData.timeout === null ? undefined : (msgData.timeout || 3000)
         });

@@ -14,7 +14,8 @@
       "WebSearch",
       "Bash(otool:*)",
       "Bash(yarn tsc:*)",
-      "WebFetch(domain:pskreporter.info)"
+      "WebFetch(domain:pskreporter.info)",
+      "Bash(node scripts/check-i18n.mjs)"
     ],
     "deny": []
   }

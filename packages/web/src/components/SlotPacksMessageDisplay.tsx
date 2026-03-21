@@ -5,6 +5,7 @@ import { useConnection, useCurrentOperatorId, useRadioState, useSlotPacks } from
 import type { FrameMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { useSplitLayoutActions } from './SplitLayout';
+import { useTranslation } from 'react-i18next';
 
 interface SlotPacksMessageDisplayProps {
   className?: string;
@@ -12,6 +13,7 @@ interface SlotPacksMessageDisplayProps {
 }
 
 export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = ({ className = '', onMessageHover }) => {
+  const { t } = useTranslation('common');
   const connection = useConnection();
   const radio = useRadioState();
   const slotPacks = useSlotPacks();
@@ -123,13 +125,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     return (
       <div className="text-center py-12 cursor-default select-none">
         <div className="text-default-400 mb-2 text-4xl">📡</div>
-        <p className="text-default-500 mb-1">暂无解码消息</p>
+        <p className="text-default-500 mb-1">{t('slotPacks.noMessages')}</p>
         <p className="text-default-400 text-sm">
-          {!connection.state.isConnected 
-            ? '请先连接到TX5DR服务器' 
-            : !radio.state.isDecoding 
-              ? '请启动解码引擎' 
-              : '等待信号...'}
+          {!connection.state.isConnected
+            ? t('slotPacks.connectFirst')
+            : !radio.state.isDecoding
+              ? t('slotPacks.startEngine')
+              : t('slotPacks.waitingSignal')}
         </p>
       </div>
     );

@@ -8,6 +8,7 @@ import {
 import { WaveLogSettings, type WaveLogSettingsRef } from './WaveLogSettings';
 import { QRZSettings, type QRZSettingsRef } from './QRZSettings';
 import { LoTWSettings, type LoTWSettingsRef } from './LoTWSettings';
+import { useTranslation } from 'react-i18next';
 
 export interface LogbookSyncSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -24,9 +25,10 @@ interface LogbookSyncSettingsProps {
 
 export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyncSettingsProps>(
   ({ callsign, initialTab, onUnsavedChanges }, ref) => {
+    const { t } = useTranslation('logbook');
     const [activeTab, setActiveTab] = useState<SyncProviderTab>(initialTab || 'wavelog');
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-    
+
     // 各个同步服务的引用
     const waveLogRef = React.useRef<WaveLogSettingsRef>(null);
     const qrzRef = React.useRef<QRZSettingsRef>(null);
@@ -72,7 +74,7 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
     // 检查当前活动Tab是否有未保存的更改
     useEffect(() => {
       let currentHasChanges = false;
-      
+
       switch (activeTab) {
         case 'wavelog':
           currentHasChanges = waveLogRef.current?.hasUnsavedChanges() || false;
@@ -103,25 +105,25 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
     const getTabInfo = (tab: SyncProviderTab) => {
       switch (tab) {
         case 'wavelog':
-          return { 
-            title: 'WaveLog', 
+          return {
+            title: 'WaveLog',
             icon: '📊',
-            description: '支持双向同步的业余无线电日志服务'
+            description: t('logbookSyncSettings.wavelogTabDesc')
           };
         case 'qrz':
-          return { 
-            title: 'QRZ.com', 
+          return {
+            title: 'QRZ.com',
             icon: '🔍',
-            description: '全球业余无线电操作员数据库' 
+            description: t('logbookSyncSettings.qrzTabDesc')
           };
         case 'lotw':
-          return { 
-            title: 'LoTW', 
+          return {
+            title: 'LoTW',
             icon: '📋',
-            description: 'ARRL\'s Logbook of The World' 
+            description: 'ARRL\'s Logbook of The World'
           };
         default:
-          return { title: '未知', icon: '❓', description: '' };
+          return { title: t('logbookSyncSettings.unknownTab'), icon: '❓', description: '' };
       }
     };
 
@@ -160,9 +162,9 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
     return (
       <div className="space-y-6">
         <div>
-          <h3 className="text-lg font-semibold">通联日志同步</h3>
+          <h3 className="text-lg font-semibold">{t('logbookSyncSettings.title')}</h3>
           <p className="text-sm text-default-500 mt-1">
-            配置与各种业余无线电日志服务的同步设置
+            {t('logbookSyncSettings.description')}
           </p>
         </div>
 
@@ -194,7 +196,7 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
               >
                 {renderTabContent()}
               </Tab>
-              
+
               <Tab
                 key="qrz"
                 title={
@@ -230,24 +232,24 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
 
         {/* 服务说明 */}
         <div className="p-4 bg-default-50 rounded-lg">
-          <h5 className="text-sm font-medium text-default-700 mb-2">支持的同步服务</h5>
+          <h5 className="text-sm font-medium text-default-700 mb-2">{t('logbookSyncSettings.supportedServices')}</h5>
           <ul className="text-xs text-default-600 space-y-2">
             <li className="flex items-start gap-2">
               <span className="text-primary-500">●</span>
               <div>
-                <strong>WaveLog</strong> - 开源的业余无线电日志系统，支持双向同步、实时上传和批量下载
+                <strong>WaveLog</strong> - {t('logbookSyncSettings.wavelogDesc')}
               </div>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-primary-500">●</span>
               <div>
-                <strong>QRZ.com</strong> - 全球业余无线电数据库，用于联络人信息查询和验证
+                <strong>QRZ.com</strong> - {t('logbookSyncSettings.qrzDesc')}
               </div>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-primary-500">●</span>
               <div>
-                <strong>LoTW</strong> - ARRL官方QSL确认系统，用于奖状申请和联络确认
+                <strong>LoTW</strong> - {t('logbookSyncSettings.lotwDesc')}
               </div>
             </li>
           </ul>

@@ -1,3 +1,4 @@
+import i18n from '../i18n';
 // 显示通知设置类型定义
 export interface HighlightConfig {
   enabled: boolean;
@@ -57,19 +58,23 @@ export enum HighlightType {
   NEW_CALLSIGN = 'newCallsign',
 }
 
-// 高亮类型显示名称映射
-export const HIGHLIGHT_TYPE_LABELS: Record<HighlightType, string> = {
-  [HighlightType.NEW_GRID]: '新网格',
-  [HighlightType.NEW_PREFIX]: '新前缀',
-  [HighlightType.NEW_CALLSIGN]: '新呼号',
-};
+// 高亮类型显示名称工厂函数（支持 i18n）
+export function getHighlightTypeLabels(t: (key: string) => string): Record<HighlightType, string> {
+  return {
+    [HighlightType.NEW_GRID]: t('settings:highlight.label.grid'),
+    [HighlightType.NEW_PREFIX]: t('settings:highlight.label.dxcc'),
+    [HighlightType.NEW_CALLSIGN]: t('settings:highlight.label.myCall'),
+  };
+}
 
-// 高亮类型描述映射
-export const HIGHLIGHT_TYPE_DESCRIPTIONS: Record<HighlightType, string> = {
-  [HighlightType.NEW_GRID]: '从未通联过的新网格方块',
-  [HighlightType.NEW_PREFIX]: '从未通联过的新国家/地区前缀',
-  [HighlightType.NEW_CALLSIGN]: '从未通联过的新呼号',
-};
+// 高亮类型描述工厂函数（支持 i18n）
+export function getHighlightTypeDescriptions(t: (key: string) => string): Record<HighlightType, string> {
+  return {
+    [HighlightType.NEW_GRID]: t('settings:highlight.description.grid'),
+    [HighlightType.NEW_PREFIX]: t('settings:highlight.description.dxcc'),
+    [HighlightType.NEW_CALLSIGN]: t('settings:highlight.description.myCall'),
+  };
+}
 
 const STORAGE_KEY = 'tx5dr_display_notification_settings';
 
@@ -119,7 +124,7 @@ export function saveDisplayNotificationSettings(settings: DisplayNotificationSet
     window.dispatchEvent(new CustomEvent('displaySettingsChanged'));
   } catch (error) {
     console.error('保存显示通知设置失败:', error);
-    throw new Error('保存设置失败');
+    throw new Error(i18n.t('settings:saveFailed'));
   }
 }
 

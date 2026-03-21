@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
+import { useTranslation } from 'react-i18next';
 
 export interface AutoRangeConfig {
   updateInterval: number;      // 更新频率（帧数），默认10
@@ -57,6 +58,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   hoverFrequency,
   totalRows,
 }) => {
+  const { t } = useTranslation('common');
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const glRef = useRef<WebGLRenderingContext | null>(null);
@@ -317,7 +319,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       
       if (!gl) {
         setWebglSupported(false);
-        setError('WebGL不被支持');
+        setError(t('webgl.notSupported'));
         return false;
       }
 
@@ -406,10 +408,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return true;
     } catch (error) {
       setWebglSupported(false);
-      setError(`WebGL初始化失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      setError(t('webgl.initFailed', { message: error instanceof Error ? error.message : t('webgl.unknownError') }));
       return false;
     }
-  }, [createProgram, colorMap, minDb, maxDb]);
+  }, [createProgram, colorMap, minDb, maxDb, t]);
 
   // 优化后的纹理更新
   const updateTexture = useCallback((spectrumData: number[][]) => {
@@ -640,7 +642,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return (
       <div className={`flex items-center justify-center ${className}`} style={{ height: `${height}px` }}>
         <div className="text-red-400 text-center">
-          <div>WebGL瀑布图渲染失败</div>
+          <div>{t('webgl.renderFailed')}</div>
           {error && <div className="text-sm mt-2">{error}</div>}
         </div>
       </div>
@@ -790,7 +792,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       {autoRange && actualRange && (
         <div style={{ display: 'none' }} className="absolute top-2 right-2 text-xs text-white bg-black bg-opacity-50 px-2 py-1 rounded">
-          范围: {actualRange.min.toFixed(1)} ~ {actualRange.max.toFixed(1)} dB
+          {t('spectrum.currentRange', { min: actualRange.min.toFixed(1), max: actualRange.max.toFixed(1) })}
         </div>
       )}
     </div>

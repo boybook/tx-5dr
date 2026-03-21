@@ -7,6 +7,7 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Modal,
   ModalContent,
@@ -73,6 +74,7 @@ export function ErrorSuggestionsDialog({
   onClose,
   errorInfo
 }: ErrorSuggestionsDialogProps) {
+  const { t } = useTranslation();
   const [isCopied, setIsCopied] = useState(false);
 
   if (!errorInfo) {
@@ -94,21 +96,21 @@ export function ErrorSuggestionsDialog({
    */
   const handleCopy = async () => {
     const errorText = [
-      `错误代码: ${code || '未知'}`,
-      `严重程度: ${severity}`,
-      `时间: ${timestamp || new Date().toISOString()}`,
+      `${t('errors:copyLabel.errorCode')}: ${code || t('errors:code.UNKNOWN_ERROR.userMessage')}`,
+      `${t('errors:copyLabel.severity')}: ${severity}`,
+      `${t('common:errorDialog.time')}: ${timestamp || new Date().toISOString()}`,
       ``,
-      `用户提示: ${userMessage}`,
+      `${t('common:errorDialog.userMessage')}: ${userMessage}`,
       ``,
       ...(suggestions.length > 0
         ? [
-            `操作建议:`,
+            `${t('common:errorDialog.suggestions')}:`,
             ...suggestions.map((s, i) => `${i + 1}. ${s}`),
             ``
           ]
         : []),
-      ...(technicalDetails ? [`技术详情: ${technicalDetails}`, ``] : []),
-      ...(context ? [`上下文:\n${JSON.stringify(context, null, 2)}`] : [])
+      ...(technicalDetails ? [`${t('common:errorDialog.technicalDetails')}: ${technicalDetails}`, ``] : []),
+      ...(context ? [`${t('common:errorDialog.context')}:\n${JSON.stringify(context, null, 2)}`] : [])
     ].join('\n');
 
     try {
@@ -116,7 +118,7 @@ export function ErrorSuggestionsDialog({
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
     } catch (error) {
-      console.error('复制失败:', error);
+      console.error('Copy failed:', error);
     }
   };
 
@@ -160,15 +162,15 @@ export function ErrorSuggestionsDialog({
   const getTitleText = () => {
     switch (severity) {
       case 'critical':
-        return '严重错误';
+        return t('errors:severity.critical');
       case 'error':
-        return '发生错误';
+        return t('errors:severity.error');
       case 'warning':
-        return '警告';
+        return t('errors:severity.warning');
       case 'info':
-        return '提示';
+        return t('errors:severity.info');
       default:
-        return '发生错误';
+        return t('errors:severity.error');
     }
   };
 
@@ -201,7 +203,7 @@ export function ErrorSuggestionsDialog({
               <Divider className="my-3" />
               <div className="mb-4">
                 <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-                  🔧 操作建议
+                  🔧 {t('common:errorDialog.suggestions')}
                 </h4>
                 <ol className="list-decimal list-inside space-y-1">
                   {suggestions.map((suggestion, index) => (
@@ -218,12 +220,12 @@ export function ErrorSuggestionsDialog({
           <Divider className="my-3" />
           <div className="mb-4">
             <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-              📋 技术信息
+              📋 {t('common:errorDialog.techInfo')}
             </h4>
             <div className="space-y-1 text-sm">
               {code && (
                 <div className="flex gap-2">
-                  <span className="text-default-500">错误代码:</span>
+                  <span className="text-default-500">{t('errors:copyLabel.errorCode')}:</span>
                   <Code color="danger" size="sm">
                     {code}
                   </Code>
@@ -231,14 +233,14 @@ export function ErrorSuggestionsDialog({
               )}
               {timestamp && (
                 <div className="flex gap-2">
-                  <span className="text-default-500">时间:</span>
+                  <span className="text-default-500">{t('common:errorDialog.time')}:</span>
                   <span className="text-default-700">{timestamp}</span>
                 </div>
               )}
               {technicalDetails && (
                 <div className="mt-2">
                   <span className="text-default-500 block mb-1">
-                    技术详情:
+                    {t('common:errorDialog.technicalDetails')}:
                   </span>
                   <Code className="block w-full" size="sm">
                     {technicalDetails}
@@ -258,7 +260,7 @@ export function ErrorSuggestionsDialog({
               onPress={handleCopy}
               className="mt-3"
             >
-              {isCopied ? '已复制' : '复制错误信息'}
+              {isCopied ? t('common:errorDialog.copied') : t('common:errorDialog.copyError')}
             </Button>
           </div>
 
@@ -269,7 +271,7 @@ export function ErrorSuggestionsDialog({
               <Accordion variant="light">
                 <AccordionItem
                   key="context"
-                  title="详细上下文"
+                  title={t('common:errorDialog.detailedContext')}
                   className="text-sm"
                 >
                   <pre className="text-xs bg-default-100 p-3 rounded-lg overflow-x-auto">
@@ -283,7 +285,7 @@ export function ErrorSuggestionsDialog({
 
         <ModalFooter>
           <Button color="primary" variant="light" onPress={onClose}>
-            关闭
+            {t('common:button.close')}
           </Button>
         </ModalFooter>
       </ModalContent>
