@@ -215,40 +215,28 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       };
     
     case 'operatorStatusUpdate':
-      console.log('📻 [Store] 收到操作员状态更新:', action.payload);
       return {
         ...state,
         operators: state.operators.map(op => {
           if (op.id === action.payload.id) {
             // 深度比较，只有实际变化时才更新
-            const hasContextChanged = 
+            const hasContextChanged =
               JSON.stringify(op.context) !== JSON.stringify(action.payload.context);
             const hasSlotChanged = op.currentSlot !== action.payload.currentSlot;
             const hasTransmittingChanged = op.isTransmitting !== action.payload.isTransmitting;
-            const hasSlotsChanged = 
+            const hasSlotsChanged =
               JSON.stringify(op.slots) !== JSON.stringify(action.payload.slots);
-            const hasCycleInfoChanged = 
+            const hasCycleInfoChanged =
               JSON.stringify(op.cycleInfo) !== JSON.stringify(action.payload.cycleInfo);
-            const hasTransmitCyclesChanged = 
+            const hasTransmitCyclesChanged =
               JSON.stringify(op.transmitCycles) !== JSON.stringify(action.payload.transmitCycles);
-              
+
             // 如果没有实质性变化，返回原对象（避免重新渲染）
-            if (!hasContextChanged && !hasSlotChanged && !hasTransmittingChanged && 
+            if (!hasContextChanged && !hasSlotChanged && !hasTransmittingChanged &&
                 !hasSlotsChanged && !hasCycleInfoChanged && !hasTransmitCyclesChanged) {
-              console.log(`📻 [Store] 操作员 ${op.id} 状态无变化，跳过更新`);
               return op;
             }
-            
-            console.log(`📻 [Store] 操作员 ${op.id} 状态有变化，进行更新:`, {
-              hasContextChanged,
-              hasSlotChanged,
-              hasTransmittingChanged,
-              hasSlotsChanged,
-              hasCycleInfoChanged,
-              hasTransmitCyclesChanged,
-              newCycleInfo: action.payload.cycleInfo
-            });
-            
+
             return action.payload;
           }
           return op;
@@ -732,9 +720,24 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const operatorsData = data as { operators: OperatorStatus[] };
         radioDispatch({ type: 'operatorsList', payload: operatorsData.operators });
       },
-      operatorStatusUpdate: (data: unknown) => {
-        radioDispatch({ type: 'operatorStatusUpdate', payload: data as OperatorStatus });
-      },
+      operatorStatusUpdate: (() => {
+        // 节流：200ms 内合并多次操作员状态更新
+        let pending: Map<string, OperatorStatus> = new Map();
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        return (data: unknown) => {
+          const status = data as OperatorStatus;
+          pending.set(status.id, status);
+          if (!timer) {
+            timer = setTimeout(() => {
+              for (const s of pending.values()) {
+                radioDispatch({ type: 'operatorStatusUpdate', payload: s });
+              }
+              pending.clear();
+              timer = null;
+            }, 200);
+          }
+        };
+      })(),
       // 频率变化：清空本地 SlotPack 历史
       frequencyChanged: () => {
         console.log('📻 [RadioProvider] 频率变化，清空本地时隙历史');
@@ -746,11 +749,30 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         console.log(`📡 [RadioProvider] PTT状态变化: ${pttData.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${pttData.operatorIds?.join(', ') || ''}]`);
         radioDispatch({ type: 'pttStatusChanged', payload: pttData });
       },
-      // 电台数值表数据
-      meterData: (data: unknown) => {
-        // 数值表数据频率较高，不打印日志
-        radioDispatch({ type: 'meterData', payload: data as MeterData });
-      },
+      // 电台数值表数据（节流：100ms 内最多更新一次）
+      meterData: (() => {
+        let lastDispatchTime = 0;
+        let pendingData: MeterData | null = null;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        return (data: unknown) => {
+          const now = Date.now();
+          pendingData = data as MeterData;
+          if (now - lastDispatchTime >= 100) {
+            lastDispatchTime = now;
+            radioDispatch({ type: 'meterData', payload: pendingData });
+            pendingData = null;
+          } else if (!timer) {
+            timer = setTimeout(() => {
+              if (pendingData) {
+                lastDispatchTime = Date.now();
+                radioDispatch({ type: 'meterData', payload: pendingData });
+                pendingData = null;
+              }
+              timer = null;
+            }, 100 - (now - lastDispatchTime));
+          }
+        };
+      })(),
       handshakeComplete: async (data: unknown) => {
         const handshakeData = data as { finalEnabledOperatorIds?: string[] };
         console.log('🤝 [RadioProvider] 握手完成:', handshakeData);

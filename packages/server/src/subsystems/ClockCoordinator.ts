@@ -10,6 +10,9 @@ import type { PSKReporterService } from '../services/PSKReporterService.js';
 import { ListenerManager } from './ListenerManager.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { RadioBridge } from './RadioBridge.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('ClockCoordinator');
 
 export interface ClockCoordinatorDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -57,7 +60,7 @@ export class ClockCoordinator {
     // ─── SlotClock 事件 ────────────────────────────
 
     this.lm.listen(slotClock, 'slotStart', async (slotInfo: SlotInfo) => {
-      console.log(`🎯 [时隙开始] ID: ${slotInfo.id}, 开始时间: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
+      logger.debug(`时隙开始 ID: ${slotInfo.id}, 开始: ${new Date(slotInfo.startMs).toISOString()}, 相位: ${slotInfo.phaseMs}ms, 漂移: ${slotInfo.driftMs}ms`);
 
       // 确保PTT在新时隙开始时被停止
       await getTransmissionPipeline().forceStopPTT();
@@ -73,7 +76,7 @@ export class ClockCoordinator {
 
     this.lm.listen(slotClock, 'encodeStart', (slotInfo: SlotInfo) => {
       const mode = getCurrentMode();
-      console.log(`🔧 [编码时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 提前量: ${mode.encodeAdvance}ms`);
+      logger.debug(`编码时机 ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 提前量: ${mode.encodeAdvance}ms`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engineEmitter.emit('encodeStart' as any, slotInfo);
 
@@ -82,7 +85,7 @@ export class ClockCoordinator {
 
     this.lm.listen(slotClock, 'transmitStart', (slotInfo: SlotInfo) => {
       const mode = getCurrentMode();
-      console.log(`📡 [目标播放时机] ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 延迟: ${mode.transmitTiming}ms`);
+      logger.debug(`目标播放时机 ID: ${slotInfo.id}, 时间: ${new Date().toISOString()}, 延迟: ${mode.transmitTiming}ms`);
 
       getTransmissionPipeline().onTransmitStart(slotInfo);
 
@@ -93,7 +96,7 @@ export class ClockCoordinator {
     this.lm.listen(slotClock, 'subWindow', (slotInfo: SlotInfo, windowIdx: number) => {
       const mode = getCurrentMode();
       const totalWindows = mode.windowTiming?.length || 0;
-      console.log(`🔍 [子窗口] 时隙: ${slotInfo.id}, 窗口: ${windowIdx}/${totalWindows}, 开始: ${new Date(slotInfo.startMs).toISOString()}`);
+      logger.debug(`子窗口 时隙: ${slotInfo.id}, 窗口: ${windowIdx}/${totalWindows}, 开始: ${new Date(slotInfo.startMs).toISOString()}`);
       engineEmitter.emit('subWindow', { slotInfo, windowIdx });
     });
 
@@ -111,23 +114,7 @@ export class ClockCoordinator {
     // ─── SlotPackManager 事件 ──────────────────────
 
     this.lm.listen(slotPackManager, 'slotPackUpdated', async (slotPack: { slotId: string; startMs: number; frames: Array<{ snr: number; dt: number; freq: number; message: string }>; stats: { totalDecodes: number } }) => {
-      console.log(`📦 [ClockCoordinator] 时隙包更新事件: ${slotPack.slotId}`);
-      console.log(`   当前状态: ${slotPack.frames.length}个信号, 解码${slotPack.stats.totalDecodes}次`);
-
-      if (slotPack.frames.length > 0) {
-        const slotStartTime = new Date(slotPack.startMs);
-        for (const frame of slotPack.frames) {
-          const utcTime = slotStartTime.toISOString().slice(11, 19).replace(/:/g, '').slice(0, 6);
-          if (frame.snr === -999) {
-            console.log(` - ${utcTime}  TX  ${frame.dt.toFixed(1).padStart(5)} ${Math.round(frame.freq).toString().padStart(4)} ~  ${frame.message}`);
-          } else {
-            const snr = frame.snr >= 0 ? ` ${frame.snr}` : `${frame.snr}`;
-            const dt = frame.dt.toFixed(1).padStart(5);
-            const freq = Math.round(frame.freq).toString().padStart(4);
-            console.log(` - ${utcTime} ${snr.padStart(3)} ${dt} ${freq} ~  ${frame.message}`);
-          }
-        }
-      }
+      logger.debug(`时隙包更新: ${slotPack.slotId}, ${slotPack.frames.length}个信号, 解码${slotPack.stats.totalDecodes}次`);
 
       // PSKReporter 上报
       if (this.pskreporterService) {
@@ -174,7 +161,7 @@ export class ClockCoordinator {
       );
     });
 
-    console.log(`✅ [ClockCoordinator] 事件监听器已注册 (${this.lm.count} 个)`);
+    logger.info(`事件监听器已注册 (${this.lm.count} 个)`);
   }
 
   /**
@@ -182,6 +169,6 @@ export class ClockCoordinator {
    */
   teardown(): void {
     this.lm.disposeAll();
-    console.log(`✅ [ClockCoordinator] 事件监听器已清理`);
+    logger.info(`事件监听器已清理`);
   }
 }

@@ -6084,10 +6084,29 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@tanstack/react-virtual@npm:^3.13.23":
+  version: 3.13.23
+  resolution: "@tanstack/react-virtual@npm:3.13.23"
+  dependencies:
+    "@tanstack/virtual-core": "npm:3.13.23"
+  peerDependencies:
+    react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 10c0/a3e33463eb471067f9539858655bbefb99778f930156165afb0218fe5ffa181bc2e3dacfe3b6f655f1716d9994064f58ef009370975f801b4c83826aa33a5791
+  languageName: node
+  linkType: hard
+
 "@tanstack/virtual-core@npm:3.11.3":
   version: 3.11.3
   resolution: "@tanstack/virtual-core@npm:3.11.3"
   checksum: 10c0/94701b8d2da9167c8b4ba36bdaff22019b8ebb19224c357c1af16cbc375b39076ecc021a8c9581001607afc921d0a843019cb27168999065dda511c445a1a335
+  languageName: node
+  linkType: hard
+
+"@tanstack/virtual-core@npm:3.13.23":
+  version: 3.13.23
+  resolution: "@tanstack/virtual-core@npm:3.13.23"
+  checksum: 10c0/3487089ea4e1dcbb01836f51a1b35b709f9ba03312fe600ddb97c893c16be213e1690af735717b1d6b2e22dfec691c338bc96b5965228c195840249699d5273a
   languageName: node
   linkType: hard
 
@@ -6256,6 +6275,7 @@ __metadata:
     "@heroui/react": "npm:^2.7.8"
     "@heroui/theme": "npm:^2.4.15"
     "@heroui/toast": "npm:^2.0.12"
+    "@tanstack/react-virtual": "npm:^3.13.23"
     "@tx5dr/contracts": "workspace:*"
     "@tx5dr/core": "workspace:*"
     "@tx5dr/shared-config": "workspace:*"

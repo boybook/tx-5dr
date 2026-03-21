@@ -23,6 +23,9 @@ import { LogManager } from '../log/LogManager.js';
 import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
 import { SyncServiceRegistry } from '../services/SyncServiceRegistry.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('RadioOperatorManager');
 
 export interface RadioOperatorManagerOptions {
   eventEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -77,7 +80,7 @@ export class RadioOperatorManager {
     // 监听记录QSO事件
     const handleRecordQSO = async (data: { operatorId: string; qsoRecord: QSORecord }) => {
       try {
-        console.log(`📝 [操作员管理器] 记录QSO: ${data.qsoRecord.callsign} (操作员: ${data.operatorId})`);
+        logger.info(`记录QSO: ${data.qsoRecord.callsign} (操作员: ${data.operatorId})`);
         
         // 获取操作员对应的日志本
         const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
@@ -129,7 +132,7 @@ export class RadioOperatorManager {
           frequency: normalizedFreq
         };
 
-        console.log(`📝 [操作员管理器] 记录QSO到日志本 ${logBook.name}: ${qsoToSave.callsign} @ ${new Date(qsoToSave.startTime).toISOString()} (${qsoToSave.frequency}Hz)`);
+        logger.info(`记录QSO到日志本 ${logBook.name}: ${qsoToSave.callsign} @ ${new Date(qsoToSave.startTime).toISOString()} (${qsoToSave.frequency}Hz)`);
         await logBook.provider.addQSO(qsoToSave, data.operatorId);
 
         // QSO记录成功后，发射事件通知上层系统
@@ -138,7 +141,7 @@ export class RadioOperatorManager {
           logBookId: logBook.id,
           qsoRecord: qsoToSave
         });
-        console.log(`📡 [操作员管理器] 已发射 qsoRecordAdded 事件: ${data.qsoRecord.callsign}`);
+        logger.debug(`已发射 qsoRecordAdded 事件: ${data.qsoRecord.callsign}`);
 
         // 自动上传到同步服务（WaveLog/QRZ）- 使用修正后的频率数据
         const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
@@ -154,7 +157,7 @@ export class RadioOperatorManager {
             statistics,
             operatorId: data.operatorId,
           });
-          console.log(`📡 [操作员管理器] 已发射 logbookUpdated 事件: ${logBook.name}`);
+          logger.debug(`已发射 logbookUpdated 事件: ${logBook.name}`);
         } catch (statsError) {
           console.warn(`⚠️ [操作员管理器] 获取日志本统计信息失败:`, statsError);
         }
@@ -224,7 +227,7 @@ export class RadioOperatorManager {
 
     // 监听操作员发射周期变更事件
     const handleOperatorTransmitCyclesChanged = (data: { operatorId: string; transmitCycles: number[] }) => {
-      console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 发射周期变更: [${data.transmitCycles.join(', ')}]`);
+      logger.debug(`操作员 ${data.operatorId} 发射周期变更: [${data.transmitCycles.join(', ')}]`);
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -235,7 +238,7 @@ export class RadioOperatorManager {
 
     // 监听操作员切换发射槽位事件
     const handleOperatorSlotChanged = (data: { operatorId: string; slot: string }) => {
-      console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 切换发射槽位: ${data.slot}`);
+      logger.debug(`操作员 ${data.operatorId} 切换发射槽位: ${data.slot}`);
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -246,13 +249,13 @@ export class RadioOperatorManager {
 
     // 监听操作员发射内容变更事件
     const handleOperatorSlotContentChanged = (data: { operatorId: string; slot: string; content: string }) => {
-      console.log(`📻 [操作员管理器] 检测到操作员 ${data.operatorId} 编辑发射内容: 槽位=${data.slot}`);
+      logger.debug(`操作员 ${data.operatorId} 编辑发射内容: 槽位=${data.slot}`);
       // 立即检查并触发发射（如果当前正在该槽位发射）
       const operator = this.operators.get(data.operatorId);
       if (operator) {
         const currentSlot = operator.transmissionStrategy?.userCommand?.({ command: 'get_state' } as any);
         if (currentSlot === data.slot) {
-          console.log(`📻 [操作员管理器] 当前正在槽位 ${data.slot} 发射，立即更新发射内容`);
+          logger.debug(`当前正在槽位 ${data.slot} 发射，立即更新发射内容`);
           this.checkAndTriggerTransmission(data.operatorId);
         }
       }
@@ -270,7 +273,7 @@ export class RadioOperatorManager {
    * 初始化操作员管理器
    */
   async initialize(): Promise<void> {
-    console.log('📻 [操作员管理器] 正在初始化...');
+    logger.info('正在初始化...');
     
     // 初始化日志管理器
     await this.logManager.initialize();
@@ -278,7 +281,7 @@ export class RadioOperatorManager {
     // 从配置文件初始化操作员（包括创建对应的日志本）
     await this.initializeOperatorsFromConfig();
     
-    console.log('✅ [操作员管理器] 初始化完成');
+    logger.info('初始化完成');
   }
 
   /**
@@ -289,7 +292,7 @@ export class RadioOperatorManager {
     const operatorsConfig = configManager.getOperatorsConfig();
 
     if (operatorsConfig.length === 0) {
-      console.log('📻 [操作员管理器] 没有配置的操作员，等待用户创建');
+      logger.info('没有配置的操作员，等待用户创建');
       return;
     }
 
@@ -297,7 +300,7 @@ export class RadioOperatorManager {
       try {
         const operator = await this.addOperator(config);
         /* operator.start(); */
-        console.log(`📻 [操作员管理器] 操作员 ${config.id} 已创建`);
+        logger.info(`操作员 ${config.id} 已创建`);
       } catch (error) {
         console.error(`❌ [操作员管理器] 创建操作员 ${config.id} 失败:`, error);
       }
@@ -348,7 +351,7 @@ export class RadioOperatorManager {
     // 立即为该呼号创建日志本
     try {
       await this.logManager.getOrCreateLogBookByCallsign(config.myCallsign);
-      console.log(`📻 [操作员管理器] 已为操作员 ${config.id} (呼号: ${config.myCallsign}) 创建日志本`);
+      logger.info(`已为操作员 ${config.id} (呼号: ${config.myCallsign}) 创建日志本`);
     } catch (error) {
       console.error(`📻 [操作员管理器] 为操作员 ${config.id} (呼号: ${config.myCallsign}) 创建日志本失败:`, error);
     }
@@ -360,18 +363,18 @@ export class RadioOperatorManager {
     
     // 监听操作员的slots更新事件
     operator.addSlotsUpdateListener((data: any) => {
-      console.log(`📻 [操作员管理器] 操作员 ${data.operatorId} 的slots已更新`);
+      logger.debug(`操作员 ${data.operatorId} 的slots已更新`);
       this.emitOperatorStatusUpdate(data.operatorId);
     });
 
     // 监听操作员的状态变化事件
     operator.addStateChangeListener((data: any) => {
-      console.log(`📻 [操作员管理器] 操作员 ${data.operatorId} 的状态已变化为: ${data.state}`);
+      logger.debug(`操作员 ${data.operatorId} 的状态已变化为: ${data.state}`);
       this.emitOperatorStatusUpdate(data.operatorId);
     });
 
     this.operators.set(config.id, operator);
-    console.log(`📻 [操作员管理器] 添加操作员: ${config.id}`);
+    logger.info(`添加操作员: ${config.id}`);
     return operator;
   }
 
@@ -388,7 +391,7 @@ export class RadioOperatorManager {
     this.logManager.disconnectOperatorFromLogBook(operatorId);
     
     this.operators.delete(operatorId);
-    console.log(`📻 [操作员管理器] 删除操作员: ${operatorId}`);
+    logger.info(`删除操作员: ${operatorId}`);
   }
 
   /**
@@ -401,7 +404,7 @@ export class RadioOperatorManager {
     }
 
     await this.logManager.connectOperatorToLogBook(operatorId, logBookId);
-    console.log(`📻 [操作员管理器] 操作员 ${operatorId} 已连接到日志本 ${logBookId}`);
+    logger.info(`操作员 ${operatorId} 已连接到日志本 ${logBookId}`);
   }
 
   /**
@@ -414,7 +417,7 @@ export class RadioOperatorManager {
     }
 
     this.logManager.disconnectOperatorFromLogBook(operatorId);
-    console.log(`📻 [操作员管理器] 操作员 ${operatorId} 已断开日志本连接`);
+    logger.info(`操作员 ${operatorId} 已断开日志本连接`);
   }
 
   /**
@@ -618,10 +621,10 @@ export class RadioOperatorManager {
     if (Object.keys(updates).length > 0) {
       const configManager = ConfigManager.getInstance();
       await configManager.updateOperatorConfig(operatorId, updates);
-      console.log(`💾 [操作员管理器] 已保存操作员 ${operatorId} 配置到文件:`, updates);
+      logger.debug(`已保存操作员 ${operatorId} 配置到文件:`, updates);
     }
 
-    console.log(`📻 [操作员管理器] 更新操作员 ${operatorId} 上下文:`, context);
+    logger.debug(`更新操作员 ${operatorId} 上下文:`, context);
     this.emitOperatorStatusUpdate(operatorId);
   }
 
@@ -639,7 +642,7 @@ export class RadioOperatorManager {
       slot: slot
     } as any);
     
-    console.log(`📻 [操作员管理器] 设置操作员 ${operatorId} 时隙: ${slot}`);
+    logger.debug(`设置操作员 ${operatorId} 时隙: ${slot}`);
     this.emitOperatorStatusUpdate(operatorId);
   }
 
@@ -653,7 +656,7 @@ export class RadioOperatorManager {
     }
     
     operator.start();
-    console.log(`📻 [操作员管理器] 启动操作员 ${operatorId} 发射`);
+    logger.info(`启动操作员 ${operatorId} 发射`);
     
     // 立即检查并触发发射（如果在发射周期内）
     this.checkAndTriggerTransmission(operatorId);
@@ -669,16 +672,16 @@ export class RadioOperatorManager {
    */
   processPendingTransmissions(slotInfo: any): void {
     if (!this.isRunning) {
-      console.log('⚠️ [RadioOperatorManager] 操作员管理器未运行，跳过处理发射队列');
+      logger.debug('操作员管理器未运行，跳过处理发射队列');
       return;
     }
 
     if (this.pendingTransmissions.length === 0) {
-      console.log('📡 [RadioOperatorManager] 发射队列为空，无待发射请求');
+      logger.debug('发射队列为空，无待发射请求');
       return;
     }
 
-    console.log(`📡 [RadioOperatorManager] 处理发射队列: ${this.pendingTransmissions.length} 个待发射请求`);
+    logger.debug(`处理发射队列: ${this.pendingTransmissions.length} 个待发射请求`);
 
     const currentMode = this.getCurrentMode();
     const slotStartMs = slotInfo.startMs; // 使用 slotInfo 中的准确时间戳
@@ -744,7 +747,7 @@ export class RadioOperatorManager {
         requestId
       });
 
-      console.log(`📡 [RadioOperatorManager] 已处理操作员 ${operatorId} 的发射请求: "${transmission}", requestId=${requestId}`);
+      logger.debug(`已处理操作员 ${operatorId} 的发射请求: "${transmission}", requestId=${requestId}`);
     }
   }
 
@@ -773,7 +776,7 @@ export class RadioOperatorManager {
     );
     
     if (!isTransmitCycle) {
-      console.log(`📻 [操作员管理器] 操作员 ${operatorId} 不在发射周期内`);
+      logger.debug(`操作员 ${operatorId} 不在发射周期内`);
       // 即使不在发射周期内，也需要更新状态（cycleInfo会显示isTransmitCycle=false）
       this.emitOperatorStatusUpdate(operatorId);
       return;
@@ -782,13 +785,13 @@ export class RadioOperatorManager {
     // 生成发射内容
     const transmission = operator.transmissionStrategy?.handleTransmitSlot();
     if (!transmission) {
-      console.log(`📻 [操作员管理器] 操作员 ${operatorId} 没有发射内容`);
+      logger.debug(`操作员 ${operatorId} 没有发射内容`);
       // 即使没有发射内容，也需要更新状态
       this.emitOperatorStatusUpdate(operatorId);
       return;
     }
     
-    console.log(`📻 [操作员管理器] 在时隙中间触发发射: 操作员=${operatorId}, 已过时间=${timeSinceSlotStartMs}ms`);
+    logger.debug(`在时隙中间触发发射: 操作员=${operatorId}, 已过时间=${timeSinceSlotStartMs}ms`);
 
     // 将发射请求加入队列（仅入队，交由统一的队列消费层处理）
     const request: TransmitRequest = {
@@ -818,7 +821,7 @@ export class RadioOperatorManager {
    */
   handleTransmissions(midSlot: boolean = false): void {
     if (!this.isRunning) {
-      console.log('⚠️ [RadioOperatorManager] 操作员管理器未运行，跳过处理发射请求');
+      logger.debug('操作员管理器未运行，跳过处理发射请求');
       return;
     }
 
@@ -828,7 +831,7 @@ export class RadioOperatorManager {
     const currentSlotStartMs = Math.floor(now / currentMode.slotMs) * currentMode.slotMs;
     const currentTimeSinceSlotStartMs = now - currentSlotStartMs;
 
-    console.log(`📡 [RadioOperatorManager] 处理发射请求:`, {
+    logger.debug(`处理发射请求:`, {
       midSlot,
       currentSlotStartMs: new Date(currentSlotStartMs).toISOString(),
       timeSinceSlotStart: currentTimeSinceSlotStartMs
@@ -849,7 +852,7 @@ export class RadioOperatorManager {
       );
 
       if (!isTransmitCycle) {
-        console.log(`📻 [RadioOperatorManager] 操作员 ${operatorId} 不在发射周期内`);
+        logger.debug(`操作员 ${operatorId} 不在发射周期内`);
         return;
       }
 
@@ -891,7 +894,7 @@ export class RadioOperatorManager {
         requestId
       });
 
-      console.log(`📻 [操作员管理器] 中途触发发射: ${operatorId}, requestId=${requestId}`);
+      logger.debug(`中途触发发射: ${operatorId}, requestId=${requestId}`);
     });
   }
 
@@ -905,7 +908,7 @@ export class RadioOperatorManager {
     }
     
     operator.stop();
-    console.log(`📻 [操作员管理器] 停止操作员 ${operatorId} 发射`);
+    logger.info(`停止操作员 ${operatorId} 发射`);
     this.emitOperatorStatusUpdate(operatorId);
   }
 
@@ -920,13 +923,13 @@ export class RadioOperatorManager {
       if (operator.isTransmitting) {
         operator.stop();
         stoppedCount++;
-        console.log(`📻 [操作员管理器] 停止操作员 ${operatorId} 发射（电台断开）`);
+        logger.info(`停止操作员 ${operatorId} 发射（电台断开）`);
         this.emitOperatorStatusUpdate(operatorId);
       }
     });
     
     if (stoppedCount > 0) {
-      console.log(`📻 [操作员管理器] 已停止 ${stoppedCount} 个操作员发射（电台断开连接）`);
+      logger.info(`已停止 ${stoppedCount} 个操作员发射（电台断开连接）`);
     }
   }
 
@@ -973,19 +976,19 @@ export class RadioOperatorManager {
    * 从配置文件重新加载所有操作员
    */
   async reloadOperatorsFromConfig(): Promise<void> {
-    console.log('🔄 [操作员管理器] 从配置文件重新加载操作员');
+    logger.info('从配置文件重新加载操作员');
     
     // 停止并移除所有现有操作员
     for (const [id, operator] of this.operators.entries()) {
       operator.stop();
       this.operators.delete(id);
-      console.log(`🛑 [操作员管理器] 移除操作员: ${id}`);
+      logger.info(`移除操作员: ${id}`);
     }
     
     // 重新从配置文件加载操作员
     this.initializeOperatorsFromConfig();
     
-    console.log('✅ [操作员管理器] 操作员重新加载完成');
+    logger.info('操作员重新加载完成');
   }
 
   /**
@@ -998,7 +1001,7 @@ export class RadioOperatorManager {
       operator.start();
     } */
     
-    console.log(`📻 [操作员管理器] 同步添加操作员: ${config.id}`);
+    logger.info(`同步添加操作员: ${config.id}`);
     this.broadcastOperatorListUpdate();
     
     return operator;
@@ -1009,7 +1012,7 @@ export class RadioOperatorManager {
    */
   async syncRemoveOperator(id: string): Promise<void> {
     this.removeOperator(id);
-    console.log(`📻 [操作员管理器] 同步删除操作员: ${id}`);
+    logger.info(`同步删除操作员: ${id}`);
     this.broadcastOperatorListUpdate();
   }
 
@@ -1025,7 +1028,7 @@ export class RadioOperatorManager {
     const operatorConfig = this.convertToOperatorConfig(config);
     Object.assign(operator.config, operatorConfig);
     
-    console.log(`📻 [操作员管理器] 同步更新操作员配置: ${config.id}`);
+    logger.info(`同步更新操作员配置: ${config.id}`);
     this.broadcastOperatorListUpdate();
   }
 
@@ -1034,7 +1037,7 @@ export class RadioOperatorManager {
    */
   start(): void {
     this.isRunning = true;
-    console.log('📻 [操作员管理器] 启动');
+    logger.info('启动');
   }
 
   /**
@@ -1045,7 +1048,7 @@ export class RadioOperatorManager {
       operator.stop();
     }
     this.isRunning = false;
-    console.log('📻 [操作员管理器] 停止');
+    logger.info('停止');
   }
 
   /**
@@ -1055,7 +1058,7 @@ export class RadioOperatorManager {
     this.stop();
 
     // 移除所有事件监听器 (修复内存泄漏)
-    console.log(`📻 [操作员管理器] 移除 ${this.eventListeners.size} 个事件监听器`);
+    logger.info(`移除 ${this.eventListeners.size} 个事件监听器`);
     for (const [eventName, handler] of this.eventListeners.entries()) {
       this.eventEmitter.off(eventName as any, handler);
     }
@@ -1070,7 +1073,7 @@ export class RadioOperatorManager {
     // 取消注册内存泄漏检测
     MemoryLeakDetector.getInstance().unregister('RadioOperatorManager');
 
-    console.log('📻 [操作员管理器] 清理完成');
+    logger.info('清理完成');
   }
 
   /**
@@ -1110,7 +1113,7 @@ export class RadioOperatorManager {
    */
   private broadcastOperatorListUpdate(): void {
     const operators = this.getOperatorsStatus();
-    console.log(`📻 [操作员管理器] 广播操作员列表更新，包含 ${operators.length} 个操作员`);
+    logger.debug(`广播操作员列表更新，包含 ${operators.length} 个操作员`);
     this.eventEmitter.emit('operatorsList', { operators });
   }
 
@@ -1154,7 +1157,7 @@ export class RadioOperatorManager {
   handleOperatorCommand(operatorId: string, command: any): void {
     if (command.command === 'set_transmit_cycles') {
       // 操作员的发射周期已更改，立即检查是否需要发射
-      console.log(`📻 [操作员管理器] 操作员 ${operatorId} 的发射周期已更改`);
+      logger.debug(`操作员 ${operatorId} 的发射周期已更改`);
       this.checkAndTriggerTransmission(operatorId);
     }
   }
@@ -1200,12 +1203,12 @@ export class RadioOperatorManager {
         if (currentState) {
           // TX6状态下已设置目标 → 正在转换中 → 视为冲突
           if (currentState === 'TX6' && currentTarget) {
-            console.log(`🚫 [操作员管理器] 检测到冲突: 操作者 ${operatorId} (${operator.config.myCallsign}) 正在转换到 ${targetCallsign} (状态: ${currentState})`);
+            logger.debug(`检测到冲突: 操作者 ${operatorId} (${operator.config.myCallsign}) 正在转换到 ${targetCallsign} (状态: ${currentState})`);
             return true;
           }
           // 非TX6状态（活跃QSO）→ 视为冲突
           if (currentState !== 'TX6') {
-            console.log(`🚫 [操作员管理器] 检测到冲突: 操作者 ${operatorId} (${operator.config.myCallsign}) 正在与 ${targetCallsign} 通联 (状态: ${currentState})`);
+            logger.debug(`检测到冲突: 操作者 ${operatorId} (${operator.config.myCallsign}) 正在与 ${targetCallsign} 通联 (状态: ${currentState})`);
             return true;
           }
         }
@@ -1231,10 +1234,10 @@ export class RadioOperatorManager {
     const waveLogService = registry.getWaveLogService(callsign);
     if (waveLogService && syncConfig?.wavelog?.autoUploadQSO) {
       try {
-        console.log(`📊 [WaveLog] 开始自动上传 QSO: ${qsoRecord.callsign} (呼号: ${callsign})`);
+        logger.info(`[WaveLog] 开始自动上传 QSO: ${qsoRecord.callsign} (呼号: ${callsign})`);
         const result = await waveLogService.uploadQSO(qsoRecord, false);
         if (result.success) {
-          console.log(`✅ [WaveLog] QSO 上传成功: ${qsoRecord.callsign}`);
+          logger.info(`[WaveLog] QSO 上传成功: ${qsoRecord.callsign}`);
           this.eventEmitter.emit('waveLogUploadSuccess' as any, { operatorId, qsoRecord, message: result.message });
         } else {
           console.warn(`⚠️ [WaveLog] QSO 上传失败: ${qsoRecord.callsign} - ${result.message}`);
@@ -1252,10 +1255,10 @@ export class RadioOperatorManager {
     const qrzService = registry.getQRZService(callsign);
     if (qrzService && syncConfig?.qrz?.autoUploadQSO) {
       try {
-        console.log(`📊 [QRZ] 开始自动上传 QSO: ${qsoRecord.callsign} (呼号: ${callsign})`);
+        logger.info(`[QRZ] 开始自动上传 QSO: ${qsoRecord.callsign} (呼号: ${callsign})`);
         const result = await qrzService.uploadQSO(qsoRecord);
         if (result.success) {
-          console.log(`✅ [QRZ] QSO 上传成功: ${qsoRecord.callsign}`);
+          logger.info(`[QRZ] QSO 上传成功: ${qsoRecord.callsign}`);
         } else {
           console.warn(`⚠️ [QRZ] QSO 上传失败: ${qsoRecord.callsign} - ${result.message}`);
         }
