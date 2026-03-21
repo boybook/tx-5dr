@@ -1,17 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTrashCan, faDesktop } from '@fortawesome/free-solid-svg-icons';
+import { faTrashCan } from '@fortawesome/free-solid-svg-icons';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/SpectrumDisplay';
 import { SlotPacksMessageDisplay } from '../components/SlotPacksMessageDisplay';
 import { RadioMetersDisplay } from '../components/RadioMetersDisplay';
+import { RemoteAccessPopover } from '../components/RemoteAccessPopover';
 import { useSlotPacks, useRadioState, useConnection } from '../store/radioStore';
+import { useHasMinRole } from '../store/authStore';
+import { UserRole } from '@tx5dr/contracts';
 import { isElectron } from '../utils/config';
 import { useTranslation } from 'react-i18next';
 
 export const LeftLayout: React.FC = () => {
   const { t } = useTranslation('common');
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const connection = useConnection();
@@ -126,14 +130,9 @@ export const LeftLayout: React.FC = () => {
           >
             <FontAwesomeIcon icon={faTrashCan} className="text-default-400" />
           </Button>
-          {/* 客户端数量显示（只在大于1个时显示） */}
-          {clientCount > 1 && (
-            <div className="bg-content1 dark:bg-content2 rounded-md px-3 py-1 flex items-center gap-2">
-              <FontAwesomeIcon icon={faDesktop} className="text-default-400 text-xs" />
-              <div className="text-xs font-mono text-default-500">
-                {clientCount}
-              </div>
-            </div>
+          {/* 网络访问入口（Admin 可点击查看远程访问信息） */}
+          {isAdmin && (
+            <RemoteAccessPopover clientCount={clientCount} />
           )}
           {/* UTC时间显示 */}
           <div className="bg-content1 dark:bg-content2 rounded-md px-3 py-1">

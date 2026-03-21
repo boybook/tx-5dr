@@ -178,5 +178,15 @@
     "totalCount": "Total",
     "lastReport": "Last Report",
     "nextReport": "Next Report"
+  },
+  "remoteAccess": {
+    "title": "Network Access",
+    "description": "Access from other devices via browser",
+    "scanToAccess": "Scan to access",
+    "copyLink": "Copy link",
+    "linkCopied": "Copied",
+    "clientCount": "{{count}} client(s) connected",
+    "networkAddress": "Network access URL:",
+    "sameNetworkHint": "Ensure devices are on the same LAN"
   }
 }

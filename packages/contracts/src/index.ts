@@ -115,3 +115,6 @@ export * from './schema/callsign-sync.schema.js';
 
 // Auth Schema
 export * from './schema/auth.schema.js';
+
+// System Schema
+export * from './schema/system.schema.js';

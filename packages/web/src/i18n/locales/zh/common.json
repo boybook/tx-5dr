@@ -178,5 +178,15 @@
     "totalCount": "总计上报",
     "lastReport": "上次上报",
     "nextReport": "下次上报"
+  },
+  "remoteAccess": {
+    "title": "网络访问",
+    "description": "其他设备可通过浏览器访问",
+    "scanToAccess": "扫码访问",
+    "copyLink": "复制链接",
+    "linkCopied": "已复制",
+    "clientCount": "当前 {{count}} 个客户端已连接",
+    "networkAddress": "网络访问地址:",
+    "sameNetworkHint": "确保设备在同一局域网下"
   }
 }

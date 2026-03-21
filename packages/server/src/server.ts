@@ -20,6 +20,7 @@ import { operatorRoutes } from './routes/operators.js';
 import { radioRoutes } from './routes/radio.js';
 import { settingsRoutes } from './routes/settings.js';
 import { profileRoutes } from './routes/profiles.js';
+import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
@@ -245,8 +246,9 @@ export async function createServer() {
     await scope.register(storageRoutes, { prefix: '/api/storage' });
     const { pskreporterRoutes } = await import('./routes/pskreporter.js');
     await scope.register(pskreporterRoutes, { prefix: '/api' });
+    await scope.register(systemRoutes, { prefix: '/api/system' });
   });
-  fastify.log.info('Admin 路由注册完成（audio, profiles, settings, storage, pskreporter）');
+  fastify.log.info('Admin 路由注册完成（audio, profiles, settings, storage, pskreporter, system）');
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包
   await fastify.register(async (scope) => {

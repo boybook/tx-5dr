@@ -6271,6 +6271,7 @@ __metadata:
     i18next: "npm:^25.9.0"
     i18next-browser-languagedetector: "npm:^8.2.1"
     postcss: "npm:^8.5.3"
+    qrcode.react: "npm:^4.2.0"
     react: "npm:^18.2.0"
     react-color-palette: "npm:^7.3.0"
     react-dom: "npm:^18.2.0"
@@ -15422,6 +15423,15 @@ __metadata:
   dependencies:
     escape-goat: "npm:^2.0.0"
   checksum: 10c0/d2346324780ebae4be847cad052b830e004d816851dd4750fc73faa6cd360f443e358f6b1c83641fd4c904c6055dcb545807f55259a20a52ad86d9477746c724
+  languageName: node
+  linkType: hard
+
+"qrcode.react@npm:^4.2.0":
+  version: 4.2.0
+  resolution: "qrcode.react@npm:4.2.0"
+  peerDependencies:
+    react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 10c0/68c691d130e5fda2f57cee505ed7aea840e7d02033100687b764601f9595e1116e34c13876628a93e1a5c2b85e4efc27d30b2fda72e2050c02f3e1c4e998d248
   languageName: node
   linkType: hard
 

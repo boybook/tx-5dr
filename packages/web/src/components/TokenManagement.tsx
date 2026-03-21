@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { api } from '@tx5dr/core';
+import type { NetworkInfo } from '@tx5dr/contracts';
 import {
   Button,
   Card,
@@ -149,6 +151,8 @@ export function TokenManagement() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createdToken, setCreatedToken] = useState<CreateTokenResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
+  const [urlCopied, setUrlCopied] = useState(false);
   const [showRevoked, setShowRevoked] = useState(false);
 
   // 创建表单状态
@@ -175,6 +179,12 @@ export function TokenManagement() {
   useEffect(() => {
     loadTokens();
   }, [loadTokens]);
+
+  // 创建 token 成功后加载网络信息
+  useEffect(() => {
+    if (!createdToken) return;
+    api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
+  }, [createdToken]);
 
   // 创建 Token
   const handleCreate = useCallback(async () => {
@@ -423,6 +433,41 @@ export function TokenManagement() {
                 <p>{t('auth:token.created.operatorsInfo', { ids: createdToken.operatorIds.join(', ') })}</p>
               )}
             </div>
+            {/* 远程访问地址提示 */}
+            {networkInfo && networkInfo.addresses.length > 0 && (
+              <div className="border-t border-divider pt-3 mt-1">
+                <p className="text-xs text-default-400 font-medium mb-1.5">
+                  {t('auth:token.created.howToUse')}
+                </p>
+                <p className="text-xs text-default-400 mb-2">
+                  {t('auth:token.created.howToUseDesc')}
+                </p>
+                <div className="flex items-center gap-1.5 bg-default-100 rounded-md px-2 py-1.5">
+                  <code className="flex-1 text-xs text-default-600 truncate">
+                    {networkInfo.addresses[0].url}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="light"
+                    isIconOnly
+                    className="min-w-6 w-6 h-6"
+                    onPress={async () => {
+                      try {
+                        await navigator.clipboard.writeText(networkInfo.addresses[0].url);
+                        setUrlCopied(true);
+                        setTimeout(() => setUrlCopied(false), 2000);
+                      } catch { /* ignore */ }
+                    }}
+                    title={t('common:remoteAccess.copyLink')}
+                  >
+                    <FontAwesomeIcon
+                      icon={urlCopied ? faCheck : faCopy}
+                      className={urlCopied ? 'text-success text-xs' : 'text-default-400 text-xs'}
+                    />
+                  </Button>
+                </div>
+              </div>
+            )}
           </ModalBody>
           <ModalFooter>
             <Button color="primary" onPress={() => setCreatedToken(null)}>{t('auth:token.created.done')}</Button>

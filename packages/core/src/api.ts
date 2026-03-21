@@ -62,6 +62,7 @@ import type {
   CreateTokenResponse,
   UpdateTokenRequest,
   UpdateAuthConfigRequest,
+  NetworkInfo,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -1461,6 +1462,12 @@ export const api = {
       { method: 'POST' },
       apiBase
     );
+  },
+
+  // ========== 系统信息 ==========
+
+  async getNetworkInfo(apiBase?: string): Promise<NetworkInfo> {
+    return apiRequest<NetworkInfo>('/system/network-info', undefined, apiBase);
   },
 }
 
