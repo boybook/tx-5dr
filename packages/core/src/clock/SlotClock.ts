@@ -2,6 +2,9 @@ import { EventEmitter } from 'eventemitter3';
 import type { ClockSource } from './ClockSource.js';
 import type { ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
 import { CycleUtils } from '../utils/cycleUtils.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('SlotClock');
 
 export interface SlotClockEvents {
   'slotStart': (slotInfo: SlotInfo) => void;
@@ -79,7 +82,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
    */
   setCompensation(compensationMs: number): void {
     this.compensationMs = compensationMs;
-    console.log(`⚙️ [SlotClock] 发射补偿已更新为 ${compensationMs}ms`);
+    logger.info(`Transmit compensation updated to ${compensationMs}ms`);
   }
 
   /**
@@ -128,7 +131,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     const phaseMs = now - slotStartTime;
     
     if (phaseMs > 100) {
-      console.warn(`⚠️ [SlotClock] 时隙触发漂移 ${phaseMs.toFixed(1)}ms（可能受 CPU 节流影响），已自动修正子事件时序`);
+      logger.warn(`Slot trigger drift ${phaseMs.toFixed(1)}ms (possible CPU throttle), sub-event timing corrected automatically`);
     }
 
     const slotInfo: SlotInfo = {
@@ -156,11 +159,11 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     const adjustedEncodeDelay = Math.max(0, encodeDelay - this.compensationMs - phaseMs);
 
     if (this.compensationMs !== 0) {
-      console.log(`⚙️ [SlotClock] 应用发射补偿: ${this.compensationMs}ms, 调整后编码延迟=${adjustedEncodeDelay}ms, 发射延迟=${adjustedTransmitDelay}ms`);
+      logger.debug(`Applying transmit compensation: ${this.compensationMs}ms, adjusted encode delay=${adjustedEncodeDelay}ms, transmit delay=${adjustedTransmitDelay}ms`);
 
       // 警告：补偿值超出编码缓冲时间
       if (adjustedEncodeDelay === 0 && encodeDelay > 0) {
-        console.warn(`⚠️ [SlotClock] 补偿值 ${this.compensationMs}ms 超过编码缓冲时间 ${encodeDelay}ms，编码将立即开始，可能导致时序紧张`);
+        logger.warn(`Compensation ${this.compensationMs}ms exceeds encode buffer ${encodeDelay}ms, encoding starts immediately, timing may be tight`);
       }
     }
 
@@ -168,13 +171,13 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     if (adjustedEncodeDelay > 0) {
       setTimeout(() => {
         if (this.isRunning) {
-          console.log(`🔧 [SlotClock] encodeStart 事件触发: 时隙=${slotInfo.id}, 延迟=${adjustedEncodeDelay}ms, 距离目标播放=${encodeAdvance}ms`);
+          logger.debug(`encodeStart fired: slot=${slotInfo.id}, delay=${adjustedEncodeDelay}ms, before transmit=${encodeAdvance}ms`);
           this.emit('encodeStart', slotInfo);
         }
       }, adjustedEncodeDelay);
     } else {
       // 如果没有足够时间，立即触发
-      console.log(`🔧 [SlotClock] encodeStart 事件立即触发: 时隙=${slotInfo.id}`);
+      logger.debug(`encodeStart fired immediately: slot=${slotInfo.id}`);
       this.emit('encodeStart', slotInfo);
     }
 
@@ -182,13 +185,13 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     if (adjustedTransmitDelay > 0) {
       setTimeout(() => {
         if (this.isRunning) {
-          console.log(`📡 [SlotClock] transmitStart 事件触发: 时隙=${slotInfo.id}, 延迟=${adjustedTransmitDelay}ms`);
+          logger.debug(`transmitStart fired: slot=${slotInfo.id}, delay=${adjustedTransmitDelay}ms`);
           this.emit('transmitStart', slotInfo);
         }
       }, adjustedTransmitDelay);
     } else {
       // 如果没有延迟，立即发射
-      console.log(`📡 [SlotClock] transmitStart 事件立即触发: 时隙=${slotInfo.id}`);
+      logger.debug(`transmitStart fired immediately: slot=${slotInfo.id}`);
       this.emit('transmitStart', slotInfo);
     }
     
@@ -196,7 +199,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     const windowTimings = this.mode.windowTiming;
     
     if (!windowTimings || windowTimings.length === 0) {
-      console.warn(`⚠️ [SlotClock] 模式 ${this.mode.name} 没有定义窗口时机`);
+      logger.warn(`Mode ${this.mode.name} has no window timings defined`);
       this.scheduleNextSlot();
       return;
     }
@@ -209,7 +212,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
       const windowOffset = windowTimings[windowIdx];
       
       if (windowOffset === undefined) {
-        console.warn(`⚠️ [SlotClock] 窗口 ${windowIdx} 的偏移时间未定义`);
+        logger.warn(`Window ${windowIdx} offset is undefined`);
         continue;
       }
       

@@ -12,6 +12,9 @@ import {
   convertQSOToADIF,
   parseADIFContent as parseADIFContentUtil,
 } from '../utils/adif-utils.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('WaveLogService');
 
 /**
  * WaveLog服务类
@@ -49,7 +52,7 @@ export class WaveLogService {
         stations
       };
     } catch (error) {
-      console.error('WaveLog连接测试失败:', error);
+      logger.error('Connection test failed:', error);
       return {
         success: false,
         message: error instanceof Error ? error.message : '连接失败'
@@ -65,8 +68,8 @@ export class WaveLogService {
     
     let response: Response;
     try {
-      console.log(`📊 [WaveLog] 正在连接到: ${url}`);
-      
+      logger.debug(`Connecting to: ${url}`);
+
       response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -77,7 +80,7 @@ export class WaveLogService {
         signal: AbortSignal.timeout(10000) // 10秒超时
       });
 
-      console.log(`📊 [WaveLog] 连接响应状态: ${response.status}`);
+      logger.debug(`Connection response status: ${response.status}`);
     } catch (error) {
       throw this.handleNetworkError(error, url);
     }
@@ -126,24 +129,21 @@ export class WaveLogService {
       string: adifString
     };
 
-    // 🔍 添加详细的调试日志
-    console.log('📊 [WaveLog] 准备上传 QSO:');
-    console.log('  - My Callsign:', qso.myCallsign || '(未设置)');
-    console.log('  - My Grid:', qso.myGrid || '(未设置)');
-    console.log('  - Their Callsign:', qso.callsign);
-    console.log('  - Their Grid:', qso.grid || '(未知)');
-    console.log('  - Mode:', qso.mode);
-    console.log('  - Frequency:', qso.frequency, 'Hz');
-    console.log('  - Start Time:', new Date(qso.startTime).toISOString());
-    console.log('  - Reports:', qso.reportSent, '/', qso.reportReceived);
-    console.log('📊 [WaveLog] 配置信息:');
-    console.log('  - API Key:', this.config.apiKey ? `${this.config.apiKey.substring(0, 10)}...` : '未设置');
-    console.log('  - Station ID:', this.config.stationId);
-    console.log('  - Radio Name:', this.config.radioName);
-    console.log('📊 [WaveLog] 生成的 ADIF 字符串:');
-    console.log('  ', adifString);
-    console.log('📊 [WaveLog] 完整 Payload:');
-    console.log('  ', JSON.stringify(payload, null, 2));
+    logger.debug('Uploading QSO:', {
+      myCallsign: qso.myCallsign,
+      myGrid: qso.myGrid,
+      callsign: qso.callsign,
+      grid: qso.grid,
+      mode: qso.mode,
+      frequency: qso.frequency,
+      startTime: new Date(qso.startTime).toISOString(),
+      reportSent: qso.reportSent,
+      reportReceived: qso.reportReceived,
+      apiKeyPrefix: this.config.apiKey ? `${this.config.apiKey.substring(0, 10)}...` : undefined,
+      stationId: this.config.stationId,
+      radioName: this.config.radioName,
+      adif: adifString,
+    });
 
     const url = `${this.config.url.replace(/\/$/, '')}/index.php/api/qso`;
 
@@ -161,10 +161,7 @@ export class WaveLogService {
 
       const responseText = await response.text();
 
-      // 🔍 记录服务器响应
-      console.log('📊 [WaveLog] 服务器响应:');
-      console.log('  - Status:', response.status, response.statusText);
-      console.log('  - Response:', responseText);
+      logger.debug(`Server response: status=${response.status} ${response.statusText}, body=${responseText}`);
 
       let result;
 
@@ -184,17 +181,16 @@ export class WaveLogService {
           message: result.status === 'created' ? '上传成功' : (result.reason || '上传失败')
         };
       } else {
-        // 🔍 记录详细的错误信息
-        console.error('📊 [WaveLog] 上传失败详情:', {
+        logger.error('Upload failed:', {
           status: response.status,
-          result: result,
           reason: result.reason || result.message || result.messages,
-          qso: { callsign: qso.callsign, mode: qso.mode }
+          callsign: qso.callsign,
+          mode: qso.mode,
         });
         throw new Error(result.reason || result.message || (result.messages ? JSON.stringify(result.messages) : `HTTP错误 ${response.status}`));
       }
     } catch (error) {
-      console.error('上传QSO到WaveLog失败:', error);
+      logger.error('Failed to upload QSO:', error);
       throw this.handleNetworkError(error, url);
     }
   }
@@ -297,17 +293,17 @@ export class WaveLogService {
       const adifContent = result.adif || '';
       
       if (!adifContent || adifContent.trim().length === 0) {
-        console.log('WaveLog返回空的ADIF内容，可能没有匹配的QSO记录');
+        logger.debug('Empty ADIF content returned, no matching QSO records');
         return [];
       }
 
       // 解析ADIF内容为QSORecord数组
       const qsoRecords = parseADIFContentUtil(adifContent, 'wavelog');
-      console.log(`📊 [WaveLog] 从服务器下载了 ${qsoRecords.length} 条QSO记录 (exported_qsos: ${result.exported_qsos || 0})`);
-      
+      logger.info(`Downloaded ${qsoRecords.length} QSO records from server (exported_qsos: ${result.exported_qsos || 0})`);
+
       return qsoRecords;
     } catch (error) {
-      console.error('从WaveLog下载QSO记录失败:', error);
+      logger.error('Failed to download QSO records:', error);
       throw this.handleNetworkError(error, `${this.config.url}/api/qso_export`);
     }
   }
@@ -318,11 +314,11 @@ export class WaveLogService {
    * 处理网络连接错误
    */
   private handleNetworkError(error: any, url: string): Error {
-    console.error(`📊 [WaveLog] 网络错误详情:`, {
+    logger.error('Network error:', {
       message: error.message,
       code: error.code,
       cause: error.cause,
-      url: url
+      url,
     });
 
     // 根据不同的错误类型提供更友好的错误信息

@@ -1,6 +1,9 @@
 import { EventEmitter } from 'eventemitter3';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AudioMonitorService');
 
 /**
  * 音频监听统计信息
@@ -54,7 +57,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   constructor(audioProvider: RingBufferAudioProvider) {
     super();
     this.audioProvider = audioProvider;
-    console.log('🎧 [AudioMonitorService] 音频监听服务已初始化（广播模式）');
+    logger.info('Audio monitor service initialized (broadcast mode)');
 
     // 自动启动推送
     this.startPushingAudio();
@@ -68,11 +71,9 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       return; // 已经在推送中
     }
 
-    console.log(
-      `🎧 [AudioMonitorService] 开始自适应音频推送 ` +
-      `(检查间隔=${this.CHECK_INTERVAL_MS}ms, ` +
-      `目标缓冲区=${this.TARGET_BUFFER_MS}ms, ` +
-      `目标块=${this.TARGET_CHUNK_MS}ms)`
+    logger.info(
+      `Starting adaptive audio push (checkInterval=${this.CHECK_INTERVAL_MS}ms, ` +
+      `targetBuffer=${this.TARGET_BUFFER_MS}ms, targetChunk=${this.TARGET_CHUNK_MS}ms)`
     );
     this.lastPushTimestamp = Date.now();
     this.isRunning = true;
@@ -90,7 +91,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       clearInterval(this.pushInterval);
       this.pushInterval = null;
       this.isRunning = false;
-      console.log('🎧 [AudioMonitorService] 停止广播音频数据');
+      logger.info('Stopped broadcasting audio data');
     }
   }
 
@@ -110,7 +111,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       // 执行推送
       await this.pushAudioChunk();
     } catch (error) {
-      console.error('❌ [AudioMonitorService] 检查并推送失败:', error);
+      console.error('[AudioMonitorService] Check and push failed:', error);
     }
   }
 
@@ -132,7 +133,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
 
       // 检查是否读取到足够数据
       if (sourceAudioData.length < sourceSampleCount) {
-        console.warn(`⚠️ [AudioMonitor] 缓冲区数据不足: 需要=${sourceSampleCount}, 实际=${sourceAudioData.length}`);
+        logger.warn(`Insufficient buffer data: needed=${sourceSampleCount}, actual=${sourceAudioData.length}`);
         return;
       }
 
@@ -167,12 +168,10 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
         const availableMs = this.audioProvider.getAvailableMs();
         const pushInterval = this.lastPushStartTime > 0 ? t0 - this.lastPushStartTime : 0;
 
-        console.log(
-          `⏱️ [AudioMonitor] 序列=${this.sequenceNumber}, ` +
-          `缓冲区=${availableMs.toFixed(1)}ms, ` +
-          `样本=${processedAudio.length}, ` +
-          `间隔=${pushInterval.toFixed(1)}ms, ` +
-          `处理=${(t1-t0).toFixed(1)}ms`
+        logger.debug(
+          `seq=${this.sequenceNumber}, buffer=${availableMs.toFixed(1)}ms, ` +
+          `samples=${processedAudio.length}, interval=${pushInterval.toFixed(1)}ms, ` +
+          `process=${(t1-t0).toFixed(1)}ms`
         );
 
         const stats = this.calculateStats(this.TARGET_SAMPLE_RATE, isActive, rms);
@@ -182,7 +181,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       this.lastPushStartTime = t0;
       this.lastPushTimestamp = now;
     } catch (error) {
-      console.error('❌ [AudioMonitorService] 推送音频失败:', error);
+      console.error('[AudioMonitorService] Push audio failed:', error);
     }
   }
 
@@ -233,6 +232,6 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   destroy(): void {
     this.stopPushingAudio();
     this.removeAllListeners();
-    console.log('🎧 [AudioMonitorService] 服务已销毁');
+    logger.info('Service destroyed');
   }
 }

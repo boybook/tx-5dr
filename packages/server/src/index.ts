@@ -51,15 +51,15 @@ function isRecoverableError(error: any): { recoverable: boolean; category: strin
 }
 
 process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  console.error('🚨 [全局错误处理器] 未捕获的 Promise Rejection:');
-  console.error('原因:', reason);
+  console.error('[GlobalErrorHandler] Unhandled Promise Rejection:');
+  console.error('Reason:', reason);
 
   const { recoverable, category } = isRecoverableError(reason);
 
   if (recoverable) {
-    console.warn(`⚠️ [全局错误处理器] ${category} 类错误，系统将继续运行`);
+    console.warn(`[GlobalErrorHandler] ${category} error, system will continue`);
   } else {
-    console.error(`⚠️ [全局错误处理器] ${category} 类错误，但不退出进程`);
+    console.error(`[GlobalErrorHandler] ${category} error, not exiting process`);
   }
 
   // 不退出进程，让系统继续运行
@@ -67,16 +67,16 @@ process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
 });
 
 process.on('uncaughtException', (error: Error) => {
-  console.error('🚨 [全局错误处理器] 未捕获的异常:');
-  console.error('错误:', error);
-  console.error('堆栈:', error.stack);
+  console.error('[GlobalErrorHandler] Uncaught exception:');
+  console.error('Error:', error);
+  console.error('Stack:', error.stack);
 
   const { recoverable, category } = isRecoverableError(error);
 
   if (recoverable) {
-    console.warn(`⚠️ [全局错误处理器] ${category} 类错误，服务器将继续运行`);
+    console.warn(`[GlobalErrorHandler] ${category} error, server will continue`);
   } else {
-    console.error(`⚠️ [全局错误处理器] ${category} 类严重错误，但将尝试继续运行`);
+    console.error(`[GlobalErrorHandler] ${category} critical error, attempting to continue`);
     // 对于真正严重的错误，可以考虑重启电台引擎而不是退出进程
   }
 });
@@ -89,37 +89,37 @@ async function start() {
         const { createSkyInspector } = await import('@statelyai/inspect');
         const inspector = createSkyInspector({
           onerror: (error) => {
-            console.error('❌ [XState Inspect] 错误:', error.message);
+            console.error('[XState Inspect] Error:', error.message);
           },
         });
         setGlobalInspector(inspector);
-        console.log('📊 [XState Inspect] 可视化调试已启用');
-        console.log('📊 [XState Inspect] 访问: https://stately.ai/inspect');
+        console.log('[XState Inspect] Visual debugging enabled');
+        console.log('[XState Inspect] Visit: https://stately.ai/inspect');
       } catch (err: any) {
-        console.warn('⚠️  [XState Inspect] 初始化失败（可忽略）:', err.message);
+        console.warn('[XState Inspect] Initialization failed (ignorable):', err.message);
       }
     }
 
     // 初始化Console日志系统
     const consoleLogger = await initializeConsoleLogger();
-    console.log('🔧 Console日志系统已初始化');
-    console.log(`📋 日志文件位置: ${consoleLogger.getLogFilePath()}`);
-    
+    console.log('Console logger initialized');
+    console.log(`Log file: ${consoleLogger.getLogFilePath()}`);
+
     const server = await createServer();
     await server.listen({ port: PORT, host: '0.0.0.0' });
-    console.log(`🚀 TX-5DR server running on http://localhost:${PORT}`);
-    
-    // 启动时钟系统进行测试
+    console.log(`TX-5DR server running on http://localhost:${PORT}`);
+
+    // 启动时钟系统
     const clockManager = DigitalRadioEngine.getInstance();
-    console.log('🕐 启动时钟系统进行测试...');
-    
+    console.log('Starting clock system...');
+
     await clockManager.start();
-    console.log('✅ 服务器启动完成！');
-    
+    console.log('Server startup complete');
+
     // 启动日志管理定时任务
     startLogMaintenanceTasks(consoleLogger);
   } catch (err) {
-    console.error('❌ 服务器启动失败:', err);
+    console.error('Server startup failed:', err);
     process.exit(1);
   }
 }
@@ -133,7 +133,7 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
     try {
       await logger.rotateLogIfNeeded(10 * 1024 * 1024); // 10MB
     } catch (error) {
-      console.error('日志轮转检查失败:', error);
+      console.error('Log rotation check failed:', error);
     }
   }, 60 * 60 * 1000); // 1小时
 
@@ -142,11 +142,11 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
     const now = new Date();
     if (now.getHours() === 2 && now.getMinutes() === 0) {
       try {
-        console.log('🧹 开始清理旧日志文件...');
+        console.log('Cleaning up old log files...');
         await logger.cleanupOldLogs(7); // 保留7天
-        console.log('✅ 旧日志清理完成');
+        console.log('Old log cleanup complete');
       } catch (error) {
-        console.error('日志清理失败:', error);
+        console.error('Log cleanup failed:', error);
       }
     }
   }, 60 * 1000); // 每分钟检查一次
@@ -159,25 +159,25 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
   };
 
   const handleSignal = async (signal: NodeJS.Signals) => {
-    console.log(`\n🛑 收到 ${signal} 信号，正在关闭服务器...`);
+    console.log(`\nReceived ${signal} signal, shutting down server...`);
 
     try {
       // 停止 DigitalRadioEngine（这会关闭电台连接和音频流）
       const engine = DigitalRadioEngine.getInstance();
       if (engine.getStatus().isRunning) {
-        console.log('🛑 正在停止数字电台引擎...');
+        console.log('Stopping digital radio engine...');
         await engine.stop();
-        console.log('✅ 数字电台引擎已停止');
+        console.log('Digital radio engine stopped');
       }
     } catch (error) {
-      console.error('❌ 停止数字电台引擎失败:', error);
+      console.error('Failed to stop digital radio engine:', error);
     }
 
     try {
       cleanup();
-      console.log('✅ 清理完成');
+      console.log('Cleanup complete');
     } catch (error) {
-      console.error('❌ 清理失败:', error);
+      console.error('Cleanup failed:', error);
     }
 
     // 确保进程在收到信号后真正退出
@@ -193,7 +193,7 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
     } catch {}
   });
   
-  console.log('🔧 日志维护任务已启动');
+  console.log('Log maintenance tasks started');
 }
 
 start(); 

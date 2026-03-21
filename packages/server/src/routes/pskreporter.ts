@@ -9,6 +9,9 @@ import { PSKReporterConfig } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { getPSKReporterService } from '../services/PSKReporterService.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('PSKReporterRoute');
 
 export async function pskreporterRoutes(fastify: FastifyInstance) {
   const configManager = ConfigManager.getInstance();
@@ -25,7 +28,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
         data: config,
       });
     } catch (error) {
-      console.error('❌ [PSKReporter] 获取配置失败:', error);
+      logger.error('Failed to get config:', error);
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
@@ -70,7 +73,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
         data: configManager.getPSKReporterConfig(),
       });
     } catch (error) {
-      console.error('❌ [PSKReporter] 更新配置失败:', error);
+      logger.error('Failed to update config:', error);
       if (error instanceof RadioError) {
         throw error;
       }
@@ -92,7 +95,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
         data: status,
       });
     } catch (error) {
-      console.error('❌ [PSKReporter] 获取状态失败:', error);
+      logger.error('Failed to get status:', error);
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
@@ -131,7 +134,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
         data: service.getStatus(),
       });
     } catch (error) {
-      console.error('❌ [PSKReporter] 手动上报失败:', error);
+      logger.error('Manual report failed:', error);
       if (error instanceof RadioError) {
         throw error;
       }
@@ -158,7 +161,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
         message: '统计信息已重置',
       });
     } catch (error) {
-      console.error('❌ [PSKReporter] 重置统计失败:', error);
+      logger.error('Failed to reset stats:', error);
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });

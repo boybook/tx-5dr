@@ -17,6 +17,9 @@ import { promisify } from 'util';
 import fs from 'fs/promises';
 import { tmpdir, platform } from 'os';
 import path from 'path';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('LoTWService');
 
 const execFileAsync = promisify(execFile);
 
@@ -147,7 +150,7 @@ export class LoTWService {
 
       const url = `https://lotw.arrl.org/lotwuser/lotwreport.adi?${params.toString()}`;
 
-      console.log(`[LoTW] 正在测试连接...`);
+      logger.debug('Testing connection...');
 
       const response = await fetch(url, {
         method: 'GET',
@@ -181,7 +184,7 @@ export class LoTWService {
         message: 'LoTW返回了意外的响应格式',
       };
     } catch (error) {
-      console.error('[LoTW] 连接测试失败:', error);
+      logger.error('Connection test failed:', error);
       const networkError = this.handleNetworkError(error, 'https://lotw.arrl.org');
       return {
         success: false,
@@ -245,7 +248,7 @@ export class LoTWService {
 
       await fs.writeFile(tempFilePath, adifContent, 'utf-8');
 
-      console.log(`[LoTW] 生成临时ADIF文件: ${tempFilePath}，包含 ${qsos.length} 条QSO记录`);
+      logger.debug(`Generated temporary ADIF file: ${tempFilePath}, contains ${qsos.length} QSO records`);
 
       // 调用TQSL上传
       const tqslArgs = [
@@ -257,15 +260,15 @@ export class LoTWService {
         tempFilePath,
       ];
 
-      console.log(`[LoTW] 调用TQSL: ${this.config.tqslPath} ${tqslArgs.join(' ')}`);
+      logger.debug(`Calling TQSL: ${this.config.tqslPath} ${tqslArgs.join(' ')}`);
 
       const { stdout, stderr } = await execFileAsync(this.config.tqslPath, tqslArgs, {
         timeout: 120000, // 120秒超时
       });
 
-      console.log(`[LoTW] TQSL输出: ${stdout}`);
+      logger.debug(`TQSL stdout: ${stdout}`);
       if (stderr) {
-        console.log(`[LoTW] TQSL错误输出: ${stderr}`);
+        logger.debug(`TQSL stderr: ${stderr}`);
       }
 
       return {
@@ -305,7 +308,7 @@ export class LoTWService {
         };
       }
 
-      console.error('[LoTW] TQSL上传错误:', error);
+      logger.error('TQSL upload error:', error);
       return {
         success: false,
         message: `TQSL执行错误: ${error.message || '未知错误'}`,
@@ -320,9 +323,9 @@ export class LoTWService {
       // 清理临时文件
       try {
         await fs.unlink(tempFilePath);
-        console.log(`[LoTW] 已删除临时文件: ${tempFilePath}`);
+        logger.debug(`Deleted temporary file: ${tempFilePath}`);
       } catch {
-        console.warn(`[LoTW] 无法删除临时文件: ${tempFilePath}`);
+        logger.warn(`Failed to delete temporary file: ${tempFilePath}`);
       }
     }
   }
@@ -350,7 +353,7 @@ export class LoTWService {
     const url = `https://lotw.arrl.org/lotwuser/lotwreport.adi?${params.toString()}`;
 
     try {
-      console.log(`[LoTW] 正在下载确认记录（自 ${sinceDate} 以来）...`);
+      logger.debug(`Downloading confirmations since ${sinceDate}...`);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -375,14 +378,14 @@ export class LoTWService {
       // 解析ADIF内容
       const records = parseADIFContent(responseText, 'lotw');
 
-      console.log(`[LoTW] 下载了 ${records.length} 条确认记录`);
+      logger.info(`Downloaded ${records.length} confirmation records`);
 
       return {
         records,
         confirmedCount: records.length,
       };
     } catch (error) {
-      console.error('[LoTW] 下载确认记录失败:', error);
+      logger.error('Failed to download confirmation records:', error);
       throw this.handleNetworkError(error, url);
     }
   }
@@ -400,11 +403,11 @@ export class LoTWService {
    * 处理网络连接错误
    */
   private handleNetworkError(error: any, url: string): Error {
-    console.error(`[LoTW] 网络错误详情:`, {
+    logger.error('Network error:', {
       message: error.message,
       code: error.code,
       cause: error.cause,
-      url: url,
+      url,
     });
 
     if (error instanceof Error && error.message.includes('LoTW')) {

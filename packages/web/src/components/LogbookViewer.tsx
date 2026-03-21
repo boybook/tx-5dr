@@ -37,6 +37,9 @@ import { showErrorToast } from '../utils/errorToast';
 import { SyncConfigModal } from './SyncConfigModal';
 import { useTranslation } from 'react-i18next';
 import { formatDate as formatDateUtil } from '../utils/dateFormatting';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('LogbookViewer');
 
 // ElectronAPI 类型定义
 interface ElectronAPI {
@@ -120,7 +123,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       if (!data) return;
       // 以 operatorId 为主进行匹配；其次尝试 logBookId
       if (data.operatorId === operatorId || (data.logBookId && data.logBookId === effectiveLogBookId)) {
-        console.log('Received logbook change notification, refreshing data');
+        logger.debug('Received logbook change notification, refreshing data');
         refresh();
       }
     };
@@ -154,7 +157,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setHasFilters(response.meta?.hasFilters || false);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : t('error.loadQSOFailed');
-      console.error('Failed to load QSO records:', error);
+      logger.error('Failed to load QSO records:', error);
       setError(errorMessage);
       setQsos([]); // 清空数据
     } finally {
@@ -168,7 +171,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       const response = await api.getLogBook(effectiveLogBookId);
       setStatistics(response.data.statistics);
     } catch (error) {
-      console.error('Failed to load statistics:', error);
+      logger.error('Failed to load statistics:', error);
       // 统计信息加载失败不影响QSO记录的显示
       setStatistics(null);
     }
@@ -252,10 +255,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      console.log(`Successfully exported ${format.toUpperCase()} format log`);
+      logger.debug(`Successfully exported ${format.toUpperCase()} format log`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : t('error.exportFailed');
-      console.error('Export failed:', error);
+      logger.error('Export failed:', error);
       setExportError(errorMessage);
     } finally {
       setIsExporting(false);
@@ -280,13 +283,13 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         await loadQSOs();
         await loadStatistics();
 
-        console.log(`WaveLog sync successful: ${operation}`, result);
+        logger.debug(`WaveLog sync successful: ${operation}`);
       } else {
         setSyncError(result.message || t('error.syncFailed'));
       }
 
     } catch (error) {
-      console.error('WaveLog sync failed:', error);
+      logger.error('WaveLog sync failed:', error);
       if (error instanceof ApiError) {
         setSyncError(error.userMessage);
         showErrorToast({
@@ -323,7 +326,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         setQrzSyncError(result.message || t('sync.qrz.syncError'));
       }
     } catch (error) {
-      console.error('QRZ sync failed:', error);
+      logger.error('QRZ sync failed:', error);
       if (error instanceof ApiError) {
         setQrzSyncError(error.userMessage);
         showErrorToast({
@@ -359,7 +362,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         setLotwSyncError(result.message || t('sync.lotw.syncError'));
       }
     } catch (error) {
-      console.error('LoTW sync failed:', error);
+      logger.error('LoTW sync failed:', error);
       if (error instanceof ApiError) {
         setLotwSyncError(error.userMessage);
         showErrorToast({
@@ -384,7 +387,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         await window.electronAPI.shell.openPath(result.path);
       }
     } catch (error) {
-      console.error('Failed to open log directory:', error);
+      logger.error('Failed to open log directory:', error);
     }
   };
 
@@ -483,9 +486,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setEditingQSO(null);
       setEditFormData({});
 
-      console.log('QSO record updated successfully');
+      logger.debug('QSO record updated successfully');
     } catch (error) {
-      console.error('Failed to update QSO record:', error);
+      logger.error('Failed to update QSO record:', error);
       setError(error instanceof Error ? error.message : t('error.updateQSOFailed'));
     } finally {
       setIsEditSaving(false);
@@ -514,9 +517,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setIsDeleteModalOpen(false);
       setDeletingQSO(null);
 
-      console.log('QSO record deleted successfully');
+      logger.debug('QSO record deleted successfully');
     } catch (error) {
-      console.error('Failed to delete QSO record:', error);
+      logger.error('Failed to delete QSO record:', error);
       setError(error instanceof Error ? error.message : t('error.deleteQSOFailed'));
     } finally {
       setIsDeleting(false);
@@ -531,7 +534,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         window.electronAPI.shell.openExternal(url);
       } else {
         // 如果shell API不可用，回退到window.open
-        console.warn('Electron shell API unavailable, falling back to window.open');
+        logger.warn('Electron shell API unavailable, falling back to window.open');
         window.open(url, '_blank');
       }
     } else {

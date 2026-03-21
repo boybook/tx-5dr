@@ -7,6 +7,9 @@ import { MODES } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { SlotPackPersistence } from './SlotPackPersistence.js';
 import { FT8MessageParser } from '@tx5dr/core';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('SlotPackManager');
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
@@ -33,7 +36,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 用于诸如切换频率等需要快速“换盘”的场景，避免打断外部对本管理器的订阅
    */
   clearInMemory(): void {
-    console.log('🧹 [SlotPackManager] 清空内存中的时隙缓存（保留监听器）');
+    logger.info('Cleared in-memory slot cache (listeners retained)');
     this.slotPacks.clear();
     this.lastSlotPack = null;
   }
@@ -74,7 +77,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       );
 
       if (existingTransmissionFrame) {
-        console.log(`📡 [SlotPackManager] 发射帧已存在，跳过重复添加: ${message}`);
+        logger.debug(`Transmission frame already exists, skipping duplicate: ${message}`);
         return;
       }
 
@@ -85,12 +88,12 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       slotPack.stats.lastUpdated = timestamp;
       slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
 
-      console.log(`📡 [SlotPackManager] 添加发射帧: ${slotId}, 操作员: ${operatorId}, 消息: "${message}"`);
+      logger.debug(`Added transmission frame: slotId=${slotId}, operator=${operatorId}, message="${message}"`);
 
       // 异步存储到本地（不阻塞主流程）
       if (this.persistenceEnabled) {
         this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
-          console.error(`💾 [SlotPackManager] 发射帧存储失败:`, error);
+          console.error('[SlotPackManager] Failed to store transmission frame:', error);
         });
       }
 
@@ -98,7 +101,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       this.emit('slotPackUpdated', { ...slotPack });
 
     } catch (error) {
-      console.error(`❌ [SlotPackManager] 添加发射帧失败:`, error);
+      console.error('[SlotPackManager] Failed to add transmission frame:', error);
     }
   }
   
@@ -107,7 +110,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    */
   setMode(mode: ModeDescriptor): void {
     this.currentMode = mode;
-    console.log(`🔄 [SlotPackManager] 切换到模式: ${mode.name}, 时隙长度: ${mode.slotMs}ms`);
+    logger.info(`Mode switched to: ${mode.name}, slotMs=${mode.slotMs}ms`);
   }
   
   /**
@@ -131,7 +134,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       // 异步存储新创建的SlotPack（不阻塞主流程）
       if (this.persistenceEnabled) {
         this.persistence.store(slotPack, 'created', this.currentMode.name).catch(error => {
-          console.error(`💾 [SlotPackManager] 新建存储失败:`, error);
+          console.error('[SlotPackManager] Failed to store new SlotPack:', error);
         });
       }
     }
@@ -161,7 +164,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       
       // 如果有窗口偏移，显示校正信息
       if ((result as any).windowOffsetMs && (result as any).windowOffsetMs !== 0) {
-        console.log(`🔧 [时间校正] 窗口${result.windowIdx}: "${frame.message}" dt: ${originalDt.toFixed(3)}s -> ${correctedDt.toFixed(3)}s (窗口偏移: ${windowOffsetSec.toFixed(3)}s)`);
+        logger.debug(`Time correction window${result.windowIdx}: "${frame.message}" dt: ${originalDt.toFixed(3)}s -> ${correctedDt.toFixed(3)}s (offset: ${windowOffsetSec.toFixed(3)}s)`);
       }
       
       return {
@@ -182,7 +185,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     // 异步存储到本地（不阻塞主流程）
     if (this.persistenceEnabled) {
       this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
-        console.error(`💾 [SlotPackManager] 存储失败:`, error);
+        console.error('[SlotPackManager] Failed to store SlotPack update:', error);
       });
     }
 
@@ -393,7 +396,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const removed = this.slotPacks.delete(slotId);
     
     if (removed) {
-      console.log(`🗑️ [SlotPackManager] 清理时隙包: ${slotId}`);
+      logger.debug(`Removed slot pack: ${slotId}`);
       
       // 如果删除的是最新的 SlotPack，需要重新计算 lastSlotPack
       if (slotPack && this.lastSlotPack && slotPack.slotId === this.lastSlotPack.slotId) {
@@ -423,7 +426,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     }
     
     if (this.lastSlotPack) {
-      console.log(`🔄 [SlotPackManager] 更新最新时隙包缓存: ${this.lastSlotPack.slotId}`);
+      logger.debug(`Updated lastSlotPack cache: ${this.lastSlotPack.slotId}`);
     }
   }
   
@@ -444,7 +447,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         
         this.slotPacks.delete(slotId);
         cleanedCount++;
-        console.log(`🗑️ [SlotPackManager] 清理过期时隙包: ${slotId} (${Math.round((now - slotPack.stats.lastUpdated) / 1000)}秒前)`);
+        logger.debug(`Cleaned expired slot pack: ${slotId} (${Math.round((now - slotPack.stats.lastUpdated) / 1000)}s ago)`);
       }
     }
     
@@ -454,7 +457,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     }
     
     if (cleanedCount > 0) {
-      console.log(`🧹 [SlotPackManager] 清理了 ${cleanedCount} 个过期时隙包`);
+      logger.debug(`Cleaned ${cleanedCount} expired slot packs`);
     }
     
     return cleanedCount;
@@ -483,7 +486,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    */
   setPersistenceEnabled(enabled: boolean): void {
     this.persistenceEnabled = enabled;
-    console.log(`💾 [SlotPackManager] 持久化存储${enabled ? '已启用' : '已禁用'}`);
+    logger.info(`Persistence storage ${enabled ? 'enabled' : 'disabled'}`);
   }
 
   /**
@@ -565,18 +568,18 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
               mode: this.currentMode.name
             };
 
-            console.log(`🔍 [SlotPackManager] 找到呼号 ${callsign} 的最后消息: "${frame.message}" 在时隙 ${slotPack.slotId}`);
+            logger.debug(`Found last message from callsign ${callsign}: "${frame.message}" in slot ${slotPack.slotId}`);
             return { message: frame, slotInfo };
           }
         } catch (error) {
           // 解析失败，跳过这个消息
-          console.warn(`⚠️ [SlotPackManager] 解析消息失败: "${frame.message}"`, error);
+          logger.warn(`Failed to parse message: "${frame.message}"`);
           continue;
         }
       }
     }
 
-    console.log(`🔍 [SlotPackManager] 未找到呼号 ${callsign} 的任何消息`);
+    logger.debug(`No messages found from callsign ${callsign}`);
     return undefined;
   }
 
@@ -596,7 +599,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   ): number | undefined {
     const slotPack = this.slotPacks.get(slotId);
     if (!slotPack) {
-      console.warn(`⚠️ [SlotPackManager] 时隙包不存在: ${slotId}`);
+      logger.warn(`Slot pack not found: ${slotId}`);
       return undefined;
     }
 
@@ -606,12 +609,12 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       .map(frame => frame.freq)
       .sort((a, b) => a - b); // 按频率排序
 
-    console.log(`🔍 [SlotPackManager] 时隙 ${slotId} 中的占用频率:`, usedFrequencies);
+    logger.debug(`Occupied frequencies in slot ${slotId}: [${usedFrequencies.join(', ')}]Hz`);
 
     // 如果没有任何占用频率，返回中间频率
     if (usedFrequencies.length === 0) {
       const centerFreq = Math.round((minFreq + maxFreq) / 2);
-      console.log(`✅ [SlotPackManager] 无占用频率，返回中心频率: ${centerFreq}Hz`);
+      logger.debug(`No occupied frequencies, returning center: ${centerFreq}Hz`);
       return centerFreq;
     }
 
@@ -673,7 +676,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const validGaps = gaps.filter(gap => gap.width >= guardBandwidth / 2);
 
     if (validGaps.length === 0) {
-      console.warn(`⚠️ [SlotPackManager] 时隙 ${slotId} 中没有找到足够的空隙频率`);
+      logger.warn(`No suitable frequency gap found in slot ${slotId}`);
       return undefined;
     }
 
@@ -696,10 +699,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     // 确保推荐频率在合理范围内
     const recommendedFreq = Math.max(minFreq, Math.min(maxFreq, bestGap.center));
 
-    console.log(`✅ [SlotPackManager] 找到最佳发射频率: ${recommendedFreq}Hz`);
-    console.log(`   空隙范围: ${bestGap.start.toFixed(1)}Hz - ${bestGap.end.toFixed(1)}Hz`);
-    console.log(`   空隙宽度: ${bestGap.width.toFixed(1)}Hz`);
-    console.log(`   占用频率: [${usedFrequencies.join(', ')}]Hz`);
+    logger.debug(`Best transmit frequency: ${recommendedFreq}Hz, gap=${bestGap.start.toFixed(1)}-${bestGap.end.toFixed(1)}Hz (width=${bestGap.width.toFixed(1)}Hz), occupied=[${usedFrequencies.join(', ')}]Hz`);
 
     return recommendedFreq;
   }
@@ -758,28 +758,28 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 清理所有时隙包
    */
   async cleanup(): Promise<void> {
-    console.log('🧹 [SlotPackManager] 正在清理...');
+    logger.info('Cleaning up');
     
     // 刷新持久化缓冲区
     try {
       await this.persistence.flush();
-      console.log('💾 [SlotPackManager] 持久化缓冲区已刷新');
+      logger.info('Persistence buffer flushed');
     } catch (error) {
-      console.error('💾 [SlotPackManager] 持久化缓冲区刷新失败:', error);
+      console.error('[SlotPackManager] Failed to flush persistence buffer:', error);
     }
-    
+
     // 清理持久化资源
     try {
       await this.persistence.cleanup();
-      console.log('💾 [SlotPackManager] 持久化资源已清理');
+      logger.info('Persistence resources cleaned up');
     } catch (error) {
-      console.error('💾 [SlotPackManager] 持久化资源清理失败:', error);
+      console.error('[SlotPackManager] Failed to clean up persistence resources:', error);
     }
     
     this.slotPacks.clear();
     this.lastSlotPack = null; // 重置最新时隙包缓存
     this.removeAllListeners();
     
-    console.log('🧹 [SlotPackManager] 清理完成');
+    logger.info('Cleanup complete');
   }
 } 

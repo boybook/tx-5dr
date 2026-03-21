@@ -1,3 +1,7 @@
+import { createLogger } from './utils/logger.js';
+
+const logger = createLogger('API');
+
 import type {
   HelloResponse,
   AudioDevicesResponse,
@@ -136,7 +140,7 @@ export function handleApiError(errorData: unknown, httpStatus: number): ApiError
   const context = (typeof data.context === 'object' && data.context !== null) ? data.context as Record<string, unknown> : undefined;
 
   // 记录技术日志
-  console.error('[API 错误]', {
+  logger.error('API error', {
     httpStatus,
     code,
     message,
@@ -178,7 +182,7 @@ class ApiConfig {
    */
   setApiBase(apiBase: string): void {
     this.apiBase = apiBase;
-    console.log(`🔧 [API配置] API基础URL已设置为: ${apiBase}`);
+    logger.debug(`API base URL set to: ${apiBase}`);
   }
 
   /**
@@ -1059,15 +1063,15 @@ export const api = {
           params.append(key, String(value));
         }
       });
-      
-      console.log('📊 [API Client] 构建请求参数:', {
+
+      logger.debug('Building QSO query params:', {
         options,
         searchParams: params.toString()
       });
     }
-    
+
     const url = `${baseUrl}/logbooks/${id}/qsos${params.toString() ? '?' + params.toString() : ''}`;
-    console.log('📊 [API Client] 请求URL:', url);
+    logger.debug('Request URL:', url);
     const res = await fetch(url, { headers: getAuthHeaders() });
     
     if (!res.ok) {

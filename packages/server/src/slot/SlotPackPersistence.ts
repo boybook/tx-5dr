@@ -5,6 +5,9 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import type { SlotPack } from '@tx5dr/contracts';
 import { tx5drPaths } from '../utils/app-paths.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('SlotPackPersistence');
 
 /**
  * SlotPack持久化存储接口
@@ -53,7 +56,7 @@ export class SlotPackPersistence {
     
     // 异步处理写入队列
     this.processWriteQueue().catch(error => {
-      console.error('💾 [SlotPack存储] 处理写入队列失败:', error);
+      console.error('[SlotPackPersistence] Failed to process write queue:', error);
     });
   }
 
@@ -75,7 +78,7 @@ export class SlotPackPersistence {
         }
       }
     } catch (error) {
-      console.error('💾 [SlotPack存储] 批量写入失败:', error);
+      console.error('[SlotPackPersistence] Batch write failed:', error);
     } finally {
       this.isWriting = false;
     }
@@ -102,13 +105,11 @@ export class SlotPackPersistence {
       // 强制刷新到磁盘（确保数据不丢失）
       await this.currentFileHandle.sync();
 
-      // 计算数据大小用于日志
       const dataSizeKB = (Buffer.byteLength(jsonLine, 'utf8') / 1024).toFixed(2);
-      
-      console.log(`💾 [SlotPack存储] 已保存: ${record.slotPack.slotId} (${record.operation}, ${record.slotPack.frames.length}帧, ${dataSizeKB}KB)`);
-      
+      logger.info(`Saved: ${record.slotPack.slotId} (${record.operation}, ${record.slotPack.frames.length} frames, ${dataSizeKB}KB)`);
+
     } catch (error) {
-      console.error(`💾 [SlotPack存储] 写入失败 (尝试 ${retryCount + 1}/${this.maxRetries}):`, error);
+      console.error(`[SlotPackPersistence] Write failed (attempt ${retryCount + 1}/${this.maxRetries}):`, error);
       
       // 关闭可能有问题的文件句柄
       await this.closeCurrentFile();
@@ -118,7 +119,7 @@ export class SlotPackPersistence {
         await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // 指数退避
         await this.writeRecord(record, retryCount + 1);
       } else {
-        console.error(`💾 [SlotPack存储] 达到最大重试次数，丢弃数据:`, record.slotPack.slotId);
+        console.error('[SlotPackPersistence] Max retries reached, dropping data:', record.slotPack.slotId);
       }
     }
   }
@@ -149,10 +150,10 @@ export class SlotPackPersistence {
       this.currentFileHandle = await fs.open(filePath, 'a');
       this.currentDateStr = dateStr;
       
-      console.log(`💾 [SlotPack存储] 打开存储文件: ${filePath}`);
-      
+      logger.info(`Opened storage file: ${filePath}`);
+
     } catch (error) {
-      console.error(`💾 [SlotPack存储] 无法打开文件:`, error);
+      console.error('[SlotPackPersistence] Cannot open file:', error);
       throw error;
     }
   }
@@ -164,9 +165,9 @@ export class SlotPackPersistence {
     if (this.currentFileHandle) {
       try {
         await this.currentFileHandle.close();
-        console.log(`💾 [SlotPack存储] 已关闭文件: ${this.currentDateStr}`);
+        logger.info(`Closed file: ${this.currentDateStr}`);
       } catch (error) {
-        console.error(`💾 [SlotPack存储] 关闭文件失败:`, error);
+        console.error('[SlotPackPersistence] Failed to close file:', error);
       } finally {
         this.currentFileHandle = null;
         this.currentDateStr = null;
@@ -206,7 +207,7 @@ export class SlotPackPersistence {
       try {
         currentFilePath = await this.getFilePath(this.currentDateStr);
       } catch (error) {
-        console.error('获取当前文件路径失败:', error);
+        console.error('[SlotPackPersistence] Failed to get current file path:', error);
       }
     }
     
@@ -225,9 +226,9 @@ export class SlotPackPersistence {
     if (this.currentFileHandle) {
       try {
         await this.currentFileHandle.sync();
-        console.log(`💾 [SlotPack存储] 强制刷新完成`);
+        logger.info('Forced flush complete');
       } catch (error) {
-        console.error(`💾 [SlotPack存储] 强制刷新失败:`, error);
+        console.error('[SlotPackPersistence] Forced flush failed:', error);
       }
     }
     
@@ -239,7 +240,7 @@ export class SlotPackPersistence {
    * 清理资源
    */
   async cleanup(): Promise<void> {
-    console.log('💾 [SlotPack存储] 正在清理资源...');
+    logger.info('Cleaning up resources');
     
     // 处理剩余的写入队列
     await this.processWriteQueue();
@@ -250,7 +251,7 @@ export class SlotPackPersistence {
     // 清空队列
     this.writeQueue.length = 0;
     
-    console.log('💾 [SlotPack存储] 资源清理完成');
+    logger.info('Resource cleanup complete');
   }
 
   /**
@@ -270,20 +271,20 @@ export class SlotPackPersistence {
             const record = JSON.parse(line) as SlotPackStorageRecord;
             records.push(record);
           } catch (error) {
-            console.warn(`💾 [SlotPack存储] 跳过损坏的行: ${line.substring(0, 100)}...`);
+            logger.warn(`Skipping corrupted line: ${line.substring(0, 100)}...`);
           }
         }
       }
       
-      console.log(`💾 [SlotPack存储] 读取 ${dateStr} 的记录: ${records.length} 条`);
+      logger.info(`Read ${records.length} records for ${dateStr}`);
       return records;
-      
+
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
-        console.log(`💾 [SlotPack存储] 日期 ${dateStr} 的文件不存在`);
+        logger.info(`No file found for date ${dateStr}`);
         return [];
       }
-      console.error(`💾 [SlotPack存储] 读取记录失败:`, error);
+      console.error('[SlotPackPersistence] Failed to read records:', error);
       throw error;
     }
   }
@@ -311,7 +312,7 @@ export class SlotPackPersistence {
         throw error;
       }
     } catch (error) {
-      console.error('💾 [SlotPack存储] 获取可用日期失败:', error);
+      console.error('[SlotPackPersistence] Failed to get available dates:', error);
       return [];
     }
   }

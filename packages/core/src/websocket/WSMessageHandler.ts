@@ -1,5 +1,8 @@
 import { WSEventEmitter } from './WSEventEmitter.js';
 import { WSMessageType } from '@tx5dr/contracts';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('WSMessageHandler');
 
 /**
  * 消息类型到事件名称的映射表
@@ -80,8 +83,8 @@ export class WSMessageHandler extends WSEventEmitter {
         this.handleMessage(message);
       }
     } catch (error) {
-      console.error('解析WebSocket消息失败:', error);
-      this.emitWSEvent('error', new Error(`消息格式错误: ${error instanceof Error ? error.message : String(error)}`));
+      logger.error('Failed to parse message:', error);
+      this.emitWSEvent('error', new Error(`Message parse error: ${error instanceof Error ? error.message : String(error)}`));
     }
   }
 
@@ -99,8 +102,8 @@ export class WSMessageHandler extends WSEventEmitter {
       }
     }
 
-    console.error('WebSocket消息验证失败: 缺少必要字段');
-    this.emitWSEvent('error', new Error('消息验证失败'));
+    logger.debug('Message validation failed: missing required fields');
+    this.emitWSEvent('error', new Error('Message validation failed'));
     return null;
   }
 
@@ -121,8 +124,8 @@ export class WSMessageHandler extends WSEventEmitter {
       // 根据消息类型分发事件
       this.dispatchMessageEvent(messageType, message);
     } else {
-      console.warn('未知的WebSocket消息类型:', messageType);
-      this.emitWSEvent('error', new Error(`未知的消息类型: ${String(messageType)}`));
+      logger.warn('Unknown message type:', messageType);
+      this.emitWSEvent('error', new Error(`Unknown message type: ${String(messageType)}`));
     }
   }
 
@@ -176,8 +179,8 @@ export class WSMessageHandler extends WSEventEmitter {
     try {
       return JSON.stringify(message);
     } catch (error) {
-      console.error('序列化WebSocket消息失败:', error);
-      throw new Error(`消息序列化失败: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error('Failed to serialize message:', error);
+      throw new Error(`Message serialization failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

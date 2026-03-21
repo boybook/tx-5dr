@@ -8,6 +8,9 @@ import { CycleUtils } from '@tx5dr/core';
 import { openLogbookWindow } from '../utils/windowManager';
 import { addToast } from '@heroui/toast';
 import { useTranslation } from 'react-i18next';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('RadioOperator');
 
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
@@ -35,7 +38,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       const contextChanged = JSON.stringify(prevOperatorStatusRef.current.context) !== JSON.stringify(operatorStatus.context);
       
       if (contextChanged) {
-        console.log(`🔄 [RadioOperator ${operatorStatus.id}] 渲染 #${renderCountRef.current}`, {
+        logger.debug(`Operator ${operatorStatus.id} render #${renderCountRef.current}`, {
           contextChanged,
           editingFields: Array.from(editingFields),
         });
@@ -110,10 +113,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   React.useEffect(() => {
     const shouldShow = shouldShowForceStopPopover();
     if (shouldShow && !isForceStopPopoverOpen) {
-      console.log('✅ [ForceStop] 自动打开Popover');
+      logger.debug('Auto-opening force stop popover');
       setIsForceStopPopoverOpen(true);
     } else if (!shouldShow && isForceStopPopoverOpen) {
-      console.log('❌ [ForceStop] 自动关闭Popover');
+      logger.debug('Auto-closing force stop popover');
       setIsForceStopPopoverOpen(false);
     }
   }, [shouldShowForceStopPopover, isForceStopPopoverOpen]);
@@ -484,12 +487,12 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 <Switch
                   isSelected={operatorStatus.isTransmitting}
                   onValueChange={(isSelected) => {
-                    console.log('🔄 [Switch] 值变化:', { isSelected, operatorId: operatorStatus.id });
+                    logger.debug('Switch value changed:', { isSelected, operatorId: operatorStatus.id });
                     if (connection.state.radioService) {
                       if (isSelected) {
                         connection.state.radioService.startOperator(operatorStatus.id);
                       } else {
-                        console.log('🛑 [Switch] 关闭发射，检查是否需要显示Popover');
+                        logger.debug('Switch off, checking if force stop popover needed');
                         connection.state.radioService.stopOperator(operatorStatus.id);
                       }
                     }

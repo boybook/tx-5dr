@@ -10,6 +10,9 @@
 
 import { EventEmitter } from 'eventemitter3';
 import type { MeterData, FT8Spectrum } from '@tx5dr/contracts';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('EventBus');
 
 /**
  * 事件总线支持的事件类型
@@ -87,7 +90,7 @@ export class EventBus extends EventEmitter<EventBusEvents> {
     };
 
     if (this.config.enableTracing) {
-      console.log('🚌 [EventBus] 事件总线已启用（追踪模式开启）');
+      logger.debug('EventBus initialized (tracing enabled)');
     }
   }
 
@@ -121,7 +124,7 @@ export class EventBus extends EventEmitter<EventBusEvents> {
     if (this.config.rateLimits?.[eventName]) {
       if (!this.checkRateLimit(eventName)) {
         if (this.config.enableTracing) {
-          console.warn(`⚠️  [EventBus] 事件 ${eventName} 被限流`);
+          logger.debug(`Event ${eventName} rate-limited`);
         }
         return false;
       }
@@ -200,8 +203,8 @@ export class EventBus extends EventEmitter<EventBusEvents> {
 
     if (shouldLog) {
       const dataSize = JSON.stringify(args).length;
-      console.log(
-        `🚌 [EventBus] ${eventName} (#${stats?.count || 1}, ${dataSize} bytes, ${stats?.avgInterval.toFixed(1) || 0}ms avg)`
+      logger.debug(
+        `${eventName} (#${stats?.count || 1}, ${dataSize} bytes, ${stats?.avgInterval.toFixed(1) || 0}ms avg)`
       );
     }
   }
@@ -219,25 +222,25 @@ export class EventBus extends EventEmitter<EventBusEvents> {
   printStatsReport(): void {
     const stats = this.getStats();
     if (stats.length === 0) {
-      console.log('📊 [EventBus] 暂无事件统计数据');
+      logger.debug('No event stats available');
       return;
     }
 
-    console.log('📊 [EventBus] 事件统计报告:');
-    console.log('━'.repeat(80));
-    console.log(
-      `${'事件名称'.padEnd(30)} | ${'次数'.padEnd(10)} | ${'平均间隔'.padEnd(15)} | ${'频率'.padEnd(10)}`
+    logger.debug('Event stats report:');
+    logger.debug('━'.repeat(80));
+    logger.debug(
+      `${'Event name'.padEnd(30)} | ${'Count'.padEnd(10)} | ${'Avg interval'.padEnd(15)} | ${'Frequency'.padEnd(10)}`
     );
-    console.log('━'.repeat(80));
+    logger.debug('━'.repeat(80));
 
     stats.forEach((stat) => {
       const frequency = stat.avgInterval > 0 ? (1000 / stat.avgInterval).toFixed(2) : 'N/A';
-      console.log(
+      logger.debug(
         `${stat.eventName.padEnd(30)} | ${String(stat.count).padEnd(10)} | ${stat.avgInterval.toFixed(1).padEnd(15)} | ${frequency.padEnd(10)}`
       );
     });
 
-    console.log('━'.repeat(80));
+    logger.debug('━'.repeat(80));
   }
 
   /**
@@ -246,7 +249,7 @@ export class EventBus extends EventEmitter<EventBusEvents> {
   clearStats(): void {
     this.eventStats.clear();
     this.rateLimitState.clear();
-    console.log('🧹 [EventBus] 统计数据已清空');
+    logger.debug('Stats cleared');
   }
 }
 

@@ -1,4 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('SpectrumDisplay');
 import type { FT8Spectrum } from '@tx5dr/contracts';
 import { useConnection, useOperators } from '../store/radioStore';
 import { WebGLWaterfall } from './WebGLWaterfall';
@@ -79,7 +82,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       await (window as any).electronAPI.window.openSpectrumWindow();
       onPopOutChange?.(true);
     } catch (error) {
-      console.error('Failed to open spectrum window:', error);
+      logger.error('Failed to open spectrum window:', error);
     }
   }, [onPopOutChange]);
 
@@ -91,7 +94,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       try {
         return JSON.parse(saved);
       } catch (e) {
-        console.error('Failed to parse saved settings:', e);
+        logger.error('Failed to parse saved settings:', e);
       }
     }
     // 默认设置

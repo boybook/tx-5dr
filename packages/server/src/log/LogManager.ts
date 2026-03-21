@@ -2,6 +2,9 @@ import { ILogProvider, CallsignAnalysis } from '@tx5dr/core';
 
 import { ADIFLogProvider } from './ADIFLogProvider.js';
 import { getDataFilePath } from '../utils/app-paths.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('LogManager');
 
 /**
  * 日志本实例
@@ -59,11 +62,11 @@ export class LogManager {
    */
   async initialize(): Promise<void> {
     if (this.isInitialized) {
-      console.log('📋 [日志管理器] 已经初始化');
+      logger.info('Already initialized');
       return;
     }
-    
-    console.log('📋 [日志管理器] 正在初始化...');
+
+    logger.info('Initializing');
     
     // 确保logbook目录存在
     const logbookDir = await getDataFilePath('logbook');
@@ -71,13 +74,13 @@ export class LogManager {
     const fs = await import('fs/promises');
     try {
       await fs.mkdir(logbookDir, { recursive: true });
-      console.log(`📋 [日志管理器] logbook目录已准备: ${logbookDir}`);
+      logger.info(`Logbook directory ready: ${logbookDir}`);
     } catch (error) {
-      console.error('📋 [日志管理器] 创建logbook目录失败:', error);
+      console.error('[LogManager] Failed to create logbook directory:', error);
     }
-    
+
     this.isInitialized = true;
-    console.log('✅ [日志管理器] 初始化完成 - 基于呼号的日志系统已就绪');
+    logger.info('Initialization complete - callsign-based log system ready');
   }
 
   /**
@@ -86,11 +89,11 @@ export class LogManager {
    */
   async initializeLogBooksForExistingOperators(): Promise<void> {
     if (!this.isInitialized) {
-      console.warn('📋 [日志管理器] 尚未初始化，跳过操作员日志本初始化');
+      logger.warn('Not initialized, skipping operator logbook initialization');
       return;
     }
 
-    console.log('📋 [日志管理器] 开始为现有操作员初始化日志本...');
+    logger.info('Initializing logbooks for existing operators');
     
     const callsigns = Array.from(this.operatorCallsignMap.values());
     const uniqueCallsigns = [...new Set(callsigns)]; // 去重
@@ -98,13 +101,13 @@ export class LogManager {
     for (const callsign of uniqueCallsigns) {
       try {
         await this.getOrCreateLogBookByCallsign(callsign);
-        console.log(`📋 [日志管理器] 已为呼号 ${callsign} 初始化日志本`);
+        logger.info(`Logbook initialized for callsign ${callsign}`);
       } catch (error) {
-        console.error(`📋 [日志管理器] 为呼号 ${callsign} 初始化日志本失败:`, error);
+        console.error(`[LogManager] Failed to initialize logbook for callsign ${callsign}:`, error);
       }
     }
     
-    console.log(`✅ [日志管理器] 完成 ${uniqueCallsigns.length} 个呼号的日志本初始化`);
+    logger.info(`Completed logbook initialization for ${uniqueCallsigns.length} callsigns`);
   }
   
   /**
@@ -115,7 +118,7 @@ export class LogManager {
       throw new Error(`日志本 ${config.id} 已存在`);
     }
     
-    console.log(`📋 [日志管理器] 创建日志本: ${config.name} (${config.id})`);
+    logger.info(`Creating logbook: ${config.name} (${config.id})`);
     
     // 确定日志文件路径
     let logFilePath: string;
@@ -127,7 +130,7 @@ export class LogManager {
       logFilePath = await getDataFilePath(fileName);
     }
     
-    console.log(`📋 [日志管理器] 日志文件路径: ${logFilePath}`);
+    logger.debug(`Log file path: ${logFilePath}`);
     
     // 创建ADIF日志Provider
     const provider = new ADIFLogProvider({
@@ -150,7 +153,7 @@ export class LogManager {
     };
     
     this.logBooks.set(config.id, logBook);
-    console.log(`📋 [日志管理器] 日志本创建完成: ${config.name} -> ${logBook.filePath}`);
+    logger.info(`Logbook created: ${config.name} -> ${logBook.filePath}`);
     
     return logBook;
   }
@@ -176,7 +179,7 @@ export class LogManager {
     await logBook.provider.close();
     this.logBooks.delete(logBookId);
     
-    console.log(`📋 [日志管理器] 日志本已删除: ${logBook.name}`);
+    logger.info(`Logbook deleted: ${logBook.name}`);
   }
   
   /**
@@ -216,7 +219,7 @@ export class LogManager {
       logBookId = `logbook-${normalizedCallsign}`;
       const logFileName = `logbook/${normalizedCallsign}.adi`;
       
-      console.log(`📋 [日志管理器] 为呼号 ${normalizedCallsign} 创建日志本`);
+      logger.info(`Creating logbook for callsign ${normalizedCallsign}`);
       
       const logBook = await this.createLogBook({
         id: logBookId,
@@ -245,7 +248,7 @@ export class LogManager {
   registerOperatorCallsign(operatorId: string, callsign: string): void {
     const normalizedCallsign = callsign.toUpperCase();
     this.operatorCallsignMap.set(operatorId, normalizedCallsign);
-    console.log(`📋 [日志管理器] 操作员 ${operatorId} 注册呼号: ${normalizedCallsign}`);
+    logger.info(`Operator ${operatorId} registered callsign: ${normalizedCallsign}`);
   }
 
   /**
@@ -263,9 +266,9 @@ export class LogManager {
       // 将呼号映射到指定的日志本
       this.callsignLogBookMap.set(callsign, logBookId);
       logBook.lastUsed = Date.now();
-      console.log(`📋 [日志管理器] 操作员 ${operatorId} (呼号: ${callsign}) 已连接到日志本 ${logBook.name}`);
+      logger.info(`Operator ${operatorId} (callsign: ${callsign}) connected to logbook ${logBook.name}`);
     } else {
-      console.warn(`📋 [日志管理器] 警告：操作员 ${operatorId} 未注册呼号，无法连接到日志本`);
+      logger.warn(`Operator ${operatorId} has no registered callsign, cannot connect to logbook`);
     }
   }
 
@@ -278,7 +281,7 @@ export class LogManager {
       const logBookId = this.callsignLogBookMap.get(callsign);
       if (logBookId) {
         this.callsignLogBookMap.delete(callsign);
-        console.log(`📋 [日志管理器] 操作员 ${operatorId} (呼号: ${callsign}) 已断开与日志本的连接`);
+        logger.info(`Operator ${operatorId} (callsign: ${callsign}) disconnected from logbook`);
       }
     }
   }
@@ -338,14 +341,14 @@ export class LogManager {
     const callsign = this.operatorCallsignMap.get(operatorId);
     if (!callsign) {
       // 没有注册呼号的操作员没有日志本
-      console.warn(`📋 [日志管理器] 操作员 ${operatorId} 未注册呼号，无法获取日志本`);
+      logger.warn(`Operator ${operatorId} has no registered callsign, cannot get logbook`);
       return null;
     }
     
     try {
       return await this.getOrCreateLogBookByCallsign(callsign);
     } catch (error) {
-      console.error(`📋 [日志管理器] 获取操作员 ${operatorId} (呼号: ${callsign}) 的日志本失败:`, error);
+      console.error(`[LogManager] Failed to get logbook for operator ${operatorId} (callsign: ${callsign}):`, error);
       return null;
     }
   }
@@ -354,7 +357,7 @@ export class LogManager {
    * 获取日志Provider（已废弃，不再支持默认日志本）
    */
   getLogProvider(): ILogProvider | null {
-    console.warn('📋 [日志管理器] getLogProvider() 已废弃，请使用 getOperatorLogBook() 替代');
+    logger.warn('getLogProvider() is deprecated, use getOperatorLogBook() instead');
     return null;
   }
   

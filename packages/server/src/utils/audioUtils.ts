@@ -5,6 +5,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as nodeWav from 'node-wav';
 import { Resampler } from 'rubato-fft-node';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('AudioUtils');
 
 /**
  * 音频工具函数集合
@@ -40,14 +43,14 @@ export async function saveAudioToWav(
     // 确保输出目录存在
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
-      console.log(`📁 [音频工具] 创建输出目录: ${outputDir}`);
+      logger.debug(`Created output dir: ${outputDir}`);
     }
-    
+
     // 生成完整文件路径
     const wavFilename = filename.endsWith('.wav') ? filename : `${filename}.wav`;
     const filepath = path.resolve(outputDir, wavFilename);
-    
-    console.log(`💾 [音频工具] 准备保存音频文件 (float32): ${filepath}`);
+
+    logger.debug(`Saving audio file (float32): ${filepath}`);
     
     // 确保音频数据在有效范围内 [-1, 1]
     const normalizedAudio = new Float32Array(audioData.length);
@@ -77,23 +80,23 @@ export async function saveAudioToWav(
     fs.writeFileSync(filepath, wavBuffer);
     
     const stats = fs.statSync(filepath);
-    console.log(`✅ [音频工具] 保存音频文件成功 (float32): ${wavFilename} (${(stats.size / 1024).toFixed(1)}KB)`);
+    logger.debug(`Audio file saved (float32): ${wavFilename} (${(stats.size / 1024).toFixed(1)}KB)`);
     
     return filepath;
     
   } catch (error) {
-    console.error(`❌ [音频工具] 保存音频文件失败:`, error);
-    console.error(`   输出目录: ${outputDir}`);
-    console.error(`   目录是否存在: ${fs.existsSync(outputDir)}`);
-    
+    logger.error('Failed to save audio file:', error);
+    logger.error(`Output dir: ${outputDir}`);
+    logger.error(`Dir exists: ${fs.existsSync(outputDir)}`);
+
     // 尝试创建一个简单的测试文件来验证目录权限
     try {
       const testFile = path.resolve(outputDir, 'test.txt');
       fs.writeFileSync(testFile, 'test');
       fs.unlinkSync(testFile);
-      console.log(`✅ [音频工具] 目录权限正常`);
+      logger.debug('Directory permissions OK');
     } catch (permError) {
-      console.error(`❌ [音频工具] 目录权限问题:`, permError);
+      logger.error('Directory permission issue:', permError);
     }
     
     throw error;
@@ -147,7 +150,7 @@ export function normalizeAudioVolume(
   
   // 如果音频完全静音，返回原始数据
   if (currentPeak === 0) {
-    console.log(`🔇 [音频标准化] 检测到静音，跳过标准化`);
+    logger.debug('Silent audio detected, skipping normalization');
     return new Float32Array(samples);
   }
   
@@ -157,11 +160,11 @@ export function normalizeAudioVolume(
   // 限制增益范围
   const actualGain = Math.max(minGain, Math.min(maxGain, requiredGain));
   
-  console.log(`🔊 [音频标准化] 当前峰值: ${currentPeak.toFixed(4)}, 目标峰值: ${targetPeak}, 计算增益: ${requiredGain.toFixed(2)}, 实际增益: ${actualGain.toFixed(2)}`);
+  logger.debug(`Normalization: currentPeak=${currentPeak.toFixed(4)}, targetPeak=${targetPeak}, requiredGain=${requiredGain.toFixed(2)}, actualGain=${actualGain.toFixed(2)}`);
   
   // 如果增益接近1，不需要处理
   if (Math.abs(actualGain - 1.0) < 0.01) {
-    console.log(`✅ [音频标准化] 音量已接近目标，无需调整`);
+    logger.debug('Volume already near target, no adjustment needed');
     return new Float32Array(samples);
   }
   
@@ -189,7 +192,7 @@ export function normalizeAudioVolume(
     }
   }
   
-  console.log(`✅ [音频标准化] 完成，最终峰值: ${finalPeak.toFixed(4)}`);
+  logger.debug(`Normalization complete, final peak: ${finalPeak.toFixed(4)}`);
   
   return normalized;
 }
@@ -209,17 +212,17 @@ export function createAudioOutputDir(
   try {
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
-      console.log(`📁 [音频工具] 创建音频输出目录: ${outputDir}`);
+      logger.debug(`Created audio output dir: ${outputDir}`);
     } else {
-      console.log(`📁 [音频工具] 使用现有音频输出目录: ${outputDir}`);
+      logger.debug(`Using existing audio output dir: ${outputDir}`);
     }
     return outputDir;
   } catch (error) {
-    console.error(`❌ [音频工具] 创建音频输出目录失败:`, error);
+    logger.error('Failed to create audio output dir:', error);
     // 如果创建失败，使用临时目录
     const tempDir = path.resolve(process.cwd(), 'temp_audio_captures');
     fs.mkdirSync(tempDir, { recursive: true });
-    console.log(`📁 [音频工具] 使用临时目录: ${tempDir}`);
+    logger.debug(`Using temp dir: ${tempDir}`);
     return tempDir;
   }
 }
@@ -253,17 +256,17 @@ export function cleanupOldAudioFiles(
       if (fileAge > maxAgeMs) {
         fs.unlinkSync(filepath);
         cleanedCount++;
-        console.log(`🗑️ [音频工具] 清理旧文件: ${file}`);
+        logger.debug(`Removed old audio file: ${file}`);
       }
     }
-    
+
     if (cleanedCount > 0) {
-      console.log(`✅ [音频工具] 清理完成，删除了 ${cleanedCount} 个旧文件`);
+      logger.debug(`Cleanup complete, removed ${cleanedCount} old file(s)`);
     }
-    
+
     return cleanedCount;
   } catch (error) {
-    console.error(`❌ [音频工具] 清理旧文件失败:`, error);
+    logger.error('Failed to clean up old audio files:', error);
     return 0;
   }
 }
@@ -315,15 +318,15 @@ export async function resampleAudioProfessional(
         resamplerCache.set(cacheKey, resampler);
       }
 
-      console.log(`🔄 [音频工具] 创建新的 Rust 重采样器: ${inputSampleRate}Hz -> ${outputSampleRate}Hz, 质量=${nativeQuality}`);
+      logger.debug(`Created new Rust resampler: ${inputSampleRate}Hz -> ${outputSampleRate}Hz, quality=${nativeQuality}`);
     }
 
     const resampled = await resampler.process(samples);
     return resampled;
 
   } catch (error) {
-    console.error(`❌ [音频工具] 重采样失败:`, error);
-    console.log(`🔄 [音频工具] 回退到简单重采样`);
+    logger.error('Resampling failed:', error);
+    logger.debug('Falling back to simple resampler');
     return resampleAudioSimple(samples, inputSampleRate, outputSampleRate);
   }
 }
@@ -388,7 +391,7 @@ export function clearResamplerCache(): void {
     resampler.dispose();
   }
   resamplerCache.clear();
-  console.log('🧹 [音频工具] Rust 重采样器缓存已清理');
+  logger.debug('Rust resampler cache cleared');
 }
 
 /**

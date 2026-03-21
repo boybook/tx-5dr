@@ -3,6 +3,9 @@ import type { FT8Spectrum } from '@tx5dr/contracts';
 import type { AudioBufferProvider } from '@tx5dr/core';
 import { SpectrumAnalyzer } from './SpectrumAnalyzer.js';
 import { globalEventBus } from '../utils/EventBus.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('SpectrumScheduler');
 
 /**
  * 频谱分析配置
@@ -80,7 +83,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     this.sampleRate = sampleRate;
 
     if (!this.config.enabled) {
-      console.log('📊 [频谱调度器] 频谱分析已禁用');
+      logger.info('spectrum analysis disabled');
       return;
     }
 
@@ -92,11 +95,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       targetSampleRate: this.config.targetSampleRate,
     });
 
-    console.log(`📊 [频谱调度器] 初始化完成:`);
-    console.log(`   - 分析间隔: ${this.config.analysisInterval}ms`);
-    console.log(`   - FFT大小: ${this.config.fftSize}`);
-    console.log(`   - 窗口函数: ${this.config.windowFunction}`);
-    console.log(`   - 采样率: ${this.sampleRate}Hz`);
+    logger.info(`spectrum analyzer started: interval=${this.config.analysisInterval}ms fftSize=${this.config.fftSize} window=${this.config.windowFunction} sampleRate=${this.sampleRate}Hz`);
   }
 
   /**
@@ -107,7 +106,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       return;
     }
 
-    console.log(`📊 [频谱调度器] 启动频谱分析，间隔: ${this.config.analysisInterval}ms`);
+    logger.info(`spectrum analysis started, interval=${this.config.analysisInterval}ms`);
 
     this.isRunning = true;
     this.resetStats();
@@ -129,7 +128,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       return;
     }
 
-    console.log('📊 [频谱调度器] 停止频谱分析');
+    logger.info('spectrum analysis stopped');
 
     this.isRunning = false;
     this.pausedDueToPTT = false; // 重置暂停状态
@@ -156,15 +155,15 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     if (!allowSpectrumWhileTransmitting) {
       if (active && !wasActive) {
         // PTT 激活，暂停频谱分析
-        console.log('📊 [频谱调度器] PTT激活且配置禁用发射时频谱分析，暂停频谱分析');
+        logger.debug('PTT active, spectrum analysis paused (transmit spectrum disabled)');
         this.pauseAnalysis();
       } else if (!active && wasActive) {
         // PTT 停止，恢复频谱分析
-        console.log('📊 [频谱调度器] PTT停止，恢复频谱分析');
+        logger.debug('PTT stopped, resuming spectrum analysis');
         this.resumeAnalysis();
       }
     } else if (active && !wasActive) {
-      console.log('📊 [频谱调度器] PTT激活但配置允许发射时频谱分析，继续分析');
+      logger.debug('PTT active, spectrum analysis continues (transmit spectrum allowed)');
     }
   }
 
@@ -178,7 +177,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
         clearInterval(this.analysisTimer);
         this.analysisTimer = null;
       }
-      console.log('📊 [频谱调度器] 频谱分析已暂停（PTT激活）');
+      logger.debug('spectrum analysis paused (PTT active)');
     }
   }
 
@@ -195,7 +194,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
       // 立即执行一次分析
       this.performAnalysis();
-      console.log('📊 [频谱调度器] 频谱分析已恢复（PTT停止）');
+      logger.debug('spectrum analysis resumed (PTT stopped)');
     }
   }
 
@@ -253,7 +252,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       this.emit('spectrumReady', spectrum);  // 原路径
       globalEventBus.emit('bus:spectrumData', spectrum);  // EventBus 直达
     } catch (error) {
-      console.error('频谱分析失败:', error);
+      logger.error('spectrum analysis failed:', error);
       this.stats.errorCount++;
     }
   }
@@ -280,7 +279,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       });
     }
 
-    console.log('📊 [频谱调度器] 配置已更新:', newConfig);
+    logger.info('config updated:', newConfig);
 
     if (wasRunning && this.config.enabled) {
       this.start();
@@ -323,10 +322,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
    */
   private logStats(): void {
     if (this.stats.totalAnalyses > 0) {
-      console.log('📊 [频谱调度器] 性能统计:');
-      console.log(`   - 总分析次数: ${this.stats.totalAnalyses}`);
-      console.log(`   - 平均处理时间: ${this.stats.averageProcessingTime.toFixed(2)}ms`);
-      console.log(`   - 错误次数: ${this.stats.errorCount}`);
+      logger.info(`stats: analyses=${this.stats.totalAnalyses} avgTime=${this.stats.averageProcessingTime.toFixed(2)}ms errors=${this.stats.errorCount}`);
     }
   }
 
@@ -337,6 +333,6 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     this.stop();
     this.analyzer = null;
     this.removeAllListeners();
-    console.log('📊 [频谱调度器] 已销毁');
+    logger.info('spectrum scheduler destroyed');
   }
 }

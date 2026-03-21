@@ -2,6 +2,9 @@ import type { RadioProfile, CreateProfileRequest, UpdateProfileRequest } from '@
 import type { HamlibConfig, AudioDeviceSettings } from '@tx5dr/contracts';
 import { ConfigManager } from './config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('ProfileManager');
 
 /**
  * ProfileManager - Profile 业务管理器
@@ -52,7 +55,7 @@ export class ProfileManager {
     };
 
     await configManager.addProfile(profile);
-    console.log(`✅ [ProfileManager] 创建 Profile: "${profile.name}" (id: ${profile.id})`);
+    logger.info(`Profile created: "${profile.name}" (id: ${profile.id})`);
 
     // 广播列表更新事件
     this.broadcastProfileListUpdated();
@@ -83,7 +86,7 @@ export class ProfileManager {
     }
 
     const profile = await configManager.updateProfile(id, updates);
-    console.log(`✅ [ProfileManager] 更新 Profile: "${profile.name}" (id: ${id})`);
+    logger.info(`Profile updated: "${profile.name}" (id: ${id})`);
 
     // 广播列表更新事件
     this.broadcastProfileListUpdated();
@@ -104,7 +107,7 @@ export class ProfileManager {
 
     const profile = configManager.getProfile(id);
     await configManager.deleteProfile(id);
-    console.log(`✅ [ProfileManager] 删除 Profile: "${profile?.name}" (id: ${id})`);
+    logger.info(`Profile deleted: "${profile?.name}" (id: ${id})`);
 
     // 广播列表更新事件
     this.broadcastProfileListUpdated();
@@ -138,16 +141,16 @@ export class ProfileManager {
             setTimeout(() => reject(new Error('引擎停止超时')), 10_000)
           ),
         ]);
-        console.log('✅ [ProfileManager] 引擎已停止');
+        logger.info('Engine stopped');
       } catch (stopError) {
         // 停止超时或失败：记录日志但继续切换
-        console.warn('⚠️ [ProfileManager] 引擎停止异常，继续切换:', stopError);
+        logger.warn('Engine stop error, proceeding with profile switch:', stopError);
       }
     }
 
     // 阶段2：切换配置（原子操作）
     await configManager.setActiveProfileId(id);
-    console.log(`✅ [ProfileManager] 已激活 Profile: "${profile.name}" (id: ${id})`);
+    logger.info(`Profile activated: "${profile.name}" (id: ${id})`);
 
     // 阶段3：广播事件通知前端
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -160,11 +163,11 @@ export class ProfileManager {
 
     // 阶段4：始终启动引擎（使用新 Profile 配置）
     try {
-      console.log('🚀 [ProfileManager] 启动引擎（新 Profile 配置）...');
+      logger.info('Starting engine with new profile config...');
       await engine.start();
-      console.log('✅ [ProfileManager] 引擎已启动');
+      logger.info('Engine started');
     } catch (startError) {
-      console.error('❌ [ProfileManager] 引擎启动失败:', startError);
+      logger.error('Engine start failed:', startError);
       // 启动失败不影响 Profile 切换结果，错误会通过引擎事件通知前端
     }
 
@@ -181,7 +184,7 @@ export class ProfileManager {
   async reorderProfiles(orderedIds: string[]): Promise<void> {
     const configManager = ConfigManager.getInstance();
     await configManager.reorderProfiles(orderedIds);
-    console.log(`✅ [ProfileManager] Profile 顺序已更新`);
+    logger.info('Profile order updated');
     this.broadcastProfileListUpdated();
   }
 

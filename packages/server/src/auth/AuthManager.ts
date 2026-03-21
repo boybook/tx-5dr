@@ -15,6 +15,9 @@ import {
   AuthConfigSchema,
 } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AuthManager');
 
 const BCRYPT_ROUNDS = 10;
 const TOKEN_PREFIX = 'txdr_';
@@ -55,7 +58,7 @@ export class AuthManager {
     } catch {
       this.config = AuthConfigSchema.parse({});
       await this.saveConfig();
-      console.log('🔑 [AuthManager] 已创建默认认证配置');
+      logger.info('Default auth config created');
     }
   }
 
@@ -67,7 +70,7 @@ export class AuthManager {
     if (!this.config.jwtSecret) {
       this.config.jwtSecret = randomBytes(64).toString('hex');
       this.saveConfig().catch(err =>
-        console.error('🔑 [AuthManager] 保存 JWT secret 失败:', err)
+        logger.error('Failed to save JWT secret:', err)
       );
     }
     this.jwtSecret = this.config.jwtSecret;
@@ -96,7 +99,7 @@ export class AuthManager {
           operatorIds: [],
           maxOperators: 0,
         }, null, plainToken, true);
-        console.log('🔑 [AuthManager] 已从 .admin-token 文件注册管理员令牌');
+        logger.info('Admin token registered from .admin-token file');
       } else if (!existing.system) {
         // 迁移：给已有的初始令牌补上 system 标记
         existing.system = true;
@@ -113,13 +116,13 @@ export class AuthManager {
       plainToken = result.token;
       // 写入 .admin-token 文件供 Electron 等外部进程读取
       await fs.writeFile(this.adminTokenFilePath, plainToken, 'utf-8');
-      console.log('🔑 [AuthManager] 已生成并写入 .admin-token 文件');
+      logger.info('Admin token generated and written to .admin-token file');
     }
 
     // 每次启动都打印管理员令牌
     console.log('');
     console.log('╔══════════════════════════════════════════════════╗');
-    console.log('║  🔑 管理员令牌:                                   ║');
+    console.log('║  Admin token:                                    ║');
     console.log(`║  ${plainToken}`);
     console.log('╚══════════════════════════════════════════════════╝');
     console.log('');
@@ -221,7 +224,7 @@ export class AuthManager {
 
     // 同步更新 .admin-token 文件
     await fs.writeFile(this.adminTokenFilePath, newPlainToken, 'utf-8');
-    console.log('🔑 [AuthManager] 系统令牌已重新生成');
+    logger.info('System token regenerated');
 
     return {
       id: token.id,
@@ -328,7 +331,7 @@ export class AuthManager {
       this.config.allowPublicViewing = updates.allowPublicViewing;
     }
     await this.saveConfig();
-    console.log('🔑 [AuthManager] 认证配置已更新:', this.getAuthConfig());
+    logger.info('Auth config updated:', this.getAuthConfig());
     return this.getAuthConfig();
   }
 

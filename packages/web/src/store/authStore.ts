@@ -2,6 +2,9 @@ import React, { createContext, useContext, useReducer, useEffect, useCallback, R
 import { api, configureAuthToken } from '@tx5dr/core';
 import type { UserRole, AuthStatus, AuthMeResponse } from '@tx5dr/contracts';
 import i18n from '../i18n';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('AuthStore');
 
 // ===== 认证状态 =====
 
@@ -201,7 +204,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // 1. 检查 URL 参数 ?auth_token=xxx（Electron 浏览器模式）
         const urlParams = new URLSearchParams(window.location.search);
         const urlToken = urlParams.get('auth_token');
-        console.log('🔑 [Auth] 初始化开始, URL token:', urlToken ? `${urlToken.slice(0, 15)}...` : '无');
+        logger.info('Initializing auth, URL token present:', urlToken ? 'yes' : 'no');
 
         if (urlToken) {
           // 清除 URL 参数
@@ -210,9 +213,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
           // 直接用 URL token 登录
           try {
-            console.log('🔑 [Auth] 正在通过 URL token 登录...');
+            logger.info('Logging in via URL token...');
             const resp = await api.login(urlToken);
-            console.log('🔑 [Auth] URL token 登录成功:', resp.role, resp.label);
+            logger.info('URL token login succeeded:', resp.role, resp.label);
             if (!cancelled) {
               saveJwt(resp.jwt);
               configureAuthToken(resp.jwt);
@@ -231,7 +234,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             }
             return;
           } catch (err) {
-            console.error('🔑 [Auth] URL token 登录失败:', err);
+            logger.error('URL token login failed:', err);
             // URL token 无效，继续正常流程
           }
         }
@@ -240,9 +243,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
         let authStatus: AuthStatus;
         try {
           authStatus = await api.getAuthStatus();
-          console.log('🔑 [Auth] 服务器认证状态:', authStatus);
+          logger.info('Server auth status:', authStatus);
         } catch (err) {
-          console.error('🔑 [Auth] 获取认证状态失败:', err);
+          logger.error('Failed to fetch auth status:', err);
           // 服务器不可达 — 默认认证未启用（向后兼容旧服务器）
           if (!cancelled) {
             dispatch({ type: 'INIT_NO_AUTH' });
@@ -295,7 +298,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
         // 否则保持未认证状态，显示登录页
       } catch (err) {
-        console.error('认证初始化失败:', err);
+        logger.error('Auth initialization failed:', err);
         if (!cancelled) {
           dispatch({ type: 'INIT_NO_AUTH' });
         }

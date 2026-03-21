@@ -9,6 +9,9 @@ import { TransmissionTracker, TransmissionPhase } from '../transmission/Transmis
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
 import { ListenerManager } from './ListenerManager.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('TransmissionPipeline');
 
 export interface TransmissionPipelineDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -65,7 +68,7 @@ export class TransmissionPipeline {
 
     // 编码错误事件
     this.lm.listen(encodeQueue, 'encodeError', (error: Error, request: { operatorId: string }) => {
-      console.error(`❌ [TransmissionPipeline] 编码失败: 操作员=${request.operatorId}:`, error.message);
+      logger.error(`encode failed: operatorId=${request.operatorId}: ${error.message}`);
       this.deps.engineEmitter.emit('transmissionComplete', {
         operatorId: request.operatorId,
         success: false,
@@ -78,7 +81,7 @@ export class TransmissionPipeline {
       await this.handleMixedAudioReady(mixedAudio);
     });
 
-    console.log(`✅ [TransmissionPipeline] 事件监听器已注册 (${this.lm.count} 个)`);
+    logger.info(`event listeners registered (${this.lm.count})`);
   }
 
   /**
@@ -92,7 +95,7 @@ export class TransmissionPipeline {
     }
 
     this.lm.disposeAll();
-    console.log(`✅ [TransmissionPipeline] 事件监听器已清理`);
+    logger.info('event listeners cleaned up');
   }
 
   /**
@@ -115,7 +118,7 @@ export class TransmissionPipeline {
     this.currentSlotExpectedEncodes = pendingCount;
 
     if (this.currentSlotExpectedEncodes > 0) {
-      console.log(`📊 [编码跟踪] 时隙 ${slotInfo.id}: 期望 ${this.currentSlotExpectedEncodes} 个编码任务`);
+      logger.debug(`slot ${slotInfo.id}: expected ${this.currentSlotExpectedEncodes} encode tasks`);
     }
   }
 
@@ -126,7 +129,7 @@ export class TransmissionPipeline {
     if (this.currentSlotExpectedEncodes > 0 &&
         this.currentSlotCompletedEncodes < this.currentSlotExpectedEncodes) {
       const missingCount = this.currentSlotExpectedEncodes - this.currentSlotCompletedEncodes;
-      console.warn(`⚠️ [编码超时] 发射时刻到达但编码未完成！期望 ${this.currentSlotExpectedEncodes} 个，已完成 ${this.currentSlotCompletedEncodes} 个，缺少 ${missingCount} 个`);
+      logger.warn(`encode timeout: expected ${this.currentSlotExpectedEncodes}, completed ${this.currentSlotCompletedEncodes}, missing ${missingCount}`);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.deps.engineEmitter.emit('timingWarning' as any, {
@@ -134,7 +137,7 @@ export class TransmissionPipeline {
         text: `发射时刻已到达，但仍有 ${missingCount} 个编码任务未完成。这可能导致发射延迟或失败。建议检查发射补偿设置或减少同时发射的操作员数量。`
       });
     } else if (this.currentSlotExpectedEncodes > 0) {
-      console.log(`✅ [编码跟踪] 所有编码任务已按时完成 (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);
+      logger.debug(`all encode tasks completed on time (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);
     }
   }
 
@@ -143,7 +146,6 @@ export class TransmissionPipeline {
    */
   async forceStopPTT(): Promise<void> {
     if (this._isPTTActive) {
-      console.log('📡 [PTT] 强制停止PTT');
       await this.stopPTT();
     }
   }
@@ -152,20 +154,13 @@ export class TransmissionPipeline {
    * 强制停止当前发射（公开方法）
    */
   async forceStopTransmission(): Promise<void> {
-    console.log('🛑 [TransmissionPipeline] 强制停止发射');
-
     try {
       const stoppedBytes = await this.deps.audioStreamManager.stopCurrentPlayback();
-      console.log(`🛑 [TransmissionPipeline] 已停止音频播放，丢弃 ${stoppedBytes} 字节`);
-
       await this.forceStopPTT();
-
       this.deps.audioMixer.clear();
-      console.log('🛑 [TransmissionPipeline] 已清空音频混音器队列');
-
-      console.log('✅ [TransmissionPipeline] 强制停止发射完成');
+      logger.info('force stop transmission', { stoppedBytes });
     } catch (error) {
-      console.error('❌ [TransmissionPipeline] 强制停止发射失败:', error);
+      logger.error(`force stop transmission failed: ${error}`);
       throw error;
     }
   }
@@ -173,11 +168,8 @@ export class TransmissionPipeline {
   // ─── 内部方法 ────────────────────────────────────
 
   private async startPTT(operatorIds: string[]): Promise<void> {
-    const pttStartTime = Date.now();
-    console.log(`📡 [PTT] 开始启动PTT (${new Date(pttStartTime).toISOString()})`);
-
     if (this._isPTTActive) {
-      console.log('📡 [PTT] PTT已经激活，跳过启动');
+      logger.debug('PTT already active, skipping');
       return;
     }
 
@@ -188,13 +180,9 @@ export class TransmissionPipeline {
 
     if (this.deps.radioManager.isConnected()) {
       try {
-        console.log(`📡 [PTT] 调用radioManager.setPTT(true)...`);
-        const radioCallStartTime = Date.now();
-
+        const pttStartTime = Date.now();
         await this.deps.radioManager.setPTT(true);
-
-        const radioCallDuration = Date.now() - radioCallStartTime;
-        console.log(`📡 [PTT] radioManager.setPTT(true)完成，耗时: ${radioCallDuration}ms`);
+        const durationMs = Date.now() - pttStartTime;
 
         this._isPTTActive = true;
 
@@ -204,22 +192,20 @@ export class TransmissionPipeline {
           isTransmitting: true,
           operatorIds
         });
-        console.log(`📡 [PTT] PTT状态广播: 开始发射, 操作员=[${operatorIds.join(', ')}]`);
 
-        const pttTotalDuration = Date.now() - pttStartTime;
-        console.log(`📡 [PTT] PTT启动成功，频谱分析已暂停，总耗时: ${pttTotalDuration}ms`);
+        logger.debug('PTT started', { durationMs });
       } catch (error) {
-        console.error('📡 [PTT] PTT启动失败:', error);
+        logger.error(`PTT start failed: ${error}`);
         throw error;
       }
     } else {
-      console.log('📡 [PTT] 电台未连接，跳过PTT启动');
+      logger.debug('radio not connected, skipping PTT start');
     }
   }
 
   private async stopPTT(): Promise<void> {
     if (!this._isPTTActive) {
-      console.log('📡 [PTT] PTT已经停止，跳过操作');
+      logger.debug('PTT already stopped, skipping');
       return;
     }
 
@@ -239,18 +225,17 @@ export class TransmissionPipeline {
           isTransmitting: false,
           operatorIds: []
         });
-        console.log(`📡 [PTT] PTT状态广播: 停止发射`);
 
-        console.log('📡 [PTT] PTT停止成功，频谱分析已恢复');
+        logger.debug('PTT stopped');
       } catch (error) {
-        console.error('📡 [PTT] PTT停止失败:', error);
+        logger.error(`PTT stop failed: ${error}`);
         this._isPTTActive = false;
         this.deps.spectrumScheduler.setPTTActive(false);
       }
     } else {
       this._isPTTActive = false;
       this.deps.spectrumScheduler.setPTTActive(false);
-      console.log('📡 [PTT] 电台未连接，更新PTT状态为停止，频谱分析已恢复');
+      logger.debug('radio not connected, PTT state set to stopped');
     }
   }
 
@@ -259,7 +244,7 @@ export class TransmissionPipeline {
       clearTimeout(this.pttTimeoutId);
     }
 
-    console.log(`📡 [PTT] 安排 ${delayMs}ms 后停止PTT`);
+    logger.debug(`PTT stop scheduled in ${delayMs}ms`);
 
     this.pttTimeoutId = setTimeout(async () => {
       this.pttTimeoutId = null;
@@ -280,14 +265,14 @@ export class TransmissionPipeline {
       const timeSinceSlotStartMs = request?.timeSinceSlotStartMs || 0;
       const mode = this.deps.getCurrentMode();
 
-      console.log(`🎵 [TransmissionPipeline] 编码完成，提交到混音器`, {
+      logger.debug('encode complete', {
         operatorId: result.operatorId,
         duration: result.duration,
         requestId: requestId || 'N/A'
       });
 
       this.currentSlotCompletedEncodes++;
-      console.log(`📊 [编码跟踪] 时隙 ${this.currentSlotId}: 已完成 ${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes}`);
+      logger.debug(`slot ${this.currentSlotId}: completed ${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes}`);
 
       this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.MIXING, {});
       this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.READY, {
@@ -300,8 +285,6 @@ export class TransmissionPipeline {
       const currentSlotStartMs = Math.floor(now / mode.slotMs) * mode.slotMs;
       const currentTimeSinceSlotStartMs = now - currentSlotStartMs;
       const transmitStartFromSlotMs = mode.transmitTiming || 0;
-
-      console.log(`⏰ [TransmissionPipeline] 编码完成时序: 操作员=${result.operatorId}, 音频时长=${result.duration.toFixed(2)}s`);
 
       this.deps.audioMixer.addOperatorAudio(
         result.operatorId,
@@ -319,14 +302,17 @@ export class TransmissionPipeline {
       const isCurrentlyPlaying = this.deps.audioStreamManager.isPlaying();
 
       if (isCurrentlyPlaying) {
-        console.log(`🔄 [TransmissionPipeline] 检测到正在播放，触发重新混音`);
+        logger.debug('playback in progress, triggering remix');
         try {
           const elapsedTimeMs = await this.deps.audioStreamManager.stopCurrentPlayback();
           this.deps.audioMixer.markPlaybackStop();
 
           const remixedAudio = await this.deps.audioMixer.remixAfterUpdate(elapsedTimeMs);
           if (remixedAudio) {
-            console.log(`🎵 [TransmissionPipeline] 重新混音完成: 操作员=[${remixedAudio.operatorIds.join(', ')}], 时长=${remixedAudio.duration.toFixed(2)}s`);
+            logger.debug('remix complete', {
+              operators: remixedAudio.operatorIds,
+              duration: remixedAudio.duration
+            });
             // 重混音后操作者列表可能变化，更新前端
             this.deps.engineEmitter.emit('pttStatusChanged', {
               isTransmitting: true,
@@ -337,10 +323,10 @@ export class TransmissionPipeline {
             this.schedulePTTStop(remixedAudio.duration * 1000 + 200);
           }
         } catch (remixError) {
-          console.error(`❌ [TransmissionPipeline] 重新混音失败:`, remixError);
+          logger.error(`remix failed: ${remixError}`);
         }
       } else if (isMidSlotSwitch && currentTimeSinceSlotStartMs >= transmitStartFromSlotMs) {
-        console.log(`🔄 [TransmissionPipeline] 时隙中间切换，立即混音播放`);
+        logger.debug('mid-slot switch, mixing immediately');
         const elapsedFromTransmitStart = currentTimeSinceSlotStartMs - transmitStartFromSlotMs;
         const mixedAudio = await this.deps.audioMixer.mixAllOperatorAudios(elapsedFromTransmitStart);
         if (mixedAudio) {
@@ -351,7 +337,7 @@ export class TransmissionPipeline {
         this.deps.audioMixer.scheduleMixing(targetPlaybackTime);
       }
     } catch (error) {
-      console.error(`❌ [TransmissionPipeline] 编码结果处理失败:`, error);
+      logger.error(`encode result handling failed: ${error}`);
       this.deps.engineEmitter.emit('transmissionComplete', {
         operatorId: result.operatorId,
         success: false,
@@ -362,16 +348,17 @@ export class TransmissionPipeline {
 
   private async handleMixedAudioReady(mixedAudio: MixedAudio): Promise<void> {
     try {
-      console.log(`🎵 [TransmissionPipeline] 混音完成，开始播放:`);
-      console.log(`   操作员: [${mixedAudio.operatorIds.join(', ')}]`);
-      console.log(`   混音时长: ${mixedAudio.duration.toFixed(2)}s`);
-      console.log(`   采样率: ${mixedAudio.sampleRate}Hz`);
+      logger.debug('mixed audio ready', {
+        operators: mixedAudio.operatorIds,
+        duration: mixedAudio.duration,
+        sampleRate: mixedAudio.sampleRate
+      });
 
       for (const operatorId of mixedAudio.operatorIds) {
         this.deps.transmissionTracker.recordMixedAudioReady(operatorId);
       }
 
-      console.log(`📡 [TransmissionPipeline] 并行启动PTT和音频播放`);
+      logger.debug('starting PTT and audio playback in parallel');
 
       for (const operatorId of mixedAudio.operatorIds) {
         this.deps.transmissionTracker.recordAudioPlaybackStart(operatorId);
@@ -389,7 +376,11 @@ export class TransmissionPipeline {
       const pttHoldTimeMs = 200;
       const totalPTTTimeMs = actualPlaybackTimeMs + pttHoldTimeMs;
 
-      console.log(`📡 [TransmissionPipeline] PTT时序: 音频=${actualPlaybackTimeMs.toFixed(0)}ms, PTT延迟=${pttHoldTimeMs}ms, 总计=${totalPTTTimeMs.toFixed(0)}ms`);
+      logger.debug('PTT timing', {
+        audioMs: Math.round(actualPlaybackTimeMs),
+        holdMs: pttHoldTimeMs,
+        totalMs: Math.round(totalPTTTimeMs)
+      });
 
       this.schedulePTTStop(totalPTTTimeMs);
       await Promise.all([pttPromise, audioPromise]);
@@ -404,10 +395,8 @@ export class TransmissionPipeline {
           mixedWith: mixedAudio.operatorIds.filter(id => id !== operatorId)
         });
       }
-
-      console.log(`✅ [TransmissionPipeline] 混音播放完成，通知 ${mixedAudio.operatorIds.length} 个操作员`);
     } catch (error) {
-      console.error(`❌ [TransmissionPipeline] 混音播放失败:`, error);
+      logger.error(`mixed audio playback failed: ${error}`);
       this.deps.audioMixer.markPlaybackStop();
       await this.stopPTT();
       for (const operatorId of mixedAudio.operatorIds) {

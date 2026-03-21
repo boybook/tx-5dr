@@ -1,4 +1,7 @@
 import i18n from '../i18n';
+import { createLogger } from './logger';
+
+const logger = createLogger('DisplayNotificationSettings');
 // 显示通知设置类型定义
 export interface HighlightConfig {
   enabled: boolean;
@@ -109,7 +112,7 @@ export function getDisplayNotificationSettings(): DisplayNotificationSettings {
       },
     };
   } catch (error) {
-    console.error('读取显示通知设置失败:', error);
+    logger.error('Failed to read display notification settings:', error);
     return { ...DEFAULT_DISPLAY_SETTINGS };
   }
 }
@@ -123,7 +126,7 @@ export function saveDisplayNotificationSettings(settings: DisplayNotificationSet
     // 触发自定义事件，通知其他组件设置已更新
     window.dispatchEvent(new CustomEvent('displaySettingsChanged'));
   } catch (error) {
-    console.error('保存显示通知设置失败:', error);
+    logger.error('Failed to save display notification settings:', error);
     throw new Error(i18n.t('settings:saveFailed'));
   }
 }

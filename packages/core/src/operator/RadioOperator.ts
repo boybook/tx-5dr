@@ -3,6 +3,9 @@ import { CycleUtils } from '../utils/cycleUtils.js';
 import { ITransmissionStrategy } from './transmission/ITransmissionStrategy';
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
 import EventEmitter from 'eventemitter3';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('RadioOperator');
 
 export class RadioOperator {
     // 通联策略（自动化及用户交互）
@@ -58,7 +61,7 @@ export class RadioOperator {
     }
 
     stop() {
-        console.log(`[RadioOperator.stop] (${this._config.myCallsign}) 停止操作员，_stopped=${this._stopped} → true, _isTransmitting=${this._isTransmitting} → false`);
+        logger.info(`Stopping operator (${this._config.myCallsign}): stopped=${this._stopped}->true, isTransmitting=${this._isTransmitting}->false`);
         this._stopped = true;
         this._isTransmitting = false;
         this.notifyStatusChanged();
@@ -112,10 +115,10 @@ export class RadioOperator {
                     }
                 } catch {}
                 if (result?.stop) {
-                    console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 收到停止指令，调用 stop()`);
+                    logger.debug(`onSlotStart (${this.config.myCallsign}): stop command received, calling stop()`);
                     this.stop();
                 }
-                console.log(`[RadioOperator.onSlotStart] (${this.config.myCallsign}) 自动决策`, result);
+                logger.debug(`onSlotStart (${this.config.myCallsign}): auto decision result=${JSON.stringify(result)}`);
             }
         });
         
@@ -123,11 +126,11 @@ export class RadioOperator {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         eventEmitter.on('encodeStart' as any, (slotInfo: SlotInfo) => {
             if (this._stopped) {
-                console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 操作员已停止，跳过编码`);
+                logger.debug(`onEncodeStart (${this.config.myCallsign}): operator stopped, skipping encode`);
                 return;
             }
             if (!this._isTransmitting) {
-                console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 未处于发射状态，跳过编码`);
+                logger.debug(`onEncodeStart (${this.config.myCallsign}): not transmitting, skipping encode`);
                 return;
             }
 
@@ -140,12 +143,12 @@ export class RadioOperator {
                         operatorId: this._config.id,
                         transmission
                     });
-                    console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 编码时机到达，准备发射: ${transmission}`);
+                    logger.debug(`onEncodeStart (${this.config.myCallsign}): transmit slot, queued transmission: ${transmission}`);
                 } else {
-                    console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 编码时机到达，但没有发射内容`);
+                    logger.debug(`onEncodeStart (${this.config.myCallsign}): transmit slot but no transmission content`);
                 }
             } else {
-                console.log(`[RadioOperator.onEncodeStart] (${this.config.myCallsign}) 编码时机到达，但不是发射时隙`);
+                logger.debug(`onEncodeStart (${this.config.myCallsign}): not a transmit slot, skipping`);
             }
         });
 
@@ -158,7 +161,7 @@ export class RadioOperator {
             // 判断是否为发射时隙
             const isTransmitSlot = this.isTransmitSlot(slotInfo);
             if (isTransmitSlot) {
-                console.log(`[RadioOperator.onTransmitStart] (${this.config.myCallsign}) 目标播放时间到达`);
+                logger.debug(`onTransmitStart (${this.config.myCallsign}): target playback time reached`);
             }
         });
     }

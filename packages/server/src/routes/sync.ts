@@ -2,6 +2,9 @@
 // SyncRoutes - API响应处理需要使用any
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('SyncRoute');
 import {
   CallsignSyncConfigSchema,
   WaveLogConfig,
@@ -115,7 +118,7 @@ async function getRecentQSOs() {
       });
       allQSOs.push(...qsos);
     } catch (error) {
-      console.warn(`[Sync] 从日志本 ${logBook.name} 获取QSO记录失败:`, error);
+      logger.warn(`Failed to get QSO records from log book ${logBook.name}:`, error);
     }
   }
 
@@ -287,7 +290,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
               syncTime: Date.now(),
             };
           } else {
-            console.log(`[Sync] 准备上传 ${allQSOs.length} 条QSO到WaveLog (${callsign})`);
+            logger.debug(`Uploading ${allQSOs.length} QSOs to WaveLog (${callsign})`);
             result = await service.uploadMultipleQSOs(allQSOs);
           }
           break;
@@ -442,13 +445,13 @@ export async function syncRoutes(fastify: FastifyInstance) {
               syncTime: Date.now(),
             };
           } else {
-            console.log(`[Sync] 准备上传 ${allQSOs.length} 条QSO到QRZ (${callsign})`);
+            logger.debug(`Uploading ${allQSOs.length} QSOs to QRZ (${callsign})`);
             result = await service.uploadMultipleQSOs(allQSOs);
             // 上传成功后标记本地 QSO 的 qrzQslSent
             if (result.success && result.uploadedCount > 0) {
               const logManager = LogManager.getInstance();
               const markedCount = await markQSOsAsSent(allQSOs, 'qrz', logManager);
-              console.log(`[Sync] 已标记 ${markedCount} 条QSO的QRZ上传状态`);
+              logger.info(`Marked ${markedCount} QSOs as QRZ sent`);
             }
           }
           break;
@@ -642,13 +645,13 @@ export async function syncRoutes(fastify: FastifyInstance) {
               syncTime: Date.now(),
             };
           } else {
-            console.log(`[Sync] 准备上传 ${allQSOs.length} 条QSO到LoTW (${callsign})`);
+            logger.debug(`Uploading ${allQSOs.length} QSOs to LoTW (${callsign})`);
             result = await service.uploadQSOs(allQSOs);
             // 上传成功后标记本地 QSO 的 lotwQslSent
             if (result.success && result.uploadedCount > 0) {
               const logManager = LogManager.getInstance();
               const markedCount = await markQSOsAsSent(allQSOs, 'lotw', logManager);
-              console.log(`[Sync] 已标记 ${markedCount} 条QSO的LoTW上传状态`);
+              logger.info(`Marked ${markedCount} QSOs as LoTW sent`);
             }
           }
           break;
@@ -678,7 +681,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
               }
             }
           }
-          console.log(`[Sync] LoTW确认回写: ${updatedCount}/${records.length} 条QSO已更新`);
+          logger.info(`LoTW confirmation write-back: ${updatedCount}/${records.length} QSOs updated`);
           result = {
             success: true,
             message: `下载了 ${confirmedCount} 条LoTW确认记录，已更新 ${updatedCount} 条本地QSO`,

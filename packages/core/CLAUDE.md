@@ -42,7 +42,8 @@ import type { RadioStatus, SlotPack } from '@tx5dr/contracts';
 
 // 订阅事件
 const handleRadioStatus = (data: RadioStatus) => {
-  console.log('📻 Radio status:', data);
+  // 在 web 中使用 createLogger；此处仅示意
+  // logger.debug('radio status updated', data);
 };
 
 client.onWSEvent('radioStatusUpdated', handleRadioStatus);
@@ -54,8 +55,8 @@ client.offWSEvent('radioStatusUpdated', handleRadioStatus);
 #### 多监听器支持
 ```typescript
 // 同一事件可以有多个监听器
-const handlerA = (data: SlotPack) => console.log('Handler A:', data);
-const handlerB = (data: SlotPack) => console.log('Handler B:', data);
+const handlerA = (data: SlotPack) => { /* handle A */ };
+const handlerB = (data: SlotPack) => { /* handle B */ };
 
 client.onWSEvent('slotPackReceived', handlerA);
 client.onWSEvent('slotPackReceived', handlerB);
@@ -101,7 +102,7 @@ function useWSEvent<T = any>(
 // 使用
 function MyComponent({ wsClient }: { wsClient: WSClient }) {
   useWSEvent(wsClient, 'slotPackReceived', (data: SlotPack) => {
-    console.log('收到时隙包:', data);
+    // process data — use createLogger for any logging
   });
 
   return <div>...</div>;
@@ -175,3 +176,20 @@ export class WSEventEmitter extends EventEmitter {
 ## 命令
 - `yarn dev` - 开发构建
 - `yarn build` - 生产构建
+
+## 日志规范
+
+禁止裸 `console.log`，使用 `createLogger`（`src/utils/logger.ts`）。日志消息必须为英文，不含 emoji。
+
+```typescript
+import { createLogger } from "../utils/logger.js"; // ESM .js 后缀
+const logger = createLogger("MyModule");
+
+logger.debug("slot started", { id }); // 高频路径（每时隙/每事件）
+logger.info("operator stopped");      // 生命周期
+logger.warn("unexpected state", ctx);
+logger.error("decode failed", err);
+```
+
+- Node.js（server 进程）：`LOG_LEVEL` 控制级别，默认 info；server 的 `ConsoleLogger` 覆盖层将通过级别过滤的输出写入日志文件
+- 浏览器：默认 info 级别（debug 静默）

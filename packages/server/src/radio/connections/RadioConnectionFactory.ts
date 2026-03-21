@@ -14,6 +14,9 @@ import type { IRadioConnection, RadioConnectionConfig } from './IRadioConnection
 import { IcomWlanConnection } from './IcomWlanConnection.js';
 import { HamlibConnection } from './HamlibConnection.js';
 import { NullConnection } from './NullConnection.js';
+import { createLogger } from '../../utils/logger.js';
+
+const logger = createLogger('RadioConnectionFactory');
 
 /**
  * 电台连接工厂类
@@ -40,16 +43,16 @@ export class RadioConnectionFactory {
     // 根据类型创建相应的连接实例
     switch (config.type) {
       case 'icom-wlan':
-        console.log('🏭 [RadioConnectionFactory] 创建 ICOM WLAN 连接实例');
+        logger.debug('Creating ICOM WLAN connection instance');
         return new IcomWlanConnection();
 
       case 'network':
       case 'serial':
-        console.log(`🏭 [RadioConnectionFactory] 创建 Hamlib 连接实例 (${config.type})`);
+        logger.debug(`Creating Hamlib connection instance (${config.type})`);
         return new HamlibConnection();
 
       case 'none':
-        console.log('🏭 [RadioConnectionFactory] 创建 NullConnection 实例（无电台模式）');
+        logger.debug('Creating NullConnection instance (no-radio mode)');
         return new NullConnection();
 
       default:
@@ -81,7 +84,7 @@ export class RadioConnectionFactory {
       });
     }
 
-    console.log('🏭 [RadioConnectionFactory] 创建 ICOM WLAN 连接实例');
+    logger.debug('Creating ICOM WLAN connection instance');
     return new IcomWlanConnection();
   }
 
@@ -101,7 +104,7 @@ export class RadioConnectionFactory {
       });
     }
 
-    console.log(`🏭 [RadioConnectionFactory] 创建 Hamlib 连接实例 (${config.type})`);
+    logger.debug(`Creating Hamlib connection instance (${config.type})`);
     return new HamlibConnection();
   }
 

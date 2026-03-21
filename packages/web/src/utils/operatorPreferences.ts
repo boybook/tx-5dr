@@ -3,6 +3,10 @@
  * 用于在localStorage中保存客户端对操作员的启用状态
  */
 
+import { createLogger } from './logger';
+
+const logger = createLogger('OperatorPrefs');
+
 const STORAGE_KEY = 'tx5dr_operator_preferences';
 
 export interface OperatorPreferences {
@@ -24,7 +28,7 @@ export function getOperatorPreferences(): OperatorPreferences {
       };
     }
   } catch (error) {
-    console.warn('❌ 读取操作员偏好设置失败:', error);
+    logger.warn('Failed to read operator preferences:', error);
   }
   
   // 返回默认值：启用所有操作员
@@ -44,9 +48,9 @@ export function setOperatorPreferences(preferences: OperatorPreferences): void {
       lastUpdated: Date.now()
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));
-    console.log('💾 操作员偏好设置已保存:', toStore);
+    logger.debug('Operator preferences saved:', toStore);
   } catch (error) {
-    console.error('❌ 保存操作员偏好设置失败:', error);
+    logger.error('Failed to save operator preferences:', error);
   }
 }
 
@@ -129,12 +133,12 @@ export function hasOperatorPreferences(): boolean {
 export function getHandshakeOperatorIds(): string[] | null {
   if (!hasOperatorPreferences()) {
     // 新客户端，没有任何偏好设置，返回null表示默认启用所有操作员
-    console.log('🆕 [OperatorPreferences] 新客户端，发送null（启用所有操作员）');
+    logger.debug('New client, sending null (enable all operators)');
     return null;
   }
   
   // 已有偏好设置的客户端，返回具体的启用列表
   const enabledIds = getEnabledOperatorIds();
-  console.log('🔧 [OperatorPreferences] 已有偏好设置，启用操作员:', enabledIds);
+  logger.debug('Existing preferences, enabled operators:', enabledIds);
   return enabledIds;
 } 

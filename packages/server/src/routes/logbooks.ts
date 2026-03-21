@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { createLogger } from '../utils/logger.js';
 import {
   LogBookListResponseSchema,
   LogBookDetailResponseSchema,
@@ -22,6 +23,8 @@ import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
+
+const logger = createLogger('LogbooksRoute');
 
 /**
  * 日志本管理API路由
@@ -85,7 +88,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
         } catch (error) {
-          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+          logger.warn(`Failed to create log book for callsign ${id}:`, error);
         }
       }
 
@@ -186,7 +189,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
         } catch (error) {
-          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+          logger.warn(`Failed to create log book for callsign ${id}:`, error);
         }
       }
 
@@ -311,7 +314,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
         } catch (error) {
-          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+          logger.warn(`Failed to create log book for callsign ${id}:`, error);
         }
       }
 
@@ -386,10 +389,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       // 分离分页参数和筛选参数
       const { limit: requestLimit, offset: requestOffset, ...filterOptions } = queryOptions;
       
-      console.log(`📊 [LogBook API] 分页请求参数:`, {
+      logger.debug('Pagination request params:', {
         requestLimit,
         requestOffset,
-        filterOptions: Object.keys(filterOptions)
+        filterOptions: Object.keys(filterOptions),
       });
       
       // 先获取不带分页限制的筛选后总数
@@ -401,13 +404,13 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const limit = requestLimit || 100;
       const paginatedQsos = allFilteredQsos.slice(offset, offset + limit);
       
-      console.log(`📊 [LogBook API] 分页处理结果:`, {
+      logger.debug('Pagination result:', {
         totalFiltered,
         offset,
         limit,
         paginatedCount: paginatedQsos.length,
         firstRecordId: paginatedQsos[0]?.id,
-        firstRecordCallsign: paginatedQsos[0]?.callsign
+        firstRecordCallsign: paginatedQsos[0]?.callsign,
       });
 
       // 同时获取不带任何筛选的总记录数（用于统计显示）
@@ -450,7 +453,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
         } catch (error) {
-          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+          logger.warn(`Failed to create log book for callsign ${id}:`, error);
         }
       }
 
@@ -541,7 +544,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
         } catch (error) {
-          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+          logger.warn(`Failed to create log book for callsign ${id}:`, error);
         }
       }
 
@@ -584,7 +587,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
         } catch (error) {
-          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+          logger.warn(`Failed to create log book for callsign ${id}:`, error);
         }
       }
 
@@ -642,7 +645,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         try {
           logBook = await logManager.getOrCreateLogBookByCallsign(id);
         } catch (error) {
-          console.warn(`📋 [API] 无法为呼号 ${id} 创建日志本:`, error);
+          logger.warn(`Failed to create log book for callsign ${id}:`, error);
         }
       }
 

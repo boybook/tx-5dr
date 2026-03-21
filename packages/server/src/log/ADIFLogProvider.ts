@@ -2,10 +2,10 @@
 // ADIFLogProvider - 日志解析需要使用any
 
 import { QSORecord } from '@tx5dr/contracts';
-import { 
-  ILogProvider, 
-  LogQueryOptions, 
-  LogStatistics, 
+import {
+  ILogProvider,
+  LogQueryOptions,
+  LogStatistics,
   CallsignAnalysis,
   getBandFromFrequency,
   extractPrefix,
@@ -18,6 +18,9 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import { getDataFilePath } from '../utils/app-paths.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('ADIFLogProvider');
 
 // —— 索引数据结构 ——
 interface PerCallsignInfo {
@@ -181,15 +184,15 @@ export class ADIFLogProvider implements ILogProvider {
     for (const legacyPath of legacyPaths) {
       try {
         await fs.access(legacyPath);
-        console.log(`📋 [ADIFLogProvider] 发现旧日志文件: ${legacyPath}`);
-        console.log(`📋 [ADIFLogProvider] 将迁移到用户数据目录: ${standardPath}`);
+        logger.info(`Found legacy log file: ${legacyPath}`);
+        logger.info(`Migrating to user data directory: ${standardPath}`);
         
         // 迁移文件到新位置
         const dir = path.dirname(standardPath);
         await fs.mkdir(dir, { recursive: true });
         await fs.copyFile(legacyPath, standardPath);
         
-        console.log(`✅ [ADIFLogProvider] 文件迁移完成`);
+        logger.info('File migration complete');
         return standardPath;
       } catch {
         // 文件不存在，继续下一个
@@ -222,10 +225,10 @@ export class ADIFLogProvider implements ILogProvider {
   private async loadCache(): Promise<void> {
     try {
       const content = await fs.readFile(this.logFilePath, 'utf-8');
-      console.log(`[ADIFLogProvider] 读取文件内容长度: ${content.length}`);
-      
+      logger.debug(`File content length: ${content.length}`);
+
       const adif = AdifParser.parseAdi(content);
-      console.log(`[ADIFLogProvider] 解析到 ${adif.records?.length || 0} 条记录`);
+      logger.debug(`Parsed ${adif.records?.length || 0} records`);
       
       this.qsoCache.clear();
       
@@ -235,16 +238,16 @@ export class ADIFLogProvider implements ILogProvider {
             // 直接传递record，而不是record.fields
             const qso = this.adifToQSORecord(record);
             this.qsoCache.set(qso.id, qso);
-            console.debug(`[ADIFLogProvider] 加载QSO: ${qso.id} - ${qso.callsign}`);
+            logger.debug(`Loaded QSO: ${qso.id} - ${qso.callsign}`);
           } catch (err) {
-            console.error(`[ADIFLogProvider] 加载记录失败:`, err, record);
+            console.error('[ADIFLogProvider] Failed to load record:', err, record);
           }
         }
       }
       
-      console.log(`[ADIFLogProvider] 缓存中现有 ${this.qsoCache.size} 条记录`);
+      logger.debug(`Cache loaded: ${this.qsoCache.size} records`);
     } catch (error) {
-      console.error('Failed to load ADIF log cache:', error);
+      console.error('[ADIFLogProvider] Failed to load ADIF log cache:', error);
     }
   }
 

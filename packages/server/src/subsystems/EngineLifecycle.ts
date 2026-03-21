@@ -15,6 +15,9 @@ import { createEngineActor, isEngineState, getEngineContext, type EngineActor } 
 import { EngineState, type EngineInput } from '../state-machines/types.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { ClockCoordinator } from './ClockCoordinator.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('EngineLifecycle');
 
 export interface EngineLifecycleDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -92,7 +95,7 @@ export class EngineLifecycle {
    * 注册所有资源到 ResourceManager
    */
   registerResources(): void {
-    console.log('📦 [EngineLifecycle] 注册引擎资源...');
+    logger.info('Registering engine resources...');
 
     const { resourceManager, radioManager, audioStreamManager, slotClock, slotScheduler, spectrumScheduler, operatorManager } = this.deps;
     const configManager = ConfigManager.getInstance();
@@ -106,12 +109,12 @@ export class EngineLifecycle {
         const radioConfig = configManager.getRadioConfig();
         if (radioConfig.type === 'icom-wlan') {
           if (!radioConfig.icomWlan?.ip || !radioConfig.icomWlan?.port) {
-            console.error('❌ [ResourceManager] ICOM WLAN 配置不完整:', radioConfig.icomWlan);
+            logger.error('ICOM WLAN config incomplete:', radioConfig.icomWlan);
             throw new Error('ICOM WLAN IP 或端口缺失');
           }
-          console.log(`📡 [ResourceManager] ICOM WLAN 配置验证通过: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
+          logger.debug(`ICOM WLAN config validated: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
         }
-        console.log(`📡 [ResourceManager] 应用物理电台配置:`, radioConfig);
+        logger.debug('Applying radio config:', radioConfig);
         await radioManager.applyConfig(radioConfig);
       },
       stop: async () => {
@@ -129,13 +132,13 @@ export class EngineLifecycle {
       start: async () => {
         const radioConfig = configManager.getRadioConfig();
         if (radioConfig.type !== 'icom-wlan') {
-          console.log('ℹ️ [ResourceManager] 非 ICOM WLAN 模式，跳过适配器初始化');
+          logger.debug('Not ICOM WLAN mode, skipping adapter init');
           return;
         }
-        console.log(`📡 [ResourceManager] 初始化 ICOM WLAN 音频适配器`);
+        logger.debug('Initializing ICOM WLAN audio adapter');
         const icomWlanManager = radioManager.getIcomWlanManager();
         if (!icomWlanManager || !icomWlanManager.isConnected()) {
-          console.warn(`⚠️ [ResourceManager] ICOM WLAN 电台未连接，将回退到普通声卡输入`);
+          logger.warn('ICOM WLAN radio not connected, falling back to normal audio input');
           return;
         }
         this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(icomWlanManager);
@@ -144,14 +147,14 @@ export class EngineLifecycle {
         audioDeviceManager.setIcomWlanConnectedCallback(() => {
           return icomWlanManager.isConnected();
         });
-        console.log(`✅ [ResourceManager] ICOM WLAN 音频适配器已初始化`);
+        logger.debug('ICOM WLAN audio adapter initialized');
       },
       stop: async () => {
         if (this.icomWlanAudioAdapter) {
           this.icomWlanAudioAdapter.stopReceiving();
           audioStreamManager.setIcomWlanAudioAdapter(null);
           this.icomWlanAudioAdapter = null;
-          console.log(`🛑 [ResourceManager] ICOM WLAN 音频适配器已清理`);
+          logger.debug('ICOM WLAN audio adapter cleaned up');
         }
       },
       priority: 2,
@@ -164,11 +167,11 @@ export class EngineLifecycle {
       name: 'audioInputStream',
       start: async () => {
         await audioStreamManager.startStream();
-        console.log(`🎤 [ResourceManager] 音频输入流启动成功`);
+        logger.debug('Audio input stream started');
       },
       stop: async () => {
         await audioStreamManager.stopStream();
-        console.log(`🛑 [ResourceManager] 音频输入流已停止`);
+        logger.debug('Audio input stream stopped');
       },
       priority: 3,
       dependencies: [],
@@ -180,18 +183,18 @@ export class EngineLifecycle {
       name: 'audioOutputStream',
       start: async () => {
         await audioStreamManager.startOutput();
-        console.log(`🔊 [ResourceManager] 音频输出流启动成功`);
+        logger.debug('Audio output stream started');
         const lastVolumeGain = configManager.getLastVolumeGain();
         if (lastVolumeGain) {
-          console.log(`🔊 [ResourceManager] 恢复上次音量增益: ${lastVolumeGain.gainDb.toFixed(1)}dB`);
+          logger.debug(`Restoring last volume gain: ${lastVolumeGain.gainDb.toFixed(1)}dB`);
           audioStreamManager.setVolumeGainDb(lastVolumeGain.gainDb);
         } else {
-          console.log(`🔊 [ResourceManager] 使用默认音量增益: 0.0dB`);
+          logger.debug('Using default volume gain: 0.0dB');
         }
       },
       stop: async () => {
         await audioStreamManager.stopOutput();
-        console.log(`🛑 [ResourceManager] 音频输出流已停止`);
+        logger.debug('Audio output stream stopped');
       },
       priority: 4,
       dependencies: ['audioInputStream'],
@@ -202,16 +205,16 @@ export class EngineLifecycle {
     resourceManager.register({
       name: 'audioMonitorService',
       start: async () => {
-        console.log('🎧 [ResourceManager] 初始化音频监听服务...');
+        logger.debug('Initializing audio monitor service...');
         const audioProvider = audioStreamManager.getAudioProvider();
         this.audioMonitorService = new AudioMonitorService(audioProvider);
-        console.log('✅ [ResourceManager] 音频监听服务已初始化');
+        logger.debug('Audio monitor service initialized');
       },
       stop: async () => {
         if (this.audioMonitorService) {
           this.audioMonitorService.destroy();
           this.audioMonitorService = null;
-          console.log(`🛑 [ResourceManager] 音频监听服务已清理`);
+          logger.debug('Audio monitor service cleaned up');
         }
       },
       priority: 5,
@@ -227,14 +230,14 @@ export class EngineLifecycle {
           throw new Error('时钟未初始化');
         }
         slotClock.start();
-        console.log(`📡 [ResourceManager] 时钟已启动`);
+        logger.debug('Clock started');
       },
       stop: async () => {
         if (slotClock) {
           slotClock.stop();
           // 确保PTT被停止
           await this.deps.subsystems.transmissionPipeline.forceStopPTT();
-          console.log(`🛑 [ResourceManager] 时钟已停止`);
+          logger.debug('Clock stopped');
         }
       },
       priority: 6,
@@ -248,13 +251,13 @@ export class EngineLifecycle {
       start: async () => {
         if (slotScheduler) {
           slotScheduler.start();
-          console.log(`📡 [ResourceManager] 解码调度器已启动`);
+          logger.debug('Slot scheduler started');
         }
       },
       stop: async () => {
         if (slotScheduler) {
           slotScheduler.stop();
-          console.log(`🛑 [ResourceManager] 解码调度器已停止`);
+          logger.debug('Slot scheduler stopped');
         }
       },
       priority: 7,
@@ -268,13 +271,13 @@ export class EngineLifecycle {
       start: async () => {
         if (spectrumScheduler) {
           spectrumScheduler.start();
-          console.log(`📊 [ResourceManager] 频谱分析调度器已启动`);
+          logger.debug('Spectrum scheduler started');
         }
       },
       stop: async () => {
         if (spectrumScheduler) {
           spectrumScheduler.stop();
-          console.log(`🛑 [ResourceManager] 频谱分析调度器已停止`);
+          logger.debug('Spectrum scheduler stopped');
         }
       },
       priority: 8,
@@ -287,40 +290,40 @@ export class EngineLifecycle {
       name: 'operatorManager',
       start: async () => {
         operatorManager.start();
-        console.log(`📡 [ResourceManager] 操作员管理器已启动`);
+        logger.debug('Operator manager started');
       },
       stop: async () => {
         operatorManager.stop();
-        console.log(`🛑 [ResourceManager] 操作员管理器已停止`);
+        logger.debug('Operator manager stopped');
       },
       priority: 9,
       dependencies: ['clock'],
       optional: false,
     });
 
-    console.log('✅ [EngineLifecycle] 所有资源已注册');
+    logger.info('All resources registered');
   }
 
   /**
    * 初始化引擎状态机
    */
   initializeStateMachine(): void {
-    console.log('🎛️ [EngineStateMachine] 初始化引擎状态机...');
+    logger.info('Initializing engine state machine...');
 
     const engineInput: EngineInput = {
       onStart: async () => {
-        console.log('🚀 [EngineStateMachine] 执行启动操作');
+        logger.info('Executing start operation');
         await this.doStart();
       },
       onStop: async () => {
-        console.log('🛑 [EngineStateMachine] 执行停止操作');
+        logger.info('Executing stop operation');
         await this.doStop();
       },
       onError: (error) => {
-        console.error('❌ [EngineStateMachine] 状态机错误:', error);
+        logger.error('State machine error:', error);
       },
       onStateChange: (_state, context) => {
-        console.log(`🔄 [EngineStateMachine] 状态变化: ${_state}`, {
+        logger.info(`State changed: ${_state}`, {
           error: context.error?.message,
           forcedStop: context.forcedStop,
           startedResources: context.startedResources,
@@ -335,7 +338,7 @@ export class EngineLifecycle {
     });
     this.engineStateMachineActor.start();
 
-    console.log('✅ [EngineStateMachine] 引擎状态机已初始化');
+    logger.info('Engine state machine initialized');
   }
 
   /**
@@ -347,18 +350,18 @@ export class EngineLifecycle {
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
-      console.log('⚠️  [EngineLifecycle] 引擎已经在运行中，发送状态同步');
+      logger.info('Engine already running, sending status sync');
       const status = this.deps.getStatus();
       this.deps.engineEmitter.emit('systemStatus', status);
       return;
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.STARTING)) {
-      console.log('⚠️  [EngineLifecycle] 引擎正在启动中，忽略重复的启动请求');
+      logger.info('Engine already starting, ignoring duplicate start request');
       return;
     }
 
-    console.log('🎛️ [EngineStateMachine] 委托给状态机: START');
+    logger.info('Delegating to state machine: START');
     this.engineStateMachineActor.send({ type: 'START' });
   }
 
@@ -371,26 +374,26 @@ export class EngineLifecycle {
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.IDLE)) {
-      console.log('⚠️  [EngineLifecycle] 引擎已经停止，发送状态同步');
+      logger.info('Engine already stopped, sending status sync');
       const status = this.deps.getStatus();
       this.deps.engineEmitter.emit('systemStatus', status);
       return;
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.STOPPING)) {
-      console.log('⚠️  [EngineLifecycle] 引擎正在停止中，等待停止完成...');
+      logger.info('Engine already stopping, waiting for completion...');
       try {
         const { waitForEngineState } = await import('../state-machines/engineStateMachine.js');
         await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 10000);
-        console.log('✅ [EngineLifecycle] 停止完成');
+        logger.info('Stop completed');
       } catch (error) {
-        console.error('❌ [EngineLifecycle] 等待停止超时:', error);
+        logger.error('Waiting for stop timed out:', error);
         throw error;
       }
       return;
     }
 
-    console.log('🎛️ [EngineStateMachine] 委托给状态机: STOP');
+    logger.info('Delegating to state machine: STOP');
     this.engineStateMachineActor.send({ type: 'STOP' });
   }
 
@@ -399,7 +402,7 @@ export class EngineLifecycle {
    */
   sendRadioDisconnected(reason: string): void {
     if (this.engineStateMachineActor && isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
-      console.log('🎛️ [EngineStateMachine] 发送 RADIO_DISCONNECTED 事件');
+      logger.info('Sending RADIO_DISCONNECTED event');
       this.engineStateMachineActor.send({
         type: 'RADIO_DISCONNECTED',
         reason
@@ -412,10 +415,10 @@ export class EngineLifecycle {
    */
   destroyStateMachine(): void {
     if (this.engineStateMachineActor) {
-      console.log('🗑️  [EngineLifecycle] 停止引擎状态机...');
+      logger.info('Stopping engine state machine...');
       this.engineStateMachineActor.stop();
       this.engineStateMachineActor = null;
-      console.log('✅ [EngineLifecycle] 引擎状态机已停止');
+      logger.info('Engine state machine stopped');
     }
   }
 
@@ -427,7 +430,7 @@ export class EngineLifecycle {
     }
 
     const mode = this.deps.getCurrentMode();
-    console.log(`🚀 [EngineLifecycle] 启动引擎，模式: ${mode.name}`);
+    logger.info(`Starting engine, mode: ${mode.name}`);
 
     try {
       // 1. 注册时钟/解码/频谱事件
@@ -443,15 +446,15 @@ export class EngineLifecycle {
       this.isRunning = true;
       this.audioStarted = true;
 
-      console.log(`✅ [EngineLifecycle] 引擎启动完成`);
+      logger.info('Engine started successfully');
     } catch (error) {
-      console.error(`❌ [EngineLifecycle] 引擎启动失败:`, error);
+      logger.error('Engine start failed:', error);
       throw error;
     }
   }
 
   private async doStop(): Promise<void> {
-    console.log('🛑 [EngineLifecycle] 停止引擎');
+    logger.info('Stopping engine');
 
     try {
       // 1. 清除编码/混音监听器 + PTT 定时器
@@ -467,9 +470,9 @@ export class EngineLifecycle {
       this.isRunning = false;
       this.audioStarted = false;
 
-      console.log(`✅ [EngineLifecycle] 引擎停止完成`);
+      logger.info('Engine stopped successfully');
     } catch (error) {
-      console.error(`❌ [EngineLifecycle] 引擎停止失败:`, error);
+      logger.error('Engine stop failed:', error);
       this.isRunning = false;
       this.audioStarted = false;
       throw error;

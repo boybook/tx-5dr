@@ -7,6 +7,9 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import LogbookViewer from '../components/LogbookViewer';
 import { useTranslation } from 'react-i18next';
 import '../index.css';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('LogbookPage');
 
 /**
  * 页面内容组件 - 需要RadioProvider包装
@@ -31,7 +34,7 @@ const LogbookContent: React.FC = () => {
     const logId = urlParams.get('logBookId');
 
     if (!opId) {
-      console.error('Missing operator ID parameter');
+      logger.error('Missing operator ID parameter');
       setLoading(false);
       return;
     }

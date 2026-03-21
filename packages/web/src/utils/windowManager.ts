@@ -3,6 +3,10 @@
  * 处理在Electron和Web环境中打开新窗口的逻辑
  */
 
+import { createLogger } from './logger';
+
+const logger = createLogger('WindowManager');
+
 interface LogbookWindowOptions {
   operatorId: string;
   logBookId?: string;
@@ -49,11 +53,11 @@ function openElectronLogbookWindow(queryString: string): void {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).electronAPI.window.openLogbookWindow(queryString);
     } else {
-      console.warn('Electron IPC不可用，回退到Web模式');
+      logger.warn('Electron IPC unavailable, falling back to web mode');
       openWebLogbookWindow(queryString);
     }
   } catch (error) {
-    console.error('打开Electron窗口失败:', error);
+    logger.error('Failed to open Electron window:', error);
     // 回退到Web模式
     openWebLogbookWindow(queryString);
   }
@@ -72,7 +76,7 @@ function openWebLogbookWindow(queryString: string): void {
   if (newWindow) {
     newWindow.focus();
   } else {
-    console.error('无法打开新标签页，可能被浏览器阻止');
+    logger.error('Failed to open new tab, may be blocked by browser');
     // 提供后备方案：在同一标签页中打开
     window.location.href = logbookUrl;
   }

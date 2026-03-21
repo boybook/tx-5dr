@@ -1,5 +1,8 @@
 import { WSMessageType, ModeDescriptor } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('WSClient');
 
 /**
  * WebSocket客户端配置
@@ -44,7 +47,7 @@ export class WSClient extends WSMessageHandler {
         this.ws = new WebSocket(this.config.url);
 
         this.ws.onopen = () => {
-          console.log('🔗 WebSocket连接已建立');
+          logger.info('Connected');
           this.isConnecting = false;
           this.startHeartbeat();
           this.emitWSEvent('connected');
@@ -56,17 +59,17 @@ export class WSClient extends WSMessageHandler {
         };
 
         this.ws.onclose = (event) => {
-          console.log('🔌 WebSocket连接已关闭', event.code, event.reason);
+          logger.info(`Disconnected: code=${event.code} reason=${event.reason}`);
           this.isConnecting = false;
           this.stopHeartbeat();
           this.emitWSEvent('disconnected');
         };
 
         this.ws.onerror = (error) => {
-          console.error('❌ WebSocket错误:', error);
+          logger.error('Connection error:', error);
           this.isConnecting = false;
-          this.emitWSEvent('error', new Error('WebSocket连接错误'));
-          reject(new Error('WebSocket连接失败'));
+          this.emitWSEvent('error', new Error('WebSocket connection error'));
+          reject(new Error('WebSocket connection failed'));
         };
 
       } catch (error) {
@@ -96,7 +99,7 @@ export class WSClient extends WSMessageHandler {
       const messageStr = this.createAndSerializeMessage(type, data, id);
       this.ws.send(messageStr);
     } else {
-      console.warn('WebSocket未连接，无法发送消息');
+      logger.warn('Not connected, cannot send message');
     }
   }
 
@@ -104,7 +107,7 @@ export class WSClient extends WSMessageHandler {
    * 启动数字无线电引擎
    */
   startEngine(): void {
-    console.log('📤 WSClient.startEngine() - 发送startEngine命令');
+    logger.debug('Sending startEngine command');
     this.send(WSMessageType.START_ENGINE);
   }
 
@@ -112,7 +115,7 @@ export class WSClient extends WSMessageHandler {
    * 停止数字无线电引擎
    */
   stopEngine(): void {
-    console.log('📤 WSClient.stopEngine() - 发送stopEngine命令');
+    logger.debug('Sending stopEngine command');
     this.send(WSMessageType.STOP_ENGINE);
   }
 
@@ -135,7 +138,7 @@ export class WSClient extends WSMessageHandler {
    * 立即停止PTT并清空音频播放队列
    */
   forceStopTransmission(): void {
-    console.log('📤 WSClient.forceStopTransmission() - 发送强制停止发射命令');
+    logger.debug('Sending forceStopTransmission command');
     this.send(WSMessageType.FORCE_STOP_TRANSMISSION);
   }
 
@@ -143,7 +146,7 @@ export class WSClient extends WSMessageHandler {
    * 停止自动重连
    */
   stopReconnect(): void {
-    console.log('📤 WSClient.stopReconnect() - 发送停止重连命令');
+    logger.info('Sending stopReconnect command');
     this.send(WSMessageType.RADIO_STOP_RECONNECT);
   }
 
@@ -219,7 +222,7 @@ export class WSClient extends WSMessageHandler {
    * 设置客户端启用的操作员列表
    */
   setClientEnabledOperators(enabledOperatorIds: string[]): void {
-    console.log('📤 [WSClient] 设置客户端启用操作员:', enabledOperatorIds);
+    logger.debug('Setting client enabled operators:', enabledOperatorIds);
     this.send('setClientEnabledOperators', { enabledOperatorIds });
   }
 
@@ -227,7 +230,7 @@ export class WSClient extends WSMessageHandler {
    * 发送客户端握手消息
    */
   sendHandshake(enabledOperatorIds: string[] | null): void {
-    console.log('🤝 [WSClient] 发送握手消息:', { enabledOperatorIds });
+    logger.info('Sending handshake:', { enabledOperatorIds });
     this.send('clientHandshake', {
       enabledOperatorIds,
       clientVersion: '1.0.0',

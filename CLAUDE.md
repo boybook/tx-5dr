@@ -148,16 +148,32 @@ node scripts/check-i18n.mjs
 - 语言文件：`packages/web/src/i18n/locales/{zh,en}/`（7 个命名空间）
 - 后端 `broadcastTextMessage` 必须传 `key` 参数（`ServerMessageKey` 枚举），AUTH_RESULT/ERROR 消息 error 字段用英文 code
 
-## 后端日志规范
+## 日志规范
 
-**高频路径禁止裸 `console.log`，使用 `createLogger`。**
+**所有包禁止裸 `console.log`，使用各包的 `createLogger`。日志消息必须为英文，不含 emoji。**
+
+| 包 | 工具文件 | import 路径示例 |
+|----|---------|---------------|
+| server | `utils/logger.ts` | `'../utils/logger.js'` |
+| core | `utils/logger.ts` | `'../utils/logger.js'` |
+| web | `utils/logger.ts` | `'../utils/logger'`（无扩展名） |
+| electron-main | `utils/logger.ts` | `'./utils/logger.js'` |
 
 ```typescript
 import { createLogger } from '../utils/logger.js';
 const logger = createLogger('MyModule');
-logger.debug('...'); // 生产静默；logger.warn/error 始终输出
+
+logger.debug('slot started', { id });   // 高频路径 → 生产静默
+logger.info('operator created', { id }); // 生命周期事件
+logger.warn('encode timeout', { expected, actual }); // 告警
+logger.error('PTT failed', err);         // 错误
 ```
 
-- `LOG_LEVEL=debug|info|warn|error`（默认：production=warn，development=info）
-- 以下高频路径必须用 `logger.debug`：WSServer 命令接收/广播循环、音频帧写入循环、频率轮询、操作员状态广播、编码完成回调
-- `catch` 块、连接事件、引擎启停保留 `console.error/warn`（生产可见）
+**级别规则**：
+- `debug`：高频路径（每时隙/每次 WS 事件/每次编解码）
+- `info`：生命周期（启动/停止/连接/断开/配置变更）
+- `warn`/`error`：始终输出
+
+**架构说明（server）**：`ConsoleLogger` 通过 console 全局覆盖拦截所有输出写入日志文件；`createLogger` 做级别过滤后调用 `console.*`，由覆盖层统一持久化。`core` 包的日志经级别过滤后同样进入覆盖层写入 server 日志文件。
+
+**server 级别控制**：`LOG_LEVEL=debug|info|warn|error`（production 默认 warn，development 默认 info）

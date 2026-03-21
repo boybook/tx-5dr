@@ -56,8 +56,8 @@ export default defineConfig({
                   success: false,
                   code: isBackendOffline ? 'BACKEND_OFFLINE' : 'PROXY_ERROR',
                   message: isBackendOffline
-                    ? '后端服务器未启动或不可达（开发代理）'
-                    : `代理错误: ${err?.message || '未知错误'}`,
+                    ? 'Backend server unavailable (dev proxy)'
+                    : `Proxy error: ${err?.message || 'unknown error'}`,
                 };
                 res.end(JSON.stringify(payload));
               } catch (e) {
@@ -67,14 +67,14 @@ export default defineConfig({
               // WS 或无法写响应头的场景，直接结束连接即可
               try { res.end(); } catch {}
             } else {
-              console.log('🚨 代理错误(无法回写响应):', err?.code || '', err?.message || err);
+              console.log('[proxy] error (cannot write response):', err?.code || '', err?.message || err);
             }
           });
           proxy.on('proxyReq', (proxyReq, req, _res) => {
-            console.log('📤 代理请求:', req.method, req.url, '→', proxyReq.getHeader('host') + proxyReq.path);
+            console.log('[proxy] ->', req.method, req.url, proxyReq.getHeader('host') + proxyReq.path);
           });
           proxy.on('proxyRes', (proxyRes, req, _res) => {
-            console.log('📥 代理响应:', req.method, req.url, '←', proxyRes.statusCode);
+            console.log('[proxy] <-', req.method, req.url, proxyRes.statusCode);
           });
         },
       },

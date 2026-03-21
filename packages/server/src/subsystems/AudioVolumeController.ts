@@ -2,6 +2,9 @@ import type { EventEmitter } from 'eventemitter3';
 import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AudioVolumeController');
 
 /**
  * 音量控制子系统
@@ -18,6 +21,7 @@ export class AudioVolumeController {
    * 设置音量增益（线性单位）
    */
   setVolumeGain(gain: number): void {
+    logger.debug(`Setting volume gain: ${gain}`);
     this.audioStreamManager.setVolumeGain(gain);
     this.persistAndBroadcast();
   }
@@ -26,6 +30,7 @@ export class AudioVolumeController {
    * 设置音量增益（dB单位）
    */
   setVolumeGainDb(gainDb: number): void {
+    logger.debug(`Setting volume gain: ${gainDb.toFixed(1)}dB`);
     this.audioStreamManager.setVolumeGainDb(gainDb);
     this.persistAndBroadcast();
   }
@@ -51,7 +56,7 @@ export class AudioVolumeController {
     // 持久化到配置
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ConfigManager.getInstance().updateLastVolumeGain(currentGain, currentGainDb).catch((error: any) => {
-      console.warn('⚠️ [AudioVolumeController] 保存音量增益配置失败:', error);
+      logger.warn('Failed to save volume gain config:', error);
     });
 
     // 广播事件

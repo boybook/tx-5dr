@@ -14,6 +14,9 @@ import { useHasMinRole } from '../store/authStore';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AudioMonitorNode, createWorkletMonitorNode, ScriptProcessorFallbackNode } from '../utils/audio-monitor-fallback';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('RadioControl');
 
 interface FrequencyOption {
   key: string;
@@ -46,7 +49,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
             setSupportedRigs(rigsResponse.rigs);
           }
         } catch (error) {
-          console.error('获取支持的电台列表失败:', error);
+          logger.error('Failed to fetch supported rigs list:', error);
         }
       }
     };
@@ -62,7 +65,6 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radio: { state: Radio
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleRadioDisconnectedDuringTransmission = (data: any) => {
-      console.warn('🚨 [RadioControl] 电台发射中断开连接:', data);
       addToast({
         title: t('status.txDisconnected'),
         description: data.message,
@@ -281,33 +283,28 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   React.useEffect(() => {
     const loadModes = async () => {
       if (!connection.state.isConnected) {
-        console.log('🔌 未连接到服务器，清空模式列表');
         setAvailableModes([]);
         return;
       }
-      
+
       setIsLoadingModes(true);
       setModeError(null);
-      
+
       try {
-        console.log('🔄 开始加载模式列表...');
         const response = await api.getAvailableModes();
-        console.log('📦 收到模式列表响应:', response);
-        
+
         if (response.success && Array.isArray(response.data)) {
           if (response.data.length === 0) {
-            console.warn('⚠️ 模式列表为空');
             setModeError(t('mode.noModes'));
           } else {
-            console.log(`✅ 成功加载 ${response.data.length} 个模式:`, response.data.map(m => m.name).join(', '));
             setAvailableModes(response.data);
           }
         } else {
-          console.error('❌ 加载模式列表失败: 返回数据格式错误', response);
+          logger.error('Failed to load modes: invalid response format', response);
           setModeError(t('mode.loadFailed'));
         }
       } catch (error) {
-        console.error('❌ 加载模式列表失败:', error);
+        logger.error('Failed to load modes:', error);
         setModeError(t('mode.loadFailedDetail', { detail: error instanceof Error ? error.message : t('error.unknown') }));
       } finally {
         setIsLoadingModes(false);
@@ -321,18 +318,15 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   React.useEffect(() => {
     const loadFrequencies = async () => {
       if (!connection.state.isConnected) {
-        console.log('🔌 未连接到服务器，清空频率列表');
         setAvailableFrequencies([]);
         return;
       }
-      
+
       setIsLoadingFrequencies(true);
-      
+
       try {
-        console.log('🔄 开始加载频率列表...');
         const response = await api.getPresetFrequencies();
-        console.log('📦 收到频率列表响应:', response);
-        
+
         if (response.success && Array.isArray(response.presets)) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const frequencyOptions: FrequencyOption[] = response.presets.map((preset: any) => ({
@@ -343,14 +337,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             mode: preset.mode,
             radioMode: preset.radioMode
           }));
-          
+
           setAvailableFrequencies(frequencyOptions);
-          console.log(`✅ 成功加载 ${frequencyOptions.length} 个预设频率`);
         } else {
-          console.error('❌ 加载频率列表失败: 返回数据格式错误', response);
+          logger.error('Failed to load frequencies: invalid response format', response);
         }
       } catch (error) {
-        console.error('❌ 加载频率列表失败:', error);
+        logger.error('Failed to load preset frequencies:', error);
       } finally {
         setIsLoadingFrequencies(false);
       }
@@ -367,12 +360,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
 
       try {
-        console.log('🔄 加载上次选择的频率...');
         const response = await api.getLastFrequency();
 
         if (response.success && response.lastFrequency) {
           const lastFreq = response.lastFrequency;
-          console.log('📦 找到上次选择的频率:', lastFreq);
 
           // 查找匹配的频率选项
           const matchingFreq = availableFrequencies.find(freq =>
@@ -380,18 +371,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           );
 
           if (matchingFreq && radio.state.currentMode?.name === lastFreq.mode) {
-            console.log(`🔄 自动恢复上次频率: ${matchingFreq.label}`);
+            logger.debug(`Restoring last frequency: ${matchingFreq.label}`);
             setCurrentFrequency(matchingFreq.key);
             // 自动设置频率到电台
             autoSetFrequency(matchingFreq);
-          } else {
-            console.log('⚠️ 上次选择的频率与当前模式不匹配或未找到对应选项');
           }
-        } else {
-          console.log('ℹ️ 没有找到上次选择的频率记录');
         }
       } catch (error) {
-        console.error('❌ 加载上次选择的频率失败:', error);
+        logger.error('Failed to load last frequency:', error);
         // 静默失败，不影响用户体验
       }
     };
@@ -430,7 +417,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
       
     } catch (error) {
-      console.error('❌ 切换监听状态失败:', error);
+      logger.error('Failed to toggle listen state:', error);
     } finally {
       // 2秒后自动清除loading状态
       setTimeout(() => {
@@ -443,25 +430,23 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleModeChange = async (keys: any) => {
     if (!connection.state.isConnected) {
-      console.warn('⚠️ 未连接到服务器，无法切换模式');
       return;
     }
 
     const selectedModeName = Array.from(keys)[0];
     const selectedMode = availableModes.find(mode => mode.name === selectedModeName);
-    
+
     if (!selectedMode) {
-      console.warn('⚠️ 未找到选中的模式:', selectedModeName);
       return;
     }
 
     try {
       const response = await api.switchMode(selectedMode);
       if (response.success) {
-        console.log(`✅ 模式已切换到: ${selectedMode.name}`);
+        logger.info(`Mode switched to: ${selectedMode.name}`);
       }
     } catch (error) {
-      console.error('❌ 切换模式失败:', error);
+      logger.error('Failed to switch mode:', error);
     }
   };
 
@@ -508,7 +493,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     isInitializingWorklet.current = true;
 
     try {
-      console.log(`🎧 [AudioMonitor] 创建AudioContext，采样率=${sampleRate}Hz`);
       const audioContext = new AudioContext({ sampleRate });
       let monitorNode: AudioMonitorNode;
 
@@ -517,12 +501,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
         const workletNode = new AudioWorkletNode(audioContext, 'audio-monitor-processor');
         monitorNode = createWorkletMonitorNode(workletNode);
-        console.log('✅ [AudioMonitor] AudioWorklet初始化成功');
+        logger.debug('AudioWorklet initialized');
       } else {
         // Insecure Context（局域网 HTTP）: 回退到 ScriptProcessorNode
-        console.warn('⚠️ [AudioMonitor] AudioWorklet 不可用（非安全上下文），回退到 ScriptProcessorNode');
+        logger.debug('AudioWorklet unavailable (insecure context), falling back to ScriptProcessorNode');
         monitorNode = new ScriptProcessorFallbackNode(audioContext);
-        console.log('✅ [AudioMonitor] ScriptProcessorNode回退初始化成功');
       }
 
       const gainNode = audioContext.createGain();
@@ -539,7 +522,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       audioContextRef.current = audioContext;
       workletNodeRef.current = monitorNode;
     } catch (error) {
-      console.error('❌ [AudioMonitor] 音频初始化失败:', error);
+      logger.error('Audio monitor initialization failed:', error);
       throw error;
     } finally {
       // 释放初始化锁
@@ -550,8 +533,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   // 开始监听（简化版：连接即接收）
   const startMonitoring = async () => {
     try {
-      console.log('🎧 [AudioMonitor] 开始监听...');
-
       // 在用户点击回调中立即创建 AudioContext（浏览器自动播放策略要求）
       // 使用 48kHz 采样率（与服务端 AudioMonitorService 的 TARGET_SAMPLE_RATE 匹配）
       await initAudioWorklet(48000);
@@ -565,9 +546,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       // 然后连接音频WebSocket（连接后服务端自动广播）
       connection.state.radioService?.connectAudioMonitor();
 
-      console.log('✅ [AudioMonitor] 监听已开启');
+      logger.info('Audio monitor started');
     } catch (error) {
-      console.error('❌ [AudioMonitor] 开始监听失败:', error);
+      logger.error('Failed to start audio monitor:', error);
       addToast({
         title: t('monitor.startFailed'),
         description: error instanceof Error ? error.message : t('error.unknown'),
@@ -589,8 +570,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   // 停止监听
   const stopMonitoring = () => {
     try {
-      console.log('🛑 [AudioMonitor] 停止监听...');
-
       // 断开音频WebSocket连接
       connection.state.radioService?.disconnectAudioMonitor();
 
@@ -607,9 +586,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
       setIsMonitoring(false);
       setMonitorStats(null);
-      console.log('✅ [AudioMonitor] 监听已停止');
+      logger.info('Audio monitor stopped');
     } catch (error) {
-      console.error('❌ [AudioMonitor] 停止监听失败:', error);
+      logger.error('Failed to stop audio monitor:', error);
     }
   };
 
@@ -691,8 +670,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     setIsSettingCustomFrequency(true);
 
     try {
-      console.log(`🔄 设置自定义频率: ${formatFrequencyDisplay(frequency)} MHz (${frequency} Hz)`);
-
       const response = await api.setRadioFrequency({
         frequency: frequency,
         mode: radio.state.currentMode?.name || 'FT8',
@@ -714,7 +691,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         const successMessage = t('frequency.switched', { freq: formatFrequencyDisplay(frequency) });
 
         if (response.radioConnected) {
-          console.log(`✅ Custom frequency set: ${formatFrequencyDisplay(frequency)} MHz`);
+          logger.info(`Custom frequency set: ${formatFrequencyDisplay(frequency)} MHz`);
           addToast({
             title: t('frequency.switchSuccess'),
             description: successMessage,
@@ -722,7 +699,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             timeout: 3000
           });
         } else {
-          console.log(`📝 Custom frequency recorded: ${formatFrequencyDisplay(frequency)} MHz (radio not connected)`);
           addToast({
             title: t('frequency.recorded'),
             description: t('frequency.recordedDetail', { message: successMessage }),
@@ -730,11 +706,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           });
         }
       } else {
-        console.error('❌ Custom frequency set failed:', response.message);
+        logger.error('Custom frequency set failed:', response.message);
         setCustomFrequencyError(response.message || t('frequency.setFailed'));
       }
     } catch (error) {
-      console.error('❌ 设置自定义频率失败:', error);
+      logger.error('Failed to set custom frequency:', error);
       if (error instanceof ApiError) {
         setCustomFrequencyError(error.userMessage);
         showErrorToast({
@@ -778,7 +754,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     }
 
-    console.log(`🔍 当前模式: ${currentModeName}, 筛选出 ${filtered.length} 个频率${customFrequencyOption ? ' (含自定义)' : ''}`);
     return filtered;
   }, [availableFrequencies, radio.state.currentMode, customFrequencyOption]);
 
@@ -787,8 +762,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     if (!connection.state.isConnected) return;
 
     try {
-      console.log(`🔄 自动设置频率: ${frequency.label} (${frequency.frequency} Hz)${frequency.radioMode ? ` [${frequency.radioMode}]` : ''}`);
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const params: any = {
         frequency: frequency.frequency,
@@ -802,13 +775,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
       const response = await api.setRadioFrequency(params);
 
-      if (response.success) {
-        console.log(`✅ 自动设置频率成功: ${frequency.label}`);
-      } else {
-        console.error('❌ 自动设置频率失败:', response.message);
+      if (!response.success) {
+        logger.debug('Auto set frequency failed:', response.message);
       }
     } catch (error) {
-      console.error('❌ 自动设置频率失败:', error);
+      logger.debug('Auto set frequency failed:', error);
       // 自动设置失败，静默处理，不影响用户体验
     }
   };
@@ -819,7 +790,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       const currentFreqExists = filteredFrequencies.some(freq => freq.key === currentFrequency);
       if (!currentFreqExists) {
         const firstFreq = filteredFrequencies[0];
-        console.log(`🔄 模式改变，自动选择第一个频率: ${firstFreq.label}`);
+        logger.debug(`Mode changed, auto-selecting first frequency: ${firstFreq.label}`);
         setCurrentFrequency(firstFreq.key);
         // 清除自定义频率标签
         setCustomFrequencyLabel('');
@@ -833,7 +804,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFrequencyChange = async (keys: any) => {
     if (!connection.state.isConnected) {
-      console.warn('⚠️ 未连接到服务器，无法切换频率');
       return;
     }
 
@@ -842,7 +812,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     // 检查是否选择了自定义频率选项
     if (selectedFrequencyKey === '__custom__') {
-      console.log('📝 打开自定义频率输入框');
       setIsCustomFrequencyModalOpen(true);
       setCustomFrequencyInput('');
       setCustomFrequencyError('');
@@ -852,13 +821,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     const selectedFrequency = filteredFrequencies.find(freq => freq.key === selectedFrequencyKey);
     if (!selectedFrequency) {
-      console.warn('⚠️ 未找到选中的频率:', selectedFrequencyKey);
       return;
     }
 
     try {
-      console.log(`🔄 切换频率到: ${selectedFrequency.label} (${selectedFrequency.frequency} Hz)${selectedFrequency.radioMode ? ` [${selectedFrequency.radioMode}]` : ''}`);
-
       // 设置频率和电台调制模式
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const params: any = {
@@ -883,7 +849,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           : t('frequency.switchedLabel', { label: selectedFrequency.label });
 
         if (response.radioConnected) {
-          console.log(`✅ Frequency switched to: ${selectedFrequency.label}`);
+          logger.info(`Frequency switched to: ${selectedFrequency.label}`);
           addToast({
             title: t('frequency.switchSuccess'),
             description: successMessage,
@@ -891,7 +857,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             timeout: 3000
           });
         } else {
-          console.log(`📝 Frequency recorded: ${selectedFrequency.label} (radio not connected)`);
           addToast({
             title: t('frequency.recorded'),
             description: t('frequency.recordedDetail', { message: successMessage }),
@@ -899,7 +864,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           });
         }
       } else {
-        console.error('❌ Frequency switch failed:', response.message);
+        logger.error('Frequency switch failed:', response.message);
         addToast({
           title: t('frequency.switchFailed'),
           description: response.message,
@@ -907,7 +872,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         });
       }
     } catch (error) {
-      console.error('❌ Frequency switch failed:', error);
+      logger.error('Frequency switch failed:', error);
       if (error instanceof ApiError) {
         showErrorToast({
           userMessage: error.userMessage,
@@ -934,25 +899,23 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleVolumeGainChanged = (data: any) => {
-      console.log('🔊 收到服务器音量变化:', data);
-
       // 处理新的数据格式（包含gain和gainDb）
       if (data && typeof data === 'object' && data.gain !== undefined) {
         // 新格式：{ gain: number, gainDb: number }
         if (!isNaN(data.gain) && data.gain >= 0) {
           setVolumeGain(data.gain);
         } else {
-          console.warn('⚠️ 收到无效的音量增益值:', data);
+          logger.debug('Received invalid volume gain value:', data);
         }
       } else if (typeof data === 'number') {
         // 向后兼容：直接是gain数值
         if (!isNaN(data) && data >= 0) {
           setVolumeGain(data);
         } else {
-          console.warn('⚠️ 收到无效的音量增益值:', data);
+          logger.debug('Received invalid volume gain value:', data);
         }
       } else {
-        console.warn('⚠️ 收到未知格式的音量增益数据:', data);
+        logger.debug('Received unknown format volume gain data:', data);
       }
     };
 
@@ -1003,7 +966,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
 
       if (!data.sampleRate) {
-        console.warn('⚠️ [AudioMonitor] 元数据缺少采样率');
+        logger.debug('Audio monitor metadata missing sample rate');
         return;
       }
 
@@ -1014,9 +977,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       if (audioContextRef.current?.state === 'suspended') {
         try {
           await audioContextRef.current.resume();
-          console.log('▶️ [AudioMonitor] AudioContext 已恢复');
+          logger.debug('AudioContext resumed');
         } catch (error) {
-          console.error('❌ [AudioMonitor] AudioContext 恢复失败:', error);
+          logger.error('AudioContext resume failed:', error);
         }
       }
 
@@ -1025,11 +988,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           audioContextRef.current.sampleRate !== data.sampleRate) {
 
         if (isInitializingWorklet.current) {
-          console.log('⏭️ [AudioMonitor] 正在初始化中，跳过重复请求');
           return;
         }
 
-        console.log(`🔄 [AudioMonitor] 采样率变化 ${audioContextRef.current.sampleRate} → ${data.sampleRate}，重新创建AudioContext`);
+        logger.debug(`Sample rate changed ${audioContextRef.current.sampleRate} -> ${data.sampleRate}, recreating AudioContext`);
         workletNodeRef.current?.dispose();
         workletNodeRef.current = null;
         audioContextRef.current.close();
@@ -1038,7 +1000,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         try {
           await initAudioWorklet(data.sampleRate);
         } catch (error) {
-          console.error('❌ [AudioMonitor] 重建AudioContext失败:', error);
+          logger.error('Failed to rebuild AudioContext:', error);
         }
       }
     };
@@ -1049,7 +1011,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
       // 确保音频节点已就绪
       if (!workletNodeRef.current) {
-        console.warn('⚠️ [AudioMonitor] 音频节点未就绪，丢弃音频数据');
         return;
       }
 
@@ -1067,8 +1028,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       // 服务端的统计信息可以作为补充
     };
 
-    console.log('🔧 [AudioMonitor] 注册事件监听器和数据处理器');
-
     // 订阅控制WebSocket的元数据事件
     wsClient.onWSEvent('audioMonitorData', handleAudioMonitorData);
     wsClient.onWSEvent('audioMonitorStats', handleAudioMonitorStats);
@@ -1076,11 +1035,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     // 注册二进制音频数据处理器（音频专用WebSocket）
     radioService.setAudioMonitorDataHandler(handleBinaryAudioData);
 
-    console.log('✅ [AudioMonitor] 事件监听器和数据处理器已注册');
-
     return () => {
-      console.log('🧹 [AudioMonitor] 清理事件监听器和数据处理器');
-
       // 清理控制WebSocket事件
       wsClient.offWSEvent('audioMonitorData', handleAudioMonitorData);
       wsClient.offWSEvent('audioMonitorStats', handleAudioMonitorStats);
@@ -1114,7 +1069,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         if (!isNaN(gain) && gain >= 0) {
           setVolumeGain(gain);
         } else {
-          console.warn('⚠️ 系统状态中收到无效的音量增益值:', gain);
+          logger.debug('Received invalid volume gain in system status:', gain);
         }
       }
       // 支持dB格式的系统状态（如果后续添加）
@@ -1143,8 +1098,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleFrequencyChanged = (data: any) => {
-      console.log('📻 收到频率变化广播:', data);
-
       const frequencyKey = String(data.frequency);
       setCurrentFrequency(frequencyKey);
 
@@ -1163,12 +1116,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         };
         setCustomFrequencyOption(customOption);
         setCustomFrequencyLabel(customOption.label);
-        console.log('📻 添加自定义频率选项:', customOption);
+        logger.debug('Custom frequency option added:', customOption.label);
       } else {
         // 预设频率：清除自定义选项
         setCustomFrequencyOption(null);
         setCustomFrequencyLabel('');
-        console.log('📻 切换到预设频率，清除自定义选项');
       }
     };
 
@@ -1192,7 +1144,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       try {
         const response = await api.getTunerCapabilities();
         if (response.success) {
-          console.log('📡 天调能力:', response.capabilities);
           setTunerCapabilities(response.capabilities);
 
           // 如果支持天调，获取当前状态
@@ -1204,7 +1155,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           }
         }
       } catch (error) {
-        console.error('❌ 获取天调能力失败:', error);
+        logger.error('Failed to get tuner capabilities:', error);
         setTunerCapabilities(null);
       }
     };
@@ -1219,7 +1170,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     const wsClient = connection.state.radioService.wsClientInstance;
 
     const handleTunerStatusChanged = (status: TunerStatus) => {
-      console.log('📡 收到天调状态变化:', status);
       setTunerStatus(status);
       setIsTunerLoading(false);
     };
@@ -1234,7 +1184,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   // 天调控制方法
   const handleTunerToggle = async () => {
     if (!tunerCapabilities?.supported || !tunerCapabilities.hasSwitch) {
-      console.warn('⚠️ 天调不支持开关控制');
       return;
     }
 
@@ -1243,7 +1192,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     try {
       const newEnabled = !tunerStatus.enabled;
       await api.setTuner(newEnabled);
-      console.log(`✅ 天调已${newEnabled ? '启用' : '禁用'}`);
+      logger.info(`Tuner ${newEnabled ? 'enabled' : 'disabled'}`);
 
       addToast({
         title: newEnabled ? t('tuner.enabled') : t('tuner.disabled'),
@@ -1251,7 +1200,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         timeout: 2000
       });
     } catch (error) {
-      console.error('❌ Tuner toggle failed:', error);
+      logger.error('Tuner toggle failed:', error);
       setIsTunerLoading(false);
 
       if (error instanceof ApiError) {
@@ -1273,7 +1222,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   const handleStartTuning = async () => {
     if (!tunerCapabilities?.supported || !tunerCapabilities.hasManualTune) {
-      console.warn('⚠️ Tuner does not support manual tuning');
       return;
     }
 
@@ -1291,7 +1239,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     try {
       const response = await api.startTuning();
       if (response.success) {
-        console.log('✅ Manual tuning started');
+        logger.info('Manual tuning started');
         addToast({
           title: t('tuner.tuningStarted'),
           color: 'success',
@@ -1299,7 +1247,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         });
       }
     } catch (error) {
-      console.error('❌ Manual tuning failed:', error);
+      logger.error('Manual tuning failed:', error);
       setIsTunerLoading(false);
 
       if (error instanceof ApiError) {

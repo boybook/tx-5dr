@@ -9,6 +9,9 @@
 import { addToast } from '@heroui/toast';
 import { Button } from '@heroui/react';
 import i18n from '../i18n';
+import { createLogger } from './logger';
+
+const logger = createLogger('ErrorToast');
 
 /**
  * 错误 Toast 选项
@@ -145,7 +148,7 @@ export function showErrorToast(options: ErrorToastOptions): void {
   const title = titleMap[severity] || i18n.t('toast:severity.error');
 
   // 记录完整的技术错误日志
-  console.error('[错误提示]', {
+  logger.error('Error toast shown:', {
     code,
     severity,
     userMessage,

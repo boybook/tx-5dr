@@ -1,3 +1,7 @@
+import { createLogger } from './logger.js';
+
+const logger = createLogger('ErrorBoundary');
+
 /**
  * ErrorBoundary - 错误边界工具
  *
@@ -152,8 +156,8 @@ export class ErrorBoundary {
               : retry.delay;
 
             if (logError) {
-              console.warn(
-                `⚠️  [ErrorBoundary] ${operationName} 失败 (尝试 ${attempt}/${maxAttempts}), ${delay}ms 后重试:`,
+              logger.warn(
+                `${operationName} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms:`,
                 transformedError
               );
             }
@@ -166,8 +170,8 @@ export class ErrorBoundary {
 
         // 不再重试，执行清理
         if (logError) {
-          console.error(
-            `❌ [ErrorBoundary] ${operationName} 失败 (尝试 ${attempt}/${maxAttempts}):`,
+          logger.error(
+            `${operationName} failed (attempt ${attempt}/${maxAttempts}):`,
             transformedError
           );
         }
@@ -176,12 +180,12 @@ export class ErrorBoundary {
           if (cleanup) {
             await cleanup();
             if (logError) {
-              console.log(`🧹 [ErrorBoundary] ${operationName} 清理完成`);
+              logger.debug(`${operationName} cleanup complete`);
             }
           }
         } catch (cleanupError) {
-          console.error(
-            `⚠️  [ErrorBoundary] ${operationName} 清理失败:`,
+          logger.error(
+            `${operationName} cleanup failed:`,
             cleanupError
           );
         }
@@ -189,9 +193,7 @@ export class ErrorBoundary {
         // 如果有降级方案，返回降级值
         if (fallback !== undefined) {
           if (logError) {
-            console.log(
-              `🔄 [ErrorBoundary] ${operationName} 使用降级方案`
-            );
+            logger.debug(`${operationName} using fallback`);
           }
           return fallback;
         }
@@ -227,8 +229,8 @@ export class ErrorBoundary {
       const transformedError = errorTransform ? errorTransform(error) : error;
 
       if (logError) {
-        console.error(
-          `❌ [ErrorBoundary] ${operationName} 失败:`,
+        logger.error(
+          `${operationName} failed:`,
           transformedError
         );
       }
@@ -237,19 +239,19 @@ export class ErrorBoundary {
         if (cleanup) {
           cleanup();
           if (logError) {
-            console.log(`🧹 [ErrorBoundary] ${operationName} 清理完成`);
+            logger.debug(`${operationName} cleanup complete`);
           }
         }
       } catch (cleanupError) {
-        console.error(
-          `⚠️  [ErrorBoundary] ${operationName} 清理失败:`,
+        logger.error(
+          `${operationName} cleanup failed:`,
           cleanupError
         );
       }
 
       if (fallback !== undefined) {
         if (logError) {
-          console.log(`🔄 [ErrorBoundary] ${operationName} 使用降级方案`);
+          logger.debug(`${operationName} using fallback`);
         }
         return fallback;
       }

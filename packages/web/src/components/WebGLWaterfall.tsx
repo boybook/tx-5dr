@@ -1,6 +1,9 @@
 import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('WebGLWaterfall');
 
 export interface AutoRangeConfig {
   updateInterval: number;      // 更新频率（帧数），默认10
@@ -271,7 +274,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.compileShader(shader);
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
+      logger.error('Shader compilation error:', gl.getShaderInfoLog(shader));
       gl.deleteShader(shader);
       return null;
     }
@@ -294,7 +297,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.linkProgram(program);
 
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error('Program linking error:', gl.getProgramInfoLog(program));
+      logger.error('Program linking error:', gl.getProgramInfoLog(program));
       gl.deleteProgram(program);
       return null;
     }

@@ -21,6 +21,9 @@ import { AudioMonitorService } from './audio/AudioMonitorService.js';
 import { MemoryLeakDetector } from './utils/MemoryLeakDetector.js';
 import { ResourceManager } from './utils/ResourceManager.js';
 import { initializePSKReporterService } from './services/PSKReporterService.js';
+import { createLogger } from './utils/logger.js';
+
+const logger = createLogger('DigitalRadioEngine');
 
 // 子系统
 import { AudioVolumeController } from './subsystems/AudioVolumeController.js';
@@ -99,7 +102,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getCurrentMode: () => this.currentMode,
       setRadioFrequency: (freq: number) => {
         if (this.radioManager) {
-          try { this.radioManager.setFrequency(freq); } catch (e) { console.error('设置电台频率失败', e); }
+          try { this.radioManager.setFrequency(freq); } catch (e) { logger.error('Failed to set radio frequency', e); }
         }
       },
       getRadioFrequency: async () => {
@@ -182,14 +185,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // ─── 初始化 ──────────────────────────────────────
 
   async initialize(): Promise<void> {
-    console.log('🕐 [DigitalRadioEngine] 正在初始化...');
+    logger.info('Initializing...');
 
     await printAppPaths();
 
     // 从配置读取发射补偿值
     const radioConfig = ConfigManager.getInstance().getRadioConfig();
     const compensationMs = radioConfig.transmitCompensationMs || 0;
-    console.log(`⚙️ [DigitalRadioEngine] 读取发射补偿配置: ${compensationMs}ms`);
+    logger.info(`Transmit compensation config: ${compensationMs}ms`);
 
     // 创建 SlotClock
     this.slotClock = new SlotClock(this.clockSource, this.currentMode, compensationMs);
@@ -218,9 +221,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     try {
       pskreporterService = await initializePSKReporterService();
       pskreporterService.setMode(this.currentMode.name);
-      console.log('✅ [DigitalRadioEngine] PSKReporter服务初始化完成');
+      logger.info('PSKReporter service initialized');
     } catch (error) {
-      console.warn('⚠️ [DigitalRadioEngine] PSKReporter服务初始化失败:', error);
+      logger.warn('PSKReporter service initialization failed:', error);
     }
 
     // 初始化 ClockCoordinator（需要 slotClock）
@@ -261,7 +264,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.engineLifecycle.registerResources();
     this.engineLifecycle.initializeStateMachine();
 
-    console.log(`✅ [DigitalRadioEngine] 初始化完成，当前模式: ${this.currentMode.name}`);
+    logger.info(`Initialization complete, current mode: ${this.currentMode.name}`);
   }
 
   // ─── 委托方法 ────────────────────────────────────
@@ -275,7 +278,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   async destroy(): Promise<void> {
-    console.log('🗑️  [DigitalRadioEngine] 正在销毁...');
+    logger.info('Destroying...');
     await this.stop();
 
     // 清理 RadioBridge 监听器
@@ -292,13 +295,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (this.audioMixer) {
       this.audioMixer.clear();
       this.audioMixer.removeAllListeners();
-      console.log('🗑️  [DigitalRadioEngine] 音频混音器已清理');
+      logger.info('Audio mixer cleaned up');
     }
 
     // 销毁频谱调度器
     if (this.spectrumScheduler) {
       await this.spectrumScheduler.destroy();
-      console.log('🗑️  [DigitalRadioEngine] 频谱调度器已销毁');
+      logger.info('Spectrum scheduler destroyed');
     }
 
     if (this.slotClock) {
@@ -315,7 +318,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 清理传输跟踪器
     if (this.transmissionTracker) {
       this.transmissionTracker.cleanup();
-      console.log('🗑️  [DigitalRadioEngine] 传输跟踪器已清理');
+      logger.info('Transmission tracker cleaned up');
     }
 
     // 停止状态机
@@ -324,7 +327,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 取消注册内存泄漏检测
     MemoryLeakDetector.getInstance().unregister('DigitalRadioEngine');
 
-    console.log('✅ [DigitalRadioEngine] 销毁完成');
+    logger.info('Destroy complete');
   }
 
   setVolumeGain(gain: number): void {
@@ -350,19 +353,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   public updateTransmitCompensation(compensationMs: number): void {
     if (this.slotClock) {
       this.slotClock.setCompensation(compensationMs);
-      console.log(`⏱️ [DigitalRadioEngine] 发射补偿已更新为 ${compensationMs}ms`);
+      logger.info(`Transmit compensation updated to ${compensationMs}ms`);
     } else {
-      console.warn(`⚠️ [DigitalRadioEngine] SlotClock 未初始化，无法更新补偿值`);
+      logger.warn('SlotClock not initialized, cannot update compensation');
     }
   }
 
   async setMode(mode: ModeDescriptor): Promise<void> {
     if (this.currentMode.name === mode.name) {
-      console.log(`🔄 [DigitalRadioEngine] 已经是模式: ${mode.name}`);
+      logger.info(`Already in mode: ${mode.name}`);
       return;
     }
 
-    console.log(`🔄 [DigitalRadioEngine] 切换模式: ${this.currentMode.name} -> ${mode.name}`);
+    logger.info(`Switching mode: ${this.currentMode.name} -> ${mode.name}`);
     this.currentMode = mode;
 
     if (this.slotClock) {

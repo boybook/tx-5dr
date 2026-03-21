@@ -13,6 +13,9 @@ import { IcomControl, AUDIO_RATE } from 'icom-wlan-node';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
+import { createLogger } from '../../utils/logger.js';
+
+const logger = createLogger('IcomWlanConnection');
 import {
   RadioConnectionType,
   RadioConnectionState,
@@ -153,8 +156,8 @@ export class IcomWlanConnection
     this.setState(RadioConnectionState.CONNECTING);
 
     try {
-      console.log(`📡 [IcomWlanConnection] 连接到 ICOM 电台: ${config.icomWlan.ip}:${config.icomWlan.port}`);
-      console.log(`📡 [IcomWlanConnection] 数据模式默认值: ${this.defaultDataMode}`);
+      logger.debug(`Connecting to ICOM radio: ${config.icomWlan.ip}:${config.icomWlan.port}`);
+      logger.debug(`Default data mode: ${this.defaultDataMode}`);
 
       // 直接创建 IcomControl 实例
       this.rig = new IcomControl({
@@ -191,7 +194,7 @@ export class IcomWlanConnection
 
       // 连接成功
       this.setState(RadioConnectionState.CONNECTED);
-      console.log(`✅ [IcomWlanConnection] ICOM 电台连接成功`);
+      logger.info('ICOM radio connected successfully');
 
       // 启动数值表轮询
       this.startMeterPolling();
@@ -213,7 +216,7 @@ export class IcomWlanConnection
    * 断开电台连接
    */
   async disconnect(reason?: string): Promise<void> {
-    console.log(`🔌 [IcomWlanConnection] 断开连接: ${reason || '无原因'}`);
+    logger.info(`Disconnecting: ${reason || 'no reason'}`);
 
     // 清理资源
     await this.cleanup();
@@ -224,7 +227,7 @@ export class IcomWlanConnection
     // 触发断开事件
     this.emit('disconnected', reason);
 
-    console.log(`✅ [IcomWlanConnection] 连接已断开`);
+    logger.info('Connection disconnected');
   }
 
   /**
@@ -235,7 +238,7 @@ export class IcomWlanConnection
 
     try {
       await this.rig!.setFrequency(frequency);
-      console.log(`🔊 [IcomWlanConnection] 频率设置成功: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
     } catch (error) {
       throw this.convertError(error, 'setFrequency');
     }
@@ -265,9 +268,9 @@ export class IcomWlanConnection
     this.checkConnected();
 
     try {
-      console.log(`📡 [IcomWlanConnection] PTT ${enabled ? '启动发射' : '停止发射'}`);
+      logger.debug(`PTT ${enabled ? 'TX start' : 'RX start'}`);
       await this.rig!.setPtt(enabled);
-      console.log(`✅ [IcomWlanConnection] PTT ${enabled ? '已启动' : '已停止'}`);
+      logger.debug(`PTT ${enabled ? 'TX active' : 'RX active'}`);
     } catch (error) {
       throw RadioError.pttActivationFailed(
         `PTT ${enabled ? '启动' : '停止'}失败`,
@@ -294,7 +297,7 @@ export class IcomWlanConnection
       const modeCode = this.mapModeToIcom(mode);
       await this.rig!.setMode(modeCode, { dataMode });
 
-      console.log(`📻 [IcomWlanConnection] 模式设置成功: ${mode}${dataMode ? ' (Data)' : ''}`);
+      logger.debug(`Mode set: ${mode}${dataMode ? ' (Data)' : ''}`);
     } catch (error) {
       throw this.convertError(error, 'setMode');
     }
@@ -329,7 +332,7 @@ export class IcomWlanConnection
     try {
       this.rig!.sendAudioFloat32(samples);
     } catch (error) {
-      console.error('❌ [IcomWlanConnection] 发送音频失败:', error);
+      logger.error('Failed to send audio:', error);
       throw this.convertError(error, 'sendAudio');
     }
   }
@@ -343,7 +346,7 @@ export class IcomWlanConnection
     try {
       const freq = await this.rig!.readOperatingFrequency({ timeout: 5000 });
       if (freq !== null) {
-        console.log(`✅ [IcomWlanConnection] 连接测试成功，当前频率: ${(freq / 1000000).toFixed(3)} MHz`);
+        logger.debug(`Connection test passed, current frequency: ${(freq / 1000000).toFixed(3)} MHz`);
       } else {
         throw new Error('测试连接失败：无法获取频率');
       }
@@ -412,9 +415,9 @@ export class IcomWlanConnection
 
       // 更新本地状态
       this.tunerEnabled = enabled;
-      console.log(`✅ [IcomWlanConnection] 天调已${enabled ? '启用' : '禁用'}`);
+      logger.debug(`Tuner ${enabled ? 'enabled' : 'disabled'}`);
     } catch (error) {
-      console.error('❌ [IcomWlanConnection] 设置天调失败:', error);
+      logger.error('Failed to set tuner:', error);
       throw this.convertError(error, 'setTuner');
     }
   }
@@ -430,10 +433,10 @@ export class IcomWlanConnection
       // CI-V: 1C 01 02
       const data = Buffer.from([0x1C, 0x01, 0x02]);
       this.rig!.sendCiv(data);
-      console.log('✅ [IcomWlanConnection] 手动调谐已启动');
+      logger.debug('Manual tuning started');
       return true;
     } catch (error) {
-      console.error('❌ [IcomWlanConnection] 启动调谐失败:', error);
+      logger.error('Failed to start tuning:', error);
       return false;
     }
   }
@@ -446,9 +449,7 @@ export class IcomWlanConnection
       const oldState = this.state;
       this.state = newState;
 
-      console.log(
-        `🔄 [IcomWlanConnection] 状态变化: ${oldState} -> ${newState}`
-      );
+      logger.debug(`State changed: ${oldState} -> ${newState}`);
 
       this.emit('stateChanged', newState);
     }
@@ -463,9 +464,9 @@ export class IcomWlanConnection
     // 登录结果
     this.rig.events.on('login', (res) => {
       if (res.ok) {
-        console.log('✅ [IcomWlanConnection] ICOM 登录成功');
+        logger.info('ICOM login successful');
       } else {
-        console.error('❌ [IcomWlanConnection] ICOM 登录失败:', res.errorCode);
+        logger.error('ICOM login failed:', res.errorCode);
         const error = new Error(`ICOM 登录失败: ${res.errorCode}`);
         this.emit('error', this.convertError(error, 'login'));
       }
@@ -473,12 +474,12 @@ export class IcomWlanConnection
 
     // 状态信息
     this.rig.events.on('status', (s) => {
-      console.log(`📊 [IcomWlanConnection] ICOM 状态: CIV端口=${s.civPort}, 音频端口=${s.audioPort}`);
+      logger.debug(`ICOM status: CIV port=${s.civPort}, audio port=${s.audioPort}`);
     });
 
     // 能力信息
     this.rig.events.on('capabilities', (c) => {
-      console.log(`📋 [IcomWlanConnection] ICOM 能力: CIV地址=${c.civAddress}, 音频名称=${c.audioName}`);
+      logger.debug(`ICOM capabilities: CIV address=${c.civAddress}, audio name=${c.audioName}`);
     });
 
     // 音频数据
@@ -489,7 +490,7 @@ export class IcomWlanConnection
 
     // 连接丢失 → 只 emit disconnected，不直接改状态（让上层状态机管理）
     this.rig.events.on('connectionLost', (info) => {
-      console.warn(`🔌 [IcomWlanConnection] 连接丢失: ${info.sessionType}, 空闲 ${info.timeSinceLastData}ms`);
+      logger.warn(`Connection lost: ${info.sessionType}, idle ${info.timeSinceLastData}ms`);
       this.stopMeterPolling();
       this.emit('disconnected', `连接丢失: ${info.sessionType}`);
     });
@@ -497,7 +498,7 @@ export class IcomWlanConnection
 
     // 错误处理
     this.rig.events.on('error', (err) => {
-      console.error('❌ [IcomWlanConnection] ICOM UDP 错误:', err);
+      logger.error('ICOM UDP error:', err);
       const radioError = this.convertError(err, 'udp');
       this.emit('error', radioError);
     });
@@ -508,11 +509,11 @@ export class IcomWlanConnection
    */
   private startMeterPolling(): void {
     if (this.meterPollingInterval) {
-      console.log('⚠️ [IcomWlanConnection] 数值表轮询已在运行');
+      logger.debug('Meter polling already running');
       return;
     }
 
-    console.log(`📊 [IcomWlanConnection] 启动数值表轮询，间隔 ${this.meterPollingIntervalMs}ms`);
+    logger.debug(`Starting meter polling, interval ${this.meterPollingIntervalMs}ms`);
 
     this.meterPollingInterval = setInterval(async () => {
       await this.pollMeters();
@@ -524,7 +525,7 @@ export class IcomWlanConnection
    */
   private stopMeterPolling(): void {
     if (this.meterPollingInterval) {
-      console.log('🛑 [IcomWlanConnection] 停止数值表轮询');
+      logger.debug('Stopping meter polling');
       clearInterval(this.meterPollingInterval);
       this.meterPollingInterval = null;
     }
@@ -551,7 +552,7 @@ export class IcomWlanConnection
       if (allFailed) {
         this.meterPollFailCount++;
         if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-          console.warn(`⚠️ [IcomWlanConnection] 数值表轮询连续失败 ${this.meterPollFailCount} 次，判定为断线`);
+          logger.warn(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost`);
           this.stopMeterPolling();
           this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
           return;
@@ -578,7 +579,7 @@ export class IcomWlanConnection
       // Promise.all 本身抛异常（不应发生，因为内部都有 catch）
       this.meterPollFailCount++;
       if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-        console.warn(`⚠️ [IcomWlanConnection] 数值表轮询异常失败 ${this.meterPollFailCount} 次，判定为断线`);
+        logger.warn(`Meter polling exception failed ${this.meterPollFailCount} times, connection lost`);
         this.stopMeterPolling();
         this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
       }
@@ -605,7 +606,7 @@ export class IcomWlanConnection
   private async cleanup(): Promise<void> {
     // 防重入保护：避免重复清理导致资源泄漏或冲突
     if (this.isCleaningUp) {
-      console.log('⚠️ [IcomWlanConnection] cleanup 已在进行中，跳过');
+      logger.debug('Cleanup already in progress, skipping');
       return;
     }
 
@@ -629,9 +630,9 @@ export class IcomWlanConnection
           }
 
           await this.rig.disconnect();
-          console.log('🔕 [IcomWlanConnection] 已清理事件监听器并断开连接');
+          logger.debug('Event listeners cleared and connection closed');
         } catch (error: any) {
-          console.warn('⚠️ [IcomWlanConnection] 清理时断开连接失败:', error);
+          logger.warn('Failed to disconnect during cleanup:', error);
         }
 
         this.rig = null;

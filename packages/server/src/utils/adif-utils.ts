@@ -5,6 +5,9 @@
 
 import { QSORecord } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('ADIFUtils');
 
 /**
  * 格式化 ADIF 日期 (YYYYMMDD)
@@ -164,7 +167,7 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
 
   // 检查必需字段
   if (!fields.call || !fields.qso_date || !fields.time_on) {
-    console.warn('ADIF记录缺少必需字段，跳过:', fields);
+    logger.warn('ADIF record missing required fields, skipping:', fields);
     return null;
   }
 
@@ -219,7 +222,7 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
 
     return record;
   } catch (error) {
-    console.warn('解析ADIF记录时出错:', error, fields);
+    logger.warn('Error parsing ADIF record', { error, fields });
     return null;
   }
 }
@@ -247,8 +250,8 @@ export function parseADIFContent(adifContent: string, source: string = 'adif'): 
       }
     }
   } catch (error) {
-    console.error('解析ADIF内容失败:', error);
-    throw new Error('ADIF格式解析错误');
+    logger.error('Failed to parse ADIF content:', error);
+    throw new Error('ADIF format parse error');
   }
 
   return records;

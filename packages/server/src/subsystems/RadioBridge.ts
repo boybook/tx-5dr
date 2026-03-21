@@ -10,6 +10,9 @@ import { ConfigManager } from '../config/config-manager.js';
 import { ListenerManager } from './ListenerManager.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { EngineLifecycle } from './EngineLifecycle.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('RadioBridge');
 
 export interface RadioBridgeDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -76,7 +79,7 @@ export class RadioBridge {
 
     // 监听电台连接中
     this.lm.listen(radioManager, 'connecting', () => {
-      console.log('📡 [RadioBridge] 物理电台连接中...');
+      logger.info('Radio connecting...');
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engineEmitter.emit('radioStatusChanged', {
@@ -90,7 +93,7 @@ export class RadioBridge {
 
     // 监听电台连接成功
     this.lm.listen(radioManager, 'connected', async () => {
-      console.log('📡 [RadioBridge] 物理电台连接成功');
+      logger.info('Radio connected');
 
       const radioInfo = await radioManager.getRadioInfo();
       const radioConfig = radioManager.getConfig();
@@ -108,13 +111,13 @@ export class RadioBridge {
       try {
         const lastFrequency = ConfigManager.getInstance().getLastSelectedFrequency();
         if (lastFrequency && lastFrequency.frequency) {
-          console.log(`📡 [RadioBridge] 自动设置频率: ${(lastFrequency.frequency / 1000000).toFixed(3)} MHz (${lastFrequency.description || lastFrequency.mode})`);
+          logger.info(`Auto-setting frequency: ${(lastFrequency.frequency / 1000000).toFixed(3)} MHz (${lastFrequency.description || lastFrequency.mode})`);
           await radioManager.setFrequency(lastFrequency.frequency);
         } else {
-          console.log('ℹ️ [RadioBridge] 未找到保存的频率配置，跳过自动设置');
+          logger.info('No saved frequency config, skipping auto-set');
         }
       } catch (err) {
-        console.error('❌ [RadioBridge] 自动设置频率失败:', err);
+        logger.error('Auto-set frequency failed:', err);
       }
 
       // 连接成功后恢复之前的运行状态（竞态保护）
@@ -123,12 +126,12 @@ export class RadioBridge {
         // 双重检查：不在运行中 且 不在启动中
         const engineState = lifecycle.getEngineState();
         if (!lifecycle.getIsRunning() && engineState !== 'starting') {
-          console.log('🚀 [RadioBridge] 电台连接成功，恢复之前的运行状态');
+          logger.info('Radio connected, restoring previous running state');
           this._wasRunningBeforeDisconnect = false;
           try {
             await lifecycle.start();
           } catch (err) {
-            console.error('❌ [RadioBridge] 自动启动失败:', err);
+            logger.error('Auto-start failed:', err);
             this._wasRunningBeforeDisconnect = false;
           }
         } else {
@@ -142,7 +145,7 @@ export class RadioBridge {
       const attempt = args[0] as number;
       const maxAttempts = args[1] as number;
       const delayMs = args[2] as number | undefined;
-      console.log(`🔄 [RadioBridge] 电台重连中 ${attempt}/${maxAttempts}`);
+      logger.info(`Radio reconnecting ${attempt}/${maxAttempts}`);
 
       const lifecycle = this.deps.getEngineLifecycle();
 
@@ -176,14 +179,14 @@ export class RadioBridge {
     // 监听电台断开连接
     this.lm.listen(radioManager, 'disconnected', async (...args: unknown[]) => {
       const reason = args[0] as string | undefined;
-      console.log(`📡 [RadioBridge] 物理电台断开连接: ${reason || '未知原因'}`);
+      logger.info(`Radio disconnected: ${reason || 'unknown reason'}`);
 
       const lifecycle = this.deps.getEngineLifecycle();
 
       // 记录断开前是否在运行（兜底，reconnecting handler 可能已设置过）
       if (lifecycle.getIsRunning() && !this._wasRunningBeforeDisconnect) {
         this._wasRunningBeforeDisconnect = true;
-        console.log('📝 [RadioBridge] 记录断开前运行状态');
+        logger.info('Recording running state before disconnect');
       }
 
       // 立即停止所有操作员的发射
@@ -193,7 +196,7 @@ export class RadioBridge {
 
       // 如果是在PTT激活时断开连接
       if (pipeline.getIsPTTActive()) {
-        console.warn('⚠️ [RadioBridge] 电台在发射过程中断开连接，立即停止发射和监听');
+        logger.warn('Radio disconnected during transmission, stopping PTT immediately');
 
         await pipeline.forceStopPTT();
 
@@ -206,7 +209,7 @@ export class RadioBridge {
           recommendation: '请检查电台设置，降低发射功率或改善通讯环境，然后重新连接电台。'
         });
       } else if (lifecycle.getIsRunning()) {
-        console.warn('⚠️ [RadioBridge] 电台断开连接，自动停止引擎');
+        logger.warn('Radio disconnected, stopping engine automatically');
         lifecycle.sendRadioDisconnected(reason || '电台断开连接');
       }
 
@@ -233,7 +236,7 @@ export class RadioBridge {
     // 监听电台错误（提取完整 RadioError 属性 + Profile 关联）
     this.lm.listen(radioManager, 'error', (...args: unknown[]) => {
       const error = args[0] as Error;
-      console.error(`📡 [RadioBridge] 物理电台错误: ${error.message}`);
+      logger.error(`Radio error: ${error.message}`);
 
       const configManager = ConfigManager.getInstance();
       const activeProfile = configManager.getActiveProfile();
@@ -264,7 +267,7 @@ export class RadioBridge {
     // 监听电台频率变化（自动同步）
     this.lm.listen(radioManager, 'radioFrequencyChanged', async (...args: unknown[]) => {
       const frequency = args[0] as number;
-      console.log(`📡 [RadioBridge] 检测到电台频率变化: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Radio frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
 
       try {
         const matchResult = frequencyManager.findMatchingPreset(frequency, 500);
@@ -278,7 +281,7 @@ export class RadioBridge {
         };
 
         if (matchResult.preset) {
-          console.log(`✅ [RadioBridge] 匹配到预设频率: ${matchResult.preset.description}`);
+          logger.debug(`Matched preset frequency: ${matchResult.preset.description}`);
           frequencyInfo = {
             frequency: matchResult.preset.frequency,
             mode: matchResult.preset.mode,
@@ -287,7 +290,7 @@ export class RadioBridge {
             description: matchResult.preset.description || `${(matchResult.preset.frequency / 1000000).toFixed(3)} MHz`
           };
         } else {
-          console.log(`🔧 [RadioBridge] 未匹配预设，设为自定义频率`);
+          logger.debug('No preset matched, using custom frequency');
           frequencyInfo = {
             frequency: frequency,
             mode: 'FT8',
@@ -306,7 +309,7 @@ export class RadioBridge {
         });
 
         slotPackManager.clearInMemory();
-        console.log(`🧹 [RadioBridge] 已清空历史解码数据`);
+        logger.debug('Cleared historical decode data');
 
         engineEmitter.emit('frequencyChanged', {
           frequency: frequencyInfo.frequency,
@@ -317,20 +320,20 @@ export class RadioBridge {
           radioConnected: true
         });
 
-        console.log(`📡 [RadioBridge] 频率自动同步完成: ${frequencyInfo.description}`);
+        logger.debug(`Frequency auto-sync complete: ${frequencyInfo.description}`);
       } catch (error) {
-        console.error(`❌ [RadioBridge] 处理频率变化失败:`, error);
+        logger.error('Failed to handle frequency change:', error);
       }
     });
 
-    console.log(`📡 [RadioBridge] 已注册 ${this.lm.count} 个 RadioManager 事件监听器`);
+    logger.info(`Registered ${this.lm.count} RadioManager event listeners`);
   }
 
   /**
    * 清理所有监听器
    */
   teardownListeners(): void {
-    console.log(`🗑️ [RadioBridge] 移除 ${this.lm.count} 个 RadioManager 事件监听器`);
+    logger.info(`Removing ${this.lm.count} RadioManager event listeners`);
     this.lm.disposeAll();
   }
 
@@ -354,23 +357,21 @@ export class RadioBridge {
     const radioConfig = ConfigManager.getInstance().getRadioConfig();
     // type=none 时电台未连接是正常的，不发出警告
     if (!radioConnected && lifecycle.getIsRunning() && radioConfig.type !== 'none') {
-      console.warn('⚠️ [健康检查] 电台未连接，但引擎处于运行状态');
+      logger.warn('Radio not connected but engine is running');
     }
 
     const spectrumRate = timeSinceLastCheck > 0 ? (this.spectrumEventCount / timeSinceLastCheck) * 1000 : 0;
     const meterRate = timeSinceLastCheck > 0 ? (this.meterEventCount / timeSinceLastCheck) * 1000 : 0;
 
     if (spectrumRate < 1 && lifecycle.getIsRunning()) {
-      console.warn(`⚠️ [健康检查] 频谱事件频率异常低: ${spectrumRate.toFixed(2)} Hz`);
+      logger.warn(`Spectrum event rate abnormally low: ${spectrumRate.toFixed(2)} Hz`);
     }
 
     if (meterRate < 0.5 && lifecycle.getIsRunning() && radioConnected && radioConfig.type !== 'none') {
-      console.warn(`⚠️ [健康检查] 数值表事件频率异常低: ${meterRate.toFixed(2)} Hz`);
+      logger.warn(`Meter event rate abnormally low: ${meterRate.toFixed(2)} Hz`);
     }
 
-    console.log(`📊 [健康检查] 高频事件采样统计 (${(timeSinceLastCheck / 1000).toFixed(1)}秒):`);
-    console.log(`   频谱事件: ${this.spectrumEventCount} 次 (${spectrumRate.toFixed(1)} Hz)`);
-    console.log(`   数值表事件: ${this.meterEventCount} 次 (${meterRate.toFixed(1)} Hz)`);
+    logger.debug(`High-frequency event sample stats (${(timeSinceLastCheck / 1000).toFixed(1)}s): spectrum=${this.spectrumEventCount} (${spectrumRate.toFixed(1)} Hz), meter=${this.meterEventCount} (${meterRate.toFixed(1)} Hz)`);
 
     this.spectrumEventCount = 0;
     this.meterEventCount = 0;

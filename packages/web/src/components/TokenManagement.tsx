@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('TokenManagement');
 import { useTranslation } from 'react-i18next';
 import {
   Button,
@@ -168,7 +171,7 @@ export function TokenManagement() {
       const list = await api.getTokens();
       setTokens(list);
     } catch (err) {
-      console.error('加载 Token 列表失败:', err);
+      logger.error('Failed to load token list:', err);
     } finally {
       setLoading(false);
     }

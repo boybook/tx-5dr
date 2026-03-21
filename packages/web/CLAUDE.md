@@ -51,9 +51,9 @@ function MultiEventComponent() {
   const connection = useConnection();
 
   useWSEvents(connection.state.radioService, {
-    spectrumData: (data) => console.log('频谱:', data),
-    meterData: (data) => console.log('数值表:', data),
-    systemStatus: (status) => console.log('系统状态:', status)
+    spectrumData: (data) => { /* handle spectrum data */ },
+    meterData: (data) => { /* handle meter data */ },
+    systemStatus: (status) => { /* handle system status */ }
   });
 
   return <div>{/* render */}</div>;
@@ -253,3 +253,20 @@ http://localhost:5173 + Vite代理4000 + 热更新
 
 ## 依赖
 依赖: @tx5dr/core + @tx5dr/contracts + react + heroui + vite
+
+## 日志规范
+
+禁止裸 `console.log`，使用 `createLogger`（`src/utils/logger.ts`）。日志消息必须为英文，不含 emoji。
+
+```typescript
+import { createLogger } from "../utils/logger"; // 无扩展名（Vite/React）
+const logger = createLogger("MyComponent");
+
+logger.debug("slot updated", { id }); // 生产构建静默
+logger.info("connection established"); // 开发模式可见
+logger.warn("auth expired");
+logger.error("request failed", err);
+```
+
+- 生产构建（`isDev=false`）：`debug/info` 静默，`warn/error` 始终输出
+- WSClient 高频事件（frequencyChanged、pttStatusChanged 等）→ `logger.debug`

@@ -8,6 +8,9 @@
 
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('ErrorSuggestionsDialog');
 import {
   Modal,
   ModalContent,
@@ -118,7 +121,7 @@ export function ErrorSuggestionsDialog({
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
     } catch (error) {
-      console.error('Copy failed:', error);
+      logger.error('Copy failed:', error);
     }
   };
 
