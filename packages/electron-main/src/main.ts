@@ -708,6 +708,7 @@ async function createWindow() {
 
     serverProcess = runChild('server', serverEntry, {
       PORT: String(serverPort),
+      WEB_PORT: String(webPort),
     });
     webProcess = runChild('client-tools', webEntry, {
       PORT: String(webPort),

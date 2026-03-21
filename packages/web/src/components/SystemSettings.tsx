@@ -10,8 +10,11 @@ import {
   Chip,
   Divider,
 } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
+import { Button } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { PSKReporterConfig, PSKReporterStatus, AuthStatus } from '@tx5dr/contracts';
+import type { PSKReporterConfig, PSKReporterStatus, AuthStatus, NetworkInfo } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 
 export interface SystemSettingsRef {
@@ -56,12 +59,17 @@ export const SystemSettings = forwardRef<
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_pskrStatusLoading, setPskrStatusLoading] = useState(false);
 
+  // 网络信息
+  const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
+  const [urlCopied, setUrlCopied] = useState(false);
+
   // 加载配置
   useEffect(() => {
     loadSettings();
     loadAuthConfig();
     loadPSKReporterConfig();
     loadPSKReporterStatus();
+    api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
   }, []);
 
   const loadSettings = async () => {
@@ -315,6 +323,38 @@ export const SystemSettings = forwardRef<
                 isDisabled={isSaving}
                 size="lg"
               />
+            {/* 网络访问地址 */}
+            {networkInfo && networkInfo.addresses.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-divider">
+                <p className="text-xs text-default-400 mb-1.5">
+                  {t('common:remoteAccess.networkAddress')}
+                </p>
+                {networkInfo.addresses.map((addr) => (
+                  <div key={addr.ip} className="flex items-center gap-1.5 bg-default-100 rounded-md px-2 py-1 mb-1">
+                    <code className="flex-1 text-xs text-default-500 truncate">{addr.url}</code>
+                    <Button
+                      size="sm"
+                      variant="light"
+                      isIconOnly
+                      className="min-w-6 w-6 h-6"
+                      onPress={async () => {
+                        try {
+                          await navigator.clipboard.writeText(addr.url);
+                          setUrlCopied(true);
+                          setTimeout(() => setUrlCopied(false), 2000);
+                        } catch { /* ignore */ }
+                      }}
+                      title={t('common:remoteAccess.copyLink')}
+                    >
+                      <FontAwesomeIcon
+                        icon={urlCopied ? faCheck : faCopy}
+                        className={urlCopied ? 'text-success text-xs' : 'text-default-400 text-xs'}
+                      />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
             </div>
           </CardBody>
         </Card>
