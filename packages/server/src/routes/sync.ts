@@ -274,7 +274,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
           // 手动触发下载同步 — 复用 WaveLogSyncScheduler 逻辑
           const { WaveLogSyncScheduler } = await import('../services/WaveLogSyncScheduler.js');
           const syncScheduler = WaveLogSyncScheduler.getInstance();
-          result = await syncScheduler.triggerSync();
+          result = await syncScheduler.triggerSync(service, callsign);
           break;
         }
         case 'upload': {
@@ -295,7 +295,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
         case 'full_sync': {
           const { WaveLogSyncScheduler } = await import('../services/WaveLogSyncScheduler.js');
           const syncScheduler = WaveLogSyncScheduler.getInstance();
-          const downloadResult = await syncScheduler.triggerSync();
+          const downloadResult = await syncScheduler.triggerSync(service, callsign);
 
           const qsos = await getRecentQSOs();
           let uploadResult: any = { success: true, message: '无QSO', uploadedCount: 0, skippedCount: 0, errorCount: 0, errors: [] };

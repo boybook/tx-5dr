@@ -961,18 +961,18 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   onAction={(key) => handleQRZSync(key as 'download' | 'upload' | 'full_sync')}
                 >
                   <DropdownItem
-                    key="upload"
-                    startContent={<FontAwesomeIcon icon={faUpload} className="text-warning" />}
-                    description="上传本地QSO记录到QRZ.com Logbook"
-                  >
-                    上传到 QRZ.com
-                  </DropdownItem>
-                  <DropdownItem
                     key="download"
                     startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
                     description="从QRZ.com Logbook下载QSO记录"
                   >
                     从 QRZ.com 下载
+                  </DropdownItem>
+                  <DropdownItem
+                    key="upload"
+                    startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
+                    description="上传本地QSO记录到QRZ.com Logbook"
+                  >
+                    上传到 QRZ.com
                   </DropdownItem>
                   <DropdownItem
                     key="full_sync"
@@ -1006,18 +1006,18 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   onAction={(key) => handleLoTWSync(key as 'upload' | 'download_confirmations')}
                 >
                   <DropdownItem
-                    key="upload"
-                    startContent={<FontAwesomeIcon icon={faUpload} className="text-success" />}
-                    description="通过本地TQSL工具签名上传到LoTW"
-                  >
-                    上传到 LoTW
-                  </DropdownItem>
-                  <DropdownItem
                     key="download_confirmations"
                     startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
                     description="从LoTW下载QSL确认记录"
                   >
                     下载 LoTW 确认
+                  </DropdownItem>
+                  <DropdownItem
+                    key="upload"
+                    startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
+                    description="通过本地TQSL工具签名上传到LoTW"
+                  >
+                    上传到 LoTW
                   </DropdownItem>
                 </DropdownMenu>
               </Dropdown>
