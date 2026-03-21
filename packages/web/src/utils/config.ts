@@ -65,12 +65,13 @@ export function getWebSocketUrl(): string {
 /**
  * 获取日志本专用 WebSocket URL（带过滤参数）
  */
-export function getLogbookWebSocketUrl(params: { operatorId?: string; logBookId?: string }): string {
+export function getLogbookWebSocketUrl(params: { operatorId?: string; logBookId?: string; token?: string }): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
   const qs = new URLSearchParams();
   if (params.operatorId) qs.set('operatorId', params.operatorId);
   if (params.logBookId) qs.set('logBookId', params.logBookId);
+  if (params.token) qs.set('token', params.token);
   const result = `${protocol}//${host}/api/ws/logbook${qs.toString() ? `?${qs.toString()}` : ''}`;
   console.log('🔍 [配置] Logbook WebSocket URL:', result);
   return result;

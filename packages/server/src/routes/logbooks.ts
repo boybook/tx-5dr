@@ -9,7 +9,7 @@ import {
   LogBookQSOQueryOptionsSchema,
   LogBookExportOptionsSchema,
   UpdateQSORequestSchema,
-  QSOActionResponseSchema,
+  UserRole,
   type LogBookInfo,
   type CreateLogBookRequest,
   type UpdateLogBookRequest,
@@ -17,11 +17,11 @@ import {
   type LogBookQSOQueryOptions,
   type LogBookExportOptions,
   type UpdateQSORequest,
-  type QSOActionResponse
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
 
 /**
  * 日志本管理API路由
@@ -31,14 +31,23 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
   const logManager = digitalRadioEngine.operatorManager.getLogManager();
 
+  // 日志本归属校验 preHandler（复用于所有带 :id 的路由）
+  const logbookAccessCheck = requireLogbookAccess(logManager);
+  // ADMIN only preHandler
+  const adminOnly = requireRole(UserRole.ADMIN);
+
   /**
-   * 获取所有日志本列表
+   * 获取所有日志本列表（按角色过滤）
    * GET /api/logbooks
    */
   fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const logBooks = logManager.getLogBooks();
-      
+      // ADMIN 看全部（含孤儿日志本），OPERATOR 只看自己操作员关联的日志本
+      const authUser = request.authUser!;
+      const logBooks = authUser.role === UserRole.ADMIN
+        ? logManager.getLogBooks()
+        : logManager.getAccessibleLogBooks(authUser.operatorIds);
+
       // 转换为API格式
       const logBookInfos: LogBookInfo[] = logBooks.map(book => ({
         id: book.id,
@@ -66,7 +75,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 获取特定日志本详情
    * GET /api/logbooks/:id
    */
-  fastify.get('/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  fastify.get<{ Params: { id: string } }>('/:id', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
       let logBook = logManager.getLogBook(id);
@@ -165,7 +174,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 更新日志本信息
    * PUT /api/logbooks/:id
    */
-  fastify.put('/:id', async (request: FastifyRequest<{ Params: { id: string }; Body: UpdateLogBookRequest }>, reply: FastifyReply) => {
+  fastify.put<{ Params: { id: string }; Body: UpdateLogBookRequest }>('/:id', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
       const updates = UpdateLogBookRequestSchema.parse(request.body);
@@ -226,10 +235,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * 删除日志本
+   * 删除日志本（仅 ADMIN）
    * DELETE /api/logbooks/:id
    */
-  fastify.delete('/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  fastify.delete<{ Params: { id: string } }>('/:id', { preHandler: [adminOnly] }, async (request, reply) => {
     try {
       const { id } = request.params;
       
@@ -246,10 +255,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * 连接操作员到日志本
+   * 连接操作员到日志本（仅 ADMIN）
    * POST /api/logbooks/:id/connect
    */
-  fastify.post('/:id/connect', async (request: FastifyRequest<{ Params: { id: string }; Body: ConnectOperatorToLogBookRequest }>, reply: FastifyReply) => {
+  fastify.post<{ Params: { id: string }; Body: ConnectOperatorToLogBookRequest }>('/:id/connect', { preHandler: [adminOnly] }, async (request, reply) => {
     try {
       const { id: logBookId } = request.params;
       const { operatorId } = ConnectOperatorToLogBookRequestSchema.parse(request.body);
@@ -267,10 +276,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * 断开操作员与日志本的连接
+   * 断开操作员与日志本的连接（仅 ADMIN）
    * POST /api/logbooks/disconnect/:operatorId
    */
-  fastify.post('/disconnect/:operatorId', async (request: FastifyRequest<{ Params: { operatorId: string } }>, reply: FastifyReply) => {
+  fastify.post<{ Params: { operatorId: string } }>('/disconnect/:operatorId', { preHandler: [adminOnly] }, async (request, reply) => {
     try {
       const { operatorId } = request.params;
       
@@ -290,7 +299,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 查询日志本中的QSO记录
    * GET /api/logbooks/:id/qsos
    */
-  fastify.get('/:id/qsos', async (request: FastifyRequest<{ Params: { id: string }; Querystring: LogBookQSOQueryOptions }>, reply: FastifyReply) => {
+  fastify.get<{ Params: { id: string }; Querystring: LogBookQSOQueryOptions }>('/:id/qsos', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
       const options = LogBookQSOQueryOptionsSchema.parse(request.query);
@@ -428,7 +437,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 导出日志本数据
    * GET /api/logbooks/:id/export
    */
-  fastify.get('/:id/export', async (request: FastifyRequest<{ Params: { id: string }; Querystring: LogBookExportOptions }>, reply: FastifyReply) => {
+  fastify.get<{ Params: { id: string }; Querystring: LogBookExportOptions }>('/:id/export', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
       const options = LogBookExportOptionsSchema.parse(request.query);
@@ -519,7 +528,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 导入数据到日志本
    * POST /api/logbooks/:id/import
    */
-  fastify.post('/:id/import', async (request: FastifyRequest<{ Params: { id: string }; Body: { adifContent: string; operatorId?: string } }>, reply: FastifyReply) => {
+  fastify.post<{ Params: { id: string }; Body: { adifContent: string; operatorId?: string } }>('/:id/import', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
       const { adifContent, operatorId } = request.body;
@@ -562,7 +571,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 更新单条QSO记录
    * PUT /api/logbooks/:id/qsos/:qsoId
    */
-  fastify.put('/:id/qsos/:qsoId', async (request: FastifyRequest<{ Params: { id: string; qsoId: string }; Body: UpdateQSORequest }>, reply: FastifyReply) => {
+  fastify.put<{ Params: { id: string; qsoId: string }; Body: UpdateQSORequest }>('/:id/qsos/:qsoId', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id, qsoId } = request.params;
       const updates = UpdateQSORequestSchema.parse(request.body);
@@ -621,7 +630,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 删除单条QSO记录
    * DELETE /api/logbooks/:id/qsos/:qsoId
    */
-  fastify.delete('/:id/qsos/:qsoId', async (request: FastifyRequest<{ Params: { id: string; qsoId: string } }>, reply: FastifyReply) => {
+  fastify.delete<{ Params: { id: string; qsoId: string } }>('/:id/qsos/:qsoId', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id, qsoId } = request.params;
 
@@ -661,10 +670,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   });
 
   /**
-   * 获取日志本数据目录路径
+   * 获取日志本数据目录路径（仅 ADMIN）
    * GET /api/logbooks/data-path
    */
-  fastify.get('/data-path', async (_request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/data-path', { preHandler: [adminOnly] }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { tx5drPaths } = await import('../utils/app-paths.js');
       const dataDir = await tx5drPaths.getDataDir();

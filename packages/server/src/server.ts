@@ -264,17 +264,23 @@ export async function createServer() {
   });
   fastify.log.info('Admin 路由注册完成（audio, profiles, settings, storage, wavelog, qrz, lotw, pskreporter）');
 
-  // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、日志本
+  // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包
   await fastify.register(async (scope) => {
     await scope.register(withRole(UserRole.VIEWER));
     await scope.register(operatorRoutes, { prefix: '/api/operators' });
     await scope.register(radioRoutes, { prefix: '/api/radio' });
     await scope.register(modeRoutes, { prefix: '/api/mode' });
     await scope.register(slotpackRoutes, { prefix: '/api/slotpack' });
+  });
+  fastify.log.info('Viewer+ 路由注册完成（operators, radio, mode, slotpack）');
+
+  // Operator+ 路由：日志本（细粒度权限由路由内部 preHandler 控制）
+  await fastify.register(async (scope) => {
+    await scope.register(withRole(UserRole.OPERATOR));
     const { logbookRoutes } = await import('./routes/logbooks.js');
     await scope.register(logbookRoutes, { prefix: '/api/logbooks' });
   });
-  fastify.log.info('Viewer+ 路由注册完成（operators, radio, mode, slotpack, logbooks）');
+  fastify.log.info('Operator+ 路由注册完成（logbooks）');
 
   // 公开路由：认证
   await fastify.register(authRoutes, { prefix: '/api/auth' });
@@ -289,11 +295,72 @@ export async function createServer() {
   });
 
   // Logbook 专用 WebSocket endpoint（仅轻量通知）
-  fastify.get('/api/ws/logbook', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+  // 注意：浏览器 WebSocket 无法设置 Authorization 头，JWT 通过 ?token= 参数传递
+  fastify.get('/api/ws/logbook', { websocket: true }, async (socket: WebSocket, req: FastifyRequest) => {
     try {
       const url = new URL(req.url, 'http://localhost');
       const operatorId = url.searchParams.get('operatorId') || undefined;
       const logBookId = url.searchParams.get('logBookId') || undefined;
+      const jwtToken = url.searchParams.get('token');
+
+      // 认证未启用时直接放行（向后兼容）
+      if (!authManager.isAuthEnabled()) {
+        fastify.log.info(`Logbook WS 客户端连接（无认证模式）: operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
+        logbookWsServer.addConnection(socket, { operatorId, logBookId });
+        return;
+      }
+
+      // 认证已启用：必须提供 JWT
+      if (!jwtToken) {
+        fastify.log.warn('Logbook WS 连接未提供 token，拒绝连接');
+        socket.close(4001, '未认证');
+        return;
+      }
+
+      // 验证 JWT
+      let decoded: import('@tx5dr/contracts').JWTPayload;
+      try {
+        decoded = fastify.jwt.verify<import('@tx5dr/contracts').JWTPayload>(jwtToken);
+      } catch {
+        fastify.log.warn('Logbook WS JWT 验证失败');
+        socket.close(4001, 'Token 无效');
+        return;
+      }
+
+      // 检查 token 是否仍有效（未撤销/未过期）
+      if (!authManager.isTokenStillValid(decoded.tokenId)) {
+        fastify.log.warn(`Logbook WS Token 已失效: ${decoded.tokenId}`);
+        socket.close(4001, 'Token 已失效');
+        return;
+      }
+
+      // 获取最新权限
+      const current = authManager.getTokenCurrentPermissions(decoded.tokenId);
+      if (!current) {
+        socket.close(4001, 'Token 权限获取失败');
+        return;
+      }
+
+      // 检查最低角色
+      if (!AuthManager.hasMinRole(current.role, UserRole.OPERATOR)) {
+        fastify.log.warn(`Logbook WS 连接权限不足（role=${current.role}），拒绝连接`);
+        socket.close(4003, '权限不足，需要 Operator 以上角色');
+        return;
+      }
+
+      // 归属校验：若指定了 logBookId 且非 ADMIN，检查是否有权访问
+      if (logBookId && current.role !== UserRole.ADMIN) {
+        const wsLogManager = digitalRadioEngine.operatorManager.getLogManager();
+        const associated = wsLogManager.getOperatorIdsForLogBook(logBookId);
+        const hasAccess = associated.length > 0 &&
+          associated.some(id => current.operatorIds.includes(id));
+        if (!hasAccess) {
+          fastify.log.warn(`Logbook WS 连接无权访问日志本 ${logBookId}，拒绝连接`);
+          socket.close(4003, '无日志本访问权限');
+          return;
+        }
+      }
+
       fastify.log.info(`Logbook WS 客户端连接: operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
       logbookWsServer.addConnection(socket, { operatorId, logBookId });
     } catch (e) {

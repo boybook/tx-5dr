@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { HeroUIProvider } from '@heroui/react';
-import { configureApi, api } from '@tx5dr/core';
+import { configureApi, configureAuthToken, api } from '@tx5dr/core';
 import { getApiBaseUrl, isElectron } from '../utils/config';
 import { useTheme } from '../hooks/useTheme';
 import { ThemeToggle } from '../components/ThemeToggle';
@@ -17,8 +17,11 @@ const LogbookContent: React.FC = () => {
   const [operatorCallsign, setOperatorCallsign] = useState<string>('');
 
   useEffect(() => {
-    // 配置API
+    // 配置API及鉴权
     configureApi(getApiBaseUrl());
+    // 独立页面无 AuthProvider，从 localStorage 读取 JWT 并初始化
+    const savedJwt = localStorage.getItem('tx5dr_jwt');
+    configureAuthToken(savedJwt);
 
     // 从URL参数获取操作员ID和日志本ID
     const urlParams = new URLSearchParams(window.location.search);
