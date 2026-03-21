@@ -700,29 +700,6 @@ export class ConfigManager {
   }
 
   /**
-   * 获取WaveLog配置
-   */
-  getWaveLogConfig(): WaveLogConfig {
-    return { ...this.config.wavelog };
-  }
-
-  /**
-   * 更新WaveLog配置
-   */
-  async updateWaveLogConfig(waveLogConfig: Partial<WaveLogConfig>): Promise<void> {
-    this.config.wavelog = { ...this.config.wavelog, ...waveLogConfig };
-    await this.saveConfig();
-  }
-
-  /**
-   * 重置WaveLog配置为默认值
-   */
-  async resetWaveLogConfig(): Promise<void> {
-    this.config.wavelog = { ...DEFAULT_CONFIG.wavelog };
-    await this.saveConfig();
-  }
-
-  /**
    * 获取QRZ配置
    */
   getQRZConfig(): QRZConfig {

@@ -1,8 +1,8 @@
 import { EventEmitter } from 'events';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
-import { WaveLogServiceManager } from './WaveLogService.js';
-import type { WaveLogSyncResponse, QSORecord } from '@tx5dr/contracts';
+import { WaveLogService } from './WaveLogService.js';
+import type { WaveLogSyncResponse, WaveLogConfig, QSORecord } from '@tx5dr/contracts';
 
 /**
  * WaveLog同步服务
@@ -27,38 +27,32 @@ export class WaveLogSyncScheduler extends EventEmitter {
   /**
    * 手动触发同步
    */
-  async triggerSync(): Promise<WaveLogSyncResponse> {
+  async triggerSync(service: WaveLogService, callsign: string): Promise<WaveLogSyncResponse> {
     if (this.isSyncing) {
       throw new Error('同步正在进行中，请稍后再试');
     }
 
-    return await this.performSync();
+    return await this.performSync(service, callsign);
   }
 
   /**
    * 执行同步操作
    */
-  private async performSync(): Promise<WaveLogSyncResponse> {
+  private async performSync(waveLogService: WaveLogService, callsign: string): Promise<WaveLogSyncResponse> {
     if (this.isSyncing) {
       throw new Error('同步已在进行中');
     }
 
     this.isSyncing = true;
     const startTime = Date.now();
-    
+
     try {
       console.log('📊 [WaveLog同步] 开始执行下载同步');
       this.emit('syncStarted');
 
       // 获取配置和服务
       const configManager = ConfigManager.getInstance();
-      const waveLogManager = WaveLogServiceManager.getInstance();
-      const waveLogService = waveLogManager.getService();
       const logManager = LogManager.getInstance();
-
-      if (!waveLogService) {
-        throw new Error('WaveLog服务未初始化');
-      }
 
       // 计算同步时间范围（从上次同步时间到现在）
       const endDate = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
@@ -104,10 +98,11 @@ export class WaveLogSyncScheduler extends EventEmitter {
         }
       }
 
-      // 更新最后同步时间
+      // 更新最后同步时间（写入按呼号配置）
       this.lastSyncTime = startTime;
-      await configManager.updateWaveLogConfig({
-        lastSyncTime: this.lastSyncTime
+      const existingConfig = configManager.getCallsignSyncConfig(callsign);
+      await configManager.updateCallsignSyncConfig(callsign, {
+        wavelog: { ...(existingConfig?.wavelog || {}), lastSyncTime: this.lastSyncTime } as WaveLogConfig,
       });
 
       const result: WaveLogSyncResponse = {
