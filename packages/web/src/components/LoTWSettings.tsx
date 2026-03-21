@@ -19,6 +19,8 @@ import type {
   LoTWConfig,
   LoTWTQSLDetectResponse
 } from '@tx5dr/contracts';
+import { useTranslation } from 'react-i18next';
+import { formatDateTime } from '../utils/dateFormatting';
 
 export interface LoTWSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -32,6 +34,7 @@ interface LoTWSettingsProps {
 
 export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
   ({ callsign, onUnsavedChanges }, ref) => {
+    const { t } = useTranslation('logbook');
     const [config, setConfig] = useState<LoTWConfig>({
       username: '',
       password: '',
@@ -71,7 +74,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
           setOriginalConfig(prev => ({ ...prev, ...data }));
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : '加载配置失败');
+        setError(err instanceof Error ? err.message : t('lotwSettings.loadConfigFailed'));
       } finally {
         setLoading(false);
       }
@@ -106,7 +109,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       if (!config.username || !config.password) {
         setTestResult({
           success: false,
-          message: '请先填写用户名和密码'
+          message: t('lotwSettings.fillUsernamePassword')
         });
         return;
       }
@@ -128,7 +131,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       } catch (err) {
         setTestResult({
           success: false,
-          message: err instanceof Error ? err.message : '验证失败'
+          message: err instanceof Error ? err.message : t('lotwSettings.verifyFailed')
         });
       } finally {
         setTesting(false);
@@ -165,7 +168,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       } catch (err) {
         setDetectResult({
           found: false,
-          message: err instanceof Error ? err.message : '检测失败'
+          message: err instanceof Error ? err.message : t('lotwSettings.detectFailed')
         });
       } finally {
         setDetecting(false);
@@ -181,7 +184,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
         setHasChanges(false);
         onUnsavedChanges?.(false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '保存配置失败');
+        setError(err instanceof Error ? err.message : t('lotwSettings.saveConfigFailed'));
         throw err;
       }
     };
@@ -190,7 +193,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       return (
         <div className="flex justify-center items-center py-8">
           <Spinner size="md" />
-          <span className="ml-2">加载 LoTW 配置中...</span>
+          <span className="ml-2">{t('lotwSettings.loading')}</span>
         </div>
       );
     }
@@ -198,14 +201,14 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
     return (
       <div className="space-y-6">
         <div>
-          <h3 className="text-lg font-semibold">LoTW 同步设置</h3>
+          <h3 className="text-lg font-semibold">{t('lotwSettings.title')}</h3>
           <p className="text-sm text-default-500 mt-1">
-            ARRL Logbook of The World QSL 确认系统
+            {t('lotwSettings.description')}
           </p>
         </div>
 
         {error && (
-          <Alert color="danger" title="错误" className="mb-4">
+          <Alert color="danger" title={t('lotwSettings.errorTitle')} className="mb-4">
             <p className="font-medium">{error}</p>
           </Alert>
         )}
@@ -215,25 +218,25 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
           <CardHeader>
             <div className="flex items-center gap-2">
               <FontAwesomeIcon icon={faUser} className="text-primary" />
-              <span className="font-medium">LoTW 账户（下载确认用）</span>
+              <span className="font-medium">{t('lotwSettings.account')}</span>
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
             <Input
-              label="用户名（呼号）"
-              placeholder="请输入您的呼号"
+              label={t('lotwSettings.usernameLabel')}
+              placeholder={t('lotwSettings.usernamePlaceholder')}
               value={config.username}
               onChange={(e) => updateConfig('username', e.target.value)}
-              description="您在 LoTW 注册的呼号"
+              description={t('lotwSettings.usernameDesc')}
             />
 
             <Input
-              label="密码"
-              placeholder="请输入 LoTW 密码"
+              label={t('lotwSettings.passwordLabel')}
+              placeholder={t('lotwSettings.passwordPlaceholder')}
               value={config.password}
               onChange={(e) => updateConfig('password', e.target.value)}
               type="password"
-              description="LoTW 网站登录密码"
+              description={t('lotwSettings.passwordDesc')}
             />
 
             <div className="flex gap-2">
@@ -246,7 +249,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
                 startContent={!testing && <FontAwesomeIcon icon={faCheck} />}
                 className="flex-shrink-0"
               >
-                {testing ? '验证中...' : '验证账户'}
+                {testing ? t('lotwSettings.verifying') : t('lotwSettings.verifyAccount')}
               </Button>
 
               {testResult && (
@@ -269,7 +272,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
 
             {testResult?.success && (
               <Alert color="success">
-                账户验证通过，可以下载 QSL 确认记录
+                {t('lotwSettings.verifySuccess')}
               </Alert>
             )}
           </CardBody>
@@ -280,14 +283,14 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
           <CardHeader>
             <div className="flex items-center gap-2">
               <FontAwesomeIcon icon={faCertificate} className="text-primary" />
-              <span className="font-medium">TQSL 签名工具（上传日志用）</span>
+              <span className="font-medium">{t('lotwSettings.tqslTitle')}</span>
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
             <Alert color="primary">
               <div>
                 <p className="text-sm">
-                  上传到 LoTW 需要通过 ARRL 的 TQSL 工具对日志进行数字签名。请先安装 TQSL 并完成证书配置。
+                  {t('lotwSettings.tqslInfo')}
                 </p>
                 <Button
                   size="sm"
@@ -297,18 +300,18 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
                   startContent={<FontAwesomeIcon icon={faExternalLinkAlt} />}
                   onPress={() => window.open('https://lotw.arrl.org/lotw-help/installation/', '_blank')}
                 >
-                  下载 TQSL
+                  {t('lotwSettings.downloadTqsl')}
                 </Button>
               </div>
             </Alert>
 
             <div className="flex gap-2 items-end">
               <Input
-                label="TQSL 路径"
-                placeholder="TQSL 可执行文件路径"
+                label={t('lotwSettings.tqslPathLabel')}
+                placeholder={t('lotwSettings.tqslPathPlaceholder')}
                 value={config.tqslPath}
                 onChange={(e) => updateConfig('tqslPath', e.target.value)}
-                description="TQSL 可执行文件的完整路径"
+                description={t('lotwSettings.tqslPathDesc')}
                 className="flex-1"
               />
               <Button
@@ -319,7 +322,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
                 startContent={!detecting && <FontAwesomeIcon icon={faSearch} />}
                 className="flex-shrink-0 mb-6"
               >
-                {detecting ? '检测中...' : '自动检测'}
+                {detecting ? t('lotwSettings.detecting') : t('lotwSettings.autoDetect')}
               </Button>
             </div>
 
@@ -327,21 +330,21 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
               <>
                 <Alert color="success">
                   <div className="space-y-1">
-                    <p className="text-sm font-medium">TQSL 版本: {detectResult.version}</p>
-                    <p className="text-sm">路径: {detectResult.path}</p>
+                    <p className="text-sm font-medium">{t('lotwSettings.tqslVersion', { version: detectResult.version })}</p>
+                    <p className="text-sm">{t('lotwSettings.tqslPath', { path: detectResult.path })}</p>
                   </div>
                 </Alert>
 
                 {tqslStations.length > 0 && (
                   <Select
                     label="Station Location"
-                    placeholder="选择台站位置"
+                    placeholder={t('lotwSettings.stationLocationPlaceholder')}
                     selectedKeys={config.stationCallsign ? [config.stationCallsign] : []}
                     onSelectionChange={(keys) => {
                       const selected = Array.from(keys as Set<string>)[0] || '';
                       updateConfig('stationCallsign', selected);
                     }}
-                    description="选择 TQSL 中配置的台站位置"
+                    description={t('lotwSettings.stationLocationDesc')}
                   >
                     {tqslStations.map((station) => (
                       <SelectItem key={station} textValue={station}>
@@ -355,7 +358,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
 
             {detectResult && !detectResult.found && (
               <Alert color="warning">
-                未检测到 TQSL，请安装 TQSL 或手动指定路径
+                {t('lotwSettings.tqslNotFound')}
               </Alert>
             )}
           </CardBody>
@@ -366,7 +369,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
           <CardHeader>
             <div className="flex items-center gap-2">
               <FontAwesomeIcon icon={faSync} className="text-primary" />
-              <span className="font-medium">同步选项</span>
+              <span className="font-medium">{t('lotwSettings.syncOptions')}</span>
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
@@ -376,18 +379,18 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
               isDisabled={!config.tqslPath || !config.stationCallsign}
               size="sm"
             >
-              自动上传新 QSO
+              {t('lotwSettings.autoUpload')}
             </Switch>
             <p className="text-xs text-default-500 ml-6 -mt-2">
-              完成通联后自动通过 TQSL 签名上传到 LoTW
+              {t('lotwSettings.autoUploadDesc')}
             </p>
 
             <Alert color="primary">
               <div className="text-sm">
-                <p className="font-medium">手动操作请前往「通联日志」页面：</p>
+                <p className="font-medium">{t('lotwSettings.manualOpsInfo')}</p>
                 <ul className="mt-1 space-y-1">
-                  <li>• 「上传到 LoTW」— 通过 TQSL 签名上传</li>
-                  <li>• 「下载确认」— 查询 QSL 确认状态</li>
+                  <li>• {t('lotwSettings.manualUpload')}</li>
+                  <li>• {t('lotwSettings.manualDownload')}</li>
                 </ul>
               </div>
             </Alert>
@@ -400,10 +403,10 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
             <CardBody>
               <div className="text-sm text-default-600 space-y-1">
                 {config.lastUploadTime && (
-                  <p>最后上传时间：{new Date(config.lastUploadTime).toLocaleString('zh-CN', { timeZone: 'UTC' })} UTC</p>
+                  <p>{t('lotwSettings.lastUpload', { time: formatDateTime(config.lastUploadTime) })}</p>
                 )}
                 {config.lastDownloadTime && (
-                  <p>最后下载时间：{new Date(config.lastDownloadTime).toLocaleString('zh-CN', { timeZone: 'UTC' })} UTC</p>
+                  <p>{t('lotwSettings.lastDownload', { time: formatDateTime(config.lastDownloadTime) })}</p>
                 )}
               </div>
             </CardBody>
@@ -412,13 +415,13 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
 
         {/* 使用说明 */}
         <div className="p-4 bg-default-50 rounded-lg">
-          <h5 className="text-sm font-medium text-default-700 mb-2">使用说明</h5>
+          <h5 className="text-sm font-medium text-default-700 mb-2">{t('lotwSettings.usageTitle')}</h5>
           <ul className="text-xs text-default-600 space-y-1">
-            <li>• LoTW 是 ARRL 的官方 QSL 确认系统</li>
-            <li>• 下载确认只需 LoTW 账户密码</li>
-            <li>• 上传日志需要安装 TQSL 并配置数字证书</li>
-            <li>• TQSL 证书需在 ARRL 网站申请并激活</li>
-            <li>• 首次使用请先在 TQSL 中完成台站位置配置</li>
+            <li>• {t('lotwSettings.usage1')}</li>
+            <li>• {t('lotwSettings.usage2')}</li>
+            <li>• {t('lotwSettings.usage3')}</li>
+            <li>• {t('lotwSettings.usage4')}</li>
+            <li>• {t('lotwSettings.usage5')}</li>
           </ul>
         </div>
       </div>

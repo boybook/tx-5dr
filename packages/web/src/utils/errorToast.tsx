@@ -8,6 +8,7 @@
 
 import { addToast } from '@heroui/toast';
 import { Button } from '@heroui/react';
+import i18n from '../i18n';
 
 /**
  * 错误 Toast 选项
@@ -89,7 +90,7 @@ export function showErrorToast(options: ErrorToastOptions): void {
 
   if (suggestions.length > 0) {
     const suggestionText = suggestions.map(s => `• ${s}`).join('\n');
-    description += '\n\n建议：\n' + suggestionText;
+    description += '\n\n' + i18n.t('toast:suggestion.label') + '\n' + suggestionText;
   }
 
   // 开发环境显示技术详情
@@ -135,13 +136,13 @@ export function showErrorToast(options: ErrorToastOptions): void {
 
   // 设置标题
   const titleMap: Record<string, string> = {
-    info: '提示',
-    warning: '⚠️ 警告',
-    error: '错误',
-    critical: '⚠️ 严重错误'
+    info: i18n.t('toast:severity.info'),
+    warning: i18n.t('toast:severity.warning'),
+    error: i18n.t('toast:severity.error'),
+    critical: i18n.t('toast:severity.critical'),
   };
 
-  const title = titleMap[severity] || '错误';
+  const title = titleMap[severity] || i18n.t('toast:severity.error');
 
   // 记录完整的技术错误日志
   console.error('[错误提示]', {
@@ -216,7 +217,7 @@ export function showCriticalError(message: string, suggestions?: string[]): void
  */
 export function createGoToSettingsAction(navigate: (path: string) => void, tab?: string) {
   return {
-    label: '前往设置',
+    label: i18n.t('common:action.goToSettings'),
     handler: () => {
       if (tab) {
         navigate(`/?settingsTab=${tab}`);
@@ -232,7 +233,7 @@ export function createGoToSettingsAction(navigate: (path: string) => void, tab?:
  */
 export function createRefreshStatusAction(onRefresh: () => void) {
   return {
-    label: '刷新状态',
+    label: i18n.t('common:action.refreshStatus'),
     handler: onRefresh
   };
 }
@@ -242,7 +243,7 @@ export function createRefreshStatusAction(onRefresh: () => void) {
  */
 export function createRetryAction(onRetry: () => void) {
   return {
-    label: '重试',
+    label: i18n.t('common:action.retry'),
     handler: onRetry
   };
 }

@@ -735,6 +735,10 @@ export const WSTextMessageSchema = WSBaseMessageSchema.extend({
     text: z.string(),
     color: z.enum(['success', 'warning', 'danger', 'default']).optional(),
     timeout: z.number().nullable().optional(), // null 表示需要手动关闭，number 表示自动关闭的毫秒数
+    /** i18n key，前端有此字段时优先翻译显示 */
+    key: z.string().optional(),
+    /** i18n 插值参数 */
+    params: z.record(z.string()).optional(),
   }),
 });
 

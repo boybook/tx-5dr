@@ -1,0 +1,182 @@
+{
+  "button": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add",
+    "create": "New",
+    "copy": "Copy",
+    "refresh": "Refresh"
+  },
+  "action": {
+    "goToSettings": "Go to Settings",
+    "refreshStatus": "Refresh Status",
+    "retry": "Retry",
+    "openSettings": "Open Settings",
+    "clearData": "Clear Data"
+  },
+  "role": {
+    "viewer": "Viewer",
+    "operator": "Operator",
+    "admin": "Admin"
+  },
+  "status": {
+    "loading": "Loading...",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "connecting": "Connecting...",
+    "none": "None"
+  },
+  "serverError": {
+    "title": "Connection Failed",
+    "description": "Unable to connect to server: {{errMsg}}",
+    "connecting": "Connecting to server...",
+    "disconnected": "Connection to server lost",
+    "checkNetwork": "Please check your network or backend service status",
+    "reconnect": "Reconnect",
+    "diagnose": {
+      "serviceUnavailable": "Reason: Backend service is not running or unreachable",
+      "devCheck": "Debug: Start the backend with: yarn workspace @tx5dr/server dev",
+      "devLog": "Check: Backend logs in the terminal to confirm port 4000 is listening",
+      "electronCheck": "Debug: Restart the app; if still failing, check Electron main process logs",
+      "prodCheck": "Debug: Ensure the backend service is running and listening on /api",
+      "dockerCheck": "Docker: Use docker-compose logs -f to check container logs"
+    }
+  },
+  "auth": {
+    "user": "User",
+    "role": "Role",
+    "login": "Login",
+    "logout": "Logout",
+    "enterToken": "Enter Access Token",
+    "pasteToken": "Paste token...",
+    "accessToken": "Access Token"
+  },
+  "login": {
+    "subtitle": "Digital Radio Remote Control"
+  },
+  "automation": {
+    "title": "Automation"
+  },
+  "theme": {
+    "toggle": "Toggle Theme",
+    "select": "Select Theme",
+    "light": "Light Mode",
+    "dark": "Dark Mode",
+    "system": "Follow System",
+    "lightDesc": "Use light theme",
+    "darkDesc": "Use dark theme",
+    "systemDesc": "Follow system settings",
+    "switchToLight": "Switch to light mode",
+    "switchToDark": "Switch to dark mode"
+  },
+  "colorPicker": {
+    "selectColor": "Select Color",
+    "currentColor": "Current color: {{value}}"
+  },
+  "slotPacks": {
+    "noMessages": "No decoded messages",
+    "connectFirst": "Please connect to TX5DR server first",
+    "startEngine": "Please start the decode engine",
+    "waitingSignal": "Waiting for signal..."
+  },
+  "framesTable": {
+    "freq": "Freq",
+    "message": "Message",
+    "location": "Location"
+  },
+  "myFrames": {
+    "noRecords": "No related QSO records",
+    "hint": "Messages related to me will appear here"
+  },
+  "spectrum": {
+    "waiting": "Waiting for spectrum data...",
+    "popOut": "Show in separate window",
+    "rangeSettings": "Spectrum Range Settings",
+    "autoMode": "Auto Mode",
+    "manualMode": "Manual Mode",
+    "updateInterval": "Range auto-refresh interval (frames)",
+    "frames": "{{count}} frames",
+    "minPercentile": "Min percentile",
+    "maxPercentile": "Max percentile",
+    "expansionFactor": "Range expansion factor",
+    "minDb": "Min (dB)",
+    "maxDb": "Max (dB)",
+    "currentRange": "Current range: {{min}} ~ {{max}} dB"
+  },
+  "splitLayout": {
+    "decode": "Decode",
+    "call": "Call",
+    "pageSwitch": "Page Switch"
+  },
+  "webgl": {
+    "notSupported": "WebGL is not supported",
+    "initFailed": "WebGL initialization failed: {{message}}",
+    "unknownError": "Unknown error",
+    "renderFailed": "WebGL waterfall render failed"
+  },
+  "errorDialog": {
+    "time": "Time",
+    "userMessage": "User message",
+    "suggestions": "Suggestions",
+    "technicalDetails": "Technical details",
+    "context": "Context",
+    "techInfo": "Technical Info",
+    "copied": "Copied",
+    "copyError": "Copy error info",
+    "detailedContext": "Detailed Context"
+  },
+  "system": {
+    "title": "System Settings",
+    "description": "Configure system-level feature options.",
+    "loadFailed": "Failed to load configuration",
+    "saveFailed": "Failed to save configuration",
+    "pskrSaveFailed": "Failed to save PSKReporter configuration",
+    "reportSoon": "Reporting soon",
+    "reportInMins": "In {{mins}}m {{secs}}s",
+    "reportInSecs": "In {{secs}}s",
+    "on": "On",
+    "off": "Off",
+    "recommended": "Recommended",
+    "advanced": "Advanced",
+    "allowPublicViewing": "Allow Public Viewing",
+    "allowPublicViewingOnDesc": "Unauthenticated users can view as observers, but cannot operate",
+    "allowPublicViewingOffDesc": "Unauthenticated users must log in with a token to access",
+    "decodeWhileTransmitting": "Decode While Transmitting",
+    "decodeWhileTransmittingOffDesc": "Stop decoding when any operator is transmitting, avoids residual signals",
+    "decodeWhileTransmittingOnDesc": "Continue decoding during TX cycle, supports dual-cycle remote TX/RX",
+    "spectrumWhileTransmitting": "Spectrum While Transmitting",
+    "spectrumWhileTransmittingOnDesc": "Continue displaying spectrum while transmitting, monitor TX signal in real time",
+    "spectrumWhileTransmittingOffDesc": "Pause spectrum analysis while transmitting, reduces CPU usage",
+    "configValid": "Config Valid",
+    "configIncomplete": "Config Incomplete",
+    "pendingSpots": "Pending: {{count}}",
+    "receiverInfo": "Receiver Info",
+    "receiverInfoDesc": "If left empty, the first operator's callsign and grid will be used automatically",
+    "pskrTitle": "PSKReporter Reporting",
+    "pskrDesc": "Automatically report decoded FT8/FT4 signals to",
+    "pskrActiveInfo": "Currently using: {{callsign}} @ {{locator}}",
+    "gridNotSet": "Grid not set",
+    "rxCallsign": "Receiver Callsign",
+    "rxCallsignPlaceholder": "e.g. BV2ABC",
+    "rxLocator": "Receiver Grid",
+    "rxLocatorPlaceholder": "e.g. PL05qb",
+    "willUse": "Will use: {{val}}",
+    "optionalConfig": "Optional Config",
+    "antennaInfo": "Antenna Info",
+    "antennaInfoPlaceholder": "e.g. Dipole, Yagi 3el, Vertical",
+    "reportInterval": "Report Interval",
+    "testServer": "Test Server",
+    "testServerDesc": "For debugging only",
+    "runningStatus": "Running Status",
+    "reporting": "Reporting...",
+    "waiting": "Waiting",
+    "todayCount": "Today",
+    "totalCount": "Total",
+    "lastReport": "Last Report",
+    "nextReport": "Next Report"
+  }
+}

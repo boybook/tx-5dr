@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Modal,
   ModalContent,
@@ -32,6 +33,7 @@ interface ProfileModalProps {
 type ModalMode = 'list' | 'create' | 'edit';
 
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
+  const { t } = useTranslation('radio');
   const { profiles, activeProfileId } = useProfiles();
   const radio = useRadioState();
   const [mode, setMode] = useState<ModalMode>('list');
@@ -80,8 +82,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
         await api.reorderProfiles(newOrder.map(p => p.id));
       } catch (error) {
         addToast({
-          title: '排序保存失败',
-          description: error instanceof Error ? error.message : '请重试',
+          title: t('profileModal.reorderFailed'),
+          description: error instanceof Error ? error.message : t('profileModal.retry'),
           color: 'danger',
           timeout: 3000,
         });
@@ -101,11 +103,11 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   // 获取电台类型显示文本
   const getRadioTypeLabel = (config: HamlibConfig) => {
     switch (config.type) {
-      case 'none': return '无电台';
-      case 'network': return `网络 RigCtrl | ${config.network?.host || ''}:${config.network?.port || ''}`;
-      case 'serial': return `串口 | ${config.serial?.path || ''}`;
+      case 'none': return t('connection.none');
+      case 'network': return `${t('profileModal.network')} | ${config.network?.host || ''}:${config.network?.port || ''}`;
+      case 'serial': return `${t('profileModal.serial')} | ${config.serial?.path || ''}`;
       case 'icom-wlan': return `ICOM WLAN | ${config.icomWlan?.ip || ''}`;
-      default: return '未知类型';
+      default: return t('profileModal.unknownType');
     }
   };
 
@@ -145,7 +147,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   // 保存 Profile（创建或更新）
   const handleSave = async () => {
     if (!editName.trim()) {
-      addToast({ title: '请输入 Profile 名称', color: 'warning', timeout: 3000 });
+      addToast({ title: t('profileModal.nameRequired'), color: 'warning', timeout: 3000 });
       return;
     }
 
@@ -158,7 +160,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           audio: editAudioConfig,
           description: editDescription.trim() || undefined,
         });
-        addToast({ title: `Profile「${result.profile?.name ?? editName.trim()}」已创建`, color: 'success', timeout: 3000 });
+        addToast({ title: t('profileModal.created', { name: result.profile?.name ?? editName.trim() }), color: 'success', timeout: 3000 });
       } else if (mode === 'edit' && editingProfileId) {
         const result = await api.updateProfile(editingProfileId, {
           name: editName.trim(),
@@ -166,14 +168,14 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           audio: editAudioConfig,
           description: editDescription.trim() || undefined,
         });
-        addToast({ title: `Profile「${result.profile?.name ?? editName.trim()}」已更新`, color: 'success', timeout: 3000 });
+        addToast({ title: t('profileModal.updated', { name: result.profile?.name ?? editName.trim() }), color: 'success', timeout: 3000 });
       }
       setMode('list');
       setEditingProfileId(null);
     } catch (error) {
       addToast({
-        title: mode === 'create' ? '创建失败' : '更新失败',
-        description: error instanceof Error ? error.message : '请重试',
+        title: mode === 'create' ? t('settings.createFailed') : t('profileModal.updateFailed'),
+        description: error instanceof Error ? error.message : t('profileModal.retry'),
         color: 'danger',
         timeout: 5000
       });
@@ -185,7 +187,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   // 删除 Profile
   const handleDelete = async (profileId: string) => {
     if (profileId === activeProfileId) {
-      addToast({ title: '无法删除当前激活的 Profile', color: 'warning', timeout: 3000 });
+      addToast({ title: t('profileModal.cannotDeleteActive'), color: 'warning', timeout: 3000 });
       return;
     }
 
@@ -193,11 +195,11 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     try {
       await api.deleteProfile(profileId);
       const profile = profiles.find(p => p.id === profileId);
-      addToast({ title: `Profile「${profile?.name || ''}」已删除`, color: 'success', timeout: 3000 });
+      addToast({ title: t('profileModal.deleted', { name: profile?.name || '' }), color: 'success', timeout: 3000 });
     } catch (error) {
       addToast({
-        title: '删除失败',
-        description: error instanceof Error ? error.message : '请重试',
+        title: t('settings.deleteFailed'),
+        description: error instanceof Error ? error.message : t('profileModal.retry'),
         color: 'danger',
         timeout: 5000
       });
@@ -216,15 +218,15 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       const profileName = result.profile?.name || '';
       const isSameProfile = selectedProfileId === activeProfileId;
       addToast({
-        title: isSameProfile ? `正在重新连接「${profileName}」` : `已切换到「${profileName}」`,
+        title: isSameProfile ? t('profile.reconnecting', { name: profileName }) : t('profile.switched', { name: profileName }),
         color: 'success',
         timeout: 3000
       });
       onClose();
     } catch (error) {
       addToast({
-        title: selectedProfileId !== activeProfileId ? 'Profile 切换失败' : '连接失败',
-        description: error instanceof Error ? error.message : '请重试',
+        title: selectedProfileId !== activeProfileId ? t('profile.switchFailed', { name: '' }) : t('connection.failed'),
+        description: error instanceof Error ? error.message : t('error.unknown'),
         color: 'danger',
         timeout: 5000
       });
@@ -243,9 +245,9 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
         <div className="space-y-3">
           {profiles.length === 0 ? (
             <div className="text-center py-8">
-              <p className="text-default-500 mb-4">还没有电台配置，请创建一个</p>
+              <p className="text-default-500 mb-4">{t('profileModal.noProfiles')}</p>
               <Button color="primary" onPress={handleStartCreate} startContent={<FontAwesomeIcon icon={faPlus} />}>
-                新建电台配置
+                {t('profileModal.newProfile')}
               </Button>
             </div>
           ) : (
@@ -273,7 +275,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                               <div className="flex items-center gap-2">
                                 <span className="font-medium text-default-900 truncate">{profile.name}</span>
                                 {profile.id === activeProfileId && (
-                                  <Chip size="sm" color="success" variant="flat">当前</Chip>
+                                  <Chip size="sm" color="success" variant="flat">{t('profileModal.current')}</Chip>
                                 )}
                               </div>
                               <p className="text-xs text-default-500 truncate mt-0.5">
@@ -286,7 +288,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                                 variant="light"
                                 isIconOnly
                                 onPress={() => handleStartEdit(profile)}
-                                title="编辑"
+                                title={t('profileModal.edit')}
                               >
                                 <FontAwesomeIcon icon={faPen} className="text-default-400 text-xs" />
                               </Button>
@@ -298,7 +300,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                                 isDisabled={profile.id === activeProfileId}
                                 isLoading={isDeleting === profile.id}
                                 onPress={() => handleDelete(profile.id)}
-                                title={profile.id === activeProfileId ? '无法删除当前激活的 Profile' : '删除'}
+                                title={profile.id === activeProfileId ? t('profileModal.cannotDeleteActive') : t('common:button.delete')}
                               >
                                 <FontAwesomeIcon icon={faTrash} className="text-xs" />
                               </Button>
@@ -318,7 +320,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                 startContent={<FontAwesomeIcon icon={faPlus} />}
                 className="mt-2"
               >
-                新建电台配置
+                {t('profileModal.createNew')}
               </Button>
             </>
           )}
@@ -328,11 +330,11 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       <ModalFooter>
         <div className="flex justify-between items-center w-full">
           <div className="text-sm text-default-400">
-            {selectedProfileId && selectedProfileId !== activeProfileId && '切换 Profile 并连接电台'}
-            {selectedProfileId && selectedProfileId === activeProfileId && '重新连接电台'}
+            {selectedProfileId && selectedProfileId !== activeProfileId && t('profileModal.switchAndConnect')}
+            {selectedProfileId && selectedProfileId === activeProfileId && t('profileModal.reconnect')}
           </div>
           <div className="flex gap-2">
-            <Button variant="flat" onPress={onClose}>关闭</Button>
+            <Button variant="flat" onPress={onClose}>{t('common:button.close')}</Button>
             <Button
               color="primary"
               onPress={handleApply}
@@ -340,7 +342,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
               isDisabled={!selectedProfileId}
               startContent={!isActivating ? <FontAwesomeIcon icon={faCheck} /> : undefined}
             >
-              {selectedProfileId && selectedProfileId === activeProfileId ? '重新连接' : '应用'}
+              {selectedProfileId && selectedProfileId === activeProfileId ? t('profileModal.reconnect') : t('profileModal.apply')}
             </Button>
           </div>
         </div>
@@ -356,15 +358,15 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           {/* Profile 基本信息 */}
           <div className="space-y-3">
             <Input
-              label="Profile 名称"
-              placeholder="例如：IC-705 WiFi、FT-991A 串口"
+              label={t('profileModal.nameLabel')}
+              placeholder={t('profileModal.namePlaceholder')}
               value={editName}
               onChange={e => setEditName(e.target.value)}
               isRequired
             />
             <Textarea
-              label="描述（可选）"
-              placeholder="备注信息"
+              label={t('profileModal.descLabel')}
+              placeholder={t('profileModal.descPlaceholder')}
               value={editDescription}
               onChange={e => setEditDescription(e.target.value)}
               minRows={1}
@@ -389,8 +391,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
               <Card shadow="none" radius="lg" classNames={{ base: 'border border-divider bg-content1 mb-3' }}>
                 <CardBody className="p-3">
                   <div className="flex items-center gap-2 text-primary">
-                    <Chip size="sm" color="primary" variant="flat">默认</Chip>
-                    <span className="text-sm">ICOM WLAN 模式默认使用电台音频，如有特殊音频路由可手动更改</span>
+                    <Chip size="sm" color="primary" variant="flat">{t('profileModal.icomDefault')}</Chip>
+                    <span className="text-sm">{t('profileModal.icomDefaultDesc')}</span>
                   </div>
                 </CardBody>
               </Card>
@@ -411,17 +413,17 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             onPress={handleBackToList}
             startContent={<FontAwesomeIcon icon={faArrowLeft} />}
           >
-            返回列表
+            {t('profileModal.backToList')}
           </Button>
           <div className="flex gap-2">
-            <Button variant="flat" onPress={handleBackToList}>取消</Button>
+            <Button variant="flat" onPress={handleBackToList}>{t('common:button.cancel')}</Button>
             <Button
               color="primary"
               onPress={handleSave}
               isLoading={isSaving}
               isDisabled={!editName.trim()}
             >
-              {mode === 'create' ? '创建 Profile' : '保存 Profile'}
+              {mode === 'create' ? t('profileModal.create') : t('profileModal.save')}
             </Button>
           </div>
         </div>
@@ -447,14 +449,14 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
         <ModalHeader>
           <div>
             <h2 className="text-xl font-bold">
-              {mode === 'list' ? '电台配置 Profile' : mode === 'create' ? '新建 Profile' : '编辑 Profile'}
+              {mode === 'list' ? t('profileModal.titleList') : mode === 'create' ? t('profileModal.titleCreate') : t('profileModal.titleEdit')}
             </h2>
             <p className="text-sm text-default-500 font-normal mt-1">
               {mode === 'list'
-                ? '管理电台和音频配置组合，快速切换不同的物理电台'
+                ? t('profileModal.subtitleList')
                 : mode === 'create'
-                  ? '创建新的电台配置组合'
-                  : `编辑「${editName}」`
+                  ? t('profileModal.subtitleCreate')
+                  : t('profileModal.subtitleEdit', { name: editName })
               }
             </p>
           </div>

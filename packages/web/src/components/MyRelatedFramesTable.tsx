@@ -4,6 +4,7 @@ import { parseFT8LocationInfo } from '@tx5dr/core';
 import { useSlotPacks, useRadioState, useConnection, useCurrentOperatorId } from '../store/radioStore';
 import { FrameMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
+import { useTranslation } from 'react-i18next';
 
 interface MyRelatedFT8TableProps {
   className?: string;
@@ -19,6 +20,7 @@ interface TransmissionLog {
 }
 
 export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
+  const { t } = useTranslation('common');
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const connection = useConnection();
@@ -203,7 +205,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         const slotToFreeze = recentSlotGroupKeys[1]; // 最老的时隙
         const groupDataToFreeze = myFrameGroups.find(group => group.time === slotToFreeze);
         if (groupDataToFreeze) {
-          console.log(`🔒 [MyRelatedFramesTable] 固化时隙数据: ${slotToFreeze}`);
+          console.log(`[MyRelatedFramesTable] Freezing slot data: ${slotToFreeze}`);
           freezeSlotData(slotToFreeze, groupDataToFreeze);
         }
       }
@@ -376,8 +378,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       {myFrameGroups.length === 0 ? (
         <div className="text-center py-12 cursor-default select-none">
           <div className="text-default-400 mb-2 text-4xl">📞</div>
-          <p className="text-default-500 mb-1">暂无相关通联记录</p>
-          <p className="text-default-400 text-sm">与我有关的消息将在这里显示</p>
+          <p className="text-default-500 mb-1">{t('myFrames.noRecords')}</p>
+          <p className="text-default-400 text-sm">{t('myFrames.hint')}</p>
         </div>
       ) : (
         <FramesTable

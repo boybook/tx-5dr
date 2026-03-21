@@ -7,6 +7,7 @@ import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
 import { useTxFrequencies } from '../hooks/useTxFrequencies';
 import { Button, Popover, PopoverTrigger, PopoverContent, Tabs, Tab, Slider, Input } from '@heroui/react';
 import { Cog6ToothIcon, ArrowsPointingOutIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 
 // 瀑布图配置
 const WATERFALL_HISTORY = 120; // 保存120个历史数据点
@@ -53,6 +54,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   showPopOut = true,
   onPopOutChange,
 }) => {
+  const { t } = useTranslation('common');
   const [spectrum, setSpectrum] = useState<FT8Spectrum | null>(null);
   const [waterfallData, setWaterfallData] = useState<WaterfallData>({
     spectrumData: [],
@@ -77,7 +79,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       await (window as any).electronAPI.window.openSpectrumWindow();
       onPopOutChange?.(true);
     } catch (error) {
-      console.error('打开频谱窗口失败:', error);
+      console.error('Failed to open spectrum window:', error);
     }
   }, [onPopOutChange]);
 
@@ -250,7 +252,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   if (!spectrum || waterfallData.spectrumData.length === 0) {
     return (
       <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
-        <div className="text-default-400">等待频谱数据...</div>
+        <div className="text-default-400">{t('spectrum.waiting')}</div>
         {canPopOut && (
           <Button
             isIconOnly
@@ -258,7 +260,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             variant="light"
             onPress={handlePopOut}
             className="absolute top-1 right-1 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
-            title="在独立窗口中显示"
+            title={t('spectrum.popOut')}
           >
             <ArrowsPointingOutIcon className="w-4 h-4" />
           </Button>
@@ -294,7 +296,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
           variant="light"
           onPress={handlePopOut}
           className="absolute top-1 right-9 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
-          title="在独立窗口中显示"
+          title={t('spectrum.popOut')}
         >
           <ArrowsPointingOutIcon className="w-4 h-4" />
         </Button>
@@ -315,7 +317,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         <PopoverContent className="w-80 p-0">
           <div className="w-full">
             <div className="px-4 py-3 text-sm font-semibold border-b border-divider">
-              频谱范围设置
+              {t('spectrum.rangeSettings')}
             </div>
 
             {/* 模式切换 - 使用 Tabs */}
@@ -349,10 +351,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                   panel: "w-full px-4 py-3"
                 }}
               >
-                <Tab key="auto" title="自动模式">
+                <Tab key="auto" title={t('spectrum.autoMode')}>
                   <div className="space-y-4">
                     <Slider
-                      label="范围自动刷新频率（帧）"
+                      label={t('spectrum.updateInterval')}
                       size="sm"
                       step={1}
                       minValue={1}
@@ -364,10 +366,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                           auto: { ...prev.auto, updateInterval: value as number }
                         }));
                       }}
-                      getValue={(value) => `${value} 帧`}
+                      getValue={(value) => t('spectrum.frames', { count: value as number })}
                     />
                     <Slider
-                      label="最小值百分位数"
+                      label={t('spectrum.minPercentile')}
                       size="sm"
                       step={1}
                       minValue={5}
@@ -382,7 +384,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       getValue={(value) => `${value}%`}
                     />
                     <Slider
-                      label="最大值百分位数"
+                      label={t('spectrum.maxPercentile')}
                       size="sm"
                       step={1}
                       minValue={90}
@@ -397,7 +399,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       getValue={(value) => `${value}%`}
                     />
                     <Slider
-                      label="范围扩展因子"
+                      label={t('spectrum.expansionFactor')}
                       size="sm"
                       step={0.5}
                       minValue={2}
@@ -414,10 +416,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                   </div>
                 </Tab>
 
-                <Tab key="manual" title="手动模式">
+                <Tab key="manual" title={t('spectrum.manualMode')}>
                   <div className="space-y-3">
                     <Input
-                      label="最小值 (dB)"
+                      label={t('spectrum.minDb')}
                       type="number"
                       size="sm"
                       value={rangeSettings.manual.minDb.toString()}
@@ -432,7 +434,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       }}
                     />
                     <Input
-                      label="最大值 (dB)"
+                      label={t('spectrum.maxDb')}
                       type="number"
                       size="sm"
                       value={rangeSettings.manual.maxDb.toString()}
@@ -455,7 +457,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             {actualRange && (
               <div className="px-4 py-3 border-t border-divider">
                 <div className="text-xs text-default-400">
-                  当前范围: {actualRange.min.toFixed(1)} ~ {actualRange.max.toFixed(1)} dB
+                  {t('spectrum.currentRange', { min: actualRange.min.toFixed(1), max: actualRange.max.toFixed(1) })}
                 </div>
               </div>
             )}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { 
-  Select, 
+import { useTranslation } from 'react-i18next';
+import {
+  Select,
   SelectItem,
   Spinner,
   Alert,
@@ -28,6 +29,7 @@ export interface AudioDeviceSettingsRef {
 }
 
 export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDeviceSettingsProps>(({ onUnsavedChanges, initialConfig, onChange }, ref) => {
+  const { t } = useTranslation('settings');
   const isControlled = initialConfig !== undefined;
   // 状态管理
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
@@ -113,8 +115,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       }
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载音频设备失败');
-      console.error('加载音频设备失败:', err);
+      setError(err instanceof Error ? err.message : t('audio.loadFailed'));
+      console.error('Failed to load audio devices:', err);
     } finally {
       setLoading(false);
     }
@@ -134,8 +136,8 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       console.log('🔄 音频设备列表已刷新');
       
     } catch (err) {
-      setError(err instanceof Error ? err.message : '刷新音频设备列表失败');
-      console.error('刷新音频设备失败:', err);
+      setError(err instanceof Error ? err.message : t('audio.refreshFailed'));
+      console.error('Failed to refresh audio devices:', err);
     } finally {
       setRefreshingDevices(false);
     }
@@ -162,19 +164,19 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       
       if (response.success) {
         setCurrentSettings(response.currentSettings);
-        setSuccessMessage(response.message || '音频设备设置更新成功');
+        setSuccessMessage(response.message || t('audio.updateSuccess'));
         
         // 不自动关闭弹窗，让父组件控制
         // setTimeout(() => {
         //   onClose?.();
         // }, 2000);
       } else {
-        setError('更新失败');
+        setError(t('audio.updateFailedGeneric'));
       }
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新音频设备设置失败');
-      console.error('更新音频设备设置失败:', err);
+      setError(err instanceof Error ? err.message : t('audio.updateFailed'));
+      console.error('Failed to update audio device settings:', err);
     } finally {
       setSaving(false);
     }
@@ -185,7 +187,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       <div className="flex items-center justify-center py-12">
         <div className="text-center">
           <Spinner size="lg" />
-          <p className="mt-4 text-default-500">正在加载音频设备...</p>
+          <p className="mt-4 text-default-500">{t('audio.loading')}</p>
         </div>
       </div>
     );
@@ -195,14 +197,14 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     <div className="space-y-6">
       {/* 错误提示 */}
       {error && (
-        <Alert color="danger" variant="flat" title="错误">
+        <Alert color="danger" variant="flat" title={t('common.error')}>
           {error}
         </Alert>
       )}
-      
+
       {/* 成功提示 */}
       {successMessage && (
-        <Alert color="success" variant="flat" title="成功">
+        <Alert color="success" variant="flat" title={t('common.success')}>
           {successMessage}
         </Alert>
       )}
@@ -210,7 +212,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       {/* 设备配置表单 */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">音频设备配置</h3>
+          <h3 className="text-lg font-semibold">{t('audio.deviceConfig')}</h3>
           <Button
             variant="flat"
             color="primary"
@@ -220,81 +222,81 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             isDisabled={saving}
             startContent={refreshingDevices ? undefined : <FontAwesomeIcon icon={faRotateRight} />}
           >
-            {refreshingDevices ? '刷新中...' : '刷新设备'}
+            {refreshingDevices ? t('audio.refreshing') : t('audio.refreshDevices')}
           </Button>
         </div>
         
         <Select
-          label="音频输入设备"
-          placeholder="请选择输入设备"
+          label={t('audio.inputDevice')}
+          placeholder={t('audio.inputDevicePlaceholder')}
           selectedKeys={selectedInputDeviceName ? [selectedInputDeviceName] : []}
           onSelectionChange={(keys) => {
             const selected = Array.from(keys)[0] as string;
             setSelectedInputDeviceName(selected || '');
           }}
           isDisabled={saving}
-          aria-label="选择音频输入设备"
+          aria-label={t('audio.selectInput')}
         >
           {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
           {selectedInputDeviceName && !inputDevices.find(d => d.name === selectedInputDeviceName) && (
-            <SelectItem 
+            <SelectItem
               key={selectedInputDeviceName}
-              textValue={`${selectedInputDeviceName} (暂时失效)`}
+              textValue={`${selectedInputDeviceName} (${t('audio.deviceUnavailableShort')})`}
               className="text-warning"
             >
               <div className="flex flex-col">
-                <span className="text-warning">{selectedInputDeviceName} (暂时失效)</span>
-                <span className="text-xs text-warning-400">设备当前不可用，请重新选择</span>
+                <span className="text-warning">{selectedInputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
+                <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
               </div>
             </SelectItem>
           )}
           {/* 可用设备列表 */}
           {inputDevices.map((device) => (
-            <SelectItem 
+            <SelectItem
               key={device.name}
-              textValue={`${device.name} ${device.isDefault ? '(默认)' : ''}`}
+              textValue={`${device.name} ${device.isDefault ? `(${t('audio.default')})` : ''}`}
             >
               <div className="flex flex-col">
-                <span>{device.name} {device.isDefault ? '(默认)' : ''}</span>
-                <span className="text-xs text-default-400">{device.channels}声道, {device.sampleRate}Hz</span>
+                <span>{device.name} {device.isDefault ? `(${t('audio.default')})` : ''}</span>
+                <span className="text-xs text-default-400">{device.channels}{t('audio.channels')}, {device.sampleRate}Hz</span>
               </div>
             </SelectItem>
           ))}
         </Select>
 
         <Select
-          label="音频输出设备"
-          placeholder="请选择输出设备"
+          label={t('audio.outputDevice')}
+          placeholder={t('audio.outputDevicePlaceholder')}
           selectedKeys={selectedOutputDeviceName ? [selectedOutputDeviceName] : []}
           onSelectionChange={(keys) => {
             const selected = Array.from(keys)[0] as string;
             setSelectedOutputDeviceName(selected || '');
           }}
           isDisabled={saving}
-          aria-label="选择音频输出设备"
+          aria-label={t('audio.selectOutput')}
         >
           {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
           {selectedOutputDeviceName && !outputDevices.find(d => d.name === selectedOutputDeviceName) && (
-            <SelectItem 
+            <SelectItem
               key={selectedOutputDeviceName}
-              textValue={`${selectedOutputDeviceName} (暂时失效)`}
+              textValue={`${selectedOutputDeviceName} (${t('audio.deviceUnavailableShort')})`}
               className="text-warning"
             >
               <div className="flex flex-col">
-                <span className="text-warning">{selectedOutputDeviceName} (暂时失效)</span>
-                <span className="text-xs text-warning-400">设备当前不可用，请重新选择</span>
+                <span className="text-warning">{selectedOutputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
+                <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
               </div>
             </SelectItem>
           )}
           {/* 可用设备列表 */}
           {outputDevices.map((device) => (
-            <SelectItem 
+            <SelectItem
               key={device.name}
-              textValue={`${device.name} ${device.isDefault ? '(默认)' : ''}`}
+              textValue={`${device.name} ${device.isDefault ? `(${t('audio.default')})` : ''}`}
             >
               <div className="flex flex-col">
-                <span>{device.name} {device.isDefault ? '(默认)' : ''}</span>
-                <span className="text-xs text-default-400">{device.channels}声道, {device.sampleRate}Hz</span>
+                <span>{device.name} {device.isDefault ? `(${t('audio.default')})` : ''}</span>
+                <span className="text-xs text-default-400">{device.channels}{t('audio.channels')}, {device.sampleRate}Hz</span>
               </div>
             </SelectItem>
           ))}
@@ -302,14 +304,14 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Select
-            label="采样率 (Hz)"
+            label={t('audio.sampleRate')}
             selectedKeys={[sampleRate.toString()]}
             onSelectionChange={(keys) => {
               const selected = Array.from(keys)[0] as string;
               setSampleRate(parseInt(selected));
             }}
             isDisabled={saving}
-            aria-label="选择采样率"
+            aria-label={t('audio.selectSampleRate')}
           >
             <SelectItem key="8000" textValue="8,000 Hz">8,000 Hz</SelectItem>
             <SelectItem key="16000" textValue="16,000 Hz">16,000 Hz</SelectItem>
@@ -320,14 +322,14 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           </Select>
 
           <Select
-            label="缓冲区大小 (samples)"
+            label={t('audio.bufferSize')}
             selectedKeys={[bufferSize.toString()]}
             onSelectionChange={(keys) => {
               const selected = Array.from(keys)[0] as string;
               setBufferSize(parseInt(selected));
             }}
             isDisabled={saving}
-            aria-label="选择缓冲区大小"
+            aria-label={t('audio.selectBufferSize')}
           >
             <SelectItem key="128" textValue="128">128</SelectItem>
             <SelectItem key="256" textValue="256">256</SelectItem>
@@ -339,12 +341,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         </div>
 
         <div className="mt-6 p-4 bg-default-50 rounded-lg">
-          <h4 className="text-sm font-medium text-default-700 mb-2">设置说明</h4>
+          <h4 className="text-sm font-medium text-default-700 mb-2">{t('audio.settingsNote')}</h4>
           <ul className="text-xs text-default-600 space-y-1">
-            <li>• 输入设备：用于接收FT8音频信号的设备</li>
-            <li>• 输出设备：用于发送FT8音频信号的设备</li>
-            <li>• 采样率：建议使用48kHz以获得最佳音质</li>
-            <li>• 缓冲区：较大的缓冲区可以减少音频爆音，但会增加延迟</li>
+            <li>• {t('audio.noteInput')}</li>
+            <li>• {t('audio.noteOutput')}</li>
+            <li>• {t('audio.noteSampleRate')}</li>
+            <li>• {t('audio.noteBuffer')}</li>
           </ul>
         </div>
       </div>

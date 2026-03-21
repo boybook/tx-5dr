@@ -8,8 +8,10 @@ import { SlotPacksMessageDisplay } from '../components/SlotPacksMessageDisplay';
 import { RadioMetersDisplay } from '../components/RadioMetersDisplay';
 import { useSlotPacks, useRadioState, useConnection } from '../store/radioStore';
 import { isElectron } from '../utils/config';
+import { useTranslation } from 'react-i18next';
 
 export const LeftLayout: React.FC = () => {
+  const { t } = useTranslation('common');
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const connection = useConnection();
@@ -119,8 +121,8 @@ export const LeftLayout: React.FC = () => {
             isIconOnly
             variant="light"
             size="sm"
-            title="清空数据"
-            aria-label="清空数据"
+            title={t('action.clearData')}
+            aria-label={t('action.clearData')}
           >
             <FontAwesomeIcon icon={faTrashCan} className="text-default-400" />
           </Button>

@@ -35,6 +35,8 @@ import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
 import { showErrorToast } from '../utils/errorToast';
 import { SyncConfigModal } from './SyncConfigModal';
+import { useTranslation } from 'react-i18next';
+import { formatDate as formatDateUtil } from '../utils/dateFormatting';
 
 // ElectronAPI 类型定义
 interface ElectronAPI {
@@ -66,6 +68,7 @@ interface QSOFilters {
 }
 
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
+  const { t } = useTranslation('logbook');
   const [qsos, setQsos] = useState<QSORecord[]>([]);
   const [statistics, setStatistics] = useState<LogBookStatistics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -96,7 +99,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
   const effectiveLogBookId = logBookId || operatorId;
-  
+
   // 日志本专用WebSocket：只接收轻量通知，然后主动刷新
   useEffect(() => {
     // 仅按 operatorId 订阅，避免 logBookId 不一致导致过滤失败
@@ -117,7 +120,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       if (!data) return;
       // 以 operatorId 为主进行匹配；其次尝试 logBookId
       if (data.operatorId === operatorId || (data.logBookId && data.logBookId === effectiveLogBookId)) {
-        console.log('🔔 收到日志本变更通知，刷新数据');
+        console.log('Received logbook change notification, refreshing data');
         refresh();
       }
     };
@@ -141,25 +144,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         limit: itemsPerPage,
         offset: (currentPage - 1) * itemsPerPage,
       };
-      
-      console.log('📊 [LogbookViewer] 发送API请求:', {
-        effectiveLogBookId,
-        queryOptions,
-        currentPage,
-        itemsPerPage,
-        calculatedOffset: (currentPage - 1) * itemsPerPage
-      });
-      
+
       const response = await api.getLogBookQSOs(effectiveLogBookId, queryOptions);
-      console.log('📊 [LogbookViewer] API响应:', { 
-        dataLength: response.data.length, 
-        meta: response.meta,
-        filteredTotal: response.meta?.total,
-        actualTotalRecords: response.meta?.totalRecords,
-        currentPage,
-        itemsPerPage,
-        calculatedTotalPages: Math.ceil((response.meta?.total || response.data.length) / itemsPerPage)
-      });
       setQsos(response.data);
       // 使用筛选后的总数来计算分页
       setTotalRecords(response.meta?.total || response.data.length);
@@ -167,8 +153,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setActualTotalRecords(response.meta?.totalRecords || response.data.length);
       setHasFilters(response.meta?.hasFilters || false);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '加载QSO记录失败';
-      console.error('加载QSO记录失败:', error);
+      const errorMessage = error instanceof Error ? error.message : t('error.loadQSOFailed');
+      console.error('Failed to load QSO records:', error);
       setError(errorMessage);
       setQsos([]); // 清空数据
     } finally {
@@ -182,7 +168,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       const response = await api.getLogBook(effectiveLogBookId);
       setStatistics(response.data.statistics);
     } catch (error) {
-      console.error('加载统计信息失败:', error);
+      console.error('Failed to load statistics:', error);
       // 统计信息加载失败不影响QSO记录的显示
       setStatistics(null);
     }
@@ -218,7 +204,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 导出功能（增强错误处理）
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  
+
   // WaveLog同步功能
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -241,21 +227,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 同步配置摘要（按呼号）
   const [syncSummary, setSyncSummary] = useState<{ wavelog: boolean; qrz: boolean; lotw: boolean }>({ wavelog: false, qrz: false, lotw: false });
   const [isSyncConfigOpen, setIsSyncConfigOpen] = useState(false);
-  
+
   const handleExport = async (format: 'adif' | 'csv') => {
     if (isExporting) return;
-    
+
     try {
       setIsExporting(true);
       setExportError(null);
-      
+
       const exportData = await api.exportLogBook(effectiveLogBookId, {
         format,
         ...filters,
       });
-      
-      const blob = new Blob([exportData], { 
-        type: format === 'adif' ? 'text/plain' : 'text/csv' 
+
+      const blob = new Blob([exportData], {
+        type: format === 'adif' ? 'text/plain' : 'text/csv'
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -265,11 +251,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
-      console.log(`📊 成功导出 ${format.toUpperCase()} 格式日志`);
+
+      console.log(`Successfully exported ${format.toUpperCase()} format log`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '导出失败';
-      console.error('导出失败:', error);
+      const errorMessage = error instanceof Error ? error.message : t('error.exportFailed');
+      console.error('Export failed:', error);
       setExportError(errorMessage);
     } finally {
       setIsExporting(false);
@@ -279,7 +265,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // WaveLog同步功能
   const handleWaveLogSync = async (operation: 'download' | 'upload' | 'full_sync') => {
     if (isSyncing) return;
-    
+
     try {
       setIsSyncing(true);
       setSyncError(null);
@@ -294,13 +280,13 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         await loadQSOs();
         await loadStatistics();
 
-        console.log(`📊 WaveLog同步成功: ${operation}`, result);
+        console.log(`WaveLog sync successful: ${operation}`, result);
       } else {
-        setSyncError(result.message || '同步失败');
+        setSyncError(result.message || t('error.syncFailed'));
       }
 
     } catch (error) {
-      console.error('WaveLog同步失败:', error);
+      console.error('WaveLog sync failed:', error);
       if (error instanceof ApiError) {
         setSyncError(error.userMessage);
         showErrorToast({
@@ -310,7 +296,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           code: error.code
         });
       } else {
-        const errorMessage = error instanceof Error ? error.message : 'WaveLog同步失败';
+        const errorMessage = error instanceof Error ? error.message : t('sync.wavelog.syncError');
         setSyncError(errorMessage);
       }
     } finally {
@@ -334,10 +320,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         await loadQSOs();
         await loadStatistics();
       } else {
-        setQrzSyncError(result.message || 'QRZ同步失败');
+        setQrzSyncError(result.message || t('sync.qrz.syncError'));
       }
     } catch (error) {
-      console.error('QRZ同步失败:', error);
+      console.error('QRZ sync failed:', error);
       if (error instanceof ApiError) {
         setQrzSyncError(error.userMessage);
         showErrorToast({
@@ -347,7 +333,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           code: error.code
         });
       } else {
-        setQrzSyncError(error instanceof Error ? error.message : 'QRZ同步失败');
+        setQrzSyncError(error instanceof Error ? error.message : t('sync.qrz.syncError'));
       }
     } finally {
       setIsQRZSyncing(false);
@@ -370,10 +356,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         await loadQSOs();
         await loadStatistics();
       } else {
-        setLotwSyncError(result.message || 'LoTW同步失败');
+        setLotwSyncError(result.message || t('sync.lotw.syncError'));
       }
     } catch (error) {
-      console.error('LoTW同步失败:', error);
+      console.error('LoTW sync failed:', error);
       if (error instanceof ApiError) {
         setLotwSyncError(error.userMessage);
         showErrorToast({
@@ -383,7 +369,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           code: error.code
         });
       } else {
-        setLotwSyncError(error instanceof Error ? error.message : 'LoTW同步失败');
+        setLotwSyncError(error instanceof Error ? error.message : t('sync.lotw.syncError'));
       }
     } finally {
       setIsLoTWSyncing(false);
@@ -398,7 +384,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         await window.electronAPI.shell.openPath(result.path);
       }
     } catch (error) {
-      console.error('打开日志目录失败:', error);
+      console.error('Failed to open log directory:', error);
     }
   };
 
@@ -497,10 +483,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setEditingQSO(null);
       setEditFormData({});
 
-      console.log('✅ QSO记录更新成功');
+      console.log('QSO record updated successfully');
     } catch (error) {
-      console.error('更新QSO记录失败:', error);
-      setError(error instanceof Error ? error.message : '更新QSO记录失败');
+      console.error('Failed to update QSO record:', error);
+      setError(error instanceof Error ? error.message : t('error.updateQSOFailed'));
     } finally {
       setIsEditSaving(false);
     }
@@ -528,10 +514,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setIsDeleteModalOpen(false);
       setDeletingQSO(null);
 
-      console.log('✅ QSO记录删除成功');
+      console.log('QSO record deleted successfully');
     } catch (error) {
-      console.error('删除QSO记录失败:', error);
-      setError(error instanceof Error ? error.message : '删除QSO记录失败');
+      console.error('Failed to delete QSO record:', error);
+      setError(error instanceof Error ? error.message : t('error.deleteQSOFailed'));
     } finally {
       setIsDeleting(false);
     }
@@ -545,7 +531,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         window.electronAPI.shell.openExternal(url);
       } else {
         // 如果shell API不可用，回退到window.open
-        console.warn('Electron shell API不可用，回退到window.open');
+        console.warn('Electron shell API unavailable, falling back to window.open');
         window.open(url, '_blank');
       }
     } else {
@@ -558,7 +544,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const formatDateTime = (timestamp: number, compact = false) => {
     if (compact) {
       // 移动端紧凑格式
-      return new Date(timestamp).toLocaleString('zh-CN', {
+      return new Date(timestamp).toLocaleString(undefined, {
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
@@ -567,7 +553,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       });
     }
     // 桌面端完整格式
-    return new Date(timestamp).toLocaleString('zh-CN', {
+    return new Date(timestamp).toLocaleString(undefined, {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -598,17 +584,17 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   };
 
   // 表格列定义（响应式）
-  const columns = [
-    { key: 'startTime', label: '时间 (UTC)', sortable: true, hideOnMobile: false },
-    { key: 'callsign', label: '呼号', sortable: true, hideOnMobile: false },
-    { key: 'grid', label: '网格', sortable: true, hideOnMobile: true },
-    { key: 'frequency', label: '频率', sortable: true, hideOnMobile: false },
-    { key: 'mode', label: '模式', sortable: true, hideOnMobile: true },
-    { key: 'reportSent', label: '发送报告', sortable: false, hideOnMobile: true },
-    { key: 'reportReceived', label: '接收报告', sortable: false, hideOnMobile: true },
-    { key: 'qslStatus', label: '确认', sortable: false, hideOnMobile: true },
-    { key: 'actions', label: '操作', sortable: false, hideOnMobile: false },
-  ];
+  const columns = useMemo(() => [
+    { key: 'startTime', label: t('column.timeUtc'), sortable: true, hideOnMobile: false },
+    { key: 'callsign', label: t('column.callsign'), sortable: true, hideOnMobile: false },
+    { key: 'grid', label: t('column.grid'), sortable: true, hideOnMobile: true },
+    { key: 'frequency', label: t('column.frequency'), sortable: true, hideOnMobile: false },
+    { key: 'mode', label: t('column.mode'), sortable: true, hideOnMobile: true },
+    { key: 'reportSent', label: t('column.reportSent'), sortable: false, hideOnMobile: true },
+    { key: 'reportReceived', label: t('column.reportReceived'), sortable: false, hideOnMobile: true },
+    { key: 'qslStatus', label: t('column.qslStatus'), sortable: false, hideOnMobile: true },
+    { key: 'actions', label: t('column.actions'), sortable: false, hideOnMobile: false },
+  ], [t]);
 
   // 渲染单元格内容
   const renderCell = React.useCallback((qso: QSORecord, columnKey: React.Key) => {
@@ -632,7 +618,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 openExternalLink(`https://www.qrz.com/db/${qso.callsign}`);
               }}
               className="text-default-400 hover:text-primary transition-colors"
-              title={`在QRZ.com查看 ${qso.callsign} 的信息`}
+              title={t('qso.callsignInfo', { callsign: qso.callsign })}
             >
               <FontAwesomeIcon icon={faExternalLinkAlt} size="sm" />
             </button>
@@ -675,14 +661,22 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         // Build tooltip details
         const details: string[] = [];
         if (isLotwConfirmed) {
-          details.push(`LoTW: 已确认${qso.lotwQslReceivedDate ? ` (${new Date(qso.lotwQslReceivedDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+          details.push(qso.lotwQslReceivedDate
+            ? t('qso.lotwConfirmedDate', { date: new Date(qso.lotwQslReceivedDate).toLocaleDateString(undefined, { timeZone: 'UTC' }) })
+            : t('qso.lotwConfirmed'));
         } else if (isLotwSent) {
-          details.push(`LoTW: 已上传${qso.lotwQslSentDate ? ` (${new Date(qso.lotwQslSentDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+          details.push(qso.lotwQslSentDate
+            ? t('qso.lotwUploadedDate', { date: new Date(qso.lotwQslSentDate).toLocaleDateString(undefined, { timeZone: 'UTC' }) })
+            : t('qso.lotwUploaded'));
         }
         if (isQrzConfirmed) {
-          details.push(`QRZ: 已确认${qso.qrzQslReceivedDate ? ` (${new Date(qso.qrzQslReceivedDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+          details.push(qso.qrzQslReceivedDate
+            ? t('qso.qrzConfirmedDate', { date: new Date(qso.qrzQslReceivedDate).toLocaleDateString(undefined, { timeZone: 'UTC' }) })
+            : t('qso.qrzConfirmed'));
         } else if (isQrzSent) {
-          details.push(`QRZ: 已上传${qso.qrzQslSentDate ? ` (${new Date(qso.qrzQslSentDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+          details.push(qso.qrzQslSentDate
+            ? t('qso.qrzUploadedDate', { date: new Date(qso.qrzQslSentDate).toLocaleDateString(undefined, { timeZone: 'UTC' }) })
+            : t('qso.qrzUploaded'));
         }
 
         return (
@@ -692,7 +686,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               variant="flat"
               color={isConfirmed ? 'success' : 'primary'}
             >
-              {isConfirmed ? '已确认' : '已上传'}
+              {isConfirmed ? t('qslStatus.confirmed') : t('qslStatus.uploaded')}
             </Chip>
           </Tooltip>
         );
@@ -700,7 +694,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       case "actions":
         return (
           <div className="flex items-center gap-1 md:gap-2">
-            <Tooltip content="编辑">
+            <Tooltip content={t('action.edit')}>
               <Button
                 size="sm"
                 variant="light"
@@ -711,7 +705,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 <FontAwesomeIcon icon={faEdit} className="text-primary text-sm" />
               </Button>
             </Tooltip>
-            <Tooltip content="删除">
+            <Tooltip content={t('action.delete')}>
               <Button
                 size="sm"
                 variant="light"
@@ -728,7 +722,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       default:
         return cellValue;
     }
-  }, []);
+  }, [t]);
 
   // 顶部内容：标题和操作工具
   const topContent = React.useMemo(() => {
@@ -738,7 +732,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
           <div className="flex items-center gap-3">
             <h1 className="text-xl md:text-2xl font-bold text-foreground">
-              通联日志
+              {t('title')}
             </h1>
             {operatorCallsign && (
               <div className="flex items-center gap-2">
@@ -758,7 +752,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 isClearable
                 size="sm"
                 className="w-40 md:w-64 transition-all duration-200"
-                placeholder="搜索呼号..."
+                placeholder={t('filter.searchPlaceholder')}
                 startContent={<SearchIcon />}
                 value={filters.callsign || ''}
                 onClear={() => handleFilterChange('callsign', undefined)}
@@ -777,11 +771,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 onPress={() => setIsSearchExpanded(true)}
                 className="transition-all duration-200 min-w-0"
               >
-                <span className="hidden md:inline">搜索</span>
+                <span className="hidden md:inline">{t('action.search')}</span>
                 <SearchIcon className="md:hidden" />
               </Button>
             )}
-            
+
             {/* 筛选按钮 */}
             <Dropdown>
               <DropdownTrigger>
@@ -792,12 +786,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   color={filters.band ? "primary" : "default"}
                   className="min-w-0"
                 >
-                  <span className="hidden md:inline">频段{filters.band ? `: ${filters.band}` : ''}</span>
-                  <span className="md:hidden">{filters.band || '频段'}</span>
+                  <span className="hidden md:inline">{t('filter.band')}{filters.band ? `: ${filters.band}` : ''}</span>
+                  <span className="md:hidden">{filters.band || t('filter.band')}</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
-                aria-label="频段筛选"
+                aria-label={t('filter.bandFilter')}
                 selectedKeys={filters.band ? [filters.band] : []}
                 selectionMode="single"
                 onSelectionChange={(keys) => {
@@ -805,7 +799,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   handleFilterChange('band', selected[0]);
                 }}
               >
-                <DropdownItem key="">全部频段</DropdownItem>
+                <DropdownItem key="">{t('filter.allBands')}</DropdownItem>
                 <DropdownItem key="160m">160m (1.8MHz)</DropdownItem>
                 <DropdownItem key="80m">80m (3.5MHz)</DropdownItem>
                 <DropdownItem key="60m">60m (5MHz)</DropdownItem>
@@ -825,7 +819,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 <DropdownItem key="23cm">23cm (1.2GHz)</DropdownItem>
               </DropdownMenu>
             </Dropdown>
-            
+
             <Dropdown>
               <DropdownTrigger>
                 <Button
@@ -835,12 +829,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   color={filters.mode ? "primary" : "default"}
                   className="min-w-0"
                 >
-                  <span className="hidden md:inline">模式{filters.mode ? `: ${filters.mode}` : ''}</span>
-                  <span className="md:hidden">{filters.mode || '模式'}</span>
+                  <span className="hidden md:inline">{t('filter.mode')}{filters.mode ? `: ${filters.mode}` : ''}</span>
+                  <span className="md:hidden">{filters.mode || t('filter.mode')}</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
-                aria-label="模式筛选"
+                aria-label={t('filter.modeFilter')}
                 selectedKeys={filters.mode ? [filters.mode] : []}
                 selectionMode="single"
                 onSelectionChange={(keys) => {
@@ -848,7 +842,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   handleFilterChange('mode', selected[0]);
                 }}
               >
-                <DropdownItem key="">全部模式</DropdownItem>
+                <DropdownItem key="">{t('filter.allModes')}</DropdownItem>
                 <DropdownItem key="FT8">FT8</DropdownItem>
                 <DropdownItem key="FT4">FT4</DropdownItem>
               </DropdownMenu>
@@ -863,11 +857,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   color={filters.qslStatus ? "primary" : "default"}
                   className="min-w-0 hidden md:flex"
                 >
-                  {filters.qslStatus === 'confirmed' ? '已确认' : filters.qslStatus === 'uploaded' ? '已上传' : filters.qslStatus === 'none' ? '未上传' : '确认'}
+                  {filters.qslStatus === 'confirmed' ? t('qslStatus.confirmed') : filters.qslStatus === 'uploaded' ? t('qslStatus.uploaded') : filters.qslStatus === 'none' ? t('qslStatus.notUploaded') : t('qslStatus.confirmStatus')}
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
-                aria-label="确认状态筛选"
+                aria-label={t('filter.confirmFilter')}
                 selectedKeys={filters.qslStatus ? [filters.qslStatus] : []}
                 selectionMode="single"
                 onSelectionChange={(keys) => {
@@ -875,10 +869,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   handleFilterChange('qslStatus', selected[0]);
                 }}
               >
-                <DropdownItem key="">全部状态</DropdownItem>
-                <DropdownItem key="confirmed">已确认</DropdownItem>
-                <DropdownItem key="uploaded">已上传未确认</DropdownItem>
-                <DropdownItem key="none">未上传</DropdownItem>
+                <DropdownItem key="">{t('qslStatus.allStatus')}</DropdownItem>
+                <DropdownItem key="confirmed">{t('qslStatus.confirmed')}</DropdownItem>
+                <DropdownItem key="uploaded">{t('qslStatus.uploadedNotConfirmed')}</DropdownItem>
+                <DropdownItem key="none">{t('qslStatus.notUploaded')}</DropdownItem>
               </DropdownMenu>
             </Dropdown>
 
@@ -890,8 +884,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 onPress={clearFilters}
                 className="min-w-0 whitespace-nowrap"
               >
-                <span className="hidden md:inline">清除筛选</span>
-                <span className="md:hidden">清除</span>
+                <span className="hidden md:inline">{t('action.clearFilter')}</span>
+                <span className="md:hidden">{t('action.clear')}</span>
               </Button>
             )}
 
@@ -907,34 +901,34 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                     startContent={!isSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
                     className="min-w-0"
                   >
-                    <span className="hidden lg:inline">WaveLog同步</span>
-                    <span className="lg:hidden hidden md:inline">同步</span>
+                    <span className="hidden lg:inline">{t('sync.wavelog.button')}</span>
+                    <span className="lg:hidden hidden md:inline">{t('sync.sync')}</span>
                   </Button>
                 </DropdownTrigger>
                 <DropdownMenu
-                  aria-label="WaveLog同步操作"
+                  aria-label={t('sync.wavelog.ariaLabel')}
                   onAction={(key) => handleWaveLogSync(key as 'download' | 'upload' | 'full_sync')}
                 >
                   <DropdownItem
                     key="download"
                     startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                    description="从WaveLog下载最新的QSO记录"
+                    description={t('sync.wavelog.downloadDesc')}
                   >
-                    下载同步
+                    {t('sync.wavelog.download')}
                   </DropdownItem>
                   <DropdownItem
                     key="upload"
                     startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                    description="上传本地QSO记录到WaveLog"
+                    description={t('sync.wavelog.uploadDesc')}
                   >
-                    上传同步
+                    {t('sync.wavelog.upload')}
                   </DropdownItem>
                   <DropdownItem
                     key="full_sync"
                     startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
-                    description="双向完整同步"
+                    description={t('sync.wavelog.fullSyncDesc')}
                   >
-                    完整同步
+                    {t('sync.wavelog.fullSync')}
                   </DropdownItem>
                 </DropdownMenu>
               </Dropdown>
@@ -957,29 +951,29 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   </Button>
                 </DropdownTrigger>
                 <DropdownMenu
-                  aria-label="QRZ.com同步操作"
+                  aria-label={t('sync.qrz.ariaLabel')}
                   onAction={(key) => handleQRZSync(key as 'download' | 'upload' | 'full_sync')}
                 >
                   <DropdownItem
                     key="download"
                     startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                    description="从QRZ.com Logbook下载QSO记录"
+                    description={t('sync.qrz.downloadDesc')}
                   >
-                    从 QRZ.com 下载
+                    {t('sync.qrz.download')}
                   </DropdownItem>
                   <DropdownItem
                     key="upload"
                     startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                    description="上传本地QSO记录到QRZ.com Logbook"
+                    description={t('sync.qrz.uploadDesc')}
                   >
-                    上传到 QRZ.com
+                    {t('sync.qrz.upload')}
                   </DropdownItem>
                   <DropdownItem
                     key="full_sync"
                     startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
-                    description="双向完整同步"
+                    description={t('sync.qrz.fullSyncDesc')}
                   >
-                    完整同步
+                    {t('sync.qrz.fullSync')}
                   </DropdownItem>
                 </DropdownMenu>
               </Dropdown>
@@ -1002,22 +996,22 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   </Button>
                 </DropdownTrigger>
                 <DropdownMenu
-                  aria-label="LoTW同步操作"
+                  aria-label={t('sync.lotw.ariaLabel')}
                   onAction={(key) => handleLoTWSync(key as 'upload' | 'download_confirmations')}
                 >
                   <DropdownItem
                     key="download_confirmations"
                     startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                    description="从LoTW下载QSL确认记录"
+                    description={t('sync.lotw.downloadConfirmationsDesc')}
                   >
-                    下载 LoTW 确认
+                    {t('sync.lotw.downloadConfirmations')}
                   </DropdownItem>
                   <DropdownItem
                     key="upload"
                     startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                    description="通过本地TQSL工具签名上传到LoTW"
+                    description={t('sync.lotw.uploadDesc')}
                   >
-                    上传到 LoTW
+                    {t('sync.lotw.upload')}
                   </DropdownItem>
                 </DropdownMenu>
               </Dropdown>
@@ -1034,21 +1028,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   className="min-w-0"
                   startContent={<FontAwesomeIcon icon={faDownload} className="md:hidden" />}
                 >
-                  <span className="hidden md:inline">导出</span>
+                  <span className="hidden md:inline">{t('export.button')}</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
-                aria-label="导出格式"
+                aria-label={t('export.ariaLabel')}
                 onAction={(key) => handleExport(key as 'adif' | 'csv')}
               >
-                <DropdownItem key="adif">ADIF 格式</DropdownItem>
-                <DropdownItem key="csv">CSV 格式</DropdownItem>
+                <DropdownItem key="adif">{t('export.adif')}</DropdownItem>
+                <DropdownItem key="csv">{t('export.csv')}</DropdownItem>
               </DropdownMenu>
             </Dropdown>
 
             {/* 打开日志文件目录按钮 - 仅Electron */}
             {isElectron() && (
-              <Tooltip content="在文件管理器中打开日志文件目录">
+              <Tooltip content={t('action.openDataDir')}>
                 <Button
                   variant="flat"
                   size="sm"
@@ -1063,7 +1057,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
             {/* 同步配置齿轮按钮 */}
             {operatorCallsign && (
-              <Tooltip content="配置同步服务">
+              <Tooltip content={t('action.configSync')}>
                 <Button
                   variant="flat"
                   size="sm"
@@ -1082,15 +1076,15 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-2 text-xs md:text-small text-default-500">
           <span>
             {hasFilters
-              ? `筛选结果: ${totalRecords} 条 / 总计: ${actualTotalRecords} 条通联记录`
-              : `共 ${actualTotalRecords} 条通联记录`
+              ? t('stats.filtered', { filtered: totalRecords, total: actualTotalRecords })
+              : t('stats.total', { total: actualTotalRecords })
             }
           </span>
           {statistics && (
             <span className="flex flex-wrap gap-2 md:gap-0">
-              <span>唯一呼号: {statistics.uniqueCallsigns}</span>
+              <span>{t('stats.uniqueCallsigns', { count: statistics.uniqueCallsigns })}</span>
               {statistics.lastQSO && (
-                <span className="hidden md:inline"> | 最近通联: {new Date(statistics.lastQSO).toLocaleDateString('zh-CN', { timeZone: 'UTC' })} UTC</span>
+                <span className="hidden md:inline"> | {t('stats.lastQSO', { date: new Date(statistics.lastQSO).toLocaleDateString(undefined, { timeZone: 'UTC' }) })}</span>
               )}
             </span>
           )}
@@ -1098,6 +1092,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       </div>
     );
   }, [
+    t,
     operatorCallsign,
     isSearchExpanded,
     filters.callsign,
@@ -1122,17 +1117,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 底部内容：分页
   const bottomContent = React.useMemo(() => {
-    console.log('📊 [LogbookViewer] 渲染分页组件:', { 
-      currentPage, 
-      totalPages, 
-      showPagination: totalPages > 1 
-    });
-    
     // 如果只有一页，不显示分页组件
     if (totalPages <= 1) {
       return null;
     }
-    
+
     return (
       <div className="py-2 px-2 flex flex-col md:flex-row justify-between items-center gap-2">
         <Pagination
@@ -1143,7 +1132,6 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           page={currentPage}
           total={totalPages}
           onChange={(page) => {
-            console.log('📊 [LogbookViewer] 分页切换:', { from: currentPage, to: page });
             setCurrentPage(page);
           }}
           classNames={{
@@ -1157,32 +1145,30 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             size="sm"
             variant="flat"
             onPress={() => {
-              console.log('📊 [LogbookViewer] 跳转到第一页');
               setCurrentPage(1);
             }}
             isDisabled={currentPage === 1 || totalPages <= 1}
             className="min-w-0 text-xs md:text-sm"
           >
-            <span className="hidden md:inline">第一页</span>
-            <span className="md:hidden">首页</span>
+            <span className="hidden md:inline">{t('pagination.firstPage')}</span>
+            <span className="md:hidden">{t('pagination.firstPageShort')}</span>
           </Button>
           <Button
             size="sm"
             variant="flat"
             onPress={() => {
-              console.log('📊 [LogbookViewer] 跳转到最后页:', totalPages);
               setCurrentPage(totalPages);
             }}
             isDisabled={currentPage === totalPages || totalPages <= 1}
             className="min-w-0 text-xs md:text-sm"
           >
-            <span className="hidden md:inline">最后页</span>
-            <span className="md:hidden">尾页</span>
+            <span className="hidden md:inline">{t('pagination.lastPage')}</span>
+            <span className="md:hidden">{t('pagination.lastPageShort')}</span>
           </Button>
         </div>
       </div>
     );
-  }, [currentPage, totalPages]);
+  }, [t, currentPage, totalPages]);
 
   // 计算加载状态的内容
   const loadingState = loading ? "loading" : "idle";
@@ -1193,7 +1179,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       <div className="h-full flex items-center justify-center p-6 max-w-7xl mx-auto">
         <Alert
           color="danger"
-          title="加载失败"
+          title={t('error.loadFailed')}
           description={error}
           endContent={
             <Button
@@ -1205,7 +1191,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 loadStatistics();
               }}
             >
-              重试
+              {t('error.retry')}
             </Button>
           }
         />
@@ -1221,19 +1207,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="success"
           variant="flat"
           className="w-full mb-4"
-          title="WaveLog同步成功"
+          title={t('sync.wavelog.successTitle')}
           description={syncSuccess}
           isClosable
           onClose={() => setSyncSuccess(null)}
         />
       )}
-      
+
       {syncError && (
         <Alert
           color="danger"
           variant="flat"
           className="w-full mb-4"
-          title="WaveLog同步失败"
+          title={t('sync.wavelog.errorTitle')}
           description={syncError}
           isClosable
           onClose={() => setSyncError(null)}
@@ -1245,7 +1231,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="success"
           variant="flat"
           className="w-full mb-4"
-          title="QRZ.com 同步成功"
+          title={t('sync.qrz.successTitle')}
           description={qrzSyncSuccess}
           isClosable
           onClose={() => setQrzSyncSuccess(null)}
@@ -1257,7 +1243,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="danger"
           variant="flat"
           className="w-full mb-4"
-          title="QRZ.com 同步失败"
+          title={t('sync.qrz.errorTitle')}
           description={qrzSyncError}
           isClosable
           onClose={() => setQrzSyncError(null)}
@@ -1269,7 +1255,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="success"
           variant="flat"
           className="w-full mb-4"
-          title="LoTW 同步成功"
+          title={t('sync.lotw.successTitle')}
           description={lotwSyncSuccess}
           isClosable
           onClose={() => setLotwSyncSuccess(null)}
@@ -1281,7 +1267,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="danger"
           variant="flat"
           className="w-full mb-4"
-          title="LoTW 同步失败"
+          title={t('sync.lotw.errorTitle')}
           description={lotwSyncError}
           isClosable
           onClose={() => setLotwSyncError(null)}
@@ -1293,7 +1279,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           color="danger"
           variant="flat"
           className="w-full mb-4"
-          title="导出失败"
+          title={t('export.errorTitle')}
           description={exportError}
           isClosable
           onClose={() => setExportError(null)}
@@ -1302,7 +1288,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
       {/* 表格 - 固定高度 */}
       <Table
-        aria-label="QSO记录表格"
+        aria-label={t('qso.tableAriaLabel')}
         isHeaderSticky
         bottomContent={bottomContent}
         bottomContentPlacement="outside"
@@ -1331,7 +1317,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           items={qsos}
           loadingContent={<Spinner />}
           loadingState={loadingState}
-          emptyContent={"暂无通联记录"}
+          emptyContent={t('empty')}
         >
           {(qso) => (
             <TableRow key={qso.id}>
@@ -1361,19 +1347,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       >
         <ModalContent>
           <ModalHeader>
-            <h3 className="text-lg font-semibold">编辑 QSO 记录</h3>
+            <h3 className="text-lg font-semibold">{t('editQso.title')}</h3>
           </ModalHeader>
           <ModalBody>
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Input
-                  label="呼号"
+                  label={t('editQso.callsign')}
                   value={editFormData.callsign || ''}
                   onChange={(e) => setEditFormData({ ...editFormData, callsign: e.target.value })}
                   isRequired
                 />
                 <Input
-                  label="网格坐标"
+                  label={t('editQso.grid')}
                   value={editFormData.grid || ''}
                   onChange={(e) => setEditFormData({ ...editFormData, grid: e.target.value })}
                 />
@@ -1381,14 +1367,14 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Input
-                  label="频率 (Hz)"
+                  label={t('editQso.frequency')}
                   type="number"
                   value={editFormData.frequency?.toString() || ''}
                   onChange={(e) => setEditFormData({ ...editFormData, frequency: parseInt(e.target.value) || 0 })}
                   isRequired
                 />
                 <Select
-                  label="模式"
+                  label={t('editQso.mode')}
                   selectedKeys={editFormData.mode ? [editFormData.mode] : []}
                   onSelectionChange={(keys) => {
                     const selected = Array.from(keys as Set<string>)[0];
@@ -1406,12 +1392,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Input
-                  label="发送信号报告"
+                  label={t('editQso.reportSent')}
                   value={editFormData.reportSent || ''}
                   onChange={(e) => setEditFormData({ ...editFormData, reportSent: e.target.value })}
                 />
                 <Input
-                  label="接收信号报告"
+                  label={t('editQso.reportReceived')}
                   value={editFormData.reportReceived || ''}
                   onChange={(e) => setEditFormData({ ...editFormData, reportReceived: e.target.value })}
                 />
@@ -1419,7 +1405,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
               {/* 分隔线 + QSL 确认状态 */}
               <div className="border-t border-default-200 dark:border-default-100 pt-4">
-                <p className="text-sm font-medium text-default-500 mb-3">确认状态</p>
+                <p className="text-sm font-medium text-default-500 mb-3">{t('editQso.confirmStatus')}</p>
                 <div className="grid grid-cols-2 gap-4">
                   {/* LoTW */}
                   <div className="flex items-center justify-between rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
@@ -1433,7 +1419,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                         }
                         color="primary"
                       >
-                        <span className="text-sm">已上传</span>
+                        <span className="text-sm">{t('editQso.uploaded')}</span>
                       </Checkbox>
                       <Checkbox
                         size="sm"
@@ -1443,7 +1429,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                         }
                         color="success"
                       >
-                        <span className="text-sm">已确认</span>
+                        <span className="text-sm">{t('editQso.confirmed')}</span>
                       </Checkbox>
                     </div>
                   </div>
@@ -1459,7 +1445,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                         }
                         color="primary"
                       >
-                        <span className="text-sm">已上传</span>
+                        <span className="text-sm">{t('editQso.uploaded')}</span>
                       </Checkbox>
                       <Checkbox
                         size="sm"
@@ -1469,7 +1455,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                         }
                         color="success"
                       >
-                        <span className="text-sm">已确认</span>
+                        <span className="text-sm">{t('editQso.confirmed')}</span>
                       </Checkbox>
                     </div>
                   </div>
@@ -1477,7 +1463,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               </div>
 
               <Alert color="warning" variant="flat" className="text-sm">
-                修改 QSO 记录可能会影响统计数据的准确性，请谨慎操作。
+                {t('editQso.editWarning')}
               </Alert>
             </div>
           </ModalBody>
@@ -1490,7 +1476,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 setEditFormData({});
               }}
             >
-              取消
+              {t('common:button.cancel')}
             </Button>
             <Button
               color="primary"
@@ -1498,7 +1484,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               isLoading={isEditSaving}
               isDisabled={!editFormData.callsign || !editFormData.frequency}
             >
-              保存
+              {t('common:button.save')}
             </Button>
           </ModalFooter>
         </ModalContent>
@@ -1515,22 +1501,22 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       >
         <ModalContent>
           <ModalHeader>
-            <h3 className="text-lg font-semibold text-danger">删除 QSO 记录</h3>
+            <h3 className="text-lg font-semibold text-danger">{t('deleteQso.title')}</h3>
           </ModalHeader>
           <ModalBody>
             {deletingQSO && (
               <div className="space-y-3">
                 <p className="text-default-600">
-                  确定要删除与 <span className="font-semibold text-danger">{deletingQSO.callsign}</span> 的通联记录吗?
+                  {t('deleteQso.confirm', { callsign: deletingQSO.callsign })}
                 </p>
                 <div className="p-3 bg-default-100 rounded-lg space-y-1">
-                  <p className="text-sm"><span className="font-medium">时间:</span> {formatDateTime(deletingQSO.startTime)}</p>
-                  <p className="text-sm"><span className="font-medium">频率:</span> {formatFrequency(deletingQSO.frequency)}</p>
-                  <p className="text-sm"><span className="font-medium">模式:</span> {deletingQSO.mode}</p>
+                  <p className="text-sm"><span className="font-medium">{t('deleteQso.time')}</span> {formatDateTime(deletingQSO.startTime)}</p>
+                  <p className="text-sm"><span className="font-medium">{t('deleteQso.frequency')}</span> {formatFrequency(deletingQSO.frequency)}</p>
+                  <p className="text-sm"><span className="font-medium">{t('deleteQso.mode')}</span> {deletingQSO.mode}</p>
                 </div>
                 <div className="p-3 bg-danger-50 dark:bg-danger-100/20 border border-danger-200 dark:border-danger-400/30 rounded-lg">
                   <p className="text-danger-700 dark:text-danger-400 text-sm">
-                    ⚠️ 此操作无法撤销,删除后该记录将永久丢失。
+                    {t('deleteQso.warning')}
                   </p>
                 </div>
               </div>
@@ -1544,14 +1530,14 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 setDeletingQSO(null);
               }}
             >
-              取消
+              {t('common:button.cancel')}
             </Button>
             <Button
               color="danger"
               onPress={handleDeleteConfirm}
               isLoading={isDeleting}
             >
-              确认删除
+              {t('deleteQso.confirmDelete')}
             </Button>
           </ModalFooter>
         </ModalContent>

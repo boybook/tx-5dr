@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, createContext, useCont
 import { Tabs, Tab } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faListUl, faMicrophone } from '@fortawesome/free-solid-svg-icons';
+import { useTranslation } from 'react-i18next';
 
 // 创建 Context 用于子组件切换 tab
 interface SplitLayoutContextType {
@@ -32,10 +33,13 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
   defaultLeftWidth = 50,
   minLeftWidth = 20,
   maxLeftWidth = 80,
-  leftLabel = '解码',
-  rightLabel = '呼叫',
+  leftLabel,
+  rightLabel,
   className = ''
 }) => {
+  const { t } = useTranslation('common');
+  const resolvedLeftLabel = leftLabel ?? t('splitLayout.decode');
+  const resolvedRightLabel = rightLabel ?? t('splitLayout.call');
   const [leftWidth, setLeftWidth] = useState(defaultLeftWidth);
   const [isDragging, setIsDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -147,7 +151,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
         {/* 底部 Tabs 导航 */}
         <div className="flex-shrink-0 border-t border-divider bg-content2">
           <Tabs
-            aria-label="页面切换"
+            aria-label={t('splitLayout.pageSwitch')}
             selectedKey={selectedTab}
             onSelectionChange={(key) => setSelectedTab(key as string)}
             variant="light"
@@ -162,7 +166,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
               title={
                 <div className="flex items-center gap-2">
                   <FontAwesomeIcon icon={faListUl} className="text-sm" />
-                  <span>{leftLabel}</span>
+                  <span>{resolvedLeftLabel}</span>
                 </div>
               }
             />
@@ -171,7 +175,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
               title={
                 <div className="flex items-center gap-2">
                   <FontAwesomeIcon icon={faMicrophone} className="text-sm" />
-                  <span>{rightLabel}</span>
+                  <span>{resolvedRightLabel}</span>
                 </div>
               }
             />

@@ -6,12 +6,14 @@ import { useRadioState, useConnection } from '../store/radioStore';
 import { useAuth } from '../store/authStore';
 import { RadioOperator } from './RadioOperator';
 import { hasOperatorPreferences } from '../utils/operatorPreferences';
+import { useTranslation } from 'react-i18next';
 
 interface RadioOperatorListProps {
   onCreateOperator?: () => void; // 创建操作员的回调
 }
 
 export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOperator }) => {
+  const { t } = useTranslation('radio');
   const radio = useRadioState();
   const connection = useConnection();
   const { state: authState } = useAuth();
@@ -53,7 +55,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
             authState.role === 'viewer' || authState.isPublicViewer ? (
               // 仅查看权限
               <div className="cursor-default select-none">
-                <div className="text-xs text-default-400">当前为仅查看权限</div>
+                <div className="text-xs text-default-400">{t('operator.viewOnly')}</div>
               </div>
             ) : authState.operatorIds.length === 0 && (authState.role === 'admin' || authState.role === 'operator') ? (
               // 有操作权限但无操作员，显示创建按钮
@@ -64,29 +66,28 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
                 className="w-full border-2 border-dashed border-default-300 hover:border-default-400 bg-transparent hover:bg-content1 text-default-500 py-3"
               >
                 <FontAwesomeIcon icon={faPlus} className="mr-2" />
-                创建第一个操作员
+                {t('operator.createFirst')}
               </Button>
             ) : hasOperatorPreferences() ? (
               // 有操作权限的用户，客户端偏好设置隐藏了所有操作员
               <div className="cursor-default select-none space-y-3">
                 <div className="text-xs text-default-400">
                   <FontAwesomeIcon icon={faEyeSlash} className="mr-2" />
-                  <span>所有操作员均已隐藏</span>
+                  <span>{t('operator.allHidden')}</span>
                 </div>
               </div>
             ) : (
               // 其他情况（不应发生）
               <div className="cursor-default select-none">
-                <div className="text-xs text-default-400">暂无可用的操作员</div>
+                <div className="text-xs text-default-400">{t('operator.none')}</div>
               </div>
             )
           ) : (
             // 未连接时的提示
             <div className="cursor-default select-none">
-              <div className="text-default-500">请先连接到服务器</div>
+              <div className="text-default-500">{t('operator.connectFirst')}</div>
               <div className="text-xs text-default-400 mt-2">
-                连接: {connection.state.isConnected ? '已连接' : '未连接'} | 
-                服务: {connection.state.radioService ? '已初始化' : '未初始化'}
+                {t('operator.connectStatus', { connected: connection.state.isConnected ? t('connection.connected') : t('connection.disconnected'), service: connection.state.radioService ? t('operator.initialized') : t('operator.notInitialized') })}
               </div>
             </div>
           )}

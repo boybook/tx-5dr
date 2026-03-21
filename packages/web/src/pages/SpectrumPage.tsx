@@ -25,9 +25,9 @@ const SpectrumContent: React.FC = () => {
   return (
     <div className="w-full h-screen overflow-hidden bg-background">
       {showTitlebar && (
-        /* 透明拖拽条：fixed 浮于顶部，不占布局空间
-           外层 pointer-events:none，使左右两侧鼠标事件穿透到下方按钮；
-           仅中间拖拽区域恢复 pointer-events:auto + webkit-app-region:drag */
+        /* Transparent drag bar: fixed at the top, no layout space.
+           outer layer pointer-events:none so mouse events pass through to buttons;
+           only the center drag area restores pointer-events:auto + webkit-app-region:drag */
         <div
           className="fixed top-0 left-0 right-0 z-50 flex"
           style={{ height: 28, pointerEvents: 'none' } as React.CSSProperties}

@@ -1,4 +1,5 @@
 // Schema exports
+export * from './schema/server-message-keys.js';
 export * from './schema/hello.schema.js';
 export * from './schema/audio.schema.js';
 export * from './schema/ft8.schema.js';

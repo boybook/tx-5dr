@@ -10,6 +10,7 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSun, faMoon, faCircleHalfStroke } from '@fortawesome/free-solid-svg-icons';
 import { useTheme, ThemeMode } from '../hooks/useTheme';
+import { useTranslation } from 'react-i18next';
 
 interface ThemeToggleProps {
   variant?: 'button' | 'dropdown';
@@ -17,11 +18,12 @@ interface ThemeToggleProps {
   className?: string;
 }
 
-export const ThemeToggle: React.FC<ThemeToggleProps> = ({ 
-  variant = 'dropdown', 
+export const ThemeToggle: React.FC<ThemeToggleProps> = ({
+  variant = 'dropdown',
   size = 'md',
-  className = '' 
+  className = ''
 }) => {
+  const { t } = useTranslation('common');
   const { theme, themeMode, setThemeMode, toggleTheme } = useTheme();
 
   const getThemeIcon = (mode: ThemeMode) => {
@@ -40,24 +42,24 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
   const _getThemeLabel = (mode: ThemeMode) => {
     switch (mode) {
       case 'light':
-        return '浅色模式';
+        return t('theme.light');
       case 'dark':
-        return '深色模式';
+        return t('theme.dark');
       case 'system':
-        return '跟随系统';
+        return t('theme.system');
     }
   };
 
   if (variant === 'button') {
     return (
-      <Tooltip content={`切换到${theme === 'dark' ? '浅色' : '深色'}模式`}>
+      <Tooltip content={theme === 'dark' ? t('theme.switchToLight') : t('theme.switchToDark')}>
         <Button
           isIconOnly
           variant="light"
           size={size}
           className={className}
           onPress={toggleTheme}
-          aria-label="切换主题"
+          aria-label={t('theme.toggle')}
         >
           {theme === 'dark' ? 
             <FontAwesomeIcon icon={faSun} className="text-default-400" /> : 
@@ -76,13 +78,13 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
           variant="light"
           size={size}
           className={className}
-          aria-label="选择主题"
+          aria-label={t('theme.select')}
         >
           {getThemeIcon(themeMode)}
         </Button>
       </DropdownTrigger>
       <DropdownMenu
-        aria-label="主题选择"
+        aria-label={t('theme.select')}
         selectedKeys={[themeMode]}
         selectionMode="single"
         onSelectionChange={(keys) => {
@@ -95,23 +97,23 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
         <DropdownItem
           key="light"
           startContent={<FontAwesomeIcon icon={faSun} className="text-sm text-default-400" />}
-          description="使用浅色主题"
+          description={t('theme.lightDesc')}
         >
-          浅色模式
+          {t('theme.light')}
         </DropdownItem>
         <DropdownItem
           key="dark"
           startContent={<FontAwesomeIcon icon={faMoon} className="text-sm text-default-400" />}
-          description="使用深色主题"
+          description={t('theme.darkDesc')}
         >
-          深色模式
+          {t('theme.dark')}
         </DropdownItem>
         <DropdownItem
           key="system"
           startContent={<FontAwesomeIcon icon={faCircleHalfStroke} className="text-sm text-default-400" />}
-          description="跟随系统设置"
+          description={t('theme.systemDesc')}
         >
-          跟随系统
+          {t('theme.system')}
         </DropdownItem>
       </DropdownMenu>
     </Dropdown>

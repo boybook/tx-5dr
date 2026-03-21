@@ -1,0 +1,29 @@
+{
+  "severity": {
+    "info": "Info",
+    "warning": "⚠️ Warning",
+    "error": "Error",
+    "critical": "⚠️ Critical Error"
+  },
+  "suggestion": {
+    "label": "Suggestions:"
+  },
+  "hint": {
+    "retryManually": "Please retry the previous operation manually",
+    "tryLater": "Please try again later"
+  },
+  "serverMessage": {
+    "timingAlert": {
+      "title": "Timing Alert",
+      "description": "Operator auto-decision may not complete encoding in time for this TX slot"
+    },
+    "radioConnected": {
+      "title": "Radio Connected",
+      "description": "Radio connection established"
+    },
+    "qsoLogged": {
+      "title": "QSO Logged",
+      "description": ""
+    }
+  }
+}

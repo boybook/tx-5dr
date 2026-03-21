@@ -14,6 +14,8 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlug, faKey, faSync, faCheck, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import type { QRZConfig } from '@tx5dr/contracts';
+import { useTranslation } from 'react-i18next';
+import { formatDateTime } from '../utils/dateFormatting';
 
 export interface QRZSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -27,6 +29,7 @@ interface QRZSettingsProps {
 
 export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
   ({ callsign, onUnsavedChanges }, ref) => {
+    const { t } = useTranslation('logbook');
     const [config, setConfig] = useState<QRZConfig>({
       apiKey: '',
       autoUploadQSO: false,
@@ -62,7 +65,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
           setOriginalConfig(prev => ({ ...prev, ...data }));
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : '加载配置失败');
+        setError(err instanceof Error ? err.message : t('qrzSettings.loadConfigFailed'));
       } finally {
         setLoading(false);
       }
@@ -97,7 +100,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
       if (!config.apiKey) {
         setTestResult({
           success: false,
-          message: '请先填写API Key'
+          message: t('qrzSettings.fillApiKey')
         });
         return;
       }
@@ -120,7 +123,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
       } catch (err) {
         setTestResult({
           success: false,
-          message: err instanceof Error ? err.message : '连接失败'
+          message: err instanceof Error ? err.message : t('qrzSettings.connectFailed')
         });
       } finally {
         setTesting(false);
@@ -136,7 +139,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
         setHasChanges(false);
         onUnsavedChanges?.(false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '保存配置失败');
+        setError(err instanceof Error ? err.message : t('qrzSettings.saveConfigFailed'));
         throw err;
       }
     };
@@ -145,7 +148,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
       return (
         <div className="flex justify-center items-center py-8">
           <Spinner size="md" />
-          <span className="ml-2">加载QRZ.com配置中...</span>
+          <span className="ml-2">{t('qrzSettings.loading')}</span>
         </div>
       );
     }
@@ -153,14 +156,14 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
     return (
       <div className="space-y-6">
         <div>
-          <h3 className="text-lg font-semibold">QRZ.com Logbook 同步设置</h3>
+          <h3 className="text-lg font-semibold">{t('qrzSettings.title')}</h3>
           <p className="text-sm text-default-500 mt-1">
-            将通联日志同步到 QRZ.com Logbook
+            {t('qrzSettings.description')}
           </p>
         </div>
 
         {error && (
-          <Alert color="danger" title="错误" className="mb-4">
+          <Alert color="danger" title={t('qrzSettings.errorTitle')} className="mb-4">
             <p className="font-medium">{error}</p>
           </Alert>
         )}
@@ -170,18 +173,18 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
           <CardHeader>
             <div className="flex items-center gap-2">
               <FontAwesomeIcon icon={faKey} className="text-primary" />
-              <span className="font-medium">API 密钥设置</span>
+              <span className="font-medium">{t('qrzSettings.apiKeySettings')}</span>
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
             <Input
               label="API Key"
-              placeholder="输入QRZ.com API Key"
+              placeholder={t('qrzSettings.apiKeyPlaceholder')}
               value={config.apiKey}
               onChange={(e) => updateConfig('apiKey', e.target.value)}
               isRequired
               type="password"
-              description="在 QRZ.com → My Logbook → Settings 中获取 API Key"
+              description={t('qrzSettings.apiKeyDesc')}
             />
 
             <div className="flex gap-2">
@@ -194,7 +197,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
                 startContent={!testing && <FontAwesomeIcon icon={faPlug} />}
                 className="flex-shrink-0"
               >
-                {testing ? '测试中...' : '测试连接'}
+                {testing ? t('qrzSettings.testing') : t('qrzSettings.testConnection')}
               </Button>
 
               {testResult && !testResult.success && (
@@ -225,11 +228,11 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
             </div>
 
             {testResult?.success && testResult.callsign && (
-              <Alert color="success" title="连接成功">
+              <Alert color="success" title={t('qrzSettings.connectSuccess')}>
                 <div className="space-y-1">
-                  <p>呼号: {testResult.callsign}</p>
+                  <p>{t('qrzSettings.callsign', { callsign: testResult.callsign })}</p>
                   {testResult.logbookCount !== undefined && (
-                    <p>Logbook 共有 {testResult.logbookCount} 条 QSO 记录</p>
+                    <p>{t('qrzSettings.logbookCount', { count: testResult.logbookCount })}</p>
                   )}
                 </div>
               </Alert>
@@ -242,7 +245,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
           <CardHeader>
             <div className="flex items-center gap-2">
               <FontAwesomeIcon icon={faSync} className="text-primary" />
-              <span className="font-medium">同步选项</span>
+              <span className="font-medium">{t('qrzSettings.syncOptions')}</span>
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
@@ -251,19 +254,19 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
               onValueChange={(enabled) => updateConfig('autoUploadQSO', enabled)}
               size="sm"
             >
-              自动上传新QSO
+              {t('qrzSettings.autoUpload')}
             </Switch>
             <p className="text-xs text-default-500 ml-6 -mt-2">
-              成功完成QSO后自动上传到QRZ.com Logbook
+              {t('qrzSettings.autoUploadDesc')}
             </p>
 
             <div className="p-3 bg-primary-50 rounded-lg border border-primary-200">
               <div className="flex items-start gap-2">
                 <FontAwesomeIcon icon={faSync} className="text-primary-600 mt-1" />
                 <div>
-                  <p className="text-sm font-medium text-primary-800">下载与手动同步</p>
+                  <p className="text-sm font-medium text-primary-800">{t('qrzSettings.downloadSyncTitle')}</p>
                   <p className="text-xs text-primary-700 mt-1">
-                    下载和手动同步请在<strong>通联日志页面</strong>操作。
+                    {t('qrzSettings.downloadSyncDesc')}
                   </p>
                 </div>
               </div>
@@ -276,7 +279,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
           <Card>
             <CardBody>
               <div className="text-sm text-default-600">
-                <p>最后同步时间：{new Date(config.lastSyncTime).toLocaleString('zh-CN', { timeZone: 'UTC' })} UTC</p>
+                <p>{t('qrzSettings.lastSync', { time: formatDateTime(config.lastSyncTime) })}</p>
               </div>
             </CardBody>
           </Card>
@@ -284,10 +287,10 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
 
         {/* 使用说明 */}
         <div className="p-4 bg-default-50 rounded-lg">
-          <h5 className="text-sm font-medium text-default-700 mb-2">使用说明</h5>
+          <h5 className="text-sm font-medium text-default-700 mb-2">{t('qrzSettings.usageTitle')}</h5>
           <ul className="text-xs text-default-600 space-y-1">
-            <li>• QRZ.com Logbook API 需要 XML Logbook Data 订阅</li>
-            <li>• 上传的 QSO 使用 ADIF 格式</li>
+            <li>• {t('qrzSettings.usage1')}</li>
+            <li>• {t('qrzSettings.usage2')}</li>
           </ul>
         </div>
       </div>

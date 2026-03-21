@@ -407,6 +407,29 @@ private commandHandlers = {
 - 解码：工作池配置，内存管理，异常重启
 - WebSocket：始终同步更新contracts、server、core三处代码
 
+---
+
+## 日志规范
+
+**高频路径禁止裸 `console.log`，使用 `createLogger`。**
+
+```typescript
+import { createLogger } from '../utils/logger.js';
+const logger = createLogger('MyModule');
+// info/debug → 生产静默；warn/error → 始终输出
+logger.debug('频率轮询', data);
+logger.warn('连接异常', err);
+```
+
+- `LOG_LEVEL=debug|info|warn|error`（production 默认 warn，development 默认 info）
+- 高频路径（WS 命令接收/广播循环、音频帧写入、频率轮询、操作员状态广播、编码回调）必须用 `logger.debug`
+- `catch` 块、连接/引擎/电台错误事件保留 `console.error/warn`（生产可见）
+- `broadcastTextMessage` 必须带 `key`（`ServerMessageKey` 枚举），AUTH/ERROR 消息用英文 code 不发中文
+
+```bash
+node scripts/check-i18n.mjs   # 检查合规（含后端高频路径 console.log 提示）
+```
+
 ## 运维
 
 ### 环境变量

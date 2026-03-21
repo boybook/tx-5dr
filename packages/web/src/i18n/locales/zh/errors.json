@@ -1,0 +1,120 @@
+{
+  "severity": {
+    "critical": "⚠️ 严重错误",
+    "error": "错误",
+    "warning": "⚠️ 警告",
+    "info": "提示"
+  },
+  "copyLabel": {
+    "errorCode": "错误代码",
+    "severity": "严重程度",
+    "message": "错误信息",
+    "suggestions": "建议"
+  },
+  "code": {
+    "CONNECTION_FAILED": {
+      "userMessage": "无法连接到电台",
+      "suggestions": ["检查电台是否开机", "检查网络连接", "检查配置是否正确", "尝试重启电台"]
+    },
+    "CONNECTION_TIMEOUT": {
+      "userMessage": "连接超时",
+      "suggestions": ["检查网络是否正常", "确认电台地址和端口", "增大连接超时时间"]
+    },
+    "CONNECTION_LOST": {
+      "userMessage": "与电台的连接已断开",
+      "suggestions": ["检查电台是否仍在运行", "检查网络连接", "系统将自动尝试重连"]
+    },
+    "RECONNECT_FAILED": {
+      "userMessage": "重新连接失败",
+      "suggestions": ["检查电台是否正常工作", "检查网络连接", "稍后手动重试"]
+    },
+    "RECONNECT_MAX_ATTEMPTS": {
+      "userMessage": "无法重新连接到电台",
+      "suggestions": ["检查电台是否正常工作", "检查网络连接", "尝试手动重启系统", "联系技术支持"]
+    },
+    "INVALID_CONFIG": {
+      "userMessage": "配置无效",
+      "suggestions": ["检查配置参数是否正确", "前往设置页面重新配置", "恢复默认配置"]
+    },
+    "MISSING_CONFIG": {
+      "userMessage": "缺少必要配置",
+      "suggestions": ["前往设置页面完成配置", "检查所有必填项"]
+    },
+    "UNSUPPORTED_MODE": {
+      "userMessage": "不支持的工作模式",
+      "suggestions": ["检查电台是否支持该模式", "尝试切换到其他模式"]
+    },
+    "DEVICE_NOT_FOUND": {
+      "userMessage": "未找到设备",
+      "suggestions": ["检查设备是否已连接", "刷新设备列表", "选择其他可用设备"]
+    },
+    "DEVICE_BUSY": {
+      "userMessage": "设备正忙",
+      "suggestions": ["关闭其他使用该设备的程序", "稍后重试", "重启设备"]
+    },
+    "DEVICE_ERROR": {
+      "userMessage": "设备错误",
+      "suggestions": ["检查设备连接", "重启设备", "重新安装驱动程序"]
+    },
+    "AUDIO_DEVICE_ERROR": {
+      "userMessage": "音频设备操作失败",
+      "suggestions": ["检查音频设备是否可用", "尝试选择其他设备", "重启应用程序"]
+    },
+    "INVALID_OPERATION": {
+      "userMessage": "无效操作",
+      "suggestions": ["当前状态不允许此操作", "请稍后重试"]
+    },
+    "OPERATION_TIMEOUT": {
+      "userMessage": "操作超时",
+      "suggestions": ["检查系统是否正常运行", "稍后重试"]
+    },
+    "OPERATION_CANCELLED": {
+      "userMessage": "操作已取消",
+      "suggestions": []
+    },
+    "PTT_ACTIVATION_FAILED": {
+      "userMessage": "无法激活发射（PTT）",
+      "suggestions": ["检查电台连接", "确认电台未被其他程序占用", "检查 PTT 配置"]
+    },
+    "INVALID_STATE": {
+      "userMessage": "当前状态不允许执行此操作",
+      "suggestions": ["等待当前操作完成后重试"]
+    },
+    "NOT_INITIALIZED": {
+      "userMessage": "系统尚未初始化",
+      "suggestions": ["等待系统启动完成", "如果长时间等待，请重启应用"]
+    },
+    "ALREADY_RUNNING": {
+      "userMessage": "系统已在运行中",
+      "suggestions": []
+    },
+    "NOT_RUNNING": {
+      "userMessage": "系统未在运行",
+      "suggestions": ["先启动系统再执行此操作"]
+    },
+    "RESOURCE_UNAVAILABLE": {
+      "userMessage": "所需资源不可用",
+      "suggestions": ["检查系统资源是否充足", "关闭其他占用资源的程序"]
+    },
+    "RESOURCE_CLEANUP_FAILED": {
+      "userMessage": "资源清理失败",
+      "suggestions": ["重启应用程序"]
+    },
+    "NETWORK_ERROR": {
+      "userMessage": "网络错误",
+      "suggestions": ["检查网络连接", "检查防火墙设置", "确认服务器地址正确"]
+    },
+    "UDP_ERROR": {
+      "userMessage": "UDP 通信错误",
+      "suggestions": ["检查 UDP 端口是否被占用", "检查防火墙是否允许 UDP 通信"]
+    },
+    "WEBSOCKET_ERROR": {
+      "userMessage": "WebSocket 连接错误",
+      "suggestions": ["检查网络连接", "刷新页面重试"]
+    },
+    "UNKNOWN_ERROR": {
+      "userMessage": "发生未知错误",
+      "suggestions": ["查看错误详情", "重试操作", "如果问题持续，请联系技术支持"]
+    }
+  }
+}

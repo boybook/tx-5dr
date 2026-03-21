@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Modal,
   ModalContent,
@@ -25,14 +26,14 @@ interface ProfileSetupOverlayProps {
 
 type RadioType = 'none' | 'network' | 'serial' | 'icom-wlan';
 
-const RADIO_TYPE_OPTIONS: { type: RadioType; icon: typeof faWifi; title: string; description: string }[] = [
-  { type: 'none', icon: faBan, title: '纯监听', description: '不连接电台，仅进行 FT8 解码' },
-  { type: 'icom-wlan', icon: faWifi, title: 'ICOM WLAN', description: '通过 Wi-Fi 连接 ICOM 电台' },
-  { type: 'network', icon: faSatelliteDish, title: '网络 RigCtrl', description: '通过网络连接 rigctld' },
-  { type: 'serial', icon: faPlug, title: '串口直连', description: '通过串口线连接电台' },
-];
-
 export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
+  const { t } = useTranslation();
+  const RADIO_TYPE_OPTIONS = useMemo(() => [
+    { type: 'none' as RadioType, icon: faBan, title: t('settings:radioType.none'), description: t('settings:radioType.noneDesc') },
+    { type: 'icom-wlan' as RadioType, icon: faWifi, title: t('settings:radioType.icomWlan'), description: t('settings:radioType.icomWlanDesc') },
+    { type: 'network' as RadioType, icon: faSatelliteDish, title: t('settings:radioType.network'), description: t('settings:radioType.networkDesc') },
+    { type: 'serial' as RadioType, icon: faPlug, title: t('settings:radioType.serial'), description: t('settings:radioType.serialDesc') },
+  ], [t]);
   const [step, setStep] = useState(0); // 0=选类型, 1=填配置, 2=选音频, 3=命名
   const [selectedType, setSelectedType] = useState<RadioType | null>(null);
   const [radioConfig, setRadioConfig] = useState<HamlibConfig>({ type: 'none' });
@@ -99,18 +100,18 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
         audio: audioConfig,
       });
       // 创建后立即激活
-      if (!result.profile) throw new Error('创建 Profile 返回数据异常');
+      if (!result.profile) throw new Error('Profile creation returned no data');
       await api.activateProfile(result.profile.id);
       addToast({
-        title: `Profile「${name}」已创建并激活`,
-        description: '现在可以开始使用了',
+        title: t('settings:profileSetup.created', { name }),
+        description: t('settings:profileSetup.readyToUse'),
         color: 'success',
         timeout: 4000
       });
     } catch (error) {
       addToast({
-        title: '创建失败',
-        description: error instanceof Error ? error.message : '请重试',
+        title: t('settings:profileSetup.createFailed'),
+        description: error instanceof Error ? error.message : t('common:action.retry'),
         color: 'danger',
         timeout: 5000
       });
@@ -122,17 +123,17 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const getDefaultName = () => {
     switch (selectedType) {
       case 'icom-wlan': return 'ICOM WLAN';
-      case 'network': return '网络 RigCtrl';
-      case 'serial': return '串口电台';
-      case 'none': return '纯监听';
-      default: return '我的 Profile';
+      case 'network': return t('settings:radioType.network');
+      case 'serial': return t('settings:radioType.serial');
+      case 'none': return t('settings:radioType.none');
+      default: return t('settings:profileSetup.myProfile');
     }
   };
 
   // 渲染步骤0：选择类型
   const renderStep0 = () => (
     <div className="space-y-4">
-      <p className="text-default-600">请选择您的电台连接方式：</p>
+      <p className="text-default-600">{t('settings:profileSetup.selectTypePrompt')}</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {RADIO_TYPE_OPTIONS.map(option => (
           <Card
@@ -187,21 +188,21 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   // 渲染步骤3：命名
   const renderStep3 = () => (
     <div className="space-y-4 py-4">
-      <p className="text-default-600">为这个配置起一个名称，方便日后识别和切换：</p>
+      <p className="text-default-600">{t('settings:profileSetup.namePrompt')}</p>
       <Input
-        label="Profile 名称"
+        label={t('settings:profileSetup.nameLabel')}
         placeholder={getDefaultName()}
         value={profileName}
         onChange={e => setProfileName(e.target.value)}
         size="lg"
       />
       <div className="text-xs text-default-400 bg-default-50 p-3 rounded-lg">
-        <p>留空将使用默认名称：{getDefaultName()}</p>
+        <p>{t('settings:profileSetup.defaultNameHint', { name: getDefaultName() })}</p>
       </div>
     </div>
   );
 
-  const stepTitles = ['选择电台类型', '配置电台', '配置音频设备', '命名 Profile'];
+  const stepTitles = [t('settings:profileSetup.step0'), t('settings:profileSetup.step1'), t('settings:profileSetup.step2'), t('settings:profileSetup.step3')];
 
   return (
     <Modal
@@ -221,9 +222,9 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
       <ModalContent>
         <ModalHeader>
           <div className="w-full">
-            <h2 className="text-xl font-bold">欢迎使用 TX-5DR</h2>
+            <h2 className="text-xl font-bold">{t('settings:profileSetup.welcome')}</h2>
             <p className="text-sm text-default-500 font-normal mt-1">
-              {step === 0 ? '首先，让我们配置您的电台' : stepTitles[step]}
+              {step === 0 ? t('settings:profileSetup.welcomeDesc') : stepTitles[step]}
             </p>
             <Progress
               value={progressValue}
@@ -249,7 +250,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
                 onPress={handleBack}
                 startContent={<FontAwesomeIcon icon={faArrowLeft} />}
               >
-                上一步
+                {t('settings:profileSetup.back')}
               </Button>
               <div className="flex gap-2">
                 {step < 3 ? (
@@ -258,7 +259,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
                     onPress={handleNext}
                     endContent={<FontAwesomeIcon icon={faArrowRight} />}
                   >
-                    下一步
+                    {t('settings:profileSetup.next')}
                   </Button>
                 ) : (
                   <Button
@@ -267,7 +268,7 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
                     isLoading={isCreating}
                     startContent={!isCreating ? <FontAwesomeIcon icon={faCheck} /> : undefined}
                   >
-                    完成
+                    {t('settings:profileSetup.finish')}
                   </Button>
                 )}
               </div>

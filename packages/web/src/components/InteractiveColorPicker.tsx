@@ -9,6 +9,7 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPalette } from '@fortawesome/free-solid-svg-icons';
 import 'react-color-palette/css';
+import { useTranslation } from 'react-i18next';
 
 interface InteractiveColorPickerProps {
   value: string;
@@ -21,6 +22,7 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
   onChange,
   disabled = false,
 }) => {
+  const { t } = useTranslation('common');
   const [color, setColor] = useColor(value);
   const [isOpen, setIsOpen] = useState(false);
 
@@ -51,13 +53,13 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
             <FontAwesomeIcon icon={faPalette} className="text-default-500 text-xs" />
           }
         >
-          <span className="text-xs text-default-700">选择颜色</span>
+          <span className="text-xs text-default-700">{t('colorPicker.selectColor')}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="p-4">
         <div className="flex flex-col gap-3">
           <div className="text-sm font-medium text-default-900">
-            选择颜色
+            {t('colorPicker.selectColor')}
           </div>
           <div
             className="react-color-palette-container"
@@ -77,14 +79,14 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
           </div>
           <div className="flex justify-between items-center">
             <div className="text-xs text-default-500">
-              当前颜色: {value}
+              {t('colorPicker.currentColor', { value })}
             </div>
             <Button
               size="sm"
               color="primary"
               onPress={() => setIsOpen(false)}
             >
-              确定
+              {t('button.confirm')}
             </Button>
           </div>
         </div>

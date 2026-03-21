@@ -338,7 +338,7 @@ export class WSServer extends WSMessageHandler {
       try {
         const title = data?.title || '⚠️ 时序告警';
         const text = data?.text || '操作员自动决策可能赶不上此发射时隙的编码';
-        this.broadcastTextMessage(title, text);
+        this.broadcastTextMessage(title, text, undefined, undefined, 'timingAlert');
       } catch {}
     });
 
@@ -384,7 +384,6 @@ export class WSServer extends WSMessageHandler {
 
     // 监听操作员列表更新事件
     this.digitalRadioEngine.on('operatorsList' as any, (data: { operators: any[] }) => {
-      console.log('📻 [WSServer] 收到operatorsList事件，向各客户端发送过滤后的操作员列表');
       
       const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
       activeConnections.forEach(connection => {
@@ -392,7 +391,6 @@ export class WSServer extends WSMessageHandler {
         connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
       });
       
-      console.log(`📤 [WSServer] 已向 ${activeConnections.length} 个已握手的客户端发送过滤后的操作员列表`);
     });
 
     // 监听音量变化事件
@@ -417,7 +415,7 @@ export class WSServer extends WSMessageHandler {
         const gridPart = qso.grid ? ` ${qso.grid}` : '';
         const title = 'QSO已记录';
         const text = `${qso.callsign}${gridPart} • ${mhz} MHz • ${qso.mode}`;
-        this.broadcastOperatorTextMessage(data.operatorId, title, text);
+        this.broadcastOperatorTextMessage(data.operatorId, title, text, 'success', 3000, 'qsoLogged');
       } catch (e) {
         console.warn('⚠️ [WSServer] 发送QSO记录Toast失败:', e);
       }
@@ -425,7 +423,6 @@ export class WSServer extends WSMessageHandler {
 
     // 监听日志本更新事件
     this.digitalRadioEngine.on('logbookUpdated' as any, (data: { logBookId: string; statistics: any }) => {
-      console.log(`📡 [WSServer] 收到日志本更新事件:`, data.logBookId);
       this.broadcastLogbookUpdated(data);
     });
 
@@ -440,7 +437,8 @@ export class WSServer extends WSMessageHandler {
           '电台已连接',
           data.reason || '电台连接成功',
           'success',
-          3000
+          3000,
+          'radioConnected'
         );
       }
     });
@@ -527,7 +525,6 @@ export class WSServer extends WSMessageHandler {
    * 处理客户端命令（含权限检查）
    */
   private async handleClientCommand(connectionId: string, message: { type: string; data: unknown }): Promise<void> {
-    console.log(`📥 [WSServer] 收到客户端命令: ${message.type}, 连接: ${connectionId}`);
 
     const connection = this.getConnection(connectionId);
     if (!connection) return;
@@ -545,7 +542,7 @@ export class WSServer extends WSMessageHandler {
     const requiredRole = WSServer.COMMAND_ROLES[msgType];
     if (requiredRole && !connection.hasMinRole(requiredRole)) {
       connection.send(WSMessageType.ERROR, {
-        message: '权限不足',
+        message: 'insufficient_permission',
         code: 'FORBIDDEN',
         details: { command: message.type, requiredRole },
       });
@@ -558,7 +555,7 @@ export class WSServer extends WSMessageHandler {
       const operatorId = data?.operatorId;
       if (operatorId && !connection.hasOperatorAccess(operatorId)) {
         connection.send(WSMessageType.ERROR, {
-          message: '无该操作员的访问权限',
+          message: 'no_operator_access',
           code: 'FORBIDDEN',
           details: { operatorId },
         });
@@ -689,7 +686,6 @@ export class WSServer extends WSMessageHandler {
         connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
       });
 
-      console.log(`📤 [WSServer] 已向 ${activeConnections.length} 个已握手的客户端发送过滤后的操作员列表`);
     } catch (error) {
       this.handleCommandError(error, 'getOperators');
     }
@@ -975,14 +971,18 @@ export class WSServer extends WSMessageHandler {
     title: string,
     text: string,
     color?: 'success' | 'warning' | 'danger' | 'default',
-    timeout?: number | null
+    timeout?: number | null,
+    key?: string,
+    params?: Record<string, string>
   ): void {
     console.log(`📡 [WSServer] 广播文本消息: ${title} - ${text} (color=${color}, timeout=${timeout})`);
     this.broadcast(WSMessageType.TEXT_MESSAGE, {
       title,
       text,
       color,
-      timeout
+      timeout,
+      key,
+      params
     });
   }
 
@@ -999,7 +999,9 @@ export class WSServer extends WSMessageHandler {
     title: string,
     text: string,
     color?: 'success' | 'warning' | 'danger' | 'default',
-    timeout?: number | null
+    timeout?: number | null,
+    key?: string,
+    params?: Record<string, string>
   ): void {
     const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
     const targets = activeConnections.filter(conn => conn.isOperatorEnabled(operatorId));
@@ -1008,7 +1010,9 @@ export class WSServer extends WSMessageHandler {
         title,
         text,
         color,
-        timeout
+        timeout,
+        key,
+        params
       });
     });
     console.log(`📡 [WSServer] 向 ${targets.length} 个启用操作员 ${operatorId} 的客户端发送文本消息: ${title} - ${text} (color=${color}, timeout=${timeout})`);
@@ -1405,11 +1409,7 @@ export class WSServer extends WSMessageHandler {
         return; // 没有客户端连接，跳过广播
       }
 
-      // 每秒输出一次日志
       audioDataCount++;
-      if (audioDataCount % 20 === 0) { // 50ms推送一次，20次=1秒
-        console.log(`📤 [WSServer] 向${clientIds.length}个客户端广播音频数据`);
-      }
 
       // 1. 广播元数据到所有控制WebSocket（JSON）
       this.broadcast(WSMessageType.AUDIO_MONITOR_DATA, {
@@ -1527,7 +1527,7 @@ export class WSServer extends WSMessageHandler {
 
     const { jwt } = data;
     if (!jwt) {
-      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '缺少 JWT' });
+      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'missing_jwt' });
       return;
     }
 
@@ -1542,14 +1542,14 @@ export class WSServer extends WSMessageHandler {
 
       // 检查引用的 token 是否仍有效
       if (!authManager.isTokenStillValid(decoded.tokenId)) {
-        connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '令牌已被撤销或过期' });
+        connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'token_revoked_or_expired' });
         return;
       }
 
       // 获取最新权限
       const perms = authManager.getTokenCurrentPermissions(decoded.tokenId);
       if (!perms) {
-        connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '令牌无效' });
+        connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'token_invalid' });
         return;
       }
 
@@ -1580,7 +1580,7 @@ export class WSServer extends WSMessageHandler {
       console.log(`✅ [WSServer] 连接 ${connectionId} 认证成功: ${label} (${perms.role})`);
     } catch (error) {
       console.error(`❌ [WSServer] 连接 ${connectionId} JWT 验证失败:`, error);
-      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'JWT 无效或已过期' });
+      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'jwt_invalid_or_expired' });
     }
   }
 
@@ -1593,7 +1593,7 @@ export class WSServer extends WSMessageHandler {
 
     const authManager = AuthManager.getInstance();
     if (!authManager.isPublicViewingAllowed()) {
-      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: '不允许公开查看' });
+      connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'public_view_not_allowed' });
       connection.close();
       return;
     }

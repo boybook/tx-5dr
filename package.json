@@ -28,6 +28,7 @@
     "build:package": "yarn build && yarn package",
     "build:make": "yarn build && yarn make",
     "clean": "rm -rf out/ && find packages -name dist -type d -exec rm -rf {} + || true",
+    "check:i18n": "node scripts/check-i18n.mjs",
     "docker:build": "scripts/docker-quick-build.sh",
     "docker:build-multi": "scripts/build-docker.sh",
     "docker:build-and-push": "scripts/build-docker.sh boybook tx-5dr latest true"

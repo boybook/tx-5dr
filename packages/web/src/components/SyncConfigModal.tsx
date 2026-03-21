@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Modal,
   ModalContent,
@@ -20,6 +21,7 @@ interface SyncConfigModalProps {
 }
 
 export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved }: SyncConfigModalProps) {
+  const { t } = useTranslation('settings');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const logbookSyncSettingsRef = useRef<LogbookSyncSettingsRef | null>(null);
@@ -83,7 +85,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
       >
         <ModalContent>
           <ModalHeader>
-            <h2 className="text-xl font-bold">{callsign} 同步配置</h2>
+            <h2 className="text-xl font-bold">{t('sync.title', { callsign })}</h2>
           </ModalHeader>
 
           <ModalBody>
@@ -99,7 +101,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
             <div className="flex justify-between items-center w-full">
               <div className="text-sm text-default-400">
                 {hasUnsavedChanges && (
-                  <span className="text-warning-600">● 有未保存的更改</span>
+                  <span className="text-warning-600">{t('hasUnsavedChanges')}</span>
                 )}
               </div>
               <div className="flex gap-3">
@@ -107,7 +109,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
                   variant="flat"
                   onPress={handleClose}
                 >
-                  取消
+                  {t('common:button.cancel')}
                 </Button>
                 <Button
                   color="primary"
@@ -115,7 +117,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
                   isDisabled={!hasUnsavedChanges}
                   startContent={<FontAwesomeIcon icon={faSave} />}
                 >
-                  保存
+                  {t('common:button.save')}
                 </Button>
               </div>
             </div>
@@ -133,11 +135,11 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
       >
         <ModalContent>
           <ModalHeader>
-            <h3 className="text-lg font-semibold">未保存的更改</h3>
+            <h3 className="text-lg font-semibold">{t('confirmDialog.title')}</h3>
           </ModalHeader>
           <ModalBody>
             <p className="text-default-600">
-              您有未保存的设置更改。您希望保存这些更改吗？
+              {t('confirmDialog.message')}
             </p>
           </ModalBody>
           <ModalFooter>
@@ -145,20 +147,20 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
               variant="flat"
               onPress={handleConfirmCancel}
             >
-              取消
+              {t('common:button.cancel')}
             </Button>
             <Button
               color="danger"
               variant="flat"
               onPress={handleConfirmDiscard}
             >
-              不保存
+              {t('confirmDialog.discard')}
             </Button>
             <Button
               color="primary"
               onPress={handleConfirmSave}
             >
-              保存
+              {t('common:button.save')}
             </Button>
           </ModalFooter>
         </ModalContent>

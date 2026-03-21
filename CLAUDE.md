@@ -128,3 +128,36 @@ DigitalRadioEngine (Facade)
 1. 各包有专门 CLAUDE.md，修改时参考对应文档
 2. 新功能: contracts 定义 Schema → server 实现 → web 集成
 3. 提交前: `yarn lint && yarn build`
+
+---
+
+## i18n 规范
+
+**前端所有面向用户的中文字符串禁止硬编码，必须通过翻译系统输出。**
+
+```bash
+# 修改前端代码后运行，AI 也应在完成前端修改后执行
+node scripts/check-i18n.mjs
+```
+
+- React 组件：`useTranslation()` → `t('namespace:key')`
+- 非组件文件（store/utils）：`import i18n from '../i18n'` → `i18n.t('...')`
+- 模块级常量含中文：改为 `getXxx(t)` 工厂函数 + `useMemo`
+- 动态字符串：`t('key', { name })` + 语言文件 `"key": "...{{name}}..."`
+- 3 个 Vite 入口（main/spectrum/logbook）首行均须 `import './i18n/index'`
+- 语言文件：`packages/web/src/i18n/locales/{zh,en}/`（7 个命名空间）
+- 后端 `broadcastTextMessage` 必须传 `key` 参数（`ServerMessageKey` 枚举），AUTH_RESULT/ERROR 消息 error 字段用英文 code
+
+## 后端日志规范
+
+**高频路径禁止裸 `console.log`，使用 `createLogger`。**
+
+```typescript
+import { createLogger } from '../utils/logger.js';
+const logger = createLogger('MyModule');
+logger.debug('...'); // 生产静默；logger.warn/error 始终输出
+```
+
+- `LOG_LEVEL=debug|info|warn|error`（默认：production=warn，development=info）
+- 以下高频路径必须用 `logger.debug`：WSServer 命令接收/广播循环、音频帧写入循环、频率轮询、操作员状态广播、编码完成回调
+- `catch` 块、连接事件、引擎启停保留 `console.error/warn`（生产可见）

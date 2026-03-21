@@ -7,12 +7,14 @@ import type { OperatorStatus } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { openLogbookWindow } from '../utils/windowManager';
 import { addToast } from '@heroui/toast';
+import { useTranslation } from 'react-i18next';
 
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
 }
 
 export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operatorStatus }) => {
+  const { t } = useTranslation('radio');
   const connection = useConnection();
   const radio = useRadioState();
   const slotPacks = useSlotPacks();
@@ -333,8 +335,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     const mode = radio.state.currentMode;
     if (!mode) {
       addToast({
-        title: '无法选择频率',
-        description: '当前未获取到模式信息，请稍后重试。',
+        title: t('operator.cannotPickFreq'),
+        description: t('operator.cannotPickFreqDesc'),
         color: 'warning'
       });
       return;
@@ -351,8 +353,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
     if (candidates.length === 0) {
       addToast({
-        title: '未找到可用时隙',
-        description: '没有与当前发射周期类型一致的解码数据。请先取消发射，等待接收到该周期类型的通联消息后再尝试。',
+        title: t('operator.noSlot'),
+        description: t('operator.noSlotDesc'),
         color: 'warning'
       });
       return;
@@ -375,8 +377,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
     if (!Number.isFinite(midFreq)) {
       addToast({
-        title: '计算失败',
-        description: '无法计算空闲频率，请稍后重试。',
+        title: t('operator.calcFailed'),
+        description: t('operator.calcFailedDesc'),
         color: 'danger'
       });
       return;
@@ -384,7 +386,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
     handleContextUpdate('frequency', midFreq);
     addToast({
-      title: '已选择空闲频率',
+      title: t('operator.freqSelected'),
       description: `${midFreq} Hz`,
       color: 'success'
     });
@@ -435,7 +437,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               if (!operatorStatus.cycleInfo) {
                 return (
                   <div className="text-foreground opacity-65 font-bold text-lg">
-                    监听中...
+                    {t('operator.listening')}
                   </div>
                 );
               }
@@ -445,11 +447,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
               return isActuallyTransmitting ? (
                 <div className="font-bold font-mono text-lg text-danger">
-                  {getCurrentTransmissionContent() || '准备发射...'}
+                  {getCurrentTransmissionContent() || t('operator.preparingTx')}
                 </div>
               ) : (
                 <div className="text-foreground opacity-65 font-bold font-mono text-lg">
-                  监听中...
+                  {t('operator.listening')}
                 </div>
               );
             })()}
@@ -466,12 +468,12 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 logBookId: operatorStatus.context.myCall
               })}
               className="h-8 w-8 min-w-8"
-              title="查看通联日志"
-              aria-label="查看通联日志"
+              title={t('operator.viewLog')}
+              aria-label={t('operator.viewLog')}
             >
               <FontAwesomeIcon icon={faBook} className="text-default-600" />
             </Button>
-            <span className="text-sm text-default-600">发射</span>
+            <span className="text-sm text-default-600">{t('control.ptt')}</span>
             <Popover
               isOpen={isForceStopPopoverOpen}
               onOpenChange={setIsForceStopPopoverOpen}
@@ -495,7 +497,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   size="sm"
                   color="danger"
                   isDisabled={!connection.state.isConnected}
-                  aria-label="切换发射状态"
+                  aria-label={t('operator.toggleTx')}
                 />
               </PopoverTrigger>
               <PopoverContent>
@@ -506,7 +508,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     onPress={handleForceStop}
                     fullWidth
                   >
-                    立即停止发射
+                    {t('operator.forceStop')}
                   </Button>
                 </div>
               </PopoverContent>
@@ -538,13 +540,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         {/* 第一行 - 发射周期和发射槽位选择 */}
         <div className="flex gap-2 -my-1">
           <div className="flex items-center gap-0">
-            <span className="text-default-500 text-sm">发射周期:</span>
+            <span className="text-default-500 text-sm">{t('operator.txCycle')}:</span>
             <Button
               size="sm"
               variant="light"
                               className="h-auto p-1 min-w-0 bg-transparent hover:bg-content2 px-2 rounded-md"
               isDisabled={!connection.state.isConnected}
-              aria-label="切换发射周期"
+              aria-label={t('operator.toggleTxCycle')}
               onPress={() => {
                 // 获取当前本地设置的发射周期
                 const currentTransmitCycles = localTransmitCycles;
@@ -580,7 +582,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     if (mode?.name === 'FT8') {
                       displayText = "00/30";
                     } else {
-                      displayText = "偶数周期";
+                      displayText = t('operator.evenCycle');
                     }
                     dotColor = "#5EC56F"; // 绿色
                   } else if (transmitCycles.includes(1) && !transmitCycles.includes(0)) {
@@ -588,7 +590,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     if (mode?.name === 'FT8') {
                       displayText = "15/45";
                     } else {
-                      displayText = "奇数周期";
+                      displayText = t('operator.oddCycle');
                     }
                     dotColor = "#FFCD94"; // 黄色
                   } else {
@@ -596,7 +598,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     if (mode?.name === 'FT8') {
                       displayText = "00/30";
                     } else {
-                      displayText = "偶数周期";
+                      displayText = t('operator.evenCycle');
                     }
                     dotColor = "#5EC56F";
                   }
@@ -639,7 +641,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 popoverContent: "min-w-[260px]",
               }}
               isDisabled={!connection.state.isConnected}
-              aria-label="选择当前时隙"
+              aria-label={t('operator.selectSlot')}
               renderValue={(items) => {
                 const item = items[0];
                 if (!item || !operatorStatus.slots) return String(item?.key || 'TX6');
@@ -663,7 +665,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
             {/* 重置按钮 - 仅在非TX6状态下显示 */}
             {operatorStatus.currentSlot !== 'TX6' && (
-              <Tooltip content="重置到CQ" placement="top" offset={6}>
+              <Tooltip content={t('operator.resetToCQ')} placement="top" offset={6}>
                 <Button
                   size="sm"
                   variant="light"
@@ -691,7 +693,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     }
                   }}
                   className="h-auto p-2 min-w-0 w-auto"
-                  aria-label="重置到CQ"
+                  aria-label={t('operator.resetToCQ')}
                   isDisabled={!connection.state.isConnected}
                 >
                   <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
@@ -706,7 +708,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           <Input
             startContent={
               <div className="flex items-center">
-                <span className="text-sm text-default-500 whitespace-nowrap">目标</span>
+                <span className="text-sm text-default-500 whitespace-nowrap">{t('operator.target')}</span>
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
             }
@@ -714,15 +716,15 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             onChange={(e) => handleContextUpdate('targetCall', e.target.value)}
             size="sm"
             variant="flat"
-            placeholder="暂无"
+            placeholder={t('common:status.none')}
             isDisabled={!connection.state.isConnected}
             className="flex-1"
-            aria-label="目标呼号"
+            aria-label={t('operator.targetCallsign')}
           />
           <Input
             startContent={
               <div className="flex items-center">
-                <span className="text-sm text-default-500 whitespace-nowrap">报告</span>
+                <span className="text-sm text-default-500 whitespace-nowrap">{t('operator.report')}</span>
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
             }
@@ -740,17 +742,17 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             placeholder="0"
             isDisabled={!connection.state.isConnected}
             className="flex-1"
-            aria-label="发送报告"
+            aria-label={t('operator.txReport')}
           />
           <Input
             startContent={
               <div className="flex items-center">
-                <span className="text-sm text-default-500 whitespace-nowrap">频率</span>
+                <span className="text-sm text-default-500 whitespace-nowrap">{t('control.frequency')}</span>
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
             }
             endContent={
-              <Tooltip content="自动选择空闲频率" placement="top" offset={6}>
+              <Tooltip content={t('operator.autoPickFreq')} placement="top" offset={6}>
                 <Button
                   size="sm"
                   variant="light"
@@ -759,7 +761,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   className="min-w-0 h-6 w-6 text-default-400 hover:text-foreground"
                   onPress={pickIdleFrequency}
                   isDisabled={!connection.state.isConnected}
-                  aria-label="自动选择空闲频率"
+                  aria-label={t('operator.autoFrequency')}
                 >
                   <FontAwesomeIcon icon={faWandMagicSparkles} />
                 </Button>
@@ -772,7 +774,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             variant="flat"
             isDisabled={!connection.state.isConnected}
             className="flex-1"
-            aria-label="频率"
+            aria-label={t('control.frequency')}
           />
           
           {/* 展开/收起按钮 */}
@@ -784,7 +786,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             style={{
               transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
             }}
-            aria-label={isSlotContentExpanded ? "收起时隙内容" : "展开时隙内容"}
+            aria-label={isSlotContentExpanded ? t('operator.collapse') : t('operator.expand')}
             startContent={
               <span 
                 className={`transition-transform duration-300 ${isSlotContentExpanded ? 'rotate-180' : 'rotate-0'}`}
@@ -796,7 +798,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               </span>
             }
           >
-            {isSlotContentExpanded ? '收起' : '展开'}
+            {isSlotContentExpanded ? t('operator.collapse') : t('operator.expand')}
           </Button>
         </div>
         
@@ -836,9 +838,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                           input: "font-mono text-sm",
                           inputWrapper: "h-7 min-h-7"
                         }}
-                        placeholder="(空)"
+                        placeholder={t('operator.emptySlot')}
                         isDisabled={!connection.state.isConnected}
-                        aria-label={`${slot}时隙内容`}
+                        aria-label={t('operator.slotContent', { slot })}
                       />
                       <Button
                         size="sm"
@@ -851,8 +853,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                           transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
                         }}
                         isDisabled={!connection.state.isConnected}
-                        title={`切换到${slot}`}
-                        aria-label={`切换到${slot}`}
+                        title={t('operator.switchToSlot', { slot })}
+                        aria-label={t('operator.switchToSlot', { slot })}
                       >
                         {operatorStatus.currentSlot === slot ? "●" : "○"}
                       </Button>

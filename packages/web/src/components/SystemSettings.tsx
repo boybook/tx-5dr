@@ -1,4 +1,5 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Card,
   CardBody,
@@ -22,18 +23,21 @@ interface SystemSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
-// 上报间隔选项（高实时性，10-60秒）
-const REPORT_INTERVAL_OPTIONS = [
-  { value: '10', label: '10 秒' },
-  { value: '15', label: '15 秒' },
-  { value: '30', label: '30 秒' },
-  { value: '60', label: '60 秒' },
-];
+function getReportIntervalOptions(t: (key: string) => string) {
+  return [
+    { value: '10', label: t('settings:reportInterval.10s') },
+    { value: '15', label: t('settings:reportInterval.15s') },
+    { value: '30', label: t('settings:reportInterval.30s') },
+    { value: '60', label: t('settings:reportInterval.60s') },
+  ];
+}
 
 export const SystemSettings = forwardRef<
   SystemSettingsRef,
   SystemSettingsProps
 >(({ onUnsavedChanges }, ref) => {
+  const { t } = useTranslation();
+  const REPORT_INTERVAL_OPTIONS = useMemo(() => getReportIntervalOptions(t), [t]);
   const [decodeWhileTransmitting, setDecodeWhileTransmitting] = useState(false);
   const [originalDecodeValue, setOriginalDecodeValue] = useState(false);
   const [spectrumWhileTransmitting, setSpectrumWhileTransmitting] = useState(true);
@@ -81,7 +85,7 @@ export const SystemSettings = forwardRef<
           code: err.code
         });
       } else {
-        setError('加载配置失败');
+        setError(t('system.loadFailed'));
       }
     }
   };
@@ -177,7 +181,7 @@ export const SystemSettings = forwardRef<
         setOriginalDecodeValue(decodeWhileTransmitting);
         setOriginalSpectrumValue(spectrumWhileTransmitting);
       } else {
-        throw new Error(result.message || '保存配置失败');
+        throw new Error(result.message || t('system.saveFailed'));
       }
 
       // 保存认证配置
@@ -206,7 +210,7 @@ export const SystemSettings = forwardRef<
           // 刷新状态
           loadPSKReporterStatus();
         } else {
-          throw new Error(pskrResult.message || '保存 PSKReporter 配置失败');
+          throw new Error(pskrResult.message || t('system.pskrSaveFailed'));
         }
       }
 
@@ -222,7 +226,7 @@ export const SystemSettings = forwardRef<
           code: err.code
         });
       } else {
-        setError(err instanceof Error ? err.message : '保存配置失败');
+        setError(err instanceof Error ? err.message : t('system.saveFailed'));
       }
       throw err;
     } finally {
@@ -261,22 +265,22 @@ export const SystemSettings = forwardRef<
 
   // 格式化下次上报时间
   const formatNextReport = (seconds: number | undefined) => {
-    if (!seconds || seconds <= 0) return '即将上报';
+    if (!seconds || seconds <= 0) return t('system.reportSoon');
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     if (mins > 0) {
-      return `${mins}分${secs}秒后`;
+      return t('system.reportInMins', { mins, secs });
     }
-    return `${secs}秒后`;
+    return t('system.reportInSecs', { secs });
   };
 
   return (
     <div className="space-y-6">
       {/* 页面标题和描述 */}
       <div>
-        <h3 className="text-xl font-bold text-default-900 mb-2">系统设置</h3>
+        <h3 className="text-xl font-bold text-default-900 mb-2">{t('system.title')}</h3>
         <p className="text-default-600">
-          配置系统级别的功能选项。
+          {t('system.description')}
         </p>
       </div>
 
@@ -295,13 +299,13 @@ export const SystemSettings = forwardRef<
           <CardBody className="p-4">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1">
-                <h4 className="font-semibold text-default-900 mb-1">允许公开查看</h4>
+                <h4 className="font-semibold text-default-900 mb-1">{t('system.allowPublicViewing')}</h4>
                 <div className="text-sm text-default-600 space-y-1">
                   <p>
-                    <strong>开启</strong>：未登录用户可以以观察者身份查看界面，但无法操作
+                    <strong>{t('system.on')}</strong>：{t('system.allowPublicViewingOnDesc')}
                   </p>
                   <p>
-                    <strong>关闭</strong>：未登录用户必须输入令牌登录后才能访问
+                    <strong>{t('system.off')}</strong>：{t('system.allowPublicViewingOffDesc')}
                   </p>
                 </div>
               </div>
@@ -325,13 +329,13 @@ export const SystemSettings = forwardRef<
         <CardBody className="p-4">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
-              <h4 className="font-semibold text-default-900 mb-1">发射时允许解码</h4>
+              <h4 className="font-semibold text-default-900 mb-1">{t('system.decodeWhileTransmitting')}</h4>
               <div className="text-sm text-default-600 space-y-1">
                 <p>
-                  <strong>关闭（推荐）</strong>：任何操作员发射时停止解码，避免误解码残留信号
+                  <strong>{t('system.off')}（{t('system.recommended')}）</strong>：{t('system.decodeWhileTransmittingOffDesc')}
                 </p>
                 <p>
-                  <strong>开启（高级）</strong>：发射周期继续解码，支持双周期异地收发
+                  <strong>{t('system.on')}（{t('system.advanced')}）</strong>：{t('system.decodeWhileTransmittingOnDesc')}
                 </p>
               </div>
             </div>
@@ -353,13 +357,13 @@ export const SystemSettings = forwardRef<
         <CardBody className="p-4">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
-              <h4 className="font-semibold text-default-900 mb-1">发射时允许频谱分析</h4>
+              <h4 className="font-semibold text-default-900 mb-1">{t('system.spectrumWhileTransmitting')}</h4>
               <div className="text-sm text-default-600 space-y-1">
                 <p>
-                  <strong>开启（推荐）</strong>：发射时继续显示频谱图，实时监控发射信号
+                  <strong>{t('system.on')}（{t('system.recommended')}）</strong>：{t('system.spectrumWhileTransmittingOnDesc')}
                 </p>
                 <p>
-                  <strong>关闭</strong>：发射时暂停频谱分析，降低CPU占用
+                  <strong>{t('system.off')}</strong>：{t('system.spectrumWhileTransmittingOffDesc')}
                 </p>
               </div>
             </div>
@@ -385,17 +389,17 @@ export const SystemSettings = forwardRef<
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-1">
-                <h4 className="font-semibold text-default-900">PSKReporter 上报</h4>
+                <h4 className="font-semibold text-default-900">{t('system.pskrTitle')}</h4>
                 {pskrConfig?.enabled && pskrStatus && (
                   <div className="flex gap-1">
                     {pskrStatus.configValid ? (
-                      <Chip size="sm" color="success" variant="flat">配置有效</Chip>
+                      <Chip size="sm" color="success" variant="flat">{t('system.configValid')}</Chip>
                     ) : (
-                      <Chip size="sm" color="warning" variant="flat">配置不完整</Chip>
+                      <Chip size="sm" color="warning" variant="flat">{t('system.configIncomplete')}</Chip>
                     )}
                     {pskrStatus.pendingSpots > 0 && (
                       <Chip size="sm" color="primary" variant="flat">
-                        待上报: {pskrStatus.pendingSpots}
+                        {t('system.pendingSpots', { count: pskrStatus.pendingSpots })}
                       </Chip>
                     )}
                   </div>
@@ -403,11 +407,11 @@ export const SystemSettings = forwardRef<
               </div>
               <div className="text-sm text-default-600 space-y-1">
                 <p>
-                  将解码到的 FT8/FT4 信号自动上报到 <a href="https://pskreporter.info" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">PSKReporter</a> 网络
+                  {t('system.pskrDesc')} <a href="https://pskreporter.info" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">PSKReporter</a>
                 </p>
                 {pskrConfig?.enabled && pskrStatus?.activeCallsign && (
                   <p className="text-default-500">
-                    当前使用: <strong>{pskrStatus.activeCallsign}</strong> @ <strong>{pskrStatus.activeLocator || '未设置网格'}</strong>
+                    {t('system.pskrActiveInfo', { callsign: pskrStatus.activeCallsign, locator: pskrStatus.activeLocator || t('system.gridNotSet') })}
                   </p>
                 )}
               </div>
@@ -432,35 +436,35 @@ export const SystemSettings = forwardRef<
           }}>
             <CardBody className="p-4 space-y-4">
               <div>
-                <h4 className="font-semibold text-default-900 mb-1">接收站信息</h4>
+                <h4 className="font-semibold text-default-900 mb-1">{t('system.receiverInfo')}</h4>
                 <p className="text-sm text-default-500">
-                  留空时将自动使用第一个操作员的呼号和网格
+                  {t('system.receiverInfoDesc')}
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Input
-                  label="接收电台呼号"
-                  placeholder="如 BV2ABC"
+                  label={t('system.rxCallsign')}
+                  placeholder={t('system.rxCallsignPlaceholder')}
                   value={pskrConfig.receiverCallsign}
                   onValueChange={(v) => updatePskrConfig({ receiverCallsign: v.toUpperCase() })}
                   isDisabled={isSaving}
                   size="sm"
                   variant="bordered"
                   description={pskrStatus?.activeCallsign && !pskrConfig.receiverCallsign
-                    ? `将使用: ${pskrStatus.activeCallsign}`
+                    ? t('system.willUse', { val: pskrStatus.activeCallsign })
                     : undefined}
                 />
                 <Input
-                  label="接收电台网格"
-                  placeholder="如 PL05qb"
+                  label={t('system.rxLocator')}
+                  placeholder={t('system.rxLocatorPlaceholder')}
                   value={pskrConfig.receiverLocator}
                   onValueChange={(v) => updatePskrConfig({ receiverLocator: v.toUpperCase() })}
                   isDisabled={isSaving}
                   size="sm"
                   variant="bordered"
                   description={pskrStatus?.activeLocator && !pskrConfig.receiverLocator
-                    ? `将使用: ${pskrStatus.activeLocator}`
+                    ? t('system.willUse', { val: pskrStatus.activeLocator })
                     : undefined}
                 />
               </div>
@@ -473,12 +477,12 @@ export const SystemSettings = forwardRef<
           }}>
             <CardBody className="p-4 space-y-4">
               <div>
-                <h4 className="font-semibold text-default-900 mb-1">可选配置</h4>
+                <h4 className="font-semibold text-default-900 mb-1">{t('system.optionalConfig')}</h4>
               </div>
 
               <Input
-                label="天线信息"
-                placeholder="如 Dipole, Yagi 3el, Vertical"
+                label={t('system.antennaInfo')}
+                placeholder={t('system.antennaInfoPlaceholder')}
                 value={pskrConfig.antennaInformation}
                 onValueChange={(v) => updatePskrConfig({ antennaInformation: v })}
                 isDisabled={isSaving}
@@ -489,7 +493,7 @@ export const SystemSettings = forwardRef<
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Select
-                  label="上报间隔"
+                  label={t('system.reportInterval')}
                   selectedKeys={[String(pskrConfig.reportIntervalSeconds)]}
                   onSelectionChange={(keys) => {
                     const value = Array.from(keys)[0] as string;
@@ -508,8 +512,8 @@ export const SystemSettings = forwardRef<
 
                 <div className="flex items-center justify-between p-3 border border-divider rounded-lg">
                   <div>
-                    <p className="text-sm font-medium text-default-700">测试服务器</p>
-                    <p className="text-xs text-default-500">仅用于调试</p>
+                    <p className="text-sm font-medium text-default-700">{t('system.testServer')}</p>
+                    <p className="text-xs text-default-500">{t('system.testServerDesc')}</p>
                   </div>
                   <Switch
                     isSelected={pskrConfig.useTestServer}
@@ -529,37 +533,37 @@ export const SystemSettings = forwardRef<
           }}>
             <CardBody className="p-4">
               <div className="flex items-center justify-between mb-3">
-                <h4 className="font-semibold text-default-900">运行状态</h4>
+                <h4 className="font-semibold text-default-900">{t('system.runningStatus')}</h4>
                 <Chip
                   size="sm"
                   color={pskrStatus?.isReporting ? 'primary' : 'default'}
                   variant="flat"
                 >
-                  {pskrStatus?.isReporting ? '正在上报...' : '等待中'}
+                  {pskrStatus?.isReporting ? t('system.reporting') : t('system.waiting')}
                 </Chip>
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
-                  <p className="text-default-500">今日上报</p>
+                  <p className="text-default-500">{t('system.todayCount')}</p>
                   <p className="font-semibold text-default-900">
                     {pskrConfig.stats?.todayReportCount ?? 0}
                   </p>
                 </div>
                 <div>
-                  <p className="text-default-500">总计上报</p>
+                  <p className="text-default-500">{t('system.totalCount')}</p>
                   <p className="font-semibold text-default-900">
                     {pskrConfig.stats?.totalReportCount ?? 0}
                   </p>
                 </div>
                 <div>
-                  <p className="text-default-500">上次上报</p>
+                  <p className="text-default-500">{t('system.lastReport')}</p>
                   <p className="font-semibold text-default-900">
                     {formatTime(pskrStatus?.lastReportTime)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-default-500">下次上报</p>
+                  <p className="text-default-500">{t('system.nextReport')}</p>
                   <p className="font-semibold text-default-900">
                     {formatNextReport(pskrStatus?.nextReportIn)}
                   </p>
@@ -579,7 +583,7 @@ export const SystemSettings = forwardRef<
       {/* 提示信息 */}
       {hasUnsavedChanges() && (
         <div className="text-sm text-default-500">
-          ● 设置已修改，请保存更改
+          {t('unsavedChanges')}
         </div>
       )}
     </div>

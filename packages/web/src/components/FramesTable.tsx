@@ -4,7 +4,8 @@ import {
   ScrollShadow
 } from '@heroui/react';
 import { useDisplayNotificationSettings } from '../hooks/useDisplayNotificationSettings';
-import { HIGHLIGHT_TYPE_LABELS } from '../utils/displayNotificationSettings';
+import { getHighlightTypeLabels } from '../utils/displayNotificationSettings';
+import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../utils/colorUtils';
 
 export interface FrameDisplayMessage {
@@ -44,6 +45,8 @@ interface FramesTableProps {
 }
 
 export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true }) => {
+  const { t } = useTranslation();
+  const highlightTypeLabels = React.useMemo(() => getHighlightTypeLabels(t), [t]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
@@ -316,7 +319,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           if (!highlightType) return null;
 
           const baseColor = getHighlightColor(highlightType);
-          const label = HIGHLIGHT_TYPE_LABELS[highlightType];
+          const label = highlightTypeLabels[highlightType];
           const badgeColors = getBadgeColors(baseColor, true); // 特殊消息类型
 
           return (
@@ -369,9 +372,9 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           <div className={`text-left text-xs font-medium text-default-400 ${isNarrow ? '' : 'pl-1'}`}>UTC</div>
           <div className="text-right text-xs font-medium text-default-400">dB</div>
           {!isNarrow && <div className="text-right text-xs font-medium text-default-400">DT</div>}
-          <div className="text-center text-xs font-medium text-default-400">频率</div>
-          <div className="text-left text-xs font-medium text-default-400">信息</div>
-          <div className={`text-right text-xs font-medium text-default-400 ${isNarrow ? '' : 'pr-1'}`}>位置</div>
+          <div className="text-center text-xs font-medium text-default-400">{t('common:framesTable.freq')}</div>
+          <div className="text-left text-xs font-medium text-default-400">{t('common:framesTable.message')}</div>
+          <div className={`text-right text-xs font-medium text-default-400 ${isNarrow ? '' : 'pr-1'}`}>{t('common:framesTable.location')}</div>
         </div>
       </div>
 

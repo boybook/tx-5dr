@@ -3,8 +3,10 @@ import { Card, CardBody, CardHeader, Input, Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faKey } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '../store/authStore';
+import { useTranslation } from 'react-i18next';
 
 export function LoginPage() {
+  const { t } = useTranslation('common');
   const { login, state } = useAuth();
   const [token, setToken] = useState('');
 
@@ -24,12 +26,12 @@ export function LoginPage() {
       <Card className="w-full max-w-md mx-4">
         <CardHeader className="flex flex-col items-center gap-2 pt-8 pb-2">
           <h1 className="text-2xl font-bold">TX-5DR</h1>
-          <p className="text-default-500 text-sm">数字电台远程控制</p>
+          <p className="text-default-500 text-sm">{t('login.subtitle')}</p>
         </CardHeader>
         <CardBody className="gap-4 px-8 pb-8">
           <Input
-            label="访问令牌"
-            placeholder="粘贴令牌..."
+            label={t('auth.accessToken')}
+            placeholder={t('auth.pasteToken')}
             type="password"
             variant="bordered"
             value={token}
@@ -52,7 +54,7 @@ export function LoginPage() {
             onPress={handleSubmit}
             isDisabled={!token.trim()}
           >
-            登录
+            {t('auth.login')}
           </Button>
         </CardBody>
       </Card>
