@@ -3,6 +3,9 @@ import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import { WaveLogService } from './WaveLogService.js';
 import type { WaveLogSyncResponse, WaveLogConfig, QSORecord } from '@tx5dr/contracts';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('WaveLogSyncScheduler');
 
 /**
  * WaveLog同步服务
@@ -47,7 +50,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
     const startTime = Date.now();
 
     try {
-      console.log('📊 [WaveLog同步] 开始执行下载同步');
+      logger.info('Starting download sync');
       this.emit('syncStarted');
 
       // 获取配置和服务
@@ -68,7 +71,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
         startDate = thirtyDaysAgo.toISOString().slice(0, 10).replace(/-/g, '');
       }
 
-      console.log(`📊 [WaveLog同步] 同步日期范围: ${startDate} 到 ${endDate}`);
+      logger.debug(`Sync date range: ${startDate} to ${endDate}`);
 
       // 从WaveLog下载QSO记录
       const remoteQSOs = await waveLogService.downloadQSOs({
@@ -94,7 +97,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
           errorCount++;
           const errorMsg = error instanceof Error ? error.message : '未知错误';
           errors.push(`${remoteQSO.callsign}: ${errorMsg}`);
-          console.warn(`📊 [WaveLog同步] 处理QSO失败: ${remoteQSO.callsign} - ${errorMsg}`);
+          logger.warn(`Failed to process QSO: ${remoteQSO.callsign} - ${errorMsg}`);
         }
       }
 
@@ -116,7 +119,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
         syncTime: this.lastSyncTime
       };
 
-      console.log(`📊 [WaveLog同步] ${result.message}`);
+      logger.info(result.message);
       this.emit('syncCompleted', result);
 
       return result;
@@ -133,7 +136,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
         syncTime: startTime
       };
 
-      console.error('📊 [WaveLog同步] 同步异常:', error);
+      logger.error('Sync error:', error);
       this.emit('syncFailed', result);
 
       return result;
@@ -153,7 +156,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
       const logBooks = logManager.getLogBooks();
       
       if (logBooks.length === 0) {
-        console.warn('📊 [WaveLog同步] 没有可用的日志本来存储下载的QSO');
+        logger.warn('No log books available to store downloaded QSOs');
         return false;
       }
 
@@ -169,7 +172,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
         });
 
         if (existingQSOs.length > 0) {
-          console.log(`📊 [WaveLog同步] QSO已存在，跳过: ${remoteQSO.callsign} @ ${remoteQSO.startTime}`);
+          logger.debug(`QSO already exists, skipping: ${remoteQSO.callsign} @ ${remoteQSO.startTime}`);
           return false; // 已存在，跳过
         }
       }
@@ -179,12 +182,12 @@ export class WaveLogSyncScheduler extends EventEmitter {
       
       // 添加到日志本（不需要设置logBookId，addQSO会处理）
       await targetLogBook.provider.addQSO(remoteQSO, '');
-      console.log(`📊 [WaveLog同步] 添加新QSO: ${remoteQSO.callsign} @ ${remoteQSO.startTime} → ${targetLogBook.name}`);
+      logger.info(`Added new QSO: ${remoteQSO.callsign} @ ${remoteQSO.startTime} -> ${targetLogBook.name}`);
       
       return true;
 
     } catch (error) {
-      console.error(`📊 [WaveLog同步] 处理远程QSO失败: ${remoteQSO.callsign}`, error);
+      logger.error(`Failed to process remote QSO: ${remoteQSO.callsign}`, error);
       throw error;
     }
   }

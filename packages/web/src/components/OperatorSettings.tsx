@@ -35,6 +35,9 @@ import {
   isOperatorEnabled,
   getEnabledOperatorIds
 } from '../utils/operatorPreferences';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('OperatorSettings');
 
 export interface OperatorSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -231,16 +234,16 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             .filter(op => localEnabledStates[op.id] ?? true)
             .map(op => op.id);
           
-          console.log('📤 [OperatorSettings] 应用操作员偏好设置:', enabledIds);
+          logger.debug('Applying operator preferences:', enabledIds);
           connection.state.radioService.setClientEnabledOperators(enabledIds);
         }
 
         setPreferencesHasChanges(false);
         onUnsavedChanges?.(hasChanges);
         
-        console.log('✅ 操作员偏好设置已应用');
+        logger.info('Operator preferences applied');
       } catch (error) {
-        console.error('❌ 应用操作员偏好设置失败:', error);
+        logger.error('Failed to apply operator preferences:', error);
       }
     };
 
@@ -304,13 +307,13 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         // 自动启用新创建的操作员
         if (response.data) {
           setOperatorEnabled(response.data.id, true);
-          console.log('✅ 新操作员已自动启用:', response.data.id, response.data.myCallsign);
+          logger.info('New operator auto-enabled:', response.data.id, response.data.myCallsign);
 
           // 如果已连接，同步到服务器
           if (connection.state.isConnected && connection.state.radioService) {
             const enabledIds = [...getEnabledOperatorIds(), response.data.id];
             connection.state.radioService.setClientEnabledOperators(enabledIds);
-            console.log('📤 [OperatorSettings] 已同步新操作员到服务器');
+            logger.debug('New operator synced to server');
           }
         }
 

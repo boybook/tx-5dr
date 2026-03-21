@@ -6,6 +6,9 @@ import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, 
 import type { RadioProfile } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('ConfigManager');
 
 // 应用配置接口
 export interface AppConfig {
@@ -151,14 +154,14 @@ export class ConfigManager {
     try {
       // 设置配置文件路径
       this.configPath = await getConfigFilePath('config.json');
-      console.log(`📁 [配置管理器] 配置文件路径: ${this.configPath}`);
+      logger.info(`Config file path: ${this.configPath}`);
 
       await this.loadConfig();
-      console.log('✅ [配置管理器] 配置文件加载成功');
+      logger.info('Config file loaded successfully');
     } catch (error) {
-      console.log('⚠️ [配置管理器] 配置文件不存在或格式错误，使用默认配置');
+      logger.info('Config file missing or invalid, using defaults');
       await this.saveConfig();
-      console.log('✅ [配置管理器] 默认配置文件已创建');
+      logger.info('Default config file created');
     }
   }
 
@@ -171,43 +174,43 @@ export class ConfigManager {
 
     // 检测并迁移旧版 radio 配置格式（扁平 → 嵌套对象）
     if (parsedConfig.radio && this.needsRadioFormatMigration(parsedConfig.radio)) {
-      console.log('🔄 [配置管理器] 检测到旧版电台配置格式，开始迁移...');
+      logger.info('Detected legacy radio config format, migrating...');
 
       // 备份旧配置
       const backupPath = `${this.configPath}.backup`;
       await fs.writeFile(backupPath, configData, 'utf-8');
-      console.log(`💾 [配置管理器] 已备份旧配置到: ${backupPath}`);
+      logger.info(`Old config backed up to: ${backupPath}`);
 
       // 执行格式迁移
       parsedConfig.radio = this.migrateRadioConfigFormat(parsedConfig.radio);
 
       // 保存新格式配置
       await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
-      console.log('✅ [配置管理器] 电台配置格式迁移完成');
+      logger.info('Radio config format migration complete');
     }
 
     // 迁移到 Profile 系统（旧 radio+audio → profiles）
     if (this.needsProfileMigration(parsedConfig)) {
-      console.log('🔄 [配置管理器] 检测到旧版配置（独立 radio/audio），开始迁移到 Profile 系统...');
+      logger.info('Detected legacy radio/audio config, migrating to Profile system...');
 
       // 备份旧配置
       const backupPath = `${this.configPath}.profile-migration.backup`;
       await fs.writeFile(backupPath, configData, 'utf-8');
-      console.log(`💾 [配置管理器] 已备份旧配置到: ${backupPath}`);
+      logger.info(`Old config backed up to: ${backupPath}`);
 
       this.migrateToProfiles(parsedConfig);
 
       // 保存迁移后的配置
       await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
-      console.log('✅ [配置管理器] Profile 迁移完成');
+      logger.info('Profile migration complete');
     }
 
     // 迁移全局同步配置到按呼号的 callsignSyncConfigs
     if (this.needsSyncConfigMigration(parsedConfig)) {
-      console.log('🔄 [配置管理器] 检测到全局同步配置，开始迁移到按呼号同步配置...');
+      logger.info('Detected global sync config, migrating to per-callsign sync config...');
       this.migrateSyncConfigs(parsedConfig);
       await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
-      console.log('✅ [配置管理器] 同步配置迁移完成');
+      logger.info('Sync config migration complete');
     }
 
     // 合并默认配置和加载的配置
@@ -316,7 +319,7 @@ export class ConfigManager {
     delete parsedConfig.radio;
     delete parsedConfig.audio;
 
-    console.log(`  ✓ 创建默认 Profile: "${profileName}" (id: ${defaultProfile.id})`);
+    logger.info(`Created default profile: "${profileName}" (id: ${defaultProfile.id})`);
   }
 
   // ===== 旧版电台配置格式迁移 =====
@@ -350,14 +353,14 @@ export class ConfigManager {
       transmitCompensationMs: oldConfig.transmitCompensationMs,
     };
 
-    console.log(`📝 [配置迁移] 当前连接类型: ${newConfig.type}`);
+    logger.info(`Migrating radio config, connection type: ${newConfig.type}`);
 
     if (oldConfig.host !== undefined || oldConfig.port !== undefined) {
       newConfig.network = {
         host: oldConfig.host || 'localhost',
         port: oldConfig.port || 4532,
       };
-      console.log(`  ✓ 迁移 network 配置: ${newConfig.network.host}:${newConfig.network.port}`);
+      logger.info(`Migrated network config: ${newConfig.network.host}:${newConfig.network.port}`);
     }
 
     if (oldConfig.ip !== undefined || oldConfig.wlanPort !== undefined) {
@@ -368,7 +371,7 @@ export class ConfigManager {
         password: oldConfig.password,
         dataMode: true,
       };
-      console.log(`  ✓ 迁移 icomWlan 配置: ${newConfig.icomWlan.ip}:${newConfig.icomWlan.port}`);
+      logger.info(`Migrated icomWlan config: ${newConfig.icomWlan.ip}:${newConfig.icomWlan.port}`);
     }
 
     if (oldConfig.path !== undefined || oldConfig.rigModel !== undefined) {
@@ -377,7 +380,7 @@ export class ConfigManager {
         rigModel: oldConfig.rigModel || 0,
         serialConfig: oldConfig.serialConfig,
       };
-      console.log(`  ✓ 迁移 serial 配置: ${newConfig.serial.path} (rigModel: ${newConfig.serial.rigModel})`);
+      logger.info(`Migrated serial config: ${newConfig.serial.path} (rigModel: ${newConfig.serial.rigModel})`);
     }
 
     return newConfig;
@@ -764,7 +767,7 @@ export class ConfigManager {
   }): Promise<void> {
     this.config.lastSelectedFrequency = { ...frequencyConfig };
     await this.saveConfig();
-    console.log(`💾 [配置管理器] 已保存最后选择的频率: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
+    logger.debug(`Last selected frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
   }
 
   /**
@@ -788,7 +791,7 @@ export class ConfigManager {
   async updateLastVolumeGain(gain: number, gainDb: number): Promise<void> {
     this.config.lastVolumeGain = { gain, gainDb };
     await this.saveConfig();
-    console.log(`💾 [配置管理器] 已保存最后设置的音量增益: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
+    logger.debug(`Last volume gain saved: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
   }
 
   /**
@@ -904,7 +907,7 @@ export class ConfigManager {
     delete parsedConfig.qrz;
     delete parsedConfig.lotw;
 
-    console.log(`📋 [配置管理器] 已迁移同步配置到 ${callsigns.size} 个呼号: ${[...callsigns].join(', ')}`);
+    logger.info(`Sync config migrated for ${callsigns.size} callsign(s): ${[...callsigns].join(', ')}`);
   }
 
   /**

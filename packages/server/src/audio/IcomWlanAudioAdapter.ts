@@ -1,6 +1,9 @@
 import { EventEmitter } from 'eventemitter3';
 import { IcomWlanConnection } from '../radio/connections/IcomWlanConnection.js';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('IcomWlanAudioAdapter');
 
 export interface IcomWlanAudioAdapterEvents {
   'audioData': (samples: Float32Array) => void;
@@ -25,7 +28,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
     // 创建音频缓冲区提供者（使用 ICOM 原生采样率 12kHz）
     this.audioProvider = new RingBufferAudioProvider(this.icomSampleRate, this.icomSampleRate * 5);
 
-    console.log(`🎵 [IcomWlanAudioAdapter] 初始化完成: 使用 ICOM 原生采样率 ${this.icomSampleRate}Hz（零重采样优化）`);
+    logger.info(`Initialized with ICOM native sample rate ${this.icomSampleRate}Hz (zero-resample optimization)`);
   }
 
   /**
@@ -33,17 +36,17 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
    */
   startReceiving(): void {
     if (this.isReceiving) {
-      console.log('⚠️ [IcomWlanAudioAdapter] 已经在接收音频');
+      logger.warn('Already receiving audio');
       return;
     }
 
-    console.log('🎤 [IcomWlanAudioAdapter] 开始接收音频...');
+    logger.info('Starting audio reception');
 
     // 订阅 ICOM 音频事件
     this.icomConnection.on('audioFrame', this.handleAudioFrame.bind(this));
 
     this.isReceiving = true;
-    console.log('✅ [IcomWlanAudioAdapter] 音频接收已启动');
+    logger.info('Audio reception started');
   }
 
   /**
@@ -51,17 +54,17 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
    */
   stopReceiving(): void {
     if (!this.isReceiving) {
-      console.log('⚠️ [IcomWlanAudioAdapter] 未在接收音频');
+      logger.warn('Not currently receiving audio');
       return;
     }
 
-    console.log('🛑 [IcomWlanAudioAdapter] 停止接收音频...');
+    logger.info('Stopping audio reception');
 
     // 取消订阅
     this.icomConnection.off('audioFrame', this.handleAudioFrame.bind(this));
 
     this.isReceiving = false;
-    console.log('✅ [IcomWlanAudioAdapter] 音频接收已停止');
+    logger.info('Audio reception stopped');
   }
 
   /**
@@ -79,7 +82,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
       this.emit('audioData', samples12kHz);
 
     } catch (error) {
-      console.error('❌ [IcomWlanAudioAdapter] 处理音频帧失败:', error);
+      console.error('[IcomWlanAudioAdapter] Failed to process audio frame:', error);
       this.emit('error', error as Error);
     }
   }
@@ -97,7 +100,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
       // console.debug(`✅ [IcomWlanAudioAdapter] 音频发送成功`);
 
     } catch (error) {
-      console.error('❌ [IcomWlanAudioAdapter] 发送音频失败:', error);
+      console.error('[IcomWlanAudioAdapter] Failed to send audio:', error);
       throw error;
     }
   }

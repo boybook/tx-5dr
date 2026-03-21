@@ -1,5 +1,8 @@
 import type { SlotInfo, DecodeRequest } from '@tx5dr/contracts';
 import type { SlotClock } from './SlotClock.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('SlotScheduler');
 
 /**
  * 解码队列接口 - 由 server 包实现
@@ -94,7 +97,7 @@ export class SlotScheduler {
       // 检查slotInfo对应的时隙是否有操作员准备发射
       // 传递slotInfo以确保周期判断与解码数据的时隙一致
       if (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle(slotInfo)) {
-        console.log(`🚫 [SlotScheduler] 时隙${slotInfo.id}是发射周期且配置禁用解码，跳过窗口${windowIdx}`);
+        logger.debug(`Transmit cycle detected and decode-while-transmitting disabled, skipping slot=${slotInfo.id} window=${windowIdx}`);
         return;
       }
     }
@@ -107,7 +110,7 @@ export class SlotScheduler {
       
       // 计算窗口的时间偏移（基于时隙结束时间）
       const windowOffsetMs = mode.windowTiming[windowIdx] || 0;
-      console.log(`📡 [SlotScheduler] 使用窗口偏移: 窗口${windowIdx} = ${windowOffsetMs >= 0 ? '+' : ''}${windowOffsetMs}ms (基于时隙结束时间)`);
+      logger.debug(`Window offset: window=${windowIdx}, offset=${windowOffsetMs >= 0 ? '+' : ''}${windowOffsetMs}ms (relative to slot end)`);
       
       // 计算解码窗口的起始时间（基于时隙结束时间 + 偏移）
       // 允许负偏移，可以获取时隙结束前或其他周期的音频数据
@@ -134,17 +137,13 @@ export class SlotScheduler {
       };
       
       const offsetSign = windowOffsetMs >= 0 ? '+' : '';
-      console.log(`📡 [SlotScheduler] 生成解码请求: 时隙=${slotInfo.id}, 窗口=${windowIdx}, 偏移=${offsetSign}${windowOffsetMs}ms, 解码长度=${decodeWindowMs}ms, PCM大小=${(pcmBuffer.byteLength/1024).toFixed(1)}KB, 采样率=${actualSampleRate}Hz`);
+      logger.debug(`Decode request: slot=${slotInfo.id}, window=${windowIdx}, offset=${offsetSign}${windowOffsetMs}ms, duration=${decodeWindowMs}ms, pcm=${(pcmBuffer.byteLength/1024).toFixed(1)}KB, sampleRate=${actualSampleRate}Hz`);
       
       // 推送到解码队列
       await this.decodeQueue.push(decodeRequest);
       
     } catch (error) {
-      console.error(`SlotScheduler: 处理子窗口失败`, {
-        slotId: slotInfo.id,
-        windowIdx,
-        error: error instanceof Error ? error.message : String(error)
-      });
+      logger.error(`Failed to handle sub-window: slot=${slotInfo.id}, window=${windowIdx}, error=${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

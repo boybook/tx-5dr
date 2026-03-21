@@ -11,6 +11,9 @@
  */
 
 import { RadioError, RadioErrorCode } from './errors/RadioError.js';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('ResourceManager');
 
 /**
  * 资源接口
@@ -253,9 +256,7 @@ export class ResourceManager {
       state: ResourceState.IDLE,
     });
 
-    console.log(
-      `📦 [ResourceManager] 注册资源: ${name} (优先级: ${priority}, 可选: ${optional})`
-    );
+    logger.info(`Resource registered: ${name} (priority: ${priority}, optional: ${optional})`);
   }
 
   /**
@@ -275,7 +276,7 @@ export class ResourceManager {
     }
 
     this.resources.delete(name);
-    console.log(`📦 [ResourceManager] 取消注册资源: ${name}`);
+    logger.info(`Resource unregistered: ${name}`);
   }
 
   /**
@@ -284,7 +285,7 @@ export class ResourceManager {
    * 如果任何必需资源启动失败，会自动回滚已启动的资源
    */
   async startAll(): Promise<void> {
-    console.log(`🚀 [ResourceManager] 开始启动所有资源...`);
+    logger.info('Starting all resources...');
 
     // 检测循环依赖
     this.detectCircularDependencies();
@@ -292,9 +293,7 @@ export class ResourceManager {
     // 拓扑排序
     const startOrder = this.topologicalSort();
 
-    console.log(
-      `📋 [ResourceManager] 启动顺序: ${startOrder.join(' → ')}`
-    );
+    logger.info(`Start order: ${startOrder.join(' -> ')}`);
 
     this.startedResources = [];
 
@@ -303,11 +302,9 @@ export class ResourceManager {
         await this.startResource(name);
       }
 
-      console.log(
-        `✅ [ResourceManager] 所有资源启动成功 (${this.startedResources.length} 个)`
-      );
+      logger.info(`All resources started successfully (${this.startedResources.length})`);
     } catch (error) {
-      console.error(`❌ [ResourceManager] 资源启动失败，开始回滚...`);
+      logger.error('Resource startup failed, rolling back...');
       await this.rollback();
       throw error;
     }
@@ -318,14 +315,12 @@ export class ResourceManager {
    * 按启动的逆序停止
    */
   async stopAll(): Promise<void> {
-    console.log(`🛑 [ResourceManager] 开始停止所有资源...`);
+    logger.info('Stopping all resources...');
 
     // 按逆序停止
     const stopOrder = [...this.startedResources].reverse();
 
-    console.log(
-      `📋 [ResourceManager] 停止顺序: ${stopOrder.join(' → ')}`
-    );
+    logger.info(`Stop order: ${stopOrder.join(' -> ')}`);
 
     const errors: Error[] = [];
 
@@ -333,10 +328,7 @@ export class ResourceManager {
       try {
         await this.stopResource(name);
       } catch (error) {
-        console.error(
-          `⚠️  [ResourceManager] 停止资源 "${name}" 失败:`,
-          error
-        );
+        logger.error(`Failed to stop resource "${name}":`, error);
         errors.push(error instanceof Error ? error : new Error(String(error)));
       }
     }
@@ -344,11 +336,9 @@ export class ResourceManager {
     this.startedResources = [];
 
     if (errors.length > 0) {
-      console.warn(
-        `⚠️  [ResourceManager] 停止完成，但有 ${errors.length} 个资源失败`
-      );
+      logger.warn(`Stop complete with ${errors.length} resource failure(s)`);
     } else {
-      console.log(`✅ [ResourceManager] 所有资源停止成功`);
+      logger.info('All resources stopped successfully');
     }
   }
 
@@ -382,7 +372,7 @@ export class ResourceManager {
     }
 
     this.resources.clear();
-    console.log(`🗑️  [ResourceManager] 已清空所有资源注册`);
+    logger.info('All resource registrations cleared');
   }
 
   /**
@@ -412,12 +402,12 @@ export class ResourceManager {
 
     // 如果已经在运行，跳过
     if (metadata.state === ResourceState.RUNNING) {
-      console.log(`⏩ [ResourceManager] 资源 "${name}" 已在运行，跳过`);
+      logger.debug(`Resource "${name}" already running, skipping`);
       return;
     }
 
     metadata.state = ResourceState.STARTING;
-    console.log(`▶️  [ResourceManager] 启动资源: ${name}`);
+    logger.info(`Starting resource: ${name}`);
 
     try {
       // 使用超时保护
@@ -427,21 +417,18 @@ export class ResourceManager {
       metadata.startedAt = Date.now();
       this.startedResources.push(name);
 
-      console.log(`✅ [ResourceManager] 资源 "${name}" 启动成功`);
+      logger.info(`Resource "${name}" started successfully`);
     } catch (error) {
       metadata.state = ResourceState.ERROR;
       metadata.error = error instanceof Error ? error : new Error(String(error));
 
       if (optional) {
-        console.warn(
-          `⚠️  [ResourceManager] 可选资源 "${name}" 启动失败 (忽略):`,
-          error
-        );
+        logger.warn(`Optional resource "${name}" failed to start (ignored):`, error);
         // 可选资源失败不抛出异常
         return;
       }
 
-      console.error(`❌ [ResourceManager] 资源 "${name}" 启动失败:`, error);
+      logger.error(`Resource "${name}" failed to start:`, error);
       throw RadioError.from(error, RadioErrorCode.RESOURCE_UNAVAILABLE);
     }
   }
@@ -463,7 +450,7 @@ export class ResourceManager {
     }
 
     metadata.state = ResourceState.STOPPING;
-    console.log(`⏸️  [ResourceManager] 停止资源: ${name}`);
+    logger.info(`Stopping resource: ${name}`);
 
     try {
       await this.withTimeout(resource.stop(), stopTimeout, `停止资源 "${name}"`);
@@ -471,12 +458,12 @@ export class ResourceManager {
       metadata.state = ResourceState.STOPPED;
       metadata.stoppedAt = Date.now();
 
-      console.log(`✅ [ResourceManager] 资源 "${name}" 停止成功`);
+      logger.info(`Resource "${name}" stopped successfully`);
     } catch (error) {
       metadata.state = ResourceState.ERROR;
       metadata.error = error instanceof Error ? error : new Error(String(error));
 
-      console.error(`❌ [ResourceManager] 资源 "${name}" 停止失败:`, error);
+      logger.error(`Resource "${name}" failed to stop:`, error);
       throw RadioError.from(error, RadioErrorCode.RESOURCE_CLEANUP_FAILED);
     }
   }
@@ -485,9 +472,7 @@ export class ResourceManager {
    * 回滚已启动的资源
    */
   private async rollback(): Promise<void> {
-    console.log(
-      `🔄 [ResourceManager] 回滚 ${this.startedResources.length} 个已启动的资源...`
-    );
+    logger.info(`Rolling back ${this.startedResources.length} started resource(s)...`);
 
     const stopOrder = [...this.startedResources].reverse();
 
@@ -495,15 +480,12 @@ export class ResourceManager {
       try {
         await this.stopResource(name);
       } catch (error) {
-        console.error(
-          `⚠️  [ResourceManager] 回滚时停止资源 "${name}" 失败:`,
-          error
-        );
+        logger.error(`Failed to stop resource "${name}" during rollback:`, error);
       }
     }
 
     this.startedResources = [];
-    console.log(`✅ [ResourceManager] 回滚完成`);
+    logger.info('Rollback complete');
   }
 
   /**

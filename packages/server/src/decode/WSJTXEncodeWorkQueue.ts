@@ -1,6 +1,9 @@
 import { EventEmitter } from 'eventemitter3';
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('EncodeWorkQueue');
 
 export interface EncodeRequest {
   message: string;
@@ -39,7 +42,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
     super();
     this.maxConcurrency = maxConcurrency;
     this.lib = new WSJTXLib();
-    console.log(`🎵 [编码队列] 初始化完成（主线程），最大并发标注: ${maxConcurrency}`);
+    logger.info('encode work queue initialized', { maxConcurrency });
   }
   
   /**
@@ -48,15 +51,14 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
   async push(request: EncodeRequest): Promise<void> {
     this.queueSize++;
     
-    console.log(`🎵 [编码队列] 收到编码请求:`);
-    console.log(`   操作员: ${request.operatorId}`);
-    console.log(`   消息: "${request.message}"`);
-    console.log(`   频率: ${request.frequency}Hz`);
-    console.log(`   模式: ${request.mode || 'FT8'}`);
-    if (request.timeSinceSlotStartMs) {
-      console.log(`   时隙已过时间: ${request.timeSinceSlotStartMs}ms`);
-    }
-    console.log(`   队列大小: ${this.queueSize}`);
+    logger.debug('encode request received', {
+      operatorId: request.operatorId,
+      message: request.message,
+      frequency: request.frequency,
+      mode: request.mode || 'FT8',
+      timeSinceSlotStartMs: request.timeSinceSlotStartMs,
+      queueSize: this.queueSize,
+    });
     
     try {
       const startTime = performance.now();
@@ -82,18 +84,18 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       const maxSamples = Math.floor(expectedDuration * encodeSampleRate * 1.5);
       let finalAudio = audioFloat32;
       if (finalAudio.length > maxSamples) {
-        console.warn(`⚠️ [编码队列] 音频过长，截断 ${finalAudio.length} -> ${maxSamples}`);
+        logger.warn(`audio too long, truncating ${finalAudio.length} -> ${maxSamples}`);
         finalAudio = finalAudio.slice(0, maxSamples);
       }
       if (Math.abs(actualDuration - expectedDuration) > 2 && actualDuration > expectedDuration * 2) {
         const expectedSamples = Math.floor(expectedDuration * encodeSampleRate);
-        console.log(`🔄 [编码队列] 再次截断到期望长度: ${expectedSamples}`);
+        logger.debug(`truncating to expected length: ${expectedSamples}`);
         finalAudio = finalAudio.slice(0, expectedSamples);
       }
 
       // 重采样到统一的内部采样率（12kHz）
       const INTERNAL_SAMPLE_RATE = 12000;
-      console.log(`🔄 [编码队列] 重采样: ${encodeSampleRate}Hz -> ${INTERNAL_SAMPLE_RATE}Hz`);
+      logger.debug(`resampling: ${encodeSampleRate}Hz -> ${INTERNAL_SAMPLE_RATE}Hz`);
       finalAudio = await resampleAudioProfessional(
         finalAudio,
         encodeSampleRate,
@@ -118,7 +120,12 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       const duration = finalAudio.length / sampleRate;
       const processingTimeMs = performance.now() - startTime;
 
-      console.log(`✅ [编码完成] 操作员: ${request.operatorId}, 时长: ${duration.toFixed(2)}s, 振幅范围: [${minSample.toFixed(4)}, ${maxSample.toFixed(4)}], 耗时: ${processingTimeMs.toFixed(2)}ms`);
+      logger.debug('encode complete', {
+        operatorId: request.operatorId,
+        duration: `${duration.toFixed(2)}s`,
+        amplitude: `[${minSample.toFixed(4)}, ${maxSample.toFixed(4)}]`,
+        processingTimeMs: processingTimeMs.toFixed(2),
+      });
 
       const encodeResult: EncodeResult & { request?: EncodeRequest } = {
         operatorId: request.operatorId,
@@ -133,7 +140,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       if (this.queueSize === 0) this.emit('queueEmpty');
 
     } catch (error) {
-      console.error(`❌ [编码失败] 操作员: ${request.operatorId}:`, error);
+      console.error(`encode failed for operator ${request.operatorId}:`, error);
       this.emit('encodeError', error as Error, request);
       if (this.queueSize === 0) this.emit('queueEmpty');
     } finally {
@@ -164,6 +171,6 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
    * 销毁工作池
    */
   async destroy(): Promise<void> {
-    console.log('🗑️ [编码队列] 清理（主线程，无工作池）');
+    logger.info('encode work queue destroyed (main thread, no worker pool)');
   }
 }

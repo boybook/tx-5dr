@@ -2,6 +2,9 @@ import { QSOContext, FT8MessageType, ParsedFT8Message, QSOCommand, StrategiesRes
 import { ITransmissionStrategy } from '../ITransmissionStrategy';
 import { FT8MessageParser } from '../../../parser/ft8-message-parser.js';
 import { RadioOperator } from '../../RadioOperator';
+import { createLogger } from '../../../utils/logger.js';
+
+const logger = createLogger('QSOStrategy');
 
 type SlotsIndex = 'TX1' | 'TX2' | 'TX3' | 'TX4' | 'TX5' | 'TX6';
 
@@ -84,9 +87,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
                         if (hasConflict) {
-                            console.log(`[StandardQSOStrategy TX1] 收到新呼叫 ${newCallsign} 但其他同呼号操作者正在通联，继续等待 ${strategy.context.targetCallsign}`);
+                            logger.debug(`TX1: new call ${newCallsign} conflicts with other operator working same callsign, continuing to wait for ${strategy.context.targetCallsign}`);
                         } else {
-                            console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
+                            logger.debug(`TX1: target not replying, switching to new direct call ${newCallsign} (SNR: ${newCall.snr}dB), dropping ${strategy.context.targetCallsign}`);
 
                             // 清空旧上下文（自动保存到缓存）
                             strategy.clearQSOContext();
@@ -108,7 +111,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             return { changeState: 'TX2' };
                         }
                     } else {
-                        console.log(`[StandardQSOStrategy TX1] 收到新呼叫 ${newCallsign} 但已通联过且replyToWorkedStations=false，继续等待 ${strategy.context.targetCallsign}`);
+                        logger.debug(`TX1: new call ${newCallsign} already worked and replyToWorkedStations=false, continuing to wait for ${strategy.context.targetCallsign}`);
                     }
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                     const reportMsg = msg as FT8MessageSignalReport;
@@ -123,9 +126,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
                         if (hasConflict) {
-                            console.log(`[StandardQSOStrategy TX1] 收到新信号报告 ${newCallsign} 但其他同呼号操作者正在通联，继续等待 ${strategy.context.targetCallsign}`);
+                            logger.debug(`TX1: new signal report ${newCallsign} conflicts with other operator, continuing to wait for ${strategy.context.targetCallsign}`);
                         } else {
-                            console.log(`[StandardQSOStrategy TX1] 当前目标未回复，收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，切换目标 (放弃 ${strategy.context.targetCallsign})`);
+                            logger.debug(`TX1: target not replying, switching to new direct signal report ${newCallsign} (SNR: ${newCall.snr}dB), dropping ${strategy.context.targetCallsign}`);
 
                             // 清空旧上下文（自动保存到缓存）
                             strategy.clearQSOContext();
@@ -147,7 +150,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             return { changeState: 'TX3' };
                         }
                     } else {
-                        console.log(`[StandardQSOStrategy TX1] 收到新信号报告 ${newCallsign} 但已通联过且replyToWorkedStations=false，继续等待 ${strategy.context.targetCallsign}`);
+                        logger.debug(`TX1: new signal report ${newCallsign} already worked and replyToWorkedStations=false, continuing to wait for ${strategy.context.targetCallsign}`);
                     }
                 }
             }
@@ -164,11 +167,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 增加呼叫尝试次数
             strategy.callAttempts++;
 
-            console.log(`[StandardQSOStrategy TX1.onTimeout] 呼叫超时，当前目标: ${strategy.context.targetCallsign}, 尝试次数: ${strategy.callAttempts}/${strategy.operator.config.maxCallAttempts}`);
+            logger.debug(`TX1 timeout: target=${strategy.context.targetCallsign}, attempts=${strategy.callAttempts}/${strategy.operator.config.maxCallAttempts}`);
 
             // 检查是否达到最大呼叫次数
             if (strategy.callAttempts >= strategy.operator.config.maxCallAttempts) {
-                console.log(`[StandardQSOStrategy TX1.onTimeout] 达到最大呼叫尝试次数(${strategy.operator.config.maxCallAttempts})，放弃呼叫 ${strategy.context.targetCallsign}`);
+                logger.debug(`TX1 timeout: max attempts (${strategy.operator.config.maxCallAttempts}) reached, giving up on ${strategy.context.targetCallsign}`);
 
                 // 清理QSO开始时间
                 strategy.qsoStartTime = undefined;
@@ -181,16 +184,16 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
                 // QSO失败，检查是否自动恢复CQ
                 if (strategy.operator.config.autoResumeCQAfterFail) {
-                    console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
+                    logger.debug('TX1 timeout: autoResumeCQAfterFail=true, switching to TX6');
                     return { changeState: 'TX6' };
                 }
 
-                console.log(`[StandardQSOStrategy TX1.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
+                logger.debug('TX1 timeout: autoResumeCQAfterFail=false, stopping');
                 return { stop: true };
             }
 
             // 未达到最大次数，继续呼叫（保持TX1状态）
-            console.log(`[StandardQSOStrategy TX1.onTimeout] 未达到最大次数，继续呼叫，保持TX1状态`);
+            logger.debug('TX1 timeout: max not reached, continuing call, staying in TX1');
             return {}; // 返回空对象，保持当前状态，继续呼叫
         }
     },
@@ -211,7 +214,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             if (msgRogerReport) {
                 const msg = msgRogerReport.message as FT8MessageRogerReport;
-                console.log(`[StandardQSOStrategy TX2] 收到标准ROGER_REPORT，进入TX4`);
+                logger.debug('TX2: received ROGER_REPORT, moving to TX4');
                 // 【修复】ROGER_REPORT也包含对方给我们的信号报告（msg.report）
                 // 如果之前没有设置reportReceived，从ROGER_REPORT中获取
                 if (strategy.context.reportReceived === undefined || strategy.context.reportReceived === null) {
@@ -243,7 +246,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             if (msgSignalReport) {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
-                console.log(`[StandardQSOStrategy TX2] 容错：收到SIGNAL_REPORT（应为ROGER_REPORT），视为确认，进入TX4`);
+                logger.debug('TX2: fallback - received SIGNAL_REPORT instead of ROGER_REPORT, treating as confirmation, moving to TX4');
                 // 【修复】提取对方告诉我们的信号报告值（msg.report）
                 if (strategy.context.reportReceived === undefined || strategy.context.reportReceived === null) {
                     strategy.context.reportReceived = msg.report;
@@ -269,7 +272,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
-            console.log(`[StandardQSOStrategy TX2.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+            logger.debug(`TX2 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
 
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
@@ -279,11 +282,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             // QSO失败，检查是否自动恢复CQ
             if (strategy.operator.config.autoResumeCQAfterFail) {
-                console.log(`[StandardQSOStrategy TX2.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
+                logger.debug('TX2 timeout: autoResumeCQAfterFail=true, switching to TX6');
                 return { changeState: 'TX6' };
             }
 
-            console.log(`[StandardQSOStrategy TX2.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
+            logger.debug('TX2 timeout: autoResumeCQAfterFail=false, stopping');
             return { stop: true };
         }
     },
@@ -327,7 +330,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             if (msgSignalReport) {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
-                console.log(`[StandardQSOStrategy TX3] 容错：收到对方重复的SIGNAL_REPORT (SNR: ${msgSignalReport.snr}dB)，更新信号报告`);
+                logger.debug(`TX3: fallback - received repeated SIGNAL_REPORT (SNR: ${msgSignalReport.snr}dB), updating report`);
 
                 // 更新接收的信号报告（如果之前没有设置）
                 if (strategy.context.reportReceived === undefined ||
@@ -349,7 +352,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return {}
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
-            console.log(`[StandardQSOStrategy TX3.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+            logger.debug(`TX3 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
 
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
@@ -359,11 +362,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             // QSO失败，检查是否自动恢复CQ
             if (strategy.operator.config.autoResumeCQAfterFail) {
-                console.log(`[StandardQSOStrategy TX3.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
+                logger.debug('TX3 timeout: autoResumeCQAfterFail=true, switching to TX6');
                 return { changeState: 'TX6' };
             }
 
-            console.log(`[StandardQSOStrategy TX3.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
+            logger.debug('TX3 timeout: autoResumeCQAfterFail=false, stopping');
             return { stop: true };
         }
     },
@@ -406,7 +409,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             if (msg73) {
                 // 对方发送了73，QSO已完成
-                console.log(`[StandardQSOStrategy TX4] 收到对方73，QSO完成`);
+                logger.debug('TX4: received 73, QSO complete');
 
                 // 【修复】在转到TX6之前，先检查是否有新的直接呼叫
                 const directCalls = messages
@@ -434,9 +437,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
                             if (hasConflict) {
-                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新呼叫 ${newCallsign} 但其他同呼号操作者正在通联`);
+                                logger.debug(`TX4: QSO done, new call ${newCallsign} conflicts with other operator`);
                             } else {
-                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接呼叫 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
+                                logger.debug(`TX4: QSO done, switching to new direct call ${newCallsign} (SNR: ${newCall.snr}dB)`);
 
                                 // 清空旧QSO上下文（自动保存到缓存）
                                 strategy.clearQSOContext();
@@ -458,7 +461,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                                 return { changeState: 'TX2' };
                             }
                         } else {
-                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新呼叫 ${newCallsign} 但已通联过且replyToWorkedStations=false`);
+                            logger.debug(`TX4: QSO done, new call ${newCallsign} already worked and replyToWorkedStations=false`);
                         }
                     } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                         const reportMsg = msg as FT8MessageSignalReport;
@@ -473,9 +476,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(newCallsign);
 
                             if (hasConflict) {
-                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新信号报告 ${newCallsign} 但其他同呼号操作者正在通联`);
+                                logger.debug(`TX4: QSO done, new signal report ${newCallsign} conflicts with other operator`);
                             } else {
-                                console.log(`[StandardQSOStrategy TX4] QSO完成后收到新的直接信号报告 ${newCallsign} (SNR: ${newCall.snr}dB)，立即切换`);
+                                logger.debug(`TX4: QSO done, switching to new direct signal report ${newCallsign} (SNR: ${newCall.snr}dB)`);
 
                                 // 清空旧QSO上下文（自动保存到缓存）
                                 strategy.clearQSOContext();
@@ -497,13 +500,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
                                 return { changeState: 'TX3' };
                             }
                         } else {
-                            console.log(`[StandardQSOStrategy TX4] QSO完成后收到新信号报告 ${newCallsign} 但已通联过且replyToWorkedStations=false`);
+                            logger.debug(`TX4: QSO done, new signal report ${newCallsign} already worked and replyToWorkedStations=false`);
                         }
                     }
                 }
 
                 // 没有新的直接呼叫，转到TX6
-                console.log(`[StandardQSOStrategy TX4] 没有新的直接呼叫，转到TX6`);
+                logger.debug('TX4: no new direct calls, switching to TX6');
                 strategy.clearQSOContext();
                 return { changeState: 'TX6' };
             }
@@ -530,7 +533,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return {};
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
-            console.log(`[StandardQSOStrategy TX4.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterFail: ${strategy.operator.config.autoResumeCQAfterFail}`);
+            logger.debug(`TX4 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
 
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
@@ -540,11 +543,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             // QSO失败，检查是否自动恢复CQ
             if (strategy.operator.config.autoResumeCQAfterFail) {
-                console.log(`[StandardQSOStrategy TX4.onTimeout] autoResumeCQAfterFail=true，切换到TX6继续CQ`);
+                logger.debug('TX4 timeout: autoResumeCQAfterFail=true, switching to TX6');
                 return { changeState: 'TX6' };
             }
 
-            console.log(`[StandardQSOStrategy TX4.onTimeout] autoResumeCQAfterFail=false，返回停止指令`);
+            logger.debug('TX4 timeout: autoResumeCQAfterFail=false, stopping');
             return { stop: true };
         }
     },
@@ -589,7 +592,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (msgRRR) {
                 // 对方没收到我们的73，重新发送了RRR
                 // 保持在TX5状态，下个周期再次发送73
-                console.log(`[StandardQSOStrategy TX5] 收到对方重发的RRR，保持TX5状态重新发送73`);
+                logger.debug('TX5: received retransmitted RRR, staying in TX5 to resend 73');
                 return {}; // 保持当前状态，不转换
             }
 
@@ -615,9 +618,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
 
                         if (hasConflict) {
-                            console.log(`[StandardQSOStrategy TX5] 收到新呼叫 ${callsign} 但其他同呼号操作者正在通联`);
+                            logger.debug(`TX5: new call ${callsign} conflicts with other operator`);
                         } else {
-                            console.log(`[StandardQSOStrategy TX5] 收到新的直接呼叫 ${callsign}，立即切换`);
+                            logger.debug(`TX5: switching to new direct call ${callsign}`);
 
                             // 清空旧QSO上下文（自动保存到缓存）
                             strategy.clearQSOContext();
@@ -647,9 +650,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
 
                         if (hasConflict) {
-                            console.log(`[StandardQSOStrategy TX5] 收到新信号报告 ${callsign} 但其他同呼号操作者正在通联`);
+                            logger.debug(`TX5: new signal report ${callsign} conflicts with other operator`);
                         } else {
-                            console.log(`[StandardQSOStrategy TX5] 收到新的直接信号报告 ${callsign}，立即切换`);
+                            logger.debug(`TX5: switching to new direct signal report ${callsign}`);
 
                             // 清空旧QSO上下文（自动保存到缓存）
                             strategy.clearQSOContext();
@@ -679,7 +682,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             return { changeState: 'TX6' };
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
-            console.log(`[StandardQSOStrategy TX5.onTimeout] 超时触发，当前目标: ${strategy.context.targetCallsign}, autoResumeCQAfterSuccess: ${strategy.operator.config.autoResumeCQAfterSuccess}`);
+            logger.debug(`TX5 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterSuccess=${strategy.operator.config.autoResumeCQAfterSuccess}`);
 
             // 清理QSO上下文
             strategy.clearQSOContext();
@@ -687,11 +690,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // TX5超时表示QSO已成功（已记录日志），对方没有回复73
             // 检查是否自动恢复CQ
             if (strategy.operator.config.autoResumeCQAfterSuccess) {
-                console.log(`[StandardQSOStrategy TX5.onTimeout] autoResumeCQAfterSuccess=true，切换到TX6继续CQ`);
+                logger.debug('TX5 timeout: autoResumeCQAfterSuccess=true, switching to TX6');
                 return { changeState: 'TX6' };
             }
 
-            console.log(`[StandardQSOStrategy TX5.onTimeout] autoResumeCQAfterSuccess=false，返回停止指令`);
+            logger.debug('TX5 timeout: autoResumeCQAfterSuccess=false, stopping');
             return { stop: true };
         }
     },
@@ -728,11 +731,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
 
                         if (hasConflict) {
-                            console.log(`[StandardQSOStrategy] 跳过直接呼叫: ${callsign} (其他同呼号操作者正在通联, SNR: ${directCall.snr})`);
+                            logger.debug(`TX6: skipping direct call ${callsign} - other operator conflict (SNR: ${directCall.snr})`);
                             continue; // 跳过这个，检查下一个直接呼叫
                         }
 
-                        console.log(`[StandardQSOStrategy] 回复直接呼叫: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCall.snr})`);
+                        logger.debug(`TX6: replying to direct call ${callsign} (worked=${hasWorked}, SNR: ${directCall.snr})`);
                         strategy.context.targetCallsign = callsign;
 
                         // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
@@ -749,7 +752,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         strategy.updateSlots();
                         return { changeState: 'TX2' };
                     } else {
-                        console.log(`[StandardQSOStrategy] 跳过直接呼叫: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCall.snr})`);
+                        logger.debug(`TX6: skipping direct call ${callsign} - already worked and replyToWorkedStations=false (SNR: ${directCall.snr})`);
                     }
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                     const callsign = msg.senderCallsign;
@@ -763,11 +766,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
 
                         if (hasConflict) {
-                            console.log(`[StandardQSOStrategy] 跳过直接信号报告: ${callsign} (其他同呼号操作者正在通联, SNR: ${directCall.snr})`);
+                            logger.debug(`TX6: skipping direct signal report ${callsign} - other operator conflict (SNR: ${directCall.snr})`);
                             continue; // 跳过这个，检查下一个直接呼叫
                         }
 
-                        console.log(`[StandardQSOStrategy] 回复直接信号报告: ${callsign} (${hasWorked ? '已通联过' : '未通联过'}, SNR: ${directCall.snr})`);
+                        logger.debug(`TX6: replying to direct signal report ${callsign} (worked=${hasWorked}, SNR: ${directCall.snr})`);
                         strategy.context.targetCallsign = callsign;
 
                         // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
@@ -784,7 +787,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         strategy.updateSlots();
                         return { changeState: 'TX3' };
                     } else {
-                        console.log(`[StandardQSOStrategy] 跳过直接信号报告: ${callsign} (已通联过且replyToWorkedStations=false, SNR: ${directCall.snr})`);
+                        logger.debug(`TX6: skipping direct signal report ${callsign} - already worked and replyToWorkedStations=false (SNR: ${directCall.snr})`);
                     }
                 }
             }
@@ -799,7 +802,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     const callsign = msg.senderCallsign;
                     // 跳过带有区域/活动标记的CQ（例如 CQ NA/EU/AS/AF/OC/SA/JA/DX/TEST/POTA 等）
                     if ((msg as FT8MessageCQ).flag) {
-                        console.log(`[StandardQSOStrategy] 跳过带标记的CQ: ${callsign} (flag=${(msg as FT8MessageCQ).flag})`);
+                        logger.debug(`TX6: skipping flagged CQ from ${callsign} (flag=${(msg as FT8MessageCQ).flag})`);
                         continue;
                     }
                     
@@ -813,11 +816,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             const hasConflict = strategy.operator.isTargetBeingWorkedByOthers(callsign);
 
                             if (hasConflict) {
-                                console.log(`[StandardQSOStrategy] 跳过CQ: ${callsign} (其他同呼号操作者正在通联, SNR: ${cqCall.snr}dB)`);
+                                logger.debug(`TX6: skipping CQ from ${callsign} - other operator conflict (SNR: ${cqCall.snr}dB)`);
                                 continue; // 跳过这个CQ，继续遍历下一个
                             }
 
-                            console.log(`[StandardQSOStrategy] 回复CQ: ${callsign} (未通联过, SNR: ${cqCall.snr}dB, 按信号强度优先)`);
+                            logger.debug(`TX6: replying to CQ from ${callsign} (not worked, SNR: ${cqCall.snr}dB, by signal strength)`);
                             strategy.context.targetCallsign = callsign;
 
                             // 尝试从缓存恢复上下文，如果没有缓存则使用当前消息的信息
@@ -834,10 +837,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             strategy.updateSlots();
                             return { changeState: 'TX1' };
                         } else {
-                            console.log(`[StandardQSOStrategy] 跳过CQ: ${callsign} (已通联过, SNR: ${cqCall.snr})`);
+                            logger.debug(`TX6: skipping CQ from ${callsign} - already worked (SNR: ${cqCall.snr})`);
                         }
                     } catch (error) {
-                        console.error(`[StandardQSOStrategy] 检查呼号 ${callsign} 失败:`, error);
+                        logger.error(`TX6: failed to check callsign ${callsign}:`, error);
                         // 如果检查失败，跳过这个呼号
                         continue;
                     }
@@ -933,18 +936,18 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             this.timeoutCycles++;
             // 检查是否超时
             if (this.timeoutCycles >= this.operator.config.maxQSOTimeoutCycles) {
-                console.log(`[StandardQSOStrategy] 超时计数达到限制 (${this.timeoutCycles}/${this.operator.config.maxQSOTimeoutCycles})，当前状态: ${this.state}，触发超时处理`);
+                logger.debug(`Timeout count reached limit (${this.timeoutCycles}/${this.operator.config.maxQSOTimeoutCycles}), state=${this.state}, triggering timeout handler`);
                 if (currentState.onTimeout) {
                     const timeoutResult = currentState.onTimeout(this);
-                    console.log(`[StandardQSOStrategy] 超时处理结果:`, timeoutResult);
+                    logger.debug('Timeout handler result:', timeoutResult);
 
                     // 使用 changeState() 方法进行状态转换，确保完整的状态转换流程
                     if (timeoutResult.changeState) {
-                        console.log(`[StandardQSOStrategy] 超时后切换状态: ${this.state} → ${timeoutResult.changeState}`);
+                        logger.debug(`State transition after timeout: ${this.state} -> ${timeoutResult.changeState}`);
                         this.changeState(timeoutResult.changeState);
                     }
                     if (timeoutResult.stop) {
-                        console.log(`[StandardQSOStrategy] 超时后停止操作员`);
+                        logger.debug('Stopping operator after timeout');
                         return { stop: true };
                     }
                 }
@@ -961,7 +964,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     }
 
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
-        console.log(`[StandardQSOStrategy.requestCall] (${this.operator.config.myCallsign}) 请求通联 ${callsign}`, lastMessage);
+        logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
         if (!lastMessage) {
             this.context.targetCallsign = callsign;
             this.updateSlots();
@@ -999,7 +1002,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
                     }
                     this.updateSlots();
                     this.changeState('TX2');  // 下周期发送 SIGNAL_REPORT
-                    console.log(`[StandardQSOStrategy.requestCall] 收到 CALL，转到 TX2（发送信号报告）`);
+                    logger.debug('requestCall: received CALL, switching to TX2');
                 } else if (msg.type === FT8MessageType.SIGNAL_REPORT) {
                     // 对方发了信号报告，回复 ROGER_REPORT
                     const reportMsg = msg as FT8MessageSignalReport;
@@ -1010,7 +1013,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
                     }
                     this.updateSlots();
                     this.changeState('TX3');  // 下周期发送 ROGER_REPORT
-                    console.log(`[StandardQSOStrategy.requestCall] 收到 SIGNAL_REPORT，转到 TX3（发送确认报告）`);
+                    logger.debug('requestCall: received SIGNAL_REPORT, switching to TX3');
                 } else if (msg.type === FT8MessageType.ROGER_REPORT) {
                     // 对方发了 ROGER_REPORT，回复 RR73
                     const rogerMsg = msg as FT8MessageRogerReport;
@@ -1024,17 +1027,17 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
                     }
                     this.updateSlots();
                     this.changeState('TX4');  // 下周期发送 RR73
-                    console.log(`[StandardQSOStrategy.requestCall] 收到 ROGER_REPORT，转到 TX4（发送 RR73）`);
+                    logger.debug('requestCall: received ROGER_REPORT, switching to TX4');
                 } else if (msg.type === FT8MessageType.RRR) {
                     // 对方发了 RRR，回复 73
                     this.updateSlots();
                     this.changeState('TX5');  // 下周期发送 73
-                    console.log(`[StandardQSOStrategy.requestCall] 收到 RRR，转到 TX5（发送 73）`);
+                    logger.debug('requestCall: received RRR, switching to TX5');
                 } else if (msg.type === FT8MessageType.SEVENTY_THREE) {
                     // 对方发了 73，QSO 完成，转到待机
                     this.updateSlots();
                     this.changeState('TX6');  // 待机
-                    console.log(`[StandardQSOStrategy.requestCall] 收到 73，转到 TX6（待机）`);
+                    logger.debug('requestCall: received 73, switching to TX6 (standby)');
                 }
                 // 不再调用 handleReceivedAndDicideNext，避免状态机二次处理
                 return;
@@ -1185,10 +1188,10 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             entries.sort((a, b) => a[1].lastUpdated - b[1].lastUpdated);
             const oldestKey = entries[0][0];
             this.qsoContextHistory.delete(oldestKey);
-            console.log(`[StandardQSOStrategy] 缓存已满，删除最旧条目: ${oldestKey}`);
+            logger.debug(`Context cache full, evicting oldest entry: ${oldestKey}`);
         }
 
-        console.log(`[StandardQSOStrategy] 保存上下文到缓存: ${this.context.targetCallsign}`, {
+        logger.debug(`Saving context to cache: ${this.context.targetCallsign}`, {
             grid: this.context.targetGrid,
             reportSent: this.context.reportSent,
             reportReceived: this.context.reportReceived
@@ -1206,7 +1209,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             this.context.reportReceived = cached.reportReceived;
             this.context.actualFrequency = cached.actualFrequency;
 
-            console.log(`✅ [StandardQSOStrategy] 从缓存恢复上下文: ${targetCallsign}`, {
+            logger.debug(`Restored context from cache: ${targetCallsign}`, {
                 grid: cached.targetGrid,
                 reportSent: cached.reportSent,
                 reportReceived: cached.reportReceived
@@ -1236,7 +1239,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         // 更新slots（TX1-TX5会变为空，只保留TX6的CQ）
         this.updateSlots();
 
-        console.log(`[StandardQSOStrategy] 已清空QSO上下文 (前目标: ${previousTarget}, 当前状态: ${currentState}, 超时计数: ${this.timeoutCycles})`);
+        logger.debug(`QSO context cleared (previousTarget=${previousTarget}, state=${currentState}, timeoutCycles=${this.timeoutCycles})`);
     }
 
     /**

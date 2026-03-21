@@ -1,5 +1,8 @@
 import { api, WSClient } from '@tx5dr/core';
 import { getWebSocketUrl, getApiBaseUrl } from '../utils/config';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('RadioService');
 
 /**
  * 无线电数据服务
@@ -16,7 +19,7 @@ export class RadioService {
   constructor() {
     // 创建WebSocket客户端
     const wsUrl = getWebSocketUrl();
-    console.log('🔧 RadioService WebSocket URL:', wsUrl);
+    logger.info('WebSocket URL:', wsUrl);
     this.wsClient = new WSClient({
       url: wsUrl,
       heartbeatInterval: 30000
@@ -37,11 +40,11 @@ export class RadioService {
    */
   private async autoConnect(): Promise<void> {
     try {
-      console.log('🚀 RadioService 自动连接中...');
+      logger.info('Auto-connecting...');
       await this.connect();
-      console.log('✅ RadioService 自动连接成功');
+      logger.info('Auto-connect succeeded');
     } catch (error) {
-      console.warn('⚠️ RadioService 自动连接失败，将通过重连机制重试:', error);
+      logger.warn('Auto-connect failed, will retry via reconnect mechanism:', error);
       // 不抛出错误，让WebSocket的自动重连机制处理
     }
   }
@@ -53,7 +56,7 @@ export class RadioService {
     // 首先测试REST API连接
     const apiBase = getApiBaseUrl();
     await api.getHello(apiBase);
-    console.log('✅ REST API连接成功');
+    logger.info('REST API connected');
 
     // 然后建立WebSocket连接
     await this.wsClient.connect();
@@ -141,12 +144,12 @@ export class RadioService {
    * 获取操作员列表
    */
   getOperators(): void {
-    console.log('📤 [RadioService] getOperators 调用，isConnected:', this.isConnected);
+    logger.debug('getOperators called, isConnected:', this.isConnected);
     if (this.isConnected) {
-      console.log('📤 [RadioService] 发送 getOperators 消息');
+      logger.debug('Sending getOperators');
       this.wsClient.send('getOperators');
     } else {
-      console.warn('⚠️ [RadioService] 未连接，无法获取操作员列表');
+      logger.warn('Not connected, cannot get operator list');
     }
   }
 
@@ -237,7 +240,7 @@ export class RadioService {
    */
   setClientEnabledOperators(enabledOperatorIds: string[]): void {
     if (this.isConnected) {
-      console.log('📤 [RadioService] 设置客户端启用操作员:', enabledOperatorIds);
+      logger.debug('Setting client enabled operators:', enabledOperatorIds);
       this.wsClient.send('setClientEnabledOperators', { enabledOperatorIds });
     }
   }
@@ -247,7 +250,7 @@ export class RadioService {
    */
   sendHandshake(enabledOperatorIds: string[] | null): void {
     if (this.isConnected) {
-      console.log('🤝 [RadioService] 发送握手消息:', { enabledOperatorIds });
+      logger.debug('Sending handshake:', { enabledOperatorIds });
       this.wsClient.send('clientHandshake', {
         enabledOperatorIds,
         clientVersion: '1.0.0',
@@ -272,10 +275,10 @@ export class RadioService {
    */
   radioManualReconnect(): void {
     if (this.isConnected) {
-      console.log('📤 [RadioService] 发送手动重连电台命令');
+      logger.debug('Sending radio manual reconnect command');
       this.wsClient.send('radioManualReconnect');
     } else {
-      console.warn('⚠️ [RadioService] 未连接到服务器，无法手动重连电台');
+      logger.warn('Not connected to server, cannot send radio manual reconnect');
     }
   }
 
@@ -284,29 +287,29 @@ export class RadioService {
    */
   connectAudioMonitor(): void {
     if (!this.isConnected) {
-      console.warn('⚠️ [RadioService] 未连接到服务器，无法连接音频监听');
+      logger.warn('Not connected to server, cannot connect audio monitor');
       return;
     }
 
     if (this.audioMonitorWs) {
-      console.warn('⚠️ [RadioService] 音频WebSocket已连接');
+      logger.warn('Audio WebSocket already connected');
       return;
     }
 
     // 生成客户端ID（用于音频WebSocket连接）
     this.audioMonitorClientId = `audio_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    console.log(`🎧 [RadioService] 连接音频监听, clientId=${this.audioMonitorClientId}`);
+    logger.info(`Connecting audio monitor, clientId=${this.audioMonitorClientId}`);
 
     // 连接音频WebSocket（连接后服务端自动开始广播）
     const audioWsUrl = getWebSocketUrl().replace('/ws', `/ws/audio-monitor?clientId=${this.audioMonitorClientId}`);
-    console.log(`🎧 [RadioService] 连接音频WebSocket: ${audioWsUrl}`);
+    logger.info(`Connecting audio WebSocket: ${audioWsUrl}`);
 
     this.audioMonitorWs = new WebSocket(audioWsUrl);
     this.audioMonitorWs.binaryType = 'arraybuffer';
 
     this.audioMonitorWs.onopen = () => {
-      console.log('✅ [RadioService] 音频WebSocket已连接，开始接收音频数据');
+      logger.info('Audio WebSocket connected, receiving audio data');
     };
 
     this.audioMonitorWs.onmessage = (event) => {
@@ -319,11 +322,11 @@ export class RadioService {
     };
 
     this.audioMonitorWs.onerror = (error) => {
-      console.error('❌ [RadioService] 音频WebSocket错误:', error);
+      logger.error('Audio WebSocket error:', error);
     };
 
     this.audioMonitorWs.onclose = () => {
-      console.log('🔌 [RadioService] 音频WebSocket已关闭');
+      logger.info('Audio WebSocket closed');
       this.audioMonitorWs = null;
     };
   }
@@ -334,7 +337,7 @@ export class RadioService {
   disconnectAudioMonitor(): void {
     // 关闭音频WebSocket
     if (this.audioMonitorWs) {
-      console.log('🎧 [RadioService] 关闭音频WebSocket');
+      logger.info('Closing audio WebSocket');
       this.audioMonitorWs.close();
       this.audioMonitorWs = null;
       this.audioMonitorClientId = null;
@@ -347,6 +350,6 @@ export class RadioService {
    */
   setAudioMonitorDataHandler(handler: ((buffer: ArrayBuffer) => void) | null): void {
     this.audioMonitorDataHandler = handler;
-    console.log(`🎧 [RadioService] 音频数据处理器已${handler ? '设置' : '清除'}`);
+    logger.info(`Audio data handler ${handler ? 'set' : 'cleared'}`);
   }
 }

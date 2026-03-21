@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('MyRelatedFramesTable');
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo } from '@tx5dr/core';
 import { useSlotPacks, useRadioState, useConnection, useCurrentOperatorId } from '../store/radioStore';
@@ -60,7 +63,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         );
 
         if (isDuplicate) {
-          console.warn('⚠️ [MyRelatedFramesTable] 检测到重复的发射日志，已过滤:', data);
+          logger.warn('Duplicate transmission log detected, filtered:', data);
           return prev; // 不添加重复的日志
         }
 
@@ -205,7 +208,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         const slotToFreeze = recentSlotGroupKeys[1]; // 最老的时隙
         const groupDataToFreeze = myFrameGroups.find(group => group.time === slotToFreeze);
         if (groupDataToFreeze) {
-          console.log(`[MyRelatedFramesTable] Freezing slot data: ${slotToFreeze}`);
+          logger.debug(`Freezing slot data: ${slotToFreeze}`);
           freezeSlotData(slotToFreeze, groupDataToFreeze);
         }
       }

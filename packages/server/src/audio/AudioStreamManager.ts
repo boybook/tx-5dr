@@ -11,6 +11,9 @@ import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
 import { performance } from 'node:perf_hooks';
 import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AudioStreamManager');
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
@@ -61,12 +64,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.bufferSize = audioConfig.bufferSize || 1024;
     this.currentSampleRate = this.sampleRate;
 
-    console.log(`🎵 [AudioStreamManager] 使用音频配置: 采样率=${this.sampleRate}Hz, 缓冲区=${this.bufferSize}帧`);
-
     // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz）
     const INTERNAL_SAMPLE_RATE = 12000;
     this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5); // 5秒缓冲
-    console.log(`🎵 [AudioStreamManager] 音频缓冲区使用内部采样率: ${INTERNAL_SAMPLE_RATE}Hz`);
+    logger.info('audio stream manager initialized', { sampleRate: this.sampleRate, bufferSize: this.bufferSize, internalSampleRate: INTERNAL_SAMPLE_RATE });
   }
 
   /**
@@ -74,7 +75,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   setIcomWlanAudioAdapter(adapter: IcomWlanAudioAdapter | null): void {
     this.icomWlanAudioAdapter = adapter;
-    console.log(`📡 [AudioStreamManager] ICOM WLAN 音频适配器已${adapter ? '设置' : '清除'}`);
+    logger.info(`ICOM WLAN audio adapter ${adapter ? 'set' : 'cleared'}`);
   }
 
   /**
@@ -97,12 +98,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   async startStream(deviceId?: string): Promise<void> {
     if (this.isStreaming) {
-      console.log('⚠️ 音频流已经在运行中');
+      logger.warn('audio stream is already running');
       return;
     }
     
     try {
-      console.log('🎤 启动音频流...');
+      logger.info('starting audio stream');
       
       // 从配置获取设备名称并解析为设备ID
       const configManager = ConfigManager.getInstance();
@@ -122,11 +123,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 检测是否为 ICOM WLAN 虚拟设备
       if (resolvedDeviceId === 'icom-wlan-input' || audioConfig.inputDeviceName === 'ICOM WLAN') {
-        console.log('📡 [AudioStreamManager] 检测到 ICOM WLAN 虚拟输入设备');
+        logger.info('ICOM WLAN virtual input device detected');
 
         if (!this.icomWlanAudioAdapter) {
           // ICOM 适配器未设置时，输出警告并跳过音频流启动
-          console.warn('⚠️ [AudioStreamManager] ICOM WLAN 音频适配器未设置，跳过音频流启动');
+          logger.warn('ICOM WLAN audio adapter not set, skipping audio stream start');
 
           this.deviceId = 'icom-wlan-input';
           this.usingIcomWlanInput = false;
@@ -146,13 +147,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         });
 
         this.icomWlanAudioAdapter.on('error', (error: Error) => {
-          console.error('❌ [AudioStreamManager] ICOM WLAN 音频错误:', error);
+          console.error('ICOM WLAN audio error:', error);
           this.emit('error', error);
         });
 
         this.deviceId = 'icom-wlan-input';
         this.isStreaming = true;
-        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频输入启动成功 (12kHz → 48kHz)`);
+        logger.info('ICOM WLAN audio input started (12kHz -> 48kHz)');
         this.emit('started');
         return;
       }
@@ -164,35 +165,35 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         } else if (!isNaN(parseInt(resolvedDeviceId))) {
           actualDeviceId = parseInt(resolvedDeviceId);
         }
-        console.log(`🎯 解析到音频输入设备: ${audioConfig.inputDeviceName || '默认设备'} -> ID ${actualDeviceId}`);
+        logger.info('resolved audio input device', { name: audioConfig.inputDeviceName || 'default', id: actualDeviceId });
       } else {
-        console.log('🎯 使用系统默认音频输入设备');
+        logger.info('using system default audio input device');
       }
 
-      console.log('音频输入配置:', {
+      logger.info('audio input starting', {
         deviceId: actualDeviceId,
         channels: this.channels,
         sampleRate: this.sampleRate,
         frameSize: this.bufferSize,
-        format: 'Float32'
+        format: 'Float32',
       });
 
       // 创建和启动音频输入流（带超时保护）
       await this.createAndStartInputWithTimeout(actualDeviceId, deviceId);
       
       this.isStreaming = true;
-      console.log(`✅ 音频流启动成功 (${this.sampleRate}Hz, 缓冲区: ${this.bufferSize} 帧)`);
+      logger.info('audio stream started', { sampleRate: this.sampleRate, bufferSize: this.bufferSize });
       this.emit('started');
-      
+
     } catch (error) {
-      console.error('启动音频流失败:', error);
+      console.error('failed to start audio stream:', error);
       // 清理失败的输入流
       if (this.rtAudioInput) {
         try {
           this.rtAudioInput.stop();
           this.rtAudioInput.closeStream();
         } catch (cleanupError) {
-          console.error('清理音频输入流失败:', cleanupError);
+          console.error('failed to cleanup audio input stream:', cleanupError);
         }
         this.rtAudioInput = null;
       }
@@ -208,12 +209,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   async stopStream(): Promise<void> {
     if (!this.isStreaming) {
-      console.log('⚠️ 音频流未运行');
+      logger.warn('audio stream is not running');
       return;
     }
 
     try {
-      console.log('🛑 停止音频流...');
+      logger.info('stopping audio stream');
 
       // 停止 ICOM WLAN 音频输入
       if (this.usingIcomWlanInput && this.icomWlanAudioAdapter) {
@@ -221,7 +222,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.icomWlanAudioAdapter.removeAllListeners('audioData');
         this.icomWlanAudioAdapter.removeAllListeners('error');
         this.usingIcomWlanInput = false;
-        console.log('✅ ICOM WLAN 音频输入已停止');
+        logger.info('ICOM WLAN audio input stopped');
       }
 
       // 停止传统声卡输入
@@ -230,7 +231,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.rtAudioInput.stop();
           this.rtAudioInput.closeStream();
         } catch (e) {
-          console.error('清理音频输入流失败:', e);
+          console.error('failed to cleanup audio input stream:', e);
         }
         this.rtAudioInput = null;
       }
@@ -241,11 +242,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.isStreaming = false;
       this.deviceId = null;
 
-      console.log('✅ 音频流停止成功');
+      logger.info('audio stream stopped');
       this.emit('stopped');
 
     } catch (error) {
-      console.error('停止音频流失败:', error);
+      console.error('failed to stop audio stream:', error);
       this.emit('error', error as Error);
       throw error;
     }
@@ -275,15 +276,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     
     const oldSampleRate = this.sampleRate;
     const oldBufferSize = this.bufferSize;
-    
+
     this.sampleRate = audioConfig.sampleRate || 48000;
     this.bufferSize = audioConfig.bufferSize || 1024;
     this.currentSampleRate = this.sampleRate;
-    
-    console.log(`🔄 [AudioStreamManager] 音频配置已重新加载:`);
-    console.log(`   采样率: ${oldSampleRate}Hz -> ${this.sampleRate}Hz`);
-    console.log(`   缓冲区: ${oldBufferSize}帧 -> ${this.bufferSize}帧`);
-    console.log(`   ⚠️ 需要重启音频流才能生效`);
+
+    logger.info('audio config reloaded (restart required)', {
+      sampleRate: `${oldSampleRate}Hz -> ${this.sampleRate}Hz`,
+      bufferSize: `${oldBufferSize} -> ${this.bufferSize}`,
+    });
   }
   
   /**
@@ -308,7 +309,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     try {
       // 确保缓冲区长度是4的倍数（Float32 = 4字节）
       if (buffer.length % 4 !== 0) {
-        console.warn(`⚠️ Buffer 长度不是4的倍数: ${buffer.length}`);
+        logger.warn(`buffer length is not a multiple of 4: ${buffer.length}`);
         // 截断到最近的4的倍数
         const truncatedLength = Math.floor(buffer.length / 4) * 4;
         buffer = buffer.subarray(0, truncatedLength);
@@ -328,12 +329,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
       
       if (hasInvalidValues) {
-        console.warn('⚠️ 检测到无效音频样本值，已替换为0');
+        logger.warn('invalid audio sample values detected, replaced with 0');
       }
-      
+
       return samples;
     } catch (error) {
-      console.error('Buffer 转换错误:', error);
+      console.error('buffer conversion error:', error);
       // 返回空数组作为后备
       return new Float32Array(0);
     }
@@ -351,12 +352,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   async startOutput(outputDeviceId?: string): Promise<void> {
     if (this.isOutputting) {
-      console.log('⚠️ 音频输出已经在运行中');
+      logger.warn('audio output is already running');
       return;
     }
-    
+
     try {
-      console.log('🔊 启动音频输出...');
+      logger.info('starting audio output');
       
       // 从配置获取设备名称并解析为设备ID
       const configManager = ConfigManager.getInstance();
@@ -376,11 +377,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 检测是否为 ICOM WLAN 虚拟设备
       if (resolvedOutputDeviceId === 'icom-wlan-output' || audioConfig.outputDeviceName === 'ICOM WLAN') {
-        console.log('📡 [AudioStreamManager] 检测到 ICOM WLAN 虚拟输出设备');
+        logger.info('ICOM WLAN virtual output device detected');
 
         if (!this.icomWlanAudioAdapter) {
           // ICOM 适配器未设置时，回退到默认声卡而不是抛出错误
-          console.warn('⚠️ [AudioStreamManager] ICOM WLAN 音频适配器未设置，回退到默认音频设备');
+          logger.warn('ICOM WLAN audio adapter not set, falling back to default audio device');
           // 清除虚拟设备 ID，让后续代码使用传统声卡模式
           resolvedOutputDeviceId = undefined;
           actualOutputDeviceId = undefined;
@@ -390,7 +391,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.usingIcomWlanOutput = true;
           this.outputDeviceId = 'icom-wlan-output';
           this.isOutputting = true;
-          console.log(`✅ [AudioStreamManager] ICOM WLAN 音频输出启动成功 (48kHz → 12kHz)`);
+          logger.info('ICOM WLAN audio output started (48kHz -> 12kHz)');
           return;
         }
       }
@@ -402,35 +403,33 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         } else if (!isNaN(parseInt(resolvedOutputDeviceId))) {
           actualOutputDeviceId = parseInt(resolvedOutputDeviceId);
         }
-        console.log(`🎯 解析到音频输出设备: ${audioConfig.outputDeviceName || '默认设备'} -> ID ${actualOutputDeviceId}`);
+        logger.info('resolved audio output device', { name: audioConfig.outputDeviceName || 'default', id: actualOutputDeviceId });
       } else {
-        console.log('🎯 使用系统默认音频输出设备');
+        logger.info('using system default audio output device');
       }
-      
-      console.log('音频输出配置:', {
+
+      logger.info('audio output starting', {
         deviceId: actualOutputDeviceId,
         channels: this.channels,
         sampleRate: this.sampleRate,
         frameSize: this.bufferSize,
-        format: 'Float32'
+        format: 'Float32',
       });
 
-      // 创建和启动音频输出流（带超时保护）
-      console.log('🔧 创建音频输出流...');
       await this.createAndStartOutputWithTimeout(actualOutputDeviceId, outputDeviceId);
-      
+
       this.isOutputting = true;
-      console.log(`✅ 音频输出启动成功 (${this.sampleRate}Hz)`);
-      
+      logger.info('audio output started', { sampleRate: this.sampleRate });
+
     } catch (error) {
-      console.error('启动音频输出失败:', error);
+      console.error('failed to start audio output:', error);
       // 清理失败的输出流
       if (this.rtAudioOutput) {
         try {
           this.rtAudioOutput.stop();
           this.rtAudioOutput.closeStream();
         } catch (cleanupError) {
-          console.error('清理音频输出流失败:', cleanupError);
+          console.error('failed to cleanup audio output stream:', cleanupError);
         }
         this.rtAudioOutput = null;
       }
@@ -447,14 +446,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private async createAndStartInputWithTimeout(actualDeviceId: number | undefined, deviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        console.error('⏰ 音频输入创建/启动超时 (15秒)');
-        reject(new Error('音频输入创建/启动超时'));
+        console.error('audio input create/start timed out (15s)');
+        reject(new Error('audio input create/start timed out'));
       }, 15000);
 
       try {
         setImmediate(() => {
           try {
-            console.log('🔄 执行音频输入创建 (Audify/RtAudio)...');
+            logger.info('creating audio input stream (Audify/RtAudio)');
 
             this.rtAudioInput = new RtAudio();
 
@@ -486,7 +485,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                 try {
                   if (!pcm || pcm.length === 0) return;
                   if (pcm.length % 4 !== 0) {
-                    console.warn(`⚠️ 音频数据长度不是4的倍数: ${pcm.length}`);
+                    logger.warn(`audio data length is not a multiple of 4: ${pcm.length}`);
                     return;
                   }
 
@@ -504,7 +503,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                       this.audioProvider.writeAudio(resampled);
                       this.emit('audioData', resampled);
                     }).catch((error) => {
-                      console.error('音频重采样错误:', error);
+                      console.error('audio resample error:', error);
                       this.emit('error', error as Error);
                     });
                   } else {
@@ -512,25 +511,25 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                     this.emit('audioData', samples);
                   }
                 } catch (error) {
-                  console.error('音频数据处理错误:', error);
+                  console.error('audio data processing error:', error);
                   this.emit('error', error as Error);
                 }
               },
               null // frameOutputCallback
             );
 
-            console.log('✅ 音频输入流创建成功');
+            logger.info('audio input stream created');
             this.deviceId = deviceId || 'default';
 
-            console.log('🚀 启动音频输入流...');
+            logger.info('starting audio input stream');
             this.rtAudioInput.start();
 
-            console.log('✅ 音频输入流启动成功');
+            logger.info('audio input stream started');
             clearTimeout(timeout);
             resolve();
 
           } catch (error) {
-            console.error('❌ 音频输入创建/启动失败:', error);
+            console.error('audio input create/start failed:', error);
             clearTimeout(timeout);
             reject(error);
           }
@@ -548,14 +547,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private async createAndStartOutputWithTimeout(actualOutputDeviceId: number | undefined, outputDeviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        console.error('⏰ 音频输出创建/启动超时 (15秒)');
-        reject(new Error('音频输出创建/启动超时'));
+        console.error('audio output create/start timed out (15s)');
+        reject(new Error('audio output create/start timed out'));
       }, 15000);
 
       try {
         setImmediate(() => {
           try {
-            console.log('🔄 执行音频输出创建 (Audify/RtAudio)...');
+            logger.info('creating audio output stream (Audify/RtAudio)');
 
             this.rtAudioOutput = new RtAudio();
 
@@ -572,18 +571,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               null  // frameOutputCallback
             );
 
-            console.log('✅ 音频输出流创建成功');
+            logger.info('audio output stream created');
             this.outputDeviceId = outputDeviceId || 'default';
 
-            console.log('🚀 启动音频输出流...');
+            logger.info('starting audio output stream');
             this.rtAudioOutput.start();
 
-            console.log('✅ 音频输出流启动成功');
+            logger.info('audio output stream started');
             clearTimeout(timeout);
             resolve();
 
           } catch (error) {
-            console.error('❌ 音频输出创建/启动失败:', error);
+            console.error('audio output create/start failed:', error);
             clearTimeout(timeout);
             reject(error);
           }
@@ -600,17 +599,17 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   async stopOutput(): Promise<void> {
     if (!this.isOutputting) {
-      console.log('⚠️ 音频输出未运行');
+      logger.warn('audio output is not running');
       return;
     }
 
     try {
-      console.log('🛑 停止音频输出...');
+      logger.info('stopping audio output');
 
       // ICOM WLAN 输出只需要清除标志，不需要额外操作
       if (this.usingIcomWlanOutput) {
         this.usingIcomWlanOutput = false;
-        console.log('✅ ICOM WLAN 音频输出已停止');
+        logger.info('ICOM WLAN audio output stopped');
       }
 
       // 停止传统声卡输出
@@ -619,7 +618,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.rtAudioOutput.stop();
           this.rtAudioOutput.closeStream();
         } catch (e) {
-          console.error('清理音频输出流失败:', e);
+          console.error('failed to cleanup audio output stream:', e);
         }
         this.rtAudioOutput = null;
       }
@@ -627,10 +626,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.isOutputting = false;
       this.outputDeviceId = null;
 
-      console.log('✅ 音频输出停止成功');
+      logger.info('audio output stopped');
 
     } catch (error) {
-      console.error('停止音频输出失败:', error);
+      console.error('failed to stop audio output:', error);
       this.emit('error', error as Error);
       throw error;
     }
@@ -663,7 +662,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.volumeGainDb = Math.max(-60.0, Math.min(20.0, db));
     this.volumeGain = this.dbToGain(this.volumeGainDb);
     
-    console.log(`🔊 设置音量增益: ${this.volumeGainDb.toFixed(1)}dB (线性: ${this.volumeGain.toFixed(3)})`);
+    logger.info('volume gain set', { db: this.volumeGainDb.toFixed(1), linear: this.volumeGain.toFixed(3) });
   }
 
   /**
@@ -675,7 +674,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.volumeGain = Math.max(0.001, Math.min(10.0, gain));
     this.volumeGainDb = this.gainToDb(this.volumeGain);
     
-    console.log(`🔊 设置音量增益: ${this.volumeGain.toFixed(3)} (${this.volumeGainDb.toFixed(1)}dB)`);
+    logger.info('volume gain set', { linear: this.volumeGain.toFixed(3), db: this.volumeGainDb.toFixed(1) });
   }
 
   /**
@@ -717,14 +716,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   public async stopCurrentPlayback(): Promise<number> {
     if (!this.playing) {
-      console.log('🛑 [音频播放] 没有正在播放的音频');
+      logger.debug('no audio currently playing');
       return 0;
     }
 
     const now = Date.now();
     const elapsedTime = now - this.playbackStartTime;
 
-    console.log(`🛑 [音频播放] 停止当前播放, 已播放时间: ${elapsedTime}ms`);
+    logger.debug(`stopping current playback, elapsed: ${elapsedTime}ms`);
 
     // 设置停止标志,让播放循环自动退出
     this.shouldStopPlayback = true;
@@ -735,7 +734,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         await this.currentPlaybackPromise;
       } catch (error) {
         // 播放被中断是预期的行为
-        console.log(`🛑 [音频播放] 播放已被中断`);
+        logger.debug('playback interrupted');
       }
     }
 
@@ -743,7 +742,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.shouldStopPlayback = false;
     this.currentPlaybackPromise = null;
 
-    console.log(`✅ [音频播放] 停止完成, 已播放: ${elapsedTime}ms`);
+    logger.debug(`playback stopped, elapsed: ${elapsedTime}ms`);
 
     return elapsedTime;
   }
@@ -756,11 +755,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     // 检查是否使用 ICOM WLAN 输出（零重采样优化）
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
-      console.log(`📡 [AudioStreamManager] 使用 ICOM WLAN 输出播放音频（零重采样优化）:`);
-      console.log(`   样本数: ${audioData.length}`);
-      console.log(`   采样率: ${targetSampleRate}Hz（已是 ICOM 原生 12kHz）`);
-      console.log(`   时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
-      console.log(`   音量增益: ${this.volumeGain.toFixed(2)}`);
+      logger.info('playing audio via ICOM WLAN output (zero-resample)', {
+        samples: audioData.length,
+        sampleRate: targetSampleRate,
+        duration: `${(audioData.length / targetSampleRate).toFixed(2)}s`,
+        volumeGain: this.volumeGain.toFixed(2),
+      });
 
       // 设置播放状态
       this.playing = true;
@@ -773,7 +773,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const chunkSize = 1200;
         const totalChunks = Math.ceil(audioData.length / chunkSize);
 
-        console.log(`🔊 [AudioStreamManager] ICOM WLAN 分块发送: ${totalChunks} 块，chunk=${chunkSize} 样本`);
+        logger.debug(`ICOM WLAN chunked send: ${totalChunks} chunks, chunkSize=${chunkSize}`);
 
         const chunkStartTime = Date.now();
         const hrStart = performance.now();
@@ -784,7 +784,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         for (let i = 0; i < totalChunks; i++) {
           // 检查是否需要停止播放
           if (this.shouldStopPlayback) {
-            console.log(`🛑 [AudioStreamManager] ICOM WLAN 检测到停止信号,中断播放 (已发送${i}/${totalChunks}块)`);
+            logger.debug(`ICOM WLAN stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
             throw new Error('播放已被中断');
           }
 
@@ -819,10 +819,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         const chunkEndTime = Date.now();
         const chunkDuration = chunkEndTime - chunkStartTime;
-        console.log(`✅ [AudioStreamManager] ICOM WLAN 音频发送完成, 耗时: ${chunkDuration}ms`);
+        logger.info(`ICOM WLAN audio send complete, duration: ${chunkDuration}ms`);
 
       } catch (error) {
-        console.error(`❌ [AudioStreamManager] ICOM WLAN 音频发送失败:`, error);
+        console.error('ICOM WLAN audio send failed:', error);
         throw error;
       } finally {
         // 清理播放状态
@@ -843,12 +843,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.playbackStartTime = playStartTime;
     this.shouldStopPlayback = false;
 
-    console.log(`🔊 [音频播放] 开始播放音频 (${new Date(playStartTime).toISOString()}):`);
-    console.log(`   原始样本数: ${audioData.length}`);
-    console.log(`   原始采样率: ${targetSampleRate}Hz`);
-    console.log(`   原始时长: ${(audioData.length / targetSampleRate).toFixed(2)}s`);
-    console.log(`   目标采样率: ${this.sampleRate}Hz`);
-    console.log(`   音量增益: ${this.volumeGain.toFixed(2)}`);
+    logger.info('starting audio playback', {
+      startTime: new Date(playStartTime).toISOString(),
+      samples: audioData.length,
+      sourceSampleRate: targetSampleRate,
+      duration: `${(audioData.length / targetSampleRate).toFixed(2)}s`,
+      targetSampleRate: this.sampleRate,
+      volumeGain: this.volumeGain.toFixed(2),
+    });
 
     // 保存当前播放的Promise
     this.currentPlaybackPromise = (async () => {
@@ -857,16 +859,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       // 检查是否需要重采样（12kHz → 设备采样率）
       if (targetSampleRate !== this.sampleRate) {
-        console.log(`🔄 [音频播放] Soxr 重采样: ${targetSampleRate}Hz -> ${this.sampleRate}Hz`);
+        logger.debug(`resampling for playback: ${targetSampleRate}Hz -> ${this.sampleRate}Hz`);
         playbackData = await resampleAudioProfessional(
           audioData,
           targetSampleRate,
           this.sampleRate,
           1 // 单声道
         );
-        console.log(`🔄 [音频播放] 重采样完成: ${audioData.length} -> ${playbackData.length} 样本`);
+        logger.debug(`resample complete: ${audioData.length} -> ${playbackData.length} samples`);
       } else {
-        console.log(`✅ [音频播放] 采样率匹配，无需重采样`);
+        logger.debug('sample rate matches, no resample needed');
         playbackData = audioData;
       }
 
@@ -882,7 +884,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 目标预缓冲时长，避免定时器抖动导致咔哒声（约 80~120ms）
       const prebufferMs = Math.max(60, Math.min(200, Math.round((framesPerBuffer / this.sampleRate) * 1000 * 4)));
 
-      console.log(`🔊 [音频播放] 分块播放: ${totalChunks} 块，chunk=${chunkSize} 样本，预缓冲≈${prebufferMs}ms`);
+      logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms`);
 
       const chunkStartTime = Date.now();
       const hrStart = performance.now();
@@ -892,7 +894,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       for (let i = 0; i < totalChunks; i++) {
         if (this.shouldStopPlayback) {
-          console.log(`🛑 [音频播放] 检测到停止信号,中断播放 (已提交${i}/${totalChunks}块)`);
+          logger.debug(`stop signal received, aborting playback (submitted ${i}/${totalChunks} chunks)`);
           throw new Error('播放已被中断');
         }
 
@@ -936,14 +938,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       const chunkEndTime = Date.now();
       const chunkDuration = chunkEndTime - chunkStartTime;
-      console.log(`📝 [音频播放] 分块写入完成 (${new Date(chunkEndTime).toISOString()}), 耗时: ${chunkDuration}ms`);
+      logger.debug(`chunked write complete at ${new Date(chunkEndTime).toISOString()}, duration: ${chunkDuration}ms`);
 
       const playEndTime = Date.now();
       const playDuration = playEndTime - playStartTime;
-      console.log(`✅ [音频播放] 播放完成 (${new Date(playEndTime).toISOString()}), 耗时: ${playDuration}ms`);
+      logger.info(`playback complete at ${new Date(playEndTime).toISOString()}, duration: ${playDuration}ms`);
 
       } catch (error) {
-        console.error('❌ [音频播放] 播放失败:', error);
+        console.error('audio playback failed:', error);
         throw error;
       } finally {
         // 清理播放状态

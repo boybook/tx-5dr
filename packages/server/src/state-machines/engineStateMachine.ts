@@ -18,6 +18,9 @@
  */
 
 import { setup, createActor, fromPromise, assign, type ActorRefFrom } from 'xstate';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('EngineStateMachine');
 import {
   EngineState,
   type EngineContext,
@@ -46,12 +49,12 @@ export function createEngineStateMachine(
        */
       startActor: fromPromise<void, { engineInput: EngineInput }>(
         async ({ input: { engineInput } }) => {
-          console.log('🚀 [EngineStateMachine] 调用 onStart()');
+          logger.info('Calling onStart()');
           try {
             await engineInput.onStart();
-            console.log('✅ [EngineStateMachine] onStart() 成功');
+            logger.info('onStart() succeeded');
           } catch (error) {
-            console.error('❌ [EngineStateMachine] onStart() 失败:', error);
+            logger.error('onStart() failed:', error);
             throw error;
           }
         }
@@ -62,12 +65,12 @@ export function createEngineStateMachine(
        */
       stopActor: fromPromise<void, { engineInput: EngineInput }>(
         async ({ input: { engineInput } }) => {
-          console.log('🛑 [EngineStateMachine] 调用 onStop()');
+          logger.info('Calling onStop()');
           try {
             await engineInput.onStop();
-            console.log('✅ [EngineStateMachine] onStop() 成功');
+            logger.info('onStop() succeeded');
           } catch (error) {
-            console.error('❌ [EngineStateMachine] onStop() 失败:', error);
+            logger.error('onStop() failed:', error);
             throw error;
           }
         }
@@ -79,7 +82,7 @@ export function createEngineStateMachine(
        */
       recordStartTime: assign({
         startTimestamp: () => {
-          console.log('⏱️  [EngineStateMachine] 记录启动时间');
+          logger.info('Recording start time');
           return Date.now();
         },
       }),
@@ -92,9 +95,7 @@ export function createEngineStateMachine(
         const duration = context.startTimestamp
           ? stopTimestamp - context.startTimestamp
           : 0;
-        console.log(
-          `⏱️  [EngineStateMachine] 记录停止时间 (运行时长: ${Math.round(duration / 1000)}秒)`
-        );
+        logger.info(`Recording stop time (uptime: ${Math.round(duration / 1000)}s)`);
         return { stopTimestamp };
       }),
 
@@ -106,9 +107,7 @@ export function createEngineStateMachine(
           event.type === 'FORCE_STOP' || event.type === 'RADIO_DISCONNECTED'
             ? (event as any).reason
             : undefined;
-        console.warn(
-          `⚠️  [EngineStateMachine] 强制停止: ${reason || '未知原因'}`
-        );
+        logger.warn(`Forced stop: ${reason || 'unknown reason'}`);
         return { forcedStop: true };
       }),
 
@@ -272,7 +271,7 @@ export function createEngineActor(
       globalInspector?.inspect ||
       (options.devTools
         ? (inspectionEvent) => {
-            console.log('[XState Inspect]', inspectionEvent);
+            logger.debug('[XState Inspect]', inspectionEvent);
           }
         : undefined),
   });

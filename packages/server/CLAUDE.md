@@ -411,24 +411,23 @@ private commandHandlers = {
 
 ## 日志规范
 
-**高频路径禁止裸 `console.log`，使用 `createLogger`。**
+**禁止裸 `console.log`，使用 `createLogger`。日志消息必须为英文，不含 emoji。**
 
 ```typescript
 import { createLogger } from '../utils/logger.js';
 const logger = createLogger('MyModule');
-// info/debug → 生产静默；warn/error → 始终输出
-logger.debug('频率轮询', data);
-logger.warn('连接异常', err);
+
+logger.debug('frequency changed', { freq }); // 高频 → 生产静默
+logger.info('operator created', { id });      // 生命周期
+logger.warn('reconnect failed', err);
+logger.error('PTT failed', err);
 ```
 
 - `LOG_LEVEL=debug|info|warn|error`（production 默认 warn，development 默认 info）
-- 高频路径（WS 命令接收/广播循环、音频帧写入、频率轮询、操作员状态广播、编码回调）必须用 `logger.debug`
-- `catch` 块、连接/引擎/电台错误事件保留 `console.error/warn`（生产可见）
-- `broadcastTextMessage` 必须带 `key`（`ServerMessageKey` 枚举），AUTH/ERROR 消息用英文 code 不发中文
-
-```bash
-node scripts/check-i18n.mjs   # 检查合规（含后端高频路径 console.log 提示）
-```
+- 高频路径（每时隙/每 WS 事件/每次编解码）→ `logger.debug`
+- 生命周期（启动/停止/连接/断开）→ `logger.info`
+- `ConsoleLogger` 通过 console 覆盖拦截所有输出写入日志文件，`createLogger` 做级别过滤后调用 `console.*`
+- `broadcastTextMessage` 必须带 `key`（`ServerMessageKey` 枚举），AUTH/ERROR 消息用英文 code
 
 ## 运维
 

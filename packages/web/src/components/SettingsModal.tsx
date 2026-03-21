@@ -1,5 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('SettingsModal');
 import {
   Modal,
   ModalContent,
@@ -139,7 +142,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       
       setHasUnsavedChanges(false);
     } catch (error) {
-      console.error('保存设置失败:', error);
+      logger.error('Failed to save settings:', error);
       // 这里可以添加错误提示
     }
   }, [activeTab]);
@@ -161,7 +164,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       setPendingAction(null);
       setPendingTab(null);
     } catch (error) {
-      console.error('保存设置失败:', error);
+      logger.error('Failed to save settings:', error);
       // 保存失败时不执行后续操作
       setIsConfirmDialogOpen(false);
       setPendingAction(null);

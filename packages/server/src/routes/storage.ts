@@ -4,6 +4,9 @@
 import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('StorageRoute');
 
 /**
  * 存储管理路由
@@ -166,7 +169,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
           totalRecords += records.length;
           totalFrames += records.reduce((sum, record) => sum + record.slotPack.frames.length, 0);
         } catch (error) {
-          console.warn(`读取日期 ${date} 的记录失败:`, error);
+          logger.warn(`Failed to read records for date ${date}:`, error);
         }
       }
 

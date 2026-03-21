@@ -11,6 +11,9 @@ import {
   convertQSOToADIF,
   parseADIFContent as parseADIFContentUtil,
 } from '../utils/adif-utils.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('QRZService');
 
 const QRZ_API_URL = 'https://logbook.qrz.com/api';
 
@@ -72,7 +75,7 @@ export class QRZService {
 
       let response: Response;
       try {
-        console.log(`📊 [QRZ] 正在测试连接到: ${QRZ_API_URL}`);
+        logger.debug(`Testing connection to: ${QRZ_API_URL}`);
 
         response = await fetch(QRZ_API_URL, {
           method: 'POST',
@@ -84,7 +87,7 @@ export class QRZService {
           signal: AbortSignal.timeout(10000),
         });
 
-        console.log(`📊 [QRZ] 连接响应状态: ${response.status}`);
+        logger.debug(`Connection response status: ${response.status}`);
       } catch (error) {
         throw this.handleNetworkError(error, QRZ_API_URL);
       }
@@ -94,7 +97,7 @@ export class QRZService {
       }
 
       const responseText = await response.text();
-      console.log(`📊 [QRZ] STATUS 响应: ${responseText}`);
+      logger.debug(`STATUS response: ${responseText}`);
 
       const parsed = this.parseQRZResponse(responseText);
 
@@ -117,7 +120,7 @@ export class QRZService {
         };
       }
     } catch (error) {
-      console.error('QRZ连接测试失败:', error);
+      logger.error('Connection test failed:', error);
       if (error instanceof Error && error.message.startsWith('连接')) {
         // 已经是 handleNetworkError 处理过的错误
         return {
@@ -143,11 +146,12 @@ export class QRZService {
   }> {
     const adifString = convertQSOToADIF(qso);
 
-    console.log('📊 [QRZ] 准备上传 QSO:');
-    console.log('  - Callsign:', qso.callsign);
-    console.log('  - Mode:', qso.mode);
-    console.log('  - Frequency:', qso.frequency, 'Hz');
-    console.log('  - ADIF:', adifString);
+    logger.debug('Uploading QSO:', {
+      callsign: qso.callsign,
+      mode: qso.mode,
+      frequency: qso.frequency,
+      adif: adifString,
+    });
 
     const body = new URLSearchParams({
       KEY: this.config.apiKey,
@@ -167,7 +171,7 @@ export class QRZService {
       });
 
       const responseText = await response.text();
-      console.log(`📊 [QRZ] INSERT 响应: ${responseText}`);
+      logger.debug(`INSERT response: ${responseText}`);
 
       const parsed = this.parseQRZResponse(responseText);
 
@@ -192,7 +196,7 @@ export class QRZService {
         };
       }
     } catch (error) {
-      console.error('上传QSO到QRZ失败:', error);
+      logger.error('Failed to upload QSO:', error);
       throw this.handleNetworkError(error, QRZ_API_URL);
     }
   }
@@ -253,7 +257,7 @@ export class QRZService {
 
       const body = new URLSearchParams(params);
 
-      console.log(`📊 [QRZ] 正在下载QSO记录...`);
+      logger.debug('Downloading QSO records...');
 
       const response = await fetch(QRZ_API_URL, {
         method: 'POST',
@@ -270,7 +274,7 @@ export class QRZService {
       }
 
       const responseText = await response.text();
-      console.log(`📊 [QRZ] FETCH 响应长度: ${responseText.length} 字节`);
+      logger.debug(`FETCH response length: ${responseText.length} bytes`);
 
       const parsed = this.parseQRZResponse(responseText);
 
@@ -278,12 +282,12 @@ export class QRZService {
         const adifData = parsed.DATA || '';
 
         if (!adifData || adifData.trim().length === 0) {
-          console.log('📊 [QRZ] 没有QSO数据返回');
+          logger.debug('No QSO data returned');
           return [];
         }
 
         const qsoRecords = parseADIFContentUtil(adifData, 'qrz');
-        console.log(`📊 [QRZ] 从QRZ下载了 ${qsoRecords.length} 条QSO记录 (COUNT: ${parsed.COUNT || 0})`);
+        logger.info(`Downloaded ${qsoRecords.length} QSO records (COUNT: ${parsed.COUNT || 0})`);
 
         return qsoRecords;
       } else if (parsed.RESULT === 'FAIL' || parsed.RESULT === 'AUTH') {
@@ -292,7 +296,7 @@ export class QRZService {
         throw new Error(`未知QRZ响应: ${responseText}`);
       }
     } catch (error) {
-      console.error('从QRZ下载QSO记录失败:', error);
+      logger.error('Failed to download QSO records:', error);
       throw this.handleNetworkError(error, QRZ_API_URL);
     }
   }
@@ -301,11 +305,11 @@ export class QRZService {
    * 处理网络连接错误
    */
   private handleNetworkError(error: any, url: string): Error {
-    console.error(`📊 [QRZ] 网络错误详情:`, {
+    logger.error('Network error:', {
       message: error.message,
       code: error.code,
       cause: error.cause,
-      url: url,
+      url,
     });
 
     if (error instanceof Error && (

@@ -14,6 +14,9 @@ import type { PttType } from 'hamlib';
 import type { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
+import { createLogger } from '../../utils/logger.js';
+
+const logger = createLogger('HamlibConnection');
 import {
   RadioConnectionType,
   RadioConnectionState,
@@ -162,8 +165,8 @@ export class HamlibConnection
     this.setState(RadioConnectionState.CONNECTING);
 
     try {
-      console.log(
-        `📡 [HamlibConnection] 连接到 Hamlib 电台: ${config.type === 'network' ? `${config.network!.host}:${config.network!.port}` : config.serial!.path}`
+      logger.debug(
+        `Connecting to Hamlib radio: ${config.type === 'network' ? `${config.network!.host}:${config.network!.port}` : config.serial!.path}`
       );
 
       // 确定连接参数
@@ -185,7 +188,7 @@ export class HamlibConnection
         'rts': 'RTS',
       };
       const hamlibPttType = pttTypeMap[this.pttMethod] || 'RIG';
-      console.log(`🔧 [HamlibConnection] 配置 PTT 类型: ${this.pttMethod} → ${hamlibPttType}`);
+      logger.debug(`Configuring PTT type: ${this.pttMethod} -> ${hamlibPttType}`);
       await this.rig.setPttType(hamlibPttType);
 
       // 应用串口配置（如果有）
@@ -208,9 +211,7 @@ export class HamlibConnection
 
       // 等待电台初始化完成后再验证通信
       const POST_OPEN_DELAY = 100;
-      console.log(
-        `⏳ [HamlibConnection] 等待 ${POST_OPEN_DELAY}ms 让电台完成初始化...`
-      );
+      logger.debug(`Waiting ${POST_OPEN_DELAY}ms for radio initialization...`);
       await new Promise((resolve) => setTimeout(resolve, POST_OPEN_DELAY));
 
       // 验证与电台的实际通信（状态仍为 CONNECTING）
@@ -219,7 +220,7 @@ export class HamlibConnection
       // 通信验证成功，才转为 CONNECTED
       this.setState(RadioConnectionState.CONNECTED);
       this.lastSuccessfulOperation = Date.now();
-      console.log(`✅ [HamlibConnection] Hamlib 电台连接成功`);
+      logger.info('Hamlib radio connected successfully');
 
       // 启动数值表轮询
       this.startMeterPolling();
@@ -240,7 +241,7 @@ export class HamlibConnection
    * 断开电台连接
    */
   async disconnect(reason?: string): Promise<void> {
-    console.log(`🔌 [HamlibConnection] 断开连接: ${reason || '无原因'}`);
+    logger.info(`Disconnecting: ${reason || 'no reason'}`);
 
     // 停止数值表轮询
     this.stopMeterPolling();
@@ -254,7 +255,7 @@ export class HamlibConnection
     // 触发断开事件
     this.emit('disconnected', reason);
 
-    console.log(`✅ [HamlibConnection] 连接已断开`);
+    logger.info('Connection disconnected');
   }
 
   /**
@@ -272,9 +273,7 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
-      console.log(
-        `🔊 [HamlibConnection] 频率设置成功: ${(frequency / 1000000).toFixed(3)} MHz`
-      );
+      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
     } catch (error) {
       throw this.convertError(error, 'setFrequency');
     }
@@ -321,9 +320,7 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
-      console.log(
-        `📡 [HamlibConnection] PTT设置成功: ${enabled ? '发射' : '接收'}`
-      );
+      logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);
     } catch (error) {
       throw RadioError.pttActivationFailed(
         `PTT ${enabled ? '启动' : '停止'}失败`,
@@ -347,9 +344,7 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
-      console.log(
-        `📻 [HamlibConnection] 模式设置成功: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`
-      );
+      logger.debug(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`);
     } catch (error) {
       throw this.convertError(error, 'setMode');
     }
@@ -420,7 +415,7 @@ export class HamlibConnection
       };
 
       this.lastSuccessfulOperation = Date.now();
-      console.log(`📻 [HamlibConnection] 天调能力查询成功:`, capabilities);
+      logger.debug('Tuner capabilities queried:', capabilities);
 
       return capabilities;
     } catch (error) {
@@ -443,9 +438,7 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
-      console.log(
-        `📻 [HamlibConnection] 天调设置成功: ${enabled ? '已启用' : '已禁用'}`
-      );
+      logger.debug(`Tuner set: ${enabled ? 'enabled' : 'disabled'}`);
     } catch (error) {
       throw this.convertError(error, 'setTuner');
     }
@@ -496,11 +489,11 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
-      console.log(`📻 [HamlibConnection] 手动调谐已启动`);
+      logger.debug('Manual tuning started');
 
       return true;
     } catch (error) {
-      console.error(`❌ [HamlibConnection] 启动调谐失败:`, error);
+      logger.error('Failed to start tuning:', error);
       throw this.convertError(error, 'startTuning');
     }
   }
@@ -513,9 +506,7 @@ export class HamlibConnection
       const oldState = this.state;
       this.state = newState;
 
-      console.log(
-        `🔄 [HamlibConnection] 状态变化: ${oldState} -> ${newState}`
-      );
+      logger.debug(`State changed: ${oldState} -> ${newState}`);
 
       this.emit('stateChanged', newState);
     }
@@ -550,7 +541,7 @@ export class HamlibConnection
     const VERIFY_TIMEOUT = 5000;
 
     try {
-      console.log(`🔍 [HamlibConnection] 验证电台通信...`);
+      logger.debug('Verifying radio communication...');
 
       await Promise.race([
         this.rig.getFrequency('VFO-A'),
@@ -559,7 +550,7 @@ export class HamlibConnection
         ),
       ]);
 
-      console.log(`✅ [HamlibConnection] 通信验证成功`);
+      logger.debug('Radio communication verified successfully');
     } catch (error) {
       throw new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
@@ -591,7 +582,7 @@ export class HamlibConnection
       throw new Error('电台实例未初始化');
     }
 
-    console.log('🔧 [HamlibConnection] 应用串口配置参数...');
+    logger.debug('Applying serial config parameters...');
 
     try {
       // 基础串口设置
@@ -616,9 +607,7 @@ export class HamlibConnection
 
       for (const config of configs) {
         if (config.value !== undefined && config.value !== null) {
-          console.log(
-            `🔧 [HamlibConnection] 设置 ${config.param}: ${config.value}`
-          );
+          logger.debug(`Setting ${config.param}: ${config.value}`);
           await Promise.race([
             this.rig!.setSerialConfig(config.param as any, config.value),
             new Promise((_, reject) =>
@@ -631,12 +620,9 @@ export class HamlibConnection
         }
       }
 
-      console.log('✅ [HamlibConnection] 串口配置参数应用成功');
+      logger.debug('Serial config parameters applied successfully');
     } catch (error) {
-      console.warn(
-        '⚠️ [HamlibConnection] 串口配置应用失败:',
-        (error as Error).message
-      );
+      logger.warn('Failed to apply serial config:', (error as Error).message);
       throw new Error(`串口配置失败: ${(error as Error).message}`);
     }
   }
@@ -661,7 +647,7 @@ export class HamlibConnection
   private async cleanup(): Promise<void> {
     // 防重入保护：避免重复调用 rig.close() 导致 pthread_join 超时
     if (this.isCleaningUp) {
-      console.log('⚠️ [HamlibConnection] cleanup 已在进行中，跳过');
+      logger.debug('Cleanup already in progress, skipping');
       return;
     }
 
@@ -682,7 +668,7 @@ export class HamlibConnection
             ),
           ]);
         } catch (error) {
-          console.warn(`⚠️ [HamlibConnection] 清理时断开连接失败:`, error);
+          logger.warn('Failed to close connection during cleanup:', error);
         }
 
         this.rig = null;
@@ -703,11 +689,11 @@ export class HamlibConnection
    */
   private startMeterPolling(): void {
     if (this.meterPollingInterval) {
-      console.log('⚠️ [HamlibConnection] 数值表轮询已在运行');
+      logger.debug('Meter polling already running');
       return;
     }
 
-    console.log(`📊 [HamlibConnection] 启动数值表轮询，间隔 ${this.meterPollingIntervalMs}ms`);
+    logger.debug(`Starting meter polling, interval ${this.meterPollingIntervalMs}ms`);
 
     this.meterPollingInterval = setInterval(async () => {
       await this.pollMeters();
@@ -719,7 +705,7 @@ export class HamlibConnection
    */
   private stopMeterPolling(): void {
     if (this.meterPollingInterval) {
-      console.log('🛑 [HamlibConnection] 停止数值表轮询');
+      logger.debug('Stopping meter polling');
       clearInterval(this.meterPollingInterval);
       this.meterPollingInterval = null;
     }
@@ -761,7 +747,7 @@ export class HamlibConnection
     } catch (error) {
       this.meterPollFailCount++;
       if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-        console.error(`❌ [HamlibConnection] 数值表轮询连续失败 ${this.meterPollFailCount} 次，检测到断线`);
+        logger.error(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
         // 只 emit 事件，不直接修改 state —— 让上层状态机决定状态转换
         this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
         this.stopMeterPolling();

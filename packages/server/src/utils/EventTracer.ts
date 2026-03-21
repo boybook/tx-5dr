@@ -20,6 +20,9 @@
  */
 
 import EventEmitter from 'eventemitter3';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('EventTracer');
 
 /**
  * 事件追踪记录
@@ -252,17 +255,17 @@ export class EventTracer {
         duration,
       });
 
-      // 慢事件警告（使用字符串版本）
+      // Slow event warning
       if (duration > this.slowEventThreshold) {
-        console.warn(
-          `⚠️  [EventTracer] 慢事件: ${emitterName}.${eventNameStr} (${duration.toFixed(2)}ms)`
+        logger.warn(
+          `Slow event: ${emitterName}.${eventNameStr} (${duration.toFixed(2)}ms)`
         );
       }
 
       return result;
     };
 
-    console.log(`📊 [EventTracer] 已附加到: ${emitterName}`);
+    logger.debug(`Attached to: ${emitterName}`);
   }
 
   /**
@@ -310,7 +313,7 @@ export class EventTracer {
    */
   clearTraces(): void {
     this.traces = [];
-    console.log('🧹 [EventTracer] 已清除所有追踪记录');
+    logger.debug('All traces cleared');
   }
 
   /**
@@ -375,50 +378,49 @@ export class EventTracer {
   printReport(): void {
     const stats = this.calculateStats();
 
-    console.log('\n📊 ===== EventTracer 统计报告 =====');
-    console.log(`追踪记录总数: ${this.traces.length}`);
-    console.log(`附加的 EventEmitter: ${this.attachedEmitters.size}`);
-    console.log('');
+    logger.debug(`===== EventTracer stats report =====`);
+    logger.debug(`Total traces: ${this.traces.length}`);
+    logger.debug(`Attached emitters: ${this.attachedEmitters.size}`);
 
-    console.log('事件统计（按触发次数排序）:');
+    logger.debug('Event stats (sorted by count):');
     console.table(
       stats.map((s) => ({
-        事件: s.eventName,
-        次数: s.count,
-        频率: `${s.frequency.toFixed(1)}/s`,
-        平均耗时: `${s.averageDuration.toFixed(2)}ms`,
-        最大耗时: `${s.maxDuration.toFixed(2)}ms`,
-        平均数据: `${(s.averageDataSize / 1024).toFixed(2)}KB`,
+        event: s.eventName,
+        count: s.count,
+        frequency: `${s.frequency.toFixed(1)}/s`,
+        avgDuration: `${s.averageDuration.toFixed(2)}ms`,
+        maxDuration: `${s.maxDuration.toFixed(2)}ms`,
+        avgData: `${(s.averageDataSize / 1024).toFixed(2)}KB`,
       }))
     );
 
-    // 高频事件警告
+    // High-frequency event warnings
     const highFrequencyEvents = stats.filter(
       (s) => s.frequency > this.highFrequencyThreshold
     );
     if (highFrequencyEvents.length > 0) {
-      console.warn('\n⚠️  高频事件警告（频率超过阈值）:');
+      logger.warn('High-frequency events (above threshold):');
       for (const event of highFrequencyEvents) {
-        console.warn(
-          `  - ${event.eventName}: ${event.frequency.toFixed(1)}/s (阈值: ${this.highFrequencyThreshold}/s)`
+        logger.warn(
+          `  - ${event.eventName}: ${event.frequency.toFixed(1)}/s (threshold: ${this.highFrequencyThreshold}/s)`
         );
       }
     }
 
-    // 慢事件警告
+    // Slow event warnings
     const slowEvents = stats.filter(
       (s) => s.averageDuration > this.slowEventThreshold
     );
     if (slowEvents.length > 0) {
-      console.warn('\n⚠️  慢事件警告（平均耗时超过阈值）:');
+      logger.warn('Slow events (avg duration above threshold):');
       for (const event of slowEvents) {
-        console.warn(
-          `  - ${event.eventName}: ${event.averageDuration.toFixed(2)}ms (阈值: ${this.slowEventThreshold}ms)`
+        logger.warn(
+          `  - ${event.eventName}: ${event.averageDuration.toFixed(2)}ms (threshold: ${this.slowEventThreshold}ms)`
         );
       }
     }
 
-    console.log('========================================\n');
+    logger.debug('========================================');
   }
 
   /**
@@ -431,9 +433,7 @@ export class EventTracer {
       this.printReport();
     }, this.autoPrintInterval);
 
-    console.log(
-      `📊 [EventTracer] 自动报告已启动 (间隔: ${this.autoPrintInterval / 1000}秒)`
-    );
+    logger.debug(`Auto report started (interval: ${this.autoPrintInterval / 1000}s)`);
   }
 
   /**
@@ -443,7 +443,7 @@ export class EventTracer {
     if (this.autoPrintTimer) {
       clearInterval(this.autoPrintTimer);
       this.autoPrintTimer = undefined;
-      console.log('📊 [EventTracer] 自动报告已停止');
+      logger.debug('Auto report stopped');
     }
   }
 
@@ -454,7 +454,7 @@ export class EventTracer {
     this.detachAll();
     this.stopAutoPrint();
     this.clearTraces();
-    console.log('📊 [EventTracer] 已销毁');
+    logger.debug('EventTracer destroyed');
   }
 
   /**
@@ -462,7 +462,7 @@ export class EventTracer {
    */
   enable(): void {
     this.enabled = true;
-    console.log('📊 [EventTracer] 已启用');
+    logger.debug('EventTracer enabled');
   }
 
   /**
@@ -470,7 +470,7 @@ export class EventTracer {
    */
   disable(): void {
     this.enabled = false;
-    console.log('📊 [EventTracer] 已禁用');
+    logger.debug('EventTracer disabled');
   }
 }
 
@@ -493,7 +493,7 @@ export function initializeGlobalEventTracer(
   options: EventTracerOptions = {}
 ): EventTracer {
   if (globalTracer) {
-    console.warn('⚠️  [EventTracer] 全局实例已存在，跳过初始化');
+    logger.warn('Global EventTracer instance already exists, skipping init');
     return globalTracer;
   }
 
@@ -504,7 +504,7 @@ export function initializeGlobalEventTracer(
     ...options,
   });
 
-  console.log('📊 [EventTracer] 全局实例已初始化');
+  logger.debug('Global EventTracer instance initialized');
   return globalTracer;
 }
 

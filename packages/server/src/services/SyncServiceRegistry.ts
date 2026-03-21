@@ -5,6 +5,9 @@ import { QRZService } from './QRZService.js';
 import { LoTWService } from './LoTWService.js';
 import { ConfigManager } from '../config/config-manager.js';
 import type { CallsignSyncConfig, WaveLogConfig, QRZConfig, LoTWConfig } from '@tx5dr/contracts';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('SyncServiceRegistry');
 
 /**
  * 同步服务注册表（单例）
@@ -59,11 +62,8 @@ export class SyncServiceRegistry {
       this.createServicesFromConfig(callsign, config);
     }
 
-    console.log(
-      `📋 [SyncServiceRegistry] 已初始化同步服务: ` +
-      `WaveLog=${this.waveLogServices.size}, ` +
-      `QRZ=${this.qrzServices.size}, ` +
-      `LoTW=${this.lotwServices.size}`
+    logger.info(
+      `Sync services initialized: WaveLog=${this.waveLogServices.size}, QRZ=${this.qrzServices.size}, LoTW=${this.lotwServices.size}`
     );
   }
 

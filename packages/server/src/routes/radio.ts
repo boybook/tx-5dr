@@ -6,6 +6,9 @@
  * 📊 Day14优化：统一错误处理，使用 RadioError + Fastify 全局错误处理器
  */
 import { FastifyInstance } from 'fastify';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { HamlibConfigSchema, RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
@@ -69,7 +72,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     // 如果切换到 ICOM WLAN 模式，自动设置音频设备为 ICOM WLAN
     if (config.type === 'icom-wlan') {
-      console.log('📡 [Radio Routes] 检测到 ICOM WLAN 模式，自动设置音频设备');
+      logger.debug('ICOM WLAN mode detected, auto-setting audio devices');
       const audioConfig = configManager.getAudioConfig();
       const updatedAudioConfig = {
         ...audioConfig,
@@ -80,15 +83,15 @@ export async function radioRoutes(fastify: FastifyInstance) {
       // 重启引擎以应用音频配置（参考 POST /audio/settings 的实现）
       const wasRunning = engine.getStatus().isRunning;
       if (wasRunning) {
-        console.log('🔄 [Radio Routes] 停止引擎以应用音频配置');
+        logger.debug('Stopping engine to apply audio config');
         await engine.stop();
       }
 
       await configManager.updateAudioConfig(updatedAudioConfig);
-      console.log('✅ [Radio Routes] 音频设备已自动设置为 ICOM WLAN');
+      logger.info('Audio devices auto-set to ICOM WLAN');
 
       if (wasRunning) {
-        console.log('🔄 [Radio Routes] 重新启动引擎');
+        logger.debug('Restarting engine');
         await engine.start();
         engineRestarted = true; // 标记已触发重启，radio 资源会自动应用配置
       }
@@ -100,21 +103,21 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (!engine.getStatus().isRunning && !engineRestarted) {
       try {
         await radioManager.applyConfig(config);
-        console.log(`✅ [Radio Routes] 配置已应用: type=${config.type}`);
+        logger.info(`Config applied: type=${config.type}`);
       } catch (error) {
-        console.error('❌ [Radio Routes] 应用配置时出错:', error);
+        logger.error('Error applying config:', error);
       }
     } else if (engineRestarted) {
-      console.log('📡 [Radio Routes] 引擎正在重启，radio 资源会自动应用配置');
+      logger.debug('Engine restarting, radio resource will auto-apply config');
     } else {
-      console.log('📡 [Radio Routes] 引擎正在运行，radio 资源已自动应用配置');
+      logger.debug('Engine running, radio resource has auto-applied config');
     }
 
     // 如果 engine 已运行，立即更新 SlotClock 的发射补偿值（热更新）
     if (engine.getStatus().isRunning) {
       const compensationMs = config.transmitCompensationMs || 0;
       engine.updateTransmitCompensation(compensationMs);
-      console.log(`✅ [Radio Routes] 发射补偿已热更新为: ${compensationMs}ms`);
+      logger.info(`Transmit compensation hot-updated: ${compensationMs}ms`);
     }
 
     // 广播配置变更事件，确保所有客户端同步最新配置
@@ -127,7 +130,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       reason: '配置已更新',
       connectionHealth: radioManager.getConnectionHealth()
     });
-    console.log(`📡 [Radio Routes] 已广播配置变更事件: type=${config.type}, connected=${radioManager.isConnected()}`);
+    logger.debug(`Config change event broadcast: type=${config.type}, connected=${radioManager.isConnected()}`);
 
     return reply.send({ success: true, config });
   });
@@ -183,9 +186,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
       (mode && lastFrequency.mode !== mode);
 
     if (isFrequencyChanged) {
-      console.log(`📻 [Radio Routes] 频率真正改变: ${lastFrequency?.frequency || 'null'} → ${frequency}, 模式: ${lastFrequency?.mode || 'null'} → ${mode || 'null'}`);
+      logger.debug(`Frequency changed: ${lastFrequency?.frequency || 'null'} -> ${frequency}, mode: ${lastFrequency?.mode || 'null'} -> ${mode || 'null'}`);
     } else {
-      console.log(`📻 [Radio Routes] 频率未改变，跳过清空和广播: ${frequency} Hz, 模式: ${mode}`);
+      logger.debug(`Frequency unchanged, skipping clear and broadcast: ${frequency} Hz, mode: ${mode}`);
     }
 
     // 保存到配置文件（无论电台是否连接都要保存）
@@ -199,7 +202,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
           description
         });
       } catch (configError) {
-        console.warn(`⚠️ [Radio Routes] 保存频率配置失败: ${(configError as Error).message}`);
+        logger.warn(`Failed to save frequency config: ${(configError as Error).message}`);
       }
     }
 
@@ -208,7 +211,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     if (!radioConnected) {
       // 电台未连接时，只记录频率但不实际设置
-      console.log(`📡 [Radio Routes] 电台未连接，记录频率: ${(frequency / 1000000).toFixed(3)} MHz${radioMode ? ` (${radioMode})` : ''}`);
+      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${radioMode ? ` (${radioMode})` : ''}`);
 
       // 只有在频率真正改变时才广播
       if (isFrequencyChanged) {
@@ -252,9 +255,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (radioMode) {
       try {
         await radioManager.setMode(radioMode);
-        console.log(`📻 [Radio Routes] 电台调制模式已设置: ${radioMode}`);
+        logger.debug(`Radio mode set: ${radioMode}`);
       } catch (modeError) {
-        console.warn(`⚠️ [Radio Routes] 设置电台调制模式失败: ${(modeError as Error).message}`);
+        logger.warn(`Failed to set radio mode: ${(modeError as Error).message}`);
         // 模式设置失败不影响频率设置的成功
       }
     }
@@ -264,9 +267,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
       // 基础动作：立即清空服务端内存中的历史接收缓存
       try {
         engine.getSlotPackManager().clearInMemory();
-        console.log('🧹 [Radio Routes] 频率切换：已清空 SlotPack 内存缓存');
+        logger.debug('Frequency switched: SlotPack memory cache cleared');
       } catch (e) {
-        console.warn('⚠️ [Radio Routes] 频率切换：清空 SlotPack 缓存失败（继续广播）:', e);
+        logger.warn('Frequency switched: failed to clear SlotPack cache (continuing broadcast):', e);
       }
 
       // 广播频率变化到所有客户端
@@ -302,7 +305,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
       if (isHardwareSameTarget(activeConfig, config)) {
         // 硬件目标相同 → 复用已有连接进行健康检查
-        console.log('🔄 [Radio Routes] 复用已有连接进行测试');
+        logger.debug('Reusing existing connection for test');
         try {
           await radioManager.testConnection();
           return reply.send({ success: true, message: '连接测试成功！电台响应正常。' });
@@ -325,17 +328,17 @@ export async function radioRoutes(fastify: FastifyInstance) {
     try {
       await tester.applyConfig(config);
       await tester.testConnection();
-      console.log('✅ [Radio Routes] 连接测试成功');
+      logger.info('Connection test succeeded');
       return reply.send({ success: true, message: '连接测试成功！电台响应正常。' });
     } catch (e) {
-      console.error('❌ [Radio Routes] 连接测试失败:', e);
+      logger.error('Connection test failed:', e);
       throw RadioError.from(e, RadioErrorCode.CONNECTION_FAILED);
     } finally {
       try {
         await tester.disconnect();
-        console.log('🧹 [Radio Routes] 测试连接已清理');
+        logger.debug('Test connection cleaned up');
       } catch (error) {
-        console.warn('⚠️ [Radio Routes] 清理测试连接失败:', error);
+        logger.warn('Failed to clean up test connection:', error);
       }
     }
   });
@@ -360,10 +363,10 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const doPttTest = async (manager: PhysicalRadioManager) => {
       try {
         await manager.setPTT(true);
-        console.log('📡 [Radio Routes] PTT已开启，电台处于发射状态');
+        logger.debug('PTT enabled, radio in transmit state');
         await new Promise(resolve => setTimeout(resolve, 500));
         await manager.setPTT(false);
-        console.log('✅ [Radio Routes] PTT测试完成，已恢复接收状态');
+        logger.info('PTT test complete, returned to receive state');
       } catch (error) {
         // 确保 PTT 关闭
         try { await manager.setPTT(false); } catch { /* ignore */ }
@@ -376,7 +379,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       const activeConfig = radioManager.getConfig();
 
       if (isHardwareSameTarget(activeConfig, config)) {
-        console.log('🔄 [Radio Routes] 复用已有连接进行PTT测试');
+        logger.debug('Reusing existing connection for PTT test');
         try {
           await doPttTest(radioManager);
           return reply.send({ success: true, message: 'PTT 测试成功！已切换发射状态 0.5 秒。' });
@@ -394,21 +397,21 @@ export async function radioRoutes(fastify: FastifyInstance) {
     }
 
     // 创建临时连接，同步等待 PTT 测试结果
-    console.log('🔄 [Radio Routes] 创建临时连接进行PTT测试');
+    logger.debug('Creating temporary connection for PTT test');
     const tester = new PhysicalRadioManager();
     try {
       await tester.applyConfig(config);
       await doPttTest(tester);
       return reply.send({ success: true, message: 'PTT 测试成功！已切换发射状态 0.5 秒。' });
     } catch (e) {
-      console.error('❌ [Radio Routes] PTT测试失败:', e);
+      logger.error('PTT test failed:', e);
       throw RadioError.from(e, RadioErrorCode.INVALID_OPERATION);
     } finally {
       try {
         await tester.disconnect();
-        console.log('🧹 [Radio Routes] PTT测试连接已清理');
+        logger.debug('PTT test connection cleaned up');
       } catch (error) {
-        console.warn('⚠️ [Radio Routes] 清理PTT测试连接失败:', error);
+        logger.warn('Failed to clean up PTT test connection:', error);
       }
     }
   });

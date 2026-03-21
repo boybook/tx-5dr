@@ -2,6 +2,9 @@
 // MemoryLeakDetector - 资源跟踪需要使用any
 
 import type EventEmitter from 'eventemitter3';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('MemoryLeakDetector');
 
 /**
  * 内存泄漏检测器
@@ -24,7 +27,7 @@ export class MemoryLeakDetector {
     this.isEnabled = process.env.NODE_ENV === 'development';
 
     if (this.isEnabled) {
-      console.log('🔍 [内存泄漏检测器] 已启用 (开发环境)');
+      logger.debug('MemoryLeakDetector enabled (development)');
       this.startMonitoring();
     }
   }
@@ -51,7 +54,7 @@ export class MemoryLeakDetector {
     const baseline = this.getListenerCounts(emitter);
 
     this.monitoredEmitters.set(name, { emitter, baseline });
-    console.log(`🔍 [内存泄漏检测器] 注册监控: ${name}, 基线监听器数量:`, this.formatListenerCounts(baseline));
+    logger.debug(`Registered for monitoring: ${name}, baseline listeners: ${this.formatListenerCounts(baseline)}`);
   }
 
   /**
@@ -62,7 +65,7 @@ export class MemoryLeakDetector {
     if (!this.isEnabled) return;
 
     this.monitoredEmitters.delete(name);
-    console.log(`🔍 [内存泄漏检测器] 取消监控: ${name}`);
+    logger.debug(`Unregistered from monitoring: ${name}`);
   }
 
   /**
@@ -77,7 +80,7 @@ export class MemoryLeakDetector {
       this.checkForLeaks();
     }, this.CHECK_INTERVAL_MS);
 
-    console.log(`🔍 [内存泄漏检测器] 开始监控,检查间隔: ${this.CHECK_INTERVAL_MS / 1000}秒`);
+    logger.debug(`Monitoring started, check interval: ${this.CHECK_INTERVAL_MS / 1000}s`);
   }
 
   /**
@@ -87,7 +90,7 @@ export class MemoryLeakDetector {
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
-      console.log('🔍 [内存泄漏检测器] 停止监控');
+      logger.debug('Monitoring stopped');
     }
   }
 
@@ -99,7 +102,7 @@ export class MemoryLeakDetector {
       return;
     }
 
-    console.log(`\n🔍 [内存泄漏检测器] ===== 开始检查 (${new Date().toISOString()}) =====`);
+    logger.debug(`===== Leak check started (${new Date().toISOString()}) =====`);
 
     let hasWarnings = false;
 
@@ -114,10 +117,10 @@ export class MemoryLeakDetector {
     }
 
     if (!hasWarnings) {
-      console.log('✅ [内存泄漏检测器] 未检测到监听器数量异常');
+      logger.debug('No listener count anomalies detected');
     }
 
-    console.log('🔍 [内存泄漏检测器] ===== 检查完成 =====\n');
+    logger.debug('===== Leak check complete =====');
   }
 
   /**
@@ -188,30 +191,30 @@ export class MemoryLeakDetector {
     current: Map<string, number>,
     changes: { increased: Map<string, { from: number; to: number }>; decreased: Map<string, { from: number; to: number }>; warnings: string[] }
   ): void {
-    console.log(`\n📊 [${name}] 监听器数量变化:`);
+    logger.debug(`[${name}] Listener count changes:`);
 
     if (changes.increased.size > 0) {
-      console.log('  📈 增加:');
+      logger.debug('  Increased:');
       for (const [eventName, { from, to }] of changes.increased.entries()) {
-        console.log(`     "${eventName}": ${from} → ${to} (+${to - from})`);
+        logger.debug(`     "${eventName}": ${from} -> ${to} (+${to - from})`);
       }
     }
 
     if (changes.decreased.size > 0) {
-      console.log('  📉 减少:');
+      logger.debug('  Decreased:');
       for (const [eventName, { from, to }] of changes.decreased.entries()) {
-        console.log(`     "${eventName}": ${from} → ${to} (${to - from})`);
+        logger.debug(`     "${eventName}": ${from} -> ${to} (${to - from})`);
       }
     }
 
     if (changes.warnings.length > 0) {
-      console.warn('\n  ⚠️ 警告:');
+      logger.warn('  Warnings:');
       for (const warning of changes.warnings) {
-        console.warn(`     ${warning}`);
+        logger.warn(`     ${warning}`);
       }
     }
 
-    console.log(`  当前总计: ${this.formatListenerCounts(current)}`);
+    logger.debug(`  Current total: ${this.formatListenerCounts(current)}`);
   }
 
   /**
@@ -231,7 +234,7 @@ export class MemoryLeakDetector {
    */
   checkNow(): void {
     if (!this.isEnabled) {
-      console.log('🔍 [内存泄漏检测器] 未启用 (仅在开发环境可用)');
+      logger.debug('MemoryLeakDetector not enabled (development only)');
       return;
     }
     this.checkForLeaks();
@@ -257,7 +260,7 @@ export class MemoryLeakDetector {
   destroy(): void {
     this.stopMonitoring();
     this.monitoredEmitters.clear();
-    console.log('🔍 [内存泄漏检测器] 已销毁');
+    logger.debug('MemoryLeakDetector destroyed');
   }
 }
 

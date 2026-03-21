@@ -1,5 +1,8 @@
 import { EventEmitter } from 'eventemitter3';
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AudioMixer');
 
 export interface MixedAudio {
   audioData: Float32Array;
@@ -65,13 +68,13 @@ export class AudioMixer extends EventEmitter {
 
     // 检查是否是旧的编码结果（通过 requestId 判断）
     if (existing && requestId && existing.requestId === requestId) {
-      console.log(`⚠️ [音频混音器] 忽略重复的编码结果: ${operatorId}, requestId=${requestId}`);
+      logger.debug(`Ignoring duplicate encode result: ${operatorId}, requestId=${requestId}`);
       return;
     }
 
     // 时隙切换检测：如果是新时隙，清空缓存
     if (slotStartMs !== this.currentSlotStartMs && this.currentSlotStartMs !== 0) {
-      console.log(`🔄 [音频混音器] 检测到时隙切换: ${this.currentSlotStartMs} -> ${slotStartMs}`);
+      logger.debug(`Slot switch detected: ${this.currentSlotStartMs} -> ${slotStartMs}`);
       this.clearSlotCache();
     }
     this.currentSlotStartMs = slotStartMs;
@@ -89,9 +92,9 @@ export class AudioMixer extends EventEmitter {
 
     this.slotAudioCache.set(operatorId, operatorAudio);
 
-    console.log(`🎵 [音频混音器] ${existing ? '更新' : '添加'}操作员音频: ${operatorId}, ` +
-      `时长=${duration.toFixed(2)}s, 采样率=${sampleRate}Hz, ` +
-      `requestId=${requestId || 'N/A'}, 当前缓存数=${this.slotAudioCache.size}`);
+    logger.debug(`${existing ? 'Updated' : 'Added'} operator audio: ${operatorId}, ` +
+      `duration=${duration.toFixed(2)}s, sampleRate=${sampleRate}Hz, ` +
+      `requestId=${requestId || 'N/A'}, cacheSize=${this.slotAudioCache.size}`);
   }
 
   /**
@@ -113,17 +116,14 @@ export class AudioMixer extends EventEmitter {
       const timeUntilTarget = targetPlaybackTime - now;
 
       if (timeUntilTarget > this.mixingWindowMs) {
-        // 距离目标播放时间还很远，等待到接近目标时间再混音
-        mixingDelay = Math.max(0, timeUntilTarget - 50); // 提前50ms混音
-        console.log(`⏰ [音频混音器] 智能调度: 距离目标时间${timeUntilTarget}ms, 将在${mixingDelay}ms后混音`);
+        mixingDelay = Math.max(0, timeUntilTarget - 50); // mix 50ms before target
+        logger.debug(`Smart schedule: ${timeUntilTarget}ms to target, will mix in ${mixingDelay}ms`);
       } else if (timeUntilTarget > 0) {
-        // 快到目标时间了
         mixingDelay = Math.max(0, timeUntilTarget);
-        console.log(`⏰ [音频混音器] 智能调度: 目标时间即将到达(${timeUntilTarget}ms)`);
+        logger.debug(`Smart schedule: target time approaching (${timeUntilTarget}ms)`);
       } else {
-        // 已经过了目标时间，立即混音
         mixingDelay = 0;
-        console.warn(`⚠️ [音频混音器] 警告: 已过目标播放时间${Math.abs(timeUntilTarget)}ms, 立即混音`);
+        logger.warn(`Target playback time already passed by ${Math.abs(timeUntilTarget)}ms, mixing immediately`);
       }
     }
 
@@ -133,7 +133,7 @@ export class AudioMixer extends EventEmitter {
         this.mixingTimeout = null;
         await this.triggerMixing();
       }, mixingDelay);
-      console.log(`⏰ [音频混音器] 设置混音定时器: ${mixingDelay}ms后执行`);
+      logger.debug(`Mix timer set: will execute in ${mixingDelay}ms`);
     } else {
       // 立即混音
       this.triggerMixing();
@@ -158,14 +158,14 @@ export class AudioMixer extends EventEmitter {
     const mixStartTime = Date.now();
 
     if (this.slotAudioCache.size === 0) {
-      console.log(`⚠️ [音频混音器] 没有待混音的音频`);
+      logger.debug('No audio pending for mix');
       return null;
     }
 
     const audioList = Array.from(this.slotAudioCache.values());
     const operatorIds = audioList.map(a => a.operatorId);
 
-    console.log(`🎛️ [音频混音器] 开始混音: ${audioList.length}个音频, 操作员=[${operatorIds.join(', ')}], 跳过=${elapsedTimeMs}ms`);
+    logger.debug(`Starting mix: ${audioList.length} tracks, operators=[${operatorIds.join(', ')}], skip=${elapsedTimeMs}ms`);
 
     try {
       // 1. 确定目标采样率（使用最高的采样率）
@@ -180,16 +180,16 @@ export class AudioMixer extends EventEmitter {
 
         // 重采样（如需要）
         if (audio.sampleRate !== targetSampleRate) {
-          console.log(`🔄 [音频混音器] 操作员 ${audio.operatorId}: 重采样 ${audio.sampleRate}Hz -> ${targetSampleRate}Hz`);
+          logger.debug(`Operator ${audio.operatorId}: resampling ${audio.sampleRate}Hz -> ${targetSampleRate}Hz`);
           try {
             samples = await resampleAudioProfessional(
               samples,
               audio.sampleRate,
               targetSampleRate,
-              1 // 单声道
+              1 // mono
             );
           } catch (error) {
-            console.error(`❌ [音频混音器] 操作员 ${audio.operatorId}: 重采样失败，使用备用方案:`, error);
+            console.error(`[AudioMixer] Operator ${audio.operatorId}: resample failed, using fallback:`, error);
             samples = this.linearResample(samples, audio.sampleRate, targetSampleRate);
           }
         }
@@ -199,10 +199,9 @@ export class AudioMixer extends EventEmitter {
           if (skipSamples < samples.length) {
             const originalLength = samples.length;
             samples = samples.slice(skipSamples);
-            console.log(`✂️ [音频混音器] 操作员 ${audio.operatorId}: 裁剪 ${originalLength} -> ${samples.length} 样本 (跳过 ${skipSamples})`);
+            logger.debug(`Operator ${audio.operatorId}: trimmed ${originalLength} -> ${samples.length} samples (skipped ${skipSamples})`);
           } else {
-            // 该操作员的音频已播放完毕
-            console.log(`⏭️ [音频混音器] 操作员 ${audio.operatorId}: 音频已播放完毕，跳过`);
+            logger.debug(`Operator ${audio.operatorId}: audio fully played, skipping`);
             samples = new Float32Array(0);
           }
         }
@@ -213,14 +212,14 @@ export class AudioMixer extends EventEmitter {
       // 4. 过滤掉空音频
       const validAudios = processedAudios.filter(a => a.samples.length > 0);
       if (validAudios.length === 0) {
-        console.warn(`⚠️ [音频混音器] 所有音频都已播放完毕，无需混音`);
+        logger.warn('All audio tracks fully played, nothing to mix');
         return null;
       }
 
       // 5. 单一音频快速路径
       if (validAudios.length === 1) {
         const single = validAudios[0];
-        console.log(`🔊 [音频混音器] 单一音频直接输出: ${single.operatorId}`);
+        logger.debug(`Single track fast path: ${single.operatorId}`);
         return {
           audioData: single.samples,
           sampleRate: targetSampleRate,
@@ -234,7 +233,7 @@ export class AudioMixer extends EventEmitter {
       const mixedSamples = new Float32Array(maxLength);
 
       for (const audio of validAudios) {
-        console.log(`🎵 [音频混音器] 混合操作员 ${audio.operatorId}: ${audio.samples.length} 样本`);
+        logger.debug(`Mixing operator ${audio.operatorId}: ${audio.samples.length} samples`);
         for (let i = 0; i < audio.samples.length; i++) {
           mixedSamples[i] += audio.samples[i];
         }
@@ -244,7 +243,7 @@ export class AudioMixer extends EventEmitter {
       const peakLevel = this.findPeakLevel(mixedSamples);
       if (peakLevel > 1.0) {
         const normalizeRatio = 0.95 / peakLevel;
-        console.log(`🔧 [音频混音器] 应用归一化: 峰值=${peakLevel.toFixed(3)}, 比率=${normalizeRatio.toFixed(3)}`);
+        logger.debug(`Normalizing: peak=${peakLevel.toFixed(3)}, ratio=${normalizeRatio.toFixed(3)}`);
         for (let i = 0; i < mixedSamples.length; i++) {
           mixedSamples[i] *= normalizeRatio;
         }
@@ -253,7 +252,7 @@ export class AudioMixer extends EventEmitter {
       const finalDuration = maxLength / targetSampleRate;
       const mixEndTime = Date.now();
 
-      console.log(`✅ [音频混音器] 混音完成: ${validAudios.length}个音频 -> 时长=${finalDuration.toFixed(2)}s, 耗时=${mixEndTime - mixStartTime}ms`);
+      logger.debug(`Mix complete: ${validAudios.length} tracks -> duration=${finalDuration.toFixed(2)}s, elapsed=${mixEndTime - mixStartTime}ms`);
 
       return {
         audioData: mixedSamples,
@@ -263,7 +262,7 @@ export class AudioMixer extends EventEmitter {
       };
 
     } catch (error) {
-      console.error(`❌ [音频混音器] 混音失败:`, error);
+      console.error('[AudioMixer] Mix failed:', error);
       throw error;
     }
   }
@@ -276,7 +275,7 @@ export class AudioMixer extends EventEmitter {
     // 累加新的偏移量到总偏移
     this.cumulativeOffsetMs += newElapsedTimeMs;
 
-    console.log(`🔄 [音频混音器] 重新混音: 本次偏移=${newElapsedTimeMs}ms, 累计偏移=${this.cumulativeOffsetMs}ms, 操作员数=${this.slotAudioCache.size}`);
+    logger.debug(`Remix: offset=${newElapsedTimeMs}ms, totalOffset=${this.cumulativeOffsetMs}ms, operators=${this.slotAudioCache.size}`);
 
     // 使用累计偏移量进行裁剪
     return this.mixAllOperatorAudios(this.cumulativeOffsetMs);
@@ -334,7 +333,7 @@ export class AudioMixer extends EventEmitter {
       this.mixingTimeout = null;
     }
 
-    console.log(`🧹 [音频混音器] 清空时隙音频缓存: 清除了 ${count} 个操作员的音频`);
+    logger.debug(`Slot audio cache cleared: removed ${count} operator tracks`);
   }
 
   /**
@@ -343,7 +342,7 @@ export class AudioMixer extends EventEmitter {
   markPlaybackStart(): void {
     this.playbackStartTimeMs = Date.now();
     this.isPlaying = true;
-    console.log(`▶️ [音频混音器] 标记播放开始: ${new Date(this.playbackStartTimeMs).toISOString()}`);
+    logger.debug(`Playback start marked: ${new Date(this.playbackStartTimeMs).toISOString()}`);
   }
 
   /**
@@ -351,7 +350,7 @@ export class AudioMixer extends EventEmitter {
    */
   markPlaybackStop(): void {
     this.isPlaying = false;
-    console.log(`⏹️ [音频混音器] 标记播放停止`);
+    logger.debug('Playback stop marked');
   }
 
   /**
@@ -388,7 +387,7 @@ export class AudioMixer extends EventEmitter {
   clearOperatorAudio(operatorId: string): boolean {
     if (this.slotAudioCache.has(operatorId)) {
       this.slotAudioCache.delete(operatorId);
-      console.log(`🧹 [音频混音器] 清除操作员 ${operatorId} 的音频`);
+      logger.debug(`Cleared audio for operator ${operatorId}`);
       return true;
     }
     return false;

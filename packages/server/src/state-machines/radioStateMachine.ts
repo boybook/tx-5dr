@@ -24,6 +24,9 @@ import {
 } from './types.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import { globalInspector } from './inspector.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('RadioStateMachine');
 
 /** 指数退避延迟序列（毫秒） */
 const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];
@@ -49,15 +52,15 @@ export function createRadioStateMachine(
        */
       connectActor: fromPromise<void, { radioInput: RadioInput; config: HamlibConfig }>(
         async ({ input: { radioInput, config } }) => {
-          console.log('🔌 [RadioStateMachine] 调用 onConnect()');
+          logger.info('Calling onConnect()');
           if (!config) {
-            throw new Error('电台配置缺失：无法进行连接操作');
+            throw new Error('Radio config missing: cannot connect');
           }
           try {
             await radioInput.onConnect(config);
-            console.log('✅ [RadioStateMachine] onConnect() 成功');
+            logger.info('onConnect() succeeded');
           } catch (error) {
-            console.error('❌ [RadioStateMachine] onConnect() 失败:', error);
+            logger.error('onConnect() failed:', error);
             throw error;
           }
         }
@@ -68,11 +71,11 @@ export function createRadioStateMachine(
        */
       reconnectActor: fromPromise<void, { radioInput: RadioInput; config: HamlibConfig; delayMs: number }>(
         async ({ input: { radioInput, config, delayMs } }) => {
-          console.log(`🔄 [RadioStateMachine] 等待 ${delayMs}ms 后重连...`);
+          logger.debug(`Waiting ${delayMs}ms before reconnect...`);
           await new Promise(resolve => setTimeout(resolve, delayMs));
-          console.log('🔌 [RadioStateMachine] 开始重连尝试');
+          logger.info('Starting reconnect attempt');
           await radioInput.onConnect(config);
-          console.log('✅ [RadioStateMachine] 重连成功');
+          logger.info('Reconnect succeeded');
         }
       ),
     },
@@ -80,21 +83,21 @@ export function createRadioStateMachine(
       saveConfig: ({ context, event }) => {
         if (event.type === 'CONNECT') {
           context.config = event.config;
-          console.log('💾 [RadioStateMachine] 保存配置');
+          logger.debug('Config saved');
         }
       },
 
       recordConnectedTime: ({ context }) => {
         context.connectedTimestamp = Date.now();
         context.isHealthy = true;
-        console.log('⏱️  [RadioStateMachine] 记录连接时间');
+        logger.info('Connected - recording connection time');
       },
 
       recordDisconnectReason: ({ context, event }) => {
         if (event.type === 'DISCONNECT' || event.type === 'CONNECTION_LOST') {
           context.disconnectReason = event.reason;
           context.isHealthy = false;
-          console.log(`⚠️  [RadioStateMachine] 记录断开原因: ${event.reason || '未知'}`);
+          logger.info(`Disconnect reason recorded: ${event.reason || 'unknown'}`);
         }
       },
 
@@ -102,13 +105,13 @@ export function createRadioStateMachine(
         if (event.type === 'CONNECT_FAILURE' || event.type === 'HEALTH_CHECK_FAILED') {
           context.error = event.error;
           context.isHealthy = false;
-          console.error(`❌ [RadioStateMachine] 错误: ${event.error.message}`);
+          logger.error(`Error: ${event.error.message}`);
         }
       },
 
       clearError: ({ context }) => {
         context.error = undefined;
-        console.log('🧹 [RadioStateMachine] 清除错误状态');
+        logger.debug('Error state cleared');
       },
 
       updateHealthCheckTime: ({ context }) => {
@@ -126,20 +129,20 @@ export function createRadioStateMachine(
       /** 标记曾经成功连接过 */
       markEverConnected: ({ context }) => {
         context.wasEverConnected = true;
-        console.log('✅ [RadioStateMachine] 标记: 已成功连接过');
+        logger.info('Marked as ever-connected');
       },
 
       /** 递增重连次数 */
       incrementReconnectAttempt: ({ context }) => {
         context.reconnectAttempt++;
-        console.log(`🔄 [RadioStateMachine] 重连尝试: ${context.reconnectAttempt}/${context.maxReconnectAttempts}`);
+        logger.debug(`Reconnect attempt: ${context.reconnectAttempt}/${context.maxReconnectAttempts}`);
       },
 
       /** 计算退避延迟 */
       calculateReconnectDelay: ({ context }) => {
         const idx = Math.min(context.reconnectAttempt - 1, RECONNECT_DELAYS.length - 1);
         context.reconnectDelayMs = RECONNECT_DELAYS[idx];
-        console.log(`⏳ [RadioStateMachine] 退避延迟: ${context.reconnectDelayMs}ms`);
+        logger.debug(`Backoff delay: ${context.reconnectDelayMs}ms`);
       },
 
       /** 重置重连状态 */
@@ -201,7 +204,7 @@ export function createRadioStateMachine(
             const eventConfig = (event as Extract<RadioEvent, { type: 'CONNECT' }>).config;
             const config = eventConfig || context.config;
             if (!config) {
-              console.error('❌ [RadioStateMachine] 无法获取电台配置');
+              logger.error('Unable to get radio config');
             }
             return { radioInput: input, config: config! };
           },
@@ -215,7 +218,7 @@ export function createRadioStateMachine(
             actions: [
               ({ event, context }: any) => {
                 context.error = event.error;
-                console.error('❌ [RadioStateMachine] 连接失败:', event.error);
+                logger.error('Connection failed:', event.error);
               },
               { type: 'invokeErrorHandler', params: { input } },
             ],
@@ -335,7 +338,7 @@ export function createRadioActor(
       globalInspector?.inspect ||
       (options.devTools
         ? (inspectionEvent) => {
-            console.log('[XState Inspect]', inspectionEvent);
+            logger.debug('[XState Inspect]', inspectionEvent);
           }
         : undefined),
   });

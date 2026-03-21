@@ -1,4 +1,7 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('AudioDeviceSettings');
 import { useTranslation } from 'react-i18next';
 import {
   Select,
@@ -116,7 +119,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
     } catch (err) {
       setError(err instanceof Error ? err.message : t('audio.loadFailed'));
-      console.error('Failed to load audio devices:', err);
+      logger.error('Failed to load audio devices:', err);
     } finally {
       setLoading(false);
     }
@@ -133,11 +136,11 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       setInputDevices(devicesResponse.inputDevices);
       setOutputDevices(devicesResponse.outputDevices);
       
-      console.log('🔄 音频设备列表已刷新');
+      logger.debug('Audio device list refreshed');
       
     } catch (err) {
       setError(err instanceof Error ? err.message : t('audio.refreshFailed'));
-      console.error('Failed to refresh audio devices:', err);
+      logger.error('Failed to refresh audio devices:', err);
     } finally {
       setRefreshingDevices(false);
     }
@@ -176,7 +179,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
 
     } catch (err) {
       setError(err instanceof Error ? err.message : t('audio.updateFailed'));
-      console.error('Failed to update audio device settings:', err);
+      logger.error('Failed to update audio device settings:', err);
     } finally {
       setSaving(false);
     }

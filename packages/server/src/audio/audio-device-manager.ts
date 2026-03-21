@@ -6,6 +6,9 @@ import audify from 'audify';
 const { RtAudio } = audify;
 type RtAudioInstance = InstanceType<typeof RtAudio>;
 import { ConfigManager } from '../config/config-manager.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AudioDeviceManager');
 
 // 音频设备管理器
 export class AudioDeviceManager {
@@ -15,7 +18,7 @@ export class AudioDeviceManager {
 
   private constructor() {
     this.rtAudio = new RtAudio();
-    console.log('初始化 Audify (RtAudio) 音频系统...');
+    logger.info('Audify (RtAudio) audio system initialized');
   }
 
   static getInstance(): AudioDeviceManager {
@@ -57,7 +60,7 @@ export class AudioDeviceManager {
     const channels = type === 'input' ? device.inputChannels : device.outputChannels;
     const finalChannels = channels && channels > 0 ? channels : 0;
 
-    console.log(`🔄 [AudioDeviceManager] 转换设备 ${device.name} (${type}): 原始通道=${channels}, 最终通道=${finalChannels}`);
+    logger.debug(`Converting device ${device.name} (${type}): rawChannels=${channels}, finalChannels=${finalChannels}`);
 
     return {
       id: `${type}-${device.id}`,
@@ -74,37 +77,31 @@ export class AudioDeviceManager {
    */
   async getInputDevices(): Promise<AudioDevice[]> {
     try {
-      console.log('🎤 [AudioDeviceManager] 开始获取音频输入设备...');
+      logger.debug('Enumerating audio input devices');
       const devices = this.rtAudio.getDevices();
-      console.log(`🎤 [AudioDeviceManager] Audify 返回 ${devices.length} 个设备`);
+      logger.debug(`Audify returned ${devices.length} devices`);
 
       devices.forEach((device: any, index: number) => {
-        console.log(`🎤 [AudioDeviceManager] 设备 ${index}:`, {
-          id: device.id,
-          name: device.name,
-          inputChannels: device.inputChannels,
-          outputChannels: device.outputChannels,
-          preferredSampleRate: device.preferredSampleRate
-        });
+        logger.debug(`Device ${index}: id=${device.id}, name=${device.name}, inputCh=${device.inputChannels}, outputCh=${device.outputChannels}, sampleRate=${device.preferredSampleRate}`);
       });
 
       // 过滤输入设备
       const inputDevices = devices.filter((device: any, index: number) => {
         const hasInputChannels = device.inputChannels && device.inputChannels > 0;
-        console.log(`🎤 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${hasInputChannels}`);
+        logger.debug(`Device ${index} (${device.name}) input filter: ${hasInputChannels}`);
         return hasInputChannels;
       });
 
-      console.log(`🎤 [AudioDeviceManager] 过滤后找到 ${inputDevices.length} 个输入设备`);
+      logger.debug(`Found ${inputDevices.length} input devices after filter`);
 
       const result = inputDevices.map((device: any) => {
         const isSystemDefault = Boolean(device.isDefaultInput);
-        console.log(`🎤 [AudioDeviceManager] 转换输入设备: ${device.name} (默认: ${isSystemDefault})`);
+        logger.debug(`Converting input device: ${device.name} (default: ${isSystemDefault})`);
         return this.convertAudifyDevice(device, 'input', isSystemDefault);
       });
 
       if (result.length === 0) {
-        console.log('🎤 [AudioDeviceManager] 未找到具体设备，添加通用默认输入设备');
+        logger.debug('No input devices found, adding generic default input device');
         result.push({
           id: 'input-default',
           name: '默认音频输入设备',
@@ -117,7 +114,7 @@ export class AudioDeviceManager {
 
       // ICOM WLAN 虚拟设备注入
       if (this.shouldShowIcomWlanDevice()) {
-        console.log('📡 [AudioDeviceManager] 注入 ICOM WLAN 虚拟输入设备');
+        logger.debug('Injecting ICOM WLAN virtual input device');
         const icomWlanInputDevice: AudioDevice = {
           id: 'icom-wlan-input',
           name: 'ICOM WLAN',
@@ -129,13 +126,10 @@ export class AudioDeviceManager {
         result.unshift(icomWlanInputDevice);
       }
 
-      console.log(`🎤 [AudioDeviceManager] 最终返回 ${result.length} 个输入设备:`, result.map((d: AudioDevice) => d.name));
+      logger.debug(`Returning ${result.length} input devices: ${result.map((d: AudioDevice) => d.name).join(', ')}`);
       return result;
     } catch (error) {
-      console.error('🎤 [AudioDeviceManager] 获取输入设备失败:', error);
-      if (error instanceof Error) {
-        console.error('🎤 [AudioDeviceManager] 错误详情:', error.stack);
-      }
+      console.error('[AudioDeviceManager] Failed to get input devices:', error);
 
       return [
         {
@@ -155,26 +149,26 @@ export class AudioDeviceManager {
    */
   async getOutputDevices(): Promise<AudioDevice[]> {
     try {
-      console.log('🔊 [AudioDeviceManager] 开始获取音频输出设备...');
+      logger.debug('Enumerating audio output devices');
       const devices = this.rtAudio.getDevices();
-      console.log(`🔊 [AudioDeviceManager] Audify 返回 ${devices.length} 个设备`);
+      logger.debug(`Audify returned ${devices.length} devices`);
 
       const outputDevices = devices.filter((device: any, index: number) => {
         const hasOutputChannels = device.outputChannels && device.outputChannels > 0;
-        console.log(`🔊 [AudioDeviceManager] 设备 ${index} (${device.name}) 筛选结果: ${hasOutputChannels}`);
+        logger.debug(`Device ${index} (${device.name}) output filter: ${hasOutputChannels}`);
         return hasOutputChannels;
       });
 
-      console.log(`🔊 [AudioDeviceManager] 过滤后找到 ${outputDevices.length} 个输出设备`);
+      logger.debug(`Found ${outputDevices.length} output devices after filter`);
 
       const result = outputDevices.map((device: any) => {
         const isSystemDefault = Boolean(device.isDefaultOutput);
-        console.log(`🔊 [AudioDeviceManager] 转换输出设备: ${device.name} (默认: ${isSystemDefault})`);
+        logger.debug(`Converting output device: ${device.name} (default: ${isSystemDefault})`);
         return this.convertAudifyDevice(device, 'output', isSystemDefault);
       });
 
       if (result.length === 0) {
-        console.log('🔊 [AudioDeviceManager] 未找到具体设备，添加通用默认输出设备');
+        logger.debug('No output devices found, adding generic default output device');
         result.push({
           id: 'output-default',
           name: '默认音频输出设备',
@@ -187,7 +181,7 @@ export class AudioDeviceManager {
 
       // ICOM WLAN 虚拟设备注入
       if (this.shouldShowIcomWlanDevice()) {
-        console.log('📡 [AudioDeviceManager] 注入 ICOM WLAN 虚拟输出设备');
+        logger.debug('Injecting ICOM WLAN virtual output device');
         const icomWlanOutputDevice: AudioDevice = {
           id: 'icom-wlan-output',
           name: 'ICOM WLAN',
@@ -199,13 +193,10 @@ export class AudioDeviceManager {
         result.unshift(icomWlanOutputDevice);
       }
 
-      console.log(`🔊 [AudioDeviceManager] 最终返回 ${result.length} 个输出设备:`, result.map((d: AudioDevice) => d.name));
+      logger.debug(`Returning ${result.length} output devices: ${result.map((d: AudioDevice) => d.name).join(', ')}`);
       return result;
     } catch (error) {
-      console.error('🔊 [AudioDeviceManager] 获取输出设备失败:', error);
-      if (error instanceof Error) {
-        console.error('🔊 [AudioDeviceManager] 错误详情:', error.stack);
-      }
+      console.error('[AudioDeviceManager] Failed to get output devices:', error);
 
       return [
         {
@@ -224,13 +215,13 @@ export class AudioDeviceManager {
    * 获取所有音频设备
    */
   async getAllDevices() {
-    console.log('📻 [AudioDeviceManager] 获取所有音频设备...');
+    logger.debug('Getting all audio devices');
     const [inputDevices, outputDevices] = await Promise.all([
       this.getInputDevices(),
       this.getOutputDevices(),
     ]);
 
-    console.log(`📻 [AudioDeviceManager] 设备汇总: ${inputDevices.length} 个输入设备, ${outputDevices.length} 个输出设备`);
+    logger.debug(`Device summary: ${inputDevices.length} input, ${outputDevices.length} output`);
 
     return {
       inputDevices,
@@ -256,7 +247,7 @@ export class AudioDeviceManager {
       const inputDevices = await this.getInputDevices();
       return inputDevices.find(device => device.name === deviceName) || null;
     } catch (error) {
-      console.error(`🎤 [AudioDeviceManager] 根据名称查找输入设备失败:`, error);
+      console.error('[AudioDeviceManager] Failed to find input device by name:', error);
       return null;
     }
   }
@@ -269,7 +260,7 @@ export class AudioDeviceManager {
       const outputDevices = await this.getOutputDevices();
       return outputDevices.find(device => device.name === deviceName) || null;
     } catch (error) {
-      console.error(`🔊 [AudioDeviceManager] 根据名称查找输出设备失败:`, error);
+      console.error('[AudioDeviceManager] Failed to find output device by name:', error);
       return null;
     }
   }
@@ -283,7 +274,7 @@ export class AudioDeviceManager {
       const defaultDevice = inputDevices.find(device => device.isDefault);
       return defaultDevice || inputDevices[0] || null;
     } catch (error) {
-      console.error(`🎤 [AudioDeviceManager] 获取默认输入设备失败:`, error);
+      console.error('[AudioDeviceManager] Failed to get default input device:', error);
       return null;
     }
   }
@@ -297,7 +288,7 @@ export class AudioDeviceManager {
       const defaultDevice = outputDevices.find(device => device.isDefault);
       return defaultDevice || outputDevices[0] || null;
     } catch (error) {
-      console.error(`🔊 [AudioDeviceManager] 获取默认输出设备失败:`, error);
+      console.error('[AudioDeviceManager] Failed to get default output device:', error);
       return null;
     }
   }
@@ -308,19 +299,19 @@ export class AudioDeviceManager {
   async resolveInputDeviceId(deviceName?: string): Promise<string | undefined> {
     if (!deviceName) {
       const defaultDevice = await this.getDefaultInputDevice();
-      console.log(`🎤 [AudioDeviceManager] 使用默认输入设备: ${defaultDevice?.name || '无'}`);
+      logger.debug(`Using default input device: ${defaultDevice?.name || 'none'}`);
       return defaultDevice?.id;
     }
 
     const device = await this.getInputDeviceByName(deviceName);
     if (device) {
-      console.log(`🎤 [AudioDeviceManager] 找到配置的输入设备: ${device.name} -> ${device.id}`);
+      logger.debug(`Found configured input device: ${device.name} -> ${device.id}`);
       return device.id;
     }
 
-    console.warn(`🎤 [AudioDeviceManager] 输入设备 "${deviceName}" 未找到，回退到默认设备`);
+    logger.warn(`Input device "${deviceName}" not found, falling back to default`);
     const defaultDevice = await this.getDefaultInputDevice();
-    console.log(`🎤 [AudioDeviceManager] 回退到默认输入设备: ${defaultDevice?.name || '无'}`);
+    logger.debug(`Fallback to default input device: ${defaultDevice?.name || 'none'}`);
     return defaultDevice?.id;
   }
 
@@ -330,19 +321,19 @@ export class AudioDeviceManager {
   async resolveOutputDeviceId(deviceName?: string): Promise<string | undefined> {
     if (!deviceName) {
       const defaultDevice = await this.getDefaultOutputDevice();
-      console.log(`🔊 [AudioDeviceManager] 使用默认输出设备: ${defaultDevice?.name || '无'}`);
+      logger.debug(`Using default output device: ${defaultDevice?.name || 'none'}`);
       return defaultDevice?.id;
     }
 
     const device = await this.getOutputDeviceByName(deviceName);
     if (device) {
-      console.log(`🔊 [AudioDeviceManager] 找到配置的输出设备: ${device.name} -> ${device.id}`);
+      logger.debug(`Found configured output device: ${device.name} -> ${device.id}`);
       return device.id;
     }
 
-    console.warn(`🔊 [AudioDeviceManager] 输出设备 "${deviceName}" 未找到，回退到默认设备`);
+    logger.warn(`Output device "${deviceName}" not found, falling back to default`);
     const defaultDevice = await this.getDefaultOutputDevice();
-    console.log(`🔊 [AudioDeviceManager] 回退到默认输出设备: ${defaultDevice?.name || '无'}`);
+    logger.debug(`Fallback to default output device: ${defaultDevice?.name || 'none'}`);
     return defaultDevice?.id;
   }
 
@@ -353,10 +344,10 @@ export class AudioDeviceManager {
     try {
       const device = await this.getDeviceById(deviceId);
       const exists = device !== null;
-      console.log(`🔍 [AudioDeviceManager] 验证设备 ${deviceId}: ${exists ? '存在' : '不存在'}`);
+      logger.debug(`Validate device ${deviceId}: ${exists ? 'found' : 'not found'}`);
       return exists;
     } catch (error) {
-      console.error(`🔍 [AudioDeviceManager] 验证设备 ${deviceId} 失败:`, error);
+      console.error(`[AudioDeviceManager] Failed to validate device ${deviceId}:`, error);
       return false;
     }
   }

@@ -1,3 +1,7 @@
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('RingBuffer');
+
 /**
  * 环形缓冲区 - 用于存储连续的 PCM 音频数据
  * 支持多线程安全的读写操作
@@ -36,7 +40,7 @@ export class RingBuffer {
     // 如果空间不足，批量移动读指针
     if (samples.length > freeSpace) {
       const needToDrop = samples.length - freeSpace;
-      console.warn(`⚠️ [RingBuffer] 缓冲区溢出，丢弃 ${needToDrop} 个样本`);
+      logger.warn(`Buffer overflow, dropping ${needToDrop} samples`);
       this.readIndex = (this.readIndex + needToDrop) % this.size;
     }
 

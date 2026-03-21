@@ -1,5 +1,8 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('SyncConfigModal');
 import {
   Modal,
   ModalContent,
@@ -43,7 +46,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
       setHasUnsavedChanges(false);
       onSaved?.();
     } catch (error) {
-      console.error('保存同步配置失败:', error);
+      logger.error('Failed to save sync config:', error);
     }
   }, [onSaved]);
 
@@ -59,7 +62,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
       setIsConfirmDialogOpen(false);
       onClose();
     } catch (error) {
-      console.error('保存同步配置失败:', error);
+      logger.error('Failed to save sync config:', error);
       setIsConfirmDialogOpen(false);
     }
   }, [handleSave, onClose]);

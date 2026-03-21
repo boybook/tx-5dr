@@ -2,6 +2,9 @@
 // TransmissionTracker - 状态跟踪需要使用any
 
 import { EventEmitter } from 'eventemitter3';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('TransmissionTracker');
 
 /**
  * 传输阶段枚举
@@ -111,7 +114,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
 
     this.states.set(operatorId, state);
 
-    console.log(`🎯 [TransmissionTracker] 开始传输跟踪: 操作员=${operatorId}, 时隙=${slotId}, 目标时间=${new Date(targetTime).toISOString()}, 剩余时间=${timeUntilTarget}ms`);
+    logger.debug(`Transmission tracking started: operator=${operatorId}, slot=${slotId}, target=${new Date(targetTime).toISOString()}, timeLeft=${timeUntilTarget}ms`);
 
     // 边界检测：检查是否有足够时间完成编码和混音
     if (timeUntilTarget < 200) {
@@ -131,7 +134,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
   updatePhase(operatorId: string, phase: TransmissionPhase, metadata?: any): void {
     const state = this.states.get(operatorId);
     if (!state) {
-      console.warn(`⚠️ [TransmissionTracker] 未找到操作员状态: ${operatorId}`);
+      logger.warn(`Operator state not found: ${operatorId}`);
       return;
     }
     
@@ -201,7 +204,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
         break;
     }
     
-    console.log(`📊 [TransmissionTracker] 状态更新: 操作员=${operatorId}, ${previousPhase} -> ${phase}`);
+    logger.debug(`State updated: operator=${operatorId}, ${previousPhase} -> ${phase}`);
     this.emit('stateChanged', state);
   }
   
@@ -259,7 +262,13 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
     };
     
     state.warnings.push(warning);
-    console.log(`${level === WarningLevel.ERROR ? '❌' : level === WarningLevel.WARN ? '⚠️' : 'ℹ️'} [TransmissionTracker] ${operatorId}: ${message}`);
+    if (level === WarningLevel.ERROR) {
+      logger.debug(`[${operatorId}] ERROR: ${message}`);
+    } else if (level === WarningLevel.WARN) {
+      logger.debug(`[${operatorId}] WARN: ${message}`);
+    } else {
+      logger.debug(`[${operatorId}] ${message}`);
+    }
     
     this.emit('warningAdded', operatorId, warning);
   }
@@ -323,7 +332,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
       state.audioMixerWaitTimeMs = now - state.readyTime;
     }
     
-    console.log(`⏱️ [TransmissionTracker] 音频已添加到混音器: ${operatorId}, 等待时间=${state.audioMixerWaitTimeMs || 0}ms`);
+    logger.debug(`Audio added to mixer: ${operatorId}, wait=${state.audioMixerWaitTimeMs || 0}ms`);
   }
   
   /**
@@ -340,7 +349,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
       state.mixedAudioProcessTimeMs = now - state.audioAddedToMixerTime;
     }
     
-    console.log(`⏱️ [TransmissionTracker] 混音完成: ${operatorId}, 混音处理时间=${state.mixedAudioProcessTimeMs || 0}ms`);
+    logger.debug(`Mix complete: ${operatorId}, mix process time=${state.mixedAudioProcessTimeMs || 0}ms`);
   }
   
   /**
@@ -357,7 +366,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
       state.pttActivationTimeMs = now - state.mixedAudioReadyTime;
     }
     
-    console.log(`⏱️ [TransmissionTracker] PTT启动: ${operatorId}, PTT激活时间=${state.pttActivationTimeMs || 0}ms`);
+    logger.debug(`PTT start: ${operatorId}, PTT activation time=${state.pttActivationTimeMs || 0}ms`);
   }
   
   /**
@@ -374,7 +383,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
       state.totalPipelineTimeMs = now - state.encodeStartTime;
     }
     
-    console.log(`⏱️ [TransmissionTracker] 音频播放开始: ${operatorId}`);
+    logger.debug(`Audio playback started: ${operatorId}`);
     
     // 打印详细的时间花费统计
     this.printTimingStatistics(operatorId);
@@ -386,91 +395,86 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
   private printTimingStatistics(operatorId: string): void {
     const state = this.states.get(operatorId);
     if (!state) return;
-    
-    console.log(`📊 [TransmissionTracker] ===== 操作员 ${operatorId} 发射时间统计 =====`);
-    
-    // 打印所有时间戳（用于调试）
-    console.log(`   📅 时间戳记录:`);
-    if (state.encodeStartTime) console.log(`      编码开始: ${new Date(state.encodeStartTime).toISOString()}`);
-    if (state.encodeCompleteTime) console.log(`      编码完成: ${new Date(state.encodeCompleteTime).toISOString()}`);
-    if (state.readyTime) console.log(`      音频就绪: ${new Date(state.readyTime).toISOString()}`);
-    if (state.audioAddedToMixerTime) console.log(`      添加到混音器: ${new Date(state.audioAddedToMixerTime).toISOString()}`);
-    if (state.mixedAudioReadyTime) console.log(`      混音完成: ${new Date(state.mixedAudioReadyTime).toISOString()}`);
-    if (state.pttStartTime) console.log(`      PTT启动: ${new Date(state.pttStartTime).toISOString()}`);
-    if (state.audioPlaybackStartTime) console.log(`      播放开始: ${new Date(state.audioPlaybackStartTime).toISOString()}`);
-    
-    // 计算各阶段时间
+
+    logger.debug(`===== Operator ${operatorId} transmission timing stats =====`);
+
+    // Timestamps (debug)
+    if (state.encodeStartTime) logger.debug(`  encode start: ${new Date(state.encodeStartTime).toISOString()}`);
+    if (state.encodeCompleteTime) logger.debug(`  encode complete: ${new Date(state.encodeCompleteTime).toISOString()}`);
+    if (state.readyTime) logger.debug(`  audio ready: ${new Date(state.readyTime).toISOString()}`);
+    if (state.audioAddedToMixerTime) logger.debug(`  added to mixer: ${new Date(state.audioAddedToMixerTime).toISOString()}`);
+    if (state.mixedAudioReadyTime) logger.debug(`  mix complete: ${new Date(state.mixedAudioReadyTime).toISOString()}`);
+    if (state.pttStartTime) logger.debug(`  PTT start: ${new Date(state.pttStartTime).toISOString()}`);
+    if (state.audioPlaybackStartTime) logger.debug(`  playback start: ${new Date(state.audioPlaybackStartTime).toISOString()}`);
+
     let accumulatedTime = 0;
-    
+
     if (state.encodeTimeMs !== undefined) {
-      console.log(`   🔄 编码时间: ${state.encodeTimeMs}ms`);
+      logger.debug(`  encode time: ${state.encodeTimeMs}ms`);
       accumulatedTime += state.encodeTimeMs;
     } else if (state.encodeStartTime && state.encodeCompleteTime) {
       const encodeTime = state.encodeCompleteTime - state.encodeStartTime;
-      console.log(`   🔄 编码时间: ${encodeTime}ms (重新计算)`);
+      logger.debug(`  encode time: ${encodeTime}ms (recalculated)`);
       accumulatedTime += encodeTime;
     }
-    
-    // 编码完成到音频就绪的时间
+
     if (state.encodeCompleteTime && state.readyTime) {
       const processingTime = state.readyTime - state.encodeCompleteTime;
-      console.log(`   ⚙️ 编码后处理时间: ${processingTime}ms`);
+      logger.debug(`  post-encode processing: ${processingTime}ms`);
       accumulatedTime += processingTime;
     }
-    
-    // 音频就绪到添加到混音器的时间
+
     if (state.readyTime && state.audioAddedToMixerTime) {
       const waitTime = state.audioAddedToMixerTime - state.readyTime;
-      console.log(`   ⏳ 音频处理等待时间: ${waitTime}ms`);
+      logger.debug(`  audio processing wait: ${waitTime}ms`);
       accumulatedTime += waitTime;
     }
-    
+
     if (state.mixingTimeMs !== undefined) {
-      console.log(`   🎵 混音时间: ${state.mixingTimeMs}ms`);
+      logger.debug(`  mixing time: ${state.mixingTimeMs}ms`);
     }
-    
+
     if (state.audioMixerWaitTimeMs !== undefined) {
-      console.log(`   ⏳ 混音器等待时间: ${state.audioMixerWaitTimeMs}ms`);
+      logger.debug(`  mixer wait time: ${state.audioMixerWaitTimeMs}ms`);
       accumulatedTime += state.audioMixerWaitTimeMs;
     }
-    
+
     if (state.mixedAudioProcessTimeMs !== undefined) {
-      console.log(`   🎛️ 混音处理时间: ${state.mixedAudioProcessTimeMs}ms`);
+      logger.debug(`  mix process time: ${state.mixedAudioProcessTimeMs}ms`);
       accumulatedTime += state.mixedAudioProcessTimeMs;
     }
-    
+
     if (state.pttActivationTimeMs !== undefined) {
-      console.log(`   📡 PTT激活时间: ${state.pttActivationTimeMs}ms`);
+      logger.debug(`  PTT activation time: ${state.pttActivationTimeMs}ms`);
       accumulatedTime += state.pttActivationTimeMs;
     }
-    
+
     if (state.totalPipelineTimeMs !== undefined) {
-      console.log(`   ⏱️ 总管道时间: ${state.totalPipelineTimeMs}ms (编码开始 -> 播放开始)`);
-      console.log(`   🔍 已统计时间: ${accumulatedTime}ms`);
+      logger.debug(`  total pipeline time: ${state.totalPipelineTimeMs}ms (encode start -> playback start)`);
+      logger.debug(`  accounted time: ${accumulatedTime}ms`);
       const unaccountedTime = state.totalPipelineTimeMs - accumulatedTime;
       if (unaccountedTime > 10) {
-        console.log(`   ❓ 未统计时间: ${unaccountedTime}ms`);
+        logger.debug(`  unaccounted time: ${unaccountedTime}ms`);
       }
     }
-    
+
     if (state.actualDelayMs !== undefined) {
-      console.log(`   🎯 实际延迟: ${state.actualDelayMs}ms (相对于目标发射时间)`);
+      logger.debug(`  actual delay: ${state.actualDelayMs}ms (relative to target transmit time)`);
     }
-    
-    // 计算目标发射时间到实际播放开始的延迟
+
     const targetTime = this.targetTransmitTime.get(state.slotId);
     if (targetTime && state.audioPlaybackStartTime) {
       const totalDelay = state.audioPlaybackStartTime - targetTime;
-      console.log(`   🚨 总延迟: ${totalDelay}ms (目标时间 -> 实际播放)`);
-      
+      logger.debug(`  total delay: ${totalDelay}ms (target time -> actual playback)`);
+
       if (totalDelay > 100) {
-        this.addWarning(operatorId, WarningLevel.ERROR, `总延迟过大: ${totalDelay}ms`);
+        this.addWarning(operatorId, WarningLevel.ERROR, `Total delay too large: ${totalDelay}ms`);
       } else if (totalDelay > 50) {
-        this.addWarning(operatorId, WarningLevel.WARN, `总延迟较大: ${totalDelay}ms`);
+        this.addWarning(operatorId, WarningLevel.WARN, `Total delay elevated: ${totalDelay}ms`);
       }
     }
-    
-    console.log(`📊 [TransmissionTracker] =======================================`);
+
+    logger.debug(`=======================================`);
   }
 
   /**

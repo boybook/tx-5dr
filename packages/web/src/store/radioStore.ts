@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode } from 'react';
 import { addToast } from '@heroui/toast';
+import { createLogger } from '../utils/logger';
 import type {
   SlotPack,
   ModeDescriptor,
@@ -26,6 +27,8 @@ import {
   isRetryableError
 } from '../utils/errorToast';
 import i18n from '../i18n';
+
+const logger = createLogger('RadioStore');
 
 // ===== 连接状态管理 =====
 export interface ConnectionState {
@@ -201,11 +204,11 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       };
     
     case 'decodeError':
-      console.warn('解码错误:', action.payload);
+      logger.warn('Decode error:', action.payload);
       return state;
-    
+
     case 'error':
-      console.error('RadioService错误:', action.payload);
+      logger.error('Radio service error:', action.payload);
       return state;
     
     case 'operatorsList':
@@ -496,9 +499,25 @@ export interface CombinedDispatch {
   logbookDispatch: React.Dispatch<LogbookAction>;
 }
 
-const RadioContext = createContext<{
-  state: CombinedState;
-  dispatch: CombinedDispatch;
+// ===== 拆分后的独立 Context =====
+const ConnectionContext = createContext<{
+  state: ConnectionState;
+  dispatch: React.Dispatch<ConnectionAction>;
+} | undefined>(undefined);
+
+const RadioStateContext = createContext<{
+  state: RadioState;
+  dispatch: React.Dispatch<RadioAction>;
+} | undefined>(undefined);
+
+const SlotPacksContext = createContext<{
+  state: SlotPacksState;
+  dispatch: React.Dispatch<SlotPacksAction>;
+} | undefined>(undefined);
+
+const LogbookContext = createContext<{
+  state: LogbookState;
+  dispatch: React.Dispatch<LogbookAction>;
 } | undefined>(undefined);
 
 // Provider组件
@@ -535,7 +554,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 当认证启用时，等待 authResult 成功后再握手
         if (!authStateRef.current.authEnabled) {
           const handshakeOperatorIds = getHandshakeOperatorIds();
-          console.log('🤝 [RadioProvider] 认证未启用，直接发送握手消息:', {
+          logger.info('Auth disabled, sending handshake directly:', {
             enabledOperatorIds: handshakeOperatorIds
           });
           radioService.sendHandshake(handshakeOperatorIds);
@@ -545,24 +564,24 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // 认证：服务端要求认证
       authRequired: (data: unknown) => {
         const authData = data as { allowPublicViewing: boolean };
-        console.log('🔐 [RadioProvider] 收到 AUTH_REQUIRED:', authData);
+        logger.info('Received AUTH_REQUIRED:', authData);
         const wsClient = radioService.wsClientInstance;
         const jwt = authStateRef.current.jwt;
         if (jwt) {
-          console.log('🔑 [RadioProvider] 发送 JWT 进行认证');
+          logger.info('Sending JWT for authentication');
           wsClient.sendAuthToken(jwt);
         } else if (authData.allowPublicViewing) {
-          console.log('👀 [RadioProvider] 以公开观察者模式接入');
+          logger.info('Joining as public viewer');
           wsClient.sendAuthPublicViewer();
         } else {
-          console.warn('⚠️ [RadioProvider] 需要认证但无 JWT');
+          logger.warn('Auth required but no JWT available');
         }
       },
       // 认证结果
       authResult: (data: unknown) => {
         const result = data as { success: boolean; role?: UserRole; label?: string; operatorIds?: string[]; error?: string };
         if (result.success) {
-          console.log('✅ [RadioProvider] 认证成功, role:', result.role);
+          logger.info('Auth succeeded, role:', result.role);
           // 认证成功后发送握手
           const handshakeOperatorIds = getHandshakeOperatorIds();
           radioService.sendHandshake(handshakeOperatorIds);
@@ -571,13 +590,13 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const localizedError = errorCode
             ? i18n.t(`auth:errors.${errorCode}`, { defaultValue: errorCode })
             : i18n.t('auth:login.failed');
-          console.error('❌ [RadioProvider] 认证失败:', errorCode, '→', localizedError);
+          logger.error('Auth failed:', errorCode, '->', localizedError);
         }
       },
       // JWT 过期通知
       authExpired: (data: unknown) => {
         const expData = data as { reason?: string };
-        console.warn('⏰ [RadioProvider] JWT 已过期:', expData.reason);
+        logger.warn('JWT expired:', expData.reason);
         addToast({
           title: i18n.t('auth:expired.title'),
           description: i18n.t('auth:expired.description'),
@@ -616,7 +635,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 处理连接失败 / 超时错误 → 重试启动引擎
         if (code === 'CONNECTION_FAILED' || code === 'RADIO_CONNECTION_FAILED' || code === 'CONNECTION_TIMEOUT') {
           action = createRetryAction(() => {
-            console.log('🔄 用户点击重试启动');
+            logger.debug('User clicked retry start');
             if (radioServiceRef.current) {
               radioServiceRef.current.startDecoding();
             }
@@ -625,7 +644,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 处理引擎启动失败
         else if (code === 'ENGINE_START_FAILED') {
           action = createRetryAction(() => {
-            console.log('🔄 用户点击重试启动引擎');
+            logger.debug('User clicked retry start engine');
             if (radioServiceRef.current) {
               radioServiceRef.current.startDecoding();
             }
@@ -643,7 +662,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 处理超时错误
         else if (code === 'TIMEOUT') {
           action = createRetryAction(() => {
-            console.log('🔄 用户点击重试操作');
+            logger.debug('User clicked retry operation');
             addToast({
               title: i18n.t('toast:severity.info'),
               description: i18n.t('toast:hint.retryManually'),
@@ -655,7 +674,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 处理状态冲突
         else if (code === 'STATE_CONFLICT') {
           action = createRefreshStatusAction(() => {
-            console.log('🔄 用户点击刷新状态');
+            logger.debug('User clicked refresh status');
             if (radioServiceRef.current) {
               radioServiceRef.current.getSystemStatus();
             }
@@ -664,7 +683,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 处理资源繁忙
         else if (code === 'RESOURCE_BUSY') {
           action = createRetryAction(() => {
-            console.log('🔄 用户点击重试（资源繁忙）');
+            logger.debug('User clicked retry (resource busy)');
             addToast({
               title: i18n.t('toast:severity.info'),
               description: i18n.t('toast:hint.tryLater'),
@@ -676,7 +695,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 其他可重试错误
         else if (isRetryableError(code)) {
           action = createRetryAction(() => {
-            console.log(`🔄 用户点击重试（错误代码：${code}）`);
+            logger.debug(`User clicked retry (error code: ${code})`);
             addToast({
               title: i18n.t('toast:severity.info'),
               description: i18n.t('toast:hint.retryManually'),
@@ -708,12 +727,12 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       qsoRecordAdded: (data: unknown) => {
         const qsoData = data as { operatorId: string; logBookId: string; qsoRecord: QSORecord };
-        console.log('📝 [RadioProvider] 收到QSO记录添加事件:', qsoData);
+        logger.debug('QSO record added:', qsoData);
         logbookDispatch({ type: 'qsoRecordAdded', payload: qsoData });
       },
       logbookUpdated: (data: unknown) => {
         const logbookData = data as { logBookId: string; statistics: LogBookStatistics };
-        console.log('📊 [RadioProvider] 收到日志本更新事件:', logbookData);
+        logger.debug('Logbook updated:', logbookData);
         logbookDispatch({ type: 'logbookUpdated', payload: logbookData });
       },
       operatorsList: (data: unknown) => {
@@ -740,13 +759,13 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       })(),
       // 频率变化：清空本地 SlotPack 历史
       frequencyChanged: () => {
-        console.log('📻 [RadioProvider] 频率变化，清空本地时隙历史');
+        logger.debug('Frequency changed, clearing local slot history');
         slotPacksDispatch({ type: 'CLEAR_DATA' });
       },
       // PTT状态变化
       pttStatusChanged: (data: unknown) => {
         const pttData = data as { isTransmitting: boolean; operatorIds: string[] };
-        console.log(`📡 [RadioProvider] PTT状态变化: ${pttData.isTransmitting ? '开始发射' : '停止发射'}, 操作员=[${pttData.operatorIds?.join(', ') || ''}]`);
+        logger.debug(`PTT status changed: ${pttData.isTransmitting ? 'transmitting' : 'idle'}, operators=[${pttData.operatorIds?.join(', ') || ''}]`);
         radioDispatch({ type: 'pttStatusChanged', payload: pttData });
       },
       // 电台数值表数据（节流：100ms 内最多更新一次）
@@ -775,9 +794,9 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       })(),
       handshakeComplete: async (data: unknown) => {
         const handshakeData = data as { finalEnabledOperatorIds?: string[] };
-        console.log('🤝 [RadioProvider] 握手完成:', handshakeData);
+        logger.info('Handshake complete:', handshakeData);
         if (handshakeData.finalEnabledOperatorIds) {
-          console.log('💾 [RadioProvider] 新客户端，保存默认操作员偏好:', handshakeData.finalEnabledOperatorIds);
+          logger.info('New client, saving default operator preferences:', handshakeData.finalEnabledOperatorIds);
           setOperatorPreferences({
             enabledOperatorIds: handshakeData.finalEnabledOperatorIds,
             lastUpdated: Date.now()
@@ -787,11 +806,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // 握手完成后，请求 Profile 列表
         // 注意：电台状态已通过 WSServer addConnection 的 radioStatusChanged 初始同步完成，
         // 后续状态变化通过 radioStatusChanged 事件实时推送，无需重复 API 请求。
-        console.log('🔄 [RadioProvider] 握手完成，请求 Profile 列表');
+        logger.info('Handshake complete, requesting profile list');
         try {
           const { api } = await import('@tx5dr/core');
           const profilesResponse = await api.getProfiles();
-          console.log('✅ [RadioProvider] Profile 列表已同步:', profilesResponse.profiles.length, '个 Profile');
+          logger.info('Profile list synced:', profilesResponse.profiles.length, 'profiles');
           radioDispatch({
             type: 'setProfiles',
             payload: {
@@ -800,7 +819,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             }
           });
         } catch (error) {
-          console.error('❌ [RadioProvider] 获取 Profile 列表失败:', error);
+          logger.error('Failed to fetch profile list:', error);
         }
       },
       radioStatusChanged: (data: unknown) => {
@@ -814,7 +833,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           reason?: string;
           message?: string;
         };
-        console.log('📡 [RadioProvider] 电台状态变化:', radioData.status || (radioData.connected ? 'connected' : 'disconnected'), radioData.reason || '');
+        logger.debug('Radio status changed:', radioData.status || (radioData.connected ? 'connected' : 'disconnected'), radioData.reason || '');
 
         radioDispatch({
           type: 'radioStatusUpdate',
@@ -838,7 +857,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       radioError: (data: unknown) => {
         const errorData = data as RadioErrorEventData;
-        console.log('⚠️ [RadioProvider] 电台错误:', errorData);
+        logger.warn('Radio error received:', errorData);
 
         const record: RadioErrorRecord = {
           id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -858,11 +877,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         radioDispatch({ type: 'radioError', payload: record });
       },
       radioDisconnectedDuringTransmission: (data: unknown) => {
-        console.warn('🚨 [RadioProvider] 电台发射中断开连接:', data);
+        logger.warn('Radio disconnected during transmission:', data);
       },
       textMessage: (data: unknown) => {
         const msgData = data as { title: string; text: string; color?: string; timeout?: number | null; key?: string; params?: Record<string, string> };
-        console.log('📬 [RadioProvider] 收到文本消息:', msgData);
+        logger.debug('Text message received:', msgData);
         // 有 key 时优先使用翻译，兜底使用原始 title/text
         const title = msgData.key
           ? i18n.t(`toast:serverMessage.${msgData.key}.title`, msgData.params || {})
@@ -880,12 +899,12 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Profile 管理事件
       profileChanged: (data: unknown) => {
         const profileData = data as ProfileChangedEvent;
-        console.log('📋 [RadioProvider] Profile 已切换:', profileData.profileId, profileData.profile.name);
+        logger.info('Profile switched:', profileData.profileId, profileData.profile.name);
         radioDispatch({ type: 'profileChanged', payload: profileData });
       },
       profileListUpdated: (data: unknown) => {
         const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null };
-        console.log('📋 [RadioProvider] Profile 列表已更新:', listData.profiles.length, '个 Profile');
+        logger.info('Profile list updated:', listData.profiles.length, 'profiles');
         radioDispatch({ type: 'profileListUpdated', payload: listData });
       }
     };
@@ -924,112 +943,116 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
   }, []);
 
-  const combinedState: CombinedState = {
-    connection: connectionState,
-    radio: radioState,
-    slotPacks: slotPacksState,
-    logbook: logbookState
-  };
-
-  const combinedDispatch: CombinedDispatch = {
-    connectionDispatch,
-    radioDispatch,
-    slotPacksDispatch,
-    logbookDispatch
-  };
-
   return React.createElement(
-    RadioContext.Provider,
-    { value: { state: combinedState, dispatch: combinedDispatch } },
-    children
+    ConnectionContext.Provider, { value: { state: connectionState, dispatch: connectionDispatch } },
+    React.createElement(
+      RadioStateContext.Provider, { value: { state: radioState, dispatch: radioDispatch } },
+      React.createElement(
+        SlotPacksContext.Provider, { value: { state: slotPacksState, dispatch: slotPacksDispatch } },
+        React.createElement(
+          LogbookContext.Provider, { value: { state: logbookState, dispatch: logbookDispatch } },
+          children
+        )
+      )
+    )
   );
 };
 
-// Hook for using the radio context
+// ===== Consumer Hooks（各 hook 直接从对应 Context 读取，互不影响）=====
+
+// 向后兼容：聚合所有 Context
 export const useRadio = () => {
-  const context = useContext(RadioContext);
-  if (context === undefined) {
+  const connection = useContext(ConnectionContext);
+  const radio = useContext(RadioStateContext);
+  const slotPacks = useContext(SlotPacksContext);
+  const logbook = useContext(LogbookContext);
+  if (!connection || !radio || !slotPacks || !logbook) {
     throw new Error('useRadio must be used within a RadioProvider');
   }
+  return {
+    state: {
+      connection: connection.state,
+      radio: radio.state,
+      slotPacks: slotPacks.state,
+      logbook: logbook.state,
+    },
+    dispatch: {
+      connectionDispatch: connection.dispatch,
+      radioDispatch: radio.dispatch,
+      slotPacksDispatch: slotPacks.dispatch,
+      logbookDispatch: logbook.dispatch,
+    }
+  };
+};
+
+export const useConnection = () => {
+  const context = useContext(ConnectionContext);
+  if (!context) throw new Error('useConnection must be used within RadioProvider');
   return context;
 };
 
-// 便捷的单独hooks
-export const useConnection = () => {
-  const { state, dispatch } = useRadio();
-  return {
-    state: state.connection,
-    dispatch: dispatch.connectionDispatch
-  };
-};
-
 export const useRadioState = () => {
-  const { state, dispatch } = useRadio();
-  return {
-    state: state.radio,
-    dispatch: dispatch.radioDispatch
-  };
+  const context = useContext(RadioStateContext);
+  if (!context) throw new Error('useRadioState must be used within RadioProvider');
+  return context;
 };
 
 export const useSlotPacks = () => {
-  const { state, dispatch } = useRadio();
-  return {
-    state: state.slotPacks,
-    dispatch: dispatch.slotPacksDispatch
-  };
-}; 
+  const context = useContext(SlotPacksContext);
+  if (!context) throw new Error('useSlotPacks must be used within RadioProvider');
+  return context;
+};
 
 export const useOperators = () => {
-  const { state } = useRadio();
+  const { state } = useRadioState();
   return {
-    operators: state.radio.operators || [],
+    operators: state.operators || [],
   };
 };
 
 export const useCurrentOperatorId = () => {
-  const { state, dispatch } = useRadio();
+  const { state, dispatch } = useRadioState();
   return {
-    currentOperatorId: state.radio.currentOperatorId || state.radio.operators?.[0]?.id,
+    currentOperatorId: state.currentOperatorId || state.operators?.[0]?.id,
     setCurrentOperatorId: (operatorId: string) => {
-      // 只更新前端状态，不发送到后端
-      dispatch.radioDispatch({ type: 'setCurrentOperator', payload: operatorId });
+      dispatch({ type: 'setCurrentOperator', payload: operatorId });
     }
   };
 };
 
 export const useLogbook = () => {
-  const { state, dispatch } = useRadio();
+  const context = useContext(LogbookContext);
+  if (!context) throw new Error('useLogbook must be used within RadioProvider');
   return {
-    state: state.logbook,
-    dispatch: dispatch.logbookDispatch,
-    // 便捷方法
-    getQSOsForOperator: (operatorId: string) => state.logbook.qsosByOperator.get(operatorId) || [],
-    getStatisticsForLogbook: (logBookId: string) => state.logbook.statisticsByLogbook.get(logBookId),
+    state: context.state,
+    dispatch: context.dispatch,
+    getQSOsForOperator: (operatorId: string) => context.state.qsosByOperator.get(operatorId) || [],
+    getStatisticsForLogbook: (logBookId: string) => context.state.statisticsByLogbook.get(logBookId),
     addQSORecord: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
-      dispatch.logbookDispatch({ type: 'qsoRecordAdded', payload: data });
+      context.dispatch({ type: 'qsoRecordAdded', payload: data });
     },
     loadQSOs: (operatorId: string, qsos: QSORecord[]) => {
-      dispatch.logbookDispatch({ type: 'loadQSOs', payload: { operatorId, qsos } });
+      context.dispatch({ type: 'loadQSOs', payload: { operatorId, qsos } });
     }
   };
 };
 
 export const useProfiles = () => {
-  const { state } = useRadio();
-  const activeProfile = state.radio.profiles.find(p => p.id === state.radio.activeProfileId) ?? null;
+  const { state } = useRadioState();
+  const activeProfile = state.profiles.find(p => p.id === state.activeProfileId) ?? null;
   return {
-    profiles: state.radio.profiles,
-    activeProfileId: state.radio.activeProfileId,
+    profiles: state.profiles,
+    activeProfileId: state.activeProfileId,
     activeProfile,
-    profilesLoaded: state.radio.profilesLoaded,
+    profilesLoaded: state.profilesLoaded,
   };
 };
 
 export const useRadioErrors = () => {
-  const { state, dispatch } = useRadio();
+  const { state, dispatch } = useRadioState();
   return {
-    errors: state.radio.radioErrors,
-    latestError: state.radio.latestRadioError,
-    clearErrors: () => dispatch.radioDispatch({ type: 'clearRadioErrors' }),
+    errors: state.radioErrors,
+    latestError: state.latestRadioError,
+    clearErrors: () => dispatch({ type: 'clearRadioErrors' }),
   };
 };

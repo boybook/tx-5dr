@@ -2,13 +2,16 @@
 // WSJTXDecodeWorkQueue - Worker任务处理需要使用any
 
 import { EventEmitter } from 'eventemitter3';
-import { 
-  type IDecodeQueue, 
-  type DecodeRequest, 
-  type DecodeResult 
+import {
+  type IDecodeQueue,
+  type DecodeRequest,
+  type DecodeResult
 } from '@tx5dr/core';
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
 import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('DecodeWorkQueue');
 
 export interface DecodeWorkQueueEvents {
   'decodeComplete': (result: DecodeResult) => void;
@@ -34,7 +37,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
     super();
     this.maxConcurrency = maxConcurrency;
     this.lib = new WSJTXLib();
-    console.log(`🔧 [解码队列] 初始化完成（主线程），最大并发标注: ${maxConcurrency}`);
+    logger.info(`Initialized (main thread), max concurrency: ${maxConcurrency}`);
   }
   
   /**
@@ -75,7 +78,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
     // 保留此逻辑作为保险，以防特殊情况下传入非 12kHz 数据
     let resampledAudioData: Float32Array;
     if (request.sampleRate && request.sampleRate !== 12000) {
-      console.warn(`⚠️ [解码队列] 意外的采样率 ${request.sampleRate}Hz，重采样到 12kHz`);
+      logger.warn(`Unexpected sample rate ${request.sampleRate}Hz, resampling to 12kHz`);
       resampledAudioData = await resampleAudioProfessional(
         originalAudioData,
         request.sampleRate,
@@ -115,7 +118,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       windowOffsetMs: request.windowOffsetMs || 0
     };
 
-    console.log(`🔧 [解码完成] 时隙: ${request.slotId}, 窗口: ${request.windowIdx}, 找到 ${decodeResult.frames.length} 个信号, 耗时: ${processingTimeMs.toFixed(2)}ms`);
+    logger.debug(`Decode complete - slot: ${request.slotId}, window: ${request.windowIdx}, signals: ${decodeResult.frames.length}, elapsed: ${processingTimeMs.toFixed(2)}ms`);
     this.emit('decodeComplete', decodeResult);
   }
   
@@ -142,6 +145,6 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
    * 销毁工作池
    */
   async destroy(): Promise<void> {
-    console.log('🗑️ [解码队列] 清理（主线程，无工作池）');
+    logger.info('Cleanup (main thread, no worker pool)');
   }
 }

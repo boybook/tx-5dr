@@ -58,23 +58,14 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
 
     // 更新当前采样率
     if (sampleRate && sampleRate !== this.currentSampleRate) {
-      console.log(`[AudioWorklet] 采样率更新: ${this.currentSampleRate} → ${sampleRate} Hz`);
+      console.log(`[AudioWorklet] sample rate updated: ${this.currentSampleRate} -> ${sampleRate} Hz`);
       this.currentSampleRate = sampleRate;
     }
 
     const audioData = new Float32Array(buffer);
     const samples = audioData.length;
 
-    // 每秒输出一次简化日志
     this.frameCount++;
-    if (this.frameCount % 20 === 0) {
-      const bufferMs = (this.availableSamples / (this.currentSampleRate / 1000)).toFixed(1);
-      console.log(
-        `🎧 [Worklet] 缓冲区=${bufferMs}ms (${this.availableSamples}样本), ` +
-        `播放=${this.isPlaying ? '▶️' : '⏸️'}, ` +
-        `欠载=${this.underrunCount}`
-      );
-    }
 
     // 检查缓冲区是否有足够空间
     const freeSpace = this.ringBufferSize - this.availableSamples;
@@ -112,7 +103,7 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
         this.isPlaying = true;
         this.prefillComplete = true;
         this.consecutiveUnderrunFrames = 0;
-        console.log(`▶️ [Worklet] 预填充完成 (${bufferMs.toFixed(1)}ms)，开始播放`);
+        console.log(`[Worklet] pre-fill complete (${bufferMs.toFixed(1)}ms), starting playback`);
       } else {
         // 继续静音，等待预填充
         for (let i = 0; i < samples; i++) {
@@ -150,7 +141,7 @@ class AudioMonitorProcessor extends AudioWorkletProcessor {
       if (this.consecutiveUnderrunFrames > 10) {
         this.isPlaying = false;
         this.consecutiveUnderrunFrames = 0;
-        console.warn(`⏸️ [Worklet] 连续欠载，暂停等待预填充`);
+        console.warn(`[Worklet] consecutive underruns, pausing to wait for pre-fill`);
       }
     } else {
       this.consecutiveUnderrunFrames = 0;

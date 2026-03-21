@@ -19,6 +19,9 @@ import {
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { FT8MessageParser } from '@tx5dr/core';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('PSKReporterService');
 
 // PSKReporter 服务器地址
 const PSKREPORTER_HOST = 'report.pskreporter.info';
@@ -84,7 +87,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
       await this.start();
     }
 
-    console.log('✅ [PSKReporter] 服务已初始化');
+    logger.info('Service initialized');
   }
 
   /**
@@ -97,8 +100,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
     this.resolveActiveIdentity();
 
     if (!this.activeCallsign || !this.activeLocator) {
-      console.warn('⚠️ [PSKReporter] 无法确定接收站呼号或网格，服务未启动');
-      console.warn(`   呼号: "${this.activeCallsign}", 网格: "${this.activeLocator}"`);
+      logger.warn(`Cannot determine receiver callsign or locator, service not started (callsign="${this.activeCallsign}", locator="${this.activeLocator}")`);
       return;
     }
 
@@ -106,7 +108,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
     this.udpSocket = dgram.createSocket('udp4');
 
     this.udpSocket.on('error', (err) => {
-      console.error('❌ [PSKReporter] UDP 错误:', err);
+      logger.error('UDP error:', err);
       this.emit('reportError', err);
     });
 
@@ -116,8 +118,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
       this.sendPendingSpots();
     }, intervalMs);
 
-    console.log(`✅ [PSKReporter] 服务已启动，上报间隔: ${config.reportIntervalSeconds}秒`);
-    console.log(`   接收站: ${this.activeCallsign} @ ${this.activeLocator}`);
+    logger.info(`Service started, report interval: ${config.reportIntervalSeconds}s, receiver: ${this.activeCallsign} @ ${this.activeLocator}`);
 
     this.emitStatus();
   }
@@ -141,7 +142,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
       this.udpSocket = null;
     }
 
-    console.log('🛑 [PSKReporter] 服务已停止');
+    logger.info('Service stopped');
     this.emitStatus();
   }
 
@@ -290,7 +291,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
         informationSource: 1, // 1 = automatic
       };
     } catch (error) {
-      console.error('📡 [PSKReporter] 解析消息失败:', error);
+      logger.error('Failed to parse message:', error);
       return null;
     }
   }
@@ -334,7 +335,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
         lastError: undefined,
       });
 
-      console.log(`📡 [PSKReporter] 成功上报 ${spotsToSend.length} 条记录到 ${host}:${port}`);
+      logger.info(`Reported ${spotsToSend.length} spots to ${host}:${port}`);
       this.emit('reportSent', spotsToSend.length);
     } catch (error) {
       // 上报失败，将数据放回队列
@@ -346,7 +347,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
         lastError: error instanceof Error ? error.message : String(error),
       });
 
-      console.error('❌ [PSKReporter] 上报失败:', error);
+      logger.error('Report failed:', error);
       this.emit('reportError', error instanceof Error ? error : new Error(String(error)));
     } finally {
       this.isReporting = false;

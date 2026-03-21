@@ -4,6 +4,9 @@
  */
 
 import { FT8MessageParser } from '../parser/ft8-message-parser.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('Callsign');
 import { FT8MessageType } from '@tx5dr/contracts';
 import dxccData from './dxcc.json' with { type: 'json' };
 
@@ -898,7 +901,7 @@ class DXCCIndex {
           const regex = new RegExp(entity.prefixRegex);
           this.prefixRegexMap.set(regex, entity);
         } catch (e) {
-          console.warn(`Invalid prefix regex for ${entity.name}: ${entity.prefixRegex}`);
+          logger.warn(`Invalid prefix regex for ${entity.name}: ${entity.prefixRegex}`);
         }
       }
 

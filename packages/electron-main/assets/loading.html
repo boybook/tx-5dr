@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -54,6 +54,10 @@
 </head>
 <body>
   <div class="spinner"></div>
-  <div class="text">正在启动...</div>
+  <div class="text" id="loading-text">Starting...</div>
+  <script>
+    const zh = (navigator.language || '').toLowerCase().startsWith('zh');
+    document.getElementById('loading-text').textContent = zh ? '正在启动...' : 'Starting...';
+  </script>
 </body>
 </html>

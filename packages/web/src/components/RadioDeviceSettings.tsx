@@ -1,4 +1,7 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('RadioDeviceSettings');
 import { useTranslation } from 'react-i18next';
 import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip } from '@heroui/react';
 import { api } from '@tx5dr/core';
@@ -79,7 +82,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
         const portList = await api.getSerialPorts();
         setPorts(portList.ports || []);
       } catch (error) {
-        console.error('刷新串口列表失败:', error);
+        logger.error('Failed to refresh serial port list:', error);
       } finally {
         setIsRefreshingPorts(false);
       }
@@ -454,7 +457,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     selectedKey={config.serial?.rigModel ? String(config.serial.rigModel) : null}
                     onSelectionChange={selectedKey => {
                       if (selectedKey) {
-                        console.log('📡 [RadioDeviceSettings] 选择电台型号:', selectedKey);
+                        logger.debug('Radio model selected:', selectedKey);
                         updateConfig({ serial: { path: config.serial?.path ?? '', rigModel: Number(selectedKey), serialConfig: config.serial?.serialConfig } });
                       }
                     }}

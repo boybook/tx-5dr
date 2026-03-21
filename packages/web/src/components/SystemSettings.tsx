@@ -16,6 +16,9 @@ import { Button } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
 import type { PSKReporterConfig, PSKReporterStatus, AuthStatus, NetworkInfo } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('SystemSettings');
 
 export interface SystemSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -83,7 +86,7 @@ export const SystemSettings = forwardRef<
       setSpectrumWhileTransmitting(spectrumValue);
       setOriginalSpectrumValue(spectrumValue);
     } catch (err) {
-      console.error('加载FT8配置失败:', err);
+      logger.error('Failed to load FT8 settings:', err);
       if (err instanceof ApiError) {
         setError(err.userMessage);
         showErrorToast({
@@ -105,7 +108,7 @@ export const SystemSettings = forwardRef<
       setAuthConfig(status);
       setOriginalAuthConfig(status);
     } catch (err) {
-      console.error('加载认证配置失败:', err);
+      logger.error('Failed to load auth config:', err);
     }
   };
 
@@ -118,7 +121,7 @@ export const SystemSettings = forwardRef<
         setOriginalPskrConfig(result.data);
       }
     } catch (err) {
-      console.error('加载 PSKReporter 配置失败:', err);
+      logger.error('Failed to load PSKReporter config:', err);
     }
   };
 
@@ -131,7 +134,7 @@ export const SystemSettings = forwardRef<
         setPskrStatus(result.data);
       }
     } catch (err) {
-      console.error('加载 PSKReporter 状态失败:', err);
+      logger.error('Failed to load PSKReporter status:', err);
     } finally {
       setPskrStatusLoading(false);
     }
@@ -224,7 +227,7 @@ export const SystemSettings = forwardRef<
 
       onUnsavedChanges?.(false);
     } catch (err) {
-      console.error('保存配置失败:', err);
+      logger.error('Failed to save settings:', err);
       if (err instanceof ApiError) {
         setError(err.userMessage);
         showErrorToast({
