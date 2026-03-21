@@ -24,7 +24,6 @@ import {
   UserRole,
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireOperatorAccess } from '../auth/authPlugin.js';
 import { AuthManager } from '../auth/AuthManager.js';
@@ -122,9 +121,6 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   // 创建新操作员（OPERATOR+ 角色，受 maxOperators 限制）
   fastify.post<{ Body: CreateRadioOperatorRequest }>('/', {
     preHandler: [requireRole(UserRole.OPERATOR)],
-    schema: {
-      body: zodToJsonSchema(CreateRadioOperatorRequestSchema),
-    },
   }, async (request, reply) => {
     try {
       const authUser = request.authUser!;
@@ -203,9 +199,6 @@ export async function operatorRoutes(fastify: FastifyInstance) {
   // 更新操作员配置（需要操作员访问权限）
   fastify.put<{ Params: { id: string }; Body: UpdateRadioOperatorRequest }>('/:id', {
     preHandler: [requireRole(UserRole.OPERATOR), requireOperatorAccess((req) => (req.params as any).id)],
-    schema: {
-      body: zodToJsonSchema(UpdateRadioOperatorRequestSchema),
-    },
   }, async (request, reply) => {
     try {
       const { id } = request.params;
