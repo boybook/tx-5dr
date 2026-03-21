@@ -13,6 +13,7 @@ import { showErrorToast } from '../utils/errorToast';
 import { useHasMinRole } from '../store/authStore';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { AudioMonitorNode, createWorkletMonitorNode, ScriptProcessorFallbackNode } from '../utils/audio-monitor-fallback';
 
 interface FrequencyOption {
   key: string;
@@ -255,7 +256,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   } | null>(null);
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
   const audioContextRef = React.useRef<AudioContext | null>(null);
-  const workletNodeRef = React.useRef<AudioWorkletNode | null>(null);
+  const workletNodeRef = React.useRef<AudioMonitorNode | null>(null);
   const monitorGainNodeRef = React.useRef<GainNode | null>(null);
   const isInitializingWorklet = React.useRef<boolean>(false); // 初始化锁，防止重复初始化
 
@@ -501,7 +502,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   };
 
-  // 初始化AudioWorklet（动态采样率）
+  // 初始化音频监听节点（动态采样率，自动选择 AudioWorklet 或 ScriptProcessorNode）
   const initAudioWorklet = async (sampleRate: number) => {
     // 设置初始化锁
     isInitializingWorklet.current = true;
@@ -509,26 +510,36 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     try {
       console.log(`🎧 [AudioMonitor] 创建AudioContext，采样率=${sampleRate}Hz`);
       const audioContext = new AudioContext({ sampleRate });
-      await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
-      const workletNode = new AudioWorkletNode(audioContext, 'audio-monitor-processor');
+      let monitorNode: AudioMonitorNode;
+
+      if (audioContext.audioWorklet) {
+        // Secure Context: 使用 AudioWorklet（性能更好，独立音频线程）
+        await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
+        const workletNode = new AudioWorkletNode(audioContext, 'audio-monitor-processor');
+        monitorNode = createWorkletMonitorNode(workletNode);
+        console.log('✅ [AudioMonitor] AudioWorklet初始化成功');
+      } else {
+        // Insecure Context（局域网 HTTP）: 回退到 ScriptProcessorNode
+        console.warn('⚠️ [AudioMonitor] AudioWorklet 不可用（非安全上下文），回退到 ScriptProcessorNode');
+        monitorNode = new ScriptProcessorFallbackNode(audioContext);
+        console.log('✅ [AudioMonitor] ScriptProcessorNode回退初始化成功');
+      }
+
       const gainNode = audioContext.createGain();
       gainNode.gain.value = monitorVolume;
-      workletNode.connect(gainNode);
+      monitorNode.getOutputNode().connect(gainNode);
       gainNode.connect(audioContext.destination);
       monitorGainNodeRef.current = gainNode;
 
-      // 监听来自worklet的统计信息
-      workletNode.port.onmessage = (e) => {
-        if (e.data.type === 'stats') {
-          setMonitorStats(e.data.data);
-        }
-      };
+      // 监听统计信息
+      monitorNode.onStats((stats) => {
+        setMonitorStats(stats);
+      });
 
       audioContextRef.current = audioContext;
-      workletNodeRef.current = workletNode;
-      console.log('✅ [AudioMonitor] AudioWorklet初始化成功');
+      workletNodeRef.current = monitorNode;
     } catch (error) {
-      console.error('❌ [AudioMonitor] AudioWorklet初始化失败:', error);
+      console.error('❌ [AudioMonitor] 音频初始化失败:', error);
       throw error;
     } finally {
       // 释放初始化锁
@@ -564,11 +575,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       });
 
       // 清理资源
+      workletNodeRef.current?.dispose();
+      workletNodeRef.current = null;
       if (audioContextRef.current) {
         audioContextRef.current.close();
         audioContextRef.current = null;
       }
-      workletNodeRef.current = null;
       isInitializingWorklet.current = false; // 重置初始化锁
       setIsMonitoring(false);
     }
@@ -582,12 +594,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       // 断开音频WebSocket连接
       connection.state.radioService?.disconnectAudioMonitor();
 
-      // 清理AudioWorklet
+      // 清理音频节点
+      workletNodeRef.current?.dispose();
+      workletNodeRef.current = null;
       if (audioContextRef.current) {
         audioContextRef.current.close();
         audioContextRef.current = null;
       }
-      workletNodeRef.current = null;
       monitorGainNodeRef.current?.disconnect();
       monitorGainNodeRef.current = null;
       isInitializingWorklet.current = false; // 重置初始化锁
@@ -1017,9 +1030,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         }
 
         console.log(`🔄 [AudioMonitor] 采样率变化 ${audioContextRef.current.sampleRate} → ${data.sampleRate}，重新创建AudioContext`);
+        workletNodeRef.current?.dispose();
+        workletNodeRef.current = null;
         audioContextRef.current.close();
         audioContextRef.current = null;
-        workletNodeRef.current = null;
 
         try {
           await initAudioWorklet(data.sampleRate);
@@ -1033,19 +1047,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     const handleBinaryAudioData = (buffer: ArrayBuffer) => {
       const _t_receive = performance.now(); // 接收时间戳
 
-      // 确保AudioContext和Worklet已就绪
+      // 确保音频节点已就绪
       if (!workletNodeRef.current) {
-        console.warn('⚠️ [AudioMonitor] AudioWorklet未就绪，丢弃音频数据');
+        console.warn('⚠️ [AudioMonitor] 音频节点未就绪，丢弃音频数据');
         return;
       }
 
-      // 直接发送ArrayBuffer到AudioWorklet（零拷贝传输）
-      workletNodeRef.current.port.postMessage({
-        type: 'audioData',
-        buffer: buffer,
-        sampleRate: currentSampleRate || 48000,
-        clientTimestamp: _t_receive // 添加客户端时间戳
-      }, [buffer]); // Transferable objects - 零拷贝传输
+      // 通过统一接口发送音频数据
+      workletNodeRef.current.postAudioData(
+        buffer,
+        currentSampleRate || 48000,
+        _t_receive
+      );
     };
 
     // 处理统计信息（可选，AudioWorklet也会生成统计）

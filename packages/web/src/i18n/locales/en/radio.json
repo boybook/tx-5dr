@@ -116,7 +116,15 @@
     "report": "Report",
     "autoPickFreq": "Auto select idle frequency",
     "collapse": "Collapse",
-    "expand": "Expand"
+    "expand": "Expand",
+    "viewOnly": "View-only access, cannot control operators",
+    "createFirst": "Create first operator",
+    "allHidden": "All operators hidden in client preferences",
+    "none": "No operators",
+    "connectFirst": "Please connect to server first",
+    "connectStatus": "Connection: {{connected}} / Service: {{service}}",
+    "initialized": "Initialized",
+    "notInitialized": "Not initialized"
   },
   "profile": {
     "reconnecting": "Reconnecting to \"{{name}}\"",

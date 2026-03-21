@@ -116,7 +116,15 @@
     "report": "报告",
     "autoPickFreq": "自动选择空闲频率",
     "collapse": "收起",
-    "expand": "展开"
+    "expand": "展开",
+    "viewOnly": "仅查看权限，无法控制操作员",
+    "createFirst": "创建第一个操作员",
+    "allHidden": "所有操作员已在客户端偏好中隐藏",
+    "none": "暂无操作员",
+    "connectFirst": "请先连接到服务器",
+    "connectStatus": "连接状态: {{connected}} / 服务: {{service}}",
+    "initialized": "已初始化",
+    "notInitialized": "未初始化"
   },
   "profile": {
     "reconnecting": "正在重新连接「{{name}}」",
