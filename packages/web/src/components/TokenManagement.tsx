@@ -41,7 +41,7 @@ function expiryKeyToTimestamp(key: string): number | undefined {
 
 interface TokenCardProps {
   token: TokenInfo;
-  operators: { id: string; context: { myCall: string; txFrequency: number } }[];
+  operators: { id: string; context: { myCall: string; frequency?: number } }[];
   onRevoke: (id: string) => void;
   onRegenerate: (id: string) => void;
 }
@@ -120,7 +120,7 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
           <div className="text-xs text-default-500">
             {t('auth:token.operators')}: {token.operatorIds.map((id) => {
               const op = operators.find((o) => o.id === id);
-              return op ? `${op.context.myCall}(${op.context.txFrequency}Hz)` : id;
+              return op ? `${op.context.myCall}(${op.context.frequency}Hz)` : id;
             }).join(', ')}
           </div>
         )}
@@ -360,7 +360,7 @@ export function TokenManagement() {
               >
                 {operators.map((op) => (
                   <Checkbox key={op.id} value={op.id}>
-                    {op.context.myCall} ({op.context.txFrequency} Hz)
+                    {op.context.myCall} ({op.context.frequency} Hz)
                   </Checkbox>
                 ))}
               </CheckboxGroup>
@@ -426,7 +426,7 @@ export function TokenManagement() {
             </div>
             <div className="text-xs text-default-400">
               <p>{t('auth:token.created.labelInfo', { label: createdToken?.label })}</p>
-              <p>{t('auth:token.created.roleInfo', { role: ROLE_LABELS[createdToken?.role || ''] })}</p>
+              <p>{t('auth:token.created.roleInfo', { role: createdToken?.role ? ROLE_LABELS[createdToken.role] : '' })}</p>
               {createdToken?.operatorIds && createdToken.operatorIds.length > 0 && (
                 <p>{t('auth:token.created.operatorsInfo', { ids: createdToken.operatorIds.join(', ') })}</p>
               )}
