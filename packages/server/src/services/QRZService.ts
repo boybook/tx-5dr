@@ -141,10 +141,6 @@ export class QRZService {
     logId: string;
     message: string;
   }> {
-    if (!this.config.enabled) {
-      throw new Error('QRZ同步未启用');
-    }
-
     const adifString = convertQSOToADIF(qso);
 
     console.log('📊 [QRZ] 准备上传 QSO:');
@@ -244,10 +240,6 @@ export class QRZService {
     startDate?: string;
     endDate?: string;
   }): Promise<QSORecord[]> {
-    if (!this.config.enabled) {
-      throw new Error('QRZ同步未启用');
-    }
-
     try {
       const params: Record<string, string> = {
         KEY: this.config.apiKey,

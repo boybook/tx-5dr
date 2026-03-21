@@ -331,6 +331,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const queryOptions: LogQueryOptions = {
         callsign: options.callsign,
         mode: options.mode,
+        qslStatus: options.qslStatus,
         limit: options.limit,
         offset: options.offset,
         orderBy: 'time',

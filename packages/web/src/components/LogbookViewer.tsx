@@ -9,6 +9,7 @@ import {
   Button,
   Input,
   Chip,
+  Checkbox,
   Pagination,
   Spinner,
   Dropdown,
@@ -27,12 +28,13 @@ import {
 } from '@heroui/react';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faCloudUploadAlt, faCheckCircle } from '@fortawesome/free-solid-svg-icons';
 import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, QRZConfig, LoTWConfig } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
 import { showErrorToast } from '../utils/errorToast';
+import { SyncConfigModal } from './SyncConfigModal';
 
 // ElectronAPI 类型定义
 interface ElectronAPI {
@@ -60,6 +62,7 @@ interface QSOFilters {
   mode?: string;
   startDate?: string;
   endDate?: string;
+  qslStatus?: string;
 }
 
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
@@ -191,24 +194,20 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     loadStatistics();
   }, [effectiveLogBookId, filters, currentPage]);
 
-  // 加载QRZ和LoTW启用状态
+  // 加载呼号的同步配置摘要
   useEffect(() => {
-    const loadSyncConfigs = async () => {
-      try {
-        const qrzConfig = await api.getQRZConfig();
-        setIsQRZEnabled(qrzConfig.enabled);
-      } catch {
-        // QRZ配置加载失败，保持禁用
-      }
-      try {
-        const lotwConfig = await api.getLoTWConfig();
-        setIsLoTWEnabled(lotwConfig.enabled);
-      } catch {
-        // LoTW配置加载失败，保持禁用
-      }
-    };
-    loadSyncConfigs();
-  }, []);
+    if (operatorCallsign) {
+      api.getCallsignSyncSummary(operatorCallsign).then((res: unknown) => {
+        const result = res as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
+        if (result.success && result.summary) {
+          setSyncSummary(result.summary);
+          // 同步到旧的启用状态以保持兼容
+          setIsQRZEnabled(result.summary.qrz);
+          setIsLoTWEnabled(result.summary.lotw);
+        }
+      }).catch(() => {});
+    }
+  }, [operatorCallsign]);
 
   // 总页数计算 - 基于筛选后的记录数
   const totalPages = useMemo(() => {
@@ -235,9 +234,13 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [lotwSyncError, setLotwSyncError] = useState<string | null>(null);
   const [lotwSyncSuccess, setLotwSyncSuccess] = useState<string | null>(null);
 
-  // 平台启用状态
+  // 平台启用状态（旧的，保留兼容）
   const [isQRZEnabled, setIsQRZEnabled] = useState(false);
   const [isLoTWEnabled, setIsLoTWEnabled] = useState(false);
+
+  // 同步配置摘要（按呼号）
+  const [syncSummary, setSyncSummary] = useState<{ wavelog: boolean; qrz: boolean; lotw: boolean }>({ wavelog: false, qrz: false, lotw: false });
+  const [isSyncConfigOpen, setIsSyncConfigOpen] = useState(false);
   
   const handleExport = async (format: 'adif' | 'csv') => {
     if (isExporting) return;
@@ -283,7 +286,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setSyncSuccess(null);
 
       // 调用WaveLog同步API
-      const result = await api.syncWaveLog(operation) as WaveLogSyncResponse;
+      const result = await api.syncWaveLog(operatorCallsign || '', operation) as WaveLogSyncResponse;
 
       if (result.success) {
         setSyncSuccess(result.message);
@@ -324,7 +327,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setQrzSyncError(null);
       setQrzSyncSuccess(null);
 
-      const result = await api.syncQRZ(operation) as QRZSyncResponse;
+      const result = await api.syncQRZ(operatorCallsign || '', operation) as QRZSyncResponse;
 
       if (result.success) {
         setQrzSyncSuccess(result.message);
@@ -360,7 +363,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setLotwSyncError(null);
       setLotwSyncSuccess(null);
 
-      const result = await api.syncLoTW(operation) as LoTWSyncResponse;
+      const result = await api.syncLoTW(operatorCallsign || '', operation) as LoTWSyncResponse;
 
       if (result.success) {
         setLotwSyncSuccess(result.message);
@@ -469,6 +472,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       reportSent: qso.reportSent,
       reportReceived: qso.reportReceived,
       messages: qso.messages,
+      lotwQslSent: qso.lotwQslSent,
+      lotwQslReceived: qso.lotwQslReceived,
+      qrzQslSent: qso.qrzQslSent,
+      qrzQslReceived: qso.qrzQslReceived,
     });
     setIsEditModalOpen(true);
   };
@@ -599,6 +606,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     { key: 'mode', label: '模式', sortable: true, hideOnMobile: true },
     { key: 'reportSent', label: '发送报告', sortable: false, hideOnMobile: true },
     { key: 'reportReceived', label: '接收报告', sortable: false, hideOnMobile: true },
+    { key: 'qslStatus', label: '确认', sortable: false, hideOnMobile: true },
     { key: 'actions', label: '操作', sortable: false, hideOnMobile: false },
   ];
 
@@ -652,6 +660,43 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         return qso.reportSent || '-';
       case "reportReceived":
         return qso.reportReceived || '-';
+      case "qslStatus": {
+        const isLotwConfirmed = qso.lotwQslReceived === 'Y' || qso.lotwQslReceived === 'V';
+        const isQrzConfirmed = qso.qrzQslReceived === 'Y';
+        const isLotwSent = qso.lotwQslSent === 'Y';
+        const isQrzSent = qso.qrzQslSent === 'Y';
+        const isConfirmed = isLotwConfirmed || isQrzConfirmed;
+        const isUploaded = isLotwSent || isQrzSent;
+
+        if (!isConfirmed && !isUploaded) {
+          return <span className="text-default-300">-</span>;
+        }
+
+        // Build tooltip details
+        const details: string[] = [];
+        if (isLotwConfirmed) {
+          details.push(`LoTW: 已确认${qso.lotwQslReceivedDate ? ` (${new Date(qso.lotwQslReceivedDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+        } else if (isLotwSent) {
+          details.push(`LoTW: 已上传${qso.lotwQslSentDate ? ` (${new Date(qso.lotwQslSentDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+        }
+        if (isQrzConfirmed) {
+          details.push(`QRZ: 已确认${qso.qrzQslReceivedDate ? ` (${new Date(qso.qrzQslReceivedDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+        } else if (isQrzSent) {
+          details.push(`QRZ: 已上传${qso.qrzQslSentDate ? ` (${new Date(qso.qrzQslSentDate).toLocaleDateString('zh-CN', { timeZone: 'UTC' })})` : ''}`);
+        }
+
+        return (
+          <Tooltip content={details.join(', ')}>
+            <Chip
+              size="sm"
+              variant="flat"
+              color={isConfirmed ? 'success' : 'primary'}
+            >
+              {isConfirmed ? '已确认' : '已上传'}
+            </Chip>
+          </Tooltip>
+        );
+      }
       case "actions":
         return (
           <div className="flex items-center gap-1 md:gap-2">
@@ -808,7 +853,35 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 <DropdownItem key="FT4">FT4</DropdownItem>
               </DropdownMenu>
             </Dropdown>
-            
+
+            <Dropdown>
+              <DropdownTrigger>
+                <Button
+                  variant="flat"
+                  size="sm"
+                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
+                  color={filters.qslStatus ? "primary" : "default"}
+                  className="min-w-0 hidden md:flex"
+                >
+                  {filters.qslStatus === 'confirmed' ? '已确认' : filters.qslStatus === 'uploaded' ? '已上传' : filters.qslStatus === 'none' ? '未上传' : '确认'}
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu
+                aria-label="确认状态筛选"
+                selectedKeys={filters.qslStatus ? [filters.qslStatus] : []}
+                selectionMode="single"
+                onSelectionChange={(keys) => {
+                  const selected = Array.from(keys as Set<string>);
+                  handleFilterChange('qslStatus', selected[0]);
+                }}
+              >
+                <DropdownItem key="">全部状态</DropdownItem>
+                <DropdownItem key="confirmed">已确认</DropdownItem>
+                <DropdownItem key="uploaded">已上传未确认</DropdownItem>
+                <DropdownItem key="none">未上传</DropdownItem>
+              </DropdownMenu>
+            </Dropdown>
+
             {Object.keys(filters).length > 0 && (
               <Button
                 variant="light"
@@ -821,52 +894,54 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 <span className="md:hidden">清除</span>
               </Button>
             )}
-            
-            {/* WaveLog同步按钮 */}
-            <Dropdown>
-              <DropdownTrigger>
-                <Button
-                  color="secondary"
-                  variant="bordered"
-                  size="sm"
-                  isLoading={isSyncing}
-                  startContent={<FontAwesomeIcon icon={faSync} className={isSyncing ? 'animate-spin' : ''} />}
-                  className="min-w-0"
+
+            {/* WaveLog同步按钮 - 仅在WaveLog启用时显示 */}
+            {syncSummary.wavelog && (
+              <Dropdown>
+                <DropdownTrigger>
+                  <Button
+                    color="secondary"
+                    variant="bordered"
+                    size="sm"
+                    isLoading={isSyncing}
+                    startContent={!isSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
+                    className="min-w-0"
+                  >
+                    <span className="hidden lg:inline">WaveLog同步</span>
+                    <span className="lg:hidden hidden md:inline">同步</span>
+                  </Button>
+                </DropdownTrigger>
+                <DropdownMenu
+                  aria-label="WaveLog同步操作"
+                  onAction={(key) => handleWaveLogSync(key as 'download' | 'upload' | 'full_sync')}
                 >
-                  <span className="hidden lg:inline">WaveLog同步</span>
-                  <span className="lg:hidden hidden md:inline">同步</span>
-                </Button>
-              </DropdownTrigger>
-              <DropdownMenu
-                aria-label="WaveLog同步操作"
-                onAction={(key) => handleWaveLogSync(key as 'download' | 'upload' | 'full_sync')}
-              >
-                <DropdownItem 
-                  key="download"
-                  startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                  description="从WaveLog下载最新的QSO记录"
-                >
-                  下载同步
-                </DropdownItem>
-                <DropdownItem 
-                  key="upload"
-                  startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                  description="上传本地QSO记录到WaveLog"
-                >
-                  上传同步
-                </DropdownItem>
-                <DropdownItem 
-                  key="full_sync"
-                  startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
-                  description="双向完整同步"
-                >
-                  完整同步
-                </DropdownItem>
-              </DropdownMenu>
-            </Dropdown>
+                  <DropdownItem
+                    key="download"
+                    startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
+                    description="从WaveLog下载最新的QSO记录"
+                  >
+                    下载同步
+                  </DropdownItem>
+                  <DropdownItem
+                    key="upload"
+                    startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
+                    description="上传本地QSO记录到WaveLog"
+                  >
+                    上传同步
+                  </DropdownItem>
+                  <DropdownItem
+                    key="full_sync"
+                    startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
+                    description="双向完整同步"
+                  >
+                    完整同步
+                  </DropdownItem>
+                </DropdownMenu>
+              </Dropdown>
+            )}
 
             {/* QRZ.com同步按钮 - 仅在QRZ启用时显示 */}
-            {isQRZEnabled && (
+            {syncSummary.qrz && (
               <Dropdown>
                 <DropdownTrigger>
                   <Button
@@ -874,7 +949,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                     variant="bordered"
                     size="sm"
                     isLoading={isQRZSyncing}
-                    startContent={<FontAwesomeIcon icon={faSync} className={isQRZSyncing ? 'animate-spin' : ''} />}
+                    startContent={!isQRZSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
                     className="min-w-0"
                   >
                     <span className="hidden lg:inline">QRZ.com</span>
@@ -911,7 +986,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             )}
 
             {/* LoTW同步按钮 - 仅在LoTW启用时显示 */}
-            {isLoTWEnabled && (
+            {syncSummary.lotw && (
               <Dropdown>
                 <DropdownTrigger>
                   <Button
@@ -919,7 +994,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                     variant="bordered"
                     size="sm"
                     isLoading={isLoTWSyncing}
-                    startContent={<FontAwesomeIcon icon={faSync} className={isLoTWSyncing ? 'animate-spin' : ''} />}
+                    startContent={!isLoTWSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
                     className="min-w-0"
                   >
                     <span className="hidden lg:inline">LoTW</span>
@@ -985,6 +1060,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 </Button>
               </Tooltip>
             )}
+
+            {/* 同步配置齿轮按钮 */}
+            {operatorCallsign && (
+              <Tooltip content="配置同步服务">
+                <Button
+                  variant="flat"
+                  size="sm"
+                  isIconOnly
+                  onPress={() => setIsSyncConfigOpen(true)}
+                  className="min-w-0"
+                >
+                  <FontAwesomeIcon icon={faCog} />
+                </Button>
+              </Tooltip>
+            )}
           </div>
         </div>
 
@@ -1013,6 +1103,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     filters.callsign,
     filters.band,
     filters.mode,
+    filters.qslStatus,
     totalRecords,
     actualTotalRecords,
     hasFilters,
@@ -1023,8 +1114,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     handleExport,
     isQRZSyncing,
     isLoTWSyncing,
-    isQRZEnabled,
-    isLoTWEnabled,
+    syncSummary,
+    isSyncConfigOpen,
     handleQRZSync,
     handleLoTWSync
   ]);
@@ -1326,11 +1417,68 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 />
               </div>
 
-              <div className="p-3 bg-warning-50 dark:bg-warning-100/20 border border-warning-200 dark:border-warning-400/30 rounded-lg">
-                <p className="text-warning-700 dark:text-warning-400 text-sm">
-                  ⚠️ 注意:修改 QSO 记录可能会影响统计数据的准确性,请谨慎操作。
-                </p>
+              {/* 分隔线 + QSL 确认状态 */}
+              <div className="border-t border-default-200 dark:border-default-100 pt-4">
+                <p className="text-sm font-medium text-default-500 mb-3">确认状态</p>
+                <div className="grid grid-cols-2 gap-4">
+                  {/* LoTW */}
+                  <div className="flex items-center justify-between rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <span className="text-sm font-medium text-default-600">LoTW</span>
+                    <div className="flex items-center gap-4">
+                      <Checkbox
+                        size="sm"
+                        isSelected={editFormData.lotwQslSent === 'Y'}
+                        onValueChange={(checked) =>
+                          setEditFormData({ ...editFormData, lotwQslSent: checked ? 'Y' : 'N' })
+                        }
+                        color="primary"
+                      >
+                        <span className="text-sm">已上传</span>
+                      </Checkbox>
+                      <Checkbox
+                        size="sm"
+                        isSelected={editFormData.lotwQslReceived === 'Y' || editFormData.lotwQslReceived === 'V'}
+                        onValueChange={(checked) =>
+                          setEditFormData({ ...editFormData, lotwQslReceived: checked ? 'Y' : 'N' })
+                        }
+                        color="success"
+                      >
+                        <span className="text-sm">已确认</span>
+                      </Checkbox>
+                    </div>
+                  </div>
+                  {/* QRZ */}
+                  <div className="flex items-center justify-between rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <span className="text-sm font-medium text-default-600">QRZ</span>
+                    <div className="flex items-center gap-4">
+                      <Checkbox
+                        size="sm"
+                        isSelected={editFormData.qrzQslSent === 'Y'}
+                        onValueChange={(checked) =>
+                          setEditFormData({ ...editFormData, qrzQslSent: checked ? 'Y' : 'N' })
+                        }
+                        color="primary"
+                      >
+                        <span className="text-sm">已上传</span>
+                      </Checkbox>
+                      <Checkbox
+                        size="sm"
+                        isSelected={editFormData.qrzQslReceived === 'Y'}
+                        onValueChange={(checked) =>
+                          setEditFormData({ ...editFormData, qrzQslReceived: checked ? 'Y' : 'N' })
+                        }
+                        color="success"
+                      >
+                        <span className="text-sm">已确认</span>
+                      </Checkbox>
+                    </div>
+                  </div>
+                </div>
               </div>
+
+              <Alert color="warning" variant="flat" className="text-sm">
+                修改 QSO 记录可能会影响统计数据的准确性，请谨慎操作。
+              </Alert>
             </div>
           </ModalBody>
           <ModalFooter>
@@ -1408,6 +1556,26 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {/* 同步配置弹窗 */}
+      {operatorCallsign && (
+        <SyncConfigModal
+          isOpen={isSyncConfigOpen}
+          onClose={() => setIsSyncConfigOpen(false)}
+          callsign={operatorCallsign}
+          onSaved={() => {
+            // 刷新同步摘要
+            api.getCallsignSyncSummary(operatorCallsign).then((res: unknown) => {
+              const result = res as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
+              if (result.success && result.summary) {
+                setSyncSummary(result.summary);
+                setIsQRZEnabled(result.summary.qrz);
+                setIsLoTWEnabled(result.summary.lotw);
+              }
+            }).catch(() => {});
+          }}
+        />
+      )}
     </div>
   );
 };

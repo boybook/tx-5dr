@@ -16,7 +16,6 @@ export const WaveLogStationSchema = z.object({
  * WaveLog配置Schema
  */
 export const WaveLogConfigSchema = z.object({
-  enabled: z.boolean().default(false),
   url: z.string().url('请输入有效的WaveLog URL'),
   apiKey: z.string().min(1, 'API密钥不能为空'),
   stationId: z.string().min(1, 'Station ID不能为空'),

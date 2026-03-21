@@ -6,7 +6,6 @@ import { z } from 'zod';
  * QRZ.com Logbook 配置 Schema
  */
 export const QRZConfigSchema = z.object({
-  enabled: z.boolean().default(false),
   apiKey: z.string().default(''),
   autoUploadQSO: z.boolean().default(false),
   lastSyncTime: z.number().optional(),

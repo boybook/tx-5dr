@@ -1115,6 +1115,28 @@ export function extractCallsignPrefix(callsign: string): string {
 export const extractPrefix = extractCallsignPrefix;
 
 /**
+ * 从带前后缀的呼号中提取基础呼号（身份标识）
+ * BG5DRB/QRP → BG5DRB, VK2/BG5DRB → BG5DRB, BG5DRB → BG5DRB
+ * 规则：按 / 分割后，取最长的、符合呼号格式（含字母和数字，长度>=3）的部分
+ * @param callsign 可能带前后缀的呼号
+ * @returns 基础呼号（大写）
+ */
+export function extractBaseCallsign(callsign: string): string {
+  if (!callsign) return '';
+  const upper = callsign.toUpperCase().trim();
+  if (!upper.includes('/')) return upper;
+
+  const parts = upper.split('/');
+  let best = parts[0];
+  for (const part of parts) {
+    if (part.length > best.length && /[A-Z]/.test(part) && /\d/.test(part)) {
+      best = part;
+    }
+  }
+  return best;
+}
+
+/**
  * 验证呼号格式是否有效
  * @param callsign 呼号
  * @returns 是否有效

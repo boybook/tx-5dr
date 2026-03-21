@@ -14,15 +14,17 @@ export interface LogbookSyncSettingsRef {
   save: () => Promise<void>;
 }
 
+type SyncProviderTab = 'wavelog' | 'qrz' | 'lotw';
+
 interface LogbookSyncSettingsProps {
+  callsign: string;
+  initialTab?: SyncProviderTab;
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
-type SyncProviderTab = 'wavelog' | 'qrz' | 'lotw';
-
 export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyncSettingsProps>(
-  ({ onUnsavedChanges }, ref) => {
-    const [activeTab, setActiveTab] = useState<SyncProviderTab>('wavelog');
+  ({ callsign, initialTab, onUnsavedChanges }, ref) => {
+    const [activeTab, setActiveTab] = useState<SyncProviderTab>(initialTab || 'wavelog');
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     
     // 各个同步服务的引用
@@ -130,6 +132,7 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
           return (
             <WaveLogSettings
               ref={waveLogRef}
+              callsign={callsign}
               onUnsavedChanges={handleChildUnsavedChanges}
             />
           );
@@ -137,6 +140,7 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
           return (
             <QRZSettings
               ref={qrzRef}
+              callsign={callsign}
               onUnsavedChanges={handleChildUnsavedChanges}
             />
           );
@@ -144,6 +148,7 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
           return (
             <LoTWSettings
               ref={lotwRef}
+              callsign={callsign}
               onUnsavedChanges={handleChildUnsavedChanges}
             />
           );
@@ -182,7 +187,7 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
                     <span className="text-lg">{getTabInfo('wavelog').icon}</span>
                     <div className="flex flex-col items-start">
                       <span className="text-sm font-medium">{getTabInfo('wavelog').title}</span>
-                      <span className="text-xs text-default-400">已配置</span>
+                      <span className="text-xs text-default-400">Web-based Logging</span>
                     </div>
                   </div>
                 }

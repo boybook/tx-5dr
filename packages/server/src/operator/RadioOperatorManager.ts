@@ -21,7 +21,7 @@ import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
-import { WaveLogServiceManager } from '../services/WaveLogService.js';
+import { SyncServiceRegistry } from '../services/SyncServiceRegistry.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 
 export interface RadioOperatorManagerOptions {
@@ -140,8 +140,11 @@ export class RadioOperatorManager {
         });
         console.log(`📡 [操作员管理器] 已发射 qsoRecordAdded 事件: ${data.qsoRecord.callsign}`);
 
-        // 自动上传到WaveLog（如果已启用）- 使用修正后的频率数据
-        await this.handleWaveLogAutoUpload(qsoToSave, data.operatorId);
+        // 自动上传到同步服务（WaveLog/QRZ）- 使用修正后的频率数据
+        const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
+        if (operatorCallsign) {
+          await this.handleAutoSync(qsoToSave, operatorCallsign, data.operatorId);
+        }
         
         // 获取更新的统计信息并发射日志本更新事件
         try {
@@ -1215,61 +1218,50 @@ export class RadioOperatorManager {
   /**
    * 处理WaveLog自动上传
    */
-  private async handleWaveLogAutoUpload(qsoRecord: QSORecord, operatorId: string): Promise<void> {
-    try {
-      // 获取WaveLog配置
-      const configManager = ConfigManager.getInstance();
-      const waveLogConfig = configManager.getWaveLogConfig();
-      
-      // 检查是否启用自动上传
-      if (!waveLogConfig.enabled || !waveLogConfig.autoUploadQSO) {
-        console.log(`📊 [WaveLog] 自动上传已禁用，跳过 ${qsoRecord.callsign}`);
-        return;
-      }
-      
-      // 获取WaveLog服务实例
-      const waveLogManager = WaveLogServiceManager.getInstance();
-      const waveLogService = waveLogManager.getService();
-      
-      if (!waveLogService) {
-        console.warn(`⚠️ [WaveLog] 服务未初始化，无法上传 ${qsoRecord.callsign}`);
-        return;
-      }
-      
-      console.log(`📊 [WaveLog] 开始自动上传 QSO: ${qsoRecord.callsign} (操作员: ${operatorId})`);
-      
-      // 上传QSO到WaveLog
-      const result = await waveLogService.uploadQSO(qsoRecord, false);
-      
-      if (result.success) {
-        console.log(`✅ [WaveLog] QSO 上传成功: ${qsoRecord.callsign}`);
-        
-        // 发射WaveLog上传成功事件
-        this.eventEmitter.emit('waveLogUploadSuccess' as any, {
-          operatorId,
-          qsoRecord,
-          message: result.message
-        });
-      } else {
-        console.warn(`⚠️ [WaveLog] QSO 上传失败: ${qsoRecord.callsign} - ${result.message}`);
-        
-        // 发射WaveLog上传失败事件
-        this.eventEmitter.emit('waveLogUploadFailed' as any, {
-          operatorId,
-          qsoRecord,
-          message: result.message
+  /**
+   * 自动上传 QSO 到已启用的同步服务（WaveLog / QRZ）
+   * LoTW 不支持逐条上传（需 TQSL 批量签名），跳过
+   */
+  private async handleAutoSync(qsoRecord: QSORecord, callsign: string, operatorId: string): Promise<void> {
+    const registry = SyncServiceRegistry.getInstance();
+    const configManager = ConfigManager.getInstance();
+    const syncConfig = configManager.getCallsignSyncConfig(callsign);
+
+    // WaveLog 自动上传
+    const waveLogService = registry.getWaveLogService(callsign);
+    if (waveLogService && syncConfig?.wavelog?.autoUploadQSO) {
+      try {
+        console.log(`📊 [WaveLog] 开始自动上传 QSO: ${qsoRecord.callsign} (呼号: ${callsign})`);
+        const result = await waveLogService.uploadQSO(qsoRecord, false);
+        if (result.success) {
+          console.log(`✅ [WaveLog] QSO 上传成功: ${qsoRecord.callsign}`);
+          this.eventEmitter.emit('waveLogUploadSuccess' as any, { operatorId, qsoRecord, message: result.message });
+        } else {
+          console.warn(`⚠️ [WaveLog] QSO 上传失败: ${qsoRecord.callsign} - ${result.message}`);
+          this.eventEmitter.emit('waveLogUploadFailed' as any, { operatorId, qsoRecord, message: result.message });
+        }
+      } catch (error) {
+        console.error(`❌ [WaveLog] QSO 自动上传异常: ${qsoRecord.callsign}`, error);
+        this.eventEmitter.emit('waveLogUploadError' as any, {
+          operatorId, qsoRecord, error: error instanceof Error ? error.message : '未知错误'
         });
       }
-      
-    } catch (error) {
-      console.error(`❌ [WaveLog] QSO 自动上传异常: ${qsoRecord.callsign}`, error);
-      
-      // 发射WaveLog上传错误事件
-      this.eventEmitter.emit('waveLogUploadError' as any, {
-        operatorId,
-        qsoRecord,
-        error: error instanceof Error ? error.message : '未知错误'
-      });
+    }
+
+    // QRZ 自动上传
+    const qrzService = registry.getQRZService(callsign);
+    if (qrzService && syncConfig?.qrz?.autoUploadQSO) {
+      try {
+        console.log(`📊 [QRZ] 开始自动上传 QSO: ${qsoRecord.callsign} (呼号: ${callsign})`);
+        const result = await qrzService.uploadQSO(qsoRecord);
+        if (result.success) {
+          console.log(`✅ [QRZ] QSO 上传成功: ${qsoRecord.callsign}`);
+        } else {
+          console.warn(`⚠️ [QRZ] QSO 上传失败: ${qsoRecord.callsign} - ${result.message}`);
+        }
+      } catch (error) {
+        console.error(`❌ [QRZ] QSO 自动上传异常: ${qsoRecord.callsign}`, error);
+      }
     }
   }
 } 

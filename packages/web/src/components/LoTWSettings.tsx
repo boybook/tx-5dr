@@ -26,13 +26,13 @@ export interface LoTWSettingsRef {
 }
 
 interface LoTWSettingsProps {
+  callsign: string;
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
 export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
-  ({ onUnsavedChanges }, ref) => {
+  ({ callsign, onUnsavedChanges }, ref) => {
     const [config, setConfig] = useState<LoTWConfig>({
-      enabled: false,
       username: '',
       password: '',
       tqslPath: '',
@@ -64,9 +64,12 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       try {
         setLoading(true);
         setError('');
-        const response = await api.getLoTWConfig();
-        setConfig(response);
-        setOriginalConfig(response);
+        const response = await api.getLoTWConfig(callsign) as any;
+        const data = response?.config || response;
+        if (data && typeof data === 'object') {
+          setConfig(prev => ({ ...prev, ...data }));
+          setOriginalConfig(prev => ({ ...prev, ...data }));
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载配置失败');
       } finally {
@@ -113,7 +116,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       setError('');
 
       try {
-        const response = await api.testLoTWConnection({
+        const response = await api.testLoTWConnection(callsign, {
           username: config.username,
           password: config.password
         });
@@ -139,7 +142,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       setError('');
 
       try {
-        const response = await api.detectTQSL({
+        const response = await api.detectTQSL(callsign, {
           tqslPath: config.tqslPath || undefined
         });
 
@@ -173,7 +176,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
     const handleSave = async () => {
       try {
         setError('');
-        await api.updateLoTWConfig(config);
+        await api.updateLoTWConfig(callsign, config);
         setOriginalConfig({ ...config });
         setHasChanges(false);
         onUnsavedChanges?.(false);
@@ -206,28 +209,6 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
             <p className="font-medium">{error}</p>
           </Alert>
         )}
-
-        {/* 启用开关 */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <FontAwesomeIcon icon={faPlug} className="text-primary" />
-              <span className="font-medium">启用 LoTW 同步</span>
-            </div>
-          </CardHeader>
-          <CardBody>
-            <Switch
-              isSelected={config.enabled}
-              onValueChange={(enabled) => updateConfig('enabled', enabled)}
-              size="md"
-            >
-              {config.enabled ? '已启用' : '已禁用'}
-            </Switch>
-            <p className="text-xs text-default-500 mt-2">
-              启用后可查询 QSL 确认状态并上传通联日志
-            </p>
-          </CardBody>
-        </Card>
 
         {/* LoTW 账户 */}
         <Card>

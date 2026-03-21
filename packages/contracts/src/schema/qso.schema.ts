@@ -34,6 +34,11 @@ export const QSOCommandSchema = z.object({
   args: z.any(),
 });
 
+// QSL 确认状态枚举（参考 ADIF 3.1.4 规范）
+export const QslSentStatusSchema = z.enum(['Y', 'N', 'R', 'Q', 'I']).optional(); // Y=yes, N=no, R=requested, Q=queued, I=invalid
+export const QslReceivedStatusSchema = z.enum(['Y', 'N', 'R', 'I', 'V']).optional(); // Y=yes, V=validated
+export const QslSimpleStatusSchema = z.enum(['Y', 'N']).optional();
+
 // QSO联系记录
 export const QSORecordSchema = z.object({
   id: z.string(),
@@ -48,6 +53,18 @@ export const QSORecordSchema = z.object({
   messages: z.array(z.string()), // 消息历史
   myCallsign: z.string().optional(), // 我的呼号（操作员呼号）
   myGrid: z.string().optional(), // 我的网格定位（操作员网格）
+
+  // LoTW QSL 确认状态
+  lotwQslSent: QslSentStatusSchema,
+  lotwQslReceived: QslReceivedStatusSchema,
+  lotwQslSentDate: z.number().optional(),     // 发送日期 (timestamp)
+  lotwQslReceivedDate: z.number().optional(), // 确认日期 (timestamp)
+
+  // QRZ QSL 确认状态
+  qrzQslSent: QslSimpleStatusSchema,
+  qrzQslReceived: QslSimpleStatusSchema,
+  qrzQslSentDate: z.number().optional(),
+  qrzQslReceivedDate: z.number().optional(),
 });
 
 // 策略执行结果

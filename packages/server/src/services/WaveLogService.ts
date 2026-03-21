@@ -116,10 +116,6 @@ export class WaveLogService {
     success: boolean;
     message: string;
   }> {
-    if (!this.config.enabled) {
-      throw new Error('WaveLog同步未启用');
-    }
-
     // 转换QSO记录为ADIF格式
     const adifString = convertQSOToADIF(qso);
 
@@ -247,10 +243,6 @@ export class WaveLogService {
     endDate?: string;
     limit?: number;
   }): Promise<QSORecord[]> {
-    if (!this.config.enabled) {
-      throw new Error('WaveLog同步未启用');
-    }
-
     try {
       // 构建请求payload，使用WaveLog官方API格式
       const payload = {

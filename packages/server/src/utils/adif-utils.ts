@@ -114,6 +114,22 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
     adifFields.push(`<my_gridsquare:${qso.myGrid.length}>${qso.myGrid}`);
   }
 
+  // LoTW QSL 确认状态
+  if (qso.lotwQslSent) {
+    adifFields.push(`<lotw_qsl_sent:${qso.lotwQslSent.length}>${qso.lotwQslSent}`);
+  }
+  if (qso.lotwQslReceived) {
+    adifFields.push(`<lotw_qsl_rcvd:${qso.lotwQslReceived.length}>${qso.lotwQslReceived}`);
+  }
+  if (qso.lotwQslSentDate) {
+    const dateStr = formatADIFDate(new Date(qso.lotwQslSentDate));
+    adifFields.push(`<lotw_qslsdate:8>${dateStr}`);
+  }
+  if (qso.lotwQslReceivedDate) {
+    const dateStr = formatADIFDate(new Date(qso.lotwQslReceivedDate));
+    adifFields.push(`<lotw_qslrdate:8>${dateStr}`);
+  }
+
   // 结束标记
   adifFields.push('<eor>');
 
@@ -160,7 +176,7 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
     const startTime = parseADIFDateTime(qsoDate, timeOn);
     const endTime = parseADIFDateTime(fields.qso_date_off || qsoDate, timeOff);
 
-    return {
+    const record: QSORecord = {
       id: `${source}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       callsign: fields.call.toUpperCase(),
       startTime: new Date(startTime).getTime(),
@@ -174,6 +190,34 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       myGrid: fields.my_gridsquare || '',
       messages: [`QSO imported from ${source} at ${new Date().toISOString()}`]
     };
+
+    // LoTW QSL 确认状态
+    const lotwSent = fields.lotw_qsl_sent?.toUpperCase();
+    if (lotwSent && ['Y', 'N', 'R', 'Q', 'I'].includes(lotwSent)) {
+      record.lotwQslSent = lotwSent as 'Y' | 'N' | 'R' | 'Q' | 'I';
+    }
+    const lotwRcvd = (fields.lotw_qsl_rcvd || fields.app_lotw_rxqsl)?.toUpperCase();
+    if (lotwRcvd && ['Y', 'N', 'R', 'I', 'V'].includes(lotwRcvd)) {
+      record.lotwQslReceived = lotwRcvd as 'Y' | 'N' | 'R' | 'I' | 'V';
+    }
+    if (fields.lotw_qslsdate) {
+      try {
+        record.lotwQslSentDate = new Date(parseADIFDateTime(fields.lotw_qslsdate, '000000')).getTime();
+      } catch { /* ignore parse error */ }
+    }
+    if (fields.lotw_qslrdate) {
+      try {
+        record.lotwQslReceivedDate = new Date(parseADIFDateTime(fields.lotw_qslrdate, '000000')).getTime();
+      } catch { /* ignore parse error */ }
+    }
+
+    // QRZ QSL 确认状态
+    const qrzStatus = fields.app_qrzlog_status?.toUpperCase();
+    if (qrzStatus === 'C' || qrzStatus === 'Y') {
+      record.qrzQslReceived = 'Y';
+    }
+
+    return record;
   } catch (error) {
     console.warn('解析ADIF记录时出错:', error, fields);
     return null;

@@ -109,5 +109,8 @@ export * from './schema/qrz.schema.js';
 // LoTW Schema
 export * from './schema/lotw.schema.js';
 
+// Callsign Sync Schema
+export * from './schema/callsign-sync.schema.js';
+
 // Auth Schema
 export * from './schema/auth.schema.js';
