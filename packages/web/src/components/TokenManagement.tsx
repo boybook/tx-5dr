@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api } from '@tx5dr/core';
-import type { NetworkInfo } from '@tx5dr/contracts';
 import {
   Button,
   Card,
@@ -26,7 +24,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import { UserRole } from '@tx5dr/contracts';
-import type { TokenInfo, CreateTokenRequest, CreateTokenResponse } from '@tx5dr/contracts';
+import type { TokenInfo, CreateTokenRequest, CreateTokenResponse, NetworkInfo } from '@tx5dr/contracts';
 import { useOperators } from '../store/radioStore';
 
 const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
