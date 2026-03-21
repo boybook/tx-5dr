@@ -7,6 +7,7 @@ import { useDisplayNotificationSettings } from '../hooks/useDisplayNotificationS
 import { getHighlightTypeLabels } from '../utils/displayNotificationSettings';
 import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../utils/colorUtils';
+import { FlagDisplay } from './FlagDisplay';
 
 export interface FrameDisplayMessage {
   utc: string;
@@ -16,6 +17,8 @@ export interface FrameDisplayMessage {
   message: string;
   country?: string;
   countryZh?: string;
+  countryEn?: string;
+  countryCode?: string;
   flag?: string;
   logbookAnalysis?: {
     isNewCallsign?: boolean;
@@ -45,7 +48,8 @@ interface FramesTableProps {
 }
 
 export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isZh = i18n.language === 'zh';
   const highlightTypeLabels = React.useMemo(() => getHighlightTypeLabels(t), [t]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -263,27 +267,27 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   };
 
   // 格式化位置信息
-  const formatLocation = (countryZh?: string, country?: string, flag?: string): React.ReactNode => {
-    if (!countryZh && !country) return null;
+  const formatLocation = (countryZh?: string, countryEn?: string, country?: string, flag?: string, countryCode?: string): React.ReactNode => {
+    const displayName = isZh
+      ? (countryZh || countryEn || country)
+      : (countryEn || country);
+    if (!displayName) return null;
 
     if (!isNarrow) {
-      // 正常模式：中国:湖南 🇨🇳
       return (
         <div className="flex items-center justify-end gap-1">
-          <span className="text-xs">
-            {countryZh || country}
-          </span>
-          {flag && <span>{flag}</span>}
+          <span className="text-xs">{displayName}</span>
+          <FlagDisplay flag={flag} countryCode={countryCode} />
         </div>
       );
     }
 
     // 窄屏模式：只显示省份（如果有）或国家 + 旗帜
-    const displayText = countryZh?.split(':')[1] || countryZh || country;
+    const narrowText = displayName.split('·')[1] || displayName;
     return (
       <div className="flex items-center justify-end gap-1">
-        <span className="text-xs">{displayText}</span>
-        {flag && <span>{flag}</span>}
+        <span className="text-xs">{narrowText}</span>
+        <FlagDisplay flag={flag} countryCode={countryCode} />
       </div>
     );
   };
@@ -465,7 +469,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                     {formatMessage(message)}
                   </div>
                   <div className={`text-xs text-right ${isNarrow ? '' : 'pr-1'}`}>
-                    {formatLocation(message.countryZh, message.country, message.flag)}
+                    {formatLocation(message.countryZh, message.countryEn, message.country, message.flag, message.countryCode)}
                   </div>
                 </div>
               ))}

@@ -412,11 +412,13 @@ interface DXCCEntity {
   prefix?: string;
   prefixRegex?: string;
   flag?: string;
+  countryCode?: string;
   continent?: string[];
   cqZone?: number;
   ituZone?: number;
   deleted?: boolean;
   countryZh?: string;
+  countryEn?: string;
 }
 
 // 前缀Trie结构（字符图）
@@ -433,6 +435,8 @@ export interface CallsignInfo {
   callsign: string;
   country?: string;
   countryZh?: string;
+  countryEn?: string;
+  countryCode?: string;
   flag?: string;
   prefix?: string;
   entityCode?: number;
@@ -444,6 +448,8 @@ export interface CallsignInfo {
 export interface FT8LocationInfo {
   country?: string;
   countryZh?: string;
+  countryEn?: string;
+  countryCode?: string;
   flag?: string;
   callsign?: string;
   grid?: string;
@@ -561,7 +567,19 @@ class ChinaCallsignParser {
   private static readonly CHINA_PREFIX = 'B';
   private static readonly CHINA_STATION_TYPES = ['G', 'H', 'I', 'D', 'A', 'B', 'C', 'E', 'F', 'K', 'L', 'R'];
 
-  public static parseChinaCallsign(callsign: string): { country: string; countryZh: string } | null {
+  private static readonly PROVINCE_EN_MAP: Record<string, string> = {
+    '北京': 'Beijing', '黑龙江': 'Heilongjiang', '吉林': 'Jilin', '辽宁': 'Liaoning',
+    '天津': 'Tianjin', '内蒙古': 'Inner Mongolia', '河北': 'Hebei', '山西': 'Shanxi',
+    '上海': 'Shanghai', '江苏': 'Jiangsu', '山东': 'Shandong',
+    '浙江': 'Zhejiang', '江西': 'Jiangxi', '福建': 'Fujian',
+    '安徽': 'Anhui', '河南': 'Henan', '湖北': 'Hubei',
+    '湖南': 'Hunan', '广东': 'Guangdong', '广西': 'Guangxi', '海南': 'Hainan',
+    '四川': 'Sichuan', '重庆': 'Chongqing', '贵州': 'Guizhou', '云南': 'Yunnan',
+    '陕西': 'Shaanxi', '甘肃': 'Gansu', '宁夏': 'Ningxia', '青海': 'Qinghai',
+    '新疆': 'Xinjiang', '西藏': 'Tibet'
+  };
+
+  public static parseChinaCallsign(callsign: string): { country: string; countryZh: string; countryEn: string; countryCode: string } | null {
     if (!callsign || !callsign.startsWith(this.CHINA_PREFIX)) {
       return null;
     }
@@ -609,9 +627,12 @@ class ChinaCallsignParser {
       return null;
     }
 
+    const provinceEn = this.PROVINCE_EN_MAP[province] || province;
     return {
       country: 'China',
-      countryZh: `中国·${province}`
+      countryZh: `中国·${province}`,
+      countryEn: `China·${provinceEn}`,
+      countryCode: 'CN'
     };
   }
 }
@@ -635,7 +656,14 @@ class JapanCallsignParser {
     '9': '北陆'         // JA9（富山、石川、福井）
   };
 
-  public static parseJapanCallsign(callsign: string): { country: string; countryZh: string } | null {
+  // 区号到地区（英文）映射
+  private static readonly AREA_MAP_EN: Record<string, string> = {
+    '0': 'Kōshinetsu', '1': 'Kantō',    '2': 'Tōkai',
+    '3': 'Kansai',      '4': 'Chūgoku', '5': 'Shikoku',
+    '6': 'Kyūshū',      '7': 'Tōhoku',  '8': 'Hokkaido', '9': 'Hokuriku'
+  };
+
+  public static parseJapanCallsign(callsign: string): { country: string; countryZh: string; countryEn: string; countryCode: string } | null {
     if (!callsign) return null;
     const upper = callsign.toUpperCase();
 
@@ -651,9 +679,12 @@ class JapanCallsignParser {
     const region = this.AREA_MAP[area];
     if (!region) return null;
 
+    const regionEn = this.AREA_MAP_EN[area] || region;
     return {
       country: 'Japan',
-      countryZh: `日本·${region}`
+      countryZh: `日本·${region}`,
+      countryEn: `Japan·${regionEn}`,
+      countryCode: 'JP'
     };
   }
 }
@@ -677,7 +708,7 @@ class RussiaCallsignParser {
    * - UA8-9-0, UB8-9-0, UC8-9-0, ..., UI8-9-0
    * - R8-9-0 系列（除特殊后缀外）
    */
-  public static parseRussiaCallsign(callsign: string): { country: string; countryZh: string; entityCode: number; continent: string[]; cqZone: number; ituZone: number } | null {
+  public static parseRussiaCallsign(callsign: string): { country: string; countryZh: string; countryEn: string; countryCode: string; entityCode: number; continent: string[]; cqZone: number; ituZone: number } | null {
     if (!callsign) return null;
     const upper = callsign.toUpperCase();
 
@@ -730,6 +761,8 @@ class RussiaCallsignParser {
       return {
         country: 'European Russia',
         countryZh: '俄罗斯·欧洲',
+        countryEn: 'European Russia',
+        countryCode: 'RU',
         entityCode: 54,
         continent: ['EU'],
         cqZone: 16,
@@ -740,6 +773,8 @@ class RussiaCallsignParser {
       return {
         country: 'Asiatic Russia',
         countryZh: '俄罗斯·亚洲',
+        countryEn: 'Asiatic Russia',
+        countryCode: 'RU',
         entityCode: 15,
         continent: ['AS'],
         cqZone: 18,
@@ -978,6 +1013,8 @@ class DXCCIndex {
       return {
         name: chinaInfo.country,
         countryZh: chinaInfo.countryZh,
+        countryEn: chinaInfo.countryEn,
+        countryCode: chinaInfo.countryCode,
         flag: '🇨🇳',
         prefix: upperCallsign.substring(0, 2),
         entityCode: 318, // 中国的 DXCC 实体代码
@@ -993,6 +1030,8 @@ class DXCCIndex {
       return {
         name: japanInfo.country,
         countryZh: japanInfo.countryZh,
+        countryEn: japanInfo.countryEn,
+        countryCode: japanInfo.countryCode,
         flag: '🇯🇵',
         prefix: upperCallsign.match(/^[A-Z]+/)?.[0],
         entityCode: 339, // 日本 DXCC 实体代码
@@ -1008,6 +1047,8 @@ class DXCCIndex {
       const result = {
         name: russiaInfo.country,
         countryZh: russiaInfo.countryZh,
+        countryEn: russiaInfo.countryEn,
+        countryCode: russiaInfo.countryCode,
         flag: '🇷🇺',
         prefix: upperCallsign.match(/^[A-Z]+/)?.[0],
         entityCode: russiaInfo.entityCode,
@@ -1024,7 +1065,8 @@ class DXCCIndex {
     if (trieHit.entity) {
       const result = {
         ...trieHit.entity,
-        countryZh: COUNTRY_ZH_MAP[trieHit.entity.name] || trieHit.entity.name
+        countryZh: COUNTRY_ZH_MAP[trieHit.entity.name] || trieHit.entity.name,
+        countryEn: trieHit.entity.name
       };
       this.entityLRU.set(upperCallsign, result);
       return result;
@@ -1035,7 +1077,8 @@ class DXCCIndex {
       if (regex.test(upperCallsign)) {
         const result = {
           ...entity,
-          countryZh: COUNTRY_ZH_MAP[entity.name] || entity.name
+          countryZh: COUNTRY_ZH_MAP[entity.name] || entity.name,
+          countryEn: entity.name
         };
         this.entityLRU.set(upperCallsign, result);
         return result;
@@ -1077,6 +1120,8 @@ export function getCallsignInfo(callsign: string): CallsignInfo | undefined {
     callsign,
     country: entity.name,
     countryZh: entity.countryZh,
+    countryEn: entity.countryEn ?? entity.name,
+    countryCode: entity.countryCode,
     flag: entity.flag,
     prefix: callsign.match(/^[A-Z]+/)?.[0],
     entityCode: entity.entityCode,
@@ -1301,6 +1346,8 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
     callsign: callsignInfo.callsign,
     country: callsignInfo.country,
     countryZh: callsignInfo.countryZh,
+    countryEn: callsignInfo.countryEn,
+    countryCode: callsignInfo.countryCode,
     flag: callsignInfo.flag
   };
 }

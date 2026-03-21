@@ -294,6 +294,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           message: frame.message,
           ...(locationInfo.country && { country: locationInfo.country }),
           ...(locationInfo.countryZh && { countryZh: locationInfo.countryZh }),
+          ...(locationInfo.countryEn && { countryEn: locationInfo.countryEn }),
+          ...(locationInfo.countryCode && { countryCode: locationInfo.countryCode }),
           ...(locationInfo.flag && { flag: locationInfo.flag }),
           ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis })
         };

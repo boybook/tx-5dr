@@ -82,6 +82,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
           message: frame.message,
           ...(locationInfo.country && { country: locationInfo.country }),
           ...(locationInfo.countryZh && { countryZh: locationInfo.countryZh }),
+          ...(locationInfo.countryEn && { countryEn: locationInfo.countryEn }),
+          ...(locationInfo.countryCode && { countryCode: locationInfo.countryCode }),
           ...(locationInfo.flag && { flag: locationInfo.flag }),
           ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis })
         };
