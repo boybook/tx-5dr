@@ -51,11 +51,19 @@ interface TokenCardProps {
 
 function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps) {
   const { t } = useTranslation();
+  const [tokenCopied, setTokenCopied] = useState(false);
   const roleLabels: Record<string, string> = {
     viewer: t('common:role.viewer'),
     operator: t('common:role.operator'),
     admin: t('common:role.admin'),
   };
+  const handleCopyToken = useCallback(async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setTokenCopied(true);
+      setTimeout(() => setTokenCopied(false), 2000);
+    } catch { /* ignore */ }
+  }, []);
   return (
     <Card className={token.revoked ? 'opacity-50' : ''}>
       <CardBody className="p-3 gap-2">
@@ -125,6 +133,24 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
               const op = operators.find((o) => o.id === id);
               return op ? `${op.context.myCall}(${op.context.frequency}Hz)` : id;
             }).join(', ')}
+          </div>
+        )}
+        {token.token && !token.revoked && (
+          <div className="flex items-center gap-2 bg-default-100 rounded-md px-2 py-1.5">
+            <code className="flex-1 text-xs break-all text-default-600">{token.token}</code>
+            <Button
+              size="sm"
+              variant="light"
+              isIconOnly
+              className="min-w-6 w-6 h-6 shrink-0"
+              onPress={() => handleCopyToken(token.token!)}
+              title={t('auth:token.copy')}
+            >
+              <FontAwesomeIcon
+                icon={tokenCopied ? faCheck : faCopy}
+                className={tokenCopied ? 'text-success text-xs' : 'text-default-400 text-xs'}
+              />
+            </Button>
           </div>
         )}
       </CardBody>
