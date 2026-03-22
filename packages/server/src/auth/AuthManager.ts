@@ -100,10 +100,19 @@ export class AuthManager {
           maxOperators: 0,
         }, null, plainToken, true);
         logger.info('Admin token registered from .admin-token file');
-      } else if (!existing.system) {
-        // 迁移：给已有的初始令牌补上 system 标记
-        existing.system = true;
-        await this.saveConfig();
+      } else {
+        let changed = false;
+        if (!existing.system) {
+          // 迁移：给已有的初始令牌补上 system 标记
+          existing.system = true;
+          changed = true;
+        }
+        if (!existing.tokenPlain && plainToken) {
+          // 迁移：补充明文 token（之前版本未存储）
+          existing.tokenPlain = plainToken;
+          changed = true;
+        }
+        if (changed) await this.saveConfig();
       }
     } else {
       // 没有 .admin-token 文件，生成新 token
@@ -147,6 +156,7 @@ export class AuthManager {
     const authToken: AuthToken = {
       id,
       tokenHash,
+      tokenPlain: token,
       label: req.label,
       role: req.role,
       operatorIds: req.operatorIds,
@@ -219,6 +229,7 @@ export class AuthManager {
     const newHash = await bcrypt.hash(newPlainToken, BCRYPT_ROUNDS);
 
     token.tokenHash = newHash;
+    token.tokenPlain = newPlainToken;
     token.lastUsedAt = undefined;
     await this.saveConfig();
 
@@ -266,6 +277,7 @@ export class AuthManager {
   private toTokenInfo(token: AuthToken): TokenInfo {
     return {
       id: token.id,
+      token: token.tokenPlain,
       label: token.label,
       role: token.role,
       operatorIds: token.operatorIds,

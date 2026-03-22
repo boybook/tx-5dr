@@ -20,6 +20,7 @@ export const USER_ROLE_LEVEL: Record<UserRole, number> = {
 export const AuthTokenSchema = z.object({
   id: z.string(),
   tokenHash: z.string(),
+  tokenPlain: z.string().optional(), // plaintext stored so admins can retrieve it later
   label: z.string(),
   role: z.nativeEnum(UserRole),
   operatorIds: z.array(z.string()),
@@ -89,6 +90,7 @@ export type CreateTokenResponse = z.infer<typeof CreateTokenResponseSchema>;
 
 export const TokenInfoSchema = z.object({
   id: z.string(),
+  token: z.string().optional(), // plaintext token value (admin only)
   label: z.string(),
   role: z.nativeEnum(UserRole),
   operatorIds: z.array(z.string()),
