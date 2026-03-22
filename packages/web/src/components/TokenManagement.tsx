@@ -24,7 +24,8 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown } from '@fortawesome/free-solid-svg-icons';
+import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown, faShareNodes } from '@fortawesome/free-solid-svg-icons';
+import { QRCodeSVG } from 'qrcode.react';
 import { api } from '@tx5dr/core';
 import { UserRole } from '@tx5dr/contracts';
 import type { TokenInfo, CreateTokenRequest, CreateTokenResponse, NetworkInfo } from '@tx5dr/contracts';
@@ -47,9 +48,10 @@ interface TokenCardProps {
   operators: { id: string; context: { myCall: string; frequency?: number } }[];
   onRevoke: (id: string) => void;
   onRegenerate: (id: string) => void;
+  onShare: (token: TokenInfo) => void;
 }
 
-function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps) {
+function TokenCard({ token, operators, onRevoke, onRegenerate, onShare }: TokenCardProps) {
   const { t } = useTranslation();
   const [tokenCopied, setTokenCopied] = useState(false);
   const roleLabels: Record<string, string> = {
@@ -91,6 +93,18 @@ function TokenCard({ token, operators, onRevoke, onRegenerate }: TokenCardProps)
             )}
           </div>
           <div className="flex items-center gap-1">
+            {token.token && !token.revoked && (
+              <Button
+                size="sm"
+                variant="flat"
+                color="primary"
+                isIconOnly
+                onPress={() => onShare(token)}
+                title={t('auth:token.share')}
+              >
+                <FontAwesomeIcon icon={faShareNodes} />
+              </Button>
+            )}
             {token.system && !token.revoked && (
               <Button
                 size="sm"
@@ -181,6 +195,9 @@ export function TokenManagement() {
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
   const [showRevoked, setShowRevoked] = useState(false);
+  const [sharingToken, setSharingToken] = useState<TokenInfo | null>(null);
+  const [selectedAddressIndex, setSelectedAddressIndex] = useState(0);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
 
   // 创建表单状态
   const [newLabel, setNewLabel] = useState('');
@@ -205,13 +222,8 @@ export function TokenManagement() {
 
   useEffect(() => {
     loadTokens();
-  }, [loadTokens]);
-
-  // 创建 token 成功后加载网络信息
-  useEffect(() => {
-    if (!createdToken) return;
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
-  }, [createdToken]);
+  }, [loadTokens]);
 
   // 创建 Token
   const handleCreate = useCallback(async () => {
@@ -280,6 +292,30 @@ export function TokenManagement() {
     }
   }, [loadTokens]);
 
+  // 分享 token
+  const handleShare = useCallback((token: TokenInfo) => {
+    setSharingToken(token);
+    setSelectedAddressIndex(0);
+    setShareLinkCopied(false);
+  }, []);
+
+  const shareUrl = useMemo(() => {
+    if (!sharingToken?.token || !networkInfo || networkInfo.addresses.length === 0) return '';
+    const base = networkInfo.addresses[selectedAddressIndex]?.url ?? networkInfo.addresses[0].url;
+    return `${base}?auth_token=${encodeURIComponent(sharingToken.token)}`;
+  }, [sharingToken, networkInfo, selectedAddressIndex]);
+
+  const handleCopyShareLink = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareLinkCopied(true);
+      setTimeout(() => setShareLinkCopied(false), 2000);
+    } catch {
+      addToast({ title: t('auth:token.copyFailed'), color: 'danger', timeout: 2000 });
+    }
+  }, [shareUrl, t]);
+
   // 复制到剪贴板
   const handleCopy = useCallback(async (text: string) => {
     try {
@@ -330,6 +366,7 @@ export function TokenManagement() {
                 operators={operators}
                 onRevoke={handleRevoke}
                 onRegenerate={handleRegenerate}
+                onShare={handleShare}
               />
             ))}
             {revokedTokens.length > 0 && (
@@ -429,6 +466,73 @@ export function TokenManagement() {
             >
               {t('auth:token.create')}
             </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      {/* 分享弹窗 */}
+      <Modal isOpen={!!sharingToken} onClose={() => setSharingToken(null)} size="md">
+        <ModalContent>
+          <ModalHeader>{t('auth:token.shareModal.title')}</ModalHeader>
+          <ModalBody className="gap-4">
+            <p className="text-sm text-default-500">{t('auth:token.shareModal.desc')}</p>
+
+            {/* 地址选择（多网卡时显示） */}
+            {networkInfo && networkInfo.addresses.length > 1 && (
+              <Select
+                label={t('auth:token.shareModal.selectAddress')}
+                selectedKeys={new Set([String(selectedAddressIndex)])}
+                onSelectionChange={(keys) => {
+                  const arr = Array.from(keys);
+                  if (arr.length > 0) setSelectedAddressIndex(Number(arr[0]));
+                }}
+                size="sm"
+              >
+                {networkInfo.addresses.map((addr, i) => (
+                  <SelectItem key={String(i)}>{addr.url}</SelectItem>
+                ))}
+              </Select>
+            )}
+
+            {/* QR 码 */}
+            {shareUrl ? (
+              <div className="flex flex-col items-center gap-3">
+                <div className="bg-white p-4 rounded-xl shadow-sm">
+                  <QRCodeSVG value={shareUrl} size={200} />
+                </div>
+                {/* URL + 复制按钮 */}
+                <div className="flex items-center gap-2 w-full bg-default-100 rounded-lg px-3 py-2">
+                  <code className="flex-1 text-xs break-all text-default-600">{shareUrl}</code>
+                  <Button
+                    size="sm"
+                    variant="light"
+                    isIconOnly
+                    className="min-w-6 w-6 h-6 shrink-0"
+                    onPress={handleCopyShareLink}
+                    title={t('auth:token.shareModal.copyLink')}
+                  >
+                    <FontAwesomeIcon
+                      icon={shareLinkCopied ? faCheck : faCopy}
+                      className={shareLinkCopied ? 'text-success text-xs' : 'text-default-400 text-xs'}
+                    />
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-warning-600 text-center py-4">{t('auth:token.shareModal.noToken')}</p>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              color="primary"
+              variant="flat"
+              startContent={<FontAwesomeIcon icon={shareLinkCopied ? faCheck : faCopy} />}
+              onPress={handleCopyShareLink}
+              isDisabled={!shareUrl}
+            >
+              {shareLinkCopied ? t('auth:token.shareModal.linkCopied') : t('auth:token.shareModal.copyLink')}
+            </Button>
+            <Button color="primary" onPress={() => setSharingToken(null)}>{t('auth:token.created.done')}</Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
