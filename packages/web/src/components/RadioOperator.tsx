@@ -330,7 +330,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       // @ts-expect-error CSS custom property for animation start position
       '--progress-start': `${maskStartPercent}%`,
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [operatorStatus.cycleInfo?.currentCycle, radio.state.currentMode?.slotMs]);
 
   // 选择空闲频率

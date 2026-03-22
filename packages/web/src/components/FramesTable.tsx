@@ -328,7 +328,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         scrollToBottom();
       }, 0);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── 监听容器宽度变化 ─────────────────────
