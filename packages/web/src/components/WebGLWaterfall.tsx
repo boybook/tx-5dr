@@ -86,7 +86,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const rangeUpdateCounterRef = useRef<number>(0);
   const cachedRangeRef = useRef<{min: number, max: number} | null>(null);
   const textureDataRef = useRef<Uint8Array | null>(null);
-  const dataAnimRef = useRef<number>();
   const heightRef = useRef(height);
   useEffect(() => { heightRef.current = height; }, [height]);
   const minDbRef = useRef(minDb);
@@ -94,6 +93,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   useEffect(() => { minDbRef.current = minDb; }, [minDb]);
   useEffect(() => { maxDbRef.current = maxDb; }, [maxDb]);
   const actualRangeRef = useRef<{min: number, max: number} | null>(null);
+  // 平滑滚动相关
+  const scrollOffsetLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const scrollAnimRef = useRef<number>();
+  const lastDataTimeRef = useRef(0);
+  const frameIntervalRef = useRef(100);
 
   // 优化后的数据范围计算 - 使用采样和缓存
   const calculateDataRange = useCallback((spectrumData: number[][]) => {
@@ -229,17 +233,20 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   // 片段着色器源码
   const fragmentShaderSource = `
     precision mediump float;
-    
+
     uniform sampler2D u_texture;
     uniform sampler2D u_colorMap;
     uniform float u_minDb;
     uniform float u_maxDb;
     uniform bool u_useFloatTexture;
-    
+    uniform float u_scrollOffset;
+
     varying vec2 v_texCoord;
-    
+
     void main() {
-      float value = texture2D(u_texture, v_texCoord).r;
+      // 偏移 Y 坐标实现平滑滚动，clamp 防止底部环绕
+      float scrolledY = clamp(v_texCoord.y + u_scrollOffset, 0.0, 1.0);
+      float value = texture2D(u_texture, vec2(v_texCoord.x, scrolledY)).r;
       float normalized;
       
       if (u_useFloatTexture) {
@@ -401,6 +408,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       const useFloatTextureLocation = gl.getUniformLocation(program, 'u_useFloatTexture');
       gl.uniform1i(useFloatTextureLocation, 0);
+
+      const scrollOffsetLocation = gl.getUniformLocation(program, 'u_scrollOffset');
+      scrollOffsetLocationRef.current = scrollOffsetLocation;
+      gl.uniform1f(scrollOffsetLocation, 0.0);
 
       // 设置纹理单元
       const textureLocation = gl.getUniformLocation(program, 'u_texture');
@@ -584,7 +595,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const handleContextLost = (e: Event) => {
       e.preventDefault();
       logger.warn('WebGL context lost');
-      if (dataAnimRef.current) cancelAnimationFrame(dataAnimRef.current);
+      if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
     };
     const handleContextRestored = () => {
       logger.info('WebGL context restored, reinitializing');
@@ -622,6 +633,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
+      if (scrollAnimRef.current) {
+        cancelAnimationFrame(scrollAnimRef.current);
+      }
       // 释放 WebGL 资源，防止泄漏
       const gl = glRef.current;
       if (gl) {
@@ -634,24 +648,66 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
   }, [initWebGL, handleResize]);
 
-  // 数据更新时重新渲染（使用独立的 dataAnimRef，避免被 setup effect cleanup 误取消）
+  // 数据更新时平滑滚动渲染
   useEffect(() => {
-    if (data.length > 0) {
-      if (dataAnimRef.current) {
-        cancelAnimationFrame(dataAnimRef.current);
-      }
-      dataAnimRef.current = requestAnimationFrame(() => {
-        updateTexture(data);
-        render();
-      });
+    if (data.length === 0) return;
+
+    // 取消之前的动画
+    if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
+
+    // 上传纹理（每帧只做一次）
+    updateTexture(data);
+
+    // 帧间隔估算（EMA α=0.3，cap 500ms）
+    const now = performance.now();
+    if (lastDataTimeRef.current > 0) {
+      const interval = Math.min(now - lastDataTimeRef.current, 500);
+      frameIntervalRef.current = frameIntervalRef.current * 0.7 + interval * 0.3;
+    }
+    lastDataTimeRef.current = now;
+
+    // 滚动动画参数
+    const textureHeight = totalRows || data.length;
+    const startOffset = 1.0 / textureHeight;
+    const animDuration = Math.max(50, frameIntervalRef.current * 0.9);
+    const animStartTime = now;
+
+    // 先渲染一帧带初始偏移的画面（视觉上保持旧位置）
+    const gl = glRef.current;
+    const program = programRef.current;
+    if (gl && program) {
+      gl.useProgram(program);
+      gl.uniform1f(scrollOffsetLocationRef.current, startOffset);
+      render();
     }
 
-    return () => {
-      if (dataAnimRef.current) {
-        cancelAnimationFrame(dataAnimRef.current);
+    // 启动平滑滚动动画
+    const animate = () => {
+      const elapsed = performance.now() - animStartTime;
+      const progress = Math.min(1, elapsed / animDuration);
+      // ease-out quadratic: 开始快，结束慢
+      const eased = 1 - (1 - progress) * (1 - progress);
+      const offset = startOffset * (1 - eased);
+
+      const gl = glRef.current;
+      const program = programRef.current;
+      if (gl && program) {
+        gl.useProgram(program);
+        gl.uniform1f(scrollOffsetLocationRef.current, offset);
+        render();
+      }
+
+      if (progress < 1) {
+        scrollAnimRef.current = requestAnimationFrame(animate);
       }
     };
-  }, [data, updateTexture, render]);
+
+    scrollAnimRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
+    };
+  }, [data, updateTexture, render, totalRows]);
 
   // height属性变化时重新调整尺寸
   useEffect(() => {
