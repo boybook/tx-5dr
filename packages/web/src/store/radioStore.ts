@@ -14,7 +14,9 @@ import type {
   RadioProfile,
   ProfileChangedEvent,
   ReconnectProgress,
-  RadioErrorEventData
+  RadioErrorEventData,
+  VoicePTTLock,
+  EngineMode
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
@@ -97,6 +99,10 @@ export interface RadioState {
   profiles: RadioProfile[];
   activeProfileId: string | null;
   profilesLoaded: boolean;
+  // 语音模式
+  engineMode: EngineMode;
+  voicePttLock: VoicePTTLock | null;
+  currentRadioMode: string | null;
   // 电台错误频道
   radioErrors: RadioErrorRecord[];
   latestRadioError: RadioErrorRecord | null;
@@ -161,7 +167,10 @@ export type RadioAction =
   | { type: 'profileChanged'; payload: ProfileChangedEvent }
   | { type: 'profileListUpdated'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
   | { type: 'radioError'; payload: RadioErrorRecord }
-  | { type: 'clearRadioErrors' };
+  | { type: 'clearRadioErrors' }
+  | { type: 'setEngineMode'; payload: EngineMode }
+  | { type: 'voicePttLockChanged'; payload: VoicePTTLock }
+  | { type: 'voiceRadioModeChanged'; payload: string };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -183,6 +192,9 @@ const initialRadioState: RadioState = {
   profiles: [],
   activeProfileId: null,
   profilesLoaded: false,
+  engineMode: 'digital',
+  voicePttLock: null,
+  currentRadioMode: null,
   radioErrors: [],
   latestRadioError: null
 };
@@ -200,7 +212,10 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         ...state,
         systemStatus: action.payload,
         isDecoding: action.payload?.isDecoding || false,
-        currentMode: action.payload?.currentMode || state.currentMode
+        currentMode: action.payload?.currentMode || state.currentMode,
+        // Extract engineMode from systemStatus (defaults to 'digital')
+        engineMode: (action.payload as SystemStatus & { engineMode?: EngineMode })?.engineMode || state.engineMode,
+        currentRadioMode: (action.payload as SystemStatus & { currentRadioMode?: string })?.currentRadioMode ?? state.currentRadioMode
       };
     
     case 'decodeError':
@@ -317,6 +332,15 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
 
     case 'clearRadioErrors':
       return { ...state, radioErrors: [], latestRadioError: null };
+
+    case 'setEngineMode':
+      return { ...state, engineMode: action.payload };
+
+    case 'voicePttLockChanged':
+      return { ...state, voicePttLock: action.payload };
+
+    case 'voiceRadioModeChanged':
+      return { ...state, currentRadioMode: action.payload };
 
     default:
       return state;
@@ -906,6 +930,17 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null };
         logger.info('Profile list updated:', listData.profiles.length, 'profiles');
         radioDispatch({ type: 'profileListUpdated', payload: listData });
+      },
+      // Voice mode events
+      voicePttLockChanged: (data: unknown) => {
+        const lockData = data as VoicePTTLock;
+        logger.debug('Voice PTT lock changed:', lockData);
+        radioDispatch({ type: 'voicePttLockChanged', payload: lockData });
+      },
+      voiceRadioModeChanged: (data: unknown) => {
+        const modeData = data as { radioMode: string };
+        logger.debug('Voice radio mode changed:', modeData.radioMode);
+        radioDispatch({ type: 'voiceRadioModeChanged', payload: modeData.radioMode });
       }
     };
 

@@ -2,7 +2,7 @@ import type { PresetFrequency } from '@tx5dr/contracts';
 
 export class FrequencyManager {
   static readonly DEFAULT_PRESETS: PresetFrequency[] = [
-    // 按频率从小到大排列
+    // ===== FT8 / FT4 数字模式 =====
     { band: '160m', mode: 'FT8', radioMode: 'USB', frequency: 1840000, description: '1.840 MHz 160m' },
     { band: '160m', mode: 'FT4', radioMode: 'USB', frequency: 1842000, description: '1.842 MHz 160m' },
     { band: '80m', mode: 'FT8', radioMode: 'USB', frequency: 3573000, description: '3.573 MHz 80m' },
@@ -26,6 +26,37 @@ export class FrequencyManager {
     { band: '2m', mode: 'FT8', radioMode: 'USB', frequency: 144174000, description: '144.174 MHz 2m' },
     { band: '2m', mode: 'FT8', radioMode: 'USB', frequency: 144460000, description: '144.460 MHz 2m' },
     { band: '70cm', mode: 'FT8', radioMode: 'USB', frequency: 432174000, description: '432.174 MHz 70cm' },
+
+    // ===== VOICE 语音模式 =====
+    // HF SSB - LSB below 10 MHz, USB above 10 MHz (ham radio convention)
+    // 80m
+    { band: '80m', mode: 'VOICE', radioMode: 'LSB', frequency: 3840000, description: '3.840 MHz 80m' },
+    { band: '80m', mode: 'VOICE', radioMode: 'LSB', frequency: 3850000, description: '3.850 MHz 80m' },
+    // 40m - 7.050 is the main Chinese ham calling frequency
+    { band: '40m', mode: 'VOICE', radioMode: 'LSB', frequency: 7050000, description: '7.050 MHz 40m Calling' },
+    { band: '40m', mode: 'VOICE', radioMode: 'LSB', frequency: 7055000, description: '7.055 MHz 40m' },
+    { band: '40m', mode: 'VOICE', radioMode: 'LSB', frequency: 7060000, description: '7.060 MHz 40m' },
+    { band: '40m', mode: 'VOICE', radioMode: 'LSB', frequency: 7070000, description: '7.070 MHz 40m' },
+    // 20m - 14.270 is the main Chinese ham USB frequency
+    { band: '20m', mode: 'VOICE', radioMode: 'USB', frequency: 14180000, description: '14.180 MHz 20m BY NET' },
+    { band: '20m', mode: 'VOICE', radioMode: 'USB', frequency: 14270000, description: '14.270 MHz 20m Calling' },
+    { band: '20m', mode: 'VOICE', radioMode: 'USB', frequency: 14275000, description: '14.275 MHz 20m' },
+    { band: '20m', mode: 'VOICE', radioMode: 'USB', frequency: 14330000, description: '14.330 MHz 20m CRSA NET' },
+    // 17m
+    { band: '17m', mode: 'VOICE', radioMode: 'USB', frequency: 18160000, description: '18.160 MHz 17m' },
+    // 15m - 21.400 is the Chinese ham calling frequency
+    { band: '15m', mode: 'VOICE', radioMode: 'USB', frequency: 21400000, description: '21.400 MHz 15m Calling' },
+    // 12m
+    { band: '12m', mode: 'VOICE', radioMode: 'USB', frequency: 24950000, description: '24.950 MHz 12m' },
+    // 10m
+    { band: '10m', mode: 'VOICE', radioMode: 'USB', frequency: 28400000, description: '28.400 MHz 10m' },
+    { band: '10m', mode: 'VOICE', radioMode: 'FM', frequency: 29600000, description: '29.600 MHz 10m FM' },
+    // 6m
+    { band: '6m', mode: 'VOICE', radioMode: 'USB', frequency: 50110000, description: '50.110 MHz 6m Calling' },
+    // VHF/UHF FM
+    { band: '2m', mode: 'VOICE', radioMode: 'FM', frequency: 145000000, description: '145.000 MHz 2m FM' },
+    { band: '70cm', mode: 'VOICE', radioMode: 'FM', frequency: 433000000, description: '433.000 MHz 70cm FM' },
+    { band: '70cm', mode: 'VOICE', radioMode: 'FM', frequency: 438500000, description: '438.500 MHz 70cm FM' },
   ];
 
   private presets: PresetFrequency[];
@@ -81,7 +112,6 @@ export class FrequencyManager {
     let closestPreset: PresetFrequency | null = null;
     let smallestDiff = Infinity;
 
-    // 遍历所有预设频率，查找最接近的
     for (const preset of this.presets) {
       const diff = Math.abs(preset.frequency - frequency);
       if (diff <= tolerance && diff < smallestDiff) {

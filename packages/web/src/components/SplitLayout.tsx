@@ -41,6 +41,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
   const resolvedLeftLabel = leftLabel ?? t('splitLayout.decode');
   const resolvedRightLabel = rightLabel ?? t('splitLayout.call');
   const [leftWidth, setLeftWidth] = useState(defaultLeftWidth);
+  const prevDefaultRef = useRef(defaultLeftWidth);
   const [isDragging, setIsDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [selectedTab, setSelectedTab] = useState<string>('left');
@@ -99,6 +100,14 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
       };
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
+
+  // Sync leftWidth when defaultLeftWidth prop changes (e.g. mode switch)
+  useEffect(() => {
+    if (defaultLeftWidth !== prevDefaultRef.current) {
+      prevDefaultRef.current = defaultLeftWidth;
+      setLeftWidth(defaultLeftWidth);
+    }
+  }, [defaultLeftWidth]);
 
   // 监听屏幕宽度变化，判断是否为移动端
   useEffect(() => {

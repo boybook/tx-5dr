@@ -33,6 +33,8 @@ interface SpectrumDisplayProps {
   showPopOut?: boolean;
   /** 弹出状态变化时的回调，父组件可据此整体隐藏频谱区块 */
   onPopOutChange?: (isPopedOut: boolean) => void;
+  /** 是否显示 TX/RX 频率标记线，默认 true。语音模式下可设为 false */
+  showMarkers?: boolean;
 }
 
 interface WaterfallData {
@@ -56,6 +58,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   hoverFrequency,
   showPopOut = true,
   onPopOutChange,
+  showMarkers = true,
 }) => {
   const { t } = useTranslation('common');
   const [spectrum, setSpectrum] = useState<FT8Spectrum | null>(null);
@@ -283,9 +286,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         autoRange={rangeSettings.mode === 'auto'}
         autoRangeConfig={rangeSettings.auto}
         totalRows={WATERFALL_HISTORY}
-        rxFrequencies={rxFrequencies}
-        txFrequencies={txFrequencies}
-        onTxFrequencyChange={handleTxFrequencyChange}
+        rxFrequencies={showMarkers ? rxFrequencies : []}
+        txFrequencies={showMarkers ? txFrequencies : []}
+        onTxFrequencyChange={showMarkers ? handleTxFrequencyChange : undefined}
         onActualRangeChange={setActualRange}
         hoverFrequency={hoverFrequency}
         className="bg-transparent"

@@ -958,4 +958,59 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     // 等待播放完成
     return this.currentPlaybackPromise;
   }
+
+  /**
+   * Stream voice audio frames for real-time playback.
+   * Unlike playAudio() which plays a complete FT8 audio clip,
+   * this method accepts small PCM frames (e.g. 20ms Opus decoded)
+   * and writes them directly to the output device with minimal latency.
+   *
+   * @param pcmData PCM audio data (Float32Array, -1.0 to 1.0)
+   * @param frameSampleRate Sample rate of the input data (typically 48000)
+   */
+  playVoiceAudio(pcmData: Float32Array, frameSampleRate: number): void {
+    // ICOM WLAN output path
+    if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
+      const gain = this.volumeGain;
+      const processed = new Float32Array(pcmData.length);
+      for (let i = 0; i < pcmData.length; i++) {
+        const s = pcmData[i] * gain;
+        processed[i] = s > 1 ? 1 : (s < -1 ? -1 : s);
+      }
+      this.icomWlanAudioAdapter.sendAudio(processed).catch((err) => {
+        logger.error('Voice audio ICOM WLAN send failed', err);
+      });
+      return;
+    }
+
+    // RtAudio output path
+    if (!this.isOutputting || !this.rtAudioOutput) {
+      return;
+    }
+
+    // Simple case: sample rates match (typical: both 48kHz)
+    let outputData = pcmData;
+
+    // If sample rates don't match, skip frame (resampling every frame is too expensive
+    // for real-time; in practice Opus always outputs 48kHz which should match the device)
+    if (frameSampleRate !== this.sampleRate) {
+      logger.warn(`Voice audio sample rate mismatch: ${frameSampleRate} vs device ${this.sampleRate}, dropping frame`);
+      return;
+    }
+
+    // Apply volume gain and convert to Buffer
+    const gain = this.volumeGain;
+    const buffer = Buffer.allocUnsafe(outputData.length * 4);
+    for (let i = 0; i < outputData.length; i++) {
+      const s = outputData[i] * gain;
+      const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
+      buffer.writeFloatLE(clamped, i * 4);
+    }
+
+    try {
+      this.rtAudioOutput.write(buffer);
+    } catch {
+      // Buffer full or device error - drop frame silently
+    }
+  }
 } 

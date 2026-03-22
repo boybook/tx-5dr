@@ -315,6 +315,9 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
       [WSMessageType.AUTH_TOKEN]: (data, id) => this.handleAuthToken(id, data),
       [WSMessageType.AUTH_PUBLIC_VIEWER]: (_data, id) => this.handleAuthPublicViewer(id),
+      [WSMessageType.VOICE_PTT_REQUEST]: (data, id) => this.handleVoicePttRequest(id, data),
+      [WSMessageType.VOICE_PTT_RELEASE]: (_data, id) => this.handleVoicePttRelease(id),
+      [WSMessageType.VOICE_SET_RADIO_MODE]: (data) => this.handleVoiceSetRadioMode(data),
     };
   }
 
@@ -494,6 +497,18 @@ export class WSServer extends WSMessageHandler {
       logger.debug(`profile list updated: ${data.profiles?.length} profiles`);
       this.broadcast(WSMessageType.PROFILE_LIST_UPDATED, data);
     });
+
+    // 监听语音 PTT 锁状态变化事件
+    this.digitalRadioEngine.on('voicePttLockChanged', (data) => {
+      logger.debug('voice PTT lock changed', data);
+      this.broadcast(WSMessageType.VOICE_PTT_LOCK_CHANGED, data);
+    });
+
+    // 监听语音电台模式变化事件
+    this.digitalRadioEngine.on('voiceRadioModeChanged', (data) => {
+      logger.debug('voice radio mode changed', data);
+      this.broadcast(WSMessageType.VOICE_RADIO_MODE_CHANGED, data);
+    });
   }
 
   // WebSocket 命令所需的最低角色
@@ -506,6 +521,8 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.RADIO_MANUAL_RECONNECT]: UserRole.ADMIN,
     [WSMessageType.RADIO_STOP_RECONNECT]: UserRole.ADMIN,
     [WSMessageType.FORCE_STOP_TRANSMISSION]: UserRole.ADMIN,
+    [WSMessageType.VOICE_PTT_REQUEST]: UserRole.OPERATOR,
+    [WSMessageType.VOICE_SET_RADIO_MODE]: UserRole.OPERATOR,
     [WSMessageType.START_OPERATOR]: UserRole.OPERATOR,
     [WSMessageType.STOP_OPERATOR]: UserRole.OPERATOR,
     [WSMessageType.SET_OPERATOR_CONTEXT]: UserRole.OPERATOR,
@@ -665,7 +682,7 @@ export class WSServer extends WSMessageHandler {
    * 处理设置模式命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleSetMode(mode: ModeDescriptor): Promise<void> {
+  private async handleSetMode(mode: ModeDescriptor | string): Promise<void> {
     try {
       await this.digitalRadioEngine.setMode(mode);
     } catch (error) {
@@ -794,6 +811,61 @@ export class WSServer extends WSMessageHandler {
     }
   }
 
+  // ===== 语音模式命令处理 =====
+
+  private async handleVoicePttRequest(connectionId: string, data: any): Promise<void> {
+    try {
+      const voiceSessionManager = this.digitalRadioEngine.getVoiceSessionManager();
+      if (!voiceSessionManager) {
+        throw new Error('Voice session manager not available');
+      }
+
+      const connection = this.getConnection(connectionId);
+      const label = connection?.getAuthLabel() || connectionId;
+      const result = await voiceSessionManager.startTransmit(connectionId, label);
+
+      if (!result.success) {
+        this.sendToConnection(connectionId, WSMessageType.ERROR, {
+          message: result.reason || 'PTT request failed',
+          code: 'VOICE_PTT_DENIED',
+        });
+      }
+    } catch (error) {
+      this.handleCommandError(error, 'voicePttRequest');
+    }
+  }
+
+  private async handleVoicePttRelease(connectionId: string): Promise<void> {
+    try {
+      const voiceSessionManager = this.digitalRadioEngine.getVoiceSessionManager();
+      if (!voiceSessionManager) {
+        throw new Error('Voice session manager not available');
+      }
+
+      await voiceSessionManager.stopTransmit(connectionId);
+    } catch (error) {
+      this.handleCommandError(error, 'voicePttRelease');
+    }
+  }
+
+  private async handleVoiceSetRadioMode(data: any): Promise<void> {
+    try {
+      const voiceSessionManager = this.digitalRadioEngine.getVoiceSessionManager();
+      if (!voiceSessionManager) {
+        throw new Error('Voice session manager not available');
+      }
+
+      const { radioMode } = data as { radioMode: string };
+      if (!radioMode) {
+        throw new Error('radioMode is required');
+      }
+
+      await voiceSessionManager.setRadioMode(radioMode);
+    } catch (error) {
+      this.handleCommandError(error, 'voiceSetRadioMode');
+    }
+  }
+
   /**
    * 添加新的客户端连接
    */
@@ -876,6 +948,14 @@ export class WSServer extends WSMessageHandler {
       connection.removeAllListeners();
       this.connections.delete(id);
       logger.info('connection disconnected', { id });
+
+      // Auto-release voice PTT if this client held it
+      const voiceSessionManager = this.digitalRadioEngine.getVoiceSessionManager();
+      if (voiceSessionManager) {
+        voiceSessionManager.handleClientDisconnect(id).catch((err) => {
+          logger.error('failed to handle voice client disconnect', err);
+        });
+      }
 
       // 广播客户端数量变化（客户端断开连接）
       this.broadcastClientCount();
