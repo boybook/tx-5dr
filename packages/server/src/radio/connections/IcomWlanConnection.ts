@@ -10,6 +10,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { IcomControl, AUDIO_RATE } from 'icom-wlan-node';
+import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
@@ -387,6 +388,19 @@ export class IcomWlanConnection
       supported: true,
       hasSwitch: true,
       hasManualTune: true,
+    };
+  }
+
+  /**
+   * 获取电台数值表能力
+   * ICOM WLAN 始终支持全部数值表
+   */
+  getMeterCapabilities(): MeterCapabilities {
+    return {
+      strength: true,
+      swr: true,
+      alc: true,
+      power: true,
     };
   }
 

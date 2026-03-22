@@ -8,6 +8,7 @@ import type {
   QSORecord,
   LogBookStatistics,
   MeterData,
+  MeterCapabilities,
   SystemStatus,
   HamlibConfig,
   RadioInfo,
@@ -90,6 +91,8 @@ export interface RadioState {
   };
   // 电台数值表数据
   meterData: MeterData | null;
+  // 电台数值表能力（null = 未知/兼容旧版）
+  meterCapabilities: MeterCapabilities | null;
   // 电台重连进度
   reconnectProgress: ReconnectProgress | null;
   // 电台连接健康状态
@@ -163,7 +166,7 @@ export type RadioAction =
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
-  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null } }
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; meterCapabilities?: MeterCapabilities } }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
   | { type: 'meterData'; payload: MeterData }
   | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
@@ -192,6 +195,7 @@ const initialRadioState: RadioState = {
     operatorIds: []
   },
   meterData: null,
+  meterCapabilities: null,
   radioConnectionHealth: null,
   profiles: [],
   activeProfileId: null,
@@ -285,7 +289,11 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         // 同步连接健康状态（如果事件中包含）
         radioConnectionHealth: action.payload.radioConnectionHealth !== undefined
           ? action.payload.radioConnectionHealth
-          : state.radioConnectionHealth
+          : state.radioConnectionHealth,
+        // 数值表能力：连接时更新，断开时重置为 null
+        meterCapabilities: action.payload.radioConnected
+          ? (action.payload.meterCapabilities ?? state.meterCapabilities)
+          : null,
       };
 
     case 'pttStatusChanged':
@@ -872,6 +880,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           radioConfig?: HamlibConfig;
           connectionHealth?: ConnectionHealthInfo;
           reconnectProgress?: ReconnectProgress | null;
+          meterCapabilities?: MeterCapabilities;
           reason?: string;
           message?: string;
         };
@@ -885,7 +894,8 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             radioInfo: radioData.radioInfo,
             radioConfig: radioData.radioConfig,
             radioConnectionHealth: radioData.connectionHealth,
-            reconnectProgress: radioData.reconnectProgress ?? null
+            reconnectProgress: radioData.reconnectProgress ?? null,
+            meterCapabilities: radioData.meterCapabilities,
           }
         });
 

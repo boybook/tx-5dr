@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
+import type { HamlibConfig, MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 
 /**
  * 电台连接类型
@@ -245,4 +245,12 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @optional 仅支持手动调谐的电台需要实现
    */
   startTuning?(): Promise<boolean>;
+
+  /**
+   * 获取电台数值表能力
+   *
+   * @returns 数值表能力信息（哪些 level 可读取）
+   * @optional 不是所有连接类型都需要实现
+   */
+  getMeterCapabilities?(): MeterCapabilities;
 }

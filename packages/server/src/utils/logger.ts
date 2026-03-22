@@ -10,7 +10,7 @@
 const LEVELS: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
 let _logLevel: string = process.env.LOG_LEVEL ||
-  (process.env.NODE_ENV === 'production' ? 'warn' : 'info');
+  (process.env.NODE_ENV === 'production' ? 'warn' : 'debug');
 
 /**
  * Override the active log level at runtime (e.g. from config file).

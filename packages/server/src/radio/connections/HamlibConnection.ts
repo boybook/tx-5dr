@@ -11,7 +11,7 @@
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
 import type { PttType } from 'hamlib';
-import type { HamlibConfig, SerialConfig } from '@tx5dr/contracts';
+import type { HamlibConfig, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
@@ -79,6 +79,11 @@ export class HamlibConnection
    */
   private meterPollFailCount = 0;
   private readonly METER_POLL_FAIL_THRESHOLD = 3;
+
+  /**
+   * 电台支持的 level 集合（连接时检测）
+   */
+  private supportedLevels: Set<string> = new Set();
 
   constructor() {
     super();
@@ -222,6 +227,16 @@ export class HamlibConnection
       this.lastSuccessfulOperation = Date.now();
       logger.info('Hamlib radio connected successfully');
 
+      // 检测数值表能力
+      try {
+        const levels = this.rig!.getSupportedLevels();
+        this.supportedLevels = new Set(levels);
+        logger.info('Supported meter levels detected', { levels: Array.from(this.supportedLevels) });
+      } catch (error) {
+        logger.warn('Failed to detect supported levels, assuming all supported', error);
+        this.supportedLevels = new Set(['STRENGTH', 'SWR', 'ALC', 'RFPOWER_METER']);
+      }
+
       // 启动数值表轮询
       this.startMeterPolling();
 
@@ -245,6 +260,7 @@ export class HamlibConnection
 
     // 停止数值表轮询
     this.stopMeterPolling();
+    this.supportedLevels.clear();
 
     // 清理资源
     await this.cleanup();
@@ -421,6 +437,18 @@ export class HamlibConnection
     } catch (error) {
       throw this.convertError(error, 'getTunerCapabilities');
     }
+  }
+
+  /**
+   * 获取电台数值表能力
+   */
+  getMeterCapabilities(): MeterCapabilities {
+    return {
+      strength: this.supportedLevels.has('STRENGTH'),
+      swr: this.supportedLevels.has('SWR'),
+      alc: this.supportedLevels.has('ALC'),
+      power: this.supportedLevels.has('RFPOWER_METER'),
+    };
   }
 
   /**
@@ -717,13 +745,33 @@ export class HamlibConnection
   private async pollMeters(): Promise<void> {
     if (!this.rig) return;
 
+    // 如果没有任何支持的 level，使用 getFrequency 做健康检查
+    const hasAnyLevel = this.supportedLevels.has('STRENGTH') || this.supportedLevels.has('SWR')
+      || this.supportedLevels.has('ALC') || this.supportedLevels.has('RFPOWER_METER');
+
+    if (!hasAnyLevel) {
+      try {
+        await this.rig.getFrequency();
+        this.meterPollFailCount = 0;
+        this.lastSuccessfulOperation = Date.now();
+      } catch {
+        this.meterPollFailCount++;
+        if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+          logger.error(`Health check failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
+          this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
+          this.stopMeterPolling();
+        }
+      }
+      return;
+    }
+
     try {
-      // 并行读取四个数值表
+      // 仅轮询电台支持的 level
       const [strength, swr, alc, power] = await Promise.all([
-        this.rig.getLevel('STRENGTH').catch(() => null),
-        this.rig.getLevel('SWR').catch(() => null),
-        this.rig.getLevel('ALC').catch(() => null),
-        this.rig.getLevel('RFPOWER_METER').catch(() => null),
+        this.supportedLevels.has('STRENGTH') ? this.rig.getLevel('STRENGTH').catch(() => null) : Promise.resolve(null),
+        this.supportedLevels.has('SWR') ? this.rig.getLevel('SWR').catch(() => null) : Promise.resolve(null),
+        this.supportedLevels.has('ALC') ? this.rig.getLevel('ALC').catch(() => null) : Promise.resolve(null),
+        this.supportedLevels.has('RFPOWER_METER') ? this.rig.getLevel('RFPOWER_METER').catch(() => null) : Promise.resolve(null),
       ]);
 
       // 转换数据格式
