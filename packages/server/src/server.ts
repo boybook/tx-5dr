@@ -111,27 +111,27 @@ export async function createServer() {
   // 初始化配置管理器
   const configManager = ConfigManager.getInstance();
   await configManager.initialize();
-  fastify.log.info('配置管理器初始化完成');
+  fastify.log.info('Config manager initialized');
 
   // 初始化认证管理器
   const authManager = AuthManager.getInstance();
   await authManager.initialize();
-  fastify.log.info('认证管理器初始化完成');
+  fastify.log.info('Auth manager initialized');
 
   // 注册认证插件（全局 JWT 验证）
   await fastify.register(authPlugin);
-  fastify.log.info('认证插件注册完成');
+  fastify.log.info('Auth plugin registered');
 
   // 初始化数字无线电引擎
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
   await digitalRadioEngine.initialize();
-  fastify.log.info('数字无线电引擎初始化完成');
+  fastify.log.info('Digital radio engine initialized');
 
   // 初始化按呼号的同步服务注册表（替代旧的全局 WaveLog/QRZ/LoTW 服务）
   const { SyncServiceRegistry } = await import('./services/SyncServiceRegistry.js');
   const syncRegistry = SyncServiceRegistry.getInstance();
   syncRegistry.initializeAll();
-  fastify.log.info('同步服务注册表初始化完成');
+  fastify.log.info('Sync service registry initialized');
 
   // 初始化音频监听WebSocket服务器
   const audioMonitorWSServer = new AudioMonitorWSServer();
@@ -139,7 +139,7 @@ export async function createServer() {
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, audioMonitorWSServer);
   const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
-  fastify.log.info('WebSocket服务器初始化完成');
+  fastify.log.info('WebSocket server initialized');
 
   // Register CORS plugin - 允许所有跨域
   await fastify.register(cors, {
@@ -158,7 +158,7 @@ export async function createServer() {
   // 📊 Day14：Fastify 全局错误处理器
   // 根据 RadioError.code 返回友好错误并添加用户指导信息
   fastify.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
-    fastify.log.error('API请求错误:', error);
+    fastify.log.error('API request error:', error);
 
     // 如果是 RadioError，返回详细的错误信息
     if (error instanceof RadioError) {
@@ -185,10 +185,10 @@ export async function createServer() {
         success: false,
         error: {
           code: 'VALIDATION_ERROR',
-          message: '请求参数验证失败',
-          userMessage: '请检查请求参数是否正确',
+          message: 'Request parameter validation failed',
+          userMessage: 'Please check if request parameters are correct',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查请求参数格式', '参考API文档'],
+          suggestions: ['Check request parameter format', 'Refer to API documentation'],
           details: error.validation,
         },
       });
@@ -201,11 +201,11 @@ export async function createServer() {
       success: false,
       error: {
         code: RadioErrorCode.UNKNOWN_ERROR,
-        message: error.message || '服务器内部错误',
-        userMessage: statusCode === 500 ? '服务器遇到错误，请稍后重试' : error.message,
+        message: error.message || 'Internal server error',
+        userMessage: statusCode === 500 ? 'Server encountered an error, please try again later' : error.message,
         severity: statusCode === 500 ? RadioErrorSeverity.CRITICAL : RadioErrorSeverity.ERROR,
         suggestions: statusCode === 500
-          ? ['请稍后重试', '如果问题持续，请联系技术支持']
+          ? ['Please try again later', 'If the problem persists, contact technical support']
           : [],
       },
     });
@@ -248,7 +248,7 @@ export async function createServer() {
     await scope.register(pskreporterRoutes, { prefix: '/api' });
     await scope.register(systemRoutes, { prefix: '/api/system' });
   });
-  fastify.log.info('Admin 路由注册完成（audio, profiles, settings, storage, pskreporter, system）');
+  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system)');
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包
   await fastify.register(async (scope) => {
@@ -258,7 +258,7 @@ export async function createServer() {
     await scope.register(modeRoutes, { prefix: '/api/mode' });
     await scope.register(slotpackRoutes, { prefix: '/api/slotpack' });
   });
-  fastify.log.info('Viewer+ 路由注册完成（operators, radio, mode, slotpack）');
+  fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack)');
 
   // Operator+ 路由：日志本（细粒度权限由路由内部 preHandler 控制）
   await fastify.register(async (scope) => {
@@ -266,7 +266,7 @@ export async function createServer() {
     const { logbookRoutes } = await import('./routes/logbooks.js');
     await scope.register(logbookRoutes, { prefix: '/api/logbooks' });
   });
-  fastify.log.info('Operator+ 路由注册完成（logbooks）');
+  fastify.log.info('Operator+ routes registered (logbooks)');
 
   // Operator+ 同步路由：按呼号的同步配置（细粒度权限由 requireCallsignAccess 控制）
   await fastify.register(async (scope) => {
@@ -274,15 +274,15 @@ export async function createServer() {
     const { syncRoutes } = await import('./routes/sync.js');
     await scope.register(syncRoutes, { prefix: '/api/sync' });
   });
-  fastify.log.info('Operator+ 路由注册完成（sync）');
+  fastify.log.info('Operator+ routes registered (sync)');
 
   // 公开路由：认证
   await fastify.register(authRoutes, { prefix: '/api/auth' });
-  fastify.log.info('认证路由注册完成');
+  fastify.log.info('Auth routes registered');
 
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
-    fastify.log.info('WebSocket客户端已连接');
+    fastify.log.info('WebSocket client connected');
     
     // 添加连接到WebSocket服务器（业务逻辑已集成在WSServer中）
     wsServer.addConnection(socket);
@@ -299,15 +299,15 @@ export async function createServer() {
 
       // 认证未启用时直接放行（向后兼容）
       if (!authManager.isAuthEnabled()) {
-        fastify.log.info(`Logbook WS 客户端连接（无认证模式）: operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
+        fastify.log.info(`Logbook WS client connected (no-auth mode): operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
         logbookWsServer.addConnection(socket, { operatorId, logBookId });
         return;
       }
 
       // 认证已启用：必须提供 JWT
       if (!jwtToken) {
-        fastify.log.warn('Logbook WS 连接未提供 token，拒绝连接');
-        socket.close(4001, '未认证');
+        fastify.log.warn('Logbook WS connection missing token, rejecting');
+        socket.close(4001, 'Unauthenticated');
         return;
       }
 
@@ -316,29 +316,29 @@ export async function createServer() {
       try {
         decoded = fastify.jwt.verify<import('@tx5dr/contracts').JWTPayload>(jwtToken);
       } catch {
-        fastify.log.warn('Logbook WS JWT 验证失败');
-        socket.close(4001, 'Token 无效');
+        fastify.log.warn('Logbook WS JWT verification failed');
+        socket.close(4001, 'Token invalid');
         return;
       }
 
       // 检查 token 是否仍有效（未撤销/未过期）
       if (!authManager.isTokenStillValid(decoded.tokenId)) {
-        fastify.log.warn(`Logbook WS Token 已失效: ${decoded.tokenId}`);
-        socket.close(4001, 'Token 已失效');
+        fastify.log.warn(`Logbook WS token expired: ${decoded.tokenId}`);
+        socket.close(4001, 'Token expired');
         return;
       }
 
       // 获取最新权限
       const current = authManager.getTokenCurrentPermissions(decoded.tokenId);
       if (!current) {
-        socket.close(4001, 'Token 权限获取失败');
+        socket.close(4001, 'Token permission retrieval failed');
         return;
       }
 
       // 检查最低角色
       if (!AuthManager.hasMinRole(current.role, UserRole.OPERATOR)) {
-        fastify.log.warn(`Logbook WS 连接权限不足（role=${current.role}），拒绝连接`);
-        socket.close(4003, '权限不足，需要 Operator 以上角色');
+        fastify.log.warn(`Logbook WS connection insufficient permissions (role=${current.role}), rejecting`);
+        socket.close(4003, 'Insufficient permissions, Operator role or above required');
         return;
       }
 
@@ -349,16 +349,16 @@ export async function createServer() {
         const hasAccess = associated.length > 0 &&
           associated.some(id => current.operatorIds.includes(id));
         if (!hasAccess) {
-          fastify.log.warn(`Logbook WS 连接无权访问日志本 ${logBookId}，拒绝连接`);
-          socket.close(4003, '无日志本访问权限');
+          fastify.log.warn(`Logbook WS connection has no access to log book ${logBookId}, rejecting`);
+          socket.close(4003, 'No log book access permission');
           return;
         }
       }
 
-      fastify.log.info(`Logbook WS 客户端连接: operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
+      fastify.log.info(`Logbook WS client connected: operatorId=${operatorId || ''}, logBookId=${logBookId || ''}`);
       logbookWsServer.addConnection(socket, { operatorId, logBookId });
     } catch (e) {
-      fastify.log.warn('Logbook WS 连接参数解析失败, 以无过滤模式连接');
+      fastify.log.warn('Logbook WS connection parameter parsing failed, connecting in unfiltered mode');
       logbookWsServer.addConnection(socket);
     }
   });
@@ -370,15 +370,15 @@ export async function createServer() {
       const clientId = url.searchParams.get('clientId');
 
       if (!clientId) {
-        fastify.log.warn('音频监听WS连接缺少clientId参数，拒绝连接');
+        fastify.log.warn('Audio monitor WS connection missing clientId parameter, rejecting');
         socket.close();
         return;
       }
 
-      fastify.log.info(`🎧 音频监听WS客户端连接: clientId=${clientId}`);
+      fastify.log.info(`Audio monitor WS client connected: clientId=${clientId}`);
       audioMonitorWSServer.handleConnection(socket, clientId);
     } catch (e) {
-      fastify.log.error('音频监听WS连接参数解析失败:', e);
+      fastify.log.error('Audio monitor WS connection parameter parsing failed:', e);
       socket.close();
     }
   });

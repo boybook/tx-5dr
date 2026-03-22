@@ -39,7 +39,7 @@ export class WaveLogService {
    */
   async testConnection(): Promise<WaveLogTestConnectionResponse> {
     if (!this.config.url || !this.config.apiKey) {
-      throw new Error('WaveLog URL和API密钥不能为空');
+      throw new Error('WaveLog URL and API key cannot be empty');
     }
 
     try {
@@ -48,14 +48,14 @@ export class WaveLogService {
       
       return {
         success: true,
-        message: '连接成功',
+        message: 'Connection successful',
         stations
       };
     } catch (error) {
       logger.error('Connection test failed:', error);
       return {
         success: false,
-        message: error instanceof Error ? error.message : '连接失败'
+        message: error instanceof Error ? error.message : 'Connection failed'
       };
     }
   }
@@ -87,18 +87,18 @@ export class WaveLogService {
 
     if (!response.ok) {
       if (response.status === 401) {
-        throw new Error('API密钥无效');
+        throw new Error('Invalid API key');
       } else if (response.status === 404) {
-        throw new Error('WaveLog URL无效或API端点不存在');
+        throw new Error('WaveLog URL invalid or API endpoint not found');
       } else {
-        throw new Error(`HTTP错误 ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
       }
     }
 
     const stations = await response.json();
-    
+
     if (!Array.isArray(stations)) {
-      throw new Error('WaveLog返回的Station数据格式无效');
+      throw new Error('WaveLog returned invalid station data format');
     }
 
     return stations.map(station => ({
@@ -170,15 +170,15 @@ export class WaveLogService {
       } catch {
         // 如果响应不是JSON，可能是HTML错误页面
         if (responseText.includes('<html>')) {
-          throw new Error('WaveLog URL错误或服务器返回了HTML页面');
+          throw new Error('WaveLog URL error or server returned an HTML page');
         }
-        throw new Error('WaveLog服务器返回了无效的响应格式');
+        throw new Error('WaveLog server returned invalid response format');
       }
 
       if (response.ok) {
         return {
           success: result.status === 'created',
-          message: result.status === 'created' ? '上传成功' : (result.reason || '上传失败')
+          message: result.status === 'created' ? 'Upload successful' : (result.reason || 'Upload failed')
         };
       } else {
         logger.error('Upload failed:', {
@@ -187,7 +187,7 @@ export class WaveLogService {
           callsign: qso.callsign,
           mode: qso.mode,
         });
-        throw new Error(result.reason || result.message || (result.messages ? JSON.stringify(result.messages) : `HTTP错误 ${response.status}`));
+        throw new Error(result.reason || result.message || (result.messages ? JSON.stringify(result.messages) : `HTTP error ${response.status}`));
       }
     } catch (error) {
       logger.error('Failed to upload QSO:', error);
@@ -214,13 +214,13 @@ export class WaveLogService {
         }
       } catch (error) {
         errorCount++;
-        errors.push(`${qso.callsign}: ${error instanceof Error ? error.message : '未知错误'}`);
+        errors.push(`${qso.callsign}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
 
     return {
       success: errorCount === 0,
-      message: `上传完成: 成功${uploadedCount}条, 失败${errorCount}条`,
+      message: `Upload complete: ${uploadedCount} succeeded, ${errorCount} failed`,
       uploadedCount,
       downloadedCount: 0,
       skippedCount: 0,
@@ -262,26 +262,26 @@ export class WaveLogService {
 
       if (!response.ok) {
         if (response.status === 401) {
-          throw new Error('API密钥无效');
+          throw new Error('Invalid API key');
         } else if (response.status === 404) {
-          throw new Error('WaveLog导出API端点不存在');
+          throw new Error('WaveLog export API endpoint not found');
         } else {
-          throw new Error(`HTTP错误 ${response.status}: ${response.statusText}`);
+          throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
         }
       }
 
       const responseText = await response.text();
       let result;
-      
+
       try {
         result = JSON.parse(responseText);
       } catch {
-        throw new Error('WaveLog服务器返回了无效的JSON响应');
+        throw new Error('WaveLog server returned invalid JSON response');
       }
 
       // 检查响应格式
       if (!result || typeof result !== 'object') {
-        throw new Error('WaveLog返回的响应格式不正确');
+        throw new Error('WaveLog response format is invalid');
       }
 
       // 检查是否有错误信息
@@ -323,32 +323,32 @@ export class WaveLogService {
 
     // 根据不同的错误类型提供更友好的错误信息
     if (error.name === 'AbortError' || error.code === 'ABORT_ERR') {
-      return new Error(`连接超时: WaveLog服务器响应时间过长，请检查服务器状态和网络连接`);
+      return new Error(`Connection timeout: WaveLog server response too slow, check server status and network`);
     }
 
     if (error.code === 'UND_ERR_SOCKET') {
       if (error.cause?.message?.includes('ECONNREFUSED')) {
-        return new Error(`连接被拒绝: 无法连接到WaveLog服务器 ${url}，请检查URL和端口是否正确`);
+        return new Error(`Connection refused: cannot connect to WaveLog server ${url}, check URL and port`);
       }
       if (error.cause?.message?.includes('ENOTFOUND')) {
-        return new Error(`域名解析失败: 找不到WaveLog服务器 ${url}，请检查URL是否正确`);
+        return new Error(`DNS resolution failed: WaveLog server ${url} not found, check URL`);
       }
       if (error.cause?.message?.includes('other side closed')) {
-        return new Error(`连接被服务器关闭: WaveLog服务器意外关闭了连接，可能是服务器配置问题或网络不稳定`);
+        return new Error(`Connection closed by server: WaveLog server unexpectedly closed the connection`);
       }
-      return new Error(`网络连接错误: ${error.cause?.message || error.message}，请检查网络连接和WaveLog服务器状态`);
+      return new Error(`Network connection error: ${error.cause?.message || error.message}, check network and WaveLog server status`);
     }
 
     if (error.code === 'UND_ERR_CONNECT_TIMEOUT') {
-      return new Error(`连接超时: 无法在规定时间内连接到WaveLog服务器，请检查网络延迟`);
+      return new Error(`Connection timeout: unable to connect to WaveLog server within time limit`);
     }
 
     if (error.message?.includes('fetch failed')) {
-      return new Error(`网络请求失败: 无法连接到WaveLog服务器，请检查URL、网络连接和防火墙设置`);
+      return new Error(`Network request failed: cannot connect to WaveLog server, check URL, network, and firewall`);
     }
 
     // 通用错误处理
-    return new Error(`WaveLog连接失败: ${error.message || '未知网络错误'}`);
+    return new Error(`WaveLog connection failed: ${error.message || 'Unknown network error'}`);
   }
 
 
@@ -403,7 +403,7 @@ export class WaveLogService {
             reachable: true,
             httpStatus: versionResponse.status,
             responseTime,
-            wavelogVersion: versionData.version || '未知版本'
+            wavelogVersion: versionData.version || 'Unknown version'
           };
         } else if (versionResponse.status === 401) {
           return {
@@ -411,7 +411,7 @@ export class WaveLogService {
             reachable: true,
             httpStatus: versionResponse.status,
             responseTime,
-            error: 'API密钥无效'
+            error: 'Invalid API key'
           };
         }
       }

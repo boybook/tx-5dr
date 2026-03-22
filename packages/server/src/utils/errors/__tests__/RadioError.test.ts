@@ -1,14 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * RadioError 单元测试
+ * RadioError unit tests
  */
 
 import { describe, it, expect } from 'vitest';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../RadioError.js';
 
 describe('RadioError', () => {
-  describe('构造函数', () => {
-    it('创建基本错误', () => {
+  describe('Constructor', () => {
+    it('creates basic error', () => {
       const error = new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
         message: 'Test error',
@@ -23,18 +23,18 @@ describe('RadioError', () => {
       expect(error.timestamp).toBeGreaterThan(0);
     });
 
-    it('设置用户消息', () => {
+    it('sets user message', () => {
       const error = new RadioError({
         code: RadioErrorCode.DEVICE_NOT_FOUND,
         message: 'Internal: Device eth0 not found',
-        userMessage: '未找到网络设备',
+        userMessage: 'Network device not found',
       });
 
       expect(error.message).toBe('Internal: Device eth0 not found');
-      expect(error.userMessage).toBe('未找到网络设备');
+      expect(error.userMessage).toBe('Network device not found');
     });
 
-    it('设置错误级别', () => {
+    it('sets error severity', () => {
       const error = new RadioError({
         code: RadioErrorCode.RECONNECT_MAX_ATTEMPTS,
         message: 'Max attempts reached',
@@ -44,7 +44,7 @@ describe('RadioError', () => {
       expect(error.severity).toBe(RadioErrorSeverity.CRITICAL);
     });
 
-    it('设置建议', () => {
+    it('sets suggestions', () => {
       const error = new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
         message: 'Failed to connect',
@@ -54,7 +54,7 @@ describe('RadioError', () => {
       expect(error.suggestions).toEqual(['Check network', 'Restart device']);
     });
 
-    it('设置原始错误', () => {
+    it('sets cause error', () => {
       const cause = new Error('Original error');
       const error = new RadioError({
         code: RadioErrorCode.NETWORK_ERROR,
@@ -65,7 +65,7 @@ describe('RadioError', () => {
       expect(error.cause).toBe(cause);
     });
 
-    it('设置上下文', () => {
+    it('sets context', () => {
       const error = new RadioError({
         code: RadioErrorCode.INVALID_STATE,
         message: 'Invalid state',
@@ -82,8 +82,8 @@ describe('RadioError', () => {
     });
   });
 
-  describe('from - 错误转换', () => {
-    it('转换 RadioError 返回自身', () => {
+  describe('from - error conversion', () => {
+    it('converting RadioError returns itself', () => {
       const original = new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
         message: 'Test',
@@ -93,7 +93,7 @@ describe('RadioError', () => {
       expect(converted).toBe(original);
     });
 
-    it('转换标准 Error', () => {
+    it('converts standard Error', () => {
       const original = new Error('Test error');
       const converted = RadioError.from(original, RadioErrorCode.NETWORK_ERROR);
 
@@ -103,7 +103,7 @@ describe('RadioError', () => {
       expect(converted.cause).toBe(original);
     });
 
-    it('转换字符串', () => {
+    it('converts string', () => {
       const converted = RadioError.from('String error');
 
       expect(converted).toBeInstanceOf(RadioError);
@@ -111,7 +111,7 @@ describe('RadioError', () => {
       expect(converted.message).toBe('String error');
     });
 
-    it('转换其他类型', () => {
+    it('converts other types', () => {
       const converted = RadioError.from({ foo: 'bar' });
 
       expect(converted).toBeInstanceOf(RadioError);
@@ -119,13 +119,13 @@ describe('RadioError', () => {
     });
   });
 
-  describe('工厂方法', () => {
+  describe('Factory methods', () => {
     it('connectionFailed', () => {
       const error = RadioError.connectionFailed('Timeout');
 
       expect(error.code).toBe(RadioErrorCode.CONNECTION_FAILED);
       expect(error.message).toContain('Timeout');
-      expect(error.userMessage).toBe('无法连接到电台');
+      expect(error.userMessage).toBe('Unable to connect to radio');
       expect(error.suggestions.length).toBeGreaterThan(0);
     });
 
@@ -172,15 +172,15 @@ describe('RadioError', () => {
     });
   });
 
-  describe('序列化', () => {
+  describe('Serialization', () => {
     it('toJSON', () => {
       const cause = new Error('Cause error');
       const error = new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
         message: 'Test error',
-        userMessage: '连接失败',
+        userMessage: 'Connection failed',
         severity: RadioErrorSeverity.ERROR,
-        suggestions: ['建议1', '建议2'],
+        suggestions: ['Suggestion 1', 'Suggestion 2'],
         context: { foo: 'bar' },
         cause,
       });
@@ -190,9 +190,9 @@ describe('RadioError', () => {
       expect(json.name).toBe('RadioError');
       expect(json.code).toBe(RadioErrorCode.CONNECTION_FAILED);
       expect(json.message).toBe('Test error');
-      expect(json.userMessage).toBe('连接失败');
+      expect(json.userMessage).toBe('Connection failed');
       expect(json.severity).toBe(RadioErrorSeverity.ERROR);
-      expect(json.suggestions).toEqual(['建议1', '建议2']);
+      expect(json.suggestions).toEqual(['Suggestion 1', 'Suggestion 2']);
       expect(json.context).toEqual({ foo: 'bar' });
       expect(json.timestamp).toBeGreaterThan(0);
       expect((json.cause as any).message).toBe('Cause error');

@@ -160,7 +160,7 @@ export class MemoryLeakDetector {
 
         // 检查是否超过警告阈值
         if (currentCount > this.WARNING_THRESHOLD) {
-          warnings.push(`⚠️ 事件 "${eventName}" 监听器数量超过阈值 (${currentCount} > ${this.WARNING_THRESHOLD})`);
+          warnings.push(`Event "${eventName}" listener count exceeds threshold (${currentCount} > ${this.WARNING_THRESHOLD})`);
         }
       } else if (currentCount < baselineCount) {
         decreased.set(eventName, { from: baselineCount, to: currentCount });
@@ -221,12 +221,12 @@ export class MemoryLeakDetector {
    * 格式化监听器数量为可读字符串
    */
   private formatListenerCounts(counts: Map<string, number>): string {
-    if (counts.size === 0) return '无监听器';
+    if (counts.size === 0) return 'no listeners';
 
     const entries = Array.from(counts.entries());
     const total = entries.reduce((sum, [, count]) => sum + count, 0);
 
-    return `总计 ${total} 个 (${entries.map(([name, count]) => `${name}:${count}`).join(', ')})`;
+    return `total ${total} (${entries.map(([name, count]) => `${name}:${count}`).join(', ')})`;
   }
 
   /**

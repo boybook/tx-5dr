@@ -38,14 +38,6 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
     }
   }, [connection.state.isConnected, connection.state.radioService]);
 
-  // 监听操作员状态变化
-  /* React.useEffect(() => {
-    console.log('📻 [RadioOperatorList] 操作员状态更新:', {
-      operatorCount: radio.state.operators.length,
-      operators: radio.state.operators
-    });
-  }, [radio.state.operators]); */
-
   if (radio.state.operators.length === 0) {
     return (
       <div className="flex items-center justify-center">

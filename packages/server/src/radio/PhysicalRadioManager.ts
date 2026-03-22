@@ -223,11 +223,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     if (!this.radioActor) {
       logger.error('State machine not initialized');
-      throw new Error('状态机未初始化');
+      throw new Error('state machine not initialized');
     }
 
     if (!this.currentConfig) {
-      throw new Error('无有效配置，无法重新连接');
+      throw new Error('no valid configuration for reconnection');
     }
 
     if (this.currentConfig.type === 'none') {
@@ -425,7 +425,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async testConnection(): Promise<void> {
     if (!this.connection) {
-      throw new Error('电台未连接，无法测试连接');
+      throw new Error('radio not connected, cannot test connection');
     }
 
     try {
@@ -443,7 +443,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async setMode(mode: string, bandwidth?: 'narrow' | 'wide'): Promise<void> {
     if (!this.connection) {
-      throw new Error('电台未连接');
+      throw new Error('radio not connected');
     }
 
     try {
@@ -451,7 +451,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.info(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`);
     } catch (error) {
       this.handleConnectionError(error as Error);
-      throw new Error(`设置模式失败: ${(error as Error).message}`);
+      throw new Error(`set mode failed: ${(error as Error).message}`);
     }
   }
 
@@ -460,7 +460,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
     if (!this.connection) {
-      throw new Error('电台未连接');
+      throw new Error('radio not connected');
     }
 
     try {
@@ -469,7 +469,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return modeInfo;
     } catch (error) {
       this.handleConnectionError(error as Error);
-      throw new Error(`获取模式失败: ${(error as Error).message}`);
+      throw new Error(`get mode failed: ${(error as Error).message}`);
     }
   }
 
@@ -520,11 +520,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async setTuner(enabled: boolean): Promise<void> {
     if (!this.connection) {
-      throw new Error('电台未连接，无法控制天调');
+      throw new Error('radio not connected, cannot control tuner');
     }
 
     if (!this.connection.setTuner) {
-      throw new Error('当前电台不支持天调控制');
+      throw new Error('radio does not support tuner control');
     }
 
     try {
@@ -587,11 +587,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async startTuning(): Promise<boolean> {
     if (!this.connection) {
-      throw new Error('电台未连接，无法启动调谐');
+      throw new Error('radio not connected, cannot start tuning');
     }
 
     if (!this.connection.startTuning) {
-      throw new Error('当前电台不支持手动调谐');
+      throw new Error('radio does not support manual tuning');
     }
 
     try {
@@ -644,15 +644,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async getSignalStrength(): Promise<number> {
     if (!this.connection) {
-      throw new Error('电台未连接');
+      throw new Error('radio not connected');
     }
 
     try {
       // IRadioConnection 接口目前没有 getSignalStrength，需要扩展
-      throw new Error('getSignalStrength 功能待实现');
+      throw new Error('getSignalStrength not implemented');
     } catch (error) {
       this.handleConnectionError(error as Error);
-      throw new Error(`获取信号强度失败: ${(error as Error).message}`);
+      throw new Error(`get signal strength failed: ${(error as Error).message}`);
     }
   }
 
@@ -665,7 +665,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     signalStrength?: number;
   }> {
     if (!this.connection) {
-      throw new Error('电台未连接');
+      throw new Error('radio not connected');
     }
 
     try {
@@ -676,7 +676,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         mode: { mode: 'UNKNOWN', bandwidth: 'UNKNOWN' },
       };
     } catch (error) {
-      throw new Error(`获取电台状态失败: ${(error as Error).message}`);
+      throw new Error(`get radio status failed: ${(error as Error).message}`);
     }
   }
 
@@ -710,7 +710,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       const { HamLib } = hamlibModule;
       return HamLib.getSupportedRigs();
     } catch (error) {
-      console.warn('Failed to get HamLib supported rig list:', (error as Error).message);
+      logger.warn('Failed to get HamLib supported rig list:', (error as Error).message);
       return [];
     }
   }
@@ -812,7 +812,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 验证连接健康
     if (!this.connection.isHealthy()) {
-      throw new Error('连接验证失败');
+      throw new Error('connection health check failed');
     }
 
     // 启动频率监控
@@ -986,13 +986,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private async waitForConnected(timeout: number = 30000): Promise<void> {
     if (!this.radioActor) {
-      throw new Error('状态机未初始化');
+      throw new Error('state machine not initialized');
     }
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         subscription?.unsubscribe();
-        reject(new Error('等待连接超时'));
+        reject(new Error('waiting for connection timed out'));
       }, timeout);
 
       // 注意：此方法在 CONNECT 事件发送之后调用，此时状态已经是 CONNECTING 或更后面。
@@ -1007,7 +1007,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           // 连接失败回到 DISCONNECTED，立即 reject（不等 30 秒超时）
           clearTimeout(timeoutId);
           subscription?.unsubscribe();
-          reject(snapshot.context.error || new Error('连接失败'));
+          reject(snapshot.context.error || new Error('connection failed'));
         }
       });
 
@@ -1022,7 +1022,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         const ctx = this.radioActor!.getSnapshot().context;
         clearTimeout(timeoutId);
         subscription?.unsubscribe();
-        reject(ctx.error || new Error('连接失败'));
+        reject(ctx.error || new Error('connection failed'));
       }
     });
   }
@@ -1035,13 +1035,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     timeout: number = 5000
   ): Promise<void> {
     if (!this.radioActor) {
-      throw new Error('状态机未初始化');
+      throw new Error('state machine not initialized');
     }
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         subscription?.unsubscribe();
-        reject(new Error(`等待状态 ${targetState} 超时`));
+        reject(new Error(`waiting for state ${targetState} timed out`));
       }, timeout);
 
       const subscription = this.radioActor!.subscribe((snapshot) => {

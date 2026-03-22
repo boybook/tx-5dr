@@ -333,7 +333,7 @@ export class RadioOperatorManager {
    */
   async addOperator(config: RadioOperatorConfig): Promise<RadioOperator> {
     if (this.operators.has(config.id)) {
-      throw new Error(`操作员 ${config.id} 已存在`);
+      throw new Error(`operator ${config.id} already exists`);
     }
 
     const operatorConfig = this.convertToOperatorConfig(config);
@@ -384,7 +384,7 @@ export class RadioOperatorManager {
   removeOperator(operatorId: string): void {
     const operator = this.operators.get(operatorId);
     if (!operator) {
-      throw new Error(`操作员 ${operatorId} 不存在`);
+      throw new Error(`operator ${operatorId} not found`);
     }
 
     // 断开与日志本的连接
@@ -400,7 +400,7 @@ export class RadioOperatorManager {
   async connectOperatorToLogBook(operatorId: string, logBookId: string): Promise<void> {
     const operator = this.operators.get(operatorId);
     if (!operator) {
-      throw new Error(`操作员 ${operatorId} 不存在`);
+      throw new Error(`operator ${operatorId} not found`);
     }
 
     await this.logManager.connectOperatorToLogBook(operatorId, logBookId);
@@ -413,7 +413,7 @@ export class RadioOperatorManager {
   disconnectOperatorFromLogBook(operatorId: string): void {
     const operator = this.operators.get(operatorId);
     if (!operator) {
-      throw new Error(`操作员 ${operatorId} 不存在`);
+      throw new Error(`operator ${operatorId} not found`);
     }
 
     this.logManager.disconnectOperatorFromLogBook(operatorId);
@@ -575,7 +575,7 @@ export class RadioOperatorManager {
   async updateOperatorContext(operatorId: string, context: any): Promise<void> {
     const operator = this.operators.get(operatorId);
     if (!operator) {
-      throw new Error(`操作员 ${operatorId} 不存在`);
+      throw new Error(`operator ${operatorId} not found`);
     }
 
     // 构建更新对象（只包含实际变化的字段）
@@ -634,7 +634,7 @@ export class RadioOperatorManager {
   setOperatorSlot(operatorId: string, slot: string): void {
     const operator = this.operators.get(operatorId);
     if (!operator) {
-      throw new Error(`操作员 ${operatorId} 不存在`);
+      throw new Error(`operator ${operatorId} not found`);
     }
     
     operator.userCommand({
@@ -652,7 +652,7 @@ export class RadioOperatorManager {
   startOperator(operatorId: string): void {
     const operator = this.operators.get(operatorId);
     if (!operator) {
-      throw new Error(`操作员 ${operatorId} 不存在`);
+      throw new Error(`operator ${operatorId} not found`);
     }
     
     operator.start();
@@ -904,7 +904,7 @@ export class RadioOperatorManager {
   stopOperator(operatorId: string): void {
     const operator = this.operators.get(operatorId);
     if (!operator) {
-      throw new Error(`操作员 ${operatorId} 不存在`);
+      throw new Error(`operator ${operatorId} not found`);
     }
     
     operator.stop();
@@ -1022,7 +1022,7 @@ export class RadioOperatorManager {
   async syncUpdateOperator(config: RadioOperatorConfig): Promise<void> {
     const operator = this.operators.get(config.id);
     if (!operator) {
-      throw new Error(`操作员 ${config.id} 不存在`);
+      throw new Error(`operator ${config.id} not found`);
     }
 
     const operatorConfig = this.convertToOperatorConfig(config);
@@ -1246,7 +1246,7 @@ export class RadioOperatorManager {
       } catch (error) {
         logger.error(`[WaveLog] QSO auto-upload error: ${qsoRecord.callsign}`, error);
         this.eventEmitter.emit('waveLogUploadError' as any, {
-          operatorId, qsoRecord, error: error instanceof Error ? error.message : '未知错误'
+          operatorId, qsoRecord, error: error instanceof Error ? error.message : 'unknown error'
         });
       }
     }

@@ -45,10 +45,10 @@ export async function storageRoutes(fastify: FastifyInstance) {
       if (typeof enabled !== 'boolean') {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: '参数错误：enabled 必须是布尔值',
-          userMessage: '请提供有效的开关状态',
+          message: 'Parameter error: enabled must be a boolean',
+          userMessage: 'Please provide a valid switch state',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['enabled 参数应为 true 或 false'],
+          suggestions: ['enabled parameter should be true or false'],
         });
       }
 
@@ -76,7 +76,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
       return {
         success: true,
         data: {
-          message: '缓冲区刷新完成'
+          message: 'Buffer flush complete'
         },
         timestamp: Date.now()
       };
@@ -114,10 +114,10 @@ export async function storageRoutes(fastify: FastifyInstance) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: `日期格式错误: ${date}`,
-          userMessage: '日期格式不正确',
+          message: `Invalid date format: ${date}`,
+          userMessage: 'Date format is incorrect',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['日期格式应为 YYYY-MM-DD（例如：2025-11-02）'],
+          suggestions: ['Date format should be YYYY-MM-DD (e.g. 2025-11-02)'],
         });
       }
 

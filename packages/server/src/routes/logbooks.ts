@@ -96,10 +96,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `日志本 ${id} 不存在`,
-          userMessage: '未找到指定的日志本',
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
+          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
         });
       }
 
@@ -154,7 +154,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       const response = LogBookActionResponseSchema.parse({
         success: true,
-        message: '日志本创建成功',
+        message: 'Logbook created successfully',
         data: {
           id: logBook.id,
           name: logBook.name,
@@ -198,10 +198,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `日志本 ${id} 不存在`,
-          userMessage: '未找到指定的日志本',
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
+          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
         });
       }
 
@@ -218,7 +218,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       const response = LogBookActionResponseSchema.parse({
         success: true,
-        message: '日志本更新成功',
+        message: 'Logbook updated successfully',
         data: {
           id: logBook.id,
           name: logBook.name,
@@ -249,7 +249,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         success: true,
-        message: '日志本删除成功'
+        message: 'Logbook deleted successfully'
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
@@ -270,7 +270,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         success: true,
-        message: `操作员 ${operatorId} 已连接到日志本 ${logBookId}`
+        message: `Operator ${operatorId} connected to logbook ${logBookId}`
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
@@ -290,7 +290,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         success: true,
-        message: `操作员 ${operatorId} 已断开与日志本的连接`
+        message: `Operator ${operatorId} disconnected from logbook`
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
@@ -323,10 +323,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `日志本 ${id} 不存在`,
-          userMessage: '未找到指定的日志本',
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
+          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
         });
       }
 
@@ -462,10 +462,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `日志本 ${id} 不存在`,
-          userMessage: '未找到指定的日志本',
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
+          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
         });
       }
 
@@ -506,8 +506,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       
       // 确保返回的是字符串
       if (typeof exportedData !== 'string') {
-        fastify.log.error('导出方法返回了非字符串类型:', typeof exportedData, exportedData);
-        throw new Error('导出数据格式错误');
+        fastify.log.error('Export method returned non-string type:', typeof exportedData, exportedData);
+        throw new Error('Export data format error');
       }
 
       // 设置正确的MIME类型和文件扩展名
@@ -552,10 +552,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `日志本 ${id} 不存在`,
-          userMessage: '未找到指定的日志本',
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
+          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
         });
       }
 
@@ -563,7 +563,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         success: true,
-        message: '数据导入成功'
+        message: 'Data imported successfully'
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
@@ -595,10 +595,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `日志本 ${id} 不存在`,
-          userMessage: '未找到指定的日志本',
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
+          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
         });
       }
 
@@ -612,16 +612,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `QSO记录 ${qsoId} 不存在`,
-          userMessage: '未找到指定的QSO记录',
+          message: `QSO record ${qsoId} does not exist`,
+          userMessage: 'QSO record not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查QSO记录ID是否正确', '刷新日志本数据'],
+          suggestions: ['Check if QSO record ID is correct', 'Refresh logbook data'],
         });
       }
 
       return reply.send({
         success: true,
-        message: 'QSO记录更新成功',
+        message: 'QSO record updated successfully',
         data: updatedQSO
       });
     } catch (error) {
@@ -653,10 +653,10 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `日志本 ${id} 不存在`,
-          userMessage: '未找到指定的日志本',
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查日志本ID是否正确', '查看可用的日志本列表'],
+          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
         });
       }
 
@@ -665,7 +665,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         success: true,
-        message: 'QSO记录删除成功'
+        message: 'QSO record deleted successfully'
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理

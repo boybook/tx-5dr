@@ -76,7 +76,7 @@ export class LogManager {
       await fs.mkdir(logbookDir, { recursive: true });
       logger.info(`Logbook directory ready: ${logbookDir}`);
     } catch (error) {
-      console.error('[LogManager] Failed to create logbook directory:', error);
+      logger.error('Failed to create logbook directory', error);
     }
 
     this.isInitialized = true;
@@ -103,7 +103,7 @@ export class LogManager {
         await this.getOrCreateLogBookByCallsign(callsign);
         logger.info(`Logbook initialized for callsign ${callsign}`);
       } catch (error) {
-        console.error(`[LogManager] Failed to initialize logbook for callsign ${callsign}:`, error);
+        logger.error(`Failed to initialize logbook for callsign ${callsign}`, error);
       }
     }
     
@@ -115,7 +115,7 @@ export class LogManager {
    */
   async createLogBook(config: LogBookConfig): Promise<LogBookInstance> {
     if (this.logBooks.has(config.id)) {
-      throw new Error(`日志本 ${config.id} 已存在`);
+      throw new Error(`logbook ${config.id} already exists`);
     }
     
     logger.info(`Creating logbook: ${config.name} (${config.id})`);
@@ -164,16 +164,16 @@ export class LogManager {
   async deleteLogBook(logBookId: string): Promise<void> {
     const logBook = this.logBooks.get(logBookId);
     if (!logBook) {
-      throw new Error(`日志本 ${logBookId} 不存在`);
+      throw new Error(`logbook ${logBookId} not found`);
     }
-    
+
     // 检查是否有呼号正在使用此日志本
     const usingCallsigns = Array.from(this.callsignLogBookMap.entries())
       .filter(([_, bookId]) => bookId === logBookId)
       .map(([callsign]) => callsign);
     
     if (usingCallsigns.length > 0) {
-      throw new Error(`日志本 ${logBookId} 正在被呼号使用: ${usingCallsigns.join(', ')}`);
+      throw new Error(`logbook ${logBookId} is in use by callsigns: ${usingCallsigns.join(', ')}`);
     }
     
     await logBook.provider.close();
@@ -223,8 +223,8 @@ export class LogManager {
       
       const logBook = await this.createLogBook({
         id: logBookId,
-        name: `${normalizedCallsign} 通联日志`,
-        description: `${normalizedCallsign} 电台的通联记录`,
+        name: `${normalizedCallsign} QSO Log`,
+        description: `QSO records for ${normalizedCallsign}`,
         logFileName: logFileName,
         autoCreateFile: true
       });
@@ -235,7 +235,7 @@ export class LogManager {
     
     const logBook = this.logBooks.get(logBookId);
     if (!logBook) {
-      throw new Error(`日志本 ${logBookId} 不存在（呼号: ${normalizedCallsign}）`);
+      throw new Error(`logbook ${logBookId} not found (callsign: ${normalizedCallsign})`);
     }
     
     logBook.lastUsed = Date.now();
@@ -257,9 +257,9 @@ export class LogManager {
   async connectOperatorToLogBook(operatorId: string, logBookId: string): Promise<void> {
     const logBook = this.logBooks.get(logBookId);
     if (!logBook) {
-      throw new Error(`日志本 ${logBookId} 不存在`);
+      throw new Error(`logbook ${logBookId} not found`);
     }
-    
+
     // 获取操作员呼号
     const callsign = this.operatorCallsignMap.get(operatorId);
     if (callsign) {
@@ -348,7 +348,7 @@ export class LogManager {
     try {
       return await this.getOrCreateLogBookByCallsign(callsign);
     } catch (error) {
-      console.error(`[LogManager] Failed to get logbook for operator ${operatorId} (callsign: ${callsign}):`, error);
+      logger.error(`Failed to get logbook for operator ${operatorId} (callsign: ${callsign})`, error);
       return null;
     }
   }

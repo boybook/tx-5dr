@@ -1,5 +1,5 @@
 /**
- * ResourceManager 单元测试
+ * ResourceManager unit tests
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -7,7 +7,7 @@ import { ResourceManager, IResource, ResourceState } from '../ResourceManager.js
 
 
 /**
- * 创建模拟资源
+ * Create mock resource
  */
 function createMockResource(name: string, options?: {
   startDelay?: number;
@@ -58,23 +58,23 @@ describe('ResourceManager', () => {
   });
 
   describe('register/unregister', () => {
-    it('注册资源', () => {
+    it('register resource', () => {
       const resource = createMockResource('test');
       manager.register({ resource });
 
       expect(manager.getState('test')).toBe(ResourceState.IDLE);
     });
 
-    it('重复注册抛出错误', () => {
+    it('throws error on duplicate registration', () => {
       const resource = createMockResource('test');
       manager.register({ resource });
 
       expect(() => {
         manager.register({ resource });
-      }).toThrow('已注册');
+      }).toThrow('already registered');
     });
 
-    it('取消注册资源', () => {
+    it('unregister resource', () => {
       const resource = createMockResource('test');
       manager.register({ resource });
       manager.unregister('test');
@@ -82,7 +82,7 @@ describe('ResourceManager', () => {
       expect(manager.getState('test')).toBeUndefined();
     });
 
-    it('无法取消注册运行中的资源', async () => {
+    it('cannot unregister running resource', async () => {
       const resource = createMockResource('test');
       manager.register({ resource });
       await manager.startAll();
@@ -96,14 +96,14 @@ describe('ResourceManager', () => {
   });
 
   describe('startAll/stopAll', () => {
-    it('按优先级顺序启动资源', async () => {
+    it('starts resources in priority order', async () => {
       const startOrder: string[] = [];
 
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2');
       const resource3 = createMockResource('resource3');
 
-      // 重写 start 方法以记录顺序
+      // Override start method to record order
       const originalStart1 = resource1.start;
       resource1.start = async () => {
         startOrder.push('resource1');
@@ -128,13 +128,13 @@ describe('ResourceManager', () => {
 
       await manager.startAll();
 
-      // 应该按 priority 1 -> 2 -> 3 顺序启动
+      // Should start in priority 1 -> 2 -> 3 order
       expect(startOrder).toEqual(['resource2', 'resource3', 'resource1']);
 
       await manager.stopAll();
     });
 
-    it('按依赖关系顺序启动', async () => {
+    it('starts in dependency order', async () => {
       const startOrder: string[] = [];
 
       const resourceA = createMockResource('A');
@@ -157,13 +157,13 @@ describe('ResourceManager', () => {
 
       await manager.startAll();
 
-      // 应该按依赖顺序 A -> B -> C
+      // Should start in dependency order A -> B -> C
       expect(startOrder).toEqual(['A', 'B', 'C']);
 
       await manager.stopAll();
     });
 
-    it('启动失败时自动回滚', async () => {
+    it('automatically rolls back on start failure', async () => {
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2', { shouldFailStart: true });
       const resource3 = createMockResource('resource3');
@@ -174,13 +174,13 @@ describe('ResourceManager', () => {
 
       await expect(manager.startAll()).rejects.toThrow();
 
-      // resource1 应该已回滚（停止）
+      // resource1 should have been rolled back (stopped)
       expect(resource1.isRunning()).toBe(false);
       expect(resource2.isRunning()).toBe(false);
       expect(resource3.isRunning()).toBe(false);
     });
 
-    it('可选资源失败不影响其他资源', async () => {
+    it('optional resource failure does not affect other resources', async () => {
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2', { shouldFailStart: true });
       const resource3 = createMockResource('resource3');
@@ -198,7 +198,7 @@ describe('ResourceManager', () => {
       await manager.stopAll();
     });
 
-    it('按逆序停止资源', async () => {
+    it('stops resources in reverse order', async () => {
       const stopOrder: string[] = [];
 
       const resource1 = createMockResource('resource1');
@@ -222,11 +222,11 @@ describe('ResourceManager', () => {
       await manager.startAll();
       await manager.stopAll();
 
-      // 应该按启动的逆序停止
+      // Should stop in reverse order of startup
       expect(stopOrder).toEqual(['resource3', 'resource2', 'resource1']);
     });
 
-    it('停止时单个资源失败不影响其他资源', async () => {
+    it('single resource stop failure does not affect other resources', async () => {
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2', { shouldFailStop: true });
       const resource3 = createMockResource('resource3');
@@ -238,24 +238,24 @@ describe('ResourceManager', () => {
       await manager.startAll();
       await manager.stopAll();
 
-      // 所有资源都应该尝试停止（即使 resource2 失败）
+      // All resources should attempt to stop (even if resource2 fails)
       expect(resource1.isRunning()).toBe(false);
       expect(resource3.isRunning()).toBe(false);
     });
   });
 
-  describe('循环依赖检测', () => {
-    it('检测直接循环依赖', async () => {
+  describe('Circular dependency detection', () => {
+    it('detects direct circular dependency', async () => {
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2');
 
       manager.register({ resource: resource1, dependencies: ['resource2'] });
       manager.register({ resource: resource2, dependencies: ['resource1'] });
 
-      await expect(manager.startAll()).rejects.toThrow('循环依赖');
+      await expect(manager.startAll()).rejects.toThrow('Circular dependency detected');
     });
 
-    it('检测间接循环依赖', async () => {
+    it('detects indirect circular dependency', async () => {
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2');
       const resource3 = createMockResource('resource3');
@@ -264,44 +264,44 @@ describe('ResourceManager', () => {
       manager.register({ resource: resource2, dependencies: ['resource3'] });
       manager.register({ resource: resource3, dependencies: ['resource1'] });
 
-      await expect(manager.startAll()).rejects.toThrow('循环依赖');
+      await expect(manager.startAll()).rejects.toThrow('Circular dependency detected');
     });
 
-    it('检测未注册的依赖', async () => {
+    it('detects unregistered dependency', async () => {
       const resource1 = createMockResource('resource1');
 
       manager.register({ resource: resource1, dependencies: ['notExists'] });
 
-      await expect(manager.startAll()).rejects.toThrow('未注册');
+      await expect(manager.startAll()).rejects.toThrow('is not registered');
     });
   });
 
-  describe('超时处理', () => {
-    it('启动超时', async () => {
+  describe('Timeout handling', () => {
+    it('start timeout', async () => {
       const resource = createMockResource('test', { startDelay: 200 });
 
       manager.register({ resource, startTimeout: 50 });
 
-      await expect(manager.startAll()).rejects.toThrow('超时');
+      await expect(manager.startAll()).rejects.toThrow('timed out');
     });
 
-    it('停止超时', async () => {
+    it('stop timeout', async () => {
       const resource = createMockResource('test', { stopDelay: 200 });
 
       manager.register({ resource, stopTimeout: 50 });
 
       await manager.startAll();
 
-      // stopAll 不会抛出错误，而是会捕获并记录错误后继续
+      // stopAll does not throw, it captures and logs errors then continues
       await manager.stopAll();
 
-      // 资源状态应该是 ERROR（因为停止超时）
+      // Resource state should be ERROR (due to stop timeout)
       expect(manager.getState('test')).toBe(ResourceState.ERROR);
     });
   });
 
-  describe('状态查询', () => {
-    it('获取单个资源状态', async () => {
+  describe('State query', () => {
+    it('get single resource state', async () => {
       const resource = createMockResource('test');
       manager.register({ resource });
 
@@ -314,7 +314,7 @@ describe('ResourceManager', () => {
       expect(manager.getState('test')).toBe(ResourceState.STOPPED);
     });
 
-    it('获取所有资源状态', async () => {
+    it('get all resource states', async () => {
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2');
 
@@ -332,7 +332,7 @@ describe('ResourceManager', () => {
   });
 
   describe('clear', () => {
-    it('清空所有资源注册', () => {
+    it('clears all resource registrations', () => {
       const resource = createMockResource('test');
       manager.register({ resource });
       manager.clear();
@@ -340,7 +340,7 @@ describe('ResourceManager', () => {
       expect(manager.getState('test')).toBeUndefined();
     });
 
-    it('有资源运行时无法清空', async () => {
+    it('cannot clear while resources are running', async () => {
       const resource = createMockResource('test');
       manager.register({ resource });
       await manager.startAll();

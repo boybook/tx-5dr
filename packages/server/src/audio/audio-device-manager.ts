@@ -64,7 +64,7 @@ export class AudioDeviceManager {
 
     return {
       id: `${type}-${device.id}`,
-      name: device.name || `${type === 'input' ? '输入' : '输出'}设备 ${device.id}`,
+      name: device.name || `${type === 'input' ? 'input' : 'output'} device ${device.id}`,
       isDefault: isSystemDefault,
       channels: finalChannels,
       sampleRate: device.preferredSampleRate || 48000,
@@ -104,7 +104,7 @@ export class AudioDeviceManager {
         logger.debug('No input devices found, adding generic default input device');
         result.push({
           id: 'input-default',
-          name: '默认音频输入设备',
+          name: 'Default audio input device',
           isDefault: true,
           channels: 1,
           sampleRate: 48000,
@@ -129,12 +129,12 @@ export class AudioDeviceManager {
       logger.debug(`Returning ${result.length} input devices: ${result.map((d: AudioDevice) => d.name).join(', ')}`);
       return result;
     } catch (error) {
-      console.error('[AudioDeviceManager] Failed to get input devices:', error);
+      logger.error('Failed to get input devices', error);
 
       return [
         {
           id: 'input-fallback',
-          name: '默认输入设备 (后备)',
+          name: 'Default input device (fallback)',
           isDefault: true,
           channels: 1,
           sampleRate: 48000,
@@ -171,7 +171,7 @@ export class AudioDeviceManager {
         logger.debug('No output devices found, adding generic default output device');
         result.push({
           id: 'output-default',
-          name: '默认音频输出设备',
+          name: 'Default audio output device',
           isDefault: true,
           channels: 2,
           sampleRate: 48000,
@@ -196,12 +196,12 @@ export class AudioDeviceManager {
       logger.debug(`Returning ${result.length} output devices: ${result.map((d: AudioDevice) => d.name).join(', ')}`);
       return result;
     } catch (error) {
-      console.error('[AudioDeviceManager] Failed to get output devices:', error);
+      logger.error('Failed to get output devices', error);
 
       return [
         {
           id: 'output-fallback',
-          name: '默认输出设备 (后备)',
+          name: 'Default output device (fallback)',
           isDefault: true,
           channels: 2,
           sampleRate: 48000,
@@ -247,7 +247,7 @@ export class AudioDeviceManager {
       const inputDevices = await this.getInputDevices();
       return inputDevices.find(device => device.name === deviceName) || null;
     } catch (error) {
-      console.error('[AudioDeviceManager] Failed to find input device by name:', error);
+      logger.error('Failed to find input device by name', error);
       return null;
     }
   }
@@ -260,7 +260,7 @@ export class AudioDeviceManager {
       const outputDevices = await this.getOutputDevices();
       return outputDevices.find(device => device.name === deviceName) || null;
     } catch (error) {
-      console.error('[AudioDeviceManager] Failed to find output device by name:', error);
+      logger.error('Failed to find output device by name', error);
       return null;
     }
   }
@@ -274,7 +274,7 @@ export class AudioDeviceManager {
       const defaultDevice = inputDevices.find(device => device.isDefault);
       return defaultDevice || inputDevices[0] || null;
     } catch (error) {
-      console.error('[AudioDeviceManager] Failed to get default input device:', error);
+      logger.error('Failed to get default input device', error);
       return null;
     }
   }
@@ -288,7 +288,7 @@ export class AudioDeviceManager {
       const defaultDevice = outputDevices.find(device => device.isDefault);
       return defaultDevice || outputDevices[0] || null;
     } catch (error) {
-      console.error('[AudioDeviceManager] Failed to get default output device:', error);
+      logger.error('Failed to get default output device', error);
       return null;
     }
   }
@@ -347,7 +347,7 @@ export class AudioDeviceManager {
       logger.debug(`Validate device ${deviceId}: ${exists ? 'found' : 'not found'}`);
       return exists;
     } catch (error) {
-      console.error(`[AudioDeviceManager] Failed to validate device ${deviceId}:`, error);
+      logger.error(`Failed to validate device ${deviceId}`, error);
       return false;
     }
   }

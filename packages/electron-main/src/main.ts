@@ -247,17 +247,17 @@ async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Pr
  */
 function buildContextMenu(includQuit: boolean): Menu {
   const template: Parameters<typeof Menu.buildFromTemplate>[0] = [
-    { label: '打开主窗口', click: () => showMainWindow() },
-    { label: '日志查看器', click: () => openLogInTerminal() },
+    { label: 'Open Main Window', click: () => showMainWindow() },
+    { label: 'Log Viewer', click: () => openLogInTerminal() },
     { type: 'separator' },
-    { label: '在浏览器中打开', click: () => openInBrowser() },
+    { label: 'Open in Browser', click: () => openInBrowser() },
   ];
 
   if (includQuit) {
     template.push(
       { type: 'separator' },
       {
-        label: '退出',
+        label: 'Quit',
         click: () => {
           void cleanupAndQuit();
         },
@@ -284,7 +284,7 @@ function createTray() {
         : path.join(__dirname, '..', 'assets', 'icon.png'));
 
   trayInstance = new Tray(iconPath);
-  trayInstance.setToolTip('TX-5DR 数字电台');
+  trayInstance.setToolTip('TX-5DR Digital Radio');
   trayInstance.setContextMenu(buildContextMenu(true));
 
   // 双击托盘图标打开主窗口（Windows 惯例）
@@ -474,10 +474,10 @@ function openLogInTerminal() {
       const script = path.join(app.getPath('temp'), 'tx5dr-tail.sh');
       fs.writeFileSync(script, [
         '#!/bin/bash',
-        `echo "TX-5DR 日志查看器"`,
-        `echo "日志目录: ${logDir}"`,
-        `echo "监控文件: ${logFiles.map(f => path.basename(f)).join(', ')}"`,
-        `echo "按 Ctrl+C 退出"`,
+        `echo "TX-5DR Log Viewer"`,
+        `echo "Log directory: ${logDir}"`,
+        `echo "Monitoring files: ${logFiles.map(f => path.basename(f)).join(', ')}"`,
+        `echo "Press Ctrl+C to exit"`,
         `echo ""`,
         `tail -f ${tailTarget}`,
       ].join('\n'), { mode: 0o755 });
@@ -486,7 +486,7 @@ function openLogInTerminal() {
       // Windows: PowerShell 的 Get-Content 支持多文件
       const psFiles = logFiles.map(f => `'${f}'`).join(', ');
       spawn('cmd', ['/c', 'start', 'cmd', '/k',
-        `title TX-5DR 日志查看器 && powershell -Command "Get-Content ${psFiles} -Wait -Tail 50"`
+        `title TX-5DR Log Viewer && powershell -Command "Get-Content ${psFiles} -Wait -Tail 50"`
       ], { shell: true });
     } else {
       const tailCmd = `tail -f ${tailTarget}`;
@@ -503,12 +503,12 @@ function openLogInTerminal() {
         spawn(found.bin, found.args, { detached: true, stdio: 'ignore' });
       } else {
         logger.warn('no terminal emulator found');
-        dialog.showErrorBox('TX-5DR', `未找到终端模拟器\n\n日志目录: ${logDir}`);
+        dialog.showErrorBox('TX-5DR', `No terminal emulator found\n\nLog directory: ${logDir}`);
       }
     }
   } catch (err) {
     logger.error('failed to open terminal', err);
-    dialog.showErrorBox('TX-5DR', `打开终端失败\n\n日志目录: ${logDir}`);
+    dialog.showErrorBox('TX-5DR', `Failed to open terminal\n\nLog directory: ${logDir}`);
   }
 }
 
@@ -759,6 +759,11 @@ const startApp = async () => {
   const logsDir = getAppLogsDir();
   fs.mkdirSync(logsDir, { recursive: true });
   log.transports.file.resolvePathFn = () => path.join(logsDir, 'electron-main.log');
+  // Limit file log level in production; dev keeps default (silly = all levels)
+  if (app.isPackaged) {
+    log.transports.file.level = 'warn';
+    log.transports.console.level = 'warn';
+  }
   log.initialize();
   Object.assign(console, log.functions);
   log.errorHandler.startCatching();

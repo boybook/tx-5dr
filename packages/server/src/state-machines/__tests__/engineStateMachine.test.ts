@@ -1,5 +1,5 @@
 /**
- * engineStateMachine 单元测试
+ * engineStateMachine unit tests
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -15,7 +15,7 @@ describe('engineStateMachine', () => {
   let mockInput: EngineInput;
 
   beforeEach(() => {
-    // 创建mock input
+    // Create mock input
     mockInput = {
       onStart: vi.fn().mockResolvedValue(undefined),
       onStop: vi.fn().mockResolvedValue(undefined),
@@ -28,8 +28,8 @@ describe('engineStateMachine', () => {
     vi.clearAllMocks();
   });
 
-  describe('初始状态', () => {
-    it('初始状态应为 idle', () => {
+  describe('Initial state', () => {
+    it('initial state should be idle', () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
@@ -39,7 +39,7 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('初始上下文应包含空的 startedResources', () => {
+    it('initial context should contain empty startedResources', () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
@@ -51,20 +51,20 @@ describe('engineStateMachine', () => {
     });
   });
 
-  describe('启动流程', () => {
-    it('启动成功：idle → starting → running', async () => {
+  describe('Startup flow', () => {
+    it('successful start: idle → starting → running', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
-      // 发送 START 事件
+      // Send START event
       actor.send({ type: 'START' });
 
-      // 等待 onStart 被调用
+      // Wait for onStart to be called
       await vi.waitFor(() => {
         expect(mockInput.onStart).toHaveBeenCalledOnce();
       });
 
-      // 等待转换到 running 状态
+      // Wait for transition to running state
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
       expect(isEngineState(actor, EngineState.RUNNING)).toBe(true);
@@ -72,8 +72,8 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('启动失败：idle → starting → idle', async () => {
-      const testError = new Error('启动失败');
+    it('start failure: idle → starting → idle', async () => {
+      const testError = new Error('start failed');
       mockInput.onStart = vi.fn().mockRejectedValue(testError);
 
       const actor = createEngineActor(mockInput);
@@ -81,25 +81,25 @@ describe('engineStateMachine', () => {
 
       actor.send({ type: 'START' });
 
-      // 等待回到 idle 状态（不再进入 error）
+      // Wait for return to idle state (no longer enters error)
       await waitForEngineState(actor, EngineState.IDLE, 1000);
 
       expect(isEngineState(actor, EngineState.IDLE)).toBe(true);
       expect(mockInput.onError).toHaveBeenCalledWith(testError);
 
-      // context.error 保留（在 IDLE 中不清除，下次 START 时清除）
+      // context.error is preserved (not cleared in IDLE, cleared on next START)
       const context = getEngineContext(actor);
       expect(context.error).toBeDefined();
 
       actor.stop();
     });
 
-    it('启动失败后可以直接重新启动', async () => {
+    it('should allow restart after start failure', async () => {
       let failOnce = true;
       mockInput.onStart = vi.fn().mockImplementation(() => {
         if (failOnce) {
           failOnce = false;
-          return Promise.reject(new Error('首次失败'));
+          return Promise.reject(new Error('first attempt failed'));
         }
         return Promise.resolve();
       });
@@ -107,23 +107,23 @@ describe('engineStateMachine', () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
-      // 首次启动失败 → 回到 idle
+      // First start fails → return to idle
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.IDLE, 1000);
 
-      // 直接重新启动（不需要 RESET）
+      // Restart directly (no RESET needed)
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
       expect(isEngineState(actor, EngineState.RUNNING)).toBe(true);
-      // 重新启动时 error 应被清除
+      // error should be cleared on restart
       const context = getEngineContext(actor);
       expect(context.error).toBeUndefined();
 
       actor.stop();
     });
 
-    it('启动时应记录 startTimestamp', async () => {
+    it('should record startTimestamp on start', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
@@ -139,16 +139,16 @@ describe('engineStateMachine', () => {
     });
   });
 
-  describe('停止流程', () => {
-    it('停止成功：running → stopping → idle', async () => {
+  describe('Stop flow', () => {
+    it('successful stop: running → stopping → idle', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
-      // 先启动
+      // Start first
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
-      // 再停止
+      // Then stop
       actor.send({ type: 'STOP' });
       await waitForEngineState(actor, EngineState.IDLE, 1000);
 
@@ -158,40 +158,40 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('停止失败：running → stopping → idle', async () => {
-      const testError = new Error('停止失败');
+    it('stop failure: running → stopping → idle', async () => {
+      const testError = new Error('stop failed');
       mockInput.onStop = vi.fn().mockRejectedValue(testError);
 
       const actor = createEngineActor(mockInput);
       actor.start();
 
-      // 先启动
+      // Start first
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
-      // 再停止（失败，但仍回到 idle）
+      // Then stop (fails, but still returns to idle)
       actor.send({ type: 'STOP' });
       await waitForEngineState(actor, EngineState.IDLE, 1000);
 
       expect(isEngineState(actor, EngineState.IDLE)).toBe(true);
       expect(mockInput.onError).toHaveBeenCalledWith(testError);
 
-      // context.error 保留
+      // context.error is preserved
       const context = getEngineContext(actor);
       expect(context.error).toBeDefined();
 
       actor.stop();
     });
 
-    it('停止时应记录 stopTimestamp', async () => {
+    it('should record stopTimestamp on stop', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
-      // 先启动
+      // Start first
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
-      // 再停止
+      // Then stop
       actor.send({ type: 'STOP' });
       await waitForEngineState(actor, EngineState.IDLE, 1000);
 
@@ -203,17 +203,17 @@ describe('engineStateMachine', () => {
     });
   });
 
-  describe('强制停止', () => {
-    it('FORCE_STOP 事件应触发停止', async () => {
+  describe('Force stop', () => {
+    it('FORCE_STOP event should trigger stop', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
-      // 先启动
+      // Start first
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
-      // 强制停止
-      actor.send({ type: 'FORCE_STOP', reason: '测试强制停止' });
+      // Force stop
+      actor.send({ type: 'FORCE_STOP', reason: 'test force stop' });
       await waitForEngineState(actor, EngineState.IDLE, 1000);
 
       const context = getEngineContext(actor);
@@ -222,16 +222,16 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('RADIO_DISCONNECTED 事件应触发停止', async () => {
+    it('RADIO_DISCONNECTED event should trigger stop', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
-      // 先启动
+      // Start first
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
-      // 电台断开
-      actor.send({ type: 'RADIO_DISCONNECTED', reason: '电台连接丢失' });
+      // Radio disconnected
+      actor.send({ type: 'RADIO_DISCONNECTED', reason: 'radio connection lost' });
       await waitForEngineState(actor, EngineState.IDLE, 1000);
 
       const context = getEngineContext(actor);
@@ -240,8 +240,8 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('启动中也可以被强制停止', async () => {
-      // 模拟慢启动
+    it('should allow force stop during startup', async () => {
+      // Simulate slow startup
       mockInput.onStart = vi.fn().mockImplementation(
         () => new Promise((resolve) => setTimeout(resolve, 500))
       );
@@ -251,23 +251,23 @@ describe('engineStateMachine', () => {
 
       actor.send({ type: 'START' });
 
-      // 等待进入 starting 状态
+      // Wait for entry into starting state
       await vi.waitFor(() => {
         expect(isEngineState(actor, EngineState.STARTING)).toBe(true);
       });
 
-      // 在启动中强制停止
-      actor.send({ type: 'FORCE_STOP', reason: '用户取消启动' });
+      // Force stop during startup
+      actor.send({ type: 'FORCE_STOP', reason: 'user cancelled startup' });
 
-      // 应该转到 stopping 状态
+      // Should transition to stopping state
       await waitForEngineState(actor, EngineState.STOPPING, 1000);
 
       actor.stop();
     });
   });
 
-  describe('状态变化回调', () => {
-    it('每次状态变化都应调用 onStateChange', async () => {
+  describe('State change callback', () => {
+    it('should call onStateChange on every state change', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
@@ -275,16 +275,16 @@ describe('engineStateMachine', () => {
       actor.send({ type: 'START' });
       await waitForEngineState(actor, EngineState.RUNNING, 1000);
 
-      // 验证状态变化回调被调用
-      // idle (初始进入) + starting (entry) + running (entry) = 至少3次
+      // Verify state change callback was called
+      // idle (initial entry) + starting (entry) + running (entry) = at least 3 times
       expect(mockInput.onStateChange).toHaveBeenCalled();
 
       actor.stop();
     });
   });
 
-  describe('工具函数', () => {
-    it('isEngineState 支持单个状态', () => {
+  describe('Utility functions', () => {
+    it('isEngineState should support single state', () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
@@ -294,7 +294,7 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('isEngineState 支持多个状态', () => {
+    it('isEngineState should support multiple states', () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
@@ -308,7 +308,7 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('getEngineContext 返回当前上下文', () => {
+    it('getEngineContext should return current context', () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
@@ -319,13 +319,13 @@ describe('engineStateMachine', () => {
       actor.stop();
     });
 
-    it('waitForEngineState 超时应抛出错误', async () => {
+    it('waitForEngineState should throw on timeout', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();
 
       await expect(
         waitForEngineState(actor, EngineState.RUNNING, 100)
-      ).rejects.toThrow('等待状态 running 超时');
+      ).rejects.toThrow('Waiting for state running timed out');
 
       actor.stop();
     });

@@ -56,7 +56,7 @@ export class SlotPackPersistence {
     
     // 异步处理写入队列
     this.processWriteQueue().catch(error => {
-      console.error('[SlotPackPersistence] Failed to process write queue:', error);
+      logger.error('process write queue failed', error);
     });
   }
 
@@ -78,7 +78,7 @@ export class SlotPackPersistence {
         }
       }
     } catch (error) {
-      console.error('[SlotPackPersistence] Batch write failed:', error);
+      logger.error('batch write failed', error);
     } finally {
       this.isWriting = false;
     }
@@ -93,7 +93,7 @@ export class SlotPackPersistence {
       await this.ensureFileHandle(record.storedAt);
       
       if (!this.currentFileHandle) {
-        throw new Error('无法获取文件句柄');
+        throw new Error('cannot get file handle');
       }
 
       // 转换为JSON Lines格式（每行一个JSON对象）
@@ -109,7 +109,7 @@ export class SlotPackPersistence {
       logger.info(`Saved: ${record.slotPack.slotId} (${record.operation}, ${record.slotPack.frames.length} frames, ${dataSizeKB}KB)`);
 
     } catch (error) {
-      console.error(`[SlotPackPersistence] Write failed (attempt ${retryCount + 1}/${this.maxRetries}):`, error);
+      logger.error(`write failed (attempt ${retryCount + 1}/${this.maxRetries})`, error);
       
       // 关闭可能有问题的文件句柄
       await this.closeCurrentFile();
@@ -119,7 +119,7 @@ export class SlotPackPersistence {
         await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // 指数退避
         await this.writeRecord(record, retryCount + 1);
       } else {
-        console.error('[SlotPackPersistence] Max retries reached, dropping data:', record.slotPack.slotId);
+        logger.error('max retries reached, dropping data', { slotId: record.slotPack.slotId });
       }
     }
   }
@@ -153,7 +153,7 @@ export class SlotPackPersistence {
       logger.info(`Opened storage file: ${filePath}`);
 
     } catch (error) {
-      console.error('[SlotPackPersistence] Cannot open file:', error);
+      logger.error('cannot open file', error);
       throw error;
     }
   }
@@ -167,7 +167,7 @@ export class SlotPackPersistence {
         await this.currentFileHandle.close();
         logger.info(`Closed file: ${this.currentDateStr}`);
       } catch (error) {
-        console.error('[SlotPackPersistence] Failed to close file:', error);
+        logger.error('close file failed', error);
       } finally {
         this.currentFileHandle = null;
         this.currentDateStr = null;
@@ -207,7 +207,7 @@ export class SlotPackPersistence {
       try {
         currentFilePath = await this.getFilePath(this.currentDateStr);
       } catch (error) {
-        console.error('[SlotPackPersistence] Failed to get current file path:', error);
+        logger.error('get current file path failed', error);
       }
     }
     
@@ -228,7 +228,7 @@ export class SlotPackPersistence {
         await this.currentFileHandle.sync();
         logger.info('Forced flush complete');
       } catch (error) {
-        console.error('[SlotPackPersistence] Forced flush failed:', error);
+        logger.error('forced flush failed', error);
       }
     }
     
@@ -284,7 +284,7 @@ export class SlotPackPersistence {
         logger.info(`No file found for date ${dateStr}`);
         return [];
       }
-      console.error('[SlotPackPersistence] Failed to read records:', error);
+      logger.error('read records failed', error);
       throw error;
     }
   }
@@ -312,7 +312,7 @@ export class SlotPackPersistence {
         throw error;
       }
     } catch (error) {
-      console.error('[SlotPackPersistence] Failed to get available dates:', error);
+      logger.error('get available dates failed', error);
       return [];
     }
   }

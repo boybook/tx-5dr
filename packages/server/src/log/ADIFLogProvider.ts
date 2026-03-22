@@ -240,14 +240,14 @@ export class ADIFLogProvider implements ILogProvider {
             this.qsoCache.set(qso.id, qso);
             logger.debug(`Loaded QSO: ${qso.id} - ${qso.callsign}`);
           } catch (err) {
-            console.error('[ADIFLogProvider] Failed to load record:', err, record);
+            logger.error('Failed to load record', { err, record });
           }
         }
       }
       
       logger.debug(`Cache loaded: ${this.qsoCache.size} records`);
     } catch (error) {
-      console.error('[ADIFLogProvider] Failed to load ADIF log cache:', error);
+      logger.error('Failed to load ADIF log cache', error);
     }
   }
 

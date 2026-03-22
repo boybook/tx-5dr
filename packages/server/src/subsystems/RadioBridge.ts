@@ -160,7 +160,7 @@ export class RadioBridge {
           pipeline.forceStopPTT();
         }
         if (lifecycle.getIsRunning()) {
-          lifecycle.sendRadioDisconnected('电台断连，自动重连中');
+          lifecycle.sendRadioDisconnected('Radio disconnected, auto-reconnecting');
         }
       }
 
@@ -170,7 +170,7 @@ export class RadioBridge {
         status: RadioConnectionStatus.RECONNECTING,
         radioInfo: null,
         radioConfig: radioManager.getConfig(),
-        message: `正在重新连接电台... (${attempt}/${maxAttempts})`,
+        message: `Reconnecting to radio... (${attempt}/${maxAttempts})`,
         reconnectProgress: { attempt, maxAttempts, nextRetryMs: delayMs },
         connectionHealth: radioManager.getConnectionHealth(),
       });
@@ -200,17 +200,17 @@ export class RadioBridge {
 
         await pipeline.forceStopPTT();
 
-        lifecycle.sendRadioDisconnected(reason || '电台在发射过程中断开连接');
+        lifecycle.sendRadioDisconnected(reason || 'Radio disconnected during transmission');
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         engineEmitter.emit('radioDisconnectedDuringTransmission', {
-          reason: reason || '电台在发射过程中断开连接',
-          message: '电台在发射过程中断开连接，可能是发射功率过大导致USB通讯受到干扰。系统已自动停止发射和监听。',
-          recommendation: '请检查电台设置，降低发射功率或改善通讯环境，然后重新连接电台。'
+          reason: reason || 'Radio disconnected during transmission',
+          message: 'Radio disconnected during transmission, possibly due to high TX power causing USB interference. Transmission and monitoring have been stopped automatically.',
+          recommendation: 'Check radio settings, reduce TX power or improve connection environment, then reconnect the radio.'
         });
       } else if (lifecycle.getIsRunning()) {
         logger.warn('Radio disconnected, stopping engine automatically');
-        lifecycle.sendRadioDisconnected(reason || '电台断开连接');
+        lifecycle.sendRadioDisconnected(reason || 'Radio disconnected');
       }
 
       // 区分：曾在运行中断连（CONNECTION_LOST）vs 正常断开（DISCONNECTED）
@@ -225,7 +225,7 @@ export class RadioBridge {
         radioInfo: null,
         radioConfig: radioManager.getConfig(),
         reason,
-        message: wasReconnecting ? '电台连接丢失' : '电台已断开连接',
+        message: wasReconnecting ? 'Radio connection lost' : 'Radio disconnected',
         recommendation: this.getDisconnectRecommendation(reason),
         connectionHealth: radioManager.getConnectionHealth()
       });
@@ -295,7 +295,7 @@ export class RadioBridge {
             frequency: frequency,
             mode: 'FT8',
             band: 'Custom',
-            description: `自定义 ${(frequency / 1000000).toFixed(3)} MHz`
+            description: `Custom ${(frequency / 1000000).toFixed(3)} MHz`
           };
         }
 
@@ -383,35 +383,35 @@ export class RadioBridge {
    */
   private getDisconnectRecommendation(reason?: string): string {
     if (!reason) {
-      return '请检查电台是否开机，网络连接是否正常，然后尝试重新连接。';
+      return 'Check that the radio is powered on and the network connection is normal, then try reconnecting.';
     }
 
     const reasonLower = reason.toLowerCase();
 
-    if (reasonLower.includes('usb') || reasonLower.includes('通讯') || reasonLower.includes('通信')) {
-      return '可能是USB通讯不稳定。请检查USB线缆连接，尝试更换USB端口或使用更短的USB线。';
+    if (reasonLower.includes('usb') || reasonLower.includes('communication') || reasonLower.includes('serial')) {
+      return 'USB communication may be unstable. Check USB cable connection, try a different USB port or use a shorter cable.';
     }
 
-    if (reasonLower.includes('network') || reasonLower.includes('网络') || reasonLower.includes('timeout') || reasonLower.includes('超时')) {
-      return '可能是网络连接问题。请检查WiFi连接，确认电台和电脑在同一网络，检查防火墙设置。';
+    if (reasonLower.includes('network') || reasonLower.includes('timeout') || reasonLower.includes('timed out')) {
+      return 'Possible network connection issue. Check WiFi, confirm radio and computer are on the same network, check firewall settings.';
     }
 
-    if (reasonLower.includes('disconnect()') || reasonLower.includes('用户') || reasonLower.includes('手动')) {
-      return '连接已按要求断开。如需重新连接，请点击"连接电台"按钮。';
+    if (reasonLower.includes('disconnect()') || reasonLower.includes('manual') || reasonLower.includes('requested')) {
+      return 'Connection disconnected as requested. To reconnect, click the "Connect Radio" button.';
     }
 
-    if (reasonLower.includes('timeout') || reasonLower.includes('超时') || reasonLower.includes('timed out')) {
-      return '连接超时。请检查电台是否开机，网络或串口连接是否正常，然后重试。';
+    if (reasonLower.includes('timed out') || reasonLower.includes('connection timeout')) {
+      return 'Connection timed out. Check that the radio is powered on and network or serial connection is normal, then retry.';
     }
 
-    if (reasonLower.includes('io error') || reasonLower.includes('i/o') || reasonLower.includes('设备')) {
-      return '设备IO错误。请检查电台连接（USB/网络），确认电台开机并工作正常，然后重新连接。';
+    if (reasonLower.includes('io error') || reasonLower.includes('i/o') || reasonLower.includes('device')) {
+      return 'Device IO error. Check radio connection (USB/network), confirm radio is powered on and working, then reconnect.';
     }
 
-    if (reasonLower.includes('功率') || reasonLower.includes('power') || reasonLower.includes('干扰')) {
-      return '可能是发射功率过大导致干扰。请降低发射功率（建议50W以下），改善通讯环境，然后重新连接。';
+    if (reasonLower.includes('power') || reasonLower.includes('interference')) {
+      return 'High TX power may be causing interference. Reduce TX power (50W or below recommended), improve connection environment, then reconnect.';
     }
 
-    return `连接已断开（${reason}）。请检查电台连接和设置，然后尝试重新连接。`;
+    return `Connection disconnected (${reason}). Check radio connection and settings, then try reconnecting.`;
   }
 }

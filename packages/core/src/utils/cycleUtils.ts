@@ -85,7 +85,7 @@ export class CycleUtils {
     } else {
       // 其他模式显示通用周期ID
       const cycleNumber = this.calculateCycleNumber(utcSeconds, mode.slotMs);
-      return `周期${cycleNumber}`;
+      return `Cycle ${cycleNumber}`;
     }
   }
 

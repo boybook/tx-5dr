@@ -110,7 +110,7 @@ export class EngineLifecycle {
         if (radioConfig.type === 'icom-wlan') {
           if (!radioConfig.icomWlan?.ip || !radioConfig.icomWlan?.port) {
             logger.error('ICOM WLAN config incomplete:', radioConfig.icomWlan);
-            throw new Error('ICOM WLAN IP 或端口缺失');
+            throw new Error('ICOM WLAN IP or port missing');
           }
           logger.debug(`ICOM WLAN config validated: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
         }
@@ -119,7 +119,7 @@ export class EngineLifecycle {
       },
       stop: async () => {
         if (radioManager.isConnected()) {
-          await radioManager.disconnect('引擎停止');
+          await radioManager.disconnect('Engine stopped');
         }
       },
       priority: 1,
@@ -227,7 +227,7 @@ export class EngineLifecycle {
       name: 'clock',
       start: async () => {
         if (!slotClock) {
-          throw new Error('时钟未初始化');
+          throw new Error('Clock not initialized');
         }
         slotClock.start();
         logger.debug('Clock started');
@@ -346,7 +346,7 @@ export class EngineLifecycle {
    */
   async start(): Promise<void> {
     if (!this.engineStateMachineActor) {
-      throw new Error('引擎状态机未初始化');
+      throw new Error('Engine state machine not initialized');
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
@@ -370,7 +370,7 @@ export class EngineLifecycle {
    */
   async stop(): Promise<void> {
     if (!this.engineStateMachineActor) {
-      throw new Error('引擎状态机未初始化');
+      throw new Error('Engine state machine not initialized');
     }
 
     if (isEngineState(this.engineStateMachineActor, EngineState.IDLE)) {
@@ -426,7 +426,7 @@ export class EngineLifecycle {
 
   private async doStart(): Promise<void> {
     if (!this.deps.slotClock) {
-      throw new Error('时钟管理器未初始化');
+      throw new Error('Clock manager not initialized');
     }
 
     const mode = this.deps.getCurrentMode();

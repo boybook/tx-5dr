@@ -1,13 +1,13 @@
 /**
- * ErrorBoundary 单元测试
+ * ErrorBoundary unit tests
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { ErrorBoundary } from '../ErrorBoundary.js';
 
 describe('ErrorBoundary', () => {
-  describe('execute - 基本功能', () => {
-    it('成功执行操作', async () => {
+  describe('execute - basic functionality', () => {
+    it('successful execution', async () => {
       const result = await ErrorBoundary.execute(
         {
           operationName: 'test',
@@ -18,7 +18,7 @@ describe('ErrorBoundary', () => {
       expect(result).toBe('success');
     });
 
-    it('执行失败时调用清理函数', async () => {
+    it('calls cleanup function on execution failure', async () => {
       const cleanup = vi.fn();
 
       await expect(
@@ -37,7 +37,7 @@ describe('ErrorBoundary', () => {
       expect(cleanup).toHaveBeenCalledOnce();
     });
 
-    it('使用降级方案', async () => {
+    it('uses fallback value', async () => {
       const result = await ErrorBoundary.execute(
         {
           operationName: 'test',
@@ -52,7 +52,7 @@ describe('ErrorBoundary', () => {
       expect(result).toBe('fallback value');
     });
 
-    it('清理函数失败不影响降级方案', async () => {
+    it('cleanup failure does not affect fallback', async () => {
       const cleanup = vi.fn().mockRejectedValue(new Error('cleanup error'));
 
       const result = await ErrorBoundary.execute(
@@ -72,8 +72,8 @@ describe('ErrorBoundary', () => {
     });
   });
 
-  describe('execute - 重试逻辑', () => {
-    it('重试成功后返回结果', async () => {
+  describe('execute - retry logic', () => {
+    it('returns result after successful retry', async () => {
       let attemptCount = 0;
 
       const result = await ErrorBoundary.execute(
@@ -98,7 +98,7 @@ describe('ErrorBoundary', () => {
       expect(attemptCount).toBe(3);
     });
 
-    it('达到最大重试次数后抛出错误', async () => {
+    it('throws error after reaching max retry attempts', async () => {
       let attemptCount = 0;
 
       await expect(
@@ -121,7 +121,7 @@ describe('ErrorBoundary', () => {
       expect(attemptCount).toBe(3);
     });
 
-    it('shouldRetry 返回 false 时立即停止', async () => {
+    it('stops immediately when shouldRetry returns false', async () => {
       let attemptCount = 0;
 
       await expect(
@@ -145,7 +145,7 @@ describe('ErrorBoundary', () => {
       expect(attemptCount).toBe(1);
     });
 
-    it('指数退避重试延迟', async () => {
+    it('exponential backoff retry delay', async () => {
       const delays: number[] = [];
       let attemptCount = 0;
 
@@ -173,12 +173,12 @@ describe('ErrorBoundary', () => {
       ).rejects.toThrow();
 
       expect(attemptCount).toBe(3);
-      // 第二次尝试延迟应该大于第一次
+      // Second attempt delay should be greater than first
     });
   });
 
-  describe('execute - 错误转换', () => {
-    it('转换错误类型', async () => {
+  describe('execute - error transform', () => {
+    it('transforms error type', async () => {
       class CustomError extends Error {
         constructor(message: string) {
           super(message);
@@ -203,8 +203,8 @@ describe('ErrorBoundary', () => {
     });
   });
 
-  describe('executeSync - 同步版本', () => {
-    it('成功执行同步操作', () => {
+  describe('executeSync - synchronous version', () => {
+    it('successful synchronous execution', () => {
       const result = ErrorBoundary.executeSync(
         {
           operationName: 'test',
@@ -215,7 +215,7 @@ describe('ErrorBoundary', () => {
       expect(result).toBe('success');
     });
 
-    it('同步操作失败时调用清理', () => {
+    it('calls cleanup on synchronous operation failure', () => {
       const cleanup = vi.fn();
 
       expect(() =>
@@ -234,7 +234,7 @@ describe('ErrorBoundary', () => {
       expect(cleanup).toHaveBeenCalledOnce();
     });
 
-    it('同步操作使用降级方案', () => {
+    it('synchronous operation uses fallback', () => {
       const result = ErrorBoundary.executeSync(
         {
           operationName: 'test',
@@ -250,8 +250,8 @@ describe('ErrorBoundary', () => {
     });
   });
 
-  describe('create - 预配置实例', () => {
-    it('创建预配置实例', async () => {
+  describe('create - pre-configured instance', () => {
+    it('creates pre-configured instance', async () => {
       const cleanup = vi.fn();
       const boundary = ErrorBoundary.create({
         cleanup,

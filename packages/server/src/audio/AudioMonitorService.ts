@@ -111,7 +111,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       // 执行推送
       await this.pushAudioChunk();
     } catch (error) {
-      console.error('[AudioMonitorService] Check and push failed:', error);
+      logger.error('Check and push failed', error);
     }
   }
 
@@ -181,7 +181,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       this.lastPushStartTime = t0;
       this.lastPushTimestamp = now;
     } catch (error) {
-      console.error('[AudioMonitorService] Push audio failed:', error);
+      logger.error('Push audio failed', error);
     }
   }
 

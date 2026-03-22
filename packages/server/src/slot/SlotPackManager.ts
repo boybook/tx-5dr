@@ -93,7 +93,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       // 异步存储到本地（不阻塞主流程）
       if (this.persistenceEnabled) {
         this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
-          console.error('[SlotPackManager] Failed to store transmission frame:', error);
+          logger.error('store transmission frame failed', error);
         });
       }
 
@@ -101,7 +101,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       this.emit('slotPackUpdated', { ...slotPack });
 
     } catch (error) {
-      console.error('[SlotPackManager] Failed to add transmission frame:', error);
+      logger.error('add transmission frame failed', error);
     }
   }
   
@@ -134,7 +134,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       // 异步存储新创建的SlotPack（不阻塞主流程）
       if (this.persistenceEnabled) {
         this.persistence.store(slotPack, 'created', this.currentMode.name).catch(error => {
-          console.error('[SlotPackManager] Failed to store new SlotPack:', error);
+          logger.error('store SlotPack failed', error);
         });
       }
     }
@@ -185,13 +185,13 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     // 异步存储到本地（不阻塞主流程）
     if (this.persistenceEnabled) {
       this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
-        console.error('[SlotPackManager] Failed to store SlotPack update:', error);
+        logger.error('store SlotPack update failed', error);
       });
     }
 
     // 发出更新事件
     this.emit('slotPackUpdated', { ...slotPack });
-    
+
     return { ...slotPack };
   }
   
@@ -765,7 +765,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       await this.persistence.flush();
       logger.info('Persistence buffer flushed');
     } catch (error) {
-      console.error('[SlotPackManager] Failed to flush persistence buffer:', error);
+      logger.error('flush persistence buffer failed', error);
     }
 
     // 清理持久化资源
@@ -773,7 +773,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       await this.persistence.cleanup();
       logger.info('Persistence resources cleaned up');
     } catch (error) {
-      console.error('[SlotPackManager] Failed to clean up persistence resources:', error);
+      logger.error('clean up persistence resources failed', error);
     }
     
     this.slotPacks.clear();

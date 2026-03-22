@@ -64,7 +64,7 @@ export class QRZService {
    */
   async testConnection(): Promise<QRZTestConnectionResponse> {
     if (!this.config.apiKey) {
-      throw new Error('QRZ API密钥不能为空');
+      throw new Error('QRZ API key cannot be empty');
     }
 
     try {
@@ -93,7 +93,7 @@ export class QRZService {
       }
 
       if (!response.ok) {
-        throw new Error(`HTTP错误 ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
       }
 
       const responseText = await response.text();
@@ -104,25 +104,25 @@ export class QRZService {
       if (parsed.RESULT === 'OK') {
         return {
           success: true,
-          message: '连接成功',
+          message: 'Connection successful',
           callsign: parsed.CALLSIGN,
           logbookCount: parsed.COUNT ? parseInt(parsed.COUNT, 10) : undefined,
         };
       } else if (parsed.RESULT === 'AUTH' || parsed.RESULT === 'FAIL') {
         return {
           success: false,
-          message: parsed.REASON || 'API密钥无效或请求失败',
+          message: parsed.REASON || 'Invalid API key or request failed',
         };
       } else {
         return {
           success: false,
-          message: `未知响应: ${responseText}`,
+          message: `Unknown response: ${responseText}`,
         };
       }
     } catch (error) {
       logger.error('Connection test failed:', error);
-      if (error instanceof Error && error.message.startsWith('连接')) {
-        // 已经是 handleNetworkError 处理过的错误
+      if (error instanceof Error && error.message.startsWith('Connection')) {
+        // Already handled by handleNetworkError
         return {
           success: false,
           message: error.message,
@@ -130,7 +130,7 @@ export class QRZService {
       }
       return {
         success: false,
-        message: error instanceof Error ? error.message : '连接失败',
+        message: error instanceof Error ? error.message : 'Connection failed',
       };
     }
   }
@@ -179,20 +179,20 @@ export class QRZService {
         return {
           success: true,
           logId: parsed.LOGID || parsed.LOGIDS || '',
-          message: '上传成功',
+          message: 'Upload successful',
         };
       } else if (parsed.RESULT === 'REPLACE') {
         // QRZ 返回 REPLACE 表示替换了已有记录
         return {
           success: true,
           logId: parsed.LOGID || parsed.LOGIDS || '',
-          message: '已替换现有记录',
+          message: 'Existing record replaced',
         };
       } else {
         return {
           success: false,
           logId: '',
-          message: parsed.REASON || `上传失败: ${responseText}`,
+          message: parsed.REASON || `Upload failed: ${responseText}`,
         };
       }
     } catch (error) {
@@ -220,13 +220,13 @@ export class QRZService {
         }
       } catch (error) {
         errorCount++;
-        errors.push(`${qso.callsign}: ${error instanceof Error ? error.message : '未知错误'}`);
+        errors.push(`${qso.callsign}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
 
     return {
       success: errorCount === 0,
-      message: `上传完成: 成功${uploadedCount}条, 失败${errorCount}条`,
+      message: `Upload complete: ${uploadedCount} succeeded, ${errorCount} failed`,
       uploadedCount,
       downloadedCount: 0,
       skippedCount: 0,
@@ -270,7 +270,7 @@ export class QRZService {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP错误 ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
       }
 
       const responseText = await response.text();
@@ -291,9 +291,9 @@ export class QRZService {
 
         return qsoRecords;
       } else if (parsed.RESULT === 'FAIL' || parsed.RESULT === 'AUTH') {
-        throw new Error(parsed.REASON || 'QRZ API请求失败');
+        throw new Error(parsed.REASON || 'QRZ API request failed');
       } else {
-        throw new Error(`未知QRZ响应: ${responseText}`);
+        throw new Error(`Unknown QRZ response: ${responseText}`);
       }
     } catch (error) {
       logger.error('Failed to download QSO records:', error);
@@ -313,40 +313,40 @@ export class QRZService {
     });
 
     if (error instanceof Error && (
-      error.message.startsWith('连接') ||
-      error.message.startsWith('网络') ||
-      error.message.startsWith('域名') ||
-      error.message.startsWith('QRZ连接失败')
+      error.message.startsWith('Connection') ||
+      error.message.startsWith('Network') ||
+      error.message.startsWith('DNS') ||
+      error.message.startsWith('QRZ connection failed')
     )) {
       return error;
     }
 
     if (error.name === 'AbortError' || error.code === 'ABORT_ERR') {
-      return new Error(`连接超时: QRZ服务器响应时间过长，请检查网络连接`);
+      return new Error(`Connection timeout: QRZ server response too slow, check network connection`);
     }
 
     if (error.code === 'UND_ERR_SOCKET') {
       if (error.cause?.message?.includes('ECONNREFUSED')) {
-        return new Error(`连接被拒绝: 无法连接到QRZ服务器 ${url}`);
+        return new Error(`Connection refused: cannot connect to QRZ server ${url}`);
       }
       if (error.cause?.message?.includes('ENOTFOUND')) {
-        return new Error(`域名解析失败: 找不到QRZ服务器 ${url}，请检查网络连接`);
+        return new Error(`DNS resolution failed: QRZ server ${url} not found, check network connection`);
       }
       if (error.cause?.message?.includes('other side closed')) {
-        return new Error(`连接被服务器关闭: QRZ服务器意外关闭了连接`);
+        return new Error(`Connection closed by server: QRZ server unexpectedly closed the connection`);
       }
-      return new Error(`网络连接错误: ${error.cause?.message || error.message}，请检查网络连接`);
+      return new Error(`Network connection error: ${error.cause?.message || error.message}, check network connection`);
     }
 
     if (error.code === 'UND_ERR_CONNECT_TIMEOUT') {
-      return new Error(`连接超时: 无法在规定时间内连接到QRZ服务器，请检查网络延迟`);
+      return new Error(`Connection timeout: unable to connect to QRZ server within time limit`);
     }
 
     if (error.message?.includes('fetch failed')) {
-      return new Error(`网络请求失败: 无法连接到QRZ服务器，请检查网络连接和防火墙设置`);
+      return new Error(`Network request failed: cannot connect to QRZ server, check network connection and firewall`);
     }
 
-    return new Error(`QRZ连接失败: ${error.message || '未知网络错误'}`);
+    return new Error(`QRZ connection failed: ${error.message || 'Unknown network error'}`);
   }
 }
 

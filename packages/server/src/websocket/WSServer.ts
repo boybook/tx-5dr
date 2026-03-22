@@ -183,7 +183,7 @@ export class WSConnection extends WSMessageHandler {
     this.authenticated = false;
     this.userRole = UserRole.VIEWER;
     this.authorizedOperatorIds = new Set(); // 公开观察者无操作员权限
-    this.authLabel = '公开观察者';
+    this.authLabel = 'public viewer';
     logger.info(`connection ${this.id} set as public viewer`);
   }
 
@@ -194,7 +194,7 @@ export class WSConnection extends WSMessageHandler {
     this.authenticated = true;
     this.userRole = UserRole.ADMIN;
     this.authorizedOperatorIds = new Set();
-    this.authLabel = '本地管理员';
+    this.authLabel = 'local admin';
   }
 
   isAuthenticated(): boolean { return this.authenticated; }
@@ -339,8 +339,8 @@ export class WSServer extends WSMessageHandler {
     // 监听时序告警事件（由核心/操作员侧在判定"赶不上发射"时发出）
     this.digitalRadioEngine.on('timingWarning' as any, (data: any) => {
       try {
-        const title = data?.title || '⚠️ 时序告警';
-        const text = data?.text || '操作员自动决策可能赶不上此发射时隙的编码';
+        const title = data?.title || 'Timing Warning';
+        const text = data?.text || 'Operator auto-decision may not complete encoding in time for this transmission slot';
         this.broadcastTextMessage(title, text, undefined, undefined, 'timingAlert');
       } catch {}
     });
@@ -416,7 +416,7 @@ export class WSServer extends WSMessageHandler {
         const qso = data.qsoRecord;
         const mhz = (qso.frequency / 1_000_000).toFixed(3);
         const gridPart = qso.grid ? ` ${qso.grid}` : '';
-        const title = 'QSO已记录';
+        const title = 'QSO Logged';
         const text = `${qso.callsign}${gridPart} • ${mhz} MHz • ${qso.mode}`;
         this.broadcastOperatorTextMessage(data.operatorId, title, text, 'success', 3000, 'qsoLogged');
       } catch (e) {
@@ -437,8 +437,8 @@ export class WSServer extends WSMessageHandler {
       // 仅连接成功时推送 Toast（断开/失败由前端 RadioControl Alert 展示）
       if (data.connected) {
         this.broadcastTextMessage(
-          '电台已连接',
-          data.reason || '电台连接成功',
+          'Radio Connected',
+          data.reason || 'Radio connection successful',
           'success',
           3000,
           'radioConnected'
@@ -729,7 +729,7 @@ export class WSServer extends WSMessageHandler {
       const { operatorId, command, args } = data;
       const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
       if (!operator) {
-        throw new Error(`操作员 ${operatorId} 不存在`);
+        throw new Error(`Operator ${operatorId} does not exist`);
       }
 
       // 如果是update_context命令，先持久化到配置文件（此时内存还未更新，可以检测到变化）
@@ -783,7 +783,7 @@ export class WSServer extends WSMessageHandler {
       const { operatorId, callsign } = data;
       const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
       if (!operator) {
-        throw new Error(`操作员 ${operatorId} 不存在`);
+        throw new Error(`Operator ${operatorId} does not exist`);
       }
       const lastMessage = this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign);
       operator.requestCall(callsign, lastMessage);
@@ -1342,7 +1342,7 @@ export class WSServer extends WSMessageHandler {
         this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, {
           connected: false,
           status: RadioConnectionStatus.DISCONNECTED,
-          reason: '手动重连失败',
+          reason: 'manual reconnect failed',
           radioInfo: null,
           radioConfig: radioManager.getConfig(),
           connectionHealth
@@ -1441,7 +1441,7 @@ export class WSServer extends WSMessageHandler {
       const { enabledOperatorIds } = data;
       const connection = this.getConnection(connectionId);
       if (!connection) {
-        throw new Error(`连接 ${connectionId} 不存在`);
+        throw new Error(`Connection ${connectionId} does not exist`);
       }
 
       // 处理客户端发送的操作员偏好设置
@@ -1574,7 +1574,7 @@ export class WSServer extends WSMessageHandler {
 
       logger.info(`connection ${connectionId} authenticated: ${label} (${perms.role})`);
     } catch (error) {
-      console.error(`JWT verification failed for connection ${connectionId}:`, error);
+      logger.error('JWT verification failed', { connectionId, error });
       connection.send(WSMessageType.AUTH_RESULT, { success: false, error: 'jwt_invalid_or_expired' });
     }
   }
@@ -1597,7 +1597,7 @@ export class WSServer extends WSMessageHandler {
     connection.send(WSMessageType.AUTH_RESULT, {
       success: true,
       role: UserRole.VIEWER,
-      label: '公开观察者',
+      label: 'public viewer',
       operatorIds: [],
     });
 

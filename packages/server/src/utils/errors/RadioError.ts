@@ -169,14 +169,14 @@ export class RadioError extends Error {
   static connectionFailed(message: string, cause?: unknown): RadioError {
     return new RadioError({
       code: RadioErrorCode.CONNECTION_FAILED,
-      message: `连接失败: ${message}`,
-      userMessage: '无法连接到电台',
+      message: `Connection failed: ${message}`,
+      userMessage: 'Unable to connect to radio',
       severity: RadioErrorSeverity.ERROR,
       suggestions: [
-        '检查电台是否开机',
-        '检查网络连接',
-        '检查配置是否正确',
-        '尝试重启电台',
+        'Check if the radio is powered on',
+        'Check network connection',
+        'Check if configuration is correct',
+        'Try restarting the radio',
       ],
       cause,
     });
@@ -188,13 +188,13 @@ export class RadioError extends Error {
   static deviceNotFound(deviceName: string): RadioError {
     return new RadioError({
       code: RadioErrorCode.DEVICE_NOT_FOUND,
-      message: `未找到设备: ${deviceName}`,
-      userMessage: `未找到音频设备 "${deviceName}"`,
+      message: `Device not found: ${deviceName}`,
+      userMessage: `Audio device "${deviceName}" not found`,
       severity: RadioErrorSeverity.ERROR,
       suggestions: [
-        '检查设备是否已连接',
-        '刷新设备列表',
-        '选择其他可用设备',
+        'Check if the device is connected',
+        'Refresh the device list',
+        'Select another available device',
       ],
       context: { deviceName },
     });
@@ -210,8 +210,8 @@ export class RadioError extends Error {
   ): RadioError {
     return new RadioError({
       code: RadioErrorCode.INVALID_STATE,
-      message: `无效的状态: 执行 ${operation} 时期望状态为 ${expectedState}，当前状态为 ${currentState}`,
-      userMessage: `当前状态不允许执行此操作`,
+      message: `Invalid state: expected ${expectedState} when executing ${operation}, current state is ${currentState}`,
+      userMessage: `The current state does not allow this operation`,
       severity: RadioErrorSeverity.WARNING,
       context: { operation, currentState, expectedState },
     });
@@ -223,14 +223,14 @@ export class RadioError extends Error {
   static reconnectMaxAttempts(maxAttempts: number): RadioError {
     return new RadioError({
       code: RadioErrorCode.RECONNECT_MAX_ATTEMPTS,
-      message: `重连失败: 已达到最大重试次数 ${maxAttempts}`,
-      userMessage: `无法重新连接到电台 (已尝试 ${maxAttempts} 次)`,
+      message: `Reconnect failed: maximum retry attempts reached (${maxAttempts})`,
+      userMessage: `Unable to reconnect to radio (tried ${maxAttempts} times)`,
       severity: RadioErrorSeverity.CRITICAL,
       suggestions: [
-        '检查电台是否正常工作',
-        '检查网络连接',
-        '尝试手动重启系统',
-        '联系技术支持',
+        'Check if the radio is working normally',
+        'Check network connection',
+        'Try manually restarting the system',
+        'Contact technical support',
       ],
       context: { maxAttempts },
     });
@@ -242,13 +242,13 @@ export class RadioError extends Error {
   static audioDeviceError(message: string, cause?: unknown): RadioError {
     return new RadioError({
       code: RadioErrorCode.AUDIO_DEVICE_ERROR,
-      message: `音频设备错误: ${message}`,
-      userMessage: '音频设备操作失败',
+      message: `Audio device error: ${message}`,
+      userMessage: 'Audio device operation failed',
       severity: RadioErrorSeverity.ERROR,
       suggestions: [
-        '检查音频设备是否可用',
-        '尝试选择其他设备',
-        '重启应用程序',
+        'Check if the audio device is available',
+        'Try selecting another device',
+        'Restart the application',
       ],
       cause,
     });
@@ -260,13 +260,13 @@ export class RadioError extends Error {
   static pttActivationFailed(reason: string, cause?: unknown): RadioError {
     return new RadioError({
       code: RadioErrorCode.PTT_ACTIVATION_FAILED,
-      message: `PTT 激活失败: ${reason}`,
-      userMessage: '无法激活发射（PTT）',
+      message: `PTT activation failed: ${reason}`,
+      userMessage: 'Unable to activate transmission (PTT)',
       severity: RadioErrorSeverity.ERROR,
       suggestions: [
-        '检查电台连接',
-        '确认电台未被其他程序占用',
-        '检查 PTT 配置',
+        'Check radio connection',
+        'Confirm the radio is not occupied by another program',
+        'Check PTT configuration',
       ],
       cause,
     });

@@ -189,7 +189,7 @@ export class AudioMixer extends EventEmitter {
               1 // mono
             );
           } catch (error) {
-            console.error(`[AudioMixer] Operator ${audio.operatorId}: resample failed, using fallback:`, error);
+            logger.error(`Operator ${audio.operatorId}: resample failed, using fallback`, error);
             samples = this.linearResample(samples, audio.sampleRate, targetSampleRate);
           }
         }
@@ -262,7 +262,7 @@ export class AudioMixer extends EventEmitter {
       };
 
     } catch (error) {
-      console.error('[AudioMixer] Mix failed:', error);
+      logger.error('Mix failed', error);
       throw error;
     }
   }

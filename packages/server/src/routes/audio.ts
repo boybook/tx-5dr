@@ -65,10 +65,10 @@ export async function audioRoutes(fastify: FastifyInstance) {
           // 📊 Day14：设备未找到使用 RadioError
           throw new RadioError({
             code: RadioErrorCode.DEVICE_NOT_FOUND,
-            message: `指定的输入设备 "${settings.inputDeviceName}" 不存在`,
-            userMessage: '找不到指定的音频输入设备',
+            message: `Specified input device "${settings.inputDeviceName}" not found`,
+            userMessage: 'Cannot find specified audio input device',
             severity: RadioErrorSeverity.WARNING,
-            suggestions: ['检查设备名称是否正确', '查看可用的音频设备列表', '确保设备已连接'],
+            suggestions: ['Check if device name is correct', 'View list of available audio devices', 'Ensure device is connected'],
           });
         }
       }
@@ -79,10 +79,10 @@ export async function audioRoutes(fastify: FastifyInstance) {
           // 📊 Day14：设备未找到使用 RadioError
           throw new RadioError({
             code: RadioErrorCode.DEVICE_NOT_FOUND,
-            message: `指定的输出设备 "${settings.outputDeviceName}" 不存在`,
-            userMessage: '找不到指定的音频输出设备',
+            message: `Specified output device "${settings.outputDeviceName}" not found`,
+            userMessage: 'Cannot find specified audio output device',
             severity: RadioErrorSeverity.WARNING,
-            suggestions: ['检查设备名称是否正确', '查看可用的音频设备列表', '确保设备已连接'],
+            suggestions: ['Check if device name is correct', 'View list of available audio devices', 'Ensure device is connected'],
           });
         }
       }
@@ -92,17 +92,17 @@ export async function audioRoutes(fastify: FastifyInstance) {
       
       // 如果引擎正在运行，先停止它
       if (wasRunning) {
-        fastify.log.info('音频设置更新：停止解码引擎以应用新配置');
+        fastify.log.info('Audio settings update: stopping engine to apply new config');
         await digitalRadioEngine.stop();
       }
       
       // 更新配置（只存储设备名称）
       await configManager.updateAudioConfig(settings);
-      fastify.log.info('音频设备配置已更新:', settings);
+      fastify.log.info('Audio device config updated:', settings);
       
       // 如果引擎之前在运行，重新启动它
       if (wasRunning) {
-        fastify.log.info('音频设置更新：重新启动解码引擎');
+        fastify.log.info('Audio settings update: restarting engine');
         await digitalRadioEngine.start();
       }
 
@@ -111,8 +111,8 @@ export async function audioRoutes(fastify: FastifyInstance) {
       const response = AudioDeviceSettingsResponseSchema.parse({
         success: true,
         message: wasRunning 
-          ? '音频设备设置更新成功，解码引擎已重新启动' 
-          : '音频设备设置更新成功',
+          ? 'Audio device settings updated, engine restarted'
+          : 'Audio device settings updated',
         currentSettings: updatedSettings,
       });
 
@@ -132,7 +132,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
       
       // 如果引擎正在运行，先停止它
       if (wasRunning) {
-        fastify.log.info('音频设置重置：停止解码引擎以应用默认配置');
+        fastify.log.info('Audio settings reset: stopping engine to apply default config');
         await digitalRadioEngine.stop();
       }
 
@@ -143,11 +143,11 @@ export async function audioRoutes(fastify: FastifyInstance) {
         bufferSize: 1024,
       });
       
-      fastify.log.info('音频设备配置已重置为默认值');
+      fastify.log.info('Audio device config reset to default');
       
       // 如果引擎之前在运行，重新启动它
       if (wasRunning) {
-        fastify.log.info('音频设置重置：重新启动解码引擎');
+        fastify.log.info('Audio settings reset: restarting engine');
         await digitalRadioEngine.start();
       }
 
@@ -156,8 +156,8 @@ export async function audioRoutes(fastify: FastifyInstance) {
       const response = AudioDeviceSettingsResponseSchema.parse({
         success: true,
         message: wasRunning 
-          ? '音频设备设置已重置，解码引擎已重新启动' 
-          : '音频设备设置已重置',
+          ? 'Audio device settings reset, engine restarted'
+          : 'Audio device settings reset',
         currentSettings: resetSettings,
       });
 

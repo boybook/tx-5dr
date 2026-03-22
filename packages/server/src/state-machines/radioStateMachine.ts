@@ -384,7 +384,7 @@ export function waitForRadioState(
     const timeoutId = setTimeout(() => {
       reject(
         new Error(
-          `等待状态 ${targetState} 超时 (当前状态: ${actor.getSnapshot().value})`
+          `Waiting for state ${targetState} timed out (current state: ${actor.getSnapshot().value})`
         )
       );
     }, timeout);

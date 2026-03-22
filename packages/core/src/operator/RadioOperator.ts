@@ -109,8 +109,8 @@ export class RadioOperator {
                         // 决策耗时超过预算，可能赶不上本周期发射，广播告警（由WSServer转成TEXT_MESSAGE）
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         this._eventEmitter.emit('timingWarning' as any, {
-                            title: '⚠️ 时序告警',
-                            text: `决策耗时 ${elapsed}ms 超过预算 ${budget}ms，可能赶不上本周期发射（${this._config.myCallsign}）`
+                            title: 'Timing Warning',
+                            text: `Decision took ${elapsed}ms, exceeding budget ${budget}ms, may miss this slot transmission (${this._config.myCallsign})`
                         });
                     }
                 } catch {}
