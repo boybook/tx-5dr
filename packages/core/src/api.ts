@@ -68,6 +68,8 @@ import type {
   UpdateAuthConfigRequest,
   NetworkInfo,
   PresetFrequency,
+  StationInfo,
+  StationInfoResponse,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -1582,6 +1584,19 @@ export const api = {
   async getNetworkInfo(apiBase?: string): Promise<NetworkInfo> {
     return apiRequest<NetworkInfo>('/system/network-info', undefined, apiBase);
   },
+
+  // ========== 电台站基础信息 ==========
+
+  async getStationInfo(apiBase?: string): Promise<StationInfoResponse> {
+    return apiRequest<StationInfoResponse>('/station/info', undefined, apiBase);
+  },
+
+  async updateStationInfo(data: StationInfo, apiBase?: string): Promise<StationInfoResponse> {
+    return apiRequest<StationInfoResponse>('/station/info', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }, apiBase);
+  },
 }
 
 // 为了向后兼容,也导出单独的函数
@@ -1679,4 +1694,7 @@ export const {
   ,deleteProfile
   ,reorderProfiles
   ,activateProfile
+  // 电台站基础信息函数
+  ,getStationInfo
+  ,updateStationInfo
 } = api;

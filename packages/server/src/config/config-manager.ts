@@ -3,7 +3,7 @@
 
 import { promises as fs } from 'fs';
 import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary } from '@tx5dr/contracts';
-import type { RadioProfile, DecodeWindowSettings, PresetFrequency } from '@tx5dr/contracts';
+import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
@@ -73,6 +73,8 @@ export interface AppConfig {
   voiceGrid?: string;
   /** Audio monitor codec: 'opus' for low bandwidth, 'pcm' for compatibility. Default: 'opus'. */
   audioMonitorCodec?: 'opus' | 'pcm';
+  /** Station basic information visible to all connected users */
+  stationInfo?: StationInfo;
 }
 
 // 音频处理配置接口
@@ -1082,5 +1084,15 @@ export class ConfigManager {
   async setVoiceGrid(grid: string): Promise<void> {
     this.config.voiceGrid = grid;
     await this.saveConfig();
+  }
+
+  getStationInfo(): StationInfo {
+    return this.config.stationInfo ?? {};
+  }
+
+  async updateStationInfo(info: StationInfo): Promise<void> {
+    this.config.stationInfo = { ...this.config.stationInfo, ...info };
+    await this.saveConfig();
+    logger.info('Station info updated', { callsign: info.callsign });
   }
 }

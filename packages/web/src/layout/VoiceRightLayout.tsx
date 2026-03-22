@@ -40,7 +40,7 @@ export const VoiceRightLayout: React.FC = () => {
   const { state: authState, login, logout } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system'>('radio');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system' | 'station_info'>('radio');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
@@ -67,6 +67,17 @@ export const VoiceRightLayout: React.FC = () => {
     const handler = () => setIsProfileModalOpen(true);
     window.addEventListener('openProfileModal', handler);
     return () => window.removeEventListener('openProfileModal', handler);
+  }, []);
+
+  // 监听全局 openSettingsModal 事件（携带 tab 参数）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent).detail?.tab;
+      if (tab) setSettingsInitialTab(tab);
+      setIsSettingsOpen(true);
+    };
+    window.addEventListener('openSettingsModal', handler);
+    return () => window.removeEventListener('openSettingsModal', handler);
   }, []);
 
   return (

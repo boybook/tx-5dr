@@ -121,3 +121,6 @@ export * from './schema/system.schema.js';
 
 // Voice Schema
 export * from './schema/voice.schema.js';
+
+// Station Info Schema
+export * from './schema/station-info.schema.js';

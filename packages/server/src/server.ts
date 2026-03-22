@@ -26,6 +26,7 @@ import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
 import { VoiceAudioWSServer } from './websocket/VoiceAudioWSServer.js';
 import { voiceRoutes } from './routes/voice.js';
+import { stationRoutes } from './routes/station.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 
 /**
@@ -290,6 +291,10 @@ export async function createServer() {
   // 公开路由：认证
   await fastify.register(authRoutes, { prefix: '/api/auth' });
   fastify.log.info('Auth routes registered');
+
+  // 公开路由：电台站信息（GET 无需认证，PUT 由路由内部 preHandler 保护）
+  await fastify.register(stationRoutes, { prefix: '/api/station' });
+  fastify.log.info('Station routes registered');
 
   // WebSocket endpoint for real-time communication
   fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
