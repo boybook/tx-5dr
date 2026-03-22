@@ -38,6 +38,8 @@ interface WebGLWaterfallProps {
   hoverFrequency?: number | null;
   /** 纹理总行数，不足时底部用暗色填充，实现从顶部逐渐填充的效果 */
   totalRows?: number;
+  /** 当前是否处于发射状态，用于 TX/RX 自动范围分离 */
+  isTransmitting?: boolean;
 }
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
@@ -60,6 +62,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   onActualRangeChange,
   hoverFrequency,
   totalRows,
+  isTransmitting = false,
 }) => {
   const { t } = useTranslation('common');
   const containerRef = useRef<HTMLDivElement>(null);
@@ -93,6 +96,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   useEffect(() => { minDbRef.current = minDb; }, [minDb]);
   useEffect(() => { maxDbRef.current = maxDb; }, [maxDb]);
   const actualRangeRef = useRef<{min: number, max: number} | null>(null);
+  // TX/RX 自动范围分离：多段冻结机制
+  // 每个冻结段记录一段历史行的行数和对应的范围
+  const frozenSegmentsRef = useRef<Array<{ rowCount: number; range: { min: number; max: number } }>>([]);
+  const activeRowCountRef = useRef<number>(0); // 当前状态已累积的行数
+  const prevTransmittingRef = useRef<boolean | undefined>(undefined);
+  const prevDataRef = useRef<number[][] | null>(null); // 用于检测新数据到达
   // 平滑滚动相关
   const scrollOffsetLocationRef = useRef<WebGLUniformLocation | null>(null);
   const scrollAnimRef = useRef<number>();
@@ -100,6 +109,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const frameIntervalRef = useRef(100);
 
   // 优化后的数据范围计算 - 使用采样和缓存
+  // 当存在冻结段时，只从活跃行（当前状态）采样
   const calculateDataRange = useCallback((spectrumData: number[][]) => {
     const calculateInternal = () => {
     if (spectrumData.length === 0) return { min: minDb, max: maxDb };
@@ -109,20 +119,26 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (rangeUpdateCounterRef.current % autoRangeConfig.updateInterval !== 0 && cachedRangeRef.current) {
       return cachedRangeRef.current;
     }
-    
+
     let min = Infinity;
     let max = -Infinity;
     const values: number[] = [];
-    
+
+    // 确定采样范围：如果存在冻结段且活跃行数足够，只采样活跃行
+    const activeRows = activeRowCountRef.current;
+    const sampleEndRow = (frozenSegmentsRef.current.length > 0 && activeRows > 0 && activeRows < spectrumData.length)
+      ? activeRows
+      : spectrumData.length;
+
     // 采样策略：对于大数据集，只采样部分数据
-    const sampleRate = spectrumData.length > 50 ? 2 : 1;
+    const sampleRate = sampleEndRow > 50 ? 2 : 1;
     const maxSamples = 5000; // 最多采样5000个点
     let sampleCount = 0;
-    
-    for (let i = 0; i < spectrumData.length && sampleCount < maxSamples; i += sampleRate) {
+
+    for (let i = 0; i < sampleEndRow && sampleCount < maxSamples; i += sampleRate) {
       const row = spectrumData[i];
       const rowSampleRate = row.length > 100 ? Math.ceil(row.length / 100) : 1;
-      
+
       for (let j = 0; j < row.length; j += rowSampleRate) {
         const value = row[j];
         if (isFinite(value)) {
@@ -133,12 +149,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         }
       }
     }
-    
+
     // 如果没有有效数据，使用默认范围
     if (!isFinite(min) || !isFinite(max)) {
       return { min: minDb, max: maxDb };
     }
-    
+
     // 快速百分位数计算（使用部分排序）
     values.sort((a, b) => a - b);
     const pMin = values[Math.floor(values.length * (autoRangeConfig.minPercentile / 100))];
@@ -151,15 +167,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const medianRange = p75 - p25;
     const dynamicMin = Math.max(pMin, median - medianRange);
     const dynamicMax = Math.max(pMax, median + medianRange * autoRangeConfig.rangeExpansionFactor);
-    
+
     const result = {
       min: dynamicMin,
       max: dynamicMax
     };
-    
+
     // 缓存结果
     cachedRangeRef.current = result;
-    
+
     return result;
     };
 
@@ -438,8 +454,32 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const gl = glRef.current;
     const texture = textureRef.current;
     const program = programRef.current;
-    
+
     if (!gl || !texture || !program || spectrumData.length === 0) return;
+
+    // 检测是否有新数据行到达（通过比较首行引用）
+    const isNewData = prevDataRef.current !== spectrumData;
+    prevDataRef.current = spectrumData;
+
+    // TX/RX 状态切换检测：将当前活跃段冻结，开始新的活跃段
+    if (autoRange && isTransmitting !== prevTransmittingRef.current && prevTransmittingRef.current !== undefined) {
+      if (cachedRangeRef.current && activeRowCountRef.current > 0) {
+        // 将当前活跃段推入冻结段列表的头部
+        frozenSegmentsRef.current.unshift({
+          rowCount: activeRowCountRef.current,
+          range: { ...cachedRangeRef.current },
+        });
+      }
+      cachedRangeRef.current = null;
+      rangeUpdateCounterRef.current = 0;
+      activeRowCountRef.current = 0;
+    }
+    prevTransmittingRef.current = isTransmitting;
+
+    // 新数据到达时递增活跃行计数
+    if (isNewData) {
+      activeRowCountRef.current++;
+    }
 
     const width = spectrumData[0].length;
     const actualHeight = spectrumData.length;
@@ -453,7 +493,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
     const textureData = textureDataRef.current;
 
-    // 计算实际数据范围（仅对真实数据行，不含底部填充行）
+    // 计算活跃范围（仅对真实数据行，不含底部填充行）
     let currentMin = minDb;
     let currentMax = maxDb;
 
@@ -476,16 +516,56 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       }
     }
 
-    // 优化的数据转换循环（仅处理实际数据行）
-    const range = currentMax - currentMin;
-    const scale = range > 0 ? 255 / range : 1;
+    // 构建分段归一化参数列表：[活跃段, 冻结段0, 冻结段1, ...]
+    // 每段包含 { rowCount, rangeMin, rangeScale }
+    const segments: Array<{ rowCount: number; rangeMin: number; rangeScale: number }> = [];
+    const frozen = frozenSegmentsRef.current;
 
+    // 活跃段
+    const activeRows = Math.min(activeRowCountRef.current, actualHeight);
+    const activeRange = currentMax - currentMin;
+    segments.push({
+      rowCount: activeRows,
+      rangeMin: currentMin,
+      rangeScale: activeRange > 0 ? 255 / activeRange : 1,
+    });
+
+    // 冻结段
+    if (autoRange) {
+      for (const seg of frozen) {
+        const segRange = seg.range.max - seg.range.min;
+        segments.push({
+          rowCount: seg.rowCount,
+          rangeMin: seg.range.min,
+          rangeScale: segRange > 0 ? 255 / segRange : 1,
+        });
+      }
+    }
+
+    // 按段归一化数据行
     let index = 0;
-    for (let y = 0; y < actualHeight; y++) {
-      const row = spectrumData[y];
-      for (let x = 0; x < width; x++) {
-        const normalizedValue = (row[x] - currentMin) * scale;
-        textureData[index++] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
+    let rowOffset = 0;
+    for (const seg of segments) {
+      const segEnd = Math.min(rowOffset + seg.rowCount, actualHeight);
+      for (let y = rowOffset; y < segEnd; y++) {
+        const row = spectrumData[y];
+        for (let x = 0; x < width; x++) {
+          const normalizedValue = (row[x] - seg.rangeMin) * seg.rangeScale;
+          textureData[index++] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
+        }
+      }
+      rowOffset = segEnd;
+      if (rowOffset >= actualHeight) break;
+    }
+    // 如果段总行数不足以覆盖所有数据行（理论上不应发生），用活跃范围补齐
+    if (rowOffset < actualHeight) {
+      const fallbackScale = activeRange > 0 ? 255 / activeRange : 1;
+      for (let y = rowOffset; y < actualHeight; y++) {
+        const row = spectrumData[y];
+        for (let x = 0; x < width; x++) {
+          const normalizedValue = (row[x] - currentMin) * fallbackScale;
+          textureData[index++] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
+        }
       }
     }
     // 底部填充行置 0（映射到颜色表最暗端）
@@ -493,11 +573,29 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       textureData.fill(0, index);
     }
 
+    // 清理已完全滚出视图的冻结段
+    if (frozen.length > 0) {
+      const totalFrozenRows = frozen.reduce((sum, s) => sum + s.rowCount, 0);
+      if (activeRows + totalFrozenRows > actualHeight) {
+        // 从尾部裁剪超出的冻结段
+        let remaining = actualHeight - activeRows;
+        let keepCount = 0;
+        for (const seg of frozen) {
+          if (remaining <= 0) break;
+          remaining -= seg.rowCount;
+          keepCount++;
+        }
+        if (keepCount < frozen.length) {
+          frozenSegmentsRef.current = frozen.slice(0, keepCount);
+        }
+      }
+    }
+
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
-    
+
     // 只在纹理大小改变时设置参数
     if (lastDataLengthRef.current !== dataSize) {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -509,7 +607,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
 
     updateInternal();
-  }, [minDb, maxDb, autoRange, calculateDataRange]);
+  }, [minDb, maxDb, autoRange, calculateDataRange, isTransmitting]);
 
   // 渲染
   const render = useCallback(() => {
