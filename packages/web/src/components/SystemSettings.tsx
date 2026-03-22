@@ -15,8 +15,36 @@ import { faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
 import { Button } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
 import type { PSKReporterConfig, PSKReporterStatus, AuthStatus, NetworkInfo } from '@tx5dr/contracts';
+import { FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { createLogger } from '../utils/logger';
+
+interface DecodeWindowState {
+  ft8Preset: string;
+  ft8CustomWindows: number[];
+  ft4Preset: string;
+  ft4CustomWindows: number[];
+}
+
+const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
+  ft8Preset: 'maximum',
+  ft8CustomWindows: [-1500, -1000, -500, 0, 250],
+  ft4Preset: 'balanced',
+  ft4CustomWindows: [0],
+};
+
+function getWindowCount(preset: string, customWindows: number[], presets: Record<string, number[]>): number {
+  if (preset === 'custom') return customWindows.length;
+  return presets[preset]?.length ?? 1;
+}
+
+function getCpuLoadInfo(count: number, t: (key: string) => string): { label: string; color: 'success' | 'primary' | 'warning' | 'danger' } {
+  if (count <= 1) return { label: t('system.cpuVeryLow'), color: 'success' };
+  if (count <= 2) return { label: t('system.cpuLow'), color: 'success' };
+  if (count <= 3) return { label: t('system.cpuMedium'), color: 'primary' };
+  if (count <= 5) return { label: t('system.cpuHigh'), color: 'warning' };
+  return { label: t('system.cpuVeryHigh'), color: 'danger' };
+}
 
 const logger = createLogger('SystemSettings');
 
@@ -66,12 +94,17 @@ export const SystemSettings = forwardRef<
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
 
+  // 解码窗口设置
+  const [decodeWindowState, setDecodeWindowState] = useState<DecodeWindowState>({ ...DEFAULT_DECODE_WINDOW_STATE });
+  const [originalDecodeWindowState, setOriginalDecodeWindowState] = useState<DecodeWindowState>({ ...DEFAULT_DECODE_WINDOW_STATE });
+
   // 加载配置
   useEffect(() => {
     loadSettings();
     loadAuthConfig();
     loadPSKReporterConfig();
     loadPSKReporterStatus();
+    loadDecodeWindowSettings();
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
   }, []);
 
@@ -140,6 +173,26 @@ export const SystemSettings = forwardRef<
     }
   }, []);
 
+  // 加载解码窗口设置
+  const loadDecodeWindowSettings = async () => {
+    try {
+      const result = await api.getDecodeWindowSettings();
+      if (result.success && result.data) {
+        const settings = result.data.settings as Record<string, { preset?: string; customWindowTiming?: number[] }>;
+        const state: DecodeWindowState = {
+          ft8Preset: settings.ft8?.preset ?? 'maximum',
+          ft8CustomWindows: settings.ft8?.customWindowTiming ?? [...(FT8_WINDOW_PRESETS['maximum'])],
+          ft4Preset: settings.ft4?.preset ?? 'balanced',
+          ft4CustomWindows: settings.ft4?.customWindowTiming ?? [...(FT4_WINDOW_PRESETS['balanced'])],
+        };
+        setDecodeWindowState(state);
+        setOriginalDecodeWindowState({ ...state });
+      }
+    } catch (err) {
+      logger.error('Failed to load decode window settings:', err);
+    }
+  };
+
   // 定期刷新 PSKReporter 状态
   useEffect(() => {
     if (!pskrConfig?.enabled) return;
@@ -167,13 +220,24 @@ export const SystemSettings = forwardRef<
     return authConfig.allowPublicViewing !== originalAuthConfig.allowPublicViewing;
   };
 
+  // 检查解码窗口设置是否有变化
+  const hasDecodeWindowChanges = () => {
+    return (
+      decodeWindowState.ft8Preset !== originalDecodeWindowState.ft8Preset ||
+      decodeWindowState.ft4Preset !== originalDecodeWindowState.ft4Preset ||
+      JSON.stringify(decodeWindowState.ft8CustomWindows) !== JSON.stringify(originalDecodeWindowState.ft8CustomWindows) ||
+      JSON.stringify(decodeWindowState.ft4CustomWindows) !== JSON.stringify(originalDecodeWindowState.ft4CustomWindows)
+    );
+  };
+
   // 检查是否有未保存的更改
   const hasUnsavedChanges = () => {
     return (
       decodeWhileTransmitting !== originalDecodeValue ||
       spectrumWhileTransmitting !== originalSpectrumValue ||
       hasAuthChanges() ||
-      hasPskrChanges()
+      hasPskrChanges() ||
+      hasDecodeWindowChanges()
     );
   };
 
@@ -225,6 +289,22 @@ export const SystemSettings = forwardRef<
         }
       }
 
+      // 保存解码窗口设置
+      if (hasDecodeWindowChanges()) {
+        const dwSettings: Record<string, unknown> = {
+          ft8: {
+            preset: decodeWindowState.ft8Preset,
+            ...(decodeWindowState.ft8Preset === 'custom' ? { customWindowTiming: decodeWindowState.ft8CustomWindows } : {}),
+          },
+          ft4: {
+            preset: decodeWindowState.ft4Preset,
+            ...(decodeWindowState.ft4Preset === 'custom' ? { customWindowTiming: decodeWindowState.ft4CustomWindows } : {}),
+          },
+        };
+        await api.updateDecodeWindowSettings(dwSettings);
+        setOriginalDecodeWindowState({ ...decodeWindowState });
+      }
+
       onUnsavedChanges?.(false);
     } catch (err) {
       logger.error('Failed to save settings:', err);
@@ -255,7 +335,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, onUnsavedChanges]);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -326,6 +406,7 @@ export const SystemSettings = forwardRef<
                 isDisabled={isSaving}
                 size="lg"
               />
+            </div>
             {/* 网络访问地址 */}
             {networkInfo && networkInfo.addresses.length > 0 && (
               <div className="mt-3 pt-3 border-t border-divider">
@@ -358,7 +439,6 @@ export const SystemSettings = forwardRef<
                 ))}
               </div>
             )}
-            </div>
           </CardBody>
         </Card>
       )}
@@ -418,6 +498,252 @@ export const SystemSettings = forwardRef<
               color={spectrumWhileTransmitting ? 'success' : 'warning'}
             />
           </div>
+        </CardBody>
+      </Card>
+
+      {/* 解码窗口设置 */}
+      <Divider className="my-4" />
+
+      <Card shadow="none" radius="lg" classNames={{
+        base: "border border-divider bg-content1"
+      }}>
+        <CardBody className="p-4 space-y-4">
+          <div>
+            <h4 className="font-semibold text-default-900 mb-1">{t('system.decodeWindowTitle')}</h4>
+            <p className="text-sm text-default-600">{t('system.decodeWindowDesc')}</p>
+          </div>
+
+          {/* FT8 解码策略 */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <Select
+                label={t('system.ft8DecodeWindow')}
+                selectedKeys={[decodeWindowState.ft8Preset]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0] as string;
+                  if (value) {
+                    setDecodeWindowState(prev => ({
+                      ...prev,
+                      ft8Preset: value,
+                      ft8CustomWindows: value === 'custom'
+                        ? prev.ft8CustomWindows
+                        : FT8_WINDOW_PRESETS[value] ?? prev.ft8CustomWindows,
+                    }));
+                  }
+                }}
+                isDisabled={isSaving}
+                variant="bordered"
+                className="flex-1"
+              >
+                <SelectItem key="maximum" textValue={`${t('system.presetMaximum')}${t('system.presetDefault')}`}>{t('system.presetMaximum')}{t('system.presetDefault')}</SelectItem>
+                <SelectItem key="balanced" textValue={t('system.presetBalanced')}>{t('system.presetBalanced')}</SelectItem>
+                <SelectItem key="lightweight" textValue={t('system.presetLightweight')}>{t('system.presetLightweight')}</SelectItem>
+                <SelectItem key="minimum" textValue={t('system.presetMinimum')}>{t('system.presetMinimum')}</SelectItem>
+                <SelectItem key="custom" textValue={t('system.presetCustom')}>{t('system.presetCustom')}</SelectItem>
+              </Select>
+            </div>
+            {(() => {
+              const count = getWindowCount(decodeWindowState.ft8Preset, decodeWindowState.ft8CustomWindows, FT8_WINDOW_PRESETS);
+              const cpuInfo = getCpuLoadInfo(count, t);
+              return (
+                <div className="flex items-center gap-2 text-sm text-default-500">
+                  <span>{t('system.decodesPerSlot', { count })}</span>
+                  <Chip size="sm" color={cpuInfo.color} variant="flat">{cpuInfo.label}</Chip>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* FT4 解码策略 */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <Select
+                label={t('system.ft4DecodeWindow')}
+                selectedKeys={[decodeWindowState.ft4Preset]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0] as string;
+                  if (value) {
+                    setDecodeWindowState(prev => ({
+                      ...prev,
+                      ft4Preset: value,
+                      ft4CustomWindows: value === 'custom'
+                        ? prev.ft4CustomWindows
+                        : FT4_WINDOW_PRESETS[value] ?? prev.ft4CustomWindows,
+                    }));
+                  }
+                }}
+                isDisabled={isSaving}
+                variant="bordered"
+                className="flex-1"
+              >
+                <SelectItem key="maximum" textValue={t('system.presetMaximum')}>{t('system.presetMaximum')}</SelectItem>
+                <SelectItem key="balanced" textValue={`${t('system.presetBalanced')}${t('system.presetDefault')}`}>{t('system.presetBalanced')}{t('system.presetDefault')}</SelectItem>
+                <SelectItem key="custom" textValue={t('system.presetCustom')}>{t('system.presetCustom')}</SelectItem>
+              </Select>
+            </div>
+            {(() => {
+              const count = getWindowCount(decodeWindowState.ft4Preset, decodeWindowState.ft4CustomWindows, FT4_WINDOW_PRESETS);
+              const cpuInfo = getCpuLoadInfo(count, t);
+              return (
+                <div className="flex items-center gap-2 text-sm text-default-500">
+                  <span>{t('system.decodesPerSlot', { count })}</span>
+                  <Chip size="sm" color={cpuInfo.color} variant="flat">{cpuInfo.label}</Chip>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* FT8 自定义编辑区 */}
+          {decodeWindowState.ft8Preset === 'custom' && (
+            <div className="space-y-2 p-3 border border-divider rounded-lg">
+              <p className="text-sm font-medium text-default-700">FT8 {t('system.presetCustom')}</p>
+              {decodeWindowState.ft8CustomWindows.map((offset, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <Input
+                    label={t('system.windowOffset', { idx: idx + 1 })}
+                    type="number"
+                    value={String(offset)}
+                    onValueChange={(v) => {
+                      const val = parseInt(v) || 0;
+                      setDecodeWindowState(prev => {
+                        const windows = [...prev.ft8CustomWindows];
+                        windows[idx] = Math.max(-2000, Math.min(1000, val));
+                        return { ...prev, ft8CustomWindows: windows };
+                      });
+                    }}
+                    isDisabled={isSaving}
+                    size="sm"
+                    variant="bordered"
+                    className="flex-1"
+                    endContent={<span className="text-xs text-default-400">{t('system.offsetUnit')}</span>}
+                  />
+                  <Button
+                    size="sm"
+                    variant="light"
+                    color="danger"
+                    isIconOnly
+                    isDisabled={isSaving || decodeWindowState.ft8CustomWindows.length <= 1}
+                    onPress={() => {
+                      setDecodeWindowState(prev => ({
+                        ...prev,
+                        ft8CustomWindows: prev.ft8CustomWindows.filter((_, i) => i !== idx),
+                      }));
+                    }}
+                    title={t('system.removeWindow')}
+                  >
+                    ×
+                  </Button>
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="flat"
+                  isDisabled={isSaving || decodeWindowState.ft8CustomWindows.length >= 8}
+                  onPress={() => {
+                    setDecodeWindowState(prev => ({
+                      ...prev,
+                      ft8CustomWindows: [...prev.ft8CustomWindows, 0],
+                    }));
+                  }}
+                >
+                  {t('system.addWindow')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  isDisabled={isSaving}
+                  onPress={() => {
+                    setDecodeWindowState(prev => ({
+                      ...prev,
+                      ft8CustomWindows: [...FT8_WINDOW_PRESETS['maximum']],
+                    }));
+                  }}
+                >
+                  {t('system.resetDefault')}
+                </Button>
+              </div>
+              {decodeWindowState.ft8CustomWindows.length >= 8 && (
+                <p className="text-xs text-warning-600">{t('system.windowLimitReached', { max: 8 })}</p>
+              )}
+            </div>
+          )}
+
+          {/* FT4 自定义编辑区 */}
+          {decodeWindowState.ft4Preset === 'custom' && (
+            <div className="space-y-2 p-3 border border-divider rounded-lg">
+              <p className="text-sm font-medium text-default-700">FT4 {t('system.presetCustom')}</p>
+              {decodeWindowState.ft4CustomWindows.map((offset, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <Input
+                    label={t('system.windowOffset', { idx: idx + 1 })}
+                    type="number"
+                    value={String(offset)}
+                    onValueChange={(v) => {
+                      const val = parseInt(v) || 0;
+                      setDecodeWindowState(prev => {
+                        const windows = [...prev.ft4CustomWindows];
+                        windows[idx] = Math.max(-2000, Math.min(1000, val));
+                        return { ...prev, ft4CustomWindows: windows };
+                      });
+                    }}
+                    isDisabled={isSaving}
+                    size="sm"
+                    variant="bordered"
+                    className="flex-1"
+                    endContent={<span className="text-xs text-default-400">{t('system.offsetUnit')}</span>}
+                  />
+                  <Button
+                    size="sm"
+                    variant="light"
+                    color="danger"
+                    isIconOnly
+                    isDisabled={isSaving || decodeWindowState.ft4CustomWindows.length <= 1}
+                    onPress={() => {
+                      setDecodeWindowState(prev => ({
+                        ...prev,
+                        ft4CustomWindows: prev.ft4CustomWindows.filter((_, i) => i !== idx),
+                      }));
+                    }}
+                    title={t('system.removeWindow')}
+                  >
+                    ×
+                  </Button>
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="flat"
+                  isDisabled={isSaving || decodeWindowState.ft4CustomWindows.length >= 8}
+                  onPress={() => {
+                    setDecodeWindowState(prev => ({
+                      ...prev,
+                      ft4CustomWindows: [...prev.ft4CustomWindows, 0],
+                    }));
+                  }}
+                >
+                  {t('system.addWindow')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  isDisabled={isSaving}
+                  onPress={() => {
+                    setDecodeWindowState(prev => ({
+                      ...prev,
+                      ft4CustomWindows: [...FT4_WINDOW_PRESETS['balanced']],
+                    }));
+                  }}
+                >
+                  {t('system.resetDefault')}
+                </Button>
+              </div>
+              {decodeWindowState.ft4CustomWindows.length >= 8 && (
+                <p className="text-xs text-warning-600">{t('system.windowLimitReached', { max: 8 })}</p>
+              )}
+            </div>
+          )}
         </CardBody>
       </Card>
 

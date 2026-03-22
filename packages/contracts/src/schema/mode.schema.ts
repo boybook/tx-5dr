@@ -53,4 +53,80 @@ export const MODES = {
     transmitTiming: 550, // (7500 - 6400) / 2 = 550ms
     encodeAdvance: 500   // 提前500ms开始编码准备
   } as ModeDescriptor,
-} as const; 
+} as const;
+
+/**
+ * 解码窗口预设
+ */
+export const DecodeWindowPreset = {
+  MAXIMUM: 'maximum',
+  BALANCED: 'balanced',
+  LIGHTWEIGHT: 'lightweight',
+  MINIMUM: 'minimum',
+  CUSTOM: 'custom',
+} as const;
+
+/**
+ * FT8 解码窗口预设映射
+ */
+export const FT8_WINDOW_PRESETS: Record<string, number[]> = {
+  maximum: [-1500, -1000, -500, 0, 250],
+  balanced: [-1000, 0, 250],
+  lightweight: [-500, 0],
+  minimum: [0],
+};
+
+/**
+ * FT4 解码窗口预设映射
+ */
+export const FT4_WINDOW_PRESETS: Record<string, number[]> = {
+  maximum: [-500, 0, 250],
+  balanced: [0],
+};
+
+/**
+ * 解码窗口设置 Schema
+ */
+export const DecodeWindowSettingsSchema = z.object({
+  ft8: z.object({
+    preset: z.enum(['maximum', 'balanced', 'lightweight', 'minimum', 'custom']).default('maximum'),
+    customWindowTiming: z.array(z.number().int().min(-2000).max(1000)).optional(),
+  }).optional(),
+  ft4: z.object({
+    preset: z.enum(['maximum', 'balanced', 'custom']).default('balanced'),
+    customWindowTiming: z.array(z.number().int().min(-2000).max(1000)).optional(),
+  }).optional(),
+});
+
+export type DecodeWindowSettings = z.infer<typeof DecodeWindowSettingsSchema>;
+
+/**
+ * 根据模式名和设置解析实际的 windowTiming
+ * 返回 null 表示使用 MODES 中的默认值
+ */
+export function resolveWindowTiming(
+  modeName: string,
+  settings?: DecodeWindowSettings
+): number[] | null {
+  if (!settings) return null;
+
+  const modeKey = modeName.toUpperCase();
+
+  if (modeKey === 'FT8' && settings.ft8) {
+    const { preset, customWindowTiming } = settings.ft8;
+    if (preset === 'custom' && customWindowTiming && customWindowTiming.length > 0) {
+      return [...customWindowTiming].sort((a, b) => a - b);
+    }
+    return FT8_WINDOW_PRESETS[preset] ?? null;
+  }
+
+  if (modeKey === 'FT4' && settings.ft4) {
+    const { preset, customWindowTiming } = settings.ft4;
+    if (preset === 'custom' && customWindowTiming && customWindowTiming.length > 0) {
+      return [...customWindowTiming].sort((a, b) => a - b);
+    }
+    return FT4_WINDOW_PRESETS[preset] ?? null;
+  }
+
+  return null;
+}
