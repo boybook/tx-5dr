@@ -104,7 +104,8 @@ export class RadioBridge {
         status: RadioConnectionStatus.CONNECTED,
         radioInfo,
         radioConfig,
-        connectionHealth: radioManager.getConnectionHealth()
+        connectionHealth: radioManager.getConnectionHealth(),
+        meterCapabilities: radioManager.getMeterCapabilities(),
       });
 
       // 连接成功后自动设置频率（根据引擎模式选择对应的保存频率）

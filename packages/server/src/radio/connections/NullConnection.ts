@@ -6,6 +6,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
+import type { MeterCapabilities } from '@tx5dr/contracts';
 import type { IRadioConnection, IRadioConnectionEvents, RadioConnectionConfig, MeterData } from './IRadioConnection.js';
 import { RadioConnectionType, RadioConnectionState } from './IRadioConnection.js';
 
@@ -50,6 +51,15 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
 
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
     return { mode: 'NONE', bandwidth: '' };
+  }
+
+  getMeterCapabilities(): MeterCapabilities {
+    return {
+      strength: false,
+      swr: false,
+      alc: false,
+      power: false,
+    };
   }
 
   getConnectionInfo(): {

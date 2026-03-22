@@ -15,7 +15,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, RadioInfo, ReconnectProgress } from '@tx5dr/contracts';
+import type { HamlibConfig, MeterCapabilities, RadioInfo, ReconnectProgress } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
@@ -513,6 +513,16 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         hasManualTune: false,
       };
     }
+  }
+
+  /**
+   * 获取电台数值表能力
+   */
+  getMeterCapabilities(): MeterCapabilities | undefined {
+    if (!this.connection?.getMeterCapabilities) {
+      return undefined;
+    }
+    return this.connection.getMeterCapabilities();
   }
 
   /**

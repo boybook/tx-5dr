@@ -195,6 +195,15 @@ export const LevelMeterReadingSchema = z.object({
 
 export type LevelMeterReading = z.infer<typeof LevelMeterReadingSchema>;
 
+// 电台数值表能力检测
+export const MeterCapabilitiesSchema = z.object({
+  strength: z.boolean(),  // 接收信号强度 (STRENGTH)
+  swr: z.boolean(),       // 驻波比 (SWR)
+  alc: z.boolean(),       // 自动电平控制 (ALC)
+  power: z.boolean(),     // 射频功率 (RFPOWER_METER)
+});
+export type MeterCapabilities = z.infer<typeof MeterCapabilitiesSchema>;
+
 // 电台数值表数据结构
 export const MeterDataSchema = z.object({
   swr: z.object({
@@ -612,6 +621,7 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
     connectionHealth: z.object({
       connectionHealthy: z.boolean(),
     }).optional(),
+    meterCapabilities: MeterCapabilitiesSchema.optional(), // 电台数值表能力（连接时检测）
   }),
 });
 

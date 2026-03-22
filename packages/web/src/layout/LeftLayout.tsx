@@ -171,11 +171,12 @@ export const LeftLayout: React.FC = () => {
           </div>
         )}
 
-        {/* 电台数值表（无电台模式下隐藏） */}
+        {/* 电台数值表（无电台模式下隐藏，不支持时由组件内部返回 null） */}
         {radio.state.radioConnected && radio.state.radioConfig?.type !== 'none' && (
           <RadioMetersDisplay
             meterData={radio.state.meterData || { swr: null, alc: null, level: null, power: null }}
             isPttActive={radio.state.pttStatus.isTransmitting}
+            meterCapabilities={radio.state.meterCapabilities}
           />
         )}
       </div>

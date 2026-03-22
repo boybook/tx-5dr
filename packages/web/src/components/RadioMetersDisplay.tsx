@@ -1,11 +1,12 @@
 import React from 'react';
-import type { MeterData } from '@tx5dr/contracts';
+import type { MeterData, MeterCapabilities } from '@tx5dr/contracts';
 import { Progress } from '@heroui/react';
 import { useBufferedMeterData } from '../hooks/useBufferedMeterData';
 
 interface RadioMetersDisplayProps {
   meterData: MeterData;
   isPttActive: boolean;
+  meterCapabilities: MeterCapabilities | null;
   className?: string;
 }
 
@@ -84,19 +85,31 @@ const Meter: React.FC<MeterProps> = ({
 /**
  * 电台数值表显示组件
  * 显示 SWR、ALC、Level/Power 仪表（带 3 秒缓冲）
+ * 根据 meterCapabilities 条件渲染：不支持的仪表隐藏，全不支持时隐藏整个组件
  */
 export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   meterData,
   isPttActive,
+  meterCapabilities,
   className = ''
 }) => {
   const buffered = useBufferedMeterData(meterData);
+
+  // 判断各仪表是否应显示（null = 未知，保持全显示以兼容旧版后端）
+  const showLevelPower = meterCapabilities === null || meterCapabilities.strength || meterCapabilities.power;
+  const showSwr = meterCapabilities === null || meterCapabilities.swr;
+  const showAlc = meterCapabilities === null || meterCapabilities.alc;
+
+  // 全部不支持时隐藏整个组件
+  if (!showLevelPower && !showSwr && !showAlc) {
+    return null;
+  }
 
   return (
     <div className={`w-full px-2 py-2 pt-1.5 bg-default-50 dark:bg-default-100/50 rounded-lg border border-default-200 dark:border-default-100 ${className}`}>
       <div className="flex items-center gap-2">
         {/* 第一个仪表：根据 PTT 状态动态切换 Level/Power */}
-        {isPttActive ? (
+        {showLevelPower && (isPttActive ? (
           <Meter
             label="Power"
             value={buffered.power.value?.percent ?? null}
@@ -122,34 +135,40 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
               return `${formatted} / ${dBm.toFixed(1)}dBm`;
             }}
           />
+        ))}
+
+        {/* SWR 驻波比表（对数刻度：1.0=0%, 2.0≈50%, 3.0≈75%, 10+=100%） */}
+        {showSwr && (
+          <Meter
+            label="SWR"
+            value={buffered.swr.value ? (() => {
+              const swr = buffered.swr.value!.swr;
+              if (swr <= 1.0) return 0;
+              // 对数映射：log(swr)/log(10) * 100，SWR 1→0%, 10→100%
+              return Math.min(100, (Math.log(swr) / Math.log(10)) * 100);
+            })() : null}
+            unit=""
+            alert={buffered.swr.value?.alert}
+            isTimeout={buffered.swr.isTimeout || !isPttActive}
+            formatValue={(_value) => {
+              if (!buffered.swr.value) return '1.0';
+              const swr = buffered.swr.value.swr;
+              if (swr >= 99) return '∞';
+              return swr.toFixed(1);
+            }}
+          />
         )}
 
-        {/* SWR 驻波比表 */}
-        <Meter
-          label="SWR"
-          value={buffered.swr.value ? (buffered.swr.value.raw / 255) * 100 : null}
-          unit=""
-          alert={buffered.swr.value?.alert}
-          isTimeout={buffered.swr.isTimeout || (!isPttActive && buffered.swr.value?.raw === 0)}
-          formatValue={(_value) => {
-            if (!buffered.swr.value) return '0.0';
-            const raw = buffered.swr.value.raw;
-            if (raw <= 128) {
-              const swr = 1.0 + (raw / 128) * 2.0;
-              return swr.toFixed(1);
-            }
-            return '∞';
-          }}
-        />
-
         {/* ALC 自动电平控制表 */}
-        <Meter
-          label="ALC"
-          value={buffered.alc.value?.percent ?? null}
-          unit="%"
-          alert={buffered.alc.value?.alert}
-          isTimeout={buffered.alc.isTimeout || !isPttActive}
-        />
+        {showAlc && (
+          <Meter
+            label="ALC"
+            value={buffered.alc.value?.percent ?? null}
+            unit="%"
+            alert={buffered.alc.value?.alert}
+            isTimeout={buffered.alc.isTimeout || !isPttActive}
+          />
+        )}
       </div>
     </div>
   );
