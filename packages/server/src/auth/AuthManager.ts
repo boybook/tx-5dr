@@ -94,7 +94,7 @@ export class AuthManager {
       const existing = await this.findTokenByPlainText(plainToken);
       if (!existing) {
         await this.createTokenInternal({
-          label: '初始管理员令牌',
+          label: 'Initial admin token',
           role: UserRole.ADMIN,
           operatorIds: [],
           maxOperators: 0,
@@ -108,7 +108,7 @@ export class AuthManager {
     } else {
       // 没有 .admin-token 文件，生成新 token
       const result = await this.createTokenInternal({
-        label: '初始管理员令牌',
+        label: 'Initial admin token',
         role: UserRole.ADMIN,
         operatorIds: [],
         maxOperators: 0,
@@ -120,12 +120,12 @@ export class AuthManager {
     }
 
     // 每次启动都打印管理员令牌
-    console.log('');
-    console.log('╔══════════════════════════════════════════════════╗');
-    console.log('║  Admin token:                                    ║');
-    console.log(`║  ${plainToken}`);
-    console.log('╚══════════════════════════════════════════════════╝');
-    console.log('');
+    logger.info('');
+    logger.info('╔══════════════════════════════════════════════════╗');
+    logger.info('║  Admin token:                                    ║');
+    logger.info(`║  ${plainToken}`);
+    logger.info('╚══════════════════════════════════════════════════╝');
+    logger.info('');
   }
 
   // ===== Token CRUD =====

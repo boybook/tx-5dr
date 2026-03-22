@@ -118,11 +118,11 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
 
     // 边界检测：检查是否有足够时间完成编码和混音
     if (timeUntilTarget < 200) {
-      this.addWarning(operatorId, WarningLevel.ERROR, `剩余时间不足: 仅剩${timeUntilTarget}ms，可能无法及时完成编码`);
+      this.addWarning(operatorId, WarningLevel.ERROR, `Insufficient time remaining: only ${timeUntilTarget}ms left, encoding may not complete in time`);
     } else if (timeUntilTarget < 400) {
-      this.addWarning(operatorId, WarningLevel.WARN, `剩余时间紧张: 仅剩${timeUntilTarget}ms`);
+      this.addWarning(operatorId, WarningLevel.WARN, `Time is tight: only ${timeUntilTarget}ms remaining`);
     } else {
-      this.addWarning(operatorId, WarningLevel.INFO, `开始编码: 距离目标播放还有${timeUntilTarget}ms`);
+      this.addWarning(operatorId, WarningLevel.INFO, `Encoding started: ${timeUntilTarget}ms until target playback`);
     }
 
     this.emit('stateChanged', state);
@@ -189,7 +189,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
         if (targetTime) {
           state.actualDelayMs = now - targetTime;
           if (state.actualDelayMs > 50) { // 超过50ms认为是延迟
-            this.addWarning(operatorId, WarningLevel.WARN, `发射延迟 ${state.actualDelayMs}ms`);
+            this.addWarning(operatorId, WarningLevel.WARN, `Transmission delayed ${state.actualDelayMs}ms`);
             this.emit('transmissionDelayed', operatorId, state.actualDelayMs);
           }
         }
@@ -200,7 +200,7 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
         break;
         
       case TransmissionPhase.FAILED:
-        this.addWarning(operatorId, WarningLevel.ERROR, `传输失败: ${metadata?.error || '未知错误'}`);
+        this.addWarning(operatorId, WarningLevel.ERROR, `Transmission failed: ${metadata?.error || 'unknown error'}`);
         break;
     }
     
@@ -296,11 +296,11 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
     }
     
     if (timeMs > errorThreshold) {
-      this.addWarning(operatorId, WarningLevel.ERROR, `${type}处理时间过长: ${timeMs}ms (阈值: ${errorThreshold}ms)`);
+      this.addWarning(operatorId, WarningLevel.ERROR, `${type} processing time too long: ${timeMs}ms (threshold: ${errorThreshold}ms)`);
     } else if (timeMs > warningThreshold) {
-      this.addWarning(operatorId, WarningLevel.WARN, `${type}处理时间较长: ${timeMs}ms (阈值: ${warningThreshold}ms)`);
+      this.addWarning(operatorId, WarningLevel.WARN, `${type} processing time elevated: ${timeMs}ms (threshold: ${warningThreshold}ms)`);
     } else {
-      this.addWarning(operatorId, WarningLevel.INFO, `${type}处理完成: ${timeMs}ms`);
+      this.addWarning(operatorId, WarningLevel.INFO, `${type} processing complete: ${timeMs}ms`);
     }
   }
   

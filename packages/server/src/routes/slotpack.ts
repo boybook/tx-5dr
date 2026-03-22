@@ -40,10 +40,10 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
         // 📊 Day14：资源未找到使用 RadioError
         throw new RadioError({
           code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `时隙包 ${slotId} 未找到`,
-          userMessage: '未找到指定的时隙包',
+          message: `SlotPack ${slotId} not found`,
+          userMessage: 'Specified SlotPack not found',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['检查时隙ID是否正确', '查看活跃的时隙包列表'],
+          suggestions: ['Check if slot ID is correct', 'View list of active SlotPacks'],
         });
       }
 

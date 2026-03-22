@@ -90,13 +90,13 @@ export function requireRole(minRole: UserRole) {
     if (!request.authUser) {
       return reply.code(401).send({
         success: false,
-        error: { code: 'UNAUTHORIZED', message: '需要认证', userMessage: '请先登录' },
+        error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
       });
     }
     if (!AuthManager.hasMinRole(request.authUser.role, minRole)) {
       return reply.code(403).send({
         success: false,
-        error: { code: 'FORBIDDEN', message: '权限不足', userMessage: '您没有执行此操作的权限' },
+        error: { code: 'FORBIDDEN', message: 'Permission denied', userMessage: 'You do not have permission for this operation' },
       });
     }
   };
@@ -120,7 +120,7 @@ export function requireLogbookAccess(logManager: import('../log/LogManager.js').
     if (!request.authUser) {
       return reply.code(401).send({
         success: false,
-        error: { code: 'UNAUTHORIZED', message: '需要认证', userMessage: '请先登录' },
+        error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
       });
     }
 
@@ -141,7 +141,7 @@ export function requireLogbookAccess(logManager: import('../log/LogManager.js').
     if (associated.length === 0) {
       return reply.code(403).send({
         success: false,
-        error: { code: 'FORBIDDEN', message: '无日志本访问权限', userMessage: '您没有访问该日志本的权限' },
+        error: { code: 'FORBIDDEN', message: 'No logbook access', userMessage: 'You do not have permission to access this logbook' },
       });
     }
 
@@ -152,7 +152,7 @@ export function requireLogbookAccess(logManager: import('../log/LogManager.js').
     if (!hasAccess) {
       return reply.code(403).send({
         success: false,
-        error: { code: 'FORBIDDEN', message: '无日志本访问权限', userMessage: '您没有访问该日志本的权限' },
+        error: { code: 'FORBIDDEN', message: 'No logbook access', userMessage: 'You do not have permission to access this logbook' },
       });
     }
   };
@@ -166,7 +166,7 @@ export function requireLogbookAccess(logManager: import('../log/LogManager.js').
 export function requireCallsignAccess() {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     if (!request.authUser) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: '未认证' } });
+      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
     }
     if (request.authUser.role === UserRole.ADMIN) return; // admin 放行
 
@@ -190,7 +190,7 @@ export function requireCallsignAccess() {
     if (!userOperatorCallsigns.has(targetBase)) {
       return reply.code(403).send({
         success: false,
-        error: { code: 'FORBIDDEN', message: '无权访问该呼号的同步配置' },
+        error: { code: 'FORBIDDEN', message: 'No permission to access sync config for this callsign' },
       });
     }
   };
@@ -221,14 +221,14 @@ export function requireOperatorAccess(getOperatorId: (request: FastifyRequest) =
     if (!request.authUser) {
       return reply.code(401).send({
         success: false,
-        error: { code: 'UNAUTHORIZED', message: '需要认证', userMessage: '请先登录' },
+        error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
       });
     }
     const operatorId = getOperatorId(request);
     if (!AuthManager.hasOperatorAccess(request.authUser.role, request.authUser.operatorIds, operatorId)) {
       return reply.code(403).send({
         success: false,
-        error: { code: 'FORBIDDEN', message: '无操作员访问权限', userMessage: '您没有该操作员的访问权限' },
+        error: { code: 'FORBIDDEN', message: 'No operator access', userMessage: 'You do not have access to this operator' },
       });
     }
   };

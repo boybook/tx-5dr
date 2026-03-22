@@ -46,10 +46,10 @@ function isHardwareConflict(active: HamlibConfig, test: HamlibConfig): boolean {
 /** 返回硬件描述文本（用于冲突提示消息） */
 function describeHardware(config: HamlibConfig): string {
   switch (config.type) {
-    case 'serial': return `串口 ${config.serial?.path || ''}`;
-    case 'network': return `网络 ${config.network?.host || ''}:${config.network?.port || ''}`;
+    case 'serial': return `Serial ${config.serial?.path || ''}`;
+    case 'network': return `Network ${config.network?.host || ''}:${config.network?.port || ''}`;
     case 'icom-wlan': return `ICOM WLAN ${config.icomWlan?.ip || ''}`;
-    default: return '未知';
+    default: return 'Unknown';
   }
 }
 
@@ -127,7 +127,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       status: radioManager.getConnectionStatus(),
       radioInfo,
       radioConfig: config,
-      reason: '配置已更新',
+      reason: 'Configuration updated',
       connectionHealth: radioManager.getConnectionHealth()
     });
     logger.debug(`Config change event broadcast: type=${config.type}, connected=${radioManager.isConnected()}`);
@@ -169,12 +169,12 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (!frequency || typeof frequency !== 'number') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `无效的频率值: ${frequency}`,
-        userMessage: '请提供有效的频率值',
+        message: `Invalid frequency value: ${frequency}`,
+        userMessage: 'Please provide a valid frequency value',
         severity: RadioErrorSeverity.WARNING,
         suggestions: [
-          '确认频率参数是否为数字类型',
-          '检查频率范围是否在电台支持的范围内'
+          'Confirm frequency parameter is a number',
+          'Check if frequency is within radio supported range'
         ],
       });
     }
@@ -229,7 +229,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         success: true,
         frequency,
         radioMode,
-        message: '频率已记录（电台未连接）',
+        message: 'Frequency recorded (radio not connected)',
         radioConnected: false
       });
     }
@@ -240,13 +240,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (!frequencySuccess) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_OPERATION,
-        message: '电台频率设置失败',
-        userMessage: '无法设置电台频率',
+        message: 'Failed to set radio frequency',
+        userMessage: 'Cannot set radio frequency',
         severity: RadioErrorSeverity.ERROR,
         suggestions: [
-          '检查电台连接是否正常',
-          '确认频率在电台支持的范围内',
-          '尝试重新连接电台'
+          'Check if radio connection is normal',
+          'Confirm frequency is within radio supported range',
+          'Try reconnecting to the radio'
         ],
       });
     }
@@ -287,7 +287,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       success: true,
       frequency,
       radioMode,
-      message: radioMode ? `频率和调制模式设置成功 (${radioMode})` : '频率设置成功',
+      message: radioMode ? `Frequency and mode set successfully (${radioMode})` : 'Frequency set successfully',
       radioConnected: true
     });
   });
@@ -296,7 +296,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const config = HamlibConfigSchema.parse(req.body);
 
     if (config.type === 'none') {
-      return reply.send({ success: true, message: '无电台模式，无需测试连接' });
+      return reply.send({ success: true, message: 'No radio mode, connection test not needed' });
     }
 
     // 智能复用：检查引擎是否已连接同一硬件
@@ -308,7 +308,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         logger.debug('Reusing existing connection for test');
         try {
           await radioManager.testConnection();
-          return reply.send({ success: true, message: '连接测试成功！电台响应正常。' });
+          return reply.send({ success: true, message: 'Connection test successful! Radio responding normally.' });
         } catch (error) {
           throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
         }
@@ -318,7 +318,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       if (isHardwareConflict(activeConfig, config)) {
         return reply.send({
           success: false,
-          message: `引擎正在使用${describeHardware(activeConfig)}，无法同时测试。请先停止引擎或使用不同的硬件。`
+          message: `Engine is using ${describeHardware(activeConfig)}, cannot test simultaneously. Stop the engine or use different hardware.`
         });
       }
     }
@@ -329,7 +329,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       await tester.applyConfig(config);
       await tester.testConnection();
       logger.info('Connection test succeeded');
-      return reply.send({ success: true, message: '连接测试成功！电台响应正常。' });
+      return reply.send({ success: true, message: 'Connection test successful! Radio responding normally.' });
     } catch (e) {
       logger.error('Connection test failed:', e);
       throw RadioError.from(e, RadioErrorCode.CONNECTION_FAILED);
@@ -349,12 +349,12 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (config.type === 'none') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: '无电台模式无需测试PTT',
-        userMessage: '当前配置为无电台模式',
+        message: 'No radio mode, PTT test not needed',
+        userMessage: 'Current configuration is no-radio mode',
         severity: RadioErrorSeverity.WARNING,
         suggestions: [
-          '请先配置电台连接方式（串口或网络）',
-          '在设置页面选择正确的电台类型'
+          'Configure radio connection type first (serial or network)',
+          'Select correct radio type in settings page'
         ],
       });
     }
@@ -382,7 +382,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         logger.debug('Reusing existing connection for PTT test');
         try {
           await doPttTest(radioManager);
-          return reply.send({ success: true, message: 'PTT 测试成功！已切换发射状态 0.5 秒。' });
+          return reply.send({ success: true, message: 'PTT test successful! Transmit state toggled for 0.5 seconds.' });
         } catch (error) {
           throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
         }
@@ -391,7 +391,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       if (isHardwareConflict(activeConfig, config)) {
         return reply.send({
           success: false,
-          message: `引擎正在使用${describeHardware(activeConfig)}，无法同时测试 PTT。请先停止引擎或使用不同的硬件。`
+          message: `Engine is using ${describeHardware(activeConfig)}, cannot test PTT simultaneously. Stop the engine or use different hardware.`
         });
       }
     }
@@ -402,7 +402,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     try {
       await tester.applyConfig(config);
       await doPttTest(tester);
-      return reply.send({ success: true, message: 'PTT 测试成功！已切换发射状态 0.5 秒。' });
+      return reply.send({ success: true, message: 'PTT test successful! Transmit state toggled for 0.5 seconds.' });
     } catch (e) {
       logger.error('PTT test failed:', e);
       throw RadioError.from(e, RadioErrorCode.INVALID_OPERATION);
@@ -444,12 +444,12 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (config.type === 'none') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: '当前配置为无电台模式，无法连接',
-        userMessage: '无法连接电台',
+        message: 'Current configuration is no-radio mode, cannot connect',
+        userMessage: 'Cannot connect to radio',
         severity: RadioErrorSeverity.WARNING,
         suggestions: [
-          '请先在设置页面配置电台类型',
-          '选择串口或网络连接方式'
+          'Configure radio type in settings page first',
+          'Select serial or network connection type'
         ],
       });
     }
@@ -457,7 +457,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (radioManager.isConnected()) {
       return reply.send({
         success: true,
-        message: '电台已连接',
+        message: 'Radio already connected',
         isConnected: true
       });
     }
@@ -467,7 +467,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     return reply.send({
       success: true,
-      message: '电台连接成功',
+      message: 'Radio connected successfully',
       isConnected: true
     });
   });
@@ -478,7 +478,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     return reply.send({
       success: true,
-      message: '电台已断开连接',
+      message: 'Radio disconnected',
       isConnected: false
     });
   });
@@ -490,12 +490,12 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (config.type === 'none') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: '当前配置为无电台模式，无法重连',
-        userMessage: '无法重连电台',
+        message: 'Current configuration is no-radio mode, cannot reconnect',
+        userMessage: 'Cannot reconnect to radio',
         severity: RadioErrorSeverity.WARNING,
         suggestions: [
-          '请先在设置页面配置电台类型',
-          '选择串口或网络连接方式'
+          'Configure radio type in settings page first',
+          'Select serial or network connection type'
         ],
       });
     }
@@ -505,7 +505,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     return reply.send({
       success: true,
-      message: '电台手动重连成功',
+      message: 'Radio manual reconnect successful',
       isConnected: true
     });
   });
@@ -547,10 +547,10 @@ export async function radioRoutes(fastify: FastifyInstance) {
     if (typeof enabled !== 'boolean') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `无效的天调开关值: ${enabled}`,
-        userMessage: '请提供有效的天调开关状态',
+        message: `Invalid tuner switch value: ${enabled}`,
+        userMessage: 'Please provide a valid tuner switch state',
         severity: RadioErrorSeverity.WARNING,
-        suggestions: ['确认 enabled 参数是否为布尔类型 (true/false)'],
+        suggestions: ['Confirm enabled parameter is a boolean (true/false)'],
       });
     }
 
@@ -558,7 +558,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     return reply.send({
       success: true,
-      message: `天调已${enabled ? '启用' : '禁用'}`,
+      message: `Tuner ${enabled ? 'enabled' : 'disabled'}`,
     });
   });
 
@@ -571,7 +571,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     return reply.send({
       success: result,
-      message: result ? '调谐成功' : '调谐失败',
+      message: result ? 'Tuning successful' : 'Tuning failed',
     });
   });
 }

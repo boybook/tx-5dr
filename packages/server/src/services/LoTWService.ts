@@ -84,7 +84,7 @@ export class LoTWService {
 
     return {
       found: false,
-      message: `未在系统中找到TQSL，请手动指定路径。已搜索: ${searchPaths.join(', ')}`,
+      message: `TQSL not found in system, please specify path manually. Searched: ${searchPaths.join(', ')}`,
     };
   }
 
@@ -97,7 +97,7 @@ export class LoTWService {
     } catch {
       return {
         found: false,
-        message: `TQSL未找到或不可执行: ${tqslPath}`,
+        message: `TQSL not found or not executable: ${tqslPath}`,
       };
     }
 
@@ -114,14 +114,14 @@ export class LoTWService {
         found: true,
         path: tqslPath,
         version,
-        message: `TQSL已找到: ${tqslPath}${version ? ` (版本 ${version})` : ''}`,
+        message: `TQSL found: ${tqslPath}${version ? ` (version ${version})` : ''}`,
       };
     } catch (error) {
       // 即使version命令失败，文件存在且可执行也算找到
       return {
         found: true,
         path: tqslPath,
-        message: `TQSL已找到: ${tqslPath}，但无法获取版本信息`,
+        message: `TQSL found: ${tqslPath}, but unable to retrieve version info`,
       };
     }
   }
@@ -133,7 +133,7 @@ export class LoTWService {
     if (!this.config.username || !this.config.password) {
       return {
         success: false,
-        message: 'LoTW用户名和密码不能为空',
+        message: 'LoTW username and password cannot be empty',
       };
     }
 
@@ -166,7 +166,7 @@ export class LoTWService {
       if (responseText.toLowerCase().includes('<eoh>')) {
         return {
           success: true,
-          message: 'LoTW连接成功，凭据有效',
+          message: 'LoTW connection successful, credentials valid',
         };
       }
 
@@ -175,13 +175,13 @@ export class LoTWService {
       if (lowerText.includes('password') || lowerText.includes('incorrect') || lowerText.includes('invalid')) {
         return {
           success: false,
-          message: 'LoTW用户名或密码不正确',
+          message: 'LoTW username or password incorrect',
         };
       }
 
       return {
         success: false,
-        message: 'LoTW返回了意外的响应格式',
+        message: 'LoTW returned unexpected response format',
       };
     } catch (error) {
       logger.error('Connection test failed:', error);
@@ -200,12 +200,12 @@ export class LoTWService {
     if (!this.config.tqslPath) {
       return {
         success: false,
-        message: 'TQSL路径未配置，请先检测或手动设置TQSL路径',
+        message: 'TQSL path not configured, please detect or set TQSL path manually',
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
         errorCount: 1,
-        errors: ['TQSL路径未配置'],
+        errors: ['TQSL path not configured'],
         syncTime: Date.now(),
       };
     }
@@ -213,12 +213,12 @@ export class LoTWService {
     if (!this.config.stationCallsign) {
       return {
         success: false,
-        message: 'Station Callsign未配置，请先设置电台呼号',
+        message: 'Station Callsign not configured, please set station callsign',
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
         errorCount: 1,
-        errors: ['Station Callsign未配置'],
+        errors: ['Station Callsign not configured'],
         syncTime: Date.now(),
       };
     }
@@ -226,7 +226,7 @@ export class LoTWService {
     if (qsos.length === 0) {
       return {
         success: true,
-        message: '没有需要上传的QSO记录',
+        message: 'No QSO records to upload',
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
@@ -273,7 +273,7 @@ export class LoTWService {
 
       return {
         success: true,
-        message: `成功上传 ${qsos.length} 条QSO记录到LoTW`,
+        message: `Successfully uploaded ${qsos.length} QSO records to LoTW`,
         uploadedCount: qsos.length,
         downloadedCount: 0,
         confirmedCount: 0,
@@ -287,23 +287,23 @@ export class LoTWService {
       if (exitCode === 1) {
         return {
           success: false,
-          message: 'TQSL操作被用户取消',
+          message: 'TQSL operation cancelled by user',
           uploadedCount: 0,
           downloadedCount: 0,
           confirmedCount: 0,
           errorCount: 1,
-          errors: ['用户取消'],
+          errors: ['User cancelled'],
           syncTime: Date.now(),
         };
       } else if (exitCode === 2) {
         return {
           success: false,
-          message: 'TQSL上传失败，请检查网络连接和TQSL配置',
+          message: 'TQSL upload failed, check network connection and TQSL configuration',
           uploadedCount: 0,
           downloadedCount: 0,
           confirmedCount: 0,
           errorCount: 1,
-          errors: [error.stderr || error.message || 'TQSL上传失败'],
+          errors: [error.stderr || error.message || 'TQSL upload failed'],
           syncTime: Date.now(),
         };
       }
@@ -311,12 +311,12 @@ export class LoTWService {
       logger.error('TQSL upload error:', error);
       return {
         success: false,
-        message: `TQSL执行错误: ${error.message || '未知错误'}`,
+        message: `TQSL execution error: ${error.message || 'Unknown error'}`,
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
         errorCount: 1,
-        errors: [error.message || '未知错误'],
+        errors: [error.message || 'Unknown error'],
         syncTime: Date.now(),
       };
     } finally {
@@ -335,7 +335,7 @@ export class LoTWService {
    */
   async downloadConfirmations(since?: string): Promise<{ records: QSORecord[]; confirmedCount: number }> {
     if (!this.config.username || !this.config.password) {
-      throw new Error('LoTW用户名和密码未配置');
+      throw new Error('LoTW username and password not configured');
     }
 
     // 计算起始日期：使用since参数或最近30天
@@ -368,11 +368,11 @@ export class LoTWService {
       // 检查认证是否成功
       const lowerText = responseText.toLowerCase();
       if (lowerText.includes('password') || lowerText.includes('incorrect') || lowerText.includes('invalid')) {
-        throw new Error('LoTW用户名或密码不正确');
+        throw new Error('LoTW username or password incorrect');
       }
 
       if (!lowerText.includes('<eoh>')) {
-        throw new Error('LoTW返回了意外的响应格式');
+        throw new Error('LoTW returned unexpected response format');
       }
 
       // 解析ADIF内容
@@ -415,28 +415,28 @@ export class LoTWService {
     }
 
     if (error.name === 'AbortError' || error.code === 'ABORT_ERR') {
-      return new Error('连接超时: LoTW服务器响应时间过长，请检查网络连接');
+      return new Error('Connection timeout: LoTW server response too slow, check network connection');
     }
 
     if (error.code === 'UND_ERR_SOCKET') {
       if (error.cause?.message?.includes('ECONNREFUSED')) {
-        return new Error(`连接被拒绝: 无法连接到LoTW服务器 ${url}`);
+        return new Error(`Connection refused: cannot connect to LoTW server ${url}`);
       }
       if (error.cause?.message?.includes('ENOTFOUND')) {
-        return new Error(`域名解析失败: 找不到LoTW服务器，请检查网络连接`);
+        return new Error(`DNS resolution failed: LoTW server not found, check network connection`);
       }
-      return new Error(`网络连接错误: ${error.cause?.message || error.message}`);
+      return new Error(`Network connection error: ${error.cause?.message || error.message}`);
     }
 
     if (error.code === 'UND_ERR_CONNECT_TIMEOUT') {
-      return new Error('连接超时: 无法在规定时间内连接到LoTW服务器');
+      return new Error('Connection timeout: unable to connect to LoTW server within time limit');
     }
 
     if (error.message?.includes('fetch failed')) {
-      return new Error('网络请求失败: 无法连接到LoTW服务器，请检查网络连接');
+      return new Error('Network request failed: cannot connect to LoTW server, check network connection');
     }
 
-    return new Error(`LoTW连接失败: ${error.message || '未知网络错误'}`);
+    return new Error(`LoTW connection failed: ${error.message || 'Unknown network error'}`);
   }
 }
 

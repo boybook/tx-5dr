@@ -5,6 +5,10 @@ import { createServer } from './server.js';
 import { DigitalRadioEngine } from './DigitalRadioEngine.js';
 import { initializeConsoleLogger, ConsoleLogger } from './utils/console-logger.js';
 import { setGlobalInspector } from './state-machines/inspector.js';
+import { createLogger, setLogLevel, getActiveLogLevel } from './utils/logger.js';
+import { ConfigManager } from './config/config-manager.js';
+
+const logger = createLogger('Server');
 
 const PORT = Number(process.env.PORT) || 4000;
 
@@ -51,15 +55,14 @@ function isRecoverableError(error: any): { recoverable: boolean; category: strin
 }
 
 process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  console.error('[GlobalErrorHandler] Unhandled Promise Rejection:');
-  console.error('Reason:', reason);
+  logger.error('unhandled promise rejection', { reason, promise });
 
   const { recoverable, category } = isRecoverableError(reason);
 
   if (recoverable) {
-    console.warn(`[GlobalErrorHandler] ${category} error, system will continue`);
+    logger.warn(`${category} error, system will continue`);
   } else {
-    console.error(`[GlobalErrorHandler] ${category} error, not exiting process`);
+    logger.error(`${category} error, not exiting process`);
   }
 
   // 不退出进程，让系统继续运行
@@ -67,16 +70,14 @@ process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
 });
 
 process.on('uncaughtException', (error: Error) => {
-  console.error('[GlobalErrorHandler] Uncaught exception:');
-  console.error('Error:', error);
-  console.error('Stack:', error.stack);
+  logger.error('uncaught exception', error);
 
   const { recoverable, category } = isRecoverableError(error);
 
   if (recoverable) {
-    console.warn(`[GlobalErrorHandler] ${category} error, server will continue`);
+    logger.warn(`${category} error, server will continue`);
   } else {
-    console.error(`[GlobalErrorHandler] ${category} critical error, attempting to continue`);
+    logger.error(`${category} critical error, attempting to continue`);
     // 对于真正严重的错误，可以考虑重启电台引擎而不是退出进程
   }
 });
@@ -89,37 +90,49 @@ async function start() {
         const { createSkyInspector } = await import('@statelyai/inspect');
         const inspector = createSkyInspector({
           onerror: (error) => {
-            console.error('[XState Inspect] Error:', error.message);
+            logger.error('XState inspect error', { message: error.message });
           },
         });
         setGlobalInspector(inspector);
-        console.log('[XState Inspect] Visual debugging enabled');
-        console.log('[XState Inspect] Visit: https://stately.ai/inspect');
+        logger.info('XState visual debugging enabled');
+        logger.info('XState inspect URL: https://stately.ai/inspect');
       } catch (err: any) {
-        console.warn('[XState Inspect] Initialization failed (ignorable):', err.message);
+        logger.warn('XState inspect initialization failed (ignorable)', { message: err.message });
       }
     }
 
     // 初始化Console日志系统
     const consoleLogger = await initializeConsoleLogger();
-    console.log('Console logger initialized');
-    console.log(`Log file: ${consoleLogger.getLogFilePath()}`);
+    logger.info('console logger initialized');
+    logger.info('log file path', { path: consoleLogger.getLogFilePath() });
 
     const server = await createServer();
+
+    // Apply log level from config.json (overrides LOG_LEVEL env var)
+    const configLogLevel = ConfigManager.getInstance().getConfig().logLevel;
+    if (configLogLevel) {
+      setLogLevel(configLogLevel);
+      // Also propagate to core's logger which reads process.env.LOG_LEVEL dynamically
+      process.env.LOG_LEVEL = configLogLevel;
+      logger.info(`log level set from config: ${configLogLevel}`);
+    } else {
+      logger.info(`log level: ${getActiveLogLevel()} (from env/default)`);
+    }
+
     await server.listen({ port: PORT, host: '0.0.0.0' });
-    console.log(`TX-5DR server running on http://localhost:${PORT}`);
+    logger.info(`TX-5DR server running on http://localhost:${PORT}`);
 
     // 启动时钟系统
     const clockManager = DigitalRadioEngine.getInstance();
-    console.log('Starting clock system...');
+    logger.info('starting clock system');
 
     await clockManager.start();
-    console.log('Server startup complete');
+    logger.info('server startup complete');
 
     // 启动日志管理定时任务
     startLogMaintenanceTasks(consoleLogger);
   } catch (err) {
-    console.error('Server startup failed:', err);
+    logger.error('server startup failed', err);
     process.exit(1);
   }
 }
@@ -127,13 +140,13 @@ async function start() {
 /**
  * 启动日志维护任务
  */
-function startLogMaintenanceTasks(logger: ConsoleLogger): void {
+function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
   // 每小时检查一次日志轮转（文件大小超过10MB时轮转）
   const rotationInterval = setInterval(async () => {
     try {
-      await logger.rotateLogIfNeeded(10 * 1024 * 1024); // 10MB
+      await consoleLogger.rotateLogIfNeeded(10 * 1024 * 1024); // 10MB
     } catch (error) {
-      console.error('Log rotation check failed:', error);
+      logger.error('log rotation check failed', error);
     }
   }, 60 * 60 * 1000); // 1小时
 
@@ -142,11 +155,11 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
     const now = new Date();
     if (now.getHours() === 2 && now.getMinutes() === 0) {
       try {
-        console.log('Cleaning up old log files...');
-        await logger.cleanupOldLogs(7); // 保留7天
-        console.log('Old log cleanup complete');
+        logger.info('cleaning up old log files');
+        await consoleLogger.cleanupOldLogs(7); // 保留7天
+        logger.info('old log cleanup complete');
       } catch (error) {
-        console.error('Log cleanup failed:', error);
+        logger.error('log cleanup failed', error);
       }
     }
   }, 60 * 1000); // 每分钟检查一次
@@ -155,29 +168,29 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
   const cleanup = () => {
     clearInterval(rotationInterval);
     clearInterval(cleanupInterval);
-    logger.restore();
+    consoleLogger.restore();
   };
 
   const handleSignal = async (signal: NodeJS.Signals) => {
-    console.log(`\nReceived ${signal} signal, shutting down server...`);
+    logger.info(`received ${signal} signal, shutting down server`);
 
     try {
       // 停止 DigitalRadioEngine（这会关闭电台连接和音频流）
       const engine = DigitalRadioEngine.getInstance();
       if (engine.getStatus().isRunning) {
-        console.log('Stopping digital radio engine...');
+        logger.info('stopping digital radio engine');
         await engine.stop();
-        console.log('Digital radio engine stopped');
+        logger.info('digital radio engine stopped');
       }
     } catch (error) {
-      console.error('Failed to stop digital radio engine:', error);
+      logger.error('failed to stop digital radio engine', error);
     }
 
     try {
       cleanup();
-      console.log('Cleanup complete');
+      logger.info('cleanup complete');
     } catch (error) {
-      console.error('Cleanup failed:', error);
+      logger.error('cleanup failed', error);
     }
 
     // 确保进程在收到信号后真正退出
@@ -192,8 +205,8 @@ function startLogMaintenanceTasks(logger: ConsoleLogger): void {
       cleanup();
     } catch {}
   });
-  
-  console.log('Log maintenance tasks started');
+
+  logger.info('log maintenance tasks started');
 }
 
 start(); 

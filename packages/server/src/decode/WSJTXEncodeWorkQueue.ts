@@ -74,7 +74,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       );
 
       if (!audioFloat32 || audioFloat32.length === 0) {
-        throw new Error('编码返回的音频数据为空');
+        throw new Error('encode returned empty audio data');
       }
 
       // 基于模式校验并必要时截断
@@ -140,7 +140,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       if (this.queueSize === 0) this.emit('queueEmpty');
 
     } catch (error) {
-      console.error(`encode failed for operator ${request.operatorId}:`, error);
+      logger.error('encode failed', { operatorId: request.operatorId, error });
       this.emit('encodeError', error as Error, request);
       if (this.queueSize === 0) this.emit('queueEmpty');
     } finally {

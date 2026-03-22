@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // AudioMonitorWSServer - WebSocket消息处理需要使用any
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('AudioMonitorWS');
 
 /**
  * 音频监听WebSocket服务器
@@ -26,26 +29,26 @@ export class AudioMonitorWSServer {
    * @param clientId 客户端ID（由URL参数或握手确定）
    */
   handleConnection(ws: any, clientId: string): void {
-    console.log(`🎧 [AudioMonitorWS] 客户端 ${clientId} 连接到音频WebSocket`);
+    logger.info('audio WebSocket client connected', { clientId });
 
     // 存储连接
     this.clients.set(clientId, ws);
 
     // 监听连接关闭
     ws.on('close', () => {
-      console.log(`🎧 [AudioMonitorWS] 客户端 ${clientId} 断开音频WebSocket`);
+      logger.info('audio WebSocket client disconnected', { clientId });
       this.clients.delete(clientId);
     });
 
     // 监听错误
     ws.on('error', (error: Error) => {
-      console.error(`❌ [AudioMonitorWS] 客户端 ${clientId} 音频WebSocket错误:`, error);
+      logger.error('audio WebSocket error', { clientId, error });
       this.clients.delete(clientId);
     });
 
     // 音频WebSocket只接收二进制数据，不处理文本消息
     ws.on('message', (_data: any) => {
-      console.warn(`⚠️ [AudioMonitorWS] 客户端 ${clientId} 发送了消息（音频WS不应接收消息）`);
+      logger.warn('audio WebSocket client sent unexpected message (audio WS should not receive messages)', { clientId });
     });
   }
 
@@ -63,7 +66,7 @@ export class AudioMonitorWSServer {
     }
 
     if (ws.readyState !== 1) { // WebSocket.OPEN
-      console.warn(`⚠️ [AudioMonitorWS] 客户端 ${clientId} WebSocket未就绪，状态=${ws.readyState}`);
+      logger.warn('audio WebSocket not ready', { clientId, readyState: ws.readyState });
       return;
     }
 
@@ -72,10 +75,7 @@ export class AudioMonitorWSServer {
     if (bufferedAmount > this.BACKPRESSURE_THRESHOLD) {
       this.backpressureWarningCount++;
       if (this.backpressureWarningCount % 20 === 1) { // 每秒输出一次警告
-        console.warn(
-          `⚠️ [AudioMonitorWS] 客户端 ${clientId} 背压过高: ${(bufferedAmount/1024).toFixed(1)}KB, ` +
-          `丢弃本帧避免积压`
-        );
+        logger.debug('backpressure high', { clientId, bufferedAmount: `${(bufferedAmount/1024).toFixed(1)}KB` });
       }
       return; // 丢弃本帧，避免内存积压
     }
@@ -86,10 +86,10 @@ export class AudioMonitorWSServer {
 
       // 每秒输出一次背压状态
       if (this.backpressureWarningCount % 20 === 0 && bufferedAmount > 10 * 1024) {
-        console.log(`📊 [AudioMonitorWS] 客户端 ${clientId} 背压: ${(bufferedAmount/1024).toFixed(1)}KB`);
+        logger.debug('backpressure status', { clientId, bufferedAmount: `${(bufferedAmount/1024).toFixed(1)}KB` });
       }
     } catch (error) {
-      console.error(`❌ [AudioMonitorWS] 发送音频数据到客户端 ${clientId} 失败:`, error);
+      logger.error('failed to send audio data to client', { clientId, error });
       // 发送失败，移除连接
       this.clients.delete(clientId);
     }
@@ -102,7 +102,7 @@ export class AudioMonitorWSServer {
   disconnect(clientId: string): void {
     const ws = this.clients.get(clientId);
     if (ws) {
-      console.log(`🎧 [AudioMonitorWS] 主动断开客户端 ${clientId} 的音频WebSocket`);
+      logger.info('disconnecting client', { clientId });
       ws.close();
       this.clients.delete(clientId);
     }
@@ -134,12 +134,12 @@ export class AudioMonitorWSServer {
    * 关闭所有连接
    */
   closeAll(): void {
-    console.log(`🎧 [AudioMonitorWS] 关闭所有音频WebSocket连接 (${this.clients.size}个)`);
+    logger.info('closing all audio WebSocket connections', { count: this.clients.size });
     for (const [clientId, ws] of this.clients.entries()) {
       try {
         ws.close();
       } catch (error) {
-        console.error(`❌ [AudioMonitorWS] 关闭客户端 ${clientId} 失败:`, error);
+        logger.error('failed to close client connection', { clientId, error });
       }
     }
     this.clients.clear();

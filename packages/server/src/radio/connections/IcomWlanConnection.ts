@@ -123,27 +123,27 @@ export class IcomWlanConnection
 
     // 如果已连接，先断开
     if (this.state === RadioConnectionState.CONNECTED && this.rig) {
-      await this.disconnect('重新连接');
+      await this.disconnect('reconnecting');
     }
 
     // 验证配置
     if (config.type !== 'icom-wlan') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `配置类型错误: 期望 'icom-wlan'，实际 '${config.type}'`,
-        userMessage: '电台配置类型不正确',
-        suggestions: ['请检查配置文件中的连接类型设置'],
+        message: `Configuration type error: expected 'icom-wlan', got '${config.type}'`,
+        userMessage: 'Radio configuration type is incorrect',
+        suggestions: ['Check the connection type setting in the configuration file'],
       });
     }
 
     if (!config.icomWlan || !config.icomWlan.ip || !config.icomWlan.port) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: 'ICOM WLAN 配置缺少必需参数: icomWlan.ip, icomWlan.port',
-        userMessage: 'ICOM WLAN 配置不完整',
+        message: 'ICOM WLAN configuration missing required fields: icomWlan.ip, icomWlan.port',
+        userMessage: 'ICOM WLAN configuration is incomplete',
         suggestions: [
-          '请填写电台的 IP 地址',
-          '请填写电台的 WLAN 端口号（默认50001）',
+          'Enter the radio IP address',
+          'Enter the radio WLAN port number (default 50001)',
         ],
       });
     }
@@ -186,7 +186,7 @@ export class IcomWlanConnection
         this.rig.connect(),
         new Promise((_, reject) =>
           setTimeout(
-            () => reject(new Error('连接超时')),
+            () => reject(new Error('Connection timeout')),
             CONNECTION_TIMEOUT
           )
         ),
@@ -255,7 +255,7 @@ export class IcomWlanConnection
       if (freq !== null) {
         return freq;
       }
-      throw new Error('获取频率返回 null');
+      throw new Error('Get frequency returned null');
     } catch (error) {
       throw this.convertError(error, 'getFrequency');
     }
@@ -273,7 +273,7 @@ export class IcomWlanConnection
       logger.debug(`PTT ${enabled ? 'TX active' : 'RX active'}`);
     } catch (error) {
       throw RadioError.pttActivationFailed(
-        `PTT ${enabled ? '启动' : '停止'}失败`,
+        `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
         error instanceof Error ? error : new Error(String(error))
       );
     }
@@ -317,7 +317,7 @@ export class IcomWlanConnection
           bandwidth: result.filterName || 'Normal'
         };
       }
-      throw new Error('获取模式返回 null');
+      throw new Error('Get mode returned null');
     } catch (error) {
       throw this.convertError(error, 'getMode');
     }
@@ -348,7 +348,7 @@ export class IcomWlanConnection
       if (freq !== null) {
         logger.debug(`Connection test passed, current frequency: ${(freq / 1000000).toFixed(3)} MHz`);
       } else {
-        throw new Error('测试连接失败：无法获取频率');
+        throw new Error('Test connection failed: unable to get frequency');
       }
     } catch (error) {
       throw this.convertError(error, 'testConnection');
@@ -467,7 +467,7 @@ export class IcomWlanConnection
         logger.info('ICOM login successful');
       } else {
         logger.error('ICOM login failed:', res.errorCode);
-        const error = new Error(`ICOM 登录失败: ${res.errorCode}`);
+        const error = new Error(`Login failed: ${res.errorCode}`);
         this.emit('error', this.convertError(error, 'login'));
       }
     });
@@ -492,7 +492,7 @@ export class IcomWlanConnection
     this.rig.events.on('connectionLost', (info) => {
       logger.warn(`Connection lost: ${info.sessionType}, idle ${info.timeSinceLastData}ms`);
       this.stopMeterPolling();
-      this.emit('disconnected', `连接丢失: ${info.sessionType}`);
+      this.emit('disconnected', `Connection lost: ${info.sessionType}`);
     });
 
 
@@ -554,7 +554,7 @@ export class IcomWlanConnection
         if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
           logger.warn(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost`);
           this.stopMeterPolling();
-          this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
+          this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
           return;
         }
       } else {
@@ -581,7 +581,7 @@ export class IcomWlanConnection
       if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
         logger.warn(`Meter polling exception failed ${this.meterPollFailCount} times, connection lost`);
         this.stopMeterPolling();
-        this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
+        this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
       }
     }
   }
@@ -593,9 +593,9 @@ export class IcomWlanConnection
     if (!this.rig || this.state !== RadioConnectionState.CONNECTED) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
-        message: `电台未连接，当前状态: ${this.state}`,
-        userMessage: '电台未连接',
-        suggestions: ['请先连接电台'],
+        message: `Radio not connected, current state: ${this.state}`,
+        userMessage: 'Radio not connected',
+        suggestions: ['Connect to radio first'],
       });
     }
   }
@@ -687,13 +687,13 @@ export class IcomWlanConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
-        message: `ICOM WLAN 连接失败: ${errorMessage}`,
-        userMessage: '无法连接到 ICOM 电台',
+        message: `ICOM WLAN connection failed: ${errorMessage}`,
+        userMessage: 'Cannot connect to ICOM radio',
         suggestions: [
-          '检查电台是否开机',
-          '检查电台的 WiFi 是否已启用',
-          '检查 IP 地址和端口是否正确',
-          '尝试重启电台',
+          'Check if radio is powered on',
+          'Verify radio WiFi is enabled',
+          'Verify IP address and port are correct',
+          'Try restarting the radio',
         ],
         cause: error,
         context: { operation: context },
@@ -703,17 +703,17 @@ export class IcomWlanConnection
     if (
       errorMessageLower.includes('timeout') ||
       errorMessageLower.includes('etimedout') ||
-      errorMessageLower.includes('连接超时')
+      errorMessageLower.includes('connection timeout')
     ) {
       return new RadioError({
         code: RadioErrorCode.CONNECTION_TIMEOUT,
-        message: `ICOM WLAN 连接超时: ${errorMessage}`,
-        userMessage: '连接 ICOM 电台超时',
+        message: `ICOM WLAN connection timeout: ${errorMessage}`,
+        userMessage: 'Timeout connecting to ICOM radio',
         suggestions: [
-          '检查网络连接是否正常',
-          '检查电台和电脑是否在同一网络',
-          '检查防火墙设置',
-          '尝试增加超时时间',
+          'Check if network is functioning',
+          'Verify radio and computer are on the same network',
+          'Check firewall settings',
+          'Try increasing timeout duration',
         ],
         cause: error,
         context: { operation: context },
@@ -726,12 +726,12 @@ export class IcomWlanConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.CONNECTION_LOST,
-        message: `ICOM WLAN 连接断开: ${errorMessage}`,
-        userMessage: 'ICOM 电台连接已断开',
+        message: `ICOM WLAN connection disconnected: ${errorMessage}`,
+        userMessage: 'ICOM radio connection disconnected',
         suggestions: [
-          '检查网络连接',
-          '检查电台是否正常运行',
-          '系统将自动尝试重连',
+          'Check network connection',
+          'Verify radio is operating normally',
+          'System will attempt automatic reconnection',
         ],
         cause: error,
         context: { operation: context },
@@ -746,12 +746,12 @@ export class IcomWlanConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.NETWORK_ERROR,
-        message: `ICOM WLAN 网络错误: ${errorMessage}`,
-        userMessage: '网络连接错误',
+        message: `ICOM WLAN network error: ${errorMessage}`,
+        userMessage: 'Network connection error',
         suggestions: [
-          '检查网络设置',
-          '检查电台和电脑是否在同一网络',
-          '尝试重启路由器',
+          'Check network settings',
+          'Verify radio and computer are on the same network',
+          'Try restarting the router',
         ],
         cause: error,
         context: { operation: context },
@@ -762,11 +762,11 @@ export class IcomWlanConnection
     if (errorMessageLower.includes('login') || errorMessageLower.includes('auth')) {
       return new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `ICOM WLAN 登录失败: ${errorMessage}`,
-        userMessage: 'ICOM 电台登录失败',
+        message: `ICOM WLAN login failed: ${errorMessage}`,
+        userMessage: 'ICOM radio login failed',
         suggestions: [
-          '检查用户名和密码是否正确',
-          '检查电台的用户管理设置',
+          'Verify username and password are correct',
+          'Check radio user management settings',
         ],
         cause: error,
         context: { operation: context },
@@ -780,11 +780,11 @@ export class IcomWlanConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.OPERATION_TIMEOUT,
-        message: `操作超时: ${errorMessage}`,
-        userMessage: '电台操作超时',
+        message: `Operation timeout: ${errorMessage}`,
+        userMessage: 'Radio operation timed out',
         suggestions: [
-          '检查电台连接状态',
-          '尝试重新执行操作',
+          'Check radio connection status',
+          'Try executing the operation again',
         ],
         cause: error,
         context: { operation: context },
@@ -794,12 +794,12 @@ export class IcomWlanConnection
     // 未知错误
     return new RadioError({
       code: RadioErrorCode.UNKNOWN_ERROR,
-      message: `ICOM WLAN 未知错误 (${context}): ${errorMessage}`,
-      userMessage: 'ICOM 电台操作失败',
+      message: `ICOM WLAN unknown error (${context}): ${errorMessage}`,
+      userMessage: 'ICOM radio operation failed',
       suggestions: [
-        '请查看详细错误信息',
-        '尝试重新连接电台',
-        '如问题持续，请联系技术支持',
+        'Please check detailed error information',
+        'Try reconnecting to the radio',
+        'If problem persists, contact technical support',
       ],
       cause: error,
       context: { operation: context },

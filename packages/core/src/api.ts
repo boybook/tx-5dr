@@ -130,7 +130,7 @@ export function handleApiError(errorData: unknown, httpStatus: number): ApiError
   // 类型守卫：确保 errorData 是对象
   const data = (typeof errorData === 'object' && errorData !== null) ? errorData as Record<string, unknown> : {};
 
-  const message = typeof data.message === 'string' ? data.message : '操作失败';
+  const message = typeof data.message === 'string' ? data.message : 'Operation failed';
   const userMessage = typeof data.userMessage === 'string' ? data.userMessage : undefined;
   const code = typeof data.code === 'string' ? data.code : undefined;
   const suggestions = Array.isArray(data.suggestions) ? data.suggestions.filter((s): s is string => typeof s === 'string') : [];
@@ -152,7 +152,7 @@ export function handleApiError(errorData: unknown, httpStatus: number): ApiError
 
   return new ApiError(
     message,
-    userMessage || message || '操作失败，请稍后重试',
+    userMessage || message || 'Operation failed, please try again later',
     httpStatus,
     { code, suggestions, severity, context }
   );
@@ -301,7 +301,7 @@ async function apiRequest<T = unknown>(
           if (data?.code || data?.message) {
             throw new ApiError(
               data.message || `HTTP ${response.status}`,
-              data.message || '操作失败，请稍后重试',
+              data.message || 'Operation failed, please try again later',
               response.status,
               {
                 code: data.code,
@@ -319,7 +319,7 @@ async function apiRequest<T = unknown>(
         // 否则创建通用 HTTP 错误
         throw new ApiError(
           `HTTP ${response.status}: ${response.statusText}`,
-          '操作失败，请检查请求参数',
+          'Operation failed, please check request parameters',
           response.status,
           {
             code: 'HTTP_ERROR',
@@ -331,7 +331,7 @@ async function apiRequest<T = unknown>(
       // 如果没有抛出任何错误，创建通用错误
       throw new ApiError(
         `HTTP ${response.status}: ${response.statusText}`,
-        '操作失败',
+        'Operation failed',
         response.status
       );
     }
@@ -356,12 +356,12 @@ async function apiRequest<T = unknown>(
     // 网络错误（fetch 失败）
     if (error instanceof TypeError && error.message.includes('fetch')) {
       throw new ApiError(
-        '网络请求失败',
-        '无法连接到服务器，请检查网络连接',
+        'Network request failed',
+        'Unable to connect to server, please check network connection',
         0,
         {
           code: 'NETWORK_ERROR',
-          suggestions: ['检查网络连接', '确认服务器是否运行'],
+          suggestions: ['Check network connection', 'Confirm server is running'],
           severity: 'error'
         }
       );
@@ -375,7 +375,7 @@ async function apiRequest<T = unknown>(
     // 其他未知错误
     throw new ApiError(
       error instanceof Error ? error.message : String(error),
-      '发生未知错误，请稍后重试',
+      'An unknown error occurred, please try again later',
       500,
       {
         code: 'UNKNOWN_ERROR',
@@ -415,11 +415,11 @@ export const api = {
             if (data?.code === 'BACKEND_OFFLINE') {
               throw new ApiError(
                 'Backend server offline',
-                '后端服务器未启动或不可达',
+                'Backend server not started or unreachable',
                 res.status,
                 {
                   code: 'BACKEND_OFFLINE',
-                  suggestions: ['检查后端服务是否运行', '查看控制台日志'],
+                  suggestions: ['Check if backend service is running', 'Check console logs'],
                   severity: 'error'
                 }
               );
@@ -439,11 +439,11 @@ export const api = {
           if (proxyHeader === 'backend_offline') {
             throw new ApiError(
               'Backend server offline',
-              '后端服务器未启动或不可达',
+              'Backend server not started or unreachable',
               res.status,
               {
                 code: 'BACKEND_OFFLINE',
-                suggestions: ['检查后端服务是否运行', '查看控制台日志'],
+                suggestions: ['Check if backend service is running', 'Check console logs'],
                 severity: 'error'
               }
             );
@@ -456,11 +456,11 @@ export const api = {
           // 否则创建通用 HTTP 错误
           throw new ApiError(
             `HTTP ${res.status}: ${res.statusText}`,
-            '连接服务器失败，请检查网络连接',
+            'Failed to connect to server, please check network connection',
             res.status,
             {
               code: 'HTTP_ERROR',
-              suggestions: ['检查网络连接', '确认服务器是否运行'],
+              suggestions: ['Check network connection', 'Confirm server is running'],
               severity: 'error'
             }
           );
@@ -469,7 +469,7 @@ export const api = {
         // 如果没有抛出任何错误，创建通用错误
         throw new ApiError(
           `HTTP ${res.status}: ${res.statusText}`,
-          '连接服务器失败',
+          'Failed to connect to server',
           res.status
         );
       }
@@ -479,12 +479,12 @@ export const api = {
       // 网络错误（fetch 失败）
       if (error instanceof TypeError && error.message.includes('fetch')) {
         throw new ApiError(
-          '网络请求失败',
-          '无法连接到服务器，请检查网络连接',
+          'Network request failed',
+          'Unable to connect to server, please check network connection',
           0,
           {
             code: 'NETWORK_ERROR',
-            suggestions: ['检查网络连接', '确认服务器是否运行'],
+            suggestions: ['Check network connection', 'Confirm server is running'],
             severity: 'error'
           }
         );
@@ -498,7 +498,7 @@ export const api = {
       // 其他未知错误
       throw new ApiError(
         error instanceof Error ? error.message : String(error),
-        '发生未知错误，请稍后重试',
+        'An unknown error occurred, please try again later',
         500,
         {
           code: 'UNKNOWN_ERROR',
@@ -1075,7 +1075,7 @@ export const api = {
     const res = await fetch(url, { headers: getAuthHeaders() });
     
     if (!res.ok) {
-      throw new Error(`查询QSO记录失败: ${res.status} ${res.statusText}`);
+      throw new Error(`Failed to query QSO records: ${res.status} ${res.statusText}`);
     }
     
     return await res.json();
@@ -1100,7 +1100,7 @@ export const api = {
     const res = await fetch(url, { headers: getAuthHeaders() });
     
     if (!res.ok) {
-      throw new Error(`导出日志本失败: ${res.status} ${res.statusText}`);
+      throw new Error(`Failed to export logbook: ${res.status} ${res.statusText}`);
     }
     
     return await res.text();
@@ -1122,7 +1122,7 @@ export const api = {
 
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `导入数据失败: ${res.status} ${res.statusText}`);
+      throw new Error(errorData.message || `Failed to import data: ${res.status} ${res.statusText}`);
     }
 
     return await res.json();
@@ -1144,7 +1144,7 @@ export const api = {
 
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `更新QSO记录失败: ${res.status} ${res.statusText}`);
+      throw new Error(errorData.message || `Failed to update QSO record: ${res.status} ${res.statusText}`);
     }
 
     return await res.json();
@@ -1162,7 +1162,7 @@ export const api = {
 
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `删除QSO记录失败: ${res.status} ${res.statusText}`);
+      throw new Error(errorData.message || `Failed to delete QSO record: ${res.status} ${res.statusText}`);
     }
 
     return await res.json();

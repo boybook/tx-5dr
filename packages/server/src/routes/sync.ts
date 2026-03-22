@@ -263,10 +263,10 @@ export async function syncRoutes(fastify: FastifyInstance) {
       if (!service) {
         throw new RadioError({
           code: RadioErrorCode.NOT_INITIALIZED,
-          message: `呼号 ${callsign} 的WaveLog服务未初始化`,
-          userMessage: '请先配置该呼号的WaveLog设置',
+          message: `WaveLog service for callsign ${callsign} not initialized`,
+          userMessage: 'Please configure WaveLog settings for this callsign first',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['在同步设置页面配置WaveLog URL和API密钥', '确保WaveLog服务已启用'],
+          suggestions: ['Configure WaveLog URL and API key in sync settings page', 'Ensure WaveLog service is enabled'],
         });
       }
 
@@ -285,7 +285,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
           if (allQSOs.length === 0) {
             result = {
               success: true,
-              message: '没有找到需要上传的QSO记录',
+              message: 'No QSO records found to upload',
               uploadedCount: 0, downloadedCount: 0, skippedCount: 0, errorCount: 0,
               syncTime: Date.now(),
             };
@@ -301,14 +301,14 @@ export async function syncRoutes(fastify: FastifyInstance) {
           const downloadResult = await syncScheduler.triggerSync(service, callsign);
 
           const qsos = await getRecentQSOs();
-          let uploadResult: any = { success: true, message: '无QSO', uploadedCount: 0, skippedCount: 0, errorCount: 0, errors: [] };
+          let uploadResult: any = { success: true, message: 'No QSOs', uploadedCount: 0, skippedCount: 0, errorCount: 0, errors: [] };
           if (qsos.length > 0) {
             uploadResult = await service.uploadMultipleQSOs(qsos);
           }
 
           result = {
             success: downloadResult.success && uploadResult.success,
-            message: `完整同步完成 - 下载: ${downloadResult.message}, 上传: ${uploadResult.message}`,
+            message: `Full sync complete - download: ${downloadResult.message}, upload: ${uploadResult.message}`,
             uploadedCount: uploadResult.uploadedCount,
             downloadedCount: downloadResult.downloadedCount,
             skippedCount: downloadResult.skippedCount + uploadResult.skippedCount,
@@ -321,10 +321,10 @@ export async function syncRoutes(fastify: FastifyInstance) {
         default:
           throw new RadioError({
             code: RadioErrorCode.INVALID_OPERATION,
-            message: `不支持的同步操作类型: ${syncRequest.operation}`,
-            userMessage: '不支持的同步操作类型',
+            message: `Unsupported sync operation type: ${syncRequest.operation}`,
+            userMessage: 'Unsupported sync operation type',
             severity: RadioErrorSeverity.WARNING,
-            suggestions: ['支持的操作类型：download、upload、full_sync'],
+            suggestions: ['Supported operation types: download, upload, full_sync'],
           });
       }
 
@@ -415,10 +415,10 @@ export async function syncRoutes(fastify: FastifyInstance) {
       if (!service) {
         throw new RadioError({
           code: RadioErrorCode.NOT_INITIALIZED,
-          message: `呼号 ${callsign} 的QRZ服务未初始化`,
-          userMessage: '请先配置该呼号的QRZ设置',
+          message: `QRZ service for callsign ${callsign} not initialized`,
+          userMessage: 'Please configure QRZ settings for this callsign first',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['在同步设置页面配置QRZ API密钥', '确保QRZ服务已启用'],
+          suggestions: ['Configure QRZ API key in sync settings page', 'Ensure QRZ service is enabled'],
         });
       }
 
@@ -429,7 +429,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
           const qsos = await service.downloadQSOs();
           result = {
             success: true,
-            message: `下载完成: ${qsos.length}条QSO记录`,
+            message: `Download complete: ${qsos.length} QSO records`,
             uploadedCount: 0, downloadedCount: qsos.length, skippedCount: 0, errorCount: 0,
             syncTime: Date.now(),
           };
@@ -440,7 +440,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
           if (allQSOs.length === 0) {
             result = {
               success: true,
-              message: '没有找到需要上传的QSO记录',
+              message: 'No QSO records found to upload',
               uploadedCount: 0, downloadedCount: 0, skippedCount: 0, errorCount: 0,
               syncTime: Date.now(),
             };
@@ -464,11 +464,11 @@ export async function syncRoutes(fastify: FastifyInstance) {
             const qsos = await service.downloadQSOs();
             downloadedCount = qsos.length;
           } catch (error) {
-            downloadErrors.push(error instanceof Error ? error.message : '下载失败');
+            downloadErrors.push(error instanceof Error ? error.message : 'Download failed');
           }
 
           const allQSOs = await getRecentQSOs();
-          let uploadResult: any = { success: true, message: '无QSO', uploadedCount: 0, skippedCount: 0, errorCount: 0, errors: [] };
+          let uploadResult: any = { success: true, message: 'No QSOs', uploadedCount: 0, skippedCount: 0, errorCount: 0, errors: [] };
           if (allQSOs.length > 0) {
             uploadResult = await service.uploadMultipleQSOs(allQSOs);
             // 上传成功后标记本地 QSO 的 qrzQslSent
@@ -480,7 +480,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
 
           result = {
             success: downloadErrors.length === 0 && uploadResult.success,
-            message: `完整同步完成 - 下载: ${downloadedCount}条, 上传: ${uploadResult.message}`,
+            message: `Full sync complete - downloaded: ${downloadedCount}, upload: ${uploadResult.message}`,
             uploadedCount: uploadResult.uploadedCount,
             downloadedCount,
             skippedCount: uploadResult.skippedCount,
@@ -493,10 +493,10 @@ export async function syncRoutes(fastify: FastifyInstance) {
         default:
           throw new RadioError({
             code: RadioErrorCode.INVALID_OPERATION,
-            message: `不支持的同步操作类型: ${syncRequest.operation}`,
-            userMessage: '不支持的同步操作类型',
+            message: `Unsupported sync operation type: ${syncRequest.operation}`,
+            userMessage: 'Unsupported sync operation type',
             severity: RadioErrorSeverity.WARNING,
-            suggestions: ['支持的操作类型：download、upload、full_sync'],
+            suggestions: ['Supported operation types: download, upload, full_sync'],
           });
       }
 
@@ -625,10 +625,10 @@ export async function syncRoutes(fastify: FastifyInstance) {
       if (!service) {
         throw new RadioError({
           code: RadioErrorCode.NOT_INITIALIZED,
-          message: `呼号 ${callsign} 的LoTW服务未初始化`,
-          userMessage: '请先配置该呼号的LoTW设置',
+          message: `LoTW service for callsign ${callsign} not initialized`,
+          userMessage: 'Please configure LoTW settings for this callsign first',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['在同步设置页面配置LoTW用户名和密码', '确保LoTW服务已启用'],
+          suggestions: ['Configure LoTW username and password in sync settings page', 'Ensure LoTW service is enabled'],
         });
       }
 
@@ -640,7 +640,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
           if (allQSOs.length === 0) {
             result = {
               success: true,
-              message: '没有找到需要上传的QSO记录',
+              message: 'No QSO records found to upload',
               uploadedCount: 0, downloadedCount: 0, confirmedCount: 0, errorCount: 0,
               syncTime: Date.now(),
             };
@@ -684,7 +684,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
           logger.info(`LoTW confirmation write-back: ${updatedCount}/${records.length} QSOs updated`);
           result = {
             success: true,
-            message: `下载了 ${confirmedCount} 条LoTW确认记录，已更新 ${updatedCount} 条本地QSO`,
+            message: `Downloaded ${confirmedCount} LoTW confirmation records, updated ${updatedCount} local QSOs`,
             uploadedCount: 0,
             downloadedCount: records.length,
             confirmedCount: updatedCount,
@@ -697,10 +697,10 @@ export async function syncRoutes(fastify: FastifyInstance) {
         default:
           throw new RadioError({
             code: RadioErrorCode.INVALID_OPERATION,
-            message: `不支持的同步操作类型: ${(syncRequest as any).operation}`,
-            userMessage: '不支持的同步操作类型',
+            message: `Unsupported sync operation type: ${(syncRequest as any).operation}`,
+            userMessage: 'Unsupported sync operation type',
             severity: RadioErrorSeverity.WARNING,
-            suggestions: ['支持的操作类型：upload、download_confirmations'],
+            suggestions: ['Supported operation types: upload, download_confirmations'],
           });
       }
 

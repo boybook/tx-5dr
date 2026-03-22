@@ -192,17 +192,14 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 return { stop: true };
             }
 
-            // 未达到最大次数，继续呼叫（保持TX1状态）
+            // haven't reached max attempts, continue calling (keep TX1)
             logger.debug('TX1 timeout: max not reached, continuing call, staying in TX1');
-            return {}; // 返回空对象，保持当前状态，继续呼叫
+            return {}; // return empty object to stay in current state, continue calling
         }
     },
     TX2: {
         async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
-            /* if (strategy.context.config.id === 'BA1ABC') {
-                console.log('TX2', strategy.context, messages);
-            } */
-            // 首先等待标准的ROGER_REPORT（R-XX）
+            // first wait for standard ROGER_REPORT (R-XX)
             const msgRogerReport = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.ROGER_REPORT &&

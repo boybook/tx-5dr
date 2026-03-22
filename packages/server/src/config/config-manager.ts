@@ -50,6 +50,8 @@ export interface AppConfig {
   qrz: QRZConfig;
   lotw: LoTWConfig;
   pskreporter: PSKReporterConfig;
+  /** Override log level. Unset = use LOG_LEVEL env var (default: warn in production, info in development). */
+  logLevel?: 'debug' | 'info' | 'warn' | 'error';
 }
 
 // 音频处理配置接口
@@ -289,15 +291,15 @@ export class ConfigManager {
     const oldAudio: AudioDeviceSettings = parsedConfig.audio || DEFAULT_AUDIO;
 
     // 根据电台类型生成默认名称
-    let profileName = '默认配置';
+    let profileName = 'Default Configuration';
     if (oldRadio.type === 'icom-wlan') {
       profileName = `ICOM WLAN ${oldRadio.icomWlan?.ip || ''}`.trim();
     } else if (oldRadio.type === 'serial') {
-      profileName = `串口 ${oldRadio.serial?.path || ''}`.trim();
+      profileName = `Serial ${oldRadio.serial?.path || ''}`.trim();
     } else if (oldRadio.type === 'network') {
       profileName = `RigCtld ${oldRadio.network?.host || 'localhost'}`.trim();
     } else if (oldRadio.type === 'none') {
-      profileName = '纯监听';
+      profileName = 'Listening Only';
     }
 
     const now = Date.now();
@@ -309,7 +311,7 @@ export class ConfigManager {
       audioLockedToRadio: oldRadio.type === 'icom-wlan',
       createdAt: now,
       updatedAt: now,
-      description: '从旧版配置自动迁移',
+      description: 'Automatically migrated from legacy configuration',
     };
 
     parsedConfig.profiles = [defaultProfile];
@@ -431,7 +433,7 @@ export class ConfigManager {
   async updateProfile(id: string, updates: Partial<Omit<RadioProfile, 'id' | 'createdAt'>>): Promise<RadioProfile> {
     const index = this.config.profiles.findIndex(p => p.id === id);
     if (index === -1) {
-      throw new Error(`Profile ${id} 不存在`);
+      throw new Error(`Profile ${id} does not exist`);
     }
 
     this.config.profiles[index] = {
@@ -450,7 +452,7 @@ export class ConfigManager {
   async deleteProfile(id: string): Promise<void> {
     const index = this.config.profiles.findIndex(p => p.id === id);
     if (index === -1) {
-      throw new Error(`Profile ${id} 不存在`);
+      throw new Error(`Profile ${id} does not exist`);
     }
 
     this.config.profiles.splice(index, 1);
@@ -467,7 +469,7 @@ export class ConfigManager {
       .filter((p): p is RadioProfile => p !== undefined);
 
     if (reordered.length !== this.config.profiles.length) {
-      throw new Error('排序列表与现有 Profile 不匹配');
+      throw new Error('Sort list does not match existing Profiles');
     }
 
     this.config.profiles = reordered;
@@ -479,7 +481,7 @@ export class ConfigManager {
    */
   async setActiveProfileId(id: string | null): Promise<void> {
     if (id !== null && !this.config.profiles.find(p => p.id === id)) {
-      throw new Error(`Profile ${id} 不存在`);
+      throw new Error(`Profile ${id} does not exist`);
     }
     this.config.activeProfileId = id;
     await this.saveConfig();
@@ -609,7 +611,7 @@ export class ConfigManager {
   async updateOperatorConfig(id: string, updates: Partial<Omit<RadioOperatorConfig, 'id'>>): Promise<RadioOperatorConfig> {
     const operatorIndex = this.config.operators.findIndex(op => op.id === id);
     if (operatorIndex === -1) {
-      throw new Error(`操作员 ${id} 不存在`);
+      throw new Error(`Operator ${id} does not exist`);
     }
 
     this.config.operators[operatorIndex] = {
@@ -627,7 +629,7 @@ export class ConfigManager {
   async deleteOperatorConfig(id: string): Promise<void> {
     const operatorIndex = this.config.operators.findIndex(op => op.id === id);
     if (operatorIndex === -1) {
-      throw new Error(`操作员 ${id} 不存在`);
+      throw new Error(`Operator ${id} does not exist`);
     }
 
     this.config.operators.splice(operatorIndex, 1);
@@ -642,31 +644,31 @@ export class ConfigManager {
 
     // 验证FT8配置
     if (!this.config.ft8.myCallsign) {
-      errors.push('呼号不能为空');
+      errors.push('Callsign cannot be empty');
     }
 
     if (!this.config.ft8.myGrid) {
-      errors.push('网格定位不能为空');
+      errors.push('Grid locator cannot be empty');
     }
 
     if (this.config.ft8.frequency <= 0) {
-      errors.push('频率必须大于0');
+      errors.push('Frequency must be greater than 0');
     }
 
     if (this.config.ft8.transmitPower <= 0 || this.config.ft8.transmitPower > 100) {
-      errors.push('发射功率必须在1-100之间');
+      errors.push('Transmit power must be between 1 and 100');
     }
 
     // 验证操作员配置
     this.config.operators.forEach((operator, index) => {
       if (!operator.myCallsign) {
-        errors.push(`操作员 ${index + 1}: 呼号不能为空`);
+        errors.push(`Operator ${index + 1}: callsign cannot be empty`);
       }
       if (operator.frequency < 200 || operator.frequency > 4000) {
-        errors.push(`操作员 ${index + 1}: 频率必须在200-4000Hz之间`);
+        errors.push(`Operator ${index + 1}: frequency must be between 200 and 4000 Hz`);
       }
       if (!operator.transmitCycles || operator.transmitCycles.length === 0) {
-        errors.push(`操作员 ${index + 1}: 发射周期不能为空`);
+        errors.push(`Operator ${index + 1}: transmit cycles cannot be empty`);
       }
     });
 
@@ -674,12 +676,12 @@ export class ConfigManager {
     const operatorIds = this.config.operators.map(op => op.id);
     const duplicateIds = operatorIds.filter((id, index) => operatorIds.indexOf(id) !== index);
     if (duplicateIds.length > 0) {
-      errors.push(`操作员ID重复: ${duplicateIds.join(', ')}`);
+      errors.push(`Duplicate operator IDs: ${duplicateIds.join(', ')}`);
     }
 
     // 验证服务器配置
     if (this.config.server.port <= 0 || this.config.server.port > 65535) {
-      errors.push('端口号必须在1-65535之间');
+      errors.push('Port number must be between 1 and 65535');
     }
 
     return {

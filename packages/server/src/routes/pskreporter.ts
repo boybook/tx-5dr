@@ -45,8 +45,8 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
       if (updates.receiverCallsign && !/^[A-Z0-9]{1,10}(\/[A-Z0-9]{1,4})?$/i.test(updates.receiverCallsign)) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: '呼号格式无效',
-          userMessage: '请输入有效的业余电台呼号',
+          message: 'Invalid callsign format',
+          userMessage: 'Please enter a valid amateur radio callsign',
         });
       }
 
@@ -54,8 +54,8 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
       if (updates.receiverLocator && !/^[A-R]{2}[0-9]{2}([A-X]{2})?$/i.test(updates.receiverLocator)) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: '网格格式无效',
-          userMessage: '请输入有效的4位或6位网格坐标，如 PL05 或 PL05qb',
+          message: 'Invalid grid format',
+          userMessage: 'Please enter a valid 4 or 6 digit grid locator, e.g. PL05 or PL05qb',
         });
       }
 
@@ -65,11 +65,11 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
       const service = getPSKReporterService();
       await service.onConfigChanged();
 
-      fastify.log.info('PSKReporter配置已更新:', updates);
+      fastify.log.info('PSKReporter configuration updated:', updates);
 
       return reply.code(200).send({
         success: true,
-        message: '配置保存成功',
+        message: 'Configuration saved successfully',
         data: configManager.getPSKReporterConfig(),
       });
     } catch (error) {
@@ -112,16 +112,16 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
       if (!status.enabled) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_OPERATION,
-          message: 'PSKReporter 未启用',
-          userMessage: '请先在设置中启用 PSKReporter',
+          message: 'PSKReporter is not enabled',
+          userMessage: 'Please enable PSKReporter in settings first',
         });
       }
 
       if (!status.configValid) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: 'PSKReporter 配置无效',
-          userMessage: '请确保已配置有效的呼号和网格坐标',
+          message: 'PSKReporter configuration is invalid',
+          userMessage: 'Please ensure a valid callsign and grid locator are configured',
         });
       }
 
@@ -130,7 +130,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
 
       return reply.code(200).send({
         success: true,
-        message: '上报请求已发送',
+        message: 'Report request sent',
         data: service.getStatus(),
       });
     } catch (error) {
@@ -158,7 +158,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
 
       return reply.code(200).send({
         success: true,
-        message: '统计信息已重置',
+        message: 'Statistics reset successfully',
       });
     } catch (error) {
       logger.error('Failed to reset stats:', error);

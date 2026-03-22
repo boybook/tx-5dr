@@ -32,7 +32,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
    */
   async triggerSync(service: WaveLogService, callsign: string): Promise<WaveLogSyncResponse> {
     if (this.isSyncing) {
-      throw new Error('同步正在进行中，请稍后再试');
+      throw new Error('Sync already in progress, please try again later');
     }
 
     return await this.performSync(service, callsign);
@@ -43,7 +43,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
    */
   private async performSync(waveLogService: WaveLogService, callsign: string): Promise<WaveLogSyncResponse> {
     if (this.isSyncing) {
-      throw new Error('同步已在进行中');
+      throw new Error('Sync already in progress');
     }
 
     this.isSyncing = true;
@@ -95,7 +95,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
           }
         } catch (error) {
           errorCount++;
-          const errorMsg = error instanceof Error ? error.message : '未知错误';
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
           errors.push(`${remoteQSO.callsign}: ${errorMsg}`);
           logger.warn(`Failed to process QSO: ${remoteQSO.callsign} - ${errorMsg}`);
         }
@@ -110,7 +110,7 @@ export class WaveLogSyncScheduler extends EventEmitter {
 
       const result: WaveLogSyncResponse = {
         success: errorCount === 0,
-        message: `同步完成: 下载${downloadedCount}条, 跳过${skippedCount}条, 失败${errorCount}条`,
+        message: `Sync complete: ${downloadedCount} downloaded, ${skippedCount} skipped, ${errorCount} failed`,
         uploadedCount: 0,
         downloadedCount,
         skippedCount,
@@ -127,12 +127,12 @@ export class WaveLogSyncScheduler extends EventEmitter {
     } catch (error) {
       const result: WaveLogSyncResponse = {
         success: false,
-        message: error instanceof Error ? error.message : '同步失败',
+        message: error instanceof Error ? error.message : 'Sync failed',
         uploadedCount: 0,
         downloadedCount: 0,
         skippedCount: 0,
         errorCount: 1,
-        errors: [error instanceof Error ? error.message : '未知错误'],
+        errors: [error instanceof Error ? error.message : 'Unknown error'],
         syncTime: startTime
       };
 

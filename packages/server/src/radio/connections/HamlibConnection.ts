@@ -126,16 +126,16 @@ export class HamlibConnection
 
     // 如果已连接，先断开
     if (this.state === RadioConnectionState.CONNECTED && this.rig) {
-      await this.disconnect('重新连接');
+      await this.disconnect('reconnecting');
     }
 
     // 验证配置
     if (config.type !== 'network' && config.type !== 'serial') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `配置类型错误: 期望 'network' 或 'serial'，实际 '${config.type}'`,
-        userMessage: 'Hamlib 配置类型不正确',
-        suggestions: ['请检查配置文件中的连接类型设置'],
+        message: `Configuration type error: expected 'network' or 'serial', got '${config.type}'`,
+        userMessage: 'Hamlib configuration type is incorrect',
+        suggestions: ['Check the connection type setting in the configuration file'],
       });
     }
 
@@ -143,18 +143,18 @@ export class HamlibConnection
     if (config.type === 'network' && (!config.network || !config.network.host || !config.network.port)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: 'Hamlib 网络配置缺少必需参数: network.host, network.port',
-        userMessage: 'Hamlib 网络配置不完整',
-        suggestions: ['请填写电台的主机地址', '请填写电台的端口号'],
+        message: 'Hamlib network configuration missing required fields: network.host, network.port',
+        userMessage: 'Hamlib network configuration is incomplete',
+        suggestions: ['Enter the radio host address', 'Enter the radio port number'],
       });
     }
 
     if (config.type === 'serial' && (!config.serial || !config.serial.path || !config.serial.rigModel)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: 'Hamlib 串口配置缺少必需参数: serial.path, serial.rigModel',
-        userMessage: 'Hamlib 串口配置不完整',
-        suggestions: ['请填写串口设备路径', '请选择电台型号'],
+        message: 'Hamlib serial configuration missing required fields: serial.path, serial.rigModel',
+        userMessage: 'Hamlib serial configuration is incomplete',
+        suggestions: ['Enter the serial device path', 'Select the radio model'],
       });
     }
 
@@ -203,7 +203,7 @@ export class HamlibConnection
         this.openConnection(),
         new Promise((_, reject) =>
           setTimeout(
-            () => reject(new Error('连接超时')),
+            () => reject(new Error('Connection timeout')),
             CONNECTION_TIMEOUT
           )
         ),
@@ -268,7 +268,7 @@ export class HamlibConnection
       await Promise.race([
         this.rig!.setFrequency(frequency, 'VFO-A'),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('设置频率超时')), 5000)
+          setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
         ),
       ]);
 
@@ -289,7 +289,7 @@ export class HamlibConnection
       const frequency = (await Promise.race([
         this.rig!.getFrequency('VFO-A'),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('获取频率超时')), 5000)
+          setTimeout(() => reject(new Error('Get frequency timeout')), 5000)
         ),
       ])) as number;
 
@@ -315,7 +315,7 @@ export class HamlibConnection
       await Promise.race([
         this.rig!.setPtt(enabled),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('PTT操作超时')), 3000)
+          setTimeout(() => reject(new Error('PTT operation timeout')), 3000)
         ),
       ]);
 
@@ -323,7 +323,7 @@ export class HamlibConnection
       logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);
     } catch (error) {
       throw RadioError.pttActivationFailed(
-        `PTT ${enabled ? '启动' : '停止'}失败`,
+        `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
         error instanceof Error ? error : new Error(String(error))
       );
     }
@@ -339,7 +339,7 @@ export class HamlibConnection
       await Promise.race([
         this.rig!.setMode(mode, bandwidth),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('设置模式超时')), 5000)
+          setTimeout(() => reject(new Error('Set mode timeout')), 5000)
         ),
       ]);
 
@@ -360,7 +360,7 @@ export class HamlibConnection
       const modeInfo = (await Promise.race([
         this.rig!.getMode(),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('获取模式超时')), 5000)
+          setTimeout(() => reject(new Error('Get mode timeout')), 5000)
         ),
       ])) as { mode: string; bandwidth: string };
 
@@ -399,7 +399,7 @@ export class HamlibConnection
       const supportedFunctions = await Promise.race([
         this.rig!.getSupportedFunctions(),
         new Promise<string[]>((_, reject) =>
-          setTimeout(() => reject(new Error('获取功能列表超时')), 5000)
+          setTimeout(() => reject(new Error('Get functions list timeout')), 5000)
         ),
       ]);
 
@@ -433,7 +433,7 @@ export class HamlibConnection
       await Promise.race([
         this.rig!.setFunction('TUNER', enabled),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('设置天调超时')), 5000)
+          setTimeout(() => reject(new Error('Set tuner timeout')), 5000)
         ),
       ]);
 
@@ -454,7 +454,7 @@ export class HamlibConnection
       const enabled = await Promise.race([
         this.rig!.getFunction('TUNER'),
         new Promise<boolean>((_, reject) =>
-          setTimeout(() => reject(new Error('获取天调状态超时')), 5000)
+          setTimeout(() => reject(new Error('Get tuner status timeout')), 5000)
         ),
       ]);
 
@@ -484,7 +484,7 @@ export class HamlibConnection
       await Promise.race([
         this.rig!.vfoOperation('TUNE'),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('启动调谐超时')), 10000) // 调谐可能需要较长时间
+          setTimeout(() => reject(new Error('Start tuning timeout')), 10000) // tuning may require extra time
         ),
       ]);
 
@@ -517,7 +517,7 @@ export class HamlibConnection
    */
   private async openConnection(): Promise<void> {
     if (!this.rig) {
-      throw new Error('电台实例未初始化');
+      throw new Error('Radio instance not initialized');
     }
 
     await this.rig.open();
@@ -535,7 +535,7 @@ export class HamlibConnection
    */
   private async verifyRadioCommunication(): Promise<void> {
     if (!this.rig) {
-      throw new Error('电台实例未初始化');
+      throw new Error('Radio instance not initialized');
     }
 
     const VERIFY_TIMEOUT = 5000;
@@ -546,7 +546,7 @@ export class HamlibConnection
       await Promise.race([
         this.rig.getFrequency('VFO-A'),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('通信验证超时')), VERIFY_TIMEOUT)
+          setTimeout(() => reject(new Error('Communication verification timeout')), VERIFY_TIMEOUT)
         ),
       ]);
 
@@ -554,15 +554,15 @@ export class HamlibConnection
     } catch (error) {
       throw new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
-        message: `串口已打开但无法与电台通信: ${(error as Error).message}`,
-        userMessage: '串口已打开，但无法与电台建立通信',
+        message: `Serial port opened but cannot communicate with radio: ${(error as Error).message}`,
+        userMessage: 'Serial port opened but cannot establish radio communication',
         severity: RadioErrorSeverity.ERROR,
         suggestions: [
-          '检查电台是否已开机',
-          '检查串口线缆（CI-V/CAT）是否正确连接',
-          '确认电台型号选择正确',
-          '检查波特率等串口参数是否匹配',
-          '某些电台需要开启 CI-V/CAT 功能',
+          'Check if radio is powered on',
+          'Check if serial cable (CI-V/CAT) is properly connected',
+          'Confirm correct radio model selection',
+          'Verify baud rate and serial parameters match',
+          'Some radios require enabling CI-V/CAT function',
         ],
         cause: error,
         context: {
@@ -579,7 +579,7 @@ export class HamlibConnection
    */
   private async applySerialConfig(serialConfig: SerialConfig): Promise<void> {
     if (!this.rig) {
-      throw new Error('电台实例未初始化');
+      throw new Error('Radio instance not initialized');
     }
 
     logger.debug('Applying serial config parameters...');
@@ -612,7 +612,7 @@ export class HamlibConnection
             this.rig!.setSerialConfig(config.param as any, config.value),
             new Promise((_, reject) =>
               setTimeout(
-                () => reject(new Error(`设置${config.param}超时`)),
+                () => reject(new Error(`Set ${config.param} timeout`)),
                 3000
               )
             ),
@@ -623,7 +623,7 @@ export class HamlibConnection
       logger.debug('Serial config parameters applied successfully');
     } catch (error) {
       logger.warn('Failed to apply serial config:', (error as Error).message);
-      throw new Error(`串口配置失败: ${(error as Error).message}`);
+      throw new Error(`Serial configuration failed: ${(error as Error).message}`);
     }
   }
 
@@ -634,9 +634,9 @@ export class HamlibConnection
     if (!this.rig || this.state !== RadioConnectionState.CONNECTED) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
-        message: `电台未连接，当前状态: ${this.state}`,
-        userMessage: '电台未连接',
-        suggestions: ['请先连接电台'],
+        message: `Radio not connected, current state: ${this.state}`,
+        userMessage: 'Radio not connected',
+        suggestions: ['Connect to radio first'],
       });
     }
   }
@@ -664,7 +664,7 @@ export class HamlibConnection
           await Promise.race([
             this.rig.close(),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('关闭连接超时')), 5000)
+              setTimeout(() => reject(new Error('Close connection timeout')), 5000)
             ),
           ]);
         } catch (error) {
@@ -749,7 +749,7 @@ export class HamlibConnection
       if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
         logger.error(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
         // 只 emit 事件，不直接修改 state —— 让上层状态机决定状态转换
-        this.emit('error', new Error(`电台通信连续失败 ${this.meterPollFailCount} 次`));
+        this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
         this.stopMeterPolling();
       }
     }
@@ -844,13 +844,13 @@ export class HamlibConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
-        message: `Hamlib 连接失败: ${errorMessage}`,
-        userMessage: '无法连接到电台',
+        message: `Hamlib connection failed: ${errorMessage}`,
+        userMessage: 'Cannot connect to radio',
         suggestions: [
-          '检查电台是否开机',
-          '检查网络连接是否正常',
-          '检查主机地址和端口是否正确',
-          '检查串口设备路径是否正确',
+          'Check if radio is powered on',
+          'Check if network is functioning',
+          'Verify host address and port are correct',
+          'Verify serial device path is correct',
         ],
         cause: error,
         context: { operation: context },
@@ -860,16 +860,16 @@ export class HamlibConnection
     if (
       errorMessageLower.includes('timeout') ||
       errorMessageLower.includes('etimedout') ||
-      errorMessageLower.includes('连接超时')
+      errorMessageLower.includes('connection timeout')
     ) {
       return new RadioError({
         code: RadioErrorCode.CONNECTION_TIMEOUT,
-        message: `Hamlib 连接超时: ${errorMessage}`,
-        userMessage: '连接电台超时',
+        message: `Hamlib connection timeout: ${errorMessage}`,
+        userMessage: 'Timeout connecting to radio',
         suggestions: [
-          '检查网络连接是否正常',
-          '检查电台是否正常响应',
-          '尝试增加超时时间',
+          'Check if network is functioning',
+          'Verify radio responds normally',
+          'Try increasing timeout duration',
         ],
         cause: error,
         context: { operation: context },
@@ -883,13 +883,13 @@ export class HamlibConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.DEVICE_ERROR,
-        message: `Hamlib 设备错误: ${errorMessage}`,
-        userMessage: '电台设备未找到或未配置',
+        message: `Hamlib device error: ${errorMessage}`,
+        userMessage: 'Radio device not found or not configured',
         suggestions: [
-          '检查串口设备是否正确连接',
-          '检查设备驱动是否已安装',
-          '检查设备路径是否正确',
-          '尝试重新插拔设备',
+          'Verify serial device is properly connected',
+          'Check if device drivers are installed',
+          'Verify device path is correct',
+          'Try disconnecting and reconnecting the device',
         ],
         cause: error,
         context: { operation: context },
@@ -903,13 +903,13 @@ export class HamlibConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.DEVICE_ERROR,
-        message: `Hamlib IO 错误: ${errorMessage}`,
-        userMessage: '电台通信错误',
+        message: `Hamlib IO error: ${errorMessage}`,
+        userMessage: 'Radio communication error',
         suggestions: [
-          '检查电台连接是否稳定',
-          '检查串口线缆是否正常',
-          '尝试重启电台',
-          '检查串口参数是否正确',
+          'Verify radio connection is stable',
+          'Check if serial cable is functional',
+          'Try restarting the radio',
+          'Verify serial parameters are correct',
         ],
         cause: error,
         context: { operation: context },
@@ -923,9 +923,9 @@ export class HamlibConnection
     ) {
       return new RadioError({
         code: RadioErrorCode.OPERATION_TIMEOUT,
-        message: `操作超时: ${errorMessage}`,
-        userMessage: '电台操作超时',
-        suggestions: ['检查电台连接状态', '尝试重新执行操作'],
+        message: `Operation timeout: ${errorMessage}`,
+        userMessage: 'Radio operation timed out',
+        suggestions: ['Check radio connection status', 'Try executing the operation again'],
         cause: error,
         context: { operation: context },
       });
@@ -934,12 +934,12 @@ export class HamlibConnection
     // 未知错误
     return new RadioError({
       code: RadioErrorCode.UNKNOWN_ERROR,
-      message: `Hamlib 未知错误 (${context}): ${errorMessage}`,
-      userMessage: '电台操作失败',
+      message: `Hamlib unknown error (${context}): ${errorMessage}`,
+      userMessage: 'Radio operation failed',
       suggestions: [
-        '请查看详细错误信息',
-        '尝试重新连接电台',
-        '如问题持续，请联系技术支持',
+        'Please check detailed error information',
+        'Try reconnecting to the radio',
+        'If problem persists, contact technical support',
       ],
       cause: error,
       context: { operation: context },

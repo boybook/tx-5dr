@@ -33,10 +33,10 @@ export async function profileRoutes(fastify: FastifyInstance) {
       if (e instanceof Error && e.name === 'ZodError') {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: `Profile 数据验证失败: ${e.message}`,
-          userMessage: '请检查 Profile 配置参数',
+          message: `Profile data validation failed: ${e.message}`,
+          userMessage: 'Check Profile configuration parameters',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['确认名称不为空', '检查电台配置参数'],
+          suggestions: ['Confirm name is not empty', 'Check radio configuration parameters'],
         });
       }
       throw e;
@@ -52,8 +52,8 @@ export async function profileRoutes(fastify: FastifyInstance) {
     if (!Array.isArray(profileIds) || profileIds.length === 0) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: 'profileIds 必须是非空数组',
-        userMessage: '排序参数无效',
+        message: 'profileIds must be a non-empty array',
+        userMessage: 'Invalid sort parameters',
         severity: RadioErrorSeverity.WARNING,
       });
     }
@@ -72,10 +72,10 @@ export async function profileRoutes(fastify: FastifyInstance) {
     if (!profileManager.getProfile(id)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `Profile ${id} 不存在`,
-        userMessage: '找不到指定的 Profile',
+        message: `Profile ${id} does not exist`,
+        userMessage: 'Profile not found',
         severity: RadioErrorSeverity.WARNING,
-        suggestions: ['请刷新页面后重试'],
+        suggestions: ['Please refresh the page and try again'],
       });
     }
 
@@ -87,10 +87,10 @@ export async function profileRoutes(fastify: FastifyInstance) {
       if (e instanceof Error && e.name === 'ZodError') {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: `Profile 数据验证失败: ${e.message}`,
-          userMessage: '请检查 Profile 配置参数',
+          message: `Profile data validation failed: ${e.message}`,
+          userMessage: 'Check Profile configuration parameters',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['确认名称不为空', '检查配置参数格式'],
+          suggestions: ['Confirm name is not empty', 'Check configuration parameter format'],
         });
       }
       throw e;
@@ -106,10 +106,10 @@ export async function profileRoutes(fastify: FastifyInstance) {
     if (!profileManager.getProfile(id)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `Profile ${id} 不存在`,
-        userMessage: '找不到指定的 Profile',
+        message: `Profile ${id} does not exist`,
+        userMessage: 'Profile not found',
         severity: RadioErrorSeverity.WARNING,
-        suggestions: ['请刷新页面后重试'],
+        suggestions: ['Please refresh the page and try again'],
       });
     }
 
@@ -117,10 +117,10 @@ export async function profileRoutes(fastify: FastifyInstance) {
     if (configManager.getActiveProfileId() === id) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_OPERATION,
-        message: '无法删除当前激活的 Profile',
-        userMessage: '无法删除正在使用的 Profile',
+        message: 'Cannot delete the currently active Profile',
+        userMessage: 'Cannot delete Profile currently in use',
         severity: RadioErrorSeverity.WARNING,
-        suggestions: ['请先切换到其他 Profile，再删除此 Profile'],
+        suggestions: ['Please switch to another Profile before deleting this one'],
       });
     }
 
@@ -137,10 +137,10 @@ export async function profileRoutes(fastify: FastifyInstance) {
     if (!profileManager.getProfile(id)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `Profile ${id} 不存在`,
-        userMessage: '找不到指定的 Profile',
+        message: `Profile ${id} does not exist`,
+        userMessage: 'Profile not found',
         severity: RadioErrorSeverity.WARNING,
-        suggestions: ['请刷新页面后重试'],
+        suggestions: ['Please refresh the page and try again'],
       });
     }
 

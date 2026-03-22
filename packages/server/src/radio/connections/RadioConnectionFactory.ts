@@ -34,9 +34,9 @@ export class RadioConnectionFactory {
     if (!config || !config.type) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: '配置无效: 缺少 type 字段',
-        userMessage: '电台配置无效',
-        suggestions: ['请提供有效的电台配置'],
+        message: 'Invalid configuration: missing type field',
+        userMessage: 'Invalid radio configuration',
+        suggestions: ['Please provide a valid radio configuration'],
       });
     }
 
@@ -58,11 +58,11 @@ export class RadioConnectionFactory {
       default:
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: `不支持的连接类型: ${(config as any).type}`,
-          userMessage: '不支持的电台连接类型',
+          message: `Unsupported connection type: ${(config as any).type}`,
+          userMessage: 'Unsupported radio connection type',
           suggestions: [
-            '支持的类型: icom-wlan, network, serial',
-            '请检查配置文件中的连接类型',
+            'Supported types: icom-wlan, network, serial',
+            'Check the connection type in the configuration file',
           ],
         });
     }
@@ -78,9 +78,9 @@ export class RadioConnectionFactory {
     if (config.type !== 'icom-wlan') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `配置类型错误: 期望 'icom-wlan'，实际 '${config.type}'`,
-        userMessage: '配置类型不匹配',
-        suggestions: ['请使用 ICOM WLAN 类型的配置'],
+        message: `Configuration type error: expected 'icom-wlan', got '${config.type}'`,
+        userMessage: 'Configuration type mismatch',
+        suggestions: ['Please use an ICOM WLAN type configuration'],
       });
     }
 
@@ -98,9 +98,9 @@ export class RadioConnectionFactory {
     if (config.type !== 'network' && config.type !== 'serial') {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `配置类型错误: 期望 'network' 或 'serial'，实际 '${config.type}'`,
-        userMessage: '配置类型不匹配',
-        suggestions: ['请使用 Hamlib 类型的配置 (network 或 serial)'],
+        message: `Configuration type error: expected 'network' or 'serial', got '${config.type}'`,
+        userMessage: 'Configuration type mismatch',
+        suggestions: ['Please use a Hamlib type configuration (network or serial)'],
       });
     }
 
@@ -122,33 +122,33 @@ export class RadioConnectionFactory {
 
     // 检查 type 字段
     if (!config || !config.type) {
-      errors.push('缺少 type 字段');
+      errors.push('Missing type field');
       return { valid: false, errors };
     }
 
     // 根据类型验证必需字段
     switch (config.type) {
       case 'icom-wlan':
-        if (!config.icomWlan) errors.push('ICOM WLAN 配置缺少 icomWlan 对象');
+        if (!config.icomWlan) errors.push('ICOM WLAN configuration missing icomWlan object');
         else {
-          if (!config.icomWlan.ip) errors.push('ICOM WLAN 配置缺少 icomWlan.ip 字段');
-          if (!config.icomWlan.port) errors.push('ICOM WLAN 配置缺少 icomWlan.port 字段');
+          if (!config.icomWlan.ip) errors.push('ICOM WLAN configuration missing required field: icomWlan.ip');
+          if (!config.icomWlan.port) errors.push('ICOM WLAN configuration missing required field: icomWlan.port');
         }
         break;
 
       case 'network':
-        if (!config.network) errors.push('网络配置缺少 network 对象');
+        if (!config.network) errors.push('Network configuration missing network object');
         else {
-          if (!config.network.host) errors.push('网络配置缺少 network.host 字段');
-          if (!config.network.port) errors.push('网络配置缺少 network.port 字段');
+          if (!config.network.host) errors.push('Network configuration missing required field: network.host');
+          if (!config.network.port) errors.push('Network configuration missing required field: network.port');
         }
         break;
 
       case 'serial':
-        if (!config.serial) errors.push('串口配置缺少 serial 对象');
+        if (!config.serial) errors.push('Serial configuration missing serial object');
         else {
-          if (!config.serial.path) errors.push('串口配置缺少 serial.path 字段');
-          if (!config.serial.rigModel) errors.push('串口配置缺少 serial.rigModel 字段');
+          if (!config.serial.path) errors.push('Serial configuration missing required field: serial.path');
+          if (!config.serial.rigModel) errors.push('Serial configuration missing required field: serial.rigModel');
         }
         break;
 
@@ -157,7 +157,7 @@ export class RadioConnectionFactory {
         break;
 
       default:
-        errors.push(`不支持的连接类型: ${(config as any).type}`);
+        errors.push(`Unsupported connection type: ${(config as any).type}`);
     }
 
     return {

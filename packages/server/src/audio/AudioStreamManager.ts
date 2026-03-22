@@ -147,7 +147,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         });
 
         this.icomWlanAudioAdapter.on('error', (error: Error) => {
-          console.error('ICOM WLAN audio error:', error);
+          logger.error('ICOM WLAN audio error', error);
           this.emit('error', error);
         });
 
@@ -186,14 +186,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.emit('started');
 
     } catch (error) {
-      console.error('failed to start audio stream:', error);
+      logger.error('failed to start audio stream', error);
       // 清理失败的输入流
       if (this.rtAudioInput) {
         try {
           this.rtAudioInput.stop();
           this.rtAudioInput.closeStream();
         } catch (cleanupError) {
-          console.error('failed to cleanup audio input stream:', cleanupError);
+          logger.error('failed to cleanup audio input stream', cleanupError);
         }
         this.rtAudioInput = null;
       }
@@ -231,7 +231,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.rtAudioInput.stop();
           this.rtAudioInput.closeStream();
         } catch (e) {
-          console.error('failed to cleanup audio input stream:', e);
+          logger.error('failed to cleanup audio input stream', e);
         }
         this.rtAudioInput = null;
       }
@@ -246,7 +246,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.emit('stopped');
 
     } catch (error) {
-      console.error('failed to stop audio stream:', error);
+      logger.error('failed to stop audio stream', error);
       this.emit('error', error as Error);
       throw error;
     }
@@ -334,7 +334,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       return samples;
     } catch (error) {
-      console.error('buffer conversion error:', error);
+      logger.error('buffer conversion error', error);
       // 返回空数组作为后备
       return new Float32Array(0);
     }
@@ -422,14 +422,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.info('audio output started', { sampleRate: this.sampleRate });
 
     } catch (error) {
-      console.error('failed to start audio output:', error);
+      logger.error('failed to start audio output', error);
       // 清理失败的输出流
       if (this.rtAudioOutput) {
         try {
           this.rtAudioOutput.stop();
           this.rtAudioOutput.closeStream();
         } catch (cleanupError) {
-          console.error('failed to cleanup audio output stream:', cleanupError);
+          logger.error('failed to cleanup audio output stream', cleanupError);
         }
         this.rtAudioOutput = null;
       }
@@ -446,7 +446,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private async createAndStartInputWithTimeout(actualDeviceId: number | undefined, deviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        console.error('audio input create/start timed out (15s)');
+        logger.error('audio input create/start timed out (15s)');
         reject(new Error('audio input create/start timed out'));
       }, 15000);
 
@@ -463,8 +463,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               const targetDevice = allDevices.find((d: any) => d.id === actualDeviceId);
               if (targetDevice && targetDevice.inputChannels < (this.channels || 1)) {
                 throw new Error(
-                  `输入设备 "${targetDevice.name}" (ID ${actualDeviceId}) 不支持 ${this.channels} 通道输入` +
-                  ` (输入通道数: ${targetDevice.inputChannels})。请在设置中选择正确的音频输入设备。`
+                  `Input device "${targetDevice.name}" (ID ${actualDeviceId}) does not support ${this.channels} channel input` +
+                  ` (available input channels: ${targetDevice.inputChannels}). Please select the correct audio input device in settings.`
                 );
               }
             }
@@ -503,7 +503,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                       this.audioProvider.writeAudio(resampled);
                       this.emit('audioData', resampled);
                     }).catch((error) => {
-                      console.error('audio resample error:', error);
+                      logger.error('audio resample error', error);
                       this.emit('error', error as Error);
                     });
                   } else {
@@ -511,7 +511,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                     this.emit('audioData', samples);
                   }
                 } catch (error) {
-                  console.error('audio data processing error:', error);
+                  logger.error('audio data processing error', error);
                   this.emit('error', error as Error);
                 }
               },
@@ -529,7 +529,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             resolve();
 
           } catch (error) {
-            console.error('audio input create/start failed:', error);
+            logger.error('audio input create/start failed', error);
             clearTimeout(timeout);
             reject(error);
           }
@@ -547,7 +547,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private async createAndStartOutputWithTimeout(actualOutputDeviceId: number | undefined, outputDeviceId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        console.error('audio output create/start timed out (15s)');
+        logger.error('audio output create/start timed out (15s)');
         reject(new Error('audio output create/start timed out'));
       }, 15000);
 
@@ -582,7 +582,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             resolve();
 
           } catch (error) {
-            console.error('audio output create/start failed:', error);
+            logger.error('audio output create/start failed', error);
             clearTimeout(timeout);
             reject(error);
           }
@@ -618,7 +618,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.rtAudioOutput.stop();
           this.rtAudioOutput.closeStream();
         } catch (e) {
-          console.error('failed to cleanup audio output stream:', e);
+          logger.error('failed to cleanup audio output stream', e);
         }
         this.rtAudioOutput = null;
       }
@@ -629,7 +629,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.info('audio output stopped');
 
     } catch (error) {
-      console.error('failed to stop audio output:', error);
+      logger.error('failed to stop audio output', error);
       this.emit('error', error as Error);
       throw error;
     }
@@ -785,7 +785,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           // 检查是否需要停止播放
           if (this.shouldStopPlayback) {
             logger.debug(`ICOM WLAN stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
-            throw new Error('播放已被中断');
+            throw new Error('playback interrupted');
           }
 
           const start = i * chunkSize;
@@ -822,7 +822,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         logger.info(`ICOM WLAN audio send complete, duration: ${chunkDuration}ms`);
 
       } catch (error) {
-        console.error('ICOM WLAN audio send failed:', error);
+        logger.error('ICOM WLAN audio send failed', error);
         throw error;
       } finally {
         // 清理播放状态
@@ -835,7 +835,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     // 传统声卡输出
     if (!this.isOutputting || !this.rtAudioOutput) {
-      throw new Error('音频输出流未启动');
+      throw new Error('audio output stream not started');
     }
 
     // 保存播放状态
@@ -895,7 +895,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       for (let i = 0; i < totalChunks; i++) {
         if (this.shouldStopPlayback) {
           logger.debug(`stop signal received, aborting playback (submitted ${i}/${totalChunks} chunks)`);
-          throw new Error('播放已被中断');
+          throw new Error('playback interrupted');
         }
 
         const start = i * chunkSize;
@@ -924,7 +924,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         // 写入音频数据（Audify 无背压机制，依赖时间节拍控制流速）
         if (!this.rtAudioOutput) {
-          throw new Error('音频输出未初始化');
+          throw new Error('audio output not initialized');
         }
         try {
           this.rtAudioOutput.write(buffer);
@@ -945,7 +945,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       logger.info(`playback complete at ${new Date(playEndTime).toISOString()}, duration: ${playDuration}ms`);
 
       } catch (error) {
-        console.error('audio playback failed:', error);
+        logger.error('audio playback failed', error);
         throw error;
       } finally {
         // 清理播放状态

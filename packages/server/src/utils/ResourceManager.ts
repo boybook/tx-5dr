@@ -242,7 +242,7 @@ export class ResourceManager {
     if (this.resources.has(name)) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_OPERATION,
-        message: `资源 "${name}" 已注册`,
+        message: `Resource "${name}" is already registered`,
       });
     }
 
@@ -271,7 +271,7 @@ export class ResourceManager {
     if (metadata.state === ResourceState.RUNNING) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
-        message: `无法取消注册运行中的资源 "${name}"`,
+        message: `Cannot unregister running resource "${name}"`,
       });
     }
 
@@ -367,7 +367,7 @@ export class ResourceManager {
     if (this.startedResources.length > 0) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
-        message: '无法清空：还有资源正在运行',
+        message: 'Cannot clear: some resources are still running',
       });
     }
 
@@ -383,7 +383,7 @@ export class ResourceManager {
     if (!metadata) {
       throw new RadioError({
         code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-        message: `未找到资源 "${name}"`,
+        message: `Resource "${name}" not found`,
       });
     }
 
@@ -395,7 +395,7 @@ export class ResourceManager {
       if (!depMetadata || depMetadata.state !== ResourceState.RUNNING) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_STATE,
-          message: `资源 "${name}" 依赖的资源 "${depName}" 未运行`,
+          message: `Dependency "${depName}" of resource "${name}" is not running`,
         });
       }
     }
@@ -411,7 +411,7 @@ export class ResourceManager {
 
     try {
       // 使用超时保护
-      await this.withTimeout(resource.start(), startTimeout, `启动资源 "${name}"`);
+      await this.withTimeout(resource.start(), startTimeout, `Starting resource "${name}"`);
 
       metadata.state = ResourceState.RUNNING;
       metadata.startedAt = Date.now();
@@ -453,7 +453,7 @@ export class ResourceManager {
     logger.info(`Stopping resource: ${name}`);
 
     try {
-      await this.withTimeout(resource.stop(), stopTimeout, `停止资源 "${name}"`);
+      await this.withTimeout(resource.stop(), stopTimeout, `Stopping resource "${name}"`);
 
       metadata.state = ResourceState.STOPPED;
       metadata.stoppedAt = Date.now();
@@ -505,7 +505,7 @@ export class ResourceManager {
       if (visiting.has(name)) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: `检测到循环依赖: ${name}`,
+          message: `Circular dependency detected: ${name}`,
         });
       }
 
@@ -547,7 +547,7 @@ export class ResourceManager {
       if (recursionStack.has(name)) {
         throw new RadioError({
           code: RadioErrorCode.INVALID_CONFIG,
-          message: `检测到循环依赖: ${[...path, name].join(' → ')}`,
+          message: `Circular dependency detected: ${[...path, name].join(' -> ')}`,
         });
       }
 
@@ -564,7 +564,7 @@ export class ResourceManager {
           if (!this.resources.has(dep)) {
             throw new RadioError({
               code: RadioErrorCode.INVALID_CONFIG,
-              message: `资源 "${name}" 依赖的资源 "${dep}" 未注册`,
+              message: `Dependency "${dep}" of resource "${name}" is not registered`,
             });
           }
 
@@ -597,7 +597,7 @@ export class ResourceManager {
             reject(
               new RadioError({
                 code: RadioErrorCode.OPERATION_TIMEOUT,
-                message: `${operationName} 超时 (${timeoutMs}ms)`,
+                message: `${operationName} timed out (${timeoutMs}ms)`,
               })
             ),
           timeoutMs

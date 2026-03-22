@@ -102,7 +102,7 @@ export class ProfileManager {
 
     // 禁止删除当前激活的 Profile
     if (configManager.getActiveProfileId() === id) {
-      throw new Error('无法删除当前激活的 Profile，请先切换到其他 Profile');
+      throw new Error('Cannot delete active Profile, please switch to another Profile first');
     }
 
     const profile = configManager.getProfile(id);
@@ -125,7 +125,7 @@ export class ProfileManager {
     const configManager = ConfigManager.getInstance();
     const profile = configManager.getProfile(id);
     if (!profile) {
-      throw new Error(`Profile ${id} 不存在`);
+      throw new Error(`Profile ${id} does not exist`);
     }
 
     const engine = DigitalRadioEngine.getInstance();
@@ -138,7 +138,7 @@ export class ProfileManager {
         await Promise.race([
           engine.stop(),
           new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error('引擎停止超时')), 10_000)
+            setTimeout(() => reject(new Error('Engine stop timeout')), 10_000)
           ),
         ]);
         logger.info('Engine stopped');

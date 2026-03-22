@@ -82,7 +82,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
       this.emit('audioData', samples12kHz);
 
     } catch (error) {
-      console.error('[IcomWlanAudioAdapter] Failed to process audio frame:', error);
+      logger.error('Failed to process audio frame', error);
       this.emit('error', error as Error);
     }
   }
@@ -100,7 +100,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
       // console.debug(`✅ [IcomWlanAudioAdapter] 音频发送成功`);
 
     } catch (error) {
-      console.error('[IcomWlanAudioAdapter] Failed to send audio:', error);
+      logger.error('Failed to send audio', error);
       throw error;
     }
   }

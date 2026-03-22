@@ -55,17 +55,17 @@ export async function modeRoutes(fastify: FastifyInstance) {
       
       // 如果引擎正在运行，先停止它
       if (wasRunning) {
-        fastify.log.info('模式切换：停止解码引擎以应用新模式');
+        fastify.log.info('Mode switch: stopping engine to apply new mode');
         await digitalRadioEngine.stop();
       }
       
       // 切换模式
       await digitalRadioEngine.setMode(newMode);
-      fastify.log.info(`模式已切换到: ${newMode.name}`);
+      fastify.log.info(`Mode switched to: ${newMode.name}`);
       
       // 如果引擎之前在运行，重新启动它
       if (wasRunning) {
-        fastify.log.info('模式切换：重新启动解码引擎');
+        fastify.log.info('Mode switch: restarting engine');
         await digitalRadioEngine.start();
       }
 
@@ -74,8 +74,8 @@ export async function modeRoutes(fastify: FastifyInstance) {
       return reply.code(200).send({
         success: true,
         message: wasRunning 
-          ? '模式切换成功，解码引擎已重新启动' 
-          : '模式切换成功',
+          ? 'Mode switched successfully, engine restarted'
+          : 'Mode switched successfully',
         data: status.currentMode,
       });
     } catch (error) {

@@ -38,11 +38,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       }>;
 
       await configManager.updateFT8Config(updates);
-      fastify.log.info('FT8配置已更新:', updates);
+      fastify.log.info('FT8 config updated:', updates);
 
       return reply.code(200).send({
         success: true,
-        message: '配置保存成功',
+        message: 'Configuration saved successfully',
         data: configManager.getFT8Config(),
       });
     } catch (error) {

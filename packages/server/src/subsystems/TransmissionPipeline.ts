@@ -133,8 +133,8 @@ export class TransmissionPipeline {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.deps.engineEmitter.emit('timingWarning' as any, {
-        title: '⚠️ 编码超时警告',
-        text: `发射时刻已到达，但仍有 ${missingCount} 个编码任务未完成。这可能导致发射延迟或失败。建议检查发射补偿设置或减少同时发射的操作员数量。`
+        title: 'Encode timeout warning',
+        text: `Transmit time reached but ${missingCount} encode task(s) not yet complete. This may cause delayed or failed transmission. Check transmit compensation settings or reduce simultaneous operators.`
       });
     } else if (this.currentSlotExpectedEncodes > 0) {
       logger.debug(`all encode tasks completed on time (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);

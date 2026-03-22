@@ -25,7 +25,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (!authToken) {
       return reply.code(401).send({
         success: false,
-        error: { code: 'INVALID_TOKEN', message: '令牌无效或已过期', userMessage: '令牌无效或已过期' },
+        error: { code: 'INVALID_TOKEN', message: 'Token is invalid or expired', userMessage: 'Token is invalid or expired' },
       });
     }
 
@@ -49,7 +49,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (!request.authUser) {
       return reply.code(401).send({
         success: false,
-        error: { code: 'UNAUTHORIZED', message: '未认证', userMessage: '请先登录' },
+        error: { code: 'UNAUTHORIZED', message: 'Not authenticated', userMessage: 'Please login first' },
       });
     }
 
@@ -98,7 +98,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (!result) {
       return reply.code(404).send({
         success: false,
-        error: { code: 'NOT_FOUND', message: '令牌不存在', userMessage: '令牌不存在' },
+        error: { code: 'NOT_FOUND', message: 'Token does not exist', userMessage: 'Token does not exist' },
       });
     }
 
@@ -116,12 +116,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       if (result.error === 'SYSTEM_TOKEN') {
         return reply.code(403).send({
           success: false,
-          error: { code: 'SYSTEM_TOKEN', message: '系统令牌不可撤销', userMessage: '系统令牌不可撤销，请使用"重新生成"功能' },
+          error: { code: 'SYSTEM_TOKEN', message: 'System token cannot be revoked', userMessage: 'System token cannot be revoked, use regenerate instead' },
         });
       }
       return reply.code(404).send({
         success: false,
-        error: { code: 'NOT_FOUND', message: '令牌不存在', userMessage: '令牌不存在' },
+        error: { code: 'NOT_FOUND', message: 'Token does not exist', userMessage: 'Token does not exist' },
       });
     }
 
@@ -138,7 +138,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (!result) {
       return reply.code(404).send({
         success: false,
-        error: { code: 'NOT_FOUND', message: '令牌不存在或非系统令牌', userMessage: '令牌不存在或非系统令牌' },
+        error: { code: 'NOT_FOUND', message: 'Token does not exist or is not a system token', userMessage: 'Token does not exist or is not a system token' },
       });
     }
 

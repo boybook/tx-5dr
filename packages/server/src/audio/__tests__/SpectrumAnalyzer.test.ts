@@ -1,11 +1,11 @@
 /**
- * SpectrumAnalyzer 单元测试
+ * SpectrumAnalyzer unit tests
  */
 
 import { describe, it, expect } from 'vitest';
 import { SpectrumAnalyzer } from '../SpectrumAnalyzer.js';
 
-/** 生成指定频率的正弦波 */
+/** Generate a sine wave at the specified frequency */
 function generateSineWave(frequency: number, sampleRate: number, duration: number, amplitude = 0.8): Float32Array {
   const numSamples = Math.floor(sampleRate * duration);
   const data = new Float32Array(numSamples);
@@ -15,12 +15,12 @@ function generateSineWave(frequency: number, sampleRate: number, duration: numbe
   return data;
 }
 
-/** 生成静音数据 */
+/** Generate silence data */
 function generateSilence(sampleRate: number, duration: number): Float32Array {
   return new Float32Array(Math.floor(sampleRate * duration));
 }
 
-/** 生成白噪声 */
+/** Generate white noise */
 function generateWhiteNoise(sampleRate: number, duration: number, amplitude = 0.1): Float32Array {
   const numSamples = Math.floor(sampleRate * duration);
   const data = new Float32Array(numSamples);
@@ -38,18 +38,18 @@ describe('SpectrumAnalyzer', () => {
     targetSampleRate: 6000,
   };
 
-  describe('构造函数', () => {
-    it('应正常创建实例', () => {
+  describe('Constructor', () => {
+    it('should create instance normally', () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       expect(analyzer).toBeDefined();
     });
 
-    it('FFT 大小非 2 的幂应抛出错误', () => {
+    it('should throw error for FFT size not power of 2', () => {
       expect(() => new SpectrumAnalyzer({ ...defaultConfig, fftSize: 1000 }))
         .toThrow('FFT size must be a power of 2');
     });
 
-    it('应使用默认配置值', () => {
+    it('should use default config values', () => {
       const analyzer = new SpectrumAnalyzer({ sampleRate: 12000, fftSize: 1024 });
       const config = analyzer.getConfig();
       expect(config.windowFunction).toBe('hann');
@@ -58,13 +58,13 @@ describe('SpectrumAnalyzer', () => {
     });
   });
 
-  describe('analyze - 基本功能', () => {
-    it('应返回有效的 FT8Spectrum 结构', async () => {
+  describe('analyze - basic functionality', () => {
+    it('should return valid FT8Spectrum structure', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(audio);
 
-      // 验证结构完整性
+      // Verify structural completeness
       expect(spectrum.timestamp).toBeTypeOf('number');
       expect(spectrum.sampleRate).toBe(defaultConfig.targetSampleRate);
       expect(spectrum.frequencyRange.min).toBe(0);
@@ -76,7 +76,7 @@ describe('SpectrumAnalyzer', () => {
       expect(spectrum.summary!.averageMagnitude).toBeTypeOf('number');
     });
 
-    it('静音输入的峰值幅度应极低', async () => {
+    it('should have very low peak amplitude for silent input', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       const silence = generateSilence(defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(silence);
@@ -84,9 +84,9 @@ describe('SpectrumAnalyzer', () => {
       expect(spectrum.summary!.peakMagnitude).toBeLessThan(-80);
     });
 
-    it('正弦波的峰值频率应接近输入频率', async () => {
+    it('sine wave peak frequency should be close to input frequency', async () => {
       const targetFreq = 1000; // 1kHz
-      // 使用 sampleRate=targetSampleRate 避免降采样零填充影响精度
+      // Use sampleRate=targetSampleRate to avoid downsampling zero-padding accuracy impact
       const analyzer = new SpectrumAnalyzer({
         sampleRate: 6000,
         fftSize: 4096,
@@ -95,12 +95,12 @@ describe('SpectrumAnalyzer', () => {
       const audio = generateSineWave(targetFreq, 6000, 2.0);
       const spectrum = await analyzer.analyze(audio);
 
-      // 频率分辨率 = 6000 / 4096 ≈ 1.46Hz，容许误差 ±10Hz
+      // Frequency resolution = 6000 / 4096 ≈ 1.46Hz, tolerance ±10Hz
       expect(spectrum.summary!.peakFrequency).toBeGreaterThan(targetFreq - 10);
       expect(spectrum.summary!.peakFrequency).toBeLessThan(targetFreq + 10);
     });
 
-    it('正弦波的峰值幅度应明显高于静音', async () => {
+    it('sine wave peak amplitude should be significantly higher than silence', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       const sine = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const silence = generateSilence(defaultConfig.sampleRate, 0.5);
@@ -112,8 +112,8 @@ describe('SpectrumAnalyzer', () => {
     });
   });
 
-  describe('analyze - 降采样', () => {
-    it('采样率相同时应跳过降采样', async () => {
+  describe('analyze - downsampling', () => {
+    it('should skip downsampling when sample rates are equal', async () => {
       const analyzer = new SpectrumAnalyzer({
         sampleRate: 6000,
         fftSize: 1024,
@@ -126,27 +126,27 @@ describe('SpectrumAnalyzer', () => {
       expect(spectrum.frequencyRange.max).toBeLessThanOrEqual(3000);
     });
 
-    it('高采样率应正确降采样', async () => {
+    it('should correctly downsample high sample rate', async () => {
       const analyzer = new SpectrumAnalyzer({
         sampleRate: 48000,
         fftSize: 2048,
         targetSampleRate: 6000,
       });
-      // 使用足够长的音频，确保降采样后数据远大于 fftSize
+      // Use long enough audio to ensure downsampled data is much larger than fftSize
       const audio = generateSineWave(1000, 48000, 2.0);
       const spectrum = await analyzer.analyze(audio);
 
       expect(spectrum.sampleRate).toBe(6000);
-      // 降采样后峰值频率仍应接近 1kHz，容许误差 ±100Hz（线性插值降采样有精度损失）
+      // Peak frequency after downsampling should still be close to 1kHz, tolerance ±100Hz (linear interpolation downsampling has precision loss)
       expect(spectrum.summary!.peakFrequency).toBeGreaterThan(900);
       expect(spectrum.summary!.peakFrequency).toBeLessThan(1100);
     });
   });
 
-  describe('analyze - 窗口函数', () => {
+  describe('analyze - window function', () => {
     const windowTypes = ['hann', 'hamming', 'blackman', 'none'] as const;
 
-    it.each(windowTypes)('窗口函数 %s 应正常工作', async (windowFunction) => {
+    it.each(windowTypes)('window function %s should work correctly', async (windowFunction) => {
       const analyzer = new SpectrumAnalyzer({
         ...defaultConfig,
         windowFunction,
@@ -159,8 +159,8 @@ describe('SpectrumAnalyzer', () => {
     });
   });
 
-  describe('analyze - binaryData 编码', () => {
-    it('base64 数据应能正确解码为 Int16Array', async () => {
+  describe('analyze - binaryData encoding', () => {
+    it('base64 data should decode correctly to Int16Array', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(audio);
@@ -171,7 +171,7 @@ describe('SpectrumAnalyzer', () => {
       expect(int16.length).toBe(spectrum.binaryData.format.length);
     });
 
-    it('使用 scale/offset 应能还原为 dB 值', async () => {
+    it('should restore dB values using scale/offset', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(audio);
@@ -180,24 +180,24 @@ describe('SpectrumAnalyzer', () => {
       const int16 = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 2);
       const { scale, offset } = spectrum.binaryData.format;
 
-      // 还原 dB 值
+      // Restore dB values
       const dbValues = Array.from(int16).map(v => v * (scale ?? 1) + (offset ?? 0));
-      // dB 值应在合理范围
+      // dB values should be within reasonable range
       for (const db of dbValues) {
         expect(db).toBeLessThanOrEqual(10);
       }
     });
   });
 
-  describe('analyzeStream - 批量分析', () => {
-    it('长音频应返回多个频谱帧', async () => {
+  describe('analyzeStream - batch analysis', () => {
+    it('long audio should return multiple spectrum frames', async () => {
       const analyzer = new SpectrumAnalyzer({
         sampleRate: 6000,
         fftSize: 1024,
         targetSampleRate: 6000,
         overlapRatio: 0.5,
       });
-      // 1秒 = 6000 样本, fftSize=1024, hopSize=512, 预期约 (6000-1024)/512 + 1 ≈ 10 帧
+      // 1s = 6000 samples, fftSize=1024, hopSize=512, expected ~(6000-1024)/512 + 1 ≈ 10 frames
       const audio = generateSineWave(1000, 6000, 1.0);
       const results = await analyzer.analyzeStream(audio);
 
@@ -207,13 +207,13 @@ describe('SpectrumAnalyzer', () => {
       });
     });
 
-    it('短于 fftSize 的音频应返回空数组', async () => {
+    it('audio shorter than fftSize should return empty array', async () => {
       const analyzer = new SpectrumAnalyzer({
         sampleRate: 6000,
         fftSize: 2048,
         targetSampleRate: 6000,
       });
-      const shortAudio = new Float32Array(1000); // 少于 2048
+      const shortAudio = new Float32Array(1000); // less than 2048
       const results = await analyzer.analyzeStream(shortAudio);
 
       expect(results.length).toBe(0);
@@ -221,18 +221,18 @@ describe('SpectrumAnalyzer', () => {
   });
 
   describe('updateConfig', () => {
-    it('更新窗口函数后应生效', async () => {
+    it('should apply updated window function', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       analyzer.updateConfig({ windowFunction: 'blackman' });
 
       expect(analyzer.getConfig().windowFunction).toBe('blackman');
-      // 仍能正常分析
+      // Should still analyze normally
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(audio);
       expect(spectrum.summary!.peakMagnitude).toBeGreaterThan(-60);
     });
 
-    it('更新 FFT 大小后应生效', async () => {
+    it('should apply updated FFT size', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       analyzer.updateConfig({ fftSize: 4096 });
 
@@ -242,22 +242,22 @@ describe('SpectrumAnalyzer', () => {
       expect(spectrum.binaryData.format.length).toBeGreaterThan(0);
     });
 
-    it('更新 FFT 大小为非 2 的幂应抛出错误', () => {
+    it('should throw error when updating FFT size to non-power-of-2', () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       expect(() => analyzer.updateConfig({ fftSize: 3000 }))
         .toThrow('FFT size must be a power of 2');
     });
   });
 
-  describe('频率分辨率', () => {
-    it('应能区分两个相近但不同的频率', async () => {
-      // 使用 sampleRate=targetSampleRate 避免降采样干扰
+  describe('frequency resolution', () => {
+    it('should distinguish two close but different frequencies', async () => {
+      // Use sampleRate=targetSampleRate to avoid downsampling interference
       const analyzer = new SpectrumAnalyzer({
         sampleRate: 6000,
         fftSize: 8192,
         targetSampleRate: 6000,
       });
-      // 频率分辨率 = 6000/8192 ≈ 0.73Hz
+      // Frequency resolution = 6000/8192 ≈ 0.73Hz
       const audio800 = generateSineWave(800, 6000, 2.0);
       const audio1000 = generateSineWave(1000, 6000, 2.0);
 
@@ -266,7 +266,7 @@ describe('SpectrumAnalyzer', () => {
 
       expect(Math.abs(spec800.summary!.peakFrequency - 800)).toBeLessThan(10);
       expect(Math.abs(spec1000.summary!.peakFrequency - 1000)).toBeLessThan(10);
-      // 两个峰值频率应明显不同
+      // The two peak frequencies should be clearly different
       expect(Math.abs(spec800.summary!.peakFrequency - spec1000.summary!.peakFrequency)).toBeGreaterThan(150);
     });
   });
