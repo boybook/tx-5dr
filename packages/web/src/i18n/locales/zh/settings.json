@@ -282,5 +282,30 @@
     "autoResumeCQAfterSuccess": "成功后自动恢复CQ",
     "replyToWorkedStations": "回复已通联电台",
     "prioritizeNewCalls": "优先选择新呼号"
+  },
+  "serverHealth": {
+    "title": "服务器进程健康状态",
+    "tooltip": "查看服务器健康状态",
+    "statusGood": "正常",
+    "statusWarn": "警告",
+    "statusCritical": "异常",
+    "statusUnknown": "未知",
+    "uptime": "运行时长",
+    "memory": "内存",
+    "cpu": "CPU 使用率",
+    "eventLoop": "事件循环延迟",
+    "heapUsed": "堆已用",
+    "heapTotal": "堆总量",
+    "rss": "RSS",
+    "user": "用户态",
+    "system": "内核态",
+    "total": "总计",
+    "p99": "P99",
+    "p50": "P50",
+    "mean": "均值",
+    "timeRange5m": "5 分钟",
+    "timeRange15m": "15 分钟",
+    "timeRange30m": "30 分钟",
+    "noData": "等待数据..."
   }
 }

@@ -67,6 +67,10 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // 语音模式事件
   [WSMessageType.VOICE_PTT_LOCK_CHANGED]: 'voicePttLockChanged',
   [WSMessageType.VOICE_RADIO_MODE_CHANGED]: 'voiceRadioModeChanged',
+
+  // 进程监控事件
+  [WSMessageType.PROCESS_SNAPSHOT]: 'processSnapshot',
+  [WSMessageType.PROCESS_SNAPSHOT_HISTORY]: 'processSnapshotHistory',
 };
 
 /**

@@ -15,6 +15,7 @@ import type {
 } from '@tx5dr/contracts';
 import { WSMessageHandler } from '@tx5dr/core';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import type { ProcessMonitor } from '../services/ProcessMonitor.js';
 import { globalEventBus } from '../utils/EventBus.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { AuthManager } from '../auth/AuthManager.js';
@@ -288,16 +289,23 @@ export class WSServer extends WSMessageHandler {
   private connectionIdCounter = 0;
   private digitalRadioEngine: DigitalRadioEngine;
   private audioMonitorWSServer: AudioMonitorWSServer; // AudioMonitorWSServer实例
+  private processMonitor: ProcessMonitor | null = null;
   private audioMonitorListenersSetup = false; // 标记AudioMonitor监听器是否已设置
   private opusMonitorEncoder: OpusMonitorEncoder | null = null;
   private opusAccumBuffer: Float32Array = new Float32Array(0);
   private readonly OPUS_FRAME_SIZE = 960; // 20ms at 48kHz
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
-  constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: AudioMonitorWSServer) {
+  constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: AudioMonitorWSServer, processMonitor?: ProcessMonitor) {
     super();
     this.digitalRadioEngine = digitalRadioEngine;
     this.audioMonitorWSServer = audioMonitorWSServer;
+    if (processMonitor) {
+      this.processMonitor = processMonitor;
+      processMonitor.setBroadcastCallback((snapshot) => {
+        this.broadcast(WSMessageType.PROCESS_SNAPSHOT, snapshot);
+      });
+    }
     this.setupEngineEventListeners();
     this.setupAudioMonitorEventListeners(); // 初始化时设置音频监听事件（广播模式）
 
@@ -1638,6 +1646,11 @@ export class WSServer extends WSMessageHandler {
         supportedFeatures: ['operatorFiltering', 'handshakeProtocol'],
         finalEnabledOperatorIds: enabledOperatorIds === null ? finalEnabledOperatorIds : undefined // 新客户端需要保存最终的操作员列表
       });
+
+      // 3.5 发送进程监控历史数据
+      if (this.processMonitor) {
+        connection.send(WSMessageType.PROCESS_SNAPSHOT_HISTORY, this.processMonitor.getHistoryPayload());
+      }
 
       // 4. 如果引擎正在运行，发送额外的状态同步
       const status = this.digitalRadioEngine.getStatus();

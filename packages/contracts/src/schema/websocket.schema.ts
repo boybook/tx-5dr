@@ -113,6 +113,10 @@ export enum WSMessageType {
   VOICE_PTT_LOCK_CHANGED = 'voicePttLockChanged',
   VOICE_SET_RADIO_MODE = 'voiceSetRadioMode',
   VOICE_RADIO_MODE_CHANGED = 'voiceRadioModeChanged',
+
+  // ===== 进程监控 =====
+  PROCESS_SNAPSHOT = 'processSnapshot',
+  PROCESS_SNAPSHOT_HISTORY = 'processSnapshotHistory',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -1107,4 +1111,8 @@ export interface DigitalRadioEngineEvents {
   // 语音模式事件
   voicePttLockChanged: (data: VoicePTTLock) => void;
   voiceRadioModeChanged: (data: { radioMode: string }) => void;
-} 
+
+  // 进程监控事件
+  processSnapshot: (data: import('./process-monitor.schema.js').ProcessSnapshot) => void;
+  processSnapshotHistory: (data: import('./process-monitor.schema.js').ProcessSnapshotHistory) => void;
+}

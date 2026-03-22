@@ -18,6 +18,7 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faCog, faKey, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { AutomationSettingsPanel } from '../components/AutomationSettingsPanel';
+import { ServerHealthButton } from '../components/ServerHealthButton';
 import { useTranslation } from 'react-i18next';
 
 export const RightLayout: React.FC = () => {
@@ -208,6 +209,7 @@ export const RightLayout: React.FC = () => {
             )}
           </div>
           <div className="flex items-center gap-0">
+            <ServerHealthButton />
             <ThemeToggle variant="dropdown" size="sm" />
             <Button
               onPress={handleOpenSettings}
