@@ -3,7 +3,7 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('SpectrumDisplay');
 import type { FT8Spectrum } from '@tx5dr/contracts';
-import { useConnection, useOperators } from '../store/radioStore';
+import { useConnection, useOperators, useRadioState } from '../store/radioStore';
 import { WebGLWaterfall } from './WebGLWaterfall';
 import type { AutoRangeConfig } from './WebGLWaterfall';
 import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
@@ -69,6 +69,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   });
   const connection = useConnection();
   const { operators } = useOperators();
+  const { state: radioState } = useRadioState();
+  const isTransmitting = radioState.pttStatus.isTransmitting;
   const lastUpdateRef = useRef<number>(0);
   const pendingDataRef = useRef<FT8Spectrum | null>(null);
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -291,6 +293,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         onTxFrequencyChange={showMarkers ? handleTxFrequencyChange : undefined}
         onActualRangeChange={setActualRange}
         hoverFrequency={hoverFrequency}
+        isTransmitting={isTransmitting}
         className="bg-transparent"
       />
 
