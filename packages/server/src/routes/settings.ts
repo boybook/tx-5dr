@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
-import { UserRole, DecodeWindowSettingsSchema, resolveWindowTiming } from '@tx5dr/contracts';
+import { UserRole, DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema } from '@tx5dr/contracts';
+import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { requireRole } from '../auth/authPlugin.js';
@@ -98,6 +99,58 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  // ==================== 频率预设管理 ====================
+
+  // 获取频率预设列表
+  fastify.get('/frequency-presets', async (_request, reply) => {
+    try {
+      const custom = configManager.getCustomFrequencyPresets();
+      const freqManager = new FrequencyManager(custom);
+      return reply.code(200).send({
+        success: true,
+        presets: freqManager.getPresets(),
+        isCustomized: custom !== null,
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // 保存自定义频率预设（仅管理员）
+  fastify.put('/frequency-presets', {
+    preHandler: [requireRole(UserRole.ADMIN)],
+  }, async (request, reply) => {
+    try {
+      const parsed = CustomFrequencyPresetsSchema.parse(request.body);
+      await configManager.updateCustomFrequencyPresets(parsed.presets);
+      return reply.code(200).send({
+        success: true,
+        message: 'Frequency presets saved',
+        presets: parsed.presets,
+        isCustomized: true,
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  // 恢复默认频率预设（仅管理员）
+  fastify.delete('/frequency-presets', {
+    preHandler: [requireRole(UserRole.ADMIN)],
+  }, async (_request, reply) => {
+    try {
+      await configManager.resetCustomFrequencyPresets();
+      return reply.code(200).send({
+        success: true,
+        message: 'Frequency presets reset to defaults',
+        presets: FrequencyManager.DEFAULT_PRESETS,
+        isCustomized: false,
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 }

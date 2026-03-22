@@ -3,7 +3,7 @@
 
 import { promises as fs } from 'fs';
 import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary } from '@tx5dr/contracts';
-import type { RadioProfile, DecodeWindowSettings } from '@tx5dr/contracts';
+import type { RadioProfile, DecodeWindowSettings, PresetFrequency } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
@@ -54,6 +54,8 @@ export interface AppConfig {
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
   /** Decode window settings per mode (preset or custom timing) */
   decodeWindowSettings?: DecodeWindowSettings;
+  /** Custom frequency presets (null/undefined = use built-in defaults) */
+  customFrequencyPresets?: PresetFrequency[] | null;
 }
 
 // 音频处理配置接口
@@ -974,6 +976,22 @@ export class ConfigManager {
    */
   async updateDecodeWindowSettings(settings: DecodeWindowSettings): Promise<void> {
     this.config.decodeWindowSettings = settings;
+    await this.saveConfig();
+  }
+
+  // ==================== 频率预设管理 ====================
+
+  getCustomFrequencyPresets(): PresetFrequency[] | null {
+    return this.config.customFrequencyPresets ?? null;
+  }
+
+  async updateCustomFrequencyPresets(presets: PresetFrequency[]): Promise<void> {
+    this.config.customFrequencyPresets = presets;
+    await this.saveConfig();
+  }
+
+  async resetCustomFrequencyPresets(): Promise<void> {
+    this.config.customFrequencyPresets = null;
     await this.saveConfig();
   }
 }

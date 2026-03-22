@@ -67,6 +67,7 @@ import type {
   UpdateTokenRequest,
   UpdateAuthConfigRequest,
   NetworkInfo,
+  PresetFrequency,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -899,6 +900,48 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(settings),
       },
+      apiBase
+    );
+  },
+
+  // ========== 频率预设管理 ==========
+
+  async getFrequencyPresets(apiBase?: string): Promise<{
+    success: boolean;
+    presets: PresetFrequency[];
+    isCustomized: boolean;
+  }> {
+    return apiRequest('/settings/frequency-presets', undefined, apiBase);
+  },
+
+  async updateFrequencyPresets(
+    presets: PresetFrequency[],
+    apiBase?: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    presets: PresetFrequency[];
+    isCustomized: boolean;
+  }> {
+    return apiRequest(
+      '/settings/frequency-presets',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ presets }),
+      },
+      apiBase
+    );
+  },
+
+  async resetFrequencyPresets(apiBase?: string): Promise<{
+    success: boolean;
+    message: string;
+    presets: PresetFrequency[];
+    isCustomized: boolean;
+  }> {
+    return apiRequest(
+      '/settings/frequency-presets',
+      { method: 'DELETE' },
       apiBase
     );
   },

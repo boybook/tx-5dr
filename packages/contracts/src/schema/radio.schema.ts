@@ -267,7 +267,15 @@ export type ReconnectProgress = z.infer<typeof ReconnectProgressSchema>;
 
 export const RadioConnectionStatusSchema = z.nativeEnum(RadioConnectionStatus);
 
+/**
+ * 自定义频率预设设置Schema
+ */
+export const CustomFrequencyPresetsSchema = z.object({
+  presets: z.array(PresetFrequencySchema).min(1),
+});
+
 // 导出类型
+export type CustomFrequencyPresets = z.infer<typeof CustomFrequencyPresetsSchema>;
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;
 export type FrequencyListResponse = z.infer<typeof FrequencyListResponseSchema>;
 export type SerialConfig = z.infer<typeof SerialConfigSchema>;

@@ -87,7 +87,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.slotPackManager = new SlotPackManager();
     this.audioMixer = new AudioMixer(100);
     this.radioManager = new PhysicalRadioManager();
-    this.frequencyManager = new FrequencyManager();
+    this.frequencyManager = new FrequencyManager(ConfigManager.getInstance().getCustomFrequencyPresets());
     this.transmissionTracker = new TransmissionTracker();
     this.resourceManager = new ResourceManager();
 

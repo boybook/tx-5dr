@@ -1,13 +1,7 @@
-export interface PresetFrequency {
-  band: string;
-  mode: string; // 协议模式，如 FT8, FT4
-  radioMode?: string; // 电台调制模式，如 USB, LSB, AM, FM
-  frequency: number;
-  description?: string;
-}
+import type { PresetFrequency } from '@tx5dr/contracts';
 
 export class FrequencyManager {
-  private presets: PresetFrequency[] = [
+  static readonly DEFAULT_PRESETS: PresetFrequency[] = [
     // 按频率从小到大排列
     { band: '160m', mode: 'FT8', radioMode: 'USB', frequency: 1840000, description: '1.840 MHz 160m' },
     { band: '160m', mode: 'FT4', radioMode: 'USB', frequency: 1842000, description: '1.842 MHz 160m' },
@@ -33,6 +27,14 @@ export class FrequencyManager {
     { band: '2m', mode: 'FT8', radioMode: 'USB', frequency: 144460000, description: '144.460 MHz 2m' },
     { band: '70cm', mode: 'FT8', radioMode: 'USB', frequency: 432174000, description: '432.174 MHz 70cm' },
   ];
+
+  private presets: PresetFrequency[];
+
+  constructor(customPresets?: PresetFrequency[] | null) {
+    this.presets = customPresets && customPresets.length > 0
+      ? customPresets
+      : [...FrequencyManager.DEFAULT_PRESETS];
+  }
 
   getPresets(): PresetFrequency[] {
     return [...this.presets];
