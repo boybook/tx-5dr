@@ -864,6 +864,45 @@ export const api = {
     );
   },
 
+  // ========== 解码窗口设置 ==========
+
+  /**
+   * 获取解码窗口设置
+   */
+  async getDecodeWindowSettings(apiBase?: string): Promise<{
+    success: boolean;
+    data: {
+      settings: Record<string, unknown>;
+      resolved: Record<string, number[]>;
+    };
+  }> {
+    return apiRequest('/settings/decode-windows', undefined, apiBase);
+  },
+
+  /**
+   * 更新解码窗口设置
+   */
+  async updateDecodeWindowSettings(
+    settings: Record<string, unknown>,
+    apiBase?: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: {
+      settings: Record<string, unknown>;
+      resolved: Record<string, number[]>;
+    };
+  }> {
+    return apiRequest(
+      '/settings/decode-windows',
+      {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      },
+      apiBase
+    );
+  },
+
   // ========== 操作员管理API ==========
 
   /**

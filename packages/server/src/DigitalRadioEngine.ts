@@ -3,7 +3,7 @@ import {
   SlotScheduler,
   ClockSourceSystem
 } from '@tx5dr/core';
-import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, resolveWindowTiming } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
@@ -194,6 +194,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const compensationMs = radioConfig.transmitCompensationMs || 0;
     logger.info(`Transmit compensation config: ${compensationMs}ms`);
 
+    // 应用解码窗口覆盖配置
+    this.applyDecodeWindowOverrides();
+
     // 创建 SlotClock
     this.slotClock = new SlotClock(this.clockSource, this.currentMode, compensationMs);
 
@@ -367,14 +370,39 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     logger.info(`Switching mode: ${this.currentMode.name} -> ${mode.name}`);
     this.currentMode = mode;
+    this.applyDecodeWindowOverrides();
 
     if (this.slotClock) {
-      this.slotClock.setMode(mode);
+      this.slotClock.setMode(this.currentMode);
     }
 
-    this.slotPackManager.setMode(mode);
-    this.clockCoordinator?.onModeChanged(mode);
-    this.emit('modeChanged', mode);
+    this.slotPackManager.setMode(this.currentMode);
+    this.clockCoordinator?.onModeChanged(this.currentMode);
+    this.emit('modeChanged', this.currentMode);
+  }
+
+  /**
+   * Apply decode window settings from config to currentMode
+   */
+  private applyDecodeWindowOverrides(): void {
+    const settings = ConfigManager.getInstance().getDecodeWindowSettings();
+    const resolved = resolveWindowTiming(this.currentMode.name, settings);
+    if (resolved) {
+      this.currentMode = { ...this.currentMode, windowTiming: resolved };
+      logger.info(`Decode window overrides applied for ${this.currentMode.name}: [${resolved.join(', ')}]`);
+    }
+  }
+
+  /**
+   * Update decode windows at runtime (called after settings change)
+   */
+  public updateDecodeWindows(): void {
+    this.applyDecodeWindowOverrides();
+    if (this.slotClock) {
+      this.slotClock.setMode(this.currentMode);
+    }
+    this.emit('modeChanged', this.currentMode);
+    logger.info(`Decode windows updated: ${this.currentMode.windowTiming.length} windows`);
   }
 
   // ─── 查询方法 ────────────────────────────────────

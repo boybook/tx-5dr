@@ -3,7 +3,7 @@
 
 import { promises as fs } from 'fs';
 import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary } from '@tx5dr/contracts';
-import type { RadioProfile } from '@tx5dr/contracts';
+import type { RadioProfile, DecodeWindowSettings } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
@@ -52,6 +52,8 @@ export interface AppConfig {
   pskreporter: PSKReporterConfig;
   /** Override log level. Unset = use LOG_LEVEL env var (default: warn in production, info in development). */
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
+  /** Decode window settings per mode (preset or custom timing) */
+  decodeWindowSettings?: DecodeWindowSettings;
 }
 
 // 音频处理配置接口
@@ -956,5 +958,22 @@ export class ConfigManager {
       qrz: !!(config?.qrz?.apiKey),
       lotw: !!(config?.lotw?.username || config?.lotw?.tqslPath),
     };
+  }
+
+  // ===== 解码窗口设置 =====
+
+  /**
+   * 获取解码窗口设置
+   */
+  getDecodeWindowSettings(): DecodeWindowSettings | undefined {
+    return this.config.decodeWindowSettings;
+  }
+
+  /**
+   * 更新解码窗口设置
+   */
+  async updateDecodeWindowSettings(settings: DecodeWindowSettings): Promise<void> {
+    this.config.decodeWindowSettings = settings;
+    await this.saveConfig();
   }
 }
