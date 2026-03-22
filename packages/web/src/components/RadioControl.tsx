@@ -1602,7 +1602,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               onValueChange={handleListenToggle}
               size="sm"
               color="primary"
-              isDisabled={!connection.state.isConnected || isTogglingListen}
+              isDisabled={!connection.state.isConnected || isTogglingListen || !isAdmin}
               aria-label={t('monitor.toggleListen')}
               className={isTogglingListen ? 'opacity-50 pointer-events-none' : ''}
             />

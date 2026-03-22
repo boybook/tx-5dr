@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../utils/logger';
@@ -89,6 +89,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const dataAnimRef = useRef<number>();
   const heightRef = useRef(height);
   useEffect(() => { heightRef.current = height; }, [height]);
+  const minDbRef = useRef(minDb);
+  const maxDbRef = useRef(maxDb);
+  useEffect(() => { minDbRef.current = minDb; }, [minDb]);
+  useEffect(() => { maxDbRef.current = maxDb; }, [maxDb]);
+  const actualRangeRef = useRef<{min: number, max: number} | null>(null);
 
   // 优化后的数据范围计算 - 使用采样和缓存
   const calculateDataRange = useCallback((spectrumData: number[][]) => {
@@ -389,10 +394,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
 
       const minDbLocation = gl.getUniformLocation(program, 'u_minDb');
-      gl.uniform1f(minDbLocation, minDb);
+      gl.uniform1f(minDbLocation, minDbRef.current);
 
       const maxDbLocation = gl.getUniformLocation(program, 'u_maxDb');
-      gl.uniform1f(maxDbLocation, maxDb);
+      gl.uniform1f(maxDbLocation, maxDbRef.current);
 
       const useFloatTextureLocation = gl.getUniformLocation(program, 'u_useFloatTexture');
       gl.uniform1i(useFloatTextureLocation, 0);
@@ -414,7 +419,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       setError(t('webgl.initFailed', { message: error instanceof Error ? error.message : t('webgl.unknownError') }));
       return false;
     }
-  }, [createProgram, colorMap, minDb, maxDb, t]);
+  }, [createProgram, colorMap, t]);
 
   // 优化后的纹理更新
   const updateTexture = useCallback((spectrumData: number[][]) => {
@@ -446,10 +451,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       currentMin = range.min;
       currentMax = range.max;
 
-      // 只在范围变化显著时更新状态和通知父组件
-      if (!actualRange ||
-          Math.abs(actualRange.min - currentMin) > 0.5 ||
-          Math.abs(actualRange.max - currentMax) > 0.5) {
+      // 只在范围变化显著时更新状态和通知父组件（使用 ref 比较避免循环依赖）
+      if (!actualRangeRef.current ||
+          Math.abs(actualRangeRef.current.min - currentMin) > 0.5 ||
+          Math.abs(actualRangeRef.current.max - currentMax) > 0.5) {
+        actualRangeRef.current = range;
         setActualRange(range);
 
         // 通知父组件范围已更新
@@ -492,7 +498,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
 
     updateInternal();
-  }, [minDb, maxDb, autoRange, calculateDataRange, actualRange]);
+  }, [minDb, maxDb, autoRange, calculateDataRange]);
 
   // 渲染
   const render = useCallback(() => {
@@ -515,10 +521,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     // 获取容器的实际尺寸
     const containerRect = container.getBoundingClientRect();
     const pixelRatio = window.devicePixelRatio || 1;
-    
+
     // 使用容器的宽度和传入的height（通过 ref 读取，避免 handleResize 随 height 变化重建）
     const canvasWidth = containerRect.width;
     const canvasHeight = heightRef.current;
+
+    // 防止零尺寸导致 WebGL 错误（布局切换时容器可能瞬间为 0）
+    if (canvasWidth <= 0 || canvasHeight <= 0) return;
     
     // 只在尺寸真正改变时更新
     if (canvas.width === canvasWidth * pixelRatio && 
@@ -566,8 +575,26 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
   }, [render]);
 
-  // 初始化
-  useEffect(() => {
+  // 初始化（使用 useLayoutEffect 确保 WebGL 在浏览器绘制前完成初始化，避免黑帧闪烁）
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // WebGL context loss 处理
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      logger.warn('WebGL context lost');
+      if (dataAnimRef.current) cancelAnimationFrame(dataAnimRef.current);
+    };
+    const handleContextRestored = () => {
+      logger.info('WebGL context restored, reinitializing');
+      if (initWebGL()) {
+        handleResize();
+      }
+    };
+    canvas.addEventListener('webglcontextlost', handleContextLost);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored);
+
     if (initWebGL()) {
       handleResize();
     }
@@ -581,7 +608,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         handleResize();
       });
     });
-    
+
     // 监听组件容器的尺寸变化
     const container = containerRef.current;
     if (container) {
@@ -589,9 +616,20 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     return () => {
+      canvas.removeEventListener('webglcontextlost', handleContextLost);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored);
       resizeObserver.disconnect();
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
+      }
+      // 释放 WebGL 资源，防止泄漏
+      const gl = glRef.current;
+      if (gl) {
+        if (programRef.current) { gl.deleteProgram(programRef.current); programRef.current = null; }
+        if (textureRef.current) { gl.deleteTexture(textureRef.current); textureRef.current = null; }
+        if (colorMapTextureRef.current) { gl.deleteTexture(colorMapTextureRef.current); colorMapTextureRef.current = null; }
+        if (positionBufferRef.current) { gl.deleteBuffer(positionBufferRef.current); positionBufferRef.current = null; }
+        if (texCoordBufferRef.current) { gl.deleteBuffer(texCoordBufferRef.current); texCoordBufferRef.current = null; }
       }
     };
   }, [initWebGL, handleResize]);
