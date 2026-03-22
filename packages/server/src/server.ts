@@ -22,6 +22,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { profileRoutes } from './routes/profiles.js';
 import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
+import { ProcessMonitor } from './services/ProcessMonitor.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
 import { VoiceAudioWSServer } from './websocket/VoiceAudioWSServer.js';
@@ -147,8 +148,12 @@ export async function createServer() {
     voiceAudioWSServer.setVoiceSessionManager(voiceSessionManager);
   }
 
+  // 初始化进程监控（独立于引擎，始终运行）
+  const processMonitor = ProcessMonitor.getInstance();
+  processMonitor.start();
+
   // 初始化WebSocket服务器（集成业务逻辑）
-  const wsServer = new WSServer(digitalRadioEngine, audioMonitorWSServer);
+  const wsServer = new WSServer(digitalRadioEngine, audioMonitorWSServer, processMonitor);
   const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
   fastify.log.info('WebSocket server initialized');
 
@@ -422,6 +427,7 @@ export async function createServer() {
 
   // 服务器关闭时清理WebSocket连接
   fastify.addHook('onClose', async () => {
+    processMonitor.stop();
     wsServer.cleanup();
     logbookWsServer.cleanup();
     audioMonitorWSServer.closeAll();

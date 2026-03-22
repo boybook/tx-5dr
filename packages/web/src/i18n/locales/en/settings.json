@@ -282,5 +282,30 @@
     "autoResumeCQAfterSuccess": "Resume CQ after success",
     "replyToWorkedStations": "Reply to worked stations",
     "prioritizeNewCalls": "Prioritize new callsigns"
+  },
+  "serverHealth": {
+    "title": "Server Process Health",
+    "tooltip": "View server health",
+    "statusGood": "Good",
+    "statusWarn": "Warning",
+    "statusCritical": "Critical",
+    "statusUnknown": "Unknown",
+    "uptime": "Uptime",
+    "memory": "Memory",
+    "cpu": "CPU Usage",
+    "eventLoop": "Event Loop Delay",
+    "heapUsed": "Heap Used",
+    "heapTotal": "Heap Total",
+    "rss": "RSS",
+    "user": "User",
+    "system": "System",
+    "total": "Total",
+    "p99": "P99",
+    "p50": "P50",
+    "mean": "Mean",
+    "timeRange5m": "5 min",
+    "timeRange15m": "15 min",
+    "timeRange30m": "30 min",
+    "noData": "Waiting for data..."
   }
 }
