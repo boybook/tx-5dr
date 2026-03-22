@@ -69,15 +69,16 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
 
   /**
    * Start voice transmission for a client.
-   * Acquires PTT lock → mutes monitor → activates radio PTT → starts audio receiving.
+   * Acquires PTT lock → activates radio PTT → starts audio receiving.
+   * @param voiceAudioClientId - Voice audio WS client ID to associate with this PTT session
    */
-  async startTransmit(clientId: string, label: string): Promise<{ success: boolean; reason?: string }> {
+  async startTransmit(clientId: string, label: string, voiceAudioClientId?: string): Promise<{ success: boolean; reason?: string }> {
     if (!this.isStarted) {
       return { success: false, reason: 'Voice mode not active' };
     }
 
-    // 1. Acquire PTT lock
-    const lockResult = this.pttLockManager.requestLock(clientId, label);
+    // 1. Acquire PTT lock (with associated voice audio client ID)
+    const lockResult = this.pttLockManager.requestLock(clientId, label, voiceAudioClientId);
     if (!lockResult.success) {
       return lockResult;
     }
@@ -138,11 +139,18 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
 
   /**
    * Handle incoming Opus audio frame from a client.
-   * Only processes audio from the client that holds the PTT lock.
+   * Only processes audio from the client that holds the PTT lock
+   * or from the associated voice audio WebSocket client.
    */
   handleAudioFrame(clientId: string, opusData: Buffer): void {
-    if (!this.pttLockManager.isLocked() || this.pttLockManager.getLockHolder() !== clientId) {
-      return; // Ignore audio from non-PTT holders
+    if (!this.pttLockManager.isLocked()) {
+      return;
+    }
+    // Accept audio from the PTT lock holder OR from the associated voice audio WS client
+    const lockHolder = this.pttLockManager.getLockHolder();
+    const voiceAudioClientId = this.pttLockManager.getVoiceAudioClientId();
+    if (clientId !== lockHolder && clientId !== voiceAudioClientId) {
+      return;
     }
     this.voiceAudioReceiver.handleOpusFrame(opusData);
   }

@@ -133,7 +133,10 @@ interface OpusDecoderWrapper {
 async function createOpusDecoder(sampleRate: number, channels: number): Promise<OpusDecoderWrapper> {
   // Try @discordjs/opus first (native, best performance)
   try {
-    const { OpusEncoder } = await import('@discordjs/opus');
+    const opusModule = await import('@discordjs/opus');
+    // Handle both ESM default export and CJS named export
+    const OpusEncoder = opusModule.OpusEncoder || opusModule.default?.OpusEncoder;
+    if (!OpusEncoder) throw new Error('OpusEncoder not found in module');
     const encoder = new OpusEncoder(sampleRate, channels);
     logger.info('Using @discordjs/opus (native)');
     return {
@@ -157,7 +160,8 @@ async function createOpusDecoder(sampleRate: number, channels: number): Promise<
 
   // Fallback to opusscript (WASM)
   try {
-    const OpusScript = (await import('opusscript')).default;
+    const opusScriptModule = await import('opusscript');
+    const OpusScript = opusScriptModule.default || opusScriptModule;
     const decoder = new OpusScript(sampleRate, channels, OpusScript.Application.AUDIO);
     logger.info('Using opusscript (WASM)');
     return {

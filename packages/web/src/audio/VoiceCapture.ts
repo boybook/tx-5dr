@@ -99,6 +99,12 @@ export class VoiceCapture {
 
       this.setState('capturing');
       logger.info('Voice capture started');
+
+      // If PTT was activated before start() completed, apply it now
+      if (this.pttActive) {
+        this.workletNode?.port.postMessage({ type: 'start' });
+        logger.info('PTT was pending, activating audio capture now');
+      }
     } catch (error) {
       logger.error('Failed to start voice capture:', error);
       this.setState('error');
@@ -132,9 +138,14 @@ export class VoiceCapture {
     this.pttActive = active;
 
     if (active) {
-      // Start forwarding audio frames from worklet
-      this.workletNode?.port.postMessage({ type: 'start' });
-      logger.debug('PTT activated, sending audio');
+      if (this.state === 'capturing') {
+        // Ready - start forwarding audio frames from worklet
+        this.workletNode?.port.postMessage({ type: 'start' });
+        logger.debug('PTT activated, sending audio');
+      } else {
+        // Not ready yet - will be applied when start() completes
+        logger.debug('PTT activated but capture not ready, will apply when ready');
+      }
     } else {
       // Stop forwarding audio frames
       this.workletNode?.port.postMessage({ type: 'stop' });

@@ -279,9 +279,10 @@ export class WSClient extends WSMessageHandler {
 
   /**
    * 请求语音 PTT 锁
+   * @param voiceAudioClientId - Voice audio WS client ID to associate with this PTT session
    */
-  requestVoicePTT(): void {
-    this.send(WSMessageType.VOICE_PTT_REQUEST);
+  requestVoicePTT(voiceAudioClientId?: string): void {
+    this.send(WSMessageType.VOICE_PTT_REQUEST, voiceAudioClientId ? { voiceAudioClientId } : undefined);
   }
 
   /**

@@ -22,15 +22,21 @@ export class VoicePTTLockManager extends EventEmitter<VoicePTTLockManagerEvents>
     timeoutMs: 180000, // 3 minutes
   };
   private timeoutTimer: NodeJS.Timeout | null = null;
+  /** Associated voice audio WS client ID for the current lock holder */
+  private _voiceAudioClientId: string | null = null;
 
   /**
    * Request the PTT lock for a client.
    * Returns success=true if the lock was acquired.
+   * @param voiceAudioClientId - Optional voice audio WS client ID to associate with this lock
    */
-  requestLock(clientId: string, label: string): { success: boolean; reason?: string } {
+  requestLock(clientId: string, label: string, voiceAudioClientId?: string): { success: boolean; reason?: string } {
     if (this.lock.locked) {
       if (this.lock.lockedBy === clientId) {
-        // Already held by this client - idempotent success
+        // Already held by this client - idempotent success, update voice audio client ID
+        if (voiceAudioClientId) {
+          this._voiceAudioClientId = voiceAudioClientId;
+        }
         return { success: true };
       }
       return {
@@ -39,6 +45,7 @@ export class VoicePTTLockManager extends EventEmitter<VoicePTTLockManagerEvents>
       };
     }
 
+    this._voiceAudioClientId = voiceAudioClientId || null;
     this.lock = {
       locked: true,
       lockedBy: clientId,
@@ -107,6 +114,10 @@ export class VoicePTTLockManager extends EventEmitter<VoicePTTLockManagerEvents>
     return this.lock.lockedBy;
   }
 
+  getVoiceAudioClientId(): string | null {
+    return this._voiceAudioClientId;
+  }
+
   destroy(): void {
     this.clearTimeoutTimer();
     if (this.lock.locked) {
@@ -118,6 +129,7 @@ export class VoicePTTLockManager extends EventEmitter<VoicePTTLockManagerEvents>
   private doRelease(reason: string): void {
     this.clearTimeoutTimer();
     const previousHolder = this.lock.lockedBy;
+    this._voiceAudioClientId = null;
     this.lock = {
       locked: false,
       lockedBy: null,

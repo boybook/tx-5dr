@@ -355,12 +355,19 @@ export class RadioService {
 
   // ===== Voice Mode Methods =====
 
+  /** Current voice audio WebSocket client ID (used to associate audio stream with PTT lock) */
+  private _voiceAudioClientId: string | null = null;
+
+  get voiceAudioClientId(): string | null {
+    return this._voiceAudioClientId;
+  }
+
   /**
    * 请求语音 PTT 锁
    */
   requestVoicePTT(): void {
     if (this.isConnected) {
-      this.wsClient.requestVoicePTT();
+      this.wsClient.requestVoicePTT(this._voiceAudioClientId || undefined);
     }
   }
 
@@ -387,7 +394,7 @@ export class RadioService {
    * 用于 VoiceCapture 建立二进制音频传输通道
    */
   getVoiceAudioWsUrl(): string {
-    const clientId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    return getWebSocketUrl().replace('/ws', `/ws/voice-audio?clientId=${clientId}`);
+    this._voiceAudioClientId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return getWebSocketUrl().replace('/ws', `/ws/voice-audio?clientId=${this._voiceAudioClientId}`);
   }
 }

@@ -30,12 +30,17 @@ export class VoiceAudioWSServer {
     this.connections.set(clientId, ws);
 
     ws.on('message', (data: any) => {
-      // Only process binary data (Opus frames)
-      if (data instanceof Buffer || data instanceof ArrayBuffer) {
-        const buf = data instanceof Buffer ? data : Buffer.from(data);
-        if (this.voiceSessionManager) {
-          this.voiceSessionManager.handleAudioFrame(clientId, buf);
-        }
+      // Process binary data (Opus frames)
+      let buf: Buffer | null = null;
+      if (Buffer.isBuffer(data)) {
+        buf = data;
+      } else if (data instanceof ArrayBuffer) {
+        buf = Buffer.from(data);
+      } else if (Array.isArray(data)) {
+        buf = Buffer.concat(data);
+      }
+      if (buf && buf.length > 0 && this.voiceSessionManager) {
+        this.voiceSessionManager.handleAudioFrame(clientId, buf);
       }
     });
 
