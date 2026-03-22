@@ -6267,6 +6267,7 @@ __metadata:
     icom-wlan-node: "npm:^0.2.6"
     mic: "npm:^2.1.2"
     node-wav: "npm:^0.0.2"
+    opusscript: "npm:^0.1.1"
     rubato-fft-node: "npm:^0.1.0"
     serialport: "npm:^13.0.0"
     tsx: "npm:^4.0.0"
@@ -14616,6 +14617,13 @@ __metadata:
     type-check: "npm:^0.4.0"
     word-wrap: "npm:^1.2.5"
   checksum: 10c0/4afb687a059ee65b61df74dfe87d8d6815cd6883cb8b3d5883a910df72d0f5d029821f37025e4bccf4048873dbdb09acc6d303d27b8f76b1a80dd5a7d5334675
+  languageName: node
+  linkType: hard
+
+"opusscript@npm:^0.1.1":
+  version: 0.1.1
+  resolution: "opusscript@npm:0.1.1"
+  checksum: 10c0/43216f82b0b707958ab0f0d0b16dba9bd82d0e9756417d24f8674c38b8ac992934d5d8744f87f267ebd83b61bd7dac4d717d616e0038b2aeb761bb03eb6485cd
   languageName: node
   linkType: hard
 

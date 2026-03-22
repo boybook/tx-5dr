@@ -904,6 +904,33 @@ export const api = {
     );
   },
 
+  // ========== 音频监听编码设置 ==========
+
+  async getAudioMonitorCodec(apiBase?: string): Promise<{
+    success: boolean;
+    data: { codec: string };
+  }> {
+    return apiRequest('/settings/audio-monitor-codec', undefined, apiBase);
+  },
+
+  async updateAudioMonitorCodec(
+    codec: string,
+    apiBase?: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: { codec: string };
+  }> {
+    return apiRequest(
+      '/settings/audio-monitor-codec',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ codec }),
+      },
+      apiBase
+    );
+  },
+
   // ========== 频率预设管理 ==========
 
   async getFrequencyPresets(apiBase?: string): Promise<{

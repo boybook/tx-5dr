@@ -64,7 +64,8 @@
     "monitorSwitch": "Audio monitor switch",
     "toggleListen": "Toggle listen",
     "listen": "Listen",
-    "startFailed": "Failed to start monitor"
+    "startFailed": "Failed to start monitor",
+    "codec": "Monitor Audio Codec"
   },
   "tuner": {
     "control": "Tuner control",

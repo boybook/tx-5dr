@@ -39,6 +39,7 @@
     "icom-wlan-node": "^0.2.6",
     "mic": "^2.1.2",
     "node-wav": "^0.0.2",
+    "opusscript": "^0.1.1",
     "rubato-fft-node": "^0.1.0",
     "serialport": "^13.0.0",
     "wav": "^1.0.2",

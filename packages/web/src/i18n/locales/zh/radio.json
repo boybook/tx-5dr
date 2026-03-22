@@ -64,7 +64,8 @@
     "monitorSwitch": "音频监听开关",
     "toggleListen": "切换监听状态",
     "listen": "监听",
-    "startFailed": "监听启动失败"
+    "startFailed": "监听启动失败",
+    "codec": "编解码"
   },
   "tuner": {
     "control": "天调控制",

@@ -3,6 +3,7 @@
 
 import { WSMessageType, RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type {
+  AudioMonitorCodec,
   DecodeErrorInfo,
   FT8Spectrum,
   JWTPayload,
@@ -18,6 +19,8 @@ import { globalEventBus } from '../utils/EventBus.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { AuthManager } from '../auth/AuthManager.js';
 import { createLogger } from '../utils/logger.js';
+import { createOpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
+import type { OpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
 
 const logger = createLogger('WSServer');
 
@@ -275,7 +278,9 @@ export class WSConnection extends WSMessageHandler {
  */
 interface AudioMonitorWSServer {
   getAllClientIds(): string[];
-  sendAudioData(clientId: string, audioData: ArrayBuffer): void;
+  sendAudioData(clientId: string, opusBuffer: Buffer | null, pcmBuffer: ArrayBuffer): void;
+  hasOpusClients(): boolean;
+  getServerCodec(): AudioMonitorCodec;
 }
 
 export class WSServer extends WSMessageHandler {
@@ -284,6 +289,9 @@ export class WSServer extends WSMessageHandler {
   private digitalRadioEngine: DigitalRadioEngine;
   private audioMonitorWSServer: AudioMonitorWSServer; // AudioMonitorWSServer实例
   private audioMonitorListenersSetup = false; // 标记AudioMonitor监听器是否已设置
+  private opusMonitorEncoder: OpusMonitorEncoder | null = null;
+  private opusAccumBuffer: Float32Array = new Float32Array(0);
+  private readonly OPUS_FRAME_SIZE = 960; // 20ms at 48kHz
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
   constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: AudioMonitorWSServer) {
@@ -1478,6 +1486,16 @@ export class WSServer extends WSMessageHandler {
 
     logger.info('setting up AudioMonitorService event listeners (broadcast mode)');
 
+    // Initialize Opus encoder asynchronously
+    createOpusMonitorEncoder(48000, 1).then((encoder) => {
+      this.opusMonitorEncoder = encoder;
+      if (encoder) {
+        logger.info('Opus monitor encoder ready for audio broadcast');
+      }
+    }).catch((err) => {
+      logger.warn('Failed to create Opus monitor encoder', err);
+    });
+
     // 监听音频数据事件（广播给所有已连接的客户端）
     let audioDataCount = 0;
     audioMonitorService.on('audioData', (data) => {
@@ -1497,10 +1515,53 @@ export class WSServer extends WSMessageHandler {
         timestamp: data.timestamp
       });
 
-      // 2. 向每个音频WebSocket发送二进制数据
-      clientIds.forEach((clientId: string) => {
-        this.audioMonitorWSServer.sendAudioData(clientId, data.audioData);
-      });
+      // 2. Determine codec path
+      const useOpus =
+        this.audioMonitorWSServer.getServerCodec() === 'opus' &&
+        this.audioMonitorWSServer.hasOpusClients() &&
+        this.opusMonitorEncoder;
+
+      if (!useOpus) {
+        // PCM path: send raw data directly
+        clientIds.forEach((clientId: string) => {
+          this.audioMonitorWSServer.sendAudioData(clientId, null, data.audioData);
+        });
+        return;
+      }
+
+      // Opus path: encode 960-sample frames
+      const pcmFloat32 = new Float32Array(data.audioData);
+      if (pcmFloat32.length === 0) return;
+
+      if (audioDataCount === 1) {
+        logger.info('First audio frame for Opus encoding', { samples: pcmFloat32.length });
+      }
+
+      const sendOpusFrame = (frame: Float32Array) => {
+        const opusBuffer = this.opusMonitorEncoder!.encode(frame);
+        const pcmFallback = frame.buffer as ArrayBuffer;
+        clientIds.forEach((clientId: string) => {
+          this.audioMonitorWSServer.sendAudioData(clientId, opusBuffer, pcmFallback);
+        });
+      };
+
+      // Fast path: frame is exactly 960 samples and no leftover — skip accumulation
+      if (this.opusAccumBuffer.length === 0 && pcmFloat32.length === this.OPUS_FRAME_SIZE) {
+        sendOpusFrame(pcmFloat32);
+        return;
+      }
+
+      // Slow path: accumulate partial frames
+      const newBuf = new Float32Array(this.opusAccumBuffer.length + pcmFloat32.length);
+      newBuf.set(this.opusAccumBuffer);
+      newBuf.set(pcmFloat32, this.opusAccumBuffer.length);
+      this.opusAccumBuffer = newBuf;
+
+      while (this.opusAccumBuffer.length >= this.OPUS_FRAME_SIZE) {
+        const frame = this.opusAccumBuffer.slice(0, this.OPUS_FRAME_SIZE);
+        this.opusAccumBuffer = this.opusAccumBuffer.slice(this.OPUS_FRAME_SIZE);
+        sendOpusFrame(frame);
+      }
     });
 
     // 监听统计信息事件（广播给所有客户端）

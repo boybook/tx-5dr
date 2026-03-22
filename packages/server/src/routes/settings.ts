@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { UserRole, DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema } from '@tx5dr/contracts';
+import { UserRole, DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema, AudioMonitorCodecSchema } from '@tx5dr/contracts';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
@@ -96,6 +96,35 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             ft4: resolveWindowTiming('FT4', parsed) ?? [0],
           },
         },
+      });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
+    }
+  });
+
+  // ==================== 音频监听编码设置 ====================
+
+  fastify.get('/audio-monitor-codec', async (_request, reply) => {
+    try {
+      const codec = configManager.getAudioMonitorCodec();
+      return reply.code(200).send({ success: true, data: { codec } });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  fastify.put('/audio-monitor-codec', {
+    preHandler: [requireRole(UserRole.ADMIN)],
+  }, async (request, reply) => {
+    try {
+      const body = request.body as { codec?: string };
+      const codec = AudioMonitorCodecSchema.parse(body?.codec);
+      await configManager.updateAudioMonitorCodec(codec);
+
+      return reply.code(200).send({
+        success: true,
+        message: 'Audio monitor codec updated',
+        data: { codec },
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);

@@ -14,6 +14,7 @@ import { useHasMinRole } from '../store/authStore';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AudioMonitorNode, createWorkletMonitorNode, ScriptProcessorFallbackNode } from '../utils/audio-monitor-fallback';
+import { OpusMonitorDecoder, canDecodeOpus } from '../audio/OpusMonitorDecoder';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('RadioControl');
@@ -260,6 +261,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const audioContextRef = React.useRef<AudioContext | null>(null);
   const workletNodeRef = React.useRef<AudioMonitorNode | null>(null);
   const monitorGainNodeRef = React.useRef<GainNode | null>(null);
+  const opusDecoderRef = React.useRef<OpusMonitorDecoder | null>(null);
   const isInitializingWorklet = React.useRef<boolean>(false); // 初始化锁，防止重复初始化
 
   // 自定义频率相关状态
@@ -550,6 +552,19 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       // 使用 48kHz 采样率（与服务端 AudioMonitorService 的 TARGET_SAMPLE_RATE 匹配）
       await initAudioWorklet(48000);
 
+      // Initialize Opus decoder if supported
+      if (canDecodeOpus()) {
+        try {
+          const decoder = new OpusMonitorDecoder(48000, 1);
+          await decoder.init();
+          opusDecoderRef.current = decoder;
+          logger.info('Opus monitor decoder initialized');
+        } catch (err) {
+          logger.warn('Opus decoder init failed, falling back to PCM', err);
+          opusDecoderRef.current = null;
+        }
+      }
+
       // 设置isMonitoring为true，触发useEffect注册事件监听器和数据处理器
       setIsMonitoring(true);
 
@@ -557,7 +572,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // 然后连接音频WebSocket（连接后服务端自动广播）
-      connection.state.radioService?.connectAudioMonitor();
+      // If Opus decoder failed to init, force PCM mode
+      connection.state.radioService?.connectAudioMonitor(!opusDecoderRef.current);
 
       logger.info('Audio monitor started');
     } catch (error) {
@@ -595,6 +611,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
       monitorGainNodeRef.current?.disconnect();
       monitorGainNodeRef.current = null;
+      opusDecoderRef.current?.destroy();
+      opusDecoderRef.current = null;
       isInitializingWorklet.current = false; // 重置初始化锁
 
       setIsMonitoring(false);
@@ -1037,19 +1055,32 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
     // 处理二进制音频数据（从音频专用WebSocket接收）
     const handleBinaryAudioData = (buffer: ArrayBuffer) => {
-      const _t_receive = performance.now(); // 接收时间戳
+      const _t_receive = performance.now();
 
-      // 确保音频节点已就绪
       if (!workletNodeRef.current) {
         return;
       }
 
-      // 通过统一接口发送音频数据
-      workletNodeRef.current.postAudioData(
-        buffer,
-        currentSampleRate || 48000,
-        _t_receive
-      );
+      const codec = radioService.audioMonitorCodec;
+      if (codec === 'opus' && opusDecoderRef.current) {
+        // Decode Opus to PCM before passing to worklet
+        opusDecoderRef.current.decode(buffer).then((pcm) => {
+          if (pcm.length > 0 && workletNodeRef.current) {
+            workletNodeRef.current.postAudioData(
+              pcm.buffer as ArrayBuffer,
+              currentSampleRate || 48000,
+              _t_receive
+            );
+          }
+        });
+      } else {
+        // Raw PCM - pass directly
+        workletNodeRef.current.postAudioData(
+          buffer,
+          currentSampleRate || 48000,
+          _t_receive
+        );
+      }
     };
 
     // 处理统计信息（可选，AudioWorklet也会生成统计）
@@ -1433,6 +1464,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                         <div className={`w-2 h-2 rounded-full ${
                           monitorStats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
                         }`} />
+                      </div>
+
+                      {/* 编解码器 */}
+                      <div className="flex justify-between items-center">
+                        {t('monitor.codec')}
+                        <span className="font-mono text-default-400 uppercase">
+                          {connection.state.radioService?.audioMonitorCodec || 'pcm'}
+                        </span>
                       </div>
                     </div>
                   )}

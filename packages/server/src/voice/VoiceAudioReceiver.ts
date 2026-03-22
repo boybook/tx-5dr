@@ -162,7 +162,8 @@ async function createOpusDecoder(sampleRate: number, channels: number): Promise<
   try {
     const opusScriptModule = await import('opusscript');
     const OpusScript = opusScriptModule.default || opusScriptModule;
-    const decoder = new OpusScript(sampleRate, channels, OpusScript.Application.AUDIO);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const decoder = new OpusScript(sampleRate as any, channels, OpusScript.Application.AUDIO);
     logger.info('Using opusscript (WASM)');
     return {
       decode(opusData: Buffer): Float32Array {

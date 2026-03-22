@@ -15,6 +15,7 @@ export class RadioService {
   private audioMonitorWs: WebSocket | null = null; // 音频监听专用WebSocket
   private audioMonitorDataHandler: ((buffer: ArrayBuffer) => void) | null = null; // 音频数据处理器
   private audioMonitorClientId: string | null = null; // 音频监听客户端ID
+  private _audioMonitorCodec: 'opus' | 'pcm' = 'pcm'; // 实际使用的codec
 
   constructor() {
     // 创建WebSocket客户端
@@ -285,7 +286,7 @@ export class RadioService {
   /**
    * 连接音频监听（简化模式：连接即接收）
    */
-  connectAudioMonitor(): void {
+  connectAudioMonitor(forcePcm = false): void {
     if (!this.isConnected) {
       logger.warn('Not connected to server, cannot connect audio monitor');
       return;
@@ -301,9 +302,13 @@ export class RadioService {
 
     logger.info(`Connecting audio monitor, clientId=${this.audioMonitorClientId}`);
 
+    // Detect Opus decode capability (can be overridden by forcePcm)
+    const canOpus = !forcePcm && typeof AudioDecoder !== 'undefined';
+    this._audioMonitorCodec = canOpus ? 'opus' : 'pcm';
+
     // 连接音频WebSocket（连接后服务端自动开始广播）
-    const audioWsUrl = getWebSocketUrl().replace('/ws', `/ws/audio-monitor?clientId=${this.audioMonitorClientId}`);
-    logger.info(`Connecting audio WebSocket: ${audioWsUrl}`);
+    const audioWsUrl = getWebSocketUrl().replace('/ws', `/ws/audio-monitor?clientId=${this.audioMonitorClientId}&codec=${this._audioMonitorCodec}`);
+    logger.info(`Connecting audio WebSocket: ${audioWsUrl}, codec=${this._audioMonitorCodec}`);
 
     this.audioMonitorWs = new WebSocket(audioWsUrl);
     this.audioMonitorWs.binaryType = 'arraybuffer';
@@ -314,9 +319,20 @@ export class RadioService {
 
     this.audioMonitorWs.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
-        // 接收到二进制音频数据，调用处理器
+        // Binary: audio data
         if (this.audioMonitorDataHandler) {
           this.audioMonitorDataHandler(event.data);
+        }
+      } else if (typeof event.data === 'string') {
+        // Text: server sends codec confirmation as first message
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'codec' && (msg.codec === 'opus' || msg.codec === 'pcm')) {
+            this._audioMonitorCodec = msg.codec;
+            logger.info(`Server confirmed audio monitor codec: ${msg.codec}`);
+          }
+        } catch {
+          // ignore non-JSON text
         }
       }
     };
@@ -360,6 +376,13 @@ export class RadioService {
 
   get voiceAudioClientId(): string | null {
     return this._voiceAudioClientId;
+  }
+
+  /**
+   * Get the effective audio monitor codec being used for the current connection.
+   */
+  get audioMonitorCodec(): 'opus' | 'pcm' {
+    return this._audioMonitorCodec;
   }
 
   /**

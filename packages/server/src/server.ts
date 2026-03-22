@@ -386,8 +386,9 @@ export async function createServer() {
         return;
       }
 
-      fastify.log.info(`Audio monitor WS client connected: clientId=${clientId}`);
-      audioMonitorWSServer.handleConnection(socket, clientId);
+      const codec = url.searchParams.get('codec') === 'opus' ? 'opus' as const : 'pcm' as const;
+      fastify.log.info(`Audio monitor WS client connected: clientId=${clientId}, codec=${codec}`);
+      audioMonitorWSServer.handleConnection(socket, clientId, codec);
     } catch (e) {
       fastify.log.error('Audio monitor WS connection parameter parsing failed:', e);
       socket.close();
