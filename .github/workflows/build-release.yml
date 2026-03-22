@@ -401,6 +401,17 @@ jobs:
               cp "$file" "release-artifacts/${PREFIX}-windows-${ARCH}.zip"
               echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.zip"
             done
+
+            # Windows: 用 7-Zip LZMA2 打包便携版（比 ZIP Deflate 小 ~100MB）
+            # PE/DLL 文件对 Deflate 压缩不友好，LZMA2 可将包体从 ~300MB 降至 ~190MB
+            APP_DIR=$(find out -maxdepth 1 -type d -name "TX-5DR-win32-*" | head -1)
+            if [ -n "$APP_DIR" ]; then
+              echo "📦 使用 7-Zip LZMA2 压缩便携版..."
+              7z a -t7z -mx=9 -mmt=on "release-artifacts/${PREFIX}-windows-${ARCH}.7z" "${APP_DIR}/"
+              echo "✅ 已准备: ${PREFIX}-windows-${ARCH}.7z ($(du -sh "release-artifacts/${PREFIX}-windows-${ARCH}.7z" | cut -f1))"
+            else
+              echo "⚠️ 未找到 Forge 打包输出目录，跳过 7z 压缩"
+            fi
           fi
 
           echo "=== 产物准备完成 ==="
@@ -457,41 +468,42 @@ jobs:
           body: |
             ## TX-5DR Nightly Build
 
-            **自动构建于**: ${{ steps.release_info.outputs.timestamp }}
+            **Built at** （构建时间）: ${{ steps.release_info.outputs.timestamp }}
             **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
             **Branch**: ${{ github.ref_name }}
 
-            ### 📦 下载说明
+            ### 📦 Downloads 下载
 
             #### Windows (x64)
-            - **MSI 安装包**: `TX-5DR-nightly-windows-x64.msi` - 推荐用于安装（支持自定义安装目录）
-            - **ZIP 便携版**: `TX-5DR-nightly-windows-x64.zip` - 解压即用
+            - **MSI Installer** （安装包）: `TX-5DR-nightly-windows-x64.msi` — recommended for installation, supports custom install directory
+            - **7z Portable** （便携版，推荐）: `TX-5DR-nightly-windows-x64.7z` — LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
+            - **ZIP Portable** （便携版）: `TX-5DR-nightly-windows-x64.zip` — larger file size
 
-            #### macOS (ARM64 - Apple Silicon)
-            - **DMG 安装包**: `TX-5DR-nightly-macos-arm64.dmg` - 推荐用于安装
-            - **ZIP 便携版**: `TX-5DR-nightly-macos-arm64.zip` - 解压即用
+            #### macOS (ARM64 — Apple Silicon)
+            - **DMG Installer** （安装包）: `TX-5DR-nightly-macos-arm64.dmg` — recommended
+            - **ZIP Portable** （便携版）: `TX-5DR-nightly-macos-arm64.zip`
 
-            #### macOS (x64 - Intel)
-            - **DMG 安装包**: `TX-5DR-nightly-macos-x64.dmg` - 推荐用于安装
-            - **ZIP 便携版**: `TX-5DR-nightly-macos-x64.zip` - 解压即用
+            #### macOS (x64 — Intel)
+            - **DMG Installer** （安装包）: `TX-5DR-nightly-macos-x64.dmg` — recommended
+            - **ZIP Portable** （便携版）: `TX-5DR-nightly-macos-x64.zip`
 
             #### Linux (x64)
-            - **DEB 包** (Ubuntu/Debian): `TX-5DR-nightly-linux-x64.deb`
-            - **RPM 包** (Fedora/RHEL): `TX-5DR-nightly-linux-x64.rpm`
-            - **ZIP 便携版**: `TX-5DR-nightly-linux-x64.zip`
+            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-linux-x64.deb`
+            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-linux-x64.rpm`
+            - **ZIP Portable** （便携版）: `TX-5DR-nightly-linux-x64.zip`
 
             #### Linux (ARM64)
-            - **DEB 包** (Ubuntu/Debian): `TX-5DR-nightly-linux-arm64.deb`
-            - **RPM 包** (Fedora/RHEL): `TX-5DR-nightly-linux-arm64.rpm`
-            - **ZIP 便携版**: `TX-5DR-nightly-linux-arm64.zip`
+            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-linux-arm64.deb`
+            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-linux-arm64.rpm`
+            - **ZIP Portable** （便携版）: `TX-5DR-nightly-linux-arm64.zip`
 
-            ### ⚠️ 注意事项
-            - 这是开发版本，可能包含未经充分测试的新功能
-            - 每次推送到 main/develop 分支都会自动更新此版本
-            - 如需稳定版本，请下载正式 Release
+            ### ⚠️ Notice 注意事项
+            - This is a development build and may contain untested features. （开发版本，可能包含未经充分测试的功能）
+            - Automatically updated on every push to `main` / `develop`. （每次推送自动更新）
+            - For a stable release, please download an official versioned release. （稳定版请下载正式 Release）
 
-            ### 🔧 系统要求
-            - Node.js >= 22.15.1 (已内置便携版)
+            ### 🔧 System Requirements 系统要求
+            - Node.js >= 22.15.1 (bundled / 已内置)
             - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
           allowUpdates: true
           removeArtifacts: true
@@ -508,45 +520,45 @@ jobs:
           tag: ${{ github.event.inputs.version }}
           name: "TX-5DR ${{ github.event.inputs.version }}"
           body: |
-            ## TX-5DR Release ${{ github.event.inputs.version }}
+            ## TX-5DR ${{ github.event.inputs.version }}
 
-            **发布日期**: ${{ steps.release_info.outputs.date }}
+            **Release Date** （发布日期）: ${{ steps.release_info.outputs.date }}
             **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
 
-            ### 🚀 新功能
-            - Electron 应用多平台自动构建
-            - 支持 Windows、macOS、Linux 平台
+            ### 🚀 What's New 新功能
+            - See [CHANGELOG](https://github.com/${{ github.repository }}/commits/main) for details.
 
-            ### 📦 下载说明
+            ### 📦 Downloads 下载
 
             #### Windows (x64)
-            - **MSI 安装包**: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.msi` - 推荐（支持自定义安装目录）
-            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip`
+            - **MSI Installer** （安装包）: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.msi` — recommended, supports custom install directory
+            - **7z Portable** （便携版，推荐）: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.7z` — LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
+            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip` — larger file size
 
-            #### macOS (ARM64 - Apple Silicon)
-            - **DMG 安装包**: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg` - 推荐
-            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.zip`
+            #### macOS (ARM64 — Apple Silicon)
+            - **DMG Installer** （安装包）: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg` — recommended
+            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.zip`
 
-            #### macOS (x64 - Intel)
-            - **DMG 安装包**: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.dmg` - 推荐
-            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.zip`
+            #### macOS (x64 — Intel)
+            - **DMG Installer** （安装包）: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.dmg` — recommended
+            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.zip`
 
             #### Linux (x64)
-            - **DEB 包** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb`
-            - **RPM 包** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.rpm`
-            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-linux-x64.zip`
+            - **DEB Package** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb`
+            - **RPM Package** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.rpm`
+            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-linux-x64.zip`
 
             #### Linux (ARM64)
-            - **DEB 包** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.deb`
-            - **RPM 包** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm`
-            - **ZIP 便携版**: `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip`
+            - **DEB Package** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.deb`
+            - **RPM Package** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm`
+            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip`
 
-            ### 🔧 系统要求
-            - Node.js >= 22.15.1 (已内置便携版)
-            - 操作系统: Windows 10+, macOS 11+, Ubuntu 20.04+, Fedora 35+
+            ### 🔧 System Requirements 系统要求
+            - Node.js >= 22.15.1 (bundled / 已内置)
+            - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
 
             ---
-            构建于: ${{ steps.release_info.outputs.timestamp }}
+            Built at （构建于）: ${{ steps.release_info.outputs.timestamp }}
           artifacts: "release-assets/*"
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
