@@ -71,6 +71,8 @@ export interface AppConfig {
   voiceCallsign?: string;
   /** Voice mode operator grid */
   voiceGrid?: string;
+  /** Audio monitor codec: 'opus' for low bandwidth, 'pcm' for compatibility. Default: 'opus'. */
+  audioMonitorCodec?: 'opus' | 'pcm';
 }
 
 // 音频处理配置接口
@@ -1012,6 +1014,17 @@ export class ConfigManager {
    */
   async updateDecodeWindowSettings(settings: DecodeWindowSettings): Promise<void> {
     this.config.decodeWindowSettings = settings;
+    await this.saveConfig();
+  }
+
+  // ===== 音频监听编码设置 =====
+
+  getAudioMonitorCodec(): 'opus' | 'pcm' {
+    return this.config.audioMonitorCodec ?? 'opus';
+  }
+
+  async updateAudioMonitorCodec(codec: 'opus' | 'pcm'): Promise<void> {
+    this.config.audioMonitorCodec = codec;
     await this.saveConfig();
   }
 

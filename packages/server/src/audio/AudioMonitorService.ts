@@ -154,9 +154,10 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       }
       const t1 = performance.now();
 
-      // 广播音频数据
+      // 广播音频数据（创建独立副本，避免底层缓冲区复用问题）
+      const audioCopy = new Float32Array(processedAudio).buffer;
       this.emit('audioData', {
-        audioData: processedAudio.buffer,
+        audioData: audioCopy,
         sampleRate: this.TARGET_SAMPLE_RATE,
         samples: processedAudio.length,
         timestamp: now,

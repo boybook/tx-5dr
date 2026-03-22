@@ -201,7 +201,11 @@
     "offsetUnit": "ms",
     "windowLimitReached": "Maximum {{max}} windows",
     "atLeastOneWindow": "At least 1 window required",
-    "removeWindow": "Remove window"
+    "removeWindow": "Remove window",
+    "audioMonitorCodec": "Audio Monitor Codec",
+    "audioMonitorCodecDesc": "Select encoding format for audio monitor streaming. Opus saves bandwidth significantly, PCM offers better compatibility. Reconnect monitor after changing.",
+    "codecOpus": "Opus (Recommended, Low Bandwidth)",
+    "codecPcm": "PCM (Compatible)"
   },
   "freqPresets": {
     "title": "Frequency Preset Management",

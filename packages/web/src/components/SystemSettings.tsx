@@ -98,6 +98,10 @@ export const SystemSettings = forwardRef<
   const [decodeWindowState, setDecodeWindowState] = useState<DecodeWindowState>({ ...DEFAULT_DECODE_WINDOW_STATE });
   const [originalDecodeWindowState, setOriginalDecodeWindowState] = useState<DecodeWindowState>({ ...DEFAULT_DECODE_WINDOW_STATE });
 
+  // 音频监听编码设置
+  const [audioMonitorCodec, setAudioMonitorCodec] = useState<'opus' | 'pcm'>('opus');
+  const [originalAudioMonitorCodec, setOriginalAudioMonitorCodec] = useState<'opus' | 'pcm'>('opus');
+
   // 加载配置
   useEffect(() => {
     loadSettings();
@@ -105,6 +109,7 @@ export const SystemSettings = forwardRef<
     loadPSKReporterConfig();
     loadPSKReporterStatus();
     loadDecodeWindowSettings();
+    loadAudioMonitorCodec();
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
   }, []);
 
@@ -193,6 +198,19 @@ export const SystemSettings = forwardRef<
     }
   };
 
+  const loadAudioMonitorCodec = async () => {
+    try {
+      const result = await api.getAudioMonitorCodec();
+      if (result.success && result.data) {
+        const codec = result.data.codec === 'pcm' ? 'pcm' as const : 'opus' as const;
+        setAudioMonitorCodec(codec);
+        setOriginalAudioMonitorCodec(codec);
+      }
+    } catch (err) {
+      logger.error('Failed to load audio monitor codec:', err);
+    }
+  };
+
   // 定期刷新 PSKReporter 状态
   useEffect(() => {
     if (!pskrConfig?.enabled) return;
@@ -237,7 +255,8 @@ export const SystemSettings = forwardRef<
       spectrumWhileTransmitting !== originalSpectrumValue ||
       hasAuthChanges() ||
       hasPskrChanges() ||
-      hasDecodeWindowChanges()
+      hasDecodeWindowChanges() ||
+      audioMonitorCodec !== originalAudioMonitorCodec
     );
   };
 
@@ -305,6 +324,12 @@ export const SystemSettings = forwardRef<
         setOriginalDecodeWindowState({ ...decodeWindowState });
       }
 
+      // 保存音频监听编码设置
+      if (audioMonitorCodec !== originalAudioMonitorCodec) {
+        await api.updateAudioMonitorCodec(audioMonitorCodec);
+        setOriginalAudioMonitorCodec(audioMonitorCodec);
+      }
+
       onUnsavedChanges?.(false);
     } catch (err) {
       logger.error('Failed to save settings:', err);
@@ -335,7 +360,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, audioMonitorCodec, originalAudioMonitorCodec, onUnsavedChanges]);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -744,6 +769,39 @@ export const SystemSettings = forwardRef<
               )}
             </div>
           )}
+        </CardBody>
+      </Card>
+
+      {/* 音频监听编码设置 */}
+      <Divider className="my-4" />
+
+      <Card shadow="none" radius="lg" classNames={{
+        base: "border border-divider bg-content1"
+      }}>
+        <CardBody className="p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <h4 className="font-semibold text-default-900 mb-1">{t('system.audioMonitorCodec')}</h4>
+              <p className="text-sm text-default-600 mb-3">{t('system.audioMonitorCodecDesc')}</p>
+              <Select
+                label={t('system.audioMonitorCodec')}
+                selectedKeys={[audioMonitorCodec]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0] as string;
+                  if (value === 'opus' || value === 'pcm') {
+                    setAudioMonitorCodec(value);
+                  }
+                }}
+                isDisabled={isSaving}
+                size="sm"
+                variant="bordered"
+                className="max-w-xs"
+              >
+                <SelectItem key="opus">{t('system.codecOpus')}</SelectItem>
+                <SelectItem key="pcm">{t('system.codecPcm')}</SelectItem>
+              </Select>
+            </div>
+          </div>
         </CardBody>
       </Card>
 

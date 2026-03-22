@@ -201,7 +201,11 @@
     "offsetUnit": "ms",
     "windowLimitReached": "最多 {{max}} 个窗口",
     "atLeastOneWindow": "至少需要 1 个窗口",
-    "removeWindow": "删除窗口"
+    "removeWindow": "删除窗口",
+    "audioMonitorCodec": "监听音频编解码",
+    "audioMonitorCodecDesc": "选择音频监听传输编码方式。Opus 可大幅节省带宽，PCM 兼容性更好。更改后需重新连接监听。",
+    "codecOpus": "Opus（推荐，低带宽）",
+    "codecPcm": "PCM（兼容模式）"
   },
   "freqPresets": {
     "title": "频率预设管理",
