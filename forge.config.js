@@ -373,6 +373,10 @@ module.exports = {
         // naudiodon2: 清理编译源码
         rmrf(join(nm, 'naudiodon2', 'src'));
         rmrf(join(nm, 'naudiodon2', 'binding.gyp'));
+        // @discordjs/opus: deps/ 含捆绑的 libopus C++ 源码 (~5.6MB)，运行时只需 prebuild/
+        rmrf(join(nm, '@discordjs', 'opus', 'deps'));
+        rmrf(join(nm, '@discordjs', 'opus', 'src'));
+        rmrf(join(nm, '@discordjs', 'opus', 'binding.gyp'));
         console.log('✅ native 模块编译源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 native 模块编译源码遇到问题：', (err && err.message) || err);
