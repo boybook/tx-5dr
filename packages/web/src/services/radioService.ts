@@ -352,4 +352,42 @@ export class RadioService {
     this.audioMonitorDataHandler = handler;
     logger.info(`Audio data handler ${handler ? 'set' : 'cleared'}`);
   }
+
+  // ===== Voice Mode Methods =====
+
+  /**
+   * 请求语音 PTT 锁
+   */
+  requestVoicePTT(): void {
+    if (this.isConnected) {
+      this.wsClient.requestVoicePTT();
+    }
+  }
+
+  /**
+   * 释放语音 PTT 锁
+   */
+  releaseVoicePTT(): void {
+    if (this.isConnected) {
+      this.wsClient.releaseVoicePTT();
+    }
+  }
+
+  /**
+   * 设置电台调制模式（语音模式使用，如 USB/LSB/FM/AM）
+   */
+  setVoiceRadioMode(radioMode: string): void {
+    if (this.isConnected) {
+      this.wsClient.setVoiceRadioMode(radioMode);
+    }
+  }
+
+  /**
+   * 获取语音音频 WebSocket URL
+   * 用于 VoiceCapture 建立二进制音频传输通道
+   */
+  getVoiceAudioWsUrl(): string {
+    const clientId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return getWebSocketUrl().replace('/ws', `/ws/voice-audio?clientId=${clientId}`);
+  }
 }

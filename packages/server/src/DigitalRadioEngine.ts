@@ -3,7 +3,7 @@ import {
   SlotScheduler,
   ClockSourceSystem
 } from '@tx5dr/core';
-import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, resolveWindowTiming } from '@tx5dr/contracts';
+import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type EngineMode, resolveWindowTiming } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
@@ -31,6 +31,7 @@ import { RadioBridge } from './subsystems/RadioBridge.js';
 import { TransmissionPipeline } from './subsystems/TransmissionPipeline.js';
 import { ClockCoordinator } from './subsystems/ClockCoordinator.js';
 import { EngineLifecycle } from './subsystems/EngineLifecycle.js';
+import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -61,6 +62,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private _operatorManager: RadioOperatorManager;
   private transmissionTracker: TransmissionTracker;
   private resourceManager: ResourceManager;
+
+  // 语音模式
+  private engineMode: EngineMode = 'digital';
+  private voiceSessionManager: VoiceSessionManager | null = null;
 
   // 子系统
   private audioVolumeController: AudioVolumeController;
@@ -182,6 +187,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.engineLifecycle.getAudioMonitorService();
   }
 
+  public getEngineMode(): EngineMode {
+    return this.engineMode;
+  }
+
+  public getVoiceSessionManager(): VoiceSessionManager | null {
+    return this.voiceSessionManager;
+  }
+
   // ─── 初始化 ──────────────────────────────────────
 
   async initialize(): Promise<void> {
@@ -243,6 +256,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     this.clockCoordinator.setPSKReporterService(pskreporterService);
 
+    // 初始化 VoiceSessionManager
+    this.voiceSessionManager = new VoiceSessionManager({
+      radioManager: this.radioManager,
+      audioStreamManager: this.audioStreamManager,
+    });
+    await this.voiceSessionManager.initialize();
+
+    // Forward voice events through engine emitter
+    this.voiceSessionManager.on('voicePttLockChanged', (lock) => {
+      this.emit('voicePttLockChanged', lock);
+    });
+    this.voiceSessionManager.on('pttStatusChanged', (data) => {
+      this.emit('pttStatusChanged', data);
+    });
+    this.voiceSessionManager.on('voiceRadioModeChanged', (data) => {
+      this.emit('voiceRadioModeChanged', data);
+    });
+
     // 初始化 EngineLifecycle（需要 slotClock 和子系统）
     this.engineLifecycle = new EngineLifecycle({
       engineEmitter: this,
@@ -260,14 +291,44 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         clockCoordinator: this.clockCoordinator,
       },
       getCurrentMode: () => this.currentMode,
+      getVoiceSessionManager: () => this.voiceSessionManager,
       getStatus: () => this.getStatus(),
     });
 
-    // 注册资源和状态机
+    // Pass voice session manager to engine lifecycle
+    this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
+
+    // Restore last engine mode and digital sub-mode from config
+    const configManager = ConfigManager.getInstance();
+    const lastEngineMode = configManager.getLastEngineMode();
+    const lastDigitalModeName = configManager.getLastDigitalModeName();
+
+    // Restore digital sub-mode (FT8/FT4) before registering resources
+    if (lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
+      const targetMode = Object.values(MODES).find(m => m.name === lastDigitalModeName);
+      if (targetMode && targetMode.name !== 'VOICE') {
+        this.currentMode = targetMode;
+        this.applyDecodeWindowOverrides();
+        if (this.slotClock) {
+          this.slotClock.setMode(this.currentMode);
+        }
+        this.slotPackManager.setMode(this.currentMode);
+        logger.info(`Restored last digital mode: ${this.currentMode.name}`);
+      }
+    }
+
+    // If last mode was voice, switch engine mode (resources will be registered for voice)
+    if (lastEngineMode === 'voice') {
+      this.engineMode = 'voice';
+      this.currentMode = MODES.VOICE;
+      logger.info('Restored last engine mode: voice');
+    }
+
+    // 注册资源和状态机（based on restored mode）
     this.engineLifecycle.registerResources();
     this.engineLifecycle.initializeStateMachine();
 
-    logger.info(`Initialization complete, current mode: ${this.currentMode.name}`);
+    logger.info(`Initialization complete, current mode: ${this.currentMode.name}, engine mode: ${this.engineMode}`);
   }
 
   // ─── 委托方法 ────────────────────────────────────
@@ -314,6 +375,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.slotScheduler = null;
     this.removeAllListeners();
+
+    // 清理语音会话管理器
+    if (this.voiceSessionManager) {
+      this.voiceSessionManager.destroy();
+      this.voiceSessionManager = null;
+      logger.info('Voice session manager destroyed');
+    }
 
     // 清理操作员管理器
     this.operatorManager.cleanup();
@@ -362,14 +430,34 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
   }
 
-  async setMode(mode: ModeDescriptor): Promise<void> {
-    if (this.currentMode.name === mode.name) {
-      logger.info(`Already in mode: ${mode.name}`);
+  async setMode(mode: ModeDescriptor | string): Promise<void> {
+    // Handle voice mode (string 'VOICE')
+    if (mode === 'VOICE' || (typeof mode === 'object' && mode.name === 'VOICE')) {
+      if (this.engineMode === 'voice') {
+        logger.info('Already in voice mode');
+        return;
+      }
+      await this.switchToVoiceMode();
       return;
     }
 
-    logger.info(`Switching mode: ${this.currentMode.name} -> ${mode.name}`);
-    this.currentMode = mode;
+    // Handle digital mode (ModeDescriptor)
+    const digitalMode = mode as ModeDescriptor;
+
+    // If switching from voice to digital
+    if (this.engineMode === 'voice') {
+      await this.switchToDigitalMode(digitalMode);
+      return;
+    }
+
+    // Normal digital mode switch (FT8 <-> FT4)
+    if (this.currentMode.name === digitalMode.name) {
+      logger.info(`Already in mode: ${digitalMode.name}`);
+      return;
+    }
+
+    logger.info(`Switching mode: ${this.currentMode.name} -> ${digitalMode.name}`);
+    this.currentMode = digitalMode;
     this.applyDecodeWindowOverrides();
 
     if (this.slotClock) {
@@ -378,7 +466,80 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.slotPackManager.setMode(this.currentMode);
     this.clockCoordinator?.onModeChanged(this.currentMode);
+
+    // Persist digital sub-mode
+    ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
+
     this.emit('modeChanged', this.currentMode);
+  }
+
+  private async switchToVoiceMode(): Promise<void> {
+    logger.info('Switching to voice mode');
+
+    // Stop engine if running
+    const wasRunning = this.engineLifecycle?.getIsRunning() ?? false;
+    if (wasRunning) {
+      // Prevent RadioBridge from auto-restarting engine after reconnect
+      this.radioBridge.wasRunningBeforeDisconnect = false;
+      await this.stop();
+    }
+
+    // Clear and re-register resources for voice mode
+    this.resourceManager.clear();
+    this.engineMode = 'voice';
+    this.currentMode = MODES.VOICE;
+    this.engineLifecycle.registerResources();
+
+    // Persist engine mode
+    ConfigManager.getInstance().setLastEngineMode('voice');
+
+    this.emit('modeChanged', this.currentMode);
+    logger.info('Switched to voice mode');
+
+    // Restart engine if it was running
+    if (wasRunning) {
+      await this.start();
+    }
+  }
+
+  private async switchToDigitalMode(mode?: ModeDescriptor): Promise<void> {
+    const targetMode = mode ?? MODES.FT8;
+    logger.info(`Switching to digital mode: ${targetMode.name}`);
+
+    // Stop engine if running
+    const wasRunning = this.engineLifecycle?.getIsRunning() ?? false;
+    if (wasRunning) {
+      // Prevent RadioBridge from auto-restarting engine after reconnect
+      this.radioBridge.wasRunningBeforeDisconnect = false;
+      await this.stop();
+    }
+
+    // Clear and re-register resources for digital mode
+    this.resourceManager.clear();
+    this.engineMode = 'digital';
+    this.currentMode = targetMode;
+    this.applyDecodeWindowOverrides();
+    this.engineLifecycle.registerResources();
+
+    if (this.slotClock) {
+      this.slotClock.setMode(this.currentMode);
+    }
+
+    this.slotPackManager.setMode(this.currentMode);
+    this.clockCoordinator?.onModeChanged(this.currentMode);
+
+    // Persist engine mode and digital sub-mode
+    const cfgMgr = ConfigManager.getInstance();
+    cfgMgr.setLastEngineMode('digital');
+    cfgMgr.setLastDigitalModeName(targetMode.name);
+
+    this.emit('modeChanged', this.currentMode);
+    logger.info(`Switched to digital mode: ${targetMode.name}`);
+
+    // Restart engine if it was running
+    if (wasRunning) {
+      await this.start();
+    }
   }
 
   /**
@@ -421,7 +582,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getStatus() {
     const isRunning = this.engineLifecycle?.getIsRunning() ?? false;
-    const isActuallyDecoding = isRunning && (this.slotClock?.isRunning ?? false);
+    // Voice mode has no slotClock, so isDecoding = isRunning
+    const isActuallyDecoding = this.engineMode === 'voice'
+      ? isRunning
+      : isRunning && (this.slotClock?.isRunning ?? false);
 
     const engineState = this.engineLifecycle?.getEngineState() ?? 'idle';
     const engineContext = this.engineLifecycle?.getEngineContext() ?? null;
@@ -430,6 +594,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       isRunning,
       isDecoding: isActuallyDecoding,
       currentMode: this.currentMode,
+      engineMode: this.engineMode,
       currentTime: this.clockSource.now(),
       nextSlotIn: this.slotClock?.getNextSlotIn() ?? 0,
       audioStarted: this.engineLifecycle?.getIsAudioStarted() ?? false,

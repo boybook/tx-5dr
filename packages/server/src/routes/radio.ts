@@ -151,9 +151,11 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
   fastify.get('/last-frequency', async (_req, reply) => {
     const lastFrequency = configManager.getLastSelectedFrequency();
-    return reply.send({ 
-      success: true, 
-      lastFrequency: lastFrequency 
+    const lastVoiceFrequency = configManager.getLastVoiceFrequency();
+    return reply.send({
+      success: true,
+      lastFrequency,
+      lastVoiceFrequency,
     });
   });
 
@@ -193,15 +195,25 @@ export async function radioRoutes(fastify: FastifyInstance) {
     }
 
     // 保存到配置文件（无论电台是否连接都要保存）
+    // Voice mode saves to separate lastVoiceFrequency to avoid overwriting digital frequency
     if (mode && band) {
       try {
-        await configManager.updateLastSelectedFrequency({
-          frequency,
-          mode,
-          radioMode,
-          band,
-          description
-        });
+        if (mode === 'VOICE') {
+          await configManager.updateLastVoiceFrequency({
+            frequency,
+            radioMode,
+            band,
+            description,
+          });
+        } else {
+          await configManager.updateLastSelectedFrequency({
+            frequency,
+            mode,
+            radioMode,
+            band,
+            description
+          });
+        }
       } catch (configError) {
         logger.warn(`Failed to save frequency config: ${(configError as Error).message}`);
       }

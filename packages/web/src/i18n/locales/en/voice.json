@@ -1,0 +1,80 @@
+{
+  "frequency": {
+    "title": "Frequency Control",
+    "currentFrequency": "Current Frequency",
+    "mhz": "MHz",
+    "presets": "Preset Frequencies",
+    "customFrequency": "Custom Frequency",
+    "addPreset": "Add Preset",
+    "removePreset": "Remove Preset",
+    "noPresets": "No voice frequency presets",
+    "customTitle": "Custom Frequency",
+    "inputPlaceholder": "e.g. 14.270 or 14270000",
+    "inputHint": "Supports MHz (e.g. 14.270) or Hz (e.g. 14270000)",
+    "confirm": "Confirm",
+    "switchSuccess": "Frequency switched",
+    "switchFailed": "Frequency switch failed",
+    "switched": "Switched to {{freq}} MHz"
+  },
+  "radioMode": {
+    "title": "Radio Mode",
+    "usb": "USB",
+    "lsb": "LSB",
+    "fm": "FM",
+    "am": "AM"
+  },
+  "ptt": {
+    "title": "Voice PTT",
+    "idle": "Push to Talk",
+    "requesting": "Requesting...",
+    "transmitting": "Transmitting",
+    "lockedByOther": "Locked by {{user}}",
+    "releaseHint": "Release to stop",
+    "spaceHint": "Hold Space to transmit",
+    "micPermissionNeeded": "Microphone permission needed",
+    "micPermissionDenied": "Microphone permission denied",
+    "captureError": "Audio capture error",
+    "wakeLockFailed": "Screen wake lock failed"
+  },
+  "qso": {
+    "title": "Voice QSO Log",
+    "callsign": "Callsign",
+    "callsignPlaceholder": "Their callsign",
+    "rstSent": "RST Sent",
+    "rstReceived": "RST Rcvd",
+    "name": "Name",
+    "namePlaceholder": "Their name",
+    "qth": "QTH",
+    "qthPlaceholder": "Their location",
+    "grid": "Grid",
+    "gridPlaceholder": "Grid locator",
+    "notes": "Notes",
+    "notesPlaceholder": "Notes",
+    "frequency": "Frequency",
+    "mode": "Mode",
+    "startTime": "Start Time",
+    "endTime": "End Time",
+    "logQSO": "Log QSO",
+    "clear": "Clear",
+    "logSuccess": "QSO logged successfully",
+    "logFailed": "Failed to log QSO",
+    "myCallsign": "Operator",
+    "myGrid": "Grid",
+    "operator": "Operator",
+    "noOperator": "Please create an operator before logging QSO"
+  },
+  "recentQSO": {
+    "title": "Recent QSOs",
+    "empty": "No voice QSO records",
+    "emptyHint": "Logged voice QSOs will appear here",
+    "time": "Time",
+    "callsign": "Callsign",
+    "freq": "Freq",
+    "mode": "Mode",
+    "rst": "RST"
+  },
+  "layout": {
+    "voiceMode": "Voice Mode",
+    "digitalMode": "Digital Mode"
+  }
+}

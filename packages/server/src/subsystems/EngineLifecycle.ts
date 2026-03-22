@@ -6,6 +6,7 @@ import type { AudioMixer } from '../audio/AudioMixer.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { SpectrumScheduler } from '../audio/SpectrumScheduler.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
+import type { VoiceSessionManager } from '../voice/VoiceSessionManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ResourceManager } from '../utils/ResourceManager.js';
 import { IcomWlanAudioAdapter } from '../audio/IcomWlanAudioAdapter.js';
@@ -35,6 +36,7 @@ export interface EngineLifecycleDeps {
     clockCoordinator: ClockCoordinator;
   };
   getCurrentMode: () => ModeDescriptor;
+  getVoiceSessionManager: () => VoiceSessionManager | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getStatus: () => any;
 }
@@ -54,10 +56,17 @@ export class EngineLifecycle {
   // 音频监听服务
   private audioMonitorService: AudioMonitorService | null = null;
 
+  // 语音会话管理器
+  private voiceSessionManager: VoiceSessionManager | null = null;
+
   // 引擎状态机 (XState v5)
   private engineStateMachineActor: EngineActor | null = null;
 
   constructor(private deps: EngineLifecycleDeps) {}
+
+  setVoiceSessionManager(manager: VoiceSessionManager | null): void {
+    this.voiceSessionManager = manager;
+  }
 
   getIsRunning(): boolean {
     return this.isRunning;
@@ -222,86 +231,135 @@ export class EngineLifecycle {
       optional: false,
     });
 
-    // 6. 时钟
-    resourceManager.register({
-      name: 'clock',
-      start: async () => {
-        if (!slotClock) {
-          throw new Error('Clock not initialized');
-        }
-        slotClock.start();
-        logger.debug('Clock started');
-      },
-      stop: async () => {
-        if (slotClock) {
-          slotClock.stop();
-          // 确保PTT被停止
-          await this.deps.subsystems.transmissionPipeline.forceStopPTT();
-          logger.debug('Clock stopped');
-        }
-      },
-      priority: 6,
-      dependencies: ['audioOutputStream'],
-      optional: false,
-    });
+    const mode = this.deps.getCurrentMode();
+    const isVoiceMode = mode.name === 'VOICE';
 
-    // 7. 解码调度器
-    resourceManager.register({
-      name: 'slotScheduler',
-      start: async () => {
-        if (slotScheduler) {
-          slotScheduler.start();
-          logger.debug('Slot scheduler started');
-        }
-      },
-      stop: async () => {
-        if (slotScheduler) {
-          slotScheduler.stop();
-          logger.debug('Slot scheduler stopped');
-        }
-      },
-      priority: 7,
-      dependencies: ['clock'],
-      optional: false,
-    });
+    if (isVoiceMode) {
+      // Voice mode: spectrum depends on audioInputStream (no clock), plus voiceSessionManager
+      // 6. 频谱调度器 (voice mode: depends on audioInputStream)
+      resourceManager.register({
+        name: 'spectrumScheduler',
+        start: async () => {
+          if (spectrumScheduler) {
+            spectrumScheduler.start();
+            logger.debug('Spectrum scheduler started (voice mode)');
+          }
+        },
+        stop: async () => {
+          if (spectrumScheduler) {
+            spectrumScheduler.stop();
+            logger.debug('Spectrum scheduler stopped (voice mode)');
+          }
+        },
+        priority: 6,
+        dependencies: ['audioInputStream'],
+        optional: false,
+      });
 
-    // 8. 频谱调度器
-    resourceManager.register({
-      name: 'spectrumScheduler',
-      start: async () => {
-        if (spectrumScheduler) {
-          spectrumScheduler.start();
-          logger.debug('Spectrum scheduler started');
-        }
-      },
-      stop: async () => {
-        if (spectrumScheduler) {
-          spectrumScheduler.stop();
-          logger.debug('Spectrum scheduler stopped');
-        }
-      },
-      priority: 8,
-      dependencies: ['clock'],
-      optional: false,
-    });
+      // 7. 语音会话管理器
+      const voiceSessionManager = this.deps.getVoiceSessionManager();
+      if (voiceSessionManager) {
+        resourceManager.register({
+          name: 'voiceSessionManager',
+          start: async () => {
+            await voiceSessionManager.start();
+            logger.debug('Voice session manager started');
+          },
+          stop: async () => {
+            await voiceSessionManager.stop();
+            logger.debug('Voice session manager stopped');
+          },
+          priority: 7,
+          dependencies: ['audioOutputStream', 'audioMonitorService'],
+          optional: false,
+        });
+      }
 
-    // 9. 操作员管理器
-    resourceManager.register({
-      name: 'operatorManager',
-      start: async () => {
-        operatorManager.start();
-        logger.debug('Operator manager started');
-      },
-      stop: async () => {
-        operatorManager.stop();
-        logger.debug('Operator manager stopped');
-      },
-      priority: 9,
-      dependencies: ['clock'],
-      optional: false,
-    });
+      logger.info('All resources registered (voice mode)');
+    } else {
+      // Digital mode: clock, slotScheduler, spectrumScheduler, operatorManager
 
-    logger.info('All resources registered');
+      // 6. 时钟
+      resourceManager.register({
+        name: 'clock',
+        start: async () => {
+          if (!slotClock) {
+            throw new Error('Clock not initialized');
+          }
+          slotClock.start();
+          logger.debug('Clock started');
+        },
+        stop: async () => {
+          if (slotClock) {
+            slotClock.stop();
+            // 确保PTT被停止
+            await this.deps.subsystems.transmissionPipeline.forceStopPTT();
+            logger.debug('Clock stopped');
+          }
+        },
+        priority: 6,
+        dependencies: ['audioOutputStream'],
+        optional: false,
+      });
+
+      // 7. 解码调度器
+      resourceManager.register({
+        name: 'slotScheduler',
+        start: async () => {
+          if (slotScheduler) {
+            slotScheduler.start();
+            logger.debug('Slot scheduler started');
+          }
+        },
+        stop: async () => {
+          if (slotScheduler) {
+            slotScheduler.stop();
+            logger.debug('Slot scheduler stopped');
+          }
+        },
+        priority: 7,
+        dependencies: ['clock'],
+        optional: false,
+      });
+
+      // 8. 频谱调度器
+      resourceManager.register({
+        name: 'spectrumScheduler',
+        start: async () => {
+          if (spectrumScheduler) {
+            spectrumScheduler.start();
+            logger.debug('Spectrum scheduler started');
+          }
+        },
+        stop: async () => {
+          if (spectrumScheduler) {
+            spectrumScheduler.stop();
+            logger.debug('Spectrum scheduler stopped');
+          }
+        },
+        priority: 8,
+        dependencies: ['clock'],
+        optional: false,
+      });
+
+      // 9. 操作员管理器
+      resourceManager.register({
+        name: 'operatorManager',
+        start: async () => {
+          operatorManager.start();
+          logger.debug('Operator manager started');
+        },
+        stop: async () => {
+          operatorManager.stop();
+          logger.debug('Operator manager stopped');
+        },
+        priority: 9,
+        dependencies: ['clock'],
+        optional: false,
+      });
+
+      logger.info('All resources registered (digital mode)');
+    }
   }
 
   /**
@@ -395,6 +453,16 @@ export class EngineLifecycle {
 
     logger.info('Delegating to state machine: STOP');
     this.engineStateMachineActor.send({ type: 'STOP' });
+
+    // Wait for engine to reach IDLE state after sending STOP
+    try {
+      const { waitForEngineState } = await import('../state-machines/engineStateMachine.js');
+      await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 15000);
+      logger.info('Stop completed');
+    } catch (error) {
+      logger.error('Waiting for stop timed out:', error);
+      throw error;
+    }
   }
 
   /**

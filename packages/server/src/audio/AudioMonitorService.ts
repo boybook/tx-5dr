@@ -229,6 +229,25 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   /**
    * 销毁服务
    */
+  /**
+   * Pause audio pushing (e.g. during voice TX to prevent echo).
+   * The service stays initialized and can be resumed.
+   */
+  pause(): void {
+    if (!this.isRunning) return;
+    this.stopPushingAudio();
+    logger.info('Audio monitor paused');
+  }
+
+  /**
+   * Resume audio pushing after pause.
+   */
+  resume(): void {
+    if (this.isRunning) return;
+    this.startPushingAudio();
+    logger.info('Audio monitor resumed');
+  }
+
   destroy(): void {
     this.stopPushingAudio();
     this.removeAllListeners();

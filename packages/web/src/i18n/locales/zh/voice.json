@@ -1,0 +1,80 @@
+{
+  "frequency": {
+    "title": "频率控制",
+    "currentFrequency": "当前频率",
+    "mhz": "MHz",
+    "presets": "预设频率",
+    "customFrequency": "自定义频率",
+    "addPreset": "添加预设",
+    "removePreset": "移除预设",
+    "noPresets": "暂无语音频率预设",
+    "customTitle": "自定义频率",
+    "inputPlaceholder": "例如: 14.270 或 14270000",
+    "inputHint": "支持 MHz (如 14.270) 或 Hz (如 14270000) 格式",
+    "confirm": "确认",
+    "switchSuccess": "频率切换成功",
+    "switchFailed": "频率切换失败",
+    "switched": "已切换到 {{freq}} MHz"
+  },
+  "radioMode": {
+    "title": "电台模式",
+    "usb": "USB",
+    "lsb": "LSB",
+    "fm": "FM",
+    "am": "AM"
+  },
+  "ptt": {
+    "title": "语音发射",
+    "idle": "按住发射",
+    "requesting": "请求中...",
+    "transmitting": "正在发射",
+    "lockedByOther": "被 {{user}} 占用",
+    "releaseHint": "松开停止发射",
+    "spaceHint": "按住空格键发射",
+    "micPermissionNeeded": "需要麦克风权限",
+    "micPermissionDenied": "麦克风权限被拒绝",
+    "captureError": "音频采集错误",
+    "wakeLockFailed": "屏幕保持唤醒失败"
+  },
+  "qso": {
+    "title": "语音通联日志",
+    "callsign": "呼号",
+    "callsignPlaceholder": "对方呼号",
+    "rstSent": "RST 发送",
+    "rstReceived": "RST 接收",
+    "name": "姓名",
+    "namePlaceholder": "对方姓名",
+    "qth": "QTH",
+    "qthPlaceholder": "对方位置",
+    "grid": "网格",
+    "gridPlaceholder": "网格坐标",
+    "notes": "备注",
+    "notesPlaceholder": "备注信息",
+    "frequency": "频率",
+    "mode": "模式",
+    "startTime": "开始时间",
+    "endTime": "结束时间",
+    "logQSO": "记录 QSO",
+    "clear": "清空",
+    "logSuccess": "QSO 记录成功",
+    "logFailed": "QSO 记录失败",
+    "myCallsign": "操作员",
+    "myGrid": "网格",
+    "operator": "操作员",
+    "noOperator": "请先创建操作员后再记录 QSO"
+  },
+  "recentQSO": {
+    "title": "最近通联",
+    "empty": "暂无语音通联记录",
+    "emptyHint": "记录的语音 QSO 将在这里显示",
+    "time": "时间",
+    "callsign": "呼号",
+    "freq": "频率",
+    "mode": "模式",
+    "rst": "RST"
+  },
+  "layout": {
+    "voiceMode": "语音模式",
+    "digitalMode": "数字模式"
+  }
+}

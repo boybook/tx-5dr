@@ -1,6 +1,8 @@
 import './App.css';
 import { LeftLayout } from './layout/LeftLayout';
 import { RightLayout } from './layout/RightLayout';
+import { VoiceLeftLayout } from './layout/VoiceLeftLayout';
+import { VoiceRightLayout } from './layout/VoiceRightLayout';
 import { SplitLayout } from './components/SplitLayout';
 import { RadioProvider, useRadioState, useProfiles, useConnection } from './store/radioStore';
 import { AuthProvider, useAuth } from './store/authStore';
@@ -11,12 +13,14 @@ import { LoginPage } from './pages/LoginPage';
 
 function AppContent() {
   const { state } = useRadioState();
-  const { pttStatus } = state;
+  const { pttStatus, engineMode } = state;
   const { profiles, profilesLoaded } = useProfiles();
   const { state: connectionState } = useConnection();
 
   // 首次使用引导：已连接服务器且 Profile 数据已加载且为空时显示
   const showSetupOverlay = connectionState.isConnected && profilesLoaded && profiles.length === 0;
+
+  const isVoiceMode = engineMode === 'voice';
 
   return (
     <div className="App h-screen w-full overflow-hidden relative">
@@ -33,11 +37,11 @@ function AppContent() {
       )}
 
       <SplitLayout
-        leftContent={<LeftLayout />}
-        rightContent={<RightLayout />}
-        defaultLeftWidth={50}
+        leftContent={isVoiceMode ? <VoiceLeftLayout /> : <LeftLayout />}
+        rightContent={isVoiceMode ? <VoiceRightLayout /> : <RightLayout />}
+        defaultLeftWidth={isVoiceMode ? 30 : 50}
         minLeftWidth={25}
-        maxLeftWidth={75}
+        maxLeftWidth={isVoiceMode ? 50 : 75}
       />
 
       {/* 服务器断连蒙层：仅在曾经连接成功后断线时显示，避免首次加载闪烁 */}

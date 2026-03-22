@@ -24,6 +24,8 @@ import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
+import { VoiceAudioWSServer } from './websocket/VoiceAudioWSServer.js';
+import { voiceRoutes } from './routes/voice.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 
 /**
@@ -135,6 +137,14 @@ export async function createServer() {
 
   // 初始化音频监听WebSocket服务器
   const audioMonitorWSServer = new AudioMonitorWSServer();
+
+  // 初始化语音音频WebSocket服务器
+  const voiceAudioWSServer = new VoiceAudioWSServer();
+  // Wire to engine's VoiceSessionManager
+  const voiceSessionManager = digitalRadioEngine.getVoiceSessionManager();
+  if (voiceSessionManager) {
+    voiceAudioWSServer.setVoiceSessionManager(voiceSessionManager);
+  }
 
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, audioMonitorWSServer);
@@ -250,15 +260,16 @@ export async function createServer() {
   });
   fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system)');
 
-  // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包
+  // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、语音
   await fastify.register(async (scope) => {
     await scope.register(withRole(UserRole.VIEWER));
     await scope.register(operatorRoutes, { prefix: '/api/operators' });
     await scope.register(radioRoutes, { prefix: '/api/radio' });
     await scope.register(modeRoutes, { prefix: '/api/mode' });
     await scope.register(slotpackRoutes, { prefix: '/api/slotpack' });
+    await scope.register(voiceRoutes, { prefix: '/api/voice' });
   });
-  fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack)');
+  fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack, voice)');
 
   // Operator+ 路由：日志本（细粒度权限由路由内部 preHandler 控制）
   await fastify.register(async (scope) => {
@@ -383,11 +394,32 @@ export async function createServer() {
     }
   });
 
+  // 语音音频专用 WebSocket endpoint（接收客户端的 Opus 音频帧）
+  fastify.get('/api/ws/voice-audio', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const clientId = url.searchParams.get('clientId');
+
+      if (!clientId) {
+        fastify.log.warn('Voice audio WS connection missing clientId parameter, rejecting');
+        socket.close();
+        return;
+      }
+
+      fastify.log.info(`Voice audio WS client connected: clientId=${clientId}`);
+      voiceAudioWSServer.handleConnection(socket, clientId);
+    } catch (e) {
+      fastify.log.error('Voice audio WS connection parameter parsing failed:', e);
+      socket.close();
+    }
+  });
+
   // 服务器关闭时清理WebSocket连接
   fastify.addHook('onClose', async () => {
     wsServer.cleanup();
     logbookWsServer.cleanup();
     audioMonitorWSServer.closeAll();
+    voiceAudioWSServer.closeAll();
   });
 
   return fastify;

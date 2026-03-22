@@ -63,6 +63,10 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.AUTH_REQUIRED]: 'authRequired',
   [WSMessageType.AUTH_RESULT]: 'authResult',
   [WSMessageType.AUTH_EXPIRED]: 'authExpired',
+
+  // 语音模式事件
+  [WSMessageType.VOICE_PTT_LOCK_CHANGED]: 'voicePttLockChanged',
+  [WSMessageType.VOICE_RADIO_MODE_CHANGED]: 'voiceRadioModeChanged',
 };
 
 /**

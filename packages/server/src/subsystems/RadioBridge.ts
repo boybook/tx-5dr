@@ -107,12 +107,28 @@ export class RadioBridge {
         connectionHealth: radioManager.getConnectionHealth()
       });
 
-      // 连接成功后自动设置频率
+      // 连接成功后自动设置频率（根据引擎模式选择对应的保存频率）
       try {
-        const lastFrequency = ConfigManager.getInstance().getLastSelectedFrequency();
-        if (lastFrequency && lastFrequency.frequency) {
-          logger.info(`Auto-setting frequency: ${(lastFrequency.frequency / 1000000).toFixed(3)} MHz (${lastFrequency.description || lastFrequency.mode})`);
-          await radioManager.setFrequency(lastFrequency.frequency);
+        const cfgMgr = ConfigManager.getInstance();
+        const engineMode = cfgMgr.getLastEngineMode();
+        let targetFrequency: number | null = null;
+
+        if (engineMode === 'voice') {
+          const lastVoice = cfgMgr.getLastVoiceFrequency();
+          if (lastVoice?.frequency) {
+            targetFrequency = lastVoice.frequency;
+            logger.info(`Auto-setting voice frequency: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz (${lastVoice.description || lastVoice.radioMode || 'voice'})`);
+          }
+        } else {
+          const lastDigital = cfgMgr.getLastSelectedFrequency();
+          if (lastDigital?.frequency) {
+            targetFrequency = lastDigital.frequency;
+            logger.info(`Auto-setting digital frequency: ${(lastDigital.frequency / 1000000).toFixed(3)} MHz (${lastDigital.description || lastDigital.mode})`);
+          }
+        }
+
+        if (targetFrequency) {
+          await radioManager.setFrequency(targetFrequency);
         } else {
           logger.info('No saved frequency config, skipping auto-set');
         }

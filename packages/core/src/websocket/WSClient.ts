@@ -274,4 +274,27 @@ export class WSClient extends WSMessageHandler {
   sendAuthPublicViewer(): void {
     this.send(WSMessageType.AUTH_PUBLIC_VIEWER);
   }
+
+  // ===== 语音模式命令 =====
+
+  /**
+   * 请求语音 PTT 锁
+   */
+  requestVoicePTT(): void {
+    this.send(WSMessageType.VOICE_PTT_REQUEST);
+  }
+
+  /**
+   * 释放语音 PTT 锁
+   */
+  releaseVoicePTT(): void {
+    this.send(WSMessageType.VOICE_PTT_RELEASE);
+  }
+
+  /**
+   * 设置电台调制模式（语音模式下使用，如 USB/LSB/FM/AM）
+   */
+  setVoiceRadioMode(radioMode: string): void {
+    this.send(WSMessageType.VOICE_SET_RADIO_MODE, { radioMode });
+  }
 } 

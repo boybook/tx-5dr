@@ -7,6 +7,7 @@ import { LogBookStatisticsSchema } from './logbook.schema.js';
 import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, RadioConnectionStatusSchema, ReconnectProgressSchema } from './radio.schema.js';
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
+import type { VoicePTTLock } from './voice.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -105,6 +106,13 @@ export enum WSMessageType {
   AUTH_PUBLIC_VIEWER = 'authPublicViewer',
   AUTH_RESULT = 'authResult',
   AUTH_EXPIRED = 'authExpired',
+
+  // ===== 语音模式 =====
+  VOICE_PTT_REQUEST = 'voicePttRequest',
+  VOICE_PTT_RELEASE = 'voicePttRelease',
+  VOICE_PTT_LOCK_CHANGED = 'voicePttLockChanged',
+  VOICE_SET_RADIO_MODE = 'voiceSetRadioMode',
+  VOICE_RADIO_MODE_CHANGED = 'voiceRadioModeChanged',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -121,6 +129,10 @@ export const SystemStatusSchema = z.object({
   radioConnectionHealth: z.object({
     connectionHealthy: z.boolean(),
   }).optional(),
+  /** 引擎模式：digital（FT8/FT4）或 voice（语音通联） */
+  engineMode: z.enum(['digital', 'voice']).default('digital'),
+  /** 当前电台调制模式（语音模式下使用，如 USB/LSB/FM/AM） */
+  currentRadioMode: z.string().optional(),
 });
 
 // 子窗口信息数据结构
@@ -1081,4 +1093,8 @@ export interface DigitalRadioEngineEvents {
   authRequired: (data: { allowPublicViewing: boolean }) => void;
   authResult: (data: { success: boolean; role?: UserRole; label?: string; operatorIds?: string[]; error?: string }) => void;
   authExpired: (data: { reason?: string }) => void;
+
+  // 语音模式事件
+  voicePttLockChanged: (data: VoicePTTLock) => void;
+  voiceRadioModeChanged: (data: { radioMode: string }) => void;
 } 

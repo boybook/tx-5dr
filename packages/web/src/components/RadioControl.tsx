@@ -433,7 +433,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       return;
     }
 
-    const selectedModeName = Array.from(keys)[0];
+    const selectedModeName = Array.from(keys)[0] as string;
+
+    // Handle VOICE mode switch via WSClient (not REST API, since VOICE is not a ModeDescriptor)
+    if (selectedModeName === 'VOICE') {
+      try {
+        // Use WSClient to send mode switch command
+        connection.state.radioService?.wsClientInstance.setMode({ name: 'VOICE' } as ModeDescriptor);
+        logger.info('Mode switch requested: VOICE');
+      } catch (error) {
+        logger.error('Failed to switch to VOICE mode:', error);
+      }
+      return;
+    }
+
     const selectedMode = availableModes.find(mode => mode.name === selectedModeName);
 
     if (!selectedMode) {
@@ -620,6 +633,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   };
 
+  // Auto-start audio monitoring in voice mode
+  const voiceAutoMonitorTriggered = React.useRef(false);
+  React.useEffect(() => {
+    if (radio.state.engineMode === 'voice' && !isMonitoring && connection.state.isConnected && !voiceAutoMonitorTriggered.current) {
+      voiceAutoMonitorTriggered.current = true;
+      logger.info('Voice mode detected, auto-starting audio monitor');
+      startMonitoring();
+    }
+    // Reset flag when leaving voice mode so it triggers again next time
+    if (radio.state.engineMode !== 'voice') {
+      voiceAutoMonitorTriggered.current = false;
+    }
+  }, [radio.state.engineMode, connection.state.isConnected, isMonitoring]);
+
   // 频率格式验证和转换
   const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
     const trimmed = input.trim();
@@ -784,8 +811,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   };
 
-  // 当模式改变时，自动选择第一个匹配的频率
+  // 当模式改变时，自动选择第一个匹配的频率（仅数字模式）
   React.useEffect(() => {
+    // Skip in voice mode - VoiceFrequencyControl manages its own frequency
+    if (radio.state.engineMode === 'voice') return;
+
     if (filteredFrequencies.length > 0) {
       const currentFreqExists = filteredFrequencies.some(freq => freq.key === currentFrequency);
       if (!currentFreqExists) {
@@ -798,7 +828,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         autoSetFrequency(firstFreq);
       }
     }
-  }, [filteredFrequencies]);
+  }, [filteredFrequencies, radio.state.engineMode]);
 
   // 处理频率切换
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1053,6 +1083,29 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     };
   }, []);
+
+  // Mute monitor audio during voice PTT to prevent echo (frontend-side)
+  useEffect(() => {
+    if (!monitorGainNodeRef.current || !audioContextRef.current) return;
+    const isTransmitting = radio.state.pttStatus.isTransmitting;
+    const now = audioContextRef.current.currentTime;
+    monitorGainNodeRef.current.gain.cancelScheduledValues(now);
+    if (isTransmitting) {
+      // Mute: ramp to near-zero quickly
+      monitorGainNodeRef.current.gain.setValueAtTime(
+        Math.max(monitorGainNodeRef.current.gain.value, 1e-6), now
+      );
+      monitorGainNodeRef.current.gain.exponentialRampToValueAtTime(1e-6, now + 0.01);
+    } else {
+      // Unmute: restore to user-set volume
+      monitorGainNodeRef.current.gain.setValueAtTime(
+        Math.max(monitorGainNodeRef.current.gain.value, 1e-6), now
+      );
+      monitorGainNodeRef.current.gain.exponentialRampToValueAtTime(
+        Math.max(monitorVolume, 1e-6), now + 0.02
+      );
+    }
+  }, [radio.state.pttStatus.isTransmitting, monitorVolume]);
 
   // 监听系统状态更新
   useEffect(() => {
@@ -1557,7 +1610,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               labelPlacement="outside"
               placeholder={modeError || t('mode.placeholder')}
               selectorIcon={<SelectorIcon />}
-              selectedKeys={radio.state.currentMode ? [radio.state.currentMode.name] : []}
+              selectedKeys={radio.state.engineMode === 'voice' ? ['VOICE'] : (radio.state.currentMode ? [radio.state.currentMode.name] : [])}
               variant="flat"
               size="md"
               radius="md"
@@ -1572,7 +1625,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               onSelectionChange={handleModeChange}
               isLoading={isLoadingModes}
             >
-              {availableModes?.filter(mode => mode && mode.name).map((mode) => (
+              {(availableModes || []).filter(mode => mode && mode.name).map((mode) => (
                 <SelectItem
                   key={mode.name}
                   textValue={mode.name}
@@ -1585,7 +1638,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           ) : (
             <div className="flex items-center px-2 h-10 cursor-not-allowed">
               <span className="font-bold text-lg text-default-foreground">
-                {radio.state.currentMode?.name || ''}
+                {radio.state.engineMode === 'voice' ? 'VOICE' : (radio.state.currentMode?.name || '')}
               </span>
             </div>
           )}

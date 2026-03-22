@@ -6,8 +6,8 @@ import { z } from 'zod';
 export const ModeDescriptorSchema = z.object({
   /** 模式名称，如 "FT8", "FT4" */
   name: z.string(),
-  /** 时隙长度（毫秒），FT8=15000, FT4=7500 */
-  slotMs: z.number().positive(),
+  /** 时隙长度（毫秒），FT8=15000, FT4=7500, VOICE=0 */
+  slotMs: z.number().nonnegative(),
   /** 时钟容差（毫秒） */
   toleranceMs: z.number().nonnegative().default(100),
   /** 
@@ -52,6 +52,14 @@ export const MODES = {
     windowTiming: [0],
     transmitTiming: 550, // (7500 - 6400) / 2 = 550ms
     encodeAdvance: 500   // 提前500ms开始编码准备
+  } as ModeDescriptor,
+  VOICE: {
+    name: 'VOICE',
+    slotMs: 0,            // 语音模式无时隙概念
+    toleranceMs: 0,
+    windowTiming: [],     // 无解码窗口
+    transmitTiming: 0,
+    encodeAdvance: 0,
   } as ModeDescriptor,
 } as const;
 

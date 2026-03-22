@@ -10,6 +10,7 @@ import zhSettings from './locales/zh/settings.json';
 import zhLogbook from './locales/zh/logbook.json';
 import zhAuth from './locales/zh/auth.json';
 import zhErrors from './locales/zh/errors.json';
+import zhVoice from './locales/zh/voice.json';
 
 // 英文语言包
 import enCommon from './locales/en/common.json';
@@ -19,6 +20,7 @@ import enSettings from './locales/en/settings.json';
 import enLogbook from './locales/en/logbook.json';
 import enAuth from './locales/en/auth.json';
 import enErrors from './locales/en/errors.json';
+import enVoice from './locales/en/voice.json';
 
 i18n
   .use(LanguageDetector)
@@ -26,7 +28,7 @@ i18n
   .init({
     fallbackLng: 'zh',
     defaultNS: 'common',
-    ns: ['common', 'toast', 'radio', 'settings', 'logbook', 'auth', 'errors'],
+    ns: ['common', 'toast', 'radio', 'settings', 'logbook', 'auth', 'errors', 'voice'],
     detection: {
       order: ['localStorage'],
       lookupLocalStorage: 'tx5dr-language',
@@ -41,6 +43,7 @@ i18n
         logbook: zhLogbook,
         auth: zhAuth,
         errors: zhErrors,
+        voice: zhVoice,
       },
       en: {
         common: enCommon,
@@ -50,6 +53,7 @@ i18n
         logbook: enLogbook,
         auth: enAuth,
         errors: enErrors,
+        voice: enVoice,
       },
     },
     interpolation: {

@@ -26,11 +26,18 @@ export interface AppConfig {
     decodeWhileTransmitting: boolean; // 发射时允许解码
     spectrumWhileTransmitting: boolean; // 发射时允许频谱分析
   };
-  // 最后选择的频率配置
+  // 最后选择的频率配置（数字模式: FT8/FT4）
   lastSelectedFrequency: {
     frequency: number;
     mode: string; // 协议模式，如 FT8, FT4
     radioMode?: string; // 电台调制模式，如 USB, LSB
+    band: string;
+    description?: string;
+  } | null;
+  // 最后选择的语音模式频率（独立于数字模式，切换时各自恢复）
+  lastVoiceFrequency?: {
+    frequency: number;
+    radioMode?: string;
     band: string;
     description?: string;
   } | null;
@@ -54,8 +61,16 @@ export interface AppConfig {
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
   /** Decode window settings per mode (preset or custom timing) */
   decodeWindowSettings?: DecodeWindowSettings;
-  /** Custom frequency presets (null/undefined = use built-in defaults) */
+  /** Custom frequency presets (null/undefined = use built-in defaults, includes all modes: FT8/FT4/VOICE) */
   customFrequencyPresets?: PresetFrequency[] | null;
+  /** Last used engine mode ('digital' or 'voice'). Restored on startup. */
+  lastEngineMode?: 'digital' | 'voice';
+  /** Last used digital sub-mode name ('FT8' or 'FT4'). Restored on startup within digital mode. */
+  lastDigitalModeName?: string;
+  /** Voice mode operator callsign */
+  voiceCallsign?: string;
+  /** Voice mode operator grid */
+  voiceGrid?: string;
 }
 
 // 音频处理配置接口
@@ -777,6 +792,27 @@ export class ConfigManager {
   }
 
   /**
+   * 获取最后选择的语音频率
+   */
+  getLastVoiceFrequency(): AppConfig['lastVoiceFrequency'] {
+    return this.config.lastVoiceFrequency ? { ...this.config.lastVoiceFrequency } : null;
+  }
+
+  /**
+   * 更新最后选择的语音频率
+   */
+  async updateLastVoiceFrequency(frequencyConfig: {
+    frequency: number;
+    radioMode?: string;
+    band: string;
+    description?: string;
+  }): Promise<void> {
+    this.config.lastVoiceFrequency = { ...frequencyConfig };
+    await this.saveConfig();
+    logger.debug(`Last voice frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
+  }
+
+  /**
    * 清除最后选择的频率
    */
   async clearLastSelectedFrequency(): Promise<void> {
@@ -992,6 +1028,46 @@ export class ConfigManager {
 
   async resetCustomFrequencyPresets(): Promise<void> {
     this.config.customFrequencyPresets = null;
+    await this.saveConfig();
+  }
+
+  // ==================== Engine mode persistence ====================
+
+  getLastEngineMode(): 'digital' | 'voice' {
+    return this.config.lastEngineMode ?? 'digital';
+  }
+
+  async setLastEngineMode(mode: 'digital' | 'voice'): Promise<void> {
+    this.config.lastEngineMode = mode;
+    await this.saveConfig();
+  }
+
+  getLastDigitalModeName(): string {
+    return this.config.lastDigitalModeName ?? 'FT8';
+  }
+
+  async setLastDigitalModeName(modeName: string): Promise<void> {
+    this.config.lastDigitalModeName = modeName;
+    await this.saveConfig();
+  }
+
+  // ===== Voice mode config =====
+
+  getVoiceCallsign(): string {
+    return this.config.voiceCallsign ?? '';
+  }
+
+  async setVoiceCallsign(callsign: string): Promise<void> {
+    this.config.voiceCallsign = callsign;
+    await this.saveConfig();
+  }
+
+  getVoiceGrid(): string {
+    return this.config.voiceGrid ?? '';
+  }
+
+  async setVoiceGrid(grid: string): Promise<void> {
+    this.config.voiceGrid = grid;
     await this.saveConfig();
   }
 }

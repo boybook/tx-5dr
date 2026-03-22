@@ -104,7 +104,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
   // ==================== 频率预设管理 ====================
 
-  // 获取频率预设列表
+  // 获取频率预设列表（包含所有模式：FT8/FT4/VOICE）
   fastify.get('/frequency-presets', async (_request, reply) => {
     try {
       const custom = configManager.getCustomFrequencyPresets();
@@ -119,7 +119,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 保存自定义频率预设（仅管理员）
+  // 保存自定义频率预设（仅管理员，包含所有模式）
   fastify.put('/frequency-presets', {
     preHandler: [requireRole(UserRole.ADMIN)],
   }, async (request, reply) => {
