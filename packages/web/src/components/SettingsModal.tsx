@@ -18,6 +18,7 @@ import { faSave } from '@fortawesome/free-solid-svg-icons';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
+import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './FrequencyPresetSettings';
 import { TokenManagement } from './TokenManagement';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
@@ -29,7 +30,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'tokens';
+type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const { t } = useTranslation('settings');
@@ -50,6 +51,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
   const systemSettingsRef = useRef<SystemSettingsRef | null>(null);
+  const frequencyPresetSettingsRef = useRef<FrequencyPresetSettingsRef | null>(null);
 
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
@@ -87,6 +89,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return displaySettingsRef.current?.hasUnsavedChanges() || false;
       case 'system':
         return systemSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'frequency_presets':
+        return frequencyPresetSettingsRef.current?.hasUnsavedChanges() || false;
       default:
         return false;
     }
@@ -138,7 +142,11 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             await systemSettingsRef.current.save();
           }
           break;
-        // 其他标签页的保存逻辑将在后续实现
+        case 'frequency_presets':
+          if (frequencyPresetSettingsRef.current) {
+            await frequencyPresetSettingsRef.current.save();
+          }
+          break;
         default:
           break;
       }
@@ -210,6 +218,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           return '📻';
         case 'system':
           return '⚙️';
+        case 'frequency_presets':
+          return '📡';
         case 'tokens':
           return '🔑';
         default:
@@ -227,6 +237,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return `📻 ${t('modal.tabRadioProfile')}`;
       case 'system':
         return `⚙️ ${t('modal.tabSystem')}`;
+      case 'frequency_presets':
+        return `📡 ${t('modal.tabFrequencyPresets')}`;
       case 'tokens':
         return `🔑 ${t('modal.tabTokens')}`;
       default:
@@ -279,6 +291,13 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
               {t('modal.goToRadioProfile')}
             </Button>
           </div>
+        );
+      case 'frequency_presets':
+        return (
+          <FrequencyPresetSettings
+            ref={frequencyPresetSettingsRef}
+            onUnsavedChanges={setHasUnsavedChanges}
+          />
         );
       case 'tokens':
         return <TokenManagement />;
@@ -354,6 +373,12 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     <Tab
                       key="system"
                       title={getTabTitle('system', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="frequency_presets"
+                      title={getTabTitle('frequency_presets', isMobile)}
                     />
                   )}
                   {isAdmin && (

@@ -245,6 +245,7 @@
     "tabDisplay": "显示通知",
     "tabRadioProfile": "电台配置",
     "tabSystem": "系统设置",
+    "tabFrequencyPresets": "频率预设",
     "tabTokens": "用户管理",
     "defaultTab": "设置",
     "radioProfileDesc1": "电台连接和音频设备在「电台配置 Profile」中设置。",

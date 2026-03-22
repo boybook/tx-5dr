@@ -245,6 +245,7 @@
     "tabDisplay": "Display",
     "tabRadioProfile": "Radio Config",
     "tabSystem": "System",
+    "tabFrequencyPresets": "Frequencies",
     "tabTokens": "Users",
     "defaultTab": "Settings",
     "radioProfileDesc1": "Radio connection and audio devices are configured in the Radio Config Profile.",

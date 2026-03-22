@@ -57,7 +57,6 @@ export async function radioRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
   const configManager = ConfigManager.getInstance();
   const radioManager = engine.getRadioManager();
-  const freqManager = new FrequencyManager();
 
   fastify.get('/config', async (_req, reply) => {
     return reply.send({ success: true, config: configManager.getRadioConfig() });
@@ -145,6 +144,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/frequencies', async (_req, reply) => {
+    const custom = configManager.getCustomFrequencyPresets();
+    const freqManager = new FrequencyManager(custom);
     return reply.send({ success: true, presets: freqManager.getPresets() });
   });
 
