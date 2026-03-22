@@ -66,8 +66,10 @@ export const VoicePTTButton: React.FC = () => {
       },
     });
 
+    // Set ref immediately so PTT can queue activation before start() completes
+    voiceCaptureRef.current = capture;
+
     capture.start().then(() => {
-      voiceCaptureRef.current = capture;
       logger.info('Voice capture initialized');
     }).catch((error) => {
       logger.error('Failed to initialize voice capture:', error);

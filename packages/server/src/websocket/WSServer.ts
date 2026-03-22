@@ -822,7 +822,8 @@ export class WSServer extends WSMessageHandler {
 
       const connection = this.getConnection(connectionId);
       const label = connection?.getAuthLabel() || connectionId;
-      const result = await voiceSessionManager.startTransmit(connectionId, label);
+      const voiceAudioClientId = data?.voiceAudioClientId as string | undefined;
+      const result = await voiceSessionManager.startTransmit(connectionId, label, voiceAudioClientId);
 
       if (!result.success) {
         this.sendToConnection(connectionId, WSMessageType.ERROR, {

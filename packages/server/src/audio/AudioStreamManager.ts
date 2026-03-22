@@ -968,6 +968,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * @param pcmData PCM audio data (Float32Array, -1.0 to 1.0)
    * @param frameSampleRate Sample rate of the input data (typically 48000)
    */
+  /** Accumulation buffer for voice audio frames (adapts Opus frame size to RtAudio buffer size) */
+  private voiceAccumBuffer: Float32Array = new Float32Array(0);
+
   playVoiceAudio(pcmData: Float32Array, frameSampleRate: number): void {
     // ICOM WLAN output path
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
@@ -988,29 +991,35 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       return;
     }
 
-    // Simple case: sample rates match (typical: both 48kHz)
-    let outputData = pcmData;
-
-    // If sample rates don't match, skip frame (resampling every frame is too expensive
-    // for real-time; in practice Opus always outputs 48kHz which should match the device)
     if (frameSampleRate !== this.sampleRate) {
       logger.warn(`Voice audio sample rate mismatch: ${frameSampleRate} vs device ${this.sampleRate}, dropping frame`);
       return;
     }
 
-    // Apply volume gain and convert to Buffer
-    const gain = this.volumeGain;
-    const buffer = Buffer.allocUnsafe(outputData.length * 4);
-    for (let i = 0; i < outputData.length; i++) {
-      const s = outputData[i] * gain;
-      const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
-      buffer.writeFloatLE(clamped, i * 4);
-    }
+    // Accumulate incoming samples (Opus frame = 960 samples, RtAudio buffer = bufferSize samples)
+    const newBuf = new Float32Array(this.voiceAccumBuffer.length + pcmData.length);
+    newBuf.set(this.voiceAccumBuffer);
+    newBuf.set(pcmData, this.voiceAccumBuffer.length);
+    this.voiceAccumBuffer = newBuf;
 
-    try {
-      this.rtAudioOutput.write(buffer);
-    } catch {
-      // Buffer full or device error - drop frame silently
+    // Write complete bufferSize chunks to RtAudio
+    const gain = this.volumeGain;
+    while (this.voiceAccumBuffer.length >= this.bufferSize) {
+      const chunk = this.voiceAccumBuffer.subarray(0, this.bufferSize);
+      this.voiceAccumBuffer = this.voiceAccumBuffer.slice(this.bufferSize);
+
+      const buffer = Buffer.allocUnsafe(this.bufferSize * 4);
+      for (let i = 0; i < this.bufferSize; i++) {
+        const s = chunk[i] * gain;
+        const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
+        buffer.writeFloatLE(clamped, i * 4);
+      }
+
+      try {
+        this.rtAudioOutput.write(buffer);
+      } catch {
+        // Buffer full or device error - drop frame silently
+      }
     }
   }
 } 
