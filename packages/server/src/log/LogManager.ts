@@ -340,8 +340,8 @@ export class LogManager {
   async getOperatorLogBook(operatorId: string): Promise<LogBookInstance | null> {
     const callsign = this.operatorCallsignMap.get(operatorId);
     if (!callsign) {
-      // 没有注册呼号的操作员没有日志本
-      logger.warn(`Operator ${operatorId} has no registered callsign, cannot get logbook`);
+      // Normal: operator has no callsign configured, logbook unavailable
+      logger.debug(`Operator ${operatorId} has no registered callsign, skipping logbook lookup`);
       return null;
     }
     
