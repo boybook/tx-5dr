@@ -7,13 +7,27 @@
  * Default: production=warn, development=info
  */
 
-const LOG_LEVEL = process.env.LOG_LEVEL ||
-  (process.env.NODE_ENV === 'production' ? 'warn' : 'info');
-
 const LEVELS: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
+let _logLevel: string = process.env.LOG_LEVEL ||
+  (process.env.NODE_ENV === 'production' ? 'warn' : 'info');
+
+/**
+ * Override the active log level at runtime (e.g. from config file).
+ * Unknown levels are silently ignored.
+ */
+export function setLogLevel(level: string): void {
+  if (LEVELS[level] !== undefined) {
+    _logLevel = level;
+  }
+}
+
+export function getActiveLogLevel(): string {
+  return _logLevel;
+}
+
 function shouldLog(level: string): boolean {
-  return (LEVELS[level] ?? 0) >= (LEVELS[LOG_LEVEL] ?? 1);
+  return (LEVELS[level] ?? 0) >= (LEVELS[_logLevel] ?? 1);
 }
 
 export interface Logger {
