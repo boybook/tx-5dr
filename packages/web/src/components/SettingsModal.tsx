@@ -34,8 +34,11 @@ type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const { t } = useTranslation('settings');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
-  // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator
-  const effectiveInitialTab = (initialTab === 'radio' || initialTab === 'audio') ? 'operator' : (initialTab || 'operator');
+  const isOperator = useHasMinRole(UserRole.OPERATOR);
+  // Viewers cannot access the operator tab; fall back to display
+  const defaultTab: SettingsTab = isOperator ? 'operator' : 'display';
+  // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator（或 display 对 viewer）
+  const effectiveInitialTab = (initialTab === 'radio' || initialTab === 'audio') ? defaultTab : (initialTab || defaultTab);
   const [activeTab, setActiveTab] = useState<SettingsTab>(effectiveInitialTab);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
@@ -51,11 +54,11 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
     if (isOpen) {
-      const tab = (initialTab === 'radio' || initialTab === 'audio') ? 'operator' : (initialTab || 'operator');
+      const tab = (initialTab === 'radio' || initialTab === 'audio') ? defaultTab : (initialTab || defaultTab);
       setActiveTab(tab);
       setHasUnsavedChanges(false);
     }
-  }, [isOpen, initialTab]);
+  }, [isOpen, initialTab, defaultTab]);
 
   // 监听屏幕宽度变化，判断是否为移动端
   useEffect(() => {
@@ -331,10 +334,12 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     tabList: isMobile ? 'overflow-x-auto' : '',
                   }}
                 >
-                  <Tab
-                    key="operator"
-                    title={getTabTitle('operator', isMobile)}
-                  />
+                  {isOperator && (
+                    <Tab
+                      key="operator"
+                      title={getTabTitle('operator', isMobile)}
+                    />
+                  )}
                   <Tab
                     key="display"
                     title={getTabTitle('display', isMobile)}
