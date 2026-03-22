@@ -24,7 +24,7 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown, faShareNodes } from '@fortawesome/free-solid-svg-icons';
+import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown, faShareNodes, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '@tx5dr/core';
 import { UserRole } from '@tx5dr/contracts';
@@ -54,6 +54,7 @@ interface TokenCardProps {
 function TokenCard({ token, operators, onRevoke, onRegenerate, onShare }: TokenCardProps) {
   const { t } = useTranslation();
   const [tokenCopied, setTokenCopied] = useState(false);
+  const [tokenVisible, setTokenVisible] = useState(false);
   const roleLabels: Record<string, string> = {
     viewer: t('common:role.viewer'),
     operator: t('common:role.operator'),
@@ -150,8 +151,23 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare }: TokenC
           </div>
         )}
         {token.token && !token.revoked && (
-          <div className="flex items-center gap-2 bg-default-100 rounded-md px-2 py-1.5">
-            <code className="flex-1 text-xs break-all text-default-600">{token.token}</code>
+          <div className="flex items-center gap-1 bg-default-100 rounded-md px-2 py-1.5">
+            <code className="flex-1 text-xs break-all text-default-600 select-all">
+              {tokenVisible ? token.token : '•'.repeat(Math.min(token.token.length, 32))}
+            </code>
+            <Button
+              size="sm"
+              variant="light"
+              isIconOnly
+              className="min-w-6 w-6 h-6 shrink-0"
+              onPress={() => setTokenVisible(v => !v)}
+              title={tokenVisible ? t('auth:token.hide') : t('auth:token.show')}
+            >
+              <FontAwesomeIcon
+                icon={tokenVisible ? faEyeSlash : faEye}
+                className="text-default-400 text-xs"
+              />
+            </Button>
             <Button
               size="sm"
               variant="light"
