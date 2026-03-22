@@ -6,6 +6,7 @@ import { SpectrumDisplay } from '../components/SpectrumDisplay';
 import { RadioMetersDisplay } from '../components/RadioMetersDisplay';
 import { VoiceFrequencyControl } from '../components/voice/VoiceFrequencyControl';
 import { RemoteAccessPopover } from '../components/RemoteAccessPopover';
+import { StationInfoPopover } from '../components/StationInfoPopover';
 import { useRadioState, useConnection } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
@@ -79,6 +80,12 @@ export const VoiceLeftLayout: React.FC = () => {
               </Button>
             </div>
           )}
+          <div
+            className={isElectron() ? 'pl-16' : 'pl-2'}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
+          >
+            <StationInfoPopover />
+          </div>
         </div>
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           {isAdmin && <RemoteAccessPopover clientCount={clientCount} />}

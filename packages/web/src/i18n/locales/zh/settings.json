@@ -6,7 +6,27 @@
     "operator": "操作员",
     "display": "显示",
     "system": "系统",
-    "token": "令牌"
+    "token": "令牌",
+    "stationInfo": "电台信息"
+  },
+  "stationInfo": {
+    "callsign": "电台呼号",
+    "callsignPlaceholder": "例如：BG7XXX",
+    "name": "电台名称",
+    "namePlaceholder": "例如：BG7XXX Remote Station",
+    "qthGrid": "Maidenhead 格点",
+    "qthGridDesc": "业余无线电标准位置格式，如 PM01",
+    "qthLocation": "地名",
+    "qthLocationPlaceholder": "例如：北京市海淀区",
+    "qthLatitude": "精确纬度",
+    "qthLatitudeDesc": "十进制度数，留空则地图显示网格范围",
+    "qthLongitude": "精确经度",
+    "qthLongitudeDesc": "十进制度数，留空则地图显示网格范围",
+    "description": "电台简介",
+    "descriptionPlaceholder": "支持 Markdown 格式，可描述天线、功率、电台型号等信息...",
+    "descriptionDesc": "支持 Markdown 格式",
+    "saveSuccess": "电台信息已保存",
+    "saveFailed": "保存失败"
   },
   "language": {
     "label": "界面语言",

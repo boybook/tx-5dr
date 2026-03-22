@@ -20,6 +20,7 @@ import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from
 import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
 import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './FrequencyPresetSettings';
 import { TokenManagement } from './TokenManagement';
+import { StationInfoSettings, type StationInfoSettingsRef } from './StationInfoSettings';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 
@@ -30,7 +31,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens';
+type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const { t } = useTranslation('settings');
@@ -52,6 +53,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
   const systemSettingsRef = useRef<SystemSettingsRef | null>(null);
   const frequencyPresetSettingsRef = useRef<FrequencyPresetSettingsRef | null>(null);
+  const stationInfoSettingsRef = useRef<StationInfoSettingsRef | null>(null);
 
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
@@ -91,6 +93,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return systemSettingsRef.current?.hasUnsavedChanges() || false;
       case 'frequency_presets':
         return frequencyPresetSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'station_info':
+        return stationInfoSettingsRef.current?.hasUnsavedChanges() || false;
       default:
         return false;
     }
@@ -145,6 +149,11 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         case 'frequency_presets':
           if (frequencyPresetSettingsRef.current) {
             await frequencyPresetSettingsRef.current.save();
+          }
+          break;
+        case 'station_info':
+          if (stationInfoSettingsRef.current) {
+            await stationInfoSettingsRef.current.save();
           }
           break;
         default:
@@ -222,6 +231,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           return '📡';
         case 'tokens':
           return '🔑';
+        case 'station_info':
+          return '📡';
         default:
           return '⚙️';
       }
@@ -241,6 +252,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return `📡 ${t('modal.tabFrequencyPresets')}`;
       case 'tokens':
         return `🔑 ${t('modal.tabTokens')}`;
+      case 'station_info':
+        return `📡 ${t('tab.stationInfo')}`;
       default:
         return t('modal.defaultTab');
     }
@@ -301,6 +314,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         );
       case 'tokens':
         return <TokenManagement />;
+      case 'station_info':
+        return <StationInfoSettings ref={stationInfoSettingsRef} onUnsavedChanges={setHasUnsavedChanges} />;
       default:
         return null;
     }
@@ -385,6 +400,12 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     <Tab
                       key="tokens"
                       title={getTabTitle('tokens', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="station_info"
+                      title={getTabTitle('station_info', isMobile)}
                     />
                   )}
                 </Tabs>

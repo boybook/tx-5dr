@@ -6,7 +6,27 @@
     "operator": "Operator",
     "display": "Display",
     "system": "System",
-    "token": "Tokens"
+    "token": "Tokens",
+    "stationInfo": "Station Info"
+  },
+  "stationInfo": {
+    "callsign": "Station Callsign",
+    "callsignPlaceholder": "e.g. BG7XXX",
+    "name": "Station Name",
+    "namePlaceholder": "e.g. BG7XXX Remote Station",
+    "qthGrid": "Maidenhead Grid",
+    "qthGridDesc": "Standard amateur radio location format, e.g. PM01",
+    "qthLocation": "Location",
+    "qthLocationPlaceholder": "e.g. Haidian, Beijing",
+    "qthLatitude": "Precise Latitude",
+    "qthLatitudeDesc": "Decimal degrees. Leave empty to show grid area on map.",
+    "qthLongitude": "Precise Longitude",
+    "qthLongitudeDesc": "Decimal degrees. Leave empty to show grid area on map.",
+    "description": "Description",
+    "descriptionPlaceholder": "Markdown supported. Describe antenna, power, radio model, etc...",
+    "descriptionDesc": "Markdown format supported",
+    "saveSuccess": "Station info saved",
+    "saveFailed": "Failed to save"
   },
   "language": {
     "label": "Interface Language",

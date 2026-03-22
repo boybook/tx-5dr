@@ -1,15 +1,27 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Card, CardBody, CardHeader, Input, Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faKey, faChevronRight, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 import { useAuth } from '../store/authStore';
 import { useTranslation } from 'react-i18next';
+import { api } from '@tx5dr/core';
+import type { StationInfo } from '@tx5dr/contracts';
+import { StationInfoCard } from '../components/StationInfoCard';
 
 export function LoginPage() {
   const { t } = useTranslation();
   const { login, state } = useAuth();
   const [token, setToken] = useState('');
   const [helpExpanded, setHelpExpanded] = useState(false);
+  const [stationInfo, setStationInfo] = useState<StationInfo | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getStationInfo().then(resp => {
+      if (!cancelled) setStationInfo(resp.data);
+    }).catch(() => { /* silent failure — station info is non-essential */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleSubmit = useCallback(async () => {
     if (!token.trim()) return;
@@ -23,7 +35,8 @@ export function LoginPage() {
   }, [handleSubmit]);
 
   return (
-    <div className="h-screen w-full flex items-center justify-center bg-default-50">
+    <div className="h-screen w-full flex flex-col items-center justify-center bg-default-50">
+      {stationInfo && <StationInfoCard stationInfo={stationInfo} />}
       <Card className="w-full max-w-md mx-4">
         <CardHeader className="flex flex-col items-center gap-2 pt-8 pb-2">
           <h1 className="text-2xl font-bold">TX-5DR</h1>

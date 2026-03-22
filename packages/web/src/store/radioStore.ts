@@ -16,7 +16,8 @@ import type {
   ReconnectProgress,
   RadioErrorEventData,
   VoicePTTLock,
-  EngineMode
+  EngineMode,
+  StationInfo
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
@@ -106,6 +107,8 @@ export interface RadioState {
   // 电台错误频道
   radioErrors: RadioErrorRecord[];
   latestRadioError: RadioErrorRecord | null;
+  // 电台站基础信息
+  stationInfo: StationInfo | null;
 }
 
 // 错误事件数据结构
@@ -170,7 +173,8 @@ export type RadioAction =
   | { type: 'clearRadioErrors' }
   | { type: 'setEngineMode'; payload: EngineMode }
   | { type: 'voicePttLockChanged'; payload: VoicePTTLock }
-  | { type: 'voiceRadioModeChanged'; payload: string };
+  | { type: 'voiceRadioModeChanged'; payload: string }
+  | { type: 'setStationInfo'; payload: StationInfo };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -196,7 +200,8 @@ const initialRadioState: RadioState = {
   voicePttLock: null,
   currentRadioMode: null,
   radioErrors: [],
-  latestRadioError: null
+  latestRadioError: null,
+  stationInfo: null
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -341,6 +346,9 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
 
     case 'voiceRadioModeChanged':
       return { ...state, currentRadioMode: action.payload };
+
+    case 'setStationInfo':
+      return { ...state, stationInfo: action.payload };
 
     default:
       return state;
@@ -845,6 +853,16 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         } catch (error) {
           logger.error('Failed to fetch profile list:', error);
         }
+
+        // 握手完成后，获取电台站信息（公开，所有角色都拉取）
+        try {
+          const { api: stationApi } = await import('@tx5dr/core');
+          const stationInfoResp = await stationApi.getStationInfo();
+          radioDispatch({ type: 'setStationInfo', payload: stationInfoResp.data });
+          logger.info('Station info loaded', { callsign: stationInfoResp.data.callsign ?? '(empty)' });
+        } catch (error) {
+          logger.warn('Failed to fetch station info', error);
+        }
       },
       radioStatusChanged: (data: unknown) => {
         const radioData = data as {
@@ -1081,6 +1099,11 @@ export const useProfiles = () => {
     activeProfile,
     profilesLoaded: state.profilesLoaded,
   };
+};
+
+export const useStationInfo = () => {
+  const { state } = useRadioState();
+  return state.stationInfo;
 };
 
 export const useRadioErrors = () => {
