@@ -741,7 +741,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       operatorStatusUpdate: (() => {
         // 节流：200ms 内合并多次操作员状态更新
-        let pending: Map<string, OperatorStatus> = new Map();
+        const pending: Map<string, OperatorStatus> = new Map();
         let timer: ReturnType<typeof setTimeout> | null = null;
         return (data: unknown) => {
           const status = data as OperatorStatus;
