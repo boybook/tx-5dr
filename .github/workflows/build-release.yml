@@ -446,7 +446,7 @@ jobs:
           mkdir -p release-assets
 
           # 将所有产物移到统一目录
-          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" \) -exec cp {} release-assets/ \;
+          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" -o -name "*.7z" \) -exec cp {} release-assets/ \;
 
           echo "=== Release 产物列表 ==="
           ls -lh release-assets/
