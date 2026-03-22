@@ -27,6 +27,7 @@ export const VoicePTTButton: React.FC = () => {
   const voiceCaptureRef = useRef<VoiceCapture | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const isPttDownRef = useRef(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const voicePttLock = radio.state.voicePttLock;
   const radioService = connection.state.radioService;
@@ -169,6 +170,33 @@ export const VoicePTTButton: React.FC = () => {
     };
   }, [handlePTTDown, handlePTTUp]);
 
+  // Suppress all long-press browser behaviors on the PTT button.
+  // React synthetic events are insufficient on Android WebView/WebKit —
+  // native listeners in the capture phase with { passive: false } are required.
+  useEffect(() => {
+    const el = buttonRef.current;
+    if (!el) return;
+
+    const prevent = (e: Event) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return false;
+    };
+
+    // contextmenu: long-press menu on Android WebView/Chrome, right-click on desktop
+    el.addEventListener('contextmenu', prevent, { capture: true, passive: false });
+    // selectstart: text selection highlight triggered by long press
+    el.addEventListener('selectstart', prevent, { capture: true, passive: false });
+    // dragstart: some browsers start drag on long press
+    el.addEventListener('dragstart', prevent, { capture: true, passive: false });
+
+    return () => {
+      el.removeEventListener('contextmenu', prevent, { capture: true } as EventListenerOptions);
+      el.removeEventListener('selectstart', prevent, { capture: true } as EventListenerOptions);
+      el.removeEventListener('dragstart', prevent, { capture: true } as EventListenerOptions);
+    };
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -214,11 +242,13 @@ export const VoicePTTButton: React.FC = () => {
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`
         w-full py-3 md:w-28 md:py-0 md:h-full rounded-lg flex flex-col items-center justify-center
         transition-all duration-150 select-none touch-none
         text-white font-bold whitespace-nowrap
+        [-webkit-touch-callout:none] [-webkit-user-select:none]
         ${bgClass}
         ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
       `}
