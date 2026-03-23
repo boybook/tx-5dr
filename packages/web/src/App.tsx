@@ -5,9 +5,11 @@ import { VoiceLeftLayout } from './layout/VoiceLeftLayout';
 import { VoiceRightLayout } from './layout/VoiceRightLayout';
 import { SplitLayout } from './components/SplitLayout';
 import { RadioProvider, useRadioState, useProfiles, useConnection } from './store/radioStore';
-import { AuthProvider, useAuth } from './store/authStore';
+import { AuthProvider, useAuth, useHasMinRole } from './store/authStore';
+import { UserRole } from '@tx5dr/contracts';
 import { useTheme } from './hooks/useTheme';
 import { ProfileSetupOverlay } from './components/ProfileSetupOverlay';
+import { ViewerWelcomeOverlay } from './components/ViewerWelcomeOverlay';
 import { ServerDisconnectedOverlay } from './components/ServerDisconnectedOverlay';
 import { LoginPage } from './pages/LoginPage';
 
@@ -16,9 +18,13 @@ function AppContent() {
   const { pttStatus, engineMode } = state;
   const { profiles, profilesLoaded } = useProfiles();
   const { state: connectionState } = useConnection();
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
 
-  // 首次使用引导：已连接服务器且 Profile 数据已加载且为空时显示
-  const showSetupOverlay = connectionState.isConnected && profilesLoaded && profiles.length === 0;
+  const noProfiles = connectionState.isConnected && profilesLoaded && profiles.length === 0;
+  // 首次使用引导：仅 Admin 可配置电台
+  const showSetupOverlay = isAdmin && noProfiles;
+  // 观看者欢迎蒙层：非 Admin 用户在无 Profile 时显示
+  const showViewerWelcome = !isAdmin && noProfiles;
 
   const isVoiceMode = engineMode === 'voice';
 
@@ -53,8 +59,9 @@ function AppContent() {
         />
       )}
 
-      {/* 首次使用引导 */}
+      {/* 首次使用引导（Admin）/ 观看者欢迎蒙层 */}
       <ProfileSetupOverlay isOpen={showSetupOverlay} />
+      <ViewerWelcomeOverlay isOpen={showViewerWelcome} />
     </div>
   );
 }
