@@ -68,6 +68,9 @@ export class ClockCoordinator {
       // 通知 TransmissionPipeline 清空时隙缓存
       getTransmissionPipeline().onSlotStart();
 
+      // 取消上一时隙的晚到解码重决策 debounce
+      operatorManager.cancelPendingReDecision();
+
       engineEmitter.emit('slotStart', slotInfo, slotPackManager.getLatestSlotPack());
 
       // 广播所有操作员的状态更新
@@ -130,6 +133,9 @@ export class ClockCoordinator {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engineEmitter.emit('slotPackUpdated', slotPack as any);
+
+      // 晚到解码重决策：当上一 RX 时隙的解码结果在 TX 时隙早期到达时，重新评估发射决策
+      operatorManager.reDecideOnLateDecodes(slotPack as any);
     });
 
     // ─── SpectrumScheduler 事件 ────────────────────
