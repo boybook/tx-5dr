@@ -123,12 +123,12 @@ fix_nodejs() {
     detect_os
     case "$OS_ID" in
         debian|ubuntu|linuxmint|pop)
-            curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
-            apt-get install -y nodejs >/dev/null 2>&1
+            curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>&1 || true
+            apt-get install -y nodejs 2>&1 || true
             ;;
         rhel|centos|fedora|rocky|alma)
-            curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
-            dnf install -y nodejs >/dev/null 2>&1 || yum install -y nodejs >/dev/null 2>&1
+            curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - 2>&1 || true
+            dnf install -y nodejs 2>&1 || yum install -y nodejs 2>&1 || true
             ;;
         *)
             log_error "$(msg FIX_NODEJS)"
@@ -145,10 +145,10 @@ fix_glibcxx() {
     case "$OS_ID" in
         debian)
             echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie-temp.list
-            apt-get update -qq >/dev/null 2>&1
-            apt-get install -y -t trixie libstdc++6 >/dev/null 2>&1
+            apt-get update -qq 2>&1 || true
+            apt-get install -y -t trixie libstdc++6 2>&1 || true
             rm -f /etc/apt/sources.list.d/trixie-temp.list
-            apt-get update -qq >/dev/null 2>&1
+            apt-get update -qq 2>&1 || true
             ;;
         ubuntu)
             # Ubuntu 22.04 may need PPA or manual install
@@ -172,10 +172,10 @@ fix_nginx() {
     detect_os
     case "$OS_ID" in
         debian|ubuntu|linuxmint|pop)
-            apt-get install -y nginx >/dev/null 2>&1
+            apt-get install -y nginx 2>&1 || true
             ;;
         rhel|centos|fedora|rocky|alma)
-            dnf install -y nginx >/dev/null 2>&1 || yum install -y nginx >/dev/null 2>&1
+            dnf install -y nginx 2>&1 || yum install -y nginx 2>&1 || true
             ;;
         *)
             log_error "$(msg FIX_NGINX)"
