@@ -16,7 +16,10 @@ StandardOutput=journal
 StandardError=journal
 
 # Security hardening
-NoNewPrivileges=true
+# Note: NoNewPrivileges=true is intentionally omitted because wsjtx-lib's
+# Fortran code (libwsjtx_core.so) requires executable stack (PT_GNU_STACK RWE)
+# for trampoline support. NoNewPrivileges prevents the kernel from enabling
+# executable stack, causing dlopen to fail with EINVAL.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/tx5dr
 
