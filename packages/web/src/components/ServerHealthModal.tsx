@@ -15,6 +15,13 @@ const MB = 1024 * 1024;
 
 // ─── Sparkline ──────────────────────────────────────────────────────────────
 
+interface SparklineSeries {
+  values: number[];
+  color: string;
+  label: string;
+  formatValue?: (v: number) => string;
+}
+
 interface SparklineProps {
   values: number[];
   height?: number;
@@ -25,6 +32,8 @@ interface SparklineProps {
   criticalColor?: string;
   timestamps?: number[];
   formatValue?: (v: number) => string;
+  /** 多线模式：传入后忽略 values/color/warnThreshold/criticalThreshold */
+  series?: SparklineSeries[];
 }
 
 function formatTimestamp(ts: number): string {
@@ -42,26 +51,159 @@ function Sparkline({
   criticalColor = 'hsl(var(--heroui-danger))',
   timestamps,
   formatValue,
+  series,
 }: SparklineProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
+  const primaryValues = series ? series[0].values : values;
+
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!wrapperRef.current || values.length < 2) return;
+    if (!wrapperRef.current || primaryValues.length < 2) return;
     const rect = wrapperRef.current.getBoundingClientRect();
     const relX = (e.clientX - rect.left) / rect.width;
-    const idx = Math.round(Math.max(0, Math.min(1, relX)) * (values.length - 1));
+    const idx = Math.round(Math.max(0, Math.min(1, relX)) * (primaryValues.length - 1));
     setHoveredIndex(idx);
-  }, [values.length]);
+  }, [primaryValues.length]);
 
   const handleMouseLeave = useCallback(() => {
     setHoveredIndex(null);
   }, []);
 
-  if (values.length < 2) {
+  if (primaryValues.length < 2) {
     return <div className="w-full" style={{ height }} />;
   }
 
+  // Clamp tooltip so it doesn't overflow left/right
+  const tooltipPct = hoveredIndex !== null ? (hoveredIndex / (primaryValues.length - 1)) * 100 : 50;
+  const tooltipTranslate =
+    tooltipPct < 15 ? '0%' : tooltipPct > 85 ? '-100%' : '-50%';
+
+  const hoveredX = hoveredIndex !== null ? (hoveredIndex / (primaryValues.length - 1)) * 100 : null;
+
+  // ── Multi-series mode ──────────────────────────────────────────────────────
+  if (series && series.length > 0) {
+    const allValues = series.flatMap(s => s.values);
+    const min = Math.min(...allValues);
+    const max = Math.max(...allValues);
+    const range = max - min || 1;
+
+    const computedSeries = series.map((s, idx) => {
+      const pts = s.values.map((v, i) => {
+        const x = (i / (s.values.length - 1)) * 100;
+        const y = height - ((v - min) / range) * (height - 4) - 2;
+        return `${x},${y}`;
+      });
+      const hoveredY =
+        hoveredIndex !== null
+          ? height - ((s.values[hoveredIndex] - min) / range) * (height - 4) - 2
+          : null;
+      return { ...s, pts, hoveredY, isFirst: idx === 0 };
+    });
+
+    return (
+      <div
+        ref={wrapperRef}
+        className="w-full relative"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        style={{ height }}
+      >
+        <svg
+          viewBox={`0 0 100 ${height}`}
+          preserveAspectRatio="none"
+          className="w-full h-full"
+          style={{ display: 'block' }}
+        >
+          {/* Area fill only for first series */}
+          {computedSeries.map((s) =>
+            s.isFirst ? (
+              <path
+                key={`area-${s.label}`}
+                d={`M${s.pts[0]} L${s.pts.join(' L')} L100,${height} L0,${height} Z`}
+                fill={s.color}
+                fillOpacity={0.12}
+              />
+            ) : null
+          )}
+          {/* Lines for all series */}
+          {computedSeries.map((s) => (
+            <polyline
+              key={`line-${s.label}`}
+              points={s.pts.join(' ')}
+              fill="none"
+              stroke={s.color}
+              strokeWidth="1.5"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+          {/* Hover vertical line */}
+          {hoveredIndex !== null && hoveredX !== null && (
+            <line
+              x1={hoveredX}
+              y1={0}
+              x2={hoveredX}
+              y2={height}
+              stroke="currentColor"
+              strokeOpacity={0.4}
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+        </svg>
+        {/* Hover dots for each series */}
+        {hoveredIndex !== null && hoveredX !== null &&
+          computedSeries.map((s) =>
+            s.hoveredY !== null ? (
+              <div
+                key={`dot-${s.label}`}
+                className="absolute pointer-events-none"
+                style={{
+                  left: `${hoveredX}%`,
+                  top: `${(s.hoveredY / height) * 100}%`,
+                  transform: 'translate(-50%, -50%)',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  backgroundColor: s.color,
+                }}
+              />
+            ) : null
+          )
+        }
+        {/* Tooltip */}
+        {hoveredIndex !== null && (
+          <div
+            className="absolute bottom-full mb-1.5 pointer-events-none z-50 bg-black/80 text-white text-xs rounded px-2 py-1 whitespace-nowrap"
+            style={{
+              left: `${tooltipPct}%`,
+              transform: `translateX(${tooltipTranslate})`,
+            }}
+          >
+            {timestamps?.[hoveredIndex] && (
+              <div className="text-default-300 mb-0.5">{formatTimestamp(timestamps[hoveredIndex])}</div>
+            )}
+            {computedSeries.map((s) => (
+              <div key={`tip-${s.label}`} className="flex items-center gap-1.5">
+                <span
+                  className="inline-block rounded-full flex-shrink-0"
+                  style={{ width: 6, height: 6, backgroundColor: s.color }}
+                />
+                <span className="text-default-300">{s.label}</span>
+                <span className="font-mono font-semibold ml-1">
+                  {s.formatValue
+                    ? s.formatValue(s.values[hoveredIndex])
+                    : s.values[hoveredIndex].toFixed(2)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Single-series mode (original) ─────────────────────────────────────────
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
@@ -82,15 +224,9 @@ function Sparkline({
 
   const areaPath = `M${pts[0]} L${pts.join(' L')} L100,${height} L0,${height} Z`;
 
-  const hoveredX = hoveredIndex !== null ? (hoveredIndex / (values.length - 1)) * 100 : null;
   const hoveredY = hoveredIndex !== null
     ? height - ((values[hoveredIndex] - min) / range) * (height - 4) - 2
     : null;
-
-  // Clamp tooltip so it doesn't overflow left/right
-  const tooltipPct = hoveredIndex !== null ? (hoveredIndex / (values.length - 1)) * 100 : 50;
-  const tooltipTranslate =
-    tooltipPct < 15 ? '0%' : tooltipPct > 85 ? '-100%' : '-50%';
 
   return (
     <div
@@ -173,6 +309,8 @@ interface MetricCardProps {
   sparkCritical?: number;
   sparkTimestamps?: number[];
   sparkFormatValue?: (v: number) => string;
+  /** 多线模式：传入后 sparkValues/sparkWarn/sparkCritical/sparkFormatValue 被忽略 */
+  sparkSeries?: SparklineSeries[];
   children?: React.ReactNode;
 }
 
@@ -186,6 +324,7 @@ function MetricCard({
   sparkCritical,
   sparkTimestamps,
   sparkFormatValue,
+  sparkSeries,
 }: MetricCardProps) {
   return (
     <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">
@@ -199,10 +338,11 @@ function MetricCard({
       <Sparkline
         values={sparkValues}
         height={52}
-        warnThreshold={sparkWarn}
-        criticalThreshold={sparkCritical}
+        warnThreshold={sparkSeries ? undefined : sparkWarn}
+        criticalThreshold={sparkSeries ? undefined : sparkCritical}
         timestamps={sparkTimestamps}
         formatValue={sparkFormatValue}
+        series={sparkSeries}
       />
       {rows && rows.length > 0 && (
         <div className="flex flex-col gap-1.5 mt-1">
@@ -291,6 +431,10 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
     () => displaySnapshots.map(s => s.memory.heapUsed / MB),
     [displaySnapshots]
   );
+  const rssValues = useMemo(
+    () => displaySnapshots.map(s => s.memory.rss / MB),
+    [displaySnapshots]
+  );
   const cpuValues = useMemo(
     () => displaySnapshots.map(s => s.cpu.total),
     [displaySnapshots]
@@ -351,10 +495,21 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   primaryLabel={t('serverHealth.heapUsed')}
                   primaryValue={formatBytes(latest.memory.heapUsed)}
                   sparkValues={memValues.length > 0 ? memValues : [0]}
-                  sparkWarn={512}
-                  sparkCritical={1024}
                   sparkTimestamps={timestamps}
-                  sparkFormatValue={(v) => `${v.toFixed(0)} MB`}
+                  sparkSeries={[
+                    {
+                      values: memValues.length > 0 ? memValues : [0],
+                      color: 'hsl(var(--heroui-primary))',
+                      label: t('serverHealth.heapUsed'),
+                      formatValue: (v) => `${v.toFixed(0)} MB`,
+                    },
+                    {
+                      values: rssValues.length > 0 ? rssValues : [0],
+                      color: 'hsl(var(--heroui-secondary))',
+                      label: t('serverHealth.rss'),
+                      formatValue: (v) => `${v.toFixed(0)} MB`,
+                    },
+                  ]}
                   rows={[
                     {
                       label: t('serverHealth.rss'),
