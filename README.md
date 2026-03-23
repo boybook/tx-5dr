@@ -59,12 +59,13 @@ Server-only deployment — no desktop environment required. Access via web brows
 ### Quick Install
 
 ```bash
-# Download the latest server package (replace amd64 with arm64 for ARM servers)
-curl -fSL -o tx5dr.deb \
-  https://github.com/boybook/tx-5dr/releases/download/nightly-server/TX-5DR-nightly-server-linux-amd64.deb
+# One-click install (auto-detects arch, downloads package, fixes dependencies)
+curl -fsSL https://github.com/boybook/tx-5dr/releases/download/nightly-server/install-online.sh | sudo bash
+```
 
-# Install (auto-fixes Node.js, GLIBCXX, nginx)
-sudo bash tx5dr.deb   # or use the install script:
+Or manually:
+```bash
+curl -fSL -o tx5dr.deb https://github.com/boybook/tx-5dr/releases/download/nightly-server/TX-5DR-nightly-server-linux-amd64.deb
 sudo dpkg -i --force-depends tx5dr.deb
 sudo bash /usr/share/tx5dr/install.sh
 ```
