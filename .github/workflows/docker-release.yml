@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Release Docker Image
 
 on:
   push:
@@ -9,6 +9,9 @@ on:
         description: 'Docker image tag (leave empty for auto-generated)'
         required: false
         default: ''
+
+permissions:
+  contents: write
 
 env:
   DOCKER_IMAGE_NAME: tx-5dr
@@ -74,6 +77,7 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Build and push Docker image
+        id: docker_build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -132,3 +136,78 @@ jobs:
           echo "### 🔗 链接" >> $GITHUB_STEP_SUMMARY
           echo "- [Docker Hub]( https://hub.docker.com/r/${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }})" >> $GITHUB_STEP_SUMMARY
           echo "- [GitHub Repository](https://github.com/${{ github.repository }})" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create or Update Nightly Docker Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly-docker
+          name: "Nightly Build — Docker Image"
+          body: |
+            ## TX-5DR Nightly Build — Docker Image Docker 镜像
+
+            **Built at** （构建时间）: ${{ github.event.head_commit.timestamp }}
+            **Commit**: [${{ steps.tags.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            **Image Digest**: `${{ steps.docker_build.outputs.digest }}`
+
+            ---
+
+            ### 🚀 Quick Start 快速启动
+
+            ```bash
+            # Pull image / 拉取镜像
+            docker pull ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+
+            # Run / 启动
+            docker run -d -p 8076:80 --name tx-5dr \
+              ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+
+            # View admin token / 查看管理员令牌
+            docker exec tx-5dr cat /app/data/config/.admin-token
+            ```
+
+            ### 📋 Docker Compose
+
+            ```yaml
+            version: '3.8'
+            services:
+              tx5dr:
+                image: ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+                container_name: tx5dr
+                restart: unless-stopped
+                ports:
+                  - "8076:80"
+                volumes:
+                  - ./data/config:/app/data/config
+                  - ./data/logs:/app/data/logs
+                  - /dev/snd:/dev/snd:rw      # Audio devices / 音频设备
+                devices:
+                  - /dev/bus/usb:/dev/bus/usb:rwm  # USB devices / USB 设备
+                group_add:
+                  - audio
+            ```
+
+            ### 🔧 Environment Variables 环境变量
+
+            | Variable 变量 | Default 默认值 | Description 说明 |
+            |---|---|---|
+            | `PORT` | `4000` | Backend API port (internal) / 后端 API 端口（内部） |
+            | `TX5DR_CONFIG_DIR` | `/app/data/config` | Config directory / 配置目录 |
+            | `TX5DR_LOGS_DIR` | `/app/data/logs` | Log directory / 日志目录 |
+
+            ### 🏷️ Image Tags 镜像标签
+            - `latest` — always points to newest build / 始终指向最新构建
+            - `${{ steps.tags.outputs.short_sha }}` — pinned to this commit / 锁定到此提交
+
+            ### 📦 Architectures 支持架构
+            - `linux/amd64` (x86_64)
+            - `linux/arm64` (aarch64)
+
+            ### 🔗 Links 链接
+            - [Docker Hub](https://hub.docker.com/r/${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }})
+            - [Desktop App / 桌面应用](https://github.com/${{ github.repository }}/releases/tag/nightly-app)
+            - [Linux Server / 服务器版](https://github.com/${{ github.repository }}/releases/tag/nightly-server)
+          allowUpdates: true
+          artifacts: ""
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: true
+          makeLatest: false

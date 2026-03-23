@@ -1,281 +1,199 @@
-# 🚀 TX-5DR
+# TX-5DR
 
-## 📋 前置要求
+**Digital radio station for amateur radio operators.** FT8 and other digital modes via a web browser — deploy on a desktop, a headless Linux server, or Docker.
 
-- **Node.js** 20+ 
-- **Yarn** 4+ (Berry)
-- **Git**
+[中文文档 (Chinese)](./README.zh-CN.md)
 
-### 安装 Yarn 4
+---
 
-本项目使用 yarn 4 进行项目管理，请按照如下说明安装。
+## Deployment Options
 
-#### 方法一：使用 Corepack（推荐）
+| Option | Best for | How |
+|--------|---------|-----|
+| **Desktop App** (Electron) | Windows / macOS / Linux with GUI | Download from [Releases (nightly-app)](https://github.com/boybook/tx-5dr/releases/tag/nightly-app) |
+| **Linux Server** (deb/rpm) | Headless servers, low-cost hardware | `tx5dr start` — see [Server Install](#linux-server) |
+| **Docker** | Containers, quick setup | `docker-compose up -d` — see [Docker](#docker) |
 
-Node.js 16.10+ 内置了 Corepack，可以直接使用：
+---
 
-```bash
-# 启用 Corepack
-corepack enable
+## Desktop App
 
-# 设置 Yarn 版本
-corepack prepare yarn@4.1.1 --activate
-```
+Download the installer for your platform from [nightly-app releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app):
 
-#### 方法二：手动安装
+- **Windows**: `.msi` installer or `.7z` portable
+- **macOS**: `.dmg` (Apple Silicon & Intel)
+- **Linux**: `.deb` / `.rpm` (includes Electron GUI)
 
-```bash
-# 1. 创建项目目录
-mkdir my-project
-cd my-project
+---
 
-# 2. 初始化 Yarn
-yarn init -2
+## Linux Server
 
-# 3. 验证安装
-yarn --version
-```
+Server-only deployment — no desktop environment required. Access via web browser.
 
-#### 平台特定说明
-
-##### Linux/macOS
-```bash
-# 如果遇到权限问题，可能需要使用 sudo
-sudo corepack enable
-
-# 验证安装
-yarn --version
-```
-
-##### Windows
-```powershell
-# 以管理员身份运行 PowerShell
-corepack enable
-
-# 验证安装
-yarn --version
-```
-
-### 平台特定依赖
-
-#### Linux (Ubuntu/Debian)
-```bash
-# 安装基础构建工具和依赖
-sudo apt-get update
-sudo apt-get install -y \
-  cmake \
-  build-essential \
-  gfortran \
-  libfftw3-dev \
-  libboost-all-dev \
-  pkg-config
-
-# ARM64 架构额外依赖
-sudo apt-get install -y \
-  gcc-aarch64-linux-gnu \
-  g++-aarch64-linux-gnu \
-  gfortran-aarch64-linux-gnu
-sudo dpkg --add-architecture arm64
-sudo apt-get update
-sudo apt-get install -y \
-  libfftw3-dev:arm64 \
-  libboost-all-dev:arm64
-```
-
-#### macOS
-```bash
-# 使用 Homebrew 安装依赖
-brew install cmake fftw boost gcc pkg-config
-
-# 设置环境变量（根据架构）
-if [ "$(uname -m)" = "arm64" ]; then
-  # Apple Silicon (ARM64)
-  BREW_PREFIX="/opt/homebrew"
-else
-  # Intel (x64)
-  BREW_PREFIX="/usr/local"
-fi
-
-# 确保 brew 路径在 PATH 中
-echo 'export PATH="'$BREW_PREFIX'/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-
-# 设置库路径
-export LIBRARY_PATH=$BREW_PREFIX/lib:$LIBRARY_PATH
-export LD_LIBRARY_PATH=$BREW_PREFIX/lib:$LD_LIBRARY_PATH
-```
-
-#### Windows
-1. 安装 Visual Studio 2022 或更高版本（包含 MSVC 工具链）
-2. 安装 Intel oneAPI（包含 Intel Fortran 编译器）
-3. 安装 vcpkg 并配置依赖：
-```cmd
-# 克隆 vcpkg
-git clone https://github.com/Microsoft/vcpkg.git
-cd vcpkg
-.\bootstrap-vcpkg.bat
-
-# 安装依赖
-.\vcpkg install fftw3[float,threads]:x64-windows boost:x64-windows
-
-# 集成到 Visual Studio（可选）
-.\vcpkg integrate install
-```
-
-## 🚀 快速开始
-
-### 1. 克隆项目
+### Quick Install
 
 ```bash
-git clone <repository-url>
+# Download the latest server package (replace amd64 with arm64 for ARM servers)
+curl -fSL -o tx5dr.deb \
+  https://github.com/boybook/tx-5dr/releases/download/nightly-server/TX-5DR-nightly-server-linux-amd64.deb
+
+# Install (auto-fixes Node.js, GLIBCXX, nginx)
+sudo bash tx5dr.deb   # or use the install script:
+sudo dpkg -i --force-depends tx5dr.deb
+sudo bash /usr/share/tx5dr/install.sh
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `tx5dr start` | Start server, show Web UI URL with auth token |
+| `tx5dr stop` | Stop server |
+| `tx5dr restart` | Restart server |
+| `tx5dr status` | Status dashboard (server, nginx, ports, SSL) |
+| `tx5dr token` | Show admin token and login URL |
+| `tx5dr update` | Download and install latest nightly |
+| `tx5dr doctor` | Full environment diagnostics |
+| `tx5dr logs` | Follow server logs (`--nginx` for nginx) |
+
+### System Requirements
+
+- **Debian 12+** (recommended) or **Ubuntu 22.04+**
+- **Node.js 20+** (auto-installed by `install.sh`)
+- **nginx** (auto-installed)
+- For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)
+
+---
+
+## Docker
+
+### Quick Start
+
+```bash
+docker run -d -p 8076:80 --name tx5dr boybook/tx-5dr:latest
+
+# View admin token
+docker exec tx5dr cat /app/data/config/.admin-token
+```
+
+### Docker Compose (recommended)
+
+```yaml
+version: '3.8'
+services:
+  tx5dr:
+    image: boybook/tx-5dr:latest
+    container_name: tx5dr
+    restart: unless-stopped
+    ports:
+      - "8076:80"
+    volumes:
+      - ./data/config:/app/data/config
+      - ./data/logs:/app/data/logs
+      - /dev/snd:/dev/snd:rw
+    devices:
+      - /dev/bus/usb:/dev/bus/usb:rwm
+    group_add:
+      - audio
+```
+
+```bash
+docker-compose up -d
+# Access: http://localhost:8076
+```
+
+See [nightly-docker releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details.
+
+---
+
+## Development
+
+### Prerequisites
+
+- Node.js 22+, Yarn 4+ (Berry), Git
+- Platform-specific build tools (see below)
+
+### Setup
+
+```bash
+git clone https://github.com/boybook/tx-5dr.git
 cd tx-5dr
-```
-
-### 2. 安装依赖
-
-```bash
 yarn install
 ```
 
-### 3. 启动开发环境
+### Run
 
-#### 仅浏览器模式
 ```bash
+# Browser mode (server + web)
 yarn dev
+# → http://localhost:5173
+
+# Electron mode
+yarn dev:electron
 ```
 
-这将启动：
-- 🌐 Web 客户端：http://localhost:5173
-- 🔧 服务器：http://localhost:4000
-
-#### 带 Electron 的完整模式
-```bash
-EMBEDDED=true yarn dev
-```
-
-这将启动所有服务并打开 Electron 应用。
-
-### 4. 构建生产版本
+### Build
 
 ```bash
-yarn build
+yarn build           # Build all packages
+yarn build:package   # Electron package
+yarn package:deb     # Server deb package (requires fpm)
 ```
 
-### 5. 预览生产版本
+### Platform Dependencies
+
+<details>
+<summary>Linux (Ubuntu/Debian)</summary>
 
 ```bash
-yarn preview
+sudo apt-get install -y \
+  libasound2-dev libpulse-dev libhamlib-dev \
+  build-essential python3-dev pkg-config \
+  libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev
 ```
+</details>
 
-## 🐳 Docker 部署
-
-### 使用 Docker Compose（推荐）
+<details>
+<summary>macOS</summary>
 
 ```bash
-# 构建并启动容器
-docker-compose up -d
-
-# 查看日志
-docker-compose logs -f
-
-# 停止容器
-docker-compose down
+brew install cmake fftw boost gcc pkg-config
 ```
+</details>
 
-访问 http://localhost:8080
+<details>
+<summary>Windows</summary>
 
-### 手动 Docker 构建
+Install Visual Studio 2022 with MSVC toolchain. For native modules, MSYS2/MinGW-w64 may be required.
+</details>
 
-```bash
-# 构建镜像
-docker build -t tx5dr .
+---
 
-# 运行容器
-docker run -d \
-  --name tx5dr \
-  -p 8080:80 \
-  --privileged \
-  --device=/dev/bus/usb \
-  -v $(pwd)/data:/app/data \
-  tx5dr
-```
-
-### 配置说明
-
-- **端口映射**: 容器的80端口映射到主机的8080端口
-- **数据持久化**: `./data` 目录包含配置、日志和缓存
-- **USB设备**: 映射USB设备以支持USB声卡和串口设备
-- **音频支持**: 容器具有音频设备访问权限
-
-## 📁 项目结构
+## Project Structure
 
 ```
-TX-5DR/
-├─ packages/
-│  ├─ shared-config/      # ESLint, TypeScript, Prettier 配置
-│  ├─ contracts/          # Zod schema 和 TypeScript 类型
-│  ├─ core/               # 运行时无关的工具函数
-│  ├─ server/             # Fastify 服务器 + 原生插件占位符
-│  ├─ web/                # Vite + React 客户端
-│  ├─ electron-preload/   # contextBridge，sandbox=true
-│  └─ electron-main/      # Electron 主进程
-├─ package.json           # 根配置和工作区
-├─ turbo.json            # Turborepo 配置
-└─ README.md             # 项目文档
+tx-5dr/
+├── packages/
+│   ├── contracts/       # Zod schemas and TypeScript types
+│   ├── core/            # Runtime-agnostic utilities and API client
+│   ├── server/          # Fastify backend + digital radio engine
+│   ├── web/             # React frontend (Vite)
+│   ├── electron-main/   # Electron main process
+│   └── electron-preload/# Electron preload (sandbox)
+├── linux/               # Server deployment (systemd, nginx, install script)
+├── docker/              # Docker config (nginx, supervisor, entrypoint)
+├── scripts/             # Build and packaging scripts
+└── .github/workflows/   # CI: electron-release, server-release, docker-release
 ```
 
-## 🔗 依赖关系图
+## Tech Stack
 
-```
-shared-config ← contracts ← core ← {web, electron-preload, server}
-                                 ↑
-                            electron-main
-```
+- **Backend**: Fastify, WebSocket, XState v5, Piscina worker pool
+- **Frontend**: React 18, HeroUI, WebGL, i18next
+- **Audio**: Audify (RtAudio), WSJTX-lib (FT8/FT4)
+- **Radio**: Hamlib (CAT control), ICOM WLAN, SerialPort
+- **Build**: Turborepo, Yarn 4 workspaces, Electron Forge
 
-依赖关系是无环的，遵循从底层到顶层的模式。
+## License
 
-## 📦 包说明
-
-### `@tx5dr/shared-config`
-- 共享的 ESLint、TypeScript 和 Prettier 配置
-- 为所有其他包提供一致的代码风格和类型检查
-
-### `@tx5dr/contracts`
-- 使用 Zod 定义的 API 契约和数据模式
-- 导出 TypeScript 类型供其他包使用
-
-### `@tx5dr/core`
-- 运行时无关的核心功能
-- 包含 API 客户端和通用工具函数
-
-### `@tx5dr/server`
-- 基于 Fastify 的 HTTP 服务器
-- 提供 RESTful API 端点
-- 包含原生插件加载的占位符代码
-
-### `@tx5dr/web`
-- 基于 Vite 和 React 18 的 Web 客户端
-- 现代化的用户界面
-- 调用后端 API 并展示数据
-
-### `@tx5dr/electron-preload`
-- Electron 预加载脚本
-- 在沙盒环境中安全地暴露原生 API
-
-### `@tx5dr/electron-main`
-- Electron 主进程
-- 可选择性地嵌入服务器
-- 管理应用窗口和生命周期
-
-## 📄 许可证
-
-本项目采用 GNU General Public License v3.0 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 🙏 致谢
-
-- [Turborepo](https://turbo.build/) - 高性能构建系统
-- [Yarn Workspaces](https://yarnpkg.com/features/workspaces) - 包管理
-- [Fastify](https://www.fastify.io/) - 快速 Web 框架
-- [React](https://reactjs.org/) - 用户界面库
-- [Electron](https://www.electronjs.org/) - 跨平台桌面应用
-- [Vite](https://vitejs.dev/) - 现代前端构建工具 
+GNU General Public License v3.0 — see [LICENSE](LICENSE).

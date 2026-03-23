@@ -232,11 +232,11 @@ cmd_update() {
 
     # Determine asset name
     local asset_name="TX-5DR-nightly-server-linux-${pkg_arch}.deb"
-    local download_url="https://github.com/${repo}/releases/download/nightly/${asset_name}"
+    local download_url="https://github.com/${repo}/releases/download/nightly-server/${asset_name}"
 
     # Get remote release info (commit sha as "version" for nightly)
     local remote_info
-    remote_info=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/tags/nightly" 2>/dev/null) || {
+    remote_info=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/tags/nightly-server" 2>/dev/null) || {
         log_error "$(msg UPDATE_FAILED)"
         log_error "Cannot reach GitHub API. Check your network."
         return 1
