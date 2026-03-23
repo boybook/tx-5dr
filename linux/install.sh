@@ -163,20 +163,30 @@ if [[ "$MODE" == "check" ]]; then
     exit $ISSUES
 fi
 
-# Step 5: Install TX-5DR package
+# Step 5: Install / Upgrade TX-5DR package
 step_header 5 "Install TX-5DR"
 require_root
+IS_UPGRADE=false
+if [[ -f /usr/share/tx5dr/packages/server/dist/index.js ]]; then
+    IS_UPGRADE=true
+fi
+
 if [[ -n "$DEB_FILE" && -f "$DEB_FILE" ]]; then
-    log_info "Installing from $DEB_FILE"
+    if $IS_UPGRADE; then
+        log_info "Upgrading from $DEB_FILE"
+        # Stop running service before upgrade
+        systemctl stop tx5dr 2>/dev/null || true
+    else
+        log_info "Installing from $DEB_FILE"
+    fi
     dpkg -i --force-depends "$DEB_FILE" 2>&1 | tail -3
     apt-get install -f -y >/dev/null 2>&1 || true
 elif [[ -n "$DEB_FILE" ]]; then
     log_error "File not found: $DEB_FILE"
     exit 1
 else
-    # Check if already installed
-    if [[ -f /usr/share/tx5dr/packages/server/dist/index.js ]]; then
-        log_ok "TX-5DR already installed"
+    if $IS_UPGRADE; then
+        log_ok "TX-5DR already installed (no package file provided, keeping current version)"
     else
         log_error "No .deb file provided and TX-5DR is not installed."
         log_error "Usage: sudo bash install.sh path/to/tx5dr.deb"
@@ -184,11 +194,15 @@ else
     fi
 fi
 
-# Step 6: Start and verify
+# Step 6: Start / Restart and verify
 step_header 6 "Start & Verify"
 systemctl daemon-reload
 systemctl start nginx 2>/dev/null || true
-systemctl start tx5dr
+if $IS_UPGRADE; then
+    systemctl restart tx5dr
+else
+    systemctl start tx5dr
+fi
 
 echo -n "  "
 if wait_for_port "${API_PORT}" 15; then
