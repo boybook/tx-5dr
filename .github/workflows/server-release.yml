@@ -1,0 +1,245 @@
+name: Build and Release Linux Server
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0, leave empty for nightly)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-server-linux:
+    name: Build Server Package (Linux ${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: amd64
+            artifact_name: tx5dr-server-linux-amd64
+
+          - os: ubuntu-22.04-arm
+            arch: arm64
+            artifact_name: tx5dr-server-linux-arm64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.1'
+
+      - name: Enable Corepack and setup Yarn
+        run: |
+          corepack enable
+          corepack prepare yarn@4.9.1 --activate
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libpulse-dev \
+            libhamlib-dev libhamlib4 \
+            libopus-dev \
+            build-essential python3-dev pkg-config \
+            ruby-dev rpm
+
+      - name: Install fpm
+        run: sudo gem install fpm --no-document
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Build application
+        run: yarn build
+        env:
+          NODE_ENV: production
+
+      - name: Build server packages (deb + rpm)
+        run: scripts/package-linux.sh both --no-build
+
+      - name: Prepare artifacts
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          mkdir -p release-artifacts
+
+          if [ -z "$VERSION" ]; then
+            PREFIX="TX-5DR-nightly"
+          else
+            PREFIX="TX-5DR-${VERSION}"
+          fi
+
+          find dist/ -name "*.deb" -type f | while read -r f; do
+            cp "$f" "release-artifacts/${PREFIX}-server-linux-${ARCH}.deb"
+            echo "✅ deb: ${PREFIX}-server-linux-${ARCH}.deb"
+          done
+
+          find dist/ -name "*.rpm" -type f | while read -r f; do
+            cp "$f" "release-artifacts/${PREFIX}-server-linux-${ARCH}.rpm"
+            echo "✅ rpm: ${PREFIX}-server-linux-${ARCH}.rpm"
+          done
+
+          ls -lh release-artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release-artifacts/*
+          retention-days: 30
+
+  create-release:
+    needs: [build-server-linux]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find dist/ -type f \( -name "*.deb" -o -name "*.rpm" \) -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Generate release info
+        id: release_info
+        run: |
+          echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+          echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      # Nightly Release
+      - name: Create or Update Nightly Release
+        if: github.event.inputs.version == ''
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly-server
+          name: "Nightly Build — Linux Server"
+          body: |
+            ## TX-5DR Nightly Build — Linux Server 服务器版
+
+            **Built at** （构建时间）: ${{ steps.release_info.outputs.timestamp }}
+            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            **Branch**: ${{ github.ref_name }}
+
+            ### 📦 Downloads 下载
+
+            #### Linux Server (x64)
+            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-server-linux-amd64.deb`
+            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-server-linux-amd64.rpm`
+
+            #### Linux Server (ARM64)
+            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-server-linux-arm64.deb`
+            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-server-linux-arm64.rpm`
+
+            ---
+
+            ### 🚀 Quick Install 一键安装
+
+            ```bash
+            # Download and install (replace amd64 with arm64 for ARM servers)
+            # 下载并安装（ARM 服务器请将 amd64 替换为 arm64）
+            curl -fSL -o tx5dr.deb https://github.com/${{ github.repository }}/releases/download/nightly-server/TX-5DR-nightly-server-linux-amd64.deb
+            sudo bash /usr/share/tx5dr/install.sh tx5dr.deb
+            ```
+
+            ### 📖 Manual Install 手动安装
+
+            ```bash
+            # 1. Install Node.js 20+ (if not installed) / 安装 Node.js 20+（如未安装）
+            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+            sudo apt install -y nodejs nginx
+
+            # 2. Install package / 安装软件包
+            sudo dpkg -i --force-depends TX-5DR-nightly-server-linux-amd64.deb
+
+            # 3. Start / 启动
+            tx5dr start
+            ```
+
+            ### 🛠 Commands 常用命令
+
+            | Command 命令 | Description 说明 |
+            |---|---|
+            | `tx5dr start` | Start server and show Web UI URL / 启动并显示访问地址 |
+            | `tx5dr stop` | Stop server / 停止 |
+            | `tx5dr restart` | Restart / 重启 |
+            | `tx5dr status` | Show status dashboard / 状态面板 |
+            | `tx5dr token` | Show admin token / 显示管理员令牌 |
+            | `tx5dr update` | Download and install latest version / 下载并安装最新版 |
+            | `tx5dr doctor` | Environment diagnostics / 环境诊断 |
+            | `tx5dr logs` | Follow server logs / 跟踪日志 |
+
+            ### 🔒 SSL Notice SSL 提示
+            Voice features (browser microphone) require HTTPS. Configure SSL in `/etc/nginx/conf.d/tx5dr.conf`.
+            语音通联功能需要 HTTPS。请在 `/etc/nginx/conf.d/tx5dr.conf` 中配置 SSL。
+
+            ### ⚠️ Notice 注意事项
+            - This is a development build. （开发版本，可能包含未经充分测试的功能）
+            - Automatically updated on every push to `main` / `develop`. （每次推送自动更新）
+
+            ### 🔧 System Requirements 系统要求
+            - Debian 12+ / Ubuntu 22.04+ (Debian 12 recommended / 推荐 Debian 12)
+            - Node.js 20+ (auto-installed via `install.sh` / 通过安装脚本自动安装)
+            - nginx (auto-installed / 自动安装)
+
+            > Looking for the **Desktop App** (Windows/macOS/Linux with GUI)? See [nightly-app](https://github.com/${{ github.repository }}/releases/tag/nightly-app).
+            > 寻找**桌面应用**（Windows/macOS/Linux 图形界面）？请查看 [nightly-app](https://github.com/${{ github.repository }}/releases/tag/nightly-app)。
+          allowUpdates: true
+          removeArtifacts: true
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: true
+          makeLatest: false
+
+      # Official Release
+      - name: Create Official Release
+        if: github.event.inputs.version != ''
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.event.inputs.version }}-server
+          name: "TX-5DR Server ${{ github.event.inputs.version }}"
+          body: |
+            ## TX-5DR Server ${{ github.event.inputs.version }}
+
+            **Release Date** （发布日期）: ${{ steps.release_info.outputs.date }}
+            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+
+            ### 📦 Downloads 下载
+
+            #### Linux Server (x64)
+            - **DEB Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.deb`
+            - **RPM Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.rpm`
+
+            #### Linux Server (ARM64)
+            - **DEB Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-arm64.deb`
+            - **RPM Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-arm64.rpm`
+
+            ### 🔧 System Requirements 系统要求
+            - Debian 12+ / Ubuntu 22.04+, Node.js 20+, nginx
+
+            ---
+            Built at （构建于）: ${{ steps.release_info.outputs.timestamp }}
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: false
+          makeLatest: false

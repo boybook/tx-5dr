@@ -424,100 +424,9 @@ jobs:
           path: release-artifacts/*
           retention-days: 30
 
-  # ============================================================
-  # Server-only Linux packages (deb + rpm, no Electron)
-  # ============================================================
-  build-server-linux:
-    name: Build Server Package (Linux ${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            arch: amd64
-            artifact_name: tx5dr-server-linux-amd64
-
-          - os: ubuntu-22.04-arm
-            arch: arm64
-            artifact_name: tx5dr-server-linux-arm64
-
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.15.1'
-
-      - name: Enable Corepack and setup Yarn
-        run: |
-          corepack enable
-          corepack prepare yarn@4.9.1 --activate
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev libpulse-dev \
-            libhamlib-dev libhamlib4 \
-            libopus-dev \
-            build-essential python3-dev pkg-config \
-            ruby-dev rpm
-
-      - name: Install fpm
-        run: sudo gem install fpm --no-document
-
-      - name: Install dependencies
-        run: yarn install
-
-      - name: Build application
-        run: yarn build
-        env:
-          NODE_ENV: production
-
-      - name: Build server packages (deb + rpm)
-        run: scripts/package-linux.sh both --no-build
-
-      - name: Prepare artifacts
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          ARCH="${{ matrix.arch }}"
-          mkdir -p release-artifacts
-
-          if [ -z "$VERSION" ]; then
-            PREFIX="TX-5DR-nightly"
-          else
-            PREFIX="TX-5DR-${VERSION}"
-          fi
-
-          find dist/ -name "*.deb" -type f | while read -r f; do
-            cp "$f" "release-artifacts/${PREFIX}-server-linux-${ARCH}.deb"
-            echo "✅ deb: ${PREFIX}-server-linux-${ARCH}.deb"
-          done
-
-          find dist/ -name "*.rpm" -type f | while read -r f; do
-            cp "$f" "release-artifacts/${PREFIX}-server-linux-${ARCH}.rpm"
-            echo "✅ rpm: ${PREFIX}-server-linux-${ARCH}.rpm"
-          done
-
-          ls -lh release-artifacts/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: release-artifacts/*
-          retention-days: 30
-
-  # ============================================================
   create-release:
-    needs: [build, build-server-linux]
+    needs: [build]
     runs-on: ubuntu-latest
-    # 仅在非 PR 时创建 release（push 或手动触发）
     if: github.event_name != 'pull_request'
 
     steps:
@@ -534,10 +443,7 @@ jobs:
         run: |
           echo "=== 准备 release 产物 ==="
           mkdir -p release-assets
-
-          # 将所有产物移到统一目录
           find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" -o -name "*.7z" \) -exec cp {} release-assets/ \;
-
           echo "=== Release 产物列表 ==="
           ls -lh release-assets/
 
@@ -548,15 +454,15 @@ jobs:
           echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-      # Nightly Release: 仅在 push 到 main/develop 时（无版本号输入）
+      # Nightly Release
       - name: Create or Update Nightly Release
         if: github.event.inputs.version == ''
         uses: ncipollo/release-action@v1
         with:
-          tag: nightly
-          name: "Nightly Build"
+          tag: nightly-app
+          name: "Nightly Build — Desktop App"
           body: |
-            ## TX-5DR Nightly Build
+            ## TX-5DR Nightly Build — Desktop App 桌面应用
 
             **Built at** （构建时间）: ${{ steps.release_info.outputs.timestamp }}
             **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
@@ -587,25 +493,16 @@ jobs:
             - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-linux-arm64.rpm`
             - **ZIP Portable** （便携版）: `TX-5DR-nightly-linux-arm64.zip`
 
-            #### Linux Server (x64) — Server + Web UI, no Electron 🆕
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-server-linux-amd64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-server-linux-amd64.rpm`
-
-            #### Linux Server (ARM64) — Server + Web UI, no Electron 🆕
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-server-linux-arm64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-server-linux-arm64.rpm`
-
-            > **Linux Server packages**: Installs server + web UI without Electron desktop. After install, run `tx5dr start` and access via browser at `http://<host>:8076`. Requires Node.js 20+ and nginx.
+            > Looking for **Linux Server** (headless, no Electron)? See [nightly-server](https://github.com/${{ github.repository }}/releases/tag/nightly-server).
+            > 寻找 **Linux 服务器版**（无桌面环境）？请查看 [nightly-server](https://github.com/${{ github.repository }}/releases/tag/nightly-server)。
 
             ### ⚠️ Notice 注意事项
             - This is a development build and may contain untested features. （开发版本，可能包含未经充分测试的功能）
             - Automatically updated on every push to `main` / `develop`. （每次推送自动更新）
-            - For a stable release, please download an official versioned release. （稳定版请下载正式 Release）
 
             ### 🔧 System Requirements 系统要求
             - Node.js >= 22.15.1 (bundled / 已内置)
             - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
-            - **Linux Server**: Node.js 20+, nginx, Ubuntu 22.04+ / Debian 11+ (installed automatically via apt/rpm dependencies)
           allowUpdates: true
           removeArtifacts: true
           artifacts: "release-assets/*"
@@ -613,7 +510,7 @@ jobs:
           prerelease: true
           makeLatest: false
 
-      # Official Release: 仅在手动触发且提供版本号时
+      # Official Release
       - name: Create Official Release
         if: github.event.inputs.version != ''
         uses: ncipollo/release-action@v1
@@ -654,20 +551,9 @@ jobs:
             - **RPM Package** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm`
             - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip`
 
-            #### Linux Server (x64) — Server + Web UI, no Electron
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.rpm`
-
-            #### Linux Server (ARM64) — Server + Web UI, no Electron
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-server-linux-arm64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-server-linux-arm64.rpm`
-
-            > **Linux Server packages**: Installs server + web UI without Electron desktop. After install, run `tx5dr start` and access via browser at `http://<host>:8076`. Requires Node.js 20+ and nginx.
-
             ### 🔧 System Requirements 系统要求
             - Node.js >= 22.15.1 (bundled / 已内置)
             - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
-            - **Linux Server**: Node.js 20+, nginx (installed automatically via apt/rpm dependencies)
 
             ---
             Built at （构建于）: ${{ steps.release_info.outputs.timestamp }}
