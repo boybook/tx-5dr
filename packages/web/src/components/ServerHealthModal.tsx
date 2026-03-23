@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import {
   Modal,
   ModalContent,
@@ -23,6 +23,13 @@ interface SparklineProps {
   color?: string;
   warnColor?: string;
   criticalColor?: string;
+  timestamps?: number[];
+  formatValue?: (v: number) => string;
+}
+
+function formatTimestamp(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
 }
 
 function Sparkline({
@@ -33,7 +40,24 @@ function Sparkline({
   color = 'hsl(var(--heroui-primary))',
   warnColor = 'hsl(var(--heroui-warning))',
   criticalColor = 'hsl(var(--heroui-danger))',
+  timestamps,
+  formatValue,
 }: SparklineProps) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!wrapperRef.current || values.length < 2) return;
+    const rect = wrapperRef.current.getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / rect.width;
+    const idx = Math.round(Math.max(0, Math.min(1, relX)) * (values.length - 1));
+    setHoveredIndex(idx);
+  }, [values.length]);
+
+  const handleMouseLeave = useCallback(() => {
+    setHoveredIndex(null);
+  }, []);
+
   if (values.length < 2) {
     return <div className="w-full" style={{ height }} />;
   }
@@ -58,22 +82,82 @@ function Sparkline({
 
   const areaPath = `M${pts[0]} L${pts.join(' L')} L100,${height} L0,${height} Z`;
 
+  const hoveredX = hoveredIndex !== null ? (hoveredIndex / (values.length - 1)) * 100 : null;
+  const hoveredY = hoveredIndex !== null
+    ? height - ((values[hoveredIndex] - min) / range) * (height - 4) - 2
+    : null;
+
+  // Clamp tooltip so it doesn't overflow left/right
+  const tooltipPct = hoveredIndex !== null ? (hoveredIndex / (values.length - 1)) * 100 : 50;
+  const tooltipTranslate =
+    tooltipPct < 15 ? '0%' : tooltipPct > 85 ? '-100%' : '-50%';
+
   return (
-    <svg
-      viewBox={`0 0 100 ${height}`}
-      preserveAspectRatio="none"
-      className="w-full"
-      style={{ height, display: 'block' }}
+    <div
+      ref={wrapperRef}
+      className="w-full relative"
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+      style={{ height }}
     >
-      <path d={areaPath} fill={activeColor} fillOpacity={0.12} />
-      <polyline
-        points={pts.join(' ')}
-        fill="none"
-        stroke={activeColor}
-        strokeWidth="1.5"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
+      <svg
+        viewBox={`0 0 100 ${height}`}
+        preserveAspectRatio="none"
+        className="w-full h-full"
+        style={{ display: 'block' }}
+      >
+        <path d={areaPath} fill={activeColor} fillOpacity={0.12} />
+        <polyline
+          points={pts.join(' ')}
+          fill="none"
+          stroke={activeColor}
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
+        {hoveredIndex !== null && hoveredX !== null && (
+          <line
+            x1={hoveredX}
+            y1={0}
+            x2={hoveredX}
+            y2={height}
+            stroke="currentColor"
+            strokeOpacity={0.4}
+            strokeWidth="1"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+      </svg>
+      {hoveredIndex !== null && hoveredX !== null && hoveredY !== null && (
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            left: `${hoveredX}%`,
+            top: `${(hoveredY / height) * 100}%`,
+            transform: 'translate(-50%, -50%)',
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            backgroundColor: activeColor,
+          }}
+        />
+      )}
+      {hoveredIndex !== null && (
+        <div
+          className="absolute bottom-full mb-1.5 pointer-events-none z-50 bg-black/80 text-white text-xs rounded px-2 py-1 whitespace-nowrap"
+          style={{
+            left: `${tooltipPct}%`,
+            transform: `translateX(${tooltipTranslate})`,
+          }}
+        >
+          {timestamps?.[hoveredIndex] && (
+            <div className="text-default-300">{formatTimestamp(timestamps[hoveredIndex])}</div>
+          )}
+          <div className="font-mono font-semibold">
+            {formatValue ? formatValue(values[hoveredIndex]) : values[hoveredIndex].toFixed(2)}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -87,6 +171,8 @@ interface MetricCardProps {
   sparkValues: number[];
   sparkWarn?: number;
   sparkCritical?: number;
+  sparkTimestamps?: number[];
+  sparkFormatValue?: (v: number) => string;
   children?: React.ReactNode;
 }
 
@@ -98,6 +184,8 @@ function MetricCard({
   sparkValues,
   sparkWarn,
   sparkCritical,
+  sparkTimestamps,
+  sparkFormatValue,
 }: MetricCardProps) {
   return (
     <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">
@@ -113,6 +201,8 @@ function MetricCard({
         height={52}
         warnThreshold={sparkWarn}
         criticalThreshold={sparkCritical}
+        timestamps={sparkTimestamps}
+        formatValue={sparkFormatValue}
       />
       {rows && rows.length > 0 && (
         <div className="flex flex-col gap-1.5 mt-1">
@@ -193,6 +283,10 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
     return snapshots.slice(-count);
   }, [snapshots, timeRange]);
 
+  const timestamps = useMemo(
+    () => displaySnapshots.map(s => s.timestamp),
+    [displaySnapshots]
+  );
   const memValues = useMemo(
     () => displaySnapshots.map(s => s.memory.heapUsed / MB),
     [displaySnapshots]
@@ -259,6 +353,8 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   sparkValues={memValues.length > 0 ? memValues : [0]}
                   sparkWarn={512}
                   sparkCritical={1024}
+                  sparkTimestamps={timestamps}
+                  sparkFormatValue={(v) => `${v.toFixed(0)} MB`}
                   rows={[
                     {
                       label: t('serverHealth.rss'),
@@ -281,6 +377,8 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   sparkValues={cpuValues.length > 0 ? cpuValues : [0]}
                   sparkWarn={70}
                   sparkCritical={90}
+                  sparkTimestamps={timestamps}
+                  sparkFormatValue={(v) => `${v.toFixed(1)}%`}
                   rows={[
                     {
                       label: t('serverHealth.user'),
@@ -320,6 +418,8 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   height={52}
                   warnThreshold={30}
                   criticalThreshold={100}
+                  timestamps={timestamps}
+                  formatValue={(v) => `${v.toFixed(1)} ms`}
                 />
               </div>
 
