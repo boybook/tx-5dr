@@ -323,7 +323,7 @@ build_package() {
         --url "https://tx5dr.com" \
         --license "MIT" \
         --category "hamradio" \
-        --depends "nodejs" \
+        --depends "nodejs >= 20" \
         --depends "nginx" \
         --depends "libasound2" \
         --depends "libhamlib4" \
