@@ -433,11 +433,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             arch: amd64
             artifact_name: tx5dr-server-linux-amd64
 
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             arch: arm64
             artifact_name: tx5dr-server-linux-arm64
 
@@ -605,7 +605,7 @@ jobs:
             ### 🔧 System Requirements 系统要求
             - Node.js >= 22.15.1 (bundled / 已内置)
             - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
-            - **Linux Server**: Node.js 20+, nginx (installed automatically via apt/rpm dependencies)
+            - **Linux Server**: Node.js 20+, nginx, Ubuntu 22.04+ / Debian 11+ (installed automatically via apt/rpm dependencies)
           allowUpdates: true
           removeArtifacts: true
           artifacts: "release-assets/*"
