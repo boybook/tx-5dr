@@ -271,6 +271,13 @@ export class TransmissionPipeline {
         requestId: requestId || 'N/A'
       });
 
+      // 检查是否为该操作员的最新编码请求（丢弃过期编码，防止双重编码竞态）
+      const latestRequestId = this.deps.operatorManager.getLatestEncodeRequestId(result.operatorId);
+      if (requestId && latestRequestId && requestId !== latestRequestId) {
+        logger.debug(`Skipping stale encode result: operatorId=${result.operatorId}, requestId=${requestId}, latest=${latestRequestId}`);
+        return;
+      }
+
       this.currentSlotCompletedEncodes++;
       logger.debug(`slot ${this.currentSlotId}: completed ${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes}`);
 

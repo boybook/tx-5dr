@@ -382,6 +382,15 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     setRecentSlotGroupKeys([]);
   };
 
+  const handleRowDoubleClick = (message: FrameDisplayMessage, _group: FrameGroup) => {
+    const callsign = message.logbookAnalysis?.callsign;
+    if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
+      if (connection.state.radioService) {
+        connection.state.radioService.sendRequestCall(currentOperatorId, callsign);
+      }
+    }
+  };
+
   return (
     <div className={className}>
       {/* 内容 */}
@@ -398,6 +407,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           myCallsigns={getMyCallsigns()}
           targetCallsign={getCurrentOperatorTargetCallsign()}
           showLogbookAnalysisVisuals={false}
+          onRowDoubleClick={handleRowDoubleClick}
         />
       )}
     </div>
