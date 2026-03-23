@@ -8,6 +8,10 @@ Type=simple
 User=tx5dr
 Group=tx5dr
 EnvironmentFile=-/etc/tx5dr/config.env
+# Allow loading shared objects with executable stack (PT_GNU_STACK RWE).
+# Required by wsjtx-lib's Fortran code (libwsjtx_core.so) for trampoline support.
+# glibc >= 2.41 (Debian trixie) blocks this by default; value 2 = always allow.
+Environment=GLIBC_TUNABLES=glibc.rtld.execstack=2
 ExecStart=/usr/bin/node /usr/share/tx5dr/packages/server/dist/index.js
 WorkingDirectory=/usr/share/tx5dr
 Restart=on-failure
