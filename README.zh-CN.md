@@ -1,8 +1,34 @@
 # TX-5DR
 
-**业余无线电数字电台。** 通过浏览器操作 FT8 等数字模式 —— 可部署在桌面、Linux 服务器或 Docker 中。
+**现代化的业余无线电数字电台。** 随时随地通过浏览器操作 FT8、FT4 和语音模式。
 
 [English](./README.md)
+
+---
+
+## 为什么选择 TX-5DR？
+
+### 随时随地访问 —— 无需安装客户端
+
+TX-5DR 采用现代前后端分离架构。服务端启动后（桌面、Linux 服务器或 Docker），通过**任意浏览器**即可操作电台 —— 笔记本、平板、手机，局域网或互联网均可。客户端零安装。
+
+即便是**桌面应用（Electron）也内置了完整的服务端**，应用运行时随时可以通过浏览器远程连接。
+
+### 共享电台 —— 多人同时操作
+
+完整的角色权限系统（管理员 / 操作员 / 观察者），支持电台共享。多个操作员可以**同时使用同一部电台** —— 各自独立的呼号、频率和自动化配置，并行发射 FT8，系统自动完成音频混音。
+
+### 核心功能
+
+- **数字模式**：FT8（15秒）、FT4（7.5秒）、语音（SSB/FM/AM），支持 Fox/Hound DXpedition 模式
+- **实时频谱**：GPU 加速 WebGL 瀑布图，支持缩放和平移
+- **电台控制**：Hamlib（网络/串口）、ICOM WLAN（IC-705 WiFi 直连）、无电台监听模式
+- **多操作员**：每人独立呼号、网格、频率和发射策略 —— 自动 CQ、自动应答、并行编码与音频混音
+- **远程语音通联**：通过浏览器远程进行语音通联（SSB/FM）—— 麦克风音频实时传输到服务端并通过电台发射（需要 HTTPS）
+- **通联日志与同步**：内置 ADIF 日志本，与 WaveLog、QRZ.com、LoTW 双向同步
+- **PSKReporter**：自动将解码信号上报至全球 PSKReporter 网络
+- **音频监控**：实时音频流（Opus/PCM）推送到浏览器
+- **多语言**：完整的中文和英文界面
 
 ---
 
@@ -187,10 +213,11 @@ tx-5dr/
 
 ## 技术栈
 
-- **后端**：Fastify、WebSocket、XState v5、Piscina 工作池
-- **前端**：React 18、HeroUI、WebGL、i18next
-- **音频**：Audify (RtAudio)、WSJTX-lib (FT8/FT4)
-- **电台**：Hamlib (CAT 控制)、ICOM WLAN、SerialPort
+基于 Node.js 构建，性能关键部分以**原生 C/C++/Fortran 二进制**运行 —— FT8 编解码（WSJT-X）、音频 I/O（RtAudio）、电台控制（Hamlib）、FFT 处理均为原生代码，非 JavaScript。
+
+- **后端**：Fastify、WebSocket、XState v5 状态机、Piscina 工作池（并行 FT8 编解码）
+- **前端**：React 18、HeroUI、WebGL（频谱）、i18next
+- **原生二进制**：WSJTX-lib（FT8/FT4 编解码）、Audify（RtAudio）、Hamlib（CAT 控制）、SerialPort
 - **构建**：Turborepo、Yarn 4 工作区、Electron Forge
 
 ## 许可证
