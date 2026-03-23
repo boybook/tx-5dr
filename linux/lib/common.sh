@@ -130,6 +130,15 @@ MSG_ZH_UPDATE_DONE="更新完成，已重启。"
 MSG_EN_UPDATE_FAILED="Update failed."
 MSG_ZH_UPDATE_FAILED="更新失败。"
 
+MSG_EN_CHECK_SSL="HTTPS (SSL)"
+MSG_ZH_CHECK_SSL="HTTPS (SSL)"
+MSG_EN_SSL_OK="configured (port %s)"
+MSG_ZH_SSL_OK="已配置（端口 %s）"
+MSG_EN_SSL_NOT_CONFIGURED="not configured"
+MSG_ZH_SSL_NOT_CONFIGURED="未配置"
+MSG_EN_SSL_HINT="Voice features require HTTPS (browser microphone access).\n      Configure SSL in: /etc/nginx/conf.d/tx5dr.conf\n      See nginx SSL docs: https://nginx.org/en/docs/http/configuring_https_servers.html"
+MSG_ZH_SSL_HINT="语音通联功能需要 HTTPS（浏览器麦克风权限要求）。\n      请在此文件中按 nginx 标准方式配置 SSL: /etc/nginx/conf.d/tx5dr.conf\n      参考文档: https://nginx.org/en/docs/http/configuring_https_servers.html"
+
 MSG_EN_REQUIRE_ROOT="This command must be run as root (sudo)."
 MSG_ZH_REQUIRE_ROOT="此命令需要 root 权限 (sudo)。"
 

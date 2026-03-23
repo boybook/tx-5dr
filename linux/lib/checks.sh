@@ -96,6 +96,18 @@ check_tx5dr_user() {
     return 0
 }
 
+# Returns 0 if SSL is configured, 1 if not. Sets SSL_PORT if found.
+check_ssl() {
+    SSL_PORT=""
+    local conf="/etc/nginx/conf.d/tx5dr.conf"
+    if [[ -f "$conf" ]] && grep -q "ssl_certificate" "$conf" 2>/dev/null; then
+        # Extract the ssl listen port
+        SSL_PORT=$(grep -oP 'listen\s+\K\d+(?=\s+ssl)' "$conf" 2>/dev/null | head -1)
+        [[ -n "$SSL_PORT" ]] && return 0
+    fi
+    return 1
+}
+
 check_disk_space() {
     local dir="${DATA_DIR:-/var/lib/tx5dr}"
     [[ ! -d "$dir" ]] && dir="/"
@@ -297,6 +309,14 @@ run_doctor() {
     else
         check_line "$(msg CHECK_DISK)" "fail" "< 100MB free"
         issues=$((issues + 1))
+    fi
+
+    # SSL (warning only, not counted as issue)
+    if check_ssl; then
+        check_line "$(msg CHECK_SSL)" "ok" "$(printf "$(msg SSL_OK)" "$SSL_PORT")"
+    else
+        check_line "$(msg CHECK_SSL)" "fail" "$(msg SSL_NOT_CONFIGURED)"
+        echo -e "      ${_DIM}$(msg SSL_HINT)${_NC}"
     fi
 
     echo ""
