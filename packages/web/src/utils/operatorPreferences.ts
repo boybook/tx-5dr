@@ -1,6 +1,7 @@
 /**
  * 操作员偏好设置管理
- * 用于在localStorage中保存客户端对操作员的启用状态
+ * 用于在localStorage中保存客户端对操作员的隐藏状态（黑名单模式）
+ * 未在黑名单中的操作员默认显示
  */
 
 import { createLogger } from './logger';
@@ -10,30 +11,42 @@ const logger = createLogger('OperatorPrefs');
 const STORAGE_KEY = 'tx5dr_operator_preferences';
 
 export interface OperatorPreferences {
-  enabledOperatorIds: string[];
+  hiddenOperatorIds: string[];
   lastUpdated: number;
 }
 
 /**
  * 获取操作员偏好设置
+ * 包含旧格式（enabledOperatorIds）的自动迁移
  */
 export function getOperatorPreferences(): OperatorPreferences {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
+
+      // 旧格式迁移：检测到 enabledOperatorIds 但没有 hiddenOperatorIds
+      if (parsed.enabledOperatorIds && !parsed.hiddenOperatorIds) {
+        logger.info('Migrating from whitelist to blacklist format, clearing old preferences');
+        localStorage.removeItem(STORAGE_KEY);
+        return {
+          hiddenOperatorIds: [],
+          lastUpdated: Date.now()
+        };
+      }
+
       return {
-        enabledOperatorIds: parsed.enabledOperatorIds || [],
+        hiddenOperatorIds: parsed.hiddenOperatorIds || [],
         lastUpdated: parsed.lastUpdated || Date.now()
       };
     }
   } catch (error) {
     logger.warn('Failed to read operator preferences:', error);
   }
-  
-  // 返回默认值：启用所有操作员
+
+  // 默认值：空黑名单 = 全部显示
   return {
-    enabledOperatorIds: [],
+    hiddenOperatorIds: [],
     lastUpdated: Date.now()
   };
 }
@@ -55,17 +68,11 @@ export function setOperatorPreferences(preferences: OperatorPreferences): void {
 }
 
 /**
- * 检查操作员是否被启用
+ * 检查操作员是否被启用（不在黑名单中）
  */
 export function isOperatorEnabled(operatorId: string): boolean {
-  // 如果从未设置过偏好，默认启用所有操作员
-  if (!hasOperatorPreferences()) {
-    return true;
-  }
-  
-  // 如果有偏好设置，严格按照保存的列表判断（空列表=全部禁用）
   const preferences = getOperatorPreferences();
-  return preferences.enabledOperatorIds.includes(operatorId);
+  return !preferences.hiddenOperatorIds.includes(operatorId);
 }
 
 /**
@@ -73,16 +80,16 @@ export function isOperatorEnabled(operatorId: string): boolean {
  */
 export function setOperatorEnabled(operatorId: string, enabled: boolean): void {
   const preferences = getOperatorPreferences();
-  const currentIds = new Set(preferences.enabledOperatorIds);
-  
+  const hiddenIds = new Set(preferences.hiddenOperatorIds);
+
   if (enabled) {
-    currentIds.add(operatorId);
+    hiddenIds.delete(operatorId);
   } else {
-    currentIds.delete(operatorId);
+    hiddenIds.add(operatorId);
   }
-  
+
   setOperatorPreferences({
-    enabledOperatorIds: Array.from(currentIds),
+    hiddenOperatorIds: Array.from(hiddenIds),
     lastUpdated: Date.now()
   });
 }
@@ -92,53 +99,41 @@ export function setOperatorEnabled(operatorId: string, enabled: boolean): void {
  */
 export function setAllOperatorsEnabled(operatorIds: string[], enabled: boolean): void {
   if (enabled) {
-    // 启用所有操作员
+    // 启用所有操作员 = 清空黑名单
     setOperatorPreferences({
-      enabledOperatorIds: [...operatorIds],
+      hiddenOperatorIds: [],
       lastUpdated: Date.now()
     });
   } else {
-    // 禁用所有操作员
+    // 禁用所有操作员 = 全部加入黑名单
     setOperatorPreferences({
-      enabledOperatorIds: [],
+      hiddenOperatorIds: [...operatorIds],
       lastUpdated: Date.now()
     });
   }
 }
 
 /**
- * 获取启用的操作员ID列表
+ * 获取被隐藏的操作员ID列表
  */
-export function getEnabledOperatorIds(): string[] {
+export function getHiddenOperatorIds(): string[] {
   const preferences = getOperatorPreferences();
-  return preferences.enabledOperatorIds;
+  return preferences.hiddenOperatorIds;
 }
 
 /**
- * 检查是否有保存的偏好设置
+ * 检查是否有主动隐藏的操作员
  */
-export function hasOperatorPreferences(): boolean {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored !== null;
-  } catch (error) {
-    return false;
-  }
+export function hasHiddenOperators(): boolean {
+  const preferences = getOperatorPreferences();
+  return preferences.hiddenOperatorIds.length > 0;
 }
 
 /**
  * 获取握手消息的操作员配置
- * 区分新客户端（返回null表示启用所有）和已配置客户端（返回具体列表）
+ * 黑名单模式下始终返回null（握手时不知道全部操作员，让服务端默认启用所有）
+ * 握手完成后通过 setClientEnabledOperators 同步实际过滤列表
  */
 export function getHandshakeOperatorIds(): string[] | null {
-  if (!hasOperatorPreferences()) {
-    // 新客户端，没有任何偏好设置，返回null表示默认启用所有操作员
-    logger.debug('New client, sending null (enable all operators)');
-    return null;
-  }
-  
-  // 已有偏好设置的客户端，返回具体的启用列表
-  const enabledIds = getEnabledOperatorIds();
-  logger.debug('Existing preferences, enabled operators:', enabledIds);
-  return enabledIds;
-} 
+  return null;
+}

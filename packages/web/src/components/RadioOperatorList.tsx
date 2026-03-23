@@ -5,7 +5,7 @@ import { faPlus, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import { useRadioState, useConnection } from '../store/radioStore';
 import { useAuth } from '../store/authStore';
 import { RadioOperator } from './RadioOperator';
-import { hasOperatorPreferences } from '../utils/operatorPreferences';
+import { hasHiddenOperators } from '../utils/operatorPreferences';
 import { useTranslation } from 'react-i18next';
 
 interface RadioOperatorListProps {
@@ -60,7 +60,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
                 <FontAwesomeIcon icon={faPlus} className="mr-2" />
                 {t('operator.createFirst')}
               </Button>
-            ) : hasOperatorPreferences() ? (
+            ) : hasHiddenOperators() ? (
               // 有操作权限的用户，客户端偏好设置隐藏了所有操作员
               <div className="cursor-default select-none space-y-3">
                 <div className="text-xs text-default-400">

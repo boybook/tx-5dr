@@ -33,7 +33,7 @@ import { useConnection } from '../store/radioStore';
 import {
   setOperatorEnabled,
   isOperatorEnabled,
-  getEnabledOperatorIds
+  getHiddenOperatorIds
 } from '../utils/operatorPreferences';
 import { createLogger } from '../utils/logger';
 
@@ -304,14 +304,15 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         const response = await api.createOperator(newOperatorData as CreateRadioOperatorRequest);
         await loadOperators();
 
-        // 自动启用新创建的操作员
+        // 新创建的操作员默认显示（不在黑名单中），同步到服务器
         if (response.data) {
-          setOperatorEnabled(response.data.id, true);
           logger.info('New operator auto-enabled:', response.data.id, response.data.myCallsign);
 
-          // 如果已连接，同步到服务器
           if (connection.state.isConnected && connection.state.radioService) {
-            const enabledIds = [...getEnabledOperatorIds(), response.data.id];
+            // 重新加载后的 operators 列表 + 新操作员，减去黑名单
+            const hiddenSet = new Set(getHiddenOperatorIds());
+            const allIds = [...operators.map(op => op.id), response.data.id];
+            const enabledIds = allIds.filter(id => !hiddenSet.has(id));
             connection.state.radioService.setClientEnabledOperators(enabledIds);
             logger.debug('New operator synced to server');
           }
@@ -873,8 +874,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           </div>
         )}
 
-        {operators.length <= 1 ? (
-          // 当操作员数量≤1时，只显示管理界面，不显示选项卡
+        {operators.length === 0 ? (
+          // 当没有操作员时，只显示管理界面（创建入口），不显示选项卡
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <div>
@@ -883,8 +884,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                   {t('settings.operatorConfigDesc')}
                 </p>
               </div>
-              {/* 当没有操作员且已在创建模式时，隐藏新建按钮 */}
-              {!(operators.length === 0 && isCreating) && (
+              {!isCreating && (
                 <Button
                   color="primary"
                   variant="flat"
@@ -906,16 +906,12 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               </div>
             ) : (
               <div className="space-y-4">
-                {/* 新建操作员卡片 */}
                 {renderNewOperatorCard()}
-
-                {/* 现有操作员卡片 */}
-                {operators.length > 0 && operators.map(renderOperatorCard)}
               </div>
             )}
           </div>
         ) : (
-          // 当操作员数量>1时，显示带选项卡的界面
+          // 有操作员时，始终显示带选项卡的界面（包含偏好 tab）
           <Tabs
             selectedKey={activeTab}
             onSelectionChange={(key) => setActiveTab(key as 'manage' | 'preferences')}
