@@ -61,6 +61,12 @@ cmd_start() {
     web_url=$(get_web_url)
     echo -e "  ${_BOLD}Web UI:${_NC} ${web_url}"
     echo -e "  ${_DIM}$(msg OPEN_URL)${_NC}"
+
+    if ! check_ssl; then
+        echo ""
+        log_warn "$(msg SSL_NOT_CONFIGURED)"
+        echo -e "  ${_DIM}$(msg SSL_HINT)${_NC}"
+    fi
     echo ""
 }
 
@@ -150,6 +156,15 @@ cmd_status() {
     local ip
     ip=$(get_local_ip)
     echo -e "  Web UI:     port ${HTTP_PORT} ${http_status} → http://${ip:-localhost}:${HTTP_PORT}"
+
+    # SSL
+    if check_ssl; then
+        local ssl_status="closed"
+        is_port_open "${SSL_PORT}" && ssl_status="open"
+        echo -e "  HTTPS:      port ${SSL_PORT} ${ssl_status} → https://${ip:-localhost}:${SSL_PORT}"
+    else
+        echo -e "  HTTPS:      ${_YELLOW}not configured${_NC} ${_DIM}(voice features require SSL)${_NC}"
+    fi
 
     # Node.js
     local node_ver="not found"
