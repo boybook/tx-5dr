@@ -669,7 +669,7 @@ async function createWindow() {
 
     // 在开发模式下，等待前端 Vite 服务器准备就绪
     logger.info('waiting for frontend server...');
-    const webReady = await waitForHttp('http://localhost:5173', 30000, 500);
+    const webReady = await waitForHttp('http://localhost:5173', 30000, 300);
 
     if (!webReady) {
       logger.error('cannot connect to frontend server (http://localhost:5173)');
@@ -682,6 +682,22 @@ async function createWindow() {
     }
 
     logger.info('frontend server connected');
+
+    // 等待后端服务器准备就绪
+    logger.info('waiting for backend server...');
+    const serverReady = await waitForHttp('http://localhost:4000', 30000, 300);
+
+    if (!serverReady) {
+      logger.error('cannot connect to backend server (http://localhost:4000)');
+      errorType = 'TIMEOUT';
+      hasStartupError = true;
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Cannot connect to backend server (http://localhost:4000)\nPlease run yarn dev\n\nLog file: ${logPath}`);
+      return;
+    }
+
+    logger.info('backend server connected');
   } else {
     // 生产模式：使用便携 Node 启动子进程（server + web）
     logger.info('production mode: starting child processes with portable Node');
@@ -709,7 +725,7 @@ async function createWindow() {
       PUBLIC: '1',
     });
 
-    const webOk = await waitForHttp(`http://127.0.0.1:${selectedWebPort}`);
+    const webOk = await waitForHttp(`http://127.0.0.1:${selectedWebPort}`, 15000, 200);
     if (!webOk) {
       logger.error('web service startup timeout');
       errorType = 'TIMEOUT';
@@ -721,6 +737,20 @@ async function createWindow() {
     } else {
       logger.info('web service ready');
     }
+
+    // 等待后端服务器 HTTP 就绪
+    logger.info('waiting for backend server...');
+    const serverOk = await waitForHttp(`http://127.0.0.1:${selectedServerPort}`, 15000, 200);
+    if (!serverOk) {
+      logger.error('backend server startup timeout');
+      errorType = 'TIMEOUT';
+      hasStartupError = true;
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Backend server startup timeout\n\nLog file: ${logPath}`);
+      return;
+    }
+    logger.info('backend server ready');
   }
 
   // 最后检查：如果子进程已经崩溃
