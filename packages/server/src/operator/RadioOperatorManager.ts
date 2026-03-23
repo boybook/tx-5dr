@@ -59,10 +59,7 @@ export class RadioOperatorManager {
   private eventListeners: Map<string, (...args: any[]) => void> = new Map();
 
   // 晚到解码重决策相关状态
-  private reDecideTimer: NodeJS.Timeout | null = null;
-  private reDecideLatestSlotPack: SlotPack | null = null;
-  private static readonly REDECIDE_DEBOUNCE_MS = 300;
-  private static readonly REDECIDE_DEADLINE_MS = 2500;
+  private static readonly REDECIDE_DEADLINE_MS = 4000;
 
   // 每个操作员的最新编码请求ID，用于丢弃过期编码结果
   private latestEncodeRequestIds: Map<string, string> = new Map();
@@ -238,8 +235,6 @@ export class RadioOperatorManager {
     // 监听操作员发射周期变更事件
     const handleOperatorTransmitCyclesChanged = (data: { operatorId: string; transmitCycles: number[] }) => {
       logger.debug(`Operator ${data.operatorId} transmit cycles changed: [${data.transmitCycles.join(', ')}]`);
-      // 手动操作优先：取消待执行的晚到解码重决策，防止覆盖用户意图
-      this.cancelPendingReDecision();
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -251,8 +246,6 @@ export class RadioOperatorManager {
     // 监听操作员切换发射槽位事件
     const handleOperatorSlotChanged = (data: { operatorId: string; slot: string }) => {
       logger.debug(`Operator ${data.operatorId} slot changed: ${data.slot}`);
-      // 手动操作优先：取消待执行的晚到解码重决策
-      this.cancelPendingReDecision();
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -264,8 +257,6 @@ export class RadioOperatorManager {
     // 监听操作员发射内容变更事件
     const handleOperatorSlotContentChanged = (data: { operatorId: string; slot: string; content: string }) => {
       logger.debug(`Operator ${data.operatorId} slot content edited: slot=${data.slot}`);
-      // 手动操作优先：取消待执行的晚到解码重决策
-      this.cancelPendingReDecision();
       // 立即检查并触发发射（如果当前正在该槽位发射）
       const operator = this.operators.get(data.operatorId);
       if (operator) {
@@ -836,7 +827,7 @@ export class RadioOperatorManager {
 
   /**
    * 当晚到的解码结果更新 SlotPack 时调用。
-   * 使用 debounce 合并多个窗口的解码结果，然后重新评估 TX 决策。
+   * 立即评估是否需要重决策（依赖 messageSet 过滤防止无效触发）。
    * @param slotPack 更新后的 SlotPack
    */
   reDecideOnLateDecodes(slotPack: SlotPack): void {
@@ -850,12 +841,8 @@ export class RadioOperatorManager {
 
     if (elapsed > RadioOperatorManager.REDECIDE_DEADLINE_MS) return;
 
-    this.reDecideLatestSlotPack = slotPack;
-    if (this.reDecideTimer) clearTimeout(this.reDecideTimer);
-    this.reDecideTimer = setTimeout(
-      () => this.executeReDecision(),
-      RadioOperatorManager.REDECIDE_DEBOUNCE_MS
-    );
+    // 立即执行重决策（不 debounce），依赖 messageSet 过滤 + latestEncodeRequestIds 防止副作用
+    this.executeReDecision(slotPack);
   }
 
   /**
@@ -866,33 +853,16 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 取消待执行的晚到解码重决策 debounce（手动操作时调用，防止重决策覆盖用户意图）
-   */
-  cancelPendingReDecision(): void {
-    if (this.reDecideTimer) {
-      clearTimeout(this.reDecideTimer);
-      this.reDecideTimer = null;
-    }
-    this.reDecideLatestSlotPack = null;
-  }
-
-  /**
-   * 时隙边界清理：取消重决策 debounce + 清空编码请求ID映射
+   * 时隙边界清理：清空编码请求ID映射
    */
   onSlotBoundary(): void {
-    this.cancelPendingReDecision();
     this.latestEncodeRequestIds.clear();
   }
 
   /**
-   * 执行晚到解码重决策（debounce 回调）
+   * 执行晚到解码重决策
    */
-  private async executeReDecision(): Promise<void> {
-    this.reDecideTimer = null;
-    const slotPack = this.reDecideLatestSlotPack;
-    if (!slotPack) return;
-    this.reDecideLatestSlotPack = null;
-
+  private async executeReDecision(slotPack: SlotPack): Promise<void> {
     if (!this.isRunning) return;
 
     const now = this.clockSource.now();
