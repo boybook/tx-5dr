@@ -16,6 +16,11 @@ export class RadioOperator {
     private _isTransmitting: boolean = false; // 发射状态
     private _checkTargetConflict?: (myCallsign: string, targetCallsign: string, operatorId: string) => boolean;
 
+    // 晚到解码重决策相关状态
+    private _decisionInProgress = false;
+    private _lastDecisionTransmission: string | null = null;
+    private _lastDecisionSlotId: string | null = null;
+
     private static readonly DEFAULT_CONFIG: OperatorConfig = {
         mode: MODES.FT8,
         id: '',
@@ -82,22 +87,23 @@ export class RadioOperator {
             if (!this._isTransmitting) {
                 return;
             }
+
+            // 重置重决策状态
+            this._lastDecisionSlotId = null;
+            this._lastDecisionTransmission = null;
+
             if (lastSlotPack) {
                 const t0 = Date.now();
-                const parsedMessages = lastSlotPack.frames.map(frame => {
-                    const message = FT8MessageParser.parseMessage(frame.message);
-                    const parsedMessage: ParsedFT8Message = {
-                        message,
-                        snr: frame.snr,
-                        dt: frame.dt,
-                        df: frame.freq,
-                        rawMessage: frame.message,
-                        slotId: lastSlotPack.slotId,
-                        timestamp: lastSlotPack.startMs
-                    }
-                    return parsedMessage;
-                });
-                const result = await this._transmissionStrategy?.handleReceivedAndDicideNext(parsedMessages);
+                const parsedMessages = this.parseSlotPackMessages(lastSlotPack);
+
+                this._decisionInProgress = true;
+                let result;
+                try {
+                    result = await this._transmissionStrategy?.handleReceivedAndDicideNext(parsedMessages);
+                } finally {
+                    this._decisionInProgress = false;
+                }
+
                 const elapsed = Date.now() - t0;
                 try {
                     // 计算从slotStart到encodeStart的预算时间：transmitTiming - encodeAdvance
@@ -118,6 +124,11 @@ export class RadioOperator {
                     logger.debug(`onSlotStart (${this.config.myCallsign}): stop command received, calling stop()`);
                     this.stop();
                 }
+
+                // 记录决策结果，用于后续晚到解码重决策比较
+                this._lastDecisionSlotId = lastSlotPack.slotId;
+                this._lastDecisionTransmission = this._transmissionStrategy?.handleTransmitSlot() ?? null;
+
                 logger.debug(`onSlotStart (${this.config.myCallsign}): auto decision result=${JSON.stringify(result)}`);
             }
         });
@@ -381,6 +392,60 @@ export class RadioOperator {
     addStateChangeListener(callback: (data: { operatorId: string; state: string }) => void): void {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this._eventEmitter.on('operatorStateChanged' as any, callback);
+    }
+
+    /**
+     * 解析 SlotPack 的帧为 ParsedFT8Message 数组
+     */
+    private parseSlotPackMessages(slotPack: SlotPack): ParsedFT8Message[] {
+        return slotPack.frames.map(frame => {
+            const message = FT8MessageParser.parseMessage(frame.message);
+            return {
+                message,
+                snr: frame.snr,
+                dt: frame.dt,
+                df: frame.freq,
+                rawMessage: frame.message,
+                slotId: slotPack.slotId,
+                timestamp: slotPack.startMs
+            };
+        });
+    }
+
+    /**
+     * 晚到解码重决策：当上一 RX 时隙的解码结果晚到时，重新评估发射决策。
+     * 由 RadioOperatorManager 在 debounce 后调用。
+     * @param slotPack 更新后的 SlotPack（来自上一 RX 时隙的晚到解码）
+     * @returns true 表示决策发生了变更，需要重新编码发射
+     */
+    async reDecideWithUpdatedSlotPack(slotPack: SlotPack): Promise<boolean> {
+        if (this._stopped || !this._isTransmitting) return false;
+        if (this._decisionInProgress) return false;
+        if (!this._lastDecisionSlotId || slotPack.slotId !== this._lastDecisionSlotId) return false;
+
+        const parsedMessages = this.parseSlotPackMessages(slotPack);
+
+        this._decisionInProgress = true;
+        try {
+            const result = await this._transmissionStrategy?.handleReceivedAndDicideNext(
+                parsedMessages, { isReDecision: true }
+            );
+            if (result?.stop) {
+                logger.debug(`reDecide (${this.config.myCallsign}): stop command received`);
+                this.stop();
+                return false;
+            }
+        } finally {
+            this._decisionInProgress = false;
+        }
+
+        const newTransmission = this._transmissionStrategy?.handleTransmitSlot() ?? null;
+        if (newTransmission !== this._lastDecisionTransmission) {
+            logger.info(`Late decode re-decision (${this._config.myCallsign}): "${this._lastDecisionTransmission}" -> "${newTransmission}"`);
+            this._lastDecisionTransmission = newTransmission;
+            return true;
+        }
+        return false;
     }
 
     /**

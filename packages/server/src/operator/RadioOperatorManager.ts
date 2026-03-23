@@ -7,13 +7,14 @@ import {
   StandardQSOStrategy,
   ClockSourceSystem
 } from '@tx5dr/core';
-import { 
-  type RadioOperatorConfig, 
-  type OperatorConfig, 
+import {
+  type RadioOperatorConfig,
+  type OperatorConfig,
   type TransmitRequest,
   type DigitalRadioEngineEvents,
   type ModeDescriptor,
   type QSORecord,
+  type SlotPack,
   MODES,
   QSOCommand
 } from '@tx5dr/contracts';
@@ -56,6 +57,12 @@ export class RadioOperatorManager {
 
   // 记录所有事件监听器,用于清理
   private eventListeners: Map<string, (...args: any[]) => void> = new Map();
+
+  // 晚到解码重决策相关状态
+  private reDecideTimer: NodeJS.Timeout | null = null;
+  private reDecideLatestSlotPack: SlotPack | null = null;
+  private static readonly REDECIDE_DEBOUNCE_MS = 300;
+  private static readonly REDECIDE_DEADLINE_MS = 2500;
 
   // 📊 Day13优化：记录上次发射的操作员状态哈希，用于去重
   private lastEmittedStatusHash: Map<string, string> = new Map();
@@ -813,6 +820,80 @@ export class RadioOperatorManager {
     
     // 发送状态更新到前端
     this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 当晚到的解码结果更新 SlotPack 时调用。
+   * 使用 debounce 合并多个窗口的解码结果，然后重新评估 TX 决策。
+   * @param slotPack 更新后的 SlotPack
+   */
+  reDecideOnLateDecodes(slotPack: SlotPack): void {
+    if (!this.isRunning) return;
+
+    const now = this.clockSource.now();
+    const mode = this.getCurrentMode();
+    const slotMs = mode.slotMs;
+    const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
+    const elapsed = now - currentSlotStartMs;
+
+    if (elapsed > RadioOperatorManager.REDECIDE_DEADLINE_MS) return;
+
+    this.reDecideLatestSlotPack = slotPack;
+    if (this.reDecideTimer) clearTimeout(this.reDecideTimer);
+    this.reDecideTimer = setTimeout(
+      () => this.executeReDecision(),
+      RadioOperatorManager.REDECIDE_DEBOUNCE_MS
+    );
+  }
+
+  /**
+   * 取消待执行的晚到解码重决策（在新时隙开始时调用）
+   */
+  cancelPendingReDecision(): void {
+    if (this.reDecideTimer) {
+      clearTimeout(this.reDecideTimer);
+      this.reDecideTimer = null;
+    }
+    this.reDecideLatestSlotPack = null;
+  }
+
+  /**
+   * 执行晚到解码重决策（debounce 回调）
+   */
+  private async executeReDecision(): Promise<void> {
+    this.reDecideTimer = null;
+    const slotPack = this.reDecideLatestSlotPack;
+    if (!slotPack) return;
+    this.reDecideLatestSlotPack = null;
+
+    if (!this.isRunning) return;
+
+    const now = this.clockSource.now();
+    const mode = this.getCurrentMode();
+    const slotMs = mode.slotMs;
+    const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
+
+    if (now - currentSlotStartMs > RadioOperatorManager.REDECIDE_DEADLINE_MS) return;
+
+    for (const [operatorId, operator] of this.operators) {
+      if (!operator.isTransmitting) continue;
+
+      const utcSeconds = Math.floor(currentSlotStartMs / 1000);
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+        operator.getTransmitCycles(), utcSeconds, slotMs
+      );
+      if (!isTransmitCycle) continue;
+
+      try {
+        const changed = await operator.reDecideWithUpdatedSlotPack(slotPack);
+        if (changed) {
+          logger.info(`Late decode re-decision triggered re-encode for operator ${operatorId}`);
+          this.checkAndTriggerTransmission(operatorId);
+        }
+      } catch (err) {
+        logger.error(`Late re-decision failed for operator ${operatorId}:`, err);
+      }
+    }
   }
 
   /**

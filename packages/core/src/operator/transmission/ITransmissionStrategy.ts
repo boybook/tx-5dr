@@ -10,8 +10,9 @@ export interface ITransmissionStrategy {
      * @param context 当前QSO上下文的只读副本。
      * @param lastMessageFromTarget 从当前目标接收到的最后一条消息 (如果存在)。
      * @returns 要发送的FT8消息字符串，如果为null，表示直接停止发射。
+     * @param options 可选参数。isReDecision=true 表示这是晚到解码触发的重决策，不应累加超时计数。
      */
-    handleReceivedAndDicideNext(messages: ParsedFT8Message[]): Promise<StrategiesResult>;
+    handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategiesResult>;
 
     /**
      * 请求呼叫一个呼号

@@ -950,7 +950,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         }
     }
 
-    async handleReceivedAndDicideNext(messages: ParsedFT8Message[]): Promise<StrategiesResult> {
+    async handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategiesResult> {
         const currentState = states[this.state];
 
         // 过滤掉发送者是我自己的消息
@@ -958,15 +958,15 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
 
         // 处理接收到的消息
         const result = await currentState.handle(this, filteredMessages);
-        
+
         // 如果状态需要改变
         if (result.changeState) {
             /* if (result.changeState !== 'TX6') {
                 this.operator.start();  // 启动发射
             } */
             this.changeState(result.changeState);
-        } else {
-            // 增加超时计数
+        } else if (!options?.isReDecision) {
+            // 增加超时计数（重决策时跳过，避免虚假超时累加）
             this.timeoutCycles++;
             // 检查是否超时
             if (this.timeoutCycles >= this.operator.config.maxQSOTimeoutCycles) {
