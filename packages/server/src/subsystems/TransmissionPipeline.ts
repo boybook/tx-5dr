@@ -403,15 +403,23 @@ export class TransmissionPipeline {
         });
       }
     } catch (error) {
-      logger.error(`mixed audio playback failed: ${error}`);
-      this.deps.audioMixer.markPlaybackStop();
-      await this.stopPTT();
-      for (const operatorId of mixedAudio.operatorIds) {
-        this.deps.engineEmitter.emit('transmissionComplete', {
-          operatorId,
-          success: false,
-          error: error instanceof Error ? error.message : String(error)
-        });
+      const isInterrupted = error instanceof Error && error.message === 'playback interrupted';
+      if (isInterrupted) {
+        // 播放被 stopCurrentPlayback 正常中断（中途内容切换），不关闭 PTT
+        logger.debug('audio playback interrupted by content switch (expected)');
+        this.deps.audioMixer.markPlaybackStop();
+      } else {
+        // 真正的播放错误，需要清理 PTT
+        logger.error(`mixed audio playback failed: ${error}`);
+        this.deps.audioMixer.markPlaybackStop();
+        await this.stopPTT();
+        for (const operatorId of mixedAudio.operatorIds) {
+          this.deps.engineEmitter.emit('transmissionComplete', {
+            operatorId,
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
       }
     }
   }
