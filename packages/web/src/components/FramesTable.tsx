@@ -32,7 +32,8 @@ export interface FrameDisplayMessage {
 }
 
 export interface FrameGroup {
-  time: string;
+  time: string;       // HHMMSS，仅用于显示
+  startMs: number;    // 对齐后的时隙起始时间戳（ms），用于排序
   messages: FrameDisplayMessage[];
   type: 'receive' | 'transmit';
   cycle: 'even' | 'odd'; // 偶数或奇数周期

@@ -173,7 +173,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       }
       
       // 按时间排序并只保留最近的100个时隙（避免内存泄漏）
-      updated.sort((a, b) => a.time.localeCompare(b.time));
+      updated.sort((a, b) => a.startMs - b.startMs);
       if (updated.length > 100) {
         updated = updated.slice(-100);
       }
@@ -218,7 +218,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     }
     
     // 只处理当前时隙的数据
-    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean }>();
+    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean, alignedMs: number }>();
     
     // 处理接收到的消息（只处理最近2个时隙的数据）
     slotPacks.state.slotPacks.forEach(slotPack => {
@@ -276,13 +276,15 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         const isMyTransmitCycle = myTransmitCycles.includes(cycleNumber);
         
         // 生成组键：使用统一的组键生成方法
+        const alignedMs = Math.floor(slotPack.startMs / currentMode.slotMs) * currentMode.slotMs;
         const groupKey = CycleUtils.generateSlotGroupKey(slotPack.startMs, currentMode.slotMs);
-        
+
         if (!groupsMap.has(groupKey)) {
           groupsMap.set(groupKey, {
             messages: [],
             cycle: isEvenCycle ? 'even' : 'odd',
-            hasTransmission: false
+            hasTransmission: false,
+            alignedMs
           });
         }
         
@@ -323,18 +325,20 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         return;
       }
       
-      const groupKey = log.time.slice(0, 6); // HHMMSS
-      
+      const logAlignedMs = Math.floor(logTimeMs / currentMode.slotMs) * currentMode.slotMs;
+      const groupKey = logGroupKey; // HHMMSS，与接收消息使用相同的键
+
       // 使用统一的周期计算方法来计算周期类型
       const utcSecondsNumber = Math.floor(logTimeMs / 1000);
       const cycleNumber = CycleUtils.calculateCycleNumber(utcSecondsNumber, currentMode?.slotMs || 15000);
       const isEvenCycle = CycleUtils.isEvenCycle(cycleNumber);
-      
+
       if (!groupsMap.has(groupKey)) {
         groupsMap.set(groupKey, {
           messages: [],
           cycle: isEvenCycle ? 'even' : 'odd',
-          hasTransmission: false
+          hasTransmission: false,
+          alignedMs: logAlignedMs
         });
       }
       
@@ -354,17 +358,18 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
 
     // 转换当前时隙数据为FrameGroup数组
     const currentSlotGroups: FrameGroup[] = Array.from(groupsMap.entries())
-      .map(([time, { messages, cycle, hasTransmission }]) => ({
+      .map(([time, { messages, cycle, hasTransmission, alignedMs }]) => ({
         time,
+        startMs: alignedMs,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
         type: hasTransmission ? 'transmit' as const : 'receive' as const,
         cycle
       }))
-      .sort((a, b) => a.time.localeCompare(b.time));
+      .sort((a, b) => a.startMs - b.startMs);
 
     // 合并固化数据和当前时隙数据
     const allGroups: FrameGroup[] = [...frozenFrameGroups, ...currentSlotGroups]
-      .sort((a, b) => a.time.localeCompare(b.time));
+      .sort((a, b) => a.startMs - b.startMs);
 
     setMyFrameGroups(allGroups);
   }, [slotPacks.state.slotPacks, transmissionLogs, radio.state.operators, radio.state.currentMode, frozenFrameGroups, recentSlotGroupKeys]);
