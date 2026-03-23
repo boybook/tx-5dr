@@ -44,11 +44,17 @@ done
 
 # --- Generate nginx site config from template ---
 if [[ -f "$NGINX_TEMPLATE" ]]; then
-    sed -e "s|%%LISTEN_PORT%%|${LISTEN_PORT}|g" \
-        -e "s|%%WEB_ROOT%%|${WEB_ROOT}|g" \
-        -e "s|%%API_HOST%%|${API_HOST}|g" \
-        "$NGINX_TEMPLATE" > "$NGINX_CONF"
-    echo "Generated nginx config: $NGINX_CONF (port ${LISTEN_PORT})"
+    if [[ -f "$NGINX_CONF" ]]; then
+        # Preserve user-modified config (SSL, custom ports, etc.)
+        echo "Nginx config already exists: $NGINX_CONF (preserved, not overwritten)"
+        echo "To regenerate from template: sudo rm $NGINX_CONF && sudo dpkg-reconfigure tx5dr"
+    else
+        sed -e "s|%%LISTEN_PORT%%|${LISTEN_PORT}|g" \
+            -e "s|%%WEB_ROOT%%|${WEB_ROOT}|g" \
+            -e "s|%%API_HOST%%|${API_HOST}|g" \
+            "$NGINX_TEMPLATE" > "$NGINX_CONF"
+        echo "Generated nginx config: $NGINX_CONF (port ${LISTEN_PORT})"
+    fi
 
     # Test and reload nginx
     if command -v nginx >/dev/null 2>&1; then
