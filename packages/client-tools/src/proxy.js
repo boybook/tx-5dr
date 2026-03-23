@@ -194,6 +194,7 @@ server.on('upgrade', (req, socket, head) => {
       upstream.pipe(socket);
       socket.pipe(upstream);
     });
+    socket.on('error', () => upstream.destroy());
     upstream.on('error', () => socket.destroy());
   } catch {
     socket.destroy();
@@ -254,3 +255,7 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+process.on('uncaughtException', (err) => {
+  console.error('[client-tools] uncaught exception:', err.message);
+});
