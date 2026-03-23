@@ -46,8 +46,14 @@ done
 if [[ -f "$NGINX_TEMPLATE" ]]; then
     if [[ -f "$NGINX_CONF" ]]; then
         # Preserve user-modified config (SSL, custom ports, etc.)
-        echo "Nginx config already exists: $NGINX_CONF (preserved, not overwritten)"
-        echo "To regenerate from template: sudo rm $NGINX_CONF && sudo dpkg-reconfigure tx5dr"
+        echo ""
+        echo "  ✓ Nginx config preserved (not overwritten)"
+        echo "    保留了现有的 Nginx 配置（未覆盖）"
+        echo "    File 文件: $NGINX_CONF"
+        echo "    Your SSL, custom ports, and other changes are safe."
+        echo "    您的 SSL、自定义端口等修改已保留。"
+        echo "    To reset to default 如需恢复默认: sudo rm $NGINX_CONF && tx5dr doctor"
+        echo ""
     else
         sed -e "s|%%LISTEN_PORT%%|${LISTEN_PORT}|g" \
             -e "s|%%WEB_ROOT%%|${WEB_ROOT}|g" \
