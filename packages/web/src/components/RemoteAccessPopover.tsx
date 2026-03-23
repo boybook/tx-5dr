@@ -50,7 +50,7 @@ export const RemoteAccessPopover: React.FC<RemoteAccessPopoverProps> = ({ client
       onOpenChange={setIsOpen}
     >
       <PopoverTrigger>
-        <div className="bg-content1 dark:bg-content2 rounded-md px-3 py-1 flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity">
+        <div className="bg-content1 dark:bg-content2 rounded-md px-3 h-6 flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity">
           <FontAwesomeIcon icon={faGlobe} className="text-default-400 text-xs" />
           {clientCount > 1 && (
             <div className="text-xs font-mono text-default-500">
