@@ -1,8 +1,34 @@
 # TX-5DR
 
-**Digital radio station for amateur radio operators.** FT8 and other digital modes via a web browser — deploy on a desktop, a headless Linux server, or Docker.
+**A modern digital radio station for amateur radio operators.** Operate FT8, FT4, and voice modes from any web browser — anywhere, anytime.
 
 [中文文档 (Chinese)](./README.zh-CN.md)
+
+---
+
+## Why TX-5DR?
+
+### Access from anywhere — no client installation needed
+
+TX-5DR uses a modern client-server architecture. Once the server is running (on a desktop, a Linux box, or Docker), you operate your radio from **any web browser** — laptop, tablet, phone, across your LAN or over the internet. No software to install on the client side.
+
+Even the **desktop app (Electron) runs a full server inside**, so you can always connect remotely via browser while the app is running.
+
+### Share your radio — multiple operators at once
+
+A complete role-based permission system (Admin / Operator / Viewer) lets you share your station with others. Multiple operators can **use the same radio simultaneously** — each with their own callsign, frequency, and automation settings, transmitting FT8 in parallel with automatic audio mixing.
+
+### Key Features
+
+- **Digital Modes**: FT8 (15s), FT4 (7.5s), Voice (SSB/FM/AM), with Fox/Hound DXpedition support
+- **Real-time Spectrum**: GPU-accelerated WebGL waterfall display with zoom/pan
+- **Radio Control**: Hamlib (network/serial), ICOM WLAN (IC-705 WiFi direct), or no-radio monitor mode
+- **Multi-operator**: Independent callsign, grid, frequency, and TX strategy per operator — auto-CQ, auto-reply, parallel encoding with audio mixing
+- **Remote Voice QSO**: Transmit and receive voice (SSB/FM) remotely through the browser — your microphone audio is streamed to the server and transmitted via the radio (requires HTTPS)
+- **Logbook & Sync**: Built-in ADIF logbook with two-way sync to WaveLog, QRZ.com, and LoTW
+- **PSKReporter**: Auto-report decoded signals to the global PSKReporter network
+- **Audio Monitoring**: Real-time audio stream (Opus/PCM) to the browser
+- **Multi-language**: Full English and Chinese UI
 
 ---
 
@@ -188,10 +214,11 @@ tx-5dr/
 
 ## Tech Stack
 
-- **Backend**: Fastify, WebSocket, XState v5, Piscina worker pool
-- **Frontend**: React 18, HeroUI, WebGL, i18next
-- **Audio**: Audify (RtAudio), WSJTX-lib (FT8/FT4)
-- **Radio**: Hamlib (CAT control), ICOM WLAN, SerialPort
+Built on Node.js with performance-critical components running as **native C/C++/Fortran binaries** — FT8 encoding/decoding (WSJT-X), audio I/O (RtAudio), radio control (Hamlib), and FFT processing are all native, not JavaScript.
+
+- **Backend**: Fastify, WebSocket, XState v5 state machines, Piscina worker pool (parallel FT8 encode/decode)
+- **Frontend**: React 18, HeroUI, WebGL (spectrum), i18next
+- **Native Binaries**: WSJTX-lib (FT8/FT4 codec), Audify (RtAudio), Hamlib (CAT), SerialPort
 - **Build**: Turborepo, Yarn 4 workspaces, Electron Forge
 
 ## License
