@@ -95,13 +95,10 @@ FROM node:22-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 
-# 升级 libstdc++6 至 trixie 版本以支持 audify 预构建二进制（需要 GLIBCXX_3.4.32）
-# 仅升级此单一库，其余包保持 Bookworm 稳定版
-RUN echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie.list && \
-    apt-get update && \
-    apt-get install -y -t trixie libstdc++6 && \
-    rm /etc/apt/sources.list.d/trixie.list && \
-    rm -rf /var/lib/apt/lists/*
+# 运行共享安装脚本（--docker 模式）修复 GLIBCXX 等兼容性问题
+COPY linux/lib/ /tmp/tx5dr-linux/lib/
+COPY linux/install.sh /tmp/tx5dr-linux/install.sh
+RUN bash /tmp/tx5dr-linux/install.sh --docker && rm -rf /tmp/tx5dr-linux/
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \
