@@ -97,7 +97,7 @@ export const FT4_WINDOW_PRESETS: Record<string, number[]> = {
  */
 export const DecodeWindowSettingsSchema = z.object({
   ft8: z.object({
-    preset: z.enum(['maximum', 'balanced', 'lightweight', 'minimum', 'custom']).default('maximum'),
+    preset: z.enum(['maximum', 'balanced', 'lightweight', 'minimum', 'custom']).default('balanced'),
     customWindowTiming: z.array(z.number().int().min(-2000).max(1000)).optional(),
   }).optional(),
   ft4: z.object({
