@@ -117,7 +117,8 @@ fi
 
 # Check glibc version (informational)
 local_glibc_int=$(get_glibc_version_int)
-local_glibc_ver=$(ldd --version 2>&1 | head -1 | grep -oP '\d+\.\d+' | tail -1)
+# Avoid SIGPIPE: head -1 closes pipe causing ldd to get signal 141 under pipefail
+local_glibc_ver=$(ldd --version 2>&1 | grep -oP '\d+\.\d+' | head -1 || true)
 if [[ "$local_glibc_int" -ge 241 ]]; then
     log_info "glibc ${local_glibc_ver} detected — GLIBC_TUNABLES=glibc.rtld.execstack=2 is configured in service file"
 fi
