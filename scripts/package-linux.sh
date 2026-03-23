@@ -279,6 +279,12 @@ cp -r "$PROJECT_ROOT/packages/web/dist/." "$APP_ROOT/web/"
 # --- Copy nginx template (for postinstall) ---
 cp "$PROJECT_ROOT/linux/nginx-site.conf" "$APP_ROOT/nginx-site.conf"
 
+# --- Shared library and install script ---
+mkdir -p "$APP_ROOT/lib"
+cp "$PROJECT_ROOT/linux/lib/"*.sh "$APP_ROOT/lib/"
+cp "$PROJECT_ROOT/linux/install.sh" "$APP_ROOT/install.sh"
+chmod 755 "$APP_ROOT/install.sh"
+
 # --- Version file ---
 echo "$VERSION" > "$APP_ROOT/version"
 
