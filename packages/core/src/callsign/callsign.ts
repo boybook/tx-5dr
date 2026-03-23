@@ -1317,8 +1317,11 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
   let callsignInfo;
 
   // 尝试从解析后的消息中获取呼号信息
-  if (msg.type !== FT8MessageType.UNKNOWN && msg.type !== FT8MessageType.CUSTOM) {
+  if (msg.type !== FT8MessageType.UNKNOWN && msg.type !== FT8MessageType.CUSTOM && msg.type !== FT8MessageType.FOX_RR73) {
     callsignInfo = getCallsignInfo(msg.senderCallsign);
+  } else if (msg.type === FT8MessageType.FOX_RR73) {
+    // Fox/Hound模式：使用下一个被邀请的Hound呼号（更活跃的一方）
+    callsignInfo = getCallsignInfo(msg.nextCallsign);
   }
 
   // 降级处理:如果FT8消息解析失败或无法识别发送者,尝试从原始消息中提取呼号
