@@ -204,6 +204,63 @@ cmd_token() {
     fi
 }
 
+cmd_update() {
+    detect_os
+    local repo="boybook/tx-5dr"
+    local current_ver="unknown"
+    [[ -f /usr/share/tx5dr/version ]] && current_ver=$(cat /usr/share/tx5dr/version)
+
+    echo "$(msg CHECKING_UPDATE)"
+
+    # Map arch: dpkg uses amd64/arm64, release assets also use amd64/arm64
+    local pkg_arch="$ARCH"
+
+    # Determine asset name
+    local asset_name="TX-5DR-nightly-server-linux-${pkg_arch}.deb"
+    local download_url="https://github.com/${repo}/releases/download/nightly/${asset_name}"
+
+    # Get remote release info (commit sha as "version" for nightly)
+    local remote_info
+    remote_info=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/tags/nightly" 2>/dev/null) || {
+        log_error "$(msg UPDATE_FAILED)"
+        log_error "Cannot reach GitHub API. Check your network."
+        return 1
+    }
+
+    local remote_date
+    remote_date=$(echo "$remote_info" | grep -oP '"published_at":\s*"\K[^"]+' | head -1 | cut -dT -f1)
+    local remote_sha
+    remote_sha=$(echo "$remote_info" | grep -oP '"target_commitish":\s*"\K[^"]+' | head -1 | cut -c1-7)
+
+    # Check if asset exists
+    if ! echo "$remote_info" | grep -q "$asset_name"; then
+        log_error "Asset not found: $asset_name"
+        log_error "Available assets may not include server packages for $pkg_arch."
+        return 1
+    fi
+
+    log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "nightly (${remote_sha}, ${remote_date})")"
+
+    # Download
+    local tmp_deb="/tmp/${asset_name}"
+    echo "$(printf "$(msg DOWNLOADING)" "$asset_name")"
+    if ! curl -fSL --progress-bar -o "$tmp_deb" "$download_url"; then
+        log_error "$(msg UPDATE_FAILED)"
+        rm -f "$tmp_deb"
+        return 1
+    fi
+
+    # Install using install.sh (handles stop → dpkg → restart → verify)
+    sudo bash /usr/share/tx5dr/install.sh "$tmp_deb"
+    local rc=$?
+    rm -f "$tmp_deb"
+
+    if [[ $rc -eq 0 ]]; then
+        log_info "$(msg UPDATE_DONE)"
+    fi
+    return $rc
+}
+
 cmd_doctor() {
     run_doctor
 }
@@ -235,6 +292,7 @@ cmd_help() {
     echo "  status   Show service status dashboard"
     echo "  logs     Follow service logs (--nginx / --all)"
     echo "  token    Show admin token (--reset to regenerate)"
+    echo "  update   Download and install latest nightly build"
     echo "  doctor   Run full environment diagnostics"
     echo "  enable   Enable auto-start on boot"
     echo "  disable  Disable auto-start on boot"
@@ -250,6 +308,7 @@ case "${1:-help}" in
     restart) cmd_restart ;;
     status)  cmd_status ;;
     token)   cmd_token "${2:-}" ;;
+    update)  cmd_update ;;
     doctor)  cmd_doctor ;;
     logs)    cmd_logs "${2:-}" ;;
     enable)
