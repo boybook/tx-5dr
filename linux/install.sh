@@ -140,8 +140,7 @@ fi
 if [[ "$MODE" != "docker" ]]; then
     step_header 4 "nginx"
     if check_nginx_installed; then
-        local nginx_ver
-        nginx_ver=$(nginx -v 2>&1 | grep -oP '[\d.]+' | head -1)
+        nginx_ver=$($NGINX_BIN -v 2>&1 | grep -oP '[\d.]+' | head -1 || true)
         log_ok "nginx ${nginx_ver}"
     elif [[ "$MODE" == "check" ]]; then
         log_fail "nginx not found"
@@ -231,7 +230,6 @@ echo ""
 echo "═══════════════════════════════════════"
 log_info "$(msg START_OK)"
 echo ""
-local web_url
 web_url=$(get_web_url)
 echo -e "  ${_BOLD}Web UI:${_NC} ${web_url}"
 echo -e "  ${_DIM}$(msg OPEN_URL)${_NC}"
