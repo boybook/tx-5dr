@@ -1,4 +1,4 @@
-import { FT8Message, FT8MessageType } from '@tx5dr/contracts';
+import { FT8Message, FT8MessageFoxRR73, FT8MessageType } from '@tx5dr/contracts';
 
 // 基础呼号正则表达式（更宽松的匹配）
 const BASE_CALLSIGN_REGEX = /^[A-Z0-9]{1,6}$/;
@@ -97,6 +97,7 @@ export class FT8MessageParser {
       case FT8MessageType.ROGER_REPORT:
       case FT8MessageType.RRR:
       case FT8MessageType.SEVENTY_THREE:
+      case FT8MessageType.FOX_RR73:
         // 其他消息类型中，如果包含网格或报告，非标准呼号需要包裹
         return !!(('grid' in message && message.grid) || ('report' in message && message.report));
 
@@ -138,6 +139,11 @@ export class FT8MessageParser {
       return part;
     });
 
+    // 检查 Fox/Hound DXpedition 模式消息（含 "RR73;" 分隔符，优先匹配）
+    if (this.isFoxRR73Message(trimmedMessage)) {
+      return this.parseFoxRR73Message(trimmedMessage);
+    }
+
     // 检查CQ消息
     if (this.isCQMessage(processedParts)) {
       return this.parseCQMessage(processedParts, message);
@@ -167,6 +173,52 @@ export class FT8MessageParser {
     return {
       type: FT8MessageType.UNKNOWN
     };
+  }
+
+  /**
+   * 检查是否为 Fox/Hound DXpedition 模式消息
+   * 特征：包含 "RR73;" 分隔符
+   * 格式：HOUND1 RR73; HOUND2 <FOXHASH>
+   */
+  private static isFoxRR73Message(raw: string): boolean {
+    return /\bRR73;\s+\S/.test(raw);
+  }
+
+  /**
+   * 解析 Fox/Hound DXpedition 模式消息
+   * 格式：HOUND1 RR73; HOUND2 [<FOXHASH>]
+   * 例如：JA0OAV RR73; JG1MPG <4>
+   */
+  private static parseFoxRR73Message(raw: string): FT8Message {
+    const match = raw.match(/^(\S+)\s+RR73;\s+(\S+)(?:\s+(<[^>]*>|\S+))?$/);
+    if (!match) {
+      return { type: FT8MessageType.UNKNOWN };
+    }
+
+    const [, completedToken, nextToken, hashToken] = match;
+
+    if (!completedToken || !nextToken) {
+      return { type: FT8MessageType.UNKNOWN };
+    }
+
+    if (!this.isValidCallsign(completedToken) || !this.isValidCallsign(nextToken)) {
+      return { type: FT8MessageType.UNKNOWN };
+    }
+
+    const foxRR73Result: FT8MessageFoxRR73 = {
+      type: FT8MessageType.FOX_RR73,
+      completedCallsign: this.cleanCallsign(completedToken),
+      nextCallsign: this.cleanCallsign(nextToken),
+    };
+
+    if (hashToken) {
+      // 去掉尖括号，保留内部值（如 "<4>" → "4"，"<...>" → "..."）
+      foxRR73Result.foxHash = hashToken.startsWith('<') && hashToken.endsWith('>')
+        ? hashToken.slice(1, -1)
+        : hashToken;
+    }
+
+    return foxRR73Result;
   }
 
   /**

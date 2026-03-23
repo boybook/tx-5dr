@@ -112,6 +112,7 @@ export const FT8MessageType = {
   ROGER_REPORT: 'roger_report', // 确认信号报告
   RRR: 'rrr',          // RRR确认
   SEVENTY_THREE: '73',           // 73告别
+  FOX_RR73: 'fox_rr73', // Fox/Hound DXpedition模式：Fox确认完成并邀请下一个Hound
   CUSTOM: 'custom',       // 自定义消息
   UNKNOWN: 'unknown',      // 未知消息类型
 } as const;
@@ -124,6 +125,7 @@ export const FT8MessageTypeSchema = z.enum([
   FT8MessageType.ROGER_REPORT,
   FT8MessageType.RRR,
   FT8MessageType.SEVENTY_THREE,
+  FT8MessageType.FOX_RR73,
   FT8MessageType.CUSTOM,
   FT8MessageType.UNKNOWN,
 ]);
@@ -174,6 +176,13 @@ export const FT8MessageSeventyThreeSchema = FT8MessageBaseSchema.extend({
   targetCallsign: z.string(),
 });
 
+export const FT8MessageFoxRR73Schema = FT8MessageBaseSchema.extend({
+  type: z.literal('fox_rr73'),
+  completedCallsign: z.string(), // 已完成QSO的Hound呼号
+  nextCallsign: z.string(),      // 下一个被邀请的Hound呼号
+  foxHash: z.string().optional(), // Fox的哈希码（去掉尖括号后的值）
+});
+
 export const FT8MessageCustomSchema = FT8MessageBaseSchema.extend({
   type: z.literal('custom'),
 });
@@ -190,6 +199,7 @@ export const FT8MessageSchema = z.discriminatedUnion('type', [
   FT8MessageRogerReportSchema,
   FT8MessageRRRSchema,
   FT8MessageSeventyThreeSchema,
+  FT8MessageFoxRR73Schema,
   FT8MessageCustomSchema,
   FT8MessageUnknownSchema,
 ]);
@@ -220,6 +230,7 @@ export type FT8MessageSignalReport = z.infer<typeof FT8MessageSignalReportSchema
 export type FT8MessageRogerReport = z.infer<typeof FT8MessageRogerReportSchema>;
 export type FT8MessageRRR = z.infer<typeof FT8MessageRRRSchema>;
 export type FT8MessageSeventyThree = z.infer<typeof FT8MessageSeventyThreeSchema>;
+export type FT8MessageFoxRR73 = z.infer<typeof FT8MessageFoxRR73Schema>;
 export type FT8MessageCustom = z.infer<typeof FT8MessageCustomSchema>;
 export type FT8MessageUnknown = z.infer<typeof FT8MessageUnknownSchema>;
 export type FT8Message = z.infer<typeof FT8MessageSchema>;

@@ -1,4 +1,4 @@
-import { QSOContext, FT8MessageType, ParsedFT8Message, QSOCommand, StrategiesResult, FT8MessageCQ, FT8MessageCall, FT8MessageSignalReport, FT8MessageRogerReport, QSORecord, FT8MessageRRR, FrameMessage, SlotInfo } from '@tx5dr/contracts';
+import { QSOContext, FT8MessageType, ParsedFT8Message, QSOCommand, StrategiesResult, FT8MessageCQ, FT8MessageCall, FT8MessageSignalReport, FT8MessageRogerReport, QSORecord, FT8MessageRRR, FT8MessageFoxRR73, FrameMessage, SlotInfo } from '@tx5dr/contracts';
 import { ITransmissionStrategy } from '../ITransmissionStrategy';
 import { FT8MessageParser } from '../../../parser/ft8-message-parser.js';
 import { RadioOperator } from '../../RadioOperator';
@@ -57,6 +57,26 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 return {
                     changeState: 'TX3'
                 }
+            }
+
+            // Fox/Hound 模式：Fox 发出邀请 (PREVHOUND RR73; MYCALL <FOXHASH>)
+            // 表示 Fox 已有我们之前的信号报告，邀请我们直接发 R-report
+            const foxInvite = messages
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.FOX_RR73 &&
+                    (msg.message as FT8MessageFoxRR73).nextCallsign === strategy.context.config.myCallsign)
+                .sort((a, b) => a.snr - b.snr)
+                .pop();
+
+            if (foxInvite) {
+                const foxMsg = foxInvite.message as FT8MessageFoxRR73;
+                logger.debug(`TX1: Fox/Hound invite received (myCallsign=${strategy.context.config.myCallsign}, foxHash=${foxMsg.foxHash})`);
+                // 以解码 Fox 消息的 SNR 作为 reportSent
+                strategy.context.reportSent = foxInvite.snr;
+                // 记录 Fox 哈希备用
+                strategy.foxHash = foxMsg.foxHash;
+                strategy.updateSlots();
+                return { changeState: 'TX3' };
             }
 
             // 【智能切换逻辑】只有当前目标没有回复时，才考虑切换到新的直接呼叫
@@ -314,6 +334,21 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         changeState: 'TX5'
                     }
                 }
+            }
+
+            // Fox/Hound 模式：Fox 发送 FOX_RR73 确认我们的 QSO 完成
+            // 格式：MYCALL RR73; NEXTHOUND <FOXHASH>
+            const foxRR73Confirm = messages
+                .filter((msg) =>
+                    msg.message.type === FT8MessageType.FOX_RR73 &&
+                    (msg.message as FT8MessageFoxRR73).completedCallsign === strategy.context.config.myCallsign)
+                .sort((a, b) => a.snr - b.snr)
+                .pop();
+
+            if (foxRR73Confirm) {
+                logger.debug(`TX3: Fox/Hound QSO confirmed via FOX_RR73 (myCallsign=${strategy.context.config.myCallsign})`);
+                strategy.updateSlots();
+                return { changeState: 'TX5' };
             }
 
             // 【新增】容错处理：如果对方继续发送SIGNAL_REPORT，更新信号报告
@@ -878,6 +913,8 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     private qsoContextHistory = new Map<string, CachedQSOContext>();
     // 最大缓存数量，避免内存泄漏
     private readonly MAX_CONTEXT_CACHE = 100;
+    // Fox/Hound 模式：记录 Fox 的哈希码
+    public foxHash?: string;
 
     constructor(operator: RadioOperator) {
         this.operator = operator;
@@ -917,7 +954,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         const currentState = states[this.state];
 
         // 过滤掉发送者是我自己的消息
-        const filteredMessages = messages.filter((msg) => msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.senderCallsign !== this.operator.config.myCallsign);
+        const filteredMessages = messages.filter((msg) => msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.type == FT8MessageType.FOX_RR73 || msg.message.senderCallsign !== this.operator.config.myCallsign);
 
         // 处理接收到的消息
         const result = await currentState.handle(this, filteredMessages);
@@ -1232,6 +1269,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         this.context.reportSent = undefined;
         this.context.reportReceived = undefined;
         this.context.actualFrequency = undefined;
+        this.foxHash = undefined;
 
         // 更新slots（TX1-TX5会变为空，只保留TX6的CQ）
         this.updateSlots();
