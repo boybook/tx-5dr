@@ -223,7 +223,7 @@ run_doctor() {
 
     # glibc execstack
     local glibc_ver
-    glibc_ver=$(ldd --version 2>&1 | head -1 | grep -oP '\d+\.\d+' | tail -1)
+    glibc_ver=$(ldd --version 2>&1 | grep -oP '\d+\.\d+' | head -1 || true)
     local glibc_int
     glibc_int=$(get_glibc_version_int)
     if [[ "$glibc_int" -ge 241 ]]; then
@@ -240,7 +240,7 @@ run_doctor() {
     # nginx
     if check_nginx_installed; then
         local nginx_ver
-        nginx_ver=$($NGINX_BIN -v 2>&1 | grep -oP '[\d.]+' | head -1)
+        nginx_ver=$($NGINX_BIN -v 2>&1 | grep -oP '[\d.]+' | head -1 || true)
         check_line "$(msg CHECK_NGINX_INSTALLED)" "ok" "${nginx_ver}"
     else
         check_line "$(msg CHECK_NGINX_INSTALLED)" "fail" "not found"

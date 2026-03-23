@@ -231,7 +231,7 @@ is_port_open() {
 
 # Get local non-loopback IPv4 address
 get_local_ip() {
-    ip -4 route get 1.0.0.0 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1
+    ip -4 route get 1.0.0.0 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1 || true
 }
 
 # Read admin token from config directory
@@ -259,7 +259,7 @@ get_web_url() {
 # Get glibc major.minor version as a comparable integer (e.g. 2.41 → 241)
 get_glibc_version_int() {
     local ver
-    ver=$(ldd --version 2>&1 | head -1 | grep -oP '\d+\.\d+' | tail -1)
+    ver=$(ldd --version 2>&1 | grep -oP '\d+\.\d+' | head -1 || true)
     if [[ -n "$ver" ]]; then
         echo "$ver" | awk -F. '{printf "%d%02d", $1, $2}'
     else
