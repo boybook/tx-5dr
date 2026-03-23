@@ -1,0 +1,24 @@
+[Unit]
+Description=TX-5DR Digital Radio Server
+After=network.target nginx.service
+Wants=nginx.service
+
+[Service]
+Type=simple
+User=tx5dr
+Group=tx5dr
+EnvironmentFile=-/etc/tx5dr/config.env
+ExecStart=/usr/bin/node /usr/share/tx5dr/server/dist/index.js
+WorkingDirectory=/usr/share/tx5dr/server
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tx5dr
+
+[Install]
+WantedBy=multi-user.target
