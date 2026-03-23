@@ -862,6 +862,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           });
         } catch (error) {
           logger.error('Failed to fetch profile list:', error);
+          // 即使获取失败（如 viewer 角色无权限），仍标记为已加载，使前端可区分引导状态
+          radioDispatch({
+            type: 'setProfiles',
+            payload: { profiles: [], activeProfileId: null }
+          });
         }
 
         // 握手完成后，获取电台站信息（公开，所有角色都拉取）

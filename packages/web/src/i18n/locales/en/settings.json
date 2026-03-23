@@ -97,6 +97,12 @@
     "welcomeDesc": "First, let's configure your radio",
     "back": "Previous",
     "next": "Next",
+    "viewerWelcomeDesc": "The station has not been configured yet. Please log in with an admin token to complete the initial setup.",
+    "viewerTokenLabel": "Access Token",
+    "viewerTokenPlaceholder": "Paste token...",
+    "viewerLogin": "Login",
+    "viewerContinue": "Continue as viewer",
+    "viewerPermissionInsufficient": "Insufficient permissions. An admin token is required to configure the station.",
     "finish": "Finish"
   },
   "radio": {

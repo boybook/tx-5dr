@@ -97,7 +97,13 @@
     "welcomeDesc": "首先，让我们配置您的电台",
     "back": "上一步",
     "next": "下一步",
-    "finish": "完成"
+    "finish": "完成",
+    "viewerWelcomeDesc": "电台尚未配置，请使用管理员令牌登录以完成初始设置。",
+    "viewerTokenLabel": "访问令牌",
+    "viewerTokenPlaceholder": "粘贴令牌...",
+    "viewerLogin": "登录",
+    "viewerContinue": "继续以观看者身份浏览",
+    "viewerPermissionInsufficient": "该令牌权限不足，需要管理员令牌才能配置电台"
   },
   "radio": {
     "pttSection": "PTT 方法",
