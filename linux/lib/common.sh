@@ -113,6 +113,11 @@ MSG_ZH_GLIBCXX_WARN="此操作可能连带升级 libc6 (glibc)。服务文件已
 MSG_EN_INSTALLING_NGINX="Installing nginx..."
 MSG_ZH_INSTALLING_NGINX="正在安装 nginx..."
 
+MSG_EN_UPGRADING="Upgrading TX-5DR..."
+MSG_ZH_UPGRADING="正在升级 TX-5DR..."
+MSG_EN_UPGRADE_OK="TX-5DR upgraded successfully."
+MSG_ZH_UPGRADE_OK="TX-5DR 升级完成。"
+
 MSG_EN_REQUIRE_ROOT="This command must be run as root (sudo)."
 MSG_ZH_REQUIRE_ROOT="此命令需要 root 权限 (sudo)。"
 
