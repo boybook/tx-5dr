@@ -6274,7 +6274,7 @@ __metadata:
     typescript: "npm:^5.0.0"
     vitest: "npm:^1.0.0"
     wav: "npm:^1.0.2"
-    wsjtx-lib: "npm:^1.2.1"
+    wsjtx-lib: "npm:1.2.4"
     xstate: "npm:^5.23.0"
     zod: "npm:^3.25.30"
     zod-to-json-schema: "npm:^3.24.5"
@@ -19597,13 +19597,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"wsjtx-lib@npm:^1.2.1":
-  version: 1.2.1
-  resolution: "wsjtx-lib@npm:1.2.1"
+"wsjtx-lib@npm:1.2.4":
+  version: 1.2.4
+  resolution: "wsjtx-lib@npm:1.2.4"
   dependencies:
     node-addon-api: "npm:^8.3.1"
     node-gyp-build: "npm:^4.8.0"
-  checksum: 10c0/c3cd73617c055186d3bd80ce39148e07bf87ac090ea7aefebb161d99361a91ca0dad798eb20e2f518d7a9efe546acb2d243d8fd7741307a03697dacc60292998
+  checksum: 10c0/377c82ce18c0be506f036728809ab6229696474dd18f1f3825a5d892e320ffdb43ae4dffa5de52aab266840e704b7eee19ec812c457c793990604e04c7ef1aba
   conditions: (os=darwin | os=linux | os=win32) & (cpu=x64 | cpu=arm64)
   languageName: node
   linkType: hard

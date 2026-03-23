@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
     libxext-dev \
     libhamlib-dev \
     libhamlib4 \
+    libopus-dev \
     git \
     wget \
     && rm -rf /var/lib/apt/lists/* \
@@ -94,6 +95,14 @@ FROM node:22-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 
+# 升级 libstdc++6 至 trixie 版本以支持 audify 预构建二进制（需要 GLIBCXX_3.4.32）
+# 仅升级此单一库，其余包保持 Bookworm 稳定版
+RUN echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie.list && \
+    apt-get update && \
+    apt-get install -y -t trixie libstdc++6 && \
+    rm /etc/apt/sources.list.d/trixie.list && \
+    rm -rf /var/lib/apt/lists/*
+
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \
     libasound2 \
@@ -123,8 +132,16 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/yarn.lock ./yarn.lock
 COPY --from=builder /app/turbo.json ./turbo.json
 
-# 复制配置文件
-COPY docker/nginx.conf /etc/nginx/nginx.conf
+# Nginx configuration: shared template + Docker-specific wrapper
+COPY docker/nginx-wrapper.conf /etc/nginx/nginx.conf
+COPY linux/nginx-site.conf /tmp/nginx-site.conf.template
+RUN sed -e 's|%%LISTEN_PORT%%|80|g' \
+        -e 's|%%WEB_ROOT%%|/app/packages/web/dist|g' \
+        -e 's|%%API_HOST%%|127.0.0.1:4000|g' \
+        /tmp/nginx-site.conf.template > /etc/nginx/conf.d/tx5dr.conf \
+    && rm /tmp/nginx-site.conf.template
+
+# Supervisor configuration
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # 复制entrypoint脚本
