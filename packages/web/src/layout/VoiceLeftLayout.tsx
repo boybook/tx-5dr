@@ -7,7 +7,7 @@ import { RadioMetersDisplay } from '../components/RadioMetersDisplay';
 import { VoiceFrequencyControl } from '../components/voice/VoiceFrequencyControl';
 import { RemoteAccessPopover } from '../components/RemoteAccessPopover';
 import { StationInfoPopover } from '../components/StationInfoPopover';
-import { useRadioState, useConnection } from '../store/radioStore';
+import { useRadioState, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron } from '../utils/config';
@@ -25,6 +25,8 @@ export const VoiceLeftLayout: React.FC = () => {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const radio = useRadioState();
   const connection = useConnection();
+  const stationInfo = useStationInfo();
+  const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
@@ -65,7 +67,7 @@ export const VoiceLeftLayout: React.FC = () => {
       >
         {/* Left: App name (non-Electron) */}
         <div className="flex items-center">
-          {!isElectron() && (
+          {!isElectron() && !(isMobile && hasStationContent) && (
             <div className="text-lg font-bold text-foreground cursor-default select-none pl-2 flex items-center gap-1">
               <span className="text-default-800">TX-5DR</span>
               <Button
@@ -81,7 +83,7 @@ export const VoiceLeftLayout: React.FC = () => {
             </div>
           )}
           <div
-            className={isElectron() ? 'pl-16' : 'pl-2'}
+            className={isElectron() ? 'pl-16' : (isMobile && hasStationContent ? 'pl-0' : 'pl-2')}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
           >
             <StationInfoPopover />

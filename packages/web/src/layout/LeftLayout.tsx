@@ -8,7 +8,7 @@ import { SlotPacksMessageDisplay } from '../components/SlotPacksMessageDisplay';
 import { RadioMetersDisplay } from '../components/RadioMetersDisplay';
 import { RemoteAccessPopover } from '../components/RemoteAccessPopover';
 import { StationInfoPopover } from '../components/StationInfoPopover';
-import { useSlotPacks, useRadioState, useConnection } from '../store/radioStore';
+import { useSlotPacks, useRadioState, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron } from '../utils/config';
@@ -20,6 +20,8 @@ export const LeftLayout: React.FC = () => {
   const slotPacks = useSlotPacks();
   const radio = useRadioState();
   const connection = useConnection();
+  const stationInfo = useStationInfo();
+  const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isMobile, setIsMobile] = useState(false);
   const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
@@ -104,7 +106,7 @@ export const LeftLayout: React.FC = () => {
       >
         {/* 左侧：非Electron环境下显示软件名称 */}
         <div className="flex items-center">
-          {!isElectron() && (
+          {!isElectron() && !(isMobile && hasStationContent) && (
             <div className="text-lg font-bold text-foreground cursor-default select-none pl-2 flex items-center gap-1">
               <span className="text-default-800">TX-5DR</span>
               <Button
@@ -120,7 +122,7 @@ export const LeftLayout: React.FC = () => {
             </div>
           )}
           <div
-            className={isElectron() ? 'pl-16' : 'pl-2'}
+            className={isElectron() ? 'pl-16' : (isMobile && hasStationContent ? 'pl-0' : 'pl-2')}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
           >
             <StationInfoPopover />

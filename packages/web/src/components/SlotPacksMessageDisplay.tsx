@@ -38,7 +38,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
 
   // 处理SlotPack数据转换为FT8Group格式
   useEffect(() => {
-    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean }>();
+    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean, alignedMs: number }>();
     const currentMode = radio.state.currentMode;
     
     if (!currentMode) {
@@ -61,13 +61,15 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         const isEvenCycle = CycleUtils.isEvenCycle(cycleNumber);
         
         // 生成组键：使用统一的组键生成方法
+        const alignedMs = Math.floor(slotPack.startMs / currentMode.slotMs) * currentMode.slotMs;
         const groupKey = CycleUtils.generateSlotGroupKey(slotPack.startMs, currentMode.slotMs);
-        
+
         if (!groupsMap.has(groupKey)) {
           groupsMap.set(groupKey, {
             messages: [],
             cycle: isEvenCycle ? 'even' : 'odd',
-            hasTransmission: false
+            hasTransmission: false,
+            alignedMs
           });
         }
         
@@ -100,13 +102,14 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
 
     // 转换为FT8Group数组并按时间排序
     const groups: FrameGroup[] = Array.from(groupsMap.entries())
-      .map(([time, { messages, cycle, hasTransmission: _hasTransmission }]) => ({
+      .map(([time, { messages, cycle, hasTransmission: _hasTransmission, alignedMs }]) => ({
         time,
+        startMs: alignedMs,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
-        type: 'receive' as const, // 如果有发射帧，组类型为transmit
+        type: 'receive' as const,
         cycle
       }))
-      .sort((a, b) => a.time.localeCompare(b.time));
+      .sort((a, b) => a.startMs - b.startMs);
 
     setFrameGroups(groups);
   }, [slotPacks.state.slotPacks, radio.state.currentMode]);
