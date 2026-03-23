@@ -68,8 +68,8 @@ export class ClockCoordinator {
       // 通知 TransmissionPipeline 清空时隙缓存
       getTransmissionPipeline().onSlotStart();
 
-      // 取消上一时隙的晚到解码重决策 debounce
-      operatorManager.cancelPendingReDecision();
+      // 时隙边界清理：取消重决策 debounce + 清空编码请求ID映射
+      operatorManager.onSlotBoundary();
 
       engineEmitter.emit('slotStart', slotInfo, slotPackManager.getLatestSlotPack());
 

@@ -20,6 +20,7 @@ export class RadioOperator {
     private _decisionInProgress = false;
     private _lastDecisionTransmission: string | null = null;
     private _lastDecisionSlotId: string | null = null;
+    private _lastDecisionMessageSet: Set<string> | null = null;
 
     private static readonly DEFAULT_CONFIG: OperatorConfig = {
         mode: MODES.FT8,
@@ -91,6 +92,7 @@ export class RadioOperator {
             // 重置重决策状态
             this._lastDecisionSlotId = null;
             this._lastDecisionTransmission = null;
+            this._lastDecisionMessageSet = null;
 
             if (lastSlotPack) {
                 const t0 = Date.now();
@@ -128,6 +130,9 @@ export class RadioOperator {
                 // 记录决策结果，用于后续晚到解码重决策比较
                 this._lastDecisionSlotId = lastSlotPack.slotId;
                 this._lastDecisionTransmission = this._transmissionStrategy?.handleTransmitSlot() ?? null;
+                this._lastDecisionMessageSet = new Set(
+                    lastSlotPack.frames.filter(f => f.snr !== -999).map(f => f.message)
+                );
 
                 logger.debug(`onSlotStart (${this.config.myCallsign}): auto decision result=${JSON.stringify(result)}`);
             }
@@ -260,6 +265,11 @@ export class RadioOperator {
         // 其他命令转发给transmission strategy
         this._transmissionStrategy?.userCommand?.(command);
 
+        // 手动操作命令：使晚到解码重决策失效
+        if (command.command === 'set_state' || command.command === 'set_slot_content' || command.command === 'set_transmit_cycles') {
+            this._lastDecisionSlotId = null;
+        }
+
         // 检查特定命令，发射相应事件以触发立即发射
         if (command.command === 'set_state') {
             // 切换发射槽位时，发射事件
@@ -280,6 +290,8 @@ export class RadioOperator {
     }
 
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
+        // 手动操作：使晚到解码重决策失效（防止自动重决策覆盖用户意图）
+        this._lastDecisionSlotId = null;
         // 启用发射
         this.start();
         // 切换周期
@@ -423,6 +435,13 @@ export class RadioOperator {
         if (this._decisionInProgress) return false;
         if (!this._lastDecisionSlotId || slotPack.slotId !== this._lastDecisionSlotId) return false;
 
+        // 检查是否有新消息到达（排除发射帧 SNR=-999），仅 SNR/dt 更新不触发重决策
+        const newMessages = slotPack.frames.filter(f => f.snr !== -999).map(f => f.message);
+        if (this._lastDecisionMessageSet) {
+            const hasNewMessage = newMessages.some(m => !this._lastDecisionMessageSet!.has(m));
+            if (!hasNewMessage) return false;
+        }
+
         const parsedMessages = this.parseSlotPackMessages(slotPack);
 
         this._decisionInProgress = true;
@@ -438,6 +457,9 @@ export class RadioOperator {
         } finally {
             this._decisionInProgress = false;
         }
+
+        // 更新消息集合记录
+        this._lastDecisionMessageSet = new Set(newMessages);
 
         const newTransmission = this._transmissionStrategy?.handleTransmitSlot() ?? null;
         if (newTransmission !== this._lastDecisionTransmission) {

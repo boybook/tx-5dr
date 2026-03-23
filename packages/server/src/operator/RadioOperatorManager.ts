@@ -64,6 +64,9 @@ export class RadioOperatorManager {
   private static readonly REDECIDE_DEBOUNCE_MS = 300;
   private static readonly REDECIDE_DEADLINE_MS = 2500;
 
+  // 每个操作员的最新编码请求ID，用于丢弃过期编码结果
+  private latestEncodeRequestIds: Map<string, string> = new Map();
+
   // 📊 Day13优化：记录上次发射的操作员状态哈希，用于去重
   private lastEmittedStatusHash: Map<string, string> = new Map();
 
@@ -235,6 +238,8 @@ export class RadioOperatorManager {
     // 监听操作员发射周期变更事件
     const handleOperatorTransmitCyclesChanged = (data: { operatorId: string; transmitCycles: number[] }) => {
       logger.debug(`Operator ${data.operatorId} transmit cycles changed: [${data.transmitCycles.join(', ')}]`);
+      // 手动操作优先：取消待执行的晚到解码重决策，防止覆盖用户意图
+      this.cancelPendingReDecision();
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -246,6 +251,8 @@ export class RadioOperatorManager {
     // 监听操作员切换发射槽位事件
     const handleOperatorSlotChanged = (data: { operatorId: string; slot: string }) => {
       logger.debug(`Operator ${data.operatorId} slot changed: ${data.slot}`);
+      // 手动操作优先：取消待执行的晚到解码重决策
+      this.cancelPendingReDecision();
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -257,6 +264,8 @@ export class RadioOperatorManager {
     // 监听操作员发射内容变更事件
     const handleOperatorSlotContentChanged = (data: { operatorId: string; slot: string; content: string }) => {
       logger.debug(`Operator ${data.operatorId} slot content edited: slot=${data.slot}`);
+      // 手动操作优先：取消待执行的晚到解码重决策
+      this.cancelPendingReDecision();
       // 立即检查并触发发射（如果当前正在该槽位发射）
       const operator = this.operators.get(data.operatorId);
       if (operator) {
@@ -743,6 +752,9 @@ export class RadioOperatorManager {
       // 生成唯一的编码请求ID（用于去重和追踪）
       const requestId = `${operatorId}-${slotStartMs}-${Date.now()}`;
 
+      // 记录该操作员的最新编码请求ID（用于丢弃过期编码结果）
+      this.latestEncodeRequestIds.set(operatorId, requestId);
+
       // 提交到编码队列
       this.encodeQueue.push({
         operatorId,
@@ -847,7 +859,14 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 取消待执行的晚到解码重决策（在新时隙开始时调用）
+   * 获取操作员的最新编码请求ID（用于过期编码结果检查）
+   */
+  getLatestEncodeRequestId(operatorId: string): string | undefined {
+    return this.latestEncodeRequestIds.get(operatorId);
+  }
+
+  /**
+   * 取消待执行的晚到解码重决策 debounce（手动操作时调用，防止重决策覆盖用户意图）
    */
   cancelPendingReDecision(): void {
     if (this.reDecideTimer) {
@@ -855,6 +874,14 @@ export class RadioOperatorManager {
       this.reDecideTimer = null;
     }
     this.reDecideLatestSlotPack = null;
+  }
+
+  /**
+   * 时隙边界清理：取消重决策 debounce + 清空编码请求ID映射
+   */
+  onSlotBoundary(): void {
+    this.cancelPendingReDecision();
+    this.latestEncodeRequestIds.clear();
   }
 
   /**
