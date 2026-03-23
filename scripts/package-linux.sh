@@ -295,6 +295,9 @@ cp "$PROJECT_ROOT/linux/tx5dr.service" "$STAGING/lib/systemd/system/tx5dr.servic
 mkdir -p "$STAGING/etc/tx5dr"
 cp "$PROJECT_ROOT/linux/config.env" "$STAGING/etc/tx5dr/config.env"
 
+# --- Data directory (must exist in staging for RPM --directories to work) ---
+mkdir -p "$STAGING/var/lib/tx5dr"
+
 # --- Calculate size ---
 STAGING_SIZE=$(du -sh "$STAGING" | cut -f1)
 log "Staged package size: $STAGING_SIZE"
