@@ -22,7 +22,7 @@ import type {
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
-import { getHandshakeOperatorIds, setOperatorPreferences } from '../utils/operatorPreferences';
+import { getHandshakeOperatorIds, getHiddenOperatorIds } from '../utils/operatorPreferences';
 import { useAuth } from './authStore';
 import {
   showErrorToast,
@@ -778,6 +778,16 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       operatorsList: (data: unknown) => {
         const operatorsData = data as { operators: OperatorStatus[] };
         radioDispatch({ type: 'operatorsList', payload: operatorsData.operators });
+
+        // 黑名单模式：收到操作员列表后，如果有隐藏的操作员，同步给服务端
+        const hiddenIds = getHiddenOperatorIds();
+        if (hiddenIds.length > 0) {
+          const allIds = operatorsData.operators.map(op => op.id);
+          const hiddenSet = new Set(hiddenIds);
+          const enabledIds = allIds.filter(id => !hiddenSet.has(id));
+          logger.debug('Syncing enabled operators after receiving list:', enabledIds);
+          radioService.setClientEnabledOperators(enabledIds);
+        }
       },
       operatorStatusUpdate: (() => {
         // 节流：200ms 内合并多次操作员状态更新
@@ -833,15 +843,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         };
       })(),
       handshakeComplete: async (data: unknown) => {
-        const handshakeData = data as { finalEnabledOperatorIds?: string[] };
-        logger.info('Handshake complete:', handshakeData);
-        if (handshakeData.finalEnabledOperatorIds) {
-          logger.info('New client, saving default operator preferences:', handshakeData.finalEnabledOperatorIds);
-          setOperatorPreferences({
-            enabledOperatorIds: handshakeData.finalEnabledOperatorIds,
-            lastUpdated: Date.now()
-          });
-        }
+        logger.info('Handshake complete');
 
         // 握手完成后，请求 Profile 列表
         // 注意：电台状态已通过 WSServer addConnection 的 radioStatusChanged 初始同步完成，
