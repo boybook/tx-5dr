@@ -3,6 +3,7 @@ import fastifyJwt from '@fastify/jwt';
 import fp from 'fastify-plugin';
 import { UserRole, type JWTPayload } from '@tx5dr/contracts';
 import { AuthManager } from './AuthManager.js';
+import { normalizeCallsign } from '../utils/callsign.js';
 
 // 扩展 Fastify Request 类型
 declare module 'fastify' {
@@ -134,21 +135,29 @@ export function requireLogbookAccess(logManager: import('../log/LogManager.js').
     const logBookId = logManager.resolveLogBookId(rawId);
     if (!logBookId) return; // 日志本还不存在，放行让路由处理 404 或创建
 
-    // 反向查找关联的 operatorId 列表
-    const associated = logManager.getOperatorIdsForLogBook(logBookId);
+    // 获取日志本关联的归一化呼号
+    const logBookCallsigns = logManager.getCallsignsForLogBook(logBookId);
 
-    // 孤儿日志本（无关联操作员）：仅 ADMIN 可访问，此处直接拒绝
-    if (associated.length === 0) {
+    // 孤儿日志本（无关联呼号）：仅 ADMIN 可访问，此处直接拒绝
+    if (logBookCallsigns.length === 0) {
       return reply.code(403).send({
         success: false,
         error: { code: 'FORBIDDEN', message: 'No logbook access', userMessage: 'You do not have permission to access this logbook' },
       });
     }
 
-    // 检查用户 token 的 operatorIds 与日志本关联 operatorIds 是否有交集
-    const hasAccess = associated.some(opId =>
-      AuthManager.hasOperatorAccess(request.authUser!.role, request.authUser!.operatorIds, opId)
-    );
+    // 获取用户操作员的归一化呼号集合
+    const { ConfigManager } = await import('../config/config-manager.js');
+    const operatorsConfig = ConfigManager.getInstance().getOperatorsConfig();
+    const userCallsigns = new Set<string>();
+    for (const op of operatorsConfig) {
+      if (request.authUser.operatorIds.includes(op.id)) {
+        userCallsigns.add(normalizeCallsign(op.myCallsign));
+      }
+    }
+
+    // 检查用户呼号与日志本呼号是否有交集
+    const hasAccess = logBookCallsigns.some(cs => userCallsigns.has(cs));
     if (!hasAccess) {
       return reply.code(403).send({
         success: false,
@@ -196,22 +205,7 @@ export function requireCallsignAccess() {
   };
 }
 
-/**
- * 从呼号中提取基础呼号（去除前后缀）
- * 与 ConfigManager.normalizeCallsign 保持一致
- */
-function normalizeCallsign(callsign: string): string {
-  const upper = callsign.toUpperCase().trim();
-  if (!upper.includes('/')) return upper;
-  const parts = upper.split('/');
-  let best = parts[0];
-  for (const part of parts) {
-    if (part.length > best.length && /[A-Z]/.test(part) && /\d/.test(part)) {
-      best = part;
-    }
-  }
-  return best;
-}
+// normalizeCallsign 已迁移到 ../utils/callsign.ts 共享模块
 
 /**
  * 要求对指定操作员有访问权限

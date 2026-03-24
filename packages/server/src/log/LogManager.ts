@@ -3,6 +3,7 @@ import { ILogProvider, CallsignAnalysis } from '@tx5dr/core';
 import { ADIFLogProvider } from './ADIFLogProvider.js';
 import { getDataFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
+import { normalizeCallsign } from '../utils/callsign.js';
 
 const logger = createLogger('LogManager');
 
@@ -211,7 +212,7 @@ export class LogManager {
    * 根据呼号自动创建或获取日志本
    */
   async getOrCreateLogBookByCallsign(callsign: string): Promise<LogBookInstance> {
-    const normalizedCallsign = callsign.toUpperCase();
+    const normalizedCallsign = normalizeCallsign(callsign);
     let logBookId = this.callsignLogBookMap.get(normalizedCallsign);
     
     if (!logBookId) {
@@ -260,10 +261,11 @@ export class LogManager {
       throw new Error(`logbook ${logBookId} not found`);
     }
 
-    // 获取操作员呼号
-    const callsign = this.operatorCallsignMap.get(operatorId);
-    if (callsign) {
-      // 将呼号映射到指定的日志本
+    // 获取操作员呼号并归一化
+    const rawCallsign = this.operatorCallsignMap.get(operatorId);
+    if (rawCallsign) {
+      const callsign = normalizeCallsign(rawCallsign);
+      // 将归一化呼号映射到指定的日志本
       this.callsignLogBookMap.set(callsign, logBookId);
       logBook.lastUsed = Date.now();
       logger.info(`Operator ${operatorId} (callsign: ${callsign}) connected to logbook ${logBook.name}`);
@@ -276,8 +278,9 @@ export class LogManager {
    * 断开操作员与日志本的连接（向后兼容方法）
    */
   disconnectOperatorFromLogBook(operatorId: string): void {
-    const callsign = this.operatorCallsignMap.get(operatorId);
-    if (callsign) {
+    const rawCallsign = this.operatorCallsignMap.get(operatorId);
+    if (rawCallsign) {
+      const callsign = normalizeCallsign(rawCallsign);
       const logBookId = this.callsignLogBookMap.get(callsign);
       if (logBookId) {
         this.callsignLogBookMap.delete(callsign);
@@ -290,24 +293,25 @@ export class LogManager {
    * 获取操作员对应的日志本ID
    */
   getOperatorLogBookId(operatorId: string): string | null {
-    const callsign = this.operatorCallsignMap.get(operatorId);
-    if (!callsign) {
+    const rawCallsign = this.operatorCallsignMap.get(operatorId);
+    if (!rawCallsign) {
       return null; // 没有注册呼号的操作员没有日志本
     }
-    return this.callsignLogBookMap.get(callsign) || null;
+    return this.callsignLogBookMap.get(normalizeCallsign(rawCallsign)) || null;
   }
   
   /**
    * 反向查找：给定 logBookId，找出所有关联的 operatorId
    */
   getOperatorIdsForLogBook(logBookId: string): string[] {
-    const matchingCallsigns: string[] = [];
+    // callsignLogBookMap 的 key 已归一化
+    const matchingCallsigns = new Set<string>();
     for (const [callsign, bookId] of this.callsignLogBookMap.entries()) {
-      if (bookId === logBookId) matchingCallsigns.push(callsign);
+      if (bookId === logBookId) matchingCallsigns.add(callsign);
     }
     const result: string[] = [];
-    for (const [operatorId, callsign] of this.operatorCallsignMap.entries()) {
-      if (matchingCallsigns.includes(callsign)) result.push(operatorId);
+    for (const [operatorId, rawCallsign] of this.operatorCallsignMap.entries()) {
+      if (matchingCallsigns.has(normalizeCallsign(rawCallsign))) result.push(operatorId);
     }
     return result;
   }
@@ -317,19 +321,31 @@ export class LogManager {
    */
   resolveLogBookId(idOrCallsign: string): string | null {
     if (this.logBooks.has(idOrCallsign)) return idOrCallsign;
-    const normalized = idOrCallsign.toUpperCase();
+    const normalized = normalizeCallsign(idOrCallsign);
     return this.callsignLogBookMap.get(normalized) ?? null;
   }
 
   /**
-   * 返回与 operatorIds 有交集的日志本列表（孤儿日志本不包含，admin 另走 getLogBooks）
+   * 获取日志本关联的归一化呼号列表
    */
-  getAccessibleLogBooks(operatorIds: string[]): LogBookInstance[] {
+  getCallsignsForLogBook(logBookId: string): string[] {
+    const result: string[] = [];
+    for (const [callsign, bookId] of this.callsignLogBookMap.entries()) {
+      // callsignLogBookMap 的 key 已归一化
+      if (bookId === logBookId) result.push(callsign);
+    }
+    return result;
+  }
+
+  /**
+   * 返回与归一化呼号集合匹配的日志本列表（孤儿日志本不包含，admin 另走 getLogBooks）
+   */
+  getAccessibleLogBooksByCallsigns(normalizedCallsigns: Set<string>): LogBookInstance[] {
     const result: LogBookInstance[] = [];
     for (const logBook of this.logBooks.values()) {
-      const associated = this.getOperatorIdsForLogBook(logBook.id);
-      if (associated.length === 0) continue;
-      if (associated.some(id => operatorIds.includes(id))) result.push(logBook);
+      const bookCallsigns = this.getCallsignsForLogBook(logBook.id);
+      if (bookCallsigns.length === 0) continue;
+      if (bookCallsigns.some(cs => normalizedCallsigns.has(cs))) result.push(logBook);
     }
     return result;
   }

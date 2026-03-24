@@ -557,6 +557,7 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.SET_OPERATOR_SLOT,
     WSMessageType.USER_COMMAND,
     WSMessageType.OPERATOR_REQUEST_CALL,
+    WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION,
   ]);
 
   /**
