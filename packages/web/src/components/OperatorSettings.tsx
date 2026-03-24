@@ -29,7 +29,7 @@ import type {
 } from '@tx5dr/contracts';
 import { SyncConfigModal } from './SyncConfigModal';
 import { MODES } from '@tx5dr/contracts';
-import { useConnection } from '../store/radioStore';
+import { useConnection, useStationInfo } from '../store/radioStore';
 import {
   setOperatorEnabled,
   isOperatorEnabled,
@@ -59,18 +59,20 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     
     // 操作员偏好设置状态
     const connection = useConnection();
+    const stationInfo = useStationInfo();
+    const stationGrid = stationInfo?.qth?.grid ?? '';
     const [localEnabledStates, setLocalEnabledStates] = useState<Record<string, boolean>>({});
     const [preferencesHasChanges, setPreferencesHasChanges] = useState(false);
-    
+
     // 编辑状态 - 记录哪些操作员正在编辑中
     const [editingOperators, setEditingOperators] = useState<Set<string>>(new Set());
     const [editFormData, setEditFormData] = useState<Record<string, Partial<RadioOperatorConfig>>>({});
-    
+
     // 新建操作员状态
     const [isCreating, setIsCreating] = useState(false);
     const [newOperatorData, setNewOperatorData] = useState<Partial<CreateRadioOperatorRequest>>({
       myCallsign: '',
-      myGrid: '',
+      myGrid: stationGrid,
       frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
       transmitCycles: [0],
       maxQSOTimeoutCycles: 10,
@@ -80,6 +82,13 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       autoResumeCQAfterSuccess: false,
       mode: MODES.FT8,
     });
+
+    // 台站网格加载后（异步），若用户未手动填写则自动同步
+    useEffect(() => {
+      if (stationGrid && !newOperatorData.myGrid) {
+        setNewOperatorData(prev => ({ ...prev, myGrid: stationGrid }));
+      }
+    }, [stationGrid]);
 
     // 删除确认对话框状态
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -322,7 +331,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         setIsCreating(false);
         setNewOperatorData({
           myCallsign: '',
-          myGrid: '',
+          myGrid: stationGrid,
           frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
           transmitCycles: [0],
           maxQSOTimeoutCycles: 10,
