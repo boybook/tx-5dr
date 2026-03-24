@@ -20,7 +20,7 @@ export const ModeDescriptorSchema = z.object({
   windowTiming: z.array(z.number()),
   /**
    * 发射时机（毫秒）- 从时隙开始的延迟
-   * FT8: 约1180ms (使12.64秒的音频在15秒时隙中居中)
+   * FT8: 500ms (WSJT-X 标准：信号在时隙边界后 ~0.5s 开始，留 ~1.86s 给解码)
    * FT4: 约550ms (使6.4秒的音频在7.5秒时隙中居中)
    */
   transmitTiming: z.number().nonnegative(),
@@ -41,9 +41,9 @@ export const MODES = {
     name: 'FT8',
     slotMs: 15000,
     toleranceMs: 100,
-    windowTiming: [-1500, -1000, -500, 0, 250],
-    transmitTiming: 1180, // (15000 - 12640) / 2 = 1180ms - 使音频在时隙中居中
-    encodeAdvance: 400    // 提前开始编码准备
+    windowTiming: [-2000, -1500, -1000, -500, 0],
+    transmitTiming: 500,  // WSJT-X 标准：信号在时隙边界后 ~0.5s 开始，留 ~1.86s 给解码
+    encodeAdvance: 500    // 编码在时隙开始时立即触发 (500-500=0ms delay)
   } as ModeDescriptor,
   FT4: {
     name: 'FT4',
@@ -78,9 +78,9 @@ export const DecodeWindowPreset = {
  * FT8 解码窗口预设映射
  */
 export const FT8_WINDOW_PRESETS: Record<string, number[]> = {
-  maximum: [-1500, -1000, -500, 0, 250],
-  balanced: [-1000, 0, 250],
-  lightweight: [-500, 0],
+  maximum: [-2000, -1500, -1000, -500, 0],  // 信号结束于 slotEnd-1860ms，首次解码在信号结束后 ~140ms
+  balanced: [-1500, -500, 0],                 // 首次解码在信号结束后 ~360ms
+  lightweight: [-1000, 0],
   minimum: [0],
 };
 

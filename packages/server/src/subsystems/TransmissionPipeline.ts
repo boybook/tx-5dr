@@ -24,6 +24,7 @@ export interface TransmissionPipelineDeps {
   operatorManager: RadioOperatorManager;
   clockSource: ClockSourceSystem;
   getCurrentMode: () => ModeDescriptor;
+  getCompensationMs: () => number;
 }
 
 /**
@@ -360,6 +361,12 @@ export class TransmissionPipeline {
       const currentSlotStartMs = Math.floor(now / mode.slotMs) * mode.slotMs;
       const currentTimeSinceSlotStartMs = now - currentSlotStartMs;
       const transmitStartFromSlotMs = mode.transmitTiming || 0;
+      const compensationMs = this.deps.getCompensationMs();
+      const compensatedTransmitStart = Math.max(0, transmitStartFromSlotMs - compensationMs);
+
+      if (compensationMs !== 0) {
+        logger.debug(`transmit compensation applied: ${compensationMs}ms, target=${compensatedTransmitStart}ms (original=${transmitStartFromSlotMs}ms)`);
+      }
 
       this.deps.audioMixer.addOperatorAudio(
         result.operatorId,
@@ -372,7 +379,7 @@ export class TransmissionPipeline {
       this.deps.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
 
       const isMidSlotSwitch = timeSinceSlotStartMs > 0 &&
-                              Math.abs(timeSinceSlotStartMs - transmitStartFromSlotMs) > 100;
+                              Math.abs(timeSinceSlotStartMs - compensatedTransmitStart) > 100;
 
       const isCurrentlyPlaying = this.deps.audioStreamManager.isPlaying();
 
@@ -401,15 +408,15 @@ export class TransmissionPipeline {
         } catch (remixError) {
           logger.error(`remix failed: ${remixError}`);
         }
-      } else if (isMidSlotSwitch && currentTimeSinceSlotStartMs >= transmitStartFromSlotMs) {
+      } else if (isMidSlotSwitch && currentTimeSinceSlotStartMs >= compensatedTransmitStart) {
         logger.debug('mid-slot switch, mixing immediately');
-        const elapsedFromTransmitStart = currentTimeSinceSlotStartMs - transmitStartFromSlotMs;
+        const elapsedFromTransmitStart = currentTimeSinceSlotStartMs - compensatedTransmitStart;
         const mixedAudio = await this.deps.audioMixer.mixAllOperatorAudios(elapsedFromTransmitStart);
         if (mixedAudio) {
           this.deps.audioMixer.emit('mixedAudioReady', mixedAudio);
         }
       } else {
-        const targetPlaybackTime = currentSlotStartMs + transmitStartFromSlotMs;
+        const targetPlaybackTime = currentSlotStartMs + compensatedTransmitStart;
         this.deps.audioMixer.scheduleMixing(targetPlaybackTime);
       }
     } catch (error) {
