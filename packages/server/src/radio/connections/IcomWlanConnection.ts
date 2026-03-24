@@ -553,12 +553,14 @@ export class IcomWlanConnection
 
     try {
       // 并行读取四个数值表
-      const [swr, alc, level, power] = await Promise.all([
+      const [swr, alcRaw, level, power] = await Promise.all([
         this.rig.readSWR({ timeout: 200 }).catch(() => null),
         this.rig.readALC({ timeout: 200 }).catch(() => null),
         this.rig.getLevelMeter({ timeout: 200 }).catch(() => null),
         this.rig.readPowerLevel({ timeout: 200 }).catch(() => null),
       ]);
+      // Override alert: align with Hamlib semantics (true only at >= 100%)
+      const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
 
       // 检查是否所有读取都失败
       const allFailed = swr === null && alc === null && level === null && power === null;
