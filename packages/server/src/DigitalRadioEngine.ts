@@ -145,6 +145,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       operatorManager: this._operatorManager,
       clockSource: this.clockSource,
       getCurrentMode: () => this.currentMode,
+      getCompensationMs: () => this.slotClock?.getCompensation() ?? 0,
     });
 
     this.radioBridge = new RadioBridge({
