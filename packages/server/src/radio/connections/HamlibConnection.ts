@@ -462,7 +462,8 @@ export class HamlibConnection
       strength: this.supportedLevels.has('STRENGTH'),
       swr: this.supportedLevels.has('SWR'),
       alc: this.supportedLevels.has('ALC'),
-      power: this.supportedLevels.has('RFPOWER_METER'),
+      power: this.supportedLevels.has('RFPOWER_METER') || this.supportedLevels.has('RFPOWER_METER_WATTS'),
+      powerWatts: this.supportedLevels.has('RFPOWER_METER_WATTS'),
     };
   }
 
@@ -782,11 +783,12 @@ export class HamlibConnection
 
     try {
       // 仅轮询电台支持的 level
-      const [strength, swr, alc, power] = await Promise.all([
+      const [strength, swr, alc, power, powerWatts] = await Promise.all([
         this.supportedLevels.has('STRENGTH') ? this.rig.getLevel('STRENGTH').catch(() => null) : Promise.resolve(null),
         this.supportedLevels.has('SWR') ? this.rig.getLevel('SWR').catch(() => null) : Promise.resolve(null),
         this.supportedLevels.has('ALC') ? this.rig.getLevel('ALC').catch(() => null) : Promise.resolve(null),
         this.supportedLevels.has('RFPOWER_METER') ? this.rig.getLevel('RFPOWER_METER').catch(() => null) : Promise.resolve(null),
+        this.supportedLevels.has('RFPOWER_METER_WATTS') ? this.rig.getLevel('RFPOWER_METER_WATTS').catch(() => null) : Promise.resolve(null),
       ]);
 
       // 转换数据格式
@@ -794,7 +796,7 @@ export class HamlibConnection
         level: strength !== null ? this.convertStrengthToLevel(strength) : null,
         swr: swr !== null ? this.convertSWR(swr) : null,
         alc: alc !== null ? this.convertALC(alc) : null,
-        power: power !== null ? this.convertPower(power) : null,
+        power: (power !== null || powerWatts !== null) ? this.convertPower(power, powerWatts) : null,
       };
 
       // 成功：重置失败计数
@@ -858,17 +860,35 @@ export class HamlibConnection
   }
 
   /**
-   * 将 Hamlib RFPOWER_METER 转换为 Power 数据
-   * @param powerValue - Hamlib 返回的功率值（0.0-1.0，最大功率的百分比）
+   * 将 Hamlib RFPOWER_METER / RFPOWER_METER_WATTS 转换为 Power 数据
+   * @param meterValue - RFPOWER_METER 返回值（标准 0.0-1.0 百分比，部分电台可能返回瓦数）
+   * @param meterWattsValue - RFPOWER_METER_WATTS 返回值（绝对瓦数，仅部分电台支持）
    */
-  private convertPower(powerValue: number): { raw: number; percent: number } {
-    // raw: 0.0-1.0 映射到 0-255
-    const raw = Math.round(powerValue * 255);
+  private convertPower(
+    meterValue: number | null,
+    meterWattsValue: number | null
+  ): { raw: number; percent: number; watts: number | null } {
+    // 优先使用 RFPOWER_METER_WATTS（绝对瓦数，可信）
+    if (meterWattsValue !== null) {
+      const percent = (meterValue !== null && meterValue <= 1.0)
+        ? meterValue * 100
+        : 0;
+      const raw = Math.round(percent * 2.55);
+      return { raw, percent, watts: meterWattsValue };
+    }
 
-    // percent: 0.0-1.0 映射到 0-100
-    const percent = powerValue * 100;
+    // 仅有 RFPOWER_METER
+    if (meterValue !== null) {
+      if (meterValue > 1.0) {
+        // 异常：RFPOWER_METER 返回了瓦数而非百分比（如 IC-705 Hamlib 后端）
+        return { raw: 0, percent: 0, watts: meterValue };
+      }
+      const percent = meterValue * 100;
+      const raw = Math.round(meterValue * 255);
+      return { raw, percent, watts: null };
+    }
 
-    return { raw, percent };
+    return { raw: 0, percent: 0, watts: null };
   }
 
   /**

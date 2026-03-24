@@ -6270,7 +6270,7 @@ __metadata:
     fast-jwt: "npm:^6.1.0"
     fastify: "npm:^5.8.4"
     fastify-plugin: "npm:^5.1.0"
-    hamlib: "npm:0.2.6"
+    hamlib: "npm:0.2.7"
     icom-wlan-node: "npm:^0.2.6"
     mic: "npm:^2.1.2"
     node-wav: "npm:^0.0.2"
@@ -11829,14 +11829,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"hamlib@npm:0.2.6":
-  version: 0.2.6
-  resolution: "hamlib@npm:0.2.6"
+"hamlib@npm:0.2.7":
+  version: 0.2.7
+  resolution: "hamlib@npm:0.2.7"
   dependencies:
     node-addon-api: "npm:^4.3.0"
     node-gyp: "npm:latest"
     node-gyp-build: "npm:^4.8.0"
-  checksum: 10c0/1cc380855ca71c13f1f44291b16197643b971d19f2fab5f17758714616a421825ccf40a82d933de22e7a6f4db845f84881328da7cda344d2d9f471011b3662f9
+  checksum: 10c0/0ae768a3d17024ee95c29cd10c06b0ed45debc1578da5d73bca84564ab1548a531c52a78e3a7d30d0d19fa2f20036530fc013d45c52b797166ede86c2eb56674
   conditions: (os=linux | os=darwin | os=win32) & (cpu=x64 | cpu=arm64)
   languageName: node
   linkType: hard

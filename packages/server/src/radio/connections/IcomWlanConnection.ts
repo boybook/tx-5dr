@@ -401,6 +401,7 @@ export class IcomWlanConnection
       swr: true,
       alc: true,
       power: true,
+      powerWatts: false,
     };
   }
 
@@ -586,7 +587,7 @@ export class IcomWlanConnection
         swr,
         alc,
         level,
-        power,
+        power: power !== null ? { ...power, watts: null } : null,
       };
 
       // 📝 EventBus 优化：双路径策略

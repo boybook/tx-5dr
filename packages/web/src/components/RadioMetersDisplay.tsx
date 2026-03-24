@@ -119,8 +119,14 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
           <Meter
             label="Power"
             value={buffered.power.value?.percent ?? null}
-            unit="%"
+            unit={buffered.power.value?.watts != null ? 'W' : '%'}
             isTimeout={buffered.power.isTimeout}
+            formatValue={(_value) => {
+              if (!buffered.power.value) return '--';
+              const { watts, percent } = buffered.power.value;
+              if (watts != null) return watts.toFixed(1);
+              return percent.toFixed(1);
+            }}
           />
         ) : (
           <Meter
