@@ -33,7 +33,7 @@
     "bcrypt": "^6.0.0",
     "eventemitter3": "^5.0.1",
     "fast-jwt": "^6.1.0",
-    "fastify": "^5.1.0",
+    "fastify": "^5.8.4",
     "fastify-plugin": "^5.1.0",
     "hamlib": "0.2.5",
     "icom-wlan-node": "^0.2.6",
@@ -43,7 +43,7 @@
     "rubato-fft-node": "^0.1.0",
     "serialport": "^13.0.0",
     "wav": "^1.0.2",
-    "wsjtx-lib": "1.2.4",
+    "wsjtx-lib": "1.2.5",
     "xstate": "^5.23.0",
     "zod": "^3.25.30",
     "zod-to-json-schema": "^3.24.5"
