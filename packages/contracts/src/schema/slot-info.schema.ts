@@ -61,7 +61,9 @@ export const FrameMessageSchema = z.object({
   /** 置信度 0-1 */
   confidence: z.number().min(0).max(1).default(1.0),
   /** 基于日志本的分析结果（可选，仅在客户端定制化数据中提供） */
-  logbookAnalysis: LogbookAnalysisSchema.optional()
+  logbookAnalysis: LogbookAnalysisSchema.optional(),
+  /** 操作员ID（可选，仅 TX 帧使用，用于多操作员覆盖识别） */
+  operatorId: z.string().optional()
 });
 
 export type FrameMessage = z.infer<typeof FrameMessageSchema>;

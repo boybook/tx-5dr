@@ -1033,6 +1033,8 @@ export type WSGetStatusMessage = z.infer<typeof WSGetStatusMessageSchema>;
 export const TransmitRequestSchema = z.object({
   operatorId: z.string(),
   transmission: z.string(),
+  /** 是否覆盖同一操作员在同一时隙的现有 TX 帧（自动重决策时为 true） */
+  replaceExisting: z.boolean().optional(),
 });
 
 export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
@@ -1077,6 +1079,7 @@ export interface DigitalRadioEngineEvents {
     message: string;
     frequency: number;
     slotStartMs: number;
+    replaceExisting?: boolean;
   }) => void;
   
   // 操作员事件

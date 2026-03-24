@@ -156,6 +156,7 @@ export class ClockCoordinator {
       message: string;
       frequency: number;
       slotStartMs: number;
+      replaceExisting?: boolean;
     }) => {
       const slotId = `slot-${data.slotStartMs}`;
       slotPackManager.addTransmissionFrame(
@@ -163,7 +164,8 @@ export class ClockCoordinator {
         data.operatorId,
         data.message,
         data.frequency,
-        data.slotStartMs
+        data.slotStartMs,
+        data.replaceExisting
       );
     });
 

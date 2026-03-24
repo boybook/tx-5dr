@@ -733,7 +733,8 @@ export class RadioOperatorManager {
         time: new Date(slotStartMs).toISOString().slice(11, 19).replace(/:/g, ''),
         message: transmission,
         frequency: frequency,
-        slotStartMs: slotStartMs
+        slotStartMs: slotStartMs,
+        replaceExisting: request.replaceExisting,
       });
 
       // 启动传输跟踪
@@ -769,7 +770,7 @@ export class RadioOperatorManager {
    * 检查并触发单个操作员的发射
    * 用于在时隙中间启动或切换发射周期时立即触发
    */
-  private checkAndTriggerTransmission(operatorId: string): void {
+  private checkAndTriggerTransmission(operatorId: string, options?: { replaceExisting?: boolean }): void {
     const operator = this.operators.get(operatorId);
     if (!operator || !operator.isTransmitting) {
       return;
@@ -810,7 +811,8 @@ export class RadioOperatorManager {
     // 将发射请求加入队列（仅入队，交由统一的队列消费层处理）
     const request: TransmitRequest = {
       operatorId,
-      transmission
+      transmission,
+      replaceExisting: options?.replaceExisting,
     };
     this.pendingTransmissions.push(request);
 
@@ -889,7 +891,7 @@ export class RadioOperatorManager {
         const changed = await operator.reDecideWithUpdatedSlotPack(slotPack);
         if (changed) {
           logger.info(`Late decode re-decision triggered re-encode for operator ${operatorId}`);
-          this.checkAndTriggerTransmission(operatorId);
+          this.checkAndTriggerTransmission(operatorId, { replaceExisting: true });
         }
       } catch (err) {
         logger.error(`Late re-decision failed for operator ${operatorId}:`, err);
