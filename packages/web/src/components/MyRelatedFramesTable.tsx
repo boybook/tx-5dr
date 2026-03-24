@@ -20,6 +20,7 @@ interface TransmissionLog {
   frequency: number;
   operatorId: string;
   slotStartMs: number;
+  replaceExisting?: boolean;
 }
 
 export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
@@ -54,19 +55,28 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       slotStartMs: number;
     }) => {
       setTransmissionLogs(prev => {
-        // 去重：检查是否已存在完全相同的发射日志
-        const isDuplicate = prev.some(log =>
-          log.operatorId === data.operatorId &&
-          log.slotStartMs === data.slotStartMs &&
-          log.message === data.message &&
-          log.frequency === data.frequency
-        );
-
-        if (isDuplicate) {
-          logger.warn('Duplicate transmission log detected, filtered:', data);
-          return prev; // 不添加重复的日志
+        if (data.replaceExisting) {
+          // 覆盖模式（自动重决策）：替换同一 operatorId + slotStartMs 的现有条目
+          const idx = prev.findIndex(log =>
+            log.operatorId === data.operatorId && log.slotStartMs === data.slotStartMs
+          );
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = data;
+            return updated;
+          }
+        } else {
+          // 新增模式：去重检查（完全相同的发射日志才跳过）
+          const isDuplicate = prev.some(log =>
+            log.operatorId === data.operatorId &&
+            log.slotStartMs === data.slotStartMs &&
+            log.message === data.message &&
+            log.frequency === data.frequency
+          );
+          if (isDuplicate) {
+            return prev;
+          }
         }
-
         return [...prev, data];
       });
     };
