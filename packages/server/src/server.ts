@@ -174,7 +174,7 @@ export async function createServer() {
   // 📊 Day14：Fastify 全局错误处理器
   // 根据 RadioError.code 返回友好错误并添加用户指导信息
   fastify.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
-    fastify.log.error('API request error:', error);
+    fastify.log.error({ error }, 'API request error');
 
     // 如果是 RadioError，返回详细的错误信息
     if (error instanceof RadioError) {
@@ -400,7 +400,7 @@ export async function createServer() {
       fastify.log.info(`Audio monitor WS client connected: clientId=${clientId}, codec=${codec}`);
       audioMonitorWSServer.handleConnection(socket, clientId, codec);
     } catch (e) {
-      fastify.log.error('Audio monitor WS connection parameter parsing failed:', e);
+      fastify.log.error({ error: e }, 'Audio monitor WS connection parameter parsing failed');
       socket.close();
     }
   });
@@ -420,7 +420,7 @@ export async function createServer() {
       fastify.log.info(`Voice audio WS client connected: clientId=${clientId}`);
       voiceAudioWSServer.handleConnection(socket, clientId);
     } catch (e) {
-      fastify.log.error('Voice audio WS connection parameter parsing failed:', e);
+      fastify.log.error({ error: e }, 'Voice audio WS connection parameter parsing failed');
       socket.close();
     }
   });

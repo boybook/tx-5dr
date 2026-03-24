@@ -215,7 +215,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           try {
             logger.info('Logging in via URL token...');
             const resp = await api.login(urlToken);
-            logger.info('URL token login succeeded:', resp.role, resp.label);
+            logger.info('URL token login succeeded', { role: resp.role, label: resp.label });
             if (!cancelled) {
               saveJwt(resp.jwt);
               configureAuthToken(resp.jwt);

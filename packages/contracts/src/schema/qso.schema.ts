@@ -65,6 +65,9 @@ export const QSORecordSchema = z.object({
   qrzQslReceived: QslSimpleStatusSchema,
   qrzQslSentDate: z.number().optional(),
   qrzQslReceivedDate: z.number().optional(),
+
+  // 备注（对应 ADIF NOTE 字段）
+  remarks: z.string().optional(),
 });
 
 // 策略执行结果

@@ -118,6 +118,8 @@ export const UpdateQSORequestSchema = z.object({
   reportSent: z.string().optional(),
   reportReceived: z.string().optional(),
   messages: z.array(z.string()).optional(),
+  myGrid: z.string().optional(),
+  myCallsign: z.string().optional(),
   // QSL 确认状态
   lotwQslSent: z.enum(['Y', 'N', 'R', 'Q', 'I']).optional(),
   lotwQslReceived: z.enum(['Y', 'N', 'R', 'I', 'V']).optional(),
@@ -127,7 +129,25 @@ export const UpdateQSORequestSchema = z.object({
   qrzQslReceived: z.enum(['Y', 'N']).optional(),
   qrzQslSentDate: z.number().optional(),
   qrzQslReceivedDate: z.number().optional(),
+  remarks: z.string().optional(),
 });
+
+/**
+ * 手动补录QSO记录请求Schema
+ */
+export const CreateQSORequestSchema = z.object({
+  callsign: z.string().min(1),
+  frequency: z.number().positive(),
+  mode: z.string().min(1),
+  startTime: z.number().positive(),
+  endTime: z.number().optional(),
+  grid: z.string().optional(),
+  reportSent: z.string().optional(),
+  reportReceived: z.string().optional(),
+  messages: z.array(z.string()).optional().default([]),
+  remarks: z.string().optional(),
+});
+export type CreateQSORequest = z.infer<typeof CreateQSORequestSchema>;
 
 /**
  * QSO操作响应Schema

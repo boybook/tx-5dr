@@ -9,7 +9,6 @@ import {
   Button,
   Input,
   Chip,
-  Checkbox,
   Pagination,
   Spinner,
   Dropdown,
@@ -23,13 +22,12 @@ import {
   ModalBody,
   ModalFooter,
   Tooltip,
-  Select,
-  SelectItem,
 } from '@heroui/react';
+import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faCloudUploadAlt, faCheckCircle } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, QRZConfig, LoTWConfig } from '@tx5dr/contracts';
+import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faCloudUploadAlt, faCheckCircle, faPlus } from '@fortawesome/free-solid-svg-icons';
+import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, QRZConfig, LoTWConfig, CreateQSORequest } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
@@ -67,7 +65,7 @@ interface QSOFilters {
   mode?: string;
   startDate?: string;
   endDate?: string;
-  qslStatus?: string;
+  qslStatus?: 'none' | 'confirmed' | 'uploaded';
 }
 
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
@@ -98,6 +96,15 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deletingQSO, setDeletingQSO] = useState<QSORecord | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // 补录 Modal 状态
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addFormData, setAddFormData] = useState<Partial<QSORecord>>({
+    callsign: '',
+    mode: 'FT8',
+    messages: [],
+  });
+  const [isAddSaving, setIsAddSaving] = useState(false);
 
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
@@ -454,6 +461,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     setEditFormData({
       callsign: qso.callsign,
       grid: qso.grid,
+      myGrid: qso.myGrid,
+      myCallsign: qso.myCallsign,
       frequency: qso.frequency,
       mode: qso.mode,
       startTime: qso.startTime,
@@ -526,6 +535,38 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
+  // 补录：保存新 QSO 记录
+  const handleAddSave = async () => {
+    const { callsign, frequency, mode: qsoMode, startTime } = addFormData;
+    if (!callsign?.trim() || !frequency || !qsoMode || !startTime) return;
+
+    const payload: CreateQSORequest = {
+      callsign: callsign.trim(),
+      frequency,
+      mode: qsoMode,
+      startTime,
+      grid: addFormData.grid,
+      reportSent: addFormData.reportSent,
+      reportReceived: addFormData.reportReceived,
+      messages: addFormData.messages ?? [],
+    };
+
+    try {
+      setIsAddSaving(true);
+      await api.createQSO(effectiveLogBookId, payload);
+      await loadQSOs();
+      await loadStatistics();
+      setIsAddModalOpen(false);
+      setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
+      logger.debug('QSO record created manually');
+    } catch (error) {
+      logger.error('Failed to create QSO record:', error);
+      setError(error instanceof Error ? error.message : t('error.createQSOFailed'));
+    } finally {
+      setIsAddSaving(false);
+    }
+  };
+
   // 打开外部链接的函数
   const openExternalLink = (url: string) => {
     if (isElectron()) {
@@ -591,6 +632,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     { key: 'startTime', label: t('column.timeUtc'), sortable: true, hideOnMobile: false },
     { key: 'callsign', label: t('column.callsign'), sortable: true, hideOnMobile: false },
     { key: 'grid', label: t('column.grid'), sortable: true, hideOnMobile: true },
+    { key: 'myGrid', label: t('column.myGrid'), sortable: true, hideOnMobile: true },
     { key: 'frequency', label: t('column.frequency'), sortable: true, hideOnMobile: false },
     { key: 'mode', label: t('column.mode'), sortable: true, hideOnMobile: true },
     { key: 'reportSent', label: t('column.reportSent'), sortable: false, hideOnMobile: true },
@@ -631,6 +673,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         return qso.grid ? (
           <Chip size="sm" variant="flat" color="primary">
             {qso.grid}
+          </Chip>
+        ) : '-';
+      case "myGrid":
+        return qso.myGrid ? (
+          <Chip size="sm" variant="flat" color="default">
+            {qso.myGrid}
           </Chip>
         ) : '-';
       case "frequency":
@@ -1043,6 +1091,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               </DropdownMenu>
             </Dropdown>
 
+            {/* 补录按钮 */}
+            <Button
+              color="primary"
+              variant="flat"
+              size="sm"
+              startContent={<FontAwesomeIcon icon={faPlus} />}
+              onPress={() => {
+                setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
+                setIsAddModalOpen(true);
+              }}
+              className="min-w-0"
+            >
+              <span className="hidden md:inline">{t('addQso.button')}</span>
+            </Button>
+
             {/* 打开日志文件目录按钮 - 仅Electron */}
             {isElectron() && (
               <Tooltip content={t('action.openDataDir')}>
@@ -1338,160 +1401,20 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       </Table>
 
       {/* 编辑 Modal */}
-      <Modal
+      <QSOFormModal
         isOpen={isEditModalOpen}
         onClose={() => {
           setIsEditModalOpen(false);
           setEditingQSO(null);
           setEditFormData({});
         }}
-        size="2xl"
-        scrollBehavior="inside"
-      >
-        <ModalContent>
-          <ModalHeader>
-            <h3 className="text-lg font-semibold">{t('editQso.title')}</h3>
-          </ModalHeader>
-          <ModalBody>
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Input
-                  label={t('editQso.callsign')}
-                  value={editFormData.callsign || ''}
-                  onChange={(e) => setEditFormData({ ...editFormData, callsign: e.target.value })}
-                  isRequired
-                />
-                <Input
-                  label={t('editQso.grid')}
-                  value={editFormData.grid || ''}
-                  onChange={(e) => setEditFormData({ ...editFormData, grid: e.target.value })}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Input
-                  label={t('editQso.frequency')}
-                  type="number"
-                  value={editFormData.frequency?.toString() || ''}
-                  onChange={(e) => setEditFormData({ ...editFormData, frequency: parseInt(e.target.value) || 0 })}
-                  isRequired
-                />
-                <Select
-                  label={t('editQso.mode')}
-                  selectedKeys={editFormData.mode ? [editFormData.mode] : []}
-                  onSelectionChange={(keys) => {
-                    const selected = Array.from(keys as Set<string>)[0];
-                    setEditFormData({ ...editFormData, mode: selected as string });
-                  }}
-                  isRequired
-                >
-                  <SelectItem key="FT8">FT8</SelectItem>
-                  <SelectItem key="FT4">FT4</SelectItem>
-                  <SelectItem key="RTTY">RTTY</SelectItem>
-                  <SelectItem key="CW">CW</SelectItem>
-                  <SelectItem key="SSB">SSB</SelectItem>
-                </Select>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Input
-                  label={t('editQso.reportSent')}
-                  value={editFormData.reportSent || ''}
-                  onChange={(e) => setEditFormData({ ...editFormData, reportSent: e.target.value })}
-                />
-                <Input
-                  label={t('editQso.reportReceived')}
-                  value={editFormData.reportReceived || ''}
-                  onChange={(e) => setEditFormData({ ...editFormData, reportReceived: e.target.value })}
-                />
-              </div>
-
-              {/* 分隔线 + QSL 确认状态 */}
-              <div className="border-t border-default-200 dark:border-default-100 pt-4">
-                <p className="text-sm font-medium text-default-500 mb-3">{t('editQso.confirmStatus')}</p>
-                <div className="grid grid-cols-2 gap-4">
-                  {/* LoTW */}
-                  <div className="flex items-center justify-between rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
-                    <span className="text-sm font-medium text-default-600">LoTW</span>
-                    <div className="flex items-center gap-4">
-                      <Checkbox
-                        size="sm"
-                        isSelected={editFormData.lotwQslSent === 'Y'}
-                        onValueChange={(checked) =>
-                          setEditFormData({ ...editFormData, lotwQslSent: checked ? 'Y' : 'N' })
-                        }
-                        color="primary"
-                      >
-                        <span className="text-sm">{t('editQso.uploaded')}</span>
-                      </Checkbox>
-                      <Checkbox
-                        size="sm"
-                        isSelected={editFormData.lotwQslReceived === 'Y' || editFormData.lotwQslReceived === 'V'}
-                        onValueChange={(checked) =>
-                          setEditFormData({ ...editFormData, lotwQslReceived: checked ? 'Y' : 'N' })
-                        }
-                        color="success"
-                      >
-                        <span className="text-sm">{t('editQso.confirmed')}</span>
-                      </Checkbox>
-                    </div>
-                  </div>
-                  {/* QRZ */}
-                  <div className="flex items-center justify-between rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
-                    <span className="text-sm font-medium text-default-600">QRZ</span>
-                    <div className="flex items-center gap-4">
-                      <Checkbox
-                        size="sm"
-                        isSelected={editFormData.qrzQslSent === 'Y'}
-                        onValueChange={(checked) =>
-                          setEditFormData({ ...editFormData, qrzQslSent: checked ? 'Y' : 'N' })
-                        }
-                        color="primary"
-                      >
-                        <span className="text-sm">{t('editQso.uploaded')}</span>
-                      </Checkbox>
-                      <Checkbox
-                        size="sm"
-                        isSelected={editFormData.qrzQslReceived === 'Y'}
-                        onValueChange={(checked) =>
-                          setEditFormData({ ...editFormData, qrzQslReceived: checked ? 'Y' : 'N' })
-                        }
-                        color="success"
-                      >
-                        <span className="text-sm">{t('editQso.confirmed')}</span>
-                      </Checkbox>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <Alert color="warning" variant="flat" className="text-sm">
-                {t('editQso.editWarning')}
-              </Alert>
-            </div>
-          </ModalBody>
-          <ModalFooter>
-            <Button
-              variant="flat"
-              onPress={() => {
-                setIsEditModalOpen(false);
-                setEditingQSO(null);
-                setEditFormData({});
-              }}
-            >
-              {t('common:button.cancel')}
-            </Button>
-            <Button
-              color="primary"
-              onPress={handleEditSave}
-              isLoading={isEditSaving}
-              isDisabled={!editFormData.callsign || !editFormData.frequency}
-            >
-              {t('common:button.save')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
+        title={t('editQso.title')}
+        formData={editFormData}
+        onChange={setEditFormData}
+        onSave={handleEditSave}
+        isSaving={isEditSaving}
+        mode="edit"
+      />
 
       {/* 删除确认 Modal */}
       <Modal
@@ -1545,6 +1468,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      {/* 补录 QSO Modal */}
+      <QSOFormModal
+        isOpen={isAddModalOpen}
+        onClose={() => {
+          setIsAddModalOpen(false);
+          setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
+        }}
+        title={t('addQso.title')}
+        formData={addFormData}
+        onChange={setAddFormData}
+        onSave={handleAddSave}
+        isSaving={isAddSaving}
+        mode="add"
+      />
 
       {/* 同步配置弹窗 */}
       {operatorCallsign && (

@@ -10,7 +10,7 @@ interface AutomationSettingsPanelProps {
   onClose: () => void;
 }
 
-export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ isOpen, _onClose }) => {
+export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ isOpen, onClose: _onClose }) => {
   const { t } = useTranslation('settings');
   const { operators } = useOperators();
   const { currentOperatorId } = useCurrentOperatorId();

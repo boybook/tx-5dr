@@ -137,7 +137,7 @@ export const FrequencyPresetSettings = forwardRef<
       }
     } catch (err) {
       logger.error('Failed to save frequency presets:', err);
-      showErrorToast(err, t('freqPresets.saveFailed'));
+      showErrorToast({ userMessage: t('freqPresets.saveFailed'), severity: 'error' });
     } finally {
       setIsSaving(false);
     }
@@ -154,7 +154,7 @@ export const FrequencyPresetSettings = forwardRef<
       }
     } catch (err) {
       logger.error('Failed to reset frequency presets:', err);
-      showErrorToast(err, t('freqPresets.saveFailed'));
+      showErrorToast({ userMessage: t('freqPresets.saveFailed'), severity: 'error' });
     }
   };
 

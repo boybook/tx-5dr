@@ -315,7 +315,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
         // 新创建的操作员默认显示（不在黑名单中），同步到服务器
         if (response.data) {
-          logger.info('New operator auto-enabled:', response.data.id, response.data.myCallsign);
+          logger.info('New operator auto-enabled', { id: response.data.id, callsign: response.data.myCallsign });
 
           if (connection.state.isConnected && connection.state.radioService) {
             // 重新加载后的 operators 列表 + 新操作员，减去黑名单

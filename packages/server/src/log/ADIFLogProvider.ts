@@ -339,20 +339,24 @@ export class ADIFLogProvider implements ILogProvider {
       id,
       callsign,
       grid: fields.gridsquare,
+      myGrid: fields.my_gridsquare ?? undefined,
+      myCallsign: fields.station_callsign ?? undefined,
       frequency,
       mode: fields.mode || 'FT8',
       startTime,
       endTime,
       reportSent: fields.rst_sent,
       reportReceived: fields.rst_rcvd,
-      messages: fields.comment ? [fields.comment] : []
+      messages: fields.comment ? [fields.comment] : [],
+      remarks: fields.note ?? undefined,
     };
   }
   
   /**
    * 将QSORecord转换为ADIF记录
+   * @param overrideMyGrid 覆盖 qso.myGrid（用于导出时注入兜底网格）
    */
-  private qsoRecordToADIF(qso: QSORecord, operatorId?: string): string {
+  private qsoRecordToADIF(qso: QSORecord, operatorId?: string, overrideMyGrid?: string): string {
     const startDate = new Date(qso.startTime);
     const dateStr = startDate.toISOString().slice(0, 10).replace(/-/g, '');
     const timeOnStr = startDate.toISOString().slice(11, 19).replace(/:/g, '');
@@ -392,11 +396,24 @@ export class ADIFLogProvider implements ILogProvider {
       const comment = qso.messages.join(' | ');
       adifRecord += `<COMMENT:${comment.length}>${comment}`;
     }
-    
+
+    if (qso.remarks) {
+      adifRecord += `<NOTE:${qso.remarks.length}>${qso.remarks}`;
+    }
+
+    const effectiveMyGrid = overrideMyGrid ?? qso.myGrid;
+    if (effectiveMyGrid) {
+      adifRecord += `<MY_GRIDSQUARE:${effectiveMyGrid.length}>${effectiveMyGrid}`;
+    }
+
+    if (qso.myCallsign) {
+      adifRecord += `<STATION_CALLSIGN:${qso.myCallsign.length}>${qso.myCallsign}`;
+    }
+
     if (operatorId) {
       adifRecord += `<OPERATOR:${operatorId.length}>${operatorId}`;
     }
-    
+
     adifRecord += '<EOR>\n';
     
     return adifRecord;
@@ -720,11 +737,11 @@ export class ADIFLogProvider implements ILogProvider {
     };
   }
   
-  async exportADIF(options?: LogQueryOptions): Promise<string> {
+  async exportADIF(options?: LogQueryOptions, exportOptions?: { fallbackGrid?: string }): Promise<string> {
     this.ensureInitialized();
-    
+
     const qsos = await this.queryQSOs(options);
-    
+
     let adifContent = `TX-5DR Export
 <ADIF_VER:5>3.1.4
 <PROGRAMID:6>TX-5DR
@@ -732,13 +749,14 @@ export class ADIFLogProvider implements ILogProvider {
 <EOH>
 
 `;
-    
+
     for (const qso of qsos) {
       const parts = qso.id.split('_');
       const operatorId = parts.length > 3 ? parts[3] : undefined;
-      adifContent += this.qsoRecordToADIF(qso, operatorId);
+      const effectiveMyGrid = qso.myGrid || exportOptions?.fallbackGrid;
+      adifContent += this.qsoRecordToADIF(qso, operatorId, effectiveMyGrid);
     }
-    
+
     return adifContent;
   }
 
@@ -751,22 +769,24 @@ export class ADIFLogProvider implements ILogProvider {
     const headers = [
       'Date',
       'Time',
-      'Callsign', 
+      'Callsign',
       'Grid',
       'Frequency (MHz)',
       'Mode',
       'Report Sent',
       'Report Received',
+      'My Callsign',
+      'My Grid',
       'Comments'
     ];
-    
+
     let csvContent = headers.join(',') + '\n';
-    
+
     for (const qso of qsos) {
       const startDate = new Date(qso.startTime);
       const date = startDate.toISOString().slice(0, 10); // YYYY-MM-DD
       const time = startDate.toISOString().slice(11, 19); // HH:MM:SS
-      
+
       const row = [
         date,
         time,
@@ -776,6 +796,8 @@ export class ADIFLogProvider implements ILogProvider {
         this.escapeCsvField(qso.mode),
         this.escapeCsvField(qso.reportSent || ''),
         this.escapeCsvField(qso.reportReceived || ''),
+        this.escapeCsvField(qso.myCallsign || ''),
+        this.escapeCsvField(qso.myGrid || ''),
         this.escapeCsvField(qso.messages?.join(' | ') || '')
       ];
       

@@ -4,7 +4,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlug } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
 import { useTranslation } from 'react-i18next';
-import type { RadioService } from '@tx5dr/core';
+import type { RadioService } from '../services/radioService';
 
 interface ServerDisconnectedOverlayProps {
   isConnected: boolean;
