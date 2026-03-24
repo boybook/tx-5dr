@@ -67,6 +67,9 @@ export class RadioOperatorManager {
   // 📊 Day13优化：记录上次发射的操作员状态哈希，用于去重
   private lastEmittedStatusHash: Map<string, string> = new Map();
 
+  // 当前正在实际PTT发射的操作员ID集合
+  private activeTransmissionOperatorIds: Set<string> = new Set();
+
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
     this.encodeQueue = options.encodeQueue;
@@ -546,6 +549,7 @@ export class RadioOperatorManager {
         id,
         isActive: this.isRunning,
         isTransmitting: operator.isTransmitting,
+        isInActivePTT: this.activeTransmissionOperatorIds.has(id),
         currentSlot,
         context: {
           myCall: operator.config.myCallsign,
@@ -1155,6 +1159,28 @@ export class RadioOperatorManager {
   }
 
   /**
+   * 更新当前正在实际PTT发射的操作员列表
+   * 当PTT状态变更（开始/停止/重混音）时由TransmissionPipeline调用
+   */
+  updateActiveTransmissionOperators(operatorIds: string[]): void {
+    const newSet = new Set(operatorIds);
+    const changed = new Set<string>();
+
+    for (const id of newSet) {
+      if (!this.activeTransmissionOperatorIds.has(id)) changed.add(id);
+    }
+    for (const id of this.activeTransmissionOperatorIds) {
+      if (!newSet.has(id)) changed.add(id);
+    }
+
+    this.activeTransmissionOperatorIds = newSet;
+
+    for (const id of changed) {
+      this.emitOperatorStatusUpdate(id);
+    }
+  }
+
+  /**
    * 发射操作员状态更新事件（触发前端更新）
    * 📊 Day13优化：添加状态去重，避免发射重复的状态更新
    */
@@ -1216,6 +1242,7 @@ export class RadioOperatorManager {
     const keyFields = {
       isActive: status.isActive,
       isTransmitting: status.isTransmitting,
+      isInActivePTT: status.isInActivePTT,
       currentSlot: status.currentSlot,
       context: status.context,
       strategyState: status.strategy?.state,

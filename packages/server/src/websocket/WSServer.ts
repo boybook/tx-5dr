@@ -329,6 +329,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
+      [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: (data) => this.handleRemoveOperatorFromTransmission(data),
       [WSMessageType.AUTH_TOKEN]: (data, id) => this.handleAuthToken(id, data),
       [WSMessageType.AUTH_PUBLIC_VIEWER]: (_data, id) => this.handleAuthPublicViewer(id),
       [WSMessageType.VOICE_PTT_REQUEST]: (data, id) => this.handleVoicePttRequest(id, data),
@@ -537,6 +538,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.RADIO_MANUAL_RECONNECT]: UserRole.ADMIN,
     [WSMessageType.RADIO_STOP_RECONNECT]: UserRole.ADMIN,
     [WSMessageType.FORCE_STOP_TRANSMISSION]: UserRole.ADMIN,
+    [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: UserRole.OPERATOR,
     [WSMessageType.VOICE_PTT_REQUEST]: UserRole.OPERATOR,
     [WSMessageType.VOICE_SET_RADIO_MODE]: UserRole.OPERATOR,
     [WSMessageType.START_OPERATOR]: UserRole.OPERATOR,
@@ -1473,6 +1475,20 @@ export class WSServer extends WSMessageHandler {
 
     } catch (error) {
       this.handleCommandError(error, 'forceStopTransmission', RadioErrorCode.PTT_ACTIVATION_FAILED);
+    }
+  }
+
+  private async handleRemoveOperatorFromTransmission(data: any): Promise<void> {
+    try {
+      const operatorId = data?.operatorId;
+      if (!operatorId) {
+        logger.warn('removeOperatorFromTransmission: missing operatorId');
+        return;
+      }
+      logger.debug('remove operator from transmission', { operatorId });
+      await this.digitalRadioEngine.removeOperatorFromTransmission(operatorId);
+    } catch (error) {
+      this.handleCommandError(error, 'removeOperatorFromTransmission', RadioErrorCode.PTT_ACTIVATION_FAILED);
     }
   }
 

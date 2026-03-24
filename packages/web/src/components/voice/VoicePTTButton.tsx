@@ -191,9 +191,9 @@ export const VoicePTTButton: React.FC = () => {
     el.addEventListener('dragstart', prevent, { capture: true, passive: false });
 
     return () => {
-      el.removeEventListener('contextmenu', prevent, { capture: true } as EventListenerOptions);
-      el.removeEventListener('selectstart', prevent, { capture: true } as EventListenerOptions);
-      el.removeEventListener('dragstart', prevent, { capture: true } as EventListenerOptions);
+      el.removeEventListener('contextmenu', prevent, { capture: true });
+      el.removeEventListener('selectstart', prevent, { capture: true });
+      el.removeEventListener('dragstart', prevent, { capture: true });
     };
   }, []);
 

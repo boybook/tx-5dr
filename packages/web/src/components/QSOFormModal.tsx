@@ -69,7 +69,7 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
           ? new Date().toISOString().slice(0, 16)
           : '',
     );
-  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isOpen]); // eslint-disable-line
 
   const handleFreqChange = (val: string) => {
     setFreqMHz(val);

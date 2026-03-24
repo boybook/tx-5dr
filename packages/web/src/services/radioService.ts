@@ -210,6 +210,15 @@ export class RadioService {
   }
 
   /**
+   * 从当前发射中移除单个操作员的音频
+   */
+  removeOperatorFromTransmission(operatorId: string): void {
+    if (this.isConnected) {
+      this.wsClient.removeOperatorFromTransmission(operatorId);
+    }
+  }
+
+  /**
    * 停止自动重连
    */
   stopReconnect(): void {

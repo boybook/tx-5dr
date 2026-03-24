@@ -76,37 +76,40 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   // 立即停止发射Popover状态
   const [isForceStopPopoverOpen, setIsForceStopPopoverOpen] = React.useState(false);
+  // 用户已点击"立即停止"后，防止 Popover 被自动重新打开（等待服务端确认）
+  const hasRequestedForceStopRef = React.useRef(false);
+
+  // 清除强制停止请求标记：
+  // - isInActivePTT 变 false（服务端确认停止）
+  // - isTransmitting 变 true（用户重新开启发射开关）
+  React.useEffect(() => {
+    if (!operatorStatus.isInActivePTT || operatorStatus.isTransmitting) {
+      hasRequestedForceStopRef.current = false;
+    }
+  }, [operatorStatus.isInActivePTT, operatorStatus.isTransmitting]);
 
   // 判断是否显示立即停止发射Popover
-  // 条件：所有操作者都已关闭发射开关，且当前周期PTT仍在进行中
+  // 条件：当前操作员已关闭发射开关，但其音频仍在被实际播放
   const shouldShowForceStopPopover = React.useCallback(() => {
+    // 已请求停止，等待服务端确认
+    if (hasRequestedForceStopRef.current) {
+      return false;
+    }
+
     // 1. 当前操作员已关闭发射开关
     if (operatorStatus.isTransmitting) {
       return false;
     }
 
-    // 2. PTT正在激活
-    if (!radio.state.pttStatus?.isTransmitting) {
-      return false;
-    }
-
-    // 3. 当前在发射周期
-    if (!operatorStatus.cycleInfo?.isTransmitCycle) {
-      return false;
-    }
-
-    // 4. 所有操作者都已关闭发射开关（不仅是当前操作者）
-    const anyOperatorTransmitting = radio.state.operators.some(op => op.isTransmitting);
-    if (anyOperatorTransmitting) {
+    // 2. 该操作员的音频正在被实际播放（PTT中）
+    if (!operatorStatus.isInActivePTT) {
       return false;
     }
 
     return true;
   }, [
     operatorStatus.isTransmitting,
-    operatorStatus.cycleInfo?.isTransmitCycle,
-    radio.state.pttStatus,
-    radio.state.operators
+    operatorStatus.isInActivePTT,
   ]);
 
   // 监听状态变化，自动打开/关闭Popover
@@ -282,10 +285,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     return '';
   };
 
-  // 处理立即停止发射
+  // 处理立即停止发射：移除当前操作员的音频并重混音
   const handleForceStop = () => {
     if (connection.state.radioService) {
-      connection.state.radioService.forceStopTransmission();
+      hasRequestedForceStopRef.current = true;
+      connection.state.radioService.removeOperatorFromTransmission(operatorStatus.id);
       setIsForceStopPopoverOpen(false);
     }
   };
