@@ -20,46 +20,6 @@ export const VoicePTTLockSchema = z.object({
 export type VoicePTTLock = z.infer<typeof VoicePTTLockSchema>;
 
 /**
- * 语音 QSO 记录（手动日志）
- * 与 FT8 自动日志不同，语音 QSO 需要用户手动输入
- */
-export const VoiceQSORecordSchema = z.object({
-  id: z.string(),
-  /** 对方呼号 */
-  callsign: z.string(),
-  /** 通联频率（Hz） */
-  frequency: z.number(),
-  /** 电台调制模式：USB/LSB/FM/AM */
-  radioMode: z.string(),
-  /** 波段（如 20m） */
-  band: z.string().optional(),
-  /** 通联开始时间（UTC timestamp） */
-  startTime: z.number(),
-  /** 通联结束时间（UTC timestamp） */
-  endTime: z.number().optional(),
-  /** RST 发送报告（如 "59"） */
-  rstSent: z.string().default('59'),
-  /** RST 接收报告（如 "59"） */
-  rstReceived: z.string().default('59'),
-  /** 对方姓名 */
-  name: z.string().optional(),
-  /** 对方 QTH */
-  qth: z.string().optional(),
-  /** 对方网格坐标 */
-  grid: z.string().optional(),
-  /** 备注 */
-  notes: z.string().optional(),
-  /** 操作员呼号 */
-  myCallsign: z.string(),
-  /** 操作员网格坐标 */
-  myGrid: z.string().optional(),
-  /** 关联的日志本 ID */
-  logBookId: z.string(),
-});
-
-export type VoiceQSORecord = z.infer<typeof VoiceQSORecordSchema>;
-
-/**
  * 引擎模式枚举
  * digital: FT8/FT4 等数字模式
  * voice: 语音通联模式（SSB/FM/AM）

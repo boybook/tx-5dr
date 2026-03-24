@@ -56,12 +56,20 @@
     "endTime": "结束时间",
     "logQSO": "记录 QSO",
     "clear": "清空",
+    "editTitle": "编辑日志",
+    "save": "保存",
+    "cancel": "取消",
     "logSuccess": "QSO 记录成功",
     "logFailed": "QSO 记录失败",
     "myCallsign": "操作员",
     "myGrid": "网格",
     "operator": "操作员",
-    "noOperator": "请先创建操作员后再记录 QSO"
+    "noOperator": "请先创建操作员后再记录 QSO",
+    "delete": "删除",
+    "deleteConfirm": "确认删除",
+    "deleteConfirmDesc": "此操作不可撤销，通联记录将被永久删除。",
+    "deleteSuccess": "通联记录已删除",
+    "deleteFailed": "删除通联记录失败"
   },
   "recentQSO": {
     "title": "最近通联",
@@ -71,7 +79,12 @@
     "callsign": "呼号",
     "freq": "频率",
     "mode": "模式",
-    "rst": "RST"
+    "rst": "RST",
+    "qth": "QTH",
+    "rstSent": "RST↑",
+    "rstReceived": "RST↓",
+    "today": "今天",
+    "yesterday": "昨天"
   },
   "layout": {
     "voiceMode": "语音模式",

@@ -36,6 +36,11 @@ export interface LogQueryOptions {
   mode?: string;
 
   /**
+   * 排除的模式列表（用于过滤掉数字模式等）
+   */
+  excludeModes?: string[];
+
+  /**
    * QSL 确认状态筛选
    * confirmed: 至少一个平台已确认 (lotwQslReceived='Y'|'V' 或 qrzQslReceived='Y')
    * uploaded: 至少一个平台已上传但无确认

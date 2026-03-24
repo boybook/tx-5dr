@@ -338,6 +338,9 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       const queryOptions: LogQueryOptions = {
         callsign: options.callsign,
         mode: options.mode,
+        excludeModes: options.excludeModes
+          ? options.excludeModes.split(',').map(m => m.trim()).filter(Boolean)
+          : undefined,
         qslStatus: options.qslStatus,
         limit: options.limit,
         offset: options.offset,
@@ -598,15 +601,20 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         myGrid = op?.config.myGrid;
       }
 
-      const logBook = logManager.getLogBook(id);
+      // 支持以呼号作为 id 参数（同 PUT 路由）
+      let logBook = logManager.getLogBook(id);
       if (!logBook) {
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct'],
-        });
+        try {
+          logBook = await logManager.getOrCreateLogBookByCallsign(id);
+        } catch {
+          throw new RadioError({
+            code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+            message: `Logbook ${id} does not exist`,
+            userMessage: 'Logbook not found',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['Check if logbook ID is correct'],
+          });
+        }
       }
 
       // 构造 QSORecord，id 格式与自动记录保持一致
@@ -621,7 +629,31 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       await logBook.provider.addQSO(record, operatorId);
       const created = await logBook.provider.getQSO(newId);
 
-      logger.info('QSO record created manually', { logBookId: id, callsign: body.callsign, operatorId });
+      logger.info('QSO record created manually', { logBookId: logBook.id, callsign: body.callsign, operatorId });
+
+      // 广播 qsoRecordAdded 事件（触发 WS 推送和前端实时更新）
+      digitalRadioEngine.emit('qsoRecordAdded' as any, {
+        operatorId: operatorId || '',
+        logBookId: logBook.id,
+        qsoRecord: record,
+      });
+      try {
+        const statistics = await logBook.provider.getStatistics();
+        digitalRadioEngine.emit('logbookUpdated' as any, {
+          logBookId: logBook.id,
+          statistics,
+          operatorId: operatorId || '',
+        });
+      } catch (statsError) {
+        logger.warn('Failed to get logbook statistics after manual QSO creation:', statsError);
+      }
+
+      // 自动同步到外部服务（WaveLog / QRZ）
+      if (myCallsign) {
+        digitalRadioEngine.operatorManager.triggerAutoSync(record, myCallsign, operatorId || '').catch((err) => {
+          logger.warn('Auto-sync failed for manually created QSO:', err);
+        });
+      }
 
       return reply.status(201).send({
         success: true,

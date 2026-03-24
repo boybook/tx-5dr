@@ -348,6 +348,7 @@ export class ADIFLogProvider implements ILogProvider {
       reportSent: fields.rst_sent,
       reportReceived: fields.rst_rcvd,
       messages: fields.comment ? [fields.comment] : [],
+      qth: fields.qth ?? undefined,
       remarks: fields.note ?? undefined,
     };
   }
@@ -395,6 +396,10 @@ export class ADIFLogProvider implements ILogProvider {
     if (qso.messages && qso.messages.length > 0) {
       const comment = qso.messages.join(' | ');
       adifRecord += `<COMMENT:${comment.length}>${comment}`;
+    }
+
+    if (qso.qth) {
+      adifRecord += `<QTH:${qso.qth.length}>${qso.qth}`;
     }
 
     if (qso.remarks) {
@@ -557,6 +562,12 @@ export class ADIFLogProvider implements ILogProvider {
       // 模式过滤
       if (options.mode) {
         results = results.filter(qso => qso.mode === options.mode);
+      }
+
+      // 排除模式过滤
+      if (options.excludeModes && options.excludeModes.length > 0) {
+        const excluded = new Set(options.excludeModes.map(m => m.toUpperCase()));
+        results = results.filter(qso => !excluded.has((qso.mode || '').toUpperCase()));
       }
       
       // QSL 确认状态过滤

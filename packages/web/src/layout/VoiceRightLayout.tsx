@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import type { QSORecord } from '@tx5dr/contracts';
 import {
   Button,
   Input,
@@ -45,6 +46,19 @@ export const VoiceRightLayout: React.FC = () => {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
+  const [selectedQSO, setSelectedQSO] = useState<QSORecord | null>(null);
+  const [lastUpdatedQSO, setLastUpdatedQSO] = useState<QSORecord | null>(null);
+  const [lastDeletedId, setLastDeletedId] = useState<string | null>(null);
+
+  const handleEditComplete = useCallback((updated: QSORecord) => {
+    setLastUpdatedQSO(updated);
+    setSelectedQSO(null);
+  }, []);
+
+  const handleDeleteComplete = useCallback((deletedId: string) => {
+    setLastDeletedId(deletedId);
+    setSelectedQSO(null);
+  }, []);
 
   const handlePopoverLogin = useCallback(async () => {
     if (!loginToken.trim()) return;
@@ -182,12 +196,23 @@ export const VoiceRightLayout: React.FC = () => {
       <div className="flex-1 p-2 pt-0 md:p-5 md:pt-0 flex flex-col gap-2 md:gap-3 min-h-0">
         {/* Recent QSOs - flat table, fills top area */}
         <div className="flex-1 min-h-0">
-          <VoiceRecentQSOList />
+          <VoiceRecentQSOList
+            selectedQSOId={selectedQSO?.id ?? null}
+            onSelectQSO={setSelectedQSO}
+            onDeselectQSO={() => setSelectedQSO(null)}
+            lastUpdatedQSO={lastUpdatedQSO}
+            lastDeletedId={lastDeletedId}
+          />
         </div>
 
         {/* QSO Log Card - full width */}
         <div className="flex-shrink-0">
-          <VoiceQSOLogCard />
+          <VoiceQSOLogCard
+            editingQSO={selectedQSO}
+            onEditComplete={handleEditComplete}
+            onDeleteComplete={handleDeleteComplete}
+            onCancelEdit={() => setSelectedQSO(null)}
+          />
         </div>
 
         {/* PTT Button + Radio Control */}
