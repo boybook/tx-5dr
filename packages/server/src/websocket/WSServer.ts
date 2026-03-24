@@ -773,6 +773,13 @@ export class WSServer extends WSMessageHandler {
         logger.debug('update_context command persisted to config file');
       }
 
+      // 如果是set_transmit_cycles命令，持久化到配置文件
+      // 否则下次通过 API 更新配置时会用文件旧值覆盖内存中的新值
+      if (command === 'set_transmit_cycles' && args?.transmitCycles !== undefined) {
+        await this.digitalRadioEngine.operatorManager.persistTransmitCycles(operatorId, args.transmitCycles);
+        logger.debug('set_transmit_cycles command persisted to config file');
+      }
+
       // 然后调用operator更新内存状态
       operator.userCommand({ command, args });
       logger.debug(`user command executed: operator=${operatorId}, command=${command}`, args);
