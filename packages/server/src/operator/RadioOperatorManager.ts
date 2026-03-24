@@ -1111,7 +1111,18 @@ export class RadioOperatorManager {
     Object.assign(operator.config, operatorConfig);
     
     logger.info(`Operator config synced and updated: ${config.id}`);
-    this.broadcastOperatorListUpdate();
+    this.emitOperatorStatusUpdate(config.id);
+  }
+
+  /**
+   * 将操作员发射周期持久化到配置文件
+   * 当通过 WS 命令 set_transmit_cycles 修改时，需要同步到配置文件，
+   * 否则下次 syncUpdateOperator() 会用文件旧值覆盖内存中的新值
+   */
+  async persistTransmitCycles(operatorId: string, transmitCycles: number[]): Promise<void> {
+    const configManager = ConfigManager.getInstance();
+    await configManager.updateOperatorConfig(operatorId, { transmitCycles });
+    logger.debug(`Persisted transmitCycles for operator ${operatorId}: [${transmitCycles.join(', ')}]`);
   }
 
   /**
