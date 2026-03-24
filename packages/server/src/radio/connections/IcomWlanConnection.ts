@@ -404,6 +404,10 @@ export class IcomWlanConnection
     };
   }
 
+  setKnownFrequency(_frequencyHz: number): void {
+    // icom-wlan-node handles frequency-aware S-meter calibration internally
+  }
+
   /**
    * 获取天线调谐器状态（简化版：使用本地状态跟踪）
    */

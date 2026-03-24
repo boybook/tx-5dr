@@ -62,6 +62,10 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
     };
   }
 
+  setKnownFrequency(_frequencyHz: number): void {
+    // no-op: null connection has no meter data
+  }
+
   getConnectionInfo(): {
     type: RadioConnectionType;
     state: RadioConnectionState;
