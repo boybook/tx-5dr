@@ -76,6 +76,7 @@ export enum WSMessageType {
   // ===== PTT状态管理 =====
   PTT_STATUS_CHANGED = 'pttStatusChanged',
   FORCE_STOP_TRANSMISSION = 'forceStopTransmission',
+  REMOVE_OPERATOR_FROM_TRANSMISSION = 'removeOperatorFromTransmission',
 
   // ===== 电台数值表 =====
   METER_DATA = 'meterData',
@@ -360,7 +361,8 @@ export const WSGetStatusMessageSchema = WSBaseMessageSchema.extend({
 export const OperatorStatusSchema = z.object({
   id: z.string(),
   isActive: z.boolean(),
-  isTransmitting: z.boolean(), // 是否正在发射
+  isTransmitting: z.boolean(), // 是否正在发射（发射开关状态）
+  isInActivePTT: z.boolean().optional(), // 该操作员的音频是否正在被实际播放
   currentSlot: z.string().optional(),
   context: z.object({
     myCall: z.string(),
@@ -741,6 +743,19 @@ export const WSForceStopTransmissionMessageSchema = WSBaseMessageSchema.extend({
 export type WSForceStopTransmissionMessage = z.infer<typeof WSForceStopTransmissionMessageSchema>;
 
 /**
+ * 从当前发射中移除单个操作员消息（客户端到服务端）
+ * 移除该操作员的音频并重混音，如果是最后一个操作员则停止PTT
+ */
+export const WSRemoveOperatorFromTransmissionMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION),
+  data: z.object({
+    operatorId: z.string(),
+  }),
+});
+
+export type WSRemoveOperatorFromTransmissionMessage = z.infer<typeof WSRemoveOperatorFromTransmissionMessageSchema>;
+
+/**
  * 电台数值表数据消息（服务端到客户端）
  */
 export const WSMeterDataMessageSchema = WSBaseMessageSchema.extend({
@@ -965,6 +980,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   // PTT状态管理消息
   WSPTTStatusChangedMessageSchema,
   WSForceStopTransmissionMessageSchema,
+  WSRemoveOperatorFromTransmissionMessageSchema,
 
   // 电台数值表消息
   WSMeterDataMessageSchema,

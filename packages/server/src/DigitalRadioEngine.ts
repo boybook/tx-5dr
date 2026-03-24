@@ -421,6 +421,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.transmissionPipeline.forceStopTransmission();
   }
 
+  public async removeOperatorFromTransmission(operatorId: string): Promise<void> {
+    return this.transmissionPipeline.removeOperatorFromTransmission(operatorId);
+  }
+
   public updateTransmitCompensation(compensationMs: number): void {
     if (this.slotClock) {
       this.slotClock.setCompensation(compensationMs);

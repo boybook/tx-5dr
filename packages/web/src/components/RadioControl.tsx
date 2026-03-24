@@ -1116,12 +1116,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   }, []);
 
   // Mute monitor audio during voice PTT to prevent echo (frontend-side)
+  // Only applies in voice mode; digital mode does not need muting
   useEffect(() => {
     if (!monitorGainNodeRef.current || !audioContextRef.current) return;
-    const isTransmitting = radio.state.pttStatus.isTransmitting;
     const now = audioContextRef.current.currentTime;
     monitorGainNodeRef.current.gain.cancelScheduledValues(now);
-    if (isTransmitting) {
+    const shouldMute = radio.state.engineMode === 'voice' && radio.state.pttStatus.isTransmitting;
+    if (shouldMute) {
       // Mute: ramp to near-zero quickly
       monitorGainNodeRef.current.gain.setValueAtTime(
         Math.max(monitorGainNodeRef.current.gain.value, 1e-6), now
@@ -1136,7 +1137,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         Math.max(monitorVolume, 1e-6), now + 0.02
       );
     }
-  }, [radio.state.pttStatus.isTransmitting, monitorVolume]);
+  }, [radio.state.pttStatus.isTransmitting, radio.state.engineMode, monitorVolume]);
 
   // 监听系统状态更新
   useEffect(() => {

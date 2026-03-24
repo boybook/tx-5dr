@@ -37,6 +37,7 @@ export class TransmissionPipeline {
   // PTT状态管理
   private _isPTTActive = false;
   private pttTimeoutId: NodeJS.Timeout | null = null;
+  private _isRemixing = false;
 
   // 编码状态跟踪
   private currentSlotExpectedEncodes: number = 0;
@@ -165,6 +166,67 @@ export class TransmissionPipeline {
     }
   }
 
+  /**
+   * 从当前发射中移除单个操作员的音频并重混音
+   * 如果移除后还有其他操作员，继续播放重混音后的音频
+   * 如果移除后没有操作员了，停止播放和PTT
+   */
+  async removeOperatorFromTransmission(operatorId: string): Promise<void> {
+    const { audioMixer, audioStreamManager } = this.deps;
+
+    const removed = audioMixer.clearOperatorAudio(operatorId);
+    if (!removed) {
+      logger.debug(`operator ${operatorId} not in mixer cache, skipping`);
+      return;
+    }
+
+    const remainingCount = audioMixer.getStatus().cacheCount;
+
+    if (remainingCount === 0) {
+      logger.info(`last operator ${operatorId} removed, stopping transmission`);
+      const stoppedBytes = await audioStreamManager.stopCurrentPlayback();
+      await this.forceStopPTT();
+      audioMixer.clear();
+      logger.info('transmission fully stopped after last operator removed', { stoppedBytes });
+      return;
+    }
+
+    if (audioStreamManager.isPlaying()) {
+      if (this._isRemixing) {
+        logger.debug(`operator ${operatorId} removed from cache, remix already in progress`);
+        return;
+      }
+
+      logger.info(`operator ${operatorId} removed, remixing with ${remainingCount} remaining`);
+      this._isRemixing = true;
+      try {
+        const elapsedTimeMs = await audioStreamManager.stopCurrentPlayback();
+        audioMixer.markPlaybackStop();
+
+        const remixedAudio = await audioMixer.remixAfterUpdate(elapsedTimeMs);
+        if (remixedAudio) {
+          this.deps.engineEmitter.emit('pttStatusChanged', {
+            isTransmitting: true,
+            operatorIds: remixedAudio.operatorIds,
+          });
+          this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
+          audioMixer.markPlaybackStart();
+          await audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
+          this.schedulePTTStop(remixedAudio.duration * 1000 + 200);
+        } else {
+          logger.info('remix returned null after operator removal, stopping PTT');
+          await this.forceStopPTT();
+        }
+      } catch (error) {
+        logger.error(`remix after operator removal failed: ${error}`);
+      } finally {
+        this._isRemixing = false;
+      }
+    } else {
+      logger.debug(`operator ${operatorId} removed from cache, not currently playing`);
+    }
+  }
+
   // ─── 内部方法 ────────────────────────────────────
 
   private async startPTT(operatorIds: string[]): Promise<void> {
@@ -192,6 +254,8 @@ export class TransmissionPipeline {
           isTransmitting: true,
           operatorIds
         });
+
+        this.deps.operatorManager.updateActiveTransmissionOperators(operatorIds);
 
         logger.debug('PTT started', { durationMs });
       } catch (error) {
@@ -226,15 +290,19 @@ export class TransmissionPipeline {
           operatorIds: []
         });
 
+        this.deps.operatorManager.updateActiveTransmissionOperators([]);
+
         logger.debug('PTT stopped');
       } catch (error) {
         logger.error(`PTT stop failed: ${error}`);
         this._isPTTActive = false;
         this.deps.spectrumScheduler.setPTTActive(false);
+        this.deps.operatorManager.updateActiveTransmissionOperators([]);
       }
     } else {
       this._isPTTActive = false;
       this.deps.spectrumScheduler.setPTTActive(false);
+      this.deps.operatorManager.updateActiveTransmissionOperators([]);
       logger.debug('radio not connected, PTT state set to stopped');
     }
   }
@@ -325,6 +393,7 @@ export class TransmissionPipeline {
               isTransmitting: true,
               operatorIds: remixedAudio.operatorIds
             });
+            this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
             this.deps.audioMixer.markPlaybackStart();
             await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
             this.schedulePTTStop(remixedAudio.duration * 1000 + 200);

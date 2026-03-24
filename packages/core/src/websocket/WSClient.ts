@@ -143,6 +143,15 @@ export class WSClient extends WSMessageHandler {
   }
 
   /**
+   * 从当前发射中移除单个操作员
+   * 如果还有其他操作员在发射，重混音继续；否则停止PTT
+   */
+  removeOperatorFromTransmission(operatorId: string): void {
+    logger.debug('Sending removeOperatorFromTransmission command', { operatorId });
+    this.send(WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION, { operatorId });
+  }
+
+  /**
    * 停止自动重连
    */
   stopReconnect(): void {
