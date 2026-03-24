@@ -276,6 +276,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
+  const [isAtTop, setIsAtTop] = useState(true);
   const [prevGroupsLength, setPrevGroupsLength] = useState(0);
   const [isNarrow, setIsNarrow] = useState(false);
   const { getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
@@ -307,9 +308,23 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     }
   }, [virtualizer, groups.length]);
 
+  const checkIfAtTop = useCallback(() => {
+    if (!scrollRef.current) return true;
+    return scrollRef.current.scrollTop <= 5;
+  }, []);
+
   const handleScroll = useCallback(() => {
     setWasAtBottom(checkIfAtBottom());
-  }, [checkIfAtBottom]);
+    setIsAtTop(checkIfAtTop());
+  }, [checkIfAtBottom, checkIfAtTop]);
+
+  // Manually control ScrollShadow visibility to work correctly with virtual scrolling
+  const scrollShadowVisibility = useMemo(() => {
+    if (isAtTop && wasAtBottom) return 'none' as const;
+    if (isAtTop) return 'bottom' as const;
+    if (wasAtBottom) return 'top' as const;
+    return 'both' as const;
+  }, [isAtTop, wasAtBottom]);
 
   // 当groups更新时，如果之前在底部且有新数据，则自动滚动到底部
   useEffect(() => {
@@ -417,7 +432,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         ref={scrollRef}
         className="flex-1"
         onScroll={handleScroll}
-        visibility={wasAtBottom ? "top" : "both"}
+        visibility={scrollShadowVisibility}
       >
         <div
           style={{
