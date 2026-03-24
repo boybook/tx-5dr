@@ -1324,8 +1324,12 @@ export class RadioOperatorManager {
   }
   
   /**
-   * 处理WaveLog自动上传
+   * 触发自动同步（公开包装，供路由层调用）
    */
+  public async triggerAutoSync(qsoRecord: QSORecord, callsign: string, operatorId: string): Promise<void> {
+    return this.handleAutoSync(qsoRecord, callsign, operatorId);
+  }
+
   /**
    * 自动上传 QSO 到已启用的同步服务（WaveLog / QRZ）
    * LoTW 不支持逐条上传（需 TQSL 批量签名），跳过

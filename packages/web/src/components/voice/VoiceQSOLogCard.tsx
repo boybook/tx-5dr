@@ -8,6 +8,9 @@ import {
   Textarea,
   Select,
   SelectItem,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronRight } from '@fortawesome/free-solid-svg-icons';
@@ -15,8 +18,9 @@ import { addToast } from '@heroui/toast';
 import { useRadioState, useConnection, useOperators, useCurrentOperatorId } from '../../store/radioStore';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
-import { getApiBaseUrl } from '../../utils/config';
+import { api } from '@tx5dr/core';
 import { useWSEvent } from '../../hooks/useWSEvent';
+import type { QSORecord } from '@tx5dr/contracts';
 
 const logger = createLogger('VoiceQSOLogCard');
 
@@ -38,13 +42,26 @@ const initialFormData: QSOFormData = {
   notes: '',
 };
 
+interface VoiceQSOLogCardProps {
+  editingQSO?: QSORecord | null;
+  onEditComplete?: (updated: QSORecord) => void;
+  onDeleteComplete?: (deletedId: string) => void;
+  onCancelEdit?: () => void;
+}
+
 /**
  * Voice QSO Log Card
  *
  * Integrates with the operator system - operator selector in top-right,
  * auto-fills myCallsign/myGrid from the selected operator.
+ * Supports both new QSO creation and editing existing QSOs.
  */
-export const VoiceQSOLogCard: React.FC = () => {
+export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
+  editingQSO,
+  onEditComplete,
+  onDeleteComplete,
+  onCancelEdit,
+}) => {
   const { t } = useTranslation('voice');
   const radio = useRadioState();
   const connection = useConnection();
@@ -54,6 +71,8 @@ export const VoiceQSOLogCard: React.FC = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [formData, setFormData] = useState<QSOFormData>(initialFormData);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deletePopoverOpen, setDeletePopoverOpen] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [endTime, setEndTime] = useState<number | null>(null);
   const [currentFrequency, setCurrentFrequency] = useState(14270000);
@@ -71,13 +90,14 @@ export const VoiceQSOLogCard: React.FC = () => {
     'frequencyChanged',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ((data: any) => {
-      if (data.frequency) setCurrentFrequency(data.frequency);
+      if (data.frequency && !editingQSO) setCurrentFrequency(data.frequency);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     }) as any
   );
 
-  // Auto-fill start/end time from PTT events
+  // Auto-fill start/end time from PTT events (only in new mode)
   useEffect(() => {
+    if (editingQSO) return;
     const isTransmitting = radio.state.pttStatus.isTransmitting;
 
     if (isTransmitting && !prevTransmitting.current) {
@@ -89,10 +109,36 @@ export const VoiceQSOLogCard: React.FC = () => {
     }
 
     prevTransmitting.current = isTransmitting;
-  }, [radio.state.pttStatus.isTransmitting, startTime]);
+  }, [radio.state.pttStatus.isTransmitting, startTime, editingQSO]);
+
+  // When editingQSO changes, pre-fill form and force expand; clear form when deselected
+  useEffect(() => {
+    if (!editingQSO) {
+      resetForm();
+      return;
+    }
+    setFormData({
+      callsign: editingQSO.callsign,
+      rstSent: editingQSO.reportSent ?? '59',
+      rstReceived: editingQSO.reportReceived ?? '59',
+      qth: editingQSO.qth ?? '',
+      grid: editingQSO.grid ?? '',
+      notes: editingQSO.remarks ?? '',
+    });
+    setStartTime(editingQSO.startTime);
+    setEndTime(editingQSO.endTime ?? null);
+    setCurrentFrequency(editingQSO.frequency);
+    setIsCollapsed(false);
+  }, [editingQSO]);
 
   const updateField = (field: keyof QSOFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const resetForm = () => {
+    setFormData(initialFormData);
+    setStartTime(null);
+    setEndTime(null);
   };
 
   const handleLogQSO = async () => {
@@ -100,45 +146,51 @@ export const VoiceQSOLogCard: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const body = {
-        id: crypto.randomUUID(),
-        callsign: formData.callsign.toUpperCase().trim(),
-        frequency: currentFrequency,
-        radioMode: radio.state.currentRadioMode || 'USB',
-        startTime: startTime || Date.now(),
-        endTime: endTime || Date.now(),
-        rstSent: formData.rstSent || '59',
-        rstReceived: formData.rstReceived || '59',
-        qth: formData.qth || undefined,
-        grid: formData.grid || undefined,
-        notes: formData.notes || undefined,
-        myCallsign: myCallsign,
-        myGrid: myGrid || undefined,
-        logBookId: currentOperator?.context?.myCall || 'default',
-      };
-
-      const response = await fetch(`${getApiBaseUrl()}/voice/qso-log`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      if (response.ok) {
+      if (editingQSO) {
+        // Edit mode: update existing QSO
+        const logbookId = editingQSO.myCallsign || myCallsign;
+        const result = await api.updateQSO(logbookId, editingQSO.id, {
+          callsign: formData.callsign.toUpperCase().trim(),
+          frequency: currentFrequency,
+          mode: radio.state.currentRadioMode || 'USB',
+          startTime: startTime ?? editingQSO.startTime,
+          endTime: endTime ?? editingQSO.endTime,
+          reportSent: formData.rstSent || '59',
+          reportReceived: formData.rstReceived || '59',
+          qth: formData.qth || undefined,
+          grid: formData.grid || undefined,
+          remarks: formData.notes || undefined,
+        });
         addToast({
           title: t('qso.logSuccess'),
           color: 'success',
           timeout: 3000,
         });
-        handleClear();
+        if (result.data) onEditComplete?.(result.data as QSORecord);
+        resetForm();
       } else {
-        const errorData = await response.json().catch(() => ({}));
-        logger.error('Failed to log QSO:', errorData);
+        // New mode: create QSO
+        const body = {
+          callsign: formData.callsign.toUpperCase().trim(),
+          frequency: currentFrequency,
+          mode: radio.state.currentRadioMode || 'USB',
+          startTime: startTime || Date.now(),
+          endTime: endTime || Date.now(),
+          reportSent: formData.rstSent || '59',
+          reportReceived: formData.rstReceived || '59',
+          qth: formData.qth || undefined,
+          grid: formData.grid || undefined,
+          remarks: formData.notes || undefined,
+        };
+
+        await api.createQSO(myCallsign, body);
+
         addToast({
-          title: t('qso.logFailed'),
-          description: errorData.message || '',
-          color: 'danger',
-          timeout: 5000,
+          title: t('qso.logSuccess'),
+          color: 'success',
+          timeout: 3000,
         });
+        resetForm();
       }
     } catch (error) {
       logger.error('Failed to log voice QSO:', error);
@@ -152,16 +204,47 @@ export const VoiceQSOLogCard: React.FC = () => {
     }
   };
 
+  const handleDelete = async () => {
+    if (!editingQSO) return;
+    setIsDeleting(true);
+    try {
+      const logbookId = editingQSO.myCallsign || myCallsign;
+      await api.deleteQSO(logbookId, editingQSO.id);
+      addToast({
+        title: t('qso.deleteSuccess'),
+        color: 'success',
+        timeout: 3000,
+      });
+      onDeleteComplete?.(editingQSO.id);
+      resetForm();
+    } catch (error) {
+      logger.error('Failed to delete QSO:', error);
+      addToast({
+        title: t('qso.deleteFailed'),
+        color: 'danger',
+        timeout: 5000,
+      });
+    } finally {
+      setIsDeleting(false);
+      setDeletePopoverOpen(false);
+    }
+  };
+
   const handleClear = () => {
-    setFormData(initialFormData);
-    setStartTime(null);
-    setEndTime(null);
+    if (editingQSO) {
+      resetForm();
+      onCancelEdit?.();
+    } else {
+      resetForm();
+    }
   };
 
   const formatTime = (timestamp: number | null): string => {
     if (!timestamp) return '--:--:--';
     return new Date(timestamp).toISOString().slice(11, 19);
   };
+
+  const isEditing = !!editingQSO;
 
   return (
     <Card className="w-full" shadow="sm">
@@ -174,7 +257,9 @@ export const VoiceQSOLogCard: React.FC = () => {
             icon={faChevronRight}
             className={`text-default-400 text-xs transition-transform duration-200 ${isCollapsed ? '' : 'rotate-90'}`}
           />
-          <span className="text-sm font-semibold">{t('qso.title')}</span>
+          <span className="text-sm font-semibold">
+            {isEditing ? t('qso.editTitle') : t('qso.title')}
+          </span>
         </div>
 
         {/* Operator selector - stop click propagation to prevent collapse toggle */}
@@ -312,16 +397,57 @@ export const VoiceQSOLogCard: React.FC = () => {
             className="flex-1"
             size="sm"
           >
-            {t('qso.logQSO')}
+            {isEditing ? t('qso.save') : t('qso.logQSO')}
           </Button>
           <Button
             variant="flat"
             onPress={handleClear}
-            isDisabled={isSubmitting}
+            isDisabled={isSubmitting || isDeleting}
             size="sm"
           >
-            {t('qso.clear')}
+            {isEditing ? t('qso.cancel') : t('qso.clear')}
           </Button>
+          {isEditing && (
+            <Popover
+              isOpen={deletePopoverOpen}
+              onOpenChange={setDeletePopoverOpen}
+              placement="top-end"
+            >
+              <PopoverTrigger>
+                <Button
+                  variant="flat"
+                  color="danger"
+                  isDisabled={isSubmitting || isDeleting}
+                  size="sm"
+                >
+                  {t('qso.delete')}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="p-3 gap-2 w-56">
+                <p className="text-sm font-medium">{t('qso.deleteConfirm')}</p>
+                <p className="text-xs text-default-500">{t('qso.deleteConfirmDesc')}</p>
+                <div className="flex gap-2 w-full pt-1">
+                  <Button
+                    size="sm"
+                    color="danger"
+                    isLoading={isDeleting}
+                    onPress={handleDelete}
+                    className="flex-1"
+                  >
+                    {t('qso.delete')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    onPress={() => setDeletePopoverOpen(false)}
+                    isDisabled={isDeleting}
+                  >
+                    {t('qso.cancel')}
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
         </div>
       </CardBody>
         </div>

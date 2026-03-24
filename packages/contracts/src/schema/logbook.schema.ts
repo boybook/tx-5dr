@@ -88,6 +88,8 @@ export const LogBookQSOQueryOptionsSchema = z.object({
   callsign: z.string().optional(),
   band: z.string().optional(),
   mode: z.string().optional(),
+  /** 排除的模式列表，逗号分隔，如 "FT8,FT4" */
+  excludeModes: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   qslStatus: z.enum(['confirmed', 'uploaded', 'none']).optional(),
@@ -111,6 +113,7 @@ export const LogBookExportOptionsSchema = z.object({
 export const UpdateQSORequestSchema = z.object({
   callsign: z.string().optional(),
   grid: z.string().optional(),
+  qth: z.string().optional(),
   frequency: z.number().optional(),
   mode: z.string().optional(),
   startTime: z.number().optional(),
@@ -142,6 +145,7 @@ export const CreateQSORequestSchema = z.object({
   startTime: z.number().positive(),
   endTime: z.number().optional(),
   grid: z.string().optional(),
+  qth: z.string().optional(),
   reportSent: z.string().optional(),
   reportReceived: z.string().optional(),
   messages: z.array(z.string()).optional().default([]),

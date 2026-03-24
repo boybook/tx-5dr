@@ -53,6 +53,7 @@ export const QSORecordSchema = z.object({
   messages: z.array(z.string()), // 消息历史
   myCallsign: z.string().optional(), // 我的呼号（操作员呼号）
   myGrid: z.string().optional(), // 我的网格定位（操作员网格）
+  qth: z.string().optional(), // 对方 QTH（地点，语音通联常用）
 
   // LoTW QSL 确认状态
   lotwQslSent: QslSentStatusSchema,

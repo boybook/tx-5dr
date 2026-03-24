@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { UserRole, VoiceQSORecordSchema } from '@tx5dr/contracts';
+import { UserRole } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { requireRole } from '../auth/authPlugin.js';
@@ -23,21 +23,6 @@ export async function voiceRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, lock: { locked: false, lockedBy: null, lockedByLabel: null, lockedAt: null, timeoutMs: 180000 } });
     }
     return reply.send({ success: true, lock: voiceSessionManager.getPTTLockState() });
-  });
-
-  // POST /qso-log - save voice QSO record (require OPERATOR role)
-  fastify.post('/qso-log', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
-  }, async (req, reply) => {
-    try {
-      const record = VoiceQSORecordSchema.parse(req.body);
-      logger.info('Voice QSO logged', { callsign: record.callsign, frequency: record.frequency, radioMode: record.radioMode });
-
-      // TODO: persist to logbook when voice logbook integration is implemented
-      return reply.send({ success: true, record });
-    } catch (error) {
-      throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
-    }
   });
 
   // GET /config - return voice callsign and grid

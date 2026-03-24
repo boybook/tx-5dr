@@ -56,12 +56,20 @@
     "endTime": "End Time",
     "logQSO": "Log QSO",
     "clear": "Clear",
+    "editTitle": "Edit Log",
+    "save": "Save",
+    "cancel": "Cancel",
     "logSuccess": "QSO logged successfully",
     "logFailed": "Failed to log QSO",
     "myCallsign": "Operator",
     "myGrid": "Grid",
     "operator": "Operator",
-    "noOperator": "Please create an operator before logging QSO"
+    "noOperator": "Please create an operator before logging QSO",
+    "delete": "Delete",
+    "deleteConfirm": "Confirm Delete",
+    "deleteConfirmDesc": "This action cannot be undone. The QSO record will be permanently deleted.",
+    "deleteSuccess": "QSO record deleted",
+    "deleteFailed": "Failed to delete QSO record"
   },
   "recentQSO": {
     "title": "Recent QSOs",
@@ -71,7 +79,12 @@
     "callsign": "Callsign",
     "freq": "Freq",
     "mode": "Mode",
-    "rst": "RST"
+    "rst": "RST",
+    "qth": "QTH",
+    "rstSent": "RST↑",
+    "rstReceived": "RST↓",
+    "today": "Today",
+    "yesterday": "Yesterday"
   },
   "layout": {
     "voiceMode": "Voice Mode",
