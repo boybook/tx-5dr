@@ -45,14 +45,14 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 添加发射帧到指定时隙包
    * 将发射的消息作为特殊的帧添加到SlotPack中
    */
-  addTransmissionFrame(slotId: string, operatorId: string, message: string, frequency: number, timestamp: number): void {
+  addTransmissionFrame(slotId: string, operatorId: string, message: string, frequency: number, timestamp: number, replaceExisting?: boolean): void {
     try {
       // 获取或创建时隙包
       let slotPack = this.slotPacks.get(slotId);
       if (!slotPack) {
         slotPack = this.createSlotPack(slotId, timestamp);
         this.slotPacks.set(slotId, slotPack);
-        
+
         // 更新最新的 SlotPack
         if (!this.lastSlotPack || slotPack.startMs > this.lastSlotPack.startMs) {
           this.lastSlotPack = slotPack;
@@ -66,29 +66,42 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         dt: 0.0, // 发射消息时间偏移设为0
         freq: frequency, // 使用操作员配置的频率
         confidence: 1.0, // 发射消息置信度为1.0
+        operatorId, // 存储操作员ID，用于多操作员覆盖识别
         // 不设置logbookAnalysis，发射消息不需要分析
       };
 
-      // 检查是否已经存在相同的发射帧（避免重复添加）
-      const existingTransmissionFrame = slotPack.frames.find(frame => 
-        frame.snr === -999 && 
-        frame.message === message && 
-        Math.abs(frame.freq - frequency) < 1 // 频率允许1Hz误差
-      );
+      if (replaceExisting) {
+        // 覆盖模式（自动重决策）：替换同一操作员的现有 TX 帧
+        const existingIdx = slotPack.frames.findIndex(frame =>
+          frame.snr === -999 && frame.operatorId === operatorId
+        );
+        if (existingIdx >= 0) {
+          slotPack.frames[existingIdx] = transmissionFrame;
+          logger.debug(`Replaced transmission frame: operator=${operatorId}, message="${message}"`);
+        } else {
+          slotPack.frames.unshift(transmissionFrame);
+          logger.debug(`Added transmission frame (replace mode, no existing): operator=${operatorId}, message="${message}"`);
+        }
+      } else {
+        // 新增模式（手动操作/首次发射）：检查完全相同的帧才跳过
+        const existingTransmissionFrame = slotPack.frames.find(frame =>
+          frame.snr === -999 &&
+          frame.message === message &&
+          Math.abs(frame.freq - frequency) < 1 // 频率允许1Hz误差
+        );
 
-      if (existingTransmissionFrame) {
-        logger.debug(`Transmission frame already exists, skipping duplicate: ${message}`);
-        return;
+        if (existingTransmissionFrame) {
+          logger.debug(`Transmission frame already exists, skipping duplicate: ${message}`);
+          return;
+        }
+
+        slotPack.frames.unshift(transmissionFrame);
+        logger.debug(`Added transmission frame: slotId=${slotId}, operator=${operatorId}, message="${message}"`);
       }
-
-      // 添加发射帧到frames数组的开头（让发射消息显示在接收消息之前）
-      slotPack.frames.unshift(transmissionFrame);
       
       // 更新统计信息
       slotPack.stats.lastUpdated = timestamp;
       slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
-
-      logger.debug(`Added transmission frame: slotId=${slotId}, operator=${operatorId}, message="${message}"`);
 
       // 异步存储到本地（不阻塞主流程）
       if (this.persistenceEnabled) {
