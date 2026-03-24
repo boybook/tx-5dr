@@ -245,7 +245,7 @@ export interface ILogProvider {
    * 导出日志（ADIF格式）
    * @param options 查询选项
    */
-  exportADIF(options?: LogQueryOptions): Promise<string>;
+  exportADIF(options?: LogQueryOptions, exportOptions?: { fallbackGrid?: string }): Promise<string>;
   
   /**
    * 导出日志（CSV格式）

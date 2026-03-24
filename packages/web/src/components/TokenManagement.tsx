@@ -404,6 +404,7 @@ export function TokenManagement() {
                     operators={operators}
                     onRevoke={handleRevoke}
                     onRegenerate={handleRegenerate}
+                    onShare={handleShare}
                   />
                 ))}
               </>

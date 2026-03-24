@@ -42,7 +42,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       }>;
 
       await configManager.updateFT8Config(updates);
-      fastify.log.info('FT8 config updated:', updates);
+      fastify.log.info({ updates }, 'FT8 config updated');
 
       return reply.code(200).send({
         success: true,

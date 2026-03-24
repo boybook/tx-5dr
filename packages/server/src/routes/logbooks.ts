@@ -10,6 +10,7 @@ import {
   LogBookQSOQueryOptionsSchema,
   LogBookExportOptionsSchema,
   UpdateQSORequestSchema,
+  CreateQSORequestSchema,
   UserRole,
   type LogBookInfo,
   type CreateLogBookRequest,
@@ -18,8 +19,11 @@ import {
   type LogBookQSOQueryOptions,
   type LogBookExportOptions,
   type UpdateQSORequest,
+  type CreateQSORequest,
+  type QSORecord,
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import { ConfigManager } from '../config/config-manager.js';
 import { LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
@@ -501,12 +505,13 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       if (options.format === 'csv') {
         exportedData = await logBook.provider.exportCSV(queryOptions);
       } else {
-        exportedData = await logBook.provider.exportADIF(queryOptions);
+        const stationGrid = ConfigManager.getInstance().getStationInfo().qth?.grid;
+        exportedData = await logBook.provider.exportADIF(queryOptions, { fallbackGrid: stationGrid });
       }
       
       // 确保返回的是字符串
       if (typeof exportedData !== 'string') {
-        fastify.log.error('Export method returned non-string type:', typeof exportedData, exportedData);
+        fastify.log.error({ type: typeof exportedData }, 'Export method returned non-string type');
         throw new Error('Export data format error');
       }
 
@@ -567,6 +572,63 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  /**
+   * 手动补录 QSO 记录
+   * POST /api/logbooks/:id/qsos
+   */
+  fastify.post<{ Params: { id: string }; Body: CreateQSORequest }>('/:id/qsos', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const body = CreateQSORequestSchema.parse(request.body);
+      const authUser = request.authUser!;
+
+      // OPERATOR 取第一个关联操作员，ADMIN 时 operatorIds 为空数组
+      const operatorId = authUser.operatorIds?.[0];
+
+      // 从 operatorManager 取 myCallsign / myGrid
+      let myCallsign: string | undefined;
+      let myGrid: string | undefined;
+      if (operatorId) {
+        const op = digitalRadioEngine.operatorManager.getOperator(operatorId);
+        myCallsign = op?.config.myCallsign;
+        myGrid = op?.config.myGrid;
+      }
+
+      const logBook = logManager.getLogBook(id);
+      if (!logBook) {
+        throw new RadioError({
+          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+          message: `Logbook ${id} does not exist`,
+          userMessage: 'Logbook not found',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: ['Check if logbook ID is correct'],
+        });
+      }
+
+      // 构造 QSORecord，id 格式与自动记录保持一致
+      const newId = `${body.callsign}_${body.startTime}_${Date.now()}_${operatorId || 'manual'}`;
+      const record: QSORecord = {
+        id: newId,
+        ...body,
+        myCallsign,
+        myGrid,
+      };
+
+      await logBook.provider.addQSO(record, operatorId);
+      const created = await logBook.provider.getQSO(newId);
+
+      logger.info('QSO record created manually', { logBookId: id, callsign: body.callsign, operatorId });
+
+      return reply.status(201).send({
+        success: true,
+        message: 'QSO record created',
+        data: created,
+      });
+    } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });

@@ -98,7 +98,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
       
       // 更新配置（只存储设备名称）
       await configManager.updateAudioConfig(settings);
-      fastify.log.info('Audio device config updated:', settings);
+      fastify.log.info({ settings }, 'Audio device config updated');
       
       // 如果引擎之前在运行，重新启动它
       if (wasRunning) {

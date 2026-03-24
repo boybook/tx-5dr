@@ -557,9 +557,8 @@ export const VoiceFrequencyControl: React.FC = () => {
                 const key = Array.from(keys)[0] as string;
                 if (key) handlePresetSelect(key);
               }}
-              isDisabled={!isAdmin}
               variant="flat"
-              className="p-0"
+              className={`p-0${!isAdmin ? ' opacity-50 pointer-events-none' : ''}`}
             >
               {Object.entries(groupedPresets).map(([band, bandPresets]) => (
                 <ListboxSection key={band} title={band} showDivider>

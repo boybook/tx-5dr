@@ -241,20 +241,20 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           aria-label={t('audio.selectInput')}
         >
           {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
-          {selectedInputDeviceName && !inputDevices.find(d => d.name === selectedInputDeviceName) && (
-            <SelectItem
-              key={selectedInputDeviceName}
-              textValue={`${selectedInputDeviceName} (${t('audio.deviceUnavailableShort')})`}
-              className="text-warning"
-            >
-              <div className="flex flex-col">
-                <span className="text-warning">{selectedInputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
-                <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
-              </div>
-            </SelectItem>
-          )}
+          {(selectedInputDeviceName && !inputDevices.find(d => d.name === selectedInputDeviceName)
+            ? <SelectItem
+                key={selectedInputDeviceName}
+                textValue={`${selectedInputDeviceName} (${t('audio.deviceUnavailableShort')})`}
+                className="text-warning"
+              >
+                <div className="flex flex-col">
+                  <span className="text-warning">{selectedInputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
+                  <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
+                </div>
+              </SelectItem>
+            : undefined) as unknown as React.ReactElement}
           {/* 可用设备列表 */}
-          {inputDevices.map((device) => (
+          {(inputDevices.map((device) => (
             <SelectItem
               key={device.name}
               textValue={`${device.name} ${device.isDefault ? `(${t('audio.default')})` : ''}`}
@@ -264,7 +264,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
                 <span className="text-xs text-default-400">{device.channels}{t('audio.channels')}, {device.sampleRate}Hz</span>
               </div>
             </SelectItem>
-          ))}
+          )) as unknown as React.ReactElement)}
         </Select>
 
         <Select
@@ -279,20 +279,20 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
           aria-label={t('audio.selectOutput')}
         >
           {/* 当前选中的设备如果不在可用设备列表中，则显示为失效状态 */}
-          {selectedOutputDeviceName && !outputDevices.find(d => d.name === selectedOutputDeviceName) && (
-            <SelectItem
-              key={selectedOutputDeviceName}
-              textValue={`${selectedOutputDeviceName} (${t('audio.deviceUnavailableShort')})`}
-              className="text-warning"
-            >
-              <div className="flex flex-col">
-                <span className="text-warning">{selectedOutputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
-                <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
-              </div>
-            </SelectItem>
-          )}
+          {(selectedOutputDeviceName && !outputDevices.find(d => d.name === selectedOutputDeviceName)
+            ? <SelectItem
+                key={selectedOutputDeviceName}
+                textValue={`${selectedOutputDeviceName} (${t('audio.deviceUnavailableShort')})`}
+                className="text-warning"
+              >
+                <div className="flex flex-col">
+                  <span className="text-warning">{selectedOutputDeviceName} ({t('audio.deviceUnavailableShort')})</span>
+                  <span className="text-xs text-warning-400">{t('audio.deviceUnavailable')}</span>
+                </div>
+              </SelectItem>
+            : undefined) as unknown as React.ReactElement}
           {/* 可用设备列表 */}
-          {outputDevices.map((device) => (
+          {(outputDevices.map((device) => (
             <SelectItem
               key={device.name}
               textValue={`${device.name} ${device.isDefault ? `(${t('audio.default')})` : ''}`}
@@ -302,7 +302,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
                 <span className="text-xs text-default-400">{device.channels}{t('audio.channels')}, {device.sampleRate}Hz</span>
               </div>
             </SelectItem>
-          ))}
+          )) as unknown as React.ReactElement)}
         </Select>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

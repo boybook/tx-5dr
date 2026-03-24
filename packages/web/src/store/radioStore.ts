@@ -630,7 +630,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const localizedError = errorCode
             ? i18n.t(`auth:errors.${errorCode}`, { defaultValue: errorCode })
             : i18n.t('auth:login.failed');
-          logger.error('Auth failed:', errorCode, '->', localizedError);
+          logger.error('Auth failed', { errorCode, localizedError });
         }
       },
       // JWT 过期通知
@@ -852,7 +852,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         try {
           const { api } = await import('@tx5dr/core');
           const profilesResponse = await api.getProfiles();
-          logger.info('Profile list synced:', profilesResponse.profiles.length, 'profiles');
+          logger.info('Profile list synced', { count: profilesResponse.profiles.length });
           radioDispatch({
             type: 'setProfiles',
             payload: {
@@ -891,7 +891,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           reason?: string;
           message?: string;
         };
-        logger.debug('Radio status changed:', radioData.status || (radioData.connected ? 'connected' : 'disconnected'), radioData.reason || '');
+        logger.debug('Radio status changed', { status: radioData.status || (radioData.connected ? 'connected' : 'disconnected'), reason: radioData.reason });
 
         radioDispatch({
           type: 'radioStatusUpdate',
@@ -958,12 +958,12 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Profile 管理事件
       profileChanged: (data: unknown) => {
         const profileData = data as ProfileChangedEvent;
-        logger.info('Profile switched:', profileData.profileId, profileData.profile.name);
+        logger.info('Profile switched', { profileId: profileData.profileId, name: profileData.profile.name });
         radioDispatch({ type: 'profileChanged', payload: profileData });
       },
       profileListUpdated: (data: unknown) => {
         const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null };
-        logger.info('Profile list updated:', listData.profiles.length, 'profiles');
+        logger.info('Profile list updated', { count: listData.profiles.length });
         radioDispatch({ type: 'profileListUpdated', payload: listData });
       },
       // Voice mode events

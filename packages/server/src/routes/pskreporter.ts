@@ -65,7 +65,7 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
       const service = getPSKReporterService();
       await service.onConfigChanged();
 
-      fastify.log.info('PSKReporter configuration updated:', updates);
+      fastify.log.info({ updates }, 'PSKReporter configuration updated');
 
       return reply.code(200).send({
         success: true,

@@ -289,7 +289,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     label={t('radio.port')}
                     placeholder="4532"
                     type="number"
-                    value={config.network?.port || ''}
+                    value={String(config.network?.port ?? '')}
                     onChange={e => updateConfig({ network: { host: config.network?.host ?? 'localhost', port: Number(e.target.value) } })}
                   />
                   <Divider />
@@ -821,27 +821,27 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     label={t('radio.ipAddress')}
                     placeholder="192.168.1.100"
                     value={config.icomWlan?.ip || ''}
-                    onChange={e => updateConfig({ icomWlan: { ip: e.target.value, port: config.icomWlan?.port ?? 50001, userName: config.icomWlan?.userName, password: config.icomWlan?.password } })}
+                    onChange={e => updateConfig({ icomWlan: { ip: e.target.value, port: config.icomWlan?.port ?? 50001, dataMode: config.icomWlan?.dataMode ?? false, userName: config.icomWlan?.userName, password: config.icomWlan?.password } })}
                   />
                   <Input
                     label={t('radio.port')}
                     placeholder="50001"
                     type="number"
-                    value={config.icomWlan?.port || ''}
-                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: Number(e.target.value), userName: config.icomWlan?.userName, password: config.icomWlan?.password } })}
+                    value={String(config.icomWlan?.port ?? '')}
+                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: Number(e.target.value), dataMode: config.icomWlan?.dataMode ?? false, userName: config.icomWlan?.userName, password: config.icomWlan?.password } })}
                   />
                   <Input
                     label={t('radio.username')}
                     placeholder="admin"
                     value={config.icomWlan?.userName || ''}
-                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: config.icomWlan?.port ?? 50001, userName: e.target.value, password: config.icomWlan?.password } })}
+                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: config.icomWlan?.port ?? 50001, dataMode: config.icomWlan?.dataMode ?? false, userName: e.target.value, password: config.icomWlan?.password } })}
                   />
                   <Input
                     label={t('radio.password')}
                     placeholder={t('radio.password')}
                     type="password"
                     value={config.icomWlan?.password || ''}
-                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: config.icomWlan?.port ?? 50001, userName: config.icomWlan?.userName, password: e.target.value } })}
+                    onChange={e => updateConfig({ icomWlan: { ip: config.icomWlan?.ip ?? '', port: config.icomWlan?.port ?? 50001, dataMode: config.icomWlan?.dataMode ?? false, userName: config.icomWlan?.userName, password: e.target.value } })}
                   />
                   <Divider />
                   <div className="flex gap-2">

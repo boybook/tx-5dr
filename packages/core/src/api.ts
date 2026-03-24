@@ -23,6 +23,7 @@ import type {
   LogBookExportOptions,
   QSORecord,
   UpdateQSORequest,
+  CreateQSORequest,
   QSOActionResponse,
   WaveLogConfig,
   WaveLogTestConnectionRequest,
@@ -1240,6 +1241,28 @@ export const api = {
   },
 
   /**
+   * 手动补录新 QSO 记录
+   */
+  async createQSO(logbookId: string, data: CreateQSORequest, apiBase?: string): Promise<QSOActionResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const res = await fetch(`${baseUrl}/logbooks/${logbookId}/qsos`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `Failed to create QSO record: ${res.status} ${res.statusText}`);
+    }
+
+    return await res.json();
+  },
+
+  /**
    * 更新单条QSO记录
    */
   async updateQSO(logbookId: string, qsoId: string, updates: UpdateQSORequest, apiBase?: string): Promise<QSOActionResponse> {
@@ -1641,6 +1664,7 @@ export const {
   getLogBookQSOs,
   exportLogBook,
   importToLogBook,
+  createQSO,
   updateQSO,
   deleteQSO,
   // 按呼号同步配置函数

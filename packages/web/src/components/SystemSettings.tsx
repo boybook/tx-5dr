@@ -116,8 +116,9 @@ export const SystemSettings = forwardRef<
   const loadSettings = async () => {
     try {
       const result = await api.getFT8Settings();
-      const decodeValue = result.data?.decodeWhileTransmitting ?? false;
-      const spectrumValue = result.data?.spectrumWhileTransmitting ?? true;
+      const ft8Data = result.data as { decodeWhileTransmitting?: boolean; spectrumWhileTransmitting?: boolean } | undefined;
+      const decodeValue = ft8Data?.decodeWhileTransmitting ?? false;
+      const spectrumValue = ft8Data?.spectrumWhileTransmitting ?? true;
 
       setDecodeWhileTransmitting(decodeValue);
       setOriginalDecodeValue(decodeValue);

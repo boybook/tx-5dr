@@ -5,7 +5,7 @@ import {
 } from '@heroui/react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDisplayNotificationSettings } from '../hooks/useDisplayNotificationSettings';
-import { getHighlightTypeLabels } from '../utils/displayNotificationSettings';
+import { getHighlightTypeLabels, HighlightType } from '../utils/displayNotificationSettings';
 import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../utils/colorUtils';
 import { FlagDisplay } from './FlagDisplay';
@@ -105,8 +105,8 @@ interface MessageRowProps {
   showLogbookAnalysisVisuals: boolean;
   isZh: boolean;
   highlightTypeLabels: Record<string, string>;
-  getHighestPriorityHighlight: (analysis: NonNullable<FrameDisplayMessage['logbookAnalysis']>) => string | null;
-  getHighlightColor: (type: string) => string;
+  getHighestPriorityHighlight: (analysis: NonNullable<FrameDisplayMessage['logbookAnalysis']>) => HighlightType | null;
+  getHighlightColor: (type: HighlightType) => string;
   onDoubleClick?: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
