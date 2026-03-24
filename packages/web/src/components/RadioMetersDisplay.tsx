@@ -44,12 +44,16 @@ const Meter: React.FC<MeterProps> = ({
     return 'primary';
   };
 
+  const isWarning = !alert && progressValue > 80;
+
   return (
     <div className="flex-1 px-2">
       <div className="mb-1 flex items-center justify-between">
         <span className={`text-xs font-semibold ${
           alert
             ? 'text-danger dark:text-danger-400'
+            : isWarning
+            ? 'text-warning dark:text-warning-400'
             : isTimeout
             ? 'text-default-400 dark:text-default-500'
             : 'text-default-700 dark:text-default-300'
@@ -59,6 +63,8 @@ const Meter: React.FC<MeterProps> = ({
         <span className={`text-xs font-mono tabular-nums ${
           alert
             ? 'text-danger font-bold animate-pulse'
+            : isWarning
+            ? 'text-warning font-semibold'
             : isTimeout
             ? 'text-default-400 dark:text-default-500'
             : 'text-default-600 dark:text-default-400'

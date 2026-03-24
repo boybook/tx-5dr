@@ -852,8 +852,8 @@ export class HamlibConnection
     // percent: 0.0-1.0 映射到 0-100
     const percent = alcValue * 100;
 
-    // alert: ALC > 80% 视为过载告警
-    const alert = alcValue > 0.8;
+    // alert: ALC at maximum (>= 100%) indicates true overload (clipped)
+    const alert = alcValue >= 1.0;
 
     return { raw, percent, alert };
   }
