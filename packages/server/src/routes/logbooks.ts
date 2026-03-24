@@ -27,6 +27,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
+import { normalizeCallsign } from '../utils/callsign.js';
 
 const logger = createLogger('LogbooksRoute');
 
@@ -49,11 +50,22 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    */
   fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      // ADMIN 看全部（含孤儿日志本），OPERATOR 只看自己操作员关联的日志本
+      // ADMIN 看全部（含孤儿日志本），OPERATOR 只看自己呼号关联的日志本
       const authUser = request.authUser!;
-      const logBooks = authUser.role === UserRole.ADMIN
-        ? logManager.getLogBooks()
-        : logManager.getAccessibleLogBooks(authUser.operatorIds);
+      let logBooks;
+      if (authUser.role === UserRole.ADMIN) {
+        logBooks = logManager.getLogBooks();
+      } else {
+        // 构建用户归一化呼号集合
+        const operatorsConfig = ConfigManager.getInstance().getOperatorsConfig();
+        const userCallsigns = new Set<string>();
+        for (const op of operatorsConfig) {
+          if (authUser.operatorIds.includes(op.id)) {
+            userCallsigns.add(normalizeCallsign(op.myCallsign));
+          }
+        }
+        logBooks = logManager.getAccessibleLogBooksByCallsigns(userCallsigns);
+      }
 
       // 转换为API格式
       const logBookInfos: LogBookInfo[] = logBooks.map(book => ({
