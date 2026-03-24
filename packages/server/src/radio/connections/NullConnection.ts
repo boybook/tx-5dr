@@ -59,6 +59,7 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
       swr: false,
       alc: false,
       power: false,
+      powerWatts: false,
     };
   }
 

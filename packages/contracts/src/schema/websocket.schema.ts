@@ -205,7 +205,8 @@ export const MeterCapabilitiesSchema = z.object({
   strength: z.boolean(),  // 接收信号强度 (STRENGTH)
   swr: z.boolean(),       // 驻波比 (SWR)
   alc: z.boolean(),       // 自动电平控制 (ALC)
-  power: z.boolean(),     // 射频功率 (RFPOWER_METER)
+  power: z.boolean(),     // 射频功率 (RFPOWER_METER / RFPOWER_METER_WATTS)
+  powerWatts: z.boolean(),  // 是否支持绝对瓦数读取 (RFPOWER_METER_WATTS)
 });
 export type MeterCapabilities = z.infer<typeof MeterCapabilitiesSchema>;
 
@@ -225,6 +226,7 @@ export const MeterDataSchema = z.object({
   power: z.object({
     raw: z.number(),
     percent: z.number(),
+    watts: z.number().nullable(),  // 绝对瓦数（仅当电台支持 RFPOWER_METER_WATTS 时非 null）
   }).nullable(),
 });
 
