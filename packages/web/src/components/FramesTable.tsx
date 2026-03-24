@@ -295,14 +295,17 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const checkIfAtBottom = useCallback(() => {
     if (!scrollRef.current) return false;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    return scrollTop + clientHeight >= scrollHeight - 5;
+    // Use 50px tolerance to account for virtualizer estimated size inaccuracies
+    return scrollTop + clientHeight >= scrollHeight - 50;
   }, []);
 
   const scrollToBottom = useCallback(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (groups.length > 0) {
+      // Use virtualizer.scrollToIndex instead of direct scrollTop manipulation,
+      // as the virtual list's internal offset table is more accurate than DOM scrollHeight
+      virtualizer.scrollToIndex(groups.length - 1, { align: 'end' });
     }
-  }, []);
+  }, [virtualizer, groups.length]);
 
   const handleScroll = useCallback(() => {
     setWasAtBottom(checkIfAtBottom());
@@ -414,6 +417,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         ref={scrollRef}
         className="flex-1"
         onScroll={handleScroll}
+        visibility={wasAtBottom ? "top" : "both"}
       >
         <div
           style={{
