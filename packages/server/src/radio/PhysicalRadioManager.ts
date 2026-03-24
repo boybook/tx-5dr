@@ -1141,6 +1141,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         );
 
         this.lastKnownFrequency = currentFrequency;
+        this.connection!.setKnownFrequency(currentFrequency);
 
         // 发射频率变化事件
         this.emit('radioFrequencyChanged', currentFrequency);
@@ -1148,6 +1149,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         // 首次获取频率
         logger.debug(`Initial frequency: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
         this.lastKnownFrequency = currentFrequency;
+        this.connection!.setKnownFrequency(currentFrequency);
       }
     } catch (error) {
       // 静默处理错误（getFrequency 已经有错误处理）

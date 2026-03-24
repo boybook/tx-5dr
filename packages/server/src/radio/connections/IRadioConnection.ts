@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
+import type { HamlibConfig, LevelMeterReading, MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 
 /**
  * 电台连接类型
@@ -64,7 +64,7 @@ export enum RadioConnectionState {
 export interface MeterData {
   swr: { raw: number; swr: number; alert: boolean } | null;
   alc: { raw: number; percent: number; alert: boolean } | null;
-  level: { raw: number; percent: number } | null;
+  level: LevelMeterReading | null;
   power: { raw: number; percent: number } | null;
 }
 
@@ -253,4 +253,12 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @optional 不是所有连接类型都需要实现
    */
   getMeterCapabilities?(): MeterCapabilities;
+
+  /**
+   * 通知连接对象当前工作频率，用于选择正确的 S 表标准（HF vs VHF/UHF）。
+   * 由 PhysicalRadioManager 在检测到频率变化时调用。
+   *
+   * @param frequencyHz - 当前频率（Hz）
+   */
+  setKnownFrequency(frequencyHz: number): void;
 }

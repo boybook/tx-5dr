@@ -11,7 +11,8 @@
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
 import type { PttType } from 'hamlib';
-import type { HamlibConfig, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
+import type { HamlibConfig, LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
+import { hamlibStrengthToLevelMeterReading } from './meterUtils.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
@@ -84,6 +85,12 @@ export class HamlibConnection
    * 电台支持的 level 集合（连接时检测）
    */
   private supportedLevels: Set<string> = new Set();
+
+  /**
+   * 当前工作频率（Hz），由 PhysicalRadioManager 通过 setKnownFrequency 更新
+   * 用于选择正确的 S 表标准（HF: S9=-73dBm vs VHF/UHF: S9=-93dBm）
+   */
+  private currentFrequencyHz: number = 0;
 
   constructor() {
     super();
@@ -289,10 +296,18 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
+      this.currentFrequencyHz = frequency;
       logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
     } catch (error) {
       throw this.convertError(error, 'setFrequency');
     }
+  }
+
+  /**
+   * 通知连接对象当前工作频率，用于选择正确的 S 表标准（HF vs VHF/UHF）
+   */
+  setKnownFrequency(frequencyHz: number): void {
+    this.currentFrequencyHz = frequencyHz;
   }
 
   /**
@@ -804,27 +819,11 @@ export class HamlibConnection
   }
 
   /**
-   * 将 Hamlib STRENGTH 转换为 Level 数据
+   * 将 Hamlib STRENGTH 转换为完整的 LevelMeterReading
    * @param dbValue - Hamlib 返回的 dB 值（相对于 S9）
    */
-  private convertStrengthToLevel(dbValue: number): { raw: number; percent: number } {
-    // S9 = -73 dBm（标准参考点）
-    // 每个 S 单位 = 6 dB
-    // S0 = -127 dBm, S9 = -73 dBm, S9+60 = -13 dBm
-
-    // 将 dB 值转换为绝对 dBm（假设 S9 = -73 dBm）
-    const dBm = -73 + dbValue;
-
-    // 映射到 0-100% 范围
-    // 范围：-127 dBm (0%) 到 -13 dBm (100%)
-    const minDbm = -127;
-    const maxDbm = -13;
-    const percent = Math.max(0, Math.min(100, ((dBm - minDbm) / (maxDbm - minDbm)) * 100));
-
-    // 模拟原始值（0-255 范围）
-    const raw = Math.round((percent / 100) * 255);
-
-    return { raw, percent };
+  private convertStrengthToLevel(dbValue: number): LevelMeterReading {
+    return hamlibStrengthToLevelMeterReading(dbValue, this.currentFrequencyHz);
   }
 
   /**
