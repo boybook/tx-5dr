@@ -924,73 +924,96 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.currentAudioData = playbackData;
       this.currentSampleRate = this.sampleRate;
       
-      // 分块播放，使用背压与时间节奏双重节流，避免过度预写导致无法即时停止
-      const framesPerBuffer = Math.max(64, this.bufferSize || 1024); // 与 outOptions.framesPerBuffer 对齐
-      const chunkSize = framesPerBuffer * this.channels; // 单声道时等于 framesPerBuffer
+      // 分块播放，使用 setInterval 高频轮询 + 追赶写入
+      // 相比链式 await setTimeout，setInterval 在事件循环延迟后能立即追赶
+      const TICK_MS = 5;
+      const framesPerBuffer = Math.max(64, this.bufferSize || 1024);
+      const chunkSize = framesPerBuffer * this.channels;
       const totalChunks = Math.ceil(playbackData.length / chunkSize);
 
-      // 目标预缓冲时长，避免定时器抖动导致咔哒声（约 80~120ms）
+      // 预缓冲目标（~85ms），控制延迟的同时避免 underrun
       const prebufferMs = Math.max(60, Math.min(200, Math.round((framesPerBuffer / this.sampleRate) * 1000 * 4)));
+      const prebufferSamples = Math.ceil((prebufferMs / 1000) * this.sampleRate);
 
-      logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms`);
+      logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms`);
 
-      const chunkStartTime = Date.now();
-      const hrStart = performance.now();
-      let samplesWritten = 0;
-
-      const wait = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
-
+      // Pre-build all chunk buffers with gain applied (avoid per-tick allocation)
+      const gain = this.volumeGain;
+      const chunkBuffers: Buffer[] = [];
+      const chunkSamples: number[] = [];
       for (let i = 0; i < totalChunks; i++) {
-        if (this.shouldStopPlayback) {
-          logger.debug(`stop signal received, aborting playback (submitted ${i}/${totalChunks} chunks)`);
-          throw new Error('playback interrupted');
-        }
-
         const start = i * chunkSize;
         const end = Math.min(start + chunkSize, playbackData.length);
         const chunk = playbackData.subarray(start, end);
-
-        // 节拍控制：确保最多领先 prebufferMs
-        const elapsedMs = performance.now() - hrStart;
-        const producedMs = (samplesWritten / this.sampleRate) * 1000;
-        const leadMs = producedMs - elapsedMs;
-        if (leadMs > prebufferMs) {
-          // 过度领先，等待至窗口内
-          await wait(Math.min(20, Math.max(1, Math.floor(leadMs - prebufferMs))));
-        }
-
-        // 转换为 Buffer
         const buffer = Buffer.allocUnsafe(chunk.length * 4);
-        // 在写入时应用当前音量增益，避免全局原地放大导致的阻塞/中断
-        const gain = this.volumeGain;
         for (let j = 0; j < chunk.length; j++) {
           const s = chunk[j] * gain;
-          // 可选限幅，防止异常爆音
           const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
           buffer.writeFloatLE(clamped, j * 4);
         }
-
-        // 写入音频数据（Audify 无背压机制，依赖时间节拍控制流速）
-        if (!this.rtAudioOutput) {
-          throw new Error('audio output not initialized');
-        }
-        try {
-          this.rtAudioOutput.write(buffer);
-        } catch {
-          // write 异常时短暂等待后继续（缓冲区满等情况）
-          await wait(5);
-        }
-
-        samplesWritten += chunk.length;
+        chunkBuffers.push(buffer);
+        chunkSamples.push(chunk.length);
       }
 
-      const chunkEndTime = Date.now();
-      const chunkDuration = chunkEndTime - chunkStartTime;
-      logger.debug(`chunked write complete at ${new Date(chunkEndTime).toISOString()}, duration: ${chunkDuration}ms`);
+      const chunkStartTime = Date.now();
 
-      const playEndTime = Date.now();
-      const playDuration = playEndTime - playStartTime;
-      logger.info(`playback complete at ${new Date(playEndTime).toISOString()}, duration: ${playDuration}ms`);
+      // setInterval-based playback loop wrapped in a Promise
+      await new Promise<void>((resolve, reject) => {
+        const hrStart = performance.now();
+        let cursor = 0;
+        let samplesWritten = 0;
+
+        const writeChunk = (idx: number): boolean => {
+          if (!this.rtAudioOutput) {
+            return false;
+          }
+          try {
+            this.rtAudioOutput.write(chunkBuffers[idx]);
+            samplesWritten += chunkSamples[idx];
+            return true;
+          } catch {
+            // write failed (e.g. buffer full), skip this tick
+            return false;
+          }
+        };
+
+        const interval = setInterval(() => {
+          try {
+            // Check stop signal
+            if (this.shouldStopPlayback) {
+              clearInterval(interval);
+              logger.debug(`stop signal received, aborting playback (submitted ${cursor}/${totalChunks} chunks)`);
+              reject(new Error('playback interrupted'));
+              return;
+            }
+
+            // Check completion
+            if (cursor >= totalChunks) {
+              clearInterval(interval);
+              const chunkDuration = Date.now() - chunkStartTime;
+              logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
+              const playDuration = Date.now() - playStartTime;
+              logger.info(`playback complete, duration: ${playDuration}ms`);
+              resolve();
+              return;
+            }
+
+            // Calculate target: how many samples should have been written by now + prebuffer
+            const elapsedMs = performance.now() - hrStart;
+            const targetSamples = Math.floor((elapsedMs / 1000) * this.sampleRate) + prebufferSamples;
+
+            // Catch-up write: write multiple chunks in one tick if behind schedule
+            while (cursor < totalChunks && samplesWritten < targetSamples) {
+              if (this.shouldStopPlayback) break;
+              if (!writeChunk(cursor)) break;
+              cursor++;
+            }
+          } catch (err) {
+            clearInterval(interval);
+            reject(err);
+          }
+        }, TICK_MS);
+      });
 
       } catch (error) {
         logger.error('audio playback failed', error);
