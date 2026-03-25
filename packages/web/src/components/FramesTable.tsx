@@ -376,17 +376,14 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
   const getGroupStyle = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
     if (type === 'transmit') {
-      return { backgroundColor: 'rgba(255, 246, 75, 0.3)' };
+      return { backgroundColor: 'var(--ft8-tx-group-bg)' };
     }
     return {
       backgroundColor: cycle === 'even' ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)'
     };
   };
 
-  const getBorderColor = (cycle: 'even' | 'odd', type: 'receive' | 'transmit') => {
-    if (type === 'transmit') {
-      return '#f31260';
-    }
+  const getBorderColor = (cycle: 'even' | 'odd', _type: 'receive' | 'transmit') => {
     return cycle === 'even' ? 'var(--ft8-cycle-even)' : 'var(--ft8-cycle-odd)';
   };
 
