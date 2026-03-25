@@ -15,7 +15,8 @@
   --ft8-cycle-even-bg: rgba(153, 255, 145, 0.2);   /* 00/30秒周期背景 */
 
   /* TX 行背景色 - 亮色模式 */
-  --ft8-tx-row-bg: rgba(255, 246, 75, 0.8);        /* TX发射行背景 */
+  --ft8-tx-row-bg: rgba(243, 18, 96, 0.15);        /* TX发射行背景（danger色） */
+  --ft8-tx-group-bg: rgba(243, 18, 96, 0.08);      /* TX分组背景（danger色低透明度） */
 }
 
 /* 暗黑模式 */
@@ -32,7 +33,8 @@
   --ft8-cycle-even-bg: rgba(5, 150, 105, 0.25);    /* 00/30秒周期背景 */
 
   /* TX 行背景色 - 暗色模式 */
-  --ft8-tx-row-bg: rgba(180, 123, 0, 0.7);         /* TX发射行背景（深黄色） */
+  --ft8-tx-row-bg: rgba(243, 18, 96, 0.25);        /* TX发射行背景（danger色） */
+  --ft8-tx-group-bg: rgba(243, 18, 96, 0.12);      /* TX分组背景（danger色低透明度） */
 }
 
 html, body {
