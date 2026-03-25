@@ -102,6 +102,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const activeRowCountRef = useRef<number>(0); // 当前状态已累积的行数
   const prevTransmittingRef = useRef<boolean | undefined>(undefined);
   const prevDataRef = useRef<number[][] | null>(null); // 用于检测新数据到达
+  const dataRef = useRef<number[][]>(data); // 持有最新 data 引用，供上下文恢复时重绘
   // 平滑滚动相关
   const scrollOffsetLocationRef = useRef<WebGLUniformLocation | null>(null);
   const scrollAnimRef = useRef<number>();
@@ -350,7 +351,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       
       if (!gl) {
         setWebglSupported(false);
-        setError(t('webgl.notSupported'));
+        setError('NOT_SUPPORTED');
         return false;
       }
 
@@ -441,12 +442,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.bindTexture(gl.TEXTURE_2D, colorMapTexture);
 
       return true;
-    } catch (error) {
+    } catch (err) {
       setWebglSupported(false);
-      setError(t('webgl.initFailed', { message: error instanceof Error ? error.message : t('webgl.unknownError') }));
+      setError(err instanceof Error ? err.message : 'INIT_FAILED');
       return false;
     }
-  }, [createProgram, colorMap, t]);
+  }, [createProgram, colorMap]);
 
   // 优化后的纹理更新
   const updateTexture = useCallback((spectrumData: number[][]) => {
@@ -455,7 +456,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const texture = textureRef.current;
     const program = programRef.current;
 
-    if (!gl || !texture || !program || spectrumData.length === 0) return;
+    if (!gl || !texture || !program || gl.isContextLost() || spectrumData.length === 0) return;
 
     // 检测是否有新数据行到达（通过比较首行引用）
     const isNewData = prevDataRef.current !== spectrumData;
@@ -653,9 +654,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const gl = glRef.current;
     const program = programRef.current;
     
-    if (gl && program) {
+    if (gl && program && !gl.isContextLost()) {
       gl.useProgram(program);
-      
+
       // 更新viewport
       gl.viewport(0, 0, canvas.width, canvas.height);
       
@@ -699,6 +700,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       logger.info('WebGL context restored, reinitializing');
       if (initWebGL()) {
         handleResize();
+        // 恢复后重新上传已有的纹理数据，避免显示黑屏
+        if (dataRef.current.length > 0) {
+          updateTexture(dataRef.current);
+          render();
+        }
       }
     };
     canvas.addEventListener('webglcontextlost', handleContextLost);
@@ -748,6 +754,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   // 数据更新时平滑滚动渲染
   useEffect(() => {
+    dataRef.current = data;
     if (data.length === 0) return;
 
     // 取消之前的动画
@@ -773,7 +780,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     // 先渲染一帧带初始偏移的画面（视觉上保持旧位置）
     const gl = glRef.current;
     const program = programRef.current;
-    if (gl && program) {
+    if (gl && program && !gl.isContextLost()) {
       gl.useProgram(program);
       gl.uniform1f(scrollOffsetLocationRef.current, startOffset);
       render();
@@ -789,7 +796,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       const gl = glRef.current;
       const program = programRef.current;
-      if (gl && program) {
+      if (gl && program && !gl.isContextLost()) {
         gl.useProgram(program);
         gl.uniform1f(scrollOffsetLocationRef.current, offset);
         render();
@@ -834,11 +841,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
 
   if (!webglSupported || error) {
+    const errorMessage = error === 'NOT_SUPPORTED' ? t('webgl.notSupported')
+      : error === 'INIT_FAILED' ? t('webgl.initFailed', { message: t('webgl.unknownError') })
+      : error ? t('webgl.initFailed', { message: error })
+      : null;
     return (
       <div className={`flex items-center justify-center ${className}`} style={{ height: `${height}px` }}>
         <div className="text-red-400 text-center">
           <div>{t('webgl.renderFailed')}</div>
-          {error && <div className="text-sm mt-2">{error}</div>}
+          {errorMessage && <div className="text-sm mt-2">{errorMessage}</div>}
         </div>
       </div>
     );
