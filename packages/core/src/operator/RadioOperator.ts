@@ -111,7 +111,9 @@ export class RadioOperator {
                 // 记录决策结果，用于后续晚到解码重决策比较
                 this._lastDecisionTransmission = this._transmissionStrategy?.handleTransmitSlot() ?? null;
                 this._lastDecisionMessageSet = new Set(
-                    lastSlotPack.frames.filter(f => f.snr !== -999).map(f => f.message)
+                    lastSlotPack.frames
+                        .filter(f => !(f.snr === -999 && f.operatorId === this._config.id))
+                        .map(f => f.message)
                 );
 
                 logger.debug(`onSlotStart (${this.config.myCallsign}): auto decision result=${JSON.stringify(result)}`);
@@ -398,11 +400,16 @@ export class RadioOperator {
      * 解析 SlotPack 的帧为 ParsedFT8Message 数组
      */
     private parseSlotPackMessages(slotPack: SlotPack): ParsedFT8Message[] {
+        // 本地操作员间通联的模拟SNR值（+10dB，表示本地信号良好）
+        const LOCAL_OPERATOR_SIMULATED_SNR = 10;
+
         return slotPack.frames.map(frame => {
             const message = FT8MessageParser.parseMessage(frame.message);
             return {
                 message,
-                snr: frame.snr,
+                // 替换 TX 帧的 -999 SNR 为模拟值；自己的 TX 帧会被
+                // handleReceivedAndDicideNext 的 senderCallsign 过滤器移除
+                snr: frame.snr === -999 ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
                 dt: frame.dt,
                 df: frame.freq,
                 rawMessage: frame.message,
@@ -422,8 +429,10 @@ export class RadioOperator {
         if (this._stopped || !this._isTransmitting) return false;
         if (this._decisionInProgress) return false;
 
-        // 检查是否有新消息到达（排除发射帧 SNR=-999），仅 SNR/dt 更新不触发重决策
-        const newMessages = slotPack.frames.filter(f => f.snr !== -999).map(f => f.message);
+        // 检查是否有新消息到达（排除自己的发射帧），仅 SNR/dt 更新不触发重决策
+        const newMessages = slotPack.frames
+            .filter(f => !(f.snr === -999 && f.operatorId === this._config.id))
+            .map(f => f.message);
         if (this._lastDecisionMessageSet) {
             const hasNewMessage = newMessages.some(m => !this._lastDecisionMessageSet!.has(m));
             if (!hasNewMessage) return false;
