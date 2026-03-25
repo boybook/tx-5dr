@@ -313,5 +313,62 @@
     "timeRange15m": "15 min",
     "timeRange30m": "30 min",
     "noData": "Waiting for data..."
+  },
+  "openwebrx": {
+    "tabTitle": "WebSDR",
+    "introTitle": "OpenWebRX Remote Receiver",
+    "introDescription": "Connect to OpenWebRX SDR stations to use their audio stream as a virtual audio input device. Once configured, select the station in your Profile's audio input settings. This feature provides audio input only — no SDR control is included.",
+    "stationList": "SDR Station Management",
+    "addStation": "Add Station",
+    "editStation": "Edit Station",
+    "noStations": "No OpenWebRX SDR stations configured yet",
+    "stationName": "Station Name",
+    "stationNamePlaceholder": "e.g. VE3XYZ WebSDR",
+    "stationUrl": "WebSocket URL",
+    "urlDescription": "WebSocket URL of the OpenWebRX server",
+    "stationDescription": "Description (optional)",
+    "descriptionPlaceholder": "Station notes or description",
+    "testConnection": "Test Connection",
+    "testSuccess": "Connected! Server version: {{version}}, {{profiles}} profile(s)",
+    "testFailed": "Connection failed: {{error}}",
+    "listenPanel": "Live Listen",
+    "addStationFirst": "Please add an SDR station first",
+    "selectStation": "Select Station",
+    "selectProfile": "SDR Profile",
+    "selectProfilePlaceholder": "Select a profile",
+    "frequency": "Frequency (Hz)",
+    "modulation": "Modulation",
+    "startListen": "Start Listen",
+    "stopListen": "Stop Listen",
+    "applyTune": "Apply Tune",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "centerFreq": "Center Frequency",
+    "listening": "Listening",
+    "codec": "Codec",
+    "latency": "Latency",
+    "buffer": "Buffer",
+    "profileSelect": {
+      "title": "Manual SDR Profile Selection",
+      "explanation": "No known SDR profile covers the target frequency {{frequency}} MHz. Please manually select a profile that covers this frequency. The system will switch to it and verify the frequency coverage.",
+      "botWarning": "Warning: OpenWebRX has bot detection. Rapidly switching profiles within 10 seconds accumulates a risk score, which can result in a 12-hour IP ban. Manual selection bypasses the system cooldown, so please choose carefully and avoid repeatedly trying different profiles in quick succession.",
+      "targetFrequency": "Target Frequency",
+      "selectProfile": "Select SDR Profile",
+      "verify": "Verify & Apply",
+      "verifying": "Switching and verifying...",
+      "verifyFailed": "This profile does not cover the target frequency. Actual coverage: center {{centerFreq}} MHz, bandwidth ±{{bandwidth}} MHz. Please select another profile.",
+      "verifySuccess": "Verified! Profile switched and tuned to target frequency.",
+      "verified": "SDR Profile switched"
+    },
+    "clientConfirm": {
+      "title": "Confirm Frequency Change",
+      "message": "There are currently {{count}} users on this SDR receiver. Changing frequency may require switching the SDR Profile, which will change the receiver's center frequency and affect other users.",
+      "confirm": "Switch Anyway",
+      "cancel": "Cancel"
+    },
+    "cooldown": {
+      "title": "SDR Profile Switch Queued",
+      "message": "Bot detection cooldown active. The switch will execute automatically in {{seconds}} seconds."
+    }
   }
 }

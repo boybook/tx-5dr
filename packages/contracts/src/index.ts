@@ -127,3 +127,6 @@ export * from './schema/station-info.schema.js';
 
 // Process Monitor Schema
 export * from './schema/process-monitor.schema.js';
+
+// OpenWebRX Schema
+export * from './schema/openwebrx.schema.js';

@@ -10,6 +10,7 @@ import type { VoiceSessionManager } from '../voice/VoiceSessionManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ResourceManager } from '../utils/ResourceManager.js';
 import { IcomWlanAudioAdapter } from '../audio/IcomWlanAudioAdapter.js';
+import { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
 import { AudioMonitorService } from '../audio/AudioMonitorService.js';
 import { createEngineActor, isEngineState, getEngineContext, type EngineActor } from '../state-machines/engineStateMachine.js';
@@ -53,6 +54,9 @@ export class EngineLifecycle {
   // ICOM WLAN 音频适配器
   private icomWlanAudioAdapter: IcomWlanAudioAdapter | null = null;
 
+  // OpenWebRX 音频适配器
+  private openwebrxAudioAdapter: OpenWebRXAudioAdapter | null = null;
+
   // 音频监听服务
   private audioMonitorService: AudioMonitorService | null = null;
 
@@ -82,6 +86,10 @@ export class EngineLifecycle {
 
   getAudioMonitorService(): AudioMonitorService | null {
     return this.audioMonitorService;
+  }
+
+  getOpenWebRXAudioAdapter(): OpenWebRXAudioAdapter | null {
+    return this.openwebrxAudioAdapter;
   }
 
   getEngineState(): EngineState {
@@ -164,6 +172,99 @@ export class EngineLifecycle {
           audioStreamManager.setIcomWlanAudioAdapter(null);
           this.icomWlanAudioAdapter = null;
           logger.debug('ICOM WLAN audio adapter cleaned up');
+        }
+      },
+      priority: 2,
+      dependencies: [],
+      optional: true,
+    });
+
+    // 2.5. OpenWebRX 音频适配器
+    resourceManager.register({
+      name: 'openwebrxAudioAdapter',
+      start: async () => {
+        const audioConfig = configManager.getAudioConfig();
+        if (!audioConfig.inputDeviceName?.startsWith('[SDR]')) {
+          logger.debug('Not OpenWebRX input mode, skipping adapter init');
+          return;
+        }
+        logger.debug('Initializing OpenWebRX audio adapter');
+        // Extract station ID from device name: "[SDR] StationName" → find by name
+        const stationName = audioConfig.inputDeviceName.replace(/^\[SDR\]\s*/, '');
+        const stations = configManager.getOpenWebRXStations();
+        const station = stations.find(s => s.name === stationName);
+        if (!station) {
+          logger.warn('OpenWebRX station not found for device', { deviceName: audioConfig.inputDeviceName });
+          return;
+        }
+        this.openwebrxAudioAdapter = new OpenWebRXAudioAdapter(station);
+        try {
+          await this.openwebrxAudioAdapter.connect();
+          // Set initial frequency from last selected frequency
+          const lastFreq = configManager.getLastSelectedFrequency();
+          if (lastFreq?.frequency) {
+            await this.openwebrxAudioAdapter.setTargetFrequency(lastFreq.frequency);
+          }
+          audioStreamManager.setOpenWebRXAudioAdapter(this.openwebrxAudioAdapter);
+
+          // Forward profileSelectRequired to engine emitter for WSServer to broadcast
+          this.openwebrxAudioAdapter.on('profileSelectRequired', (data) => {
+            this.deps.engineEmitter.emit('openwebrxProfileSelectRequest' as any, data);
+          });
+
+          // Forward errors (including ban/backoff) as radioError for WSServer to broadcast
+          this.openwebrxAudioAdapter.on('error', (err: Error) => {
+            this.deps.engineEmitter.emit('radioError', {
+              message: err.message,
+              userMessage: err.message,
+              code: 'OPENWEBRX_ERROR',
+              severity: 'error' as const,
+              suggestions: [] as string[],
+              timestamp: new Date().toISOString(),
+              profileId: null,
+              profileName: null,
+            });
+          });
+
+          // Forward client count changes for multi-user awareness
+          this.openwebrxAudioAdapter.on('clientCountChanged', (count: number) => {
+            this.deps.engineEmitter.emit('openwebrxClientCount' as any, { count });
+          });
+
+          // Forward cooldown wait notices to frontend
+          this.openwebrxAudioAdapter.on('cooldownWait', (data) => {
+            this.deps.engineEmitter.emit('openwebrxCooldownNotice' as any, data);
+          });
+
+          // Subscribe to frequency changes for auto-tuning
+          this.deps.engineEmitter.on('frequencyChanged', (data: { frequency: number }) => {
+            if (this.openwebrxAudioAdapter?.isConnected()) {
+              this.openwebrxAudioAdapter.setTargetFrequency(data.frequency).catch(err => {
+                // ProfileSwitchCancelledError is expected when rapid frequency changes
+                // supersede pending profile switches — not a real error
+                if (err?.name === 'ProfileSwitchCancelledError') {
+                  logger.debug('OpenWebRX profile switch cancelled by newer request');
+                } else {
+                  logger.error('Failed to sync OpenWebRX frequency', err);
+                }
+              });
+            }
+          });
+
+          logger.debug('OpenWebRX audio adapter initialized');
+        } catch (error) {
+          logger.error('Failed to connect OpenWebRX adapter', error);
+          this.openwebrxAudioAdapter = null;
+          throw error;
+        }
+      },
+      stop: async () => {
+        if (this.openwebrxAudioAdapter) {
+          this.openwebrxAudioAdapter.stopReceiving();
+          this.openwebrxAudioAdapter.disconnect();
+          audioStreamManager.setOpenWebRXAudioAdapter(null);
+          this.openwebrxAudioAdapter = null;
+          logger.debug('OpenWebRX audio adapter cleaned up');
         }
       },
       priority: 2,

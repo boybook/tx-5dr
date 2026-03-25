@@ -71,6 +71,11 @@ import type {
   PresetFrequency,
   StationInfo,
   StationInfoResponse,
+  OpenWebRXStationConfig,
+  OpenWebRXTestResult,
+  OpenWebRXListenStatus,
+  OpenWebRXListenStart,
+  OpenWebRXListenTune,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -1620,6 +1625,63 @@ export const api = {
       body: JSON.stringify(data),
     }, apiBase);
   },
+
+  // ===== OpenWebRX SDR 站点管理 =====
+
+  async getOpenWebRXStations(apiBase?: string): Promise<{ stations: OpenWebRXStationConfig[] }> {
+    return apiRequest<{ stations: OpenWebRXStationConfig[] }>('/openwebrx/stations', undefined, apiBase);
+  },
+
+  async addOpenWebRXStation(data: Omit<OpenWebRXStationConfig, 'id'>, apiBase?: string): Promise<{ success: boolean; station: OpenWebRXStationConfig }> {
+    return apiRequest<{ success: boolean; station: OpenWebRXStationConfig }>('/openwebrx/stations', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, apiBase);
+  },
+
+  async updateOpenWebRXStation(id: string, data: Partial<Omit<OpenWebRXStationConfig, 'id'>>, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(`/openwebrx/stations/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }, apiBase);
+  },
+
+  async removeOpenWebRXStation(id: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(`/openwebrx/stations/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }, apiBase);
+  },
+
+  async testOpenWebRXUrl(url: string, apiBase?: string): Promise<OpenWebRXTestResult> {
+    return apiRequest<OpenWebRXTestResult>('/openwebrx/test-url', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }, apiBase);
+  },
+
+  async startOpenWebRXListen(options: OpenWebRXListenStart, apiBase?: string): Promise<{ success: boolean; status: OpenWebRXListenStatus }> {
+    return apiRequest<{ success: boolean; status: OpenWebRXListenStatus }>('/openwebrx/listen/start', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    }, apiBase);
+  },
+
+  async stopOpenWebRXListen(apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>('/openwebrx/listen/stop', {
+      method: 'POST',
+    }, apiBase);
+  },
+
+  async tuneOpenWebRXListen(options: OpenWebRXListenTune, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>('/openwebrx/listen/tune', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    }, apiBase);
+  },
+
+  async getOpenWebRXListenStatus(apiBase?: string): Promise<{ status: OpenWebRXListenStatus | null }> {
+    return apiRequest<{ status: OpenWebRXListenStatus | null }>('/openwebrx/listen/status', undefined, apiBase);
+  },
 }
 
 // 为了向后兼容,也导出单独的函数
@@ -1721,4 +1783,14 @@ export const {
   // 电台站基础信息函数
   ,getStationInfo
   ,updateStationInfo
+  // OpenWebRX SDR 函数
+  ,getOpenWebRXStations
+  ,addOpenWebRXStation
+  ,updateOpenWebRXStation
+  ,removeOpenWebRXStation
+  ,testOpenWebRXUrl
+  ,startOpenWebRXListen
+  ,stopOpenWebRXListen
+  ,tuneOpenWebRXListen
+  ,getOpenWebRXListenStatus
 } = api;

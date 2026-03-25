@@ -11,6 +11,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { AudioDeviceManager } from './audio-device-manager.js';
 import { performance } from 'node:perf_hooks';
 import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
+import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('AudioStreamManager');
@@ -47,6 +48,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private usingIcomWlanInput = false; // 是否使用 ICOM WLAN 输入
   private usingIcomWlanOutput = false; // 是否使用 ICOM WLAN 输出
 
+  // OpenWebRX 音频适配器（外部注入）
+  private openwebrxAudioAdapter: OpenWebRXAudioAdapter | null = null;
+  private usingOpenWebRXInput = false;
+
   // 播放状态跟踪（用于重新混音兜底方案）
   private playing: boolean = false;             // 是否正在播放
   private playbackStartTime: number = 0;        // 播放开始时间戳
@@ -76,6 +81,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   setIcomWlanAudioAdapter(adapter: IcomWlanAudioAdapter | null): void {
     this.icomWlanAudioAdapter = adapter;
     logger.info(`ICOM WLAN audio adapter ${adapter ? 'set' : 'cleared'}`);
+  }
+
+  /**
+   * Set OpenWebRX audio adapter (injected by EngineLifecycle)
+   */
+  setOpenWebRXAudioAdapter(adapter: OpenWebRXAudioAdapter | null): void {
+    this.openwebrxAudioAdapter = adapter;
+    logger.info(`OpenWebRX audio adapter ${adapter ? 'set' : 'cleared'}`);
   }
 
   /**
@@ -154,6 +167,41 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.deviceId = 'icom-wlan-input';
         this.isStreaming = true;
         logger.info('ICOM WLAN audio input started (12kHz -> 48kHz)');
+        this.emit('started');
+        return;
+      }
+
+      // 检测是否为 OpenWebRX SDR 虚拟设备
+      if (resolvedDeviceId?.startsWith('openwebrx-') || audioConfig.inputDeviceName?.startsWith('[SDR]')) {
+        logger.info('OpenWebRX virtual input device detected');
+
+        if (!this.openwebrxAudioAdapter) {
+          logger.warn('OpenWebRX audio adapter not set, skipping audio stream start');
+          this.deviceId = resolvedDeviceId || 'openwebrx-unknown';
+          this.usingOpenWebRXInput = false;
+          this.isStreaming = true;
+          this.emit('started');
+          return;
+        }
+
+        // Use OpenWebRX audio adapter
+        this.usingOpenWebRXInput = true;
+        this.openwebrxAudioAdapter.startReceiving();
+
+        // Subscribe to audio data
+        this.openwebrxAudioAdapter.on('audioData', (samples: Float32Array) => {
+          this.audioProvider.writeAudio(samples);
+          this.emit('audioData', samples);
+        });
+
+        this.openwebrxAudioAdapter.on('error', (error: Error) => {
+          logger.error('OpenWebRX audio error', error);
+          this.emit('error', error);
+        });
+
+        this.deviceId = resolvedDeviceId || 'openwebrx-unknown';
+        this.isStreaming = true;
+        logger.info('OpenWebRX audio input started (12kHz, zero resample)');
         this.emit('started');
         return;
       }

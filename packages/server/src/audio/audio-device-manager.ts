@@ -38,6 +38,26 @@ export class AudioDeviceManager {
   /**
    * 检查是否应该显示 ICOM WLAN 虚拟设备
    */
+  /**
+   * Get OpenWebRX stations as virtual input devices
+   */
+  private getOpenWebRXVirtualDevices(): AudioDevice[] {
+    try {
+      const configManager = ConfigManager.getInstance();
+      const stations = configManager.getOpenWebRXStations();
+      return stations.map(station => ({
+        id: `openwebrx-${station.id}`,
+        name: `[SDR] ${station.name}`,
+        isDefault: false,
+        channels: 1,
+        sampleRate: 12000,
+        type: 'input' as const,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   private shouldShowIcomWlanDevice(): boolean {
     const configManager = ConfigManager.getInstance();
     const radioConfig = configManager.getRadioConfig();
@@ -124,6 +144,13 @@ export class AudioDeviceManager {
           type: 'input'
         };
         result.unshift(icomWlanInputDevice);
+      }
+
+      // OpenWebRX SDR 虚拟设备注入
+      const openwebrxDevices = this.getOpenWebRXVirtualDevices();
+      if (openwebrxDevices.length > 0) {
+        logger.debug(`Injecting ${openwebrxDevices.length} OpenWebRX virtual input device(s)`);
+        result.push(...openwebrxDevices);
       }
 
       logger.debug(`Returning ${result.length} input devices: ${result.map((d: AudioDevice) => d.name).join(', ')}`);

@@ -12,6 +12,7 @@ import { ProfileSetupOverlay } from './components/ProfileSetupOverlay';
 import { ViewerWelcomeOverlay } from './components/ViewerWelcomeOverlay';
 import { ServerDisconnectedOverlay } from './components/ServerDisconnectedOverlay';
 import { LoginPage } from './pages/LoginPage';
+import { OpenWebRXProfileSelectModal } from './components/OpenWebRXProfileSelectModal';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -62,6 +63,9 @@ function AppContent() {
       {/* 首次使用引导（Admin）/ 观看者欢迎蒙层 */}
       <ProfileSetupOverlay isOpen={showSetupOverlay} />
       <ViewerWelcomeOverlay isOpen={showViewerWelcome} />
+
+      {/* OpenWebRX SDR Profile 手动选择弹窗 */}
+      <OpenWebRXProfileSelectModal />
     </div>
   );
 }

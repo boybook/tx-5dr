@@ -3613,6 +3613,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@openwebrx-js/api@npm:^0.1.1":
+  version: 0.1.1
+  resolution: "@openwebrx-js/api@npm:0.1.1"
+  dependencies:
+    ws: "npm:^8.16.0"
+  checksum: 10c0/7bf0acdd865b4144cd4e7af4bb81da87d8278e396e325ba38ffcd16c8355fe1f92b8a3684a7ec60ec4b0d98450ab205e163c93225859d2f269345e68acbc58b9
+  languageName: node
+  linkType: hard
+
 "@pinojs/redact@npm:^0.4.0":
   version: 0.4.0
   resolution: "@pinojs/redact@npm:0.4.0"
@@ -6252,6 +6261,7 @@ __metadata:
     "@fastify/cors": "npm:^11.0.1"
     "@fastify/jwt": "npm:^10.0.0"
     "@fastify/websocket": "npm:^11.1.0"
+    "@openwebrx-js/api": "npm:^0.1.1"
     "@statelyai/inspect": "npm:^0.4.0"
     "@tx5dr/contracts": "workspace:*"
     "@tx5dr/core": "workspace:*"

@@ -28,6 +28,7 @@ import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
 import { VoiceAudioWSServer } from './websocket/VoiceAudioWSServer.js';
 import { voiceRoutes } from './routes/voice.js';
 import { stationRoutes } from './routes/station.js';
+import { openwebrxRoutes } from './routes/openwebrx.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 
 /**
@@ -263,8 +264,9 @@ export async function createServer() {
     const { pskreporterRoutes } = await import('./routes/pskreporter.js');
     await scope.register(pskreporterRoutes, { prefix: '/api' });
     await scope.register(systemRoutes, { prefix: '/api/system' });
+    await scope.register(openwebrxRoutes, { prefix: '/api/openwebrx' });
   });
-  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system)');
+  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system, openwebrx)');
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、语音
   await fastify.register(async (scope) => {
@@ -401,6 +403,29 @@ export async function createServer() {
       audioMonitorWSServer.handleConnection(socket, clientId, codec);
     } catch (e) {
       fastify.log.error({ error: e }, 'Audio monitor WS connection parameter parsing failed');
+      socket.close();
+    }
+  });
+
+  // OpenWebRX 试听音频专用 WebSocket endpoint（复用 AudioMonitorWSServer）
+  // Force PCM codec: this path has no Opus encoder, so always negotiate PCM with clients
+  const openwebrxListenWSServer = new AudioMonitorWSServer();
+  openwebrxListenWSServer.getServerCodec = () => 'pcm';
+  wsServer.setOpenWebRXListenWSServer(openwebrxListenWSServer);
+  fastify.get('/api/ws/openwebrx-listen', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const clientId = url.searchParams.get('clientId');
+      if (!clientId) {
+        fastify.log.warn('OpenWebRX listen WS connection missing clientId parameter, rejecting');
+        socket.close();
+        return;
+      }
+      const codec = url.searchParams.get('codec') === 'opus' ? 'opus' as const : 'pcm' as const;
+      fastify.log.info(`OpenWebRX listen WS client connected: clientId=${clientId}, codec=${codec}`);
+      openwebrxListenWSServer.handleConnection(socket, clientId, codec);
+    } catch (e) {
+      fastify.log.error({ error: e }, 'OpenWebRX listen WS connection parameter parsing failed');
       socket.close();
     }
   });
