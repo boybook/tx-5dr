@@ -257,6 +257,17 @@ export class RadioOperatorManager {
     this.eventEmitter.on('operatorSlotChanged' as any, handleOperatorSlotChanged);
     this.eventListeners.set('operatorSlotChanged', handleOperatorSlotChanged);
 
+    // 监听操作员频率变更事件 — 仅当该操作员正在实际 PTT 发射时触发重编码
+    const handleOperatorFrequencyChanged = (data: { operatorId: string; frequency: number }) => {
+      logger.debug(`Operator ${data.operatorId} frequency changed: ${data.frequency}`);
+      if (this.activeTransmissionOperatorIds.has(data.operatorId)) {
+        this.checkAndTriggerTransmission(data.operatorId);
+      }
+      this.emitOperatorStatusUpdate(data.operatorId);
+    };
+    this.eventEmitter.on('operatorFrequencyChanged' as any, handleOperatorFrequencyChanged);
+    this.eventListeners.set('operatorFrequencyChanged', handleOperatorFrequencyChanged);
+
     // 监听操作员发射内容变更事件
     const handleOperatorSlotContentChanged = (data: { operatorId: string; slot: string; content: string }) => {
       logger.debug(`Operator ${data.operatorId} slot content edited: slot=${data.slot}`);
@@ -606,6 +617,10 @@ export class RadioOperatorManager {
       if (clampedFreq !== operator.config.frequency) {
         operator.config.frequency = clampedFreq;
         updates.frequency = clampedFreq;
+        // 如果该操作员正在实际 PTT 发射，触发重编码和重混音
+        if (this.activeTransmissionOperatorIds.has(operatorId)) {
+          this.checkAndTriggerTransmission(operatorId);
+        }
       }
     }
 
