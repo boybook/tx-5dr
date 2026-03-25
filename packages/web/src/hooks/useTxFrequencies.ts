@@ -4,6 +4,7 @@ import { useOperators } from '../store/radioStore';
 export interface TxFrequency {
   operatorId: string;
   frequency: number;
+  callsign: string;
 }
 
 /**
@@ -27,7 +28,8 @@ export const useTxFrequencies = (): TxFrequency[] => {
       if (frequency !== undefined && frequency !== null) {
         result.push({
           operatorId: operator.id,
-          frequency: frequency
+          frequency: frequency,
+          callsign: operator.context.myCall || '',
         });
       }
     }

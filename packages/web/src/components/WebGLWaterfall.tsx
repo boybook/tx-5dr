@@ -77,9 +77,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   // TX拖动状态
   const [draggingOperatorId, setDraggingOperatorId] = React.useState<string | null>(null);
+  // 拖动时的本地频率覆盖（乐观更新 + 冷却期保护）
+  const [localFrequencyOverride, setLocalFrequencyOverride] =
+    React.useState<{ operatorId: string; frequency: number } | null>(null);
+  const [cooldownOperatorId, setCooldownOperatorId] = React.useState<string | null>(null);
+  const dragDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const cooldownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const latestDragFrequencyRef = useRef<{ operatorId: string; frequency: number } | null>(null);
 
   // RX Popover hover状态
   const [hoveredRxCallsign, setHoveredRxCallsign] = React.useState<string | null>(null);
+
+  // TX Popover hover状态（多操作员时使用）
+  const [hoveredTxOperatorId, setHoveredTxOperatorId] = React.useState<string | null>(null);
 
   // 性能优化：缓存相关引用
   const positionBufferRef = useRef<WebGLBuffer | null>(null);
@@ -884,6 +894,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   // 拖动处理函数
   const handleMouseDown = useCallback((operatorId: string) => {
+    // 如果有正在进行的冷却，先清除
+    if (cooldownTimerRef.current) {
+      clearTimeout(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+    }
+    setCooldownOperatorId(null);
     setDraggingOperatorId(operatorId);
   }, []);
 
@@ -891,12 +907,45 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (!draggingOperatorId || !onTxFrequencyChange) return;
 
     const newFrequency = getFrequencyFromMousePosition(e.clientX);
-    onTxFrequencyChange(draggingOperatorId, newFrequency);
+
+    // 乐观更新：立即更新本地位置
+    setLocalFrequencyOverride({ operatorId: draggingOperatorId, frequency: newFrequency });
+    latestDragFrequencyRef.current = { operatorId: draggingOperatorId, frequency: newFrequency };
+
+    // 200ms 防抖发送到服务端
+    if (dragDebounceRef.current) clearTimeout(dragDebounceRef.current);
+    dragDebounceRef.current = setTimeout(() => {
+      const latest = latestDragFrequencyRef.current;
+      if (latest && onTxFrequencyChange) {
+        onTxFrequencyChange(latest.operatorId, latest.frequency);
+      }
+    }, 200);
   }, [draggingOperatorId, onTxFrequencyChange, getFrequencyFromMousePosition]);
 
   const handleMouseUp = useCallback(() => {
+    if (!draggingOperatorId) return;
+
+    // 清除防抖，立即 flush 最新值
+    if (dragDebounceRef.current) {
+      clearTimeout(dragDebounceRef.current);
+      dragDebounceRef.current = null;
+    }
+    const latest = latestDragFrequencyRef.current;
+    if (latest && onTxFrequencyChange) {
+      onTxFrequencyChange(latest.operatorId, latest.frequency);
+    }
+
+    // 进入 500ms 冷却期（保留 localFrequencyOverride 防止闪回）
+    const opId = draggingOperatorId;
     setDraggingOperatorId(null);
-  }, []);
+    setCooldownOperatorId(opId);
+    cooldownTimerRef.current = setTimeout(() => {
+      setCooldownOperatorId(null);
+      setLocalFrequencyOverride(null);
+      latestDragFrequencyRef.current = null;
+      cooldownTimerRef.current = null;
+    }, 500);
+  }, [draggingOperatorId, onTxFrequencyChange]);
 
   // 监听拖动事件
   useEffect(() => {
@@ -922,15 +971,27 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       {/* 频率标记层 */}
       <div className="absolute inset-0 pointer-events-none">
         {/* TX标记 - 红色 */}
-        {txFrequencies.map(({ operatorId, frequency }) => {
-          const position = getFrequencyPosition(frequency);
+        {txFrequencies.map(({ operatorId, frequency, callsign }) => {
+          // 拖动中或冷却期：使用本地覆盖频率
+          const isOverridden = localFrequencyOverride?.operatorId === operatorId &&
+            (draggingOperatorId === operatorId || cooldownOperatorId === operatorId);
+          const displayFrequency = isOverridden ? localFrequencyOverride!.frequency : frequency;
+          const position = getFrequencyPosition(displayFrequency);
           const isDragging = draggingOperatorId === operatorId;
-          return (
+          const showPopover = txFrequencies.length > 1;
+          const isHovered = hoveredTxOperatorId === operatorId;
+
+          const markerElement = (
             <div
               key={`tx-${operatorId}`}
-              className={`absolute top-0 h-full pointer-events-auto transition-opacity ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+              className={`absolute top-0 h-full pointer-events-auto transition-opacity ${isDragging ? 'cursor-grabbing' : 'cursor-grab'} ${showPopover ? 'hover:opacity-80' : ''}`}
               style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
-              onMouseDown={() => handleMouseDown(operatorId)}
+              onMouseDown={() => {
+                setHoveredTxOperatorId(null);
+                handleMouseDown(operatorId);
+              }}
+              onMouseEnter={showPopover ? () => setHoveredTxOperatorId(operatorId) : undefined}
+              onMouseLeave={showPopover ? () => setHoveredTxOperatorId(null) : undefined}
             >
               <div className={`w-0.5 h-full ${isDragging ? 'bg-red-500' : 'bg-red-500/50'}`} />
               <div
@@ -939,6 +1000,34 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                 TX
               </div>
             </div>
+          );
+
+          if (!showPopover) return markerElement;
+
+          return (
+            <Popover
+              key={`tx-${operatorId}`}
+              placement="bottom"
+              isOpen={isHovered && !isDragging}
+              onOpenChange={(open) => {
+                if (!open) setHoveredTxOperatorId(null);
+              }}
+            >
+              <PopoverTrigger>
+                {markerElement}
+              </PopoverTrigger>
+              <PopoverContent
+                onMouseEnter={() => setHoveredTxOperatorId(operatorId)}
+                onMouseLeave={() => setHoveredTxOperatorId(null)}
+              >
+                <div className="px-2 py-1">
+                  <div className="text-sm font-semibold">{callsign}</div>
+                  <div className="text-xs text-default-400">
+                    {frequency} Hz
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           );
         })}
 

@@ -40,7 +40,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       if (contextChanged) {
         logger.debug(`Operator ${operatorStatus.id} render #${renderCountRef.current}`, {
           contextChanged,
-          editingFields: Array.from(editingFields),
+          focusedFields: Array.from(focusedFields),
         });
       }
     }
@@ -60,6 +60,16 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     };
   });
 
+  // 报告字段的原始字符串（支持 ""、"-" 等中间态）
+  const [reportSentRaw, setReportSentRaw] = React.useState(() =>
+    (operatorStatus.context.reportSent ?? 0).toString()
+  );
+
+  // 频率字段的原始字符串（支持编辑中间态，失焦时 clamp）
+  const [frequencyRaw, setFrequencyRaw] = React.useState(() =>
+    (operatorStatus.context.frequency ?? 1500).toString()
+  );
+
   // 展开/收起时隙内容的状态
   const [isSlotContentExpanded, setIsSlotContentExpanded] = React.useState(false);
   
@@ -70,9 +80,19 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   
   // 防抖定时器ref
   const debounceTimerRef = React.useRef<NodeJS.Timeout | null>(null);
-  
-  // 标记正在编辑的字段（避免服务端覆盖特定字段）
-  const [editingFields, setEditingFields] = React.useState<Set<string>>(new Set());
+
+  // 正在聚焦编辑的字段集合 — 聚焦期间服务端推送不会覆盖这些字段
+  const [focusedFields, setFocusedFields] = React.useState<Set<string>>(new Set());
+
+  // 冷却中的字段集合 — 失焦后短暂保护期，期间缓冲服务端推送
+  const [cooldownFields, setCooldownFields] = React.useState<Set<string>>(new Set());
+
+  // 冷却期缓冲区：存储冷却期间服务端推送的最新值
+  const cooldownBufferRef = React.useRef<Record<string, string | number>>({});
+
+  // localContext ref，供回调函数读取最新值
+  const localContextRef = React.useRef(localContext);
+  localContextRef.current = localContext;
 
   // 立即停止发射Popover状态
   const [isForceStopPopoverOpen, setIsForceStopPopoverOpen] = React.useState(false);
@@ -124,41 +144,62 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
   }, [shouldShowForceStopPopover, isForceStopPopoverOpen]);
 
-  // 同步props到本地状态
+  // 同步服务端状态到本地
+  // - 聚焦中的字段：保留本地值（用户正在输入）
+  // - 冷却中的字段：写入缓冲区（不直接更新 UI，等冷却结束再应用）
+  // - 其他字段：直接用服务端值
   React.useEffect(() => {
-    // 确保operatorStatus.context存在且数据完整
     if (operatorStatus.context && operatorStatus.context.myCall) {
-      // 只更新非编辑状态的字段
+      const serverCtx = operatorStatus.context;
+      const fields = ['myCall', 'myGrid', 'targetCall', 'targetGrid', 'frequency', 'reportSent'] as const;
+      const serverMap: Record<string, string | number> = {
+        myCall: serverCtx.myCall || '',
+        myGrid: serverCtx.myGrid || '',
+        targetCall: serverCtx.targetCall || '',
+        targetGrid: serverCtx.targetGrid || '',
+        frequency: serverCtx.frequency,
+        reportSent: serverCtx.reportSent ?? 0,
+      };
+
+      // 冷却中的字段：更新缓冲区
+      for (const field of fields) {
+        if (cooldownFields.has(field)) {
+          cooldownBufferRef.current[field] = serverMap[field];
+        }
+      }
+
       setLocalContext(prevContext => {
-        const newContext = {
-          myCall: editingFields.has('myCall') ? prevContext.myCall : (operatorStatus.context.myCall || ''),
-          myGrid: editingFields.has('myGrid') ? prevContext.myGrid : (operatorStatus.context.myGrid || ''),
-          targetCall: editingFields.has('targetCall') ? prevContext.targetCall : (operatorStatus.context.targetCall || ''),
-          targetGrid: editingFields.has('targetGrid') ? prevContext.targetGrid : (operatorStatus.context.targetGrid || ''),
-          frequency: editingFields.has('frequency') ? prevContext.frequency : operatorStatus.context.frequency,
-          reportSent: editingFields.has('reportSent') ? prevContext.reportSent : (operatorStatus.context.reportSent ?? 0),
-        };
-
-        // 深度对比：只有在数据实际变化时才更新状态
-        // 这防止了因服务端推送相同值导致的不必要重新渲染
-        const hasChanged =
-          prevContext.myCall !== newContext.myCall ||
-          prevContext.myGrid !== newContext.myGrid ||
-          prevContext.targetCall !== newContext.targetCall ||
-          prevContext.targetGrid !== newContext.targetGrid ||
-          prevContext.frequency !== newContext.frequency ||
-          prevContext.reportSent !== newContext.reportSent;
-
-        // 如果没有变化，返回原对象引用，避免触发下游重新渲染
-        if (!hasChanged) {
-          return prevContext;
+        const newContext = { ...prevContext };
+        for (const field of fields) {
+          if (focusedFields.has(field) || cooldownFields.has(field)) {
+            // 聚焦或冷却中 → 保留本地值
+            continue;
+          }
+          (newContext as Record<string, string | number>)[field] = serverMap[field];
         }
 
-        // 有变化时，返回新对象
-        return newContext;
+        const hasChanged = fields.some(f =>
+          (prevContext as Record<string, unknown>)[f] !== (newContext as Record<string, unknown>)[f]
+        );
+
+        // 同步原始字符串显示（仅非聚焦/冷却时）
+        if (!focusedFields.has('reportSent') && !cooldownFields.has('reportSent')) {
+          const newVal = (newContext.reportSent ?? 0).toString();
+          if (reportSentRaw !== newVal) {
+            setReportSentRaw(newVal);
+          }
+        }
+        if (!focusedFields.has('frequency') && !cooldownFields.has('frequency')) {
+          const newVal = (newContext.frequency ?? 1500).toString();
+          if (frequencyRaw !== newVal) {
+            setFrequencyRaw(newVal);
+          }
+        }
+
+        return hasChanged ? newContext : prevContext;
       });
     }
-  }, [operatorStatus.context, editingFields]);
+  }, [operatorStatus.context, focusedFields, cooldownFields, reportSentRaw, frequencyRaw]);
 
   // 同步服务端transmitCycles到本地状态
   React.useEffect(() => {
@@ -167,7 +208,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
   }, [operatorStatus.transmitCycles]);
 
-  // 组件卸载时清理防抖定时器
+  // 组件卸载时清理定时器
   React.useEffect(() => {
     return () => {
       if (debounceTimerRef.current) {
@@ -184,44 +225,97 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     }
   };
 
-  // 处理上下文更新
+  // 发送 localContext 到服务端
+  const doSendContext = React.useCallback((ctx: typeof localContext) => {
+    sendUserCommand('update_context', {
+      myCall: ctx.myCall,
+      myGrid: ctx.myGrid,
+      targetCallsign: ctx.targetCall,
+      targetGrid: ctx.targetGrid,
+      frequency: ctx.frequency,
+      reportSent: ctx.reportSent,
+      reportReceived: null,
+    });
+  }, [sendUserCommand]);
+
+  // 处理上下文更新（用户每次击键）
   const handleContextUpdate = (field: string, value: string | number) => {
-    // 立即更新本地状态
     const newContext = { ...localContext, [field]: value };
     setLocalContext(newContext);
-    
-    // 标记该字段正在编辑
-    setEditingFields(prev => new Set(prev).add(field));
-    
-    // 清除之前的防抖定时器
+
+    // 重置防抖
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
-    
-    // 设置新的防抖定时器，200ms后同步到服务端（减少延迟）
     debounceTimerRef.current = setTimeout(() => {
-      // 发送update_context命令，包含所有相关字段
-      sendUserCommand('update_context', {
-        myCall: newContext.myCall,
-        myGrid: newContext.myGrid,
-        targetCallsign: newContext.targetCall,
-        targetGrid: newContext.targetGrid,
-        frequency: newContext.frequency,
-        reportSent: newContext.reportSent,
-        reportReceived: null,
-      });
-
-      // 延迟清除编辑标记，等待服务端推送状态更新（约100ms）
-      // 这避免了在服务端推送到达前过早清除标记导致的状态闪烁
-      setTimeout(() => {
-        setEditingFields(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(field);
-          return newSet;
-        });
-      }, 150); // 给服务端处理和推送留出时间窗口
-    }, 200); // 减少防抖时间从500ms到200ms
+      doSendContext(newContext);
+    }, 400);
   };
+
+  // 输入框聚焦：标记字段为受保护状态
+  const handleInputFocus = React.useCallback((field: string) => {
+    setFocusedFields(prev => {
+      if (prev.has(field)) return prev;
+      const next = new Set(prev);
+      next.add(field);
+      return next;
+    });
+  }, []);
+
+  // 输入框失焦：立即提交，进入冷却期
+  const handleInputBlur = React.useCallback((field: string) => {
+    // 取消防抖，立即发送
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    doSendContext(localContextRef.current);
+
+    // 从聚焦集合移出，转入冷却集合
+    setFocusedFields(prev => {
+      if (!prev.has(field)) return prev;
+      const next = new Set(prev);
+      next.delete(field);
+      return next;
+    });
+    setCooldownFields(prev => {
+      const next = new Set(prev);
+      next.add(field);
+      return next;
+    });
+
+    // 500ms 冷却结束：将缓冲区数据应用到 UI
+    setTimeout(() => {
+      setCooldownFields(prev => {
+        if (!prev.has(field)) return prev;
+        const next = new Set(prev);
+        next.delete(field);
+        return next;
+      });
+      // 应用缓冲区中该字段的值（如果有）
+      const bufferedValue = cooldownBufferRef.current[field];
+      if (bufferedValue !== undefined) {
+        setLocalContext(prev => {
+          if ((prev as Record<string, unknown>)[field] === bufferedValue) return prev;
+          return { ...prev, [field]: bufferedValue };
+        });
+        // 同步原始字符串显示
+        if (field === 'reportSent') {
+          setReportSentRaw(bufferedValue.toString());
+        } else if (field === 'frequency') {
+          setFrequencyRaw(bufferedValue.toString());
+        }
+        delete cooldownBufferRef.current[field];
+      }
+    }, 500);
+  }, [doSendContext]);
+
+  // Enter 键：触发 blur → 自动走 handleInputBlur 逻辑
+  const handleInputKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur();
+    }
+  }, []);
 
   // 处理时隙内容变化
   const handleSlotContentChange = (slot: string, content: string) => {
@@ -390,7 +484,41 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       return;
     }
 
-    handleContextUpdate('frequency', midFreq);
+    // 按钮触发：立即更新本地 + 立即发送 + 冷却保护
+    const clampedFreq = Math.max(1, Math.min(3000, midFreq));
+    setFrequencyRaw(clampedFreq.toString());
+    const newContext = { ...localContext, frequency: clampedFreq };
+    setLocalContext(newContext);
+    // 取消防抖，立即发送
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    doSendContext(newContext);
+    // 进入冷却保护，防止服务端旧值覆盖
+    delete cooldownBufferRef.current['frequency'];
+    setCooldownFields(prev => {
+      const next = new Set(prev);
+      next.add('frequency');
+      return next;
+    });
+    setTimeout(() => {
+      setCooldownFields(prev => {
+        if (!prev.has('frequency')) return prev;
+        const next = new Set(prev);
+        next.delete('frequency');
+        return next;
+      });
+      const buffered = cooldownBufferRef.current['frequency'];
+      if (buffered !== undefined) {
+        setLocalContext(prev => {
+          if (prev.frequency === buffered) return prev;
+          return { ...prev, frequency: buffered as number };
+        });
+        setFrequencyRaw(buffered.toString());
+        delete cooldownBufferRef.current['frequency'];
+      }
+    }, 500);
     addToast({
       title: t('operator.freqSelected'),
       description: `${midFreq} Hz`,
@@ -720,6 +848,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             }
             value={localContext.targetCall}
             onChange={(e) => handleContextUpdate('targetCall', e.target.value)}
+            onFocus={() => handleInputFocus('targetCall')}
+            onBlur={() => handleInputBlur('targetCall')}
+            onKeyDown={handleInputKeyDown}
             size="sm"
             variant="flat"
             placeholder={t('common:status.none')}
@@ -734,15 +865,29 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
             }
-            type="number"
-            value={localContext.reportSent.toString()}
+            value={reportSentRaw}
             onChange={(e) => {
-              const value = e.target.value;
-              const numValue = value === '' ? 0 : parseInt(value);
-              if (!isNaN(numValue)) {
-                handleContextUpdate('reportSent', numValue);
+              const raw = e.target.value;
+              // 只允许可选负号 + 数字
+              if (raw !== '' && raw !== '-' && !/^-?\d+$/.test(raw)) return;
+              setReportSentRaw(raw);
+              // 中间态（空或单独负号）只更新显示，不触发防抖上报
+              const num = parseInt(raw);
+              if (!isNaN(num)) {
+                handleContextUpdate('reportSent', num);
               }
             }}
+            onFocus={() => handleInputFocus('reportSent')}
+            onBlur={() => {
+              // 失焦时修正中间态
+              const num = parseInt(reportSentRaw);
+              if (isNaN(num)) {
+                setReportSentRaw('0');
+                handleContextUpdate('reportSent', 0);
+              }
+              handleInputBlur('reportSent');
+            }}
+            onKeyDown={handleInputKeyDown}
             size="sm"
             variant="flat"
             placeholder="0"
@@ -773,9 +918,28 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 </Button>
               </Tooltip>
             }
-            type="number"
-            value={localContext?.frequency?.toString()}
-            onChange={(e) => handleContextUpdate('frequency', parseInt(e.target.value) || 1550)}
+            value={frequencyRaw}
+            onChange={(e) => {
+              const raw = e.target.value;
+              // 只允许正整数
+              if (raw !== '' && !/^\d+$/.test(raw)) return;
+              setFrequencyRaw(raw);
+              const num = parseInt(raw);
+              if (!isNaN(num) && num > 0) {
+                handleContextUpdate('frequency', num);
+              }
+            }}
+            onFocus={() => handleInputFocus('frequency')}
+            onBlur={() => {
+              // 失焦时校验并 clamp
+              let num = parseInt(frequencyRaw);
+              if (isNaN(num) || num < 1) num = 1;
+              if (num > 3000) num = 3000;
+              setFrequencyRaw(num.toString());
+              handleContextUpdate('frequency', num);
+              handleInputBlur('frequency');
+            }}
+            onKeyDown={handleInputKeyDown}
             size="sm"
             variant="flat"
             isDisabled={!connection.state.isConnected}
