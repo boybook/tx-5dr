@@ -467,17 +467,17 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           <div className="flex items-center gap-2">
             <Button
               size="sm"
-              variant="light"
-              isIconOnly
-              onPress={() => openLogbookWindow({ 
+              variant="flat"
+              onPress={() => openLogbookWindow({
                 operatorId: operatorStatus.id,
                 logBookId: operatorStatus.context.myCall
               })}
-              className="h-8 w-8 min-w-8"
+              className="h-8 px-2"
               title={t('operator.viewLog')}
               aria-label={t('operator.viewLog')}
+              startContent={<FontAwesomeIcon icon={faBook} />}
             >
-              <FontAwesomeIcon icon={faBook} className="text-default-600" />
+              {t('operator.log')}
             </Button>
             <span className="text-sm text-default-600">{t('control.ptt')}</span>
             <Popover
