@@ -260,7 +260,14 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
               textValue={`${device.name} ${device.isDefault ? `(${t('audio.default')})` : ''}`}
             >
               <div className="flex flex-col">
-                <span>{device.name} {device.isDefault ? `(${t('audio.default')})` : ''}</span>
+                <span className="flex items-center gap-2">
+                  {device.name} {device.isDefault ? `(${t('audio.default')})` : ''}
+                  {device.name.startsWith('[SDR]') && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
+                      WebSDR
+                    </span>
+                  )}
+                </span>
                 <span className="text-xs text-default-400">{device.channels}{t('audio.channels')}, {device.sampleRate}Hz</span>
               </div>
             </SelectItem>

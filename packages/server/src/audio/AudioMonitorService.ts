@@ -1,6 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
-import { resampleAudioProfessional } from '../utils/audioUtils.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('AudioMonitorService');
@@ -98,7 +97,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   /**
    * 检查缓冲区并按需推送
    */
-  private async checkAndPush(): Promise<void> {
+  private checkAndPush(): void {
     try {
       // 检查缓冲区是否达到目标水位
       const availableMs = this.audioProvider.getAvailableMs();
@@ -109,7 +108,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       }
 
       // 执行推送
-      await this.pushAudioChunk();
+      this.pushAudioChunk();
     } catch (error) {
       logger.error('Check and push failed', error);
     }
@@ -118,7 +117,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   /**
    * 推送音频数据块
    */
-  private async pushAudioChunk(): Promise<void> {
+  private pushAudioChunk(): void {
     try {
       const t0 = performance.now();
       const now = Date.now();
@@ -141,18 +140,20 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       const rms = this.calculateRMS(sourceAudioData);
       const isActive = rms > 0.001;
 
-      // 重采样到目标采样率
+      // Resample to target sample rate using stateless linear interpolation.
+      // This is intentionally simple: AudioMonitorService processes small 20ms
+      // chunks for real-time streaming, which is incompatible with FFT-based
+      // resamplers (warm-up latency, large internal buffers). Linear interpolation
+      // is adequate for monitoring/preview audio quality.
       let processedAudio = sourceAudioData;
       if (this.TARGET_SAMPLE_RATE !== sourceSampleRate) {
-        processedAudio = await resampleAudioProfessional(
-          sourceAudioData,
-          sourceSampleRate,
-          this.TARGET_SAMPLE_RATE,
-          1,
-          2
-        );
+        processedAudio = this.resampleLinear(sourceAudioData, sourceSampleRate, this.TARGET_SAMPLE_RATE);
       }
       const t1 = performance.now();
+
+      if (processedAudio.length === 0) {
+        return;
+      }
 
       // 广播音频数据（创建独立副本，避免底层缓冲区复用问题）
       const audioCopy = new Float32Array(processedAudio).buffer;
@@ -184,6 +185,32 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
     } catch (error) {
       logger.error('Push audio failed', error);
     }
+  }
+
+  /**
+   * Stateless linear-interpolation resampler for small streaming chunks.
+   * Produces exactly floor(inputLength * outputRate / inputRate) samples per call
+   * with zero warm-up, zero internal state, and no cross-chunk artifacts.
+   */
+  private resampleLinear(
+    samples: Float32Array,
+    inputRate: number,
+    outputRate: number
+  ): Float32Array {
+    const ratio = inputRate / outputRate; // e.g. 12000/48000 = 0.25
+    const outputLength = Math.floor(samples.length / ratio);
+    const result = new Float32Array(outputLength);
+
+    for (let i = 0; i < outputLength; i++) {
+      const srcPos = i * ratio;
+      const idx = Math.floor(srcPos);
+      const frac = srcPos - idx;
+      const s0 = samples[idx] ?? 0;
+      const s1 = samples[Math.min(idx + 1, samples.length - 1)] ?? 0;
+      result[i] = s0 + (s1 - s0) * frac;
+    }
+
+    return result;
   }
 
   /**

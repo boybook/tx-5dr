@@ -21,6 +21,7 @@ import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
 import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './FrequencyPresetSettings';
 import { TokenManagement } from './TokenManagement';
 import { StationInfoSettings, type StationInfoSettingsRef } from './StationInfoSettings';
+import { OpenWebRXSettings } from './OpenWebRXSettings';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 
@@ -31,7 +32,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info';
+type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx';
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const { t } = useTranslation('settings');
@@ -233,6 +234,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           return '🔑';
         case 'station_info':
           return '📡';
+        case 'openwebrx':
+          return '📻';
         default:
           return '⚙️';
       }
@@ -254,6 +257,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return `🔑 ${t('modal.tabTokens')}`;
       case 'station_info':
         return `📡 ${t('tab.stationInfo')}`;
+      case 'openwebrx':
+        return `📻 ${t('openwebrx.tabTitle')}`;
       default:
         return t('modal.defaultTab');
     }
@@ -316,6 +321,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         return <TokenManagement />;
       case 'station_info':
         return <StationInfoSettings ref={stationInfoSettingsRef} onUnsavedChanges={setHasUnsavedChanges} />;
+      case 'openwebrx':
+        return <OpenWebRXSettings />;
       default:
         return null;
     }
@@ -406,6 +413,12 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     <Tab
                       key="station_info"
                       title={getTabTitle('station_info', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="openwebrx"
+                      title={getTabTitle('openwebrx', isMobile)}
                     />
                   )}
                 </Tabs>

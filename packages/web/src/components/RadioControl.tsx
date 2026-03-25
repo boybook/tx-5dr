@@ -13,8 +13,8 @@ import { showErrorToast } from '../utils/errorToast';
 import { useHasMinRole } from '../store/authStore';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AudioMonitorNode, createWorkletMonitorNode, ScriptProcessorFallbackNode } from '../utils/audio-monitor-fallback';
-import { OpusMonitorDecoder, canDecodeOpus } from '../audio/OpusMonitorDecoder';
+import { useAudioMonitorPlayback } from '../hooks/useAudioMonitorPlayback';
+import { useWSEvent } from '../hooks/useWSEvent';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('RadioControl');
@@ -249,20 +249,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   const [volumeGain, setVolumeGain] = useState(1.0);
 
-  // 音频监听相关状态
-  const [isMonitoring, setIsMonitoring] = useState(false);
-  const [monitorStats, setMonitorStats] = useState<{
-    latencyMs: number;
-    bufferFillPercent: number;
-    isActive: boolean;
-    audioLevel?: number;
-  } | null>(null);
+  // 音频监听 (reusable hook)
+  const audioMonitor = useAudioMonitorPlayback({ wsPath: '/ws/audio-monitor' });
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
-  const audioContextRef = React.useRef<AudioContext | null>(null);
-  const workletNodeRef = React.useRef<AudioMonitorNode | null>(null);
-  const monitorGainNodeRef = React.useRef<GainNode | null>(null);
-  const opusDecoderRef = React.useRef<OpusMonitorDecoder | null>(null);
-  const isInitializingWorklet = React.useRef<boolean>(false); // 初始化锁，防止重复初始化
+
+  // OpenWebRX client count (for multi-user confirmation)
+  const openwebrxClientCountRef = React.useRef(0);
+  const [sdrConfirmPending, setSdrConfirmPending] = React.useState<{
+    frequency: string; // selectedFrequencyKey
+    count: number;
+  } | null>(null);
+
+  useWSEvent(connection.state.radioService, 'openwebrxClientCount', (data: { count: number }) => {
+    openwebrxClientCountRef.current = data.count;
+  });
 
   // 自定义频率相关状态
   const [isCustomFrequencyModalOpen, setIsCustomFrequencyModalOpen] = useState(false);
@@ -502,168 +502,46 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   };
 
-  // 初始化音频监听节点（动态采样率，自动选择 AudioWorklet 或 ScriptProcessorNode）
-  const initAudioWorklet = async (sampleRate: number) => {
-    // 设置初始化锁
-    isInitializingWorklet.current = true;
-
-    try {
-      const audioContext = new AudioContext({ sampleRate });
-      let monitorNode: AudioMonitorNode;
-
-      if (audioContext.audioWorklet) {
-        // Secure Context: 使用 AudioWorklet（性能更好，独立音频线程）
-        await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
-        const workletNode = new AudioWorkletNode(audioContext, 'audio-monitor-processor');
-        monitorNode = createWorkletMonitorNode(workletNode);
-        logger.debug('AudioWorklet initialized');
-      } else {
-        // Insecure Context（局域网 HTTP）: 回退到 ScriptProcessorNode
-        logger.debug('AudioWorklet unavailable (insecure context), falling back to ScriptProcessorNode');
-        monitorNode = new ScriptProcessorFallbackNode(audioContext);
-      }
-
-      const gainNode = audioContext.createGain();
-      gainNode.gain.value = monitorVolume;
-      monitorNode.getOutputNode().connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      monitorGainNodeRef.current = gainNode;
-
-      // 监听统计信息
-      monitorNode.onStats((stats) => {
-        setMonitorStats(stats);
-      });
-
-      audioContextRef.current = audioContext;
-      workletNodeRef.current = monitorNode;
-    } catch (error) {
-      logger.error('Audio monitor initialization failed:', error);
-      throw error;
-    } finally {
-      // 释放初始化锁
-      isInitializingWorklet.current = false;
-    }
-  };
-
-  // 开始监听（简化版：连接即接收）
-  const startMonitoring = async () => {
-    try {
-      // 在用户点击回调中立即创建 AudioContext（浏览器自动播放策略要求）
-      // 使用 48kHz 采样率（与服务端 AudioMonitorService 的 TARGET_SAMPLE_RATE 匹配）
-      await initAudioWorklet(48000);
-
-      // Initialize Opus decoder if supported
-      if (canDecodeOpus()) {
-        try {
-          const decoder = new OpusMonitorDecoder(48000, 1);
-          await decoder.init();
-          opusDecoderRef.current = decoder;
-          logger.info('Opus monitor decoder initialized');
-        } catch (err) {
-          logger.warn('Opus decoder init failed, falling back to PCM', err);
-          opusDecoderRef.current = null;
-        }
-      }
-
-      // 设置isMonitoring为true，触发useEffect注册事件监听器和数据处理器
-      setIsMonitoring(true);
-
-      // 等待一个tick确保useEffect已执行
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // 然后连接音频WebSocket（连接后服务端自动广播）
-      // If Opus decoder failed to init, force PCM mode
-      connection.state.radioService?.connectAudioMonitor(!opusDecoderRef.current);
-
-      logger.info('Audio monitor started');
-    } catch (error) {
-      logger.error('Failed to start audio monitor:', error);
-      addToast({
-        title: t('monitor.startFailed'),
-        description: error instanceof Error ? error.message : t('error.unknown'),
-        color: 'danger'
-      });
-
-      // 清理资源
-      workletNodeRef.current?.dispose();
-      workletNodeRef.current = null;
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      isInitializingWorklet.current = false; // 重置初始化锁
-      setIsMonitoring(false);
-    }
-  };
-
-  // 停止监听
-  const stopMonitoring = () => {
-    try {
-      // 断开音频WebSocket连接
-      connection.state.radioService?.disconnectAudioMonitor();
-
-      // 清理音频节点
-      workletNodeRef.current?.dispose();
-      workletNodeRef.current = null;
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      monitorGainNodeRef.current?.disconnect();
-      monitorGainNodeRef.current = null;
-      opusDecoderRef.current?.destroy();
-      opusDecoderRef.current = null;
-      isInitializingWorklet.current = false; // 重置初始化锁
-
-      setIsMonitoring(false);
-      setMonitorStats(null);
-      logger.info('Audio monitor stopped');
-    } catch (error) {
-      logger.error('Failed to stop audio monitor:', error);
-    }
-  };
-
-  // 监听音量变化（使用 exponentialRampToValueAtTime 平滑过渡，避免咔嗒声）
+  // 监听音量变化
   const handleMonitorVolumeChange = (value: number | number[]) => {
     const dbValue = Array.isArray(value) ? value[0] : value;
     if (!isNaN(dbValue) && dbValue >= -60 && dbValue <= 20) {
       const gainValue = dbToGain(dbValue);
       setMonitorVolume(gainValue);
-      if (monitorGainNodeRef.current && audioContextRef.current) {
-        const now = audioContextRef.current.currentTime;
-        monitorGainNodeRef.current.gain.cancelScheduledValues(now);
-        // exponentialRamp 不接受 0，用极小值代替
-        const safeValue = Math.max(gainValue, 1e-6);
-        monitorGainNodeRef.current.gain.setValueAtTime(
-          Math.max(monitorGainNodeRef.current.gain.value, 1e-6), now
-        );
-        monitorGainNodeRef.current.gain.exponentialRampToValueAtTime(safeValue, now + 0.02);
-      }
+      audioMonitor.setVolume(dbValue);
     }
   };
 
   // 切换监听状态
   const toggleMonitoring = async () => {
-    if (isMonitoring) {
-      stopMonitoring();
+    if (audioMonitor.isPlaying) {
+      audioMonitor.stop();
     } else {
-      await startMonitoring();
+      try {
+        await audioMonitor.start();
+      } catch (error) {
+        logger.error('Failed to start audio monitor', error);
+        addToast({
+          title: t('monitor.startFailed'),
+          description: error instanceof Error ? error.message : t('error.unknown'),
+          color: 'danger'
+        });
+      }
     }
   };
 
   // Auto-start audio monitoring in voice mode
   const voiceAutoMonitorTriggered = React.useRef(false);
   React.useEffect(() => {
-    if (radio.state.engineMode === 'voice' && !isMonitoring && connection.state.isConnected && !voiceAutoMonitorTriggered.current) {
+    if (radio.state.engineMode === 'voice' && !audioMonitor.isPlaying && connection.state.isConnected && !voiceAutoMonitorTriggered.current) {
       voiceAutoMonitorTriggered.current = true;
       logger.info('Voice mode detected, auto-starting audio monitor');
-      startMonitoring();
+      audioMonitor.start().catch(err => logger.error('Voice auto-monitor failed', err));
     }
-    // Reset flag when leaving voice mode so it triggers again next time
     if (radio.state.engineMode !== 'voice') {
       voiceAutoMonitorTriggered.current = false;
     }
-  }, [radio.state.engineMode, connection.state.isConnected, isMonitoring]);
+  }, [radio.state.engineMode, connection.state.isConnected, audioMonitor.isPlaying]);
 
   // 频率格式验证和转换
   const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
@@ -872,6 +750,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       return;
     }
 
+    // Multi-user SDR confirmation: if OpenWebRX has other users, confirm before switching
+    if (openwebrxClientCountRef.current > 1) {
+      setSdrConfirmPending({ frequency: selectedFrequencyKey, count: openwebrxClientCountRef.current });
+      return;
+    }
+
+    await executeFrequencySwitch(selectedFrequencyKey, selectedFrequency);
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const executeFrequencySwitch = async (selectedFrequencyKey: string, selectedFrequency: any) => {
     try {
       // 设置频率和电台调制模式
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -982,161 +871,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   }, [connection.state.isConnected]);
 
-  // 监听音频监听事件
+  // Voice PTT mute: mute monitor during voice transmission to prevent echo
   useEffect(() => {
-    if (!connection.state.radioService || !isMonitoring) return;
-
-    const radioService = connection.state.radioService;
-    const wsClient = radioService.wsClientInstance;
-
-    // 用于存储当前采样率（从元数据获取）
-    let currentSampleRate: number | null = null;
-    let lastSequence = -1;
-    let _frameCount = 0;
-    let _droppedFrames = 0;
-
-    // 处理音频元数据（从控制WebSocket接收）
-    // AudioContext 已在用户点击 startMonitoring() 时创建，这里仅处理采样率变化和统计
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleAudioMonitorData = async (data: any) => {
-      // 检测丢帧（通过序列号）
-      if (data.sequence !== undefined) {
-        if (lastSequence >= 0 && data.sequence !== lastSequence + 1) {
-          const dropped = data.sequence - lastSequence - 1;
-          _droppedFrames += dropped;
-        }
-        lastSequence = data.sequence;
-      }
-
-      // 计算端到端延迟（服务端timestamp到客户端接收）
-      if (data.timestamp) {
-        _frameCount++;
-      }
-
-      if (!data.sampleRate) {
-        logger.debug('Audio monitor metadata missing sample rate');
-        return;
-      }
-
-      // 更新当前采样率
-      currentSampleRate = data.sampleRate;
-
-      // 确保 AudioContext 处于 running 状态（可能被浏览器挂起）
-      if (audioContextRef.current?.state === 'suspended') {
-        try {
-          await audioContextRef.current.resume();
-          logger.debug('AudioContext resumed');
-        } catch (error) {
-          logger.error('AudioContext resume failed:', error);
-        }
-      }
-
-      // 如果采样率发生变化，重新创建 AudioContext
-      if (audioContextRef.current &&
-          audioContextRef.current.sampleRate !== data.sampleRate) {
-
-        if (isInitializingWorklet.current) {
-          return;
-        }
-
-        logger.debug(`Sample rate changed ${audioContextRef.current.sampleRate} -> ${data.sampleRate}, recreating AudioContext`);
-        workletNodeRef.current?.dispose();
-        workletNodeRef.current = null;
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-
-        try {
-          await initAudioWorklet(data.sampleRate);
-        } catch (error) {
-          logger.error('Failed to rebuild AudioContext:', error);
-        }
-      }
-    };
-
-    // 处理二进制音频数据（从音频专用WebSocket接收）
-    const handleBinaryAudioData = (buffer: ArrayBuffer) => {
-      const _t_receive = performance.now();
-
-      if (!workletNodeRef.current) {
-        return;
-      }
-
-      const codec = radioService.audioMonitorCodec;
-      if (codec === 'opus' && opusDecoderRef.current) {
-        // Decode Opus to PCM before passing to worklet
-        opusDecoderRef.current.decode(buffer).then((pcm) => {
-          if (pcm.length > 0 && workletNodeRef.current) {
-            workletNodeRef.current.postAudioData(
-              pcm.buffer as ArrayBuffer,
-              currentSampleRate || 48000,
-              _t_receive
-            );
-          }
-        });
-      } else {
-        // Raw PCM - pass directly
-        workletNodeRef.current.postAudioData(
-          buffer,
-          currentSampleRate || 48000,
-          _t_receive
-        );
-      }
-    };
-
-    // 处理统计信息（可选，AudioWorklet也会生成统计）
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleAudioMonitorStats = (_stats: any) => {
-      // 服务端的统计信息可以作为补充
-    };
-
-    // 订阅控制WebSocket的元数据事件
-    wsClient.onWSEvent('audioMonitorData', handleAudioMonitorData);
-    wsClient.onWSEvent('audioMonitorStats', handleAudioMonitorStats);
-
-    // 注册二进制音频数据处理器（音频专用WebSocket）
-    radioService.setAudioMonitorDataHandler(handleBinaryAudioData);
-
-    return () => {
-      // 清理控制WebSocket事件
-      wsClient.offWSEvent('audioMonitorData', handleAudioMonitorData);
-      wsClient.offWSEvent('audioMonitorStats', handleAudioMonitorStats);
-
-      // 清理音频数据处理器
-      radioService.setAudioMonitorDataHandler(null);
-    };
-  }, [connection.state.radioService, isMonitoring]);
-
-  // 组件卸载时清理
-  useEffect(() => {
-    return () => {
-      if (isMonitoring) {
-        stopMonitoring();
-      }
-    };
-  }, []);
-
-  // Mute monitor audio during voice PTT to prevent echo (frontend-side)
-  // Only applies in voice mode; digital mode does not need muting
-  useEffect(() => {
-    if (!monitorGainNodeRef.current || !audioContextRef.current) return;
-    const now = audioContextRef.current.currentTime;
-    monitorGainNodeRef.current.gain.cancelScheduledValues(now);
-    const shouldMute = radio.state.engineMode === 'voice' && radio.state.pttStatus.isTransmitting;
-    if (shouldMute) {
-      // Mute: ramp to near-zero quickly
-      monitorGainNodeRef.current.gain.setValueAtTime(
-        Math.max(monitorGainNodeRef.current.gain.value, 1e-6), now
-      );
-      monitorGainNodeRef.current.gain.exponentialRampToValueAtTime(1e-6, now + 0.01);
-    } else {
-      // Unmute: restore to user-set volume
-      monitorGainNodeRef.current.gain.setValueAtTime(
-        Math.max(monitorGainNodeRef.current.gain.value, 1e-6), now
-      );
-      monitorGainNodeRef.current.gain.exponentialRampToValueAtTime(
-        Math.max(monitorVolume, 1e-6), now + 0.02
-      );
-    }
+    if (radio.state.engineMode !== 'voice') return;
+    const shouldMute = radio.state.pttStatus.isTransmitting;
+    audioMonitor.setVolume(shouldMute ? -60 : gainToDb(monitorVolume));
   }, [radio.state.pttStatus.isTransmitting, radio.state.engineMode, monitorVolume]);
 
   // 监听系统状态更新
@@ -1409,7 +1148,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                   isIconOnly
                   variant="light"
                   size="sm"
-                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${isMonitoring ? 'text-success' : 'text-default-400'}`}
+                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${audioMonitor.isPlaying ? 'text-success' : 'text-default-400'}`}
                   aria-label={t('monitor.audioMonitor')}
                 >
                   <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
@@ -1435,17 +1174,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                   </div>
 
                   {/* 状态指示器 */}
-                  {isMonitoring && monitorStats && (
+                  {audioMonitor.isPlaying && audioMonitor.stats && (
                     <div className="space-y-1 pt-2 border-t border-divider text-xs">
                       {/* 延迟显示 */}
                       <div className="flex justify-between items-center">
                         {t('monitor.latency')}
                         <span className={`font-mono ${
-                          monitorStats.latencyMs < 50 ? 'text-success' :
-                          monitorStats.latencyMs < 100 ? 'text-warning' :
+                          audioMonitor.stats.latencyMs < 50 ? 'text-success' :
+                          audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
                           'text-danger'
                         }`}>
-                          {monitorStats.latencyMs.toFixed(0)}ms
+                          {audioMonitor.stats.latencyMs.toFixed(0)}ms
                         </span>
                       </div>
 
@@ -1454,7 +1193,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                         <div className="flex justify-between items-center">
                           {t('monitor.buffer')}
                           <span className="font-mono text-default-400">
-                            {monitorStats.bufferFillPercent.toFixed(0)}%
+                            {audioMonitor.stats.bufferFillPercent.toFixed(0)}%
                           </span>
                         </div>
                       </div>
@@ -1463,7 +1202,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                       <div className="flex justify-between items-center">
                         {t('monitor.active')}
                         <div className={`w-2 h-2 rounded-full ${
-                          monitorStats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
+                          audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
                         }`} />
                       </div>
 
@@ -1471,7 +1210,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                       <div className="flex justify-between items-center">
                         {t('monitor.codec')}
                         <span className="font-mono text-default-400 uppercase">
-                          {connection.state.radioService?.audioMonitorCodec || 'pcm'}
+                          {audioMonitor.codec}
                         </span>
                       </div>
                     </div>
@@ -1481,7 +1220,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                   <div className="flex items-center justify-center px-2 w-full pt-2 border-t border-divider">
                     <Switch
                       size="sm"
-                      isSelected={isMonitoring}
+                      isSelected={audioMonitor.isPlaying}
                       onValueChange={toggleMonitoring}
                       aria-label={t('monitor.monitorSwitch')}
                     />
@@ -1702,6 +1441,39 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
           </div>
         </div>
       </div>
+
+      {/* SDR multi-user frequency switch confirmation */}
+      <Modal
+        isOpen={!!sdrConfirmPending}
+        onClose={() => setSdrConfirmPending(null)}
+        placement="center"
+        size="sm"
+      >
+        <ModalContent>
+          <ModalHeader>{t('openwebrx.clientConfirm.title')}</ModalHeader>
+          <ModalBody>
+            <p className="text-sm text-default-600">
+              {t('openwebrx.clientConfirm.message', { count: sdrConfirmPending?.count ?? 0 })}
+            </p>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="flat" onPress={() => setSdrConfirmPending(null)}>
+              {t('openwebrx.clientConfirm.cancel')}
+            </Button>
+            <Button color="primary" onPress={() => {
+              if (sdrConfirmPending) {
+                const freq = filteredFrequencies.find(f => f.key === sdrConfirmPending.frequency);
+                if (freq) {
+                  executeFrequencySwitch(sdrConfirmPending.frequency, freq);
+                }
+              }
+              setSdrConfirmPending(null);
+            }}>
+              {t('openwebrx.clientConfirm.confirm')}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       {/* 自定义频率输入模态框 */}
       <Modal

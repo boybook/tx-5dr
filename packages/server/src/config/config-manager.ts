@@ -3,7 +3,7 @@
 
 import { promises as fs } from 'fs';
 import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary } from '@tx5dr/contracts';
-import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo } from '@tx5dr/contracts';
+import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
@@ -75,6 +75,8 @@ export interface AppConfig {
   audioMonitorCodec?: 'opus' | 'pcm';
   /** Station basic information visible to all connected users */
   stationInfo?: StationInfo;
+  /** OpenWebRX SDR station configurations */
+  openwebrxStations?: OpenWebRXStationConfig[];
 }
 
 // 音频处理配置接口
@@ -1094,5 +1096,42 @@ export class ConfigManager {
     this.config.stationInfo = { ...this.config.stationInfo, ...info };
     await this.saveConfig();
     logger.info('Station info updated', { callsign: info.callsign });
+  }
+
+  // ===== OpenWebRX 站点管理 =====
+
+  getOpenWebRXStations(): OpenWebRXStationConfig[] {
+    return this.config.openwebrxStations ?? [];
+  }
+
+  getOpenWebRXStationById(id: string): OpenWebRXStationConfig | undefined {
+    return this.getOpenWebRXStations().find(s => s.id === id);
+  }
+
+  async addOpenWebRXStation(station: OpenWebRXStationConfig): Promise<void> {
+    const stations = this.getOpenWebRXStations();
+    stations.push(station);
+    this.config.openwebrxStations = stations;
+    await this.saveConfig();
+    logger.info('OpenWebRX station added', { id: station.id, name: station.name });
+  }
+
+  async updateOpenWebRXStation(id: string, updates: Partial<Omit<OpenWebRXStationConfig, 'id'>>): Promise<void> {
+    const stations = this.getOpenWebRXStations();
+    const index = stations.findIndex(s => s.id === id);
+    if (index === -1) {
+      throw new Error(`OpenWebRX station not found: ${id}`);
+    }
+    stations[index] = { ...stations[index], ...updates };
+    this.config.openwebrxStations = stations;
+    await this.saveConfig();
+    logger.info('OpenWebRX station updated', { id });
+  }
+
+  async removeOpenWebRXStation(id: string): Promise<void> {
+    const stations = this.getOpenWebRXStations();
+    this.config.openwebrxStations = stations.filter(s => s.id !== id);
+    await this.saveConfig();
+    logger.info('OpenWebRX station removed', { id });
   }
 }

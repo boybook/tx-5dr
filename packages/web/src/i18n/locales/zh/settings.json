@@ -313,5 +313,62 @@
     "timeRange15m": "15 分钟",
     "timeRange30m": "30 分钟",
     "noData": "等待数据..."
+  },
+  "openwebrx": {
+    "tabTitle": "WebSDR",
+    "introTitle": "OpenWebRX 远程接收",
+    "introDescription": "此功能用于连接 OpenWebRX SDR 接收站，将其音频流接入系统作为虚拟音频输入设备。配置后可在 Profile 的音频输入中选择对应站点，实现远程 SDR 接收。此功能不提供 SDR 控制，仅用于音频接入。",
+    "stationList": "SDR 站点管理",
+    "addStation": "添加站点",
+    "editStation": "编辑站点",
+    "noStations": "尚未添加任何 OpenWebRX SDR 站点",
+    "stationName": "站点名称",
+    "stationNamePlaceholder": "例如：VE3XYZ WebSDR",
+    "stationUrl": "WebSocket 地址",
+    "urlDescription": "OpenWebRX 服务器的 WebSocket 地址",
+    "stationDescription": "描述（可选）",
+    "descriptionPlaceholder": "站点描述或备注",
+    "testConnection": "测试连接",
+    "testSuccess": "连接成功！服务器版本: {{version}}，{{profiles}} 个 Profile",
+    "testFailed": "连接失败: {{error}}",
+    "listenPanel": "在线试听",
+    "addStationFirst": "请先添加 SDR 站点",
+    "selectStation": "选择站点",
+    "selectProfile": "SDR Profile",
+    "selectProfilePlaceholder": "请选择一个 Profile",
+    "frequency": "频率 (Hz)",
+    "modulation": "调制模式",
+    "startListen": "开始试听",
+    "stopListen": "停止试听",
+    "applyTune": "应用调谐",
+    "connected": "已连接",
+    "disconnected": "未连接",
+    "centerFreq": "中心频率",
+    "listening": "试听中",
+    "codec": "编码",
+    "latency": "延迟",
+    "buffer": "缓冲",
+    "profileSelect": {
+      "title": "手动选择 SDR Profile",
+      "explanation": "当前没有已知的 SDR Profile 覆盖目标频率 {{frequency}} MHz。请手动选择一个覆盖此频率的 Profile，系统将切换并验证其频率覆盖范围。",
+      "botWarning": "注意：OpenWebRX 服务器有防机器人检测机制。10秒内频繁切换 Profile 会累积风险分数，达到阈值将导致 IP 被封禁 12 小时。手动选择会绕过系统冷却直接切换，请谨慎选择，避免短时间内反复尝试不同的 Profile。",
+      "targetFrequency": "目标频率",
+      "selectProfile": "选择 SDR Profile",
+      "verify": "检查并应用",
+      "verifying": "正在切换并验证...",
+      "verifyFailed": "该 Profile 不覆盖目标频率。实际覆盖范围：中心 {{centerFreq}} MHz，带宽 ±{{bandwidth}} MHz。请选择其他 Profile。",
+      "verifySuccess": "验证通过！Profile 已切换并调谐到目标频率。",
+      "verified": "SDR Profile 已切换"
+    },
+    "clientConfirm": {
+      "title": "切换频率确认",
+      "message": "当前有 {{count}} 位用户正在使用此 SDR 接收器。切换频率可能需要更换 SDR Profile，这将改变接收器的中心频率，影响其他用户的接收。",
+      "confirm": "继续切换",
+      "cancel": "取消"
+    },
+    "cooldown": {
+      "title": "SDR Profile 切换已排队",
+      "message": "防机器人冷却保护中，将在 {{seconds}} 秒后自动执行切换。"
+    }
   }
 }

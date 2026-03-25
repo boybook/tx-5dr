@@ -71,6 +71,13 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // 进程监控事件
   [WSMessageType.PROCESS_SNAPSHOT]: 'processSnapshot',
   [WSMessageType.PROCESS_SNAPSHOT_HISTORY]: 'processSnapshotHistory',
+
+  // OpenWebRX SDR events
+  [WSMessageType.OPENWEBRX_LISTEN_STATUS]: 'openwebrxListenStatus',
+  [WSMessageType.OPENWEBRX_PROFILE_SELECT_REQUEST]: 'openwebrxProfileSelectRequest',
+  [WSMessageType.OPENWEBRX_PROFILE_VERIFY_RESULT]: 'openwebrxProfileVerifyResult',
+  [WSMessageType.OPENWEBRX_CLIENT_COUNT]: 'openwebrxClientCount',
+  [WSMessageType.OPENWEBRX_COOLDOWN_NOTICE]: 'openwebrxCooldownNotice',
 };
 
 /**

@@ -18,6 +18,7 @@ import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import type { ProcessMonitor } from '../services/ProcessMonitor.js';
 import { globalEventBus } from '../utils/EventBus.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
+import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { AuthManager } from '../auth/AuthManager.js';
 import { createLogger } from '../utils/logger.js';
 import { createOpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
@@ -308,6 +309,7 @@ export class WSServer extends WSMessageHandler {
     }
     this.setupEngineEventListeners();
     this.setupAudioMonitorEventListeners(); // 初始化时设置音频监听事件（广播模式）
+    this.setupOpenWebRXEventListeners();
 
     this.commandHandlers = {
       [WSMessageType.START_ENGINE]: () => this.handleStartEngine(),
@@ -335,6 +337,29 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.VOICE_PTT_REQUEST]: (data, id) => this.handleVoicePttRequest(id, data),
       [WSMessageType.VOICE_PTT_RELEASE]: (_data, id) => this.handleVoicePttRelease(id),
       [WSMessageType.VOICE_SET_RADIO_MODE]: (data) => this.handleVoiceSetRadioMode(data),
+      [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: async (data: any) => {
+        const adapter = this.digitalRadioEngine.getOpenWebRXAudioAdapter();
+        if (!adapter) {
+          logger.warn('No OpenWebRX adapter available for profile verification');
+          return;
+        }
+        const response = data as { requestId: string; profileId: string; targetFrequency: number };
+        logger.info('Processing manual profile selection', {
+          requestId: response.requestId,
+          profileId: response.profileId,
+        });
+        const result = await adapter.verifyAndApplyProfile(response.profileId, response.targetFrequency);
+        const profileName = adapter.getProfiles().find(p => p.id === response.profileId)?.name;
+        this.broadcast(WSMessageType.OPENWEBRX_PROFILE_VERIFY_RESULT, {
+          requestId: response.requestId,
+          success: result.success,
+          profileId: response.profileId,
+          profileName,
+          centerFreq: result.centerFreq,
+          sampRate: result.sampRate,
+          error: result.error,
+        });
+      },
     };
   }
 
@@ -547,6 +572,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_OPERATOR_SLOT]: UserRole.OPERATOR,
     [WSMessageType.USER_COMMAND]: UserRole.OPERATOR,
     [WSMessageType.OPERATOR_REQUEST_CALL]: UserRole.OPERATOR,
+    [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: UserRole.ADMIN,
   };
 
   // 需要操作员访问权限检查的命令
@@ -1504,6 +1530,75 @@ export class WSServer extends WSMessageHandler {
    * 设置AudioMonitorService事件监听器（广播模式）
    * 支持延迟设置和自动重试
    */
+  private openwebrxListenWSServer: AudioMonitorWSServer | null = null;
+  private openwebrxAudioListenerCleanup: (() => void) | null = null;
+
+  setOpenWebRXListenWSServer(wsServer: AudioMonitorWSServer): void {
+    this.openwebrxListenWSServer = wsServer;
+  }
+
+  private setupOpenWebRXEventListeners(): void {
+    const stationManager = OpenWebRXStationManager.getInstance();
+    stationManager.on('listenStatusChanged', (status) => {
+      this.broadcast(WSMessageType.OPENWEBRX_LISTEN_STATUS, status);
+
+      // When listen session starts/stops, attach/detach audio routing
+      if (status.isListening) {
+        this.attachOpenWebRXAudioRouting();
+      } else {
+        this.detachOpenWebRXAudioRouting();
+      }
+    });
+
+    // Forward profile select requests from engine to clients
+    this.digitalRadioEngine.on('openwebrxProfileSelectRequest' as any, (data: any) => {
+      logger.info('OpenWebRX profile select required, broadcasting to clients', {
+        requestId: data.requestId,
+        targetFrequency: data.targetFrequency,
+      });
+      this.broadcast(WSMessageType.OPENWEBRX_PROFILE_SELECT_REQUEST, data);
+    });
+
+    // Forward OpenWebRX client count changes to frontend
+    this.digitalRadioEngine.on('openwebrxClientCount' as any, (data: any) => {
+      this.broadcast(WSMessageType.OPENWEBRX_CLIENT_COUNT, data);
+    });
+
+    // Forward OpenWebRX cooldown notices to frontend
+    this.digitalRadioEngine.on('openwebrxCooldownNotice' as any, (data: any) => {
+      this.broadcast(WSMessageType.OPENWEBRX_COOLDOWN_NOTICE, data);
+    });
+  }
+
+  private attachOpenWebRXAudioRouting(): void {
+    this.detachOpenWebRXAudioRouting();
+
+    const stationManager = OpenWebRXStationManager.getInstance();
+    const audioMonitorService = stationManager.getAudioMonitorService();
+    if (!audioMonitorService || !this.openwebrxListenWSServer) return;
+
+    const wsServer = this.openwebrxListenWSServer;
+
+    const handleAudioData = (data: { audioData: ArrayBuffer; sampleRate: number; samples: number; timestamp: number; sequence: number }) => {
+      const clientIds = wsServer.getAllClientIds();
+      for (const clientId of clientIds) {
+        wsServer.sendAudioData(clientId, null, data.audioData);
+      }
+    };
+
+    audioMonitorService.on('audioData', handleAudioData);
+    this.openwebrxAudioListenerCleanup = () => {
+      audioMonitorService.off('audioData', handleAudioData);
+    };
+  }
+
+  private detachOpenWebRXAudioRouting(): void {
+    if (this.openwebrxAudioListenerCleanup) {
+      this.openwebrxAudioListenerCleanup();
+      this.openwebrxAudioListenerCleanup = null;
+    }
+  }
+
   private setupAudioMonitorEventListeners(): void {
     // 如果已经设置过，直接返回
     if (this.audioMonitorListenersSetup) {

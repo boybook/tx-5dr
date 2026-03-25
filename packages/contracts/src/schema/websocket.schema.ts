@@ -118,6 +118,14 @@ export enum WSMessageType {
   // ===== 进程监控 =====
   PROCESS_SNAPSHOT = 'processSnapshot',
   PROCESS_SNAPSHOT_HISTORY = 'processSnapshotHistory',
+
+  // ===== OpenWebRX SDR =====
+  OPENWEBRX_LISTEN_STATUS = 'openwebrxListenStatus',
+  OPENWEBRX_PROFILE_SELECT_REQUEST = 'openwebrxProfileSelectRequest',
+  OPENWEBRX_PROFILE_SELECT_RESPONSE = 'openwebrxProfileSelectResponse',
+  OPENWEBRX_PROFILE_VERIFY_RESULT = 'openwebrxProfileVerifyResult',
+  OPENWEBRX_CLIENT_COUNT = 'openwebrxClientCount',
+  OPENWEBRX_COOLDOWN_NOTICE = 'openwebrxCooldownNotice',
 }
 
 // ===== 共享数据类型Schema定义 =====
@@ -1136,4 +1144,8 @@ export interface DigitalRadioEngineEvents {
   // 进程监控事件
   processSnapshot: (data: import('./process-monitor.schema.js').ProcessSnapshot) => void;
   processSnapshotHistory: (data: import('./process-monitor.schema.js').ProcessSnapshotHistory) => void;
+
+  // OpenWebRX SDR 事件
+  openwebrxProfileSelectRequest: (data: import('./openwebrx.schema.js').OpenWebRXProfileSelectRequest) => void;
+  openwebrxProfileVerifyResult: (data: import('./openwebrx.schema.js').OpenWebRXProfileVerifyResult) => void;
 }
