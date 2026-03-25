@@ -4,7 +4,7 @@ import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
-import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, RadioConnectionStatusSchema, ReconnectProgressSchema } from './radio.schema.js';
+import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabilitiesSchema, RadioConnectionStatusSchema, ReconnectProgressSchema } from './radio.schema.js';
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
@@ -638,6 +638,7 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
       connectionHealthy: z.boolean(),
     }).optional(),
     meterCapabilities: MeterCapabilitiesSchema.optional(), // 电台数值表能力（连接时检测）
+    tunerCapabilities: TunerCapabilitiesSchema.optional(), // 天调能力（连接时检测）
   }),
 });
 

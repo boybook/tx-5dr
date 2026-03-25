@@ -97,6 +97,7 @@ export class RadioBridge {
 
       const radioInfo = await radioManager.getRadioInfo();
       const radioConfig = radioManager.getConfig();
+      const tunerCapabilities = await radioManager.getTunerCapabilities();
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engineEmitter.emit('radioStatusChanged', {
@@ -106,6 +107,7 @@ export class RadioBridge {
         radioConfig,
         connectionHealth: radioManager.getConnectionHealth(),
         meterCapabilities: radioManager.getMeterCapabilities(),
+        tunerCapabilities,
       });
 
       // 连接成功后自动设置频率（根据引擎模式选择对应的保存频率）
