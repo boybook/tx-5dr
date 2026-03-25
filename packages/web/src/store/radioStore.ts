@@ -9,6 +9,7 @@ import type {
   LogBookStatistics,
   MeterData,
   MeterCapabilities,
+  TunerCapabilities,
   SystemStatus,
   HamlibConfig,
   RadioInfo,
@@ -93,6 +94,8 @@ export interface RadioState {
   meterData: MeterData | null;
   // 电台数值表能力（null = 未知/兼容旧版）
   meterCapabilities: MeterCapabilities | null;
+  // 天调能力（null = 未连接；连接时由 radioStatusChanged 事件推送）
+  tunerCapabilities: TunerCapabilities | null;
   // 电台重连进度
   reconnectProgress: ReconnectProgress | null;
   // 电台连接健康状态
@@ -166,7 +169,7 @@ export type RadioAction =
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
-  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; meterCapabilities?: MeterCapabilities } }
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; meterCapabilities?: MeterCapabilities; tunerCapabilities?: TunerCapabilities } }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
   | { type: 'meterData'; payload: MeterData }
   | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
@@ -196,6 +199,7 @@ const initialRadioState: RadioState = {
   },
   meterData: null,
   meterCapabilities: null,
+  tunerCapabilities: null,
   radioConnectionHealth: null,
   profiles: [],
   activeProfileId: null,
@@ -293,6 +297,10 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         // 数值表能力：连接时更新，断开时重置为 null
         meterCapabilities: action.payload.radioConnected
           ? (action.payload.meterCapabilities ?? state.meterCapabilities)
+          : null,
+        // 天调能力：连接时更新，断开时重置为 null
+        tunerCapabilities: action.payload.radioConnected
+          ? (action.payload.tunerCapabilities ?? state.tunerCapabilities)
           : null,
       };
 
@@ -888,6 +896,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           connectionHealth?: ConnectionHealthInfo;
           reconnectProgress?: ReconnectProgress | null;
           meterCapabilities?: MeterCapabilities;
+          tunerCapabilities?: TunerCapabilities;
           reason?: string;
           message?: string;
         };
@@ -903,6 +912,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             radioConnectionHealth: radioData.connectionHealth,
             reconnectProgress: radioData.reconnectProgress ?? null,
             meterCapabilities: radioData.meterCapabilities,
+            tunerCapabilities: radioData.tunerCapabilities,
           }
         });
 

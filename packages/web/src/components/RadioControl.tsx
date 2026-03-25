@@ -6,7 +6,7 @@ import { faCog, faChevronDown, faVolumeUp, faHeadphones, faRadio, faSlidersH } f
 import { useConnection, useRadioState, useProfiles, useRadioErrors } from '../store/radioStore';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor, TunerStatus, TunerCapabilities } from '@tx5dr/contracts';
+import type { ModeDescriptor, TunerStatus } from '@tx5dr/contracts';
 import type { ConnectionState, RadioState } from '../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
@@ -272,8 +272,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [_customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
 
+  // 天调能力从全局 store 读取（由 radioStatusChanged 事件推送，连接时更新）
+  const tunerCapabilities = radio.state.tunerCapabilities;
+
   // 天调相关状态
-  const [tunerCapabilities, setTunerCapabilities] = useState<TunerCapabilities | null>(null);
   const [tunerStatus, setTunerStatus] = useState<TunerStatus>({
     enabled: false,
     active: false,
@@ -956,36 +958,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       wsClient.offWSEvent('frequencyChanged', handleFrequencyChanged as any);
     };
   }, [connection.state.radioService, availableFrequencies]);
-
-  // 加载天调能力
-  useEffect(() => {
-    const loadTunerCapabilities = async () => {
-      if (!connection.state.isConnected || !radio.state.radioConnected) {
-        setTunerCapabilities(null);
-        return;
-      }
-
-      try {
-        const response = await api.getTunerCapabilities();
-        if (response.success) {
-          setTunerCapabilities(response.capabilities);
-
-          // 如果支持天调，获取当前状态
-          if (response.capabilities.supported) {
-            const statusResponse = await api.getTunerStatus();
-            if (statusResponse.success) {
-              setTunerStatus(statusResponse.status);
-            }
-          }
-        }
-      } catch (error) {
-        logger.error('Failed to get tuner capabilities:', error);
-        setTunerCapabilities(null);
-      }
-    };
-
-    loadTunerCapabilities();
-  }, [connection.state.isConnected, radio.state.radioConnected]);
 
   // 监听天调状态变化事件
   useEffect(() => {

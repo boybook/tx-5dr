@@ -77,6 +77,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private lastKnownFrequency: number | null = null;
 
   /**
+   * 天调状态监控
+   */
+  private tunerPollingInterval: NodeJS.Timeout | null = null;
+  private lastKnownTunerEnabled: boolean | null = null;
+
+  /**
    * 断开保护标志（防止重复断开导致 hamlib 线程冲突）
    */
   private isDisconnecting = false;
@@ -172,6 +178,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.info(`Disconnecting: ${reason || 'user request'}`);
 
       this.stopFrequencyMonitoring();
+      this.stopTunerMonitoring();
 
       // 先主动清理连接资源
       if (this.connection) {
@@ -827,6 +834,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 启动频率监控
     this.startFrequencyMonitoring();
+    // 启动天调状态监控（异步：先查能力，支持则启动轮询）
+    void this.startTunerMonitoring();
 
     logger.info('Connection established');
   }
@@ -838,6 +847,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     logger.info(`Executing disconnect: ${reason || ''}`);
 
     this.stopFrequencyMonitoring();
+    this.stopTunerMonitoring();
 
     if (this.connection) {
       try {
@@ -860,6 +870,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     logger.info(`Internal disconnect: ${reason || ''}`);
 
     this.stopFrequencyMonitoring();
+    this.stopTunerMonitoring();
 
     if (this.radioActor) {
       this.radioActor.stop();
@@ -969,6 +980,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private cleanupAfterDisconnect(): void {
     this.stopFrequencyMonitoring();
+    this.stopTunerMonitoring();
     if (this.connection) {
       this.cleanupConnectionListeners();
       // 不调用 connection.disconnect()，因为连接已断（被动断线）
@@ -1153,6 +1165,82 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
     } catch (error) {
       // 静默处理错误（getFrequency 已经有错误处理）
+    }
+  }
+
+  // ==================== 天调状态监控 ====================
+
+  /**
+   * 启动天调状态监控（每 5s 检查一次，错开频率监控 2.5s）
+   * 先查询天调能力，不支持则直接返回不启动轮询
+   */
+  private async startTunerMonitoring(): Promise<void> {
+    if (this.tunerPollingInterval) {
+      this.stopTunerMonitoring();
+    }
+
+    if (!this.connection) {
+      return;
+    }
+
+    // 连接时检查天调能力，不支持则不启动轮询
+    const capabilities = await this.getTunerCapabilities();
+    if (!capabilities.supported) {
+      logger.debug('Tuner not supported by this radio, skipping tuner monitoring');
+      return;
+    }
+
+    logger.debug('Starting tuner monitoring (every 5s, offset 2.5s from frequency monitor)');
+
+    // 将 setTimeout 句柄存入 tunerPollingInterval；
+    // stopTunerMonitoring 调用 clearInterval 同时可取消 timeout（Node.js 兼容）
+    this.tunerPollingInterval = setTimeout(() => {
+      this.checkTunerStatusChange();
+      this.tunerPollingInterval = setInterval(() => {
+        this.checkTunerStatusChange();
+      }, 5000);
+    }, 2500);
+  }
+
+  /**
+   * 停止天调状态监控
+   */
+  private stopTunerMonitoring(): void {
+    if (this.tunerPollingInterval) {
+      clearInterval(this.tunerPollingInterval);
+      this.tunerPollingInterval = null;
+      logger.debug('Tuner monitoring stopped');
+    }
+    this.lastKnownTunerEnabled = null;
+  }
+
+  /**
+   * 检查天调状态变化，有变化时广播事件
+   */
+  private async checkTunerStatusChange(): Promise<void> {
+    if (!this.connection || !this.isConnected()) {
+      return;
+    }
+
+    if (!this.connection.getTunerStatus) {
+      return;
+    }
+
+    try {
+      const status = await this.getTunerStatus();
+
+      if (this.lastKnownTunerEnabled === null) {
+        // 首次查询：记录初始状态并广播，确保前端与硬件同步
+        this.lastKnownTunerEnabled = status.enabled;
+        this.emit('tunerStatusChanged', status);
+      } else if (status.enabled !== this.lastKnownTunerEnabled) {
+        // 状态发生变化（用户在电台面板手动操作等）
+        logger.info(`Tuner state changed externally: ${this.lastKnownTunerEnabled} -> ${status.enabled}`);
+        this.lastKnownTunerEnabled = status.enabled;
+        this.emit('tunerStatusChanged', status);
+      }
+    } catch {
+      // 静默处理，不影响主连接状态
     }
   }
 
