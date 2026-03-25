@@ -35,6 +35,7 @@ export class ClockCoordinator {
   private lm = new ListenerManager();
   private pskreporterService: PSKReporterService | null = null;
   private hasSeenFirstSlot = false;
+  private decodeTimingWarningEmitted = false;
 
   constructor(private deps: ClockCoordinatorDeps) {}
 
@@ -82,16 +83,24 @@ export class ClockCoordinator {
       const mode = getCurrentMode();
       logger.debug(`encode start id=${slotInfo.id} time=${new Date().toISOString()} advance=${mode.encodeAdvance}ms`);
 
-      // 检查前一时隙是否有已完成的解码结果（跳过引擎启动后的第一个时隙）
-      if (this.hasSeenFirstSlot) {
+      // 检查前一时隙是否有已完成的解码结果
+      // 仅在有操作员需要发射时检查（非发射周期无需解码数据做决策）
+      // 跳过引擎启动后的第一个时隙（没有前一时隙数据是正常的）
+      // 每轮异常只告警一次，解码恢复正常后重置
+      if (this.hasSeenFirstSlot && operatorManager.hasActiveTransmissionsInCurrentCycle(slotInfo)) {
         const prevSlotStartMs = slotInfo.startMs - mode.slotMs;
         if (!slotPackManager.hasCompletedDecodes(prevSlotStartMs)) {
-          logger.warn(`no decode results for previous slot (startMs=${prevSlotStartMs}) by decision time`);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          engineEmitter.emit('timingWarning' as any, {
-            title: 'Decode timing warning',
-            text: `No decode results received for previous slot by decision time. Decoding may be lagging behind.`
-          });
+          if (!this.decodeTimingWarningEmitted) {
+            this.decodeTimingWarningEmitted = true;
+            logger.warn(`no decode results for previous slot (startMs=${prevSlotStartMs}) by decision time`);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            engineEmitter.emit('timingWarning' as any, {
+              title: 'Decode timing warning',
+              text: `No decode results received for previous slot by decision time. Decoding may be lagging behind.`
+            });
+          }
+        } else {
+          this.decodeTimingWarningEmitted = false;
         }
       }
       this.hasSeenFirstSlot = true;
@@ -194,6 +203,7 @@ export class ClockCoordinator {
   teardown(): void {
     this.lm.disposeAll();
     this.hasSeenFirstSlot = false;
+    this.decodeTimingWarningEmitted = false;
     logger.info('event listeners disposed');
   }
 }
