@@ -937,24 +937,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms`);
 
-      // Pre-build all chunk buffers with gain applied (avoid per-tick allocation)
-      const gain = this.volumeGain;
-      const chunkBuffers: Buffer[] = [];
-      const chunkSamples: number[] = [];
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, playbackData.length);
-        const chunk = playbackData.subarray(start, end);
-        const buffer = Buffer.allocUnsafe(chunk.length * 4);
-        for (let j = 0; j < chunk.length; j++) {
-          const s = chunk[j] * gain;
-          const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
-          buffer.writeFloatLE(clamped, j * 4);
-        }
-        chunkBuffers.push(buffer);
-        chunkSamples.push(chunk.length);
-      }
-
       const chunkStartTime = Date.now();
 
       // setInterval-based playback loop wrapped in a Promise
@@ -968,8 +950,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             return false;
           }
           try {
-            this.rtAudioOutput.write(chunkBuffers[idx]);
-            samplesWritten += chunkSamples[idx];
+            const start = idx * chunkSize;
+            const end = Math.min(start + chunkSize, playbackData.length);
+            const chunk = playbackData.subarray(start, end);
+            // Apply gain at write time so volume changes take effect immediately
+            const gain = this.volumeGain;
+            const buffer = Buffer.allocUnsafe(chunk.length * 4);
+            for (let j = 0; j < chunk.length; j++) {
+              const s = chunk[j] * gain;
+              buffer.writeFloatLE(s > 1 ? 1 : (s < -1 ? -1 : s), j * 4);
+            }
+            this.rtAudioOutput.write(buffer);
+            samplesWritten += chunk.length;
             return true;
           } catch {
             // write failed (e.g. buffer full), skip this tick
