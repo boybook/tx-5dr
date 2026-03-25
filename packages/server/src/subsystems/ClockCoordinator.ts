@@ -65,8 +65,8 @@ export class ClockCoordinator {
       // 确保PTT在新时隙开始时被停止
       await getTransmissionPipeline().forceStopPTT();
 
-      // 通知 TransmissionPipeline 清空时隙缓存
-      getTransmissionPipeline().onSlotStart();
+      // 停止残留音频 + 清空时隙缓存
+      await getTransmissionPipeline().onSlotStart();
 
       // 时隙边界清理：取消重决策 debounce + 清空编码请求ID映射
       operatorManager.onSlotBoundary();

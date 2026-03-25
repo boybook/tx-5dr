@@ -935,7 +935,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const prebufferMs = Math.max(60, Math.min(200, Math.round((framesPerBuffer / this.sampleRate) * 1000 * 4)));
       const prebufferSamples = Math.ceil((prebufferMs / 1000) * this.sampleRate);
 
-      logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms`);
+      const totalSamples = playbackData.length;
+      const expectedDurationMs = Math.round((totalSamples / this.sampleRate) * 1000);
+      logger.debug(`chunked playback: ${totalChunks} chunks, chunkSize=${chunkSize}, prebuffer~${prebufferMs}ms, tick=${TICK_MS}ms, totalSamples=${totalSamples}, expectedDuration=${expectedDurationMs}ms`);
 
       const chunkStartTime = Date.now();
 
@@ -944,6 +946,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         const hrStart = performance.now();
         let cursor = 0;
         let samplesWritten = 0;
+        let writeFailCount = 0;
+        let lastProgressSec = -1;
 
         const writeChunk = (idx: number): boolean => {
           if (!this.rtAudioOutput) {
@@ -955,16 +959,25 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const chunk = playbackData.subarray(start, end);
             // Apply gain at write time so volume changes take effect immediately
             const gain = this.volumeGain;
-            const buffer = Buffer.allocUnsafe(chunk.length * 4);
+            // RtAudio requires exactly chunkSize frames per write; pad short last chunk with silence
+            const bufferSamples = chunkSize;
+            const buffer = Buffer.allocUnsafe(bufferSamples * 4);
             for (let j = 0; j < chunk.length; j++) {
               const s = chunk[j] * gain;
               buffer.writeFloatLE(s > 1 ? 1 : (s < -1 ? -1 : s), j * 4);
+            }
+            // Zero-fill remainder (silence padding for short last chunk)
+            for (let j = chunk.length; j < bufferSamples; j++) {
+              buffer.writeFloatLE(0, j * 4);
             }
             this.rtAudioOutput.write(buffer);
             samplesWritten += chunk.length;
             return true;
           } catch {
-            // write failed (e.g. buffer full), skip this tick
+            writeFailCount++;
+            if (writeFailCount <= 3 || writeFailCount % 100 === 0) {
+              logger.debug(`writeChunk failed: chunk=${idx}/${totalChunks}, written=${samplesWritten}/${totalSamples}, fails=${writeFailCount}`);
+            }
             return false;
           }
         };
@@ -983,9 +996,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             if (cursor >= totalChunks) {
               clearInterval(interval);
               const chunkDuration = Date.now() - chunkStartTime;
-              logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
               const playDuration = Date.now() - playStartTime;
-              logger.info(`playback complete, duration: ${playDuration}ms`);
+              logger.debug(`chunked write complete, duration: ${chunkDuration}ms`);
+              logger.info(`playback complete, duration: ${playDuration}ms, expected: ${expectedDurationMs}ms, overhead: ${playDuration - expectedDurationMs}ms, writeFails: ${writeFailCount}`);
               resolve();
               return;
             }
@@ -999,6 +1012,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               if (this.shouldStopPlayback) break;
               if (!writeChunk(cursor)) break;
               cursor++;
+            }
+
+            // Periodic progress log (every 2 seconds)
+            const elapsedSec = Math.floor(elapsedMs / 1000);
+            if (elapsedSec >= 2 && elapsedSec !== lastProgressSec && elapsedSec % 2 === 0) {
+              lastProgressSec = elapsedSec;
+              logger.debug(`playback progress: ${cursor}/${totalChunks} chunks, ${samplesWritten}/${totalSamples} samples, elapsed=${Math.round(elapsedMs)}ms, target=${targetSamples}, fails=${writeFailCount}`);
             }
           } catch (err) {
             clearInterval(interval);

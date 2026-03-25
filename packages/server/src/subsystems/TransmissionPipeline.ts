@@ -37,8 +37,13 @@ export class TransmissionPipeline {
 
   // PTT状态管理
   private _isPTTActive = false;
-  private pttTimeoutId: NodeJS.Timeout | null = null;
   private _isRemixing = false;
+
+  // PTT 轮询（替代 setTimeout，在高负载 CPU 上更精确）
+  private pttPollInterval: NodeJS.Timeout | null = null;
+  private pttAudioStoppedAt: number | null = null;
+  private static readonly PTT_POLL_INTERVAL_MS = 50;
+  private static readonly PTT_HOLD_AFTER_AUDIO_MS = 500;
 
   // 编码状态跟踪
   private currentSlotExpectedEncodes: number = 0;
@@ -87,23 +92,24 @@ export class TransmissionPipeline {
   }
 
   /**
-   * 清理监听器和 PTT 定时器（doStop 时调用）
+   * 清理监听器和 PTT 轮询（doStop 时调用）
    */
   teardown(): void {
-    // 清理 PTT 定时器（修复 D4）
-    if (this.pttTimeoutId) {
-      clearTimeout(this.pttTimeoutId);
-      this.pttTimeoutId = null;
-    }
+    this.stopPTTPoll();
 
     this.lm.disposeAll();
     logger.info('event listeners cleaned up');
   }
 
   /**
-   * 时隙开始时调用
+   * 时隙开始时调用：停止残留音频播放 + 清空混音缓存
    */
-  onSlotStart(): void {
+  async onSlotStart(): Promise<void> {
+    // 停止上一时隙的残留音频播放，防止 isPlaying 状态泄漏到新时隙
+    if (this.deps.audioStreamManager.isPlaying()) {
+      await this.deps.audioStreamManager.stopCurrentPlayback();
+      logger.debug('stopped residual audio playback from previous slot');
+    }
     this.deps.audioMixer.clearSlotCache();
   }
 
@@ -147,6 +153,7 @@ export class TransmissionPipeline {
    * 强制停止PTT
    */
   async forceStopPTT(): Promise<void> {
+    this.stopPTTPoll();
     if (this._isPTTActive) {
       await this.stopPTT();
     }
@@ -213,7 +220,7 @@ export class TransmissionPipeline {
           this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
           audioMixer.markPlaybackStart();
           await audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
-          this.schedulePTTStop(remixedAudio.duration * 1000 + 200);
+          this.startPTTPoll();
         } else {
           logger.info('remix returned null after operator removal, stopping PTT');
           await this.forceStopPTT();
@@ -234,11 +241,6 @@ export class TransmissionPipeline {
     if (this._isPTTActive) {
       logger.debug('PTT already active, skipping');
       return;
-    }
-
-    if (this.pttTimeoutId) {
-      clearTimeout(this.pttTimeoutId);
-      this.pttTimeoutId = null;
     }
 
     if (this.deps.radioManager.isConnected()) {
@@ -274,11 +276,6 @@ export class TransmissionPipeline {
       return;
     }
 
-    if (this.pttTimeoutId) {
-      clearTimeout(this.pttTimeoutId);
-      this.pttTimeoutId = null;
-    }
-
     if (this.deps.radioManager.isConnected()) {
       try {
         await this.deps.radioManager.setPTT(false);
@@ -308,17 +305,46 @@ export class TransmissionPipeline {
     }
   }
 
-  private schedulePTTStop(delayMs: number): void {
-    if (this.pttTimeoutId) {
-      clearTimeout(this.pttTimeoutId);
+  /**
+   * 启动 PTT 状态轮询（替代 setTimeout 预测计时）。
+   * 轮询检测音频是否仍在播放/remix，停止后等待 hold 时间再关闭 PTT。
+   */
+  private startPTTPoll(): void {
+    if (this.pttPollInterval) return;
+    this.pttAudioStoppedAt = null;
+    this.pttPollInterval = setInterval(() => this.pollPTTState(), TransmissionPipeline.PTT_POLL_INTERVAL_MS);
+  }
+
+  private stopPTTPoll(): void {
+    if (this.pttPollInterval) {
+      clearInterval(this.pttPollInterval);
+      this.pttPollInterval = null;
+    }
+    this.pttAudioStoppedAt = null;
+  }
+
+  private pollPTTState(): void {
+    if (!this._isPTTActive) {
+      this.stopPTTPoll();
+      return;
     }
 
-    logger.debug(`PTT stop scheduled in ${delayMs}ms`);
+    const isPlaying = this.deps.audioStreamManager.isPlaying();
+    const isRemixing = this._isRemixing;
 
-    this.pttTimeoutId = setTimeout(async () => {
-      this.pttTimeoutId = null;
-      await this.stopPTT();
-    }, delayMs);
+    if (isPlaying || isRemixing) {
+      this.pttAudioStoppedAt = null;
+    } else if (!this.pttAudioStoppedAt) {
+      this.pttAudioStoppedAt = Date.now();
+      logger.debug('PTT poll: audio stopped, starting hold countdown');
+    } else {
+      const holdElapsed = Date.now() - this.pttAudioStoppedAt;
+      if (holdElapsed >= TransmissionPipeline.PTT_HOLD_AFTER_AUDIO_MS) {
+        logger.debug(`PTT poll: hold expired (${holdElapsed}ms), stopping PTT`);
+        this.stopPTT();
+        this.stopPTTPoll();
+      }
+    }
   }
 
   private async handleEncodeComplete(result: {
@@ -385,6 +411,7 @@ export class TransmissionPipeline {
 
       if (isCurrentlyPlaying) {
         logger.debug('playback in progress, triggering remix');
+        this._isRemixing = true;
         try {
           const elapsedTimeMs = await this.deps.audioStreamManager.stopCurrentPlayback();
           this.deps.audioMixer.markPlaybackStop();
@@ -403,10 +430,12 @@ export class TransmissionPipeline {
             this.deps.operatorManager.updateActiveTransmissionOperators(remixedAudio.operatorIds);
             this.deps.audioMixer.markPlaybackStart();
             await this.deps.audioStreamManager.playAudio(remixedAudio.audioData, remixedAudio.sampleRate);
-            this.schedulePTTStop(remixedAudio.duration * 1000 + 200);
+            this.startPTTPoll();
           }
         } catch (remixError) {
           logger.error(`remix failed: ${remixError}`);
+        } finally {
+          this._isRemixing = false;
         }
       } else if (isMidSlotSwitch && currentTimeSinceSlotStartMs >= compensatedTransmitStart) {
         logger.debug('mid-slot switch, mixing immediately');
@@ -455,17 +484,14 @@ export class TransmissionPipeline {
 
       this.deps.audioMixer.markPlaybackStart();
       const audioPromise = this.deps.audioStreamManager.playAudio(mixedAudio.audioData, mixedAudio.sampleRate);
-      const actualPlaybackTimeMs = mixedAudio.duration * 1000;
-      const pttHoldTimeMs = 200;
-      const totalPTTTimeMs = actualPlaybackTimeMs + pttHoldTimeMs;
 
       logger.debug('PTT timing', {
-        audioMs: Math.round(actualPlaybackTimeMs),
-        holdMs: pttHoldTimeMs,
-        totalMs: Math.round(totalPTTTimeMs)
+        audioMs: Math.round(mixedAudio.duration * 1000),
+        pollIntervalMs: TransmissionPipeline.PTT_POLL_INTERVAL_MS,
+        holdMs: TransmissionPipeline.PTT_HOLD_AFTER_AUDIO_MS
       });
 
-      this.schedulePTTStop(totalPTTTimeMs);
+      this.startPTTPoll();
       await Promise.all([pttPromise, audioPromise]);
 
       this.deps.audioMixer.markPlaybackStop();
@@ -482,11 +508,14 @@ export class TransmissionPipeline {
       const isInterrupted = error instanceof Error && error.message === 'playback interrupted';
       if (isInterrupted) {
         // 播放被 stopCurrentPlayback 正常中断（中途内容切换），不关闭 PTT
+        // 停止旧轮询，后续 remix 路径会启动新轮询
         logger.debug('audio playback interrupted by content switch (expected)');
+        this.stopPTTPoll();
         this.deps.audioMixer.markPlaybackStop();
       } else {
         // 真正的播放错误，需要清理 PTT
         logger.error(`mixed audio playback failed: ${error}`);
+        this.stopPTTPoll();
         this.deps.audioMixer.markPlaybackStop();
         await this.stopPTT();
         for (const operatorId of mixedAudio.operatorIds) {
