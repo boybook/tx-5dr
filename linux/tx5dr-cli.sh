@@ -242,10 +242,15 @@ cmd_update() {
         return 1
     }
 
+    # Use asset updated_at for actual build date (published_at is stale with allowUpdates)
     local remote_date
-    remote_date=$(echo "$remote_info" | grep -oP '"published_at":\s*"\K[^"]+' | head -1 | cut -dT -f1)
+    remote_date=$(echo "$remote_info" | grep -oP '"updated_at":\s*"\K[^"]+' | grep -v "0001" | tail -1 | cut -dT -f1)
+    # Extract commit SHA from release body (target_commitish may be branch name, not SHA)
     local remote_sha
-    remote_sha=$(echo "$remote_info" | grep -oP '"target_commitish":\s*"\K[^"]+' | head -1 | cut -c1-7)
+    remote_sha=$(echo "$remote_info" | grep -oP '\*\*Commit\*\*: \[\K[a-f0-9]{7}' | head -1)
+    if [[ -z "$remote_sha" ]]; then
+        remote_sha=$(echo "$remote_info" | grep -oP '"target_commitish":\s*"\K[^"]+' | head -1 | cut -c1-7)
+    fi
 
     # Check if asset exists
     if ! echo "$remote_info" | grep -q "$asset_name"; then
