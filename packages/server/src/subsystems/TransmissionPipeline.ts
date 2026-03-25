@@ -131,19 +131,13 @@ export class TransmissionPipeline {
   }
 
   /**
-   * transmitStart 事件中调用（检查编码超时）
+   * transmitStart 事件中调用
    */
   onTransmitStart(_slotInfo: { id: string }): void {
     if (this.currentSlotExpectedEncodes > 0 &&
         this.currentSlotCompletedEncodes < this.currentSlotExpectedEncodes) {
       const missingCount = this.currentSlotExpectedEncodes - this.currentSlotCompletedEncodes;
       logger.warn(`encode timeout: expected ${this.currentSlotExpectedEncodes}, completed ${this.currentSlotCompletedEncodes}, missing ${missingCount}`);
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.deps.engineEmitter.emit('timingWarning' as any, {
-        title: 'Encode timeout warning',
-        text: `Transmit time reached but ${missingCount} encode task(s) not yet complete. This may cause delayed or failed transmission. Check transmit compensation settings or reduce simultaneous operators.`
-      });
     } else if (this.currentSlotExpectedEncodes > 0) {
       logger.debug(`all encode tasks completed on time (${this.currentSlotCompletedEncodes}/${this.currentSlotExpectedEncodes})`);
     }

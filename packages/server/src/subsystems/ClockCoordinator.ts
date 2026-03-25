@@ -34,6 +34,7 @@ export interface ClockCoordinatorDeps {
 export class ClockCoordinator {
   private lm = new ListenerManager();
   private pskreporterService: PSKReporterService | null = null;
+  private hasSeenFirstSlot = false;
 
   constructor(private deps: ClockCoordinatorDeps) {}
 
@@ -80,6 +81,21 @@ export class ClockCoordinator {
     this.lm.listen(slotClock, 'encodeStart', (slotInfo: SlotInfo) => {
       const mode = getCurrentMode();
       logger.debug(`encode start id=${slotInfo.id} time=${new Date().toISOString()} advance=${mode.encodeAdvance}ms`);
+
+      // 检查前一时隙是否有已完成的解码结果（跳过引擎启动后的第一个时隙）
+      if (this.hasSeenFirstSlot) {
+        const prevSlotStartMs = slotInfo.startMs - mode.slotMs;
+        if (!slotPackManager.hasCompletedDecodes(prevSlotStartMs)) {
+          logger.warn(`no decode results for previous slot (startMs=${prevSlotStartMs}) by decision time`);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          engineEmitter.emit('timingWarning' as any, {
+            title: 'Decode timing warning',
+            text: `No decode results received for previous slot by decision time. Decoding may be lagging behind.`
+          });
+        }
+      }
+      this.hasSeenFirstSlot = true;
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engineEmitter.emit('encodeStart' as any, slotInfo);
 
@@ -177,6 +193,7 @@ export class ClockCoordinator {
    */
   teardown(): void {
     this.lm.disposeAll();
+    this.hasSeenFirstSlot = false;
     logger.info('event listeners disposed');
   }
 }

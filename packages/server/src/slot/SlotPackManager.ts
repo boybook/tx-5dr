@@ -390,6 +390,19 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   }
 
   /**
+   * 检查指定时隙是否有已完成的解码结果
+   * 用于判断"解码完成但无数据"与"解码未完成"的区别
+   */
+  hasCompletedDecodes(startMs: number, toleranceMs = 200): boolean {
+    for (const pack of this.slotPacks.values()) {
+      if (Math.abs(pack.startMs - startMs) <= toleranceMs) {
+        return pack.decodeHistory.length > 0;
+      }
+    }
+    return false;
+  }
+
+  /**
    * 获取最新的时隙包
    * 优化版本：直接返回缓存的 lastSlotPack
    */

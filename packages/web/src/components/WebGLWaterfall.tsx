@@ -34,6 +34,7 @@ interface WebGLWaterfallProps {
   rxFrequencies?: RxFrequency[];
   txFrequencies?: TxFrequency[];
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
+  onRightClickSetFrequency?: (frequency: number) => void;
   onActualRangeChange?: (range: { min: number; max: number }) => void;
   hoverFrequency?: number | null;
   /** 纹理总行数，不足时底部用暗色填充，实现从顶部逐渐填充的效果 */
@@ -59,6 +60,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   rxFrequencies = [],
   txFrequencies = [],
   onTxFrequencyChange,
+  onRightClickSetFrequency,
   onActualRangeChange,
   hoverFrequency,
   totalRows,
@@ -961,7 +963,17 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [draggingOperatorId, handleMouseMove, handleMouseUp]);
 
   return (
-    <div ref={containerRef} className={`relative ${className}`}>
+    <div
+      ref={containerRef}
+      className={`relative ${className}`}
+      onContextMenu={(e) => {
+        if (onRightClickSetFrequency) {
+          e.preventDefault();
+          const frequency = getFrequencyFromMousePosition(e.clientX);
+          onRightClickSetFrequency(frequency);
+        }
+      }}
+    >
       <canvas
         ref={canvasRef}
         className="w-full"
