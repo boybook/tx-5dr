@@ -237,7 +237,7 @@ export class RadioOperator {
                 this._config.myGrid = myGrid;
             }
             if (frequency !== undefined) {
-                this._config.frequency = frequency;
+                this._config.frequency = Math.max(1, Math.min(3000, frequency));
             }
             if (autoReplyToCQ !== undefined) {
                 this._config.autoReplyToCQ = autoReplyToCQ;

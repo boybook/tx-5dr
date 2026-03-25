@@ -794,12 +794,6 @@ export class WSServer extends WSMessageHandler {
         throw new Error(`Operator ${operatorId} does not exist`);
       }
 
-      // 如果是update_context命令，先持久化到配置文件（此时内存还未更新，可以检测到变化）
-      if (command === 'update_context') {
-        await this.digitalRadioEngine.operatorManager.updateOperatorContext(operatorId, args);
-        logger.debug('update_context command persisted to config file');
-      }
-
       // 如果是set_transmit_cycles命令，持久化到配置文件
       // 否则下次通过 API 更新配置时会用文件旧值覆盖内存中的新值
       if (command === 'set_transmit_cycles' && args?.transmitCycles !== undefined) {
@@ -807,9 +801,17 @@ export class WSServer extends WSMessageHandler {
         logger.debug('set_transmit_cycles command persisted to config file');
       }
 
-      // 然后调用operator更新内存状态
+      // 先执行 userCommand 更新内存状态（config + strategy.context + slots），
+      // 这会通过事件链触发一次 emitOperatorStatusUpdate（携带完整一致的数据）
       operator.userCommand({ command, args });
       logger.debug(`user command executed: operator=${operatorId}, command=${command}`, args);
+
+      // update_context 命令：仅持久化到配置文件（内存已由 userCommand 更新）
+      // 不再调用 updateOperatorContext，避免在 strategy.context 更新前产生额外广播
+      if (command === 'update_context') {
+        await this.digitalRadioEngine.operatorManager.persistOperatorContext(operatorId, args);
+        logger.debug('update_context persisted to config file');
+      }
     } catch (error) {
       this.handleCommandError(error, 'userCommand');
     }

@@ -601,9 +601,12 @@ export class RadioOperatorManager {
       operator.config.myGrid = context.myGrid;
       updates.myGrid = context.myGrid;
     }
-    if (context.frequency !== undefined && context.frequency !== operator.config.frequency) {
-      operator.config.frequency = context.frequency;
-      updates.frequency = context.frequency;
+    if (context.frequency !== undefined) {
+      const clampedFreq = Math.max(1, Math.min(3000, context.frequency));
+      if (clampedFreq !== operator.config.frequency) {
+        operator.config.frequency = clampedFreq;
+        updates.frequency = clampedFreq;
+      }
     }
 
     // 更新自动化设置
@@ -637,6 +640,55 @@ export class RadioOperatorManager {
 
     logger.debug(`Updated operator ${operatorId} context:`, context);
     this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  /**
+   * 仅持久化操作员上下文到配置文件（不更新内存、不触发广播）
+   * 用于 handleUserCommand 中 update_context 的持久化步骤，
+   * 内存更新已由 operator.userCommand 处理。
+   */
+  async persistOperatorContext(operatorId: string, context: any): Promise<void> {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`operator ${operatorId} not found`);
+    }
+
+    // 比较并构建更新对象（仅包含实际变化的字段）
+    const updates: Partial<RadioOperatorConfig> = {};
+
+    if (context.myCall !== undefined && context.myCall !== operator.config.myCallsign) {
+      updates.myCallsign = context.myCall;
+    }
+    if (context.myGrid !== undefined && context.myGrid !== operator.config.myGrid) {
+      updates.myGrid = context.myGrid;
+    }
+    if (context.frequency !== undefined) {
+      const clampedFreq = Math.max(1, Math.min(3000, context.frequency));
+      if (clampedFreq !== operator.config.frequency) {
+        updates.frequency = clampedFreq;
+      }
+    }
+    if (context.autoReplyToCQ !== undefined && context.autoReplyToCQ !== operator.config.autoReplyToCQ) {
+      updates.autoReplyToCQ = context.autoReplyToCQ;
+    }
+    if (context.autoResumeCQAfterFail !== undefined && context.autoResumeCQAfterFail !== operator.config.autoResumeCQAfterFail) {
+      updates.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
+    }
+    if (context.autoResumeCQAfterSuccess !== undefined && context.autoResumeCQAfterSuccess !== operator.config.autoResumeCQAfterSuccess) {
+      updates.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
+    }
+    if (context.replyToWorkedStations !== undefined && context.replyToWorkedStations !== operator.config.replyToWorkedStations) {
+      updates.replyToWorkedStations = context.replyToWorkedStations;
+    }
+    if (context.prioritizeNewCalls !== undefined && context.prioritizeNewCalls !== operator.config.prioritizeNewCalls) {
+      updates.prioritizeNewCalls = context.prioritizeNewCalls;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      const configManager = ConfigManager.getInstance();
+      await configManager.updateOperatorConfig(operatorId, updates);
+      logger.debug(`Persisted operator ${operatorId} context to file:`, updates);
+    }
   }
 
   /**
