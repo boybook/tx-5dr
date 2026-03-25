@@ -553,9 +553,13 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   /**
    * 获取指定呼号最后发送的消息
    * @param callsign 目标呼号
+   * @param selfOperatorId 请求者的操作员ID（可选），提供时只跳过自己的TX帧，允许发现其他本地操作员的TX帧
    * @returns 包含消息和时隙信息的对象，如果没有找到则返回undefined
    */
-  getLastMessageFromCallsign(callsign: string): { message: FrameMessage, slotInfo: SlotInfo } | undefined {
+  getLastMessageFromCallsign(callsign: string, selfOperatorId?: string): { message: FrameMessage, slotInfo: SlotInfo } | undefined {
+    // 本地操作员间通联的模拟SNR值（+10dB，表示本地信号良好）
+    const LOCAL_OPERATOR_SIMULATED_SNR = 10;
+
     // 获取所有slotPacks并按时间排序（最新的在前）
     const sortedSlotPacks = Array.from(this.slotPacks.values())
       .sort((a, b) => b.startMs - a.startMs);
@@ -566,24 +570,28 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       // 从后往前遍历frames（最新的在后）
       for (let i = slotPack.frames.length - 1; i >= 0; i--) {
         const frame = slotPack.frames[i];
-        
-        // 跳过发射帧（SNR=-999），只查找接收到的消息
+
+        // 跳过发射帧（SNR=-999）
         if (frame.snr === -999) {
-          continue;
+          // 有 selfOperatorId 时：只跳过自己的TX帧，保留其他操作员的TX帧
+          if (!selfOperatorId || frame.operatorId === selfOperatorId) {
+            continue;
+          }
+          // 其他操作员的TX帧：继续处理，稍后替换SNR
         }
 
         try {
           // 使用FT8MessageParser解析消息
           const parsedMessage = FT8MessageParser.parseMessage(frame.message);
-          
+
           // 检查是否有senderCallsign字段且匹配目标呼号
-          if ((parsedMessage as any).senderCallsign && 
+          if ((parsedMessage as any).senderCallsign &&
               (parsedMessage as any).senderCallsign.toUpperCase() === upperCallsign) {
-            
+
             // 构造SlotInfo，使用统一的周期计算方法
             const utcSeconds = Math.floor(slotPack.startMs / 1000);
             const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, this.currentMode.slotMs);
-            
+
             const slotInfo: SlotInfo = {
               id: slotPack.slotId,
               startMs: slotPack.startMs,
@@ -594,8 +602,13 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
               mode: this.currentMode.name
             };
 
-            logger.debug(`Found last message from callsign ${callsign}: "${frame.message}" in slot ${slotPack.slotId}`);
-            return { message: frame, slotInfo };
+            // 如果是其他操作员的TX帧（snr=-999），替换为模拟SNR
+            const resultFrame = frame.snr === -999
+              ? { ...frame, snr: LOCAL_OPERATOR_SIMULATED_SNR }
+              : frame;
+
+            logger.debug(`Found last message from callsign ${callsign}: "${frame.message}" in slot ${slotPack.slotId}${frame.snr === -999 ? ' (local operator TX, simulated SNR)' : ''}`);
+            return { message: resultFrame, slotInfo };
           }
         } catch (error) {
           // 解析失败，跳过这个消息

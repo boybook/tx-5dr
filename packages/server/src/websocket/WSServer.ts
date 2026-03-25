@@ -856,7 +856,7 @@ export class WSServer extends WSMessageHandler {
       if (!operator) {
         throw new Error(`Operator ${operatorId} does not exist`);
       }
-      const lastMessage = this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign);
+      const lastMessage = this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign, operatorId);
       operator.requestCall(callsign, lastMessage);
       // 调用manager中的start，来启用中途发射
       this.digitalRadioEngine.operatorManager.startOperator(operatorId);
