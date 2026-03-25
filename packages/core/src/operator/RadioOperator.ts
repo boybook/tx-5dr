@@ -237,7 +237,15 @@ export class RadioOperator {
                 this._config.myGrid = myGrid;
             }
             if (frequency !== undefined) {
+                const oldFrequency = this._config.frequency;
                 this._config.frequency = Math.max(1, Math.min(3000, frequency));
+                if (this._config.frequency !== oldFrequency) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    this._eventEmitter.emit('operatorFrequencyChanged' as any, {
+                        operatorId: this._config.id,
+                        frequency: this._config.frequency
+                    });
+                }
             }
             if (autoReplyToCQ !== undefined) {
                 this._config.autoReplyToCQ = autoReplyToCQ;
