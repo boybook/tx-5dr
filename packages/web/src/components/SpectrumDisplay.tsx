@@ -3,7 +3,7 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('SpectrumDisplay');
 import type { FT8Spectrum } from '@tx5dr/contracts';
-import { useConnection, useOperators, useRadioState } from '../store/radioStore';
+import { useConnection, useOperators, useRadioState, useCurrentOperatorId } from '../store/radioStore';
 import { WebGLWaterfall } from './WebGLWaterfall';
 import type { AutoRangeConfig } from './WebGLWaterfall';
 import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
@@ -148,6 +148,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     });
   }, [connection.state.radioService, operators]);
 
+  // 右键快捷设置当前操作员TX频率
+  const { currentOperatorId } = useCurrentOperatorId();
+  const handleRightClickSetFrequency = useCallback((frequency: number) => {
+    if (currentOperatorId) {
+      handleTxFrequencyChange(currentOperatorId, frequency);
+    }
+  }, [currentOperatorId, handleTxFrequencyChange]);
+
   // 解码二进制频谱数据
   const decodeSpectrumData = useCallback((spectrum: FT8Spectrum) => {
     const { data, format } = spectrum.binaryData;
@@ -291,6 +299,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         rxFrequencies={showMarkers ? rxFrequencies : []}
         txFrequencies={showMarkers ? txFrequencies : []}
         onTxFrequencyChange={showMarkers ? handleTxFrequencyChange : undefined}
+        onRightClickSetFrequency={showMarkers ? handleRightClickSetFrequency : undefined}
         onActualRangeChange={setActualRange}
         hoverFrequency={hoverFrequency}
         isTransmitting={isTransmitting}

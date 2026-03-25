@@ -93,7 +93,6 @@ export class RadioOperator {
             this._lastDecisionMessageSet = null;
 
             if (lastSlotPack) {
-                const t0 = Date.now();
                 const parsedMessages = this.parseSlotPackMessages(lastSlotPack);
 
                 this._decisionInProgress = true;
@@ -104,22 +103,6 @@ export class RadioOperator {
                     this._decisionInProgress = false;
                 }
 
-                const elapsed = Date.now() - t0;
-                try {
-                    // 计算从slotStart到encodeStart的预算时间：transmitTiming - encodeAdvance
-                    const mode = this._config.mode;
-                    const transmitTiming = ('transmitTiming' in mode ? mode.transmitTiming : 0) || 0;
-                    const encodeAdvance = ('encodeAdvance' in mode ? mode.encodeAdvance : 0) || 0;
-                    const budget = Math.max(0, transmitTiming - encodeAdvance);
-                    if (elapsed > budget) {
-                        // 决策耗时超过预算，可能赶不上本周期发射，广播告警（由WSServer转成TEXT_MESSAGE）
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        this._eventEmitter.emit('timingWarning' as any, {
-                            title: 'Timing Warning',
-                            text: `Decision took ${elapsed}ms, exceeding budget ${budget}ms, may miss this slot transmission (${this._config.myCallsign})`
-                        });
-                    }
-                } catch {}
                 if (result?.stop) {
                     logger.debug(`onSlotStart (${this.config.myCallsign}): stop command received, calling stop()`);
                     this.stop();
