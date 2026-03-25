@@ -90,6 +90,7 @@
   },
   "operator": {
     "viewLog": "View Log",
+    "log": "Log",
     "toggleTx": "Toggle transmit",
     "toggleTxCycle": "Toggle TX cycle",
     "selectSlot": "Select current slot",

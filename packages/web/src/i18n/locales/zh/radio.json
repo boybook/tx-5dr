@@ -90,6 +90,7 @@
   },
   "operator": {
     "viewLog": "查看通联日志",
+    "log": "日志",
     "toggleTx": "切换发射状态",
     "toggleTxCycle": "切换发射周期",
     "selectSlot": "选择当前时隙",
