@@ -644,14 +644,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       logger.info('QSO record created manually', { logBookId: logBook.id, callsign: body.callsign, operatorId });
 
       // 广播 qsoRecordAdded 事件（触发 WS 推送和前端实时更新）
-      digitalRadioEngine.emit('qsoRecordAdded' as never, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      digitalRadioEngine.emit('qsoRecordAdded' as any, {
         operatorId: operatorId || '',
         logBookId: logBook.id,
         qsoRecord: record,
       });
       try {
         const statistics = await logBook.provider.getStatistics();
-        digitalRadioEngine.emit('logbookUpdated' as never, {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        digitalRadioEngine.emit('logbookUpdated' as any, {
           logBookId: logBook.id,
           statistics,
           operatorId: operatorId || '',
