@@ -1,5 +1,5 @@
 import type { RadioProfile, CreateProfileRequest, UpdateProfileRequest } from '@tx5dr/contracts';
-import type { HamlibConfig, AudioDeviceSettings } from '@tx5dr/contracts';
+import type { AudioDeviceSettings } from '@tx5dr/contracts';
 import { ConfigManager } from './config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { createLogger } from '../utils/logger.js';

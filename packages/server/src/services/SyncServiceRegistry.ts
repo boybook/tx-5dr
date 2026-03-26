@@ -4,7 +4,7 @@ import { WaveLogService } from './WaveLogService.js';
 import { QRZService } from './QRZService.js';
 import { LoTWService } from './LoTWService.js';
 import { ConfigManager } from '../config/config-manager.js';
-import type { CallsignSyncConfig, WaveLogConfig, QRZConfig, LoTWConfig } from '@tx5dr/contracts';
+import type { CallsignSyncConfig } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('SyncServiceRegistry');

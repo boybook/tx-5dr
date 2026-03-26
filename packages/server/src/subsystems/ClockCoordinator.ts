@@ -1,5 +1,5 @@
 import type { EventEmitter } from 'eventemitter3';
-import type { DigitalRadioEngineEvents, ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, ModeDescriptor, SlotInfo, SlotPack } from '@tx5dr/contracts';
 import type { SlotClock } from '@tx5dr/core';
 import type { WSJTXDecodeWorkQueue } from '../decode/WSJTXDecodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
@@ -160,7 +160,7 @@ export class ClockCoordinator {
       engineEmitter.emit('slotPackUpdated', slotPack as any);
 
       // 晚到解码重决策：当上一 RX 时隙的解码结果在 TX 时隙早期到达时，重新评估发射决策
-      operatorManager.reDecideOnLateDecodes(slotPack as any);
+      operatorManager.reDecideOnLateDecodes(slotPack as unknown as SlotPack);
     });
 
     // ─── SpectrumScheduler 事件 ────────────────────

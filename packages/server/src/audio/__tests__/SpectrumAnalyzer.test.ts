@@ -21,7 +21,7 @@ function generateSilence(sampleRate: number, duration: number): Float32Array {
 }
 
 /** Generate white noise */
-function generateWhiteNoise(sampleRate: number, duration: number, amplitude = 0.1): Float32Array {
+function _generateWhiteNoise(sampleRate: number, duration: number, amplitude = 0.1): Float32Array {
   const numSamples = Math.floor(sampleRate * duration);
   const data = new Float32Array(numSamples);
   for (let i = 0; i < numSamples; i++) {

@@ -65,7 +65,7 @@ export const WaveLogSettings = forwardRef<WaveLogSettingsRef, WaveLogSettingsPro
       try {
         setLoading(true);
         setError('');
-        const response = await api.getWaveLogConfig(callsign) as any;
+        const response = await api.getWaveLogConfig(callsign) as Record<string, unknown>;
         const data = response?.config || response;
         if (data && typeof data === 'object') {
           setConfig(prev => ({ ...prev, ...data }));

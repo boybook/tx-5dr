@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, useCallback, useMemo, ReactNode } from 'react';
-import { createMongoAbility, type MongoAbility, subject as caslSubject } from '@casl/ability';
+import { createMongoAbility, type MongoAbility, type RawRuleOf, subject as caslSubject } from '@casl/ability';
 import { api, configureAuthToken } from '@tx5dr/core';
 import { buildAbilityRules, type PermissionGrant, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type { UserRole, AuthStatus, AuthMeResponse } from '@tx5dr/contracts';
@@ -408,12 +408,11 @@ type AppAbility = MongoAbility<[string, string]>;
 
 function createAbilityFromState(state: AuthState): AppAbility {
   if (!state.role) return createMongoAbility([]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return createMongoAbility(buildAbilityRules({
     role: state.role as import('@tx5dr/contracts').UserRole,
     operatorIds: state.operatorIds,
     permissionGrants: state.permissionGrants,
-  }) as any);
+  }) as RawRuleOf<AppAbility>[]);
 }
 
 /**

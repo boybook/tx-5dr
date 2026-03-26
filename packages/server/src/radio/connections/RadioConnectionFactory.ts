@@ -8,7 +8,6 @@
  * 统一的创建接口，简化连接实例的创建
  */
 
-import type { HamlibConfig } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import type { IRadioConnection, RadioConnectionConfig } from './IRadioConnection.js';
 import { IcomWlanConnection } from './IcomWlanConnection.js';

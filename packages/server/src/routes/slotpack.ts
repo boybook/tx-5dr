@@ -14,7 +14,7 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
   const clockManager = DigitalRadioEngine.getInstance();
   
   // 获取所有活跃的时隙包
-  fastify.get('/slotpacks', async (request, reply) => {
+  fastify.get('/slotpacks', async (_request, _reply) => {
     try {
       const slotPacks: SlotPack[] = clockManager.getActiveSlotPacks();
       
@@ -30,7 +30,7 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
   });
   
   // 获取指定时隙包
-  fastify.get('/slotpacks/:slotId', async (request, reply) => {
+  fastify.get('/slotpacks/:slotId', async (request, _reply) => {
     try {
       const { slotId } = request.params as { slotId: string };
       
@@ -59,7 +59,7 @@ export async function slotpackRoutes(fastify: FastifyInstance) {
   });
 
   // 获取时隙包统计信息
-  fastify.get('/slotpacks/stats', async (request, reply) => {
+  fastify.get('/slotpacks/stats', async (_request, _reply) => {
     try {
       const activeSlotPacks = clockManager.getActiveSlotPacks();
       const totalFrames = activeSlotPacks.reduce((sum: number, pack: SlotPack) => sum + pack.frames.length, 0);

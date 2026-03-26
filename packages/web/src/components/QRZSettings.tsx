@@ -58,7 +58,7 @@ export const QRZSettings = forwardRef<QRZSettingsRef, QRZSettingsProps>(
       try {
         setLoading(true);
         setError('');
-        const response = await api.getQRZConfig(callsign) as any;
+        const response = await api.getQRZConfig(callsign) as Record<string, unknown>;
         const data = response?.config || response;
         if (data && typeof data === 'object') {
           setConfig(prev => ({ ...prev, ...data }));

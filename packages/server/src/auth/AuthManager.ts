@@ -7,7 +7,6 @@ import {
   type TokenInfo,
   type CreateTokenRequest,
   type CreateTokenResponse,
-  type JWTPayload,
   type UpdateTokenRequest,
   type UpdateAuthConfigRequest,
   type PermissionGrant,

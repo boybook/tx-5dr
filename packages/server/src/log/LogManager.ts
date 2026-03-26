@@ -1,4 +1,4 @@
-import { ILogProvider, CallsignAnalysis } from '@tx5dr/core';
+import { ILogProvider } from '@tx5dr/core';
 
 import { ADIFLogProvider } from './ADIFLogProvider.js';
 import { getDataFilePath } from '../utils/app-paths.js';
@@ -71,7 +71,7 @@ export class LogManager {
     
     // 确保logbook目录存在
     const logbookDir = await getDataFilePath('logbook');
-    const path = await import('path');
+    const _path = await import('path');
     const fs = await import('fs/promises');
     try {
       await fs.mkdir(logbookDir, { recursive: true });
