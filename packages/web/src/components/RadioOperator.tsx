@@ -600,11 +600,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 operatorId: operatorStatus.id,
                 logBookId: operatorStatus.context.myCall
               })}
-              className="h-8 w-8 min-w-0 px-0"
+              className="h-8 min-w-0 w-8 px-0 sm:w-auto sm:px-2"
               title={t('operator.viewLog')}
               aria-label={t('operator.viewLog')}
               startContent={<FontAwesomeIcon icon={faBook} />}
-            />
+            >
+              <span className="hidden sm:inline">{t('operator.log')}</span>
+            </Button>
             <span className="text-sm text-default-600">{t('control.ptt')}</span>
             <Popover
               isOpen={isForceStopPopoverOpen}
