@@ -113,6 +113,9 @@ export * from './schema/lotw.schema.js';
 // Callsign Sync Schema
 export * from './schema/callsign-sync.schema.js';
 
+// Ability Schema (must be before auth.schema which imports from it)
+export * from './schema/ability.js';
+
 // Auth Schema
 export * from './schema/auth.schema.js';
 

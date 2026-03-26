@@ -11,8 +11,8 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { HamlibConfigSchema, RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
-import { requireRole } from '../auth/authPlugin.js';
+import { HamlibConfigSchema, RadioConnectionStatus } from '@tx5dr/contracts';
+import { requireAbility, requireAbilityFor } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
 const { SerialPort } = serialport;
@@ -62,7 +62,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, config: configManager.getRadioConfig() });
   });
 
-  fastify.post('/config', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
+  fastify.post('/config', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, preHandler: [requireAbility('update', 'RadioConfig')] }, async (req, reply) => {
     const config = HamlibConfigSchema.parse(req.body);
     await configManager.updateRadioConfig(config);
 
@@ -160,7 +160,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/frequency', {
-    preHandler: [requireRole(UserRole.ADMIN)],
+    preHandler: [requireAbilityFor('execute', 'RadioFrequency', (r) => ({ frequency: (r.body as any).frequency }))],
   }, async (req, reply) => {
     const { frequency, radioMode, mode, band, description } = req.body as {
       frequency: number;
@@ -451,7 +451,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   // 手动连接电台
-  fastify.post('/connect', async (_req, reply) => {
+  fastify.post('/connect', { preHandler: [requireAbility('execute', 'RadioReconnect')] }, async (_req, reply) => {
     const config = configManager.getRadioConfig();
 
     if (config.type === 'none') {
@@ -486,7 +486,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   // 断开电台连接
-  fastify.post('/disconnect', async (_req, reply) => {
+  fastify.post('/disconnect', { preHandler: [requireAbility('execute', 'RadioReconnect')] }, async (_req, reply) => {
     await radioManager.disconnect();
 
     return reply.send({
@@ -497,7 +497,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   // 手动重连电台
-  fastify.post('/manual-reconnect', async (_req, reply) => {
+  fastify.post('/manual-reconnect', { preHandler: [requireAbility('execute', 'RadioReconnect')] }, async (_req, reply) => {
     const config = configManager.getRadioConfig();
 
     if (config.type === 'none') {
@@ -554,7 +554,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
    * POST /radio/tuner
    * Body: { enabled: boolean }
    */
-  fastify.post('/tuner', async (req, reply) => {
+  fastify.post('/tuner', { preHandler: [requireAbility('execute', 'RadioTuner')] }, async (req, reply) => {
     const { enabled } = req.body as { enabled: boolean };
 
     if (typeof enabled !== 'boolean') {
@@ -579,7 +579,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
    * 启动手动调谐
    * POST /radio/tuner/tune
    */
-  fastify.post('/tuner/tune', async (_req, reply) => {
+  fastify.post('/tuner/tune', { preHandler: [requireAbility('execute', 'RadioTune')] }, async (_req, reply) => {
     const result = await radioManager.startTuning();
 
     return reply.send({

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { UpdateStationInfoRequestSchema, UserRole } from '@tx5dr/contracts';
+import { UpdateStationInfoRequestSchema } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
-import { requireRole } from '../auth/authPlugin.js';
+import { requireAbility } from '../auth/authPlugin.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('StationRoutes');
@@ -20,7 +20,7 @@ export async function stationRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   fastify.put('/info', {
-    preHandler: [requireRole(UserRole.ADMIN)],
+    preHandler: [requireAbility('update', 'StationInfo')],
   }, async (request, reply) => {
     const parsed = UpdateStationInfoRequestSchema.parse(request.body);
     await configManager.updateStationInfo(parsed);

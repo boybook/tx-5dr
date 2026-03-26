@@ -287,6 +287,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@casl/ability@npm:^6.8.0":
+  version: 6.8.0
+  resolution: "@casl/ability@npm:6.8.0"
+  dependencies:
+    "@ucast/mongo2js": "npm:^1.3.0"
+  checksum: 10c0/82ad74b64af7b25caffc9bac3dd75d2ac3304ac25a616e09d55b8b750311187a01e291216d9f26fe36f40d190eedcb7d07b69bfd8702bdb78986b7da0c41036e
+  languageName: node
+  linkType: hard
+
 "@clinic/bubbleprof@npm:^10.0.0":
   version: 10.0.0
   resolution: "@clinic/bubbleprof@npm:10.0.0"
@@ -6257,6 +6266,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@tx5dr/server@workspace:packages/server"
   dependencies:
+    "@casl/ability": "npm:^6.8.0"
     "@discordjs/opus": "npm:^0.10.0"
     "@fastify/cors": "npm:^11.0.1"
     "@fastify/jwt": "npm:^10.0.0"
@@ -6315,6 +6325,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@tx5dr/web@workspace:packages/web"
   dependencies:
+    "@casl/ability": "npm:^6.8.0"
     "@fortawesome/fontawesome-svg-core": "npm:^6.7.2"
     "@fortawesome/free-brands-svg-icons": "npm:^6.7.2"
     "@fortawesome/free-solid-svg-icons": "npm:^6.7.2"
@@ -6810,6 +6821,42 @@ __metadata:
     "@typescript-eslint/types": "npm:6.21.0"
     eslint-visitor-keys: "npm:^3.4.1"
   checksum: 10c0/7395f69739cfa1cb83c1fb2fad30afa2a814756367302fb4facd5893eff66abc807e8d8f63eba94ed3b0fe0c1c996ac9a1680bcbf0f83717acedc3f2bb724fbf
+  languageName: node
+  linkType: hard
+
+"@ucast/core@npm:1.10.2, @ucast/core@npm:^1.4.1":
+  version: 1.10.2
+  resolution: "@ucast/core@npm:1.10.2"
+  checksum: 10c0/bc24a2b02d796b5c14353aaf1c8faf8103157695522e82e9d6d7813a300e631a406d4809030c582bda99a72232a8eb19f25b4d78857f1c9fab2e8fb2028706e8
+  languageName: node
+  linkType: hard
+
+"@ucast/js@npm:3.1.0":
+  version: 3.1.0
+  resolution: "@ucast/js@npm:3.1.0"
+  dependencies:
+    "@ucast/core": "npm:1.10.2"
+  checksum: 10c0/5ee6c496b8c8b2905a102f7d61e052dadc12b01e48089b0523b897d76a739612c75fc58678a42aa2616298198d2da86460e9903483ddc73da8dc77c2ccdb3eb4
+  languageName: node
+  linkType: hard
+
+"@ucast/mongo2js@npm:^1.3.0":
+  version: 1.4.1
+  resolution: "@ucast/mongo2js@npm:1.4.1"
+  dependencies:
+    "@ucast/core": "npm:1.10.2"
+    "@ucast/js": "npm:3.1.0"
+    "@ucast/mongo": "npm:2.4.3"
+  checksum: 10c0/a00809b58924812c27770ebceea8978a8a6dfad4b861941e5b840284523162d5f08271ca6a22146a6ef17bf08f7f5632e3c954820515034dcf088a3953413b8d
+  languageName: node
+  linkType: hard
+
+"@ucast/mongo@npm:2.4.3":
+  version: 2.4.3
+  resolution: "@ucast/mongo@npm:2.4.3"
+  dependencies:
+    "@ucast/core": "npm:^1.4.1"
+  checksum: 10c0/3b806014f5754594faae5045f778e330c03216904895116ad524bd5e57e24875d7994add478e873628b5b2406d8c4cbce6e3eba5a7c6591924e4226e956d78b6
   languageName: node
   linkType: hard
 

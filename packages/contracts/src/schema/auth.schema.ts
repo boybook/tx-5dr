@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PermissionGrantSchema } from './ability.js';
 
 // ===== 角色枚举 =====
 
@@ -31,6 +32,7 @@ export const AuthTokenSchema = z.object({
   revoked: z.boolean(),
   system: z.boolean().optional(),
   maxOperators: z.number().min(0).optional(), // 该 Token 可创建的操作员上限
+  permissionGrants: z.array(PermissionGrantSchema).optional(), // CASL permission grants
 });
 
 export type AuthToken = z.infer<typeof AuthTokenSchema>;
@@ -61,6 +63,7 @@ export const LoginResponseSchema = z.object({
   label: z.string(),
   operatorIds: z.array(z.string()),
   maxOperators: z.number().optional(),
+  permissionGrants: z.array(PermissionGrantSchema).optional(),
 });
 
 export type LoginResponse = z.infer<typeof LoginResponseSchema>;
@@ -73,6 +76,7 @@ export const CreateTokenRequestSchema = z.object({
   operatorIds: z.array(z.string()),
   expiresAt: z.number().optional(),
   maxOperators: z.number().min(0), // 必选，0 表示不限制
+  permissionGrants: z.array(PermissionGrantSchema).optional(),
 });
 
 export type CreateTokenRequest = z.infer<typeof CreateTokenRequestSchema>;
@@ -84,6 +88,7 @@ export const CreateTokenResponseSchema = z.object({
   role: z.nativeEnum(UserRole),
   operatorIds: z.array(z.string()),
   maxOperators: z.number().optional(),
+  permissionGrants: z.array(PermissionGrantSchema).optional(),
 });
 
 export type CreateTokenResponse = z.infer<typeof CreateTokenResponseSchema>;
@@ -101,6 +106,7 @@ export const TokenInfoSchema = z.object({
   revoked: z.boolean(),
   system: z.boolean().optional(),
   maxOperators: z.number().optional(),
+  permissionGrants: z.array(PermissionGrantSchema).optional(),
 });
 
 export type TokenInfo = z.infer<typeof TokenInfoSchema>;
@@ -111,6 +117,7 @@ export const UpdateTokenRequestSchema = z.object({
   operatorIds: z.array(z.string()).optional(),
   expiresAt: z.number().nullable().optional(),
   maxOperators: z.number().min(0).nullable().optional(), // null 表示移除限制
+  permissionGrants: z.array(PermissionGrantSchema).nullable().optional(), // null to clear
 });
 
 export type UpdateTokenRequest = z.infer<typeof UpdateTokenRequestSchema>;
@@ -132,6 +139,7 @@ export const AuthMeResponseSchema = z.object({
   operatorIds: z.array(z.string()),
   tokenId: z.string(),
   maxOperators: z.number().optional(),
+  permissionGrants: z.array(PermissionGrantSchema).optional(),
 });
 
 export type AuthMeResponse = z.infer<typeof AuthMeResponseSchema>;

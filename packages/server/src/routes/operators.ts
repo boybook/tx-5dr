@@ -25,7 +25,7 @@ import {
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
-import { requireRole, requireOperatorAccess } from '../auth/authPlugin.js';
+import { requireAbility, requireOperatorAbility } from '../auth/authPlugin.js';
 import { AuthManager } from '../auth/AuthManager.js';
 
 /**
@@ -87,7 +87,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
 
   // 获取指定操作员配置
   fastify.get<{ Params: { id: string } }>('/:id', {
-    preHandler: [requireOperatorAccess((req) => (req.params as any).id)],
+    preHandler: [requireOperatorAbility((req) => (req.params as any).id)],
   }, async (request, reply) => {
     try {
       const { id } = request.params;
@@ -120,7 +120,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
 
   // 创建新操作员（OPERATOR+ 角色，受 maxOperators 限制）
   fastify.post<{ Body: CreateRadioOperatorRequest }>('/', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireAbility('create', 'Operator')],
   }, async (request, reply) => {
     try {
       const authUser = request.authUser!;
@@ -198,7 +198,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
 
   // 更新操作员配置（需要操作员访问权限）
   fastify.put<{ Params: { id: string }; Body: UpdateRadioOperatorRequest }>('/:id', {
-    preHandler: [requireRole(UserRole.OPERATOR), requireOperatorAccess((req) => (req.params as any).id)],
+    preHandler: [requireOperatorAbility((req) => (req.params as any).id)],
   }, async (request, reply) => {
     try {
       const { id } = request.params;
@@ -258,7 +258,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
 
   // 删除操作员（需要操作员访问权限）
   fastify.delete<{ Params: { id: string } }>('/:id', {
-    preHandler: [requireRole(UserRole.OPERATOR), requireOperatorAccess((req) => (req.params as any).id)],
+    preHandler: [requireOperatorAbility((req) => (req.params as any).id)],
   }, async (request, reply) => {
     try {
       const { id } = request.params;
@@ -315,7 +315,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
 
   // 启动操作员发射（OPERATOR+ 角色 + 操作员访问权限）
   fastify.post<{ Params: { id: string } }>('/:id/start', {
-    preHandler: [requireRole(UserRole.OPERATOR), requireOperatorAccess((req) => (req.params as any).id)],
+    preHandler: [requireOperatorAbility((req) => (req.params as any).id)],
   }, async (request, reply) => {
     try {
       const { id } = request.params;
@@ -334,7 +334,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
 
   // 停止操作员发射（OPERATOR+ 角色 + 操作员访问权限）
   fastify.post<{ Params: { id: string } }>('/:id/stop', {
-    preHandler: [requireRole(UserRole.OPERATOR), requireOperatorAccess((req) => (req.params as any).id)],
+    preHandler: [requireOperatorAbility((req) => (req.params as any).id)],
   }, async (request, reply) => {
     try {
       const { id } = request.params;
@@ -353,7 +353,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
 
   // 获取操作员运行状态
   fastify.get<{ Params: { id: string } }>('/:id/status', {
-    preHandler: [requireOperatorAccess((req) => (req.params as any).id)],
+    preHandler: [requireOperatorAbility((req) => (req.params as any).id)],
   }, async (request, reply) => {
     try {
       const { id } = request.params;

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { WSMessageType, RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
+import { WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   AudioMonitorCodec,
   DecodeErrorInfo,
@@ -20,6 +20,7 @@ import { globalEventBus } from '../utils/EventBus.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { AuthManager } from '../auth/AuthManager.js';
+import { buildAbility, emptyAbility, canWithData, type AppAbility } from '../auth/ability.js';
 import { createLogger } from '../utils/logger.js';
 import { createOpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
 import type { OpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
@@ -53,6 +54,7 @@ export class WSConnection extends WSMessageHandler {
   private authorizedOperatorIds: Set<string> = new Set(); // Token 授予的操作员权限
   private authLabel: string = '';
   private tokenId: string | null = null; // 用于懒查询最新权限
+  private ability: AppAbility = emptyAbility();
 
   // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
   private wsListeners: Map<string, (...args: unknown[]) => void> = new Map();
@@ -178,6 +180,14 @@ export class WSConnection extends WSMessageHandler {
     this.authorizedOperatorIds = new Set(operatorIds);
     this.authLabel = label;
     if (tokenId) this.tokenId = tokenId;
+    // Build CASL ability with latest permissions
+    const authManager = AuthManager.getInstance();
+    const perms = tokenId ? authManager.getTokenCurrentPermissions(tokenId) : null;
+    this.ability = buildAbility({
+      role,
+      operatorIds,
+      permissionGrants: perms?.permissionGrants,
+    });
     logger.debug(`connection ${this.id} authenticated: role=${role}, label=${label}, operators=[${operatorIds.join(', ')}]`);
   }
 
@@ -187,8 +197,9 @@ export class WSConnection extends WSMessageHandler {
   setPublicViewer(): void {
     this.authenticated = false;
     this.userRole = UserRole.VIEWER;
-    this.authorizedOperatorIds = new Set(); // 公开观察者无操作员权限
+    this.authorizedOperatorIds = new Set();
     this.authLabel = 'public viewer';
+    this.ability = buildAbility({ role: UserRole.VIEWER });
     logger.info(`connection ${this.id} set as public viewer`);
   }
 
@@ -200,6 +211,7 @@ export class WSConnection extends WSMessageHandler {
     this.userRole = UserRole.ADMIN;
     this.authorizedOperatorIds = new Set();
     this.authLabel = 'local admin';
+    this.ability = buildAbility({ role: UserRole.ADMIN });
   }
 
   isAuthenticated(): boolean { return this.authenticated; }
@@ -233,6 +245,27 @@ export class WSConnection extends WSMessageHandler {
 
     // 降级：使用认证时的快照
     return this.authorizedOperatorIds.has(operatorId);
+  }
+
+  /**
+   * CASL ability check with lazy refresh from AuthManager
+   */
+  canPerform(action: AppAction, subject: AppSubject, data?: Record<string, unknown>): boolean {
+    // Lazy refresh: rebuild ability from latest token permissions
+    if (this.tokenId) {
+      const authManager = AuthManager.getInstance();
+      const perms = authManager.getTokenCurrentPermissions(this.tokenId);
+      if (perms) {
+        this.ability = buildAbility({
+          role: perms.role,
+          operatorIds: perms.operatorIds,
+          permissionGrants: perms.permissionGrants,
+        });
+      }
+    }
+    return data
+      ? canWithData(this.ability, action as string, subject as string, data)
+      : this.ability.can(action as string, subject as string);
   }
 
   getTokenId(): string | null { return this.tokenId; }
@@ -553,30 +586,32 @@ export class WSServer extends WSMessageHandler {
     });
   }
 
-  // WebSocket 命令所需的最低角色
-  private static readonly COMMAND_ROLES: Partial<Record<WSMessageType, UserRole>> = {
-    [WSMessageType.START_ENGINE]: UserRole.ADMIN,
-    [WSMessageType.STOP_ENGINE]: UserRole.ADMIN,
-    [WSMessageType.SET_MODE]: UserRole.ADMIN,
-    [WSMessageType.SET_VOLUME_GAIN]: UserRole.OPERATOR,
-    [WSMessageType.SET_VOLUME_GAIN_DB]: UserRole.OPERATOR,
-    [WSMessageType.RADIO_MANUAL_RECONNECT]: UserRole.ADMIN,
-    [WSMessageType.RADIO_STOP_RECONNECT]: UserRole.ADMIN,
-    [WSMessageType.FORCE_STOP_TRANSMISSION]: UserRole.ADMIN,
-    [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: UserRole.OPERATOR,
-    [WSMessageType.VOICE_PTT_REQUEST]: UserRole.OPERATOR,
-    [WSMessageType.VOICE_SET_RADIO_MODE]: UserRole.OPERATOR,
-    [WSMessageType.START_OPERATOR]: UserRole.OPERATOR,
-    [WSMessageType.STOP_OPERATOR]: UserRole.OPERATOR,
-    [WSMessageType.SET_OPERATOR_CONTEXT]: UserRole.OPERATOR,
-    [WSMessageType.SET_OPERATOR_SLOT]: UserRole.OPERATOR,
-    [WSMessageType.USER_COMMAND]: UserRole.OPERATOR,
-    [WSMessageType.OPERATOR_REQUEST_CALL]: UserRole.OPERATOR,
-    [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: UserRole.ADMIN,
+  // CASL ability requirements for WebSocket commands
+  private static readonly COMMAND_ABILITIES: Partial<Record<WSMessageType, { action: AppAction; subject: AppSubject }>> = {
+    // Capability-based (delegatable from admin)
+    [WSMessageType.START_ENGINE]: { action: 'execute', subject: 'Engine' },
+    [WSMessageType.STOP_ENGINE]: { action: 'execute', subject: 'Engine' },
+    [WSMessageType.SET_MODE]: { action: 'execute', subject: 'ModeSwitch' },
+    [WSMessageType.RADIO_MANUAL_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
+    [WSMessageType.RADIO_STOP_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
+    [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
+    [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { action: 'execute', subject: 'RadioFrequency' },
+    // Operator-level commands (use Operator subject with conditions)
+    [WSMessageType.SET_VOLUME_GAIN]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.SET_VOLUME_GAIN_DB]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.VOICE_PTT_REQUEST]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.VOICE_SET_RADIO_MODE]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.START_OPERATOR]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.STOP_OPERATOR]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.SET_OPERATOR_CONTEXT]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.SET_OPERATOR_SLOT]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.USER_COMMAND]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.OPERATOR_REQUEST_CALL]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: { action: 'manage', subject: 'Transmission' },
   };
 
-  // 需要操作员访问权限检查的命令
-  private static readonly OPERATOR_ACCESS_COMMANDS = new Set([
+  // Commands that need operatorId-level data for CASL condition checks
+  private static readonly OPERATOR_DATA_COMMANDS = new Set([
     WSMessageType.START_OPERATOR,
     WSMessageType.STOP_OPERATOR,
     WSMessageType.SET_OPERATOR_CONTEXT,
@@ -587,7 +622,7 @@ export class WSServer extends WSMessageHandler {
   ]);
 
   /**
-   * 处理客户端命令（含权限检查）
+   * 处理客户端命令（含 CASL 权限检查）
    */
   private async handleClientCommand(connectionId: string, message: { type: string; data: unknown }): Promise<void> {
 
@@ -603,26 +638,29 @@ export class WSServer extends WSMessageHandler {
       return;
     }
 
-    // 角色权限检查
-    const requiredRole = WSServer.COMMAND_ROLES[msgType];
-    if (requiredRole && !connection.hasMinRole(requiredRole)) {
-      connection.send(WSMessageType.ERROR, {
-        message: 'insufficient_permission',
-        code: 'FORBIDDEN',
-        details: { command: message.type, requiredRole },
-      });
-      return;
-    }
-
-    // 操作员访问权限检查
-    if (WSServer.OPERATOR_ACCESS_COMMANDS.has(msgType)) {
-      const data = message.data as any;
-      const operatorId = data?.operatorId;
-      if (operatorId && !connection.hasOperatorAccess(operatorId)) {
+    // CASL ability check
+    const required = WSServer.COMMAND_ABILITIES[msgType];
+    if (required) {
+      // For operator-level commands, include operatorId in CASL data for condition matching
+      if (WSServer.OPERATOR_DATA_COMMANDS.has(msgType)) {
+        const data = message.data as any;
+        const operatorId = data?.operatorId;
+        if (operatorId) {
+          const conditionKey = required.subject === 'Transmission' ? 'operatorId' : 'id';
+          if (!connection.canPerform(required.action, required.subject, { [conditionKey]: operatorId })) {
+            connection.send(WSMessageType.ERROR, {
+              message: 'no_operator_access',
+              code: 'FORBIDDEN',
+              details: { operatorId },
+            });
+            return;
+          }
+        }
+      } else if (!connection.canPerform(required.action, required.subject)) {
         connection.send(WSMessageType.ERROR, {
-          message: 'no_operator_access',
+          message: 'insufficient_permission',
           code: 'FORBIDDEN',
-          details: { operatorId },
+          details: { command: message.type },
         });
         return;
       }

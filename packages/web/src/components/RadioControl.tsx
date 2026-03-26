@@ -9,8 +9,9 @@ import { api, ApiError } from '@tx5dr/core';
 import type { ModeDescriptor, TunerStatus } from '@tx5dr/contracts';
 import type { ConnectionState, RadioState } from '../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
+import { subject as caslSubject } from '@casl/ability';
 import { showErrorToast } from '../utils/errorToast';
-import { useHasMinRole } from '../store/authStore';
+import { useHasMinRole, useCan, useAbility } from '../store/authStore';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAudioMonitorPlayback } from '../hooks/useAudioMonitorPlayback';
@@ -236,6 +237,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const { latestError } = useRadioErrors();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isOperator = useHasMinRole(UserRole.OPERATOR);
+  const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const canSwitchMode = useCan('execute', 'ModeSwitch');
+  const canStartStopEngine = useCan('execute', 'Engine');
+  const canSetTuner = useCan('execute', 'RadioTuner');
+  const canManualTune = useCan('execute', 'RadioTune');
+  const ability = useAbility();
   const [isErrorHistoryOpen, setIsErrorHistoryOpen] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeDescriptor[]>([]);
   const [isLoadingModes, setIsLoadingModes] = useState(false);
@@ -679,8 +686,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       }
     }
 
+    // CASL 条件过滤：如果有频率限制条件，只显示允许的预设
+    if (!isAdmin && canSetFrequency) {
+      filtered = filtered.filter(freq => {
+        // 自定义频率选项始终保留（后端会做最终校验）
+        if (freq.key === customFrequencyOption?.key) return true;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return ability.can('execute', caslSubject('RadioFrequency', { frequency: freq.frequency }) as any);
+      });
+    }
+
     return filtered;
-  }, [availableFrequencies, radio.state.currentMode, customFrequencyOption]);
+  }, [availableFrequencies, radio.state.currentMode, customFrequencyOption, isAdmin, canSetFrequency, ability]);
 
   // 自动设置频率到后端（避免递归调用）
   const autoSetFrequency = async (frequency: FrequencyOption) => {
@@ -1230,7 +1247,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                           size="sm"
                           isSelected={tunerStatus.enabled}
                           onValueChange={handleTunerToggle}
-                          isDisabled={isTunerLoading}
+                          isDisabled={isTunerLoading || !canSetTuner}
                           aria-label={t('tuner.switch')}
                         />
                       </div>
@@ -1246,7 +1263,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                           className="w-full"
                           onPress={handleStartTuning}
                           isLoading={isTunerLoading && tunerStatus.status === 'tuning'}
-                          isDisabled={!tunerStatus.enabled || isTunerLoading}
+                          isDisabled={!tunerStatus.enabled || isTunerLoading || !canManualTune}
                         >
                           {tunerStatus.status === 'tuning' ? t('tuner.tuning') : t('tuner.manual')}
                         </Button>
@@ -1311,7 +1328,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       <div className="flex items-center">
         {/* 左侧选择器 */}
         <div className="flex gap-1 flex-1 -ml-3">
-          {isAdmin ? (
+          {canSetFrequency ? (
             <Select
               disableSelectorIconRotation
               className="w-[200px]"
@@ -1354,7 +1371,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               </span>
             </div>
           )}
-          {isAdmin ? (
+          {canSwitchMode ? (
             <Select
               disableSelectorIconRotation
               className="w-[88px]"
@@ -1406,7 +1423,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
               onValueChange={handleListenToggle}
               size="sm"
               color="primary"
-              isDisabled={!connection.state.isConnected || isTogglingListen || !isAdmin}
+              isDisabled={!connection.state.isConnected || isTogglingListen || !canStartStopEngine}
               aria-label={t('monitor.toggleListen')}
               className={isTogglingListen ? 'opacity-50 pointer-events-none' : ''}
             />

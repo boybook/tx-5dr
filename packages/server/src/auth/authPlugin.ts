@@ -1,14 +1,16 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fp from 'fastify-plugin';
-import { UserRole, type JWTPayload } from '@tx5dr/contracts';
+import { UserRole, type JWTPayload, type PermissionGrant, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import { AuthManager } from './AuthManager.js';
+import { buildAbility, emptyAbility, cannotWithData, type AppAbility } from './ability.js';
 import { normalizeCallsign } from '../utils/callsign.js';
 
 // 扩展 Fastify Request 类型
 declare module 'fastify' {
   interface FastifyRequest {
-    authUser: JWTPayload | null;
+    authUser: (JWTPayload & { permissionGrants?: PermissionGrant[] }) | null;
+    ability: AppAbility;
   }
 }
 
@@ -25,12 +27,14 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
     },
   });
 
-  // 装饰 request，添加 authUser
+  // 装饰 request，添加 authUser 和 ability
   fastify.decorateRequest('authUser', null);
+  fastify.decorateRequest('ability', undefined as unknown as AppAbility);
 
-  // 全局 onRequest hook：提取并验证 JWT
+  // 全局 onRequest hook：提取并验证 JWT + 构建 CASL Ability
   fastify.addHook('onRequest', async (request: FastifyRequest, _reply: FastifyReply) => {
     request.authUser = null;
+    request.ability = emptyAbility();
 
     if (!authManager.isAuthEnabled()) {
       // 认证未启用 → 所有请求视为 Admin（向后兼容）
@@ -41,6 +45,7 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
         iat: 0,
         exp: 0,
       };
+      request.ability = buildAbility({ role: UserRole.ADMIN });
       return;
     }
 
@@ -53,7 +58,7 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
     // 尝试从 Authorization header 提取 JWT
     const authHeader = request.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      return; // 无 token，authUser 保持 null
+      return; // 无 token，authUser 保持 null，ability 保持空
     }
 
     try {
@@ -72,7 +77,13 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
           ...decoded,
           role: current.role,
           operatorIds: current.operatorIds,
+          permissionGrants: current.permissionGrants,
         };
+        request.ability = buildAbility({
+          role: current.role,
+          operatorIds: current.operatorIds,
+          permissionGrants: current.permissionGrants,
+        });
       }
     } catch {
       // JWT 无效或过期
@@ -208,6 +219,7 @@ export function requireCallsignAccess() {
 // normalizeCallsign 已迁移到 ../utils/callsign.ts 共享模块
 
 /**
+ * @deprecated Use requireOperatorAbility() instead
  * 要求对指定操作员有访问权限
  */
 export function requireOperatorAccess(getOperatorId: (request: FastifyRequest) => string) {
@@ -220,6 +232,73 @@ export function requireOperatorAccess(getOperatorId: (request: FastifyRequest) =
     }
     const operatorId = getOperatorId(request);
     if (!AuthManager.hasOperatorAccess(request.authUser.role, request.authUser.operatorIds, operatorId)) {
+      return reply.code(403).send({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'No operator access', userMessage: 'You do not have access to this operator' },
+      });
+    }
+  };
+}
+
+// ===== CASL-based permission middleware =====
+
+const UNAUTHORIZED_RESPONSE = {
+  success: false,
+  error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
+} as const;
+
+const FORBIDDEN_RESPONSE = {
+  success: false,
+  error: { code: 'FORBIDDEN', message: 'Permission denied', userMessage: 'You do not have permission for this operation' },
+} as const;
+
+/**
+ * Require CASL ability check (no instance data).
+ * ADMIN passes automatically (manage all).
+ */
+export function requireAbility(action: AppAction, subject: AppSubject) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!request.authUser) {
+      return reply.code(401).send(UNAUTHORIZED_RESPONSE);
+    }
+    if (request.ability.cannot(action as string, subject as string)) {
+      return reply.code(403).send(FORBIDDEN_RESPONSE);
+    }
+  };
+}
+
+/**
+ * Require CASL ability check with instance data (for conditional permissions).
+ * Example: requireAbilityFor('execute', 'RadioFrequency', req => ({ frequency: req.body.frequency }))
+ */
+export function requireAbilityFor(
+  action: AppAction,
+  subject: AppSubject,
+  getData: (req: FastifyRequest) => Record<string, unknown>,
+) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!request.authUser) {
+      return reply.code(401).send(UNAUTHORIZED_RESPONSE);
+    }
+    const data = getData(request);
+    if (cannotWithData(request.ability, action as string, subject as string, data)) {
+      return reply.code(403).send(FORBIDDEN_RESPONSE);
+    }
+  };
+}
+
+/**
+ * Require operator-level access using CASL conditions.
+ * ADMIN's "manage all" rule passes automatically.
+ * OPERATOR's Operator subject has conditions: { id: { $in: operatorIds } }
+ */
+export function requireOperatorAbility(getOperatorId: (request: FastifyRequest) => string) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!request.authUser) {
+      return reply.code(401).send(UNAUTHORIZED_RESPONSE);
+    }
+    const operatorId = getOperatorId(request);
+    if (cannotWithData(request.ability, 'manage', 'Operator', { id: operatorId })) {
       return reply.code(403).send({
         success: false,
         error: { code: 'FORBIDDEN', message: 'No operator access', userMessage: 'You do not have access to this operator' },

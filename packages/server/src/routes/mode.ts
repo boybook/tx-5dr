@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { ModeDescriptorSchema, UserRole } from '@tx5dr/contracts';
-import { requireRole } from '../auth/authPlugin.js';
+import { ModeDescriptorSchema } from '@tx5dr/contracts';
+import { requireAbility } from '../auth/authPlugin.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
@@ -45,7 +45,7 @@ export async function modeRoutes(fastify: FastifyInstance) {
     schema: {
       body: zodToJsonSchema(ModeDescriptorSchema),
     },
-    preHandler: [requireRole(UserRole.ADMIN)],
+    preHandler: [requireAbility('execute', 'ModeSwitch')],
   }, async (request, reply) => {
     try {
       const newMode = ModeDescriptorSchema.parse(request.body);
