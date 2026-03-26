@@ -131,6 +131,22 @@ DigitalRadioEngine (Facade)
 
 ---
 
+## 权限系统 (CASL)
+
+基于 `@casl/ability` 的细粒度权限系统。三级角色 VIEWER/OPERATOR/ADMIN，ADMIN 可将 11 项原子权限下放给 OPERATOR Token（支持条件约束如频率预设限制）。
+
+**架构**: contracts (`ability.ts`) 导出纯 JSON 规则构建函数 → server/web 各自 `createMongoAbility()` 构建 Ability 实例。contracts 零 CASL 依赖。
+
+**新增可下放权限时**，按顺序修改 4 处：
+1. `contracts/ability.ts` — CapabilitySubject 类型 + Permission 枚举 + PERMISSION_RULE_MAP + PERMISSION_GROUPS
+2. `server` — REST 用 `requireAbility()` / WebSocket 在 `COMMAND_ABILITIES` 添加映射
+3. `web` — `useCan(action, subject)` 控制 UI
+4. `i18n` — `locales/{zh,en}/auth.json` 的 `permissions` 节点（键名中冒号用点号替代）
+
+**禁止**：新功能不要用 `requireRole()` 做权限控制（仅保留用于 `/api/auth/*`），统一使用 CASL 中间件。详见 server/web 各自 CLAUDE.md。
+
+---
+
 ## i18n 规范
 
 **前端所有面向用户的中文字符串禁止硬编码，必须通过翻译系统输出。**
