@@ -284,6 +284,39 @@ RadioOperatorManager.checkAndTriggerTransmission(operatorId)
 ### API 路由
 模块化设计：audio(设备/音量) | radio(状态/频率) | operators(管理/传输) | logbooks(查询/QSO) | slotpack(数据/统计) | mode(切换) | storage(存储)
 
+## 权限系统 (CASL)
+
+`src/auth/ability.ts` 构建 CASL Ability，`authPlugin.ts` 注入 `request.ability` 并提供中间件。
+
+### REST 路由权限检查
+
+```typescript
+import { requireAbility, requireAbilityFor, requireOperatorAbility } from '../auth/authPlugin.js';
+
+// 简单权限
+fastify.post('/action', { preHandler: [requireAbility('execute', 'Subject')] }, handler);
+
+// 带条件（如频率限制）
+fastify.post('/frequency', {
+  preHandler: [requireAbilityFor('execute', 'RadioFrequency', (r) => ({ frequency: (r.body as any).frequency }))],
+}, handler);
+
+// 操作员访问（自动校验 operatorId 条件）
+fastify.put('/operators/:id', {
+  preHandler: [requireOperatorAbility((req) => req.params.id)],
+}, handler);
+```
+
+### WebSocket 命令权限
+
+在 `WSServer.ts` 的 `COMMAND_ABILITIES` 映射中添加：
+```typescript
+[WSMessageType.NEW_COMMAND]: { action: 'execute', subject: 'NewSubject' },
+```
+需要 operatorId 条件检查的命令，同时加入 `OPERATOR_DATA_COMMANDS` 集合。
+
+**禁止**：新路由不要用 `requireRole()`，统一使用 `requireAbility*` 中间件。`requireRole` 仅保留用于 `/api/auth/*` 管理路由。
+
 ## 开发规范
 
 ### API 端点

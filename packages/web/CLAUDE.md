@@ -194,6 +194,28 @@ useEffect(() => {
 - **主界面**: 左侧(FT8表格+频谱) + 右侧(操作员+设置) + 状态栏
 - **日志本**: QSO 查询 + 统计分析 + ADIF 导出
 
+## 权限系统 (CASL)
+
+`store/authStore.ts` 提供权限 Hooks，基于 `@casl/ability` + contracts 的 `buildAbilityRules()`。
+
+```typescript
+import { useCan, useCanWithData, useAbility } from '../store/authStore';
+
+// 简单权限检查
+const canSetFrequency = useCan('execute', 'RadioFrequency');
+
+// 带条件检查（如频率预设过滤）
+import { subject as caslSubject } from '@casl/ability';
+const ability = useAbility();
+const allowed = ability.can('execute', caslSubject('RadioFrequency', { frequency: 14074000 }) as any);
+
+// 用于 UI 控制
+<Button isDisabled={!canSetFrequency} />
+{canSetFrequency && <Select ... />}
+```
+
+**i18n 注意**：Permission 枚举值含冒号（`radio:set_frequency`），翻译键用点号（`radio.set_frequency`），`t()` 调用时 `.replace(':', '.')`。
+
 ## 开发规范
 
 ### 组件
