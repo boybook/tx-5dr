@@ -1183,10 +1183,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return;
     }
 
-    // 连接时检查天调能力，不支持则不启动轮询
-    const capabilities = await this.getTunerCapabilities();
-    if (!capabilities.supported) {
-      logger.debug('Tuner not supported by this radio, skipping tuner monitoring');
+    // 仅在连接实现了 getTunerStatus 时才轮询（NullConnection 不实现）
+    if (!this.connection.getTunerStatus) {
       return;
     }
 
