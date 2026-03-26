@@ -112,6 +112,7 @@
     "preparingTx": "Preparing TX...",
     "forceStop": "Force stop TX",
     "txCycle": "TX cycle",
+    "txCycleShort": "Cycle",
     "evenCycle": "Even cycle",
     "oddCycle": "Odd cycle",
     "target": "Target",

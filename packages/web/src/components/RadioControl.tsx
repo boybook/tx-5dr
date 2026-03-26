@@ -1415,7 +1415,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         {/* 右侧开关 */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <span className={`text-sm text-default-600`}>
+            <span className="text-sm text-default-600 hidden sm:inline">
               {t('monitor.listen')}
             </span>
             <Switch 

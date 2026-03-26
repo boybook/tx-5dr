@@ -20,6 +20,14 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const [frameGroups, setFrameGroups] = useState<FrameGroup[]>([]);
   const {currentOperatorId} = useCurrentOperatorId();
   const splitLayoutActions = useSplitLayoutActions();
+  const [scrollToBottomTrigger, setScrollToBottomTrigger] = useState(0);
+
+  // 切换回"解码" tab 时触发滚动到底部
+  useEffect(() => {
+    if (splitLayoutActions?.selectedTab === 'left') {
+      setScrollToBottomTrigger(prev => prev + 1);
+    }
+  }, [splitLayoutActions?.selectedTab]);
 
   // 获取所有启用操作员的呼号列表
   const getMyCallsigns = (): string[] => {
@@ -150,6 +158,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       targetCallsign={getTargetCallsign()}
       onRowDoubleClick={handleRowDoubleClick}
       onMessageHover={onMessageHover}
+      scrollToBottomTrigger={scrollToBottomTrigger}
     />
   );
 }; 

@@ -17,6 +17,7 @@ interface MeterProps {
   alert?: boolean;
   isTimeout?: boolean;
   formatValue?: (value: number) => string;
+  renderDisplayValue?: () => React.ReactNode;
 }
 
 /**
@@ -28,7 +29,8 @@ const Meter: React.FC<MeterProps> = ({
   unit = '%',
   alert = false,
   isTimeout = false,
-  formatValue
+  formatValue,
+  renderDisplayValue
 }) => {
   const displayValue = isTimeout || value === null
     ? '--'
@@ -69,7 +71,7 @@ const Meter: React.FC<MeterProps> = ({
             ? 'text-default-400 dark:text-default-500'
             : 'text-default-600 dark:text-default-400'
         }`}>
-          {displayValue}{showUnit ? unit : ''}
+          {(isTimeout || value === null) ? '--' : (renderDisplayValue ? renderDisplayValue() : <>{displayValue}{showUnit ? unit : ''}</>)}
         </span>
       </div>
       <Progress
@@ -134,10 +136,15 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
             value={buffered.level.value?.percent ?? null}
             unit=""
             isTimeout={buffered.level.isTimeout}
-            formatValue={(_value) => {
+            renderDisplayValue={() => {
               if (!buffered.level.value) return '--';
               const { formatted, dBm } = buffered.level.value;
-              return `${formatted} / ${dBm.toFixed(1)}dBm`;
+              return (
+                <>
+                  {formatted}
+                  <span className="hidden sm:inline"> / {dBm.toFixed(1)}dBm</span>
+                </>
+              );
             }}
           />
         ))}
