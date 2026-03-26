@@ -17,6 +17,7 @@ import { createEngineActor, isEngineState, getEngineContext, type EngineActor } 
 import { EngineState, type EngineInput } from '../state-machines/types.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { ClockCoordinator } from './ClockCoordinator.js';
+import { RadioError } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('EngineLifecycle');
@@ -483,6 +484,23 @@ export class EngineLifecycle {
       },
       onError: (error) => {
         logger.error('State machine error:', error);
+        // Broadcast engine error to frontend via radioError channel
+        try {
+          const radioError = error instanceof RadioError ? error : RadioError.from(error);
+          const activeProfile = ConfigManager.getInstance().getActiveProfile();
+          this.deps.engineEmitter.emit('radioError', {
+            message: radioError.message,
+            userMessage: radioError.userMessage,
+            code: radioError.code,
+            severity: radioError.severity,
+            suggestions: radioError.suggestions,
+            timestamp: new Date().toISOString(),
+            profileId: activeProfile?.id ?? null,
+            profileName: activeProfile?.name ?? null,
+          });
+        } catch (emitError) {
+          logger.error('Failed to emit radioError event:', emitError);
+        }
       },
       onStateChange: (_state, context) => {
         logger.info(`State changed: ${_state}`, {
@@ -621,6 +639,9 @@ export class EngineLifecycle {
       logger.info('Engine started successfully');
     } catch (error) {
       logger.error('Engine start failed:', error);
+      // Clean up event listeners registered by setup() that won't be cleaned by rollback
+      this.deps.subsystems.transmissionPipeline.teardown();
+      this.deps.subsystems.clockCoordinator.teardown();
       throw error;
     }
   }
