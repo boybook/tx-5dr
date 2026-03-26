@@ -16,12 +16,11 @@ import {
   type QSORecord,
   type SlotPack,
   MODES,
-  QSOCommand
 } from '@tx5dr/contracts';
 import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
-import type { WSJTXEncodeWorkQueue, EncodeRequest as WSJTXEncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
+import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import { SyncServiceRegistry } from '../services/SyncServiceRegistry.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 import { createLogger } from '../utils/logger.js';
@@ -106,7 +105,7 @@ export class RadioOperatorManager {
         }
         
         // 兜底校正频率：防止误将音频偏移(Hz)写入为绝对频率
-        const operator = this.operators.get(data.operatorId);
+        const _operator = this.operators.get(data.operatorId);
         let baseFreq = 0;
         // 优先从物理电台获取全局基频
         if (this.getRadioFrequency) {
@@ -319,7 +318,7 @@ export class RadioOperatorManager {
 
     for (const config of operatorsConfig) {
       try {
-        const operator = await this.addOperator(config);
+        const _operator = await this.addOperator(config);
         /* operator.start(); */
         logger.info(`Operator ${config.id} created`);
       } catch (error) {
@@ -1103,7 +1102,7 @@ export class RadioOperatorManager {
     const currentMode = this.getCurrentMode();
 
     // 检查每个操作员
-    for (const [operatorId, operator] of this.operators) {
+    for (const [_operatorId, operator] of this.operators) {
       if (!operator.isTransmitting) {
         continue;
       }

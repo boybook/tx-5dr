@@ -508,7 +508,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             // 验证设备能力
             if (actualDeviceId !== undefined) {
               const allDevices = this.rtAudioInput.getDevices();
-              const targetDevice = allDevices.find((d: any) => d.id === actualDeviceId);
+              const targetDevice = allDevices.find((d: { id: number; inputChannels: number; name: string }) => d.id === actualDeviceId);
               if (targetDevice && targetDevice.inputChannels < (this.channels || 1)) {
                 throw new Error(
                   `Input device "${targetDevice.name}" (ID ${actualDeviceId}) does not support ${this.channels} channel input` +
@@ -537,7 +537,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                     return;
                   }
 
-                  let samples = this.convertBufferToFloat32(pcm);
+                  const samples = this.convertBufferToFloat32(pcm);
                   if (samples.length === 0) return;
 
                   const INTERNAL_SAMPLE_RATE = 12000;

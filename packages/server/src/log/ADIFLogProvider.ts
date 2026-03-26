@@ -136,7 +136,7 @@ export class ADIFLogProvider implements ILogProvider {
   /**
    * 初始化Provider
    */
-  async initialize(options?: any): Promise<void> {
+  async initialize(_options?: Record<string, unknown>): Promise<void> {
     if (this.isInitialized) return;
     
     // 确定日志文件路径

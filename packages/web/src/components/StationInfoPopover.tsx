@@ -10,8 +10,7 @@ import { UserRole } from '@tx5dr/contracts';
 // 使用 Carto @2x 瓦片（512×512px 输出），以 256px CSS 尺寸渲染：
 // - 在 2× Retina 屏上：256 CSS px = 512 物理像素 = 1 张 @2x 瓦片，完全清晰
 // - 在 1× 屏上：256 CSS px 显示 512px 瓦片，细节更丰富
-const TILE_SIZE = 256;       // CSS 渲染尺寸（也用于坐标计算）
-const CSS_TILE = 256;
+const CSS_TILE = 256;        // CSS 渲染尺寸（也用于坐标计算）
 const ZOOM = 5;
 const CONTAINER_W = 264;     // w-72(288px) 减去 p-3 两侧各 12px
 const CONTAINER_H = 120;

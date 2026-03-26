@@ -11,7 +11,7 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { HamlibConfigSchema, RadioConnectionStatus } from '@tx5dr/contracts';
+import { HamlibConfigSchema } from '@tx5dr/contracts';
 import { requireAbility, requireAbilityFor } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';

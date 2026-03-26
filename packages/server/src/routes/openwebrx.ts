@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
-import { OpenWebRXStationConfigSchema, OpenWebRXListenStartSchema, OpenWebRXListenTuneSchema } from '@tx5dr/contracts';
+
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
 /**

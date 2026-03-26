@@ -301,7 +301,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const optimizedFrames: { frame: FrameMessage, firstIndex: number }[] = [];
     
     // 对每个消息组选择最优帧，并记录其首次出现位置
-    for (const [message, groupData] of messageGroups) {
+    for (const [_message, groupData] of messageGroups) {
       const bestFrame = this.selectBestFrame(groupData.frames);
       if (bestFrame) {
         optimizedFrames.push({ frame: bestFrame, firstIndex: groupData.firstIndex });

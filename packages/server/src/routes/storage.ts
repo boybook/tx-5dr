@@ -16,7 +16,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
 
   // 获取持久化存储状态
-  fastify.get('/storage/status', async (request, reply) => {
+  fastify.get('/storage/status', async (_request, _reply) => {
     try {
       const slotPackManager = engine.getSlotPackManager();
       const stats = await slotPackManager.getPersistenceStats();
@@ -37,7 +37,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   });
 
   // 启用/禁用持久化存储
-  fastify.post('/storage/toggle', async (request, reply) => {
+  fastify.post('/storage/toggle', async (request, _reply) => {
     try {
       const { enabled } = request.body as { enabled: boolean };
 
@@ -69,7 +69,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   });
 
   // 强制刷新缓冲区
-  fastify.post('/storage/flush', async (request, reply) => {
+  fastify.post('/storage/flush', async (_request, _reply) => {
     try {
       await engine.getSlotPackManager().flushPersistence();
 
@@ -87,7 +87,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   });
 
   // 获取可用的存储日期
-  fastify.get('/storage/dates', async (request, reply) => {
+  fastify.get('/storage/dates', async (_request, _reply) => {
     try {
       const dates = await engine.getSlotPackManager().getAvailableStorageDates();
 
@@ -106,7 +106,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   });
 
   // 读取指定日期的记录
-  fastify.get('/storage/records/:date', async (request, reply) => {
+  fastify.get('/storage/records/:date', async (request, _reply) => {
     try {
       const { date } = request.params as { date: string };
 
@@ -152,7 +152,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
   });
 
   // 获取存储统计摘要
-  fastify.get('/storage/summary', async (request, reply) => {
+  fastify.get('/storage/summary', async (_request, _reply) => {
     try {
       const slotPackManager = engine.getSlotPackManager();
       const dates = await slotPackManager.getAvailableStorageDates();

@@ -209,7 +209,7 @@ export class EngineLifecycle {
 
           // Forward profileSelectRequired to engine emitter for WSServer to broadcast
           this.openwebrxAudioAdapter.on('profileSelectRequired', (data) => {
-            this.deps.engineEmitter.emit('openwebrxProfileSelectRequest' as any, data);
+            this.deps.engineEmitter.emit('openwebrxProfileSelectRequest' as keyof DigitalRadioEngineEvents, data);
           });
 
           // Forward errors (including ban/backoff) as radioError for WSServer to broadcast
@@ -228,12 +228,12 @@ export class EngineLifecycle {
 
           // Forward client count changes for multi-user awareness
           this.openwebrxAudioAdapter.on('clientCountChanged', (count: number) => {
-            this.deps.engineEmitter.emit('openwebrxClientCount' as any, { count });
+            this.deps.engineEmitter.emit('openwebrxClientCount' as keyof DigitalRadioEngineEvents, { count });
           });
 
           // Forward cooldown wait notices to frontend
           this.openwebrxAudioAdapter.on('cooldownWait', (data) => {
-            this.deps.engineEmitter.emit('openwebrxCooldownNotice' as any, data);
+            this.deps.engineEmitter.emit('openwebrxCooldownNotice' as keyof DigitalRadioEngineEvents, data);
           });
 
           // Subscribe to frequency changes for auto-tuning

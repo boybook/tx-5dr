@@ -67,7 +67,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       const mode = request.mode === 'FT4' ? WSJTXMode.FT4 : WSJTXMode.FT8;
 
       // 调用原生库编码
-      const { audioData: audioFloat32, messageSent } = await this.lib.encode(
+      const { audioData: audioFloat32, messageSent: _messageSent } = await this.lib.encode(
         mode,
         request.message,
         request.frequency

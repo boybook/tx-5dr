@@ -441,7 +441,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           {/* 与原始结构一致的 space-y-1 pt-1 通过 absolute 定位实现 */}
           {virtualItems.map((vItem) => {
             const group = groups[vItem.index];
-            const groupIndex = vItem.index;
 
             return (
               <div

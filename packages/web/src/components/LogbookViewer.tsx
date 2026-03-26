@@ -26,15 +26,14 @@ import {
 import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faCloudUploadAlt, faCheckCircle, faPlus } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, QRZConfig, LoTWConfig, CreateQSORequest } from '@tx5dr/contracts';
+import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus } from '@fortawesome/free-solid-svg-icons';
+import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, CreateQSORequest } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
 import { showErrorToast } from '../utils/errorToast';
 import { SyncConfigModal } from './SyncConfigModal';
 import { useTranslation } from 'react-i18next';
-import { formatDate as formatDateUtil } from '../utils/dateFormatting';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('LogbookViewer');
@@ -231,8 +230,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [lotwSyncSuccess, setLotwSyncSuccess] = useState<string | null>(null);
 
   // 平台启用状态（旧的，保留兼容）
-  const [isQRZEnabled, setIsQRZEnabled] = useState(false);
-  const [isLoTWEnabled, setIsLoTWEnabled] = useState(false);
+  const [_isQRZEnabled, setIsQRZEnabled] = useState(false);
+  const [_isLoTWEnabled, setIsLoTWEnabled] = useState(false);
 
   // 同步配置摘要（按呼号）
   const [syncSummary, setSyncSummary] = useState<{ wavelog: boolean; qrz: boolean; lotw: boolean }>({ wavelog: false, qrz: false, lotw: false });

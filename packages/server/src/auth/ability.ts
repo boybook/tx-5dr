@@ -33,13 +33,13 @@ export function emptyAbility(): AppAbility {
  * Helper to check ability with instance data (conditions).
  * CASL requires using subject() helper for plain objects.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function canWithData(ability: AppAbility, action: string, subjectType: string, data: Record<string, unknown>): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return ability.can(action, caslSubject(subjectType, data as Record<PropertyKey, unknown>) as any);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function cannotWithData(ability: AppAbility, action: string, subjectType: string, data: Record<string, unknown>): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return ability.cannot(action, caslSubject(subjectType, data as Record<PropertyKey, unknown>) as any);
 }
 

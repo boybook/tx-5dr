@@ -850,7 +850,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
         };
       })(),
-      handshakeComplete: async (data: unknown) => {
+      handshakeComplete: async (_data: unknown) => {
         logger.info('Handshake complete');
 
         // 握手完成后，请求 Profile 列表

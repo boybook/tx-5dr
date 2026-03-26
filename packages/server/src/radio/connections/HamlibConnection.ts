@@ -11,7 +11,7 @@
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
 import type { PttType } from 'hamlib';
-import type { HamlibConfig, LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
+import type { LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
 import { hamlibStrengthToLevelMeterReading } from './meterUtils.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';

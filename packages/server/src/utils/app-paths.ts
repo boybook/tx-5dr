@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-// AppPaths - 路径处理需要使用any
-
 import { homedir, platform } from 'os';
 import { join } from 'path';
 import { promises as fs } from 'fs';
@@ -57,12 +54,13 @@ export class AppPaths {
       case 'darwin':
         configDir = join(homedir(), 'Library', 'Application Support', this.appInfo.name);
         break;
-      default: // Linux and others
+      default: {
         const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-        configDir = xdgConfigHome 
+        configDir = xdgConfigHome
           ? join(xdgConfigHome, this.appInfo.name)
           : join(homedir(), '.config', this.appInfo.name);
         break;
+      }
     }
 
     await this.ensureDirectoryExists(configDir);
@@ -99,12 +97,13 @@ export class AppPaths {
       case 'darwin':
         dataDir = join(homedir(), 'Library', 'Application Support', this.appInfo.name);
         break;
-      default: // Linux and others
+      default: {
         const xdgDataHome = process.env.XDG_DATA_HOME;
-        dataDir = xdgDataHome 
+        dataDir = xdgDataHome
           ? join(xdgDataHome, this.appInfo.name)
           : join(homedir(), '.local', 'share', this.appInfo.name);
         break;
+      }
     }
 
     await this.ensureDirectoryExists(dataDir);
@@ -135,17 +134,19 @@ export class AppPaths {
     let logsDir: string;
 
     switch (os) {
-      case 'win32':
+      case 'win32': {
         const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
         logsDir = join(localAppData, this.appInfo.name, 'logs');
         break;
+      }
       case 'darwin':
         logsDir = join(homedir(), 'Library', 'Logs', this.appInfo.name);
         break;
-      default: // Linux and others
+      default: {
         const dataDir = await this.getDataDir();
         logsDir = join(dataDir, 'logs');
         break;
+      }
     }
 
     await this.ensureDirectoryExists(logsDir);
@@ -176,19 +177,21 @@ export class AppPaths {
     let cacheDir: string;
 
     switch (os) {
-      case 'win32':
+      case 'win32': {
         const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
         cacheDir = join(localAppData, this.appInfo.name, 'cache');
         break;
+      }
       case 'darwin':
         cacheDir = join(homedir(), 'Library', 'Caches', this.appInfo.name);
         break;
-      default: // Linux and others
+      default: {
         const xdgCacheHome = process.env.XDG_CACHE_HOME;
-        cacheDir = xdgCacheHome 
+        cacheDir = xdgCacheHome
           ? join(xdgCacheHome, this.appInfo.name)
           : join(homedir(), '.cache', this.appInfo.name);
         break;
+      }
     }
 
     await this.ensureDirectoryExists(cacheDir);

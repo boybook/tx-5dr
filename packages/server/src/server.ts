@@ -304,7 +304,7 @@ export async function createServer() {
   fastify.log.info('Station routes registered');
 
   // WebSocket endpoint for real-time communication
-  fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+  fastify.get('/api/ws', { websocket: true }, (socket: WebSocket, _req: FastifyRequest) => {
     fastify.log.info('WebSocket client connected');
     
     // 添加连接到WebSocket服务器（业务逻辑已集成在WSServer中）

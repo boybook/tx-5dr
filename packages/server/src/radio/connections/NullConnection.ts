@@ -7,7 +7,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import type { MeterCapabilities } from '@tx5dr/contracts';
-import type { IRadioConnection, IRadioConnectionEvents, RadioConnectionConfig, MeterData } from './IRadioConnection.js';
+import type { IRadioConnection, IRadioConnectionEvents, RadioConnectionConfig } from './IRadioConnection.js';
 import { RadioConnectionType, RadioConnectionState } from './IRadioConnection.js';
 
 export class NullConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {

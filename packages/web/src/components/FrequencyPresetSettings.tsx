@@ -49,7 +49,7 @@ export const FrequencyPresetSettings = forwardRef<
   const [originalPresets, setOriginalPresets] = useState<PresetFrequency[]>([]);
   const [isCustomized, setIsCustomized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
+  const [_isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
 
   // 模式筛选 tab

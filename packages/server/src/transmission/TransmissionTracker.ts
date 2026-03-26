@@ -181,19 +181,19 @@ export class TransmissionTracker extends EventEmitter<TransmissionTrackerEvents>
         this.emit('transmissionReady', operatorId, state);
         break;
         
-      case TransmissionPhase.TRANSMITTING:
+      case TransmissionPhase.TRANSMITTING: {
         state.transmitStartTime = now;
-        
-        // 计算实际延迟
+
         const targetTime = this.targetTransmitTime.get(state.slotId);
         if (targetTime) {
           state.actualDelayMs = now - targetTime;
-          if (state.actualDelayMs > 50) { // 超过50ms认为是延迟
+          if (state.actualDelayMs > 50) {
             this.addWarning(operatorId, WarningLevel.WARN, `Transmission delayed ${state.actualDelayMs}ms`);
             this.emit('transmissionDelayed', operatorId, state.actualDelayMs);
           }
         }
         break;
+      }
         
       case TransmissionPhase.COMPLETED:
         state.transmitCompleteTime = now;

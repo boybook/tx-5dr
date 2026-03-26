@@ -13,7 +13,7 @@ import {
   Alert
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlug, faUser, faCertificate, faSync, faCheck, faExclamationTriangle, faSearch, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
+import { faUser, faCertificate, faSync, faCheck, faExclamationTriangle, faSearch, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import type {
   LoTWConfig,
@@ -67,7 +67,7 @@ export const LoTWSettings = forwardRef<LoTWSettingsRef, LoTWSettingsProps>(
       try {
         setLoading(true);
         setError('');
-        const response = await api.getLoTWConfig(callsign) as any;
+        const response = await api.getLoTWConfig(callsign) as Record<string, unknown>;
         const data = response?.config || response;
         if (data && typeof data === 'object') {
           setConfig(prev => ({ ...prev, ...data }));
