@@ -70,9 +70,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             if (foxInvite) {
                 const foxMsg = foxInvite.message as FT8MessageFoxRR73;
-                logger.debug(`TX1: Fox/Hound invite received (myCallsign=${strategy.context.config.myCallsign}, foxHash=${foxMsg.foxHash})`);
-                // 以解码 Fox 消息的 SNR 作为 reportSent
-                strategy.context.reportSent = foxInvite.snr;
+                logger.debug(`TX1: Fox/Hound invite received (myCallsign=${strategy.context.config.myCallsign}, foxHash=${foxMsg.foxHash}, snrForNext=${foxMsg.snrForNext})`);
+                // Fox告知的SNR作为R-report基础；降级使用本机解码SNR
+                strategy.context.reportSent = foxMsg.snrForNext ?? foxInvite.snr;
+                // 本机解码Fox的SNR记为reportReceived（QSO日志用）
+                strategy.context.reportReceived = foxInvite.snr;
                 // 记录 Fox 哈希备用
                 strategy.foxHash = foxMsg.foxHash;
                 strategy.updateSlots();

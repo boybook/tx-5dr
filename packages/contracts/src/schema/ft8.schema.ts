@@ -181,6 +181,7 @@ export const FT8MessageFoxRR73Schema = FT8MessageBaseSchema.extend({
   completedCallsign: z.string(), // 已完成QSO的Hound呼号
   nextCallsign: z.string(),      // 下一个被邀请的Hound呼号
   foxHash: z.string().optional(), // Fox的哈希码（去掉尖括号后的值）
+  snrForNext: z.number().optional(), // Fox告知下一个Hound的信号强度（如+04→4）
 });
 
 export const FT8MessageCustomSchema = FT8MessageBaseSchema.extend({

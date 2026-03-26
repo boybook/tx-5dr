@@ -186,16 +186,17 @@ export class FT8MessageParser {
 
   /**
    * 解析 Fox/Hound DXpedition 模式消息
-   * 格式：HOUND1 RR73; HOUND2 [<FOXHASH>]
-   * 例如：JA0OAV RR73; JG1MPG <4>
+   * 格式：HOUND1 RR73; HOUND2 [<FOXHASH>] [SNR]
+   * 例如：BD7LMA RR73; BG5BNW <4G0G> +04
+   *       JA0OAV RR73; JG1MPG <4>
    */
   private static parseFoxRR73Message(raw: string): FT8Message {
-    const match = raw.match(/^(\S+)\s+RR73;\s+(\S+)(?:\s+(<[^>]*>|\S+))?$/);
+    const match = raw.match(/^(\S+)\s+RR73;\s+(\S+)(?:\s+(<[^>]+>))?(?:\s+([+-]\d{1,2}))?$/);
     if (!match) {
       return { type: FT8MessageType.UNKNOWN };
     }
 
-    const [, completedToken, nextToken, hashToken] = match;
+    const [, completedToken, nextToken, hashToken, snrToken] = match;
 
     if (!completedToken || !nextToken) {
       return { type: FT8MessageType.UNKNOWN };
@@ -216,6 +217,10 @@ export class FT8MessageParser {
       foxRR73Result.foxHash = hashToken.startsWith('<') && hashToken.endsWith('>')
         ? hashToken.slice(1, -1)
         : hashToken;
+    }
+
+    if (snrToken) {
+      foxRR73Result.snrForNext = parseInt(snrToken, 10);
     }
 
     return foxRR73Result;
