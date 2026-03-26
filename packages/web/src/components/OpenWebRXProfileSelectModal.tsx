@@ -12,14 +12,13 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { useTranslation } from 'react-i18next';
-import { UserRole } from '@tx5dr/contracts';
 import type {
   OpenWebRXProfileSelectRequest,
   OpenWebRXProfileVerifyResult,
 } from '@tx5dr/contracts';
 import { useWSEvent } from '../hooks/useWSEvent';
 import { useConnection } from '../store/radioStore';
-import { useHasMinRole } from '../store/authStore';
+import { useCan } from '../store/authStore';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('OpenWebRXProfileSelectModal');
@@ -35,7 +34,7 @@ export function OpenWebRXProfileSelectModal() {
   const { t } = useTranslation();
   const { state } = useConnection();
   const radioService = state.radioService;
-  const isAdmin = useHasMinRole(UserRole.ADMIN);
+  const canSetFrequency = useCan('execute', 'RadioFrequency');
 
   const [isOpen, setIsOpen] = useState(false);
   const [request, setRequest] = useState<OpenWebRXProfileSelectRequest | null>(null);
@@ -135,8 +134,8 @@ export function OpenWebRXProfileSelectModal() {
     }, [t])
   );
 
-  // Only show for admin users
-  if (!isAdmin) return null;
+  // Only show for users with frequency control permission
+  if (!canSetFrequency) return null;
 
   const targetFreqMHz = request ? (request.targetFrequency / 1_000_000).toFixed(3) : '';
 

@@ -18,8 +18,9 @@ import {
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
 import { useConnection, useRadioState } from '../../store/radioStore';
-import { useHasMinRole } from '../../store/authStore';
+import { useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
+import { subject as caslSubject } from '@casl/ability';
 import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
@@ -218,6 +219,8 @@ export const VoiceFrequencyControl: React.FC = () => {
   const connection = useConnection();
   const radio = useRadioState();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
+  const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const ability = useAbility();
 
   const [presets, setPresets] = useState<FrequencyPreset[]>([]);
   const [isLoadingPresets, setIsLoadingPresets] = useState(false);
@@ -307,16 +310,24 @@ export const VoiceFrequencyControl: React.FC = () => {
     };
   }, [connection.state.radioService]);
 
-  // Group presets by band
+  // Group presets by band (with CASL frequency condition filtering)
   const groupedPresets = useMemo(() => {
+    let filtered = presets;
+    // CASL 条件过滤：非 admin 用户只显示被允许的频率预设
+    if (!isAdmin && canSetFrequency) {
+      filtered = presets.filter(preset =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ability.can('execute', caslSubject('RadioFrequency', { frequency: preset.frequency }) as any),
+      );
+    }
     const groups: Record<string, FrequencyPreset[]> = {};
-    for (const preset of presets) {
+    for (const preset of filtered) {
       const band = preset.band || 'Other';
       if (!groups[band]) groups[band] = [];
       groups[band].push(preset);
     }
     return groups;
-  }, [presets]);
+  }, [presets, isAdmin, canSetFrequency, ability]);
 
   // Break frequency into individual digits with their place values
   // Fixed format: XXX.XXX.XXX (3+3+3 digits, leading zeros shown dimmed)
@@ -399,7 +410,7 @@ export const VoiceFrequencyControl: React.FC = () => {
 
   // Handle frequency preset selection
   const handlePresetSelect = async (key: string) => {
-    if (!isAdmin || !connection.state.isConnected) return;
+    if (!canSetFrequency || !connection.state.isConnected) return;
 
     const preset = presets.find(p => p.key === key);
     if (!preset) return;
@@ -433,7 +444,7 @@ export const VoiceFrequencyControl: React.FC = () => {
 
   // Handle radio mode change
   const handleRadioModeChange = (mode: string) => {
-    if (!isAdmin) return;
+    if (!canSetFrequency) return;
     setCurrentRadioMode(mode);
     connection.state.radioService?.setVoiceRadioMode(mode);
   };
@@ -512,7 +523,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                   key={`d-${i}`}
                   digit={entry.char}
                   placeValue={entry.placeValue}
-                  disabled={!isAdmin}
+                  disabled={!canSetFrequency}
                   isLeadingZero={entry.isLeadingZero}
                   onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
                   onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
@@ -533,7 +544,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                 color={currentRadioMode === mode ? 'primary' : 'default'}
                 variant={currentRadioMode === mode ? 'solid' : 'flat'}
                 onPress={() => handleRadioModeChange(mode)}
-                isDisabled={!isAdmin}
+                isDisabled={!canSetFrequency}
                 className="min-w-12"
               >
                 {mode}
@@ -552,13 +563,13 @@ export const VoiceFrequencyControl: React.FC = () => {
               selectionMode="single"
               selectedKeys={new Set([String(currentFrequency)])}
               onSelectionChange={(keys) => {
-                if (!isAdmin) return;
+                if (!canSetFrequency) return;
                 if (keys === 'all') return;
                 const key = Array.from(keys)[0] as string;
                 if (key) handlePresetSelect(key);
               }}
               variant="flat"
-              className={`p-0${!isAdmin ? ' opacity-50 pointer-events-none' : ''}`}
+              className={`p-0${!canSetFrequency ? ' opacity-50 pointer-events-none' : ''}`}
             >
               {Object.entries(groupedPresets).map(([band, bandPresets]) => (
                 <ListboxSection key={band} title={band} showDivider>
@@ -581,7 +592,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         </div>
 
         {/* Custom frequency button */}
-        {isAdmin && (
+        {canSetFrequency && (
           <div className="flex-shrink-0">
             <Button
               size="sm"

@@ -41,6 +41,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       label: authToken.label,
       operatorIds: authToken.operatorIds,
       maxOperators: authToken.maxOperators,
+      permissionGrants: authToken.permissionGrants,
     };
   });
 
@@ -60,6 +61,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       operatorIds: request.authUser.operatorIds,
       tokenId: request.authUser.tokenId,
       maxOperators: tokenInfo?.maxOperators,
+      permissionGrants: tokenInfo?.permissionGrants,
     };
   });
 

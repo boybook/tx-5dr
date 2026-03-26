@@ -24,11 +24,11 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown, faShareNodes, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
+import { faPlus, faTrash, faCopy, faCheck, faRotate, faLock, faChevronDown, faShareNodes, faEye, faEyeSlash, faPen } from '@fortawesome/free-solid-svg-icons';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '@tx5dr/core';
-import { UserRole } from '@tx5dr/contracts';
-import type { TokenInfo, CreateTokenRequest, CreateTokenResponse, NetworkInfo } from '@tx5dr/contracts';
+import { UserRole, Permission, PERMISSION_GROUPS, CONDITIONAL_PERMISSIONS } from '@tx5dr/contracts';
+import type { TokenInfo, CreateTokenRequest, NetworkInfo, PermissionGrant, PresetFrequency, UpdateTokenRequest } from '@tx5dr/contracts';
 import { useOperators } from '../store/radioStore';
 
 const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
@@ -49,9 +49,10 @@ interface TokenCardProps {
   onRevoke: (id: string) => void;
   onRegenerate: (id: string) => void;
   onShare: (token: TokenInfo) => void;
+  onEdit: (token: TokenInfo) => void;
 }
 
-function TokenCard({ token, operators, onRevoke, onRegenerate, onShare }: TokenCardProps) {
+function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }: TokenCardProps) {
   const { t } = useTranslation();
   const [tokenCopied, setTokenCopied] = useState(false);
   const [tokenVisible, setTokenVisible] = useState(false);
@@ -118,6 +119,18 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare }: TokenC
                 <FontAwesomeIcon icon={faRotate} />
               </Button>
             )}
+            {!token.revoked && (
+              <Button
+                size="sm"
+                variant="flat"
+                color="default"
+                isIconOnly
+                onPress={() => onEdit(token)}
+                title={t('auth:token.edit')}
+              >
+                <FontAwesomeIcon icon={faPen} />
+              </Button>
+            )}
             {!token.revoked && !token.system && (
               <Button
                 size="sm"
@@ -148,6 +161,15 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare }: TokenC
               const op = operators.find((o) => o.id === id);
               return op ? `${op.context.myCall}(${op.context.frequency}Hz)` : id;
             }).join(', ')}
+          </div>
+        )}
+        {token.permissionGrants && token.permissionGrants.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {token.permissionGrants.map((grant) => (
+              <Chip key={grant.permission} size="sm" variant="flat" color="secondary" className="text-[10px] h-5">
+                {t(`auth:permissions.${grant.permission.replace(':', '.')}`)}
+              </Chip>
+            ))}
           </div>
         )}
         {token.token && !token.revoked && (
@@ -206,12 +228,13 @@ export function TokenManagement() {
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [createdToken, setCreatedToken] = useState<CreateTokenResponse | null>(null);
+  const [editingToken, setEditingToken] = useState<TokenInfo | null>(null);
   const [copied, setCopied] = useState(false);
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
-  const [urlCopied, setUrlCopied] = useState(false);
   const [showRevoked, setShowRevoked] = useState(false);
+  // 分享弹窗状态（创建成功 + 列表分享 共用）
   const [sharingToken, setSharingToken] = useState<TokenInfo | null>(null);
+  const [justCreatedTokenValue, setJustCreatedTokenValue] = useState<string | null>(null);
   const [selectedAddressIndex, setSelectedAddressIndex] = useState(0);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
 
@@ -222,6 +245,12 @@ export function TokenManagement() {
   const [newExpiry, setNewExpiry] = useState('never');
   const [newMaxOperators, setNewMaxOperators] = useState('1');
   const [creating, setCreating] = useState(false);
+
+  // 权限授予状态
+  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const [frequencyPresets, setFrequencyPresets] = useState<PresetFrequency[]>([]);
+  const [selectedPresetFrequencies, setSelectedPresetFrequencies] = useState<string[]>([]);
+  const [presetsLoading, setPresetsLoading] = useState(false);
 
   // 加载 Token 列表
   const loadTokens = useCallback(async () => {
@@ -241,28 +270,80 @@ export function TokenManagement() {
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
   }, [loadTokens]);
 
+  // 当弹窗打开且选中了频率权限时，加载频率预设
+  useEffect(() => {
+    if (!createModalOpen || !selectedPermissions.includes(Permission.RADIO_SET_FREQUENCY)) return;
+    if (frequencyPresets.length > 0) return; // already loaded
+    setPresetsLoading(true);
+    api.getPresetFrequencies()
+      .then((resp) => setFrequencyPresets(resp.presets))
+      .catch(() => {})
+      .finally(() => setPresetsLoading(false));
+  }, [createModalOpen, selectedPermissions, frequencyPresets.length]);
+
+  // 构建 permissionGrants
+  const buildPermissionGrants = useCallback((): PermissionGrant[] | undefined => {
+    if (selectedPermissions.length === 0) return undefined;
+    return selectedPermissions.map((p) => {
+      const grant: PermissionGrant = { permission: p as Permission };
+      const condDef = CONDITIONAL_PERMISSIONS[p as Permission];
+      if (condDef && p === Permission.RADIO_SET_FREQUENCY && selectedPresetFrequencies.length > 0) {
+        grant.conditions = {
+          [condDef.conditionField]: {
+            [condDef.conditionOperator]: selectedPresetFrequencies.map(Number),
+          },
+        };
+      }
+      return grant;
+    });
+  }, [selectedPermissions, selectedPresetFrequencies]);
+
+  // 关闭创建/编辑 Modal 并重置表单
+  const closeFormModal = useCallback(() => {
+    setCreateModalOpen(false);
+    setEditingToken(null);
+    setNewLabel('');
+    setNewRole(UserRole.OPERATOR);
+    setNewOperatorIds([]);
+    setNewExpiry('never');
+    setNewMaxOperators('1');
+    setSelectedPermissions([]);
+    setSelectedPresetFrequencies([]);
+  }, []);
+
   // 创建 Token
   const handleCreate = useCallback(async () => {
     if (!newLabel.trim()) return;
     setCreating(true);
     try {
+      const permissionGrants = newRole === UserRole.OPERATOR ? buildPermissionGrants() : undefined;
       const req: CreateTokenRequest = {
         label: newLabel.trim(),
         role: newRole,
         operatorIds: newRole === UserRole.ADMIN ? [] : newOperatorIds,
         expiresAt: expiryKeyToTimestamp(newExpiry),
         maxOperators: parseInt(newMaxOperators) || 1,
+        ...(permissionGrants ? { permissionGrants } : {}),
       };
       const resp = await api.createToken(req);
-      setCreatedToken(resp);
-      setCreateModalOpen(false);
-      // 重置表单
-      setNewLabel('');
-      setNewRole(UserRole.OPERATOR);
-      setNewOperatorIds([]);
-      setNewExpiry('never');
-      setNewMaxOperators('1');
+      closeFormModal();
       await loadTokens();
+      // 打开分享弹窗，附带刚创建的 token 明文
+      setSharingToken({
+        id: resp.id,
+        token: resp.token,
+        label: resp.label,
+        role: resp.role,
+        operatorIds: resp.operatorIds,
+        maxOperators: resp.maxOperators,
+        permissionGrants: resp.permissionGrants,
+        createdBy: null,
+        createdAt: Date.now(),
+        revoked: false,
+      });
+      setJustCreatedTokenValue(resp.token);
+      setSelectedAddressIndex(0);
+      setShareLinkCopied(false);
     } catch (err) {
       addToast({
         title: t('auth:token.createFailed'),
@@ -273,7 +354,55 @@ export function TokenManagement() {
     } finally {
       setCreating(false);
     }
-  }, [newLabel, newRole, newOperatorIds, newExpiry, newMaxOperators, loadTokens]);
+  }, [newLabel, newRole, newOperatorIds, newExpiry, newMaxOperators, loadTokens, buildPermissionGrants, closeFormModal]);
+
+  // 打开编辑 Modal（复用创建 Modal 的表单状态）
+  const handleEdit = useCallback((token: TokenInfo) => {
+    setEditingToken(token);
+    setNewLabel(token.label);
+    setNewRole(token.role as UserRole);
+    setNewOperatorIds(token.operatorIds);
+    setNewMaxOperators(String(token.maxOperators ?? 1));
+    // 从现有 permissionGrants 恢复选中的权限和频率条件
+    const perms = (token.permissionGrants ?? []).map(g => g.permission);
+    setSelectedPermissions(perms);
+    const freqGrant = (token.permissionGrants ?? []).find(g => g.permission === Permission.RADIO_SET_FREQUENCY);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const freqIn = (freqGrant?.conditions as any)?.frequency?.['$in'] as number[] | undefined;
+    setSelectedPresetFrequencies(freqIn ? freqIn.map(String) : []);
+    // expiry: 编辑时不改变已有过期时间，显示为 "never"（保持不变）
+    setNewExpiry('never');
+    setCreateModalOpen(true);
+  }, []);
+
+  // 更新 Token
+  const handleUpdate = useCallback(async () => {
+    if (!editingToken || !newLabel.trim()) return;
+    setCreating(true);
+    try {
+      const permissionGrants = newRole === UserRole.OPERATOR ? (buildPermissionGrants() ?? null) : null;
+      const req: UpdateTokenRequest = {
+        label: newLabel.trim(),
+        role: newRole,
+        operatorIds: newRole === UserRole.ADMIN ? [] : newOperatorIds,
+        maxOperators: parseInt(newMaxOperators) || 1,
+        permissionGrants,
+      };
+      await api.updateToken(editingToken.id, req);
+      addToast({ title: t('auth:token.updateSuccess'), color: 'success', timeout: 3000 });
+      closeFormModal();
+      await loadTokens();
+    } catch (err) {
+      addToast({
+        title: t('auth:token.updateFailed'),
+        description: err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
+        color: 'danger',
+        timeout: 5000,
+      });
+    } finally {
+      setCreating(false);
+    }
+  }, [editingToken, newLabel, newRole, newOperatorIds, newMaxOperators, loadTokens, buildPermissionGrants, closeFormModal, t]);
 
   // 撤销 Token
   const handleRevoke = useCallback(async (tokenId: string) => {
@@ -295,9 +424,24 @@ export function TokenManagement() {
   const handleRegenerate = useCallback(async (tokenId: string) => {
     try {
       const resp = await api.regenerateToken(tokenId);
-      setCreatedToken(resp);
       addToast({ title: t('auth:token.regenerated'), color: 'success', timeout: 3000 });
       await loadTokens();
+      // 打开分享弹窗，显示新生成的令牌
+      setSharingToken({
+        id: resp.id,
+        token: resp.token,
+        label: resp.label,
+        role: resp.role,
+        operatorIds: resp.operatorIds,
+        maxOperators: resp.maxOperators,
+        permissionGrants: resp.permissionGrants,
+        createdBy: null,
+        createdAt: Date.now(),
+        revoked: false,
+      });
+      setJustCreatedTokenValue(resp.token);
+      setSelectedAddressIndex(0);
+      setShareLinkCopied(false);
     } catch (err) {
       addToast({
         title: t('auth:token.regenerateFailed'),
@@ -311,6 +455,7 @@ export function TokenManagement() {
   // 分享 token
   const handleShare = useCallback((token: TokenInfo) => {
     setSharingToken(token);
+    setJustCreatedTokenValue(null);
     setSelectedAddressIndex(0);
     setShareLinkCopied(false);
   }, []);
@@ -320,6 +465,11 @@ export function TokenManagement() {
     const base = networkInfo.addresses[selectedAddressIndex]?.url ?? networkInfo.addresses[0].url;
     return `${base}?auth_token=${encodeURIComponent(sharingToken.token)}`;
   }, [sharingToken, networkInfo, selectedAddressIndex]);
+
+  const closeShareModal = useCallback(() => {
+    setSharingToken(null);
+    setJustCreatedTokenValue(null);
+  }, []);
 
   const handleCopyShareLink = useCallback(async () => {
     if (!shareUrl) return;
@@ -383,6 +533,7 @@ export function TokenManagement() {
                 onRevoke={handleRevoke}
                 onRegenerate={handleRegenerate}
                 onShare={handleShare}
+                onEdit={handleEdit}
               />
             ))}
             {revokedTokens.length > 0 && (
@@ -414,56 +565,139 @@ export function TokenManagement() {
       })()}
 
       {/* 创建 Token 弹窗 */}
-      <Modal isOpen={createModalOpen} onClose={() => setCreateModalOpen(false)} size="md">
+      <Modal isOpen={createModalOpen} onClose={closeFormModal} size="lg" scrollBehavior="inside">
         <ModalContent>
-          <ModalHeader>{t('auth:token.createModal.title')}</ModalHeader>
+          <ModalHeader>{editingToken ? t('auth:token.editModal.title') : t('auth:token.createModal.title')}</ModalHeader>
           <ModalBody className="gap-4">
             <Input
+              size="sm"
               label={t('auth:token.createModal.labelName')}
               placeholder={t('auth:token.createModal.labelPlaceholder')}
               value={newLabel}
               onValueChange={setNewLabel}
               isRequired
             />
-            <RadioGroup
-              label={t('auth:token.createModal.roleLabel')}
-              value={newRole}
-              onValueChange={(v) => setNewRole(v as UserRole)}
-            >
-              <Radio value={UserRole.VIEWER} description={t('auth:token.createModal.roleViewerDesc')}>{t('auth:token.createModal.roleViewer')}</Radio>
-              <Radio value={UserRole.OPERATOR} description={t('auth:token.createModal.roleOperatorDesc')}>{t('auth:token.createModal.roleOperator')}</Radio>
-              <Radio value={UserRole.ADMIN} description={t('auth:token.createModal.roleAdminDesc')}>{t('auth:token.createModal.roleAdmin')}</Radio>
-            </RadioGroup>
+            {/* 角色 */}
+            <div>
+              <p className="text-sm font-medium">{t('auth:token.createModal.roleLabel')}</p>
+              <p className="text-xs text-default-400 mb-2">{t('auth:token.createModal.roleDesc')}</p>
+              <div className="border border-default-200 rounded-lg p-3">
+                <RadioGroup
+                  size="sm"
+                  value={newRole}
+                  onValueChange={(v) => setNewRole(v as UserRole)}
+                  isDisabled={!!editingToken?.system}
+                >
+                  <Radio value={UserRole.VIEWER} description={t('auth:token.createModal.roleViewerDesc')}>{t('auth:token.createModal.roleViewer')}</Radio>
+                  <Radio value={UserRole.OPERATOR} description={t('auth:token.createModal.roleOperatorDesc')}>{t('auth:token.createModal.roleOperator')}</Radio>
+                  <Radio value={UserRole.ADMIN} description={t('auth:token.createModal.roleAdminDesc')}>{t('auth:token.createModal.roleAdmin')}</Radio>
+                </RadioGroup>
+              </div>
+            </div>
 
+            {/* 授权操作员 */}
             {newRole !== UserRole.ADMIN && operators.length > 0 && (
-              <CheckboxGroup
-                label={t('auth:token.createModal.authorizedOperators')}
-                value={newOperatorIds}
-                onValueChange={setNewOperatorIds}
-              >
-                {operators.map((op) => (
-                  <Checkbox key={op.id} value={op.id}>
-                    {op.context.myCall} ({op.context.frequency} Hz)
-                  </Checkbox>
-                ))}
-              </CheckboxGroup>
+              <div>
+                <p className="text-sm font-medium">{t('auth:token.createModal.authorizedOperators')}</p>
+                <p className="text-xs text-default-400 mb-2">{t('auth:token.createModal.authorizedOperatorsDesc')}</p>
+                <div className="border border-default-200 rounded-lg p-3">
+                  <CheckboxGroup
+                    size="sm"
+                    value={newOperatorIds}
+                    onValueChange={setNewOperatorIds}
+                  >
+                    {operators.map((op) => (
+                      <Checkbox key={op.id} value={op.id}>
+                        {op.context.myCall} ({op.context.frequency} Hz)
+                      </Checkbox>
+                    ))}
+                  </CheckboxGroup>
+                </div>
+              </div>
             )}
 
-            <Select
-              label={t('auth:token.createModal.expiryLabel')}
-              selectedKeys={new Set([newExpiry])}
-              onSelectionChange={(keys) => {
-                const arr = Array.from(keys);
-                if (arr.length > 0) setNewExpiry(arr[0] as string);
-              }}
-            >
-              {EXPIRY_OPTIONS.map((opt) => (
-                <SelectItem key={opt.key}>{opt.label}</SelectItem>
-              ))}
-            </Select>
+            {/* 额外权限（仅 OPERATOR 角色显示） */}
+            {newRole === UserRole.OPERATOR && (
+              <div>
+                <p className="text-sm font-medium">{t('auth:permissions.title')}</p>
+                <p className="text-xs text-default-400 mb-2">{t('auth:permissions.description')}</p>
+                <div className="border border-default-200 rounded-lg p-3 space-y-3">
+                  {PERMISSION_GROUPS.map((group) => (
+                    <div key={group.key}>
+                      <p className="text-xs text-default-500 font-medium mb-1.5">{t(`auth:permissions.group.${group.key}`)}</p>
+                      <div className="flex flex-col gap-1 pl-1">
+                        {group.permissions.map((perm) => (
+                          <div key={perm}>
+                            <Checkbox
+                              size="sm"
+                              isSelected={selectedPermissions.includes(perm)}
+                              onValueChange={(checked) => {
+                                if (checked) {
+                                  setSelectedPermissions((prev) => [...prev, perm]);
+                                } else {
+                                  setSelectedPermissions((prev) => prev.filter((p) => p !== perm));
+                                  if (perm === Permission.RADIO_SET_FREQUENCY) {
+                                    setSelectedPresetFrequencies([]);
+                                  }
+                                }
+                              }}
+                            >
+                              <span className="text-sm">{t(`auth:permissions.${perm.replace(':', '.')}`)}</span>
+                            </Checkbox>
+                            {/* 频率限制条件编辑器 */}
+                            {perm === Permission.RADIO_SET_FREQUENCY && selectedPermissions.includes(perm) && (
+                              <div className="pl-7 pt-1 pb-1">
+                                <p className="text-xs text-default-400 mb-1.5">{t('auth:permissions.frequencyRestriction')}</p>
+                                {presetsLoading ? (
+                                  <Spinner size="sm" />
+                                ) : frequencyPresets.length > 0 ? (
+                                  <CheckboxGroup
+                                    size="sm"
+                                    value={selectedPresetFrequencies}
+                                    onValueChange={setSelectedPresetFrequencies}
+                                  >
+                                    {frequencyPresets.map((preset) => (
+                                      <Checkbox key={String(preset.frequency)} value={String(preset.frequency)}>
+                                        <span className="text-xs">{preset.description || `${(preset.frequency / 1e6).toFixed(3)} MHz`} — {preset.band} {preset.mode}</span>
+                                      </Checkbox>
+                                    ))}
+                                  </CheckboxGroup>
+                                ) : null}
+                                <p className="text-xs text-default-300 mt-1">
+                                  {selectedPresetFrequencies.length === 0
+                                    ? t('auth:permissions.allPresets')
+                                    : t('auth:permissions.selectedPresets', { count: selectedPresetFrequencies.length })}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!editingToken && (
+              <Select
+                size="sm"
+                label={t('auth:token.createModal.expiryLabel')}
+                selectedKeys={new Set([newExpiry])}
+                onSelectionChange={(keys) => {
+                  const arr = Array.from(keys);
+                  if (arr.length > 0) setNewExpiry(arr[0] as string);
+                }}
+              >
+                {EXPIRY_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.key}>{opt.label}</SelectItem>
+                ))}
+              </Select>
+            )}
 
             {newRole !== UserRole.ADMIN && (
               <Input
+                size="sm"
                 type="number"
                 label={t('auth:token.createModal.maxOperatorsLabel')}
                 description={t('auth:token.createModal.maxOperatorsDesc')}
@@ -474,25 +708,53 @@ export function TokenManagement() {
             )}
           </ModalBody>
           <ModalFooter>
-            <Button variant="flat" onPress={() => setCreateModalOpen(false)}>{t('common:button.cancel')}</Button>
+            <Button variant="flat" onPress={closeFormModal}>{t('common:button.cancel')}</Button>
             <Button
               color="primary"
-              onPress={handleCreate}
+              onPress={editingToken ? handleUpdate : handleCreate}
               isLoading={creating}
               isDisabled={!newLabel.trim()}
             >
-              {t('auth:token.create')}
+              {editingToken ? t('common:button.save') : t('auth:token.create')}
             </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
 
-      {/* 分享弹窗 */}
-      <Modal isOpen={!!sharingToken} onClose={() => setSharingToken(null)} size="md">
+      {/* 分享 / 创建成功 弹窗（合并） */}
+      <Modal isOpen={!!sharingToken} onClose={closeShareModal} size="md">
         <ModalContent>
-          <ModalHeader>{t('auth:token.shareModal.title')}</ModalHeader>
+          <ModalHeader>{justCreatedTokenValue ? t('auth:token.created.title') : t('auth:token.shareModal.title')}</ModalHeader>
           <ModalBody className="gap-4">
-            <p className="text-sm text-default-500">{t('auth:token.shareModal.desc')}</p>
+            {/* 创建成功时显示令牌明文 */}
+            {justCreatedTokenValue && (
+              <>
+                <p className="text-sm text-default-600">{t('auth:token.created.warning')}</p>
+                <div className="flex items-center gap-2 bg-default-100 rounded-lg p-3">
+                  <code className="flex-1 text-sm break-all">{justCreatedTokenValue}</code>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    isIconOnly
+                    onPress={() => handleCopy(justCreatedTokenValue)}
+                    title={t('auth:token.copy')}
+                  >
+                    <FontAwesomeIcon icon={copied ? faCheck : faCopy} />
+                  </Button>
+                </div>
+                <div className="text-xs text-default-400">
+                  <p>{t('auth:token.created.labelInfo', { label: sharingToken?.label })}</p>
+                  <p>{t('auth:token.created.roleInfo', { role: sharingToken?.role ? ROLE_LABELS[sharingToken.role] : '' })}</p>
+                  {sharingToken?.operatorIds && sharingToken.operatorIds.length > 0 && (
+                    <p>{t('auth:token.created.operatorsInfo', { ids: sharingToken.operatorIds.join(', ') })}</p>
+                  )}
+                </div>
+              </>
+            )}
+
+            {!justCreatedTokenValue && (
+              <p className="text-sm text-default-500">{t('auth:token.shareModal.desc')}</p>
+            )}
 
             {/* 地址选择（多网卡时显示） */}
             {networkInfo && networkInfo.addresses.length > 1 && (
@@ -511,13 +773,12 @@ export function TokenManagement() {
               </Select>
             )}
 
-            {/* QR 码 */}
+            {/* QR 码 + 分享链接 */}
             {shareUrl ? (
               <div className="flex flex-col items-center gap-3">
                 <div className="bg-white p-4 rounded-xl shadow-sm">
                   <QRCodeSVG value={shareUrl} size={200} />
                 </div>
-                {/* URL + 复制按钮 */}
                 <div className="flex items-center gap-2 w-full bg-default-100 rounded-lg px-3 py-2">
                   <code className="flex-1 text-xs break-all text-default-600">{shareUrl}</code>
                   <Button
@@ -549,76 +810,7 @@ export function TokenManagement() {
             >
               {shareLinkCopied ? t('auth:token.shareModal.linkCopied') : t('auth:token.shareModal.copyLink')}
             </Button>
-            <Button color="primary" onPress={() => setSharingToken(null)}>{t('auth:token.created.done')}</Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
-
-      {/* 创建成功弹窗 */}
-      <Modal isOpen={!!createdToken} onClose={() => setCreatedToken(null)} size="md">
-        <ModalContent>
-          <ModalHeader>{t('auth:token.created.title')}</ModalHeader>
-          <ModalBody className="gap-3">
-            <p className="text-sm text-default-600">
-              {t('auth:token.created.warning')}
-            </p>
-            <div className="flex items-center gap-2 bg-default-100 rounded-lg p-3">
-              <code className="flex-1 text-sm break-all">{createdToken?.token}</code>
-              <Button
-                size="sm"
-                variant="flat"
-                isIconOnly
-                onPress={() => handleCopy(createdToken?.token || '')}
-                title={t('auth:token.copy')}
-              >
-                <FontAwesomeIcon icon={copied ? faCheck : faCopy} />
-              </Button>
-            </div>
-            <div className="text-xs text-default-400">
-              <p>{t('auth:token.created.labelInfo', { label: createdToken?.label })}</p>
-              <p>{t('auth:token.created.roleInfo', { role: createdToken?.role ? ROLE_LABELS[createdToken.role] : '' })}</p>
-              {createdToken?.operatorIds && createdToken.operatorIds.length > 0 && (
-                <p>{t('auth:token.created.operatorsInfo', { ids: createdToken.operatorIds.join(', ') })}</p>
-              )}
-            </div>
-            {/* 远程访问地址提示 */}
-            {networkInfo && networkInfo.addresses.length > 0 && (
-              <div className="border-t border-divider pt-3 mt-1">
-                <p className="text-xs text-default-400 font-medium mb-1.5">
-                  {t('auth:token.created.howToUse')}
-                </p>
-                <p className="text-xs text-default-400 mb-2">
-                  {t('auth:token.created.howToUseDesc')}
-                </p>
-                <div className="flex items-center gap-1.5 bg-default-100 rounded-md px-2 py-1.5">
-                  <code className="flex-1 text-xs text-default-600 truncate">
-                    {networkInfo.addresses[0].url}
-                  </code>
-                  <Button
-                    size="sm"
-                    variant="light"
-                    isIconOnly
-                    className="min-w-6 w-6 h-6"
-                    onPress={async () => {
-                      try {
-                        await navigator.clipboard.writeText(networkInfo.addresses[0].url);
-                        setUrlCopied(true);
-                        setTimeout(() => setUrlCopied(false), 2000);
-                      } catch { /* ignore */ }
-                    }}
-                    title={t('common:remoteAccess.copyLink')}
-                  >
-                    <FontAwesomeIcon
-                      icon={urlCopied ? faCheck : faCopy}
-                      className={urlCopied ? 'text-success text-xs' : 'text-default-400 text-xs'}
-                    />
-                  </Button>
-                </div>
-              </div>
-            )}
-          </ModalBody>
-          <ModalFooter>
-            <Button color="primary" onPress={() => setCreatedToken(null)}>{t('auth:token.created.done')}</Button>
+            <Button color="primary" onPress={closeShareModal}>{t('auth:token.created.done')}</Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

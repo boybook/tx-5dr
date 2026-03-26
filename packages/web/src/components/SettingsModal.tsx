@@ -22,7 +22,7 @@ import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './Freq
 import { TokenManagement } from './TokenManagement';
 import { StationInfoSettings, type StationInfoSettingsRef } from './StationInfoSettings';
 import { OpenWebRXSettings } from './OpenWebRXSettings';
-import { useHasMinRole } from '../store/authStore';
+import { useHasMinRole, useCan } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 
 interface SettingsModalProps {
@@ -38,6 +38,9 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const { t } = useTranslation('settings');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isOperator = useHasMinRole(UserRole.OPERATOR);
+  const canRadioConfig = useCan('update', 'RadioConfig');
+  const canFrequencyPresets = useCan('update', 'SettingsFrequencyPresets');
+  const canStationInfo = useCan('update', 'StationInfo');
   // Viewers cannot access the operator tab; fall back to display
   const defaultTab: SettingsTab = isOperator ? 'operator' : 'display';
   // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator（或 display 对 viewer）
@@ -385,7 +388,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     key="display"
                     title={getTabTitle('display', isMobile)}
                   />
-                  {isAdmin && (
+                  {canRadioConfig && (
                     <Tab
                       key="radio_profile"
                       title={getTabTitle('radio_profile', isMobile)}
@@ -397,7 +400,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       title={getTabTitle('system', isMobile)}
                     />
                   )}
-                  {isAdmin && (
+                  {canFrequencyPresets && (
                     <Tab
                       key="frequency_presets"
                       title={getTabTitle('frequency_presets', isMobile)}
@@ -409,7 +412,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       title={getTabTitle('tokens', isMobile)}
                     />
                   )}
-                  {isAdmin && (
+                  {canStationInfo && (
                     <Tab
                       key="station_info"
                       title={getTabTitle('station_info', isMobile)}

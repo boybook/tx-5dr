@@ -10,6 +10,7 @@ import {
   type JWTPayload,
   type UpdateTokenRequest,
   type UpdateAuthConfigRequest,
+  type PermissionGrant,
   UserRole,
   USER_ROLE_LEVEL,
   AuthConfigSchema,
@@ -166,6 +167,7 @@ export class AuthManager {
       revoked: false,
       ...(system ? { system: true } : {}),
       ...(req.maxOperators !== undefined ? { maxOperators: req.maxOperators } : {}),
+      ...('permissionGrants' in req && req.permissionGrants ? { permissionGrants: req.permissionGrants } : {}),
     };
 
     this.config.tokens.push(authToken);
@@ -178,6 +180,7 @@ export class AuthManager {
       role: req.role,
       operatorIds: req.operatorIds,
       maxOperators: authToken.maxOperators,
+      permissionGrants: authToken.permissionGrants,
     };
   }
 
@@ -244,6 +247,7 @@ export class AuthManager {
       role: token.role,
       operatorIds: token.operatorIds,
       maxOperators: token.maxOperators,
+      permissionGrants: token.permissionGrants,
     };
   }
 
@@ -259,6 +263,9 @@ export class AuthManager {
     }
     if (updates.maxOperators !== undefined) {
       token.maxOperators = updates.maxOperators ?? undefined; // null → 移除限制
+    }
+    if (updates.permissionGrants !== undefined) {
+      token.permissionGrants = updates.permissionGrants ?? undefined; // null → clear grants
     }
 
     await this.saveConfig();
@@ -288,6 +295,7 @@ export class AuthManager {
       revoked: token.revoked,
       system: token.system,
       maxOperators: token.maxOperators,
+      permissionGrants: token.permissionGrants,
     };
   }
 
@@ -315,10 +323,10 @@ export class AuthManager {
   /**
    * 获取 token 的最新权限（token 可能被更新过）
    */
-  getTokenCurrentPermissions(tokenId: string): { role: UserRole; operatorIds: string[]; maxOperators?: number } | null {
+  getTokenCurrentPermissions(tokenId: string): { role: UserRole; operatorIds: string[]; maxOperators?: number; permissionGrants?: PermissionGrant[] } | null {
     const token = this.config.tokens.find(t => t.id === tokenId);
     if (!token || token.revoked) return null;
-    return { role: token.role, operatorIds: token.operatorIds, maxOperators: token.maxOperators };
+    return { role: token.role, operatorIds: token.operatorIds, maxOperators: token.maxOperators, permissionGrants: token.permissionGrants };
   }
 
   // ===== 认证配置 =====

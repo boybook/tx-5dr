@@ -1,9 +1,9 @@
 import { FastifyInstance } from 'fastify';
-import { UserRole, DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema, AudioMonitorCodecSchema } from '@tx5dr/contracts';
+import { DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema, AudioMonitorCodecSchema } from '@tx5dr/contracts';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { requireRole } from '../auth/authPlugin.js';
+import { requireAbility } from '../auth/authPlugin.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
 /**
@@ -74,9 +74,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 更新解码窗口设置（仅管理员）
+  // 更新解码窗口设置
   fastify.put('/decode-windows', {
-    preHandler: [requireRole(UserRole.ADMIN)],
+    preHandler: [requireAbility('update', 'SettingsDecodeWindows')],
   }, async (request, reply) => {
     try {
       const parsed = DecodeWindowSettingsSchema.parse(request.body);
@@ -114,7 +114,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   });
 
   fastify.put('/audio-monitor-codec', {
-    preHandler: [requireRole(UserRole.ADMIN)],
+    preHandler: [requireAbility('update', 'SettingsAudioCodec')],
   }, async (request, reply) => {
     try {
       const body = request.body as { codec?: string };
@@ -148,9 +148,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 保存自定义频率预设（仅管理员，包含所有模式）
+  // 保存自定义频率预设
   fastify.put('/frequency-presets', {
-    preHandler: [requireRole(UserRole.ADMIN)],
+    preHandler: [requireAbility('update', 'SettingsFrequencyPresets')],
   }, async (request, reply) => {
     try {
       const parsed = CustomFrequencyPresetsSchema.parse(request.body);
@@ -166,9 +166,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 恢复默认频率预设（仅管理员）
+  // 恢复默认频率预设
   fastify.delete('/frequency-presets', {
-    preHandler: [requireRole(UserRole.ADMIN)],
+    preHandler: [requireAbility('update', 'SettingsFrequencyPresets')],
   }, async (_request, reply) => {
     try {
       await configManager.resetCustomFrequencyPresets();

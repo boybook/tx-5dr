@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useReducer, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useCallback, useMemo, ReactNode } from 'react';
+import { createMongoAbility, type MongoAbility, subject as caslSubject } from '@casl/ability';
 import { api, configureAuthToken } from '@tx5dr/core';
+import { buildAbilityRules, type PermissionGrant, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type { UserRole, AuthStatus, AuthMeResponse } from '@tx5dr/contracts';
 import i18n from '../i18n';
 import { createLogger } from '../utils/logger';
@@ -25,6 +27,8 @@ export interface AuthState {
   operatorIds: string[];
   /** 操作员数量上限 */
   maxOperators?: number;
+  /** CASL permission grants */
+  permissionGrants?: PermissionGrant[];
   /** 是否为未认证的公开观察者 */
   isPublicViewer: boolean;
   /** 登录错误信息 */
@@ -37,10 +41,10 @@ export type AuthAction =
   | { type: 'INIT_NO_AUTH' }
   | { type: 'INIT_AUTH'; payload: { allowPublicViewing: boolean } }
   | { type: 'LOGIN_START' }
-  | { type: 'LOGIN_SUCCESS'; payload: { jwt: string; role: UserRole; label: string; operatorIds: string[]; maxOperators?: number } }
+  | { type: 'LOGIN_SUCCESS'; payload: { jwt: string; role: UserRole; label: string; operatorIds: string[]; maxOperators?: number; permissionGrants?: PermissionGrant[] } }
   | { type: 'LOGIN_FAIL'; payload: string }
   | { type: 'SET_PUBLIC_VIEWER' }
-  | { type: 'RESTORE_SESSION'; payload: { jwt: string; role: UserRole; label: string; operatorIds: string[]; maxOperators?: number } }
+  | { type: 'RESTORE_SESSION'; payload: { jwt: string; role: UserRole; label: string; operatorIds: string[]; maxOperators?: number; permissionGrants?: PermissionGrant[] } }
   | { type: 'LOGOUT' }
   | { type: 'CLEAR_LOGIN_ERROR' };
 
@@ -88,6 +92,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         label: action.payload.label,
         operatorIds: action.payload.operatorIds,
         maxOperators: action.payload.maxOperators,
+        permissionGrants: action.payload.permissionGrants,
         isPublicViewer: false,
         loginLoading: false,
         loginError: null,
@@ -105,6 +110,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         label: null,
         operatorIds: [],
         maxOperators: undefined,
+        permissionGrants: undefined,
       };
 
     case 'RESTORE_SESSION':
@@ -115,6 +121,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         label: action.payload.label,
         operatorIds: action.payload.operatorIds,
         maxOperators: action.payload.maxOperators,
+        permissionGrants: action.payload.permissionGrants,
         isPublicViewer: false,
       };
 
@@ -126,6 +133,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         label: null,
         operatorIds: [],
         maxOperators: undefined,
+        permissionGrants: undefined,
         isPublicViewer: false,
         loginError: null,
       };
@@ -227,6 +235,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
                   label: resp.label,
                   operatorIds: resp.operatorIds,
                   maxOperators: resp.maxOperators,
+                  permissionGrants: resp.permissionGrants,
                 },
               });
               // 认证启用但已登录成功
@@ -281,6 +290,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
                   label: me.label,
                   operatorIds: me.operatorIds,
                   maxOperators: me.maxOperators,
+                  permissionGrants: me.permissionGrants,
                 },
               });
             }
@@ -324,6 +334,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           label: resp.label,
           operatorIds: resp.operatorIds,
           maxOperators: resp.maxOperators,
+          permissionGrants: resp.permissionGrants,
         },
       });
       return true;
@@ -389,4 +400,46 @@ export function useHasOperatorAccess(operatorId: string): boolean {
   if (!state.role) return false;
   if (state.role === 'admin') return true;
   return state.operatorIds.includes(operatorId);
+}
+
+// ===== CASL Ability Hooks =====
+
+type AppAbility = MongoAbility<[string, string]>;
+
+function createAbilityFromState(state: AuthState): AppAbility {
+  if (!state.role) return createMongoAbility([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return createMongoAbility(buildAbilityRules({
+    role: state.role as import('@tx5dr/contracts').UserRole,
+    operatorIds: state.operatorIds,
+    permissionGrants: state.permissionGrants,
+  }) as any);
+}
+
+/**
+ * Returns a CASL Ability instance that auto-updates with auth state.
+ */
+export function useAbility(): AppAbility {
+  const { state } = useAuth();
+  return useMemo(
+    () => createAbilityFromState(state),
+    [state.role, state.operatorIds, state.permissionGrants],
+  );
+}
+
+/**
+ * Convenience hook: check if current user can perform an action on a subject.
+ */
+export function useCan(action: AppAction, subject: AppSubject): boolean {
+  const ability = useAbility();
+  return ability.can(action as string, subject as string);
+}
+
+/**
+ * Check ability with instance data (for conditional permissions like frequency restriction).
+ */
+export function useCanWithData(action: AppAction, subject: AppSubject, data: Record<string, unknown>): boolean {
+  const ability = useAbility();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ability.can(action as string, caslSubject(subject as string, data as Record<PropertyKey, unknown>) as any);
 }
