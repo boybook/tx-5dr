@@ -1240,7 +1240,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 <PopoverContent className="py-4 space-y-2">
                   <div className="space-y-2">
                     {/* 天调开关 */}
-                    {tunerCapabilities?.hasSwitch && (
+                    {tunerCapabilities?.hasSwitch !== false && (
                       <div className="flex items-center justify-between px-2 gap-2">
                         <span className="text-sm text-default-500">{t('tuner.auto')}</span>
                         <Switch
@@ -1254,7 +1254,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     )}
 
                     {/* 手动调谐按钮 */}
-                    {tunerCapabilities?.hasManualTune && (
+                    {tunerCapabilities?.hasManualTune !== false && (
                       <div className="px-2">
                         <Button
                           size="sm"
