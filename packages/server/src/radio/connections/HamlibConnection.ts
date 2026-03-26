@@ -991,6 +991,26 @@ export class HamlibConnection
       });
     }
 
+    // Windows serial port configuration failure (tcsetattr / Invalid configuration)
+    if (
+      errorMessage.includes('tcsetattr') ||
+      (errorMessageLower.includes('invalid configuration') && errorMessage.includes('serial'))
+    ) {
+      return new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `Serial port configuration failed (${context}): ${errorMessage.split('\n')[0]}`,
+        userMessage: 'Serial port configuration failed',
+        suggestions: [
+          'Try using the Network (rigctld) connection type',
+          'Ensure no other application is using the COM port',
+          'Check that the correct COM port number is selected',
+          'Try reinstalling or updating the serial port driver',
+        ],
+        cause: error,
+        context: { operation: context },
+      });
+    }
+
     // 未知错误
     return new RadioError({
       code: RadioErrorCode.UNKNOWN_ERROR,

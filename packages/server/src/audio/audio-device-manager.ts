@@ -5,6 +5,10 @@ import { AudioDevice } from '@tx5dr/contracts';
 import audify from 'audify';
 const { RtAudio } = audify;
 type RtAudioInstance = InstanceType<typeof RtAudio>;
+
+// RtAudioApi values from audify (const enum not importable under isolatedModules)
+const RTAUDIO_API_UNSPECIFIED = 0;
+const RTAUDIO_API_WINDOWS_WASAPI = 7;
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -17,8 +21,12 @@ export class AudioDeviceManager {
   private rtAudio: RtAudioInstance;
 
   private constructor() {
-    this.rtAudio = new RtAudio();
-    logger.info('Audify (RtAudio) audio system initialized');
+    // On Windows, explicitly use WASAPI to avoid ASIO exclusive-access conflicts.
+    // ASIO only exposes ASIO devices (e.g. "Realtek ASIO"), hiding all WASAPI devices.
+    // WASAPI sees all system audio devices and supports shared-mode access.
+    const api = process.platform === 'win32' ? RTAUDIO_API_WINDOWS_WASAPI : RTAUDIO_API_UNSPECIFIED;
+    this.rtAudio = new RtAudio(api);
+    logger.info('Audify (RtAudio) audio system initialized', { api: process.platform === 'win32' ? 'WASAPI' : 'auto' });
   }
 
   static getInstance(): AudioDeviceManager {

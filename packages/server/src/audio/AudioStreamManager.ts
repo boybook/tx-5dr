@@ -2,8 +2,10 @@ import audify from 'audify';
 const { RtAudio } = audify;
 type RtAudioInstance = InstanceType<typeof RtAudio>;
 
-// RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
+// RtAudioFormat/RtAudioApi 是 const enum，isolatedModules 下无法直接导入，使用数值常量
 const RTAUDIO_FLOAT32 = 0x10;
+const RTAUDIO_API_UNSPECIFIED = 0;
+const RTAUDIO_API_WINDOWS_WASAPI = 7;
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { EventEmitter } from 'eventemitter3';
 import { clearResamplerCache, resampleAudioProfessional } from '../utils/audioUtils.js';
@@ -503,7 +505,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           try {
             logger.info('creating audio input stream (Audify/RtAudio)');
 
-            this.rtAudioInput = new RtAudio();
+            const inputApi = process.platform === 'win32' ? RTAUDIO_API_WINDOWS_WASAPI : RTAUDIO_API_UNSPECIFIED;
+            this.rtAudioInput = new RtAudio(inputApi);
 
             // 验证设备能力
             if (actualDeviceId !== undefined) {
@@ -604,7 +607,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           try {
             logger.info('creating audio output stream (Audify/RtAudio)');
 
-            this.rtAudioOutput = new RtAudio();
+            const outputApi = process.platform === 'win32' ? RTAUDIO_API_WINDOWS_WASAPI : RTAUDIO_API_UNSPECIFIED;
+            this.rtAudioOutput = new RtAudio(outputApi);
 
             const outputId = actualOutputDeviceId ?? this.rtAudioOutput.getDefaultOutputDevice();
 
