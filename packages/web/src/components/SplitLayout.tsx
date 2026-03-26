@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 // 创建 Context 用于子组件切换 tab
 interface SplitLayoutContextType {
   switchToRight: () => void;
+  selectedTab: string;
 }
 
 const SplitLayoutContext = createContext<SplitLayoutContextType | null>(null);
@@ -131,7 +132,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
   // 移动端布局
   if (isMobile) {
     return (
-      <SplitLayoutContext.Provider value={{ switchToRight }}>
+      <SplitLayoutContext.Provider value={{ switchToRight, selectedTab }}>
         <div
           ref={containerRef}
           className={`flex flex-col h-screen w-full ${className}`}

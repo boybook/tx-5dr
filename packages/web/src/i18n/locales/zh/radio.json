@@ -112,6 +112,7 @@
     "preparingTx": "准备发射...",
     "forceStop": "立即停止发射",
     "txCycle": "发射周期",
+    "txCycleShort": "周期",
     "evenCycle": "偶数周期",
     "oddCycle": "奇数周期",
     "target": "目标",

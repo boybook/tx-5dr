@@ -47,6 +47,7 @@ interface FramesTableProps {
   targetCallsign?: string; // 当前选中操作员的目标呼号
   onMessageHover?: (freq: number | null) => void; // 消息hover回调
   showLogbookAnalysisVisuals?: boolean; // 是否显示日志本分析的视觉效果（划线、标签等）
+  scrollToBottomTrigger?: number; // 外部触发滚动到底部（递增时触发）
 }
 
 // ─── 纯函数工具（提取到组件外避免重复创建）────────
@@ -269,7 +270,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, scrollToBottomTrigger }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -348,6 +349,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
       }, 0);
     }
   }, []);
+
+  // 外部触发（如 tab 切回时）滚动到底部
+  useEffect(() => {
+    if (scrollToBottomTrigger && scrollToBottomTrigger > 0) {
+      setTimeout(() => {
+        scrollToBottom();
+      }, 0);
+    }
+  }, [scrollToBottomTrigger, scrollToBottom]);
 
   // ─── 监听容器宽度变化 ─────────────────────
   useEffect(() => {

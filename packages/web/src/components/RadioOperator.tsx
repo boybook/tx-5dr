@@ -600,13 +600,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 operatorId: operatorStatus.id,
                 logBookId: operatorStatus.context.myCall
               })}
-              className="h-8 px-2"
+              className="h-8 w-8 min-w-0 px-0"
               title={t('operator.viewLog')}
               aria-label={t('operator.viewLog')}
               startContent={<FontAwesomeIcon icon={faBook} />}
-            >
-              {t('operator.log')}
-            </Button>
+            />
             <span className="text-sm text-default-600">{t('control.ptt')}</span>
             <Popover
               isOpen={isForceStopPopoverOpen}
@@ -674,7 +672,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         {/* 第一行 - 发射周期和发射槽位选择 */}
         <div className="flex gap-2 -my-1">
           <div className="flex items-center gap-0">
-            <span className="text-default-500 text-sm">{t('operator.txCycle')}:</span>
+            <span className="text-default-500 text-sm">
+              <span className="sm:hidden">{t('operator.txCycleShort')}</span>
+              <span className="hidden sm:inline">{t('operator.txCycle')}:</span>
+            </span>
             <Button
               size="sm"
               variant="light"
@@ -841,7 +842,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         <div className="flex gap-3 items-end">
           <Input
             startContent={
-              <div className="flex items-center">
+              <div className="hidden sm:flex items-center">
                 <span className="text-sm text-default-500 whitespace-nowrap">{t('operator.target')}</span>
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
@@ -853,14 +854,14 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             onKeyDown={handleInputKeyDown}
             size="sm"
             variant="flat"
-            placeholder={t('common:status.none')}
+            placeholder={t('operator.target')}
             isDisabled={!connection.state.isConnected}
             className="flex-1"
             aria-label={t('operator.targetCallsign')}
           />
           <Input
             startContent={
-              <div className="flex items-center">
+              <div className="hidden sm:flex items-center">
                 <span className="text-sm text-default-500 whitespace-nowrap">{t('operator.report')}</span>
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
@@ -890,14 +891,14 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             onKeyDown={handleInputKeyDown}
             size="sm"
             variant="flat"
-            placeholder="0"
+            placeholder={t('operator.report')}
             isDisabled={!connection.state.isConnected}
             className="flex-1"
             aria-label={t('operator.txReport')}
           />
           <Input
             startContent={
-              <div className="flex items-center">
+              <div className="hidden sm:flex items-center">
                 <span className="text-sm text-default-500 whitespace-nowrap">{t('control.frequency')}</span>
                 <div className="w-px h-4 bg-divider mx-2"></div>
               </div>
@@ -942,6 +943,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             onKeyDown={handleInputKeyDown}
             size="sm"
             variant="flat"
+            placeholder={t('control.frequency')}
             isDisabled={!connection.state.isConnected}
             className="flex-1"
             aria-label={t('control.frequency')}
@@ -952,7 +954,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             size="sm"
             variant="light"
             onPress={() => setIsSlotContentExpanded(!isSlotContentExpanded)}
-            className="text-default-400 text-sm min-w-0 px-3 transition-all duration-200 hover:bg-content2"
+            className="text-default-400 text-sm min-w-0 px-1 sm:px-3 transition-all duration-200 hover:bg-content2"
             style={{
               transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
             }}
@@ -968,7 +970,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               </span>
             }
           >
-            {isSlotContentExpanded ? t('operator.collapse') : t('operator.expand')}
+            <span className="hidden sm:inline">
+              {isSlotContentExpanded ? t('operator.collapse') : t('operator.expand')}
+            </span>
           </Button>
         </div>
         
