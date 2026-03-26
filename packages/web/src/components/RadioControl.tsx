@@ -996,7 +996,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   // 天调控制方法
   const handleTunerToggle = async () => {
-    if (!tunerCapabilities?.supported || !tunerCapabilities.hasSwitch) {
+    if (!tunerCapabilities?.hasSwitch) {
       return;
     }
 
@@ -1034,7 +1034,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   };
 
   const handleStartTuning = async () => {
-    if (!tunerCapabilities?.supported || !tunerCapabilities.hasManualTune) {
+    if (!tunerCapabilities?.hasManualTune) {
       return;
     }
 
@@ -1217,8 +1217,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 </div>
               </PopoverContent>
             </Popover>
-            {/* 天调控制 */}
-            {tunerCapabilities?.supported && (
+            {/* 天调控制：电台已连接时始终显示入口，按钮可见性由各自能力字段控制 */}
+            {radio.state.radioConnected && (
               <Popover>
                 <PopoverTrigger>
                   <Button
@@ -1240,7 +1240,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 <PopoverContent className="py-4 space-y-2">
                   <div className="space-y-2">
                     {/* 天调开关 */}
-                    {tunerCapabilities.hasSwitch && (
+                    {tunerCapabilities?.hasSwitch && (
                       <div className="flex items-center justify-between px-2 gap-2">
                         <span className="text-sm text-default-500">{t('tuner.auto')}</span>
                         <Switch
@@ -1254,7 +1254,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     )}
 
                     {/* 手动调谐按钮 */}
-                    {tunerCapabilities.hasManualTune && (
+                    {tunerCapabilities?.hasManualTune && (
                       <div className="px-2">
                         <Button
                           size="sm"

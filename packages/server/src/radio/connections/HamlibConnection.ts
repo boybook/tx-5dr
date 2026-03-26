@@ -426,31 +426,24 @@ export class HamlibConnection
     this.checkConnected();
 
     try {
-      // 获取电台支持的功能列表
-      const supportedFunctions = await Promise.race([
-        this.rig!.getSupportedFunctions(),
-        new Promise<string[]>((_, reject) =>
-          setTimeout(() => reject(new Error('Get functions list timeout')), 5000)
+      // 通过实际读取 TUNER 函数状态来探测支持情况。
+      // getSupportedFunctions() 只返回当前激活的功能，天调关闭时 TUNER 不在列表中，
+      // 导致误判为不支持。直接调用 getFunction('TUNER') 才能准确区分「关闭」和「不存在」。
+      await Promise.race([
+        this.rig!.getFunction('TUNER'),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Tuner probe timeout')), 5000)
         ),
       ]);
 
-      // 检查是否支持 TUNER 功能
-      const tunerSupported = supportedFunctions.includes('TUNER');
-
-      // 假设支持 TUNER 功能的电台都支持开关控制和手动调谐
-      // 实际支持情况可能因电台型号而异
-      const capabilities: import('@tx5dr/contracts').TunerCapabilities = {
-        supported: tunerSupported,
-        hasSwitch: tunerSupported,
-        hasManualTune: tunerSupported,
-      };
-
       this.lastSuccessfulOperation = Date.now();
-      logger.debug('Tuner capabilities queried:', capabilities);
+      logger.debug('Tuner capabilities: supported (probe succeeded)');
 
-      return capabilities;
-    } catch (error) {
-      throw this.convertError(error, 'getTunerCapabilities');
+      return { supported: true, hasSwitch: true, hasManualTune: true };
+    } catch {
+      // getFunction('TUNER') 报错说明电台本身不支持该功能
+      logger.debug('Tuner capabilities: not supported (probe failed)');
+      return { supported: false, hasSwitch: false, hasManualTune: false };
     }
   }
 
