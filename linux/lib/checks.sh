@@ -33,11 +33,10 @@ check_glibcxx() {
     fi
     [[ -z "$libpath" ]] && return 1
 
-    if command -v strings &>/dev/null; then
-        strings "$libpath" 2>/dev/null | grep -q "GLIBCXX_3.4.32"
-    else
-        grep -q "GLIBCXX_3.4.32" "$libpath" 2>/dev/null
-    fi
+    # Use grep -a (text mode) directly on the binary to avoid SIGPIPE under pipefail:
+    # strings ... | grep -q exits grep early, causing strings to get SIGPIPE (141),
+    # which pipefail would treat as failure even when the string is actually found.
+    grep -qa "GLIBCXX_3.4.32" "$libpath" 2>/dev/null
 }
 
 check_glibc_execstack() {
