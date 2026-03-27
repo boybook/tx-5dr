@@ -14,7 +14,7 @@ interface FlagDisplayProps {
 export const FlagDisplay: React.FC<FlagDisplayProps> = ({ flag, countryCode }) => {
   if (!flag && !countryCode) return null;
   if (isWindows && countryCode) {
-    return <span className={`fi fi-${countryCode.toLowerCase()}`} style={{ flexShrink: 0 }} />;
+    return <span className={`fi fi-${countryCode.toLowerCase()}`} style={{ flexShrink: 0, borderRadius: 1.5, overflow: 'hidden' }} />;
   }
   return flag ? <span>{flag}</span> : null;
 };
