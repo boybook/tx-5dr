@@ -92,6 +92,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private connectionEventListeners: Map<string, (...args: any[]) => void> = new Map();
 
+  /**
+   * 待处理的连接错误（在状态机 clearError 清除前捕获）
+   * XState v5 的 DISCONNECTED entry action 会清除 context.error，
+   * 所以在 onError 回调中先保存错误，供 waitForConnected 使用
+   */
+  private pendingConnectionError: Error | undefined;
+
   constructor() {
     super();
     this.configManager = ConfigManager.getInstance();
@@ -762,9 +769,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         await this.doDisconnect(_reason);
       },
 
-      // 错误回调
+      // 错误回调（在 DISCONNECTED entry 的 clearError 清除 context.error 之前触发）
       onError: (error: Error) => {
         logger.error(`State machine error: ${error.message}`);
+        // 保存错误供 waitForConnected 使用（context.error 在 DISCONNECTED entry action 中会被清除）
+        this.pendingConnectionError = error;
         this.emit('error', error);
       },
     };
@@ -1024,12 +1033,17 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         if (snapshot.value === RadioState.CONNECTED) {
           clearTimeout(timeoutId);
           subscription?.unsubscribe();
+          this.pendingConnectionError = undefined;
           resolve();
         } else if (snapshot.value === RadioState.DISCONNECTED) {
           // 连接失败回到 DISCONNECTED，立即 reject（不等 30 秒超时）
+          // 注意：DISCONNECTED entry action 会清除 context.error，
+          // 所以使用 pendingConnectionError（由 onError 回调在清除前保存）
           clearTimeout(timeoutId);
           subscription?.unsubscribe();
-          reject(snapshot.context.error || new Error('connection failed'));
+          const err = this.pendingConnectionError || new Error('connection failed');
+          this.pendingConnectionError = undefined;
+          reject(err);
         }
       });
 
@@ -1038,13 +1052,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (currentState === RadioState.CONNECTED) {
         clearTimeout(timeoutId);
         subscription?.unsubscribe();
+        this.pendingConnectionError = undefined;
         resolve();
       } else if (currentState === RadioState.DISCONNECTED) {
         // 连接已经失败（比 subscribe 创建还快）
-        const ctx = this.radioActor!.getSnapshot().context;
         clearTimeout(timeoutId);
         subscription?.unsubscribe();
-        reject(ctx.error || new Error('connection failed'));
+        const err = this.pendingConnectionError || new Error('connection failed');
+        this.pendingConnectionError = undefined;
+        reject(err);
       }
     });
   }

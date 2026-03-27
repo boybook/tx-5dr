@@ -117,6 +117,16 @@
     "testPTTSuccess": "PTT test successful! Radio switched TX state for 0.5 seconds.",
     "testPTTFailed": "PTT test failed",
     "testPTTFailedCheck": "PTT test failed, please check radio connection",
+    "testError": {
+      "AUTH_FAILED": "Authentication failed, please check username and password",
+      "CONNECTION_FAILED": "Cannot connect to radio, please check IP address and port",
+      "CONNECTION_TIMEOUT": "Connection timed out, please check network and firewall settings",
+      "CONNECTION_LOST": "Radio connection lost",
+      "NETWORK_ERROR": "Network error, please ensure radio and computer are on the same LAN",
+      "INVALID_CONFIG": "Configuration error, please check connection settings",
+      "OPERATION_TIMEOUT": "Operation timed out, please check radio status and retry",
+      "UNKNOWN_ERROR": "Connection test failed, please check configuration"
+    },
     "pttMethod": "PTT Method",
     "pttCat": "CAT Command (Recommended)",
     "pttVox": "VOX",

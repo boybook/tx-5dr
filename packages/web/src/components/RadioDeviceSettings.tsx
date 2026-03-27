@@ -4,7 +4,7 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('RadioDeviceSettings');
 import { useTranslation } from 'react-i18next';
 import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip } from '@heroui/react';
-import { api } from '@tx5dr/core';
+import { api, ApiError } from '@tx5dr/core';
 import type { HamlibConfig, SerialConfig, PttMethod } from '@tx5dr/contracts';
 
 interface RigInfo {
@@ -164,7 +164,9 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     } catch (error) {
       setTestResult({
         type: 'error',
-        message: error instanceof Error ? error.message : t('radio.testConnectionFailedCheck')
+        message: error instanceof ApiError
+          ? t(`radio.testError.${error.code}`, { defaultValue: error.userMessage })
+          : (error instanceof Error ? error.message : t('radio.testConnectionFailedCheck'))
       });
     } finally {
       setIsTestingConnection(false);
