@@ -283,6 +283,16 @@ export class RadioBridge {
       this.onMeterEvent();
     });
 
+    // 监听统一能力系统事件，转发到引擎事件总线
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.lm.listen(radioManager, 'capabilityList', (data: any) => {
+      engineEmitter.emit('radioCapabilityList', data);
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.lm.listen(radioManager, 'capabilityChanged', (state: any) => {
+      engineEmitter.emit('radioCapabilityChanged', state);
+    });
+
     // 监听电台频率变化（自动同步）
     this.lm.listen(radioManager, 'radioFrequencyChanged', async (...args: unknown[]) => {
       const frequency = args[0] as number;

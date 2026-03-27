@@ -52,8 +52,9 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.AUDIO_MONITOR_DATA]: 'audioMonitorData',
   [WSMessageType.AUDIO_MONITOR_STATS]: 'audioMonitorStats',
 
-  // 天调相关事件
-  [WSMessageType.TUNER_STATUS_CHANGED]: 'tunerStatusChanged',
+  // 统一能力系统事件
+  [WSMessageType.RADIO_CAPABILITY_LIST]: 'radioCapabilityList',
+  [WSMessageType.RADIO_CAPABILITY_CHANGED]: 'radioCapabilityChanged',
 
   // Profile 管理事件
   [WSMessageType.PROFILE_CHANGED]: 'profileChanged',

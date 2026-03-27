@@ -113,6 +113,25 @@ DigitalRadioEngine (Facade)
 - 电台断线 → PhysicalRadioManager 通知 EngineLifecycle → 引擎强制停止
 - 重连成功 → 恢复断线前的运行状态
 
+### 电台控制能力系统（Radio Capability System）
+
+统一管理电台可控参数（天调、发射功率、AF增益、静噪等），屏蔽 Hamlib/icom-wlan 实现差异。
+
+**新增一个能力，需改动以下 6 处：**
+
+1. **`IRadioConnection.ts`** — 新增可选方法签名（`getXxx?`, `setXxx?`）
+2. **`HamlibConnection.ts` / `IcomWlanConnection.ts`** — 实现读写方法
+3. **`RadioCapabilityManager.ts`** — 在 `CAPABILITY_CONFIGS`、`READ_MAP`、`WRITE_MAP` 三个静态表中注册
+4. **`contracts/radio-capability.schema.ts`** — 在 `CAPABILITY_IDS` 中追加新 ID
+5. **`web/src/radio-capability/capability-descriptors.ts`** — 新增静态描述符（category/valueType/range/i18nKey 等）
+6. **`web/src/radio-capability/capability-registration.ts`** — 注册前端组件（`registerCapabilityComponent`）；若需新建组件，放在 `components/` 下
+
+**i18n**：在 `locales/{zh,en}/radio.json` 的 `capability` 节点下添加 `label` 和 `description`（description 会在面板中以 tooltip 展示）。
+
+**前端组件**：通用滑块用 `NumberLevelCapabilityPanel`（rf_power/af_gain/sql 已复用）；开关类用 `TunerCapabilityPanel` 参考；surface 控件（工具栏露出）需额外实现 surface component 并在注册时传入第三参数。
+
+**权限**：写命令统一受 `execute:RadioControl` 保护，无需单独添加权限。
+
 ### WebSocket 事件系统
 - **直接订阅**: 组件通过 `radioService.wsClientInstance` 直接访问 WSClient 订阅事件
 - **多监听器**: 同一事件支持多个监听器互不干扰

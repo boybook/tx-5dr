@@ -235,5 +235,36 @@
     "confirmDelete": "Confirm Delete",
     "deleteConfirm": "Are you sure you want to delete operator \"{{callsign}}\"?",
     "deleteWarning": "⚠️ This action cannot be undone. All configurations for this operator will be lost."
+  },
+  "capability": {
+    "panel": {
+      "title": "Radio Control",
+      "notConnected": "Radio not connected",
+      "noRadioMode": "No radio configured — radio control is unavailable",
+      "notSupported": "Not supported by current radio",
+      "antenna": "Antenna",
+      "rf": "RF",
+      "audio": "Audio"
+    },
+    "tuner_switch": {
+      "label": "Auto Tuner",
+      "description": "Enable or disable the radio's built-in antenna auto-tuner. When active, the radio automatically matches antenna impedance to reduce SWR and improve TX efficiency. Re-tune after changing bands or antennas."
+    },
+    "tuner_tune": {
+      "label": "Manual Tune",
+      "description": "Trigger an immediate antenna matching cycle. Requires the auto-tuner to be enabled first. The radio will briefly transmit a low-power carrier during tuning — ensure an antenna is connected before pressing."
+    },
+    "rf_power": {
+      "label": "TX Power",
+      "description": "Set transmit power from 0–100% of the radio's rated maximum. Reducing power is advisable for extended digital mode operation to prevent PA overheating; for voice, adjust freely based on propagation conditions."
+    },
+    "af_gain": {
+      "label": "AF Gain",
+      "description": "Adjusts the audio output level of the radio's built-in speaker or headphone jack. This only affects the radio hardware volume, not the software monitor volume."
+    },
+    "sql": {
+      "label": "Squelch",
+      "description": "Sets the receive squelch threshold. Higher values suppress weaker signals. For digital mode decoding, open squelch (0) is typically recommended; for voice, raise it to filter background noise as needed."
+    }
   }
 }

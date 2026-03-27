@@ -587,4 +587,29 @@ export async function radioRoutes(fastify: FastifyInstance) {
       message: result ? 'Tuning successful' : 'Tuning failed',
     });
   });
+
+  // ===== 统一能力系统 REST 接口 =====
+
+  /**
+   * 获取当前所有能力的状态快照
+   * GET /radio/capabilities
+   */
+  fastify.get('/capabilities', async (_req, reply) => {
+    const capabilities = radioManager.getCapabilityStates();
+    return reply.send({ success: true, capabilities });
+  });
+
+  /**
+   * 写入能力值
+   * POST /radio/capabilities/:id
+   * Body: { value?: boolean | number, action?: boolean }
+   */
+  fastify.post('/capabilities/:id', { preHandler: [requireAbility('execute', 'RadioControl')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { value?: boolean | number; action?: boolean };
+
+    await radioManager.writeCapability(id, body?.value, body?.action);
+
+    return reply.send({ success: true });
+  });
 }

@@ -535,6 +535,139 @@ export class HamlibConnection
     }
   }
 
+  // ===== Level 类控制 =====
+
+  /**
+   * 检查某个 Hamlib level 是否被当前电台支持
+   * 供 RadioCapabilityManager 探测时使用，无需额外 CAT 命令。
+   */
+  isSupportedLevel(level: string): boolean {
+    return this.supportedLevels.has(level);
+  }
+
+  /**
+   * 获取发射功率（0.0–1.0）
+   */
+  async getRFPower(): Promise<number> {
+    this.checkConnected();
+    if (!this.supportedLevels.has('RFPOWER')) {
+      throw new Error('RFPOWER level not supported by this radio');
+    }
+    try {
+      const value = (await Promise.race([
+        this.rig!.getLevel('RFPOWER'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Get RF power timeout')), 5000)
+        ),
+      ])) as number;
+      this.lastSuccessfulOperation = Date.now();
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getRFPower');
+    }
+  }
+
+  /**
+   * 设置发射功率（0.0–1.0）
+   */
+  async setRFPower(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await Promise.race([
+        this.rig!.setLevel('RFPOWER', value),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Set RF power timeout')), 5000)
+        ),
+      ]);
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setRFPower');
+    }
+  }
+
+  /**
+   * 获取 AF 增益（0.0–1.0）
+   */
+  async getAFGain(): Promise<number> {
+    this.checkConnected();
+    if (!this.supportedLevels.has('AF')) {
+      throw new Error('AF level not supported by this radio');
+    }
+    try {
+      const value = (await Promise.race([
+        this.rig!.getLevel('AF'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Get AF gain timeout')), 5000)
+        ),
+      ])) as number;
+      this.lastSuccessfulOperation = Date.now();
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getAFGain');
+    }
+  }
+
+  /**
+   * 设置 AF 增益（0.0–1.0）
+   */
+  async setAFGain(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await Promise.race([
+        this.rig!.setLevel('AF', value),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Set AF gain timeout')), 5000)
+        ),
+      ]);
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setAFGain');
+    }
+  }
+
+  /**
+   * 获取静噪电平（0.0–1.0）
+   */
+  async getSQL(): Promise<number> {
+    this.checkConnected();
+    if (!this.supportedLevels.has('SQL')) {
+      throw new Error('SQL level not supported by this radio');
+    }
+    try {
+      const value = (await Promise.race([
+        this.rig!.getLevel('SQL'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Get SQL timeout')), 5000)
+        ),
+      ])) as number;
+      this.lastSuccessfulOperation = Date.now();
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getSQL');
+    }
+  }
+
+  /**
+   * 设置静噪电平（0.0–1.0）
+   */
+  async setSQL(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await Promise.race([
+        this.rig!.setLevel('SQL', value),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Set SQL timeout')), 5000)
+        ),
+      ]);
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setSQL');
+    }
+  }
+
   /**
    * 设置状态并触发事件
    */

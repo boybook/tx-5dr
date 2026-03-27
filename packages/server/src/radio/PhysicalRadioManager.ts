@@ -15,12 +15,13 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, MeterCapabilities, RadioInfo, ReconnectProgress } from '@tx5dr/contracts';
+import type { HamlibConfig, MeterCapabilities, RadioInfo, ReconnectProgress, CapabilityState } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
 import type { IRadioConnection, MeterData } from './connections/IRadioConnection.js';
 import { RadioConnectionType } from './connections/IRadioConnection.js';
+import { RadioCapabilityManager } from './RadioCapabilityManager.js';
 import {
   createRadioActor,
   isRadioState,
@@ -44,6 +45,10 @@ interface PhysicalRadioManagerEvents {
   radioFrequencyChanged: (frequency: number) => void;
   meterData: (data: MeterData) => void;
   tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void;
+  /** 能力快照（连接/断开时触发） */
+  capabilityList: (data: { capabilities: CapabilityState[] }) => void;
+  /** 单个能力值变化 */
+  capabilityChanged: (state: CapabilityState) => void;
 }
 
 /**
@@ -77,10 +82,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private lastKnownFrequency: number | null = null;
 
   /**
-   * 天调状态监控
+   * 统一电台控制能力管理器
    */
-  private tunerPollingInterval: NodeJS.Timeout | null = null;
-  private lastKnownTunerEnabled: boolean | null = null;
+  private capabilityManager: RadioCapabilityManager = new RadioCapabilityManager();
 
   /**
    * 断开保护标志（防止重复断开导致 hamlib 线程冲突）
@@ -102,6 +106,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   constructor() {
     super();
     this.configManager = ConfigManager.getInstance();
+    this.setupCapabilityManagerForwarding();
+  }
+
+  /**
+   * 转发 RadioCapabilityManager 的事件到 PhysicalRadioManager
+   */
+  private setupCapabilityManagerForwarding(): void {
+    this.capabilityManager.on('capabilityList', (data) => {
+      this.emit('capabilityList', data);
+    });
+    this.capabilityManager.on('capabilityChanged', (state) => {
+      this.emit('capabilityChanged', state);
+    });
   }
 
   // ==================== 公共接口 ====================
@@ -539,6 +556,26 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.connection.getMeterCapabilities();
   }
 
+  // ===== 统一能力系统公共接口 =====
+
+  /**
+   * 获取当前所有能力的状态快照（用于 REST 接口和客户端首次连接）
+   */
+  getCapabilityStates(): import('@tx5dr/contracts').CapabilityState[] {
+    return this.capabilityManager.getCapabilityStates();
+  }
+
+  /**
+   * 写入能力值（由 WSServer 命令处理器和 REST 接口调用）
+   */
+  async writeCapability(
+    id: string,
+    value?: boolean | number,
+    action?: boolean,
+  ): Promise<void> {
+    return this.capabilityManager.writeCapability(id, value, action);
+  }
+
   /**
    * 设置天线调谐器开关
    */
@@ -843,8 +880,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 启动频率监控
     this.startFrequencyMonitoring();
-    // 启动天调状态监控（异步：先查能力，支持则启动轮询）
+    // 启动天调状态监控（过渡期保留，阶段3清理）
     void this.startTunerMonitoring();
+    // 启动统一能力管理（异步探测+轮询）
+    void this.capabilityManager.onConnected(this.connection);
 
     logger.info('Connection established');
   }
@@ -857,6 +896,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
+    this.capabilityManager.onDisconnected();
 
     if (this.connection) {
       try {
@@ -1184,79 +1224,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
   }
 
-  // ==================== 天调状态监控 ====================
+  // ==================== 天调状态监控（已迁移至 RadioCapabilityManager，此处已清理）====================
 
-  /**
-   * 启动天调状态监控（每 5s 检查一次，错开频率监控 2.5s）
-   * 先查询天调能力，不支持则直接返回不启动轮询
-   */
-  private async startTunerMonitoring(): Promise<void> {
-    if (this.tunerPollingInterval) {
-      this.stopTunerMonitoring();
-    }
-
-    if (!this.connection) {
-      return;
-    }
-
-    // 仅在连接实现了 getTunerStatus 时才轮询（NullConnection 不实现）
-    if (!this.connection.getTunerStatus) {
-      return;
-    }
-
-    logger.debug('Starting tuner monitoring (every 5s, offset 2.5s from frequency monitor)');
-
-    // 将 setTimeout 句柄存入 tunerPollingInterval；
-    // stopTunerMonitoring 调用 clearInterval 同时可取消 timeout（Node.js 兼容）
-    this.tunerPollingInterval = setTimeout(() => {
-      this.checkTunerStatusChange();
-      this.tunerPollingInterval = setInterval(() => {
-        this.checkTunerStatusChange();
-      }, 5000);
-    }, 2500);
-  }
-
-  /**
-   * 停止天调状态监控
-   */
-  private stopTunerMonitoring(): void {
-    if (this.tunerPollingInterval) {
-      clearInterval(this.tunerPollingInterval);
-      this.tunerPollingInterval = null;
-      logger.debug('Tuner monitoring stopped');
-    }
-    this.lastKnownTunerEnabled = null;
-  }
-
-  /**
-   * 检查天调状态变化，有变化时广播事件
-   */
-  private async checkTunerStatusChange(): Promise<void> {
-    if (!this.connection || !this.isConnected()) {
-      return;
-    }
-
-    if (!this.connection.getTunerStatus) {
-      return;
-    }
-
-    try {
-      const status = await this.getTunerStatus();
-
-      if (this.lastKnownTunerEnabled === null) {
-        // 首次查询：记录初始状态并广播，确保前端与硬件同步
-        this.lastKnownTunerEnabled = status.enabled;
-        this.emit('tunerStatusChanged', status);
-      } else if (status.enabled !== this.lastKnownTunerEnabled) {
-        // 状态发生变化（用户在电台面板手动操作等）
-        logger.info(`Tuner state changed externally: ${this.lastKnownTunerEnabled} -> ${status.enabled}`);
-        this.lastKnownTunerEnabled = status.enabled;
-        this.emit('tunerStatusChanged', status);
-      }
-    } catch {
-      // 静默处理，不影响主连接状态
-    }
-  }
+  /** @deprecated Tuner polling moved to RadioCapabilityManager. No-op stubs for safe refactor. */
+  private startTunerMonitoring(): void { /* no-op: replaced by RadioCapabilityManager */ }
+  /** @deprecated */
+  private stopTunerMonitoring(): void { /* no-op: replaced by RadioCapabilityManager */ }
 
   /**
    * 比较两个配置是否相同
