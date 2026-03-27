@@ -5,8 +5,8 @@ const path = require('path');
 
 // 检查是否安装了png-to-ico包
 async function generateIco() {
-  const PNG_PATH = path.join(__dirname, '../packages/electron-main/assets/icon.png');
-  const ICO_PATH = path.join(__dirname, '../packages/electron-main/assets/icon.ico');
+  const PNG_PATH = path.join(__dirname, '../packages/electron-main/assets/AppIcon.png');
+  const ICO_PATH = path.join(__dirname, '../packages/electron-main/assets/AppIcon.ico');
 
   if (!fs.existsSync(PNG_PATH)) {
     console.log('PNG图标文件不存在:', PNG_PATH);

@@ -26,7 +26,7 @@ Vite 热重载 + 自动 DevTools + 错误处理
 - **权限控制**: 最小权限 + IPC 安全 + 文件系统受限
 
 ## 打包构建
-- **资源**: icon.ico/png + 静态资源嵌入
+- **资源**: AppIcon.ico/png/icns + 静态资源嵌入
 - **平台**: Windows/macOS/Linux + NSIS/DMG/AppImage
 - **签名**: 生产环境代码签名
 
