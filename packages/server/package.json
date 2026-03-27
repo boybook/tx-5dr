@@ -38,7 +38,7 @@
     "fastify": "^5.8.4",
     "fastify-plugin": "^5.1.0",
     "hamlib": "0.2.7",
-    "icom-wlan-node": "^0.2.6",
+    "icom-wlan-node": "0.3.0",
     "mic": "^2.1.2",
     "node-wav": "^0.0.2",
     "opusscript": "^0.1.1",

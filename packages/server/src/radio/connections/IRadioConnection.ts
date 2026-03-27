@@ -299,4 +299,40 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @optional Hamlib: setLevel('SQL', value), icom-wlan: CI-V 0x14 0x03
    */
   setSQL?(value: number): Promise<void>;
+
+  /**
+   * 获取 MIC 增益（0.0–1.0）
+   * @optional Hamlib: getLevel('MICGAIN'), icom-wlan: CI-V 0x14 0x0F
+   */
+  getMicGain?(): Promise<number>;
+
+  /**
+   * 设置 MIC 增益（0.0–1.0）
+   * @optional Hamlib: setLevel('MICGAIN', value), icom-wlan: CI-V 0x14 0x0F
+   */
+  setMicGain?(value: number): Promise<void>;
+
+  /**
+   * 获取噪声消隐电平（0.0–1.0，0 = 关闭）
+   * @optional Hamlib: getLevel('NB'), icom-wlan: CI-V 0x14 0x12
+   */
+  getNBEnabled?(): Promise<number>;
+
+  /**
+   * 设置噪声消隐电平（0.0–1.0，0 = 关闭）
+   * @optional Hamlib: setLevel('NB', value), icom-wlan: CI-V 0x14 0x12
+   */
+  setNBEnabled?(value: number): Promise<void>;
+
+  /**
+   * 获取数字降噪电平（0.0–1.0，0 = 关闭）
+   * @optional Hamlib: getLevel('NR'), icom-wlan: CI-V 0x14 0x13
+   */
+  getNREnabled?(): Promise<number>;
+
+  /**
+   * 设置数字降噪电平（0.0–1.0，0 = 关闭）
+   * @optional Hamlib: setLevel('NR', value), icom-wlan: CI-V 0x14 0x13
+   */
+  setNREnabled?(value: number): Promise<void>;
 }

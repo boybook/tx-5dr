@@ -21,3 +21,6 @@ registerCapabilityComponent('tuner_tune', TunerCapabilityPanel, TunerCapabilityS
 registerCapabilityComponent('rf_power', NumberLevelCapabilityPanel);
 registerCapabilityComponent('af_gain', NumberLevelCapabilityPanel);
 registerCapabilityComponent('sql', NumberLevelCapabilityPanel);
+registerCapabilityComponent('mic_gain', NumberLevelCapabilityPanel);
+registerCapabilityComponent('nb', NumberLevelCapabilityPanel);
+registerCapabilityComponent('nr', NumberLevelCapabilityPanel);

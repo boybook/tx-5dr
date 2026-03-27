@@ -668,6 +668,114 @@ export class HamlibConnection
     }
   }
 
+  async getMicGain(): Promise<number> {
+    this.checkConnected();
+    if (!this.supportedLevels.has('MICGAIN')) {
+      throw new Error('MICGAIN level not supported by this radio');
+    }
+    try {
+      const value = (await Promise.race([
+        this.rig!.getLevel('MICGAIN'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Get MIC gain timeout')), 5000)
+        ),
+      ])) as number;
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`MIC gain read: ${(value * 100).toFixed(0)}%`);
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getMicGain');
+    }
+  }
+
+  async setMicGain(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await Promise.race([
+        this.rig!.setLevel('MICGAIN', value),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Set MIC gain timeout')), 5000)
+        ),
+      ]);
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setMicGain');
+    }
+  }
+
+  async getNBEnabled(): Promise<number> {
+    this.checkConnected();
+    if (!this.supportedLevels.has('NB')) {
+      throw new Error('NB level not supported by this radio');
+    }
+    try {
+      const value = (await Promise.race([
+        this.rig!.getLevel('NB'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Get NB level timeout')), 5000)
+        ),
+      ])) as number;
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`NB level read: ${(value * 100).toFixed(0)}%`);
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getNBEnabled');
+    }
+  }
+
+  async setNBEnabled(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await Promise.race([
+        this.rig!.setLevel('NB', value),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Set NB level timeout')), 5000)
+        ),
+      ]);
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`NB level set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setNBEnabled');
+    }
+  }
+
+  async getNREnabled(): Promise<number> {
+    this.checkConnected();
+    if (!this.supportedLevels.has('NR')) {
+      throw new Error('NR level not supported by this radio');
+    }
+    try {
+      const value = (await Promise.race([
+        this.rig!.getLevel('NR'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Get NR level timeout')), 5000)
+        ),
+      ])) as number;
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`NR level read: ${(value * 100).toFixed(0)}%`);
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getNREnabled');
+    }
+  }
+
+  async setNREnabled(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await Promise.race([
+        this.rig!.setLevel('NR', value),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Set NR level timeout')), 5000)
+        ),
+      ]);
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`NR level set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setNREnabled');
+    }
+  }
+
   /**
    * 设置状态并触发事件
    */

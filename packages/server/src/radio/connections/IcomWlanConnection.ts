@@ -470,78 +470,13 @@ export class IcomWlanConnection
     }
   }
 
-  // ===== Level 类控制（AF 增益、静噪） =====
+  // ===== Level 类控制（AF 增益、静噪、发射功率、MIC 增益、噪声消隐、降噪） =====
 
-  /**
-   * 等待 CI-V 响应帧的工具方法。
-   *
-   * CI-V 完整帧格式（civFrame 事件接收到的 Buffer）：
-   *   FE FE [ctl_addr] [rig_addr] [cmd] [subcmd] [bcd_hi] [bcd_lo] FD
-   *
-   * 发送查询命令后，电台会回应相同 cmd+subcmd 的帧（携带当前值）。
-   * 值为 BCD 编码的两字节，范围 0000–0255，对应 0.0–1.0。
-   *
-   * @param cmd - CI-V 命令字节（如 0x14）
-   * @param subCmd - CI-V 子命令字节（如 0x01 = AF gain）
-   * @param timeoutMs - 超时时间（ms）
-   * @returns 归一化后的值（0.0–1.0）
-   */
-  private waitForCivResponse(cmd: number, subCmd: number, timeoutMs: number): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.rig!.events.removeListener('civFrame', handler);
-        reject(new Error(`CI-V response timeout (cmd=0x${cmd.toString(16)} sub=0x${subCmd.toString(16)})`));
-      }, timeoutMs);
-
-      const handler = (frame: Buffer) => {
-        // 最小长度：FE FE [ctl] [rig] [cmd] [subcmd] [hi] [lo] FD = 9 字节
-        if (frame.length < 9) return;
-        // frame[0]=FE, frame[1]=FE, frame[4]=cmd, frame[5]=subcmd
-        if (frame[4] !== cmd || frame[5] !== subCmd) return;
-        // 响应帧最后一字节为 FD
-        if (frame[frame.length - 1] !== 0xFD) return;
-
-        clearTimeout(timer);
-        this.rig!.events.removeListener('civFrame', handler);
-
-        // BCD 解析：两字节 hi/lo，每字节高 4 位和低 4 位各代表一位 BCD 数字
-        // ICOM 0x14 系列的值范围 0000–0255（两位 BCD 字节）
-        const hi = frame[6]; // 高字节（百位十位）
-        const lo = frame[7]; // 低字节（个位小数位，通常为 0）
-        const bcdValue = ((hi >> 4) * 100) + ((hi & 0x0F) * 10) + (lo >> 4);
-        const normalized = Math.min(1.0, Math.max(0.0, bcdValue / 255));
-        resolve(normalized);
-      };
-
-      this.rig!.events.on('civFrame', handler);
-    });
-  }
-
-  /**
-   * 将归一化值（0.0–1.0）编码为 ICOM CI-V 0x14 系列的两字节 BCD 格式
-   * 值域 0–255，编码为 [hi_byte, lo_byte]（lo_byte 通常为 0x00）
-   */
-  private encodeLevel(value: number): [number, number] {
-    const raw = Math.round(Math.min(1.0, Math.max(0.0, value)) * 255);
-    // hi_byte: 高两位 BCD（百位+十位），lo_byte: 低两位 BCD（个位+小数位）
-    const hundreds = Math.floor(raw / 100);
-    const tens = Math.floor((raw % 100) / 10);
-    const ones = raw % 10;
-    const hi = (hundreds << 4) | tens;
-    const lo = (ones << 4);
-    return [hi, lo];
-  }
-
-  /**
-   * 获取 AF 增益（0.0–1.0）
-   * CI-V 查询：14 01（无附加数据），读取响应帧中的 BCD 值
-   */
   async getAFGain(): Promise<number> {
     this.checkConnected();
     try {
-      const responsePromise = this.waitForCivResponse(0x14, 0x01, 3000);
-      this.rig!.sendCiv(Buffer.from([0x14, 0x01]));
-      const value = await responsePromise;
+      const reading = await this.rig!.getAFGain({ timeout: 3000 });
+      const value = reading?.normalized ?? 0;
       logger.debug(`AF gain read: ${(value * 100).toFixed(0)}%`);
       return value;
     } catch (error) {
@@ -549,31 +484,21 @@ export class IcomWlanConnection
     }
   }
 
-  /**
-   * 设置 AF 增益（0.0–1.0）
-   * CI-V 写命令：14 01 [hi] [lo]
-   */
   async setAFGain(value: number): Promise<void> {
     this.checkConnected();
     try {
-      const [hi, lo] = this.encodeLevel(value);
-      this.rig!.sendCiv(Buffer.from([0x14, 0x01, hi, lo]));
+      this.rig!.setAFGain(value);
       logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
     } catch (error) {
       throw this.convertError(error, 'setAFGain');
     }
   }
 
-  /**
-   * 获取静噪电平（0.0–1.0）
-   * CI-V 查询：14 03
-   */
   async getSQL(): Promise<number> {
     this.checkConnected();
     try {
-      const responsePromise = this.waitForCivResponse(0x14, 0x03, 3000);
-      this.rig!.sendCiv(Buffer.from([0x14, 0x03]));
-      const value = await responsePromise;
+      const reading = await this.rig!.getSQL({ timeout: 3000 });
+      const value = reading?.normalized ?? 0;
       logger.debug(`SQL read: ${(value * 100).toFixed(0)}%`);
       return value;
     } catch (error) {
@@ -581,18 +506,101 @@ export class IcomWlanConnection
     }
   }
 
-  /**
-   * 设置静噪电平（0.0–1.0）
-   * CI-V 写命令：14 03 [hi] [lo]
-   */
   async setSQL(value: number): Promise<void> {
     this.checkConnected();
     try {
-      const [hi, lo] = this.encodeLevel(value);
-      this.rig!.sendCiv(Buffer.from([0x14, 0x03, hi, lo]));
+      this.rig!.setSQL(value);
       logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
     } catch (error) {
       throw this.convertError(error, 'setSQL');
+    }
+  }
+
+  async getRFPower(): Promise<number> {
+    this.checkConnected();
+    try {
+      const reading = await this.rig!.getRFPower({ timeout: 3000 });
+      const value = reading?.normalized ?? 0;
+      logger.debug(`RF power read: ${(value * 100).toFixed(0)}%`);
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getRFPower');
+    }
+  }
+
+  async setRFPower(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      this.rig!.setRFPower(value);
+      logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setRFPower');
+    }
+  }
+
+  async getMicGain(): Promise<number> {
+    this.checkConnected();
+    try {
+      const reading = await this.rig!.getMicGain({ timeout: 3000 });
+      const value = reading?.normalized ?? 0;
+      logger.debug(`MIC gain read: ${(value * 100).toFixed(0)}%`);
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getMicGain');
+    }
+  }
+
+  async setMicGain(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      this.rig!.setMicGain(value);
+      logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setMicGain');
+    }
+  }
+
+  async getNBEnabled(): Promise<number> {
+    this.checkConnected();
+    try {
+      const reading = await this.rig!.getNBLevel({ timeout: 3000 });
+      const value = reading?.normalized ?? 0;
+      logger.debug(`NB level read: ${(value * 100).toFixed(0)}%`);
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getNBEnabled');
+    }
+  }
+
+  async setNBEnabled(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      this.rig!.setNBLevel(value);
+      logger.debug(`NB level set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setNBEnabled');
+    }
+  }
+
+  async getNREnabled(): Promise<number> {
+    this.checkConnected();
+    try {
+      const reading = await this.rig!.getNRLevel({ timeout: 3000 });
+      const value = reading?.normalized ?? 0;
+      logger.debug(`NR level read: ${(value * 100).toFixed(0)}%`);
+      return value;
+    } catch (error) {
+      throw this.convertError(error, 'getNREnabled');
+    }
+  }
+
+  async setNREnabled(value: number): Promise<void> {
+    this.checkConnected();
+    try {
+      this.rig!.setNRLevel(value);
+      logger.debug(`NR level set: ${(value * 100).toFixed(0)}%`);
+    } catch (error) {
+      throw this.convertError(error, 'setNREnabled');
     }
   }
 
