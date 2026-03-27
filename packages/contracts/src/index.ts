@@ -133,3 +133,6 @@ export * from './schema/process-monitor.schema.js';
 
 // OpenWebRX Schema
 export * from './schema/openwebrx.schema.js';
+
+// Radio Capability Schema
+export * from './schema/radio-capability.schema.js';

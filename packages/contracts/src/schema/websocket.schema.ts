@@ -8,6 +8,7 @@ import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabiliti
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
+import { CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -91,8 +92,17 @@ export enum WSMessageType {
   SET_MONITOR_VOLUME_GAIN = 'setMonitorVolumeGain',
   AUDIO_MONITOR_STATS = 'audioMonitorStats',
 
-  // ===== 天线调谐器 =====
+  // ===== 天线调谐器（已迁移至统一能力系统，枚举值保留以避免运行时错误，不再广播）=====
+  /** @deprecated Use RADIO_CAPABILITY_CHANGED with id='tuner_switch' instead */
   TUNER_STATUS_CHANGED = 'tunerStatusChanged',
+
+  // ===== 统一电台控制能力系统 =====
+  /** 连接时下发能力快照（server → client） */
+  RADIO_CAPABILITY_LIST = 'radioCapabilityList',
+  /** 单个能力值变化（server → client） */
+  RADIO_CAPABILITY_CHANGED = 'radioCapabilityChanged',
+  /** 客户端写入能力值（client → server） */
+  WRITE_RADIO_CAPABILITY = 'writeRadioCapability',
 
   // ===== 电台重连控制 =====
   RADIO_STOP_RECONNECT = 'radioStopReconnect',
@@ -638,7 +648,8 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
       connectionHealthy: z.boolean(),
     }).optional(),
     meterCapabilities: MeterCapabilitiesSchema.optional(), // 电台数值表能力（连接时检测）
-    tunerCapabilities: TunerCapabilitiesSchema.optional(), // 天调能力（连接时检测）
+    /** @deprecated Tuner capability is now in radioCapabilityList event. Kept for backward compat. */
+    tunerCapabilities: TunerCapabilitiesSchema.optional(),
   }),
 });
 
@@ -856,15 +867,40 @@ export const WSAudioMonitorStatsMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSAudioMonitorStatsMessage = z.infer<typeof WSAudioMonitorStatsMessageSchema>;
 
+// ===== 统一电台控制能力消息 =====
+
 /**
- * 天调状态变化消息（服务端到客户端）
+ * 能力列表快照（连接成功后推送，server → client）
  */
-export const WSTunerStatusChangedMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.TUNER_STATUS_CHANGED),
-  data: TunerStatusSchema,
+export const WSRadioCapabilityListMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_CAPABILITY_LIST),
+  data: z.object({
+    capabilities: z.array(CapabilityStateSchema),
+  }),
 });
 
-export type WSTunerStatusChangedMessage = z.infer<typeof WSTunerStatusChangedMessageSchema>;
+export type WSRadioCapabilityListMessage = z.infer<typeof WSRadioCapabilityListMessageSchema>;
+
+/**
+ * 单个能力值变化通知（server → client）
+ */
+export const WSRadioCapabilityChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_CAPABILITY_CHANGED),
+  data: CapabilityStateSchema,
+});
+
+export type WSRadioCapabilityChangedMessage = z.infer<typeof WSRadioCapabilityChangedMessageSchema>;
+
+/**
+ * 客户端写入能力值命令（client → server）
+ * 权限：execute:RadioControl
+ */
+export const WSWriteRadioCapabilityMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.WRITE_RADIO_CAPABILITY),
+  data: WriteCapabilityPayloadSchema,
+});
+
+export type WSWriteRadioCapabilityMessage = z.infer<typeof WSWriteRadioCapabilityMessageSchema>;
 
 // ===== 认证相关消息 =====
 
@@ -1006,9 +1042,6 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSetMonitorVolumeGainMessageSchema,
   WSAudioMonitorStatsMessageSchema,
 
-  // 天线调谐器消息
-  WSTunerStatusChangedMessageSchema,
-
   // 认证消息
   WSAuthRequiredMessageSchema,
   WSAuthTokenMessageSchema,
@@ -1121,8 +1154,12 @@ export interface DigitalRadioEngineEvents {
   audioMonitorData: (data: { audioData: ArrayBuffer; sampleRate: number; samples: number; timestamp: number }) => void;
   audioMonitorStats: (stats: AudioMonitorStats) => void;
 
-  // 天线调谐器事件
+  /** @deprecated Tuner state is now delivered via radioCapabilityChanged event (id='tuner_switch') */
   tunerStatusChanged: (status: z.infer<typeof TunerStatusSchema>) => void;
+
+  // 统一电台控制能力事件
+  radioCapabilityList: (data: { capabilities: z.infer<typeof CapabilityStateSchema>[] }) => void;
+  radioCapabilityChanged: (data: z.infer<typeof CapabilityStateSchema>) => void;
 
   // 电台连接状态事件
   radioStatusChanged: (data: z.infer<typeof WSRadioStatusChangedMessageSchema>['data']) => void;

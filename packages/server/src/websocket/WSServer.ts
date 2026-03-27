@@ -363,6 +363,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
+      [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id) => this.handleWriteRadioCapability(id, data),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
       [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: (data) => this.handleRemoveOperatorFromTransmission(data),
       [WSMessageType.AUTH_TOKEN]: (data, id) => this.handleAuthToken(id, data),
@@ -555,10 +556,12 @@ export class WSServer extends WSMessageHandler {
     });
 
     // 监听天线调谐器状态变化事件
-    const radioManager = this.digitalRadioEngine.getRadioManager();
-    radioManager.on('tunerStatusChanged', (status: any) => {
-      logger.debug('tuner status changed event received', status);
-      this.broadcast(WSMessageType.TUNER_STATUS_CHANGED, status);
+    // 监听统一能力系统事件
+    this.digitalRadioEngine.on('radioCapabilityList', (data: any) => {
+      this.broadcast(WSMessageType.RADIO_CAPABILITY_LIST, data);
+    });
+    this.digitalRadioEngine.on('radioCapabilityChanged', (state: any) => {
+      this.broadcast(WSMessageType.RADIO_CAPABILITY_CHANGED, state);
     });
 
     // 监听 Profile 变更事件
@@ -595,6 +598,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.RADIO_MANUAL_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
     [WSMessageType.RADIO_STOP_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
+    [WSMessageType.WRITE_RADIO_CAPABILITY]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { action: 'execute', subject: 'RadioFrequency' },
     // Operator-level commands (use Operator subject with conditions)
     [WSMessageType.SET_VOLUME_GAIN]: { action: 'manage', subject: 'Operator' },
@@ -1534,6 +1538,32 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
+   * 处理写入电台能力命令
+   * 权限: execute:RadioControl（由 COMMAND_ABILITIES 映射）
+   */
+  private async handleWriteRadioCapability(connectionId: string, data: unknown): Promise<void> {
+    try {
+      const payload = data as { id?: string; value?: boolean | number; action?: boolean };
+      if (!payload?.id) {
+        this.sendToConnection(connectionId, WSMessageType.ERROR, {
+          message: 'writeRadioCapability: missing capability id',
+        });
+        return;
+      }
+
+      logger.info('writeRadioCapability command', { id: payload.id, value: payload.value, action: payload.action });
+
+      const radioManager = this.digitalRadioEngine.getRadioManager();
+      await radioManager.writeCapability(payload.id, payload.value, payload.action);
+    } catch (error) {
+      logger.error('writeRadioCapability failed', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: `Failed to write capability: ${(error as Error).message}`,
+      });
+    }
+  }
+
+  /**
    * 处理强制停止发射命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
@@ -1816,6 +1846,16 @@ export class WSServer extends WSMessageHandler {
       if (status.isRunning) {
         connection.send(WSMessageType.SYSTEM_STATUS, status);
         logger.debug(`sent running status sync to connection ${connectionId}`);
+      }
+
+      // 5. 推送当前能力快照（电台已连接时有意义，未连接时为空列表）
+      try {
+        const radioManager = this.digitalRadioEngine.getRadioManager();
+        const capabilities = radioManager.getCapabilityStates();
+        connection.send(WSMessageType.RADIO_CAPABILITY_LIST, { capabilities });
+        logger.debug(`sent capability snapshot to connection ${connectionId}`, { count: capabilities.length });
+      } catch (error) {
+        logger.warn('failed to send capability snapshot', error);
       }
 
       logger.info(`connection ${connectionId} handshake complete`);

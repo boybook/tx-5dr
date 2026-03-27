@@ -1,4 +1,5 @@
 import './i18n/index';
+import './radio-capability/capability-registration';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { HeroUIProvider } from '@heroui/react';

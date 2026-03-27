@@ -261,4 +261,42 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @param frequencyHz - 当前频率（Hz）
    */
   setKnownFrequency(frequencyHz: number): void;
+
+  // ===== Level 类控制（可选，由 RadioCapabilityManager 统一路由）=====
+
+  /**
+   * 获取发射功率（0.0–1.0，1.0 = 最大功率）
+   * @optional Hamlib: getLevel('RFPOWER'), icom-wlan: CI-V 0x14 0x0A
+   */
+  getRFPower?(): Promise<number>;
+
+  /**
+   * 设置发射功率（0.0–1.0）
+   * @optional Hamlib: setLevel('RFPOWER', value), icom-wlan: CI-V 0x14 0x0A
+   */
+  setRFPower?(value: number): Promise<void>;
+
+  /**
+   * 获取 AF 增益（音频输出音量，0.0–1.0）
+   * @optional Hamlib: getLevel('AF'), icom-wlan: CI-V 0x14 0x01
+   */
+  getAFGain?(): Promise<number>;
+
+  /**
+   * 设置 AF 增益（0.0–1.0）
+   * @optional Hamlib: setLevel('AF', value), icom-wlan: CI-V 0x14 0x01
+   */
+  setAFGain?(value: number): Promise<void>;
+
+  /**
+   * 获取静噪电平（SQL，0.0–1.0，0 = 完全开放）
+   * @optional Hamlib: getLevel('SQL'), icom-wlan: CI-V 0x14 0x03
+   */
+  getSQL?(): Promise<number>;
+
+  /**
+   * 设置静噪电平（0.0–1.0）
+   * @optional Hamlib: setLevel('SQL', value), icom-wlan: CI-V 0x14 0x03
+   */
+  setSQL?(value: number): Promise<void>;
 }

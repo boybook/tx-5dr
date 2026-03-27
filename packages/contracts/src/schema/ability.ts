@@ -29,6 +29,7 @@ export type CapabilitySubject =
   | 'RadioTune'
   | 'RadioConfig'
   | 'RadioReconnect'
+  | 'RadioControl'
   | 'Engine'
   | 'ModeSwitch'
   | 'SettingsDecodeWindows'
@@ -49,6 +50,8 @@ export enum Permission {
   RADIO_TUNE = 'radio:tune',
   RADIO_CONFIG = 'radio:config',
   RADIO_RECONNECT = 'radio:reconnect',
+  /** 统一电台控制能力写命令（AF增益、静噪、发射功率等）*/
+  RADIO_CONTROL = 'radio:control',
   ENGINE_START_STOP = 'engine:start_stop',
   MODE_SWITCH = 'mode:switch',
   SETTINGS_DECODE_WINDOWS = 'settings:decode_windows',
@@ -67,6 +70,7 @@ export const PERMISSION_RULE_MAP: Record<Permission, { action: AppAction; subjec
   [Permission.RADIO_TUNE]: { action: 'execute', subject: 'RadioTune' },
   [Permission.RADIO_CONFIG]: { action: 'update', subject: 'RadioConfig' },
   [Permission.RADIO_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
+  [Permission.RADIO_CONTROL]: { action: 'execute', subject: 'RadioControl' },
   [Permission.ENGINE_START_STOP]: { action: 'execute', subject: 'Engine' },
   [Permission.MODE_SWITCH]: { action: 'execute', subject: 'ModeSwitch' },
   [Permission.SETTINGS_DECODE_WINDOWS]: { action: 'update', subject: 'SettingsDecodeWindows' },
@@ -165,6 +169,7 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
       Permission.RADIO_TUNE,
       Permission.RADIO_CONFIG,
       Permission.RADIO_RECONNECT,
+      Permission.RADIO_CONTROL,
     ],
   },
   { key: 'engine', permissions: [Permission.ENGINE_START_STOP] },

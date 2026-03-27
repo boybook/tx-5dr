@@ -19,7 +19,8 @@ import type {
   RadioErrorEventData,
   VoicePTTLock,
   EngineMode,
-  StationInfo
+  StationInfo,
+  CapabilityState
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
@@ -95,7 +96,10 @@ export interface RadioState {
   // 电台数值表能力（null = 未知/兼容旧版）
   meterCapabilities: MeterCapabilities | null;
   // 天调能力（null = 未连接；连接时由 radioStatusChanged 事件推送）
+  // TODO: remove after capability system migration (Phase 3)
   tunerCapabilities: TunerCapabilities | null;
+  // 统一能力系统：所有可控能力的当前状态
+  capabilityStates: Map<string, CapabilityState>;
   // 电台重连进度
   reconnectProgress: ReconnectProgress | null;
   // 电台连接健康状态
@@ -180,7 +184,9 @@ export type RadioAction =
   | { type: 'setEngineMode'; payload: EngineMode }
   | { type: 'voicePttLockChanged'; payload: VoicePTTLock }
   | { type: 'voiceRadioModeChanged'; payload: string }
-  | { type: 'setStationInfo'; payload: StationInfo };
+  | { type: 'setStationInfo'; payload: StationInfo }
+  | { type: 'setCapabilityList'; payload: { capabilities: CapabilityState[] } }
+  | { type: 'updateCapabilityState'; payload: CapabilityState };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -200,6 +206,7 @@ const initialRadioState: RadioState = {
   meterData: null,
   meterCapabilities: null,
   tunerCapabilities: null,
+  capabilityStates: new Map<string, CapabilityState>(),
   radioConnectionHealth: null,
   profiles: [],
   activeProfileId: null,
@@ -299,9 +306,14 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
           ? (action.payload.meterCapabilities ?? state.meterCapabilities)
           : null,
         // 天调能力：连接时更新，断开时重置为 null
+        // TODO: remove after capability system migration (Phase 3)
         tunerCapabilities: action.payload.radioConnected
           ? (action.payload.tunerCapabilities ?? state.tunerCapabilities)
           : null,
+        // 断开时清空能力状态（重连后由 radioCapabilityList 事件重新填充）
+        capabilityStates: action.payload.radioConnected
+          ? state.capabilityStates
+          : new Map<string, CapabilityState>(),
       };
 
     case 'pttStatusChanged':
@@ -365,6 +377,20 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
 
     case 'setStationInfo':
       return { ...state, stationInfo: action.payload };
+
+    case 'setCapabilityList': {
+      const newMap = new Map<string, CapabilityState>();
+      for (const cap of action.payload.capabilities) {
+        newMap.set(cap.id, cap);
+      }
+      return { ...state, capabilityStates: newMap };
+    }
+
+    case 'updateCapabilityState': {
+      const updated = new Map(state.capabilityStates);
+      updated.set(action.payload.id, action.payload);
+      return { ...state, capabilityStates: updated };
+    }
 
     default:
       return state;
@@ -986,7 +1012,18 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const modeData = data as { radioMode: string };
         logger.debug('Voice radio mode changed:', modeData.radioMode);
         radioDispatch({ type: 'voiceRadioModeChanged', payload: modeData.radioMode });
-      }
+      },
+      // 统一能力系统事件
+      radioCapabilityList: (data: unknown) => {
+        const listData = data as { capabilities: CapabilityState[] };
+        logger.debug('Radio capability list received', { count: listData.capabilities.length });
+        radioDispatch({ type: 'setCapabilityList', payload: listData });
+      },
+      radioCapabilityChanged: (data: unknown) => {
+        const state = data as CapabilityState;
+        logger.debug('Radio capability changed', { id: state.id, value: state.value });
+        radioDispatch({ type: 'updateCapabilityState', payload: state });
+      },
     };
 
     // 直接订阅 WSClient 事件，绕过 RadioService 的事件层
@@ -1140,4 +1177,23 @@ export const useRadioErrors = () => {
     latestError: state.latestRadioError,
     clearErrors: () => dispatch({ type: 'clearRadioErrors' }),
   };
+};
+
+// ===== 统一能力系统 Hooks =====
+
+/**
+ * 获取单个能力的当前状态
+ * @param id - 能力 ID，如 'tuner_switch', 'rf_power'
+ */
+export const useCapabilityState = (id: string): CapabilityState | undefined => {
+  const { state } = useRadioState();
+  return state.capabilityStates.get(id);
+};
+
+/**
+ * 获取所有能力的状态 Map
+ */
+export const useCapabilityStates = (): Map<string, CapabilityState> => {
+  const { state } = useRadioState();
+  return state.capabilityStates;
 };

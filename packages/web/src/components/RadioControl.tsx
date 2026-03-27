@@ -3,10 +3,12 @@ import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, Pop
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useRadioState, useProfiles, useRadioErrors } from '../store/radioStore';
+import { useConnection, useRadioState, useProfiles, useRadioErrors, useCapabilityState } from '../store/radioStore';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
+import { RadioControlPanel } from './RadioControlPanel';
+import { TunerCapabilitySurface } from '../radio-capability/components/TunerCapability';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor, TunerStatus } from '@tx5dr/contracts';
+import type { ModeDescriptor } from '@tx5dr/contracts';
 import type { ConnectionState, RadioState } from '../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
@@ -240,8 +242,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canSwitchMode = useCan('execute', 'ModeSwitch');
   const canStartStopEngine = useCan('execute', 'Engine');
-  const canSetTuner = useCan('execute', 'RadioTuner');
-  const canManualTune = useCan('execute', 'RadioTune');
+  // RadioControlPanel 弹窗状态
+  const [isControlPanelOpen, setIsControlPanelOpen] = useState(false);
+
+  // 天调按钮状态（从能力系统读取，需在顶层调用 Hook）
+  const tunerSwitchCapState = useCapabilityState('tuner_switch');
+  const tunerEnabled = typeof tunerSwitchCapState?.value === 'boolean' ? tunerSwitchCapState.value : false;
+  const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
   const ability = useAbility();
   const [isErrorHistoryOpen, setIsErrorHistoryOpen] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeDescriptor[]>([]);
@@ -279,16 +286,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [_customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
 
-  // 天调能力从全局 store 读取（由 radioStatusChanged 事件推送，连接时更新）
-  const tunerCapabilities = radio.state.tunerCapabilities;
-
-  // 天调相关状态
-  const [tunerStatus, setTunerStatus] = useState<TunerStatus>({
-    enabled: false,
-    active: false,
-    status: 'idle'
-  });
-  const [isTunerLoading, setIsTunerLoading] = useState(false);
 
   // 加载可用模式列表
   React.useEffect(() => {
@@ -976,116 +973,19 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     };
   }, [connection.state.radioService, availableFrequencies]);
 
-  // 监听天调状态变化事件
-  useEffect(() => {
-    if (!connection.state.radioService) return;
-
-    const wsClient = connection.state.radioService.wsClientInstance;
-
-    const handleTunerStatusChanged = (status: TunerStatus) => {
-      setTunerStatus(status);
-      setIsTunerLoading(false);
-    };
-
-    wsClient.onWSEvent('tunerStatusChanged', handleTunerStatusChanged);
-
-    return () => {
-      wsClient.offWSEvent('tunerStatusChanged', handleTunerStatusChanged);
-    };
-  }, [connection.state.radioService]);
-
-  // 天调控制方法
-  const handleTunerToggle = async () => {
-    if (!tunerCapabilities?.hasSwitch) {
-      return;
-    }
-
-    setIsTunerLoading(true);
-
-    try {
-      const newEnabled = !tunerStatus.enabled;
-      await api.setTuner(newEnabled);
-      logger.info(`Tuner ${newEnabled ? 'enabled' : 'disabled'}`);
-
-      addToast({
-        title: newEnabled ? t('tuner.enabled') : t('tuner.disabled'),
-        color: 'success',
-        timeout: 2000
-      });
-    } catch (error) {
-      logger.error('Tuner toggle failed:', error);
-      setIsTunerLoading(false);
-
-      if (error instanceof ApiError) {
-        showErrorToast({
-          userMessage: error.userMessage,
-          suggestions: error.suggestions,
-          severity: error.severity,
-          code: error.code
-        });
-      } else {
-        addToast({
-          title: t('tuner.toggleFailed'),
-          description: t('error.networkError'),
-          timeout: 3000
-        });
-      }
-    }
-  };
-
-  const handleStartTuning = async () => {
-    if (!tunerCapabilities?.hasManualTune) {
-      return;
-    }
-
-    if (!tunerStatus.enabled) {
-      addToast({
-        title: t('tuner.enableFirst'),
-        description: t('tuner.enableFirstDesc'),
-        timeout: 3000
-      });
-      return;
-    }
-
-    setIsTunerLoading(true);
-
-    try {
-      const response = await api.startTuning();
-      if (response.success) {
-        logger.info('Manual tuning started');
-        addToast({
-          title: t('tuner.tuningStarted'),
-          color: 'success',
-          timeout: 2000
-        });
-      }
-    } catch (error) {
-      logger.error('Manual tuning failed:', error);
-      setIsTunerLoading(false);
-
-      if (error instanceof ApiError) {
-        showErrorToast({
-          userMessage: error.userMessage,
-          suggestions: error.suggestions,
-          severity: error.severity,
-          code: error.code
-        });
-      } else {
-        addToast({
-          title: t('tuner.startFailed'),
-          description: t('error.networkError'),
-          timeout: 3000
-        });
-      }
-    }
-  };
-
   return (
     <div className="flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <RadioStatus connection={connection.state} radio={radio} profileName={activeProfile?.name} onPress={isAdmin ? onOpenRadioSettings : undefined} canConfigure={isAdmin} canOperate={isOperator} />
+          <RadioStatus
+            connection={connection.state}
+            radio={radio}
+            profileName={activeProfile?.name}
+            onPress={radio.state.radioConnected ? () => setIsControlPanelOpen(true) : (isAdmin ? onOpenRadioSettings : undefined)}
+            canConfigure={isAdmin}
+            canOperate={isOperator}
+          />
           <div className="flex items-center gap-0">
             {isAdmin && (
               <Button
@@ -1217,7 +1117,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 </div>
               </PopoverContent>
             </Popover>
-            {/* 天调控制：电台已连接时始终显示入口，按钮可见性由各自能力字段控制 */}
+            {/* 天调控制（能力驱动）：连接时始终显示入口 */}
             {radio.state.radioConnected && (
               <Popover>
                 <PopoverTrigger>
@@ -1226,9 +1126,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     variant="light"
                     size="sm"
                     className={`min-w-unit-6 min-w-6 w-6 h-6 ${
-                      tunerStatus.status === 'tuning'
+                      tunerIsTuning
                         ? 'text-success animate-pulse'
-                        : tunerStatus.enabled
+                        : tunerEnabled
                         ? 'text-success'
                         : 'text-default-400'
                     }`}
@@ -1237,55 +1137,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     <FontAwesomeIcon icon={faSlidersH} className="text-xs" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="py-4 space-y-2">
-                  <div className="space-y-2">
-                    {/* 天调开关 */}
-                    {tunerCapabilities?.hasSwitch !== false && (
-                      <div className="flex items-center justify-between px-2 gap-2">
-                        <span className="text-sm text-default-500">{t('tuner.auto')}</span>
-                        <Switch
-                          size="sm"
-                          isSelected={tunerStatus.enabled}
-                          onValueChange={handleTunerToggle}
-                          isDisabled={isTunerLoading || !canSetTuner}
-                          aria-label={t('tuner.switch')}
-                        />
-                      </div>
-                    )}
-
-                    {/* 手动调谐按钮 */}
-                    {tunerCapabilities?.hasManualTune !== false && (
-                      <div className="px-2">
-                        <Button
-                          size="sm"
-                          color="primary"
-                          variant="flat"
-                          className="w-full"
-                          onPress={handleStartTuning}
-                          isLoading={isTunerLoading && tunerStatus.status === 'tuning'}
-                          isDisabled={!tunerStatus.enabled || isTunerLoading || !canManualTune}
-                        >
-                          {tunerStatus.status === 'tuning' ? t('tuner.tuning') : t('tuner.manual')}
-                        </Button>
-                      </div>
-                    )}
-
-                    {/* SWR显示（如果有） */}
-                    {tunerStatus.swr !== undefined && (
-                      <div className="space-y-1 pt-2 border-t border-divider text-xs px-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-default-500">SWR</span>
-                          <span className={`font-mono ${
-                            tunerStatus.swr < 1.5 ? 'text-success' :
-                            tunerStatus.swr < 2.0 ? 'text-warning' :
-                            'text-danger'
-                          }`}>
-                            {tunerStatus.swr.toFixed(2)}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                <PopoverContent>
+                  <TunerCapabilitySurface />
                 </PopoverContent>
               </Popover>
             )}
@@ -1322,6 +1175,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       <RadioErrorHistoryModal
         isOpen={isErrorHistoryOpen}
         onClose={() => setIsErrorHistoryOpen(false)}
+      />
+      <RadioControlPanel
+        isOpen={isControlPanelOpen}
+        onClose={() => setIsControlPanelOpen(false)}
       />
 
       {/* 主控制区域 */}
