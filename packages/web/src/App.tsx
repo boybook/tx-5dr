@@ -11,6 +11,7 @@ import { useTheme } from './hooks/useTheme';
 import { ProfileSetupOverlay } from './components/ProfileSetupOverlay';
 import { ViewerWelcomeOverlay } from './components/ViewerWelcomeOverlay';
 import { ServerDisconnectedOverlay } from './components/ServerDisconnectedOverlay';
+import { ServerStatusPage } from './pages/ServerStatusPage';
 import { LoginPage } from './pages/LoginPage';
 import { OpenWebRXProfileSelectModal } from './components/OpenWebRXProfileSelectModal';
 
@@ -20,6 +21,17 @@ function AppContent() {
   const { profiles, profilesLoaded } = useProfiles();
   const { state: connectionState } = useConnection();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
+
+  // 初次连接状态：未曾连接成功时，显示专用页面代替空 UI
+  if (!connectionState.wasEverConnected) {
+    return (
+      <ServerStatusPage
+        isConnecting={connectionState.isConnecting}
+        connectError={connectionState.connectError}
+        radioService={connectionState.radioService}
+      />
+    );
+  }
 
   const noProfiles = connectionState.isConnected && profilesLoaded && profiles.length === 0;
   // 首次使用引导：仅 Admin 可配置电台

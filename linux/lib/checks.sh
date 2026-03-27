@@ -207,6 +207,51 @@ fix_tx5dr_user_groups() {
     fi
 }
 
+# Returns 0 if SELinux nginx config is OK (or SELinux not enforcing)
+check_selinux_nginx() {
+    command -v getenforce &>/dev/null || return 0
+    [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]] || return 0
+    local http_port="${1:-${HTTP_PORT:-8076}}"
+
+    # Check httpd_can_network_connect boolean
+    if command -v getsebool &>/dev/null; then
+        getsebool httpd_can_network_connect 2>/dev/null | grep -q "on$" || return 1
+    fi
+
+    # Check port is allowed in http_port_t
+    if command -v semanage &>/dev/null; then
+        semanage port -l 2>/dev/null | grep -w http_port_t | grep -qw "$http_port" || return 1
+    fi
+
+    return 0
+}
+
+fix_selinux_nginx() {
+    local http_port="${1:-${HTTP_PORT:-8076}}"
+
+    # Not needed on non-SELinux or non-enforcing systems
+    command -v getenforce &>/dev/null || return 0
+    [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]] || return 0
+
+    # Ensure semanage is available
+    if ! command -v semanage &>/dev/null; then
+        dnf install -y policycoreutils-python-utils >/dev/null 2>&1 || true
+    fi
+
+    # Add port to SELinux http_port_t (use -m to modify if already assigned)
+    if command -v semanage &>/dev/null; then
+        if ! semanage port -l 2>/dev/null | grep -w http_port_t | grep -qw "$http_port"; then
+            semanage port -a -t http_port_t -p tcp "$http_port" 2>/dev/null || \
+            semanage port -m -t http_port_t -p tcp "$http_port" 2>/dev/null || true
+        fi
+    fi
+
+    # Allow nginx to proxy to backend
+    setsebool -P httpd_can_network_connect 1 2>/dev/null || true
+
+    check_selinux_nginx "$http_port"
+}
+
 # ── Composite: run all doctor checks ─────────────────────────────────────────
 
 run_doctor() {
@@ -274,6 +319,17 @@ run_doctor() {
             check_line "$(msg CHECK_NGINX_RUNNING)" "ok" "active"
         else
             check_line "$(msg CHECK_NGINX_RUNNING)" "fail" "inactive"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    # SELinux nginx (RHEL/Fedora only — skip silently if not enforcing)
+    if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+        if check_selinux_nginx "${HTTP_PORT}"; then
+            check_line "SELinux nginx" "ok" "port ${HTTP_PORT} allowed, proxy enabled"
+        else
+            check_line "SELinux nginx" "fail" "port blocked or proxy disabled"
+            echo -e "      ${_DIM}sudo semanage port -a -t http_port_t -p tcp ${HTTP_PORT} && sudo setsebool -P httpd_can_network_connect 1${_NC}"
             issues=$((issues + 1))
         fi
     fi

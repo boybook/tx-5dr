@@ -89,6 +89,25 @@ if [[ -f "$NGINX_TEMPLATE" ]]; then
     fi
 fi
 
+# ── SELinux (RHEL/Fedora only) ───────────────────────────────────────────────
+if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+    # Ensure semanage is available
+    if ! command -v semanage &>/dev/null; then
+        dnf install -y policycoreutils-python-utils >/dev/null 2>&1 || true
+    fi
+    # Allow nginx to bind to the configured port
+    if command -v semanage &>/dev/null; then
+        if ! semanage port -l 2>/dev/null | grep -w http_port_t | grep -qw "$LISTEN_PORT"; then
+            semanage port -a -t http_port_t -p tcp "$LISTEN_PORT" 2>/dev/null || \
+            semanage port -m -t http_port_t -p tcp "$LISTEN_PORT" 2>/dev/null || true
+        fi
+    fi
+    # Allow nginx to proxy to backend
+    setsebool -P httpd_can_network_connect 1 2>/dev/null || true
+    _msg "SELinux: nginx port $LISTEN_PORT allowed, proxy to backend enabled." \
+         "SELinux: nginx 端口 $LISTEN_PORT 已放行，反向代理已启用。"
+fi
+
 # ── Enable systemd service ──────────────────────────────────────────────────
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable tx5dr 2>/dev/null || true

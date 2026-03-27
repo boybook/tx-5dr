@@ -30,6 +30,27 @@
     "connecting": "连接中...",
     "none": "暂无"
   },
+  "serverStatus": {
+    "connecting": "正在连接到服务器...",
+    "errorTitle": "无法连接到服务器",
+    "errorSubtitle": "后端服务可能未启动或不可达",
+    "retry": "重试连接",
+    "retrying": "连接中...",
+    "retryFailed": "连接失败，请检查后端服务状态",
+    "diagnoseTitle": "排查建议",
+    "hints": {
+      "linuxTitle": "Linux 服务器",
+      "linuxService": "sudo systemctl status tx5dr nginx",
+      "linuxSelinux": "sudo setsebool -P httpd_can_network_connect 1",
+      "dockerTitle": "Docker 部署",
+      "dockerLogs": "docker-compose logs -f",
+      "devTitle": "开发环境",
+      "devStart": "yarn workspace @tx5dr/server dev",
+      "devPort": "确认后端已监听 4000 端口",
+      "electronTitle": "桌面应用",
+      "electronRestart": "尝试重启应用；若仍失败请查看主进程日志"
+    }
+  },
   "serverError": {
     "title": "连接失败",
     "description": "无法连接到服务器：{{errMsg}}",

@@ -30,6 +30,27 @@
     "connecting": "Connecting...",
     "none": "None"
   },
+  "serverStatus": {
+    "connecting": "Connecting to server...",
+    "errorTitle": "Unable to connect to server",
+    "errorSubtitle": "The backend service may not be running or is unreachable",
+    "retry": "Retry Connection",
+    "retrying": "Connecting...",
+    "retryFailed": "Connection failed. Please check the backend service.",
+    "diagnoseTitle": "Troubleshooting",
+    "hints": {
+      "linuxTitle": "Linux Server",
+      "linuxService": "sudo systemctl status tx5dr nginx",
+      "linuxSelinux": "sudo setsebool -P httpd_can_network_connect 1",
+      "dockerTitle": "Docker Deployment",
+      "dockerLogs": "docker-compose logs -f",
+      "devTitle": "Development",
+      "devStart": "yarn workspace @tx5dr/server dev",
+      "devPort": "Confirm backend is listening on port 4000",
+      "electronTitle": "Desktop App",
+      "electronRestart": "Try restarting the app; check main process logs if it still fails"
+    }
+  },
   "serverError": {
     "title": "Connection Failed",
     "description": "Unable to connect to server: {{errMsg}}",
