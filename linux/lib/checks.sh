@@ -17,14 +17,20 @@ check_nodejs() {
 }
 
 check_glibcxx() {
-    # Find libstdc++.so.6 and check for GLIBCXX_3.4.32
+    # Find libstdc++.so.6 via ldconfig cache (works on any distro/arch),
+    # then fall back to well-known paths if ldconfig is unavailable.
     local libpath=""
-    for p in /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
-             /usr/lib/aarch64-linux-gnu/libstdc++.so.6 \
-             /usr/lib64/libstdc++.so.6 \
-             /usr/lib/libstdc++.so.6; do
-        [[ -f "$p" ]] && libpath="$p" && break
-    done
+    if command -v ldconfig &>/dev/null; then
+        libpath=$(ldconfig -p 2>/dev/null | grep 'libstdc++\.so\.6\b' | awk '{print $NF}' | head -1)
+    fi
+    if [[ -z "$libpath" ]]; then
+        for p in /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
+                 /usr/lib/aarch64-linux-gnu/libstdc++.so.6 \
+                 /usr/lib64/libstdc++.so.6 \
+                 /usr/lib/libstdc++.so.6; do
+            [[ -f "$p" ]] && libpath="$p" && break
+        done
+    fi
     [[ -z "$libpath" ]] && return 1
 
     if command -v strings &>/dev/null; then
@@ -165,8 +171,8 @@ fix_glibcxx() {
             esac
             ;;
         rhel)
-            # Fedora/RHEL typically ships a recent enough libstdc++ via system gcc-libs
-            dnf install -y gcc-c++ 2>&1 || yum install -y gcc-c++ 2>&1 || true
+            # Install/upgrade the libstdc++ runtime library only (not the full compiler)
+            dnf install -y libstdc++ 2>&1 || yum install -y libstdc++ 2>&1 || true
             ;;
         *)
             log_warn "$(msg FIX_GLIBCXX)"

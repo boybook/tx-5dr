@@ -320,6 +320,19 @@ build_package() {
     # Remove existing package to allow overwrite
     rm -f "$OUTPUT_DIR"/tx5dr*"${VERSION}"*"${ARCH}"*."${format}" 2>/dev/null || true
 
+    # Package names differ between deb (Debian/Ubuntu) and rpm (Fedora/RHEL)
+    local alsa_dep nginx_dep hamlib_dep
+    if [[ "$format" == "rpm" ]]; then
+        alsa_dep="alsa-lib"
+        hamlib_dep="hamlib"
+    else
+        alsa_dep="libasound2"
+        hamlib_dep="libhamlib4"
+    fi
+
+    local extra_flags=()
+    [[ "$format" == "deb" ]] && extra_flags+=(--deb-no-default-config-files)
+
     fpm -s dir -t "$format" \
         --name tx5dr \
         --version "$VERSION" \
@@ -331,12 +344,12 @@ build_package() {
         --category "hamradio" \
         --depends "nodejs >= 20" \
         --depends "nginx" \
-        --depends "libasound2" \
-        --depends "libhamlib4" \
+        --depends "$alsa_dep" \
+        --depends "$hamlib_dep" \
         --after-install "$PROJECT_ROOT/linux/postinstall.sh" \
         --before-remove "$PROJECT_ROOT/linux/preremove.sh" \
         --config-files /etc/tx5dr/config.env \
-        --deb-no-default-config-files \
+        "${extra_flags[@]}" \
         --directories /var/lib/tx5dr \
         --package "$OUTPUT_DIR/" \
         -C "$STAGING" \
