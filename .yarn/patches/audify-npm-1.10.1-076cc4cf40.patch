@@ -1,0 +1,48 @@
+diff --git a/package.json b/package.json
+index 0d29cad104cc40e79c67897054af96417a1ba409..3b4dc5924f077f378a751ed6a0d81a24e9c2b24a 100644
+--- a/package.json
++++ b/package.json
+@@ -7,7 +7,7 @@
+ 	"scripts": {
+ 		"docs": "typedoc index.d.ts --hideGenerator --name Audify.js",
+ 		"rebuild": "cmake-js compile",
+-		"install": "prebuild-install -r napi || npm run rebuild",
++		"install": "node -e \"process.platform==='win32'&&process.exit(1)\" && prebuild-install -r napi || npm run rebuild",
+ 		"deploy": "np --yolo",
+ 		"build-binaries": "run-script-os",
+ 		"build-binaries:win32": "node ./node_modules/prebuild/bin.js --backend cmake-js --include-regex \"^.*\\.(node|dylib|dll|so(\\.[0-9])?)$\" -r napi --all --verbose -u %GITHUB_TOKEN%",
+diff --git a/vendor/rtaudio/RtAudio.cpp b/vendor/rtaudio/RtAudio.cpp
+index 73cee2b7c3977ecc973d8370c75976b24ae6fe12..01b2a8051c88bd66716b6b9d62eb2349d6f0e62b 100644
+--- a/vendor/rtaudio/RtAudio.cpp
++++ b/vendor/rtaudio/RtAudio.cpp
+@@ -5449,7 +5449,11 @@ bool RtApiWasapi::probeDeviceOpen( unsigned int deviceId, StreamMode mode, unsig
+     }
+ 
+     stream_.nDeviceChannels[mode] = deviceFormat->nChannels;
+-    captureAudioClient->GetStreamLatency( ( long long* ) &stream_.latency[mode] );
++    // [TX-5DR patch] GetStreamLatency requires IAudioClient::Initialize first
++    // (per MSDN).  Calling it on an uninitialized client corrupts the COM
++    // object on Windows 11 Build 26200+, causing wasapiThread's subsequent
++    // Initialize to return E_ACCESSDENIED (0x80070005).  Latency is already
++    // queried after Initialize inside wasapiThread, so this is safe to remove.
+   }
+ 
+   // If an output device and is configured for loopback (input mode)
+@@ -5479,7 +5483,7 @@ bool RtApiWasapi::probeDeviceOpen( unsigned int deviceId, StreamMode mode, unsig
+     }
+ 
+     stream_.nDeviceChannels[mode] = deviceFormat->nChannels;
+-    captureAudioClient->GetStreamLatency( ( long long* ) &stream_.latency[mode] );
++    // [TX-5DR patch] Same fix — defer GetStreamLatency to wasapiThread.
+   }
+ 
+   // If output device and is configured for output.
+@@ -5505,7 +5509,7 @@ bool RtApiWasapi::probeDeviceOpen( unsigned int deviceId, StreamMode mode, unsig
+     }
+ 
+     stream_.nDeviceChannels[mode] = deviceFormat->nChannels;
+-    renderAudioClient->GetStreamLatency( ( long long* ) &stream_.latency[mode] );
++    // [TX-5DR patch] Same fix — defer GetStreamLatency to wasapiThread.
+   }
+ 
+   // Fill stream data

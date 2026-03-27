@@ -6281,7 +6281,7 @@ __metadata:
     "@types/node-wav": "npm:^0"
     "@types/wav": "npm:^1.0.4"
     "@types/ws": "npm:^8.18.1"
-    audify: "npm:^1.10.1"
+    audify: "patch:audify@npm%3A1.10.1#~/.yarn/patches/audify-npm-1.10.1-076cc4cf40.patch"
     autocannon: "npm:^8.0.0"
     bcrypt: "npm:^6.0.0"
     clinic: "npm:^13.0.0"
@@ -7501,7 +7501,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"audify@npm:^1.10.1":
+"audify@npm:1.10.1":
   version: 1.10.1
   resolution: "audify@npm:1.10.1"
   dependencies:
@@ -7512,6 +7512,20 @@ __metadata:
     node-gyp: "npm:latest"
     prebuild-install: "npm:^7.1.3"
   checksum: 10c0/0f9893c064fbe13c5cd92e4762c0342fe9b245cf141252c47d8d2987288bafa8f7cb6e4cb6639e655163ff93414f3ea46f0a8641dfd95de58f69f45f9ec32a53
+  languageName: node
+  linkType: hard
+
+"audify@patch:audify@npm%3A1.10.1#~/.yarn/patches/audify-npm-1.10.1-076cc4cf40.patch":
+  version: 1.10.1
+  resolution: "audify@patch:audify@npm%3A1.10.1#~/.yarn/patches/audify-npm-1.10.1-076cc4cf40.patch::version=1.10.1&hash=8aefe8"
+  dependencies:
+    bindings: "npm:^1.5.0"
+    cmake-js: "npm:^7.3.1"
+    node-abi: "npm:^4.12.0"
+    node-addon-api: "npm:^8.5.0"
+    node-gyp: "npm:latest"
+    prebuild-install: "npm:^7.1.3"
+  checksum: 10c0/5780b136eb940de5ea1b037de7ee1fb90cbe6ad883d9948fda6fff781a9423309fa8b91465e3c64a4b22831f2b01d6ace73624a197825e963e073b8432a13394
   languageName: node
   linkType: hard
 
