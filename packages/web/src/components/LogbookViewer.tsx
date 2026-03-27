@@ -44,6 +44,14 @@ interface ElectronAPI {
     openExternal: (url: string) => Promise<void>;
     openPath: (path: string) => Promise<string>;
   };
+  config?: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    get(key: string): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    set(key: string, value: any): Promise<void>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    getAll(): Promise<Record<string, any>>;
+  };
 }
 
 declare global {

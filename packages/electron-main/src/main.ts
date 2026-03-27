@@ -27,6 +27,40 @@ let errorType: string = ''; // 错误类型，空字符串表示无错误
 let hasStartupError: boolean = false; // 是否发生启动错误
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
+let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
+
+// ===== Electron 本地设置 =====
+const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
+
+interface ElectronSettings {
+  closeBehavior: 'ask' | 'tray' | 'quit';
+}
+
+const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = { closeBehavior: 'ask' };
+
+function getElectronSettingsPath(): string {
+  return path.join(getAppConfigDir(), ELECTRON_SETTINGS_FILE);
+}
+
+function loadElectronSettings(): ElectronSettings {
+  try {
+    const raw = fs.readFileSync(getElectronSettingsPath(), 'utf-8');
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_ELECTRON_SETTINGS, ...parsed };
+  } catch {
+    return { ...DEFAULT_ELECTRON_SETTINGS };
+  }
+}
+
+function saveElectronSettings(settings: ElectronSettings): void {
+  try {
+    const dir = getAppConfigDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(getElectronSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
+  } catch (err) {
+    logger.error('failed to save electron settings', err);
+  }
+}
 
 // ===== macOS 后台节流防护 =====
 // 必须在 app.whenReady() 之前调用，阻止 App Nap 降低渲染进程定时器精度
@@ -185,6 +219,9 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
   child.on('exit', (code, signal) => {
     logger.info(`[child:${name}] exited with code ${code}, signal ${signal}`);
 
+    // 主动退出流程中，子进程被杀是预期行为，不弹错误
+    if (isQuitting) return;
+
     // 非正常退出：非零退出码 或 被信号杀死（code=null, signal='SIGSEGV' 等）
     if (code !== 0) {
       if (!errorType) {
@@ -277,11 +314,11 @@ function createTray() {
 
   const iconPath = process.platform === 'win32'
     ? (app.isPackaged
-        ? path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'icon.ico')
-        : path.join(__dirname, '..', 'assets', 'icon.ico'))
+        ? path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'AppIcon.ico')
+        : path.join(__dirname, '..', 'assets', 'AppIcon.ico'))
     : (app.isPackaged
-        ? path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'icon.png')
-        : path.join(__dirname, '..', 'assets', 'icon.png'));
+        ? path.join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'AppIcon.png')
+        : path.join(__dirname, '..', 'assets', 'AppIcon.png'));
 
   trayInstance = new Tray(iconPath);
   trayInstance.setToolTip('TX-5DR Digital Radio');
@@ -360,6 +397,57 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
 
   logger.info('main window created');
   mainWindowInstance = mainWindow;
+
+  // Windows/Linux: 关闭窗口时询问用户行为（macOS 遵循平台惯例直接隐藏）
+  if (process.platform !== 'darwin') {
+    mainWindow.on('close', (event) => {
+      if (isQuitting) return;
+
+      const settings = loadElectronSettings();
+
+      if (settings.closeBehavior === 'tray') {
+        event.preventDefault();
+        mainWindow.hide();
+        return;
+      }
+
+      if (settings.closeBehavior === 'quit') {
+        void cleanupAndQuit();
+        return;
+      }
+
+      // closeBehavior === 'ask'
+      event.preventDefault();
+
+      const isZh = app.getLocale().startsWith('zh');
+
+      dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        buttons: isZh
+          ? ['最小化到托盘', '退出程序', '取消']
+          : ['Minimize to Tray', 'Quit', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        title: 'TX-5DR',
+        message: isZh ? '关闭主窗口' : 'Close Main Window',
+        detail: isZh ? '请选择关闭窗口后的行为：' : 'Choose what happens when you close the window:',
+        checkboxLabel: isZh ? '记住我的选择' : 'Remember my choice',
+        checkboxChecked: false,
+      }).then(({ response, checkboxChecked }) => {
+        if (response === 0) {
+          if (checkboxChecked) {
+            saveElectronSettings({ ...settings, closeBehavior: 'tray' });
+          }
+          mainWindow.hide();
+        } else if (response === 1) {
+          if (checkboxChecked) {
+            saveElectronSettings({ ...settings, closeBehavior: 'quit' });
+          }
+          void cleanupAndQuit();
+        }
+      });
+    });
+  }
 
   mainWindow.on('closed', () => {
     logger.info('main window closed');
@@ -825,6 +913,7 @@ async function cleanupAndQuit() {
     return;
   }
 
+  isQuitting = true;
   isCleaningUp = true;
   try {
     await cleanup();
@@ -1061,8 +1150,46 @@ function setupIpcHandlers() {
       throw error;
     }
   });
+
+  // 配置管理 IPC
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ipcMain.handle('config:get', (_event, key: string) => {
+    const settings = loadElectronSettings() as any;
+    return settings[key] ?? null;
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ipcMain.handle('config:set', (_event, key: string, value: any) => {
+    const settings = loadElectronSettings() as any;
+    settings[key] = value;
+    saveElectronSettings(settings);
+  });
+
+  ipcMain.handle('config:getAll', () => {
+    return loadElectronSettings();
+  });
 }
 
-// 确保应用总是启动
-logger.info('app startup');
-startApp().catch((err) => logger.error('startApp failed', err));
+// ===== 单实例锁（仅生产模式，开发模式下跳过以便于调试重启） =====
+const isDevMode = process.env.NODE_ENV === 'development' && !app.isPackaged;
+let shouldStart = true;
+
+if (!isDevMode) {
+  const gotTheLock = app.requestSingleInstanceLock();
+
+  if (!gotTheLock) {
+    logger.info('another instance is already running, quitting');
+    shouldStart = false;
+    app.quit();
+  } else {
+    app.on('second-instance', () => {
+      logger.info('second instance detected, focusing existing window');
+      showMainWindow();
+    });
+  }
+}
+
+if (shouldStart) {
+  logger.info('app startup');
+  startApp().catch((err) => logger.error('startApp failed', err));
+}
