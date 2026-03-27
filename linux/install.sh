@@ -167,6 +167,25 @@ if [[ "$MODE" != "docker" ]]; then
     fi
 fi
 
+# SELinux nginx (RHEL/Fedora only, after nginx is installed)
+if [[ "$MODE" != "docker" ]] && command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+    if check_selinux_nginx "${HTTP_PORT}"; then
+        log_ok "SELinux nginx (port ${HTTP_PORT}, proxy)"
+    elif [[ "$MODE" == "check" ]]; then
+        log_fail "SELinux nginx (port ${HTTP_PORT} blocked or proxy disabled)"
+        echo "      sudo semanage port -a -t http_port_t -p tcp ${HTTP_PORT} && sudo setsebool -P httpd_can_network_connect 1"
+        ISSUES=$((ISSUES + 1))
+    else
+        require_root
+        if fix_selinux_nginx "${HTTP_PORT}"; then
+            log_ok "SELinux nginx (port ${HTTP_PORT}, proxy) (fixed)"
+        else
+            log_fail "SELinux nginx (fix failed)"
+            ISSUES=$((ISSUES + 1))
+        fi
+    fi
+fi
+
 # Check-only mode: done
 if [[ "$MODE" == "check" ]]; then
     echo ""

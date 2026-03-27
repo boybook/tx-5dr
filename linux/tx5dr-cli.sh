@@ -230,8 +230,10 @@ cmd_update() {
     # Map arch: dpkg uses amd64/arm64, release assets also use amd64/arm64
     local pkg_arch="$ARCH"
 
-    # Determine asset name
-    local asset_name="TX-5DR-nightly-server-linux-${pkg_arch}.deb"
+    # Determine asset name based on OS family (rpm for RHEL/Fedora, deb otherwise)
+    local pkg_ext="deb"
+    [[ "$(os_family)" == "rhel" ]] && pkg_ext="rpm"
+    local asset_name="TX-5DR-nightly-server-linux-${pkg_arch}.${pkg_ext}"
     local download_url="https://github.com/${repo}/releases/download/nightly-server/${asset_name}"
 
     # Get remote release info (commit sha as "version" for nightly)
@@ -262,18 +264,18 @@ cmd_update() {
     log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "nightly (${remote_sha}, ${remote_date})")"
 
     # Download
-    local tmp_deb="/tmp/${asset_name}"
+    local tmp_pkg="/tmp/${asset_name}"
     echo "$(printf "$(msg DOWNLOADING)" "$asset_name")"
-    if ! curl -fSL --progress-bar -o "$tmp_deb" "$download_url"; then
+    if ! curl -fSL --progress-bar -o "$tmp_pkg" "$download_url"; then
         log_error "$(msg UPDATE_FAILED)"
-        rm -f "$tmp_deb"
+        rm -f "$tmp_pkg"
         return 1
     fi
 
-    # Install using install.sh (handles stop → dpkg → restart → verify)
-    sudo bash /usr/share/tx5dr/install.sh "$tmp_deb"
+    # Install using install.sh (handles stop → dpkg/dnf → restart → verify)
+    sudo bash /usr/share/tx5dr/install.sh "$tmp_pkg"
     local rc=$?
-    rm -f "$tmp_deb"
+    rm -f "$tmp_pkg"
 
     if [[ $rc -eq 0 ]]; then
         log_info "$(msg UPDATE_DONE)"

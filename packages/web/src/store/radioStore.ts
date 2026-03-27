@@ -42,18 +42,21 @@ export interface ConnectionState {
   isConnecting: boolean;
   wasEverConnected: boolean;
   radioService: RadioService | null;
+  connectError: string | null;
 }
 
 export type ConnectionAction =
   | { type: 'connected' }
   | { type: 'disconnected' }
-  | { type: 'SET_RADIO_SERVICE'; payload: RadioService };
+  | { type: 'SET_RADIO_SERVICE'; payload: RadioService }
+  | { type: 'connectFailed' };
 
 const initialConnectionState: ConnectionState = {
   isConnected: false,
   isConnecting: true,
   wasEverConnected: false,
-  radioService: null
+  radioService: null,
+  connectError: null,
 };
 
 function connectionReducer(state: ConnectionState, action: ConnectionAction): ConnectionState {
@@ -64,9 +67,12 @@ function connectionReducer(state: ConnectionState, action: ConnectionAction): Co
         isConnected: true,
         isConnecting: false,
         wasEverConnected: true,
+        connectError: null,
       };
     case 'disconnected':
       return { ...state, isConnected: false, isConnecting: !state.wasEverConnected };
+    case 'connectFailed':
+      return { ...state, isConnecting: false, connectError: 'SERVER_UNAVAILABLE' };
     case 'SET_RADIO_SERVICE':
       return { ...state, radioService: action.payload };
     default:
@@ -609,6 +615,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // 使用 useRef 确保 RadioService 单例，避免 StrictMode 导致的重复创建
   const radioServiceRef = useRef<RadioService | null>(null);
   const connectionStatusTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // 跟踪当前连接状态，供超时回调读取（避免闭包陷阱）
+  const connectionStateRef = useRef(connectionState);
+  useEffect(() => {
+    connectionStateRef.current = connectionState;
+  }, [connectionState]);
 
   // 初始化RadioService
   useEffect(() => {
@@ -1036,9 +1047,17 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     connectionDispatch({ type: 'SET_RADIO_SERVICE', payload: radioService });
 
+    // 首次连接超时：10s 内未连接则触发 connectFailed，引导用户检查后端
+    const initialConnectTimer = setTimeout(() => {
+      if (!connectionStateRef.current.wasEverConnected) {
+        connectionDispatch({ type: 'connectFailed' });
+      }
+    }, 10000);
 
     // 清理函数
     return () => {
+      clearTimeout(initialConnectTimer);
+
       if (connectionStatusTimerRef.current) {
         clearInterval(connectionStatusTimerRef.current);
         connectionStatusTimerRef.current = null;
