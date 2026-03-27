@@ -26,7 +26,7 @@ export function getHealthLevel(snapshot: ProcessSnapshot | null): HealthLevel {
   if (
     memory.heapUsed > 512 * MB ||
     cpu.total > 70 ||
-    eventLoop.p99 > 30
+    eventLoop.p99 > 50
   ) {
     return 'warn';
   }
