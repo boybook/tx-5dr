@@ -220,7 +220,7 @@ module.exports = {
         name: 'TX-5DR',
         manufacturer: 'TX-5DR Team',
         description: 'TX-5DR Ham Radio FT8 Application',
-        icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.ico'),
+        icon: join(__dirname, 'packages', 'electron-main', 'assets', 'AppIcon.ico'),
         ui: {
           chooseDirectory: true  // 用户可选择安装目录
         },
@@ -255,7 +255,7 @@ module.exports = {
         options: {
           maintainer: 'BG5DRB <bg5drb@example.com>',
           homepage: 'https://tx5dr.com',
-          icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.png'),
+          icon: join(__dirname, 'packages', 'electron-main', 'assets', 'AppIcon.png'),
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
           genericName: 'Ham Radio Application'
@@ -268,7 +268,7 @@ module.exports = {
       config: {
         options: {
           homepage: 'https://tx5dr.com',
-          icon: join(__dirname, 'packages', 'electron-main', 'assets', 'icon.png'),
+          icon: join(__dirname, 'packages', 'electron-main', 'assets', 'AppIcon.png'),
           categories: ['Utility', 'AudioVideo'],
           description: 'TX-5DR Ham Radio FT8 Application - Digital mode software for amateur radio',
           genericName: 'Ham Radio Application',
