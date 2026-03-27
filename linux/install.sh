@@ -195,7 +195,11 @@ if [[ -n "$DEB_FILE" && -f "$DEB_FILE" ]]; then
         log_info "Installing from $DEB_FILE"
     fi
     if [[ "$DEB_FILE" == *.rpm ]]; then
-        dnf install -y "$DEB_FILE" 2>&1 | tail -3 || rpm -ivh --force "$DEB_FILE" 2>&1 | tail -3 || true
+        if rpm -q tx5dr &>/dev/null; then
+            dnf reinstall -y "$DEB_FILE" 2>&1 | tail -3 || rpm -Uvh --force "$DEB_FILE" 2>&1 | tail -3 || true
+        else
+            dnf install -y "$DEB_FILE" 2>&1 | tail -3 || rpm -ivh --force "$DEB_FILE" 2>&1 | tail -3 || true
+        fi
     else
         dpkg -i --force-depends "$DEB_FILE" 2>&1 | tail -3
         apt-get install -f -y >/dev/null 2>&1 || true

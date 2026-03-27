@@ -67,7 +67,13 @@ download_block = f'''    # Auto-download latest nightly from GitHub
                 systemctl stop tx5dr 2>/dev/null || true
             fi
             if [[ "$_dl_family" == "rhel" ]]; then
-                dnf install -y "$PKG_FILE" 2>&1 || rpm -ivh --force "$PKG_FILE" 2>&1 || true
+                # Use reinstall when the same version is already installed (e.g. nightly always 1.0.0)
+                # so that postinstall scripts run and files are updated.
+                if rpm -q tx5dr &>/dev/null; then
+                    dnf reinstall -y "$PKG_FILE" 2>&1 || rpm -Uvh --force "$PKG_FILE" 2>&1 || true
+                else
+                    dnf install -y "$PKG_FILE" 2>&1 || rpm -ivh --force "$PKG_FILE" 2>&1 || true
+                fi
             else
                 dpkg -i --force-depends "$PKG_FILE" 2>&1 || true
                 apt-get install -f -y 2>&1 || true
