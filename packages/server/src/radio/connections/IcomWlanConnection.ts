@@ -183,8 +183,18 @@ export class IcomWlanConnection
       // 执行连接（带超时保护）
       const CONNECTION_TIMEOUT = 10000; // 10秒超时
 
+      // 认证失败立即 reject，避免等待超时（密码错误时 icom-wlan-node 不会 reject connect()）
+      const loginErrorPromise = new Promise<never>((_, reject) => {
+        this.rig!.events.once('login', (res) => {
+          if (!res.ok) {
+            reject(new Error(`Login failed: ${res.errorCode}`));
+          }
+        });
+      });
+
       await Promise.race([
         this.rig.connect(),
+        loginErrorPromise,
         new Promise((_, reject) =>
           setTimeout(
             () => reject(new Error('Connection timeout')),
@@ -779,12 +789,12 @@ export class IcomWlanConnection
       });
     }
 
-    // 登录错误
+    // 登录/认证错误
     if (errorMessageLower.includes('login') || errorMessageLower.includes('auth')) {
       return new RadioError({
-        code: RadioErrorCode.INVALID_CONFIG,
-        message: `ICOM WLAN login failed: ${errorMessage}`,
-        userMessage: 'ICOM radio login failed',
+        code: RadioErrorCode.AUTH_FAILED,
+        message: `ICOM WLAN authentication failed: ${errorMessage}`,
+        userMessage: 'ICOM radio authentication failed, please check username and password',
         suggestions: [
           'Verify username and password are correct',
           'Check radio user management settings',

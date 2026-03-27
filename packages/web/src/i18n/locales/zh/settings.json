@@ -117,6 +117,16 @@
     "testPTTSuccess": "PTT测试成功！电台已切换发射状态 0.5 秒。",
     "testPTTFailed": "PTT测试失败",
     "testPTTFailedCheck": "PTT测试失败，请检查电台连接",
+    "testError": {
+      "AUTH_FAILED": "认证失败，请检查用户名和密码",
+      "CONNECTION_FAILED": "无法连接到电台，请检查 IP 地址和端口",
+      "CONNECTION_TIMEOUT": "连接超时，请检查网络和防火墙设置",
+      "CONNECTION_LOST": "电台连接已断开",
+      "NETWORK_ERROR": "网络错误，请确认电台与电脑在同一局域网",
+      "INVALID_CONFIG": "配置参数有误，请检查连接设置",
+      "OPERATION_TIMEOUT": "操作超时，请检查电台状态后重试",
+      "UNKNOWN_ERROR": "连接测试失败，请检查配置"
+    },
     "pttMethod": "PTT 方法",
     "pttCat": "CAT 命令（推荐）",
     "pttVox": "VOX 声控",

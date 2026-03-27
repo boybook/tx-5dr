@@ -37,6 +37,9 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/R
 function getHttpStatusCode(code: RadioErrorCode): number {
   switch (code) {
     // 4xx 客户端错误
+    case RadioErrorCode.AUTH_FAILED:
+      return 401; // Unauthorized
+
     case RadioErrorCode.INVALID_CONFIG:
     case RadioErrorCode.MISSING_CONFIG:
     case RadioErrorCode.INVALID_OPERATION:
