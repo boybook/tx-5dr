@@ -101,8 +101,8 @@ MSG_EN_FIX_NODEJS="Install Node.js: curl -fsSL https://deb.nodesource.com/setup_
 MSG_ZH_FIX_NODEJS="安装 Node.js: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -"
 MSG_EN_FIX_GLIBCXX="Run: sudo bash /usr/share/tx5dr/install.sh"
 MSG_ZH_FIX_GLIBCXX="运行: sudo bash /usr/share/tx5dr/install.sh"
-MSG_EN_FIX_NGINX="Install nginx: sudo apt install -y nginx"
-MSG_ZH_FIX_NGINX="安装 nginx: sudo apt install -y nginx"
+MSG_EN_FIX_NGINX="Install nginx manually: sudo dnf install nginx  or  sudo apt install nginx"
+MSG_ZH_FIX_NGINX="请手动安装 nginx：sudo dnf install nginx  或  sudo apt install nginx"
 
 MSG_EN_INSTALLING_NODEJS="Installing Node.js 22..."
 MSG_ZH_INSTALLING_NODEJS="正在安装 Node.js 22..."
@@ -179,14 +179,29 @@ detect_os() {
         OS_ID="${ID:-unknown}"
         OS_VERSION_ID="${VERSION_ID:-0}"
         OS_CODENAME="${VERSION_CODENAME:-unknown}"
+        OS_ID_LIKE="${ID_LIKE:-}"
     else
-        OS_ID="unknown"; OS_VERSION_ID="0"; OS_CODENAME="unknown"
+        OS_ID="unknown"; OS_VERSION_ID="0"; OS_CODENAME="unknown"; OS_ID_LIKE=""
     fi
     ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
     case "$ARCH" in
         x86_64)  ARCH="amd64" ;;
         aarch64) ARCH="arm64" ;;
     esac
+}
+
+# Returns the OS package family: "debian", "rhel", or "unknown"
+# Falls back to ID_LIKE if OS_ID is not directly recognized (e.g. fedora-asahi-remix)
+os_family() {
+    case "$OS_ID" in
+        debian|ubuntu|linuxmint|pop) echo "debian"; return ;;
+        rhel|centos|fedora|rocky|alma) echo "rhel"; return ;;
+    esac
+    case "${OS_ID_LIKE:-}" in
+        *fedora*|*rhel*|*centos*) echo "rhel"; return ;;
+        *debian*|*ubuntu*) echo "debian"; return ;;
+    esac
+    echo "unknown"
 }
 
 # ── Utilities ────────────────────────────────────────────────────────────────

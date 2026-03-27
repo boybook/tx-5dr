@@ -96,7 +96,12 @@ if [[ "$MODE" != "docker" ]]; then
         ISSUES=$((ISSUES + 1))
     else
         require_root
-        fix_nodejs || ISSUES=$((ISSUES + 1))
+        if fix_nodejs; then
+            log_ok "Node.js $(node --version 2>/dev/null) (installed)"
+        else
+            log_fail "Node.js (fix failed)"
+            ISSUES=$((ISSUES + 1))
+        fi
     fi
 fi
 
@@ -112,7 +117,12 @@ elif [[ "$MODE" == "check" ]]; then
     ISSUES=$((ISSUES + 1))
 else
     require_root
-    fix_glibcxx || ISSUES=$((ISSUES + 1))
+    if fix_glibcxx; then
+        log_ok "GLIBCXX_3.4.32 (fixed)"
+    else
+        log_fail "GLIBCXX_3.4.32 (fix failed)"
+        ISSUES=$((ISSUES + 1))
+    fi
 fi
 
 # Check glibc version (informational)
@@ -148,7 +158,12 @@ if [[ "$MODE" != "docker" ]]; then
         ISSUES=$((ISSUES + 1))
     else
         require_root
-        fix_nginx || ISSUES=$((ISSUES + 1))
+        if fix_nginx; then
+            log_ok "nginx (installed)"
+        else
+            log_fail "nginx (fix failed)"
+            ISSUES=$((ISSUES + 1))
+        fi
     fi
 fi
 
@@ -179,8 +194,12 @@ if [[ -n "$DEB_FILE" && -f "$DEB_FILE" ]]; then
     else
         log_info "Installing from $DEB_FILE"
     fi
-    dpkg -i --force-depends "$DEB_FILE" 2>&1 | tail -3
-    apt-get install -f -y >/dev/null 2>&1 || true
+    if [[ "$DEB_FILE" == *.rpm ]]; then
+        dnf install -y "$DEB_FILE" 2>&1 | tail -3 || rpm -ivh --force "$DEB_FILE" 2>&1 | tail -3 || true
+    else
+        dpkg -i --force-depends "$DEB_FILE" 2>&1 | tail -3
+        apt-get install -f -y >/dev/null 2>&1 || true
+    fi
 elif [[ -n "$DEB_FILE" ]]; then
     log_error "File not found: $DEB_FILE"
     exit 1

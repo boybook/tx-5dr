@@ -53,19 +53,29 @@ install_src = re.sub(
 # Replace the "No .deb file provided" error block with auto-download logic
 download_block = f'''    # Auto-download latest nightly from GitHub
         log_info "Downloading latest nightly from GitHub..."
-        DL_URL="https://github.com/{repo}/releases/download/nightly-server/TX-5DR-nightly-server-linux-${{ARCH}}.deb"
-        DEB_FILE="/tmp/tx5dr-nightly-${{ARCH}}.deb"
-        if curl -fSL --progress-bar -o "$DEB_FILE" "$DL_URL"; then
-            log_ok "Downloaded: $DEB_FILE"
+        _dl_family=$(os_family)
+        if [[ "$_dl_family" == "rhel" ]]; then
+            DL_URL="https://github.com/{repo}/releases/download/nightly-server/TX-5DR-nightly-server-linux-${{ARCH}}.rpm"
+            PKG_FILE="/tmp/tx5dr-nightly-${{ARCH}}.rpm"
+        else
+            DL_URL="https://github.com/{repo}/releases/download/nightly-server/TX-5DR-nightly-server-linux-${{ARCH}}.deb"
+            PKG_FILE="/tmp/tx5dr-nightly-${{ARCH}}.deb"
+        fi
+        if curl -fSL --progress-bar -o "$PKG_FILE" "$DL_URL"; then
+            log_ok "Downloaded: $PKG_FILE"
             if $IS_UPGRADE; then
                 systemctl stop tx5dr 2>/dev/null || true
             fi
-            dpkg -i --force-depends "$DEB_FILE" 2>&1 || true
-            apt-get install -f -y 2>&1 || true
-            rm -f "$DEB_FILE"
+            if [[ "$_dl_family" == "rhel" ]]; then
+                dnf install -y "$PKG_FILE" 2>&1 || rpm -ivh --force "$PKG_FILE" 2>&1 || true
+            else
+                dpkg -i --force-depends "$PKG_FILE" 2>&1 || true
+                apt-get install -f -y 2>&1 || true
+            fi
+            rm -f "$PKG_FILE"
         else
             log_error "Download failed: $DL_URL"
-            log_error "You can manually download and pass the .deb path as argument."
+            log_error "You can manually download and pass the package path as argument."
             exit 1
         fi'''
 

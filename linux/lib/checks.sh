@@ -21,6 +21,7 @@ check_glibcxx() {
     local libpath=""
     for p in /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
              /usr/lib/aarch64-linux-gnu/libstdc++.so.6 \
+             /usr/lib64/libstdc++.so.6 \
              /usr/lib/libstdc++.so.6; do
         [[ -f "$p" ]] && libpath="$p" && break
     done
@@ -121,12 +122,12 @@ check_disk_space() {
 fix_nodejs() {
     log_info "$(msg INSTALLING_NODEJS)"
     detect_os
-    case "$OS_ID" in
-        debian|ubuntu|linuxmint|pop)
+    case "$(os_family)" in
+        debian)
             curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>&1 || true
             apt-get install -y nodejs 2>&1 || true
             ;;
-        rhel|centos|fedora|rocky|alma)
+        rhel)
             curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - 2>&1 || true
             dnf install -y nodejs 2>&1 || yum install -y nodejs 2>&1 || true
             ;;
@@ -142,22 +143,30 @@ fix_glibcxx() {
     log_info "$(msg UPGRADING_GLIBCXX)"
     log_warn "$(msg GLIBCXX_WARN)"
     detect_os
-    case "$OS_ID" in
+    case "$(os_family)" in
         debian)
-            echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie-temp.list
-            apt-get update -qq 2>&1 || true
-            apt-get install -y -t trixie libstdc++6 2>&1 || true
-            rm -f /etc/apt/sources.list.d/trixie-temp.list
-            apt-get update -qq 2>&1 || true
+            case "$OS_ID" in
+                debian)
+                    echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie-temp.list
+                    apt-get update -qq 2>&1 || true
+                    apt-get install -y -t trixie libstdc++6 2>&1 || true
+                    rm -f /etc/apt/sources.list.d/trixie-temp.list
+                    apt-get update -qq 2>&1 || true
+                    ;;
+                *)
+                    # Ubuntu 22.04 may need PPA or manual install
+                    # Ubuntu 24.04+ already has GLIBCXX_3.4.32
+                    if check_glibcxx; then
+                        return 0
+                    fi
+                    log_warn "$(msg FIX_GLIBCXX)"
+                    return 1
+                    ;;
+            esac
             ;;
-        ubuntu)
-            # Ubuntu 22.04 may need PPA or manual install
-            # Ubuntu 24.04+ already has GLIBCXX_3.4.32
-            if check_glibcxx; then
-                return 0
-            fi
-            log_warn "$(msg FIX_GLIBCXX)"
-            return 1
+        rhel)
+            # Fedora/RHEL typically ships a recent enough libstdc++ via system gcc-libs
+            dnf install -y gcc-c++ 2>&1 || yum install -y gcc-c++ 2>&1 || true
             ;;
         *)
             log_warn "$(msg FIX_GLIBCXX)"
@@ -170,11 +179,11 @@ fix_glibcxx() {
 fix_nginx() {
     log_info "$(msg INSTALLING_NGINX)"
     detect_os
-    case "$OS_ID" in
-        debian|ubuntu|linuxmint|pop)
+    case "$(os_family)" in
+        debian)
             apt-get install -y nginx 2>&1 || true
             ;;
-        rhel|centos|fedora|rocky|alma)
+        rhel)
             dnf install -y nginx 2>&1 || yum install -y nginx 2>&1 || true
             ;;
         *)
