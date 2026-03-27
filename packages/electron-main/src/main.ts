@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createLogger } from './utils/logger.js';
+import { getMessages } from './i18n.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -283,18 +284,19 @@ async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Pr
  * 构建右键菜单（托盘和 Dock 共用）
  */
 function buildContextMenu(includQuit: boolean): Menu {
+  const msgs = getMessages(app.getLocale());
   const template: Parameters<typeof Menu.buildFromTemplate>[0] = [
-    { label: 'Open Main Window', click: () => showMainWindow() },
-    { label: 'Log Viewer', click: () => openLogInTerminal() },
+    { label: msgs.menu.openMainWindow, click: () => showMainWindow() },
+    { label: msgs.menu.logViewer, click: () => openLogInTerminal() },
     { type: 'separator' },
-    { label: 'Open in Browser', click: () => openInBrowser() },
+    { label: msgs.menu.openInBrowser, click: () => openInBrowser() },
   ];
 
   if (includQuit) {
     template.push(
       { type: 'separator' },
       {
-        label: 'Quit',
+        label: msgs.menu.quit,
         click: () => {
           void cleanupAndQuit();
         },
@@ -419,19 +421,17 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
       // closeBehavior === 'ask'
       event.preventDefault();
 
-      const isZh = app.getLocale().startsWith('zh');
+      const msgs = getMessages(app.getLocale());
 
       dialog.showMessageBox(mainWindow, {
         type: 'question',
-        buttons: isZh
-          ? ['最小化到托盘', '退出程序', '取消']
-          : ['Minimize to Tray', 'Quit', 'Cancel'],
+        buttons: msgs.closeWindow.buttons,
         defaultId: 0,
         cancelId: 2,
         title: 'TX-5DR',
-        message: isZh ? '关闭主窗口' : 'Close Main Window',
-        detail: isZh ? '请选择关闭窗口后的行为：' : 'Choose what happens when you close the window:',
-        checkboxLabel: isZh ? '记住我的选择' : 'Remember my choice',
+        message: msgs.closeWindow.message,
+        detail: msgs.closeWindow.detail,
+        checkboxLabel: msgs.closeWindow.checkboxLabel,
         checkboxChecked: false,
       }).then(({ response, checkboxChecked }) => {
         if (response === 0) {

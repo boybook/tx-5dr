@@ -258,8 +258,10 @@ function checkBackendConsoleCalls() {
 // ─── 检查项 5：后端/core/electron 源码中的 CJK 字符串 ─────────────────────────
 // callsign.ts 包含 COUNTRY_ZH_MAP / PROVINCE_EN_MAP / AREA_MAP / REGION_INFO
 // 这些是面向中文用户的本地化数据，不是日志消息，允许包含中文
+// i18n.ts 是 electron-main 的多语言字符串模块，允许包含中文
 const BACKEND_CJK_ALLOWED_FILES = new Set([
   'callsign/callsign.ts',
+  'i18n.ts',
 ]);
 
 function checkBackendCJK() {
