@@ -48,6 +48,7 @@ COPY package.json yarn.lock turbo.json ./
 
 # 复制Yarn配置
 COPY .yarnrc.yml ./
+COPY .yarn/patches/ ./.yarn/patches/
 
 # 复制scripts目录（postinstall脚本需要）
 COPY scripts ./scripts/
