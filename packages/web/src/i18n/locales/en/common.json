@@ -205,7 +205,12 @@
     "audioMonitorCodec": "Audio Monitor Codec",
     "audioMonitorCodecDesc": "Select encoding format for audio monitor streaming. Opus saves bandwidth significantly, PCM offers better compatibility. Reconnect monitor after changing.",
     "codecOpus": "Opus (Recommended, Low Bandwidth)",
-    "codecPcm": "PCM (Compatible)"
+    "codecPcm": "PCM (Compatible)",
+    "closeBehavior": "Close Window Behavior",
+    "closeBehaviorDesc": "Default behavior when closing the main window (desktop app only)",
+    "closeBehaviorAsk": "Ask every time",
+    "closeBehaviorTray": "Minimize to system tray",
+    "closeBehaviorQuit": "Quit application"
   },
   "freqPresets": {
     "title": "Frequency Preset Management",

@@ -205,7 +205,12 @@
     "audioMonitorCodec": "监听音频编解码",
     "audioMonitorCodecDesc": "选择音频监听传输编码方式。Opus 可大幅节省带宽，PCM 兼容性更好。更改后需重新连接监听。",
     "codecOpus": "Opus（推荐，低带宽）",
-    "codecPcm": "PCM（兼容模式）"
+    "codecPcm": "PCM（兼容模式）",
+    "closeBehavior": "关闭窗口行为",
+    "closeBehaviorDesc": "设置关闭主窗口时的默认行为（仅桌面应用）",
+    "closeBehaviorAsk": "每次询问",
+    "closeBehaviorTray": "最小化到系统托盘",
+    "closeBehaviorQuit": "退出程序"
   },
   "freqPresets": {
     "title": "频率预设管理",

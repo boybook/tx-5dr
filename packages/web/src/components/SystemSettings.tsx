@@ -102,6 +102,11 @@ export const SystemSettings = forwardRef<
   const [audioMonitorCodec, setAudioMonitorCodec] = useState<'opus' | 'pcm'>('opus');
   const [originalAudioMonitorCodec, setOriginalAudioMonitorCodec] = useState<'opus' | 'pcm'>('opus');
 
+  // Electron 关闭行为设置（仅桌面应用）
+  const [closeBehavior, setCloseBehavior] = useState<string>('ask');
+  const [originalCloseBehavior, setOriginalCloseBehavior] = useState<string>('ask');
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+
   // 加载配置
   useEffect(() => {
     loadSettings();
@@ -111,6 +116,7 @@ export const SystemSettings = forwardRef<
     loadDecodeWindowSettings();
     loadAudioMonitorCodec();
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
+    loadElectronCloseBehavior();
   }, []);
 
   const loadSettings = async () => {
@@ -212,6 +218,19 @@ export const SystemSettings = forwardRef<
     }
   };
 
+  // 加载 Electron 关闭行为设置
+  const loadElectronCloseBehavior = async () => {
+    try {
+      const value = await window.electronAPI?.config?.get('closeBehavior');
+      if (value) {
+        setCloseBehavior(value);
+        setOriginalCloseBehavior(value);
+      }
+    } catch {
+      // Not in Electron environment, ignore
+    }
+  };
+
   // 定期刷新 PSKReporter 状态
   useEffect(() => {
     if (!pskrConfig?.enabled) return;
@@ -257,7 +276,8 @@ export const SystemSettings = forwardRef<
       hasAuthChanges() ||
       hasPskrChanges() ||
       hasDecodeWindowChanges() ||
-      audioMonitorCodec !== originalAudioMonitorCodec
+      audioMonitorCodec !== originalAudioMonitorCodec ||
+      (isElectron && closeBehavior !== originalCloseBehavior)
     );
   };
 
@@ -331,6 +351,12 @@ export const SystemSettings = forwardRef<
         setOriginalAudioMonitorCodec(audioMonitorCodec);
       }
 
+      // 保存 Electron 关闭行为设置
+      if (isElectron && closeBehavior !== originalCloseBehavior) {
+        await window.electronAPI?.config?.set('closeBehavior', closeBehavior);
+        setOriginalCloseBehavior(closeBehavior);
+      }
+
       onUnsavedChanges?.(false);
     } catch (err) {
       logger.error('Failed to save settings:', err);
@@ -361,7 +387,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, audioMonitorCodec, originalAudioMonitorCodec, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, audioMonitorCodec, originalAudioMonitorCodec, closeBehavior, originalCloseBehavior, onUnsavedChanges]);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -1003,6 +1029,39 @@ export const SystemSettings = forwardRef<
                   <p className="text-sm text-danger-700">{pskrStatus.lastError}</p>
                 </div>
               )}
+            </CardBody>
+          </Card>
+        </>
+      )}
+
+      {/* 桌面应用设置 - 仅 Electron 环境显示 */}
+      {isElectron && (
+        <>
+          <Divider className="my-4" />
+          <Card shadow="none" radius="lg" classNames={{
+            base: "border border-divider bg-content1"
+          }}>
+            <CardBody className="p-4">
+              <div className="space-y-3">
+                <div>
+                  <h4 className="font-semibold text-default-900 mb-1">{t('system.closeBehavior')}</h4>
+                  <p className="text-sm text-default-600">{t('system.closeBehaviorDesc')}</p>
+                </div>
+                <Select
+                  selectedKeys={[closeBehavior]}
+                  onSelectionChange={(keys) => {
+                    const value = Array.from(keys)[0] as string;
+                    if (value) setCloseBehavior(value);
+                  }}
+                  isDisabled={isSaving}
+                  variant="bordered"
+                  className="max-w-xs"
+                >
+                  <SelectItem key="ask">{t('system.closeBehaviorAsk')}</SelectItem>
+                  <SelectItem key="tray">{t('system.closeBehaviorTray')}</SelectItem>
+                  <SelectItem key="quit">{t('system.closeBehaviorQuit')}</SelectItem>
+                </Select>
+              </div>
             </CardBody>
           </Card>
         </>
