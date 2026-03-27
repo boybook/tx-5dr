@@ -162,6 +162,9 @@ export const CAPABILITY_IDS = [
   'rf_power',
   'af_gain',
   'sql',
+  'mic_gain',
+  'nb',
+  'nr',
 ] as const;
 
 export type CapabilityId = (typeof CAPABILITY_IDS)[number];

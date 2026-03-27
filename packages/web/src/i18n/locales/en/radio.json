@@ -265,6 +265,18 @@
     "sql": {
       "label": "Squelch",
       "description": "Sets the receive squelch threshold. Higher values suppress weaker signals. For digital mode decoding, open squelch (0) is typically recommended; for voice, raise it to filter background noise as needed."
+    },
+    "mic_gain": {
+      "label": "MIC Gain",
+      "description": "Adjusts the microphone input preamplification level. Too high causes audio clipping and distortion; too low results in a weak transmitted signal. For voice, aim for the audio meter to just enter the yellow zone. Digital modes typically do not require adjustment."
+    },
+    "nb": {
+      "label": "Noise Blanker",
+      "description": "The Noise Blanker (NB) suppresses impulse-type interference such as automotive ignition noise and industrial electrical interference. 0 means off; higher values increase blanking strength. Ineffective against continuous background noise — enable only when impulse interference is present."
+    },
+    "nr": {
+      "label": "Noise Reduction",
+      "description": "Digital Signal Processing noise reduction (NR) reduces background white noise using DSP algorithms, improving weak signal readability. 0 means off. For FT8 and other digital mode decoding, set to 0 to avoid DSP processing affecting decode accuracy."
     }
   }
 }

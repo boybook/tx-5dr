@@ -32,6 +32,9 @@ const CAPABILITY_CONFIGS: Record<string, CapabilityConfig> = {
   rf_power:     { updateMode: 'polling', pollIntervalMs: 10000, readable: true, writable: true },
   af_gain:      { updateMode: 'polling', pollIntervalMs: 10000, readable: true, writable: true },
   sql:          { updateMode: 'polling', pollIntervalMs: 10000, readable: true, writable: true },
+  mic_gain:     { updateMode: 'polling', pollIntervalMs: 10000, readable: true, writable: true },
+  nb:           { updateMode: 'polling', pollIntervalMs: 10000, readable: true, writable: true },
+  nr:           { updateMode: 'polling', pollIntervalMs: 10000, readable: true, writable: true },
 };
 
 // ===== 能力读取路由表 =====
@@ -45,6 +48,9 @@ const READ_MAP: Record<string, ReadFn> = {
   rf_power:     (c) => c.getRFPower!(),
   af_gain:      (c) => c.getAFGain!(),
   sql:          (c) => c.getSQL!(),
+  mic_gain:     (c) => c.getMicGain!(),
+  nb:           (c) => c.getNBEnabled!(),
+  nr:           (c) => c.getNREnabled!(),
 };
 
 const WRITE_MAP: Record<string, WriteFn> = {
@@ -52,6 +58,9 @@ const WRITE_MAP: Record<string, WriteFn> = {
   rf_power:     (c, v) => c.setRFPower!(v as number),
   af_gain:      (c, v) => c.setAFGain!(v as number),
   sql:          (c, v) => c.setSQL!(v as number),
+  mic_gain:     (c, v) => c.setMicGain!(v as number),
+  nb:           (c, v) => c.setNBEnabled!(v as number),
+  nr:           (c, v) => c.setNREnabled!(v as number),
 };
 
 const ACTION_MAP: Record<string, ActionFn> = {
@@ -205,6 +214,9 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
         rf_power: 'RFPOWER',
         af_gain:  'AF',
         sql:      'SQL',
+        mic_gain: 'MICGAIN',
+        nb:       'NB',
+        nr:       'NR',
       };
       for (const [capId, levelName] of Object.entries(levelMap)) {
         if (hamlibConn.isSupportedLevel(levelName)) {
@@ -217,8 +229,12 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
 
     // ----- icom-wlan Level 类（通过实际读取探测）-----
     const icomProbes: Array<[string, () => Promise<number> | undefined]> = [
-      ['af_gain', () => this.connection?.getAFGain?.()],
-      ['sql',     () => this.connection?.getSQL?.()],
+      ['af_gain',  () => this.connection?.getAFGain?.()],
+      ['sql',      () => this.connection?.getSQL?.()],
+      ['rf_power', () => this.connection?.getRFPower?.()],
+      ['mic_gain', () => this.connection?.getMicGain?.()],
+      ['nb',       () => this.connection?.getNBEnabled?.()],
+      ['nr',       () => this.connection?.getNREnabled?.()],
     ];
 
     for (const [capId, probeFn] of icomProbes) {
