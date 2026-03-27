@@ -229,7 +229,55 @@ module.exports = {
         shortcutName: 'TX-5DR',
         appUserModelId: 'com.tx5dr.app',
         // MSI 升级链路标识 - 发布后永不更改
-        upgradeCode: '77C3C854-49C2-4650-A366-D4CD08EDDF96'
+        upgradeCode: '77C3C854-49C2-4650-A366-D4CD08EDDF96',
+        beforeCreate: async (creator) => {
+          // 1. REINSTALLMODE: emus → amus
+          // 'amus' forces reinstall of all files without per-file version comparison,
+          // significantly faster with thousands of loose files (asar: false)
+          creator.wixTemplate = creator.wixTemplate.replace(
+            'REINSTALLMODE" Value="emus"',
+            'REINSTALLMODE" Value="amus"'
+          );
+
+          // 2. Persist install directory to registry so upgrades remember the chosen path
+          // Inject RegistrySearch before <Media> to read back previous install location
+          creator.wixTemplate = creator.wixTemplate.replace(
+            '<Media Id="1"',
+            '<!-- Restore install directory from previous installation -->\n' +
+            '    <Property Id="APPLICATIONROOTDIRECTORY">\n' +
+            '      <RegistrySearch Key="SOFTWARE\\TX-5DR"\n' +
+            '                      Root="HKLM"\n' +
+            '                      Type="directory"\n' +
+            '                      Id="INSTALLDIR_REGSEARCH"\n' +
+            '                      Name="InstallDir"\n' +
+            '                      Win64="{{Win64YesNo}}"/>\n' +
+            '    </Property>\n\n' +
+            '    <Media Id="1"'
+          );
+
+          // Inject registry write component to persist install path for future upgrades
+          creator.wixTemplate = creator.wixTemplate.replace(
+            '<!-- {{AutoUpdatePermissions}} -->',
+            '<!-- Save install directory to registry for future upgrades -->\n' +
+            '    <DirectoryRef Id="APPLICATIONROOTDIRECTORY">\n' +
+            '      <Component Id="InstallDirRegistry" Guid="B7E54A2F-8E34-4C90-B152-8D49A7E31C50" Win64="{{Win64YesNo}}">\n' +
+            '        <RegistryValue Root="HKLM"\n' +
+            '                       Key="SOFTWARE\\TX-5DR"\n' +
+            '                       Name="InstallDir"\n' +
+            '                       Type="string"\n' +
+            '                       Value="[APPLICATIONROOTDIRECTORY]"\n' +
+            '                       KeyPath="yes"/>\n' +
+            '      </Component>\n' +
+            '    </DirectoryRef>\n\n' +
+            '<!-- {{AutoUpdatePermissions}} -->'
+          );
+
+          // Add ComponentRef for the registry component to MainApplication feature
+          creator.wixTemplate = creator.wixTemplate.replace(
+            '<ComponentRef Id="PurgeOnUninstall" />',
+            '<ComponentRef Id="PurgeOnUninstall" />\n        <ComponentRef Id="InstallDirRegistry" />'
+          );
+        }
       }
     },
     // macOS Packages - DMG 安装包

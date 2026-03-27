@@ -571,11 +571,10 @@ function openLogInTerminal() {
       ].join('\n'), { mode: 0o755 });
       spawn('open', ['-a', 'Terminal', script]);
     } else if (process.platform === 'win32') {
-      // Windows: PowerShell 的 Get-Content 支持多文件
+      // Windows: use PowerShell directly in a new window via start
       const psFiles = logFiles.map(f => `'${f}'`).join(', ');
-      spawn('cmd', ['/c', 'start', 'cmd', '/k',
-        `title TX-5DR Log Viewer && powershell -Command "Get-Content ${psFiles} -Wait -Tail 50"`
-      ], { shell: true });
+      const psCommand = `$Host.UI.RawUI.WindowTitle = 'TX-5DR Log Viewer'; Get-Content ${psFiles} -Wait -Tail 50`;
+      spawn('cmd', ['/c', 'start', 'powershell', '-NoExit', '-Command', psCommand], { shell: true });
     } else {
       const tailCmd = `tail -f ${tailTarget}`;
       const terminals = [
