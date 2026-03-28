@@ -1151,15 +1151,13 @@ function setupIpcHandlers() {
   });
 
   // 配置管理 IPC
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ipcMain.handle('config:get', (_event, key: string) => {
-    const settings = loadElectronSettings() as any;
+  ipcMain.handle('config:get', (_event, key: keyof ElectronSettings) => {
+    const settings = loadElectronSettings();
     return settings[key] ?? null;
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ipcMain.handle('config:set', (_event, key: string, value: any) => {
-    const settings = loadElectronSettings() as any;
+  ipcMain.handle('config:set', (_event, key: keyof ElectronSettings, value: ElectronSettings[keyof ElectronSettings]) => {
+    const settings = loadElectronSettings();
     settings[key] = value;
     saveElectronSettings(settings);
   });

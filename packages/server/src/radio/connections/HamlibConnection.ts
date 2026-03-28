@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
-import type { PttType } from 'hamlib';
+import type { PttType, SpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib';
 import type { LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
 import { hamlibStrengthToLevelMeterReading } from './meterUtils.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
@@ -35,6 +35,12 @@ export class HamlibConnection
   extends EventEmitter<IRadioConnectionEvents>
   implements IRadioConnection
 {
+  private spectrumListener: ((line: SpectrumLine) => void) | null = null;
+  private readonly onRigSpectrumLine = (line: SpectrumLine) => {
+    this.lastSuccessfulOperation = Date.now();
+    this.spectrumListener?.(line);
+  };
+
   /**
    * 底层 Hamlib 实例
    */
@@ -189,7 +195,8 @@ export class HamlibConnection
       const model = config.type === 'network' ? 2 : config.serial!.rigModel;
 
       // 创建 HamLib 实例
-      this.rig = new HamLib(model as any, port as any);
+      const rig = new HamLib(model as any, port as any) as HamLib;
+      this.rig = rig;
 
       // 配置 PTT 类型（必须在 open() 前调用）
       this.pttMethod = config.pttMethod || 'cat';
@@ -201,7 +208,7 @@ export class HamlibConnection
       };
       const hamlibPttType = pttTypeMap[this.pttMethod] || 'RIG';
       logger.debug(`Configuring PTT type: ${this.pttMethod} -> ${hamlibPttType}`);
-      await this.rig.setPttType(hamlibPttType);
+      await rig.setPttType(hamlibPttType);
 
       // 应用串口配置（如果有）
       if (config.type === 'serial' && config.serial?.serialConfig) {
@@ -415,6 +422,108 @@ export class HamlibConnection
         serial: this.currentConfig?.type === 'serial' ? this.currentConfig.serial : undefined,
       },
     };
+  }
+
+  async getSpectrumSupportSummary(): Promise<SpectrumSupportSummary> {
+    this.checkConnected();
+    try {
+      return await this.getSpectrumRig().getSpectrumSupportSummary();
+    } catch (error) {
+      throw this.convertError(error, 'getSpectrumSupportSummary');
+    }
+  }
+
+  async getSpectrumSpans(): Promise<number[]> {
+    this.checkConnected();
+    try {
+      const summary = await this.getSpectrumRig().getSpectrumSupportSummary();
+      return Array.from(new Set((summary.spans ?? []).filter((span): span is number => Number.isFinite(span) && span > 0)))
+        .sort((left, right) => right - left);
+    } catch (error) {
+      throw this.convertError(error, 'getSpectrumSpans');
+    }
+  }
+
+  async getCurrentSpectrumSpan(): Promise<number | null> {
+    this.checkConnected();
+    try {
+      const rig = this.getSpectrumRig();
+      if (typeof (rig as any).getLevel !== 'function') {
+        return null;
+      }
+
+      const currentSpan = await (rig as any).getLevel('SPECTRUM_SPAN');
+      return typeof currentSpan === 'number' && Number.isFinite(currentSpan) && currentSpan > 0 ? currentSpan : null;
+    } catch (error) {
+      throw this.convertError(error, 'getCurrentSpectrumSpan');
+    }
+  }
+
+  async setSpectrumSpan(spanHz: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await this.getSpectrumRig().setLevel('SPECTRUM_SPAN', spanHz);
+    } catch (error) {
+      throw this.convertError(error, 'setSpectrumSpan');
+    }
+  }
+
+  async getCurrentSpectrumMode(): Promise<string | null> {
+    this.checkConnected();
+    try {
+      const rig = this.getSpectrumRig();
+      if (typeof (rig as any).getLevel !== 'function') {
+        return null;
+      }
+
+      const currentModeId = await (rig as any).getLevel('SPECTRUM_MODE');
+      if (typeof currentModeId !== 'number') {
+        return null;
+      }
+
+      const summary = await rig.getSpectrumSupportSummary();
+      const matchedMode = summary.modes.find(mode => mode.id === currentModeId);
+      return matchedMode?.name ?? String(currentModeId);
+    } catch (error) {
+      throw this.convertError(error, 'getCurrentSpectrumMode');
+    }
+  }
+
+  async startManagedSpectrum(
+    listener: (line: SpectrumLine) => void,
+    config?: SpectrumConfig
+  ): Promise<void> {
+    this.checkConnected();
+
+    const rig = this.getSpectrumRig();
+    this.spectrumListener = listener;
+    rig.removeListener('spectrumLine', this.onRigSpectrumLine);
+    rig.on('spectrumLine', this.onRigSpectrumLine);
+
+    try {
+      await rig.startManagedSpectrum(config);
+    } catch (error) {
+      rig.removeListener('spectrumLine', this.onRigSpectrumLine);
+      this.spectrumListener = null;
+      throw this.convertError(error, 'startManagedSpectrum');
+    }
+  }
+
+  async stopManagedSpectrum(): Promise<void> {
+    const rig = this.rig;
+    if (!rig) {
+      this.spectrumListener = null;
+      return;
+    }
+    try {
+      const spectrumRig = this.getSpectrumRig();
+      spectrumRig.removeListener('spectrumLine', this.onRigSpectrumLine);
+      await spectrumRig.stopManagedSpectrum();
+    } catch (error) {
+      throw this.convertError(error, 'stopManagedSpectrum');
+    } finally {
+      this.spectrumListener = null;
+    }
   }
 
   // ===== 天线调谐器控制 =====
@@ -706,19 +815,16 @@ export class HamlibConnection
 
   async getNBEnabled(): Promise<number> {
     this.checkConnected();
-    if (!this.supportedLevels.has('NB')) {
-      throw new Error('NB level not supported by this radio');
-    }
     try {
       const value = (await Promise.race([
-        this.rig!.getLevel('NB'),
+        this.rig!.getFunction('NB'),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get NB level timeout')), 5000)
+          setTimeout(() => reject(new Error('Get NB state timeout')), 5000)
         ),
-      ])) as number;
+      ])) as boolean;
       this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NB level read: ${(value * 100).toFixed(0)}%`);
-      return value;
+      logger.debug(`NB state read: ${value ? 'enabled' : 'disabled'}`);
+      return value ? 1 : 0;
     } catch (error) {
       throw this.convertError(error, 'getNBEnabled');
     }
@@ -728,13 +834,13 @@ export class HamlibConnection
     this.checkConnected();
     try {
       await Promise.race([
-        this.rig!.setLevel('NB', value),
+        this.rig!.setFunction('NB', value > 0),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set NB level timeout')), 5000)
+          setTimeout(() => reject(new Error('Set NB state timeout')), 5000)
         ),
       ]);
       this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NB level set: ${(value * 100).toFixed(0)}%`);
+      logger.debug(`NB state set: ${value > 0 ? 'enabled' : 'disabled'}`);
     } catch (error) {
       throw this.convertError(error, 'setNBEnabled');
     }
@@ -742,19 +848,16 @@ export class HamlibConnection
 
   async getNREnabled(): Promise<number> {
     this.checkConnected();
-    if (!this.supportedLevels.has('NR')) {
-      throw new Error('NR level not supported by this radio');
-    }
     try {
       const value = (await Promise.race([
-        this.rig!.getLevel('NR'),
+        this.rig!.getFunction('NR'),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get NR level timeout')), 5000)
+          setTimeout(() => reject(new Error('Get NR state timeout')), 5000)
         ),
-      ])) as number;
+      ])) as boolean;
       this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NR level read: ${(value * 100).toFixed(0)}%`);
-      return value;
+      logger.debug(`NR state read: ${value ? 'enabled' : 'disabled'}`);
+      return value ? 1 : 0;
     } catch (error) {
       throw this.convertError(error, 'getNREnabled');
     }
@@ -764,13 +867,13 @@ export class HamlibConnection
     this.checkConnected();
     try {
       await Promise.race([
-        this.rig!.setLevel('NR', value),
+        this.rig!.setFunction('NR', value > 0),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set NR level timeout')), 5000)
+          setTimeout(() => reject(new Error('Set NR state timeout')), 5000)
         ),
       ]);
       this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NR level set: ${(value * 100).toFixed(0)}%`);
+      logger.debug(`NR state set: ${value > 0 ? 'enabled' : 'disabled'}`);
     } catch (error) {
       throw this.convertError(error, 'setNREnabled');
     }
@@ -936,6 +1039,12 @@ export class HamlibConnection
 
     try {
       if (this.rig) {
+        try {
+          await this.stopManagedSpectrum();
+        } catch (error) {
+          logger.warn('Failed to stop managed spectrum during cleanup', error);
+        }
+
         try {
           // hamlib close() 返回 Promise，不接受回调参数
           // 增加超时时间到 5 秒，给 pthread 清理更多时间
@@ -1265,5 +1374,37 @@ export class HamlibConnection
       cause: error,
       context: { operation: context },
     });
+  }
+
+  private getSpectrumRig(): HamLib & {
+    getSpectrumSupportSummary?: () => Promise<SpectrumSupportSummary>;
+    startManagedSpectrum?: (config?: SpectrumConfig) => Promise<boolean>;
+    stopManagedSpectrum?: () => Promise<boolean>;
+    getLevel?: (level: string) => Promise<number>;
+  } {
+    const rig = this.rig;
+    if (!rig) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_STATE,
+        message: 'Radio not connected',
+        userMessage: 'Radio not connected',
+      });
+    }
+
+    if (
+      typeof rig.getSpectrumSupportSummary !== 'function'
+      || typeof rig.startManagedSpectrum !== 'function'
+      || typeof rig.stopManagedSpectrum !== 'function'
+    ) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        severity: RadioErrorSeverity.ERROR,
+        message: 'Official Hamlib spectrum API is not available in current hamlib package',
+        userMessage: 'Current Hamlib package does not provide official spectrum support',
+        context: { operation: 'hamlibSpectrumApi' },
+      });
+    }
+
+    return rig;
   }
 }

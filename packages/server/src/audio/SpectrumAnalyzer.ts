@@ -1,5 +1,5 @@
 import { SpectrumAnalyzer as NativeSpectrumAnalyzer } from 'rubato-fft-node';
-import type { FT8Spectrum } from '@tx5dr/contracts';
+import type { SpectrumFrame } from '@tx5dr/contracts';
 
 export interface SpectrumConfig {
   sampleRate: number;
@@ -46,7 +46,7 @@ export class SpectrumAnalyzer {
   /**
    * 分析音频数据并生成频谱
    */
-  async analyze(audioData: Float32Array): Promise<FT8Spectrum> {
+  async analyze(audioData: Float32Array): Promise<SpectrumFrame> {
     // 首先进行降采样（如需要）
     const processData = this.resampleIfNeeded(audioData);
 
@@ -58,14 +58,14 @@ export class SpectrumAnalyzer {
     // 使用原生分析器
     const result = await this.nativeAnalyzer.analyze(segment);
 
-    // 转换为FT8Spectrum格式
+    // 转换为统一 SpectrumFrame 格式
     const freqResolution = this.config.targetSampleRate / this.config.fftSize;
     // Native FFT produces fftSize/2+1 bins (DC to Nyquist inclusive)
     const numBins = result.magnitudesLength;
 
     return {
       timestamp: Date.now(),
-      sampleRate: this.config.targetSampleRate,
+      kind: 'audio',
       frequencyRange: {
         min: 0,
         max: (numBins - 1) * freqResolution
@@ -79,12 +79,12 @@ export class SpectrumAnalyzer {
         },
         data: result.magnitudesBase64
       },
-      summary: {
-        peakFrequency: result.peakFrequency,
-        peakMagnitude: result.peakMagnitude,
-        averageMagnitude: result.averageMagnitude,
-        dynamicRange: result.dynamicRange
-      }
+      meta: {
+        sourceBinCount: numBins,
+        displayBinCount: numBins,
+        centerFrequency: ((numBins - 1) * freqResolution) / 2,
+        spanHz: (numBins - 1) * freqResolution,
+      },
     };
   }
 
@@ -124,8 +124,8 @@ export class SpectrumAnalyzer {
   /**
    * 批量分析音频数据（支持重叠处理）
    */
-  async analyzeStream(audioData: Float32Array): Promise<FT8Spectrum[]> {
-    const results: FT8Spectrum[] = [];
+  async analyzeStream(audioData: Float32Array): Promise<SpectrumFrame[]> {
+    const results: SpectrumFrame[] = [];
     const hopSize = this.config.fftSize - this.overlapSize;
 
     for (let i = 0; i <= audioData.length - this.config.fftSize; i += hopSize) {

@@ -1,15 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject, type RadioViewState, type SpectrumZoomState } from '@tx5dr/contracts';
 import type {
   AudioMonitorCodec,
   DecodeErrorInfo,
-  FT8Spectrum,
   JWTPayload,
   ModeDescriptor,
   SlotInfo,
   SlotPack,
+  SpectrumCapabilities,
+  SpectrumFrame,
+  SpectrumKind,
   SubWindowInfo,
   SystemStatus
 } from '@tx5dr/contracts';
@@ -24,6 +26,9 @@ import { buildAbility, emptyAbility, canWithData, type AppAbility } from '../aut
 import { createLogger } from '../utils/logger.js';
 import { createOpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
 import type { OpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
+import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
+import { SpectrumZoomCoordinator } from '../spectrum/SpectrumZoomCoordinator.js';
+import { RadioViewStateCoordinator } from '../radio/RadioViewStateCoordinator.js';
 
 const logger = createLogger('WSServer');
 
@@ -45,6 +50,7 @@ interface WebSocketInstance {
 export class WSConnection extends WSMessageHandler {
   private ws: WebSocketInstance; // WebSocket实例(支持不同的WebSocket库)
   private id: string;
+  private clientInstanceId: string | null = null;
   private enabledOperatorIds: Set<string> = new Set(); // 客户端启用的操作员ID列表
   private handshakeCompleted: boolean = false; // 握手是否完成
 
@@ -58,6 +64,7 @@ export class WSConnection extends WSMessageHandler {
 
   // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
   private wsListeners: Map<string, (...args: unknown[]) => void> = new Map();
+  private spectrumSubscription: SpectrumKind | null = null;
 
   constructor(ws: WebSocketInstance, id: string) {
     super();
@@ -123,6 +130,14 @@ export class WSConnection extends WSMessageHandler {
     return this.id;
   }
 
+  setClientInstanceId(clientInstanceId: string): void {
+    this.clientInstanceId = clientInstanceId;
+  }
+
+  getClientInstanceId(): string | null {
+    return this.clientInstanceId;
+  }
+
   /**
    * 检查连接是否活跃
    */
@@ -167,6 +182,14 @@ export class WSConnection extends WSMessageHandler {
    */
   isHandshakeCompleted(): boolean {
     return this.handshakeCompleted;
+  }
+
+  setSpectrumSubscription(kind: SpectrumKind | null): void {
+    this.spectrumSubscription = kind;
+  }
+
+  getSpectrumSubscription(): SpectrumKind | null {
+    return this.spectrumSubscription;
   }
 
   // ===== 认证方法 =====
@@ -320,6 +343,7 @@ interface AudioMonitorWSServer {
 
 export class WSServer extends WSMessageHandler {
   private connections = new Map<string, WSConnection>();
+  private clientInstanceConnections = new Map<string, string>();
   private connectionIdCounter = 0;
   private digitalRadioEngine: DigitalRadioEngine;
   private audioMonitorWSServer: AudioMonitorWSServer; // AudioMonitorWSServer实例
@@ -328,6 +352,9 @@ export class WSServer extends WSMessageHandler {
   private opusMonitorEncoder: OpusMonitorEncoder | null = null;
   private opusAccumBuffer: Float32Array = new Float32Array(0);
   private readonly OPUS_FRAME_SIZE = 960; // 20ms at 48kHz
+  private spectrumCoordinator: SpectrumCoordinator;
+  private spectrumZoomCoordinator: SpectrumZoomCoordinator;
+  private radioViewStateCoordinator: RadioViewStateCoordinator;
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
   constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: AudioMonitorWSServer, processMonitor?: ProcessMonitor) {
@@ -340,6 +367,9 @@ export class WSServer extends WSMessageHandler {
         this.broadcast(WSMessageType.PROCESS_SNAPSHOT, snapshot);
       });
     }
+    this.spectrumCoordinator = new SpectrumCoordinator(digitalRadioEngine);
+    this.spectrumZoomCoordinator = new SpectrumZoomCoordinator(digitalRadioEngine, this.spectrumCoordinator);
+    this.radioViewStateCoordinator = new RadioViewStateCoordinator(digitalRadioEngine, this.spectrumCoordinator);
     this.setupEngineEventListeners();
     this.setupAudioMonitorEventListeners(); // 初始化时设置音频监听事件（广播模式）
     this.setupOpenWebRXEventListeners();
@@ -349,6 +379,8 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.STOP_ENGINE]: () => this.handleStopEngine(),
       [WSMessageType.GET_STATUS]: () => this.handleGetStatus(),
       [WSMessageType.SET_MODE]: (data) => this.handleSetMode((data as any)?.mode),
+      [WSMessageType.SUBSCRIBE_SPECTRUM]: (data, id) => this.handleSubscribeSpectrum(id, data),
+      [WSMessageType.STEP_SPECTRUM_ZOOM]: (data: unknown, id: string) => this.handleStepSpectrumZoom(id, data),
       [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data) => this.handleSetOperatorContext(data),
       [WSMessageType.SET_OPERATOR_SLOT]: (data) => this.handleSetOperatorSlot(data),
@@ -428,9 +460,16 @@ export class WSServer extends WSMessageHandler {
       await this.broadcastSlotPackUpdated(slotPack);
     });
 
-    // 监听频谱数据事件（通过事件总线，优化路径）
-    globalEventBus.on('bus:spectrumData', (spectrum) => {
-      this.broadcastSpectrumData(spectrum);
+    this.spectrumCoordinator.on('frame', (frame) => {
+      this.broadcastSpectrumFrame(frame);
+    });
+
+    this.spectrumCoordinator.on('capabilitiesChanged', (capabilities) => {
+      this.broadcastSpectrumCapabilities(capabilities);
+    });
+
+    this.spectrumZoomCoordinator.on('stateChanged', (state) => {
+      this.broadcastSpectrumZoomState(state);
     });
 
     this.digitalRadioEngine.on('decodeError', (errorInfo) => {
@@ -587,6 +626,9 @@ export class WSServer extends WSMessageHandler {
       logger.debug('voice radio mode changed', data);
       this.broadcast(WSMessageType.VOICE_RADIO_MODE_CHANGED, data);
     });
+    this.radioViewStateCoordinator.on('stateChanged', (data: RadioViewState) => {
+      this.broadcast(WSMessageType.RADIO_VIEW_STATE_CHANGED, data);
+    });
   }
 
   // CASL ability requirements for WebSocket commands
@@ -599,6 +641,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.RADIO_STOP_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { action: 'execute', subject: 'RadioControl' },
+    [WSMessageType.STEP_SPECTRUM_ZOOM]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { action: 'execute', subject: 'RadioFrequency' },
     // Operator-level commands (use Operator subject with conditions)
     [WSMessageType.SET_VOLUME_GAIN]: { action: 'manage', subject: 'Operator' },
@@ -763,6 +806,57 @@ export class WSServer extends WSMessageHandler {
   private async handleGetStatus(): Promise<void> {
     const currentStatus = this.digitalRadioEngine.getStatus();
     this.broadcastSystemStatus(currentStatus);
+  }
+
+  private async handleSubscribeSpectrum(connectionId: string, data: unknown): Promise<void> {
+    const connection = this.getConnection(connectionId);
+    if (!connection) {
+      return;
+    }
+
+    const requestedKind = (data as { kind?: SpectrumKind | null } | undefined)?.kind ?? null;
+    const capabilities = await this.spectrumCoordinator.getCapabilities();
+    const requestedSource = requestedKind
+      ? capabilities.sources.find(source => source.kind === requestedKind)
+      : null;
+
+    const effectiveKind = requestedKind && requestedSource?.available ? requestedKind : null;
+
+    await this.spectrumCoordinator.setConnectionSubscription(connectionId, effectiveKind);
+    connection.setSpectrumSubscription(effectiveKind);
+
+    if (requestedKind && effectiveKind === null) {
+      connection.send(WSMessageType.SPECTRUM_CAPABILITIES, capabilities);
+    }
+
+    try {
+      const zoomState = await this.spectrumZoomCoordinator.refresh();
+      connection.send(WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED, zoomState);
+    } catch (error) {
+      logger.warn('failed to refresh spectrum zoom state after subscription change', error);
+    }
+  }
+
+  private async handleStepSpectrumZoom(connectionId: string, data: unknown): Promise<void> {
+    const direction = (data as { direction?: 'in' | 'out' } | undefined)?.direction;
+    if (direction !== 'in' && direction !== 'out') {
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: 'stepSpectrumZoom: invalid direction',
+      });
+      return;
+    }
+
+    try {
+      logger.info('stepSpectrumZoom command received', { connectionId, direction });
+      await this.spectrumZoomCoordinator.step(direction);
+      const zoomState = await this.spectrumZoomCoordinator.refresh();
+      this.sendToConnection(connectionId, WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED, zoomState);
+    } catch (error) {
+      logger.warn('stepSpectrumZoom failed', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: `Failed to change spectrum zoom: ${(error as Error).message}`,
+      });
+    }
   }
 
   /**
@@ -1039,12 +1133,35 @@ export class WSServer extends WSMessageHandler {
   /**
    * 移除客户端连接
    */
-  removeConnection(id: string): void {
+  removeConnection(id: string, options: { closeSocket?: boolean } = {}): void {
     const connection = this.connections.get(id);
     if (connection) {
+      const clientInstanceId = connection.getClientInstanceId();
+      if (clientInstanceId && this.clientInstanceConnections.get(clientInstanceId) === id) {
+        this.clientInstanceConnections.delete(clientInstanceId);
+      }
+
       connection.removeAllListeners();
       this.connections.delete(id);
-      logger.info('connection disconnected', { id });
+      void this.spectrumCoordinator.removeConnection(id);
+      logger.info('connection disconnected', {
+        id,
+        clientInstanceId,
+        spectrumSubscription: connection.getSpectrumSubscription(),
+        closeSocket: options.closeSocket ?? false,
+      });
+
+      if (options.closeSocket) {
+        try {
+          connection.close();
+        } catch (error) {
+          logger.warn('failed to close replaced websocket connection', {
+            id,
+            clientInstanceId,
+            error,
+          });
+        }
+      }
 
       // Auto-release voice PTT if this client held it
       const voiceSessionManager = this.digitalRadioEngine.getVoiceSessionManager();
@@ -1374,11 +1491,25 @@ export class WSServer extends WSMessageHandler {
     };
   }
 
-  /**
-   * 广播频谱数据事件
-   */
-  broadcastSpectrumData(spectrumData: FT8Spectrum): void {
-    this.broadcast(WSMessageType.SPECTRUM_DATA, spectrumData);
+  broadcastSpectrumCapabilities(capabilities: SpectrumCapabilities): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    activeConnections.forEach(connection => {
+      connection.send(WSMessageType.SPECTRUM_CAPABILITIES, capabilities);
+    });
+  }
+
+  broadcastSpectrumZoomState(state: SpectrumZoomState): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+    activeConnections.forEach(connection => {
+      connection.send(WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED, state);
+    });
+  }
+
+  broadcastSpectrumFrame(frame: SpectrumFrame): void {
+    const targetConnectionIds = this.spectrumCoordinator.getSubscribedConnectionIds(frame.kind);
+    for (const connectionId of targetConnectionIds) {
+      this.sendToConnection(connectionId, WSMessageType.SPECTRUM_FRAME, frame);
+    }
   }
 
   /**
@@ -1777,11 +1908,26 @@ export class WSServer extends WSMessageHandler {
    */
   private async handleClientHandshake(connectionId: string, data: any): Promise<void> {
     try {
-      const { enabledOperatorIds } = data;
+      const { enabledOperatorIds, clientInstanceId } = data;
       const connection = this.getConnection(connectionId);
       if (!connection) {
         throw new Error(`Connection ${connectionId} does not exist`);
       }
+      if (!clientInstanceId || typeof clientInstanceId !== 'string') {
+        throw new Error('clientInstanceId is required');
+      }
+
+      connection.setClientInstanceId(clientInstanceId);
+      const existingConnectionId = this.clientInstanceConnections.get(clientInstanceId);
+      if (existingConnectionId && existingConnectionId !== connectionId) {
+        logger.warn('replacing stale websocket connection for client instance', {
+          clientInstanceId,
+          previousConnectionId: existingConnectionId,
+          nextConnectionId: connectionId,
+        });
+        this.removeConnection(existingConnectionId, { closeSocket: true });
+      }
+      this.clientInstanceConnections.set(clientInstanceId, connectionId);
 
       // 处理客户端发送的操作员偏好设置
       let requestedOperatorIds: string[];
@@ -1790,11 +1936,15 @@ export class WSServer extends WSMessageHandler {
         // 新客户端：null表示没有本地偏好，默认启用所有操作员
         const allOperators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
         requestedOperatorIds = allOperators.map(op => op.id);
-        logger.debug(`new client ${connectionId}, enabling all operators by default: [${requestedOperatorIds.join(', ')}]`);
+        logger.debug(`new client ${connectionId}, enabling all operators by default: [${requestedOperatorIds.join(', ')}]`, {
+          clientInstanceId,
+        });
       } else {
         // 已配置的客户端：直接使用发送的列表（可能为空数组表示全部禁用）
         requestedOperatorIds = enabledOperatorIds;
-        logger.debug(`configured client ${connectionId}, enabled operators: [${enabledOperatorIds.join(', ')}]`);
+        logger.debug(`configured client ${connectionId}, enabled operators: [${enabledOperatorIds.join(', ')}]`, {
+          clientInstanceId,
+        });
       }
 
       // 完成握手（带权限过滤：requestedIds ∩ authorizedOperatorIds）
@@ -1832,7 +1982,7 @@ export class WSServer extends WSMessageHandler {
       // 3. 发送握手完成消息
       connection.send('serverHandshakeComplete', {
         serverVersion: '1.0.0',
-        supportedFeatures: ['operatorFiltering', 'handshakeProtocol'],
+        supportedFeatures: ['operatorFiltering', 'handshakeProtocol', 'spectrumSubscriptions'],
         finalEnabledOperatorIds: enabledOperatorIds === null ? finalEnabledOperatorIds : undefined // 新客户端需要保存最终的操作员列表
       });
 
@@ -1858,7 +2008,28 @@ export class WSServer extends WSMessageHandler {
         logger.warn('failed to send capability snapshot', error);
       }
 
-      logger.info(`connection ${connectionId} handshake complete`);
+      try {
+        const spectrumCapabilities = await this.spectrumCoordinator.getCapabilities();
+        connection.send(WSMessageType.SPECTRUM_CAPABILITIES, spectrumCapabilities);
+      } catch (error) {
+        logger.warn('failed to send spectrum capabilities', error);
+      }
+
+      try {
+        const spectrumZoomState = await this.spectrumZoomCoordinator.refresh();
+        connection.send(WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED, spectrumZoomState);
+      } catch (error) {
+        logger.warn('failed to send spectrum zoom state', error);
+      }
+
+      try {
+        const radioViewState = await this.radioViewStateCoordinator.refresh();
+        connection.send(WSMessageType.RADIO_VIEW_STATE_CHANGED, radioViewState);
+      } catch (error) {
+        logger.warn('failed to send radio view state', error);
+      }
+
+      logger.info(`connection ${connectionId} handshake complete`, { clientInstanceId });
 
     } catch (error) {
       this.handleCommandError(error, 'clientHandshake');

@@ -13,6 +13,8 @@ const logger = createLogger('AuthStore');
 export interface AuthState {
   /** 是否已完成初始化检查 */
   initialized: boolean;
+  /** 当前会话身份是否已收敛，可安全建立业务 WebSocket */
+  sessionResolved: boolean;
   /** 服务端是否启用认证 */
   authEnabled: boolean;
   /** 是否允许公开查看 */
@@ -39,17 +41,19 @@ export interface AuthState {
 
 export type AuthAction =
   | { type: 'INIT_NO_AUTH' }
-  | { type: 'INIT_AUTH'; payload: { allowPublicViewing: boolean } }
+  | { type: 'AUTH_STATUS_LOADED'; payload: { allowPublicViewing: boolean } }
   | { type: 'LOGIN_START' }
   | { type: 'LOGIN_SUCCESS'; payload: { jwt: string; role: UserRole; label: string; operatorIds: string[]; maxOperators?: number; permissionGrants?: PermissionGrant[] } }
   | { type: 'LOGIN_FAIL'; payload: string }
   | { type: 'SET_PUBLIC_VIEWER' }
   | { type: 'RESTORE_SESSION'; payload: { jwt: string; role: UserRole; label: string; operatorIds: string[]; maxOperators?: number; permissionGrants?: PermissionGrant[] } }
+  | { type: 'RESOLVE_UNAUTHENTICATED' }
   | { type: 'LOGOUT' }
   | { type: 'CLEAR_LOGIN_ERROR' };
 
 const initialAuthState: AuthState = {
   initialized: false,
+  sessionResolved: false,
   authEnabled: false,
   allowPublicViewing: true,
   jwt: null,
@@ -68,15 +72,17 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
       return {
         ...state,
         initialized: true,
+        sessionResolved: true,
         authEnabled: false,
         role: 'admin' as UserRole,
         isPublicViewer: false,
       };
 
-    case 'INIT_AUTH':
+    case 'AUTH_STATUS_LOADED':
       return {
         ...state,
         initialized: true,
+        sessionResolved: false,
         authEnabled: true,
         allowPublicViewing: action.payload.allowPublicViewing,
       };
@@ -87,6 +93,8 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
     case 'LOGIN_SUCCESS':
       return {
         ...state,
+        initialized: true,
+        sessionResolved: true,
         jwt: action.payload.jwt,
         role: action.payload.role,
         label: action.payload.label,
@@ -104,6 +112,8 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
     case 'SET_PUBLIC_VIEWER':
       return {
         ...state,
+        initialized: true,
+        sessionResolved: true,
         isPublicViewer: true,
         role: 'viewer' as UserRole,
         jwt: null,
@@ -116,6 +126,8 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
     case 'RESTORE_SESSION':
       return {
         ...state,
+        initialized: true,
+        sessionResolved: true,
         jwt: action.payload.jwt,
         role: action.payload.role,
         label: action.payload.label,
@@ -125,9 +137,17 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         isPublicViewer: false,
       };
 
+    case 'RESOLVE_UNAUTHENTICATED':
+      return {
+        ...state,
+        initialized: true,
+        sessionResolved: true,
+      };
+
     case 'LOGOUT':
       return {
         ...state,
+        sessionResolved: true,
         jwt: null,
         role: state.authEnabled ? null : ('admin' as UserRole),
         label: null,
@@ -238,8 +258,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
                   permissionGrants: resp.permissionGrants,
                 },
               });
-              // 认证启用但已登录成功
-              dispatch({ type: 'INIT_AUTH', payload: { allowPublicViewing: true } });
             }
             return;
           } catch (err) {
@@ -272,7 +290,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         // 认证已启用
         if (!cancelled) {
-          dispatch({ type: 'INIT_AUTH', payload: { allowPublicViewing: authStatus.allowPublicViewing } });
+          dispatch({ type: 'AUTH_STATUS_LOADED', payload: { allowPublicViewing: authStatus.allowPublicViewing } });
         }
 
         // 4. 尝试恢复 localStorage 中的 JWT
@@ -305,6 +323,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // 5. 未认证：如果允许公开查看，自动设为公开观察者
         if (authStatus.allowPublicViewing && !cancelled) {
           dispatch({ type: 'SET_PUBLIC_VIEWER' });
+        } else if (!cancelled) {
+          dispatch({ type: 'RESOLVE_UNAUTHENTICATED' });
         }
         // 否则保持未认证状态，显示登录页
       } catch (err) {

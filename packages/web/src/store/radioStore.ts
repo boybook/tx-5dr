@@ -13,6 +13,10 @@ import type {
   SystemStatus,
   HamlibConfig,
   RadioInfo,
+  SpectrumCapabilities,
+  SpectrumFrame,
+  SpectrumKind,
+  SpectrumZoomState,
   RadioProfile,
   ProfileChangedEvent,
   ReconnectProgress,
@@ -20,7 +24,8 @@ import type {
   VoicePTTLock,
   EngineMode,
   StationInfo,
-  CapabilityState
+  CapabilityState,
+  RadioViewState,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
@@ -33,6 +38,8 @@ import {
   isRetryableError
 } from '../utils/errorToast';
 import i18n from '../i18n';
+import { getPreferredSpectrumKind, setPreferredSpectrumKind } from '../utils/spectrumPreferences';
+import { getWebSocketClientInstanceId } from '../utils/wsClientInstance';
 
 const logger = createLogger('RadioStore');
 
@@ -120,11 +127,18 @@ export interface RadioState {
   engineMode: EngineMode;
   voicePttLock: VoicePTTLock | null;
   currentRadioMode: string | null;
+  currentRadioFrequency: number | null;
+  radioViewState: RadioViewState | null;
   // 电台错误频道
   radioErrors: RadioErrorRecord[];
   latestRadioError: RadioErrorRecord | null;
   // 电台站基础信息
   stationInfo: StationInfo | null;
+  spectrumCapabilities: SpectrumCapabilities | null;
+  spectrumZoomState: SpectrumZoomState | null;
+  selectedSpectrumKind: SpectrumKind | null;
+  subscribedSpectrumKind: SpectrumKind | null;
+  latestSpectrumFrame: SpectrumFrame | null;
 }
 
 // 错误事件数据结构
@@ -190,9 +204,16 @@ export type RadioAction =
   | { type: 'setEngineMode'; payload: EngineMode }
   | { type: 'voicePttLockChanged'; payload: VoicePTTLock }
   | { type: 'voiceRadioModeChanged'; payload: string }
+  | { type: 'setCurrentRadioFrequency'; payload: number | null }
+  | { type: 'setRadioViewState'; payload: RadioViewState }
   | { type: 'setStationInfo'; payload: StationInfo }
   | { type: 'setCapabilityList'; payload: { capabilities: CapabilityState[] } }
-  | { type: 'updateCapabilityState'; payload: CapabilityState };
+  | { type: 'updateCapabilityState'; payload: CapabilityState }
+  | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities }
+  | { type: 'setSpectrumZoomState'; payload: SpectrumZoomState }
+  | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
+  | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
+  | { type: 'setLatestSpectrumFrame'; payload: SpectrumFrame | null };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -220,9 +241,16 @@ const initialRadioState: RadioState = {
   engineMode: 'digital',
   voicePttLock: null,
   currentRadioMode: null,
+  currentRadioFrequency: null,
+  radioViewState: null,
   radioErrors: [],
   latestRadioError: null,
-  stationInfo: null
+  stationInfo: null,
+  spectrumCapabilities: null,
+  spectrumZoomState: null,
+  selectedSpectrumKind: null,
+  subscribedSpectrumKind: null,
+  latestSpectrumFrame: null,
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -242,6 +270,20 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         // Extract engineMode from systemStatus (defaults to 'digital')
         engineMode: (action.payload as SystemStatus & { engineMode?: EngineMode })?.engineMode || state.engineMode,
         currentRadioMode: (action.payload as SystemStatus & { currentRadioMode?: string })?.currentRadioMode ?? state.currentRadioMode
+      };
+
+    case 'setCurrentRadioFrequency':
+      return {
+        ...state,
+        currentRadioFrequency: action.payload,
+      };
+
+    case 'setRadioViewState':
+      return {
+        ...state,
+        radioViewState: action.payload,
+        currentRadioMode: action.payload.radioMode ?? state.currentRadioMode,
+        currentRadioFrequency: action.payload.frequency ?? state.currentRadioFrequency,
       };
     
     case 'decodeError':
@@ -320,6 +362,39 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         capabilityStates: action.payload.radioConnected
           ? state.capabilityStates
           : new Map<string, CapabilityState>(),
+        currentRadioFrequency: action.payload.radioConnected ? state.currentRadioFrequency : null,
+        radioViewState: action.payload.radioConnected ? state.radioViewState : null,
+        spectrumZoomState: action.payload.radioConnected ? state.spectrumZoomState : null,
+      };
+
+    case 'setSpectrumCapabilities':
+      return {
+        ...state,
+        spectrumCapabilities: action.payload,
+      };
+
+    case 'setSpectrumZoomState':
+      return {
+        ...state,
+        spectrumZoomState: action.payload,
+      };
+
+    case 'setSelectedSpectrumKind':
+      return {
+        ...state,
+        selectedSpectrumKind: action.payload,
+      };
+
+    case 'setSubscribedSpectrumKind':
+      return {
+        ...state,
+        subscribedSpectrumKind: action.payload,
+      };
+
+    case 'setLatestSpectrumFrame':
+      return {
+        ...state,
+        latestSpectrumFrame: action.payload,
       };
 
     case 'pttStatusChanged':
@@ -628,8 +703,28 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return;
     }
     
+    const clientInstanceId = getWebSocketClientInstanceId();
     const radioService = new RadioService();
     radioServiceRef.current = radioService;
+
+    const applySpectrumSelection = (capabilities: SpectrumCapabilities) => {
+      const profileId = capabilities.profileId;
+      const preferredKind = getPreferredSpectrumKind(profileId);
+      const preferredAvailable = preferredKind
+        ? capabilities.sources.some(source => source.kind === preferredKind && source.available)
+        : false;
+      const effectiveKind = preferredAvailable ? preferredKind : capabilities.defaultKind;
+
+      radioDispatch({ type: 'setSpectrumCapabilities', payload: capabilities });
+      radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
+      radioDispatch({ type: 'setSubscribedSpectrumKind', payload: effectiveKind });
+      radioDispatch({ type: 'setLatestSpectrumFrame', payload: null });
+      radioService.subscribeSpectrum(effectiveKind);
+
+      if (profileId && effectiveKind) {
+        setPreferredSpectrumKind(profileId, effectiveKind);
+      }
+    };
 
     // 设置事件监听器 - 分发到不同的reducer
     const eventMap: Record<string, (data?: unknown) => void> = {
@@ -640,9 +735,10 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (!authStateRef.current.authEnabled) {
           const handshakeOperatorIds = getHandshakeOperatorIds();
           logger.info('Auth disabled, sending handshake directly:', {
-            enabledOperatorIds: handshakeOperatorIds
+            enabledOperatorIds: handshakeOperatorIds,
+            clientInstanceId,
           });
-          radioService.sendHandshake(handshakeOperatorIds);
+          radioService.sendHandshake(handshakeOperatorIds, clientInstanceId);
         }
         // else: 等待 authRequired → 发送 token/publicViewer → authResult → 握手
       },
@@ -669,7 +765,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           logger.info('Auth succeeded, role:', result.role);
           // 认证成功后发送握手
           const handshakeOperatorIds = getHandshakeOperatorIds();
-          radioService.sendHandshake(handshakeOperatorIds);
+          radioService.sendHandshake(handshakeOperatorIds, clientInstanceId);
         } else {
           const errorCode = result.error;
           const localizedError = errorCode
@@ -697,6 +793,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       systemStatus: (data: unknown) => {
         radioDispatch({ type: 'systemStatus', payload: data as SystemStatus });
+      },
+      spectrumCapabilities: (data: unknown) => {
+        applySpectrumSelection(data as SpectrumCapabilities);
+      },
+      spectrumFrame: (data: unknown) => {
+        radioDispatch({ type: 'setLatestSpectrumFrame', payload: data as SpectrumFrame });
+      },
+      spectrumZoomStateChanged: (data: unknown) => {
+        radioDispatch({ type: 'setSpectrumZoomState', payload: data as SpectrumZoomState });
       },
       decodeError: (data: unknown) => {
         radioDispatch({ type: 'decodeError', payload: data as DecodeErrorData });
@@ -852,10 +957,18 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
         };
       })(),
-      // 频率变化：清空本地 SlotPack 历史
-      frequencyChanged: () => {
-        logger.debug('Frequency changed, clearing local slot history');
+      // 频率变化：更新当前绝对频率并清空本地 SlotPack 历史
+      frequencyChanged: (data: unknown) => {
+        const freqData = data as { frequency?: number };
+        radioDispatch({
+          type: 'setCurrentRadioFrequency',
+          payload: typeof freqData.frequency === 'number' ? freqData.frequency : null,
+        });
+        logger.debug('Frequency changed, clearing local slot history', { frequency: freqData.frequency });
         slotPacksDispatch({ type: 'CLEAR_DATA' });
+      },
+      radioViewStateChanged: (data: unknown) => {
+        radioDispatch({ type: 'setRadioViewState', payload: data as RadioViewState });
       },
       // PTT状态变化
       pttStatusChanged: (data: unknown) => {
@@ -1187,6 +1300,21 @@ export const useProfiles = () => {
 export const useStationInfo = () => {
   const { state } = useRadioState();
   return state.stationInfo;
+};
+
+export const useSpectrum = () => {
+  const { state, dispatch } = useRadioState();
+  return {
+    capabilities: state.spectrumCapabilities,
+    zoomState: state.spectrumZoomState,
+    selectedKind: state.selectedSpectrumKind,
+    subscribedKind: state.subscribedSpectrumKind,
+    latestFrame: state.latestSpectrumFrame,
+    setSelectedKind: (kind: SpectrumKind | null) => {
+      dispatch({ type: 'setSelectedSpectrumKind', payload: kind });
+      dispatch({ type: 'setSubscribedSpectrumKind', payload: kind });
+    },
+  };
 };
 
 export const useRadioErrors = () => {

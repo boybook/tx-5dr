@@ -1,8 +1,7 @@
 import { EventEmitter } from 'eventemitter3';
-import type { FT8Spectrum } from '@tx5dr/contracts';
+import type { SpectrumFrame } from '@tx5dr/contracts';
 import type { AudioBufferProvider } from '@tx5dr/core';
 import { SpectrumAnalyzer } from './SpectrumAnalyzer.js';
-import { globalEventBus } from '../utils/EventBus.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('SpectrumScheduler');
@@ -27,7 +26,7 @@ export interface SpectrumConfig {
  * 频谱调度器事件
  */
 export interface SpectrumSchedulerEvents {
-  spectrumReady: (spectrum: FT8Spectrum) => void;
+  spectrumReady: (spectrum: SpectrumFrame) => void;
   error: (error: Error) => void;
 }
 
@@ -41,6 +40,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   private analyzer: SpectrumAnalyzer | null = null;
   private analysisTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
+  private subscriptionActive = false;
   private sampleRate = 48000; // 默认采样率
 
   // PTT 状态管理
@@ -110,14 +110,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
     this.isRunning = true;
     this.resetStats();
-
-    // 启动定时分析
-    this.analysisTimer = setInterval(() => {
-      this.performAnalysis();
-    }, this.config.analysisInterval);
-
-    // 立即执行一次分析
-    this.performAnalysis();
+    this.updateTimerState();
   }
 
   /**
@@ -132,6 +125,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
     this.isRunning = false;
     this.pausedDueToPTT = false; // 重置暂停状态
+    this.subscriptionActive = false;
 
     if (this.analysisTimer) {
       clearInterval(this.analysisTimer);
@@ -167,16 +161,22 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     }
   }
 
+  setSubscriptionActive(active: boolean): void {
+    if (this.subscriptionActive === active) {
+      return;
+    }
+
+    this.subscriptionActive = active;
+    this.updateTimerState();
+  }
+
   /**
    * 暂停频谱分析（由于PTT激活）
    */
   private pauseAnalysis(): void {
     if (this.isRunning && !this.pausedDueToPTT) {
       this.pausedDueToPTT = true;
-      if (this.analysisTimer) {
-        clearInterval(this.analysisTimer);
-        this.analysisTimer = null;
-      }
+      this.updateTimerState();
       logger.debug('spectrum analysis paused (PTT active)');
     }
   }
@@ -187,14 +187,32 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   private resumeAnalysis(): void {
     if (this.isRunning && this.pausedDueToPTT) {
       this.pausedDueToPTT = false;
-      // 重新启动定时分析
+      this.updateTimerState();
+      logger.debug('spectrum analysis resumed (PTT stopped)');
+    }
+  }
+
+  private updateTimerState(): void {
+    const shouldRunTimer =
+      this.isRunning &&
+      this.subscriptionActive &&
+      !this.pausedDueToPTT &&
+      !!this.audioProvider &&
+      !!this.analyzer;
+
+    if (shouldRunTimer && !this.analysisTimer) {
       this.analysisTimer = setInterval(() => {
         this.performAnalysis();
       }, this.config.analysisInterval);
-
-      // 立即执行一次分析
       this.performAnalysis();
-      logger.debug('spectrum analysis resumed (PTT stopped)');
+      logger.debug('spectrum analysis timer started');
+      return;
+    }
+
+    if (!shouldRunTimer && this.analysisTimer) {
+      clearInterval(this.analysisTimer);
+      this.analysisTimer = null;
+      logger.debug('spectrum analysis timer stopped');
     }
   }
 
@@ -232,7 +250,6 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       // 将ArrayBuffer转换为Float32Array
       const audioData = new Float32Array(audioBuffer);
 
-      // 使用原生 SpectrumAnalyzer 执行 FFT
       const spectrum = await this.analyzer.analyze(audioData);
 
       const processingTime = performance.now() - startTime;
@@ -240,17 +257,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       this.stats.totalProcessingTime += processingTime;
       this.stats.averageProcessingTime = this.stats.totalProcessingTime / this.stats.totalAnalyses;
 
-      // 📝 EventBus 优化：双路径策略
-      // 原路径 (3层)：SpectrumScheduler → DigitalRadioEngine
-      //   - 用途：DigitalRadioEngine 健康检查（每100次采样）
-      //   - 事件名：spectrumReady
-      // EventBus (2层)：SpectrumScheduler → EventBus → WSServer
-      //   - 用途：WebSocket 广播到前端（~6.7Hz 高频）
-      //   - 事件名：bus:spectrumData
-      //   - 性能：直达，减少33%开销
-
-      this.emit('spectrumReady', spectrum);  // 原路径
-      globalEventBus.emit('bus:spectrumData', spectrum);  // EventBus 直达
+      this.emit('spectrumReady', spectrum);
     } catch (error) {
       logger.error('spectrum analysis failed:', error);
       this.stats.errorCount++;

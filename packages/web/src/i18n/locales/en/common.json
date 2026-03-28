@@ -115,6 +115,8 @@
   },
   "spectrum": {
     "waiting": "Waiting for spectrum data...",
+    "audioSource": "Audio",
+    "radioSdrSource": "Radio SDR",
     "popOut": "Show in separate window",
     "rangeSettings": "Spectrum Range Settings",
     "autoMode": "Auto Mode",
@@ -126,7 +128,10 @@
     "expansionFactor": "Range expansion factor",
     "minDb": "Min (dB)",
     "maxDb": "Max (dB)",
-    "currentRange": "Current range: {{min}} ~ {{max}} dB"
+    "currentRange": "Current range: {{min}} ~ {{max}} dB",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "zoomUnavailable": "Zoom unavailable"
   },
   "splitLayout": {
     "decode": "Decode",

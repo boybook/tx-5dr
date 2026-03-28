@@ -20,6 +20,26 @@ export interface RxFrequency {
 export interface TxFrequency {
   operatorId: string;
   frequency: number;
+  callsign?: string;
+}
+
+export interface BasebandInteractionRange {
+  min: number;
+  max: number;
+}
+
+export interface InteractionFrequencyRange {
+  min: number;
+  max: number;
+}
+
+export interface TxBandOverlay {
+  id: string;
+  label: string;
+  lineFrequency: number;
+  rangeStartFrequency: number;
+  rangeEndFrequency: number;
+  draggable?: boolean;
 }
 
 interface WebGLWaterfallProps {
@@ -33,9 +53,16 @@ interface WebGLWaterfallProps {
   autoRangeConfig?: AutoRangeConfig;
   rxFrequencies?: RxFrequency[];
   txFrequencies?: TxFrequency[];
+  txBandOverlays?: TxBandOverlay[];
+  frequencyRangeMode?: 'baseband' | 'absolute';
+  referenceFrequencyHz?: number | null;
+  basebandInteractionRange?: BasebandInteractionRange;
+  interactionFrequencyMode?: 'baseband' | 'absolute';
+  interactionFrequencyRange?: InteractionFrequencyRange | null;
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
+  onTxBandOverlayFrequencyChange?: (id: string, frequency: number) => void;
   onRightClickSetFrequency?: (frequency: number) => void;
-  onActualRangeChange?: (range: { min: number; max: number }) => void;
+  onActualRangeChange?: (range: { min: number; max: number } | null) => void;
   hoverFrequency?: number | null;
   /** 纹理总行数，不足时底部用暗色填充，实现从顶部逐渐填充的效果 */
   totalRows?: number;
@@ -59,7 +86,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   },
   rxFrequencies = [],
   txFrequencies = [],
+  txBandOverlays = [],
+  frequencyRangeMode = 'baseband',
+  referenceFrequencyHz = null,
+  basebandInteractionRange = { min: 0, max: 3000 },
+  interactionFrequencyMode = 'baseband',
+  interactionFrequencyRange = null,
   onTxFrequencyChange,
+  onTxBandOverlayFrequencyChange,
   onRightClickSetFrequency,
   onActualRangeChange,
   hoverFrequency,
@@ -86,6 +120,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const dragDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const cooldownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const latestDragFrequencyRef = useRef<{ operatorId: string; frequency: number } | null>(null);
+  const [draggingBandOverlayId, setDraggingBandOverlayId] = React.useState<string | null>(null);
+  const [localBandOverlayOverride, setLocalBandOverlayOverride] =
+    React.useState<{ id: string; frequency: number } | null>(null);
+  const [cooldownBandOverlayId, setCooldownBandOverlayId] = React.useState<string | null>(null);
+  const latestBandOverlayFrequencyRef = useRef<{ id: string; frequency: number } | null>(null);
 
   // RX Popover hover状态
   const [hoveredRxCallsign, setHoveredRxCallsign] = React.useState<string | null>(null);
@@ -120,6 +159,17 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const scrollAnimRef = useRef<number>();
   const lastDataTimeRef = useRef(0);
   const frameIntervalRef = useRef(100);
+
+  const resetAutoRangeState = useCallback(() => {
+    rangeUpdateCounterRef.current = 0;
+    cachedRangeRef.current = null;
+    actualRangeRef.current = null;
+    frozenSegmentsRef.current = [];
+    activeRowCountRef.current = 0;
+    prevDataRef.current = null;
+    setActualRange(null);
+    onActualRangeChange?.(null);
+  }, [onActualRangeChange]);
 
   // 优化后的数据范围计算 - 使用采样和缓存
   // 当存在冻结段时，只从活跃行（当前状态）采样
@@ -826,6 +876,34 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
   }, [data, updateTexture, render, totalRows]);
 
+  useEffect(() => {
+    if (data.length === 0) {
+      resetAutoRangeState();
+    }
+  }, [data.length, resetAutoRangeState]);
+
+  useEffect(() => {
+    resetAutoRangeState();
+  }, [
+    autoRange,
+    frequencies.length,
+    frequencies[0],
+    frequencies[frequencies.length - 1],
+    resetAutoRangeState,
+  ]);
+
+  useEffect(() => {
+    if (!autoRange) return;
+    resetAutoRangeState();
+  }, [
+    autoRange,
+    autoRangeConfig.updateInterval,
+    autoRangeConfig.minPercentile,
+    autoRangeConfig.maxPercentile,
+    autoRangeConfig.rangeExpansionFactor,
+    resetAutoRangeState,
+  ]);
+
   // height属性变化时重新调整尺寸
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -869,13 +947,49 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   const FREQ_POSITION_OFFSET = 15;
 
+  const clampBasebandFrequency = useCallback((frequency: number) => {
+    return Math.round(Math.max(basebandInteractionRange.min, Math.min(basebandInteractionRange.max, frequency)));
+  }, [basebandInteractionRange.max, basebandInteractionRange.min]);
+
+  const clampInteractionFrequency = useCallback((frequency: number) => {
+    if (!interactionFrequencyRange) {
+      return Math.round(frequency);
+    }
+    return Math.round(Math.max(interactionFrequencyRange.min, Math.min(interactionFrequencyRange.max, frequency)));
+  }, [interactionFrequencyRange]);
+
+  const getDisplayFrequency = useCallback((basebandFrequency: number) => {
+    if (!frequencies || frequencies.length === 0) return null;
+    if (frequencyRangeMode === 'absolute') {
+      const referenceFrequency = referenceFrequencyHz ?? null;
+      if (referenceFrequency === null) {
+        return null;
+      }
+      return referenceFrequency + basebandFrequency;
+    }
+    return basebandFrequency;
+  }, [frequencies, frequencyRangeMode, referenceFrequencyHz]);
+
   // 计算频率到位置的百分比
-  const getFrequencyPosition = useCallback((frequency: number) => {
+  const getFrequencyPosition = useCallback((displayFrequency: number) => {
     if (!frequencies || frequencies.length === 0) return 0;
     const minFreq = frequencies[0];
     const maxFreq = frequencies[frequencies.length - 1];
-    return ((frequency + FREQ_POSITION_OFFSET - minFreq) / (maxFreq - minFreq)) * 100;
+    if (maxFreq <= minFreq) return 0;
+    return ((displayFrequency + FREQ_POSITION_OFFSET - minFreq) / (maxFreq - minFreq)) * 100;
   }, [frequencies]);
+
+  const getMarkerPosition = useCallback((basebandFrequency: number) => {
+    const displayFrequency = getDisplayFrequency(basebandFrequency);
+    if (displayFrequency === null) return null;
+
+    const position = getFrequencyPosition(displayFrequency);
+    if (!Number.isFinite(position) || position < 0 || position > 100) {
+      return null;
+    }
+
+    return position;
+  }, [getDisplayFrequency, getFrequencyPosition]);
 
   // 从鼠标位置计算频率
   const getFrequencyFromMousePosition = useCallback((clientX: number) => {
@@ -888,11 +1002,31 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     const minFreq = frequencies[0];
     const maxFreq = frequencies[frequencies.length - 1];
-    const frequency = minFreq + percentage * (maxFreq - minFreq) - FREQ_POSITION_OFFSET;
+    const displayFrequency = minFreq + percentage * (maxFreq - minFreq) - FREQ_POSITION_OFFSET;
+    const basebandFrequency = frequencyRangeMode === 'absolute'
+      ? displayFrequency - (referenceFrequencyHz ?? minFreq)
+      : displayFrequency;
 
-    // 限制在有效范围内并四舍五入
-    return Math.round(Math.max(minFreq, Math.min(maxFreq, frequency)));
-  }, [frequencies]);
+    return clampBasebandFrequency(basebandFrequency);
+  }, [clampBasebandFrequency, frequencies, frequencyRangeMode, referenceFrequencyHz]);
+
+  const getInteractionFrequencyFromMousePosition = useCallback((clientX: number) => {
+    const container = containerRef.current;
+    if (!container || !frequencies || frequencies.length === 0) return 0;
+
+    const containerRect = container.getBoundingClientRect();
+    const relativeX = clientX - containerRect.left;
+    const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
+    const minFreq = frequencies[0];
+    const maxFreq = frequencies[frequencies.length - 1];
+    const displayFrequency = minFreq + percentage * (maxFreq - minFreq) - FREQ_POSITION_OFFSET;
+
+    if (interactionFrequencyMode === 'absolute') {
+      return clampInteractionFrequency(displayFrequency);
+    }
+
+    return getFrequencyFromMousePosition(clientX);
+  }, [clampInteractionFrequency, frequencies, getFrequencyFromMousePosition, interactionFrequencyMode]);
 
   // 拖动处理函数
   const handleMouseDown = useCallback((operatorId: string) => {
@@ -924,6 +1058,22 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }, 200);
   }, [draggingOperatorId, onTxFrequencyChange, getFrequencyFromMousePosition]);
 
+  const handleBandOverlayMouseMove = useCallback((e: MouseEvent) => {
+    if (!draggingBandOverlayId || !onTxBandOverlayFrequencyChange) return;
+
+    const newFrequency = getInteractionFrequencyFromMousePosition(e.clientX);
+    setLocalBandOverlayOverride({ id: draggingBandOverlayId, frequency: newFrequency });
+    latestBandOverlayFrequencyRef.current = { id: draggingBandOverlayId, frequency: newFrequency };
+
+    if (dragDebounceRef.current) clearTimeout(dragDebounceRef.current);
+    dragDebounceRef.current = setTimeout(() => {
+      const latest = latestBandOverlayFrequencyRef.current;
+      if (latest && onTxBandOverlayFrequencyChange) {
+        onTxBandOverlayFrequencyChange(latest.id, latest.frequency);
+      }
+    }, 200);
+  }, [draggingBandOverlayId, getInteractionFrequencyFromMousePosition, onTxBandOverlayFrequencyChange]);
+
   const handleMouseUp = useCallback(() => {
     if (!draggingOperatorId) return;
 
@@ -949,6 +1099,30 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }, 500);
   }, [draggingOperatorId, onTxFrequencyChange]);
 
+  const handleBandOverlayMouseUp = useCallback(() => {
+    if (!draggingBandOverlayId) return;
+
+    if (dragDebounceRef.current) {
+      clearTimeout(dragDebounceRef.current);
+      dragDebounceRef.current = null;
+    }
+
+    const latest = latestBandOverlayFrequencyRef.current;
+    if (latest && onTxBandOverlayFrequencyChange) {
+      onTxBandOverlayFrequencyChange(latest.id, latest.frequency);
+    }
+
+    const overlayId = draggingBandOverlayId;
+    setDraggingBandOverlayId(null);
+    setCooldownBandOverlayId(overlayId);
+    cooldownTimerRef.current = setTimeout(() => {
+      setCooldownBandOverlayId(null);
+      setLocalBandOverlayOverride(null);
+      latestBandOverlayFrequencyRef.current = null;
+      cooldownTimerRef.current = null;
+    }, 500);
+  }, [draggingBandOverlayId, onTxBandOverlayFrequencyChange]);
+
   // 监听拖动事件
   useEffect(() => {
     if (draggingOperatorId) {
@@ -962,6 +1136,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
   }, [draggingOperatorId, handleMouseMove, handleMouseUp]);
 
+  useEffect(() => {
+    if (draggingBandOverlayId) {
+      document.addEventListener('mousemove', handleBandOverlayMouseMove);
+      document.addEventListener('mouseup', handleBandOverlayMouseUp);
+
+      return () => {
+        document.removeEventListener('mousemove', handleBandOverlayMouseMove);
+        document.removeEventListener('mouseup', handleBandOverlayMouseUp);
+      };
+    }
+  }, [draggingBandOverlayId, handleBandOverlayMouseMove, handleBandOverlayMouseUp]);
+
   return (
     <div
       ref={containerRef}
@@ -969,7 +1155,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       onContextMenu={(e) => {
         if (onRightClickSetFrequency) {
           e.preventDefault();
-          const frequency = getFrequencyFromMousePosition(e.clientX);
+          const frequency = getInteractionFrequencyFromMousePosition(e.clientX);
           onRightClickSetFrequency(frequency);
         }
       }}
@@ -983,12 +1169,75 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       {/* 频率标记层 */}
       <div className="absolute inset-0 pointer-events-none">
         {/* TX标记 - 红色 */}
+        {txBandOverlays.map((overlay) => {
+          const isOverridden = localBandOverlayOverride?.id === overlay.id
+            && (draggingBandOverlayId === overlay.id || cooldownBandOverlayId === overlay.id);
+          const lineFrequency = isOverridden ? localBandOverlayOverride!.frequency : overlay.lineFrequency;
+          const deltaStart = overlay.rangeStartFrequency - overlay.lineFrequency;
+          const deltaEnd = overlay.rangeEndFrequency - overlay.lineFrequency;
+          const effectiveStart = lineFrequency + deltaStart;
+          const effectiveEnd = lineFrequency + deltaEnd;
+          const linePosition = getFrequencyPosition(lineFrequency);
+          const startPosition = getFrequencyPosition(Math.min(effectiveStart, effectiveEnd));
+          const endPosition = getFrequencyPosition(Math.max(effectiveStart, effectiveEnd));
+
+          if (!Number.isFinite(linePosition) || !Number.isFinite(startPosition) || !Number.isFinite(endPosition)) {
+            return null;
+          }
+          if (endPosition < 0 || startPosition > 100) {
+            return null;
+          }
+
+          const clippedLeft = Math.max(0, startPosition);
+          const clippedRight = Math.min(100, endPosition);
+          const width = Math.max(0, clippedRight - clippedLeft);
+          const draggable = overlay.draggable && !!onTxBandOverlayFrequencyChange;
+          const isDragging = draggingBandOverlayId === overlay.id;
+
+          return (
+            <div
+              key={`tx-band-${overlay.id}`}
+              className="absolute inset-0 h-full pointer-events-none"
+            >
+              {width > 0 && (
+                <div
+                  className="absolute top-0 h-full bg-red-500/15"
+                  style={{
+                    left: `${clippedLeft}%`,
+                    width: `${width}%`,
+                  }}
+                />
+              )}
+              <div
+                className={`absolute top-0 h-full pointer-events-auto transition-opacity ${draggable ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'}`}
+                style={{ left: `${linePosition}%`, transform: 'translateX(-50%)' }}
+                onMouseDown={draggable ? () => {
+                  if (cooldownTimerRef.current) {
+                    clearTimeout(cooldownTimerRef.current);
+                    cooldownTimerRef.current = null;
+                  }
+                  setCooldownBandOverlayId(null);
+                  setDraggingBandOverlayId(overlay.id);
+                } : undefined}
+              >
+                <div className={`w-0.5 h-full ${isDragging ? 'bg-red-500' : 'bg-red-500/50'}`} />
+                <div className="absolute bottom-1 left-1/2 -translate-x-1/2 px-1 text-xs font-semibold bg-black/60 rounded text-red-500 select-none">
+                  {overlay.label}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
         {txFrequencies.map(({ operatorId, frequency, callsign }) => {
           // 拖动中或冷却期：使用本地覆盖频率
           const isOverridden = localFrequencyOverride?.operatorId === operatorId &&
             (draggingOperatorId === operatorId || cooldownOperatorId === operatorId);
           const displayFrequency = isOverridden ? localFrequencyOverride!.frequency : frequency;
-          const position = getFrequencyPosition(displayFrequency);
+          const position = getMarkerPosition(displayFrequency);
+          if (position === null) {
+            return null;
+          }
           const isDragging = draggingOperatorId === operatorId;
           const showPopover = txFrequencies.length > 1;
           const isHovered = hoveredTxOperatorId === operatorId;
@@ -1045,7 +1294,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
         {/* RX标记 - 绿色，带Popover (hover触发) */}
         {rxFrequencies.map(({ callsign, frequency }) => {
-          const position = getFrequencyPosition(frequency);
+          const position = getMarkerPosition(frequency);
+          if (position === null) {
+            return null;
+          }
           const isOpen = hoveredRxCallsign === callsign;
           return (
             <Popover
@@ -1087,10 +1339,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         })}
 
         {/* Hover消息频率线 - 淡白色 */}
-        {hoverFrequency !== null && hoverFrequency !== undefined && (
+        {hoverFrequency !== null && hoverFrequency !== undefined && getMarkerPosition(hoverFrequency) !== null && (
           <div
             className="absolute top-0 h-full pointer-events-none"
-            style={{ left: `${getFrequencyPosition(hoverFrequency)}%`, transform: 'translateX(-50%)' }}
+            style={{ left: `${getMarkerPosition(hoverFrequency)}%`, transform: 'translateX(-50%)' }}
           >
             <div className="w-0.5 h-full bg-white/30" />
           </div>

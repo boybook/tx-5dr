@@ -1,5 +1,6 @@
 import { api, WSClient } from '@tx5dr/core';
-import { getWebSocketUrl, getApiBaseUrl } from '../utils/config';
+import type { SpectrumKind, SpectrumZoomDirection } from '@tx5dr/contracts';
+import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('RadioService');
@@ -105,6 +106,18 @@ export class RadioService {
   getSystemStatus(): void {
     if (this.isConnected) {
       this.wsClient.getStatus();
+    }
+  }
+
+  subscribeSpectrum(kind: SpectrumKind | null): void {
+    if (this.isConnected) {
+      this.wsClient.subscribeSpectrum(kind);
+    }
+  }
+
+  stepSpectrumZoom(direction: SpectrumZoomDirection): void {
+    if (this.isConnected) {
+      this.wsClient.stepSpectrumZoom(direction);
     }
   }
 
@@ -258,11 +271,12 @@ export class RadioService {
   /**
    * 发送握手消息
    */
-  sendHandshake(enabledOperatorIds: string[] | null): void {
+  sendHandshake(enabledOperatorIds: string[] | null, clientInstanceId: string): void {
     if (this.isConnected) {
-      logger.debug('Sending handshake:', { enabledOperatorIds });
+      logger.debug('Sending handshake:', { enabledOperatorIds, clientInstanceId });
       this.wsClient.send('clientHandshake', {
         enabledOperatorIds,
+        clientInstanceId,
         clientVersion: '1.0.0',
         clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
       });

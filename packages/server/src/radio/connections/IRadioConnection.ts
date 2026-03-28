@@ -201,6 +201,24 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   getMode(): Promise<{ mode: string; bandwidth: string }>;
 
   /**
+   * 获取当前 SDR 频谱支持的 span 列表（Hz）
+   * @optional 仅支持 SDR 缩放的连接实现
+   */
+  getSpectrumSpans?(): Promise<number[]>;
+
+  /**
+   * 获取当前 SDR 频谱 span（Hz）
+   * @optional 仅支持 SDR 缩放的连接实现
+   */
+  getCurrentSpectrumSpan?(): Promise<number | null>;
+
+  /**
+   * 设置当前 SDR 频谱 span（Hz）
+   * @optional 仅支持 SDR 缩放的连接实现
+   */
+  setSpectrumSpan?(spanHz: number): Promise<void>;
+
+  /**
    * 获取连接信息（用于调试和日志）
    */
   getConnectionInfo(): {
