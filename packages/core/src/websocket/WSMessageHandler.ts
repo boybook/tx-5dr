@@ -16,6 +16,8 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.SPECTRUM_CAPABILITIES]: 'spectrumCapabilities',
   [WSMessageType.SPECTRUM_FRAME]: 'spectrumFrame',
   [WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED]: 'spectrumZoomStateChanged',
+  [WSMessageType.SPECTRUM_DISPLAY_STATE_CHANGED]: 'spectrumDisplayStateChanged',
+  [WSMessageType.DIGITAL_SPECTRUM_WINDOW_STATE_CHANGED]: 'digitalSpectrumWindowStateChanged',
   [WSMessageType.RADIO_VIEW_STATE_CHANGED]: 'radioViewStateChanged',
   [WSMessageType.DECODE_ERROR]: 'decodeError',
   [WSMessageType.SYSTEM_STATUS]: 'systemStatus',

@@ -6332,8 +6332,8 @@ __metadata:
     fast-jwt: "npm:^6.1.0"
     fastify: "npm:^5.8.4"
     fastify-plugin: "npm:^5.1.0"
-    hamlib: "npm:0.3.1"
-    icom-wlan-node: "npm:0.5.0"
+    hamlib: "npm:0.3.3"
+    icom-wlan-node: "npm:0.5.1"
     mic: "npm:^2.1.2"
     node-wav: "npm:^0.0.2"
     opusscript: "npm:^0.1.1"
@@ -11942,14 +11942,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"hamlib@npm:0.3.1":
-  version: 0.3.1
-  resolution: "hamlib@npm:0.3.1"
+"hamlib@npm:0.3.3":
+  version: 0.3.3
+  resolution: "hamlib@npm:0.3.3"
   dependencies:
     node-addon-api: "npm:^4.3.0"
     node-gyp: "npm:latest"
     node-gyp-build: "npm:^4.8.0"
-  checksum: 10c0/6751d069b86708e5803908266463238bd32ffb74e55c735e8c9a4f649a9edcd7383daeefa6aaf044ed07702d0ef61d892b12c2105956c1e174065fe5ff924aa8
+  checksum: 10c0/de10f7508d2c6ecc69ddc786c9220ad926abe847b5cde606c7c9567c292500b8220da328c788c69c8ec5b33e1cdcbcfc11ab7af8fe6e21a46b70e341cac4e5ae
   conditions: (os=linux | os=darwin | os=win32) & (cpu=x64 | cpu=arm64)
   languageName: node
   linkType: hard
@@ -12359,10 +12359,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"icom-wlan-node@npm:0.5.0":
-  version: 0.5.0
-  resolution: "icom-wlan-node@npm:0.5.0"
-  checksum: 10c0/36e7468b64f64f33d6453f97d51f89ee2d20183ebf61bb9078843fd411230c06cbaee78a8091efbc27c9445ba71efdd36d01c7394c6c9f45385a07a16fbb3820
+"icom-wlan-node@npm:0.5.1":
+  version: 0.5.1
+  resolution: "icom-wlan-node@npm:0.5.1"
+  checksum: 10c0/a3d653035b6c11d3cfbb2c54d49a0421e123a08bc9c5ccc11f27cf1baf8ca6a944a85be7dbf0463039a8b6021e664e8b4f82fbe829bb80db9c9eb06299344d0f
   languageName: node
   linkType: hard
 

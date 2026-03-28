@@ -14,8 +14,10 @@ import type {
   HamlibConfig,
   RadioInfo,
   SpectrumCapabilities,
+  DigitalSpectrumWindowState,
   SpectrumFrame,
   SpectrumKind,
+  SpectrumDisplayState,
   SpectrumZoomState,
   RadioProfile,
   ProfileChangedEvent,
@@ -129,6 +131,7 @@ export interface RadioState {
   currentRadioMode: string | null;
   currentRadioFrequency: number | null;
   radioViewState: RadioViewState | null;
+  spectrumDisplayState: SpectrumDisplayState | null;
   // 电台错误频道
   radioErrors: RadioErrorRecord[];
   latestRadioError: RadioErrorRecord | null;
@@ -136,6 +139,7 @@ export interface RadioState {
   stationInfo: StationInfo | null;
   spectrumCapabilities: SpectrumCapabilities | null;
   spectrumZoomState: SpectrumZoomState | null;
+  digitalSpectrumWindowState: DigitalSpectrumWindowState | null;
   selectedSpectrumKind: SpectrumKind | null;
   subscribedSpectrumKind: SpectrumKind | null;
   latestSpectrumFrame: SpectrumFrame | null;
@@ -206,11 +210,13 @@ export type RadioAction =
   | { type: 'voiceRadioModeChanged'; payload: string }
   | { type: 'setCurrentRadioFrequency'; payload: number | null }
   | { type: 'setRadioViewState'; payload: RadioViewState }
+  | { type: 'setSpectrumDisplayState'; payload: SpectrumDisplayState }
   | { type: 'setStationInfo'; payload: StationInfo }
   | { type: 'setCapabilityList'; payload: { capabilities: CapabilityState[] } }
   | { type: 'updateCapabilityState'; payload: CapabilityState }
   | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities }
   | { type: 'setSpectrumZoomState'; payload: SpectrumZoomState }
+  | { type: 'setDigitalSpectrumWindowState'; payload: DigitalSpectrumWindowState }
   | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setLatestSpectrumFrame'; payload: SpectrumFrame | null };
@@ -243,11 +249,13 @@ const initialRadioState: RadioState = {
   currentRadioMode: null,
   currentRadioFrequency: null,
   radioViewState: null,
+  spectrumDisplayState: null,
   radioErrors: [],
   latestRadioError: null,
   stationInfo: null,
   spectrumCapabilities: null,
   spectrumZoomState: null,
+  digitalSpectrumWindowState: null,
   selectedSpectrumKind: null,
   subscribedSpectrumKind: null,
   latestSpectrumFrame: null,
@@ -284,6 +292,13 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         radioViewState: action.payload,
         currentRadioMode: action.payload.radioMode ?? state.currentRadioMode,
         currentRadioFrequency: action.payload.frequency ?? state.currentRadioFrequency,
+      };
+
+    case 'setSpectrumDisplayState':
+      return {
+        ...state,
+        spectrumDisplayState: action.payload,
+        currentRadioFrequency: action.payload.currentRadioFrequency ?? state.currentRadioFrequency,
       };
     
     case 'decodeError':
@@ -364,6 +379,7 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
           : new Map<string, CapabilityState>(),
         currentRadioFrequency: action.payload.radioConnected ? state.currentRadioFrequency : null,
         radioViewState: action.payload.radioConnected ? state.radioViewState : null,
+        spectrumDisplayState: action.payload.radioConnected ? state.spectrumDisplayState : null,
         spectrumZoomState: action.payload.radioConnected ? state.spectrumZoomState : null,
       };
 
@@ -377,6 +393,11 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return {
         ...state,
         spectrumZoomState: action.payload,
+      };
+    case 'setDigitalSpectrumWindowState':
+      return {
+        ...state,
+        digitalSpectrumWindowState: action.payload,
       };
 
     case 'setSelectedSpectrumKind':
@@ -787,6 +808,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       disconnected: () => {
         connectionDispatch({ type: 'disconnected' });
+        radioDispatch({ type: 'setDigitalSpectrumWindowState', payload: {
+          supported: false,
+          active: false,
+          pending: false,
+          canToggle: false,
+          standardFrequencyHz: null,
+          lowHz: null,
+          highHz: null,
+        } });
       },
       modeChanged: (data: unknown) => {
         radioDispatch({ type: 'modeChanged', payload: data as ModeDescriptor });
@@ -802,6 +832,9 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       spectrumZoomStateChanged: (data: unknown) => {
         radioDispatch({ type: 'setSpectrumZoomState', payload: data as SpectrumZoomState });
+      },
+      digitalSpectrumWindowStateChanged: (data: unknown) => {
+        radioDispatch({ type: 'setDigitalSpectrumWindowState', payload: data as DigitalSpectrumWindowState });
       },
       decodeError: (data: unknown) => {
         radioDispatch({ type: 'decodeError', payload: data as DecodeErrorData });
@@ -969,6 +1002,9 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       radioViewStateChanged: (data: unknown) => {
         radioDispatch({ type: 'setRadioViewState', payload: data as RadioViewState });
+      },
+      spectrumDisplayStateChanged: (data: unknown) => {
+        radioDispatch({ type: 'setSpectrumDisplayState', payload: data as SpectrumDisplayState });
       },
       // PTT状态变化
       pttStatusChanged: (data: unknown) => {
@@ -1307,6 +1343,7 @@ export const useSpectrum = () => {
   return {
     capabilities: state.spectrumCapabilities,
     zoomState: state.spectrumZoomState,
+    digitalWindowState: state.digitalSpectrumWindowState,
     selectedKind: state.selectedSpectrumKind,
     subscribedKind: state.subscribedSpectrumKind,
     latestFrame: state.latestSpectrumFrame,

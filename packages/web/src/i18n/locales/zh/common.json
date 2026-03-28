@@ -131,7 +131,12 @@
     "currentRange": "当前范围: {{min}} ~ {{max}} dB",
     "zoomIn": "缩小频谱范围",
     "zoomOut": "放大频谱范围",
-    "zoomUnavailable": "缩放不可用"
+    "zoomUnavailable": "缩放不可用",
+    "digitalWindowFollowLabel": "CENT",
+    "digitalWindowFixedLabel": "FIX",
+    "digitalWindowEnable": "切到固定视图，并自动锁定到数字通联最合适的 5kHz 范围",
+    "digitalWindowDisable": "当前已固定在数字 5kHz 范围，点击恢复跟随视图",
+    "digitalWindowPending": "正在切换数字频谱窗口"
   },
   "splitLayout": {
     "decode": "解码",

@@ -131,7 +131,12 @@
     "currentRange": "Current range: {{min}} ~ {{max}} dB",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
-    "zoomUnavailable": "Zoom unavailable"
+    "zoomUnavailable": "Zoom unavailable",
+    "digitalWindowFollowLabel": "CENT",
+    "digitalWindowFixedLabel": "FIX",
+    "digitalWindowEnable": "Switch to a fixed view and lock to the most suitable 5 kHz digital window",
+    "digitalWindowDisable": "Currently fixed to the 5 kHz digital window. Click to return to follow view",
+    "digitalWindowPending": "Switching the digital spectrum window"
   },
   "splitLayout": {
     "decode": "Decode",

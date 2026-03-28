@@ -228,14 +228,15 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
       // 只有在频率真正改变时才广播
       if (isFrequencyChanged) {
-        engine.emit('frequencyChanged', {
-          frequency,
-          mode: mode || 'FT8',
-          band: band || '',
-          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-          radioMode,
-          radioConnected: false
-        });
+      engine.emit('frequencyChanged', {
+        frequency,
+        mode: mode || 'FT8',
+        band: band || '',
+        description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+        radioMode,
+        radioConnected: false,
+        source: 'program',
+      });
       }
 
       return reply.send({
@@ -292,7 +293,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
         band: band || '',
         description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
         radioMode,
-        radioConnected: true
+        radioConnected: true,
+        source: 'program',
       });
     }
 

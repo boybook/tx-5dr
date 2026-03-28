@@ -121,6 +121,12 @@ export class RadioService {
     }
   }
 
+  toggleDigitalSpectrumWindow(): void {
+    if (this.isConnected) {
+      this.wsClient.toggleDigitalSpectrumWindow();
+    }
+  }
+
   /**
    * 获取连接状态
    */
