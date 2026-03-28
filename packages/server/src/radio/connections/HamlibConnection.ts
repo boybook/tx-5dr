@@ -21,6 +21,7 @@ const logger = createLogger('HamlibConnection');
 import {
   RadioConnectionType,
   RadioConnectionState,
+  type RadioSpectrumDisplayState,
   type IRadioConnection,
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
@@ -468,24 +469,48 @@ export class HamlibConnection
     }
   }
 
-  async getCurrentSpectrumMode(): Promise<string | null> {
+  async getSpectrumDisplayState(): Promise<RadioSpectrumDisplayState | null> {
     this.checkConnected();
     try {
       const rig = this.getSpectrumRig();
-      if (typeof (rig as any).getLevel !== 'function') {
+      if (typeof (rig as any).getSpectrumDisplayState !== 'function') {
         return null;
       }
 
-      const currentModeId = await (rig as any).getLevel('SPECTRUM_MODE');
-      if (typeof currentModeId !== 'number') {
-        return null;
-      }
-
-      const summary = await rig.getSpectrumSupportSummary();
-      const matchedMode = summary.modes.find(mode => mode.id === currentModeId);
-      return matchedMode?.name ?? String(currentModeId);
+      const state = await (rig as any).getSpectrumDisplayState();
+      return {
+        mode: state?.mode ?? null,
+        spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
+        edgeSlot: typeof state?.edgeSlot === 'number' && Number.isFinite(state.edgeSlot) ? state.edgeSlot : null,
+        edgeLowHz: typeof state?.edgeLowHz === 'number' && Number.isFinite(state.edgeLowHz) ? state.edgeLowHz : null,
+        edgeHighHz: typeof state?.edgeHighHz === 'number' && Number.isFinite(state.edgeHighHz) ? state.edgeHighHz : null,
+        supportedSpans: Array.isArray(state?.supportedSpans)
+          ? state.supportedSpans.filter((span: unknown): span is number => typeof span === 'number' && Number.isFinite(span) && span > 0)
+          : [],
+        supportsFixedEdges: Boolean(state?.supportsFixedEdges),
+        supportsEdgeSlotSelection: Boolean(state?.supportsEdgeSlotSelection),
+      };
     } catch (error) {
-      throw this.convertError(error, 'getCurrentSpectrumMode');
+      throw this.convertError(error, 'getSpectrumDisplayState');
+    }
+  }
+
+  async configureSpectrumDisplay(config: {
+    mode?: 'center' | 'fixed' | 'scroll-center' | 'scroll-fixed';
+    spanHz?: number;
+    edgeSlot?: number;
+    edgeLowHz?: number;
+    edgeHighHz?: number;
+  }): Promise<void> {
+    this.checkConnected();
+    try {
+      const rig = this.getSpectrumRig();
+      if (typeof (rig as any).configureSpectrumDisplay !== 'function') {
+        throw new Error('Spectrum display control is not supported by this rig');
+      }
+      await (rig as any).configureSpectrumDisplay(config);
+    } catch (error) {
+      throw this.convertError(error, 'configureSpectrumDisplay');
     }
   }
 

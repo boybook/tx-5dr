@@ -6,6 +6,9 @@ export type SpectrumKind = z.infer<typeof SpectrumKindSchema>;
 export const SpectrumZoomDirectionSchema = z.enum(['in', 'out']);
 export type SpectrumZoomDirection = z.infer<typeof SpectrumZoomDirectionSchema>;
 
+export const SpectrumDisplayModeSchema = z.enum(['center', 'fixed', 'scroll-center', 'scroll-fixed', 'unknown']);
+export type SpectrumDisplayMode = z.infer<typeof SpectrumDisplayModeSchema>;
+
 export const SpectrumFrequencyRangeSchema = z.object({
   min: z.number(),
   max: z.number(),
@@ -75,6 +78,28 @@ export const SpectrumZoomStateSchema = z.object({
   canZoomOut: z.boolean(),
 });
 
+export const SpectrumDisplayStateSchema = z.object({
+  mode: SpectrumDisplayModeSchema,
+  displayRange: SpectrumFrequencyRangeSchema.nullable(),
+  centerFrequency: z.number().nullable(),
+  currentRadioFrequency: z.number().nullable(),
+  edgeLowHz: z.number().nullable(),
+  edgeHighHz: z.number().nullable(),
+  spanHz: z.number().nullable(),
+  supportsFixedEdges: z.boolean(),
+  supportsSpanControl: z.boolean(),
+});
+
+export const DigitalSpectrumWindowStateSchema = z.object({
+  supported: z.boolean(),
+  active: z.boolean(),
+  pending: z.boolean(),
+  canToggle: z.boolean(),
+  standardFrequencyHz: z.number().nullable(),
+  lowHz: z.number().nullable(),
+  highHz: z.number().nullable(),
+});
+
 export type SpectrumFrequencyRange = z.infer<typeof SpectrumFrequencyRangeSchema>;
 export type SpectrumBinaryFormat = z.infer<typeof SpectrumBinaryFormatSchema>;
 export type SpectrumBinaryData = z.infer<typeof SpectrumBinaryDataSchema>;
@@ -84,3 +109,5 @@ export type SpectrumSourceAvailability = z.infer<typeof SpectrumSourceAvailabili
 export type SpectrumCapabilities = z.infer<typeof SpectrumCapabilitiesSchema>;
 export type SpectrumZoomLevel = z.infer<typeof SpectrumZoomLevelSchema>;
 export type SpectrumZoomState = z.infer<typeof SpectrumZoomStateSchema>;
+export type SpectrumDisplayState = z.infer<typeof SpectrumDisplayStateSchema>;
+export type DigitalSpectrumWindowState = z.infer<typeof DigitalSpectrumWindowStateSchema>;

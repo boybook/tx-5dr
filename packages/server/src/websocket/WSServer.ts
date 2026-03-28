@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject, type RadioViewState, type SpectrumZoomState } from '@tx5dr/contracts';
+import { WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject, type RadioViewState, type SpectrumDisplayState, type SpectrumZoomState } from '@tx5dr/contracts';
 import type {
   AudioMonitorCodec,
   DecodeErrorInfo,
@@ -27,6 +27,8 @@ import { createLogger } from '../utils/logger.js';
 import { createOpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
 import type { OpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
+import { SpectrumDisplayStateCoordinator } from '../spectrum/SpectrumDisplayStateCoordinator.js';
+import { DigitalSpectrumWindowCoordinator } from '../spectrum/DigitalSpectrumWindowCoordinator.js';
 import { SpectrumZoomCoordinator } from '../spectrum/SpectrumZoomCoordinator.js';
 import { RadioViewStateCoordinator } from '../radio/RadioViewStateCoordinator.js';
 
@@ -354,6 +356,8 @@ export class WSServer extends WSMessageHandler {
   private readonly OPUS_FRAME_SIZE = 960; // 20ms at 48kHz
   private spectrumCoordinator: SpectrumCoordinator;
   private spectrumZoomCoordinator: SpectrumZoomCoordinator;
+  private spectrumDisplayStateCoordinator: SpectrumDisplayStateCoordinator;
+  private digitalSpectrumWindowCoordinator: DigitalSpectrumWindowCoordinator;
   private radioViewStateCoordinator: RadioViewStateCoordinator;
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
@@ -369,7 +373,9 @@ export class WSServer extends WSMessageHandler {
     }
     this.spectrumCoordinator = new SpectrumCoordinator(digitalRadioEngine);
     this.spectrumZoomCoordinator = new SpectrumZoomCoordinator(digitalRadioEngine, this.spectrumCoordinator);
-    this.radioViewStateCoordinator = new RadioViewStateCoordinator(digitalRadioEngine, this.spectrumCoordinator);
+    this.spectrumDisplayStateCoordinator = new SpectrumDisplayStateCoordinator(digitalRadioEngine, this.spectrumCoordinator);
+    this.digitalSpectrumWindowCoordinator = new DigitalSpectrumWindowCoordinator(digitalRadioEngine, this.spectrumDisplayStateCoordinator);
+    this.radioViewStateCoordinator = new RadioViewStateCoordinator(digitalRadioEngine);
     this.setupEngineEventListeners();
     this.setupAudioMonitorEventListeners(); // 初始化时设置音频监听事件（广播模式）
     this.setupOpenWebRXEventListeners();
@@ -381,6 +387,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_MODE]: (data) => this.handleSetMode((data as any)?.mode),
       [WSMessageType.SUBSCRIBE_SPECTRUM]: (data, id) => this.handleSubscribeSpectrum(id, data),
       [WSMessageType.STEP_SPECTRUM_ZOOM]: (data: unknown, id: string) => this.handleStepSpectrumZoom(id, data),
+      [WSMessageType.TOGGLE_DIGITAL_SPECTRUM_WINDOW]: (_data: unknown, id: string) => this.handleToggleDigitalSpectrumWindow(id),
       [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data) => this.handleSetOperatorContext(data),
       [WSMessageType.SET_OPERATOR_SLOT]: (data) => this.handleSetOperatorSlot(data),
@@ -470,6 +477,14 @@ export class WSServer extends WSMessageHandler {
 
     this.spectrumZoomCoordinator.on('stateChanged', (state) => {
       this.broadcastSpectrumZoomState(state);
+    });
+
+    this.spectrumDisplayStateCoordinator.on('stateChanged', (state: SpectrumDisplayState) => {
+      this.broadcast(WSMessageType.SPECTRUM_DISPLAY_STATE_CHANGED, state);
+    });
+
+    this.digitalSpectrumWindowCoordinator.on('stateChanged', (state) => {
+      this.broadcast(WSMessageType.DIGITAL_SPECTRUM_WINDOW_STATE_CHANGED, state);
     });
 
     this.digitalRadioEngine.on('decodeError', (errorInfo) => {
@@ -642,6 +657,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.STEP_SPECTRUM_ZOOM]: { action: 'execute', subject: 'RadioControl' },
+    [WSMessageType.TOGGLE_DIGITAL_SPECTRUM_WINDOW]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { action: 'execute', subject: 'RadioFrequency' },
     // Operator-level commands (use Operator subject with conditions)
     [WSMessageType.SET_VOLUME_GAIN]: { action: 'manage', subject: 'Operator' },
@@ -855,6 +871,19 @@ export class WSServer extends WSMessageHandler {
       logger.warn('stepSpectrumZoom failed', error);
       this.sendToConnection(connectionId, WSMessageType.ERROR, {
         message: `Failed to change spectrum zoom: ${(error as Error).message}`,
+      });
+    }
+  }
+
+  private async handleToggleDigitalSpectrumWindow(connectionId: string): Promise<void> {
+    try {
+      await this.digitalSpectrumWindowCoordinator.toggle();
+      const state = await this.digitalSpectrumWindowCoordinator.refresh();
+      this.sendToConnection(connectionId, WSMessageType.DIGITAL_SPECTRUM_WINDOW_STATE_CHANGED, state);
+    } catch (error) {
+      logger.warn('toggleDigitalSpectrumWindow failed', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, {
+        message: `Failed to toggle digital spectrum window: ${(error as Error).message}`,
       });
     }
   }
@@ -2020,6 +2049,20 @@ export class WSServer extends WSMessageHandler {
         connection.send(WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED, spectrumZoomState);
       } catch (error) {
         logger.warn('failed to send spectrum zoom state', error);
+      }
+
+      try {
+        const spectrumDisplayState = await this.spectrumDisplayStateCoordinator.refresh();
+        connection.send(WSMessageType.SPECTRUM_DISPLAY_STATE_CHANGED, spectrumDisplayState);
+      } catch (error) {
+        logger.warn('failed to send spectrum display state', error);
+      }
+
+      try {
+        const digitalSpectrumWindowState = await this.digitalSpectrumWindowCoordinator.refresh();
+        connection.send(WSMessageType.DIGITAL_SPECTRUM_WINDOW_STATE_CHANGED, digitalSpectrumWindowState);
+      } catch (error) {
+        logger.warn('failed to send digital spectrum window state', error);
       }
 
       try {

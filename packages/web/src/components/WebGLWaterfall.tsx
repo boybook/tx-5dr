@@ -54,7 +54,7 @@ interface WebGLWaterfallProps {
   rxFrequencies?: RxFrequency[];
   txFrequencies?: TxFrequency[];
   txBandOverlays?: TxBandOverlay[];
-  frequencyRangeMode?: 'baseband' | 'absolute';
+  frequencyRangeMode?: 'baseband' | 'absolute-center' | 'absolute-fixed';
   referenceFrequencyHz?: number | null;
   basebandInteractionRange?: BasebandInteractionRange;
   interactionFrequencyMode?: 'baseband' | 'absolute';
@@ -946,6 +946,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }
 
   const FREQ_POSITION_OFFSET = 15;
+  const isAbsoluteDisplayMode = frequencyRangeMode === 'absolute-center' || frequencyRangeMode === 'absolute-fixed';
 
   const clampBasebandFrequency = useCallback((frequency: number) => {
     return Math.round(Math.max(basebandInteractionRange.min, Math.min(basebandInteractionRange.max, frequency)));
@@ -960,7 +961,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   const getDisplayFrequency = useCallback((basebandFrequency: number) => {
     if (!frequencies || frequencies.length === 0) return null;
-    if (frequencyRangeMode === 'absolute') {
+    if (isAbsoluteDisplayMode) {
       const referenceFrequency = referenceFrequencyHz ?? null;
       if (referenceFrequency === null) {
         return null;
@@ -968,7 +969,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return referenceFrequency + basebandFrequency;
     }
     return basebandFrequency;
-  }, [frequencies, frequencyRangeMode, referenceFrequencyHz]);
+  }, [frequencies, isAbsoluteDisplayMode, referenceFrequencyHz]);
 
   // 计算频率到位置的百分比
   const getFrequencyPosition = useCallback((displayFrequency: number) => {
@@ -1003,12 +1004,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const minFreq = frequencies[0];
     const maxFreq = frequencies[frequencies.length - 1];
     const displayFrequency = minFreq + percentage * (maxFreq - minFreq) - FREQ_POSITION_OFFSET;
-    const basebandFrequency = frequencyRangeMode === 'absolute'
+    const basebandFrequency = isAbsoluteDisplayMode
       ? displayFrequency - (referenceFrequencyHz ?? minFreq)
       : displayFrequency;
 
     return clampBasebandFrequency(basebandFrequency);
-  }, [clampBasebandFrequency, frequencies, frequencyRangeMode, referenceFrequencyHz]);
+  }, [clampBasebandFrequency, frequencies, isAbsoluteDisplayMode, referenceFrequencyHz]);
 
   const getInteractionFrequencyFromMousePosition = useCallback((clientX: number) => {
     const container = containerRef.current;

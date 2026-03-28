@@ -346,7 +346,8 @@ export class RadioBridge {
           band: frequencyInfo.band,
           radioMode: frequencyInfo.radioMode,
           description: frequencyInfo.description,
-          radioConnected: true
+          radioConnected: true,
+          source: 'radio',
         });
 
         logger.debug(`Frequency auto-sync complete: ${frequencyInfo.description}`);

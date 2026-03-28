@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Tab, Tabs } from '@heroui/react';
+import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Tab, Tabs, Tooltip } from '@heroui/react';
 import { ArrowsPointingOutIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
@@ -198,7 +198,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
   const { state: radioState } = useRadioState();
-  const { capabilities, selectedKind, latestFrame, setSelectedKind, zoomState } = useSpectrum();
+  const { capabilities, selectedKind, latestFrame, setSelectedKind, zoomState, digitalWindowState } = useSpectrum();
   const isTransmitting = radioState.pttStatus.isTransmitting;
   const [frame, setFrame] = useState<SpectrumFrame | null>(null);
   const [waterfallData, setWaterfallData] = useState<WaterfallData>({
@@ -220,12 +220,18 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isVoiceMode = radioState.engineMode === 'voice';
-  const currentSourceAvailability = capabilities?.sources.find(source => source.kind === effectiveSelectedKind);
-  const frequencyRangeMode = currentSourceAvailability?.frequencyRangeMode ?? (isRadioSdrSelected ? 'absolute' : 'baseband');
-  const spectrumReferenceFrequency = frequencyRangeMode === 'absolute'
-    ? (radioState.currentRadioFrequency ?? frame?.meta.centerFrequency ?? null)
-    : null;
   const radioViewState = radioState.radioViewState;
+  const spectrumDisplayState = radioState.spectrumDisplayState;
+  const isFixedSpectrumMode = isRadioSdrSelected
+    && (spectrumDisplayState?.mode === 'fixed' || spectrumDisplayState?.mode === 'scroll-fixed');
+  const frequencyRangeMode = !isRadioSdrSelected
+    ? 'baseband'
+    : isFixedSpectrumMode
+      ? 'absolute-fixed'
+      : 'absolute-center';
+  const spectrumReferenceFrequency = isRadioSdrSelected
+    ? (spectrumDisplayState?.currentRadioFrequency ?? radioState.currentRadioFrequency ?? null)
+    : null;
   const currentManualRangeSettings = isRadioSdrSelected
     ? persistedRangeSettings.radioSdr
     : persistedRangeSettings.audio.manual;
@@ -423,19 +429,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const shouldShowSourceTabs = availableSources.length > 1;
   const voiceOverlayIsInteractive = isVoiceMode
     && isRadioSdrSelected
-    && radioViewState?.sdrTrackingMode !== 'follow';
+    && isFixedSpectrumMode;
   const voiceBandOverlay: TxBandOverlay[] = React.useMemo(() => {
     if (!isVoiceMode || !isRadioSdrSelected || !radioViewState?.frequency || !radioViewState.offsetModel || !radioViewState.occupiedBandwidthHz) {
       return [];
     }
-
-    const frameCenterFrequency = frame?.meta.centerFrequency
-      ?? (waterfallData.frequencies.length > 0
-        ? waterfallData.frequencies[Math.floor(waterfallData.frequencies.length / 2)] ?? null
-        : null);
-    const lineFrequency = radioViewState.sdrTrackingMode === 'follow' && typeof frameCenterFrequency === 'number'
-      ? frameCenterFrequency
-      : radioViewState.frequency;
+    const lineFrequency = radioViewState.frequency;
     const bandwidthHz = radioViewState.occupiedBandwidthHz;
     let rangeStartFrequency = lineFrequency;
     let rangeEndFrequency = lineFrequency;
@@ -463,7 +462,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       rangeEndFrequency,
       draggable: voiceOverlayIsInteractive,
     }];
-  }, [frame?.meta.centerFrequency, isRadioSdrSelected, isVoiceMode, radioViewState, voiceOverlayIsInteractive, waterfallData.frequencies]);
+  }, [isRadioSdrSelected, isVoiceMode, radioViewState, voiceOverlayIsInteractive]);
 
   const handleSpectrumKindChange = useCallback((kind: SpectrumKind) => {
     const radioService = connection.state.radioService;
@@ -478,41 +477,84 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     connection.state.radioService?.stepSpectrumZoom(direction);
   }, [connection.state.radioService]);
 
-  const shouldShowZoomControls = isRadioSdrSelected;
+  const handleToggleDigitalSpectrumWindow = useCallback(() => {
+    connection.state.radioService?.toggleDigitalSpectrumWindow();
+  }, [connection.state.radioService]);
+
+  const isCenterSpectrumMode = isRadioSdrSelected
+    && (spectrumDisplayState?.mode === 'center' || spectrumDisplayState?.mode === 'scroll-center');
+  const shouldShowZoomControls = isCenterSpectrumMode;
+  const shouldShowDigitalSpectrumWindowControl = isRadioSdrSelected
+    && Boolean(digitalWindowState?.supported);
   const currentZoomLevelIndex = zoomState?.levels.findIndex(level => level.id === zoomState.currentLevelId) ?? -1;
   const zoomControlsDisabled = !zoomState?.supported || !zoomState.available || !zoomState.currentLevelId || currentZoomLevelIndex < 0;
   const canZoomOut = !zoomControlsDisabled && currentZoomLevelIndex > 0;
   const canZoomIn = !zoomControlsDisabled && currentZoomLevelIndex < (zoomState?.levels.length ?? 0) - 1;
 
-  const renderZoomControls = () => {
-    if (!shouldShowZoomControls) {
+  const renderBottomRightControls = () => {
+    if (!shouldShowZoomControls && !shouldShowDigitalSpectrumWindowControl) {
       return null;
     }
 
     return (
       <div className="absolute bottom-1 right-1 z-20 flex items-center gap-0.5 rounded-medium bg-black/35 px-0.5 py-0.5 backdrop-blur-sm">
-        <Button
-          isIconOnly
-          size="sm"
-          variant="light"
-          className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
-          onPress={() => handleStepSpectrumZoom('out')}
-          isDisabled={!canZoomOut}
-          title={t('spectrum.zoomOut')}
-        >
-          <MinusIcon className="w-2.5 h-2.5" />
-        </Button>
-        <Button
-          isIconOnly
-          size="sm"
-          variant="light"
-          className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
-          onPress={() => handleStepSpectrumZoom('in')}
-          isDisabled={!canZoomIn}
-          title={t('spectrum.zoomIn')}
-        >
-          <PlusIcon className="w-2.5 h-2.5" />
-        </Button>
+        {shouldShowDigitalSpectrumWindowControl && (
+          <Tooltip
+            content={
+              digitalWindowState?.pending
+                ? t('spectrum.digitalWindowPending')
+                : digitalWindowState?.active
+                  ? t('spectrum.digitalWindowDisable')
+                  : t('spectrum.digitalWindowEnable')
+            }
+            placement="top"
+            offset={6}
+          >
+            <Button
+              size="sm"
+              variant="light"
+              className={`min-w-9 w-9 h-5 px-0 text-[10px] font-semibold ${
+                digitalWindowState?.active
+                  ? 'bg-primary-500/25 text-white'
+                  : digitalWindowState?.pending
+                    ? 'bg-white/10 text-white/70'
+                    : 'text-white/90'
+              } disabled:text-default-500`}
+              onPress={handleToggleDigitalSpectrumWindow}
+              isDisabled={!digitalWindowState?.canToggle}
+            >
+              {digitalWindowState?.active
+                ? t('spectrum.digitalWindowFixedLabel')
+                : t('spectrum.digitalWindowFollowLabel')}
+            </Button>
+          </Tooltip>
+        )}
+        {shouldShowZoomControls && (
+          <>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
+              onPress={() => handleStepSpectrumZoom('out')}
+              isDisabled={!canZoomOut}
+              title={t('spectrum.zoomOut')}
+            >
+              <MinusIcon className="w-2.5 h-2.5" />
+            </Button>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
+              onPress={() => handleStepSpectrumZoom('in')}
+              isDisabled={!canZoomIn}
+              title={t('spectrum.zoomIn')}
+            >
+              <PlusIcon className="w-2.5 h-2.5" />
+            </Button>
+          </>
+        )}
       </div>
     );
   };
@@ -538,7 +580,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             </Tabs>
           </div>
         )}
-        {renderZoomControls()}
+        {renderBottomRightControls()}
         {canPopOut && (
           <Button
             isIconOnly
@@ -604,7 +646,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         </div>
       )}
 
-      {renderZoomControls()}
+      {renderBottomRightControls()}
 
       {canPopOut && (
         <Button

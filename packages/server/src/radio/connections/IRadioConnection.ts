@@ -68,6 +68,27 @@ export interface MeterData {
   power: { raw: number; percent: number; watts: number | null } | null;
 }
 
+export type SpectrumDisplayMode = 'center' | 'fixed' | 'scroll-center' | 'scroll-fixed';
+
+export interface RadioSpectrumDisplayConfig {
+  mode?: SpectrumDisplayMode;
+  spanHz?: number;
+  edgeSlot?: number;
+  edgeLowHz?: number;
+  edgeHighHz?: number;
+}
+
+export interface RadioSpectrumDisplayState {
+  mode: SpectrumDisplayMode | null;
+  spanHz: number | null;
+  edgeSlot: number | null;
+  edgeLowHz: number | null;
+  edgeHighHz: number | null;
+  supportedSpans: number[];
+  supportsFixedEdges: boolean;
+  supportsEdgeSlotSelection: boolean;
+}
+
 /**
  * 电台连接事件
  */
@@ -217,6 +238,18 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @optional 仅支持 SDR 缩放的连接实现
    */
   setSpectrumSpan?(spanHz: number): Promise<void>;
+
+  /**
+   * 获取当前 SDR 显示状态（模式/span/fixed edges）
+   * @optional 仅支持 SDR 显示控制的连接实现
+   */
+  getSpectrumDisplayState?(): Promise<RadioSpectrumDisplayState | null>;
+
+  /**
+   * 配置当前 SDR 显示状态（模式/span/fixed edges）
+   * @optional 仅支持 SDR 显示控制的连接实现
+   */
+  configureSpectrumDisplay?(config: RadioSpectrumDisplayConfig): Promise<void>;
 
   /**
    * 获取连接信息（用于调试和日志）

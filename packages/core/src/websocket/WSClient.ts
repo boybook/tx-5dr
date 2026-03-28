@@ -141,6 +141,10 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.STEP_SPECTRUM_ZOOM, { direction });
   }
 
+  toggleDigitalSpectrumWindow(): void {
+    this.send(WSMessageType.TOGGLE_DIGITAL_SPECTRUM_WINDOW, {});
+  }
+
   /**
    * 强制停止发射
    * 立即停止PTT并清空音频播放队列
