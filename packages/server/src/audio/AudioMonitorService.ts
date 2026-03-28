@@ -1,8 +1,10 @@
 import { EventEmitter } from 'eventemitter3';
+import { Resampler } from 'rubato-fft-node';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('AudioMonitorService');
+const RESAMPLER_QUALITY_HIGH = 1;
 
 /**
  * 音频监听统计信息
@@ -43,8 +45,14 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   private pushInterval: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 10;      // 检查间隔：10ms（高频检查）
   private readonly TARGET_BUFFER_MS = 40;       // 目标缓冲区水位：40ms（小块高频发送）
-  private readonly TARGET_CHUNK_MS = 20;        // 目标发送块大小：20ms（VoIP标准帧大小）
+  private readonly TARGET_CHUNK_MS = 20;        // 输入块大小：20ms（低延迟流式处理）
   private readonly TARGET_SAMPLE_RATE = 48000;  // 目标采样率：48kHz（浏览器标准）
+  private readonly OUTPUT_FRAME_SAMPLES = 960;  // 20ms @ 48kHz
+  private readonly RESAMPLER_QUALITY = RESAMPLER_QUALITY_HIGH;
+  private readonly sourceSampleRate: number;
+  private readonly resampler: Resampler | null = null;
+  private outputBuffer = new Float32Array(0);
+  private isProcessingChunk = false;
 
   // 统计信息
   private lastPushTimestamp = 0;
@@ -56,7 +64,23 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   constructor(audioProvider: RingBufferAudioProvider) {
     super();
     this.audioProvider = audioProvider;
-    logger.info('Audio monitor service initialized (broadcast mode)');
+    this.sourceSampleRate = audioProvider.getSampleRate();
+
+    if (this.sourceSampleRate !== this.TARGET_SAMPLE_RATE) {
+      this.resampler = new Resampler(
+        this.sourceSampleRate,
+        this.TARGET_SAMPLE_RATE,
+        1,
+        this.RESAMPLER_QUALITY
+      );
+    }
+
+    logger.info('Audio monitor service initialized (broadcast mode)', {
+      sourceSampleRate: this.sourceSampleRate,
+      targetSampleRate: this.TARGET_SAMPLE_RATE,
+      streamingResampler: !!this.resampler,
+      quality: this.resampler ? this.RESAMPLER_QUALITY : 'bypass',
+    });
 
     // 自动启动推送
     this.startPushingAudio();
@@ -97,8 +121,12 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   /**
    * 检查缓冲区并按需推送
    */
-  private checkAndPush(): void {
+  private async checkAndPush(): Promise<void> {
     try {
+      if (this.isProcessingChunk) {
+        return;
+      }
+
       // 检查缓冲区是否达到目标水位
       const availableMs = this.audioProvider.getAvailableMs();
 
@@ -108,23 +136,25 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       }
 
       // 执行推送
-      this.pushAudioChunk();
+      this.isProcessingChunk = true;
+      await this.pushAudioChunk();
     } catch (error) {
       logger.error('Check and push failed', error);
+    } finally {
+      this.isProcessingChunk = false;
     }
   }
 
   /**
    * 推送音频数据块
    */
-  private pushAudioChunk(): void {
+  private async pushAudioChunk(): Promise<void> {
     try {
       const t0 = performance.now();
       const now = Date.now();
 
       // 计算需要读取的样本数
-      const sourceSampleRate = this.audioProvider.getSampleRate();
-      const sourceSampleCount = Math.floor((sourceSampleRate * this.TARGET_CHUNK_MS) / 1000);
+      const sourceSampleCount = Math.floor((this.sourceSampleRate * this.TARGET_CHUNK_MS) / 1000);
 
       // ✅ 使用连续读取替代基于时间戳的读取
       const audioBuffer = this.audioProvider.readNextChunk(sourceSampleCount);
@@ -140,14 +170,9 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       const rms = this.calculateRMS(sourceAudioData);
       const isActive = rms > 0.001;
 
-      // Resample to target sample rate using stateless linear interpolation.
-      // This is intentionally simple: AudioMonitorService processes small 20ms
-      // chunks for real-time streaming, which is incompatible with FFT-based
-      // resamplers (warm-up latency, large internal buffers). Linear interpolation
-      // is adequate for monitoring/preview audio quality.
       let processedAudio = sourceAudioData;
-      if (this.TARGET_SAMPLE_RATE !== sourceSampleRate) {
-        processedAudio = this.resampleLinear(sourceAudioData, sourceSampleRate, this.TARGET_SAMPLE_RATE);
+      if (this.resampler) {
+        processedAudio = await this.resampler.process(sourceAudioData);
       }
       const t1 = performance.now();
 
@@ -155,15 +180,8 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
         return;
       }
 
-      // 广播音频数据（创建独立副本，避免底层缓冲区复用问题）
-      const audioCopy = new Float32Array(processedAudio).buffer;
-      this.emit('audioData', {
-        audioData: audioCopy,
-        sampleRate: this.TARGET_SAMPLE_RATE,
-        samples: processedAudio.length,
-        timestamp: now,
-        sequence: this.sequenceNumber++,
-      });
+      this.appendToOutputBuffer(processedAudio);
+      const emittedFrames = this.emitReadyFrames(now);
 
       // 每秒输出一次统计日志
       if (this.sequenceNumber % 50 === 0) {
@@ -172,8 +190,9 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
 
         logger.debug(
           `seq=${this.sequenceNumber}, buffer=${availableMs.toFixed(1)}ms, ` +
-          `samples=${processedAudio.length}, interval=${pushInterval.toFixed(1)}ms, ` +
-          `process=${(t1-t0).toFixed(1)}ms`
+          `in=${sourceAudioData.length}, out=${processedAudio.length}, ` +
+          `queued=${this.outputBuffer.length}, emitted=${emittedFrames}, ` +
+          `interval=${pushInterval.toFixed(1)}ms, process=${(t1-t0).toFixed(1)}ms`
         );
 
         const stats = this.calculateStats(this.TARGET_SAMPLE_RATE, isActive, rms);
@@ -188,29 +207,67 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   }
 
   /**
-   * Stateless linear-interpolation resampler for small streaming chunks.
-   * Produces exactly floor(inputLength * outputRate / inputRate) samples per call
-   * with zero warm-up, zero internal state, and no cross-chunk artifacts.
+   * Append resampled audio to a small staging buffer so downstream always
+   * receives fixed-size 20ms frames even if the native resampler output size
+   * varies because of filter warm-up and internal delay.
    */
-  private resampleLinear(
-    samples: Float32Array,
-    inputRate: number,
-    outputRate: number
-  ): Float32Array {
-    const ratio = inputRate / outputRate; // e.g. 12000/48000 = 0.25
-    const outputLength = Math.floor(samples.length / ratio);
-    const result = new Float32Array(outputLength);
+  private appendToOutputBuffer(samples: Float32Array): void {
+    if (samples.length === 0) return;
 
-    for (let i = 0; i < outputLength; i++) {
-      const srcPos = i * ratio;
-      const idx = Math.floor(srcPos);
-      const frac = srcPos - idx;
-      const s0 = samples[idx] ?? 0;
-      const s1 = samples[Math.min(idx + 1, samples.length - 1)] ?? 0;
-      result[i] = s0 + (s1 - s0) * frac;
+    if (this.outputBuffer.length === 0) {
+      this.outputBuffer = new Float32Array(samples);
+      return;
     }
 
-    return result;
+    const merged = new Float32Array(this.outputBuffer.length + samples.length);
+    merged.set(this.outputBuffer);
+    merged.set(samples, this.outputBuffer.length);
+    this.outputBuffer = merged;
+  }
+
+  private emitReadyFrames(timestamp: number): number {
+    let emittedFrames = 0;
+
+    while (this.outputBuffer.length >= this.OUTPUT_FRAME_SAMPLES) {
+      const frame = this.outputBuffer.slice(0, this.OUTPUT_FRAME_SAMPLES);
+      this.outputBuffer = this.outputBuffer.slice(this.OUTPUT_FRAME_SAMPLES);
+
+      // 广播音频数据（创建独立副本，避免底层缓冲区复用问题）
+      const audioCopy = new Float32Array(frame).buffer;
+      this.emit('audioData', {
+        audioData: audioCopy,
+        sampleRate: this.TARGET_SAMPLE_RATE,
+        samples: frame.length,
+        timestamp,
+        sequence: this.sequenceNumber++,
+      });
+      emittedFrames++;
+    }
+
+    return emittedFrames;
+  }
+
+  private async flushResampler(): Promise<void> {
+    if (!this.resampler) return;
+
+    try {
+      const remaining = await this.resampler.flush();
+      if (remaining.length > 0) {
+        this.appendToOutputBuffer(remaining);
+        this.emitReadyFrames(Date.now());
+      }
+    } catch (error) {
+      logger.warn('Failed to flush audio monitor resampler', error);
+    }
+  }
+
+  private disposeResampler(): void {
+    if (!this.resampler) return;
+    try {
+      this.resampler.dispose();
+    } catch (error) {
+      logger.warn('Failed to dispose audio monitor resampler', error);
+    }
   }
 
   /**
@@ -278,6 +335,10 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
 
   destroy(): void {
     this.stopPushingAudio();
+    void this.flushResampler().finally(() => {
+      this.disposeResampler();
+    });
+    this.outputBuffer = new Float32Array(0);
     this.removeAllListeners();
     logger.info('Service destroyed');
   }
