@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FT8DecodeSchema, FT8SpectrumSchema } from './ft8.schema.js';
+import { FT8DecodeSchema } from './ft8.schema.js';
 import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema } from './qso.schema.js';
@@ -9,6 +9,7 @@ import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.s
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
 import { CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
+import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumZoomDirectionSchema, SpectrumZoomStateSchema } from './spectrum.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -28,7 +29,11 @@ export enum WSMessageType {
   SLOT_START = 'slotStart',
   SUB_WINDOW = 'subWindow',
   SLOT_PACK_UPDATED = 'slotPackUpdated',
-  SPECTRUM_DATA = 'spectrumData',
+  SPECTRUM_CAPABILITIES = 'spectrumCapabilities',
+  SUBSCRIBE_SPECTRUM = 'subscribeSpectrum',
+  SPECTRUM_FRAME = 'spectrumFrame',
+  SPECTRUM_ZOOM_STATE_CHANGED = 'spectrumZoomStateChanged',
+  STEP_SPECTRUM_ZOOM = 'stepSpectrumZoom',
   DECODE_ERROR = 'decodeError',
   SYSTEM_STATUS = 'systemStatus',
   CLIENT_COUNT_CHANGED = 'clientCountChanged',
@@ -73,6 +78,7 @@ export enum WSMessageType {
 
   // ===== 频率管理 =====
   FREQUENCY_CHANGED = 'frequencyChanged',
+  RADIO_VIEW_STATE_CHANGED = 'radioViewStateChanged',
 
   // ===== PTT状态管理 =====
   PTT_STATUS_CHANGED = 'pttStatusChanged',
@@ -185,6 +191,16 @@ export const FrequencyStateSchema = z.object({
   radioMode: z.string().optional(),
   radioConnected: z.boolean(),
 });
+
+export const RadioViewStateSchema = z.object({
+  frequency: z.number().nullable(),
+  radioMode: z.string().nullable(),
+  bandwidthLabel: z.string().nullable(),
+  occupiedBandwidthHz: z.number().nullable(),
+  offsetModel: z.enum(['upper', 'lower', 'symmetric']).nullable(),
+  sdrTrackingMode: z.enum(['follow', 'fixed', 'unknown']),
+});
+export type RadioViewState = z.infer<typeof RadioViewStateSchema>;
 
 // PTT状态数据结构
 export const PTTStatusSchema = z.object({
@@ -309,9 +325,33 @@ export const WSSlotPackUpdatedMessageSchema = WSBaseMessageSchema.extend({
   data: SlotPackSchema,
 });
 
-export const WSSpectrumDataMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.SPECTRUM_DATA),
-  data: FT8SpectrumSchema,
+export const WSSpectrumCapabilitiesMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SPECTRUM_CAPABILITIES),
+  data: SpectrumCapabilitiesSchema,
+});
+
+export const WSSubscribeSpectrumMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SUBSCRIBE_SPECTRUM),
+  data: z.object({
+    kind: SpectrumKindSchema.nullable(),
+  }),
+});
+
+export const WSSpectrumFrameMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SPECTRUM_FRAME),
+  data: SpectrumFrameSchema,
+});
+
+export const WSSpectrumZoomStateChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED),
+  data: SpectrumZoomStateSchema,
+});
+
+export const WSStepSpectrumZoomMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.STEP_SPECTRUM_ZOOM),
+  data: z.object({
+    direction: SpectrumZoomDirectionSchema,
+  }),
 });
 
 export const WSDecodeErrorMessageSchema = WSBaseMessageSchema.extend({
@@ -534,6 +574,7 @@ export const WSClientHandshakeMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.CLIENT_HANDSHAKE),
   data: z.object({
     enabledOperatorIds: z.array(z.string()).nullable(), // null表示新客户端，数组表示已配置的偏好
+    clientInstanceId: z.string().min(1),
     clientVersion: z.string().optional(),
     clientCapabilities: z.array(z.string()).optional(),
   }),
@@ -742,6 +783,13 @@ export const WSFrequencyChangedMessageSchema = WSBaseMessageSchema.extend({
 });
 
 export type WSFrequencyChangedMessage = z.infer<typeof WSFrequencyChangedMessageSchema>;
+
+export const WSRadioViewStateChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_VIEW_STATE_CHANGED),
+  data: RadioViewStateSchema,
+});
+
+export type WSRadioViewStateChangedMessage = z.infer<typeof WSRadioViewStateChangedMessageSchema>;
 
 /**
  * PTT状态变化消息（服务端到客户端）
@@ -975,7 +1023,11 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSlotStartMessageSchema,
   WSSubWindowMessageSchema,
   WSSlotPackUpdatedMessageSchema,
-  WSSpectrumDataMessageSchema,
+  WSSpectrumCapabilitiesMessageSchema,
+  WSSubscribeSpectrumMessageSchema,
+  WSSpectrumFrameMessageSchema,
+  WSSpectrumZoomStateChangedMessageSchema,
+  WSStepSpectrumZoomMessageSchema,
   WSDecodeErrorMessageSchema,
   WSSystemStatusMessageSchema,
   WSClientCountChangedMessageSchema,
@@ -1023,6 +1075,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 频率管理消息
   WSFrequencyChangedMessageSchema,
+  WSRadioViewStateChangedMessageSchema,
 
   // PTT状态管理消息
   WSPTTStatusChangedMessageSchema,
@@ -1061,7 +1114,11 @@ export type WSModeChangedMessage = z.infer<typeof WSModeChangedMessageSchema>;
 export type WSSlotStartMessage = z.infer<typeof WSSlotStartMessageSchema>;
 export type WSSubWindowMessage = z.infer<typeof WSSubWindowMessageSchema>;
 export type WSSlotPackUpdatedMessage = z.infer<typeof WSSlotPackUpdatedMessageSchema>;
-export type WSSpectrumDataMessage = z.infer<typeof WSSpectrumDataMessageSchema>;
+export type WSSpectrumCapabilitiesMessage = z.infer<typeof WSSpectrumCapabilitiesMessageSchema>;
+export type WSSubscribeSpectrumMessage = z.infer<typeof WSSubscribeSpectrumMessageSchema>;
+export type WSSpectrumFrameMessage = z.infer<typeof WSSpectrumFrameMessageSchema>;
+export type WSSpectrumZoomStateChangedMessage = z.infer<typeof WSSpectrumZoomStateChangedMessageSchema>;
+export type WSStepSpectrumZoomMessage = z.infer<typeof WSStepSpectrumZoomMessageSchema>;
 export type WSDecodeErrorMessage = z.infer<typeof WSDecodeErrorMessageSchema>;
 export type WSSystemStatusMessage = z.infer<typeof WSSystemStatusMessageSchema>;
 export type WSClientCountChangedMessage = z.infer<typeof WSClientCountChangedMessageSchema>;
@@ -1110,7 +1167,9 @@ export interface DigitalRadioEngineEvents {
   
   // 数据更新事件
   slotPackUpdated: (slotPack: z.infer<typeof SlotPackSchema>) => void;
-  spectrumData: (spectrumData: z.infer<typeof FT8SpectrumSchema>) => void;
+  spectrumCapabilities: (data: z.infer<typeof SpectrumCapabilitiesSchema>) => void;
+  spectrumFrame: (data: z.infer<typeof SpectrumFrameSchema>) => void;
+  spectrumZoomStateChanged: (data: z.infer<typeof SpectrumZoomStateSchema>) => void;
 
   // 发射相关事件
   requestTransmit: (request: TransmitRequest) => void;
@@ -1143,6 +1202,7 @@ export interface DigitalRadioEngineEvents {
 
   // 频率控制事件
   frequencyChanged: (data: FrequencyState) => void;
+  radioViewStateChanged: (data: RadioViewState) => void;
 
   // PTT状态控制事件
   pttStatusChanged: (data: PTTStatus) => void;

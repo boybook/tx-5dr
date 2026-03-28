@@ -9,7 +9,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { MeterData, FT8Spectrum } from '@tx5dr/contracts';
+import type { MeterData } from '@tx5dr/contracts';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('EventBus');
@@ -20,7 +20,6 @@ const logger = createLogger('EventBus');
 export interface EventBusEvents {
   // 高频事件（直接路由到 WSServer）
   'bus:meterData': (data: MeterData) => void;
-  'bus:spectrumData': (spectrum: FT8Spectrum) => void;
 
   // 聚合事件
   'bus:radioStatusChanged': (status: any) => void;

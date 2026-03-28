@@ -89,7 +89,7 @@ function AuthGate() {
   const { state, requiresLogin } = useAuth();
 
   // 初始化中 — 显示空白（避免闪烁）
-  if (!state.initialized) {
+  if (!state.initialized || !state.sessionResolved) {
     return null;
   }
 

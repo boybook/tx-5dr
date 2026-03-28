@@ -215,8 +215,6 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
         af_gain:  'AF',
         sql:      'SQL',
         mic_gain: 'MICGAIN',
-        nb:       'NB',
-        nr:       'NR',
       };
       for (const [capId, levelName] of Object.entries(levelMap)) {
         if (hamlibConn.isSupportedLevel(levelName)) {
@@ -224,11 +222,10 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
           logger.debug(`Capability supported: ${capId} (Hamlib level: ${levelName})`);
         }
       }
-      return;
     }
 
-    // ----- icom-wlan Level 类（通过实际读取探测）-----
-    const icomProbes: Array<[string, () => Promise<number> | undefined]> = [
+    // ----- 需要主动探测的可选能力（icom-wlan / hamlib function）-----
+    const optionalProbes: Array<[string, () => Promise<number> | undefined]> = [
       ['af_gain',  () => this.connection?.getAFGain?.()],
       ['sql',      () => this.connection?.getSQL?.()],
       ['rf_power', () => this.connection?.getRFPower?.()],
@@ -237,14 +234,18 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
       ['nr',       () => this.connection?.getNREnabled?.()],
     ];
 
-    for (const [capId, probeFn] of icomProbes) {
-      if (!probeFn()) continue;  // 接口方法不存在则跳过
+    for (const [capId, probeFn] of optionalProbes) {
+      if (this.supportedCapabilities.has(capId)) {
+        continue;
+      }
+
+      if (!probeFn()) continue;
       try {
         await probeFn();
         this.supportedCapabilities.add(capId);
-        logger.debug(`Capability supported: ${capId} (icom-wlan probe succeeded)`);
+        logger.debug(`Capability supported: ${capId} (probe succeeded)`);
       } catch {
-        logger.debug(`Capability not supported: ${capId} (icom-wlan probe failed)`);
+        logger.debug(`Capability not supported: ${capId} (probe failed)`);
       }
     }
   }

@@ -1,23 +1,34 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Tab, Tabs } from '@heroui/react';
+import { ArrowsPointingOutIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
+import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
+import { api } from '@tx5dr/core';
+import { useConnection, useCurrentOperatorId, useOperators, useProfiles, useRadioState, useSpectrum } from '../store/radioStore';
 import { createLogger } from '../utils/logger';
-
-const logger = createLogger('SpectrumDisplay');
-import type { FT8Spectrum } from '@tx5dr/contracts';
-import { useConnection, useOperators, useRadioState, useCurrentOperatorId } from '../store/radioStore';
-import { WebGLWaterfall } from './WebGLWaterfall';
-import type { AutoRangeConfig } from './WebGLWaterfall';
+import { setPreferredSpectrumKind } from '../utils/spectrumPreferences';
 import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
 import { useTxFrequencies } from '../hooks/useTxFrequencies';
-import { Button, Popover, PopoverTrigger, PopoverContent, Tabs, Tab, Slider, Input } from '@heroui/react';
-import { Cog6ToothIcon, ArrowsPointingOutIcon } from '@heroicons/react/24/outline';
-import { useTranslation } from 'react-i18next';
+import { WebGLWaterfall } from './WebGLWaterfall';
+import type { AutoRangeConfig, TxBandOverlay } from './WebGLWaterfall';
 
-// 瀑布图配置
-const WATERFALL_HISTORY = 120; // 保存120个历史数据点
+const logger = createLogger('SpectrumDisplay');
+
+type ElectronWindowHelper = Window & {
+  electronAPI?: {
+    window: {
+      openSpectrumWindow: () => Promise<void>;
+    };
+  };
+};
+
+const WATERFALL_HISTORY = 120;
 const WATERFALL_UPDATE_INTERVAL = 100;
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
+const AUDIO_SOURCE: SpectrumKind = 'audio';
+const RADIO_SDR_SOURCE: SpectrumKind = 'radio-sdr';
+const BASEBAND_INTERACTION_RANGE = { min: 0, max: 3000 };
 
-// 默认配置
 const DEFAULT_AUTO_CONFIG: AutoRangeConfig = {
   updateInterval: 10,
   minPercentile: 15,
@@ -29,11 +40,8 @@ interface SpectrumDisplayProps {
   className?: string;
   height?: number;
   hoverFrequency?: number | null;
-  /** 是否显示"弹出到独立窗口"按钮（仅 Electron 环境生效），独立频谱窗口中应传 false */
   showPopOut?: boolean;
-  /** 弹出状态变化时的回调，父组件可据此整体隐藏频谱区块 */
   onPopOutChange?: (isPopedOut: boolean) => void;
-  /** 是否显示 TX/RX 频率标记线，默认 true。语音模式下可设为 false */
   showMarkers?: boolean;
 }
 
@@ -43,13 +51,138 @@ interface WaterfallData {
   timeLabels: string[];
 }
 
-interface RangeSettings {
+interface ManualRangeSettings {
+  minDb: number;
+  maxDb: number;
+}
+
+interface AudioRangeSettings {
   mode: 'auto' | 'manual';
-  manual: {
-    minDb: number;
-    maxDb: number;
-  };
+  manual: ManualRangeSettings;
   auto: AutoRangeConfig;
+}
+
+interface PersistedRangeSettings {
+  audio: AudioRangeSettings;
+  radioSdr: ManualRangeSettings;
+}
+
+const AUDIO_RANGE_LIMITS = {
+  min: -120,
+  max: 40,
+};
+
+const RADIO_SDR_RANGE_LIMITS = {
+  min: -64,
+  max: 255,
+};
+
+const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
+  audio: {
+    mode: 'auto',
+    manual: {
+      minDb: -35,
+      maxDb: 10,
+    },
+    auto: DEFAULT_AUTO_CONFIG,
+  },
+  radioSdr: {
+    minDb: 0,
+    maxDb: 64,
+  },
+};
+
+function cloneManualRangeSettings(settings: ManualRangeSettings): ManualRangeSettings {
+  return {
+    minDb: settings.minDb,
+    maxDb: settings.maxDb,
+  };
+}
+
+function cloneAudioRangeSettings(settings: AudioRangeSettings): AudioRangeSettings {
+  return {
+    mode: settings.mode,
+    manual: cloneManualRangeSettings(settings.manual),
+    auto: { ...settings.auto },
+  };
+}
+
+function normalizeManualRangeSettings(
+  settings: Partial<ManualRangeSettings> | null | undefined,
+  fallback: ManualRangeSettings
+): ManualRangeSettings {
+  const minDb = typeof settings?.minDb === 'number' ? settings.minDb : fallback.minDb;
+  const maxDb = typeof settings?.maxDb === 'number' ? settings.maxDb : fallback.maxDb;
+
+  return {
+    minDb,
+    maxDb: maxDb > minDb ? maxDb : minDb + 1,
+  };
+}
+
+function clampRangeValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeAudioRangeSettings(
+  settings: Partial<AudioRangeSettings> | null | undefined,
+  fallback: AudioRangeSettings
+): AudioRangeSettings {
+  return {
+    mode: settings?.mode === 'manual' ? 'manual' : 'auto',
+    manual: normalizeManualRangeSettings(settings?.manual, fallback.manual),
+    auto: {
+      updateInterval: typeof settings?.auto?.updateInterval === 'number' ? settings.auto.updateInterval : fallback.auto.updateInterval,
+      minPercentile: typeof settings?.auto?.minPercentile === 'number' ? settings.auto.minPercentile : fallback.auto.minPercentile,
+      maxPercentile: typeof settings?.auto?.maxPercentile === 'number' ? settings.auto.maxPercentile : fallback.auto.maxPercentile,
+      rangeExpansionFactor: typeof settings?.auto?.rangeExpansionFactor === 'number'
+        ? settings.auto.rangeExpansionFactor
+        : fallback.auto.rangeExpansionFactor,
+    },
+  };
+}
+
+function loadPersistedRangeSettings(): PersistedRangeSettings {
+  const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
+  if (!saved) {
+    return {
+      audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
+      radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(saved) as
+      | Partial<PersistedRangeSettings>
+      | { manual?: Partial<ManualRangeSettings>; auto?: Partial<AutoRangeConfig>; mode?: 'auto' | 'manual' };
+
+    if (typeof parsed === 'object' && parsed !== null && ('audio' in parsed || 'radioSdr' in parsed)) {
+      return {
+        audio: normalizeAudioRangeSettings(
+          (parsed as Partial<PersistedRangeSettings>).audio,
+          DEFAULT_PERSISTED_RANGE_SETTINGS.audio
+        ),
+        radioSdr: normalizeManualRangeSettings(
+          (parsed as Partial<PersistedRangeSettings>).radioSdr,
+          DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr
+        ),
+      };
+    }
+
+    return {
+      audio: normalizeAudioRangeSettings(
+        parsed as { manual?: Partial<ManualRangeSettings>; auto?: Partial<AutoRangeConfig>; mode?: 'auto' | 'manual' },
+        DEFAULT_PERSISTED_RANGE_SETTINGS.audio
+      ),
+      radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+    };
+  } catch (error) {
+    logger.error('Failed to parse saved settings', error);
+    return {
+      audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
+      radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+    };
+  }
 }
 
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
@@ -61,214 +194,351 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   showMarkers = true,
 }) => {
   const { t } = useTranslation('common');
-  const [spectrum, setSpectrum] = useState<FT8Spectrum | null>(null);
+  const connection = useConnection();
+  const { operators } = useOperators();
+  const { activeProfileId } = useProfiles();
+  const { state: radioState } = useRadioState();
+  const { capabilities, selectedKind, latestFrame, setSelectedKind, zoomState } = useSpectrum();
+  const isTransmitting = radioState.pttStatus.isTransmitting;
+  const [frame, setFrame] = useState<SpectrumFrame | null>(null);
   const [waterfallData, setWaterfallData] = useState<WaterfallData>({
     spectrumData: [],
     frequencies: [],
-    timeLabels: []
+    timeLabels: [],
   });
-  const connection = useConnection();
-  const { operators } = useOperators();
-  const { state: radioState } = useRadioState();
-  const isTransmitting = radioState.pttStatus.isTransmitting;
+  const [actualRange, setActualRange] = useState<{ min: number; max: number } | null>(null);
+  const [persistedRangeSettings, setPersistedRangeSettings] = useState<PersistedRangeSettings>(() => loadPersistedRangeSettings());
   const lastUpdateRef = useRef<number>(0);
-  const pendingDataRef = useRef<FT8Spectrum | null>(null);
+  const pendingFrameRef = useRef<SpectrumFrame | null>(null);
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 弹出到独立窗口
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const isElectron = typeof window !== 'undefined' && typeof (window as any).electronAPI !== 'undefined';
+  const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
   const canPopOut = showPopOut && isElectron;
+  const rxFrequencies = useTargetRxFrequencies();
+  const txFrequencies = useTxFrequencies();
+  const { currentOperatorId } = useCurrentOperatorId();
+  const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
+  const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
+  const isVoiceMode = radioState.engineMode === 'voice';
+  const currentSourceAvailability = capabilities?.sources.find(source => source.kind === effectiveSelectedKind);
+  const frequencyRangeMode = currentSourceAvailability?.frequencyRangeMode ?? (isRadioSdrSelected ? 'absolute' : 'baseband');
+  const spectrumReferenceFrequency = frequencyRangeMode === 'absolute'
+    ? (radioState.currentRadioFrequency ?? frame?.meta.centerFrequency ?? null)
+    : null;
+  const radioViewState = radioState.radioViewState;
+  const currentManualRangeSettings = isRadioSdrSelected
+    ? persistedRangeSettings.radioSdr
+    : persistedRangeSettings.audio.manual;
+  const audioRangeSettings = persistedRangeSettings.audio;
+  const rangeLimits = isRadioSdrSelected ? RADIO_SDR_RANGE_LIMITS : AUDIO_RANGE_LIMITS;
 
-  // 弹出后此组件会被父层卸载，关窗监听由始终存活的 LeftLayout 负责
+  const updateCurrentRangeSettings = useCallback((updater: (current: ManualRangeSettings) => ManualRangeSettings) => {
+    setPersistedRangeSettings(prev => {
+      if (isRadioSdrSelected) {
+        return {
+          ...prev,
+          radioSdr: updater(prev.radioSdr),
+        };
+      }
+
+      return {
+        ...prev,
+        audio: updater(prev.audio),
+      };
+    });
+  }, [isRadioSdrSelected]);
+
+  const updateAudioRangeSettings = useCallback((updater: (current: AudioRangeSettings) => AudioRangeSettings) => {
+    setPersistedRangeSettings(prev => ({
+      ...prev,
+      audio: updater(prev.audio),
+    }));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(persistedRangeSettings));
+  }, [persistedRangeSettings]);
+
   const handlePopOut = useCallback(async () => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (window as any).electronAPI.window.openSpectrumWindow();
+      await (window as ElectronWindowHelper).electronAPI!.window.openSpectrumWindow();
       onPopOutChange?.(true);
     } catch (error) {
-      logger.error('Failed to open spectrum window:', error);
+      logger.error('Failed to open spectrum window', error);
     }
   }, [onPopOutChange]);
 
-  // 范围设置状态
-  const [rangeSettings, setRangeSettings] = useState<RangeSettings>(() => {
-    // 从 localStorage 加载设置
-    const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        logger.error('Failed to parse saved settings:', e);
-      }
-    }
-    // 默认设置
-    return {
-      mode: 'auto',
-      manual: {
-        minDb: -35,
-        maxDb: 10,
-      },
-      auto: DEFAULT_AUTO_CONFIG,
-    };
-  });
-
-  // 当前实际生效的范围（用于显示）
-  const [actualRange, setActualRange] = useState<{ min: number; max: number } | null>(null);
-
-  // 保存设置到 localStorage
-  useEffect(() => {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(rangeSettings));
-  }, [rangeSettings]);
-
-  // 获取所有操作者的通联目标RX频率
-  const rxFrequencies = useTargetRxFrequencies();
-
-  // 获取所有操作者的发射TX频率
-  const txFrequencies = useTxFrequencies();
-
-  // 处理TX频率拖动更新
   const handleTxFrequencyChange = useCallback((operatorId: string, frequency: number) => {
     const radioService = connection.state.radioService;
     if (!radioService) return;
 
-    // 查找对应的操作者
     const operator = operators.find(op => op.id === operatorId);
     if (!operator) return;
 
-    // 发送更新命令到后端
     radioService.setOperatorContext(operatorId, {
       myCall: operator.context.myCall,
       myGrid: operator.context.myGrid,
       targetCallsign: operator.context.targetCall,
       targetGrid: operator.context.targetGrid,
-      frequency: Math.round(frequency), // 四舍五入到整数
+      frequency: Math.round(frequency),
       reportSent: operator.context.reportSent,
       reportReceived: operator.context.reportReceived,
     });
   }, [connection.state.radioService, operators]);
 
-  // 右键快捷设置当前操作员TX频率
-  const { currentOperatorId } = useCurrentOperatorId();
   const handleRightClickSetFrequency = useCallback((frequency: number) => {
     if (currentOperatorId) {
       handleTxFrequencyChange(currentOperatorId, frequency);
     }
   }, [currentOperatorId, handleTxFrequencyChange]);
 
-  // 解码二进制频谱数据
-  const decodeSpectrumData = useCallback((spectrum: FT8Spectrum) => {
-    const { data, format } = spectrum.binaryData;
-    
-    // 将base64转换为二进制数组
-    const binaryString = atob(data);
+  const handleVoiceFrequencyChange = useCallback(async (frequency: number) => {
+    if (!connection.state.isConnected) {
+      return;
+    }
+
+    const currentRadioMode = radioViewState?.radioMode ?? radioState.currentRadioMode ?? 'USB';
+
+    try {
+      await api.setRadioFrequency({
+        frequency: Math.round(frequency),
+        mode: 'VOICE',
+        band: 'Custom',
+        description: `${(frequency / 1_000_000).toFixed(3)} MHz`,
+        radioMode: currentRadioMode,
+      });
+    } catch (error) {
+      logger.error('Failed to set voice frequency from SDR overlay', error);
+    }
+  }, [connection.state.isConnected, radioState.currentRadioMode, radioViewState?.radioMode]);
+
+  const decodeSpectrumData = useCallback((nextFrame: SpectrumFrame) => {
+    const binaryString = atob(nextFrame.binaryData.data);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
-    
-    // 创建Int16Array视图
+
     const int16Array = new Int16Array(bytes.buffer);
-    
-    // 还原为dB值
-    const { scale = 1, offset = 0 } = format;
-    const dbValues = Array.from(int16Array).map(value => value * scale + offset);
-    
-    return dbValues;
+    const { scale = 1, offset = 0 } = nextFrame.binaryData.format;
+    return Array.from(int16Array, value => value * scale + offset);
   }, []);
 
-  // 生成频率轴数据
-  const generateFrequencyAxis = useCallback((spectrum: FT8Spectrum) => {
-    const { min, max } = spectrum.frequencyRange;
-    const length = spectrum.binaryData.format.length;
-    
-    // 生成频率点
+  const generateFrequencyAxis = useCallback((nextFrame: SpectrumFrame) => {
+    const { min, max } = nextFrame.frequencyRange;
+    const length = nextFrame.binaryData.format.length;
     const frequencies = new Array(length);
+
     for (let i = 0; i < length; i++) {
-      frequencies[i] = min + (i * (max - min)) / (length - 1);
+      frequencies[i] = min + (i * (max - min)) / Math.max(length - 1, 1);
     }
+
     return frequencies;
   }, []);
 
-  // 批量更新瀑布图数据
+  const resetWaterfall = useCallback(() => {
+    setFrame(null);
+    setActualRange(null);
+    setWaterfallData({
+      spectrumData: [],
+      frequencies: [],
+      timeLabels: [],
+    });
+    pendingFrameRef.current = null;
+    if (updateTimerRef.current) {
+      clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = null;
+    }
+  }, []);
+
   const performUpdate = useCallback(() => {
-    const newSpectrum = pendingDataRef.current;
-    if (!newSpectrum) return;
-    
-    pendingDataRef.current = null;
-    
-    const dbValues = decodeSpectrumData(newSpectrum);
-    const timeLabel = new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
+    const nextFrame = pendingFrameRef.current;
+    if (!nextFrame) return;
+
+    pendingFrameRef.current = null;
+
+    const values = decodeSpectrumData(nextFrame);
+    const timeLabel = new Date().toISOString().slice(11, 23);
 
     setWaterfallData(prev => {
-      // 更新频率轴（如果需要）
-      const frequencies = prev.frequencies.length === 0 
-        ? generateFrequencyAxis(newSpectrum)
-        : prev.frequencies;
-
-      // 添加新数据到历史记录
-      const spectrumData = [dbValues, ...prev.spectrumData].slice(0, WATERFALL_HISTORY);
-      const timeLabels = [timeLabel, ...prev.timeLabels].slice(0, WATERFALL_HISTORY);
+      const nextFrequencies = generateFrequencyAxis(nextFrame);
+      const frequenciesChanged = prev.frequencies.length !== nextFrequencies.length
+        || prev.frequencies[0] !== nextFrequencies[0]
+        || prev.frequencies[prev.frequencies.length - 1] !== nextFrequencies[nextFrequencies.length - 1];
 
       return {
-        spectrumData,
-        frequencies,
-        timeLabels
+        spectrumData: [values, ...prev.spectrumData].slice(0, WATERFALL_HISTORY),
+        frequencies: frequenciesChanged ? nextFrequencies : prev.frequencies,
+        timeLabels: [timeLabel, ...prev.timeLabels].slice(0, WATERFALL_HISTORY),
       };
     });
 
-    setSpectrum(newSpectrum);
+    setFrame(nextFrame);
   }, [decodeSpectrumData, generateFrequencyAxis]);
 
-  // 更新瀑布图数据（带节流）
-  const updateWaterfallData = useCallback((newSpectrum: FT8Spectrum) => {
+  const updateWaterfallData = useCallback((nextFrame: SpectrumFrame) => {
     const now = Date.now();
-    pendingDataRef.current = newSpectrum;
-    
-    // 如果距离上次更新时间足够长，立即更新
+    pendingFrameRef.current = nextFrame;
+
     if (now - lastUpdateRef.current >= WATERFALL_UPDATE_INTERVAL) {
       lastUpdateRef.current = now;
       performUpdate();
-    } else {
-      // 否则，设置定时器在下一个更新间隔执行
-      if (updateTimerRef.current) {
-        clearTimeout(updateTimerRef.current);
-      }
-      
-      const delay = WATERFALL_UPDATE_INTERVAL - (now - lastUpdateRef.current);
-      updateTimerRef.current = setTimeout(() => {
-        lastUpdateRef.current = Date.now();
-        performUpdate();
-      }, delay);
+      return;
     }
+
+    if (updateTimerRef.current) {
+      clearTimeout(updateTimerRef.current);
+    }
+
+    const delay = WATERFALL_UPDATE_INTERVAL - (now - lastUpdateRef.current);
+    updateTimerRef.current = setTimeout(() => {
+      lastUpdateRef.current = Date.now();
+      performUpdate();
+    }, delay);
   }, [performUpdate]);
 
-  // 订阅频谱数据更新
   useEffect(() => {
+    if (!latestFrame || !selectedKind || latestFrame.kind !== selectedKind) {
+      return;
+    }
+    updateWaterfallData(latestFrame);
+  }, [latestFrame, selectedKind, updateWaterfallData]);
+
+  useEffect(() => {
+    resetWaterfall();
+  }, [selectedKind, resetWaterfall]);
+
+  useEffect(() => {
+    if (selectedKind !== RADIO_SDR_SOURCE) {
+      return;
+    }
+
+    setPersistedRangeSettings(prev => ({
+      ...prev,
+      radioSdr: normalizeManualRangeSettings(prev.radioSdr, DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+    }));
+  }, [selectedKind]);
+
+  const availableSources = capabilities?.sources.filter(source => source.available) ?? [];
+  const shouldShowSourceTabs = availableSources.length > 1;
+  const voiceOverlayIsInteractive = isVoiceMode
+    && isRadioSdrSelected
+    && radioViewState?.sdrTrackingMode !== 'follow';
+  const voiceBandOverlay: TxBandOverlay[] = React.useMemo(() => {
+    if (!isVoiceMode || !isRadioSdrSelected || !radioViewState?.frequency || !radioViewState.offsetModel || !radioViewState.occupiedBandwidthHz) {
+      return [];
+    }
+
+    const frameCenterFrequency = frame?.meta.centerFrequency
+      ?? (waterfallData.frequencies.length > 0
+        ? waterfallData.frequencies[Math.floor(waterfallData.frequencies.length / 2)] ?? null
+        : null);
+    const lineFrequency = radioViewState.sdrTrackingMode === 'follow' && typeof frameCenterFrequency === 'number'
+      ? frameCenterFrequency
+      : radioViewState.frequency;
+    const bandwidthHz = radioViewState.occupiedBandwidthHz;
+    let rangeStartFrequency = lineFrequency;
+    let rangeEndFrequency = lineFrequency;
+
+    switch (radioViewState.offsetModel) {
+      case 'upper':
+        rangeStartFrequency = lineFrequency;
+        rangeEndFrequency = lineFrequency + bandwidthHz;
+        break;
+      case 'lower':
+        rangeStartFrequency = lineFrequency - bandwidthHz;
+        rangeEndFrequency = lineFrequency;
+        break;
+      case 'symmetric':
+        rangeStartFrequency = lineFrequency - bandwidthHz / 2;
+        rangeEndFrequency = lineFrequency + bandwidthHz / 2;
+        break;
+    }
+
+    return [{
+      id: 'voice-current-tx',
+      label: 'TX',
+      lineFrequency,
+      rangeStartFrequency,
+      rangeEndFrequency,
+      draggable: voiceOverlayIsInteractive,
+    }];
+  }, [frame?.meta.centerFrequency, isRadioSdrSelected, isVoiceMode, radioViewState, voiceOverlayIsInteractive, waterfallData.frequencies]);
+
+  const handleSpectrumKindChange = useCallback((kind: SpectrumKind) => {
     const radioService = connection.state.radioService;
     if (!radioService) return;
 
-    // 直接订阅 WSClient 事件
-    const wsClient = radioService.wsClientInstance;
+    setSelectedKind(kind);
+    radioService.subscribeSpectrum(kind);
+    setPreferredSpectrumKind(activeProfileId, kind);
+  }, [activeProfileId, connection.state.radioService, setSelectedKind]);
 
-    const handleSpectrumData = (newSpectrum: FT8Spectrum) => {
-      updateWaterfallData(newSpectrum);
-    };
+  const handleStepSpectrumZoom = useCallback((direction: 'in' | 'out') => {
+    connection.state.radioService?.stepSpectrumZoom(direction);
+  }, [connection.state.radioService]);
 
-    wsClient.onWSEvent('spectrumData', handleSpectrumData);
+  const shouldShowZoomControls = isRadioSdrSelected;
+  const currentZoomLevelIndex = zoomState?.levels.findIndex(level => level.id === zoomState.currentLevelId) ?? -1;
+  const zoomControlsDisabled = !zoomState?.supported || !zoomState.available || !zoomState.currentLevelId || currentZoomLevelIndex < 0;
+  const canZoomOut = !zoomControlsDisabled && currentZoomLevelIndex > 0;
+  const canZoomIn = !zoomControlsDisabled && currentZoomLevelIndex < (zoomState?.levels.length ?? 0) - 1;
 
-    return () => {
-      wsClient.offWSEvent('spectrumData', handleSpectrumData);
-      if (updateTimerRef.current) {
-        clearTimeout(updateTimerRef.current);
-      }
-    };
-  }, [connection.state.radioService, updateWaterfallData]);
+  const renderZoomControls = () => {
+    if (!shouldShowZoomControls) {
+      return null;
+    }
 
-  if (!spectrum || waterfallData.spectrumData.length === 0) {
+    return (
+      <div className="absolute bottom-1 right-1 z-20 flex items-center gap-0.5 rounded-medium bg-black/35 px-0.5 py-0.5 backdrop-blur-sm">
+        <Button
+          isIconOnly
+          size="sm"
+          variant="light"
+          className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
+          onPress={() => handleStepSpectrumZoom('out')}
+          isDisabled={!canZoomOut}
+          title={t('spectrum.zoomOut')}
+        >
+          <MinusIcon className="w-2.5 h-2.5" />
+        </Button>
+        <Button
+          isIconOnly
+          size="sm"
+          variant="light"
+          className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
+          onPress={() => handleStepSpectrumZoom('in')}
+          isDisabled={!canZoomIn}
+          title={t('spectrum.zoomIn')}
+        >
+          <PlusIcon className="w-2.5 h-2.5" />
+        </Button>
+      </div>
+    );
+  };
+
+  if (!frame || waterfallData.spectrumData.length === 0) {
     return (
       <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
         <div className="text-default-400">{t('spectrum.waiting')}</div>
+        {shouldShowSourceTabs && selectedKind && (
+          <div className="absolute top-1 left-1 z-20">
+            <Tabs
+              size="sm"
+              selectedKey={selectedKind}
+              onSelectionChange={(key) => handleSpectrumKindChange(key as SpectrumKind)}
+              classNames={{
+                tabList: 'min-h-0 gap-0.5 bg-black/30 p-0.5 backdrop-blur-sm',
+                tab: 'min-h-0 h-6 px-2 text-[11px]',
+                tabContent: 'text-[11px] leading-none',
+              }}
+            >
+              <Tab key="radio-sdr" title={t('spectrum.radioSdrSource')} />
+              <Tab key="audio" title={t('spectrum.audioSource')} />
+            </Tabs>
+          </div>
+        )}
+        {renderZoomControls()}
         {canPopOut && (
           <Button
             isIconOnly
@@ -291,22 +561,51 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         data={waterfallData.spectrumData}
         frequencies={waterfallData.frequencies}
         height={height}
-        minDb={rangeSettings.mode === 'manual' ? rangeSettings.manual.minDb : -35}
-        maxDb={rangeSettings.mode === 'manual' ? rangeSettings.manual.maxDb : 10}
-        autoRange={rangeSettings.mode === 'auto'}
-        autoRangeConfig={rangeSettings.auto}
+        minDb={currentManualRangeSettings.minDb}
+        maxDb={currentManualRangeSettings.maxDb}
+        autoRange={!isRadioSdrSelected && audioRangeSettings.mode === 'auto'}
+        autoRangeConfig={audioRangeSettings.auto}
         totalRows={WATERFALL_HISTORY}
-        rxFrequencies={showMarkers ? rxFrequencies : []}
-        txFrequencies={showMarkers ? txFrequencies : []}
-        onTxFrequencyChange={showMarkers ? handleTxFrequencyChange : undefined}
-        onRightClickSetFrequency={showMarkers ? handleRightClickSetFrequency : undefined}
+        frequencyRangeMode={frequencyRangeMode}
+        referenceFrequencyHz={spectrumReferenceFrequency}
+        basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
+        interactionFrequencyMode={isVoiceMode && isRadioSdrSelected ? 'absolute' : 'baseband'}
+        txBandOverlays={voiceBandOverlay}
+        rxFrequencies={showMarkers && !isVoiceMode ? rxFrequencies : []}
+        txFrequencies={showMarkers && !isVoiceMode ? txFrequencies : []}
+        onTxFrequencyChange={showMarkers && !isVoiceMode ? handleTxFrequencyChange : undefined}
+        onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleVoiceFrequencyChange(frequency) : undefined}
+        onRightClickSetFrequency={
+          isVoiceMode && isRadioSdrSelected
+            ? (voiceOverlayIsInteractive ? (frequency) => void handleVoiceFrequencyChange(frequency) : undefined)
+            : (showMarkers ? handleRightClickSetFrequency : undefined)
+        }
         onActualRangeChange={setActualRange}
         hoverFrequency={hoverFrequency}
         isTransmitting={isTransmitting}
         className="bg-transparent"
       />
 
-      {/* 弹出到独立窗口按钮 */}
+      {shouldShowSourceTabs && selectedKind && (
+        <div className="absolute top-1 left-1 z-20">
+          <Tabs
+            size="sm"
+            selectedKey={selectedKind}
+            onSelectionChange={(key) => handleSpectrumKindChange(key as SpectrumKind)}
+            classNames={{
+              tabList: 'min-h-0 gap-0.5 bg-black/30 p-0.5 backdrop-blur-sm',
+              tab: 'min-h-0 h-6 px-2 text-[11px]',
+              tabContent: 'text-[11px] leading-none',
+            }}
+          >
+            <Tab key="radio-sdr" title={t('spectrum.radioSdrSource')} />
+            <Tab key="audio" title={t('spectrum.audioSource')} />
+          </Tabs>
+        </div>
+      )}
+
+      {renderZoomControls()}
+
       {canPopOut && (
         <Button
           isIconOnly
@@ -320,7 +619,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         </Button>
       )}
 
-      {/* 设置按钮和 Popover */}
       <Popover placement="bottom-end">
         <PopoverTrigger>
           <Button
@@ -338,50 +636,60 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               {t('spectrum.rangeSettings')}
             </div>
 
-            {/* 模式切换 - 使用 Tabs */}
             <div className="px-4 py-3">
-              <Tabs
-                selectedKey={rangeSettings.mode}
-                onSelectionChange={(key) => {
-                  const newMode = key as 'auto' | 'manual';
-                  setRangeSettings(prev => {
-                    // 如果从自动切换到手动，并且有实际范围数据，则使用实际范围
-                    if (prev.mode === 'auto' && newMode === 'manual' && actualRange) {
-                      return {
-                        ...prev,
-                        mode: newMode,
-                        manual: {
-                          minDb: Math.round(actualRange.min),
-                          maxDb: Math.round(actualRange.max)
+              <div className="space-y-3">
+                {!isRadioSdrSelected && (
+                  <Tabs
+                    selectedKey={audioRangeSettings.mode}
+                    onSelectionChange={(key) => {
+                      const nextMode = key as 'auto' | 'manual';
+                      updateAudioRangeSettings(current => {
+                        if (current.mode === 'auto' && nextMode === 'manual' && actualRange) {
+                          return {
+                            ...current,
+                            mode: 'manual',
+                            manual: {
+                              minDb: Math.round(actualRange.min),
+                              maxDb: Math.round(actualRange.max),
+                            },
+                          };
                         }
-                      };
-                    }
-                    return { ...prev, mode: newMode };
-                  });
-                }}
-                fullWidth
-                size="sm"
-                classNames={{
-                  base: "w-full",
-                  tabList: "w-full",
-                  cursor: "w-full",
-                  tab: "w-full",
-                  panel: "w-full px-4 py-3"
-                }}
-              >
-                <Tab key="auto" title={t('spectrum.autoMode')}>
-                  <div className="space-y-4">
+
+                        return {
+                          ...current,
+                          mode: nextMode,
+                        };
+                      });
+                    }}
+                    fullWidth
+                    size="sm"
+                    classNames={{
+                      base: 'w-full',
+                      tabList: 'w-full',
+                      cursor: 'w-full',
+                      tab: 'w-full',
+                    }}
+                  >
+                    <Tab key="auto" title={t('spectrum.autoMode')} />
+                    <Tab key="manual" title={t('spectrum.manualMode')} />
+                  </Tabs>
+                )}
+                {!isRadioSdrSelected && audioRangeSettings.mode === 'auto' && (
+                  <>
                     <Slider
                       label={t('spectrum.updateInterval')}
                       size="sm"
                       step={1}
                       minValue={1}
                       maxValue={20}
-                      value={rangeSettings.auto.updateInterval}
+                      value={audioRangeSettings.auto.updateInterval}
                       onChange={(value) => {
-                        setRangeSettings(prev => ({
-                          ...prev,
-                          auto: { ...prev.auto, updateInterval: value as number }
+                        updateAudioRangeSettings(current => ({
+                          ...current,
+                          auto: {
+                            ...current.auto,
+                            updateInterval: value as number,
+                          },
                         }));
                       }}
                       getValue={(value) => t('spectrum.frames', { count: value as number })}
@@ -392,11 +700,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       step={1}
                       minValue={5}
                       maxValue={50}
-                      value={rangeSettings.auto.minPercentile}
+                      value={audioRangeSettings.auto.minPercentile}
                       onChange={(value) => {
-                        setRangeSettings(prev => ({
-                          ...prev,
-                          auto: { ...prev.auto, minPercentile: value as number }
+                        updateAudioRangeSettings(current => ({
+                          ...current,
+                          auto: {
+                            ...current.auto,
+                            minPercentile: value as number,
+                          },
                         }));
                       }}
                       getValue={(value) => `${value}%`}
@@ -407,11 +718,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       step={1}
                       minValue={90}
                       maxValue={100}
-                      value={rangeSettings.auto.maxPercentile}
+                      value={audioRangeSettings.auto.maxPercentile}
                       onChange={(value) => {
-                        setRangeSettings(prev => ({
-                          ...prev,
-                          auto: { ...prev.auto, maxPercentile: value as number }
+                        updateAudioRangeSettings(current => ({
+                          ...current,
+                          auto: {
+                            ...current.auto,
+                            maxPercentile: value as number,
+                          },
                         }));
                       }}
                       getValue={(value) => `${value}%`}
@@ -422,66 +736,94 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       step={0.5}
                       minValue={2}
                       maxValue={8}
-                      value={rangeSettings.auto.rangeExpansionFactor}
+                      value={audioRangeSettings.auto.rangeExpansionFactor}
                       onChange={(value) => {
-                        setRangeSettings(prev => ({
-                          ...prev,
-                          auto: { ...prev.auto, rangeExpansionFactor: value as number }
+                        updateAudioRangeSettings(current => ({
+                          ...current,
+                          auto: {
+                            ...current.auto,
+                            rangeExpansionFactor: value as number,
+                          },
                         }));
                       }}
                       getValue={(value) => `${(typeof value === 'number' ? value : value[0]).toFixed(1)}x`}
                     />
-                  </div>
-                </Tab>
-
-                <Tab key="manual" title={t('spectrum.manualMode')}>
-                  <div className="space-y-3">
-                    <Input
-                      label={t('spectrum.minDb')}
-                      type="number"
-                      size="sm"
-                      value={rangeSettings.manual.minDb.toString()}
-                      onValueChange={(value) => {
-                        const num = parseFloat(value);
-                        if (!isNaN(num) && num < rangeSettings.manual.maxDb) {  // 确保 min < max
-                          setRangeSettings(prev => ({
-                            ...prev,
-                            manual: { ...prev.manual, minDb: num }
-                          }));
-                        }
-                      }}
-                    />
-                    <Input
-                      label={t('spectrum.maxDb')}
-                      type="number"
-                      size="sm"
-                      value={rangeSettings.manual.maxDb.toString()}
-                      onValueChange={(value) => {
-                        const num = parseFloat(value);
-                        if (!isNaN(num) && num > rangeSettings.manual.minDb) {  // 确保 max > min
-                          setRangeSettings(prev => ({
-                            ...prev,
-                            manual: { ...prev.manual, maxDb: num }
-                          }));
-                        }
-                      }}
-                    />
-                  </div>
-                </Tab>
-              </Tabs>
-            </div>
-
-            {/* 当前范围显示 */}
-            {actualRange && (
-              <div className="px-4 py-3 border-t border-divider">
+                  </>
+                )}
+                {(isRadioSdrSelected || audioRangeSettings.mode === 'manual') && (
+                  <>
+                <Slider
+                  label={t('spectrum.minDb')}
+                  size="sm"
+                  step={1}
+                  minValue={rangeLimits.min}
+                  maxValue={Math.min(rangeLimits.max - 1, currentManualRangeSettings.maxDb - 1)}
+                  value={currentManualRangeSettings.minDb}
+                  onChange={(value) => {
+                    const nextValue = Array.isArray(value) ? value[0] : value;
+                    updateCurrentRangeSettings(current => ({
+                      ...current,
+                      minDb: clampRangeValue(nextValue as number, rangeLimits.min, Math.min(rangeLimits.max - 1, current.maxDb - 1)),
+                    }));
+                  }}
+                />
+                <Input
+                  label={t('spectrum.minDb')}
+                  type="number"
+                  size="sm"
+                  value={currentManualRangeSettings.minDb.toString()}
+                  onValueChange={(value) => {
+                    const num = parseFloat(value);
+                    if (Number.isNaN(num)) {
+                      return;
+                    }
+                    updateCurrentRangeSettings(current => ({
+                      ...current,
+                      minDb: clampRangeValue(num, rangeLimits.min, Math.min(rangeLimits.max - 1, current.maxDb - 1)),
+                    }));
+                  }}
+                />
+                <Slider
+                  label={t('spectrum.maxDb')}
+                  size="sm"
+                  step={1}
+                  minValue={Math.max(rangeLimits.min + 1, currentManualRangeSettings.minDb + 1)}
+                  maxValue={rangeLimits.max}
+                  value={currentManualRangeSettings.maxDb}
+                  onChange={(value) => {
+                    const nextValue = Array.isArray(value) ? value[0] : value;
+                    updateCurrentRangeSettings(current => ({
+                      ...current,
+                      maxDb: clampRangeValue(nextValue as number, Math.max(rangeLimits.min + 1, current.minDb + 1), rangeLimits.max),
+                    }));
+                  }}
+                />
+                <Input
+                  label={t('spectrum.maxDb')}
+                  type="number"
+                  size="sm"
+                  value={currentManualRangeSettings.maxDb.toString()}
+                  onValueChange={(value) => {
+                    const num = parseFloat(value);
+                    if (Number.isNaN(num)) {
+                      return;
+                    }
+                    updateCurrentRangeSettings(current => ({
+                      ...current,
+                      maxDb: clampRangeValue(num, Math.max(rangeLimits.min + 1, current.minDb + 1), rangeLimits.max),
+                    }));
+                  }}
+                />
                 <div className="text-xs text-default-400">
-                  {t('spectrum.currentRange', { min: actualRange.min.toFixed(1), max: actualRange.max.toFixed(1) })}
+                  {isRadioSdrSelected ? t('spectrum.radioSdrSource') : t('spectrum.audioSource')}
                 </div>
+                  </>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </PopoverContent>
       </Popover>
     </div>
   );
-}; 
+};

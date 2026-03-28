@@ -758,6 +758,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.connection;
   }
 
+  /**
+   * 获取当前活动连接
+   */
+  getActiveConnection(): IRadioConnection | null {
+    return this.connection;
+  }
+
   // ==================== 静态方法 ====================
 
   /**

@@ -1,4 +1,4 @@
-import { WSMessageType, ModeDescriptor } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor, type SpectrumKind, type SpectrumZoomDirection } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -133,6 +133,14 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.SET_MODE, { mode });
   }
 
+  subscribeSpectrum(kind: SpectrumKind | null): void {
+    this.send(WSMessageType.SUBSCRIBE_SPECTRUM, { kind });
+  }
+
+  stepSpectrumZoom(direction: SpectrumZoomDirection): void {
+    this.send(WSMessageType.STEP_SPECTRUM_ZOOM, { direction });
+  }
+
   /**
    * 强制停止发射
    * 立即停止PTT并清空音频播放队列
@@ -238,10 +246,11 @@ export class WSClient extends WSMessageHandler {
   /**
    * 发送客户端握手消息
    */
-  sendHandshake(enabledOperatorIds: string[] | null): void {
-    logger.info('Sending handshake:', { enabledOperatorIds });
+  sendHandshake(enabledOperatorIds: string[] | null, clientInstanceId: string): void {
+    logger.info('Sending handshake:', { enabledOperatorIds, clientInstanceId });
     this.send('clientHandshake', {
       enabledOperatorIds,
+      clientInstanceId,
       clientVersion: '1.0.0',
       clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
     });

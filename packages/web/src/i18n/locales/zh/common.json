@@ -115,6 +115,8 @@
   },
   "spectrum": {
     "waiting": "等待频谱数据...",
+    "audioSource": "音频",
+    "radioSdrSource": "电台 SDR",
     "popOut": "在独立窗口中显示",
     "rangeSettings": "频谱范围设置",
     "autoMode": "自动模式",
@@ -126,7 +128,10 @@
     "expansionFactor": "范围扩展因子",
     "minDb": "最小值 (dB)",
     "maxDb": "最大值 (dB)",
-    "currentRange": "当前范围: {{min}} ~ {{max}} dB"
+    "currentRange": "当前范围: {{min}} ~ {{max}} dB",
+    "zoomIn": "缩小频谱范围",
+    "zoomOut": "放大频谱范围",
+    "zoomUnavailable": "缩放不可用"
   },
   "splitLayout": {
     "decode": "解码",

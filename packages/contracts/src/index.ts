@@ -3,6 +3,7 @@ export * from './schema/server-message-keys.js';
 export * from './schema/hello.schema.js';
 export * from './schema/audio.schema.js';
 export * from './schema/ft8.schema.js';
+export * from './schema/spectrum.schema.js';
 export * from './schema/websocket.schema.js';
 export * from './schema/mode.schema.js';
 export * from './schema/qso.schema.js';
@@ -30,6 +31,12 @@ export type {
   ModeDescriptor
 } from './schema/mode.schema.js';
 
+export type {
+  SpectrumZoomDirection,
+  SpectrumZoomLevel,
+  SpectrumZoomState,
+} from './schema/spectrum.schema.js';
+
 export {
   WSMessageType
 } from './schema/websocket.schema.js';
@@ -46,6 +53,7 @@ export type {
 
 // 导出所有schema中定义的类型
 export * from './schema/ft8.schema.js';
+export * from './schema/spectrum.schema.js';
 export * from './schema/qso.schema.js';
 export * from './schema/websocket.schema.js';
 export * from './schema/slot-info.schema.js';

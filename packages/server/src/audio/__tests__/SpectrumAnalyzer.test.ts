@@ -5,6 +5,33 @@
 import { describe, it, expect } from 'vitest';
 import { SpectrumAnalyzer } from '../SpectrumAnalyzer.js';
 
+function decodeDbValues(spectrum: Awaited<ReturnType<SpectrumAnalyzer['analyze']>>): number[] {
+  const buffer = Buffer.from(spectrum.binaryData.data, 'base64');
+  const int16 = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 2);
+  const { scale = 1, offset = 0 } = spectrum.binaryData.format;
+  return Array.from(int16, value => value * scale + offset);
+}
+
+function getPeakInfo(spectrum: Awaited<ReturnType<SpectrumAnalyzer['analyze']>>) {
+  const dbValues = decodeDbValues(spectrum);
+  let peakIndex = 0;
+  let peakMagnitude = -Infinity;
+
+  for (let i = 0; i < dbValues.length; i++) {
+    if (dbValues[i] > peakMagnitude) {
+      peakMagnitude = dbValues[i];
+      peakIndex = i;
+    }
+  }
+
+  const frequencyStep = (spectrum.frequencyRange.max - spectrum.frequencyRange.min) / Math.max(spectrum.binaryData.format.length - 1, 1);
+  return {
+    peakFrequency: spectrum.frequencyRange.min + peakIndex * frequencyStep,
+    peakMagnitude,
+    averageMagnitude: dbValues.reduce((sum, value) => sum + value, 0) / dbValues.length,
+  };
+}
+
 /** Generate a sine wave at the specified frequency */
 function generateSineWave(frequency: number, sampleRate: number, duration: number, amplitude = 0.8): Float32Array {
   const numSamples = Math.floor(sampleRate * duration);
@@ -59,21 +86,23 @@ describe('SpectrumAnalyzer', () => {
   });
 
   describe('analyze - basic functionality', () => {
-    it('should return valid FT8Spectrum structure', async () => {
+    it('should return valid unified spectrum frame structure', async () => {
       const analyzer = new SpectrumAnalyzer(defaultConfig);
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(audio);
+      const peakInfo = getPeakInfo(spectrum);
 
       // Verify structural completeness
       expect(spectrum.timestamp).toBeTypeOf('number');
-      expect(spectrum.sampleRate).toBe(defaultConfig.targetSampleRate);
+      expect(spectrum.kind).toBe('audio');
       expect(spectrum.frequencyRange.min).toBe(0);
       expect(spectrum.frequencyRange.max).toBeGreaterThan(0);
       expect(spectrum.binaryData.format.type).toBe('int16');
       expect(spectrum.binaryData.data).toBeTypeOf('string'); // base64
-      expect(spectrum.summary!.peakFrequency).toBeTypeOf('number');
-      expect(spectrum.summary!.peakMagnitude).toBeTypeOf('number');
-      expect(spectrum.summary!.averageMagnitude).toBeTypeOf('number');
+      expect(spectrum.meta.sourceBinCount).toBeGreaterThan(0);
+      expect(peakInfo.peakFrequency).toBeTypeOf('number');
+      expect(peakInfo.peakMagnitude).toBeTypeOf('number');
+      expect(peakInfo.averageMagnitude).toBeTypeOf('number');
     });
 
     it('should have very low peak amplitude for silent input', async () => {
@@ -81,7 +110,7 @@ describe('SpectrumAnalyzer', () => {
       const silence = generateSilence(defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(silence);
 
-      expect(spectrum.summary!.peakMagnitude).toBeLessThan(-80);
+      expect(getPeakInfo(spectrum).peakMagnitude).toBeLessThan(-80);
     });
 
     it('sine wave peak frequency should be close to input frequency', async () => {
@@ -94,10 +123,11 @@ describe('SpectrumAnalyzer', () => {
       });
       const audio = generateSineWave(targetFreq, 6000, 2.0);
       const spectrum = await analyzer.analyze(audio);
+      const peakInfo = getPeakInfo(spectrum);
 
       // Frequency resolution = 6000 / 4096 ≈ 1.46Hz, tolerance ±10Hz
-      expect(spectrum.summary!.peakFrequency).toBeGreaterThan(targetFreq - 10);
-      expect(spectrum.summary!.peakFrequency).toBeLessThan(targetFreq + 10);
+      expect(peakInfo.peakFrequency).toBeGreaterThan(targetFreq - 10);
+      expect(peakInfo.peakFrequency).toBeLessThan(targetFreq + 10);
     });
 
     it('sine wave peak amplitude should be significantly higher than silence', async () => {
@@ -108,7 +138,7 @@ describe('SpectrumAnalyzer', () => {
       const specSine = await analyzer.analyze(sine);
       const specSilence = await analyzer.analyze(silence);
 
-      expect(specSine.summary!.peakMagnitude).toBeGreaterThan(specSilence.summary!.peakMagnitude + 30);
+      expect(getPeakInfo(specSine).peakMagnitude).toBeGreaterThan(getPeakInfo(specSilence).peakMagnitude + 30);
     });
   });
 
@@ -122,7 +152,7 @@ describe('SpectrumAnalyzer', () => {
       const audio = generateSineWave(500, 6000, 0.5);
       const spectrum = await analyzer.analyze(audio);
 
-      expect(spectrum.sampleRate).toBe(6000);
+      expect(spectrum.kind).toBe('audio');
       expect(spectrum.frequencyRange.max).toBeLessThanOrEqual(3000);
     });
 
@@ -136,10 +166,10 @@ describe('SpectrumAnalyzer', () => {
       const audio = generateSineWave(1000, 48000, 2.0);
       const spectrum = await analyzer.analyze(audio);
 
-      expect(spectrum.sampleRate).toBe(6000);
+      expect(spectrum.meta.sourceBinCount).toBeGreaterThan(0);
       // Peak frequency after downsampling should still be close to 1kHz, tolerance ±100Hz (linear interpolation downsampling has precision loss)
-      expect(spectrum.summary!.peakFrequency).toBeGreaterThan(900);
-      expect(spectrum.summary!.peakFrequency).toBeLessThan(1100);
+      expect(getPeakInfo(spectrum).peakFrequency).toBeGreaterThan(900);
+      expect(getPeakInfo(spectrum).peakFrequency).toBeLessThan(1100);
     });
   });
 
@@ -154,7 +184,7 @@ describe('SpectrumAnalyzer', () => {
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(audio);
 
-      expect(spectrum.summary!.peakMagnitude).toBeGreaterThan(-60);
+      expect(getPeakInfo(spectrum).peakMagnitude).toBeGreaterThan(-60);
       expect(spectrum.binaryData.format.length).toBeGreaterThan(0);
     });
   });
@@ -229,7 +259,7 @@ describe('SpectrumAnalyzer', () => {
       // Should still analyze normally
       const audio = generateSineWave(1000, defaultConfig.sampleRate, 0.5);
       const spectrum = await analyzer.analyze(audio);
-      expect(spectrum.summary!.peakMagnitude).toBeGreaterThan(-60);
+      expect(getPeakInfo(spectrum).peakMagnitude).toBeGreaterThan(-60);
     });
 
     it('should apply updated FFT size', async () => {
@@ -263,11 +293,13 @@ describe('SpectrumAnalyzer', () => {
 
       const spec800 = await analyzer.analyze(audio800);
       const spec1000 = await analyzer.analyze(audio1000);
+      const peak800 = getPeakInfo(spec800);
+      const peak1000 = getPeakInfo(spec1000);
 
-      expect(Math.abs(spec800.summary!.peakFrequency - 800)).toBeLessThan(10);
-      expect(Math.abs(spec1000.summary!.peakFrequency - 1000)).toBeLessThan(10);
+      expect(Math.abs(peak800.peakFrequency - 800)).toBeLessThan(10);
+      expect(Math.abs(peak1000.peakFrequency - 1000)).toBeLessThan(10);
       // The two peak frequencies should be clearly different
-      expect(Math.abs(spec800.summary!.peakFrequency - spec1000.summary!.peakFrequency)).toBeGreaterThan(150);
+      expect(Math.abs(peak800.peakFrequency - peak1000.peakFrequency)).toBeGreaterThan(150);
     });
   });
 });

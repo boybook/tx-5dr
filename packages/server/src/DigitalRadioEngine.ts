@@ -189,6 +189,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.engineLifecycle.getAudioMonitorService();
   }
 
+  public getSpectrumScheduler(): SpectrumScheduler {
+    return this.spectrumScheduler;
+  }
+
   public getOpenWebRXAudioAdapter(): OpenWebRXAudioAdapter | null {
     return this.engineLifecycle.getOpenWebRXAudioAdapter();
   }

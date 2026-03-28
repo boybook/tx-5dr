@@ -9,7 +9,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import { IcomControl, AUDIO_RATE } from 'icom-wlan-node';
+import { IcomControl, AUDIO_RATE, type IcomScopeFrame } from 'icom-wlan-node';
 import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
@@ -74,6 +74,7 @@ export class IcomWlanConnection
    * 天调启用状态（本地跟踪，简化版实现）
    */
   private tunerEnabled = false;
+  private scopeEnabled = false;
 
   constructor() {
     super();
@@ -387,6 +388,70 @@ export class IcomWlanConnection
     return AUDIO_RATE; // 12000
   }
 
+  async enableScopeStream(): Promise<void> {
+    this.checkConnected();
+    if (this.scopeEnabled) {
+      return;
+    }
+
+    await this.rig!.enableScope();
+    this.scopeEnabled = true;
+  }
+
+  async disableScopeStream(): Promise<void> {
+    if (!this.rig || !this.scopeEnabled) {
+      return;
+    }
+
+    await this.rig.disableScope();
+    this.scopeEnabled = false;
+  }
+
+  addScopeFrameListener(listener: (frame: IcomScopeFrame) => void): void {
+    super.on('scopeFrame' as any, listener as any);
+  }
+
+  removeScopeFrameListener(listener: (frame: IcomScopeFrame) => void): void {
+    super.off('scopeFrame' as any, listener as any);
+  }
+
+  async getSpectrumSpans(): Promise<number[]> {
+    return [
+      25_000_000,
+      10_000_000,
+      5_000_000,
+      2_500_000,
+      1_000_000,
+      500_000,
+      250_000,
+      100_000,
+      50_000,
+      25_000,
+      10_000,
+      5_000,
+      2_500,
+    ];
+  }
+
+  async getCurrentSpectrumSpan(): Promise<number | null> {
+    this.checkConnected();
+    try {
+      const info = await this.rig!.readScopeSpan();
+      return typeof info?.spanHz === 'number' && Number.isFinite(info.spanHz) && info.spanHz > 0 ? info.spanHz : null;
+    } catch (error) {
+      throw this.convertError(error, 'getCurrentSpectrumSpan');
+    }
+  }
+
+  async setSpectrumSpan(spanHz: number): Promise<void> {
+    this.checkConnected();
+    try {
+      await this.rig!.setScopeSpan(spanHz);
+    } catch (error) {
+      throw this.convertError(error, 'setSpectrumSpan');
+    }
+  }
+
   // ===== 天线调谐器控制 =====
 
   /**
@@ -651,6 +716,10 @@ export class IcomWlanConnection
       this.emit('audioFrame', frame.pcm16);
     });
 
+    this.rig.events.on('scopeFrame', (frame) => {
+      this.emit('scopeFrame' as any, frame);
+    });
+
     // 连接丢失 → 只 emit disconnected，不直接改状态（让上层状态机管理）
     this.rig.events.on('connectionLost', (info) => {
       logger.warn(`Connection lost: ${info.sessionType}, idle ${info.timeSinceLastData}ms`);
@@ -780,6 +849,7 @@ export class IcomWlanConnection
     try {
       // 停止数值表轮询
       this.stopMeterPolling();
+      this.scopeEnabled = false;
 
       // 清理 rig 实例
       if (this.rig) {

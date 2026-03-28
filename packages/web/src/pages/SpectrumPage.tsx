@@ -51,7 +51,7 @@ const SpectrumContent: React.FC = () => {
 const SpectrumAuthGate: React.FC = () => {
   const { state } = useAuth();
 
-  if (!state.initialized) {
+  if (!state.initialized || !state.sessionResolved) {
     return null;
   }
 
