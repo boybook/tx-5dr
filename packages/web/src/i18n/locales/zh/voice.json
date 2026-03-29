@@ -5,6 +5,8 @@
     "mhz": "MHz",
     "presets": "预设频率",
     "customFrequency": "自定义频率",
+    "manualTune": "输入频率并切换",
+    "managePresets": "管理语音预设",
     "addPreset": "添加预设",
     "removePreset": "移除预设",
     "noPresets": "暂无语音频率预设",

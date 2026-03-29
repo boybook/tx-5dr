@@ -29,12 +29,13 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialTab?: SettingsTab; // 可选的初始标签页
+  initialFrequencyPresetMode?: string;
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
 type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx';
 
-export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
   const { t } = useTranslation('settings');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isOperator = useHasMinRole(UserRole.OPERATOR);
@@ -318,6 +319,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           <FrequencyPresetSettings
             ref={frequencyPresetSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
+            initialModeFilter={initialFrequencyPresetMode}
           />
         );
       case 'tokens':

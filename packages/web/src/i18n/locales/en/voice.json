@@ -5,6 +5,8 @@
     "mhz": "MHz",
     "presets": "Preset Frequencies",
     "customFrequency": "Custom Frequency",
+    "manualTune": "Enter Frequency",
+    "managePresets": "Manage Voice Presets",
     "addPreset": "Add Preset",
     "removePreset": "Remove Preset",
     "noPresets": "No voice frequency presets",

@@ -34,7 +34,8 @@ export const RightLayout: React.FC = () => {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system' | 'station_info'>('radio');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system' | 'station_info' | 'frequency_presets' | 'openwebrx'>('radio');
+  const [settingsInitialFrequencyPresetMode, setSettingsInitialFrequencyPresetMode] = useState<string | undefined>(undefined);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
@@ -62,6 +63,7 @@ export const RightLayout: React.FC = () => {
   // 打开设置弹窗
   const handleOpenSettings = () => {
     setSettingsInitialTab('radio');
+    setSettingsInitialFrequencyPresetMode(undefined);
     setIsSettingsOpen(true);
   };
 
@@ -73,6 +75,7 @@ export const RightLayout: React.FC = () => {
   // 处理创建操作员
   const handleCreateOperator = () => {
     setSettingsInitialTab('operator');
+    setSettingsInitialFrequencyPresetMode(undefined);
     setIsSettingsOpen(true);
   };
 
@@ -92,7 +95,9 @@ export const RightLayout: React.FC = () => {
   useEffect(() => {
     const handler = (e: Event) => {
       const tab = (e as CustomEvent).detail?.tab;
+      const frequencyPresetMode = (e as CustomEvent).detail?.frequencyPresetMode;
       if (tab) setSettingsInitialTab(tab);
+      setSettingsInitialFrequencyPresetMode(typeof frequencyPresetMode === 'string' ? frequencyPresetMode : undefined);
       setIsSettingsOpen(true);
     };
     window.addEventListener('openSettingsModal', handler);
@@ -248,6 +253,7 @@ export const RightLayout: React.FC = () => {
         isOpen={isSettingsOpen}
         onClose={handleCloseSettings}
         initialTab={settingsInitialTab}
+        initialFrequencyPresetMode={settingsInitialFrequencyPresetMode}
       />
 
       {/* Profile 管理弹窗（仅 Admin） */}

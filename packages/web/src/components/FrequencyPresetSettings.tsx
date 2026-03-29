@@ -18,7 +18,7 @@ import {
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faTrash, faArrowUp, faArrowDown, faUndo } from '@fortawesome/free-solid-svg-icons';
-import { api } from '@tx5dr/core';
+import { api, getBandFromFrequency } from '@tx5dr/core';
 import type { PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { createLogger } from '../utils/logger';
@@ -32,17 +32,21 @@ export interface FrequencyPresetSettingsRef {
 
 interface FrequencyPresetSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
+  initialModeFilter?: string;
 }
 
-const BAND_OPTIONS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m', '70cm'];
-const MODE_OPTIONS = ['FT8', 'FT4'];
-const RADIO_MODE_OPTIONS = ['USB', 'LSB'];
+const MODE_OPTIONS = ['FT8', 'FT4', 'VOICE'];
+const RADIO_MODE_OPTIONS = ['USB', 'LSB', 'FM', 'AM'];
 const FILTER_ALL = '__all__';
+
+function notifyFrequencyPresetsUpdated(): void {
+  window.dispatchEvent(new CustomEvent('frequencyPresetsUpdated'));
+}
 
 export const FrequencyPresetSettings = forwardRef<
   FrequencyPresetSettingsRef,
   FrequencyPresetSettingsProps
->(({ onUnsavedChanges }, ref) => {
+>(({ onUnsavedChanges, initialModeFilter }, ref) => {
   const { t } = useTranslation();
 
   const [presets, setPresets] = useState<PresetFrequency[]>([]);
@@ -57,7 +61,6 @@ export const FrequencyPresetSettings = forwardRef<
 
   // 添加表单状态
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [newBand, setNewBand] = useState('20m');
   const [newMode, setNewMode] = useState('FT8');
   const [newRadioMode, setNewRadioMode] = useState('USB');
   const [newFreqMHz, setNewFreqMHz] = useState('');
@@ -73,6 +76,25 @@ export const FrequencyPresetSettings = forwardRef<
     modes.sort();
     return modes;
   }, [presets]);
+
+  useEffect(() => {
+    if (!initialModeFilter) {
+      return;
+    }
+    setModeFilter(initialModeFilter);
+  }, [initialModeFilter]);
+
+  useEffect(() => {
+    if (modeFilter === FILTER_ALL) {
+      return;
+    }
+    if (availableModes.length === 0) {
+      return;
+    }
+    if (!availableModes.includes(modeFilter)) {
+      setModeFilter(FILTER_ALL);
+    }
+  }, [availableModes, modeFilter]);
 
   // 按当前 tab 筛选后的预设列表（仅用于显示）
   const filteredPresets = useMemo(() => {
@@ -116,6 +138,9 @@ export const FrequencyPresetSettings = forwardRef<
         setPresets(result.presets);
         setOriginalPresets(result.presets);
         setIsCustomized(result.isCustomized);
+        if (initialModeFilter && result.presets.some((preset) => preset.mode === initialModeFilter)) {
+          setModeFilter(initialModeFilter);
+        }
       }
     } catch (err) {
       logger.error('Failed to load frequency presets:', err);
@@ -134,6 +159,7 @@ export const FrequencyPresetSettings = forwardRef<
       if (result.success) {
         setOriginalPresets([...presets]);
         setIsCustomized(result.isCustomized);
+        notifyFrequencyPresetsUpdated();
       }
     } catch (err) {
       logger.error('Failed to save frequency presets:', err);
@@ -151,6 +177,7 @@ export const FrequencyPresetSettings = forwardRef<
         setPresets(result.presets);
         setOriginalPresets(result.presets);
         setIsCustomized(false);
+        notifyFrequencyPresetsUpdated();
       }
     } catch (err) {
       logger.error('Failed to reset frequency presets:', err);
@@ -211,6 +238,12 @@ export const FrequencyPresetSettings = forwardRef<
     }
 
     const frequencyHz = Math.round(freqValue * 1000000);
+    const inferredBand = getBandFromFrequency(frequencyHz);
+
+    if (!inferredBand || inferredBand === 'Unknown') {
+      setAddError(t('freqPresets.unknownBand'));
+      return;
+    }
 
     // 检查重复
     if (presets.some(p => p.frequency === frequencyHz)) {
@@ -218,10 +251,10 @@ export const FrequencyPresetSettings = forwardRef<
       return;
     }
 
-    const description = newDescription.trim() || `${freqValue.toFixed(3)} MHz ${newBand}`;
+    const description = newDescription.trim() || `${freqValue.toFixed(3)} MHz ${inferredBand}`;
 
     const newPreset: PresetFrequency = {
-      band: newBand,
+      band: inferredBand,
       mode: newMode,
       radioMode: newRadioMode,
       frequency: frequencyHz,
@@ -237,9 +270,9 @@ export const FrequencyPresetSettings = forwardRef<
 
   const openAddModal = () => {
     // 如果当前在某个模式 tab 下，默认选中该模式
-    setNewBand('20m');
-    setNewMode(modeFilter !== FILTER_ALL ? modeFilter : 'FT8');
-    setNewRadioMode('USB');
+    const initialMode = modeFilter !== FILTER_ALL ? modeFilter : 'FT8';
+    setNewMode(initialMode);
+    setNewRadioMode(initialMode === 'VOICE' ? 'USB' : 'USB');
     setNewFreqMHz('');
     setNewDescription('');
     setAddError('');
@@ -249,6 +282,15 @@ export const FrequencyPresetSettings = forwardRef<
   const formatFrequency = (hz: number): string => {
     return (hz / 1000000).toFixed(3);
   };
+  const inferredBand = useMemo(() => {
+    const freqValue = parseFloat(newFreqMHz);
+    if (!Number.isFinite(freqValue) || freqValue <= 0) {
+      return null;
+    }
+    const frequencyHz = Math.round(freqValue * 1_000_000);
+    const band = getBandFromFrequency(frequencyHz);
+    return band && band !== 'Unknown' ? band : null;
+  }, [newFreqMHz]);
 
   // 统计每个模式的预设数量
   const modeCounts = useMemo(() => {
@@ -448,19 +490,12 @@ export const FrequencyPresetSettings = forwardRef<
           <ModalHeader>{t('freqPresets.addTitle')}</ModalHeader>
           <ModalBody>
             <div className="flex gap-3">
-              <Select
+              <Input
                 label={t('freqPresets.band')}
-                selectedKeys={[newBand]}
-                onSelectionChange={(keys) => {
-                  const val = Array.from(keys)[0] as string;
-                  if (val) setNewBand(val);
-                }}
+                value={inferredBand ?? t('freqPresets.bandAutoPending')}
+                isReadOnly
                 className="flex-1"
-              >
-                {BAND_OPTIONS.map(band => (
-                  <SelectItem key={band} textValue={band}>{band}</SelectItem>
-                ))}
-              </Select>
+              />
               <Select
                 label={t('freqPresets.mode')}
                 selectedKeys={[newMode]}
@@ -508,7 +543,7 @@ export const FrequencyPresetSettings = forwardRef<
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={() => setIsAddModalOpen(false)}>
-              {t('button.cancel')}
+              {t('common:button.cancel')}
             </Button>
             <Button color="primary" onPress={handleAdd}>
               {t('freqPresets.add')}
@@ -526,10 +561,10 @@ export const FrequencyPresetSettings = forwardRef<
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={() => setIsResetConfirmOpen(false)}>
-              {t('button.cancel')}
+              {t('common:button.cancel')}
             </Button>
             <Button color="danger" onPress={handleReset}>
-              {t('button.confirm')}
+              {t('common:button.confirm')}
             </Button>
           </ModalFooter>
         </ModalContent>

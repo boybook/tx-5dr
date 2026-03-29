@@ -42,6 +42,14 @@ export interface TxBandOverlay {
   draggable?: boolean;
 }
 
+export interface PresetMarker {
+  id: string;
+  frequency: number;
+  label: string;
+  description?: string | null;
+  clickable?: boolean;
+}
+
 interface WebGLWaterfallProps {
   data: number[][];
   frequencies: number[];
@@ -54,13 +62,18 @@ interface WebGLWaterfallProps {
   rxFrequencies?: RxFrequency[];
   txFrequencies?: TxFrequency[];
   txBandOverlays?: TxBandOverlay[];
+  presetMarkers?: PresetMarker[];
   frequencyRangeMode?: 'baseband' | 'absolute-center' | 'absolute-fixed' | 'absolute-windowed';
   referenceFrequencyHz?: number | null;
   basebandInteractionRange?: BasebandInteractionRange;
   interactionFrequencyMode?: 'baseband' | 'absolute';
   interactionFrequencyRange?: InteractionFrequencyRange | null;
+  interactionFrequencyStepHz?: number | null;
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
   onTxBandOverlayFrequencyChange?: (id: string, frequency: number) => void;
+  onPresetMarkerClick?: (frequency: number) => void;
+  onDragFrequencyChange?: (frequency: number) => void;
+  onDoubleClickSetFrequency?: (frequency: number) => void;
   onRightClickSetFrequency?: (frequency: number) => void;
   onActualRangeChange?: (range: { min: number; max: number } | null) => void;
   hoverFrequency?: number | null;
@@ -69,6 +82,8 @@ interface WebGLWaterfallProps {
   /** 当前是否处于发射状态，用于 TX/RX 自动范围分离 */
   isTransmitting?: boolean;
 }
+
+const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   data,
@@ -87,13 +102,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   rxFrequencies = [],
   txFrequencies = [],
   txBandOverlays = [],
+  presetMarkers = [],
   frequencyRangeMode = 'baseband',
   referenceFrequencyHz = null,
   basebandInteractionRange = { min: 0, max: 3000 },
   interactionFrequencyMode = 'baseband',
   interactionFrequencyRange = null,
+  interactionFrequencyStepHz = null,
   onTxFrequencyChange,
   onTxBandOverlayFrequencyChange,
+  onPresetMarkerClick,
+  onDragFrequencyChange,
+  onDoubleClickSetFrequency,
   onRightClickSetFrequency,
   onActualRangeChange,
   hoverFrequency,
@@ -125,9 +145,20 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     React.useState<{ id: string; frequency: number } | null>(null);
   const [cooldownBandOverlayId, setCooldownBandOverlayId] = React.useState<string | null>(null);
   const latestBandOverlayFrequencyRef = useRef<{ id: string; frequency: number } | null>(null);
+  const [frequencyGestureDragState, setFrequencyGestureDragState] = React.useState<{
+    startX: number;
+    startFrequency: number;
+    hzPerPixel: number;
+    hasExceededThreshold: boolean;
+  } | null>(null);
+  const [localGestureFrequencyOverride, setLocalGestureFrequencyOverride] = React.useState<number | null>(null);
+  const gestureDragDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const gestureCooldownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const latestGestureFrequencyRef = useRef<number | null>(null);
 
   // RX Popover hover状态
   const [hoveredRxCallsign, setHoveredRxCallsign] = React.useState<string | null>(null);
+  const [hoveredPresetMarkerId, setHoveredPresetMarkerId] = React.useState<string | null>(null);
 
   // TX Popover hover状态（多操作员时使用）
   const [hoveredTxOperatorId, setHoveredTxOperatorId] = React.useState<string | null>(null);
@@ -949,16 +980,23 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const isAbsoluteDisplayMode = frequencyRangeMode === 'absolute-center' || frequencyRangeMode === 'absolute-fixed';
   const isAbsoluteWindowedMode = frequencyRangeMode === 'absolute-windowed';
 
+  const snapFrequency = useCallback((frequency: number) => {
+    const stepHz = typeof interactionFrequencyStepHz === 'number' && Number.isFinite(interactionFrequencyStepHz) && interactionFrequencyStepHz > 0
+      ? interactionFrequencyStepHz
+      : 1;
+    return Math.round(frequency / stepHz) * stepHz;
+  }, [interactionFrequencyStepHz]);
+
   const clampBasebandFrequency = useCallback((frequency: number) => {
-    return Math.round(Math.max(basebandInteractionRange.min, Math.min(basebandInteractionRange.max, frequency)));
-  }, [basebandInteractionRange.max, basebandInteractionRange.min]);
+    return snapFrequency(Math.max(basebandInteractionRange.min, Math.min(basebandInteractionRange.max, frequency)));
+  }, [basebandInteractionRange.max, basebandInteractionRange.min, snapFrequency]);
 
   const clampInteractionFrequency = useCallback((frequency: number) => {
     if (!interactionFrequencyRange) {
-      return Math.round(frequency);
+      return snapFrequency(frequency);
     }
-    return Math.round(Math.max(interactionFrequencyRange.min, Math.min(interactionFrequencyRange.max, frequency)));
-  }, [interactionFrequencyRange]);
+    return snapFrequency(Math.max(interactionFrequencyRange.min, Math.min(interactionFrequencyRange.max, frequency)));
+  }, [interactionFrequencyRange, snapFrequency]);
 
   const getDisplayFrequency = useCallback((basebandFrequency: number) => {
     if (!frequencies || frequencies.length === 0) return null;
@@ -1032,6 +1070,42 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     return getFrequencyFromMousePosition(clientX);
   }, [clampInteractionFrequency, frequencies, getFrequencyFromMousePosition, interactionFrequencyMode]);
+
+  const handleGenericFrequencyDragMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!onDragFrequencyChange || event.button !== 0 || frequencies.length === 0) {
+      return;
+    }
+
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('[data-waterfall-marker-interactive="true"]')) {
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    if (gestureCooldownTimerRef.current) {
+      clearTimeout(gestureCooldownTimerRef.current);
+      gestureCooldownTimerRef.current = null;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const hzPerPixel = rect.width > 0
+      ? (frequencies[frequencies.length - 1] - frequencies[0]) / rect.width
+      : 0;
+    const startFrequency = getInteractionFrequencyFromMousePosition(event.clientX);
+
+    latestGestureFrequencyRef.current = startFrequency;
+    setLocalGestureFrequencyOverride(startFrequency);
+    setFrequencyGestureDragState({
+      startX: event.clientX,
+      startFrequency,
+      hzPerPixel,
+      hasExceededThreshold: false,
+    });
+  }, [frequencies, getInteractionFrequencyFromMousePosition, onDragFrequencyChange]);
 
   // 拖动处理函数
   const handleMouseDown = useCallback((operatorId: string) => {
@@ -1153,10 +1227,103 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
   }, [draggingBandOverlayId, handleBandOverlayMouseMove, handleBandOverlayMouseUp]);
 
+  useEffect(() => {
+    if (!frequencyGestureDragState || !onDragFrequencyChange) {
+      return;
+    }
+
+    const handleGestureMouseMove = (event: MouseEvent) => {
+      const dragDistance = event.clientX - frequencyGestureDragState.startX;
+      const hasExceededThreshold = frequencyGestureDragState.hasExceededThreshold
+        || Math.abs(dragDistance) >= FREQUENCY_GESTURE_DRAG_THRESHOLD_PX;
+
+      if (!hasExceededThreshold) {
+        return;
+      }
+
+      const nextFrequency = interactionFrequencyMode === 'absolute'
+        ? clampInteractionFrequency(frequencyGestureDragState.startFrequency + dragDistance * frequencyGestureDragState.hzPerPixel)
+        : clampBasebandFrequency(frequencyGestureDragState.startFrequency + dragDistance * frequencyGestureDragState.hzPerPixel);
+
+      if (!frequencyGestureDragState.hasExceededThreshold) {
+        setFrequencyGestureDragState(current => (
+          current
+            ? {
+                ...current,
+                hasExceededThreshold: true,
+              }
+            : current
+        ));
+      }
+
+      setLocalGestureFrequencyOverride(nextFrequency);
+      latestGestureFrequencyRef.current = nextFrequency;
+
+      if (gestureDragDebounceRef.current) {
+        clearTimeout(gestureDragDebounceRef.current);
+      }
+
+      gestureDragDebounceRef.current = setTimeout(() => {
+        const latestFrequency = latestGestureFrequencyRef.current;
+        if (typeof latestFrequency === 'number') {
+          onDragFrequencyChange(latestFrequency);
+        }
+      }, 120);
+    };
+
+    const handleGestureMouseUp = () => {
+      if (gestureDragDebounceRef.current) {
+        clearTimeout(gestureDragDebounceRef.current);
+        gestureDragDebounceRef.current = null;
+      }
+
+      const latestFrequency = latestGestureFrequencyRef.current;
+      if (frequencyGestureDragState.hasExceededThreshold && typeof latestFrequency === 'number') {
+        onDragFrequencyChange(latestFrequency);
+      }
+
+      setFrequencyGestureDragState(null);
+      if (frequencyGestureDragState.hasExceededThreshold) {
+        gestureCooldownTimerRef.current = setTimeout(() => {
+          setLocalGestureFrequencyOverride(null);
+          latestGestureFrequencyRef.current = null;
+          gestureCooldownTimerRef.current = null;
+        }, 500);
+      } else {
+        setLocalGestureFrequencyOverride(null);
+        latestGestureFrequencyRef.current = null;
+      }
+    };
+
+    document.addEventListener('mousemove', handleGestureMouseMove);
+    document.addEventListener('mouseup', handleGestureMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleGestureMouseMove);
+      document.removeEventListener('mouseup', handleGestureMouseUp);
+    };
+  }, [
+    clampBasebandFrequency,
+    clampInteractionFrequency,
+    frequencyGestureDragState,
+    interactionFrequencyMode,
+    onDragFrequencyChange,
+  ]);
+
   return (
     <div
       ref={containerRef}
       className={`relative ${className}`}
+      onMouseDown={onDragFrequencyChange ? handleGenericFrequencyDragMouseDown : undefined}
+      onDoubleClick={(e) => {
+        if (!onDoubleClickSetFrequency) {
+          return;
+        }
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('[data-waterfall-marker-interactive="true"]')) {
+          return;
+        }
+        onDoubleClickSetFrequency(getInteractionFrequencyFromMousePosition(e.clientX));
+      }}
       onContextMenu={(e) => {
         if (onRightClickSetFrequency) {
           e.preventDefault();
@@ -1216,6 +1383,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
               <div
                 className={`absolute top-0 h-full pointer-events-auto transition-opacity ${draggable ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'}`}
                 style={{ left: `${linePosition}%`, transform: 'translateX(-50%)' }}
+                data-waterfall-marker-interactive="true"
                 onMouseDown={draggable ? () => {
                   if (cooldownTimerRef.current) {
                     clearTimeout(cooldownTimerRef.current);
@@ -1231,6 +1399,72 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                 </div>
               </div>
             </div>
+          );
+        })}
+
+        {presetMarkers.map((marker) => {
+          const position = getFrequencyPosition(marker.frequency);
+          if (!Number.isFinite(position) || position < 0 || position > 100) {
+            return null;
+          }
+
+          const isInteractive = Boolean(marker.clickable && onPresetMarkerClick);
+          const isHovered = hoveredPresetMarkerId === marker.id;
+          const markerElement = (
+            <div
+              key={`preset-${marker.id}`}
+              className={`absolute top-0 h-full pointer-events-auto transition-opacity ${
+                isInteractive ? 'cursor-pointer hover:opacity-80' : 'cursor-default'
+              }`}
+              style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
+              data-waterfall-marker-interactive="true"
+              onClick={isInteractive ? (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onPresetMarkerClick?.(marker.frequency);
+              } : undefined}
+              onMouseEnter={() => setHoveredPresetMarkerId(marker.id)}
+              onMouseLeave={() => setHoveredPresetMarkerId(null)}
+            >
+              <div className="w-0.5 h-full bg-amber-400/55" />
+              <div
+                className={`absolute bottom-1 left-1/2 -translate-x-1/2 max-w-[5rem] truncate px-1 text-xs font-semibold bg-black/60 rounded text-amber-300 select-none transition-opacity ${
+                  isHovered ? 'opacity-100' : 'opacity-0'
+                }`}
+              >
+                {marker.label}
+              </div>
+            </div>
+          );
+
+          if (!marker.description) {
+            return markerElement;
+          }
+
+          return (
+            <Popover
+              key={`preset-${marker.id}`}
+              placement="bottom"
+              isOpen={isHovered}
+              onOpenChange={(open) => {
+                if (!open) setHoveredPresetMarkerId(null);
+              }}
+            >
+              <PopoverTrigger>
+                {markerElement}
+              </PopoverTrigger>
+              <PopoverContent
+                onMouseEnter={() => setHoveredPresetMarkerId(marker.id)}
+                onMouseLeave={() => setHoveredPresetMarkerId(null)}
+              >
+                <div className="px-2 py-1">
+                  <div className="text-sm font-semibold">{marker.description}</div>
+                  <div className="text-xs text-default-400">
+                    {`${(marker.frequency / 1_000_000).toFixed(3)} MHz`}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           );
         })}
 
@@ -1255,6 +1489,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                 isInteractive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'
               } ${showPopover ? 'hover:opacity-80' : ''}`}
               style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
+              data-waterfall-marker-interactive="true"
               onMouseDown={isInteractive ? () => {
                 setHoveredTxOperatorId(null);
                 handleMouseDown(operatorId);
@@ -1320,6 +1555,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                 <div
                   className="absolute top-0 h-full pointer-events-auto cursor-pointer hover:opacity-80 transition-opacity"
                   style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
+                  data-waterfall-marker-interactive="true"
                   onMouseEnter={() => setHoveredRxCallsign(callsign)}
                   onMouseLeave={() => setHoveredRxCallsign(null)}
                 >
@@ -1353,6 +1589,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
             style={{ left: `${getMarkerPosition(hoverFrequency)}%`, transform: 'translateX(-50%)' }}
           >
             <div className="w-0.5 h-full bg-white/30" />
+          </div>
+        )}
+        {localGestureFrequencyOverride !== null && getFrequencyPosition(localGestureFrequencyOverride) >= 0 && getFrequencyPosition(localGestureFrequencyOverride) <= 100 && (
+          <div
+            className="absolute top-0 h-full pointer-events-none"
+            style={{ left: `${getFrequencyPosition(localGestureFrequencyOverride)}%`, transform: 'translateX(-50%)' }}
+          >
+            <div className="w-0.5 h-full bg-primary-400/80" />
           </div>
         )}
       </div>

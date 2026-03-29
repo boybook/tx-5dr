@@ -269,6 +269,8 @@
     "duplicate": "已存在相同频率的预设",
     "invalidFrequency": "请输入有效的频率值",
     "frequencyRange": "频率范围: 0.1 - 1000 MHz",
+    "unknownBand": "无法根据该频率识别业余频段",
+    "bandAutoPending": "将根据频率自动推断",
     "addTitle": "添加新预设",
     "freqPlaceholder": "例如: 14.074",
     "descPlaceholder": "自动生成",
