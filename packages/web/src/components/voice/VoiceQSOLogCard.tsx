@@ -178,6 +178,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
           endTime: endTime || Date.now(),
           reportSent: formData.rstSent || '59',
           reportReceived: formData.rstReceived || '59',
+          messages: [],
           qth: formData.qth || undefined,
           grid: formData.grid || undefined,
           remarks: formData.notes || undefined,

@@ -157,7 +157,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         myGrid: serverCtx.myGrid || '',
         targetCall: serverCtx.targetCall || '',
         targetGrid: serverCtx.targetGrid || '',
-        frequency: serverCtx.frequency,
+        frequency: serverCtx.frequency ?? 0,
         reportSent: serverCtx.reportSent ?? 0,
       };
 

@@ -1279,4 +1279,6 @@ export interface DigitalRadioEngineEvents {
   // OpenWebRX SDR 事件
   openwebrxProfileSelectRequest: (data: import('./openwebrx.schema.js').OpenWebRXProfileSelectRequest) => void;
   openwebrxProfileVerifyResult: (data: import('./openwebrx.schema.js').OpenWebRXProfileVerifyResult) => void;
+  openwebrxClientCount: (data: { count: number }) => void;
+  openwebrxCooldownNotice: (data: { waitMs: number }) => void;
 }
