@@ -111,11 +111,25 @@ export const SpectrumSessionVoiceStateSchema = z.object({
 });
 export type SpectrumSessionVoiceState = z.infer<typeof SpectrumSessionVoiceStateSchema>;
 
+export const SpectrumSessionPresetMarkerSchema = z.object({
+  id: z.string(),
+  frequency: z.number(),
+  label: z.string(),
+  description: z.string().nullable(),
+  clickable: z.boolean(),
+});
+export type SpectrumSessionPresetMarker = z.infer<typeof SpectrumSessionPresetMarkerSchema>;
+
 export const SpectrumSessionInteractionStateSchema = z.object({
   showTxMarkers: z.boolean(),
   showRxMarkers: z.boolean(),
   canDragTx: z.boolean(),
   canRightClickSetFrequency: z.boolean(),
+  canDoubleClickSetFrequency: z.boolean(),
+  canDragFrequency: z.boolean(),
+  frequencyGestureTarget: z.enum(['operator-tx', 'radio-frequency']).nullable(),
+  frequencyStepHz: z.number().int().positive().nullable(),
+  presetMarkers: z.array(SpectrumSessionPresetMarkerSchema),
   canDragVoiceOverlay: z.boolean(),
   showVoiceOverlay: z.boolean(),
   canLocalViewportZoom: z.boolean(),

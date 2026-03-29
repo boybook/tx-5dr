@@ -223,6 +223,7 @@ export const VoiceFrequencyControl: React.FC = () => {
   const radio = useRadioState();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const canSetFrequency = useCan('execute', 'RadioFrequency');
+  const canManageFrequencyPresets = useCan('update', 'SettingsFrequencyPresets');
   const ability = useAbility();
 
   const [presets, setPresets] = useState<FrequencyPreset[]>([]);
@@ -239,53 +240,67 @@ export const VoiceFrequencyControl: React.FC = () => {
   const [isSettingFreq, setIsSettingFreq] = useState(false);
 
   const RADIO_MODES = ['USB', 'LSB', 'FM', 'AM'];
+  const loadVoicePresets = useCallback(async () => {
+    if (!connection.state.isConnected) return;
+
+    setIsLoadingPresets(true);
+    try {
+      const [presetsResponse, lastFreqResponse] = await Promise.all([
+        api.getPresetFrequencies(),
+        api.getLastFrequency(),
+      ]);
+
+      if (presetsResponse.success && Array.isArray(presetsResponse.presets)) {
+        // Filter for VOICE mode presets and always present them in ascending frequency order.
+        // The settings editor still preserves manual ordering for editing, but the operator-facing
+        // voice control list should remain predictable and frequency-centric.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const voicePresets: FrequencyPreset[] = presetsResponse.presets
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((p: any) => p.mode === 'VOICE')
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((p: any) => ({
+            key: String(p.frequency),
+            label: p.description || `${p.band} ${(p.frequency / 1000000).toFixed(3)} MHz`,
+            frequency: p.frequency,
+            band: p.band,
+            mode: p.mode,
+            radioMode: p.radioMode,
+          }))
+          .sort((a, b) => a.frequency - b.frequency);
+        setPresets(voicePresets);
+      }
+
+      // Restore last voice frequency (separate from digital mode frequency)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lastVoice = (lastFreqResponse as any).lastVoiceFrequency;
+      if (lastVoice && lastVoice.frequency) {
+        setCurrentFrequency(lastVoice.frequency);
+        if (lastVoice.radioMode) setCurrentRadioMode(lastVoice.radioMode);
+        logger.info('Restored last voice frequency', { frequency: lastVoice.frequency, radioMode: lastVoice.radioMode });
+      }
+    } catch (error) {
+      logger.error('Failed to load voice presets:', error);
+    } finally {
+      setIsLoadingPresets(false);
+    }
+  }, [connection.state.isConnected]);
 
   // Load voice frequency presets + restore last frequency
   useEffect(() => {
-    const loadPresets = async () => {
-      if (!connection.state.isConnected) return;
-      setIsLoadingPresets(true);
-      try {
-        // Load presets and last frequency in parallel
-        const [presetsResponse, lastFreqResponse] = await Promise.all([
-          api.getPresetFrequencies(),
-          api.getLastFrequency(),
-        ]);
+    void loadVoicePresets();
+  }, [loadVoicePresets]);
 
-        if (presetsResponse.success && Array.isArray(presetsResponse.presets)) {
-          // Filter for VOICE mode presets
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const voicePresets: FrequencyPreset[] = presetsResponse.presets
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .filter((p: any) => p.mode === 'VOICE')
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .map((p: any) => ({
-              key: String(p.frequency),
-              label: p.description || `${p.band} ${(p.frequency / 1000000).toFixed(3)} MHz`,
-              frequency: p.frequency,
-              band: p.band,
-              mode: p.mode,
-              radioMode: p.radioMode,
-            }));
-          setPresets(voicePresets);
-        }
-
-        // Restore last voice frequency (separate from digital mode frequency)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const lastVoice = (lastFreqResponse as any).lastVoiceFrequency;
-        if (lastVoice && lastVoice.frequency) {
-          setCurrentFrequency(lastVoice.frequency);
-          if (lastVoice.radioMode) setCurrentRadioMode(lastVoice.radioMode);
-          logger.info('Restored last voice frequency', { frequency: lastVoice.frequency, radioMode: lastVoice.radioMode });
-        }
-      } catch (error) {
-        logger.error('Failed to load voice presets:', error);
-      } finally {
-        setIsLoadingPresets(false);
-      }
+  useEffect(() => {
+    const handleFrequencyPresetsUpdated = () => {
+      void loadVoicePresets();
     };
-    loadPresets();
-  }, [connection.state.isConnected]);
+
+    window.addEventListener('frequencyPresetsUpdated', handleFrequencyPresetsUpdated);
+    return () => {
+      window.removeEventListener('frequencyPresetsUpdated', handleFrequencyPresetsUpdated);
+    };
+  }, [loadVoicePresets]);
 
   // Sync current frequency from radio state
   useEffect(() => {
@@ -506,6 +521,15 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
   };
 
+  const handleOpenVoicePresetSettings = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('openSettingsModal', {
+      detail: {
+        tab: 'frequency_presets',
+        frequencyPresetMode: 'VOICE',
+      },
+    }));
+  }, []);
+
   return (
     <Card className="w-full h-full bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
       <CardHeader className="pb-1 flex-shrink-0">
@@ -594,17 +618,31 @@ export const VoiceFrequencyControl: React.FC = () => {
           )}
         </div>
 
-        {/* Custom frequency button */}
-        {canSetFrequency && (
+        {/* Voice frequency actions */}
+        {(canSetFrequency || canManageFrequencyPresets) && (
           <div className="flex-shrink-0">
-            <Button
-              size="sm"
-              variant="flat"
-              onPress={() => setIsCustomModalOpen(true)}
-              className="w-full"
-            >
-              {t('frequency.customFrequency')}
-            </Button>
+            <div className={`grid gap-2 ${canSetFrequency && canManageFrequencyPresets ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {canSetFrequency && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={() => setIsCustomModalOpen(true)}
+                  className="w-full"
+                >
+                  {t('frequency.manualTune')}
+                </Button>
+              )}
+              {canManageFrequencyPresets && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={handleOpenVoicePresetSettings}
+                  className="w-full"
+                >
+                  {t('frequency.managePresets')}
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </CardBody>

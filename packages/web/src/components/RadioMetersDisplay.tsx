@@ -3,6 +3,8 @@ import type { MeterData, MeterCapabilities } from '@tx5dr/contracts';
 import { Progress } from '@heroui/react';
 import { useBufferedMeterData } from '../hooks/useBufferedMeterData';
 
+const LEVEL_DBM_MIN_CARD_WIDTH = 480;
+
 interface RadioMetersDisplayProps {
   meterData: MeterData;
   isPttActive: boolean;
@@ -102,6 +104,33 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   className = ''
 }) => {
   const buffered = useBufferedMeterData(meterData);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const [showLevelDbmDetail, setShowLevelDbmDetail] = React.useState(true);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') {
+      return undefined;
+    }
+
+    const updateVisibility = (width: number) => {
+      setShowLevelDbmDetail(width >= LEVEL_DBM_MIN_CARD_WIDTH);
+    };
+
+    updateVisibility(container.getBoundingClientRect().width);
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        updateVisibility(entry.contentRect.width);
+      }
+    });
+
+    resizeObserver.observe(container);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
 
   // 判断各仪表是否应显示（null = 未知，保持全显示以兼容旧版后端）
   const showLevelPower = meterCapabilities === null || meterCapabilities.strength || meterCapabilities.power;
@@ -114,7 +143,10 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   }
 
   return (
-    <div className={`w-full px-2 py-2 pt-1.5 bg-default-50 dark:bg-default-100/50 rounded-lg border border-default-200 dark:border-default-100 ${className}`}>
+    <div
+      ref={containerRef}
+      className={`w-full px-2 py-2 pt-1.5 bg-default-50 dark:bg-default-100/50 rounded-lg border border-default-200 dark:border-default-100 ${className}`}
+    >
       <div className="flex items-center gap-2">
         {/* 第一个仪表：根据 PTT 状态动态切换 Level/Power */}
         {showLevelPower && (isPttActive ? (
@@ -142,7 +174,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
               return (
                 <>
                   {formatted}
-                  <span className="hidden sm:inline"> / {dBm.toFixed(1)}dBm</span>
+                  {showLevelDbmDetail && <span> / {dBm.toFixed(1)}dBm</span>}
                 </>
               );
             }}

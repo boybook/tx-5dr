@@ -3,6 +3,7 @@ import type {
   SpectrumFrame,
   SpectrumKind,
   SpectrumSessionControl,
+  SpectrumSessionPresetMarker,
   SpectrumSessionState,
   SpectrumSessionSourceMode,
 } from '@tx5dr/contracts';
@@ -30,6 +31,11 @@ const DIGITAL_WINDOW_LOW_OFFSET_HZ = -1000;
 const DIGITAL_WINDOW_HIGH_OFFSET_HZ = 4000;
 const DIGITAL_WINDOW_PENDING_TIMEOUT_MS = 3000;
 const OPENWEBRX_DETAIL_OFFSET_HZ = 1500;
+const VOICE_FREQUENCY_GESTURE_STEP_HZ = 1000;
+
+function formatPresetMarkerLabel(frequencyHz: number): string {
+  return `${(frequencyHz / 1_000_000).toFixed(3)} MHz`;
+}
 
 interface SpectrumSessionCoordinatorEvents {
   stateChanged: () => void;
@@ -307,6 +313,11 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
             showRxMarkers: this.engine.getEngineMode() === 'digital',
             canDragTx: this.engine.getEngineMode() === 'digital',
             canRightClickSetFrequency: this.engine.getEngineMode() === 'digital',
+            canDoubleClickSetFrequency: false,
+            canDragFrequency: false,
+            frequencyGestureTarget: this.engine.getEngineMode() === 'digital' ? 'operator-tx' : null,
+            frequencyStepHz: this.engine.getEngineMode() === 'digital' ? 1 : null,
+            presetMarkers: [],
             canDragVoiceOverlay: false,
             showVoiceOverlay: false,
             canLocalViewportZoom: false,
@@ -339,6 +350,11 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
             showRxMarkers: false,
             canDragTx: false,
             canRightClickSetFrequency: false,
+            canDoubleClickSetFrequency: false,
+            canDragFrequency: false,
+            frequencyGestureTarget: null,
+            frequencyStepHz: null,
+            presetMarkers: [],
             canDragVoiceOverlay: false,
             showVoiceOverlay: false,
             canLocalViewportZoom: false,
@@ -364,6 +380,12 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const sourceMode = this.mapRadioDisplayModeToSourceMode(display.mode);
     const isFixed = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
     const isDigital = this.engine.getEngineMode() === 'digital';
+    const canVoiceSetFrequency = isVoiceMode
+      && currentRadioFrequency !== null
+      && display.displayRange !== null;
+    const presetMarkers = isVoiceMode && display.displayRange
+      ? this.resolveVoicePresetMarkers(display.displayRange.min, display.displayRange.max, canVoiceSetFrequency)
+      : [];
 
     const controls: SpectrumSessionControl[] = [];
     if (zoom.visible) {
@@ -415,8 +437,18 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         showTxMarkers: isDigital,
         showRxMarkers: isDigital,
         canDragTx: isDigital,
-        canRightClickSetFrequency: isDigital,
-        canDragVoiceOverlay: isVoiceMode && isFixed,
+        canRightClickSetFrequency: isDigital || canVoiceSetFrequency,
+        canDoubleClickSetFrequency: canVoiceSetFrequency,
+        // Voice-mode drag tuning is intentionally disabled for now.
+        // In follow/center mode the SDR viewport recenters while dragging, which makes
+        // whole-spectrum drag interaction feel jumpy and harder to control precisely.
+        canDragFrequency: false,
+        frequencyGestureTarget: isDigital ? 'operator-tx' : (canVoiceSetFrequency ? 'radio-frequency' : null),
+        frequencyStepHz: isDigital ? 1 : (canVoiceSetFrequency ? VOICE_FREQUENCY_GESTURE_STEP_HZ : null),
+        // Voice preset markers are negotiated here so SDR preset rendering stays on the
+        // same capability/session-state channel as the rest of the spectrum interactions.
+        presetMarkers,
+        canDragVoiceOverlay: false,
         showVoiceOverlay: isVoiceMode,
         canLocalViewportZoom: false,
         canLocalViewportPan: false,
@@ -437,6 +469,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const currentFrame = adapter?.getLatestSpectrumFrame() ?? null;
     const detailEnabled = Boolean(adapter?.isDigitalDetailSpectrumEnabled());
     const sourceMode: SpectrumSessionSourceMode = detailEnabled ? 'detail' : 'full';
+    const isVoiceMode = this.engine.getEngineMode() === 'voice';
     const isDigitalMode = this.engine.getEngineMode() === 'digital'
       && (this.engine.getStatus().currentMode.name === 'FT8' || this.engine.getStatus().currentMode.name === 'FT4');
 
@@ -514,6 +547,9 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
                   : null
               )
         );
+    const presetMarkers = isVoiceMode && displayRange
+      ? this.resolveVoicePresetMarkers(displayRange.min, displayRange.max, true)
+      : [];
 
     return {
       kind: 'openwebrx-sdr',
@@ -534,6 +570,11 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         showRxMarkers: detailEnabled,
         canDragTx: detailEnabled && isDigitalMode,
         canRightClickSetFrequency: detailEnabled && isDigitalMode,
+        canDoubleClickSetFrequency: false,
+        canDragFrequency: false,
+        frequencyGestureTarget: detailEnabled && isDigitalMode ? 'operator-tx' : null,
+        frequencyStepHz: detailEnabled && isDigitalMode ? 1 : null,
+        presetMarkers,
         canDragVoiceOverlay: false,
         showVoiceOverlay: false,
         canLocalViewportZoom: !detailEnabled,
@@ -1024,6 +1065,27 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     }
 
     return null;
+  }
+
+  private resolveVoicePresetMarkers(
+    rangeMin: number,
+    rangeMax: number,
+    clickable: boolean,
+  ): SpectrumSessionPresetMarker[] {
+    const configManager = ConfigManager.getInstance();
+    const frequencyManager = new FrequencyManager(configManager.getCustomFrequencyPresets());
+
+    return frequencyManager
+      .getPresets()
+      .filter((preset) => preset.mode === 'VOICE')
+      .filter((preset) => Number.isFinite(preset.frequency) && preset.frequency >= rangeMin && preset.frequency <= rangeMax)
+      .map((preset) => ({
+        id: `voice-preset-${preset.frequency}`,
+        frequency: preset.frequency,
+        label: formatPresetMarkerLabel(preset.frequency),
+        description: preset.description?.trim() || null,
+        clickable,
+      }));
   }
 
   private async ensureVoiceRadioFollowMode(): Promise<void> {

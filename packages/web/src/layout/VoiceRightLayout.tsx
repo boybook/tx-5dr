@@ -42,7 +42,8 @@ export const VoiceRightLayout: React.FC = () => {
   const { state: authState, login, logout } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system' | 'station_info'>('radio');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system' | 'station_info' | 'frequency_presets' | 'openwebrx'>('radio');
+  const [settingsInitialFrequencyPresetMode, setSettingsInitialFrequencyPresetMode] = useState<string | undefined>(undefined);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
@@ -71,6 +72,7 @@ export const VoiceRightLayout: React.FC = () => {
 
   const handleOpenSettings = () => {
     setSettingsInitialTab('radio');
+    setSettingsInitialFrequencyPresetMode(undefined);
     setIsSettingsOpen(true);
   };
 
@@ -88,7 +90,9 @@ export const VoiceRightLayout: React.FC = () => {
   useEffect(() => {
     const handler = (e: Event) => {
       const tab = (e as CustomEvent).detail?.tab;
+      const frequencyPresetMode = (e as CustomEvent).detail?.frequencyPresetMode;
       if (tab) setSettingsInitialTab(tab);
+      setSettingsInitialFrequencyPresetMode(typeof frequencyPresetMode === 'string' ? frequencyPresetMode : undefined);
       setIsSettingsOpen(true);
     };
     window.addEventListener('openSettingsModal', handler);
@@ -232,6 +236,7 @@ export const VoiceRightLayout: React.FC = () => {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         initialTab={settingsInitialTab}
+        initialFrequencyPresetMode={settingsInitialFrequencyPresetMode}
       />
 
       {/* Profile Modal */}

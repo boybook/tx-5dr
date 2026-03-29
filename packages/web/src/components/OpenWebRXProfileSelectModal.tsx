@@ -209,7 +209,7 @@ export function OpenWebRXProfileSelectModal() {
         </ModalBody>
         <ModalFooter>
           <Button variant="flat" onPress={handleClose}>
-            {t('common:cancel')}
+            {t('common:button.cancel')}
           </Button>
           <Button
             color="primary"

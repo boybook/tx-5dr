@@ -269,6 +269,8 @@
     "duplicate": "A preset with this frequency already exists",
     "invalidFrequency": "Please enter a valid frequency",
     "frequencyRange": "Frequency range: 0.1 - 1000 MHz",
+    "unknownBand": "Cannot infer an amateur band from this frequency",
+    "bandAutoPending": "Auto-inferred from frequency",
     "addTitle": "Add New Preset",
     "freqPlaceholder": "e.g. 14.074",
     "descPlaceholder": "Auto-generated",

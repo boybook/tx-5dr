@@ -86,7 +86,7 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
               color="primary"
               onPress={() => setIsOpen(false)}
             >
-              {t('button.confirm')}
+              {t('common:button.confirm')}
             </Button>
           </div>
         </div>
