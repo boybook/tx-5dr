@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
-import { useRadioState, useConnection } from '../store/radioStore';
+import { useOperators, useConnection } from '../store/radioStore';
 import { useAuth } from '../store/authStore';
 import { RadioOperator } from './RadioOperator';
 import { hasHiddenOperators } from '../utils/operatorPreferences';
@@ -14,7 +14,7 @@ interface RadioOperatorListProps {
 
 export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOperator }) => {
   const { t } = useTranslation('radio');
-  const radio = useRadioState();
+  const { operators } = useOperators();
   const connection = useConnection();
   const { state: authState } = useAuth();
 
@@ -38,7 +38,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
     }
   }, [connection.state.isConnected, connection.state.radioService]);
 
-  if (radio.state.operators.length === 0) {
+  if (operators.length === 0) {
     return (
       <div className="flex items-center justify-center">
         <div className="text-center w-full">
@@ -90,7 +90,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
 
   return (
     <div className="space-y-4">
-      {radio.state.operators.map((operator) => (
+      {operators.map((operator) => (
         <RadioOperator
           key={operator.id}
           operatorStatus={operator}

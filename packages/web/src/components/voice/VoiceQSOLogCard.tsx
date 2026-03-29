@@ -15,7 +15,7 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronRight } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
-import { useRadioState, useConnection, useOperators, useCurrentOperatorId } from '../../store/radioStore';
+import { useRadioModeState, usePTTState, useConnection, useOperators, useCurrentOperatorId } from '../../store/radioStore';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { api } from '@tx5dr/core';
@@ -63,7 +63,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   onCancelEdit,
 }) => {
   const { t } = useTranslation('voice');
-  const radio = useRadioState();
+  const radioMode = useRadioModeState();
+  const { pttStatus } = usePTTState();
   const connection = useConnection();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
@@ -98,7 +99,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   // Auto-fill start/end time from PTT events (only in new mode)
   useEffect(() => {
     if (editingQSO) return;
-    const isTransmitting = radio.state.pttStatus.isTransmitting;
+    const isTransmitting = pttStatus.isTransmitting;
 
     if (isTransmitting && !prevTransmitting.current) {
       if (!startTime) {
@@ -109,7 +110,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     }
 
     prevTransmitting.current = isTransmitting;
-  }, [radio.state.pttStatus.isTransmitting, startTime, editingQSO]);
+  }, [pttStatus.isTransmitting, startTime, editingQSO]);
 
   // When editingQSO changes, pre-fill form and force expand; clear form when deselected
   useEffect(() => {
@@ -152,7 +153,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
         const result = await api.updateQSO(logbookId, editingQSO.id, {
           callsign: formData.callsign.toUpperCase().trim(),
           frequency: currentFrequency,
-          mode: radio.state.currentRadioMode || 'USB',
+          mode: radioMode.currentRadioMode || 'USB',
           startTime: startTime ?? editingQSO.startTime,
           endTime: endTime ?? editingQSO.endTime,
           reportSent: formData.rstSent || '59',
@@ -173,7 +174,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
         const body = {
           callsign: formData.callsign.toUpperCase().trim(),
           frequency: currentFrequency,
-          mode: radio.state.currentRadioMode || 'USB',
+          mode: radioMode.currentRadioMode || 'USB',
           startTime: startTime || Date.now(),
           endTime: endTime || Date.now(),
           reportSent: formData.rstSent || '59',
@@ -385,7 +386,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
         {/* Auto-filled info */}
         <div className="flex gap-4 text-xs text-default-400">
           <span>{t('qso.frequency')}: <span className="font-mono">{((currentFrequency || 0) / 1000000).toFixed(3)} MHz</span></span>
-          <span>{t('qso.mode')}: <span className="font-mono">{radio.state.currentRadioMode || 'USB'}</span></span>
+          <span>{t('qso.mode')}: <span className="font-mono">{radioMode.currentRadioMode || 'USB'}</span></span>
         </div>
 
         {/* Action buttons */}

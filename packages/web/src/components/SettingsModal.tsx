@@ -33,7 +33,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx';
+export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx';
 
 export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
   const { t } = useTranslation('settings');
@@ -342,7 +342,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         size={isMobile ? "full" : "5xl"}
         scrollBehavior="inside"
         placement="center"
-        backdrop="blur"
+        backdrop="opaque"
+        disableAnimation
         classNames={{
           body: "p-0",
           header: "border-b border-divider px-3 sm:px-6 py-3 sm:py-4",
@@ -467,7 +468,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         onClose={handleConfirmCancel}
         size="sm"
         placement="center"
-        backdrop="blur"
+        backdrop="opaque"
+        disableAnimation
       >
         <ModalContent>
           <ModalHeader>

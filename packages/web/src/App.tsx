@@ -14,6 +14,7 @@ import { ServerDisconnectedOverlay } from './components/ServerDisconnectedOverla
 import { ServerStatusPage } from './pages/ServerStatusPage';
 import { LoginPage } from './pages/LoginPage';
 import { OpenWebRXProfileSelectModal } from './components/OpenWebRXProfileSelectModal';
+import { GlobalModalHost } from './components/GlobalModalHost';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -105,6 +106,7 @@ function AuthGate() {
   return (
     <RadioProvider key={authKey}>
       <AppContent />
+      <GlobalModalHost />
     </RadioProvider>
   );
 }

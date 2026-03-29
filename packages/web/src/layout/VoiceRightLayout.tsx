@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   Button,
@@ -7,12 +7,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@heroui/react';
-import { useRadioState } from '../store/radioStore';
-import { useAuth, useHasMinRole } from '../store/authStore';
-import { UserRole } from '@tx5dr/contracts';
+import { useAuth } from '../store/authStore';
 import { RadioControl } from '../components/RadioControl';
-import { SettingsModal } from '../components/SettingsModal';
-import { ProfileModal } from '../components/ProfileModal';
 import { VoiceQSOLogCard } from '../components/voice/VoiceQSOLogCard';
 import { VoiceRecentQSOList } from '../components/voice/VoiceRecentQSOList';
 import { VoicePTTButton } from '../components/voice/VoicePTTButton';
@@ -38,13 +34,7 @@ export const VoiceRightLayout: React.FC = () => {
     operator: t('common:role.operator'),
     admin: t('common:role.admin'),
   };
-  const _radio = useRadioState();
   const { state: authState, login, logout } = useAuth();
-  const isAdmin = useHasMinRole(UserRole.ADMIN);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system' | 'station_info' | 'frequency_presets' | 'openwebrx'>('radio');
-  const [settingsInitialFrequencyPresetMode, setSettingsInitialFrequencyPresetMode] = useState<string | undefined>(undefined);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
   const [selectedQSO, setSelectedQSO] = useState<QSORecord | null>(null);
@@ -71,33 +61,12 @@ export const VoiceRightLayout: React.FC = () => {
   }, [loginToken, login]);
 
   const handleOpenSettings = () => {
-    setSettingsInitialTab('radio');
-    setSettingsInitialFrequencyPresetMode(undefined);
-    setIsSettingsOpen(true);
+    window.dispatchEvent(new CustomEvent('openSettingsModal', { detail: { tab: 'radio' } }));
   };
 
   const handleOpenRadioSettings = () => {
-    setIsProfileModalOpen(true);
+    window.dispatchEvent(new Event('openProfileModal'));
   };
-
-  useEffect(() => {
-    const handler = () => setIsProfileModalOpen(true);
-    window.addEventListener('openProfileModal', handler);
-    return () => window.removeEventListener('openProfileModal', handler);
-  }, []);
-
-  // 监听全局 openSettingsModal 事件（携带 tab 参数）
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const tab = (e as CustomEvent).detail?.tab;
-      const frequencyPresetMode = (e as CustomEvent).detail?.frequencyPresetMode;
-      if (tab) setSettingsInitialTab(tab);
-      setSettingsInitialFrequencyPresetMode(typeof frequencyPresetMode === 'string' ? frequencyPresetMode : undefined);
-      setIsSettingsOpen(true);
-    };
-    window.addEventListener('openSettingsModal', handler);
-    return () => window.removeEventListener('openSettingsModal', handler);
-  }, []);
 
   return (
     <div className="h-full flex flex-col">
@@ -230,22 +199,6 @@ export const VoiceRightLayout: React.FC = () => {
           </div>
         </div>
       </div>
-
-      {/* Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        initialTab={settingsInitialTab}
-        initialFrequencyPresetMode={settingsInitialFrequencyPresetMode}
-      />
-
-      {/* Profile Modal */}
-      {isAdmin && (
-        <ProfileModal
-          isOpen={isProfileModalOpen}
-          onClose={() => setIsProfileModalOpen(false)}
-        />
-      )}
     </div>
   );
 };
