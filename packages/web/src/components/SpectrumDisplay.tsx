@@ -47,6 +47,10 @@ interface SpectrumDisplayProps {
   showPopOut?: boolean;
   onPopOutChange?: (isPopedOut: boolean) => void;
   showMarkers?: boolean;
+  topLeftOverlayInset?: {
+    top?: number;
+    left?: number;
+  };
 }
 
 interface WaterfallData {
@@ -75,7 +79,10 @@ interface LegacyAudioRangeSettings {
 interface PersistedRangeSettings {
   audio: AudioRangeSettings;
   radioSdr: ManualRangeSettings;
-  openWebRxSdr: ManualRangeSettings;
+  openWebRxSdr: {
+    full: ManualRangeSettings;
+    detail: ManualRangeSettings;
+  };
 }
 
 interface OpenWebRXViewport {
@@ -107,6 +114,11 @@ const DEFAULT_OPENWEBRX_RANGE_SETTINGS: ManualRangeSettings = {
   maxDb: 0,
 };
 
+const DEFAULT_OPENWEBRX_DETAIL_RANGE_SETTINGS: ManualRangeSettings = {
+  minDb: -35,
+  maxDb: 10,
+};
+
 const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
   audio: {
     mode: 'auto',
@@ -121,8 +133,14 @@ const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
     maxDb: 64,
   },
   openWebRxSdr: {
-    minDb: DEFAULT_OPENWEBRX_RANGE_SETTINGS.minDb,
-    maxDb: DEFAULT_OPENWEBRX_RANGE_SETTINGS.maxDb,
+    full: {
+      minDb: DEFAULT_OPENWEBRX_RANGE_SETTINGS.minDb,
+      maxDb: DEFAULT_OPENWEBRX_RANGE_SETTINGS.maxDb,
+    },
+    detail: {
+      minDb: DEFAULT_OPENWEBRX_DETAIL_RANGE_SETTINGS.minDb,
+      maxDb: DEFAULT_OPENWEBRX_DETAIL_RANGE_SETTINGS.maxDb,
+    },
   },
 };
 
@@ -182,7 +200,10 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
       return {
         audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
         radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
-        openWebRxSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr),
+        openWebRxSdr: {
+          full: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full),
+          detail: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
+        },
       };
   }
 
@@ -201,10 +222,33 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
           (parsed as Partial<PersistedRangeSettings>).radioSdr,
           DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr
         ),
-        openWebRxSdr: normalizeManualRangeSettings(
-          (parsed as Partial<PersistedRangeSettings>).openWebRxSdr,
-          DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr
-        ),
+        openWebRxSdr: (() => {
+          const rawOpenWebRX = (parsed as Partial<PersistedRangeSettings>).openWebRxSdr;
+          if (
+            rawOpenWebRX
+            && typeof rawOpenWebRX === 'object'
+            && ('full' in rawOpenWebRX || 'detail' in rawOpenWebRX)
+          ) {
+            return {
+              full: normalizeManualRangeSettings(
+                (rawOpenWebRX as { full?: Partial<ManualRangeSettings> }).full,
+                DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full
+              ),
+              detail: normalizeManualRangeSettings(
+                (rawOpenWebRX as { detail?: Partial<ManualRangeSettings> }).detail,
+                DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail
+              ),
+            };
+          }
+
+          return {
+            full: normalizeManualRangeSettings(
+              rawOpenWebRX as Partial<ManualRangeSettings> | null | undefined,
+              DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full
+            ),
+            detail: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
+          };
+        })(),
       };
     }
 
@@ -214,14 +258,20 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
         DEFAULT_PERSISTED_RANGE_SETTINGS.audio
       ),
       radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
-      openWebRxSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr),
+      openWebRxSdr: {
+        full: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full),
+        detail: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
+      },
     };
   } catch (error) {
     logger.error('Failed to parse saved settings', error);
     return {
       audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
       radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
-      openWebRxSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr),
+      openWebRxSdr: {
+        full: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full),
+        detail: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
+      },
     };
   }
 }
@@ -343,13 +393,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   showPopOut = true,
   onPopOutChange,
   showMarkers = true,
+  topLeftOverlayInset,
 }) => {
   const { t } = useTranslation('common');
   const connection = useConnection();
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
   const { state: radioState } = useRadioState();
-  const { capabilities, selectedKind, latestFrame, setSelectedKind, zoomState, digitalWindowState } = useSpectrum();
+  const { capabilities, selectedKind, latestFrame, sessionState, setSelectedKind } = useSpectrum();
   const isTransmitting = radioState.pttStatus.isTransmitting;
   const [frame, setFrame] = useState<SpectrumFrame | null>(null);
   const [waterfallData, setWaterfallData] = useState<WaterfallData>({
@@ -375,31 +426,46 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
   const isVoiceMode = radioState.engineMode === 'voice';
-  const radioViewState = radioState.radioViewState;
-  const spectrumDisplayState = radioState.spectrumDisplayState;
-  const isFixedSpectrumMode = isRadioSdrSelected
-    && (spectrumDisplayState?.mode === 'fixed' || spectrumDisplayState?.mode === 'scroll-fixed');
-  const frequencyRangeMode = isOpenWebRXSdrSelected
-    ? 'absolute-windowed'
-    : !isRadioSdrSelected
-    ? 'baseband'
-    : isFixedSpectrumMode
-      ? 'absolute-fixed'
-      : 'absolute-center';
+  const sourceMode = sessionState?.sourceMode ?? 'unknown';
+  const isFixedSpectrumMode = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
+  const isOpenWebRXDetailMode = isOpenWebRXSdrSelected && sourceMode === 'detail';
+  const canOpenWebRXLocalViewportZoom = Boolean(sessionState?.interaction.canLocalViewportZoom);
+  const canOpenWebRXLocalViewportPan = Boolean(sessionState?.interaction.canLocalViewportPan);
+  const canDragTxMarker = Boolean(sessionState?.interaction.canDragTx);
+  const canRightClickSetFrequency = Boolean(sessionState?.interaction.canRightClickSetFrequency);
+  const showTxMarkers = Boolean(sessionState?.interaction.showTxMarkers);
+  const showRxMarkers = Boolean(sessionState?.interaction.showRxMarkers);
+  const frequencyRangeMode = sessionState?.frequencyRangeMode ?? (
+    isOpenWebRXSdrSelected
+      ? 'absolute-windowed'
+      : !isRadioSdrSelected
+        ? 'baseband'
+        : isFixedSpectrumMode
+          ? 'absolute-fixed'
+          : 'absolute-center'
+  );
   const spectrumReferenceFrequency = isRadioSdrSelected
-    ? (spectrumDisplayState?.currentRadioFrequency ?? radioState.currentRadioFrequency ?? null)
+    ? (sessionState?.currentRadioFrequency ?? radioState.currentRadioFrequency ?? null)
     : null;
   const currentManualRangeSettings = isOpenWebRXSdrSelected
-    ? persistedRangeSettings.openWebRxSdr
+    ? (isOpenWebRXDetailMode
+        ? persistedRangeSettings.openWebRxSdr.detail
+        : persistedRangeSettings.openWebRxSdr.full)
     : isRadioSdrSelected
       ? persistedRangeSettings.radioSdr
-    : persistedRangeSettings.audio.manual;
+      : persistedRangeSettings.audio.manual;
   const audioRangeSettings = persistedRangeSettings.audio;
   const rangeLimits = isOpenWebRXSdrSelected
     ? OPENWEBRX_RANGE_LIMITS
     : isRadioSdrSelected
       ? RADIO_SDR_RANGE_LIMITS
       : AUDIO_RANGE_LIMITS;
+  const topLeftOverlayStyle = topLeftOverlayInset
+    ? {
+        top: topLeftOverlayInset.top ?? 4,
+        left: topLeftOverlayInset.left ?? 4,
+      }
+    : undefined;
 
   const updateCurrentRangeSettings = useCallback((updater: (current: ManualRangeSettings) => ManualRangeSettings) => {
     setPersistedRangeSettings(prev => {
@@ -413,7 +479,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       if (isOpenWebRXSdrSelected) {
         return {
           ...prev,
-          openWebRxSdr: updater(prev.openWebRxSdr),
+          openWebRxSdr: {
+            ...prev.openWebRxSdr,
+            [isOpenWebRXDetailMode ? 'detail' : 'full']: updater(
+              isOpenWebRXDetailMode ? prev.openWebRxSdr.detail : prev.openWebRxSdr.full
+            ),
+          },
         };
       }
 
@@ -425,7 +496,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         },
       };
     });
-  }, [isOpenWebRXSdrSelected, isRadioSdrSelected]);
+  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isRadioSdrSelected]);
 
   const updateAudioRangeSettings = useCallback((updater: (current: AudioRangeSettings) => AudioRangeSettings) => {
     setPersistedRangeSettings(prev => ({
@@ -484,7 +555,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       return;
     }
 
-    const currentRadioMode = radioViewState?.radioMode ?? radioState.currentRadioMode ?? 'USB';
+    const currentRadioMode = sessionState?.voice.radioMode ?? radioState.currentRadioMode ?? 'USB';
 
     try {
       await api.setRadioFrequency({
@@ -497,7 +568,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     } catch (error) {
       logger.error('Failed to set voice frequency from SDR overlay', error);
     }
-  }, [connection.state.isConnected, radioState.currentRadioMode, radioViewState?.radioMode]);
+  }, [connection.state.isConnected, radioState.currentRadioMode, sessionState?.voice.radioMode]);
 
   const decodeSpectrumData = useCallback((nextFrame: SpectrumFrame) => {
     const binaryString = atob(nextFrame.binaryData.data);
@@ -630,7 +701,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [decodeSpectrumData, openWebRXViewport, rebuildOpenWebRXWaterfall]);
 
   useEffect(() => {
-    if (!isOpenWebRXSdrSelected || !latestFrame || latestFrame.kind !== OPENWEBRX_SDR_SOURCE) {
+    if (!isOpenWebRXSdrSelected || isOpenWebRXDetailMode || !latestFrame || latestFrame.kind !== OPENWEBRX_SDR_SOURCE) {
       return;
     }
 
@@ -654,30 +725,38 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
       return nextViewport;
     });
-  }, [isOpenWebRXSdrSelected, latestFrame]);
+  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, latestFrame]);
 
   useEffect(() => {
     if (!latestFrame || !selectedKind || latestFrame.kind !== selectedKind) {
       return;
     }
-    if (selectedKind === OPENWEBRX_SDR_SOURCE) {
+    if (selectedKind === OPENWEBRX_SDR_SOURCE && !isOpenWebRXDetailMode) {
       updateOpenWebRXWaterfallData(latestFrame);
       return;
     }
     updateWaterfallData(latestFrame);
-  }, [latestFrame, selectedKind, updateOpenWebRXWaterfallData, updateWaterfallData]);
+  }, [isOpenWebRXDetailMode, latestFrame, selectedKind, updateOpenWebRXWaterfallData, updateWaterfallData]);
 
   useEffect(() => {
-    if (!isOpenWebRXSdrSelected || !openWebRXViewport || openWebRXHistoryRef.current.length === 0) {
+    if (!isOpenWebRXSdrSelected || isOpenWebRXDetailMode || !openWebRXViewport || openWebRXHistoryRef.current.length === 0) {
       return;
     }
 
     rebuildOpenWebRXWaterfall(openWebRXViewport);
-  }, [isOpenWebRXSdrSelected, openWebRXViewport, rebuildOpenWebRXWaterfall]);
+  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, openWebRXViewport, rebuildOpenWebRXWaterfall]);
 
   useEffect(() => {
     resetWaterfall();
   }, [selectedKind, resetWaterfall]);
+
+  useEffect(() => {
+    if (!isOpenWebRXSdrSelected) {
+      return;
+    }
+
+    resetWaterfall();
+  }, [isOpenWebRXSdrSelected, isOpenWebRXDetailMode, resetWaterfall]);
 
   useEffect(() => {
     if (selectedKind !== RADIO_SDR_SOURCE) {
@@ -697,7 +776,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     setPersistedRangeSettings(prev => ({
       ...prev,
-      openWebRxSdr: normalizeManualRangeSettings(prev.openWebRxSdr, DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr),
+      openWebRxSdr: {
+        full: normalizeManualRangeSettings(prev.openWebRxSdr.full, DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full),
+        detail: normalizeManualRangeSettings(prev.openWebRxSdr.detail, DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
+      },
     }));
   }, [selectedKind]);
 
@@ -705,46 +787,41 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const shouldShowSourceTabs = availableSources.length > 1;
   const sourceTabOrder: SpectrumKind[] = [RADIO_SDR_SOURCE, OPENWEBRX_SDR_SOURCE, AUDIO_SOURCE];
   const visibleSourceTabs = sourceTabOrder.filter(kind => availableSources.some(source => source.kind === kind));
-  const voiceOverlayIsInteractive = isVoiceMode
-    && isRadioSdrSelected
-    && isFixedSpectrumMode;
-  const openWebRXDisplayBaseFrequency = radioState.currentRadioFrequency;
+  const voiceOverlayIsInteractive = Boolean(sessionState?.interaction.canDragVoiceOverlay);
   const openWebRXTxFrequencies = React.useMemo(() => {
-    if (!isOpenWebRXSdrSelected || !showMarkers || isVoiceMode || openWebRXDisplayBaseFrequency === null) {
+    if (!isOpenWebRXSdrSelected || !showMarkers || !showTxMarkers || isVoiceMode) {
       return [];
     }
 
-    return txFrequencies.map(({ frequency, ...rest }) => ({
-      ...rest,
-      frequency: openWebRXDisplayBaseFrequency + frequency,
-    }));
-  }, [isOpenWebRXSdrSelected, isVoiceMode, openWebRXDisplayBaseFrequency, showMarkers, txFrequencies]);
+    return isOpenWebRXDetailMode ? txFrequencies : [];
+  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isVoiceMode, showMarkers, showTxMarkers, txFrequencies]);
   const openWebRXRxFrequencies = React.useMemo(() => {
-    if (!isOpenWebRXSdrSelected || !showMarkers || isVoiceMode || openWebRXDisplayBaseFrequency === null) {
+    if (!isOpenWebRXSdrSelected || !showMarkers || !showRxMarkers || isVoiceMode) {
       return [];
     }
 
-    return rxFrequencies.map(({ frequency, ...rest }) => ({
-      ...rest,
-      frequency: openWebRXDisplayBaseFrequency + frequency,
-    }));
-  }, [isOpenWebRXSdrSelected, isVoiceMode, openWebRXDisplayBaseFrequency, rxFrequencies, showMarkers]);
-  const effectiveHoverFrequency = isOpenWebRXSdrSelected && openWebRXDisplayBaseFrequency !== null && hoverFrequency !== null && hoverFrequency !== undefined
-    ? openWebRXDisplayBaseFrequency + hoverFrequency
-    : hoverFrequency;
+    return isOpenWebRXDetailMode ? rxFrequencies : [];
+  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isVoiceMode, rxFrequencies, showMarkers, showRxMarkers]);
+  const effectiveHoverFrequency = hoverFrequency;
   const openWebRXFullRange = latestFrame?.kind === OPENWEBRX_SDR_SOURCE
     ? latestFrame.frequencyRange
     : null;
   const voiceBandOverlay: TxBandOverlay[] = React.useMemo(() => {
-    if (!isVoiceMode || !isRadioSdrSelected || !radioViewState?.frequency || !radioViewState.offsetModel || !radioViewState.occupiedBandwidthHz) {
+    if (
+      !isVoiceMode
+      || !isRadioSdrSelected
+      || !sessionState?.currentRadioFrequency
+      || !sessionState.voice.offsetModel
+      || !sessionState.voice.occupiedBandwidthHz
+    ) {
       return [];
     }
-    const lineFrequency = radioViewState.frequency;
-    const bandwidthHz = radioViewState.occupiedBandwidthHz;
+    const lineFrequency = sessionState.currentRadioFrequency;
+    const bandwidthHz = sessionState.voice.occupiedBandwidthHz;
     let rangeStartFrequency = lineFrequency;
     let rangeEndFrequency = lineFrequency;
 
-    switch (radioViewState.offsetModel) {
+    switch (sessionState.voice.offsetModel) {
       case 'upper':
         rangeStartFrequency = lineFrequency;
         rangeEndFrequency = lineFrequency + bandwidthHz;
@@ -767,7 +844,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       rangeEndFrequency,
       draggable: voiceOverlayIsInteractive,
     }];
-  }, [isRadioSdrSelected, isVoiceMode, radioViewState, voiceOverlayIsInteractive]);
+  }, [isRadioSdrSelected, isVoiceMode, sessionState, voiceOverlayIsInteractive]);
 
   const handleSpectrumKindChange = useCallback((kind: SpectrumKind) => {
     const radioService = connection.state.radioService;
@@ -778,12 +855,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setPreferredSpectrumKind(activeProfileId, kind);
   }, [activeProfileId, connection.state.radioService, setSelectedKind]);
 
-  const handleStepSpectrumZoom = useCallback((direction: 'in' | 'out') => {
-    connection.state.radioService?.stepSpectrumZoom(direction);
-  }, [connection.state.radioService]);
-
-  const handleToggleDigitalSpectrumWindow = useCallback(() => {
-    connection.state.radioService?.toggleDigitalSpectrumWindow();
+  const handleInvokeSpectrumControl = useCallback((id: string, action: 'in' | 'out' | 'toggle') => {
+    connection.state.radioService?.invokeSpectrumControl(id, action);
   }, [connection.state.radioService]);
 
   const updateOpenWebRXViewport = useCallback((updater: (current: OpenWebRXViewport) => OpenWebRXViewport) => {
@@ -809,7 +882,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [openWebRXFullRange]);
 
   const handleOpenWebRXWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    if (!isOpenWebRXSdrSelected || !openWebRXViewport || !openWebRXFullRange) {
+    if (!isOpenWebRXSdrSelected || !canOpenWebRXLocalViewportZoom || !openWebRXViewport || !openWebRXFullRange) {
       return;
     }
 
@@ -828,10 +901,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         spanHz: nextSpan,
       };
     });
-  }, [isOpenWebRXSdrSelected, openWebRXFullRange, openWebRXViewport, updateOpenWebRXViewport]);
+  }, [canOpenWebRXLocalViewportZoom, isOpenWebRXSdrSelected, openWebRXFullRange, openWebRXViewport, updateOpenWebRXViewport]);
 
   const handleOpenWebRXMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!isOpenWebRXSdrSelected || !openWebRXViewport || event.button !== 0) {
+    if (!isOpenWebRXSdrSelected || !canOpenWebRXLocalViewportPan || !openWebRXViewport || event.button !== 0) {
       return;
     }
 
@@ -846,7 +919,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       startCenterHz: openWebRXViewport.centerHz,
       width: rect.width,
     };
-  }, [isOpenWebRXSdrSelected, openWebRXViewport]);
+  }, [canOpenWebRXLocalViewportPan, isOpenWebRXSdrSelected, openWebRXViewport]);
 
   const openWebRXZoomLevels = React.useMemo(() => {
     if (!openWebRXFullRange) {
@@ -872,7 +945,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     return bestIndex;
   }, [openWebRXViewport, openWebRXZoomLevels]);
-  const shouldShowOpenWebRXZoomControls = isOpenWebRXSdrSelected && openWebRXZoomLevels.length > 0;
+  const shouldShowOpenWebRXZoomControls = isOpenWebRXSdrSelected && canOpenWebRXLocalViewportZoom && openWebRXZoomLevels.length > 0;
   const canOpenWebRXZoomOut = shouldShowOpenWebRXZoomControls && currentOpenWebRXZoomLevelIndex > 0;
   const canOpenWebRXZoomIn = shouldShowOpenWebRXZoomControls
     && currentOpenWebRXZoomLevelIndex >= 0
@@ -897,18 +970,26 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     }));
   }, [currentOpenWebRXZoomLevelIndex, openWebRXViewport, openWebRXZoomLevels, updateOpenWebRXViewport]);
 
-  const isCenterSpectrumMode = isRadioSdrSelected
-    && (spectrumDisplayState?.mode === 'center' || spectrumDisplayState?.mode === 'scroll-center');
-  const shouldShowZoomControls = isCenterSpectrumMode;
-  const shouldShowDigitalSpectrumWindowControl = isRadioSdrSelected
-    && Boolean(digitalWindowState?.supported);
-  const currentZoomLevelIndex = zoomState?.levels.findIndex(level => level.id === zoomState.currentLevelId) ?? -1;
-  const zoomControlsDisabled = !zoomState?.supported || !zoomState.available || !zoomState.currentLevelId || currentZoomLevelIndex < 0;
-  const canZoomOut = !zoomControlsDisabled && currentZoomLevelIndex > 0;
-  const canZoomIn = !zoomControlsDisabled && currentZoomLevelIndex < (zoomState?.levels.length ?? 0) - 1;
+  const controls = sessionState?.controls ?? [];
+  const spectrumZoomOutControl = controls.find(control => control.id === 'zoom-step' && control.action === 'out' && control.visible);
+  const spectrumZoomInControl = controls.find(control => control.id === 'zoom-step' && control.action === 'in' && control.visible);
+  const digitalWindowControl = controls.find(control => control.id === 'digital-window-toggle' && control.visible);
+  const openWebRXDetailControl = controls.find(control => control.id === 'openwebrx-detail-toggle' && control.visible);
+  const viewportZoomOutControl = controls.find(control => control.id === 'viewport-zoom' && control.action === 'out' && control.visible);
+  const viewportZoomInControl = controls.find(control => control.id === 'viewport-zoom' && control.action === 'in' && control.visible);
+  const shouldShowZoomControls = Boolean(spectrumZoomOutControl || spectrumZoomInControl);
+  const shouldShowDigitalSpectrumWindowControl = Boolean(digitalWindowControl);
+  const shouldShowOpenWebRXDetailControl = Boolean(openWebRXDetailControl);
+  const effectiveShowOpenWebRXZoomControls = shouldShowOpenWebRXZoomControls
+    && Boolean(viewportZoomOutControl || viewportZoomInControl);
 
   const renderBottomRightControls = () => {
-    if (!shouldShowZoomControls && !shouldShowDigitalSpectrumWindowControl && !shouldShowOpenWebRXZoomControls) {
+    if (
+      !shouldShowZoomControls
+      && !shouldShowDigitalSpectrumWindowControl
+      && !shouldShowOpenWebRXDetailControl
+      && !effectiveShowOpenWebRXZoomControls
+    ) {
       return null;
     }
 
@@ -917,9 +998,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         {shouldShowDigitalSpectrumWindowControl && (
           <Tooltip
             content={
-              digitalWindowState?.pending
+              digitalWindowControl?.pending
                 ? t('spectrum.digitalWindowPending')
-                : digitalWindowState?.active
+                : digitalWindowControl?.active
                   ? t('spectrum.digitalWindowDisable')
                   : t('spectrum.digitalWindowEnable')
             }
@@ -930,18 +1011,45 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               size="sm"
               variant="light"
               className={`min-w-9 w-9 h-5 px-0 text-[10px] font-semibold ${
-                digitalWindowState?.active
+                digitalWindowControl?.active
                   ? 'bg-primary-500/25 text-white'
-                  : digitalWindowState?.pending
+                  : digitalWindowControl?.pending
                     ? 'bg-white/10 text-white/70'
                     : 'text-white/90'
               } disabled:text-default-500`}
-              onPress={handleToggleDigitalSpectrumWindow}
-              isDisabled={!digitalWindowState?.canToggle}
+              onPress={() => handleInvokeSpectrumControl('digital-window-toggle', 'toggle')}
+              isDisabled={!digitalWindowControl?.enabled}
             >
-              {digitalWindowState?.active
+              {digitalWindowControl?.active
                 ? t('spectrum.digitalWindowFixedLabel')
                 : t('spectrum.digitalWindowFollowLabel')}
+            </Button>
+          </Tooltip>
+        )}
+        {shouldShowOpenWebRXDetailControl && (
+          <Tooltip
+            content={
+              openWebRXDetailControl?.active
+                ? t('spectrum.openwebrxDetailDisable')
+                : t('spectrum.openwebrxDetailEnable')
+            }
+            placement="top"
+            offset={6}
+          >
+            <Button
+              size="sm"
+              variant="light"
+              className={`min-w-10 w-10 h-5 px-0 text-[10px] font-semibold ${
+                openWebRXDetailControl?.active
+                  ? 'bg-primary-500/25 text-white'
+                  : 'text-white/90'
+              } disabled:text-default-500`}
+              onPress={() => handleInvokeSpectrumControl('openwebrx-detail-toggle', 'toggle')}
+              isDisabled={!openWebRXDetailControl?.enabled}
+            >
+              {openWebRXDetailControl?.active
+                ? t('spectrum.openwebrxDetailActiveLabel')
+                : t('spectrum.openwebrxDetailInactiveLabel')}
             </Button>
           </Tooltip>
         )}
@@ -952,8 +1060,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               size="sm"
               variant="light"
               className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
-              onPress={() => handleStepSpectrumZoom('out')}
-              isDisabled={!canZoomOut}
+              onPress={() => handleInvokeSpectrumControl('zoom-step', 'out')}
+              isDisabled={!spectrumZoomOutControl?.enabled}
               title={t('spectrum.zoomOut')}
             >
               <MinusIcon className="w-2.5 h-2.5" />
@@ -963,15 +1071,15 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               size="sm"
               variant="light"
               className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
-              onPress={() => handleStepSpectrumZoom('in')}
-              isDisabled={!canZoomIn}
+              onPress={() => handleInvokeSpectrumControl('zoom-step', 'in')}
+              isDisabled={!spectrumZoomInControl?.enabled}
               title={t('spectrum.zoomIn')}
             >
               <PlusIcon className="w-2.5 h-2.5" />
             </Button>
           </>
         )}
-        {shouldShowOpenWebRXZoomControls && (
+        {effectiveShowOpenWebRXZoomControls && (
           <>
             <Button
               isIconOnly
@@ -979,7 +1087,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               variant="light"
               className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
               onPress={() => handleStepOpenWebRXZoom('out')}
-              isDisabled={!canOpenWebRXZoomOut}
+              isDisabled={!viewportZoomOutControl?.enabled || !canOpenWebRXZoomOut}
               title={t('spectrum.zoomOut')}
             >
               <MinusIcon className="w-2.5 h-2.5" />
@@ -990,7 +1098,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               variant="light"
               className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
               onPress={() => handleStepOpenWebRXZoom('in')}
-              isDisabled={!canOpenWebRXZoomIn}
+              isDisabled={!viewportZoomInControl?.enabled || !canOpenWebRXZoomIn}
               title={t('spectrum.zoomIn')}
             >
               <PlusIcon className="w-2.5 h-2.5" />
@@ -1032,7 +1140,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
         <div className="text-default-400">{t('spectrum.waiting')}</div>
         {shouldShowSourceTabs && selectedKind && (
-          <div className="absolute top-1 left-1 z-20">
+          <div className="absolute top-1 left-1 z-20" style={topLeftOverlayStyle}>
             <Tabs
               size="sm"
               selectedKey={selectedKind}
@@ -1078,8 +1186,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   return (
     <div
       className={`relative ${className}`}
-      onWheel={isOpenWebRXSdrSelected ? handleOpenWebRXWheel : undefined}
-      onMouseDown={isOpenWebRXSdrSelected ? handleOpenWebRXMouseDown : undefined}
+      onWheel={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportZoom ? handleOpenWebRXWheel : undefined}
+      onMouseDown={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportPan ? handleOpenWebRXMouseDown : undefined}
     >
       <WebGLWaterfall
         data={waterfallData.spectrumData}
@@ -1093,26 +1201,34 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         frequencyRangeMode={frequencyRangeMode}
         referenceFrequencyHz={spectrumReferenceFrequency}
         basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
-        interactionFrequencyMode={isVoiceMode && isRadioSdrSelected ? 'absolute' : 'baseband'}
+        interactionFrequencyMode={
+          isVoiceMode && isRadioSdrSelected
+            ? 'absolute'
+            : 'baseband'
+        }
         txBandOverlays={voiceBandOverlay}
         rxFrequencies={
           isOpenWebRXSdrSelected
             ? openWebRXRxFrequencies
-            : (showMarkers && !isVoiceMode ? rxFrequencies : [])
+            : (showMarkers && showRxMarkers && !isVoiceMode ? rxFrequencies : [])
         }
         txFrequencies={
           isOpenWebRXSdrSelected
             ? openWebRXTxFrequencies
-            : (showMarkers && !isVoiceMode ? txFrequencies : [])
+            : (showMarkers && showTxMarkers && !isVoiceMode ? txFrequencies : [])
         }
-        onTxFrequencyChange={showMarkers && !isVoiceMode && !isOpenWebRXSdrSelected ? handleTxFrequencyChange : undefined}
+        onTxFrequencyChange={
+          showMarkers && canDragTxMarker && !isVoiceMode
+            ? handleTxFrequencyChange
+            : undefined
+        }
         onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleVoiceFrequencyChange(frequency) : undefined}
         onRightClickSetFrequency={
           isOpenWebRXSdrSelected
-            ? undefined
+            ? (isOpenWebRXDetailMode ? handleRightClickSetFrequency : undefined)
             : isVoiceMode && isRadioSdrSelected
             ? (voiceOverlayIsInteractive ? (frequency) => void handleVoiceFrequencyChange(frequency) : undefined)
-            : (showMarkers ? handleRightClickSetFrequency : undefined)
+            : (showMarkers && canRightClickSetFrequency ? handleRightClickSetFrequency : undefined)
         }
         onActualRangeChange={setActualRange}
         hoverFrequency={effectiveHoverFrequency}
@@ -1121,7 +1237,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       />
 
       {shouldShowSourceTabs && selectedKind && (
-        <div className="absolute top-1 left-1 z-20">
+        <div className="absolute top-1 left-1 z-20" style={topLeftOverlayStyle}>
           <Tabs
             size="sm"
             selectedKey={selectedKind}

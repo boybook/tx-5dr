@@ -127,21 +127,59 @@ export function createOpenWebRXSpectrumFrame(
   spectrumFrame: OpenWebRXSpectrumFrame,
   profileId: string | null
 ): SpectrumFrame | null {
-  const { centerFreq, sampleRate, bins } = spectrumFrame;
-  if (!centerFreq || !sampleRate || bins.length === 0) {
+  const { centerFreq, sampleRate, bins, absoluteRange, isSecondary, lowCut, highCut, ifSampleRate } = spectrumFrame;
+  if (bins.length === 0) {
     return null;
   }
 
   const resampledPixels = resampleBins(bins, SPECTRUM_DISPLAY_BIN_COUNT);
-  const halfSpan = sampleRate / 2;
+  const detailRange = isSecondary
+    ? (
+        typeof lowCut === 'number'
+        && typeof highCut === 'number'
+        && Number.isFinite(lowCut)
+        && Number.isFinite(highCut)
+        && highCut > lowCut
+          ? {
+              min: lowCut,
+              max: highCut,
+            }
+          : (
+              typeof ifSampleRate === 'number'
+              && Number.isFinite(ifSampleRate)
+              && ifSampleRate > 0
+                ? {
+                    min: 0,
+                    max: ifSampleRate,
+                  }
+                : null
+            )
+      )
+    : null;
+  const derivedRange = detailRange ?? (
+    absoluteRange ?? (
+      centerFreq && sampleRate
+        ? {
+            min: centerFreq - sampleRate / 2,
+            max: centerFreq + sampleRate / 2,
+          }
+        : null
+    )
+  );
+
+  if (!derivedRange) {
+    return null;
+  }
+
+  const spanHz = derivedRange.max - derivedRange.min;
+  const derivedCenterFrequency = isSecondary
+    ? (derivedRange.min + derivedRange.max) / 2
+    : (centerFreq ?? (derivedRange.min + derivedRange.max) / 2);
 
   return normalizeSpectrumFrame({
     timestamp: spectrumFrame.timestamp || Date.now(),
     kind: 'openwebrx-sdr',
-    frequencyRange: {
-      min: centerFreq - halfSpan,
-      max: centerFreq + halfSpan,
-    },
+    frequencyRange: derivedRange,
     binaryData: {
       data: resampledPixels,
       scale: 1,
@@ -150,8 +188,8 @@ export function createOpenWebRXSpectrumFrame(
     meta: {
       sourceBinCount: bins.length,
       displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-      centerFrequency: centerFreq,
-      spanHz: sampleRate,
+      centerFrequency: derivedCenterFrequency,
+      spanHz,
       profileId,
       radioModel: 'OpenWebRX',
     },

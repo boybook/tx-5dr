@@ -496,7 +496,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       const modeInfo = await this.connection.getMode();
-      logger.debug(`Mode read: ${modeInfo.mode}`);
+      // logger.debug(`Mode read: ${modeInfo.mode}`);
       return modeInfo;
     } catch (error) {
       this.handleConnectionError(error as Error);

@@ -31,12 +31,6 @@ export type {
   ModeDescriptor
 } from './schema/mode.schema.js';
 
-export type {
-  SpectrumZoomDirection,
-  SpectrumZoomLevel,
-  SpectrumZoomState,
-} from './schema/spectrum.schema.js';
-
 export {
   WSMessageType
 } from './schema/websocket.schema.js';

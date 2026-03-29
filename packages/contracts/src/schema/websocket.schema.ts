@@ -9,7 +9,7 @@ import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.s
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
 import { CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
-import { DigitalSpectrumWindowStateSchema, SpectrumCapabilitiesSchema, SpectrumDisplayStateSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumZoomDirectionSchema, SpectrumZoomStateSchema } from './spectrum.schema.js';
+import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -32,11 +32,8 @@ export enum WSMessageType {
   SPECTRUM_CAPABILITIES = 'spectrumCapabilities',
   SUBSCRIBE_SPECTRUM = 'subscribeSpectrum',
   SPECTRUM_FRAME = 'spectrumFrame',
-  SPECTRUM_ZOOM_STATE_CHANGED = 'spectrumZoomStateChanged',
-  SPECTRUM_DISPLAY_STATE_CHANGED = 'spectrumDisplayStateChanged',
-  STEP_SPECTRUM_ZOOM = 'stepSpectrumZoom',
-  DIGITAL_SPECTRUM_WINDOW_STATE_CHANGED = 'digitalSpectrumWindowStateChanged',
-  TOGGLE_DIGITAL_SPECTRUM_WINDOW = 'toggleDigitalSpectrumWindow',
+  SPECTRUM_SESSION_STATE_CHANGED = 'spectrumSessionStateChanged',
+  INVOKE_SPECTRUM_CONTROL = 'invokeSpectrumControl',
   DECODE_ERROR = 'decodeError',
   SYSTEM_STATUS = 'systemStatus',
   CLIENT_COUNT_CHANGED = 'clientCountChanged',
@@ -81,8 +78,6 @@ export enum WSMessageType {
 
   // ===== 频率管理 =====
   FREQUENCY_CHANGED = 'frequencyChanged',
-  RADIO_VIEW_STATE_CHANGED = 'radioViewStateChanged',
-
   // ===== PTT状态管理 =====
   PTT_STATUS_CHANGED = 'pttStatusChanged',
   FORCE_STOP_TRANSMISSION = 'forceStopTransmission',
@@ -196,14 +191,11 @@ export const FrequencyStateSchema = z.object({
   source: z.enum(['program', 'radio']).optional(),
 });
 
-export const RadioViewStateSchema = z.object({
-  frequency: z.number().nullable(),
-  radioMode: z.string().nullable(),
-  bandwidthLabel: z.string().nullable(),
-  occupiedBandwidthHz: z.number().nullable(),
-  offsetModel: z.enum(['upper', 'lower', 'symmetric']).nullable(),
+export const SpectrumControlInvocationSchema = z.object({
+  id: SpectrumSessionControlIdSchema,
+  action: SpectrumSessionControlActionSchema,
 });
-export type RadioViewState = z.infer<typeof RadioViewStateSchema>;
+export type SpectrumControlInvocation = z.infer<typeof SpectrumControlInvocationSchema>;
 
 // PTT状态数据结构
 export const PTTStatusSchema = z.object({
@@ -345,31 +337,14 @@ export const WSSpectrumFrameMessageSchema = WSBaseMessageSchema.extend({
   data: SpectrumFrameSchema,
 });
 
-export const WSSpectrumZoomStateChangedMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.SPECTRUM_ZOOM_STATE_CHANGED),
-  data: SpectrumZoomStateSchema,
+export const WSSpectrumSessionStateChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SPECTRUM_SESSION_STATE_CHANGED),
+  data: SpectrumSessionStateSchema,
 });
 
-export const WSSpectrumDisplayStateChangedMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.SPECTRUM_DISPLAY_STATE_CHANGED),
-  data: SpectrumDisplayStateSchema,
-});
-
-export const WSStepSpectrumZoomMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.STEP_SPECTRUM_ZOOM),
-  data: z.object({
-    direction: SpectrumZoomDirectionSchema,
-  }),
-});
-
-export const WSDigitalSpectrumWindowStateChangedMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.DIGITAL_SPECTRUM_WINDOW_STATE_CHANGED),
-  data: DigitalSpectrumWindowStateSchema,
-});
-
-export const WSToggleDigitalSpectrumWindowMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.TOGGLE_DIGITAL_SPECTRUM_WINDOW),
-  data: z.object({}).optional(),
+export const WSInvokeSpectrumControlMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.INVOKE_SPECTRUM_CONTROL),
+  data: SpectrumControlInvocationSchema,
 });
 
 export const WSDecodeErrorMessageSchema = WSBaseMessageSchema.extend({
@@ -802,19 +777,12 @@ export const WSFrequencyChangedMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSFrequencyChangedMessage = z.infer<typeof WSFrequencyChangedMessageSchema>;
 
-export const WSRadioViewStateChangedMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.RADIO_VIEW_STATE_CHANGED),
-  data: RadioViewStateSchema,
+export const WSSpectrumSessionStateChangedOutboundMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SPECTRUM_SESSION_STATE_CHANGED),
+  data: SpectrumSessionStateSchema,
 });
 
-export type WSRadioViewStateChangedMessage = z.infer<typeof WSRadioViewStateChangedMessageSchema>;
-
-export const WSSpectrumDisplayStateChangedOutboundMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.SPECTRUM_DISPLAY_STATE_CHANGED),
-  data: SpectrumDisplayStateSchema,
-});
-
-export type WSSpectrumDisplayStateChangedOutboundMessage = z.infer<typeof WSSpectrumDisplayStateChangedOutboundMessageSchema>;
+export type WSSpectrumSessionStateChangedOutboundMessage = z.infer<typeof WSSpectrumSessionStateChangedOutboundMessageSchema>;
 
 /**
  * PTT状态变化消息（服务端到客户端）
@@ -1051,11 +1019,8 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSpectrumCapabilitiesMessageSchema,
   WSSubscribeSpectrumMessageSchema,
   WSSpectrumFrameMessageSchema,
-  WSSpectrumZoomStateChangedMessageSchema,
-  WSSpectrumDisplayStateChangedMessageSchema,
-  WSStepSpectrumZoomMessageSchema,
-  WSDigitalSpectrumWindowStateChangedMessageSchema,
-  WSToggleDigitalSpectrumWindowMessageSchema,
+  WSSpectrumSessionStateChangedMessageSchema,
+  WSInvokeSpectrumControlMessageSchema,
   WSDecodeErrorMessageSchema,
   WSSystemStatusMessageSchema,
   WSClientCountChangedMessageSchema,
@@ -1103,7 +1068,6 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 频率管理消息
   WSFrequencyChangedMessageSchema,
-  WSRadioViewStateChangedMessageSchema,
 
   // PTT状态管理消息
   WSPTTStatusChangedMessageSchema,
@@ -1145,11 +1109,8 @@ export type WSSlotPackUpdatedMessage = z.infer<typeof WSSlotPackUpdatedMessageSc
 export type WSSpectrumCapabilitiesMessage = z.infer<typeof WSSpectrumCapabilitiesMessageSchema>;
 export type WSSubscribeSpectrumMessage = z.infer<typeof WSSubscribeSpectrumMessageSchema>;
 export type WSSpectrumFrameMessage = z.infer<typeof WSSpectrumFrameMessageSchema>;
-export type WSSpectrumZoomStateChangedMessage = z.infer<typeof WSSpectrumZoomStateChangedMessageSchema>;
-export type WSSpectrumDisplayStateChangedMessage = z.infer<typeof WSSpectrumDisplayStateChangedMessageSchema>;
-export type WSStepSpectrumZoomMessage = z.infer<typeof WSStepSpectrumZoomMessageSchema>;
-export type WSDigitalSpectrumWindowStateChangedMessage = z.infer<typeof WSDigitalSpectrumWindowStateChangedMessageSchema>;
-export type WSToggleDigitalSpectrumWindowMessage = z.infer<typeof WSToggleDigitalSpectrumWindowMessageSchema>;
+export type WSSpectrumSessionStateChangedMessage = z.infer<typeof WSSpectrumSessionStateChangedMessageSchema>;
+export type WSInvokeSpectrumControlMessage = z.infer<typeof WSInvokeSpectrumControlMessageSchema>;
 export type WSDecodeErrorMessage = z.infer<typeof WSDecodeErrorMessageSchema>;
 export type WSSystemStatusMessage = z.infer<typeof WSSystemStatusMessageSchema>;
 export type WSClientCountChangedMessage = z.infer<typeof WSClientCountChangedMessageSchema>;
@@ -1200,8 +1161,7 @@ export interface DigitalRadioEngineEvents {
   slotPackUpdated: (slotPack: z.infer<typeof SlotPackSchema>) => void;
   spectrumCapabilities: (data: z.infer<typeof SpectrumCapabilitiesSchema>) => void;
   spectrumFrame: (data: z.infer<typeof SpectrumFrameSchema>) => void;
-  spectrumZoomStateChanged: (data: z.infer<typeof SpectrumZoomStateSchema>) => void;
-  digitalSpectrumWindowStateChanged: (data: z.infer<typeof DigitalSpectrumWindowStateSchema>) => void;
+  spectrumSessionStateChanged: (data: z.infer<typeof SpectrumSessionStateSchema>) => void;
 
   // 发射相关事件
   requestTransmit: (request: TransmitRequest) => void;
@@ -1234,8 +1194,6 @@ export interface DigitalRadioEngineEvents {
 
   // 频率控制事件
   frequencyChanged: (data: FrequencyState) => void;
-  radioViewStateChanged: (data: RadioViewState) => void;
-  spectrumDisplayStateChanged: (data: import('./spectrum.schema.js').SpectrumDisplayState) => void;
 
   // PTT状态控制事件
   pttStatusChanged: (data: PTTStatus) => void;

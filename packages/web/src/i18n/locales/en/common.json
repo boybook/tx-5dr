@@ -137,7 +137,11 @@
     "digitalWindowFixedLabel": "FIX",
     "digitalWindowEnable": "Switch to a fixed view and lock to the most suitable 5 kHz digital window",
     "digitalWindowDisable": "Currently fixed to the 5 kHz digital window. Click to return to follow view",
-    "digitalWindowPending": "Switching the digital spectrum window"
+    "digitalWindowPending": "Switching the digital spectrum window",
+    "openwebrxDetailInactiveLabel": "FULL",
+    "openwebrxDetailActiveLabel": "DET",
+    "openwebrxDetailEnable": "Switch to the OpenWebRX digital detail spectrum view",
+    "openwebrxDetailDisable": "Currently in the OpenWebRX digital detail spectrum view. Click to return to the full spectrum"
   },
   "splitLayout": {
     "decode": "Decode",
