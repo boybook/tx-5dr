@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useRef, useMemo, useCallback, ReactNode } from 'react';
 import { addToast } from '@heroui/toast';
 import { createLogger } from '../utils/logger';
 import type {
@@ -666,6 +666,51 @@ const LogbookContext = createContext<{
   dispatch: React.Dispatch<LogbookAction>;
 } | undefined>(undefined);
 
+const OperatorsContext = createContext<{
+  operators: OperatorStatus[];
+  currentOperatorId: string | null;
+  setCurrentOperatorId: (operatorId: string) => void;
+} | undefined>(undefined);
+
+const ProfilesContext = createContext<{
+  profiles: RadioProfile[];
+  activeProfileId: string | null;
+  profilesLoaded: boolean;
+} | undefined>(undefined);
+
+const RadioConnectionContext = createContext<{
+  radioConnected: boolean;
+  radioConnectionStatus: RadioConnectionStatus;
+  radioInfo: RadioInfo | null;
+  radioConfig: HamlibConfig;
+  reconnectProgress: ReconnectProgress | null;
+  radioConnectionHealth: { connectionHealthy: boolean } | null;
+} | undefined>(undefined);
+
+const RadioModeContext = createContext<{
+  isDecoding: boolean;
+  currentMode: ModeDescriptor | null;
+  engineMode: EngineMode;
+  currentRadioMode: string | null;
+  currentRadioFrequency: number | null;
+  spectrumSessionState: SpectrumSessionState | null;
+} | undefined>(undefined);
+
+const PTTContext = createContext<{
+  pttStatus: RadioState['pttStatus'];
+  voicePttLock: VoicePTTLock | null;
+} | undefined>(undefined);
+
+const StationInfoContext = createContext<StationInfo | null>(null);
+
+const RadioErrorsContext = createContext<{
+  errors: RadioErrorRecord[];
+  latestError: RadioErrorRecord | null;
+  clearErrors: () => void;
+} | undefined>(undefined);
+
+const CapabilityStatesContext = createContext<Map<string, CapabilityState> | undefined>(undefined);
+
 // Provider组件
 export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [connectionState, connectionDispatch] = useReducer(connectionReducer, initialConnectionState);
@@ -1329,15 +1374,123 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     pendingDefaultOpenWebRXDetailProfileRef.current = null;
   };
 
+  const setCurrentOperatorId = useCallback((operatorId: string) => {
+    radioDispatch({ type: 'setCurrentOperator', payload: operatorId });
+  }, []);
+
+  const clearRadioErrors = useCallback(() => {
+    radioDispatch({ type: 'clearRadioErrors' });
+  }, []);
+
+  const connectionContextValue = useMemo(() => ({
+    state: connectionState,
+    dispatch: connectionDispatch,
+  }), [connectionState]);
+
+  const radioStateContextValue = useMemo(() => ({
+    state: radioState,
+    dispatch: radioDispatch,
+    markSpectrumSelectionManual,
+  }), [radioState]);
+
+  const slotPacksContextValue = useMemo(() => ({
+    state: slotPacksState,
+    dispatch: slotPacksDispatch,
+  }), [slotPacksState]);
+
+  const logbookContextValue = useMemo(() => ({
+    state: logbookState,
+    dispatch: logbookDispatch,
+  }), [logbookState]);
+
+  const operatorsContextValue = useMemo(() => ({
+    operators: radioState.operators,
+    currentOperatorId: radioState.currentOperatorId,
+    setCurrentOperatorId,
+  }), [radioState.operators, radioState.currentOperatorId, setCurrentOperatorId]);
+
+  const profilesContextValue = useMemo(() => ({
+    profiles: radioState.profiles,
+    activeProfileId: radioState.activeProfileId,
+    profilesLoaded: radioState.profilesLoaded,
+  }), [radioState.profiles, radioState.activeProfileId, radioState.profilesLoaded]);
+
+  const radioConnectionContextValue = useMemo(() => ({
+    radioConnected: radioState.radioConnected,
+    radioConnectionStatus: radioState.radioConnectionStatus,
+    radioInfo: radioState.radioInfo,
+    radioConfig: radioState.radioConfig,
+    reconnectProgress: radioState.reconnectProgress,
+    radioConnectionHealth: radioState.radioConnectionHealth,
+  }), [
+    radioState.radioConnected,
+    radioState.radioConnectionStatus,
+    radioState.radioInfo,
+    radioState.radioConfig,
+    radioState.reconnectProgress,
+    radioState.radioConnectionHealth,
+  ]);
+
+  const radioModeContextValue = useMemo(() => ({
+    isDecoding: radioState.isDecoding,
+    currentMode: radioState.currentMode,
+    engineMode: radioState.engineMode,
+    currentRadioMode: radioState.currentRadioMode,
+    currentRadioFrequency: radioState.currentRadioFrequency,
+    spectrumSessionState: radioState.spectrumSessionState,
+  }), [
+    radioState.isDecoding,
+    radioState.currentMode,
+    radioState.engineMode,
+    radioState.currentRadioMode,
+    radioState.currentRadioFrequency,
+    radioState.spectrumSessionState,
+  ]);
+
+  const pttContextValue = useMemo(() => ({
+    pttStatus: radioState.pttStatus,
+    voicePttLock: radioState.voicePttLock,
+  }), [radioState.pttStatus, radioState.voicePttLock]);
+
+  const radioErrorsContextValue = useMemo(() => ({
+    errors: radioState.radioErrors,
+    latestError: radioState.latestRadioError,
+    clearErrors: clearRadioErrors,
+  }), [radioState.radioErrors, radioState.latestRadioError, clearRadioErrors]);
+
   return React.createElement(
-    ConnectionContext.Provider, { value: { state: connectionState, dispatch: connectionDispatch } },
+    ConnectionContext.Provider, { value: connectionContextValue },
     React.createElement(
-      RadioStateContext.Provider, { value: { state: radioState, dispatch: radioDispatch, markSpectrumSelectionManual } },
+      RadioStateContext.Provider, { value: radioStateContextValue },
       React.createElement(
-        SlotPacksContext.Provider, { value: { state: slotPacksState, dispatch: slotPacksDispatch } },
+        SlotPacksContext.Provider, { value: slotPacksContextValue },
         React.createElement(
-          LogbookContext.Provider, { value: { state: logbookState, dispatch: logbookDispatch } },
-          children
+          LogbookContext.Provider, { value: logbookContextValue },
+          React.createElement(
+            OperatorsContext.Provider, { value: operatorsContextValue },
+            React.createElement(
+              ProfilesContext.Provider, { value: profilesContextValue },
+              React.createElement(
+                RadioConnectionContext.Provider, { value: radioConnectionContextValue },
+                React.createElement(
+                  RadioModeContext.Provider, { value: radioModeContextValue },
+                  React.createElement(
+                    PTTContext.Provider, { value: pttContextValue },
+                    React.createElement(
+                      StationInfoContext.Provider, { value: radioState.stationInfo },
+                      React.createElement(
+                        RadioErrorsContext.Provider, { value: radioErrorsContextValue },
+                        React.createElement(
+                          CapabilityStatesContext.Provider, { value: radioState.capabilityStates },
+                          children
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
         )
       )
     )
@@ -1390,19 +1543,19 @@ export const useSlotPacks = () => {
 };
 
 export const useOperators = () => {
-  const { state } = useRadioState();
+  const context = useContext(OperatorsContext);
+  if (!context) throw new Error('useOperators must be used within RadioProvider');
   return {
-    operators: state.operators || [],
+    operators: context.operators || [],
   };
 };
 
 export const useCurrentOperatorId = () => {
-  const { state, dispatch } = useRadioState();
+  const context = useContext(OperatorsContext);
+  if (!context) throw new Error('useCurrentOperatorId must be used within RadioProvider');
   return {
-    currentOperatorId: state.currentOperatorId || state.operators?.[0]?.id,
-    setCurrentOperatorId: (operatorId: string) => {
-      dispatch({ type: 'setCurrentOperator', payload: operatorId });
-    }
+    currentOperatorId: context.currentOperatorId || context.operators?.[0]?.id,
+    setCurrentOperatorId: context.setCurrentOperatorId,
   };
 };
 
@@ -1424,19 +1577,37 @@ export const useLogbook = () => {
 };
 
 export const useProfiles = () => {
-  const { state } = useRadioState();
-  const activeProfile = state.profiles.find(p => p.id === state.activeProfileId) ?? null;
+  const context = useContext(ProfilesContext);
+  if (!context) throw new Error('useProfiles must be used within RadioProvider');
+  const activeProfile = context.profiles.find(p => p.id === context.activeProfileId) ?? null;
   return {
-    profiles: state.profiles,
-    activeProfileId: state.activeProfileId,
+    profiles: context.profiles,
+    activeProfileId: context.activeProfileId,
     activeProfile,
-    profilesLoaded: state.profilesLoaded,
+    profilesLoaded: context.profilesLoaded,
   };
 };
 
 export const useStationInfo = () => {
-  const { state } = useRadioState();
-  return state.stationInfo;
+  return useContext(StationInfoContext);
+};
+
+export const useRadioConnectionState = () => {
+  const context = useContext(RadioConnectionContext);
+  if (!context) throw new Error('useRadioConnectionState must be used within RadioProvider');
+  return context;
+};
+
+export const useRadioModeState = () => {
+  const context = useContext(RadioModeContext);
+  if (!context) throw new Error('useRadioModeState must be used within RadioProvider');
+  return context;
+};
+
+export const usePTTState = () => {
+  const context = useContext(PTTContext);
+  if (!context) throw new Error('usePTTState must be used within RadioProvider');
+  return context;
 };
 
 export const useSpectrum = () => {
@@ -1456,12 +1627,9 @@ export const useSpectrum = () => {
 };
 
 export const useRadioErrors = () => {
-  const { state, dispatch } = useRadioState();
-  return {
-    errors: state.radioErrors,
-    latestError: state.latestRadioError,
-    clearErrors: () => dispatch({ type: 'clearRadioErrors' }),
-  };
+  const context = useContext(RadioErrorsContext);
+  if (!context) throw new Error('useRadioErrors must be used within RadioProvider');
+  return context;
 };
 
 // ===== 统一能力系统 Hooks =====
@@ -1471,14 +1639,16 @@ export const useRadioErrors = () => {
  * @param id - 能力 ID，如 'tuner_switch', 'rf_power'
  */
 export const useCapabilityState = (id: string): CapabilityState | undefined => {
-  const { state } = useRadioState();
-  return state.capabilityStates.get(id);
+  const context = useContext(CapabilityStatesContext);
+  if (!context) throw new Error('useCapabilityState must be used within RadioProvider');
+  return context.get(id);
 };
 
 /**
  * 获取所有能力的状态 Map
  */
 export const useCapabilityStates = (): Map<string, CapabilityState> => {
-  const { state } = useRadioState();
-  return state.capabilityStates;
+  const context = useContext(CapabilityStatesContext);
+  if (!context) throw new Error('useCapabilityStates must be used within RadioProvider');
+  return context;
 };

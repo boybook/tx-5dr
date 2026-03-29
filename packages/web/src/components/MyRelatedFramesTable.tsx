@@ -4,7 +4,7 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('MyRelatedFramesTable');
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo } from '@tx5dr/core';
-import { useSlotPacks, useRadioState, useConnection, useCurrentOperatorId } from '../store/radioStore';
+import { useSlotPacks, useOperators, useRadioModeState, useConnection, useCurrentOperatorId } from '../store/radioStore';
 import { FrameMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
@@ -26,7 +26,8 @@ interface TransmissionLog {
 export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ className = '' }) => {
   const { t } = useTranslation('common');
   const slotPacks = useSlotPacks();
-  const radio = useRadioState();
+  const { operators } = useOperators();
+  const { currentMode } = useRadioModeState();
   const connection = useConnection();
   const { currentOperatorId } = useCurrentOperatorId();
   const [myFrameGroups, setMyFrameGroups] = useState<FrameGroup[]>([]);
@@ -114,7 +115,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
 
   // 获取所有启用的操作员信息
   const getEnabledOperators = () => {
-    return radio.state.operators.filter(op => op.isActive);
+    return operators.filter(op => op.isActive);
   };
 
   // 获取所有启用操作员的呼号列表
@@ -144,7 +145,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
   // 获取当前操作员的目标呼号
   const getCurrentOperatorTargetCallsign = (): string => {
     if (!currentOperatorId) return '';
-    const currentOperator = radio.state.operators.find(op => op.id === currentOperatorId);
+    const currentOperator = operators.find(op => op.id === currentOperatorId);
     return currentOperator?.context?.targetCall || '';
   };
 
@@ -160,7 +161,6 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
 
   // 获取当前时隙的组键
   const getCurrentSlotGroupKey = (): string | null => {
-    const currentMode = radio.state.currentMode;
     if (!currentMode) return null;
     
     const now = Date.now();
@@ -198,8 +198,6 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     const targetCallsigns = getCurrentTargetCallsigns();
     const operators = getCurrentOperators();
     const myTransmitCycles = getCurrentTransmitCycles();
-    const currentMode = radio.state.currentMode;
-    
     if (!currentMode) {
       return;
     }
@@ -383,7 +381,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       .sort((a, b) => a.startMs - b.startMs);
 
     setMyFrameGroups(allGroups);
-  }, [slotPacks.state.slotPacks, transmissionLogs, radio.state.operators, radio.state.currentMode, frozenFrameGroups, recentSlotGroupKeys]);
+  }, [slotPacks.state.slotPacks, transmissionLogs, operators, currentMode, frozenFrameGroups, recentSlotGroupKeys]);
 
   // 清空我的通联数据
   const _handleClearMyData = () => {

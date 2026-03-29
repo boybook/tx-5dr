@@ -52,6 +52,7 @@ export interface PresetMarker {
 
 interface WebGLWaterfallProps {
   data: number[][];
+  frameToken?: string | number | null;
   frequencies: number[];
   className?: string;
   height?: number;
@@ -87,6 +88,7 @@ const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
 
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   data,
+  frameToken = null,
   frequencies,
   className = '',
   height = 200,
@@ -190,6 +192,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const scrollAnimRef = useRef<number>();
   const lastDataTimeRef = useRef(0);
   const frameIntervalRef = useRef(100);
+  const lastAnimatedFrameTokenRef = useRef<string | number | null>(null);
 
   const resetAutoRangeState = useCallback(() => {
     rangeUpdateCounterRef.current = 0;
@@ -856,6 +859,20 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     // 上传纹理（每帧只做一次）
     updateTexture(data);
 
+    const shouldAnimateScroll = frameToken !== null && frameToken !== lastAnimatedFrameTokenRef.current;
+    lastAnimatedFrameTokenRef.current = frameToken;
+
+    if (!shouldAnimateScroll) {
+      const gl = glRef.current;
+      const program = programRef.current;
+      if (gl && program && !gl.isContextLost()) {
+        gl.useProgram(program);
+        gl.uniform1f(scrollOffsetLocationRef.current, 0.0);
+        render();
+      }
+      return;
+    }
+
     // 帧间隔估算（EMA α=0.3，cap 500ms）
     const now = performance.now();
     if (lastDataTimeRef.current > 0) {
@@ -905,7 +922,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return () => {
       if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
     };
-  }, [data, updateTexture, render, totalRows]);
+  }, [data, frameToken, updateTexture, render, totalRows]);
 
   useEffect(() => {
     if (data.length === 0) {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useConnection, useRadioState } from '../../store/radioStore';
+import { useConnection, useRadioModeState, usePTTState } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
@@ -20,7 +20,8 @@ type PTTState = 'idle' | 'requesting' | 'transmitting' | 'locked-by-other';
 export const VoicePTTButton: React.FC = () => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
-  const radio = useRadioState();
+  const radioMode = useRadioModeState();
+  const { voicePttLock } = usePTTState();
   const isOperator = useHasMinRole(UserRole.OPERATOR);
 
   const [pttState, setPttState] = useState<PTTState>('idle');
@@ -29,7 +30,6 @@ export const VoicePTTButton: React.FC = () => {
   const isPttDownRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const voicePttLock = radio.state.voicePttLock;
   const radioService = connection.state.radioService;
 
   // Derive PTT state from voice lock state
@@ -52,7 +52,7 @@ export const VoicePTTButton: React.FC = () => {
 
   // Initialize voice capture when in voice mode
   useEffect(() => {
-    if (!radioService || radio.state.engineMode !== 'voice') {
+    if (!radioService || radioMode.engineMode !== 'voice') {
       return;
     }
 
@@ -80,7 +80,7 @@ export const VoicePTTButton: React.FC = () => {
       capture.stop();
       voiceCaptureRef.current = null;
     };
-  }, [radioService, radio.state.engineMode]);
+  }, [radioService, radioMode.engineMode]);
 
   // Request WakeLock during TX
   const acquireWakeLock = useCallback(async () => {

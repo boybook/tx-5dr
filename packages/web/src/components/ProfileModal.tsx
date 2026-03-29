@@ -21,7 +21,7 @@ import { Reorder } from 'framer-motion';
 import { api } from '@tx5dr/core';
 import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
-import { useProfiles, useRadioState } from '../store/radioStore';
+import { useProfiles, useRadioConnectionState } from '../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 
@@ -35,7 +35,7 @@ type ModalMode = 'list' | 'create' | 'edit';
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const { t } = useTranslation('radio');
   const { profiles, activeProfileId } = useProfiles();
-  const radio = useRadioState();
+  const radioConnection = useRadioConnectionState();
   const [mode, setMode] = useState<ModalMode>('list');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [isActivating, setIsActivating] = useState(false);
@@ -114,7 +114,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   // 获取指示器颜色：绿色=激活已连接，蓝色=激活未连接，灰色=非激活
   const getIndicatorColor = (profileId: string) => {
     if (profileId !== activeProfileId) return 'bg-default-200';
-    if (radio.state.radioConnectionStatus === RadioConnectionStatus.CONNECTED) return 'bg-success';
+    if (radioConnection.radioConnectionStatus === RadioConnectionStatus.CONNECTED) return 'bg-success';
     return 'bg-primary';
   };
 
@@ -438,7 +438,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
       size="4xl"
       scrollBehavior="inside"
       placement="center"
-      backdrop="blur"
+      backdrop="opaque"
+      disableAnimation
       classNames={{
         body: "px-4 sm:px-6 py-4 sm:py-5",
         header: "border-b border-divider px-4 sm:px-6 py-3 sm:py-4",

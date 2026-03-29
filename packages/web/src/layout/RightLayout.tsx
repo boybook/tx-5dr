@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   Button,
   Input,
@@ -6,13 +6,10 @@ import {
   PopoverContent,
   PopoverTrigger
 } from '@heroui/react';
-import { useRadioState, useOperators } from '../store/radioStore';
-import { useAuth, useHasMinRole } from '../store/authStore';
-import { UserRole } from '@tx5dr/contracts';
+import { useOperators } from '../store/radioStore';
+import { useAuth } from '../store/authStore';
 import { RadioControl } from '../components/RadioControl';
 import { RadioOperatorList } from '../components/RadioOperatorList';
-import { SettingsModal } from '../components/SettingsModal';
-import { ProfileModal } from '../components/ProfileModal';
 import { MyRelatedFramesTable } from '../components/MyRelatedFramesTable';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -28,15 +25,9 @@ export const RightLayout: React.FC = () => {
     operator: t('common:role.operator'),
     admin: t('common:role.admin'),
   };
-  const _radio = useRadioState();
   const { operators } = useOperators();
   const { state: authState, login, logout } = useAuth();
-  const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'audio' | 'radio' | 'operator' | 'display' | 'system' | 'station_info' | 'frequency_presets' | 'openwebrx'>('radio');
-  const [settingsInitialFrequencyPresetMode, setSettingsInitialFrequencyPresetMode] = useState<string | undefined>(undefined);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
 
@@ -62,47 +53,18 @@ export const RightLayout: React.FC = () => {
 
   // 打开设置弹窗
   const handleOpenSettings = () => {
-    setSettingsInitialTab('radio');
-    setSettingsInitialFrequencyPresetMode(undefined);
-    setIsSettingsOpen(true);
-  };
-
-  // 关闭设置弹窗
-  const handleCloseSettings = () => {
-    setIsSettingsOpen(false);
+    window.dispatchEvent(new CustomEvent('openSettingsModal', { detail: { tab: 'radio' } }));
   };
 
   // 处理创建操作员
   const handleCreateOperator = () => {
-    setSettingsInitialTab('operator');
-    setSettingsInitialFrequencyPresetMode(undefined);
-    setIsSettingsOpen(true);
+    window.dispatchEvent(new CustomEvent('openSettingsModal', { detail: { tab: 'operator' } }));
   };
 
   // 处理打开电台设置（Profile Modal）
   const handleOpenRadioSettings = () => {
-    setIsProfileModalOpen(true);
+    window.dispatchEvent(new Event('openProfileModal'));
   };
-
-  // 监听全局 openProfileModal 事件（来自错误 toast 的"打开设置"按钮）
-  useEffect(() => {
-    const handler = () => setIsProfileModalOpen(true);
-    window.addEventListener('openProfileModal', handler);
-    return () => window.removeEventListener('openProfileModal', handler);
-  }, []);
-
-  // 监听全局 openSettingsModal 事件（携带 tab 参数）
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const tab = (e as CustomEvent).detail?.tab;
-      const frequencyPresetMode = (e as CustomEvent).detail?.frequencyPresetMode;
-      if (tab) setSettingsInitialTab(tab);
-      setSettingsInitialFrequencyPresetMode(typeof frequencyPresetMode === 'string' ? frequencyPresetMode : undefined);
-      setIsSettingsOpen(true);
-    };
-    window.addEventListener('openSettingsModal', handler);
-    return () => window.removeEventListener('openSettingsModal', handler);
-  }, []);
 
   return (
     <div className="h-full flex flex-col">
@@ -247,22 +209,6 @@ export const RightLayout: React.FC = () => {
           <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
         </div>
       </div>
-
-      {/* 设置弹窗 */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={handleCloseSettings}
-        initialTab={settingsInitialTab}
-        initialFrequencyPresetMode={settingsInitialFrequencyPresetMode}
-      />
-
-      {/* Profile 管理弹窗（仅 Admin） */}
-      {isAdmin && (
-        <ProfileModal
-          isOpen={isProfileModalOpen}
-          onClose={() => setIsProfileModalOpen(false)}
-        />
-      )}
     </div>
   );
 };

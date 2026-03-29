@@ -1290,6 +1290,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     >
       <WebGLWaterfall
         data={waterfallData.spectrumData}
+        frameToken={waterfallData.timeLabels[0] ?? null}
         frequencies={waterfallData.frequencies}
         height={height}
         minDb={currentManualRangeSettings.minDb}
