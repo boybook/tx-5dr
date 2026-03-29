@@ -54,7 +54,7 @@ interface WebGLWaterfallProps {
   rxFrequencies?: RxFrequency[];
   txFrequencies?: TxFrequency[];
   txBandOverlays?: TxBandOverlay[];
-  frequencyRangeMode?: 'baseband' | 'absolute-center' | 'absolute-fixed';
+  frequencyRangeMode?: 'baseband' | 'absolute-center' | 'absolute-fixed' | 'absolute-windowed';
   referenceFrequencyHz?: number | null;
   basebandInteractionRange?: BasebandInteractionRange;
   interactionFrequencyMode?: 'baseband' | 'absolute';
@@ -947,6 +947,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   const FREQ_POSITION_OFFSET = 15;
   const isAbsoluteDisplayMode = frequencyRangeMode === 'absolute-center' || frequencyRangeMode === 'absolute-fixed';
+  const isAbsoluteWindowedMode = frequencyRangeMode === 'absolute-windowed';
 
   const clampBasebandFrequency = useCallback((frequency: number) => {
     return Math.round(Math.max(basebandInteractionRange.min, Math.min(basebandInteractionRange.max, frequency)));
@@ -961,6 +962,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   const getDisplayFrequency = useCallback((basebandFrequency: number) => {
     if (!frequencies || frequencies.length === 0) return null;
+    if (isAbsoluteWindowedMode) {
+      return basebandFrequency;
+    }
     if (isAbsoluteDisplayMode) {
       const referenceFrequency = referenceFrequencyHz ?? null;
       if (referenceFrequency === null) {
@@ -969,7 +973,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return referenceFrequency + basebandFrequency;
     }
     return basebandFrequency;
-  }, [frequencies, isAbsoluteDisplayMode, referenceFrequencyHz]);
+  }, [frequencies, isAbsoluteDisplayMode, isAbsoluteWindowedMode, referenceFrequencyHz]);
 
   // 计算频率到位置的百分比
   const getFrequencyPosition = useCallback((displayFrequency: number) => {
@@ -1239,6 +1243,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           if (position === null) {
             return null;
           }
+          const isInteractive = Boolean(onTxFrequencyChange);
           const isDragging = draggingOperatorId === operatorId;
           const showPopover = txFrequencies.length > 1;
           const isHovered = hoveredTxOperatorId === operatorId;
@@ -1246,12 +1251,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           const markerElement = (
             <div
               key={`tx-${operatorId}`}
-              className={`absolute top-0 h-full pointer-events-auto transition-opacity ${isDragging ? 'cursor-grabbing' : 'cursor-grab'} ${showPopover ? 'hover:opacity-80' : ''}`}
+              className={`absolute top-0 h-full pointer-events-auto transition-opacity ${
+                isInteractive ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'
+              } ${showPopover ? 'hover:opacity-80' : ''}`}
               style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
-              onMouseDown={() => {
+              onMouseDown={isInteractive ? () => {
                 setHoveredTxOperatorId(null);
                 handleMouseDown(operatorId);
-              }}
+              } : undefined}
               onMouseEnter={showPopover ? () => setHoveredTxOperatorId(operatorId) : undefined}
               onMouseLeave={showPopover ? () => setHoveredTxOperatorId(null) : undefined}
             >

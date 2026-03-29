@@ -1,6 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import { OpenWebRXClient } from '@openwebrx-js/api';
-import type { ServerConfig, Profile } from '@openwebrx-js/api';
+import type { OpenWebRXSpectrumFrame, ServerConfig, Profile } from '@openwebrx-js/api';
 import type { OpenWebRXStationConfig } from '@tx5dr/contracts';
 import { RingBufferAudioProvider } from '../audio/AudioBufferProvider.js';
 import { createLogger } from '../utils/logger.js';
@@ -16,6 +16,7 @@ const PROFILE_RECLAIM_MAX_RETRIES = 3;
 
 export interface OpenWebRXAudioAdapterEvents {
   'audioData': (samples: Float32Array) => void;
+  'spectrumFrame': (frame: OpenWebRXSpectrumFrame) => void;
   'error': (error: Error) => void;
   'connected': () => void;
   'disconnected': (code: number, reason: string) => void;
@@ -46,11 +47,13 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
   private targetFrequency: number = 0;
   private currentProfileId: string | null = null;
   private currentConfig: ServerConfig | null = null;
+  private latestSpectrumFrame: OpenWebRXSpectrumFrame | null = null;
   private profileReclaimRetries: number = 0;
 
   // Bound event handlers for proper cleanup
   private boundHandleAudio: (pcm: Int16Array) => void;
   private boundHandleConfig: (config: ServerConfig) => void;
+  private boundHandleSpectrum: (frame: OpenWebRXSpectrumFrame) => void;
   private boundHandleError: (err: Error) => void;
   private boundHandleDisconnected: (code: number, reason: string) => void;
   private boundHandleBackoff: (reason: string) => void;
@@ -69,6 +72,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
     // Bind handlers
     this.boundHandleAudio = this.handleAudioFrame.bind(this);
     this.boundHandleConfig = this.handleConfigChange.bind(this);
+    this.boundHandleSpectrum = this.handleSpectrumFrame.bind(this);
     this.boundHandleError = this.handleError.bind(this);
     this.boundHandleDisconnected = this.handleDisconnected.bind(this);
     this.boundHandleBackoff = this.handleBackoff.bind(this);
@@ -85,6 +89,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
 
     // Register event handlers before connecting
     this.client.on('config', this.boundHandleConfig);
+    this.client.on('fft', this.boundHandleSpectrum);
     this.client.on('error', this.boundHandleError);
     this.client.on('disconnected', this.boundHandleDisconnected);
     this.client.on('backoff', this.boundHandleBackoff);
@@ -116,6 +121,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
 
     // Remove event handlers
     this.client.off('config', this.boundHandleConfig);
+    this.client.off('fft', this.boundHandleSpectrum);
     this.client.off('error', this.boundHandleError);
     this.client.off('disconnected', this.boundHandleDisconnected);
     this.client.off('backoff', this.boundHandleBackoff);
@@ -222,6 +228,10 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
    */
   getServerConfig(): ServerConfig | null {
     return this.currentConfig;
+  }
+
+  getLatestSpectrumFrame(): OpenWebRXSpectrumFrame | null {
+    return this.latestSpectrumFrame;
   }
 
   /**
@@ -424,6 +434,11 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
       sampRate: config.samp_rate,
       profileId: serverProfileId,
     });
+  }
+
+  private handleSpectrumFrame(frame: OpenWebRXSpectrumFrame): void {
+    this.latestSpectrumFrame = frame;
+    this.emit('spectrumFrame', frame);
   }
 
   /**

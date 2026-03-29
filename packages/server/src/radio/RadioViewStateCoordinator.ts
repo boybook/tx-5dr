@@ -25,6 +25,12 @@ const EMPTY_STATE: RadioViewState = {
   offsetModel: null,
 };
 
+function normalizeRadioFrequency(frequency: number | null | undefined): number | null {
+  return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0
+    ? frequency
+    : null;
+}
+
 export class RadioViewStateCoordinator extends EventEmitter<RadioViewStateCoordinatorEvents> {
   private currentState: RadioViewState = EMPTY_STATE;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -96,7 +102,7 @@ export class RadioViewStateCoordinator extends EventEmitter<RadioViewStateCoordi
     }
 
     let frequency = overrides?.frequency;
-    if (typeof frequency !== 'number') {
+    if (normalizeRadioFrequency(frequency) === null) {
       try {
         frequency = await radioManager.getFrequency();
       } catch (error) {
@@ -104,6 +110,7 @@ export class RadioViewStateCoordinator extends EventEmitter<RadioViewStateCoordi
         frequency = this.currentState.frequency;
       }
     }
+    frequency = normalizeRadioFrequency(frequency);
 
     let radioMode: string | null = this.currentState.radioMode;
     let bandwidthLabel: string | number | null = this.currentState.bandwidthLabel;
@@ -119,7 +126,7 @@ export class RadioViewStateCoordinator extends EventEmitter<RadioViewStateCoordi
     const normalized = this.normalizeMode(radioMode, bandwidthLabel);
 
     return {
-      frequency: typeof frequency === 'number' ? frequency : null,
+      frequency,
       radioMode,
       bandwidthLabel: this.formatBandwidthLabel(bandwidthLabel),
       occupiedBandwidthHz: normalized.occupiedBandwidthHz,

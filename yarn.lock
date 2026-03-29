@@ -3622,12 +3622,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@openwebrx-js/api@npm:^0.1.2":
-  version: 0.1.2
-  resolution: "@openwebrx-js/api@npm:0.1.2"
+"@openwebrx-js/api@npm:^0.1.5":
+  version: 0.1.5
+  resolution: "@openwebrx-js/api@npm:0.1.5"
   dependencies:
     ws: "npm:^8.16.0"
-  checksum: 10c0/30819ed8103bf6491758664e067266fa6d6ef6eb02a21937d64313c0570e5d165eafaf123da03867d9ff207a919e8cec8ad353b09f64dc42eccdb353a50b0af8
+  checksum: 10c0/123d93a9edb4783e56301eac002fef62fdc4bc83be0516fa4f1b00047e5df911c1ec461c5d70ca8faaf62b6f528c6343df88fee44a95522f9b0bbc2c6c526d5c
   languageName: node
   linkType: hard
 
@@ -6313,7 +6313,7 @@ __metadata:
     "@fastify/cors": "npm:^11.0.1"
     "@fastify/jwt": "npm:^10.0.0"
     "@fastify/websocket": "npm:^11.1.0"
-    "@openwebrx-js/api": "npm:^0.1.2"
+    "@openwebrx-js/api": "npm:^0.1.5"
     "@statelyai/inspect": "npm:^0.4.0"
     "@tx5dr/contracts": "workspace:*"
     "@tx5dr/core": "workspace:*"

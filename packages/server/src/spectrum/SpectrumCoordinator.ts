@@ -8,8 +8,10 @@ import { ConfigManager } from '../config/config-manager.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { createLogger } from '../utils/logger.js';
-import { SPECTRUM_DISPLAY_BIN_COUNT, createHamlibRadioSpectrumFrame, createRadioSpectrumFrame, normalizeSpectrumFrame, resampleBins } from './spectrumUtils.js';
+import { SPECTRUM_DISPLAY_BIN_COUNT, createHamlibRadioSpectrumFrame, createOpenWebRXSpectrumFrame, createRadioSpectrumFrame, normalizeSpectrumFrame, resampleBins } from './spectrumUtils.js';
 import type { IcomScopeFrame } from 'icom-wlan-node';
+import type { OpenWebRXSpectrumFrame } from '@openwebrx-js/api';
+import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 
 const logger = createLogger('SpectrumCoordinator');
 
@@ -33,11 +35,14 @@ interface OfficialSpectrumCapableHamlibConnection extends HamlibConnection {
   stopManagedSpectrum(): Promise<void>;
 }
 
+interface OpenWebRXSpectrumCapableAdapter extends Pick<OpenWebRXAudioAdapter, 'isConnected' | 'getLatestSpectrumFrame' | 'on' | 'off'> {}
+
 export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents> {
   private readonly subscriptions = new Map<string, SpectrumKind | null>();
   private radioStopTimer: NodeJS.Timeout | null = null;
   private currentScopeConnection: ScopeCapableConnection | null = null;
   private currentHamlibScopeConnection: OfficialSpectrumCapableHamlibConnection | null = null;
+  private currentOpenWebRXAdapter: OpenWebRXSpectrumCapableAdapter | null = null;
   private readonly onScopeFrame = (frame: IcomScopeFrame) => {
     const profileId = ConfigManager.getInstance().getActiveProfileId();
     this.emit('frame', createRadioSpectrumFrame(frame, profileId, 'ICOM WLAN'));
@@ -46,17 +51,29 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     const profileId = ConfigManager.getInstance().getActiveProfileId();
     this.emit('frame', createHamlibRadioSpectrumFrame(line, profileId, 'ICOM Serial (Hamlib)'));
   };
+  private readonly onOpenWebRXSpectrumFrame = (frame: OpenWebRXSpectrumFrame) => {
+    if (this.getSubscriberCount('openwebrx-sdr') === 0) {
+      return;
+    }
+
+    const profileId = ConfigManager.getInstance().getActiveProfileId();
+    const normalizedFrame = createOpenWebRXSpectrumFrame(frame, profileId);
+    if (normalizedFrame) {
+      this.emit('frame', normalizedFrame);
+    }
+  };
 
   constructor(private readonly engine: DigitalRadioEngine) {
     super();
 
-    const triggerCapabilitiesRefresh = () => {
+    const handleSourceTopologyChanged = () => {
       void this.emitCapabilitiesChanged();
+      void this.refreshSourceBindings();
     };
 
-    this.engine.on('radioStatusChanged', triggerCapabilitiesRefresh);
-    this.engine.on('profileChanged', triggerCapabilitiesRefresh as never);
-    this.engine.on('profileListUpdated', triggerCapabilitiesRefresh as never);
+    this.engine.on('radioStatusChanged', handleSourceTopologyChanged);
+    this.engine.on('profileChanged', handleSourceTopologyChanged as never);
+    this.engine.on('profileListUpdated', handleSourceTopologyChanged as never);
     this.engine.getSpectrumScheduler().on('spectrumReady', (frame) => {
       if (this.getSubscriberCount('audio') === 0) {
         return;
@@ -71,7 +88,8 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     const profileId = ConfigManager.getInstance().getActiveProfileId();
     const config = this.engine.getRadioManager().getConfig();
     const radioSource = await this.getRadioSourceAvailability();
-    const defaultKind = this.getDefaultSpectrumKind(config.type, radioSource.available);
+    const openWebRXSource = this.getOpenWebRXSourceAvailability();
+    const defaultKind = this.getDefaultSpectrumKind(config.type, radioSource.available, openWebRXSource.available);
     const audioSource: SpectrumSourceAvailability = {
       kind: 'audio',
       supported: true,
@@ -84,11 +102,12 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     };
 
     radioSource.defaultSelected = defaultKind === 'radio-sdr';
+    openWebRXSource.defaultSelected = defaultKind === 'openwebrx-sdr';
 
     return {
       profileId,
       defaultKind,
-      sources: [radioSource, audioSource],
+      sources: [radioSource, openWebRXSource, audioSource],
     };
   }
 
@@ -101,6 +120,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     this.subscriptions.set(connectionId, kind);
     this.updateAudioSubscriptionState();
     await this.updateRadioSubscriptionState();
+    this.updateOpenWebRXSpectrumState();
   }
 
   async removeConnection(connectionId: string): Promise<void> {
@@ -111,6 +131,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     this.subscriptions.delete(connectionId);
     this.updateAudioSubscriptionState();
     await this.updateRadioSubscriptionState();
+    this.updateOpenWebRXSpectrumState();
   }
 
   getConnectionSubscription(connectionId: string): SpectrumKind | null {
@@ -157,6 +178,38 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
       this.radioStopTimer = null;
       void this.stopRadioScope();
     }, RADIO_SOURCE_STOP_DELAY_MS);
+  }
+
+  private updateOpenWebRXSpectrumState(): void {
+    const adapter = this.engine.getOpenWebRXAudioAdapter();
+    const shouldAttach = this.getSubscriberCount('openwebrx-sdr') > 0 && adapter?.isConnected();
+
+    if (!shouldAttach) {
+      if (this.currentOpenWebRXAdapter) {
+        this.currentOpenWebRXAdapter.off('spectrumFrame', this.onOpenWebRXSpectrumFrame);
+        this.currentOpenWebRXAdapter = null;
+      }
+      return;
+    }
+
+    if (this.currentOpenWebRXAdapter !== adapter && adapter) {
+      if (this.currentOpenWebRXAdapter) {
+        this.currentOpenWebRXAdapter.off('spectrumFrame', this.onOpenWebRXSpectrumFrame);
+      }
+
+      this.currentOpenWebRXAdapter = adapter;
+      adapter.on('spectrumFrame', this.onOpenWebRXSpectrumFrame);
+
+      const latestFrame = adapter.getLatestSpectrumFrame();
+      if (latestFrame) {
+        this.onOpenWebRXSpectrumFrame(latestFrame);
+      }
+    }
+  }
+
+  private async refreshSourceBindings(): Promise<void> {
+    await this.updateRadioSubscriptionState();
+    this.updateOpenWebRXSpectrumState();
   }
 
   private async startRadioScopeIfNeeded(): Promise<void> {
@@ -337,15 +390,42 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     this.emit('capabilitiesChanged', await this.getCapabilities());
   }
 
+  private getOpenWebRXSourceAvailability(): SpectrumSourceAvailability {
+    const adapter = this.engine.getOpenWebRXAudioAdapter();
+    const connected = adapter?.isConnected() ?? false;
+    const configured = adapter !== null;
+
+    return {
+      kind: 'openwebrx-sdr',
+      supported: configured,
+      available: connected,
+      defaultSelected: false,
+      reason: configured ? (connected ? undefined : 'openwebrx_disconnected') : 'openwebrx_input_not_active',
+      sourceBinCount: null,
+      displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
+      supportsWaterfall: true,
+      frequencyRangeMode: 'absolute',
+    };
+  }
+
   private getDefaultSpectrumKind(
     configType: ReturnType<PhysicalRadioManager['getConfig']>['type'],
-    radioAvailable: boolean
+    radioAvailable: boolean,
+    openWebRXAvailable: boolean
   ): SpectrumKind {
+    if (radioAvailable) {
+      return configType === 'icom-wlan' ? 'radio-sdr' : 'audio';
+    }
+
+    if (openWebRXAvailable) {
+      return 'openwebrx-sdr';
+    }
+
     if (!radioAvailable) {
       return 'audio';
     }
 
-    return configType === 'icom-wlan' ? 'radio-sdr' : 'audio';
+    return 'audio';
   }
 
   private isHamlibSerialScopeConnection(connection: IRadioConnection | null): connection is OfficialSpectrumCapableHamlibConnection {
