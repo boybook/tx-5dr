@@ -66,6 +66,12 @@ interface AudioRangeSettings {
   auto: AutoRangeConfig;
 }
 
+interface LegacyAudioRangeSettings {
+  manual?: Partial<ManualRangeSettings>;
+  auto?: Partial<AutoRangeConfig>;
+  mode?: 'auto' | 'manual';
+}
+
 interface PersistedRangeSettings {
   audio: AudioRangeSettings;
   radioSdr: ManualRangeSettings;
@@ -153,7 +159,7 @@ function clampRangeValue(value: number, min: number, max: number): number {
 }
 
 function normalizeAudioRangeSettings(
-  settings: Partial<AudioRangeSettings> | null | undefined,
+  settings: Partial<AudioRangeSettings> | LegacyAudioRangeSettings | null | undefined,
   fallback: AudioRangeSettings
 ): AudioRangeSettings {
   return {
@@ -183,7 +189,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
   try {
     const parsed = JSON.parse(saved) as
       | Partial<PersistedRangeSettings>
-      | { manual?: Partial<ManualRangeSettings>; auto?: Partial<AutoRangeConfig>; mode?: 'auto' | 'manual' };
+      | LegacyAudioRangeSettings;
 
     if (typeof parsed === 'object' && parsed !== null && ('audio' in parsed || 'radioSdr' in parsed)) {
       return {
@@ -204,7 +210,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
 
     return {
       audio: normalizeAudioRangeSettings(
-        parsed as { manual?: Partial<ManualRangeSettings>; auto?: Partial<AutoRangeConfig>; mode?: 'auto' | 'manual' },
+        parsed as LegacyAudioRangeSettings,
         DEFAULT_PERSISTED_RANGE_SETTINGS.audio
       ),
       radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
@@ -413,7 +419,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
       return {
         ...prev,
-        audio: updater(prev.audio),
+        audio: {
+          ...prev.audio,
+          manual: updater(prev.audio.manual),
+        },
       };
     });
   }, [isOpenWebRXSdrSelected, isRadioSdrSelected]);

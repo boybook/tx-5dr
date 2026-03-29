@@ -556,6 +556,7 @@ export function TokenManagement() {
                     onRevoke={handleRevoke}
                     onRegenerate={handleRegenerate}
                     onShare={handleShare}
+                    onEdit={handleEdit}
                   />
                 ))}
               </>

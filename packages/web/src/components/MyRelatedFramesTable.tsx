@@ -53,6 +53,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       message: string;
       frequency: number;
       slotStartMs: number;
+      replaceExisting?: boolean;
     }) => {
       setTransmissionLogs(prev => {
         if (data.replaceExisting) {
