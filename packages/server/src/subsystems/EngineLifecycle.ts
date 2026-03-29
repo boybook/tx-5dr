@@ -214,6 +214,25 @@ export class EngineLifecycle {
             this.deps.engineEmitter.emit('openwebrxProfileSelectRequest' as any, data);
           });
 
+          this.openwebrxAudioAdapter.on('connected', () => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: true });
+          });
+
+          this.openwebrxAudioAdapter.on('disconnected', () => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: false });
+          });
+
+          this.openwebrxAudioAdapter.on('profileChanged', (profileId: string) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            this.deps.engineEmitter.emit('openwebrxProfileChanged' as any, { profileId });
+          });
+
+          // connect() 返回时适配器已连上，补发一次状态变化供频谱能力重新协商。
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: true });
+
           // Forward errors (including ban/backoff) as radioError for WSServer to broadcast
           this.openwebrxAudioAdapter.on('error', (err: Error) => {
             this.deps.engineEmitter.emit('radioError', {
@@ -264,6 +283,8 @@ export class EngineLifecycle {
       },
       stop: async () => {
         if (this.openwebrxAudioAdapter) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: false });
           this.openwebrxAudioAdapter.stopReceiving();
           this.openwebrxAudioAdapter.disconnect();
           audioStreamManager.setOpenWebRXAudioAdapter(null);

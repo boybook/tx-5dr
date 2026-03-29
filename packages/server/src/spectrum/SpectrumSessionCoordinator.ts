@@ -96,6 +96,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private pendingConnectionType: 'hamlib' | 'icom-wlan' | null = null;
   private pendingZoomTimer: NodeJS.Timeout | null = null;
   private pendingDigitalTransition: PendingDigitalTransition | null = null;
+  private voiceFollowSyncPromise: Promise<void> | null = null;
 
   constructor(
     private readonly engine: DigitalRadioEngine,
@@ -112,6 +113,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         this.clearPendingDigitalTransition();
       }
       this.updatePollingState();
+      void this.ensureVoiceRadioFollowMode();
       this.markDirty();
     });
 
@@ -119,11 +121,13 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       this.displayStateFailedAt = null;
       this.clearPendingZoom();
       this.clearPendingDigitalTransition();
+      void this.ensureVoiceRadioFollowMode();
       this.markDirty();
     });
 
     this.engine.on('modeChanged', () => {
       this.updatePollingState();
+      void this.ensureVoiceRadioFollowMode();
       this.markDirty();
     });
 
@@ -1020,6 +1024,51 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     }
 
     return null;
+  }
+
+  private async ensureVoiceRadioFollowMode(): Promise<void> {
+    if (this.engine.getEngineMode() !== 'voice') {
+      return;
+    }
+
+    if (this.voiceFollowSyncPromise) {
+      return this.voiceFollowSyncPromise;
+    }
+
+    this.voiceFollowSyncPromise = this.doEnsureVoiceRadioFollowMode()
+      .finally(() => {
+        this.voiceFollowSyncPromise = null;
+      });
+
+    return this.voiceFollowSyncPromise;
+  }
+
+  private async doEnsureVoiceRadioFollowMode(): Promise<void> {
+    if (!this.engine.getRadioManager().isConnected()) {
+      return;
+    }
+
+    const connection = this.getDisplayConfigurableConnection();
+    if (!connection?.configureSpectrumDisplay || !connection.getSpectrumDisplayState) {
+      return;
+    }
+
+    try {
+      const displayState = await connection.getSpectrumDisplayState();
+      if (!displayState) {
+        return;
+      }
+      const currentMode = displayState.mode;
+      if (currentMode === 'center' || currentMode === 'scroll-center') {
+        return;
+      }
+
+      this.clearPendingDigitalTransition();
+      await connection.configureSpectrumDisplay({ mode: 'center' });
+      logger.info('Restored radio spectrum to follow mode for voice');
+    } catch (error) {
+      logger.warn('Failed to restore radio spectrum follow mode for voice', error);
+    }
   }
 
   private getDisplayConfigurableConnection(): IRadioConnection | null {

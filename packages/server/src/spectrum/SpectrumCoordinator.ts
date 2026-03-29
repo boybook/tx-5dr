@@ -77,6 +77,8 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     this.engine.on('modeChanged', handleSourceTopologyChanged as never);
     this.engine.on('profileChanged', handleSourceTopologyChanged as never);
     this.engine.on('profileListUpdated', handleSourceTopologyChanged as never);
+    this.engine.on('openwebrxConnectionChanged' as never, handleSourceTopologyChanged as never);
+    this.engine.on('openwebrxProfileChanged' as never, handleSourceTopologyChanged as never);
     this.engine.getSpectrumScheduler().on('spectrumReady', (frame) => {
       if (this.getSubscriberCount('audio') === 0) {
         return;

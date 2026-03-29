@@ -37,7 +37,6 @@ import {
   isRetryableError
 } from '../utils/errorToast';
 import i18n from '../i18n';
-import { getPreferredSpectrumKind, setPreferredSpectrumKind } from '../utils/spectrumPreferences';
 import { getWebSocketClientInstanceId } from '../utils/wsClientInstance';
 
 const logger = createLogger('RadioStore');
@@ -203,11 +202,11 @@ export type RadioAction =
   | { type: 'voicePttLockChanged'; payload: VoicePTTLock }
   | { type: 'voiceRadioModeChanged'; payload: string }
   | { type: 'setCurrentRadioFrequency'; payload: number | null }
-  | { type: 'setSpectrumSessionState'; payload: SpectrumSessionState }
+  | { type: 'setSpectrumSessionState'; payload: SpectrumSessionState | null }
   | { type: 'setStationInfo'; payload: StationInfo }
   | { type: 'setCapabilityList'; payload: { capabilities: CapabilityState[] } }
   | { type: 'updateCapabilityState'; payload: CapabilityState }
-  | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities }
+  | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities | null }
   | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setLatestSpectrumFrame'; payload: SpectrumFrame | null };
@@ -278,8 +277,8 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return {
         ...state,
         spectrumSessionState: action.payload,
-        currentRadioMode: action.payload.voice.radioMode ?? state.currentRadioMode,
-        currentRadioFrequency: action.payload.currentRadioFrequency && action.payload.currentRadioFrequency > 0
+        currentRadioMode: action.payload?.voice.radioMode ?? state.currentRadioMode,
+        currentRadioFrequency: action.payload?.currentRadioFrequency && action.payload.currentRadioFrequency > 0
           ? action.payload.currentRadioFrequency
           : state.currentRadioFrequency,
       };
@@ -654,6 +653,7 @@ const ConnectionContext = createContext<{
 const RadioStateContext = createContext<{
   state: RadioState;
   dispatch: React.Dispatch<RadioAction>;
+  markSpectrumSelectionManual?: () => void;
 } | undefined>(undefined);
 
 const SlotPacksContext = createContext<{
@@ -684,6 +684,8 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const pendingDefaultOpenWebRXDetailProfileRef = useRef<string | null>(null);
   const capabilitiesRef = useRef<SpectrumCapabilities | null>(radioState.spectrumCapabilities);
   const radioStateRef = useRef(radioState);
+  const activeProfileIdRef = useRef<string | null>(radioState.activeProfileId);
+  const spectrumAutoPriorityPendingRef = useRef<boolean>(true);
   // 跟踪当前连接状态，供超时回调读取（避免闭包陷阱）
   const connectionStateRef = useRef(connectionState);
   useEffect(() => {
@@ -692,6 +694,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   useEffect(() => {
     capabilitiesRef.current = radioState.spectrumCapabilities;
     radioStateRef.current = radioState;
+    activeProfileIdRef.current = radioState.activeProfileId;
   }, [radioState]);
 
   // 初始化RadioService
@@ -705,16 +708,76 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const radioService = new RadioService();
     radioServiceRef.current = radioService;
 
+    const isSpectrumKindAvailable = (capabilities: SpectrumCapabilities, kind: SpectrumKind | null): boolean => {
+      if (!kind) {
+        return false;
+      }
+
+      return capabilities.sources.some(source => source.kind === kind && source.available);
+    };
+
+    const pickSpectrumKindByPriority = (capabilities: SpectrumCapabilities): SpectrumKind => {
+      if (isSpectrumKindAvailable(capabilities, 'openwebrx-sdr')) {
+        return 'openwebrx-sdr';
+      }
+
+      if (isSpectrumKindAvailable(capabilities, 'radio-sdr')) {
+        return 'radio-sdr';
+      }
+
+      return 'audio';
+    };
+
+    const shouldAcceptSpectrumProfile = (profileId: string | null | undefined): boolean => {
+      if (profileId === undefined) {
+        return true;
+      }
+      const activeProfileId = activeProfileIdRef.current;
+      return activeProfileId === null || (profileId ?? null) === activeProfileId;
+    };
+
+    const resetSpectrumNegotiation = (profileId: string | null, clearSpectrumState: boolean): void => {
+      activeProfileIdRef.current = profileId;
+      spectrumAutoPriorityPendingRef.current = true;
+      pendingDefaultOpenWebRXDetailProfileRef.current = null;
+
+      radioDispatch({ type: 'setSelectedSpectrumKind', payload: null });
+      radioDispatch({ type: 'setSubscribedSpectrumKind', payload: null });
+      radioDispatch({ type: 'setLatestSpectrumFrame', payload: null });
+
+      if (clearSpectrumState) {
+        capabilitiesRef.current = null;
+        radioDispatch({ type: 'setSpectrumCapabilities', payload: null });
+        radioDispatch({ type: 'setSpectrumSessionState', payload: null });
+      }
+    };
+
     const applySpectrumSelection = (capabilities: SpectrumCapabilities) => {
+      if (!shouldAcceptSpectrumProfile(capabilities.profileId)) {
+        logger.debug('Ignoring stale spectrum capabilities', {
+          activeProfileId: activeProfileIdRef.current,
+          capabilitiesProfileId: capabilities.profileId,
+        });
+        return;
+      }
+
       const profileId = capabilities.profileId;
-      const preferredKind = getPreferredSpectrumKind(profileId);
-      const preferredAvailable = preferredKind
-        ? capabilities.sources.some(source => source.kind === preferredKind && source.available)
-        : false;
-      const effectiveKind = preferredAvailable ? preferredKind : capabilities.defaultKind;
-      const shouldAutoEnableOpenWebRXDetail = !preferredAvailable
+      const currentSelectedKind = radioStateRef.current.selectedSpectrumKind;
+      const shouldAutoApplyPriority = spectrumAutoPriorityPendingRef.current;
+      const openWebRXSource = capabilities.sources.find(source => source.kind === 'openwebrx-sdr');
+      const openWebRXSupported = openWebRXSource?.supported ?? false;
+      const effectiveKind = shouldAutoApplyPriority
+        ? pickSpectrumKindByPriority(capabilities)
+        : (
+            isSpectrumKindAvailable(capabilities, currentSelectedKind)
+              ? currentSelectedKind as SpectrumKind
+              : pickSpectrumKindByPriority(capabilities)
+          );
+      const currentModeName = radioStateRef.current.currentMode?.name ?? null;
+      const shouldAutoEnableOpenWebRXDetail = shouldAutoApplyPriority
         && effectiveKind === 'openwebrx-sdr'
-        && profileId !== null;
+        && profileId !== null
+        && (currentModeName === 'FT8' || currentModeName === 'FT4');
 
       radioDispatch({ type: 'setSpectrumCapabilities', payload: capabilities });
       radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
@@ -726,8 +789,30 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         ? profileId
         : null;
 
-      if (profileId && effectiveKind) {
-        setPreferredSpectrumKind(profileId, effectiveKind);
+      if (shouldAutoApplyPriority) {
+        spectrumAutoPriorityPendingRef.current = openWebRXSupported && !isSpectrumKindAvailable(capabilities, 'openwebrx-sdr');
+      }
+    };
+
+    const applyProfileDrivenSpectrumNegotiation = (profileId: string | null, clearSpectrumState: boolean) => {
+      resetSpectrumNegotiation(profileId, clearSpectrumState);
+
+      const currentCapabilities = capabilitiesRef.current;
+      if (currentCapabilities && shouldAcceptSpectrumProfile(currentCapabilities.profileId)) {
+        applySpectrumSelection(currentCapabilities);
+      }
+    };
+
+    const applyModeDrivenSpectrumNegotiation = () => {
+      spectrumAutoPriorityPendingRef.current = true;
+      pendingDefaultOpenWebRXDetailProfileRef.current = null;
+      radioDispatch({ type: 'setSelectedSpectrumKind', payload: null });
+      radioDispatch({ type: 'setSubscribedSpectrumKind', payload: null });
+      radioDispatch({ type: 'setLatestSpectrumFrame', payload: null });
+
+      const currentCapabilities = capabilitiesRef.current;
+      if (currentCapabilities && shouldAcceptSpectrumProfile(currentCapabilities.profileId)) {
+        applySpectrumSelection(currentCapabilities);
       }
     };
 
@@ -794,23 +879,41 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         connectionDispatch({ type: 'disconnected' });
       },
       modeChanged: (data: unknown) => {
-        radioDispatch({ type: 'modeChanged', payload: data as ModeDescriptor });
+        const nextMode = data as ModeDescriptor;
+        const previousModeName = radioStateRef.current.currentMode?.name ?? null;
+        radioDispatch({ type: 'modeChanged', payload: nextMode });
+        if (nextMode.name !== previousModeName) {
+          applyModeDrivenSpectrumNegotiation();
+        }
       },
       systemStatus: (data: unknown) => {
-        radioDispatch({ type: 'systemStatus', payload: data as SystemStatus });
+        const status = data as SystemStatus;
+        const previousEngineMode = radioStateRef.current.engineMode;
+        const nextEngineMode = (status as SystemStatus & { engineMode?: EngineMode }).engineMode ?? previousEngineMode;
+        radioDispatch({ type: 'systemStatus', payload: status });
+        if (nextEngineMode !== previousEngineMode) {
+          applyModeDrivenSpectrumNegotiation();
+        }
       },
       spectrumCapabilities: (data: unknown) => {
         applySpectrumSelection(data as SpectrumCapabilities);
       },
       spectrumFrame: (data: unknown) => {
-        radioDispatch({ type: 'setLatestSpectrumFrame', payload: data as SpectrumFrame });
+        const frame = data as SpectrumFrame;
+        if (!shouldAcceptSpectrumProfile(frame.meta.profileId)) {
+          return;
+        }
+        radioDispatch({ type: 'setLatestSpectrumFrame', payload: frame });
       },
       spectrumSessionStateChanged: (data: unknown) => {
         const sessionState = data as SpectrumSessionState;
+        const currentProfileId = capabilitiesRef.current?.profileId ?? null;
+        if (!shouldAcceptSpectrumProfile(currentProfileId)) {
+          return;
+        }
         radioDispatch({ type: 'setSpectrumSessionState', payload: sessionState });
 
         const pendingProfileId = pendingDefaultOpenWebRXDetailProfileRef.current;
-        const currentProfileId = (capabilitiesRef.current as SpectrumCapabilities | null)?.profileId ?? null;
         const currentModeName = radioStateRef.current.currentMode?.name ?? null;
         const shouldAutoEnableDetail = pendingProfileId !== null
           && currentProfileId === pendingProfileId
@@ -1035,6 +1138,10 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               activeProfileId: profilesResponse.activeProfileId
             }
           });
+          applyProfileDrivenSpectrumNegotiation(
+            profilesResponse.activeProfileId,
+            capabilitiesRef.current?.profileId !== profilesResponse.activeProfileId
+          );
         } catch (error) {
           logger.error('Failed to fetch profile list:', error);
           // 即使获取失败（如 viewer 角色无权限），仍标记为已加载，使前端可区分引导状态
@@ -1042,6 +1149,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             type: 'setProfiles',
             payload: { profiles: [], activeProfileId: null }
           });
+          applyProfileDrivenSpectrumNegotiation(null, false);
         }
 
         // 握手完成后，获取电台站信息（公开，所有角色都拉取）
@@ -1137,11 +1245,18 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const profileData = data as ProfileChangedEvent;
         logger.info('Profile switched', { profileId: profileData.profileId, name: profileData.profile.name });
         radioDispatch({ type: 'profileChanged', payload: profileData });
+        applyProfileDrivenSpectrumNegotiation(profileData.profileId, true);
       },
       profileListUpdated: (data: unknown) => {
         const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null };
         logger.info('Profile list updated', { count: listData.profiles.length });
         radioDispatch({ type: 'profileListUpdated', payload: listData });
+        if (listData.activeProfileId !== activeProfileIdRef.current) {
+          applyProfileDrivenSpectrumNegotiation(
+            listData.activeProfileId,
+            capabilitiesRef.current?.profileId !== listData.activeProfileId
+          );
+        }
       },
       // Voice mode events
       voicePttLockChanged: (data: unknown) => {
@@ -1209,10 +1324,15 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
   }, []);
 
+  const markSpectrumSelectionManual = () => {
+    spectrumAutoPriorityPendingRef.current = false;
+    pendingDefaultOpenWebRXDetailProfileRef.current = null;
+  };
+
   return React.createElement(
     ConnectionContext.Provider, { value: { state: connectionState, dispatch: connectionDispatch } },
     React.createElement(
-      RadioStateContext.Provider, { value: { state: radioState, dispatch: radioDispatch } },
+      RadioStateContext.Provider, { value: { state: radioState, dispatch: radioDispatch, markSpectrumSelectionManual } },
       React.createElement(
         SlotPacksContext.Provider, { value: { state: slotPacksState, dispatch: slotPacksDispatch } },
         React.createElement(
@@ -1320,7 +1440,7 @@ export const useStationInfo = () => {
 };
 
 export const useSpectrum = () => {
-  const { state, dispatch } = useRadioState();
+  const { state, dispatch, markSpectrumSelectionManual } = useRadioState();
   return {
     capabilities: state.spectrumCapabilities,
     sessionState: state.spectrumSessionState,
@@ -1328,6 +1448,7 @@ export const useSpectrum = () => {
     subscribedKind: state.subscribedSpectrumKind,
     latestFrame: state.latestSpectrumFrame,
     setSelectedKind: (kind: SpectrumKind | null) => {
+      markSpectrumSelectionManual?.();
       dispatch({ type: 'setSelectedSpectrumKind', payload: kind });
       dispatch({ type: 'setSubscribedSpectrumKind', payload: kind });
     },
