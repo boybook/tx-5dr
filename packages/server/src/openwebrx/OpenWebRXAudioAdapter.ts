@@ -48,12 +48,17 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
   private currentProfileId: string | null = null;
   private currentConfig: ServerConfig | null = null;
   private latestSpectrumFrame: OpenWebRXSpectrumFrame | null = null;
+  private latestMainSpectrumFrame: OpenWebRXSpectrumFrame | null = null;
+  private latestSecondarySpectrumFrame: OpenWebRXSpectrumFrame | null = null;
   private profileReclaimRetries: number = 0;
+  private digitalDetailSpectrumMode: 'ft8' | 'ft4' | null = null;
+  private digitalDetailSpectrumOffsetHz = 1500;
 
   // Bound event handlers for proper cleanup
   private boundHandleAudio: (pcm: Int16Array) => void;
   private boundHandleConfig: (config: ServerConfig) => void;
   private boundHandleSpectrum: (frame: OpenWebRXSpectrumFrame) => void;
+  private boundHandleSecondarySpectrum: (frame: OpenWebRXSpectrumFrame) => void;
   private boundHandleError: (err: Error) => void;
   private boundHandleDisconnected: (code: number, reason: string) => void;
   private boundHandleBackoff: (reason: string) => void;
@@ -73,6 +78,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
     this.boundHandleAudio = this.handleAudioFrame.bind(this);
     this.boundHandleConfig = this.handleConfigChange.bind(this);
     this.boundHandleSpectrum = this.handleSpectrumFrame.bind(this);
+    this.boundHandleSecondarySpectrum = this.handleSecondarySpectrumFrame.bind(this);
     this.boundHandleError = this.handleError.bind(this);
     this.boundHandleDisconnected = this.handleDisconnected.bind(this);
     this.boundHandleBackoff = this.handleBackoff.bind(this);
@@ -90,6 +96,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
     // Register event handlers before connecting
     this.client.on('config', this.boundHandleConfig);
     this.client.on('fft', this.boundHandleSpectrum);
+    this.client.on('secondaryFft', this.boundHandleSecondarySpectrum);
     this.client.on('error', this.boundHandleError);
     this.client.on('disconnected', this.boundHandleDisconnected);
     this.client.on('backoff', this.boundHandleBackoff);
@@ -122,6 +129,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
     // Remove event handlers
     this.client.off('config', this.boundHandleConfig);
     this.client.off('fft', this.boundHandleSpectrum);
+    this.client.off('secondaryFft', this.boundHandleSecondarySpectrum);
     this.client.off('error', this.boundHandleError);
     this.client.off('disconnected', this.boundHandleDisconnected);
     this.client.off('backoff', this.boundHandleBackoff);
@@ -131,6 +139,9 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
     this._isConnected = false;
     this.currentProfileId = null;
     this.currentConfig = null;
+    this.latestSpectrumFrame = null;
+    this.latestMainSpectrumFrame = null;
+    this.latestSecondarySpectrumFrame = null;
 
     logger.info('Disconnected from OpenWebRX server');
   }
@@ -173,9 +184,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
       setTimeout(() => {
         if (this.isReceiving && this._isConnected) {
           logger.debug('Re-applying DSP settings after startDsp', { frequency: this.targetFrequency });
-          this.client.setFrequency(this.targetFrequency);
-          this.client.setModulation('usb');
-          this.client.setBandpass(0, 3000);
+          this.applyTuning(this.targetFrequency);
         }
       }, 1000);
     }
@@ -232,6 +241,45 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
 
   getLatestSpectrumFrame(): OpenWebRXSpectrumFrame | null {
     return this.latestSpectrumFrame;
+  }
+
+  getLatestMainSpectrumFrame(): OpenWebRXSpectrumFrame | null {
+    return this.latestMainSpectrumFrame;
+  }
+
+  getLatestSecondarySpectrumFrame(): OpenWebRXSpectrumFrame | null {
+    return this.latestSecondarySpectrumFrame;
+  }
+
+  enableDigitalDetailSpectrum(mode: 'ft8' | 'ft4', offsetHz = 1500): void {
+    this.digitalDetailSpectrumMode = mode;
+    this.digitalDetailSpectrumOffsetHz = offsetHz;
+
+    if (this._isConnected) {
+      this.client.enableDigitalDetailSpectrum({ mode, offsetHz });
+    }
+
+    if (this.latestSecondarySpectrumFrame) {
+      this.latestSpectrumFrame = this.latestSecondarySpectrumFrame;
+      this.emit('spectrumFrame', this.latestSecondarySpectrumFrame);
+    }
+  }
+
+  disableDigitalDetailSpectrum(): void {
+    this.digitalDetailSpectrumMode = null;
+
+    if (this._isConnected) {
+      this.client.disableDigitalDetailSpectrum();
+    }
+
+    if (this.latestMainSpectrumFrame) {
+      this.latestSpectrumFrame = this.latestMainSpectrumFrame;
+      this.emit('spectrumFrame', this.latestMainSpectrumFrame);
+    }
+  }
+
+  isDigitalDetailSpectrumEnabled(): boolean {
+    return this.digitalDetailSpectrumMode !== null;
   }
 
   /**
@@ -303,6 +351,12 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
     this.client.setFrequency(hz);
     this.client.setModulation('usb');
     this.client.setBandpass(0, 3000);
+    if (this.digitalDetailSpectrumMode) {
+      this.client.enableDigitalDetailSpectrum({
+        mode: this.digitalDetailSpectrumMode,
+        offsetHz: this.digitalDetailSpectrumOffsetHz,
+      });
+    }
   }
 
   /**
@@ -408,9 +462,7 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
             // Re-tune after profile switch
             if (this.targetFrequency > 0) {
               setTimeout(() => {
-                this.client.setFrequency(this.targetFrequency);
-                this.client.setModulation('usb');
-                this.client.setBandpass(0, 3000);
+                this.applyTuning(this.targetFrequency);
               }, 1000);
             }
           }
@@ -437,8 +489,19 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
   }
 
   private handleSpectrumFrame(frame: OpenWebRXSpectrumFrame): void {
-    this.latestSpectrumFrame = frame;
-    this.emit('spectrumFrame', frame);
+    this.latestMainSpectrumFrame = frame;
+    if (!this.digitalDetailSpectrumMode) {
+      this.latestSpectrumFrame = frame;
+      this.emit('spectrumFrame', frame);
+    }
+  }
+
+  private handleSecondarySpectrumFrame(frame: OpenWebRXSpectrumFrame): void {
+    this.latestSecondarySpectrumFrame = frame;
+    if (this.digitalDetailSpectrumMode) {
+      this.latestSpectrumFrame = frame;
+      this.emit('spectrumFrame', frame);
+    }
   }
 
   /**

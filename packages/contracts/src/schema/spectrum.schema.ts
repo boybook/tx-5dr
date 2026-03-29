@@ -3,11 +3,28 @@ import { z } from 'zod';
 export const SpectrumKindSchema = z.enum(['audio', 'radio-sdr', 'openwebrx-sdr']);
 export type SpectrumKind = z.infer<typeof SpectrumKindSchema>;
 
-export const SpectrumZoomDirectionSchema = z.enum(['in', 'out']);
-export type SpectrumZoomDirection = z.infer<typeof SpectrumZoomDirectionSchema>;
-
 export const SpectrumDisplayModeSchema = z.enum(['center', 'fixed', 'scroll-center', 'scroll-fixed', 'unknown']);
 export type SpectrumDisplayMode = z.infer<typeof SpectrumDisplayModeSchema>;
+
+export const SpectrumSessionSourceModeSchema = z.enum([
+  'baseband',
+  'center',
+  'fixed',
+  'scroll-center',
+  'scroll-fixed',
+  'full',
+  'detail',
+  'unknown',
+]);
+export type SpectrumSessionSourceMode = z.infer<typeof SpectrumSessionSourceModeSchema>;
+
+export const SpectrumSessionFrequencyRangeModeSchema = z.enum([
+  'baseband',
+  'absolute-center',
+  'absolute-fixed',
+  'absolute-windowed',
+]);
+export type SpectrumSessionFrequencyRangeMode = z.infer<typeof SpectrumSessionFrequencyRangeModeSchema>;
 
 export const SpectrumFrequencyRangeSchema = z.object({
   min: z.number(),
@@ -61,44 +78,70 @@ export const SpectrumCapabilitiesSchema = z.object({
   sources: z.array(SpectrumSourceAvailabilitySchema),
 });
 
-export const SpectrumZoomLevelSchema = z.object({
-  id: z.string(),
-  label: z.string(),
-  spanHz: z.number().positive(),
-});
+export const SpectrumSessionControlIdSchema = z.enum([
+  'zoom-step',
+  'digital-window-toggle',
+  'openwebrx-detail-toggle',
+  'viewport-zoom',
+]);
+export type SpectrumSessionControlId = z.infer<typeof SpectrumSessionControlIdSchema>;
 
-export const SpectrumZoomStateSchema = z.object({
-  kind: SpectrumKindSchema,
-  supported: z.boolean(),
-  available: z.boolean(),
-  levels: z.array(SpectrumZoomLevelSchema),
-  currentLevelId: z.string().nullable(),
-  currentSpanHz: z.number().positive().nullable(),
-  canZoomIn: z.boolean(),
-  canZoomOut: z.boolean(),
-});
+export const SpectrumSessionControlActionSchema = z.enum(['in', 'out', 'toggle']);
+export type SpectrumSessionControlAction = z.infer<typeof SpectrumSessionControlActionSchema>;
 
-export const SpectrumDisplayStateSchema = z.object({
-  mode: SpectrumDisplayModeSchema,
+export const SpectrumSessionControlKindSchema = z.enum(['server', 'local']);
+export type SpectrumSessionControlKind = z.infer<typeof SpectrumSessionControlKindSchema>;
+
+export const SpectrumSessionControlSchema = z.object({
+  id: SpectrumSessionControlIdSchema,
+  action: SpectrumSessionControlActionSchema,
+  kind: SpectrumSessionControlKindSchema,
+  visible: z.boolean(),
+  enabled: z.boolean(),
+  active: z.boolean(),
+  pending: z.boolean(),
+});
+export type SpectrumSessionControl = z.infer<typeof SpectrumSessionControlSchema>;
+
+export const SpectrumSessionVoiceStateSchema = z.object({
+  radioMode: z.string().nullable(),
+  bandwidthLabel: z.string().nullable(),
+  occupiedBandwidthHz: z.number().nullable(),
+  offsetModel: z.enum(['upper', 'lower', 'symmetric']).nullable(),
+});
+export type SpectrumSessionVoiceState = z.infer<typeof SpectrumSessionVoiceStateSchema>;
+
+export const SpectrumSessionInteractionStateSchema = z.object({
+  showTxMarkers: z.boolean(),
+  showRxMarkers: z.boolean(),
+  canDragTx: z.boolean(),
+  canRightClickSetFrequency: z.boolean(),
+  canDragVoiceOverlay: z.boolean(),
+  showVoiceOverlay: z.boolean(),
+  canLocalViewportZoom: z.boolean(),
+  canLocalViewportPan: z.boolean(),
+  supportsManualRange: z.boolean(),
+  supportsAutoRange: z.boolean(),
+  defaultRangeMode: z.enum(['auto', 'manual']).nullable(),
+});
+export type SpectrumSessionInteractionState = z.infer<typeof SpectrumSessionInteractionStateSchema>;
+
+export const SpectrumSessionStateSchema = z.object({
+  kind: SpectrumKindSchema.nullable(),
+  sourceMode: SpectrumSessionSourceModeSchema,
+  frequencyRangeMode: SpectrumSessionFrequencyRangeModeSchema,
   displayRange: SpectrumFrequencyRangeSchema.nullable(),
   centerFrequency: z.number().nullable(),
   currentRadioFrequency: z.number().nullable(),
+  standardFrequencyHz: z.number().nullable(),
   edgeLowHz: z.number().nullable(),
   edgeHighHz: z.number().nullable(),
   spanHz: z.number().nullable(),
-  supportsFixedEdges: z.boolean(),
-  supportsSpanControl: z.boolean(),
+  voice: SpectrumSessionVoiceStateSchema,
+  interaction: SpectrumSessionInteractionStateSchema,
+  controls: z.array(SpectrumSessionControlSchema),
 });
-
-export const DigitalSpectrumWindowStateSchema = z.object({
-  supported: z.boolean(),
-  active: z.boolean(),
-  pending: z.boolean(),
-  canToggle: z.boolean(),
-  standardFrequencyHz: z.number().nullable(),
-  lowHz: z.number().nullable(),
-  highHz: z.number().nullable(),
-});
+export type SpectrumSessionState = z.infer<typeof SpectrumSessionStateSchema>;
 
 export type SpectrumFrequencyRange = z.infer<typeof SpectrumFrequencyRangeSchema>;
 export type SpectrumBinaryFormat = z.infer<typeof SpectrumBinaryFormatSchema>;
@@ -107,7 +150,3 @@ export type SpectrumFrameMeta = z.infer<typeof SpectrumFrameMetaSchema>;
 export type SpectrumFrame = z.infer<typeof SpectrumFrameSchema>;
 export type SpectrumSourceAvailability = z.infer<typeof SpectrumSourceAvailabilitySchema>;
 export type SpectrumCapabilities = z.infer<typeof SpectrumCapabilitiesSchema>;
-export type SpectrumZoomLevel = z.infer<typeof SpectrumZoomLevelSchema>;
-export type SpectrumZoomState = z.infer<typeof SpectrumZoomStateSchema>;
-export type SpectrumDisplayState = z.infer<typeof SpectrumDisplayStateSchema>;
-export type DigitalSpectrumWindowState = z.infer<typeof DigitalSpectrumWindowStateSchema>;

@@ -1,4 +1,4 @@
-import { WSMessageType, ModeDescriptor, type SpectrumKind, type SpectrumZoomDirection } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor, type SpectrumKind } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -137,12 +137,8 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.SUBSCRIBE_SPECTRUM, { kind });
   }
 
-  stepSpectrumZoom(direction: SpectrumZoomDirection): void {
-    this.send(WSMessageType.STEP_SPECTRUM_ZOOM, { direction });
-  }
-
-  toggleDigitalSpectrumWindow(): void {
-    this.send(WSMessageType.TOGGLE_DIGITAL_SPECTRUM_WINDOW, {});
+  invokeSpectrumControl(id: string, action: 'in' | 'out' | 'toggle'): void {
+    this.send(WSMessageType.INVOKE_SPECTRUM_CONTROL, { id, action });
   }
 
   /**

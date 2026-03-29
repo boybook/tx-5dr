@@ -1,5 +1,5 @@
 import { api, WSClient } from '@tx5dr/core';
-import type { SpectrumKind, SpectrumZoomDirection } from '@tx5dr/contracts';
+import type { SpectrumKind } from '@tx5dr/contracts';
 import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
 
@@ -115,15 +115,9 @@ export class RadioService {
     }
   }
 
-  stepSpectrumZoom(direction: SpectrumZoomDirection): void {
+  invokeSpectrumControl(id: string, action: 'in' | 'out' | 'toggle'): void {
     if (this.isConnected) {
-      this.wsClient.stepSpectrumZoom(direction);
-    }
-  }
-
-  toggleDigitalSpectrumWindow(): void {
-    if (this.isConnected) {
-      this.wsClient.toggleDigitalSpectrumWindow();
+      this.wsClient.invokeSpectrumControl(id, action);
     }
   }
 

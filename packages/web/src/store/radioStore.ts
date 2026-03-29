@@ -14,11 +14,9 @@ import type {
   HamlibConfig,
   RadioInfo,
   SpectrumCapabilities,
-  DigitalSpectrumWindowState,
   SpectrumFrame,
   SpectrumKind,
-  SpectrumDisplayState,
-  SpectrumZoomState,
+  SpectrumSessionState,
   RadioProfile,
   ProfileChangedEvent,
   ReconnectProgress,
@@ -27,7 +25,6 @@ import type {
   EngineMode,
   StationInfo,
   CapabilityState,
-  RadioViewState,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
@@ -130,16 +127,13 @@ export interface RadioState {
   voicePttLock: VoicePTTLock | null;
   currentRadioMode: string | null;
   currentRadioFrequency: number | null;
-  radioViewState: RadioViewState | null;
-  spectrumDisplayState: SpectrumDisplayState | null;
+  spectrumSessionState: SpectrumSessionState | null;
   // 电台错误频道
   radioErrors: RadioErrorRecord[];
   latestRadioError: RadioErrorRecord | null;
   // 电台站基础信息
   stationInfo: StationInfo | null;
   spectrumCapabilities: SpectrumCapabilities | null;
-  spectrumZoomState: SpectrumZoomState | null;
-  digitalSpectrumWindowState: DigitalSpectrumWindowState | null;
   selectedSpectrumKind: SpectrumKind | null;
   subscribedSpectrumKind: SpectrumKind | null;
   latestSpectrumFrame: SpectrumFrame | null;
@@ -209,14 +203,11 @@ export type RadioAction =
   | { type: 'voicePttLockChanged'; payload: VoicePTTLock }
   | { type: 'voiceRadioModeChanged'; payload: string }
   | { type: 'setCurrentRadioFrequency'; payload: number | null }
-  | { type: 'setRadioViewState'; payload: RadioViewState }
-  | { type: 'setSpectrumDisplayState'; payload: SpectrumDisplayState }
+  | { type: 'setSpectrumSessionState'; payload: SpectrumSessionState }
   | { type: 'setStationInfo'; payload: StationInfo }
   | { type: 'setCapabilityList'; payload: { capabilities: CapabilityState[] } }
   | { type: 'updateCapabilityState'; payload: CapabilityState }
   | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities }
-  | { type: 'setSpectrumZoomState'; payload: SpectrumZoomState }
-  | { type: 'setDigitalSpectrumWindowState'; payload: DigitalSpectrumWindowState }
   | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setLatestSpectrumFrame'; payload: SpectrumFrame | null };
@@ -248,14 +239,11 @@ const initialRadioState: RadioState = {
   voicePttLock: null,
   currentRadioMode: null,
   currentRadioFrequency: null,
-  radioViewState: null,
-  spectrumDisplayState: null,
+  spectrumSessionState: null,
   radioErrors: [],
   latestRadioError: null,
   stationInfo: null,
   spectrumCapabilities: null,
-  spectrumZoomState: null,
-  digitalSpectrumWindowState: null,
   selectedSpectrumKind: null,
   subscribedSpectrumKind: null,
   latestSpectrumFrame: null,
@@ -286,20 +274,11 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         currentRadioFrequency: action.payload && action.payload > 0 ? action.payload : state.currentRadioFrequency,
       };
 
-    case 'setRadioViewState':
+    case 'setSpectrumSessionState':
       return {
         ...state,
-        radioViewState: action.payload,
-        currentRadioMode: action.payload.radioMode ?? state.currentRadioMode,
-        currentRadioFrequency: action.payload.frequency && action.payload.frequency > 0
-          ? action.payload.frequency
-          : state.currentRadioFrequency,
-      };
-
-    case 'setSpectrumDisplayState':
-      return {
-        ...state,
-        spectrumDisplayState: action.payload,
+        spectrumSessionState: action.payload,
+        currentRadioMode: action.payload.voice.radioMode ?? state.currentRadioMode,
         currentRadioFrequency: action.payload.currentRadioFrequency && action.payload.currentRadioFrequency > 0
           ? action.payload.currentRadioFrequency
           : state.currentRadioFrequency,
@@ -382,26 +361,13 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
           ? state.capabilityStates
           : new Map<string, CapabilityState>(),
         currentRadioFrequency: action.payload.radioConnected ? state.currentRadioFrequency : null,
-        radioViewState: action.payload.radioConnected ? state.radioViewState : null,
-        spectrumDisplayState: action.payload.radioConnected ? state.spectrumDisplayState : null,
-        spectrumZoomState: action.payload.radioConnected ? state.spectrumZoomState : null,
+        spectrumSessionState: action.payload.radioConnected ? state.spectrumSessionState : null,
       };
 
     case 'setSpectrumCapabilities':
       return {
         ...state,
         spectrumCapabilities: action.payload,
-      };
-
-    case 'setSpectrumZoomState':
-      return {
-        ...state,
-        spectrumZoomState: action.payload,
-      };
-    case 'setDigitalSpectrumWindowState':
-      return {
-        ...state,
-        digitalSpectrumWindowState: action.payload,
       };
 
     case 'setSelectedSpectrumKind':
@@ -715,11 +681,18 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // 使用 useRef 确保 RadioService 单例，避免 StrictMode 导致的重复创建
   const radioServiceRef = useRef<RadioService | null>(null);
   const connectionStatusTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingDefaultOpenWebRXDetailProfileRef = useRef<string | null>(null);
+  const capabilitiesRef = useRef<SpectrumCapabilities | null>(radioState.spectrumCapabilities);
+  const radioStateRef = useRef(radioState);
   // 跟踪当前连接状态，供超时回调读取（避免闭包陷阱）
   const connectionStateRef = useRef(connectionState);
   useEffect(() => {
     connectionStateRef.current = connectionState;
   }, [connectionState]);
+  useEffect(() => {
+    capabilitiesRef.current = radioState.spectrumCapabilities;
+    radioStateRef.current = radioState;
+  }, [radioState]);
 
   // 初始化RadioService
   useEffect(() => {
@@ -739,12 +712,19 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         ? capabilities.sources.some(source => source.kind === preferredKind && source.available)
         : false;
       const effectiveKind = preferredAvailable ? preferredKind : capabilities.defaultKind;
+      const shouldAutoEnableOpenWebRXDetail = !preferredAvailable
+        && effectiveKind === 'openwebrx-sdr'
+        && profileId !== null;
 
       radioDispatch({ type: 'setSpectrumCapabilities', payload: capabilities });
       radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
       radioDispatch({ type: 'setSubscribedSpectrumKind', payload: effectiveKind });
       radioDispatch({ type: 'setLatestSpectrumFrame', payload: null });
       radioService.subscribeSpectrum(effectiveKind);
+
+      pendingDefaultOpenWebRXDetailProfileRef.current = shouldAutoEnableOpenWebRXDetail
+        ? profileId
+        : null;
 
       if (profileId && effectiveKind) {
         setPreferredSpectrumKind(profileId, effectiveKind);
@@ -812,15 +792,6 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       disconnected: () => {
         connectionDispatch({ type: 'disconnected' });
-        radioDispatch({ type: 'setDigitalSpectrumWindowState', payload: {
-          supported: false,
-          active: false,
-          pending: false,
-          canToggle: false,
-          standardFrequencyHz: null,
-          lowHz: null,
-          highHz: null,
-        } });
       },
       modeChanged: (data: unknown) => {
         radioDispatch({ type: 'modeChanged', payload: data as ModeDescriptor });
@@ -834,11 +805,23 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       spectrumFrame: (data: unknown) => {
         radioDispatch({ type: 'setLatestSpectrumFrame', payload: data as SpectrumFrame });
       },
-      spectrumZoomStateChanged: (data: unknown) => {
-        radioDispatch({ type: 'setSpectrumZoomState', payload: data as SpectrumZoomState });
-      },
-      digitalSpectrumWindowStateChanged: (data: unknown) => {
-        radioDispatch({ type: 'setDigitalSpectrumWindowState', payload: data as DigitalSpectrumWindowState });
+      spectrumSessionStateChanged: (data: unknown) => {
+        const sessionState = data as SpectrumSessionState;
+        radioDispatch({ type: 'setSpectrumSessionState', payload: sessionState });
+
+        const pendingProfileId = pendingDefaultOpenWebRXDetailProfileRef.current;
+        const currentProfileId = (capabilitiesRef.current as SpectrumCapabilities | null)?.profileId ?? null;
+        const currentModeName = radioStateRef.current.currentMode?.name ?? null;
+        const shouldAutoEnableDetail = pendingProfileId !== null
+          && currentProfileId === pendingProfileId
+          && sessionState.kind === 'openwebrx-sdr'
+          && sessionState.sourceMode === 'full'
+          && (currentModeName === 'FT8' || currentModeName === 'FT4');
+
+        if (shouldAutoEnableDetail) {
+          pendingDefaultOpenWebRXDetailProfileRef.current = null;
+          radioService.invokeSpectrumControl('openwebrx-detail-toggle', 'toggle');
+        }
       },
       decodeError: (data: unknown) => {
         radioDispatch({ type: 'decodeError', payload: data as DecodeErrorData });
@@ -1003,12 +986,6 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         });
         logger.debug('Frequency changed, clearing local slot history', { frequency: freqData.frequency });
         slotPacksDispatch({ type: 'CLEAR_DATA' });
-      },
-      radioViewStateChanged: (data: unknown) => {
-        radioDispatch({ type: 'setRadioViewState', payload: data as RadioViewState });
-      },
-      spectrumDisplayStateChanged: (data: unknown) => {
-        radioDispatch({ type: 'setSpectrumDisplayState', payload: data as SpectrumDisplayState });
       },
       // PTT状态变化
       pttStatusChanged: (data: unknown) => {
@@ -1346,8 +1323,7 @@ export const useSpectrum = () => {
   const { state, dispatch } = useRadioState();
   return {
     capabilities: state.spectrumCapabilities,
-    zoomState: state.spectrumZoomState,
-    digitalWindowState: state.digitalSpectrumWindowState,
+    sessionState: state.spectrumSessionState,
     selectedKind: state.selectedSpectrumKind,
     subscribedKind: state.subscribedSpectrumKind,
     latestFrame: state.latestSpectrumFrame,

@@ -35,7 +35,9 @@ interface OfficialSpectrumCapableHamlibConnection extends HamlibConnection {
   stopManagedSpectrum(): Promise<void>;
 }
 
-interface OpenWebRXSpectrumCapableAdapter extends Pick<OpenWebRXAudioAdapter, 'isConnected' | 'getLatestSpectrumFrame' | 'on' | 'off'> {}
+interface OpenWebRXSpectrumCapableAdapter extends Pick<OpenWebRXAudioAdapter,
+  'isConnected' | 'getLatestSpectrumFrame' | 'on' | 'off'
+> {}
 
 export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents> {
   private readonly subscriptions = new Map<string, SpectrumKind | null>();
@@ -72,6 +74,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     };
 
     this.engine.on('radioStatusChanged', handleSourceTopologyChanged);
+    this.engine.on('modeChanged', handleSourceTopologyChanged as never);
     this.engine.on('profileChanged', handleSourceTopologyChanged as never);
     this.engine.on('profileListUpdated', handleSourceTopologyChanged as never);
     this.engine.getSpectrumScheduler().on('spectrumReady', (frame) => {
@@ -413,12 +416,12 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     radioAvailable: boolean,
     openWebRXAvailable: boolean
   ): SpectrumKind {
-    if (radioAvailable) {
-      return configType === 'icom-wlan' ? 'radio-sdr' : 'audio';
-    }
-
     if (openWebRXAvailable) {
       return 'openwebrx-sdr';
+    }
+
+    if (radioAvailable) {
+      return 'radio-sdr';
     }
 
     if (!radioAvailable) {

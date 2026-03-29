@@ -15,6 +15,9 @@ const SpectrumContent: React.FC = () => {
 
   // 仅 macOS Electron 环境需要手动绘制拖拽条
   const showTitlebar = isElectron() && navigator.userAgent.includes('Macintosh');
+  const topLeftOverlayInset = showTitlebar
+    ? { left: 80 }
+    : undefined;
 
   useEffect(() => {
     const handler = () => setWindowHeight(window.innerHeight);
@@ -40,7 +43,11 @@ const SpectrumContent: React.FC = () => {
           <div className="h-full" style={{ width: 80 }} />
         </div>
       )}
-      <SpectrumDisplay height={windowHeight} showPopOut={false} />
+      <SpectrumDisplay
+        height={windowHeight}
+        showPopOut={false}
+        topLeftOverlayInset={topLeftOverlayInset}
+      />
     </div>
   );
 };
