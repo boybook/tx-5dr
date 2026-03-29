@@ -23,6 +23,12 @@ const EMPTY_STATE: SpectrumDisplayState = {
   supportsSpanControl: false,
 };
 
+function normalizeRadioFrequency(frequency: number | null | undefined): number | null {
+  return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0
+    ? frequency
+    : null;
+}
+
 export class SpectrumDisplayStateCoordinator extends EventEmitter<SpectrumDisplayStateCoordinatorEvents> {
   private currentState: SpectrumDisplayState = EMPTY_STATE;
   private lastRadioFrame: SpectrumFrame | null = null;
@@ -71,17 +77,6 @@ export class SpectrumDisplayStateCoordinator extends EventEmitter<SpectrumDispla
     const nextState = await this.buildState(overrides);
     if (!this.areStatesEqual(this.currentState, nextState)) {
       this.currentState = nextState;
-      logger.info('Spectrum display state updated', {
-        mode: nextState.mode,
-        displayRange: nextState.displayRange,
-        centerFrequency: nextState.centerFrequency,
-        currentRadioFrequency: nextState.currentRadioFrequency,
-        edgeLowHz: nextState.edgeLowHz,
-        edgeHighHz: nextState.edgeHighHz,
-        spanHz: nextState.spanHz,
-        supportsFixedEdges: nextState.supportsFixedEdges,
-        supportsSpanControl: nextState.supportsSpanControl,
-      });
       this.emit('stateChanged', nextState);
     } else {
       this.currentState = nextState;
@@ -115,7 +110,7 @@ export class SpectrumDisplayStateCoordinator extends EventEmitter<SpectrumDispla
     }
 
     let currentRadioFrequency = overrides?.currentRadioFrequency;
-    if (typeof currentRadioFrequency !== 'number') {
+    if (normalizeRadioFrequency(currentRadioFrequency) === null) {
       try {
         currentRadioFrequency = await radioManager.getFrequency();
       } catch (error) {
@@ -123,6 +118,7 @@ export class SpectrumDisplayStateCoordinator extends EventEmitter<SpectrumDispla
         currentRadioFrequency = this.currentState.currentRadioFrequency;
       }
     }
+    currentRadioFrequency = normalizeRadioFrequency(currentRadioFrequency);
 
     const activeConnection = radioManager.getActiveConnection();
     const now = Date.now();
@@ -160,7 +156,7 @@ export class SpectrumDisplayStateCoordinator extends EventEmitter<SpectrumDispla
       mode,
       displayRange,
       centerFrequency,
-      currentRadioFrequency: typeof currentRadioFrequency === 'number' ? currentRadioFrequency : null,
+      currentRadioFrequency,
       edgeLowHz: resolvedEdgeLowHz,
       edgeHighHz: resolvedEdgeHighHz,
       spanHz,

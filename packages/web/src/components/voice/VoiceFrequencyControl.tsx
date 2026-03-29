@@ -95,6 +95,9 @@ const FrequencyDigit: React.FC<{
 }> = React.memo(({ digit, disabled, isLeadingZero, onIncrement, onDecrement, onSetDigit }) => {
   const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
+  const handleDeselectEditing = useCallback(() => {
+    setEditing(false);
+  }, []);
 
   // Active = hovered OR editing
   const isActive = hovered || editing;
@@ -132,17 +135,17 @@ const FrequencyDigit: React.FC<{
     }
     setEditing(true);
     activeDigitRef.current = { onIncrement, onDecrement, onSetDigit };
-    editingDigitDeselect.current = () => setEditing(false);
-  }, [disabled, onIncrement, onDecrement, onSetDigit]);
+    editingDigitDeselect.current = handleDeselectEditing;
+  }, [disabled, handleDeselectEditing, onIncrement, onDecrement, onSetDigit]);
 
   // Clean up on unmount
   useEffect(() => {
     return () => {
-      if (editingDigitDeselect.current === (() => setEditing(false))) {
+      if (editingDigitDeselect.current === handleDeselectEditing) {
         editingDigitDeselect.current = null;
       }
     };
-  }, []);
+  }, [handleDeselectEditing]);
 
   // When disabled, never show interactive states
   const showActive = isActive && !disabled;

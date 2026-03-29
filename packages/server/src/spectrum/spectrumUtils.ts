@@ -1,6 +1,7 @@
 import type { SpectrumFrame } from '@tx5dr/contracts';
 import type { IcomScopeFrame } from 'icom-wlan-node';
 import type { SpectrumLine } from 'hamlib';
+import type { OpenWebRXSpectrumFrame } from '@openwebrx-js/api';
 
 export const SPECTRUM_DISPLAY_BIN_COUNT = 1024;
 
@@ -118,6 +119,41 @@ export function createHamlibRadioSpectrumFrame(
       spanHz: spectrumLine.spanHz,
       profileId,
       radioModel,
+    },
+  });
+}
+
+export function createOpenWebRXSpectrumFrame(
+  spectrumFrame: OpenWebRXSpectrumFrame,
+  profileId: string | null
+): SpectrumFrame | null {
+  const { centerFreq, sampleRate, bins } = spectrumFrame;
+  if (!centerFreq || !sampleRate || bins.length === 0) {
+    return null;
+  }
+
+  const resampledPixels = resampleBins(bins, SPECTRUM_DISPLAY_BIN_COUNT);
+  const halfSpan = sampleRate / 2;
+
+  return normalizeSpectrumFrame({
+    timestamp: spectrumFrame.timestamp || Date.now(),
+    kind: 'openwebrx-sdr',
+    frequencyRange: {
+      min: centerFreq - halfSpan,
+      max: centerFreq + halfSpan,
+    },
+    binaryData: {
+      data: resampledPixels,
+      scale: 1,
+      offset: 0,
+    },
+    meta: {
+      sourceBinCount: bins.length,
+      displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
+      centerFrequency: centerFreq,
+      spanHz: sampleRate,
+      profileId,
+      radioModel: 'OpenWebRX',
     },
   });
 }

@@ -117,6 +117,7 @@
     "waiting": "Waiting for spectrum data...",
     "audioSource": "Audio",
     "radioSdrSource": "Radio SDR",
+    "openwebrxSdrSource": "OpenWebRX",
     "popOut": "Show in separate window",
     "rangeSettings": "Spectrum Range Settings",
     "autoMode": "Auto Mode",

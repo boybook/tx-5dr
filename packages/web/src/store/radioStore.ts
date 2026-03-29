@@ -283,7 +283,7 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
     case 'setCurrentRadioFrequency':
       return {
         ...state,
-        currentRadioFrequency: action.payload,
+        currentRadioFrequency: action.payload && action.payload > 0 ? action.payload : state.currentRadioFrequency,
       };
 
     case 'setRadioViewState':
@@ -291,14 +291,18 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         ...state,
         radioViewState: action.payload,
         currentRadioMode: action.payload.radioMode ?? state.currentRadioMode,
-        currentRadioFrequency: action.payload.frequency ?? state.currentRadioFrequency,
+        currentRadioFrequency: action.payload.frequency && action.payload.frequency > 0
+          ? action.payload.frequency
+          : state.currentRadioFrequency,
       };
 
     case 'setSpectrumDisplayState':
       return {
         ...state,
         spectrumDisplayState: action.payload,
-        currentRadioFrequency: action.payload.currentRadioFrequency ?? state.currentRadioFrequency,
+        currentRadioFrequency: action.payload.currentRadioFrequency && action.payload.currentRadioFrequency > 0
+          ? action.payload.currentRadioFrequency
+          : state.currentRadioFrequency,
       };
     
     case 'decodeError':
@@ -995,7 +999,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const freqData = data as { frequency?: number };
         radioDispatch({
           type: 'setCurrentRadioFrequency',
-          payload: typeof freqData.frequency === 'number' ? freqData.frequency : null,
+          payload: typeof freqData.frequency === 'number' && freqData.frequency > 0 ? freqData.frequency : null,
         });
         logger.debug('Frequency changed, clearing local slot history', { frequency: freqData.frequency });
         slotPacksDispatch({ type: 'CLEAR_DATA' });

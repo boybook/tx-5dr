@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SpectrumKindSchema = z.enum(['audio', 'radio-sdr']);
+export const SpectrumKindSchema = z.enum(['audio', 'radio-sdr', 'openwebrx-sdr']);
 export type SpectrumKind = z.infer<typeof SpectrumKindSchema>;
 
 export const SpectrumZoomDirectionSchema = z.enum(['in', 'out']);

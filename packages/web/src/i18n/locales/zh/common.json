@@ -117,6 +117,7 @@
     "waiting": "等待频谱数据...",
     "audioSource": "音频",
     "radioSdrSource": "电台 SDR",
+    "openwebrxSdrSource": "OpenWebRX",
     "popOut": "在独立窗口中显示",
     "rangeSettings": "频谱范围设置",
     "autoMode": "自动模式",
