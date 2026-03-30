@@ -428,6 +428,12 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
+    env:
+      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
+      OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+      OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+      OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
 
     steps:
       - name: Checkout repository
@@ -578,22 +584,18 @@ jobs:
           makeLatest: true
 
       - name: Install ossutil
-        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: bash scripts/install-ossutil.sh
 
       - name: Configure ossutil
-        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
-        env:
-          OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
-          OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
-          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: |
           OSS_ENDPOINT_VALUE="${OSS_ENDPOINT#https://}"
           OSS_ENDPOINT_VALUE="${OSS_ENDPOINT_VALUE#http://}"
           ossutil config -e "${OSS_ENDPOINT_VALUE}" -i "${OSS_ACCESS_KEY_ID}" -k "${OSS_ACCESS_KEY_SECRET}" -c "${RUNNER_TEMP}/.ossutilconfig"
 
       - name: Generate OSS app manifest
-        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: |
           node scripts/generate-oss-manifest.mjs \
             --product app \
@@ -602,15 +604,13 @@ jobs:
             --version "${{ steps.release_info.outputs.version }}" \
             --commit "${{ steps.release_info.outputs.short_sha }}" \
             --published-at "${{ steps.release_info.outputs.timestamp }}" \
-            --base-url "${{ secrets.OSS_BASE_URL }}" \
+            --base-url "${OSS_BASE_URL}" \
             --object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
             --assets-dir "release-assets" \
             --output "oss-metadata/app/latest.json"
 
       - name: Upload app assets to OSS
-        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
-        env:
-          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: |
           for file in release-assets/*; do
             ossutil cp "$file" "oss://${OSS_BUCKET}/tx-5dr/app/${{ steps.release_info.outputs.tag }}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
