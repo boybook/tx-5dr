@@ -27,6 +27,7 @@ jobs:
       OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
       OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
       OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
+      OSS_REGION: ${{ secrets.OSS_REGION }}
 
     steps:
       - name: Checkout repository
@@ -236,10 +237,30 @@ jobs:
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         shell: bash
         run: |
+          oss_region="${OSS_REGION:-}"
+          oss_endpoint_host="${OSS_ENDPOINT#https://}"
+          oss_endpoint_host="${oss_endpoint_host#http://}"
+          oss_endpoint_host="${oss_endpoint_host%%/*}"
+
+          if [ -z "${oss_region}" ]; then
+            if [[ "${oss_endpoint_host}" =~ oss-([a-z0-9-]+)\.aliyuncs\.com$ ]]; then
+              oss_region="${BASH_REMATCH[1]}"
+            fi
+          fi
+
+          if [ -z "${oss_region}" ]; then
+            echo "Failed to determine OSS region from OSS_ENDPOINT=${OSS_ENDPOINT}" >&2
+            echo "Please configure the OSS_REGION GitHub secret, for example: cn-hangzhou" >&2
+            exit 1
+          fi
+
+          echo "Using OSS endpoint: ${OSS_ENDPOINT}"
+          echo "Using OSS region: ${oss_region}"
           cat > "${RUNNER_TEMP}/.ossutilconfig" <<EOF
           [Credentials]
           language = EN
           endpoint = ${OSS_ENDPOINT}
+          region = ${oss_region}
           accessKeyID = ${OSS_ACCESS_KEY_ID}
           accessKeySecret = ${OSS_ACCESS_KEY_SECRET}
           EOF
