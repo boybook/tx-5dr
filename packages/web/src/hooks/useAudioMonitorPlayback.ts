@@ -11,12 +11,17 @@ import type {
 } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import {
+  buildRealtimeConnectivityIssue,
+  showRealtimeFallbackActivatedToast,
   toRealtimeConnectivityError,
 } from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
 const AUDIO_TRACK_WAIT_TIMEOUT_MS = 5000;
+const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
+const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
+const LIVEKIT_FAST_TRACK_TIMEOUT_MS = 1500;
 
 interface ReceiverStatsData {
   latencyMs?: number;
@@ -101,7 +106,7 @@ export function useAudioMonitorPlayback(
     });
   }, []);
 
-  const waitForPlaybackPath = useCallback(async (): Promise<void> => {
+  const waitForPlaybackPath = useCallback(async (timeoutMs = AUDIO_TRACK_WAIT_TIMEOUT_MS): Promise<void> => {
     if (attachedTracksRef.current.size > 0 || compatSocketRef.current) {
       return;
     }
@@ -110,7 +115,7 @@ export function useAudioMonitorPlayback(
       const timer = window.setTimeout(() => {
         pendingTrackWaitersRef.current = pendingTrackWaitersRef.current.filter((entry) => entry.timer !== timer);
         reject(new Error('No realtime audio path became available before timeout'));
-      }, AUDIO_TRACK_WAIT_TIMEOUT_MS);
+      }, timeoutMs);
 
       pendingTrackWaitersRef.current.push({ resolve, reject, timer });
     });
@@ -134,7 +139,7 @@ export function useAudioMonitorPlayback(
     attachedElementsRef.current.clear();
   }, []);
 
-  const cleanup = useCallback(() => {
+  const cleanupTransportState = useCallback((preserveSessionContext = false) => {
     if (statsPollTimerRef.current !== null) {
       window.clearInterval(statsPollTimerRef.current);
       statsPollTimerRef.current = null;
@@ -185,13 +190,20 @@ export function useAudioMonitorPlayback(
     receiverStatsRef.current = null;
     displayLatencyRef.current = null;
     displayBufferFillRef.current = null;
-    connectivityHintsRef.current = null;
-    activePreviewSessionIdRef.current = null;
-    isInitializingRef.current = false;
     setTransportKind(null);
     setIsPlaying(false);
     setStats(null);
+
+    if (!preserveSessionContext) {
+      connectivityHintsRef.current = null;
+      activePreviewSessionIdRef.current = null;
+      isInitializingRef.current = false;
+    }
   }, [detachAllTracks, rejectPendingTrackWaiters]);
+
+  const cleanup = useCallback(() => {
+    cleanupTransportState(false);
+  }, [cleanupTransportState]);
 
   useEffect(() => {
     return () => {
@@ -340,7 +352,7 @@ export function useAudioMonitorPlayback(
 
     const element = track.attach();
     element.autoplay = true;
-    element.playsInline = true;
+    element.setAttribute('playsinline', 'true');
     element.style.display = 'none';
     document.body.appendChild(element);
 
@@ -375,7 +387,10 @@ export function useAudioMonitorPlayback(
     });
   }, [attachBridgeTrackPublication]);
 
-  const startLiveKitPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
+  const startLiveKitPlayback = useCallback(async (
+    offer: RealtimeTransportOffer,
+    options?: { fastFallback?: boolean },
+  ) => {
     const audioContext = new AudioContext({
       latencyHint: 'interactive',
     });
@@ -392,6 +407,11 @@ export function useAudioMonitorPlayback(
         audioContext,
       },
     });
+    const handleDisconnected = () => {
+      if (!intentionalDisconnectRef.current && roomRef.current === room) {
+        cleanup();
+      }
+    };
 
     room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
       attachBridgeTrackPublication(participant.identity, {
@@ -426,26 +446,34 @@ export function useAudioMonitorPlayback(
       void pollReceiverStats();
       recomputeStats();
     });
+    room.on(RoomEvent.Disconnected, handleDisconnected);
 
-    room.on(RoomEvent.Disconnected, () => {
-      if (!intentionalDisconnectRef.current) {
-        cleanup();
+    try {
+      await room.connect(offer.url, offer.token, {
+        autoSubscribe: true,
+        maxRetries: options?.fastFallback ? 0 : undefined,
+        websocketTimeout: options?.fastFallback ? LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS : undefined,
+        peerConnectionTimeout: options?.fastFallback ? LIVEKIT_FAST_PEER_TIMEOUT_MS : undefined,
+      });
+
+      if (!room.canPlaybackAudio) {
+        await room.startAudio();
       }
-    });
 
-    await room.connect(offer.url, offer.token, {
-      autoSubscribe: true,
-    });
-
-    if (!room.canPlaybackAudio) {
-      await room.startAudio();
+      attachExistingBridgeTracks(room);
+      await waitForPlaybackPath(options?.fastFallback ? LIVEKIT_FAST_TRACK_TIMEOUT_MS : AUDIO_TRACK_WAIT_TIMEOUT_MS);
+      roomRef.current = room;
+      setTransportKind('livekit');
+      resolvePendingTrackWaiters();
+    } catch (error) {
+      room.off(RoomEvent.Disconnected, handleDisconnected);
+      try {
+        await room.disconnect();
+      } catch {
+        // ignore
+      }
+      throw error;
     }
-
-    attachExistingBridgeTracks(room);
-    await waitForPlaybackPath();
-    roomRef.current = room;
-    setTransportKind('livekit');
-    resolvePendingTrackWaiters();
   }, [attachBridgeTrackPublication, attachExistingBridgeTracks, cleanup, pollReceiverStats, recomputeStats, resolvePendingTrackWaiters, waitForPlaybackPath]);
 
   const startCompatPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
@@ -564,6 +592,8 @@ export function useAudioMonitorPlayback(
     if (isPlaying || isInitializingRef.current) return;
     const effectivePreviewSessionId = overridePreviewSessionId ?? previewSessionId;
     let errorStage: 'token' | 'connect' | 'subscribe' = 'token';
+    let compatFallbackAttempted = false;
+    let liveKitFailureIssue: ReturnType<typeof buildRealtimeConnectivityIssue> | null = null;
 
     if (scope === 'openwebrx-preview' && !effectivePreviewSessionId) {
       throw new Error('previewSessionId is required for OpenWebRX preview playback');
@@ -586,16 +616,34 @@ export function useAudioMonitorPlayback(
         try {
           errorStage = 'connect';
           if (offer.transport === 'livekit') {
-            await startLiveKitPlayback(offer);
+            await startLiveKitPlayback(offer, {
+              fastFallback: session.offers.some((candidate) => candidate.transport === 'ws-compat'),
+            });
           } else {
+            compatFallbackAttempted = liveKitFailureIssue !== null;
             await startCompatPlayback(offer);
+            if (liveKitFailureIssue) {
+              showRealtimeFallbackActivatedToast(liveKitFailureIssue);
+            }
           }
           startStatsPolling();
           setIsPlaying(true);
           return;
         } catch (error) {
           lastError = error;
-          cleanup();
+          if (offer.transport === 'livekit') {
+            liveKitFailureIssue = buildRealtimeConnectivityIssue(error, {
+              scope,
+              stage: errorStage,
+              hints: connectivityHintsRef.current ?? undefined,
+            });
+            logger.warn('LiveKit playback path failed, trying compatibility fallback', {
+              scope,
+              code: liveKitFailureIssue.code,
+              details: liveKitFailureIssue.technicalDetails,
+            });
+          }
+          cleanupTransportState(true);
           if (intentionalDisconnectRef.current) {
             throw error;
           }
@@ -605,18 +653,23 @@ export function useAudioMonitorPlayback(
       throw lastError ?? new Error('No realtime playback transport succeeded');
     } catch (error) {
       const currentHints = connectivityHintsRef.current ?? undefined;
-      intentionalDisconnectRef.current = true;
-      cleanup();
-      logger.error('Failed to start realtime playback', error);
-      throw toRealtimeConnectivityError(error, {
+      const realtimeError = toRealtimeConnectivityError(error, {
         scope,
         stage: errorStage,
         hints: currentHints,
       });
+      if (!realtimeError.issue.context) {
+        realtimeError.issue.context = {};
+      }
+      realtimeError.issue.context.compatFallbackAttempted = String(compatFallbackAttempted);
+      intentionalDisconnectRef.current = true;
+      cleanup();
+      logger.error('Failed to start realtime playback', error);
+      throw realtimeError;
     } finally {
       isInitializingRef.current = false;
     }
-  }, [cleanup, isPlaying, previewSessionId, scope, startCompatPlayback, startLiveKitPlayback, startStatsPolling]);
+  }, [cleanup, cleanupTransportState, isPlaying, previewSessionId, scope, startCompatPlayback, startLiveKitPlayback, startStatsPolling]);
 
   const stop = useCallback(() => {
     intentionalDisconnectRef.current = true;

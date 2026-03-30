@@ -551,13 +551,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             scope: 'radio',
             stage: 'connect',
           });
-        showRealtimeConnectivityIssueToast(issue, {
-          onRetry: () => {
-            void audioMonitor.start().catch((retryError) => {
-              logger.error('Failed to retry audio monitor start', retryError);
-            });
-          },
-        });
+        showRealtimeConnectivityIssueToast(issue);
       }
     }
   };
@@ -576,13 +570,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             scope: 'radio',
             stage: 'connect',
           });
-        showRealtimeConnectivityIssueToast(issue, {
-          onRetry: () => {
-            void audioMonitor.start().catch((retryError) => {
-              logger.error('Failed to retry voice auto-monitor start', retryError);
-            });
-          },
-        });
+        showRealtimeConnectivityIssueToast(issue);
       });
     }
     if (radioMode.engineMode !== 'voice') {
