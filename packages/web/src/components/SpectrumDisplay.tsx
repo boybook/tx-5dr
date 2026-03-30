@@ -650,7 +650,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
   const availableSources = capabilities?.sources.filter(source => source.available) ?? [];
   const shouldShowSourceTabs = availableSources.length > 1;
-  const sourceTabOrder: SpectrumKind[] = [RADIO_SDR_SOURCE, OPENWEBRX_SDR_SOURCE, AUDIO_SOURCE];
+  const sourceTabOrder: SpectrumKind[] = [OPENWEBRX_SDR_SOURCE, RADIO_SDR_SOURCE, AUDIO_SOURCE];
   const visibleSourceTabs = sourceTabOrder.filter(kind => availableSources.some(source => source.kind === kind));
   const voiceOverlayIsInteractive = Boolean(sessionState?.interaction.canDragVoiceOverlay);
   const openWebRXTxFrequencies = React.useMemo(() => {
