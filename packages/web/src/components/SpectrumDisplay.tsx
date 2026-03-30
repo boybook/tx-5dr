@@ -1,16 +1,17 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Tab, Tabs, Tooltip } from '@heroui/react';
 import { ArrowsPointingOutIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
-import { useConnection, useCurrentOperatorId, useOperators, useProfiles, useRadioState, useSpectrum } from '../store/radioStore';
+import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioModeState, useSpectrum } from '../store/radioStore';
 import { createLogger } from '../utils/logger';
 import { setPreferredSpectrumKind } from '../utils/spectrumPreferences';
 import { useTargetRxFrequencies } from '../hooks/useTargetRxFrequencies';
 import { useTxFrequencies } from '../hooks/useTxFrequencies';
 import { WebGLWaterfall } from './WebGLWaterfall';
 import type { AutoRangeConfig, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
+import { SpectrumStreamController } from '../spectrum/SpectrumStreamController';
 
 const logger = createLogger('SpectrumDisplay');
 
@@ -23,7 +24,6 @@ type ElectronWindowHelper = Window & {
 };
 
 const WATERFALL_HISTORY = 120;
-const WATERFALL_UPDATE_INTERVAL = 100;
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
 const OPENWEBRX_VIEWPORT_STORAGE_KEY = 'openwebrx-spectrum-viewports';
 const AUDIO_SOURCE: SpectrumKind = 'audio';
@@ -51,12 +51,6 @@ interface SpectrumDisplayProps {
     top?: number;
     left?: number;
   };
-}
-
-interface WaterfallData {
-  spectrumData: number[][];
-  frequencies: number[];
-  timeLabels: string[];
 }
 
 interface ManualRangeSettings {
@@ -359,55 +353,6 @@ function buildOpenWebRXZoomLevels(totalSpan: number): number[] {
   return Array.from(levels).sort((a, b) => b - a);
 }
 
-function cropSpectrumToViewport(
-  values: number[],
-  fullRange: { min: number; max: number },
-  viewport: OpenWebRXViewport
-): number[] {
-  if (values.length === 0) {
-    return values;
-  }
-
-  const fullSpan = fullRange.max - fullRange.min;
-  if (fullSpan <= 0) {
-    return values;
-  }
-
-  const viewMin = viewport.centerHz - viewport.spanHz / 2;
-  const viewMax = viewport.centerHz + viewport.spanHz / 2;
-  const output = new Array<number>(values.length);
-  const maxIndex = values.length - 1;
-  const fillValue = values.reduce((min, value) => Math.min(min, value), values[0] ?? 0);
-
-  for (let i = 0; i < values.length; i++) {
-    const targetFrequency = viewMin + (i * (viewMax - viewMin)) / Math.max(values.length - 1, 1);
-    if (targetFrequency < fullRange.min || targetFrequency > fullRange.max) {
-      output[i] = fillValue;
-      continue;
-    }
-
-    const sourceRatio = (targetFrequency - fullRange.min) / fullSpan;
-    const sourcePos = Math.min(maxIndex, Math.max(0, sourceRatio * maxIndex));
-    const left = Math.floor(sourcePos);
-    const right = Math.min(maxIndex, left + 1);
-    const factor = sourcePos - left;
-    output[i] = values[left] + (values[right] - values[left]) * factor;
-  }
-
-  return output;
-}
-
-function cropSpectrumToRange(
-  values: number[],
-  fullRange: { min: number; max: number },
-  targetRange: { min: number; max: number }
-): number[] {
-  return cropSpectrumToViewport(values, fullRange, {
-    centerHz: (targetRange.min + targetRange.max) / 2,
-    spanHz: targetRange.max - targetRange.min,
-  });
-}
-
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
   height = 200,
@@ -421,24 +366,26 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const connection = useConnection();
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
-  const { state: radioState } = useRadioState();
-  const { capabilities, selectedKind, latestFrame, sessionState, setSelectedKind } = useSpectrum();
-  const isTransmitting = radioState.pttStatus.isTransmitting;
-  const [frame, setFrame] = useState<SpectrumFrame | null>(null);
-  const [waterfallData, setWaterfallData] = useState<WaterfallData>({
-    spectrumData: [],
-    frequencies: [],
-    timeLabels: [],
-  });
+  const { currentRadioMode, currentRadioFrequency, engineMode } = useRadioModeState();
+  const { pttStatus } = usePTTState();
+  const { capabilities, selectedKind, sessionState, setSelectedKind } = useSpectrum();
+  const controllerRef = useRef<SpectrumStreamController | null>(null);
+  if (!controllerRef.current) {
+    controllerRef.current = new SpectrumStreamController(WATERFALL_HISTORY);
+  }
+  const streamController = controllerRef.current;
+  const streamStatus = useSyncExternalStore(
+    streamController.subscribeStatus,
+    streamController.getStatusSnapshot,
+    streamController.getStatusSnapshot
+  );
+  const radioSdrFullRange = streamController.getFullRange(RADIO_SDR_SOURCE);
+  const openWebRXStreamRange = streamController.getFullRange(OPENWEBRX_SDR_SOURCE);
+  const isTransmitting = pttStatus.isTransmitting;
   const [actualRange, setActualRange] = useState<{ min: number; max: number } | null>(null);
   const [persistedRangeSettings, setPersistedRangeSettings] = useState<PersistedRangeSettings>(() => loadPersistedRangeSettings());
   const [openWebRXViewport, setOpenWebRXViewport] = useState<OpenWebRXViewport | null>(() => readOpenWebRXViewport(activeProfileId));
-  const lastUpdateRef = useRef<number>(0);
-  const pendingFrameRef = useRef<SpectrumFrame | null>(null);
-  const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
   const openWebRXPanStateRef = useRef<{ startX: number; startCenterHz: number; width: number } | null>(null);
-  const radioSdrHistoryRef = useRef<Array<{ frame: SpectrumFrame; values: number[]; timeLabel: string }>>([]);
-  const openWebRXHistoryRef = useRef<Array<{ frame: SpectrumFrame; values: number[]; timeLabel: string }>>([]);
 
   const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
   const canPopOut = showPopOut && isElectron;
@@ -448,7 +395,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
-  const isVoiceMode = radioState.engineMode === 'voice';
+  const isVoiceMode = engineMode === 'voice';
   const sourceMode = sessionState?.sourceMode ?? 'unknown';
   const isFixedSpectrumMode = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
   const isOpenWebRXDetailMode = isOpenWebRXSdrSelected && sourceMode === 'detail';
@@ -472,7 +419,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
           : 'absolute-center'
   );
   const spectrumReferenceFrequency = isRadioSdrSelected
-    ? (sessionState?.currentRadioFrequency ?? radioState.currentRadioFrequency ?? null)
+    ? (sessionState?.currentRadioFrequency ?? currentRadioFrequency ?? null)
     : null;
   const currentManualRangeSettings = isOpenWebRXSdrSelected
     ? (isOpenWebRXDetailMode
@@ -583,7 +530,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     }
 
     const snappedFrequency = snapFrequencyToStep(frequency, frequencyGestureStepHz);
-    const currentRadioMode = sessionState?.voice.radioMode ?? radioState.currentRadioMode ?? 'USB';
+    const nextRadioMode = sessionState?.voice.radioMode ?? currentRadioMode ?? 'USB';
 
     try {
       await api.setRadioFrequency({
@@ -591,190 +538,71 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         mode: 'VOICE',
         band: 'Custom',
         description: `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`,
-        radioMode: currentRadioMode,
+        radioMode: nextRadioMode,
       });
     } catch (error) {
       logger.error('Failed to set voice frequency from SDR overlay', error);
     }
-  }, [connection.state.isConnected, frequencyGestureStepHz, radioState.currentRadioMode, sessionState?.voice.radioMode]);
+  }, [connection.state.isConnected, currentRadioMode, frequencyGestureStepHz, sessionState?.voice.radioMode]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     void handleVoiceFrequencyChange(frequency);
   }, [handleVoiceFrequencyChange]);
-
-  const decodeSpectrumData = useCallback((nextFrame: SpectrumFrame) => {
-    const binaryString = atob(nextFrame.binaryData.data);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-
-    const int16Array = new Int16Array(bytes.buffer);
-    const { scale = 1, offset = 0 } = nextFrame.binaryData.format;
-    return Array.from(int16Array, value => value * scale + offset);
-  }, []);
-
-  const getSpectrumBinCount = useCallback((nextFrame: SpectrumFrame) => {
-    return nextFrame.meta?.displayBinCount
-      ?? nextFrame.meta?.sourceBinCount
-      ?? decodeSpectrumData(nextFrame).length;
-  }, [decodeSpectrumData]);
-
-  const generateFrequencyAxis = useCallback((nextFrame: SpectrumFrame) => {
-    const { min, max } = nextFrame.frequencyRange;
-    const length = getSpectrumBinCount(nextFrame);
-    const frequencies = new Array(length);
-
-    for (let i = 0; i < length; i++) {
-      frequencies[i] = min + (i * (max - min)) / Math.max(length - 1, 1);
-    }
-
-    return frequencies;
-  }, [getSpectrumBinCount]);
-
-  const resetWaterfall = useCallback(() => {
-    setFrame(null);
-    setActualRange(null);
-    setWaterfallData({
-      spectrumData: [],
-      frequencies: [],
-      timeLabels: [],
-    });
-    pendingFrameRef.current = null;
-    if (updateTimerRef.current) {
-      clearTimeout(updateTimerRef.current);
-      updateTimerRef.current = null;
-    }
-    radioSdrHistoryRef.current = [];
-    openWebRXHistoryRef.current = [];
-  }, []);
-
-  const rebuildRadioSdrWaterfall = useCallback((targetRange: { min: number; max: number } | null) => {
-    if (!targetRange || radioSdrHistoryRef.current.length === 0) {
-      return;
-    }
-
-    const nextSpectrumData = radioSdrHistoryRef.current.map(({ frame: historyFrame, values }) =>
-      cropSpectrumToRange(values, historyFrame.frequencyRange, targetRange)
-    );
-    const firstFrame = radioSdrHistoryRef.current[0]?.frame ?? null;
-    const frequencies = new Array(firstFrame ? getSpectrumBinCount(firstFrame) : 0)
-      .fill(0)
-      .map((_, index, array) => targetRange.min + (index * (targetRange.max - targetRange.min)) / Math.max(array.length - 1, 1));
-
-    setWaterfallData({
-      spectrumData: nextSpectrumData,
-      frequencies,
-      timeLabels: radioSdrHistoryRef.current.map(entry => entry.timeLabel),
-    });
-  }, [getSpectrumBinCount]);
-
-  const rebuildOpenWebRXWaterfall = useCallback((viewport: OpenWebRXViewport | null) => {
-    if (!viewport || openWebRXHistoryRef.current.length === 0) {
-      return;
-    }
-
-    const nextSpectrumData = openWebRXHistoryRef.current.map(({ frame: historyFrame, values }) =>
-      cropSpectrumToViewport(values, historyFrame.frequencyRange, viewport)
-    );
-    const viewportMin = viewport.centerHz - viewport.spanHz / 2;
-    const viewportMax = viewport.centerHz + viewport.spanHz / 2;
-    const firstFrame = openWebRXHistoryRef.current[0]?.frame ?? null;
-    const frequencies = new Array(firstFrame ? getSpectrumBinCount(firstFrame) : 0)
-      .fill(0)
-      .map((_, index, array) => viewportMin + (index * (viewportMax - viewportMin)) / Math.max(array.length - 1, 1));
-
-    setWaterfallData({
-      spectrumData: nextSpectrumData,
-      frequencies,
-      timeLabels: openWebRXHistoryRef.current.map(entry => entry.timeLabel),
-    });
-  }, [getSpectrumBinCount]);
-
-  const performUpdate = useCallback(() => {
-    const nextFrame = pendingFrameRef.current;
-    if (!nextFrame) return;
-
-    pendingFrameRef.current = null;
-    const values = decodeSpectrumData(nextFrame);
-    const timeLabel = new Date().toISOString().slice(11, 23);
-
-    setWaterfallData(prev => {
-      const nextFrequencies = generateFrequencyAxis(nextFrame);
-      const frequenciesChanged = prev.frequencies.length !== nextFrequencies.length
-        || prev.frequencies[0] !== nextFrequencies[0]
-        || prev.frequencies[prev.frequencies.length - 1] !== nextFrequencies[nextFrequencies.length - 1];
-
-      return {
-        spectrumData: [values, ...prev.spectrumData].slice(0, WATERFALL_HISTORY),
-        frequencies: frequenciesChanged ? nextFrequencies : prev.frequencies,
-        timeLabels: [timeLabel, ...prev.timeLabels].slice(0, WATERFALL_HISTORY),
-      };
-    });
-
-    setFrame(nextFrame);
-  }, [decodeSpectrumData, generateFrequencyAxis]);
-
-  const updateWaterfallData = useCallback((nextFrame: SpectrumFrame) => {
-    const now = Date.now();
-    pendingFrameRef.current = nextFrame;
-
-    if (now - lastUpdateRef.current >= WATERFALL_UPDATE_INTERVAL) {
-      lastUpdateRef.current = now;
-      performUpdate();
-      return;
-    }
-
-    if (updateTimerRef.current) {
-      clearTimeout(updateTimerRef.current);
-    }
-
-    const delay = WATERFALL_UPDATE_INTERVAL - (now - lastUpdateRef.current);
-    updateTimerRef.current = setTimeout(() => {
-      lastUpdateRef.current = Date.now();
-      performUpdate();
-    }, delay);
-  }, [performUpdate]);
-
-  const updateRadioSdrWaterfallData = useCallback((nextFrame: SpectrumFrame) => {
-    const values = decodeSpectrumData(nextFrame);
-    const timeLabel = new Date().toISOString().slice(11, 23);
-
-    const existingIndex = radioSdrHistoryRef.current.findIndex(entry => entry.frame.timestamp === nextFrame.timestamp);
-    if (existingIndex >= 0) {
-      radioSdrHistoryRef.current[existingIndex] = { frame: nextFrame, values, timeLabel };
-    } else {
-      radioSdrHistoryRef.current = [{ frame: nextFrame, values, timeLabel }, ...radioSdrHistoryRef.current].slice(0, WATERFALL_HISTORY);
-    }
-
-    setFrame(nextFrame);
-    rebuildRadioSdrWaterfall(sessionState?.displayRange ?? nextFrame.frequencyRange);
-  }, [decodeSpectrumData, rebuildRadioSdrWaterfall, sessionState?.displayRange]);
-
-  const updateOpenWebRXWaterfallData = useCallback((nextFrame: SpectrumFrame) => {
-    const values = decodeSpectrumData(nextFrame);
-    const timeLabel = new Date().toISOString().slice(11, 23);
-
-    const existingIndex = openWebRXHistoryRef.current.findIndex(entry => entry.frame.timestamp === nextFrame.timestamp);
-    if (existingIndex >= 0) {
-      openWebRXHistoryRef.current[existingIndex] = { frame: nextFrame, values, timeLabel };
-    } else {
-      openWebRXHistoryRef.current = [{ frame: nextFrame, values, timeLabel }, ...openWebRXHistoryRef.current].slice(0, WATERFALL_HISTORY);
-    }
-
-    setFrame(nextFrame);
-    if (openWebRXViewport) {
-      rebuildOpenWebRXWaterfall(openWebRXViewport);
-    }
-  }, [decodeSpectrumData, openWebRXViewport, rebuildOpenWebRXWaterfall]);
+  useEffect(() => {
+    return () => {
+      streamController.destroy();
+    };
+  }, [streamController]);
 
   useEffect(() => {
-    if (!isOpenWebRXSdrSelected || isOpenWebRXDetailMode || !latestFrame || latestFrame.kind !== OPENWEBRX_SDR_SOURCE) {
+    const radioService = connection.state.radioService;
+    if (!radioService) {
+      streamController.reset();
       return;
     }
 
-    const fullMin = latestFrame.frequencyRange.min;
-    const fullMax = latestFrame.frequencyRange.max;
+    const wsClient = radioService.wsClientInstance;
+    const handleSpectrumFrame = (data: unknown) => {
+      streamController.pushFrame(data as SpectrumFrame);
+    };
+
+    wsClient.onWSEvent('spectrumFrame', handleSpectrumFrame);
+    return () => {
+      wsClient.offWSEvent('spectrumFrame', handleSpectrumFrame);
+    };
+  }, [connection.state.radioService, streamController]);
+
+  useEffect(() => {
+    streamController.updateContext({
+      selectedKind: effectiveSelectedKind,
+      radioSdrDisplayRange: isRadioSdrSelected ? (sessionState?.displayRange ?? radioSdrFullRange ?? null) : null,
+      openWebRXViewport: isOpenWebRXSdrSelected && !isOpenWebRXDetailMode ? openWebRXViewport : null,
+      isOpenWebRXDetailMode,
+    });
+  }, [
+    effectiveSelectedKind,
+    isOpenWebRXDetailMode,
+    isOpenWebRXSdrSelected,
+    isRadioSdrSelected,
+    openWebRXViewport,
+    radioSdrFullRange,
+    sessionState?.displayRange,
+    streamController,
+  ]);
+
+  useEffect(() => {
+    setActualRange(null);
+    streamController.reset();
+  }, [activeProfileId, streamController]);
+
+  useEffect(() => {
+    const fullRange = isOpenWebRXSdrSelected ? (streamStatus.fullRange ?? openWebRXStreamRange) : null;
+    if (!isOpenWebRXSdrSelected || isOpenWebRXDetailMode || !fullRange) {
+      return;
+    }
+
+    const fullMin = fullRange.min;
+    const fullMax = fullRange.max;
     setOpenWebRXViewport(prev => {
       const nextViewport = clampOpenWebRXViewport(
         prev ?? {
@@ -793,56 +621,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
       return nextViewport;
     });
-  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, latestFrame]);
-
-  useEffect(() => {
-    if (!latestFrame || !selectedKind || latestFrame.kind !== selectedKind) {
-      return;
-    }
-    if (selectedKind === RADIO_SDR_SOURCE) {
-      updateRadioSdrWaterfallData(latestFrame);
-      return;
-    }
-    if (selectedKind === OPENWEBRX_SDR_SOURCE && !isOpenWebRXDetailMode) {
-      updateOpenWebRXWaterfallData(latestFrame);
-      return;
-    }
-    updateWaterfallData(latestFrame);
-  }, [isOpenWebRXDetailMode, latestFrame, selectedKind, updateOpenWebRXWaterfallData, updateRadioSdrWaterfallData, updateWaterfallData]);
-
-  useEffect(() => {
-    if (!isRadioSdrSelected || radioSdrHistoryRef.current.length === 0) {
-      return;
-    }
-
-    rebuildRadioSdrWaterfall(sessionState?.displayRange ?? frame?.frequencyRange ?? null);
-  }, [
-    frame?.frequencyRange,
-    isRadioSdrSelected,
-    rebuildRadioSdrWaterfall,
-    sessionState?.displayRange?.max,
-    sessionState?.displayRange?.min,
-  ]);
-
-  useEffect(() => {
-    if (!isOpenWebRXSdrSelected || isOpenWebRXDetailMode || !openWebRXViewport || openWebRXHistoryRef.current.length === 0) {
-      return;
-    }
-
-    rebuildOpenWebRXWaterfall(openWebRXViewport);
-  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, openWebRXViewport, rebuildOpenWebRXWaterfall]);
-
-  useEffect(() => {
-    resetWaterfall();
-  }, [selectedKind, resetWaterfall]);
-
-  useEffect(() => {
-    if (!isOpenWebRXSdrSelected) {
-      return;
-    }
-
-    resetWaterfall();
-  }, [isOpenWebRXSdrSelected, isOpenWebRXDetailMode, resetWaterfall]);
+  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, openWebRXStreamRange, streamStatus.fullRange]);
 
   useEffect(() => {
     if (selectedKind !== RADIO_SDR_SOURCE) {
@@ -889,9 +668,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return isOpenWebRXDetailMode ? rxFrequencies : [];
   }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isVoiceMode, rxFrequencies, showMarkers, showRxMarkers]);
   const effectiveHoverFrequency = hoverFrequency;
-  const openWebRXFullRange = latestFrame?.kind === OPENWEBRX_SDR_SOURCE
-    ? latestFrame.frequencyRange
-    : null;
+  const openWebRXFullRange = isOpenWebRXSdrSelected ? (streamStatus.fullRange ?? openWebRXStreamRange) : null;
   const voiceBandOverlay: TxBandOverlay[] = React.useMemo(() => {
     if (
       !isVoiceMode
@@ -1234,7 +1011,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     };
   }, [isOpenWebRXSdrSelected, updateOpenWebRXViewport]);
 
-  if (!frame || waterfallData.spectrumData.length === 0) {
+  if (!streamStatus.hasData) {
     return (
       <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
         <div className="text-default-400">{t('spectrum.waiting')}</div>
@@ -1289,9 +1066,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       onMouseDown={isOpenWebRXSdrSelected && canOpenWebRXLocalViewportPan ? handleOpenWebRXMouseDown : undefined}
     >
       <WebGLWaterfall
-        data={waterfallData.spectrumData}
-        frameToken={waterfallData.timeLabels[0] ?? null}
-        frequencies={waterfallData.frequencies}
+        controller={streamController}
         height={height}
         minDb={currentManualRangeSettings.minDb}
         maxDb={currentManualRangeSettings.maxDb}
