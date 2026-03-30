@@ -1,9 +1,16 @@
-import { FastifyInstance } from 'fastify';
-import { DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema, RealtimeSettingsSchema } from '@tx5dr/contracts';
+import { FastifyInstance, FastifyRequest } from 'fastify';
+import {
+  DecodeWindowSettingsSchema,
+  resolveWindowTiming,
+  CustomFrequencyPresetsSchema,
+  RealtimeSettingsSchema,
+} from '@tx5dr/contracts';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { requireAbility } from '../auth/authPlugin.js';
+import { LiveKitConfig } from '../realtime/LiveKitConfig.js';
+import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
 /**
@@ -12,6 +19,42 @@ import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
  */
 export async function settingsRoutes(fastify: FastifyInstance) {
   const configManager = ConfigManager.getInstance();
+  const transportManager = RealtimeTransportManager.getInstance();
+
+  const buildRealtimeSettingsData = (request: FastifyRequest) => {
+    const publicWsUrl = configManager.getLiveKitPublicUrl();
+    const transportPolicy = configManager.getRealtimeTransportPolicy();
+    const resolvedSignalingUrl = LiveKitConfig.resolvePublicWsUrl(request);
+    const connectivityHints = LiveKitConfig.getConnectivityHints();
+    const resolvedSignalingPort = (() => {
+      try {
+        const parsed = new URL(resolvedSignalingUrl);
+        const fallbackPort = parsed.protocol === 'wss:' ? 443 : 80;
+        return Number(parsed.port || fallbackPort);
+      } catch {
+        return connectivityHints.signalingPort;
+      }
+    })();
+    const health = transportManager.getScopeHealth('radio');
+
+    return {
+      publicWsUrl,
+      transportPolicy,
+      runtime: {
+        liveKitEnabled: LiveKitConfig.isEnabled(),
+        connectivityHints: {
+          ...connectivityHints,
+          signalingUrl: resolvedSignalingUrl,
+          signalingPort: Number.isFinite(resolvedSignalingPort)
+            ? resolvedSignalingPort
+            : connectivityHints.signalingPort,
+        },
+        radioReceiveTransport: transportManager.getPreferredTransport('radio', 'recv'),
+        radioBridgeHealthy: health.healthy,
+        radioBridgeIssueCode: health.issueCode,
+      },
+    };
+  };
 
   // 获取 FT8 配置
   fastify.get('/ft8', async (request, reply) => {
@@ -106,14 +149,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
   fastify.get('/realtime', {
     preHandler: [requireAbility('manage', 'all')],
-  }, async (_request, reply) => {
+  }, async (request, reply) => {
     try {
       return reply.code(200).send({
         success: true,
-        data: {
-          publicWsUrl: configManager.getLiveKitPublicUrl(),
-          transportPolicy: configManager.getRealtimeTransportPolicy(),
-        },
+        data: buildRealtimeSettingsData(request),
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
@@ -132,10 +172,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       return reply.code(200).send({
         success: true,
         message: 'Realtime settings updated',
-        data: {
-          publicWsUrl,
-          transportPolicy: configManager.getRealtimeTransportPolicy(),
-        },
+        data: buildRealtimeSettingsData(request),
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);

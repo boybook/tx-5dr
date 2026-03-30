@@ -76,12 +76,25 @@ import type {
   OpenWebRXListenStatus,
   OpenWebRXListenStart,
   OpenWebRXListenTune,
+  RealtimeConnectivityErrorCode,
+  RealtimeConnectivityHints,
   RealtimeSettings,
+  RealtimeTransportKind,
   RealtimeSessionRequest,
   RealtimeSessionResponse,
   RealtimeStatsRequest,
   RealtimeStatsResponse,
 } from '@tx5dr/contracts';
+
+type RealtimeSettingsApiData = RealtimeSettings & {
+  runtime?: {
+    liveKitEnabled: boolean;
+    connectivityHints: RealtimeConnectivityHints;
+    radioReceiveTransport: RealtimeTransportKind;
+    radioBridgeHealthy: boolean;
+    radioBridgeIssueCode: RealtimeConnectivityErrorCode | null;
+  };
+};
 
 // ========== 错误处理 ==========
 
@@ -919,7 +932,7 @@ export const api = {
 
   async getRealtimeSettings(apiBase?: string): Promise<{
     success: boolean;
-    data: RealtimeSettings;
+    data: RealtimeSettingsApiData;
   }> {
     return apiRequest('/settings/realtime', undefined, apiBase);
   },
@@ -930,7 +943,7 @@ export const api = {
   ): Promise<{
     success: boolean;
     message: string;
-    data: RealtimeSettings;
+    data: RealtimeSettingsApiData;
   }> {
     return apiRequest(
       '/settings/realtime',

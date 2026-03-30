@@ -534,6 +534,16 @@ export function useAudioMonitorPlayback(
 
       ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
+          try {
+            const message = JSON.parse(event.data) as { type?: string };
+            if (message.type === 'ready' && !settled) {
+              settled = true;
+              window.clearTimeout(timer);
+              resolve();
+            }
+          } catch {
+            // ignore non-JSON text frames
+          }
           return;
         }
 
@@ -550,7 +560,6 @@ export function useAudioMonitorPlayback(
           if (!settled) {
             settled = true;
             window.clearTimeout(timer);
-            resolvePendingTrackWaiters();
             resolve();
           }
         } catch (error) {
@@ -578,6 +587,8 @@ export function useAudioMonitorPlayback(
         }
       };
     });
+
+    resolvePendingTrackWaiters();
 
     if (compatSocketRef.current) {
       compatSocketRef.current.onclose = () => {

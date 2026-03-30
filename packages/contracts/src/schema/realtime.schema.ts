@@ -118,6 +118,22 @@ export const RealtimeSettingsSchema = z.object({
 
 export type RealtimeSettings = z.infer<typeof RealtimeSettingsSchema>;
 
+export const RealtimeSettingsRuntimeSchema = z.object({
+  liveKitEnabled: z.boolean(),
+  connectivityHints: RealtimeConnectivityHintsSchema,
+  radioReceiveTransport: RealtimeTransportKindSchema,
+  radioBridgeHealthy: z.boolean(),
+  radioBridgeIssueCode: RealtimeConnectivityErrorCodeSchema.nullable(),
+});
+
+export type RealtimeSettingsRuntime = z.infer<typeof RealtimeSettingsRuntimeSchema>;
+
+export const RealtimeSettingsResponseDataSchema = RealtimeSettingsSchema.extend({
+  runtime: RealtimeSettingsRuntimeSchema.optional(),
+});
+
+export type RealtimeSettingsResponseData = z.infer<typeof RealtimeSettingsResponseDataSchema>;
+
 export const RealtimeSourceStatsSchema = z.object({
   latencyMs: z.number(),
   bufferFillPercent: z.number(),
