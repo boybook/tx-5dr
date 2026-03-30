@@ -187,6 +187,8 @@
     "liveKitPublicUrlAutoHint": "When empty, the app derives the URL from the current browser host and switches to the LiveKit signaling port. This field is ignored when compatibility mode is forced.",
     "liveKitPublicUrlManualHint": "Manual override enabled. All clients using the LiveKit primary path will use this URL first.",
     "liveKitPublicUrlExample": "Example: {{url}}",
+    "liveKitMacInstallHint": "To enable the LiveKit primary path on the macOS desktop app, install livekit-server locally first:",
+    "liveKitMacFallbackHint": "If it is not installed, the app will automatically fall back to ws compatibility mode so listening and voice still work.",
     "realtimeTransportPolicy": "Realtime Audio Transport Policy",
     "realtimeTransportPolicyDesc": "Auto mode prefers LiveKit as the primary path and is usually more resilient on public, weak, or complex networks. If the server or client cannot establish the LiveKit audio path, the app automatically falls back to the single-port WebSocket compatibility transport. Compatibility mode is better suited to deployments that can only expose one port, LAN/local testing, or cases where the lowest possible local latency matters most.",
     "realtimeTransportPolicyAuto": "Auto Select (Recommended)",

@@ -70,6 +70,13 @@ export class LiveKitBridgeManager {
     if (this.isStarted) return;
     this.isStarted = true;
 
+    if (!LiveKitConfig.isEnabled()) {
+      this.markScopeUnhealthy('radio', 'SIGNALING_UNREACHABLE');
+      this.markScopeUnhealthy('openwebrx-preview', 'SIGNALING_UNREACHABLE');
+      logger.info('LiveKit bridge manager disabled by configuration');
+      return;
+    }
+
     try {
       await this.ensureRadioRoom();
       this.bindRadioAudioMonitor();
@@ -322,6 +329,14 @@ export class LiveKitBridgeManager {
       healthy: true,
       updatedAt: Date.now(),
       issueCode: null,
+    });
+  }
+
+  private markScopeUnhealthy(scope: RealtimeScope, issueCode: RealtimeConnectivityErrorCode): void {
+    this.scopeHealth.set(scope, {
+      healthy: false,
+      updatedAt: Date.now(),
+      issueCode,
     });
   }
 

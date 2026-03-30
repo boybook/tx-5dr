@@ -120,6 +120,7 @@ export const SystemSettings = forwardRef<
   const [closeBehavior, setCloseBehavior] = useState<string>('ask');
   const [originalCloseBehavior, setOriginalCloseBehavior] = useState<string>('ask');
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+  const isMacElectron = isElectron && typeof window !== 'undefined' && window.navigator.userAgent.includes('Macintosh');
 
   // 加载配置
   useEffect(() => {
@@ -540,6 +541,13 @@ export const SystemSettings = forwardRef<
                     url: buildLiveKitExampleUrl(networkInfo.addresses[0].url),
                   })}
                 </p>
+              )}
+              {isMacElectron && (
+                <div className="rounded-medium border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-900 dark:border-warning-800 dark:bg-warning-950/30 dark:text-warning-200">
+                  <p>{t('system.liveKitMacInstallHint')}</p>
+                  <p className="mt-1 font-mono">brew install livekit</p>
+                  <p className="mt-1 text-warning-800 dark:text-warning-300">{t('system.liveKitMacFallbackHint')}</p>
+                </div>
               )}
             </div>
 

@@ -187,6 +187,8 @@
     "liveKitPublicUrlAutoHint": "留空时将自动使用当前浏览器访问的主机，并切换到 LiveKit signaling 端口。若当前强制使用兼容模式，此项不会生效。",
     "liveKitPublicUrlManualHint": "已启用手动覆盖，所有客户端在使用 LiveKit 主链路时都会优先使用这里填写的地址。",
     "liveKitPublicUrlExample": "示例：{{url}}",
+    "liveKitMacInstallHint": "macOS 桌面版如需启用 LiveKit 主链路，请先在本机安装 livekit-server：",
+    "liveKitMacFallbackHint": "如果未安装，应用会自动退回到 ws 兼容模式，仍可正常监听与语音通联。",
     "realtimeTransportPolicy": "实时音频传输策略",
     "realtimeTransportPolicyDesc": "自动模式会优先选择 LiveKit 作为主链路，在公网、弱网或网络复杂场景下通常更稳定；若 LiveKit 无法建立音频链路，会自动回退到同端口 WebSocket 兼容模式。兼容模式适合只能暴露一个端口、局域网、本机测试或优先追求最低本地延迟的场景。",
     "realtimeTransportPolicyAuto": "自动优选（推荐）",

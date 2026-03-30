@@ -279,6 +279,15 @@ function findLocalBinary(target) {
   return null;
 }
 
+function shouldAllowMissingBinary(target, error) {
+  if (target.platform !== 'darwin') {
+    return false;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Could not find a LiveKit release asset');
+}
+
 async function prepareBinary(options) {
   const target = normalizeTarget(options.target);
   const outputPath = options.output ? path.resolve(options.output) : defaultOutputPath(target);
@@ -306,7 +315,17 @@ async function prepareBinary(options) {
     return outputPath;
   }
 
-  const asset = await resolveAsset(target);
+  let asset;
+  try {
+    asset = await resolveAsset(target);
+  } catch (error) {
+    if (shouldAllowMissingBinary(target, error)) {
+      console.warn(`LiveKit binary is not bundled for ${target.platform}-${target.arch}: ${error.message}`);
+      console.warn('Continuing without a bundled LiveKit binary. The app can use a local installation or fall back to ws-compat.');
+      return null;
+    }
+    throw error;
+  }
   const archivePath = path.join(CACHE_DIR, asset.name);
   const extractDir = path.join(CACHE_DIR, `${asset.name}.extract`);
 

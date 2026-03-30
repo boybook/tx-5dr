@@ -18,6 +18,10 @@ export interface LiveKitConnectionConfig {
 }
 
 export class LiveKitConfig {
+  static isEnabled(): boolean {
+    return process.env.LIVEKIT_DISABLED !== '1';
+  }
+
   private static getHeaderValue(value: string | string[] | undefined): string | undefined {
     if (Array.isArray(value)) {
       return value[0];
@@ -74,6 +78,7 @@ export class LiveKitConfig {
   static logEffectiveConfig(): void {
     const config = this.getConnectionConfig();
     logger.info('LiveKit config loaded', {
+      enabled: this.isEnabled(),
       wsUrl: config.wsUrl,
       publicWsUrl: config.publicWsUrl || '<derived-from-request>',
       apiKey: config.apiKey,

@@ -91,7 +91,8 @@ export class RealtimeTransportManager {
 
   async issueSession(params: IssueRealtimeSessionParams): Promise<RealtimeSessionResponse> {
     const hints = LiveKitConfig.getConnectivityHints();
-    const forceCompat = ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat';
+    const forceCompat = ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat'
+      || !LiveKitConfig.isEnabled();
     const preferredTransport = this.determinePreferredTransport(params.scope, params.direction, forceCompat);
     const liveKitOffer = forceCompat ? null : await this.buildLiveKitOffer(params, hints);
     const compatOffer = this.buildCompatOffer(params);
@@ -122,7 +123,8 @@ export class RealtimeTransportManager {
   }
 
   getPreferredTransport(scope: RealtimeScope, direction: RealtimeSessionDirection): RealtimeTransportKind {
-    const forceCompat = ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat';
+    const forceCompat = ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat'
+      || !LiveKitConfig.isEnabled();
     return this.determinePreferredTransport(scope, direction, forceCompat);
   }
 
@@ -262,6 +264,10 @@ export class RealtimeTransportManager {
     params: IssueRealtimeSessionParams,
     hints: RealtimeConnectivityHints,
   ): Promise<RealtimeTransportOffer | null> {
+    if (!LiveKitConfig.isEnabled()) {
+      return null;
+    }
+
     try {
       const tokenResponse = this.authService.issueClientToken({
         roomName: params.roomName,
