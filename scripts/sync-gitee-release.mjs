@@ -38,6 +38,27 @@ function joinUrl(base, pathname) {
   return `${base.replace(/\/$/, '')}${pathname}`;
 }
 
+function buildGiteeApiUrl(pathname, query = {}) {
+  const url = new URL(joinUrl('https://gitee.com/api/v5', pathname));
+
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    url.searchParams.set(key, String(value));
+  }
+
+  return url;
+}
+
+function maskUrlForLogs(url) {
+  const cloned = new URL(url.toString());
+  if (cloned.searchParams.has('access_token')) {
+    cloned.searchParams.set('access_token', '***');
+  }
+  return cloned.toString();
+}
+
 async function readResponseBody(response) {
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
@@ -49,7 +70,10 @@ async function readResponseBody(response) {
 }
 
 async function githubRequest(pathname, token) {
-  const response = await fetch(joinUrl('https://api.github.com', pathname), {
+  const url = joinUrl('https://api.github.com', pathname);
+  console.log(`GitHub API URL: ${url}`);
+
+  const response = await fetch(url, {
     headers: {
       Accept: 'application/vnd.github+json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -75,7 +99,7 @@ async function giteeRequest({
   body,
   allowNotFound = false,
 }) {
-  const url = new URL(joinUrl('https://gitee.com/api/v5', pathname));
+  const url = buildGiteeApiUrl(pathname, query);
 
   const normalizedQuery = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -90,6 +114,7 @@ async function giteeRequest({
   }
 
   url.search = normalizedQuery.toString();
+  console.log(`Gitee API URL: ${maskUrlForLogs(url)}`);
 
   const requestInit = {
     method,
@@ -220,6 +245,13 @@ async function listGiteeAttachFiles({ giteeOwner, giteeRepo, giteeToken, release
   return normalizeAttachFiles(payload);
 }
 
+async function verifyGiteeRepoAccess({ giteeOwner, giteeRepo, giteeToken }) {
+  return giteeRequest({
+    pathname: `/repos/${encodeURIComponent(giteeOwner)}/${encodeURIComponent(giteeRepo)}`,
+    token: giteeToken,
+  });
+}
+
 async function deleteGiteeAttachFile({ giteeOwner, giteeRepo, giteeToken, releaseId, attachFileId }) {
   return giteeRequest({
     pathname: `/repos/${encodeURIComponent(giteeOwner)}/${encodeURIComponent(giteeRepo)}/releases/${releaseId}/attach_files/${attachFileId}`,
@@ -253,6 +285,25 @@ async function syncRelease() {
 
   if (!giteeToken) {
     throw new Error('Missing GITEE_TOKEN environment variable');
+  }
+  if (giteeOwner.includes('/') || giteeOwner.startsWith('http')) {
+    throw new Error(`Invalid GITEE_OWNER: ${giteeOwner}`);
+  }
+  if (giteeRepo.includes('/') || giteeRepo.startsWith('http')) {
+    throw new Error(`Invalid GITEE_REPO: ${giteeRepo}`);
+  }
+
+  console.log(`Checking Gitee repository access: ${giteeOwner}/${giteeRepo}`);
+  try {
+    await verifyGiteeRepoAccess({
+      giteeOwner,
+      giteeRepo,
+      giteeToken,
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to access Gitee repository ${giteeOwner}/${giteeRepo}. Check GITEE_OWNER, GITEE_REPO, and whether GITEE_TOKEN has access. ${error instanceof Error ? error.message : error}`
+    );
   }
 
   console.log(`Fetching GitHub release: ${githubRepo}@${tag}`);
