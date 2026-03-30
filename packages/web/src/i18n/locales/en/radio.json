@@ -108,7 +108,7 @@
     "calcFailed": "Calculation failed",
     "calcFailedDesc": "Cannot calculate idle frequency, please try again later.",
     "freqSelected": "Idle frequency selected",
-    "listening": "Listening...",
+    "listening": "{{callsign}} listening...",
     "preparingTx": "Preparing TX...",
     "forceStop": "Force stop TX",
     "txCycle": "TX cycle",

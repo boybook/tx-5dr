@@ -23,6 +23,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const slotPacks = useSlotPacks();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
+  const operatorCallsign = operatorStatus.context.myCall || 'N0CALL';
 
   // 判断当前卡片是否被选中
   const isSelected = currentOperatorId === operatorStatus.id;
@@ -562,7 +563,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               if (!radio.state.isDecoding) {
                 return (
                   <div className="text-foreground opacity-65 font-bold text-lg">
-                    {operatorStatus.context.myCall || 'N0CALL'}
+                    {operatorCallsign}
                   </div>
                 );
               }
@@ -571,7 +572,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               if (!operatorStatus.cycleInfo) {
                 return (
                   <div className="text-foreground opacity-65 font-bold text-lg">
-                    {t('operator.listening')}
+                    {t('operator.listening', { callsign: operatorCallsign })}
                   </div>
                 );
               }
@@ -585,7 +586,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 </div>
               ) : (
                 <div className="text-foreground opacity-65 font-bold font-mono text-lg">
-                  {t('operator.listening')}
+                  {t('operator.listening', { callsign: operatorCallsign })}
                 </div>
               );
             })()}

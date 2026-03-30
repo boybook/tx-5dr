@@ -108,7 +108,7 @@
     "calcFailed": "计算失败",
     "calcFailedDesc": "无法计算空闲频率，请稍后重试。",
     "freqSelected": "已选择空闲频率",
-    "listening": "监听中...",
+    "listening": "{{callsign}} 监听中...",
     "preparingTx": "准备发射...",
     "forceStop": "立即停止发射",
     "txCycle": "发射周期",
