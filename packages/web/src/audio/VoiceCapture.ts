@@ -3,10 +3,14 @@ import type { RealtimeConnectivityHints, RealtimeTransportOffer, RealtimeTranspo
 import { Room, RoomEvent, Track, createLocalAudioTrack, type LocalAudioTrack } from 'livekit-client';
 import { createLogger } from '../utils/logger';
 import {
+  buildRealtimeConnectivityIssue,
+  showRealtimeFallbackActivatedToast,
   toRealtimeConnectivityError,
 } from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('VoiceCapture');
+const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
+const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
 
 export interface VoiceCaptureOptions {
   onStateChange?: (state: VoiceCaptureState) => void;
@@ -75,6 +79,8 @@ export class VoiceCapture {
     this.startPromise = (async () => {
       let errorStage: 'token' | 'connect' | 'publish' = 'token';
       let connectivityHints: RealtimeConnectivityHints | undefined;
+      let compatFallbackAttempted = false;
+      let liveKitFailureIssue: ReturnType<typeof buildRealtimeConnectivityIssue> | null = null;
       try {
         const session = await api.getRealtimeSession({
           scope: 'radio',
@@ -87,14 +93,31 @@ export class VoiceCapture {
           try {
             errorStage = 'connect';
             if (offer.transport === 'livekit') {
-              await this.startLiveKitCapture(offer);
+              await this.startLiveKitCapture(offer, {
+                fastFallback: session.offers.some((candidate) => candidate.transport === 'ws-compat'),
+              });
             } else {
+              compatFallbackAttempted = liveKitFailureIssue !== null;
               await this.startCompatCapture(offer);
+              if (liveKitFailureIssue) {
+                showRealtimeFallbackActivatedToast(liveKitFailureIssue);
+              }
             }
             this.setState('capturing');
             return;
           } catch (error) {
             lastError = error;
+            if (offer.transport === 'livekit') {
+              liveKitFailureIssue = buildRealtimeConnectivityIssue(error, {
+                scope: 'radio',
+                stage: errorStage,
+                hints: connectivityHints,
+              });
+              logger.warn('LiveKit voice capture path failed, trying compatibility fallback', {
+                code: liveKitFailureIssue.code,
+                details: liveKitFailureIssue.technicalDetails,
+              });
+            }
             this.cleanup();
           }
         }
@@ -108,6 +131,10 @@ export class VoiceCapture {
           stage: errorStage,
           hints: connectivityHints,
         });
+        if (!realtimeError.issue.context) {
+          realtimeError.issue.context = {};
+        }
+        realtimeError.issue.context.compatFallbackAttempted = String(compatFallbackAttempted);
         this.options.onError?.(realtimeError);
         this.cleanup();
         throw realtimeError;
@@ -147,7 +174,10 @@ export class VoiceCapture {
     }
   }
 
-  private async startLiveKitCapture(offer: RealtimeTransportOffer): Promise<void> {
+  private async startLiveKitCapture(
+    offer: RealtimeTransportOffer,
+    options?: { fastFallback?: boolean },
+  ): Promise<void> {
     const room = new Room({
       adaptiveStream: false,
       dynacast: false,
@@ -157,6 +187,9 @@ export class VoiceCapture {
     });
     await room.connect(offer.url, offer.token, {
       autoSubscribe: false,
+      maxRetries: options?.fastFallback ? 0 : undefined,
+      websocketTimeout: options?.fastFallback ? LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS : undefined,
+      peerConnectionTimeout: options?.fastFallback ? LIVEKIT_FAST_PEER_TIMEOUT_MS : undefined,
     });
 
     const localTrack = await createLocalAudioTrack(AUDIO_CONSTRAINTS);

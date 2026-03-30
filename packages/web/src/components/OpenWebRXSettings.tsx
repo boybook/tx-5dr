@@ -243,11 +243,7 @@ export function OpenWebRXSettings() {
           scope: 'openwebrx-preview',
           stage: 'connect',
         });
-      showRealtimeConnectivityIssueToast(issue, {
-        onRetry: () => {
-          void handleStartListen();
-        },
-      });
+      showRealtimeConnectivityIssueToast(issue);
     } finally {
       setIsStartingListen(false);
     }

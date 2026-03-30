@@ -1,4 +1,5 @@
 import { ApiError } from '@tx5dr/core';
+import { addToast } from '@heroui/toast';
 import type {
   RealtimeConnectivityErrorCode,
   RealtimeConnectivityHints,
@@ -6,9 +7,10 @@ import type {
   RealtimeScope,
 } from '@tx5dr/contracts';
 import i18n from '../i18n';
-import { showErrorToast } from '../utils/errorToast';
 
 type RealtimeErrorStage = RealtimeConnectivityIssue['stage'];
+const REALTIME_TOAST_DEDUPE_WINDOW_MS = 4000;
+const realtimeToastHistory = new Map<string, number>();
 
 export interface BuildRealtimeConnectivityIssueOptions {
   scope: RealtimeScope;
@@ -32,19 +34,70 @@ function getScopeLabel(scope: RealtimeScope): string {
     : i18n.t('radio:realtime.scopeOpenWebRX');
 }
 
-function openSystemSettings(): void {
-  window.dispatchEvent(new CustomEvent('openSettingsModal', {
-    detail: {
-      tab: 'system',
-    },
-  }));
-}
-
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
   return String(error ?? 'unknown error');
+}
+
+function shouldShowRealtimeToast(key: string): boolean {
+  const now = Date.now();
+  const previous = realtimeToastHistory.get(key);
+  if (previous && (now - previous) < REALTIME_TOAST_DEDUPE_WINDOW_MS) {
+    return false;
+  }
+  realtimeToastHistory.set(key, now);
+  return true;
+}
+
+function showCompactRealtimeToast(options: {
+  dedupeKey: string;
+  title: string;
+  description: string;
+  color: 'warning' | 'danger';
+  timeout: number;
+}): void {
+  if (!shouldShowRealtimeToast(options.dedupeKey)) {
+    return;
+  }
+
+  addToast({
+    title: options.title,
+    description: options.description,
+    color: options.color,
+    timeout: options.timeout,
+    hideCloseButton: false,
+  });
+}
+
+function isNetworkStyleRealtimeIssue(code: RealtimeConnectivityErrorCode): boolean {
+  return code === 'SIGNALING_UNREACHABLE'
+    || code === 'PUBLIC_URL_MISCONFIGURED'
+    || code === 'ICE_CONNECTION_FAILED'
+    || code === 'NO_AUDIO_TRACK'
+    || code === 'UNKNOWN_REALTIME_ERROR';
+}
+
+function getFallbackClue(issue: RealtimeConnectivityIssue): string {
+  switch (issue.code) {
+    case 'PUBLIC_URL_MISCONFIGURED':
+      return i18n.t('radio:realtime.compatFallbackCluePublicUrl');
+    case 'SIGNALING_UNREACHABLE':
+      return i18n.t('radio:realtime.compatFallbackClueSignaling', {
+        port: issue.context?.signalingPort || 'unknown',
+      });
+    case 'ICE_CONNECTION_FAILED':
+      return i18n.t('radio:realtime.compatFallbackClueIce', {
+        port: issue.context?.rtcTcpPort || 'unknown',
+      });
+    case 'NO_AUDIO_TRACK':
+      return i18n.t('radio:realtime.compatFallbackClueNoTrack');
+    case 'MEDIA_DEVICE_PERMISSION_DENIED':
+      return i18n.t('radio:realtime.compatFallbackCluePermission');
+    default:
+      return i18n.t('radio:realtime.compatFallbackClueGeneric');
+  }
 }
 
 function toContextRecord(
@@ -268,36 +321,36 @@ export function toRealtimeConnectivityError(
   return new RealtimeConnectivityError(buildRealtimeConnectivityIssue(error, options));
 }
 
-export function showRealtimeConnectivityIssueToast(
-  issue: RealtimeConnectivityIssue,
-  options?: {
-    onRetry?: () => void;
-    includeSettingsAction?: boolean;
-  },
-): void {
-  const actions: Array<{ label: string; handler: () => void }> = [];
+export function showRealtimeFallbackActivatedToast(issue: RealtimeConnectivityIssue): void {
+  const scopeLabel = getScopeLabel(issue.scope);
+  showCompactRealtimeToast({
+    dedupeKey: `realtime-fallback:${issue.scope}:${issue.code}`,
+    title: i18n.t('radio:realtime.compatFallbackActivatedTitle', { scope: scopeLabel }),
+    description: [
+      i18n.t('radio:realtime.compatFallbackActivatedDescription', { scope: scopeLabel }),
+      i18n.t('radio:realtime.compatFallbackClueLabel', { clue: getFallbackClue(issue) }),
+    ].join('\n'),
+    color: 'warning',
+    timeout: 5000,
+  });
+}
 
-  if (options?.onRetry) {
-    actions.push({
-      label: i18n.t('common:action.retry'),
-      handler: options.onRetry,
-    });
+export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIssue): void {
+  const scopeLabel = getScopeLabel(issue.scope);
+  const compatFallbackAttempted = issue.context?.compatFallbackAttempted === 'true';
+  const descriptionLines = [issue.userMessage];
+
+  if (compatFallbackAttempted) {
+    descriptionLines.push(i18n.t('radio:realtime.compatFallbackFailed'));
+  } else if (isNetworkStyleRealtimeIssue(issue.code)) {
+    descriptionLines.push(i18n.t('radio:realtime.compactNetworkHint'));
   }
 
-  if (options?.includeSettingsAction !== false) {
-    actions.push({
-      label: i18n.t('common:action.goToSettings'),
-      handler: openSystemSettings,
-    });
-  }
-
-  showErrorToast({
-    userMessage: issue.userMessage,
-    suggestions: issue.suggestions,
-    severity: 'critical',
-    code: issue.code,
-    technicalDetails: issue.technicalDetails,
-    context: issue.context,
-    actions,
+  showCompactRealtimeToast({
+    dedupeKey: `realtime-issue:${issue.scope}:${issue.stage}:${issue.code}:${compatFallbackAttempted ? 'compat' : 'plain'}`,
+    title: i18n.t('radio:realtime.connectionFailedTitle', { scope: scopeLabel }),
+    description: descriptionLines.join('\n'),
+    color: 'danger',
+    timeout: 8000,
   });
 }

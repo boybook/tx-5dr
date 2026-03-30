@@ -73,13 +73,7 @@ export const VoicePTTButton: React.FC = () => {
             scope: 'radio',
             stage: 'publish',
           });
-        showRealtimeConnectivityIssueToast(issue, {
-          onRetry: () => {
-            void capture.start().catch((retryError) => {
-              logger.error('Failed to retry voice capture init', retryError);
-            });
-          },
-        });
+        showRealtimeConnectivityIssueToast(issue);
       },
     });
 
