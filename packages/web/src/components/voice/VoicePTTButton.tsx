@@ -5,6 +5,11 @@ import { UserRole } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { VoiceCapture } from '../../audio/VoiceCapture';
+import {
+  RealtimeConnectivityError,
+  buildRealtimeConnectivityIssue,
+  showRealtimeConnectivityIssueToast,
+} from '../../realtime/realtimeConnectivity';
 
 const logger = createLogger('VoicePTTButton');
 
@@ -56,14 +61,25 @@ export const VoicePTTButton: React.FC = () => {
       return;
     }
 
-    const wsUrl = radioService.getVoiceAudioWsUrl();
     const capture = new VoiceCapture({
-      wsUrl,
       onStateChange: (state) => {
         logger.debug('Voice capture state changed:', state);
       },
       onError: (error) => {
         logger.error('Voice capture error:', error);
+        const issue = error instanceof RealtimeConnectivityError
+          ? error.issue
+          : buildRealtimeConnectivityIssue(error, {
+            scope: 'radio',
+            stage: 'publish',
+          });
+        showRealtimeConnectivityIssueToast(issue, {
+          onRetry: () => {
+            void capture.start().catch((retryError) => {
+              logger.error('Failed to retry voice capture init', retryError);
+            });
+          },
+        });
       },
     });
 
@@ -103,14 +119,23 @@ export const VoicePTTButton: React.FC = () => {
   }, []);
 
   // PTT press handler
-  const handlePTTDown = useCallback(() => {
+  const handlePTTDown = useCallback(async () => {
     if (!isOperator || !radioService || isPttDownRef.current) return;
     if (pttState === 'locked-by-other') return;
+
+    if (voiceCaptureRef.current?.captureState !== 'capturing') {
+      await voiceCaptureRef.current?.whenReady();
+    }
+    const participantIdentity = voiceCaptureRef.current?.participantIdentity;
+    if (!participantIdentity) {
+      logger.warn('PTT requested before voice participant identity became available');
+      return;
+    }
 
     isPttDownRef.current = true;
     setPttState('requesting');
 
-    radioService.requestVoicePTT();
+    radioService.requestVoicePTT(participantIdentity);
     voiceCaptureRef.current?.setPTTActive(true);
 
     acquireWakeLock();

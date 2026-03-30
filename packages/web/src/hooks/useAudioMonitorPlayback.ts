@@ -1,283 +1,646 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { getWebSocketUrl } from '../utils/config';
-import { createWorkletMonitorNode, ScriptProcessorFallbackNode } from '../utils/audio-monitor-fallback';
-import type { AudioMonitorNode, MonitorStatsData } from '../utils/audio-monitor-fallback';
-import { OpusMonitorDecoder, canDecodeOpus } from '../audio/OpusMonitorDecoder';
+import { Room, RoomEvent, Track, type RemoteAudioTrack } from 'livekit-client';
+import { api } from '@tx5dr/core';
+import { decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
+import type {
+  RealtimeConnectivityHints,
+  RealtimeScope,
+  RealtimeSourceStats,
+  RealtimeTransportKind,
+  RealtimeTransportOffer,
+} from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
+import {
+  toRealtimeConnectivityError,
+} from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('useAudioMonitorPlayback');
+const STATS_POLL_INTERVAL_MS = 1000;
+const AUDIO_TRACK_WAIT_TIMEOUT_MS = 5000;
 
-/** Target sample rate for audio playback (browser standard) */
-const TARGET_SAMPLE_RATE = 48000;
+interface ReceiverStatsData {
+  latencyMs?: number;
+  jitterMs?: number;
+  packetsLost?: number;
+  packetsReceived?: number;
+  bitrateKbps?: number;
+  concealedSamples?: number;
+  droppedSamples?: number;
+  bufferFillPercent?: number;
+  queueDurationMs?: number;
+  targetBufferMs?: number;
+}
 
-/** Interval for AudioContext suspend check (ms) */
-const SUSPEND_CHECK_INTERVAL = 3000;
+export interface MonitorStatsData {
+  latencyMs: number;
+  bufferFillPercent: number;
+  isActive: boolean;
+  source?: RealtimeSourceStats | null;
+  receiver?: ReceiverStatsData | null;
+}
 
 export interface UseAudioMonitorPlaybackOptions {
-  /**
-   * WS path for binary audio data (relative to WS base).
-   * e.g. '/ws/audio-monitor' or '/ws/openwebrx-listen'
-   */
-  wsPath: string;
+  scope: RealtimeScope;
+  previewSessionId?: string | null;
 }
 
 export interface UseAudioMonitorPlaybackReturn {
-  /** Whether audio is currently playing */
   isPlaying: boolean;
-  /** Start audio playback (must be called from user gesture for AudioContext) */
-  start: () => Promise<void>;
-  /** Stop audio playback and release resources */
+  start: (overridePreviewSessionId?: string) => Promise<void>;
   stop: () => void;
-  /** Monitor stats from the AudioWorklet/ScriptProcessor */
   stats: MonitorStatsData | null;
-  /** Set playback volume in dB (-60 to +20) */
   setVolume: (db: number) => void;
-  /** Current codec negotiated with server ('opus' | 'pcm') */
-  codec: 'opus' | 'pcm';
+  codec: 'webrtc' | 'pcm/ws';
+  transportKind: RealtimeTransportKind | null;
 }
 
-/**
- * Reusable hook for audio monitor playback.
- * Handles AudioContext + AudioWorklet/ScriptProcessor initialization,
- * binary WS connection, Opus/PCM decoding, and resource cleanup.
- *
- * Used by both RadioControl (engine audio monitor) and OpenWebRXSettings (listen preview).
- */
 export function useAudioMonitorPlayback(
   options: UseAudioMonitorPlaybackOptions
 ): UseAudioMonitorPlaybackReturn {
-  const { wsPath } = options;
+  const { scope, previewSessionId } = options;
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [stats, setStats] = useState<MonitorStatsData | null>(null);
-  const [codec, setCodec] = useState<'opus' | 'pcm'>('pcm');
-
+  const [transportKind, setTransportKind] = useState<RealtimeTransportKind | null>(null);
+  const roomRef = useRef<Room | null>(null);
+  const attachedTracksRef = useRef<Map<string, RemoteAudioTrack>>(new Map());
+  const attachedElementsRef = useRef<Map<string, HTMLMediaElement>>(new Map());
   const audioContextRef = useRef<AudioContext | null>(null);
-  const workletNodeRef = useRef<AudioMonitorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
-  const opusDecoderRef = useRef<OpusMonitorDecoder | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const codecRef = useRef<'opus' | 'pcm'>('pcm');
+  const compatSocketRef = useRef<WebSocket | null>(null);
   const isInitializingRef = useRef(false);
-  const suspendCheckTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentVolumeRef = useRef(1);
+  const sourceStatsRef = useRef<RealtimeSourceStats | null>(null);
+  const receiverStatsRef = useRef<ReceiverStatsData | null>(null);
+  const statsPollTimerRef = useRef<number | null>(null);
+  const displayLatencyRef = useRef<number | null>(null);
+  const displayBufferFillRef = useRef<number | null>(null);
+  const activePreviewSessionIdRef = useRef<string | null>(previewSessionId ?? null);
+  const connectivityHintsRef = useRef<RealtimeConnectivityHints | null>(null);
+  const intentionalDisconnectRef = useRef(false);
+  const pendingTrackWaitersRef = useRef<Array<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: number;
+  }>>([]);
 
-  // Cleanup everything
+  const resolvePendingTrackWaiters = useCallback(() => {
+    const waiters = pendingTrackWaitersRef.current.splice(0);
+    waiters.forEach(({ resolve, timer }) => {
+      window.clearTimeout(timer);
+      resolve();
+    });
+  }, [transportKind]);
+
+  const rejectPendingTrackWaiters = useCallback((message: string) => {
+    const waiters = pendingTrackWaitersRef.current.splice(0);
+    waiters.forEach(({ reject, timer }) => {
+      window.clearTimeout(timer);
+      reject(new Error(message));
+    });
+  }, []);
+
+  const waitForPlaybackPath = useCallback(async (): Promise<void> => {
+    if (attachedTracksRef.current.size > 0 || compatSocketRef.current) {
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        pendingTrackWaitersRef.current = pendingTrackWaitersRef.current.filter((entry) => entry.timer !== timer);
+        reject(new Error('No realtime audio path became available before timeout'));
+      }, AUDIO_TRACK_WAIT_TIMEOUT_MS);
+
+      pendingTrackWaitersRef.current.push({ resolve, reject, timer });
+    });
+  }, []);
+
+  const detachAllTracks = useCallback(() => {
+    attachedTracksRef.current.forEach((track, key) => {
+      try {
+        track.detach();
+      } catch {
+        // ignore
+      }
+
+      const element = attachedElementsRef.current.get(key);
+      if (element?.parentElement) {
+        element.parentElement.removeChild(element);
+      }
+    });
+
+    attachedTracksRef.current.clear();
+    attachedElementsRef.current.clear();
+  }, []);
+
   const cleanup = useCallback(() => {
-    // Stop suspend check timer
-    if (suspendCheckTimerRef.current) {
-      clearInterval(suspendCheckTimerRef.current);
-      suspendCheckTimerRef.current = null;
+    if (statsPollTimerRef.current !== null) {
+      window.clearInterval(statsPollTimerRef.current);
+      statsPollTimerRef.current = null;
     }
 
-    // Close WS
-    if (wsRef.current) {
-      try { wsRef.current.close(); } catch { /* ignore */ }
-      wsRef.current = null;
+    detachAllTracks();
+    rejectPendingTrackWaiters('Realtime playback stopped before audio path became available');
+
+    if (compatSocketRef.current) {
+      try {
+        compatSocketRef.current.close();
+      } catch {
+        // ignore
+      }
+      compatSocketRef.current = null;
     }
 
-    // Dispose audio nodes
-    workletNodeRef.current?.dispose();
-    workletNodeRef.current = null;
+    if (roomRef.current) {
+      void roomRef.current.disconnect();
+      roomRef.current = null;
+    }
 
-    gainNodeRef.current?.disconnect();
-    gainNodeRef.current = null;
+    if (workletNodeRef.current) {
+      try {
+        workletNodeRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      workletNodeRef.current.port.onmessage = null;
+      workletNodeRef.current = null;
+    }
 
-    opusDecoderRef.current?.destroy();
-    opusDecoderRef.current = null;
+    if (gainNodeRef.current) {
+      try {
+        gainNodeRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      gainNodeRef.current = null;
+    }
 
-    // Close AudioContext
     if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
+      void audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
 
+    sourceStatsRef.current = null;
+    receiverStatsRef.current = null;
+    displayLatencyRef.current = null;
+    displayBufferFillRef.current = null;
+    connectivityHintsRef.current = null;
+    activePreviewSessionIdRef.current = null;
     isInitializingRef.current = false;
-    codecRef.current = 'pcm';
-    setCodec('pcm');
-  }, []);
+    setTransportKind(null);
+    setIsPlaying(false);
+    setStats(null);
+  }, [detachAllTracks, rejectPendingTrackWaiters]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       cleanup();
     };
   }, [cleanup]);
 
-  const start = useCallback(async () => {
-    if (isPlaying || isInitializingRef.current) return;
-    isInitializingRef.current = true;
+  const recomputeStats = useCallback(() => {
+    const source = sourceStatsRef.current;
+    const receiver = receiverStatsRef.current;
+
+    if (!source && !receiver) {
+      return;
+    }
+
+    const rawLatencyMs = Math.max(
+      0,
+      (source?.latencyMs ?? 0) + (receiver?.latencyMs ?? receiver?.jitterMs ?? 0),
+    );
+    const rawBufferFillPercent = receiver?.bufferFillPercent
+      ?? source?.bufferFillPercent
+      ?? 0;
+    let latencyMs = rawLatencyMs;
+    let bufferFillPercent = rawBufferFillPercent;
+
+    if (transportKind === 'ws-compat') {
+      const sourceLatencyMs = source?.latencyMs ?? 0;
+      const targetBufferMs = receiver?.targetBufferMs ?? 80;
+      const queueDurationMs = receiver?.queueDurationMs ?? receiver?.latencyMs ?? 0;
+      const effectiveQueueMs = Math.min(queueDurationMs, targetBufferMs);
+      const stableLatencyMs = Math.max(0, sourceLatencyMs + effectiveQueueMs);
+      const stableBufferFillPercent = Math.max(
+        0,
+        Math.min(100, (effectiveQueueMs / Math.max(targetBufferMs, 1)) * 100),
+      );
+      const alpha = 0.35;
+
+      latencyMs = displayLatencyRef.current == null
+        ? stableLatencyMs
+        : (displayLatencyRef.current * (1 - alpha)) + (stableLatencyMs * alpha);
+      bufferFillPercent = displayBufferFillRef.current == null
+        ? stableBufferFillPercent
+        : (displayBufferFillRef.current * (1 - alpha)) + (stableBufferFillPercent * alpha);
+
+      displayLatencyRef.current = latencyMs;
+      displayBufferFillRef.current = bufferFillPercent;
+    } else {
+      displayLatencyRef.current = rawLatencyMs;
+      displayBufferFillRef.current = rawBufferFillPercent;
+    }
+
+    const isActive = source?.isActive ?? (attachedTracksRef.current.size > 0 || Boolean(compatSocketRef.current));
+
+    setStats({
+      latencyMs,
+      bufferFillPercent,
+      isActive,
+      source,
+      receiver,
+    });
+  }, []);
+
+  const pollSourceStats = useCallback(async () => {
+    try {
+      const response = await api.getRealtimeStats({
+        scope,
+        ...(scope === 'openwebrx-preview' && activePreviewSessionIdRef.current
+          ? { previewSessionId: activePreviewSessionIdRef.current }
+          : {}),
+      });
+      sourceStatsRef.current = response.source ?? null;
+      recomputeStats();
+    } catch (error) {
+      logger.debug('Failed to poll source monitor stats', error);
+    }
+  }, [recomputeStats, scope]);
+
+  const pollReceiverStats = useCallback(async () => {
+    if (transportKind === 'ws-compat') {
+      recomputeStats();
+      return;
+    }
+
+    const firstTrack = attachedTracksRef.current.values().next().value as RemoteAudioTrack | undefined;
+    if (!firstTrack) {
+      receiverStatsRef.current = null;
+      recomputeStats();
+      return;
+    }
 
     try {
-      // 1. Create AudioContext (must be in user gesture handler)
-      const audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-      let monitorNode: AudioMonitorNode;
+      const report = await firstTrack.getRTCStatsReport();
+      let receiver: ReceiverStatsData | null = null;
 
-      if (audioContext.audioWorklet) {
-        await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
-        const workletNode = new AudioWorkletNode(audioContext, 'audio-monitor-processor');
-        monitorNode = createWorkletMonitorNode(workletNode);
-        logger.debug('AudioWorklet initialized');
-      } else {
-        logger.debug('AudioWorklet unavailable, falling back to ScriptProcessorNode');
-        monitorNode = new ScriptProcessorFallbackNode(audioContext);
-      }
-
-      // 2. Connect gain node
-      const gainNode = audioContext.createGain();
-      gainNode.gain.value = 1.0;
-      monitorNode.getOutputNode().connect(gainNode);
-      gainNode.connect(audioContext.destination);
-
-      // 3. Stats callback
-      monitorNode.onStats((s) => setStats(s));
-
-      audioContextRef.current = audioContext;
-      workletNodeRef.current = monitorNode;
-      gainNodeRef.current = gainNode;
-
-      // 4. Initialize Opus decoder if supported
-      if (canDecodeOpus()) {
-        try {
-          const decoder = new OpusMonitorDecoder(TARGET_SAMPLE_RATE, 1);
-          await decoder.init();
-          opusDecoderRef.current = decoder;
-          logger.debug('Opus decoder initialized');
-        } catch (err) {
-          logger.warn('Opus decoder init failed, using PCM', err);
-          opusDecoderRef.current = null;
-        }
-      }
-
-      // 5. Connect binary WS
-      const clientId = `listen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      const canOpus = !!opusDecoderRef.current;
-      codecRef.current = canOpus ? 'opus' : 'pcm';
-      setCodec(codecRef.current);
-
-      const wsBaseUrl = getWebSocketUrl();
-      const wsUrl = wsBaseUrl.replace(/\/ws\/?$/, `${wsPath}?clientId=${clientId}&codec=${codecRef.current}`);
-      logger.info('Connecting audio WS', { url: wsUrl });
-
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-
-      // Set ALL handlers synchronously BEFORE any events can fire,
-      // matching the old RadioService pattern to avoid missing messages.
-      ws.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-          // JSON message (codec negotiation)
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'codec') {
-              codecRef.current = msg.codec;
-              setCodec(msg.codec);
-              logger.debug('Codec negotiated', { codec: msg.codec });
-            }
-          } catch { /* ignore */ }
+      report?.forEach((entry) => {
+        if (entry.type !== 'inbound-rtp') {
           return;
         }
 
-        // Binary audio data
-        const buffer = event.data as ArrayBuffer;
-        if (!workletNodeRef.current) return;
+        const inbound = entry as RTCInboundRtpStreamStats & {
+          jitterBufferEmittedCount?: number;
+        };
+        const emittedCount = inbound.jitterBufferEmittedCount ?? 0;
+        const latencyMs = emittedCount > 0 && typeof inbound.jitterBufferDelay === 'number'
+          ? (inbound.jitterBufferDelay / emittedCount) * 1000
+          : undefined;
 
-        // Resume AudioContext if suspended (browser may suspend for power saving)
-        if (audioContextRef.current?.state === 'suspended') {
-          audioContextRef.current.resume().catch(() => {});
+        receiver = {
+          latencyMs,
+          jitterMs: typeof inbound.jitter === 'number' ? inbound.jitter * 1000 : undefined,
+          packetsLost: inbound.packetsLost,
+          packetsReceived: inbound.packetsReceived,
+          bitrateKbps: Number.isFinite(firstTrack.currentBitrate) ? firstTrack.currentBitrate / 1000 : undefined,
+          concealedSamples: inbound.concealedSamples,
+        };
+      });
+
+      receiverStatsRef.current = receiver;
+      recomputeStats();
+    } catch (error) {
+      logger.debug('Failed to poll receiver monitor stats', error);
+    }
+  }, [recomputeStats, transportKind]);
+
+  const startStatsPolling = useCallback(() => {
+    if (statsPollTimerRef.current !== null) {
+      window.clearInterval(statsPollTimerRef.current);
+    }
+
+    void pollSourceStats();
+    void pollReceiverStats();
+
+    statsPollTimerRef.current = window.setInterval(() => {
+      void pollSourceStats();
+      void pollReceiverStats();
+    }, STATS_POLL_INTERVAL_MS);
+  }, [pollReceiverStats, pollSourceStats]);
+
+  const attachRemoteTrack = useCallback((key: string, track: RemoteAudioTrack) => {
+    if (attachedTracksRef.current.has(key)) {
+      return;
+    }
+
+    track.setPlayoutDelay(0);
+    track.setVolume(currentVolumeRef.current);
+
+    const element = track.attach();
+    element.autoplay = true;
+    element.playsInline = true;
+    element.style.display = 'none';
+    document.body.appendChild(element);
+
+    attachedTracksRef.current.set(key, track);
+    attachedElementsRef.current.set(key, element);
+    resolvePendingTrackWaiters();
+    void pollReceiverStats();
+    recomputeStats();
+  }, [pollReceiverStats, recomputeStats, resolvePendingTrackWaiters]);
+
+  const attachBridgeTrackPublication = useCallback((
+    participantIdentity: string,
+    publication: { trackSid?: string; trackName?: string; track?: { kind?: string } | null },
+  ) => {
+    if (!participantIdentity.startsWith('bridge:')) {
+      return;
+    }
+
+    if (!publication.track || publication.track.kind !== Track.Kind.Audio) {
+      return;
+    }
+
+    const key = publication.trackSid || `${participantIdentity}:${publication.trackName || 'audio'}`;
+    attachRemoteTrack(key, publication.track as RemoteAudioTrack);
+  }, [attachRemoteTrack]);
+
+  const attachExistingBridgeTracks = useCallback((room: Room) => {
+    room.remoteParticipants.forEach((participant) => {
+      participant.trackPublications.forEach((publication) => {
+        attachBridgeTrackPublication(participant.identity, publication);
+      });
+    });
+  }, [attachBridgeTrackPublication]);
+
+  const startLiveKitPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
+    const audioContext = new AudioContext({
+      latencyHint: 'interactive',
+    });
+    audioContextRef.current = audioContext;
+
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+
+    const room = new Room({
+      adaptiveStream: false,
+      dynacast: false,
+      webAudioMix: {
+        audioContext,
+      },
+    });
+
+    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      attachBridgeTrackPublication(participant.identity, {
+        trackSid: publication.trackSid,
+        trackName: publication.trackName,
+        track,
+      });
+    });
+
+    room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+      if (track.kind !== Track.Kind.Audio) {
+        return;
+      }
+
+      const key = publication.trackSid || `${participant.identity}:${publication.trackName}`;
+      const existingTrack = attachedTracksRef.current.get(key);
+      if (existingTrack) {
+        try {
+          existingTrack.detach();
+        } catch {
+          // ignore
+        }
+      }
+
+      const element = attachedElementsRef.current.get(key);
+      if (element?.parentElement) {
+        element.parentElement.removeChild(element);
+      }
+
+      attachedTracksRef.current.delete(key);
+      attachedElementsRef.current.delete(key);
+      void pollReceiverStats();
+      recomputeStats();
+    });
+
+    room.on(RoomEvent.Disconnected, () => {
+      if (!intentionalDisconnectRef.current) {
+        cleanup();
+      }
+    });
+
+    await room.connect(offer.url, offer.token, {
+      autoSubscribe: true,
+    });
+
+    if (!room.canPlaybackAudio) {
+      await room.startAudio();
+    }
+
+    attachExistingBridgeTracks(room);
+    await waitForPlaybackPath();
+    roomRef.current = room;
+    setTransportKind('livekit');
+    resolvePendingTrackWaiters();
+  }, [attachBridgeTrackPublication, attachExistingBridgeTracks, cleanup, pollReceiverStats, recomputeStats, resolvePendingTrackWaiters, waitForPlaybackPath]);
+
+  const startCompatPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
+    const audioContext = new AudioContext({
+      latencyHint: 'interactive',
+    });
+    audioContextRef.current = audioContext;
+
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+
+    await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
+    const worklet = new AudioWorkletNode(audioContext, 'audio-monitor-processor', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = currentVolumeRef.current;
+    worklet.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    worklet.port.onmessage = (event) => {
+      if (event.data?.type !== 'stats') {
+        return;
+      }
+      receiverStatsRef.current = {
+        latencyMs: event.data.data?.latencyMs,
+        bufferFillPercent: event.data.data?.bufferFillPercent,
+        droppedSamples: event.data.data?.droppedSamples,
+        queueDurationMs: event.data.data?.queueDurationMs,
+        targetBufferMs: event.data.data?.targetBufferMs,
+      };
+      recomputeStats();
+    };
+
+    workletNodeRef.current = worklet;
+    gainNodeRef.current = gainNode;
+
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`${offer.url}?token=${encodeURIComponent(offer.token)}`);
+      ws.binaryType = 'arraybuffer';
+      compatSocketRef.current = ws;
+      let settled = false;
+
+      const timer = window.setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(new Error('Realtime compatibility playback timed out before audio frames arrived'));
+      }, AUDIO_TRACK_WAIT_TIMEOUT_MS);
+
+      ws.onopen = () => {
+        setTransportKind('ws-compat');
+      };
+
+      ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          return;
         }
 
-        const receiveTime = performance.now();
+        try {
+          const decoded = decodeWsCompatAudioFrame(event.data as ArrayBuffer);
+          const float32 = int16ToFloat32Pcm(decoded.pcm);
+          worklet.port.postMessage({
+            type: 'audioData',
+            buffer: float32.buffer,
+            sampleRate: decoded.sampleRate,
+            clientTimestamp: decoded.timestampMs,
+          }, [float32.buffer]);
 
-        if (codecRef.current === 'opus' && opusDecoderRef.current) {
-          opusDecoderRef.current.decode(buffer).then((pcm) => {
-            if (pcm.length > 0 && workletNodeRef.current) {
-              workletNodeRef.current.postAudioData(
-                pcm.buffer as ArrayBuffer,
-                TARGET_SAMPLE_RATE,
-                receiveTime
-              );
-            }
-          });
-        } else {
-          workletNodeRef.current.postAudioData(buffer, TARGET_SAMPLE_RATE, receiveTime);
+          if (!settled) {
+            settled = true;
+            window.clearTimeout(timer);
+            resolvePendingTrackWaiters();
+            resolve();
+          }
+        } catch (error) {
+          if (!settled) {
+            settled = true;
+            window.clearTimeout(timer);
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+      };
+
+      ws.onerror = () => {
+        if (!settled) {
+          settled = true;
+          window.clearTimeout(timer);
+          reject(new Error('Realtime compatibility WebSocket failed'));
         }
       };
 
       ws.onclose = () => {
-        logger.info('Audio WS disconnected');
-        // Clean up and update state so UI reflects disconnection
-        if (wsRef.current === ws) {
-          wsRef.current = null;
+        if (!settled) {
+          settled = true;
+          window.clearTimeout(timer);
+          reject(new Error('Realtime compatibility playback closed before ready'));
+        }
+      };
+    });
+
+    if (compatSocketRef.current) {
+      compatSocketRef.current.onclose = () => {
+        if (!intentionalDisconnectRef.current) {
           cleanup();
-          setIsPlaying(false);
-          setStats(null);
         }
       };
+    }
+  }, [recomputeStats, resolvePendingTrackWaiters]);
 
-      ws.onerror = (err) => {
-        logger.error('Audio WS error', err);
-      };
+  const start = useCallback(async (overridePreviewSessionId?: string) => {
+    if (isPlaying || isInitializingRef.current) return;
+    const effectivePreviewSessionId = overridePreviewSessionId ?? previewSessionId;
+    let errorStage: 'token' | 'connect' | 'subscribe' = 'token';
 
-      // Wait for WS open using addEventListener (won't override onerror/onclose)
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('WS connection timeout')), 5000);
+    if (scope === 'openwebrx-preview' && !effectivePreviewSessionId) {
+      throw new Error('previewSessionId is required for OpenWebRX preview playback');
+    }
 
-        const onOpen = () => {
-          clearTimeout(timeout);
-          ws.removeEventListener('error', onError);
-          resolve();
-        };
-        const onError = () => {
-          clearTimeout(timeout);
-          ws.removeEventListener('open', onOpen);
-          reject(new Error('WS connection failed'));
-        };
+    isInitializingRef.current = true;
+    intentionalDisconnectRef.current = false;
+    activePreviewSessionIdRef.current = effectivePreviewSessionId ?? null;
 
-        ws.addEventListener('open', onOpen, { once: true });
-        ws.addEventListener('error', onError, { once: true });
+    try {
+      const session = await api.getRealtimeSession({
+        scope,
+        direction: 'recv',
+        ...(effectivePreviewSessionId ? { previewSessionId: effectivePreviewSessionId } : {}),
       });
+      connectivityHintsRef.current = session.connectivityHints;
 
-      wsRef.current = ws;
-
-      // 6. Start periodic AudioContext suspend check
-      // Browsers may suspend AudioContext for power saving; this ensures recovery.
-      // The old code did this implicitly via the control WS metadata events (every ~20ms).
-      suspendCheckTimerRef.current = setInterval(() => {
-        if (audioContextRef.current?.state === 'suspended') {
-          logger.debug('AudioContext suspended, attempting resume');
-          audioContextRef.current.resume().catch(() => {});
+      let lastError: unknown = null;
+      for (const offer of session.offers) {
+        try {
+          errorStage = 'connect';
+          if (offer.transport === 'livekit') {
+            await startLiveKitPlayback(offer);
+          } else {
+            await startCompatPlayback(offer);
+          }
+          startStatsPolling();
+          setIsPlaying(true);
+          return;
+        } catch (error) {
+          lastError = error;
+          cleanup();
+          if (intentionalDisconnectRef.current) {
+            throw error;
+          }
         }
-      }, SUSPEND_CHECK_INTERVAL);
+      }
 
-      setIsPlaying(true);
-      logger.info('Audio playback started');
-
+      throw lastError ?? new Error('No realtime playback transport succeeded');
     } catch (error) {
-      logger.error('Failed to start audio playback', error);
+      const currentHints = connectivityHintsRef.current ?? undefined;
+      intentionalDisconnectRef.current = true;
       cleanup();
-      throw error;
+      logger.error('Failed to start realtime playback', error);
+      throw toRealtimeConnectivityError(error, {
+        scope,
+        stage: errorStage,
+        hints: currentHints,
+      });
     } finally {
       isInitializingRef.current = false;
     }
-  }, [isPlaying, wsPath, cleanup]);
+  }, [cleanup, isPlaying, previewSessionId, scope, startCompatPlayback, startLiveKitPlayback, startStatsPolling]);
 
   const stop = useCallback(() => {
+    intentionalDisconnectRef.current = true;
     cleanup();
-    setIsPlaying(false);
-    setStats(null);
-    logger.info('Audio playback stopped');
   }, [cleanup]);
 
   const setVolume = useCallback((db: number) => {
-    if (gainNodeRef.current && audioContextRef.current) {
-      const gain = Math.pow(10, db / 20);
-      gainNodeRef.current.gain.setTargetAtTime(
-        gain,
-        audioContextRef.current.currentTime,
-        0.05
-      );
+    const linear = Math.max(0, Math.pow(10, db / 20));
+    currentVolumeRef.current = linear;
+    attachedTracksRef.current.forEach((track) => {
+      track.setVolume(linear);
+    });
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = linear;
     }
   }, []);
 
-  return { isPlaying, start, stop, stats, setVolume, codec };
+  return {
+    isPlaying,
+    start,
+    stop,
+    stats,
+    setVolume,
+    codec: transportKind === 'ws-compat' ? 'pcm/ws' : 'webrtc',
+    transportKind,
+  };
 }

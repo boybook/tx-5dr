@@ -50,10 +50,6 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // 极简文本消息
   [WSMessageType.TEXT_MESSAGE]: 'textMessage',
 
-  // 音频监听事件
-  [WSMessageType.AUDIO_MONITOR_DATA]: 'audioMonitorData',
-  [WSMessageType.AUDIO_MONITOR_STATS]: 'audioMonitorStats',
-
   // 统一能力系统事件
   [WSMessageType.RADIO_CAPABILITY_LIST]: 'radioCapabilityList',
   [WSMessageType.RADIO_CAPABILITY_CHANGED]: 'radioCapabilityChanged',

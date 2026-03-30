@@ -138,3 +138,6 @@ export * from './schema/openwebrx.schema.js';
 
 // Radio Capability Schema
 export * from './schema/radio-capability.schema.js';
+
+// Realtime Schema
+export * from './schema/realtime.schema.js';

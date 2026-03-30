@@ -5,6 +5,8 @@ services:
     build: .
     container_name: tx5dr
     restart: unless-stopped
+    depends_on:
+      - livekit
     ports:
       - "8076:80"
     volumes:
@@ -30,6 +32,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=tx5dr
+      - LIVEKIT_API_SECRET=tx5dr-change-me-0123456789abcdef
       # TX-5DR应用路径配置
       - TX5DR_CONFIG_DIR=/app/data/config
       - TX5DR_DATA_DIR=/app/data
@@ -50,3 +55,15 @@ services:
     # 共享主机音频子系统
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=100m
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: tx5dr-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    ports:
+      - "7880:7880/tcp"
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./docker/livekit.yaml:/etc/livekit.yaml:ro

@@ -24,11 +24,13 @@ import { systemRoutes } from './routes/system.js';
 import { WSServer } from './websocket/WSServer.js';
 import { ProcessMonitor } from './services/ProcessMonitor.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
-import { AudioMonitorWSServer } from './websocket/AudioMonitorWSServer.js';
-import { VoiceAudioWSServer } from './websocket/VoiceAudioWSServer.js';
 import { voiceRoutes } from './routes/voice.js';
 import { stationRoutes } from './routes/station.js';
 import { openwebrxRoutes } from './routes/openwebrx.js';
+import { realtimeRoutes } from './routes/realtime.js';
+import { LiveKitConfig } from './realtime/LiveKitConfig.js';
+import { LiveKitBridgeManager } from './realtime/LiveKitBridgeManager.js';
+import { RealtimeTransportManager } from './realtime/RealtimeTransportManager.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 
 /**
@@ -125,6 +127,7 @@ export async function createServer() {
   const authManager = AuthManager.getInstance();
   await authManager.initialize();
   fastify.log.info('Auth manager initialized');
+  LiveKitConfig.logEffectiveConfig();
 
   // 注册认证插件（全局 JWT 验证）
   await fastify.register(authPlugin);
@@ -141,23 +144,17 @@ export async function createServer() {
   syncRegistry.initializeAll();
   fastify.log.info('Sync service registry initialized');
 
-  // 初始化音频监听WebSocket服务器
-  const audioMonitorWSServer = new AudioMonitorWSServer();
-
-  // 初始化语音音频WebSocket服务器
-  const voiceAudioWSServer = new VoiceAudioWSServer();
-  // Wire to engine's VoiceSessionManager
-  const voiceSessionManager = digitalRadioEngine.getVoiceSessionManager();
-  if (voiceSessionManager) {
-    voiceAudioWSServer.setVoiceSessionManager(voiceSessionManager);
-  }
-
   // 初始化进程监控（独立于引擎，始终运行）
   const processMonitor = ProcessMonitor.getInstance();
   processMonitor.start();
 
+  // 初始化 LiveKit bridge（统一音频数据面）
+  const liveKitBridgeManager = new LiveKitBridgeManager(digitalRadioEngine);
+  await liveKitBridgeManager.start();
+  const realtimeTransportManager = RealtimeTransportManager.initialize(digitalRadioEngine, liveKitBridgeManager);
+
   // 初始化WebSocket服务器（集成业务逻辑）
-  const wsServer = new WSServer(digitalRadioEngine, audioMonitorWSServer, processMonitor);
+  const wsServer = new WSServer(digitalRadioEngine, processMonitor);
   const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
   fastify.log.info('WebSocket server initialized');
 
@@ -302,6 +299,10 @@ export async function createServer() {
   await fastify.register(authRoutes, { prefix: '/api/auth' });
   fastify.log.info('Auth routes registered');
 
+  // 实时房间 token
+  await fastify.register(realtimeRoutes, { prefix: '/api/realtime' });
+  fastify.log.info('Realtime routes registered');
+
   // 公开路由：电台站信息（GET 无需认证，PUT 由路由内部 preHandler 保护）
   await fastify.register(stationRoutes, { prefix: '/api/station' });
   fastify.log.info('Station routes registered');
@@ -389,78 +390,17 @@ export async function createServer() {
     }
   });
 
-  // 音频监听专用 WebSocket endpoint（仅传输二进制音频数据）
-  fastify.get('/api/ws/audio-monitor', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
-    try {
-      const url = new URL(req.url, 'http://localhost');
-      const clientId = url.searchParams.get('clientId');
-
-      if (!clientId) {
-        fastify.log.warn('Audio monitor WS connection missing clientId parameter, rejecting');
-        socket.close();
-        return;
-      }
-
-      const codec = url.searchParams.get('codec') === 'opus' ? 'opus' as const : 'pcm' as const;
-      fastify.log.info(`Audio monitor WS client connected: clientId=${clientId}, codec=${codec}`);
-      audioMonitorWSServer.handleConnection(socket, clientId, codec);
-    } catch (e) {
-      fastify.log.error({ error: e }, 'Audio monitor WS connection parameter parsing failed');
-      socket.close();
-    }
-  });
-
-  // OpenWebRX 试听音频专用 WebSocket endpoint（复用 AudioMonitorWSServer）
-  // Force PCM codec: this path has no Opus encoder, so always negotiate PCM with clients
-  const openwebrxListenWSServer = new AudioMonitorWSServer();
-  openwebrxListenWSServer.getServerCodec = () => 'pcm';
-  wsServer.setOpenWebRXListenWSServer(openwebrxListenWSServer);
-  fastify.get('/api/ws/openwebrx-listen', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
-    try {
-      const url = new URL(req.url, 'http://localhost');
-      const clientId = url.searchParams.get('clientId');
-      if (!clientId) {
-        fastify.log.warn('OpenWebRX listen WS connection missing clientId parameter, rejecting');
-        socket.close();
-        return;
-      }
-      const codec = url.searchParams.get('codec') === 'opus' ? 'opus' as const : 'pcm' as const;
-      fastify.log.info(`OpenWebRX listen WS client connected: clientId=${clientId}, codec=${codec}`);
-      openwebrxListenWSServer.handleConnection(socket, clientId, codec);
-    } catch (e) {
-      fastify.log.error({ error: e }, 'OpenWebRX listen WS connection parameter parsing failed');
-      socket.close();
-    }
-  });
-
-  // 语音音频专用 WebSocket endpoint（接收客户端的 Opus 音频帧）
-  fastify.get('/api/ws/voice-audio', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
-    try {
-      const url = new URL(req.url, 'http://localhost');
-      const clientId = url.searchParams.get('clientId');
-
-      if (!clientId) {
-        fastify.log.warn('Voice audio WS connection missing clientId parameter, rejecting');
-        socket.close();
-        return;
-      }
-
-      fastify.log.info(`Voice audio WS client connected: clientId=${clientId}`);
-      voiceAudioWSServer.handleConnection(socket, clientId);
-    } catch (e) {
-      fastify.log.error({ error: e }, 'Voice audio WS connection parameter parsing failed');
-      socket.close();
-    }
-  });
-
   // 服务器关闭时清理WebSocket连接
   fastify.addHook('onClose', async () => {
     processMonitor.stop();
+    await liveKitBridgeManager.stop();
     wsServer.cleanup();
     logbookWsServer.cleanup();
-    audioMonitorWSServer.closeAll();
-    voiceAudioWSServer.closeAll();
+  });
+
+  fastify.get('/api/realtime/ws-compat', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
+    realtimeTransportManager.acceptCompatConnection(socket, req.url);
   });
 
   return fastify;
-} 
+}

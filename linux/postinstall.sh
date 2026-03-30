@@ -21,6 +21,8 @@ DATA_DIR="/var/lib/tx5dr"
 NGINX_TEMPLATE="/usr/share/tx5dr/nginx-site.conf"
 NGINX_CONF="/etc/nginx/conf.d/tx5dr.conf"
 CONFIG_ENV="/etc/tx5dr/config.env"
+LIVEKIT_TEMPLATE="/usr/share/tx5dr/livekit.yaml.template"
+LIVEKIT_CONF="/etc/tx5dr/livekit.yaml"
 
 if [[ -f "$CONFIG_ENV" ]]; then
     # shellcheck disable=SC1090
@@ -89,6 +91,21 @@ if [[ -f "$NGINX_TEMPLATE" ]]; then
     fi
 fi
 
+# ── LiveKit config ──────────────────────────────────────────────────────────
+if [[ -f "$LIVEKIT_TEMPLATE" ]]; then
+    sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT:-7880}|g" \
+        -e "s|%%LIVEKIT_TCP_PORT%%|${LIVEKIT_TCP_PORT:-7881}|g" \
+        -e "s|%%LIVEKIT_UDP_PORT_START%%|${LIVEKIT_UDP_PORT_START:-50000}|g" \
+        -e "s|%%LIVEKIT_UDP_PORT_END%%|${LIVEKIT_UDP_PORT_END:-50100}|g" \
+        -e "s|%%LIVEKIT_API_KEY%%|${LIVEKIT_API_KEY:-tx5dr}|g" \
+        -e "s|%%LIVEKIT_API_SECRET%%|${LIVEKIT_API_SECRET:-tx5dr-change-me-0123456789abcdef}|g" \
+        "$LIVEKIT_TEMPLATE" > "$LIVEKIT_CONF"
+    chmod 640 "$LIVEKIT_CONF"
+    chown "$APP_USER:$APP_GROUP" "$LIVEKIT_CONF" 2>/dev/null || true
+    _msg "Generated LiveKit config: $LIVEKIT_CONF" \
+         "已生成 LiveKit 配置: $LIVEKIT_CONF"
+fi
+
 # ── SELinux (RHEL/Fedora only) ───────────────────────────────────────────────
 if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
     # Ensure semanage is available
@@ -110,6 +127,7 @@ fi
 
 # ── Enable systemd service ──────────────────────────────────────────────────
 systemctl daemon-reload 2>/dev/null || true
+systemctl enable tx5dr-livekit 2>/dev/null || true
 systemctl enable tx5dr 2>/dev/null || true
 
 # ── Environment check (using shared library if available) ────────────────────

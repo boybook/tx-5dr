@@ -295,9 +295,3 @@ export type TunerCapabilities = z.infer<typeof TunerCapabilitiesSchema>;
 export type TunerStatus = z.infer<typeof TunerStatusSchema>;
 export type TunerCapabilitiesResponse = z.infer<typeof TunerCapabilitiesResponseSchema>;
 export type TunerStatusResponse = z.infer<typeof TunerStatusResponseSchema>;
-
-/**
- * Audio monitor codec setting
- */
-export const AudioMonitorCodecSchema = z.enum(['opus', 'pcm']);
-export type AudioMonitorCodec = z.infer<typeof AudioMonitorCodecSchema>;

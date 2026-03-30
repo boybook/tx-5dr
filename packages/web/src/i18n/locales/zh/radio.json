@@ -67,6 +67,28 @@
     "startFailed": "监听启动失败",
     "codec": "编解码"
   },
+  "realtime": {
+    "scopeRadio": "电台监听",
+    "scopeOpenWebRX": "OpenWebRX 试听",
+    "tokenRequestFailed": "{{scope}} 无法获取实时语音访问令牌。",
+    "sessionExpired": "{{scope}} 的实时语音会话已失效，请重新开始。",
+    "publicUrlMisconfigured": "{{scope}} 无法连接到配置的 LiveKit 公网地址。",
+    "signalingUnreachable": "{{scope}} 无法连接到实时语音服务器。",
+    "iceFailed": "{{scope}} 已连到语音服务器，但媒体协商失败。",
+    "noAudioTrack": "{{scope}} 已连接到语音房间，但没有收到音频流。",
+    "audioPlaybackBlocked": "{{scope}} 的音频播放被浏览器阻止。",
+    "mediaPermissionDenied": "无法采集或播放语音设备，请检查浏览器/系统权限。",
+    "unknownFailure": "{{scope}} 实时语音链路发生异常。",
+    "suggestionRetryLater": "请重试刚才的操作，必要时刷新页面或重启应用。",
+    "suggestionInteractPage": "请先与页面交互一次，再重新开启监听或发射。",
+    "suggestionAllowMicrophone": "请在浏览器或系统设置中允许麦克风访问。",
+    "suggestionCheckPublicUrl": "检查系统设置中的 LiveKit 公网地址是否正确；若做了公网映射或反向代理，必须填写可直连的 WebSocket 地址。",
+    "suggestionCheckSignalingPort": "确认 LiveKit signaling 端口 {{port}} 已开放，且浏览器能访问该地址。",
+    "suggestionCheckRtcTcpPort": "若 UDP 不通，至少确认 LiveKit ICE/TCP 端口 {{port}} 已开放。",
+    "suggestionCheckUdpRange": "若希望获得最佳实时效果，请确认 UDP 端口范围 {{range}} 可通。",
+    "suggestionCheckDirectUrl": "可直接在当前机器测试实时语音地址是否可达：{{url}}",
+    "suggestionCheckGenericPorts": "请检查 LiveKit 的 signaling、ICE/TCP 和 UDP 端口是否已开放。"
+  },
   "tuner": {
     "control": "天调控制",
     "switch": "天调开关",

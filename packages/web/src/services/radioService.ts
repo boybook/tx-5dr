@@ -13,10 +13,6 @@ const logger = createLogger('RadioService');
 export class RadioService {
   private wsClient: WSClient;
   private _isDecoding = false;
-  private audioMonitorWs: WebSocket | null = null; // 音频监听专用WebSocket
-  private audioMonitorDataHandler: ((buffer: ArrayBuffer) => void) | null = null; // 音频数据处理器
-  private audioMonitorClientId: string | null = null; // 音频监听客户端ID
-  private _audioMonitorCodec: 'opus' | 'pcm' = 'pcm'; // 实际使用的codec
 
   constructor() {
     // 创建WebSocket客户端
@@ -306,114 +302,14 @@ export class RadioService {
     }
   }
 
-  /**
-   * 连接音频监听（简化模式：连接即接收）
-   */
-  connectAudioMonitor(forcePcm = false): void {
-    if (!this.isConnected) {
-      logger.warn('Not connected to server, cannot connect audio monitor');
-      return;
-    }
-
-    if (this.audioMonitorWs) {
-      logger.warn('Audio WebSocket already connected');
-      return;
-    }
-
-    // 生成客户端ID（用于音频WebSocket连接）
-    this.audioMonitorClientId = `audio_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    logger.info(`Connecting audio monitor, clientId=${this.audioMonitorClientId}`);
-
-    // Detect Opus decode capability (can be overridden by forcePcm)
-    const canOpus = !forcePcm && typeof AudioDecoder !== 'undefined';
-    this._audioMonitorCodec = canOpus ? 'opus' : 'pcm';
-
-    // 连接音频WebSocket（连接后服务端自动开始广播）
-    const audioWsUrl = getWebSocketUrl().replace('/ws', `/ws/audio-monitor?clientId=${this.audioMonitorClientId}&codec=${this._audioMonitorCodec}`);
-    logger.info(`Connecting audio WebSocket: ${audioWsUrl}, codec=${this._audioMonitorCodec}`);
-
-    this.audioMonitorWs = new WebSocket(audioWsUrl);
-    this.audioMonitorWs.binaryType = 'arraybuffer';
-
-    this.audioMonitorWs.onopen = () => {
-      logger.info('Audio WebSocket connected, receiving audio data');
-    };
-
-    this.audioMonitorWs.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        // Binary: audio data
-        if (this.audioMonitorDataHandler) {
-          this.audioMonitorDataHandler(event.data);
-        }
-      } else if (typeof event.data === 'string') {
-        // Text: server sends codec confirmation as first message
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'codec' && (msg.codec === 'opus' || msg.codec === 'pcm')) {
-            this._audioMonitorCodec = msg.codec;
-            logger.info(`Server confirmed audio monitor codec: ${msg.codec}`);
-          }
-        } catch {
-          // ignore non-JSON text
-        }
-      }
-    };
-
-    this.audioMonitorWs.onerror = (error) => {
-      logger.error('Audio WebSocket error:', error);
-    };
-
-    this.audioMonitorWs.onclose = () => {
-      logger.info('Audio WebSocket closed');
-      this.audioMonitorWs = null;
-    };
-  }
-
-  /**
-   * 断开音频监听
-   */
-  disconnectAudioMonitor(): void {
-    // 关闭音频WebSocket
-    if (this.audioMonitorWs) {
-      logger.info('Closing audio WebSocket');
-      this.audioMonitorWs.close();
-      this.audioMonitorWs = null;
-      this.audioMonitorClientId = null;
-    }
-  }
-
-  /**
-   * 设置音频监听数据处理器
-   * @param handler 处理器函数，接收ArrayBuffer音频数据
-   */
-  setAudioMonitorDataHandler(handler: ((buffer: ArrayBuffer) => void) | null): void {
-    this.audioMonitorDataHandler = handler;
-    logger.info(`Audio data handler ${handler ? 'set' : 'cleared'}`);
-  }
-
   // ===== Voice Mode Methods =====
-
-  /** Current voice audio WebSocket client ID (used to associate audio stream with PTT lock) */
-  private _voiceAudioClientId: string | null = null;
-
-  get voiceAudioClientId(): string | null {
-    return this._voiceAudioClientId;
-  }
-
-  /**
-   * Get the effective audio monitor codec being used for the current connection.
-   */
-  get audioMonitorCodec(): 'opus' | 'pcm' {
-    return this._audioMonitorCodec;
-  }
 
   /**
    * 请求语音 PTT 锁
    */
-  requestVoicePTT(): void {
+  requestVoicePTT(participantIdentity?: string): void {
     if (this.isConnected) {
-      this.wsClient.requestVoicePTT(this._voiceAudioClientId || undefined);
+      this.wsClient.requestVoicePTT(participantIdentity);
     }
   }
 
@@ -435,12 +331,4 @@ export class RadioService {
     }
   }
 
-  /**
-   * 获取语音音频 WebSocket URL
-   * 用于 VoiceCapture 建立二进制音频传输通道
-   */
-  getVoiceAudioWsUrl(): string {
-    this._voiceAudioClientId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    return getWebSocketUrl().replace('/ws', `/ws/voice-audio?clientId=${this._voiceAudioClientId}`);
-  }
 }

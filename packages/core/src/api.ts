@@ -76,6 +76,11 @@ import type {
   OpenWebRXListenStatus,
   OpenWebRXListenStart,
   OpenWebRXListenTune,
+  RealtimeSettings,
+  RealtimeSessionRequest,
+  RealtimeSessionResponse,
+  RealtimeStatsRequest,
+  RealtimeStatsResponse,
 } from '@tx5dr/contracts';
 
 // ========== 错误处理 ==========
@@ -912,28 +917,26 @@ export const api = {
     );
   },
 
-  // ========== 音频监听编码设置 ==========
-
-  async getAudioMonitorCodec(apiBase?: string): Promise<{
+  async getRealtimeSettings(apiBase?: string): Promise<{
     success: boolean;
-    data: { codec: string };
+    data: RealtimeSettings;
   }> {
-    return apiRequest('/settings/audio-monitor-codec', undefined, apiBase);
+    return apiRequest('/settings/realtime', undefined, apiBase);
   },
 
-  async updateAudioMonitorCodec(
-    codec: string,
+  async updateRealtimeSettings(
+    settings: RealtimeSettings,
     apiBase?: string
   ): Promise<{
     success: boolean;
     message: string;
-    data: { codec: string };
+    data: RealtimeSettings;
   }> {
     return apiRequest(
-      '/settings/audio-monitor-codec',
+      '/settings/realtime',
       {
         method: 'PUT',
-        body: JSON.stringify({ codec }),
+        body: JSON.stringify(settings),
       },
       apiBase
     );
@@ -1682,6 +1685,21 @@ export const api = {
   async getOpenWebRXListenStatus(apiBase?: string): Promise<{ status: OpenWebRXListenStatus | null }> {
     return apiRequest<{ status: OpenWebRXListenStatus | null }>('/openwebrx/listen/status', undefined, apiBase);
   },
+
+  async getRealtimeSession(body: RealtimeSessionRequest, apiBase?: string): Promise<RealtimeSessionResponse> {
+    return apiRequest<RealtimeSessionResponse>('/realtime/session', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, apiBase);
+  },
+
+  async getRealtimeStats(query: RealtimeStatsRequest, apiBase?: string): Promise<RealtimeStatsResponse> {
+    const params = new URLSearchParams({
+      scope: query.scope,
+      ...(query.previewSessionId ? { previewSessionId: query.previewSessionId } : {}),
+    });
+    return apiRequest<RealtimeStatsResponse>(`/realtime/stats?${params.toString()}`, undefined, apiBase);
+  },
 }
 
 // 为了向后兼容,也导出单独的函数
@@ -1793,4 +1811,6 @@ export const {
   ,stopOpenWebRXListen
   ,tuneOpenWebRXListen
   ,getOpenWebRXListenStatus
+  ,getRealtimeSession
+  ,getRealtimeStats
 } = api;

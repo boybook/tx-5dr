@@ -67,6 +67,28 @@
     "startFailed": "Failed to start monitor",
     "codec": "Monitor Audio Codec"
   },
+  "realtime": {
+    "scopeRadio": "radio monitoring",
+    "scopeOpenWebRX": "OpenWebRX preview",
+    "tokenRequestFailed": "Unable to obtain a realtime access token for {{scope}}.",
+    "sessionExpired": "The realtime session for {{scope}} is no longer valid. Please start it again.",
+    "publicUrlMisconfigured": "{{scope}} cannot reach the configured LiveKit public URL.",
+    "signalingUnreachable": "{{scope}} cannot reach the realtime voice server.",
+    "iceFailed": "{{scope}} reached the voice server, but media negotiation failed.",
+    "noAudioTrack": "{{scope}} joined the room, but no audio track was received.",
+    "audioPlaybackBlocked": "Audio playback for {{scope}} was blocked by the browser.",
+    "mediaPermissionDenied": "Unable to access the required media device. Please check browser or system permissions.",
+    "unknownFailure": "The realtime voice path for {{scope}} failed.",
+    "suggestionRetryLater": "Retry the last action. If needed, refresh the page or restart the app.",
+    "suggestionInteractPage": "Interact with the page once, then try enabling monitoring or transmit again.",
+    "suggestionAllowMicrophone": "Allow microphone access in the browser or operating system settings.",
+    "suggestionCheckPublicUrl": "Check the LiveKit public URL in System Settings. If you use public mapping or a reverse proxy, it must point to a directly reachable WebSocket endpoint.",
+    "suggestionCheckSignalingPort": "Confirm the LiveKit signaling port {{port}} is open and reachable from the browser.",
+    "suggestionCheckRtcTcpPort": "If UDP is blocked, at least make sure the LiveKit ICE/TCP port {{port}} is open.",
+    "suggestionCheckUdpRange": "For best realtime performance, confirm the UDP range {{range}} is reachable.",
+    "suggestionCheckDirectUrl": "Test whether this realtime voice endpoint is reachable directly from the client: {{url}}",
+    "suggestionCheckGenericPorts": "Check that the LiveKit signaling, ICE/TCP, and UDP ports are open."
+  },
   "tuner": {
     "control": "Tuner control",
     "switch": "Tuner switch",
