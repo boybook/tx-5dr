@@ -26,6 +26,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Generate image tags
         id: tags
         run: |
@@ -211,3 +216,21 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           prerelease: true
           makeLatest: false
+
+      - name: Sync Nightly Docker Release to Gitee
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+        run: |
+          if [ -z "${GITEE_TOKEN}" ] || [ -z "${GITEE_OWNER}" ] || [ -z "${GITEE_REPO}" ]; then
+            echo "Skipping Gitee sync because required secrets are missing."
+            exit 0
+          fi
+
+          node scripts/sync-gitee-release.mjs \
+            --github-repo "${{ github.repository }}" \
+            --tag "nightly-docker" \
+            --gitee-owner "${GITEE_OWNER}" \
+            --gitee-repo "${GITEE_REPO}"

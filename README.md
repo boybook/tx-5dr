@@ -51,7 +51,7 @@ This turns a single half-duplex transceiver into an effectively full-duplex FT8/
 
 | Option | Best for | How |
 |--------|---------|-----|
-| **Desktop App** (Electron) | Windows / macOS / Linux with GUI | Download from [Releases (nightly-app)](https://github.com/boybook/tx-5dr/releases/tag/nightly-app) |
+| **Desktop App** (Electron) | Windows / macOS / Linux with GUI | Download from [GitHub Releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app) / [Gitee Releases](https://gitee.com/boybook/tx-5dr/releases/tag/nightly-app) |
 | **Linux Server** (deb/rpm) | Headless servers, low-cost hardware | `tx5dr start` — see [Server Install](#linux-server) |
 | **Docker** | Containers, quick setup | `docker-compose up -d` — see [Docker](#docker) |
 
@@ -59,7 +59,7 @@ This turns a single half-duplex transceiver into an effectively full-duplex FT8/
 
 ## Desktop App
 
-Download the installer for your platform from [nightly-app releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app):
+Download the installer for your platform from [GitHub Releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app) or [Gitee Releases](https://gitee.com/boybook/tx-5dr/releases/tag/nightly-app). Users in mainland China can usually prefer Gitee:
 
 - **Windows**: `.msi` installer or `.7z` portable
 - **macOS**: `.dmg` (Apple Silicon & Intel)
@@ -73,15 +73,22 @@ Server-only deployment — no desktop environment required. Access via web brows
 
 ### Quick Install
 
+Release pages:
+- GitHub: <https://github.com/boybook/tx-5dr/releases/tag/nightly-server>
+- Gitee: <https://gitee.com/boybook/tx-5dr/releases/tag/nightly-server>
+
+The one-click online installer below still uses GitHub as its built-in upstream. For mainland China, prefer downloading the package from the Gitee release page and installing it locally.
+
 ```bash
 # One-click install (auto-detects arch, downloads package, fixes dependencies)
+# The online script currently pulls packages from GitHub internally.
 curl -fsSL https://github.com/boybook/tx-5dr/releases/download/nightly-server/install-online.sh | sudo bash
 ```
 
 Or manually:
 ```bash
-curl -fSL -o tx5dr.deb https://github.com/boybook/tx-5dr/releases/download/nightly-server/TX-5DR-nightly-server-linux-amd64.deb
-sudo dpkg -i --force-depends tx5dr.deb
+# Download TX-5DR-nightly-server-linux-amd64.deb from GitHub Releases or Gitee Releases first
+sudo dpkg -i --force-depends ./TX-5DR-nightly-server-linux-amd64.deb
 sudo bash /usr/share/tx5dr/install.sh
 ```
 
@@ -163,7 +170,7 @@ docker exec tx5dr cat /app/data/config/.admin-token
 - Browser clients connect directly to the LiveKit signaling URL; configure any public URL override from System Settings, which persists to `/app/data/config/config.json`
 - If your public domain, TLS termination, or port mapping differs from the container-internal address, you must set the externally reachable LiveKit WebSocket URL in the settings page
 
-See [nightly-docker releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details.
+See [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) or [Gitee nightly-docker](https://gitee.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details.
 
 ---
 

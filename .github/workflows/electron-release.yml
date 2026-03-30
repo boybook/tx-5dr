@@ -433,6 +433,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -510,6 +515,26 @@ jobs:
           prerelease: true
           makeLatest: false
 
+      - name: Sync Nightly Release to Gitee
+        if: github.event.inputs.version == ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+        run: |
+          if [ -z "${GITEE_TOKEN}" ] || [ -z "${GITEE_OWNER}" ] || [ -z "${GITEE_REPO}" ]; then
+            echo "Skipping Gitee sync because required secrets are missing."
+            exit 0
+          fi
+
+          node scripts/sync-gitee-release.mjs \
+            --github-repo "${{ github.repository }}" \
+            --tag "nightly-app" \
+            --gitee-owner "${GITEE_OWNER}" \
+            --gitee-repo "${GITEE_REPO}" \
+            --assets-dir "release-assets"
+
       # Official Release
       - name: Create Official Release
         if: github.event.inputs.version != ''
@@ -562,3 +587,23 @@ jobs:
           draft: false
           prerelease: false
           makeLatest: true
+
+      - name: Sync Official Release to Gitee
+        if: github.event.inputs.version != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+        run: |
+          if [ -z "${GITEE_TOKEN}" ] || [ -z "${GITEE_OWNER}" ] || [ -z "${GITEE_REPO}" ]; then
+            echo "Skipping Gitee sync because required secrets are missing."
+            exit 0
+          fi
+
+          node scripts/sync-gitee-release.mjs \
+            --github-repo "${{ github.repository }}" \
+            --tag "${{ github.event.inputs.version }}" \
+            --gitee-owner "${GITEE_OWNER}" \
+            --gitee-repo "${GITEE_REPO}" \
+            --assets-dir "release-assets"
