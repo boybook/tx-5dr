@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
-import { readdir, readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+const execFileAsync = promisify(execFile);
 
 function parseArgs(argv) {
   const args = {};
@@ -261,16 +265,41 @@ async function deleteGiteeAttachFile({ giteeOwner, giteeRepo, giteeToken, releas
 }
 
 async function uploadGiteeAttachFile({ giteeOwner, giteeRepo, giteeToken, releaseId, filePath }) {
-  const fileBuffer = await readFile(filePath);
-  const form = new FormData();
-  form.append('file', new Blob([fileBuffer]), path.basename(filePath));
+  const pathname = `/repos/${encodeURIComponent(giteeOwner)}/${encodeURIComponent(giteeRepo)}/releases/${releaseId}/attach_files`;
+  const url = buildGiteeApiUrl(pathname);
+  console.log(`Gitee API URL: ${maskUrlForLogs(url)}`);
 
-  return giteeRequest({
-    pathname: `/repos/${encodeURIComponent(giteeOwner)}/${encodeURIComponent(giteeRepo)}/releases/${releaseId}/attach_files`,
-    token: giteeToken,
-    method: 'POST',
-    body: form,
-  });
+  try {
+    const { stdout } = await execFileAsync(
+      'curl',
+      [
+        '-fsS',
+        '-X',
+        'POST',
+        '-F',
+        `access_token=${giteeToken}`,
+        '-F',
+        `file=@${filePath}`,
+        url.toString(),
+      ],
+      {
+        maxBuffer: 10 * 1024 * 1024,
+      }
+    );
+
+    return stdout ? JSON.parse(stdout) : null;
+  } catch (error) {
+    const stderr =
+      error && typeof error === 'object' && 'stderr' in error && typeof error.stderr === 'string'
+        ? error.stderr.trim()
+        : '';
+    const stdout =
+      error && typeof error === 'object' && 'stdout' in error && typeof error.stdout === 'string'
+        ? error.stdout.trim()
+        : '';
+    const details = [stderr, stdout].filter(Boolean).join(' | ');
+    throw new Error(`Attachment upload failed for ${path.basename(filePath)}${details ? `: ${details}` : ''}`);
+  }
 }
 
 async function syncRelease() {
@@ -353,29 +382,34 @@ async function syncRelease() {
     const assetFiles = await listAssetFiles(assetsDir);
     console.log(`Syncing ${assetFiles.length} release asset(s) from ${assetsDir}`);
 
-    const existingAttachFiles = await listGiteeAttachFiles({
-      giteeOwner,
-      giteeRepo,
-      giteeToken,
-      releaseId,
-    });
+    for (const filePath of assetFiles) {
+      const fileName = path.basename(filePath);
+      const fileInfo = await stat(filePath);
+      console.log(`Preparing attachment: ${fileName} (${fileInfo.size} bytes)`);
 
-    for (const attachFile of existingAttachFiles) {
-      if (!attachFile?.id) {
-        continue;
-      }
-      console.log(`Deleting old attachment: ${attachFile.name || attachFile.id}`);
-      await deleteGiteeAttachFile({
+      const existingAttachFiles = await listGiteeAttachFiles({
         giteeOwner,
         giteeRepo,
         giteeToken,
         releaseId,
-        attachFileId: attachFile.id,
       });
-    }
 
-    for (const filePath of assetFiles) {
-      console.log(`Uploading attachment: ${path.basename(filePath)}`);
+      for (const attachFile of existingAttachFiles) {
+        if (!attachFile?.id || attachFile.name !== fileName) {
+          continue;
+        }
+
+        console.log(`Deleting old attachment: ${attachFile.name} (#${attachFile.id})`);
+        await deleteGiteeAttachFile({
+          giteeOwner,
+          giteeRepo,
+          giteeToken,
+          releaseId,
+          attachFileId: attachFile.id,
+        });
+      }
+
+      console.log(`Uploading attachment: ${fileName}`);
       await uploadGiteeAttachFile({
         giteeOwner,
         giteeRepo,
