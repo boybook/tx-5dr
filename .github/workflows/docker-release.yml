@@ -63,6 +63,11 @@ jobs:
           echo "📦 Generated tags:"
           echo "${TAGS}" | tr ',' '\n'
 
+      - name: Generate release info
+        id: release_info
+        run: |
+          echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -150,7 +155,7 @@ jobs:
           body: |
             ## TX-5DR Nightly Build — Docker Image Docker 镜像
 
-            **Built at** （构建时间）: ${{ github.event.head_commit.timestamp }}
+            **Built at** （构建时间）: ${{ steps.release_info.outputs.timestamp }}
             **Commit**: [${{ steps.tags.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
             **Image Digest**: `${{ steps.docker_build.outputs.digest }}`
 
@@ -217,20 +222,42 @@ jobs:
           prerelease: true
           makeLatest: false
 
-      - name: Sync Nightly Docker Release to Gitee
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
-        run: |
-          if [ -z "${GITEE_TOKEN}" ] || [ -z "${GITEE_OWNER}" ] || [ -z "${GITEE_REPO}" ]; then
-            echo "Skipping Gitee sync because required secrets are missing."
-            exit 0
-          fi
+      - name: Install ossutil
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        run: bash scripts/install-ossutil.sh
 
-          node scripts/sync-gitee-release.mjs \
-            --github-repo "${{ github.repository }}" \
+      - name: Configure ossutil
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+        run: |
+          OSS_ENDPOINT_VALUE="${OSS_ENDPOINT#https://}"
+          OSS_ENDPOINT_VALUE="${OSS_ENDPOINT_VALUE#http://}"
+          ossutil config -e "${OSS_ENDPOINT_VALUE}" -i "${OSS_ACCESS_KEY_ID}" -k "${OSS_ACCESS_KEY_SECRET}" -c "${RUNNER_TEMP}/.ossutilconfig"
+
+      - name: Generate OSS docker manifest
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        run: |
+          node scripts/generate-oss-manifest.mjs \
+            --product docker \
+            --channel nightly \
             --tag "nightly-docker" \
-            --gitee-owner "${GITEE_OWNER}" \
-            --gitee-repo "${GITEE_REPO}"
+            --version "${{ steps.tags.outputs.short_sha }}" \
+            --commit "${{ steps.tags.outputs.short_sha }}" \
+            --published-at "${{ steps.release_info.outputs.timestamp }}" \
+            --base-url "${{ secrets.OSS_BASE_URL }}" \
+            --object-prefix "tx-5dr/docker/nightly-docker" \
+            --output "oss-metadata/docker/latest.json" \
+            --docker-image "${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}" \
+            --docker-tags "${{ steps.tags.outputs.tags }}" \
+            --docker-digest "${{ steps.docker_build.outputs.digest }}"
+
+      - name: Upload docker metadata to OSS
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+        run: |
+          ossutil cp "oss-metadata/docker/latest.json" "oss://${OSS_BUCKET}/tx-5dr/docker/nightly-docker/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          ossutil cp "oss-metadata/docker/latest.json" "oss://${OSS_BUCKET}/tx-5dr/docker/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"

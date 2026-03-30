@@ -25,11 +25,12 @@ for f in "$COMMON" "$CHECKS" "$INSTALL"; do
 done
 
 REPO="boybook/tx-5dr"
+DOWNLOAD_BASE_URL="${TX5DR_DOWNLOAD_BASE_URL:-}"
 
-python3 - "$COMMON" "$CHECKS" "$INSTALL" "$OUTPUT" "$REPO" << 'PYEOF'
+python3 - "$COMMON" "$CHECKS" "$INSTALL" "$OUTPUT" "$REPO" "$DOWNLOAD_BASE_URL" << 'PYEOF'
 import sys, re
 
-common_path, checks_path, install_path, output_path, repo = sys.argv[1:6]
+common_path, checks_path, install_path, output_path, repo, download_base_url = sys.argv[1:7]
 
 def read_strip_shebang(path):
     with open(path) as f:
@@ -51,17 +52,38 @@ install_src = re.sub(
 )
 
 # Replace the "No .deb file provided" error block with auto-download logic
-download_block = f'''    # Auto-download latest nightly from GitHub
-        log_info "Downloading latest nightly from GitHub..."
+download_block = f'''    # Auto-download latest nightly from OSS metadata (fallback to GitHub)
+        log_info "Resolving latest nightly package..."
         _dl_family=$(os_family)
+        _fallback_tag="nightly-server"
         if [[ "$_dl_family" == "rhel" ]]; then
-            DL_URL="https://github.com/{repo}/releases/download/nightly-server/TX-5DR-nightly-server-linux-${{ARCH}}.rpm"
+            _asset_name="TX-5DR-nightly-server-linux-${{ARCH}}.rpm"
             PKG_FILE="/tmp/tx5dr-nightly-${{ARCH}}.rpm"
         else
-            DL_URL="https://github.com/{repo}/releases/download/nightly-server/TX-5DR-nightly-server-linux-${{ARCH}}.deb"
+            _asset_name="TX-5DR-nightly-server-linux-${{ARCH}}.deb"
             PKG_FILE="/tmp/tx5dr-nightly-${{ARCH}}.deb"
         fi
-        if curl -fSL --progress-bar -o "$PKG_FILE" "$DL_URL"; then
+        _fallback_url="$(get_github_release_asset_url "$_fallback_tag" "$_asset_name")"
+        _resolved_url=""
+        _resolved_sha=""
+        if should_prefer_oss_download; then
+            log_info "Detected mainland China or OSS override. Preferring OSS mirror."
+            if _manifest_json=$(fetch_server_manifest 2>/dev/null); then
+                _resolved_url=$(get_server_manifest_package_url "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}")
+                _resolved_sha=$(get_server_manifest_package_sha256 "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}")
+            else
+                log_warn "OSS manifest unavailable, falling back to GitHub..."
+            fi
+        fi
+        [[ -n "$_resolved_url" ]] || _resolved_url="$_fallback_url"
+        if curl -fSL --progress-bar -o "$PKG_FILE" "$_resolved_url"; then
+            if [[ -n "$_resolved_sha" ]] && command -v sha256sum &>/dev/null; then
+                if ! printf "%s  %s\\n" "$_resolved_sha" "$PKG_FILE" | sha256sum -c - >/dev/null 2>&1; then
+                    log_warn "OSS package checksum mismatch, falling back to GitHub..."
+                    rm -f "$PKG_FILE"
+                    curl -fSL --progress-bar -o "$PKG_FILE" "$_fallback_url"
+                fi
+            fi
             log_ok "Downloaded: $PKG_FILE"
             if $IS_UPGRADE; then
                 systemctl stop tx5dr 2>/dev/null || true
@@ -80,7 +102,7 @@ download_block = f'''    # Auto-download latest nightly from GitHub
             fi
             rm -f "$PKG_FILE"
         else
-            log_error "Download failed: $DL_URL"
+            log_error "Download failed: $_resolved_url"
             log_error "You can manually download and pass the package path as argument."
             exit 1
         fi'''
@@ -98,7 +120,12 @@ install_src = install_src.replace(
     download_block.replace('log_info "Downloading latest', 'log_info "Downloading latest update from GitHub...\n        # Downloading')
 )
 
-header = '''#!/bin/bash
+download_base_assignment = ''
+if download_base_url:
+    escaped = download_base_url.replace('\\', '\\\\').replace('"', '\\"')
+    download_base_assignment = f'TX5DR_DOWNLOAD_BASE_URL="${{TX5DR_DOWNLOAD_BASE_URL:-{escaped}}}"\n'
+
+header = f'''#!/bin/bash
 # ╔══════════════════════════════════════════════════════════════════╗
 # ║  TX-5DR Server — One-Click Install Script (self-contained)      ║
 # ║  Auto-generated — do not edit. Source: linux/install.sh          ║
@@ -109,7 +136,7 @@ header = '''#!/bin/bash
 # ║    sudo bash install-online.sh --check-only                      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 set -euo pipefail
-'''
+{download_base_assignment}'''
 
 with open(output_path, 'w') as f:
     f.write(header)

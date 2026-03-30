@@ -51,7 +51,7 @@ This turns a single half-duplex transceiver into an effectively full-duplex FT8/
 
 | Option | Best for | How |
 |--------|---------|-----|
-| **Desktop App** (Electron) | Windows / macOS / Linux with GUI | Download from [GitHub Releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app) / [Gitee Releases](https://gitee.com/boybook/tx-5dr/releases/tag/nightly-app) |
+| **Desktop App** (Electron) | Windows / macOS / Linux with GUI | Download from [GitHub Releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app) |
 | **Linux Server** (deb/rpm) | Headless servers, low-cost hardware | `tx5dr start` — see [Server Install](#linux-server) |
 | **Docker** | Containers, quick setup | `docker-compose up -d` — see [Docker](#docker) |
 
@@ -59,7 +59,7 @@ This turns a single half-duplex transceiver into an effectively full-duplex FT8/
 
 ## Desktop App
 
-Download the installer for your platform from [GitHub Releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app) or [Gitee Releases](https://gitee.com/boybook/tx-5dr/releases/tag/nightly-app). Users in mainland China can usually prefer Gitee:
+Download the installer for your platform from [GitHub Releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-app). Mainland China builds are also published to the OSS mirror during release workflows:
 
 - **Windows**: `.msi` installer or `.7z` portable
 - **macOS**: `.dmg` (Apple Silicon & Intel)
@@ -75,19 +75,17 @@ Server-only deployment — no desktop environment required. Access via web brows
 
 Release pages:
 - GitHub: <https://github.com/boybook/tx-5dr/releases/tag/nightly-server>
-- Gitee: <https://gitee.com/boybook/tx-5dr/releases/tag/nightly-server>
 
-The one-click online installer below still uses GitHub as its built-in upstream. For mainland China, prefer downloading the package from the Gitee release page and installing it locally.
+The one-click online installer and `tx5dr update` now use OSS only when geolocation detects mainland China, and use GitHub everywhere else. If the OSS mirror is unavailable, they fall back to GitHub automatically.
 
 ```bash
-# One-click install (auto-detects arch, downloads package, fixes dependencies)
-# The online script currently pulls packages from GitHub internally.
+# One-click install (auto-detects arch, resolves latest package metadata, fixes dependencies)
 curl -fsSL https://github.com/boybook/tx-5dr/releases/download/nightly-server/install-online.sh | sudo bash
 ```
 
 Or manually:
 ```bash
-# Download TX-5DR-nightly-server-linux-amd64.deb from GitHub Releases or Gitee Releases first
+# Download TX-5DR-nightly-server-linux-amd64.deb from GitHub Releases or the OSS mirror first
 sudo dpkg -i --force-depends ./TX-5DR-nightly-server-linux-amd64.deb
 sudo bash /usr/share/tx5dr/install.sh
 ```
@@ -114,6 +112,7 @@ sudo bash /usr/share/tx5dr/install.sh
 - For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)
 - Public voice / OpenWebRX preview deployments must also expose `7880/tcp`, `7881/tcp`, and `50000-50100/udp`
 - Browser clients connect to LiveKit directly. By default the server derives `ws(s)://<current-host>:7880`; if you use public mapping or a dedicated domain/port, set the public LiveKit URL in System Settings. The value is persisted in `/var/lib/tx5dr/config/config.json`
+- Download source override: set `TX5DR_DOWNLOAD_SOURCE=github|oss|auto` in `/etc/tx5dr/config.env` if you need to force a specific source
 
 ---
 
@@ -170,7 +169,7 @@ docker exec tx5dr cat /app/data/config/.admin-token
 - Browser clients connect directly to the LiveKit signaling URL; configure any public URL override from System Settings, which persists to `/app/data/config/config.json`
 - If your public domain, TLS termination, or port mapping differs from the container-internal address, you must set the externally reachable LiveKit WebSocket URL in the settings page
 
-See [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) or [Gitee nightly-docker](https://gitee.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details.
+See [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details. Docker metadata is also published to the OSS mirror during release workflows.
 
 ---
 

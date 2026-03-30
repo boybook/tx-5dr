@@ -70,6 +70,8 @@ jobs:
 
       - name: Build server packages (deb + rpm)
         run: scripts/package-linux.sh both --no-build
+        env:
+          TX5DR_DOWNLOAD_BASE_URL: ${{ secrets.OSS_BASE_URL }}
 
       - name: Prepare artifacts
         run: |
@@ -122,6 +124,8 @@ jobs:
           path: dist/
 
       - name: Build install-online.sh
+        env:
+          TX5DR_DOWNLOAD_BASE_URL: ${{ secrets.OSS_BASE_URL }}
         run: |
           bash scripts/build-install-script.sh
           cp dist/install-online.sh release-assets/ 2>/dev/null || true
@@ -140,6 +144,15 @@ jobs:
           echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
           echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          if [ -z "${{ github.event.inputs.version }}" ]; then
+            echo "tag=nightly-server" >> $GITHUB_OUTPUT
+            echo "version=nightly" >> $GITHUB_OUTPUT
+            echo "channel=nightly" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.inputs.version }}-server" >> $GITHUB_OUTPUT
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "channel=release" >> $GITHUB_OUTPUT
+          fi
 
       # Nightly Release
       - name: Create or Update Nightly Release
@@ -225,26 +238,6 @@ jobs:
           prerelease: true
           makeLatest: false
 
-      - name: Sync Nightly Release to Gitee
-        if: github.event.inputs.version == ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
-        run: |
-          if [ -z "${GITEE_TOKEN}" ] || [ -z "${GITEE_OWNER}" ] || [ -z "${GITEE_REPO}" ]; then
-            echo "Skipping Gitee sync because required secrets are missing."
-            exit 0
-          fi
-
-          node scripts/sync-gitee-release.mjs \
-            --github-repo "${{ github.repository }}" \
-            --tag "nightly-server" \
-            --gitee-owner "${GITEE_OWNER}" \
-            --gitee-repo "${GITEE_REPO}" \
-            --assets-dir "release-assets"
-
       # Official Release
       - name: Create Official Release
         if: github.event.inputs.version != ''
@@ -279,22 +272,46 @@ jobs:
           prerelease: false
           makeLatest: false
 
-      - name: Sync Official Release to Gitee
-        if: github.event.inputs.version != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
-        run: |
-          if [ -z "${GITEE_TOKEN}" ] || [ -z "${GITEE_OWNER}" ] || [ -z "${GITEE_REPO}" ]; then
-            echo "Skipping Gitee sync because required secrets are missing."
-            exit 0
-          fi
+      - name: Install ossutil
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        run: bash scripts/install-ossutil.sh
 
-          node scripts/sync-gitee-release.mjs \
-            --github-repo "${{ github.repository }}" \
-            --tag "${{ github.event.inputs.version }}-server" \
-            --gitee-owner "${GITEE_OWNER}" \
-            --gitee-repo "${GITEE_REPO}" \
-            --assets-dir "release-assets"
+      - name: Configure ossutil
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+        run: |
+          OSS_ENDPOINT_VALUE="${OSS_ENDPOINT#https://}"
+          OSS_ENDPOINT_VALUE="${OSS_ENDPOINT_VALUE#http://}"
+          ossutil config -e "${OSS_ENDPOINT_VALUE}" -i "${OSS_ACCESS_KEY_ID}" -k "${OSS_ACCESS_KEY_SECRET}" -c "${RUNNER_TEMP}/.ossutilconfig"
+
+      - name: Generate OSS server manifest
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        run: |
+          node scripts/generate-oss-manifest.mjs \
+            --product server \
+            --channel "${{ steps.release_info.outputs.channel }}" \
+            --tag "${{ steps.release_info.outputs.tag }}" \
+            --version "${{ steps.release_info.outputs.version }}" \
+            --commit "${{ steps.release_info.outputs.short_sha }}" \
+            --published-at "${{ steps.release_info.outputs.timestamp }}" \
+            --base-url "${{ secrets.OSS_BASE_URL }}" \
+            --object-prefix "tx-5dr/server/${{ steps.release_info.outputs.tag }}" \
+            --assets-dir "release-assets" \
+            --output "oss-metadata/server/latest.json"
+
+      - name: Upload server assets to OSS
+        if: secrets.ALIYUN_ACCESS_KEY_ID != '' && secrets.ALIYUN_ACCESS_KEY_SECRET != '' && secrets.OSS_BUCKET != '' && secrets.OSS_ENDPOINT != '' && secrets.OSS_BASE_URL != ''
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+        run: |
+          for file in release-assets/*; do
+            ossutil cp "$file" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.tag }}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          done
+          ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.tag }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          if [ -f "release-assets/install-online.sh" ]; then
+            ossutil cp "release-assets/install-online.sh" "oss://${OSS_BUCKET}/tx-5dr/server/latest/install-online.sh" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          fi

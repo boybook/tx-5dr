@@ -251,6 +251,119 @@ load_config() {
     LIVEKIT_CONFIG_FILE="${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
     CONFIG_DIR="${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}"
     DATA_DIR="${TX5DR_DATA_DIR:-/var/lib/tx5dr}"
+    TX5DR_GITHUB_REPO="${TX5DR_GITHUB_REPO:-boybook/tx-5dr}"
+    TX5DR_DOWNLOAD_BASE_URL="${TX5DR_DOWNLOAD_BASE_URL:-}"
+    TX5DR_DOWNLOAD_SOURCE="${TX5DR_DOWNLOAD_SOURCE:-auto}"
+}
+
+get_download_base_url() {
+    if [[ -z "${TX5DR_DOWNLOAD_BASE_URL:-}" ]]; then
+        return 1
+    fi
+    printf "%s" "${TX5DR_DOWNLOAD_BASE_URL%/}"
+}
+
+get_server_manifest_url() {
+    local base_url
+    base_url=$(get_download_base_url) || return 1
+    printf "%s/tx-5dr/server/latest.json" "$base_url"
+}
+
+get_server_latest_install_script_url() {
+    local base_url
+    base_url=$(get_download_base_url) || return 1
+    printf "%s/tx-5dr/server/latest/install-online.sh" "$base_url"
+}
+
+get_github_release_asset_url() {
+    local tag="$1" asset_name="$2"
+    printf "https://github.com/%s/releases/download/%s/%s" "${TX5DR_GITHUB_REPO:-boybook/tx-5dr}" "$tag" "$asset_name"
+}
+
+fetch_server_manifest() {
+    local manifest_url
+    manifest_url=$(get_server_manifest_url) || return 1
+    curl -fsSL "$manifest_url"
+}
+
+normalize_country_code() {
+    local value="${1:-}"
+    value=$(printf "%s" "$value" | tr -d '\r\n[:space:]' | tr '[:lower:]' '[:upper:]')
+    [[ ${#value} -eq 2 ]] || return 1
+    printf "%s" "$value"
+}
+
+fetch_country_code() {
+    local response country
+
+    response=$(curl -fsSL --connect-timeout 2 --max-time 4 https://ipinfo.io/country 2>/dev/null || true)
+    country=$(normalize_country_code "$response" 2>/dev/null || true)
+    [[ -n "$country" ]] && { printf "%s" "$country"; return 0; }
+
+    response=$(curl -fsSL --connect-timeout 2 --max-time 4 https://ifconfig.co/country-iso 2>/dev/null || true)
+    country=$(normalize_country_code "$response" 2>/dev/null || true)
+    [[ -n "$country" ]] && { printf "%s" "$country"; return 0; }
+
+    response=$(curl -fsSL --connect-timeout 2 --max-time 4 https://ipapi.co/country/ 2>/dev/null || true)
+    country=$(normalize_country_code "$response" 2>/dev/null || true)
+    [[ -n "$country" ]] && { printf "%s" "$country"; return 0; }
+
+    response=$(curl -fsSL --connect-timeout 2 --max-time 4 https://api.country.is/ 2>/dev/null || true)
+    country=$(printf "%s" "$response" | tr -d '\n' | grep -oP '"country"\s*:\s*"\K[A-Z]{2}' | head -1 || true)
+    [[ -n "$country" ]] && { printf "%s" "$country"; return 0; }
+
+    return 1
+}
+
+is_mainland_china() {
+    local country
+    country=$(fetch_country_code 2>/dev/null || true)
+    [[ "$country" == "CN" ]]
+}
+
+should_prefer_oss_download() {
+    case "${TX5DR_DOWNLOAD_SOURCE:-auto}" in
+        oss|aliyun)
+            [[ -n "${TX5DR_DOWNLOAD_BASE_URL:-}" ]]
+            return
+            ;;
+        github)
+            return 1
+            ;;
+        auto|"")
+            [[ -n "${TX5DR_DOWNLOAD_BASE_URL:-}" ]] || return 1
+            is_mainland_china
+            return
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+manifest_lookup_value() {
+    local manifest_json="$1" lookup_key="$2"
+    printf "%s" "$manifest_json" | tr -d '\n' | grep -oP "\"${lookup_key}\":\\s*\"\\K[^\"]+" | head -1
+}
+
+get_server_manifest_package_url() {
+    local manifest_json="$1" pkg_arch="$2" pkg_ext="$3"
+    manifest_lookup_value "$manifest_json" "latest_url_${pkg_arch}_${pkg_ext}"
+}
+
+get_server_manifest_package_sha256() {
+    local manifest_json="$1" pkg_arch="$2" pkg_ext="$3"
+    manifest_lookup_value "$manifest_json" "latest_sha256_${pkg_arch}_${pkg_ext}"
+}
+
+get_server_manifest_commit() {
+    local manifest_json="$1"
+    manifest_lookup_value "$manifest_json" "commit"
+}
+
+get_server_manifest_published_at() {
+    local manifest_json="$1"
+    manifest_lookup_value "$manifest_json" "published_at"
 }
 
 get_livekit_binary_path() {

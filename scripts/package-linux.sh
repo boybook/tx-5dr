@@ -319,6 +319,13 @@ cp "$PROJECT_ROOT/linux/tx5dr-livekit.service" "$STAGING/lib/systemd/system/tx5d
 # --- Default config ---
 mkdir -p "$STAGING/etc/tx5dr"
 cp "$PROJECT_ROOT/linux/config.env" "$STAGING/etc/tx5dr/config.env"
+if [[ -n "${TX5DR_DOWNLOAD_BASE_URL:-}" ]]; then
+    {
+        echo ""
+        echo "# Download base URL for install-online.sh and tx5dr update"
+        echo "TX5DR_DOWNLOAD_BASE_URL=${TX5DR_DOWNLOAD_BASE_URL}"
+    } >> "$STAGING/etc/tx5dr/config.env"
+fi
 
 # --- Data directory (must exist in staging for RPM --directories to work) ---
 mkdir -p "$STAGING/var/lib/tx5dr"
