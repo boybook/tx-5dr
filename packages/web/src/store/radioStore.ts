@@ -135,7 +135,6 @@ export interface RadioState {
   spectrumCapabilities: SpectrumCapabilities | null;
   selectedSpectrumKind: SpectrumKind | null;
   subscribedSpectrumKind: SpectrumKind | null;
-  latestSpectrumFrame: SpectrumFrame | null;
 }
 
 // 错误事件数据结构
@@ -208,8 +207,7 @@ export type RadioAction =
   | { type: 'updateCapabilityState'; payload: CapabilityState }
   | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities | null }
   | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
-  | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
-  | { type: 'setLatestSpectrumFrame'; payload: SpectrumFrame | null };
+  | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null };
 
 const initialRadioState: RadioState = {
   isDecoding: false,
@@ -245,7 +243,6 @@ const initialRadioState: RadioState = {
   spectrumCapabilities: null,
   selectedSpectrumKind: null,
   subscribedSpectrumKind: null,
-  latestSpectrumFrame: null,
 };
 
 function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -379,12 +376,6 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return {
         ...state,
         subscribedSpectrumKind: action.payload,
-      };
-
-    case 'setLatestSpectrumFrame':
-      return {
-        ...state,
-        latestSpectrumFrame: action.payload,
       };
 
     case 'pttStatusChanged':
@@ -788,7 +779,6 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       radioDispatch({ type: 'setSelectedSpectrumKind', payload: null });
       radioDispatch({ type: 'setSubscribedSpectrumKind', payload: null });
-      radioDispatch({ type: 'setLatestSpectrumFrame', payload: null });
 
       if (clearSpectrumState) {
         capabilitiesRef.current = null;
@@ -827,7 +817,6 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       radioDispatch({ type: 'setSpectrumCapabilities', payload: capabilities });
       radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
       radioDispatch({ type: 'setSubscribedSpectrumKind', payload: effectiveKind });
-      radioDispatch({ type: 'setLatestSpectrumFrame', payload: null });
       radioService.subscribeSpectrum(effectiveKind);
 
       pendingDefaultOpenWebRXDetailProfileRef.current = shouldAutoEnableOpenWebRXDetail
@@ -853,7 +842,6 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       pendingDefaultOpenWebRXDetailProfileRef.current = null;
       radioDispatch({ type: 'setSelectedSpectrumKind', payload: null });
       radioDispatch({ type: 'setSubscribedSpectrumKind', payload: null });
-      radioDispatch({ type: 'setLatestSpectrumFrame', payload: null });
 
       const currentCapabilities = capabilitiesRef.current;
       if (currentCapabilities && shouldAcceptSpectrumProfile(currentCapabilities.profileId)) {
@@ -944,11 +932,10 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         applySpectrumSelection(data as SpectrumCapabilities);
       },
       spectrumFrame: (data: unknown) => {
-        const frame = data as SpectrumFrame;
-        if (!shouldAcceptSpectrumProfile(frame.meta.profileId)) {
+        const profileId = (data as SpectrumFrame).meta.profileId;
+        if (!shouldAcceptSpectrumProfile(profileId)) {
           return;
         }
-        radioDispatch({ type: 'setLatestSpectrumFrame', payload: frame });
       },
       spectrumSessionStateChanged: (data: unknown) => {
         const sessionState = data as SpectrumSessionState;
@@ -1617,7 +1604,6 @@ export const useSpectrum = () => {
     sessionState: state.spectrumSessionState,
     selectedKind: state.selectedSpectrumKind,
     subscribedKind: state.subscribedSpectrumKind,
-    latestFrame: state.latestSpectrumFrame,
     setSelectedKind: (kind: SpectrumKind | null) => {
       markSpectrumSelectionManual?.();
       dispatch({ type: 'setSelectedSpectrumKind', payload: kind });

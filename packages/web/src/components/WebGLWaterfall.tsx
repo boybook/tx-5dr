@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 
 import { Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../utils/logger';
+import type { SpectrumAxis, SpectrumRenderBatch, SpectrumStreamController } from '../spectrum/SpectrumStreamController';
 
 const logger = createLogger('WebGLWaterfall');
 
@@ -51,9 +52,7 @@ export interface PresetMarker {
 }
 
 interface WebGLWaterfallProps {
-  data: number[][];
-  frameToken?: string | number | null;
-  frequencies: number[];
+  controller: SpectrumStreamController;
   className?: string;
   height?: number;
   minDb?: number;
@@ -86,10 +85,18 @@ interface WebGLWaterfallProps {
 
 const FREQUENCY_GESTURE_DRAG_THRESHOLD_PX = 4;
 
+function areAxesEqual(left: SpectrumAxis | null, right: SpectrumAxis | null): boolean {
+  return Boolean(
+    left
+    && right
+    && left.minHz === right.minHz
+    && left.maxHz === right.maxHz
+    && left.binCount === right.binCount
+  ) || (left === null && right === null);
+}
+
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
-  data,
-  frameToken = null,
-  frequencies,
+  controller,
   className = '',
   height = 200,
   minDb = -35,
@@ -131,6 +138,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const animationRef = useRef<number>();
   const [webglSupported, setWebglSupported] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [viewState, setViewState] = React.useState<{ axis: SpectrumAxis | null; hasData: boolean }>({
+    axis: null,
+    hasData: false,
+  });
   const [actualRange, setActualRange] = React.useState<{min: number, max: number} | null>(null);
 
   // TX拖动状态
@@ -185,14 +196,24 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const frozenSegmentsRef = useRef<Array<{ rowCount: number; range: { min: number; max: number } }>>([]);
   const activeRowCountRef = useRef<number>(0); // 当前状态已累积的行数
   const prevTransmittingRef = useRef<boolean | undefined>(undefined);
-  const prevDataRef = useRef<number[][] | null>(null); // 用于检测新数据到达
-  const dataRef = useRef<number[][]>(data); // 持有最新 data 引用，供上下文恢复时重绘
+  const displayRowsRef = useRef<ArrayLike<number>[]>([]);
+  const headRowRef = useRef<number>(0);
+  const rowCountRef = useRef<number>(0);
   // 平滑滚动相关
-  const scrollOffsetLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const headRowLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const textureHeightLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const scrollRowsLocationRef = useRef<WebGLUniformLocation | null>(null);
   const scrollAnimRef = useRef<number>();
   const lastDataTimeRef = useRef(0);
   const frameIntervalRef = useRef(100);
   const lastAnimatedFrameTokenRef = useRef<string | number | null>(null);
+  const currentAxisRef = useRef<SpectrumAxis | null>(null);
+  const textureHeightRef = useRef<number>(Math.max(totalRows ?? 0, 1));
+  const renderRef = useRef<() => void>(() => {});
+  const handleResizeRef = useRef<() => void>(() => {});
+  const rebuildTextureRef = useRef<(rows: ArrayLike<number>[], axis: SpectrumAxis | null) => void>(() => {});
+  const processRenderBatchRef = useRef<(batch: SpectrumRenderBatch | null) => void>(() => {});
+  const axis = viewState.axis;
 
   const resetAutoRangeState = useCallback(() => {
     rangeUpdateCounterRef.current = 0;
@@ -200,14 +221,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     actualRangeRef.current = null;
     frozenSegmentsRef.current = [];
     activeRowCountRef.current = 0;
-    prevDataRef.current = null;
     setActualRange(null);
     onActualRangeChange?.(null);
   }, [onActualRangeChange]);
 
   // 优化后的数据范围计算 - 使用采样和缓存
   // 当存在冻结段时，只从活跃行（当前状态）采样
-  const calculateDataRange = useCallback((spectrumData: number[][]) => {
+  const calculateDataRange = useCallback((spectrumData: ArrayLike<number>[]) => {
     const calculateInternal = () => {
     if (spectrumData.length === 0) return { min: minDb, max: maxDb };
 
@@ -352,14 +372,17 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     uniform float u_minDb;
     uniform float u_maxDb;
     uniform bool u_useFloatTexture;
-    uniform float u_scrollOffset;
+    uniform float u_headRow;
+    uniform float u_textureHeight;
+    uniform float u_scrollRows;
 
     varying vec2 v_texCoord;
 
     void main() {
-      // 偏移 Y 坐标实现平滑滚动，clamp 防止底部环绕
-      float scrolledY = clamp(v_texCoord.y + u_scrollOffset, 0.0, 1.0);
-      float value = texture2D(u_texture, vec2(v_texCoord.x, scrolledY)).r;
+      float textureHeight = max(u_textureHeight, 1.0);
+      float sourceRow = mod(u_headRow + v_texCoord.y * textureHeight + u_scrollRows, textureHeight);
+      float sourceY = (sourceRow + 0.5) / textureHeight;
+      float value = texture2D(u_texture, vec2(v_texCoord.x, sourceY)).r;
       float normalized;
       
       if (u_useFloatTexture) {
@@ -522,9 +545,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       const useFloatTextureLocation = gl.getUniformLocation(program, 'u_useFloatTexture');
       gl.uniform1i(useFloatTextureLocation, 0);
 
-      const scrollOffsetLocation = gl.getUniformLocation(program, 'u_scrollOffset');
-      scrollOffsetLocationRef.current = scrollOffsetLocation;
-      gl.uniform1f(scrollOffsetLocation, 0.0);
+      headRowLocationRef.current = gl.getUniformLocation(program, 'u_headRow');
+      textureHeightLocationRef.current = gl.getUniformLocation(program, 'u_textureHeight');
+      scrollRowsLocationRef.current = gl.getUniformLocation(program, 'u_scrollRows');
+      gl.uniform1f(headRowLocationRef.current, 0.0);
+      gl.uniform1f(textureHeightLocationRef.current, textureHeightRef.current);
+      gl.uniform1f(scrollRowsLocationRef.current, 0.0);
 
       // 设置纹理单元
       const textureLocation = gl.getUniformLocation(program, 'u_texture');
@@ -545,167 +571,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
   }, [createProgram, colorMap]);
 
-  // 优化后的纹理更新
-  const updateTexture = useCallback((spectrumData: number[][]) => {
-    const updateInternal = () => {
-    const gl = glRef.current;
-    const texture = textureRef.current;
-    const program = programRef.current;
-
-    if (!gl || !texture || !program || gl.isContextLost() || spectrumData.length === 0) return;
-
-    // 检测是否有新数据行到达（通过比较首行引用）
-    const isNewData = prevDataRef.current !== spectrumData;
-    prevDataRef.current = spectrumData;
-
-    // TX/RX 状态切换检测：将当前活跃段冻结，开始新的活跃段
-    if (autoRange && isTransmitting !== prevTransmittingRef.current && prevTransmittingRef.current !== undefined) {
-      if (cachedRangeRef.current && activeRowCountRef.current > 0) {
-        // 将当前活跃段推入冻结段列表的头部
-        frozenSegmentsRef.current.unshift({
-          rowCount: activeRowCountRef.current,
-          range: { ...cachedRangeRef.current },
-        });
-      }
-      cachedRangeRef.current = null;
-      rangeUpdateCounterRef.current = 0;
-      activeRowCountRef.current = 0;
-    }
-    prevTransmittingRef.current = isTransmitting;
-
-    // 新数据到达时递增活跃行计数
-    if (isNewData) {
-      activeRowCountRef.current++;
-    }
-
-    const width = spectrumData[0].length;
-    const actualHeight = spectrumData.length;
-    // 纹理总高度：满足 totalRows 时底部填 0（暗色），实现从顶部逐渐填充效果
-    const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : actualHeight;
-    const dataSize = width * textureHeight;
-
-    // 重用或创建纹理数据数组
-    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
-      textureDataRef.current = new Uint8Array(dataSize);
-    }
-    const textureData = textureDataRef.current;
-
-    // 计算活跃范围（仅对真实数据行，不含底部填充行）
-    let currentMin = minDb;
-    let currentMax = maxDb;
-
-    if (autoRange) {
-      const range = calculateDataRange(spectrumData);
-      currentMin = range.min;
-      currentMax = range.max;
-
-      // 只在范围变化显著时更新状态和通知父组件（使用 ref 比较避免循环依赖）
-      if (!actualRangeRef.current ||
-          Math.abs(actualRangeRef.current.min - currentMin) > 0.5 ||
-          Math.abs(actualRangeRef.current.max - currentMax) > 0.5) {
-        actualRangeRef.current = range;
-        setActualRange(range);
-
-        // 通知父组件范围已更新
-        if (onActualRangeChange) {
-          onActualRangeChange(range);
-        }
-      }
-    }
-
-    // 构建分段归一化参数列表：[活跃段, 冻结段0, 冻结段1, ...]
-    // 每段包含 { rowCount, rangeMin, rangeScale }
-    const segments: Array<{ rowCount: number; rangeMin: number; rangeScale: number }> = [];
-    const frozen = frozenSegmentsRef.current;
-
-    // 活跃段
-    const activeRows = Math.min(activeRowCountRef.current, actualHeight);
-    const activeRange = currentMax - currentMin;
-    segments.push({
-      rowCount: activeRows,
-      rangeMin: currentMin,
-      rangeScale: activeRange > 0 ? 255 / activeRange : 1,
-    });
-
-    // 冻结段
-    if (autoRange) {
-      for (const seg of frozen) {
-        const segRange = seg.range.max - seg.range.min;
-        segments.push({
-          rowCount: seg.rowCount,
-          rangeMin: seg.range.min,
-          rangeScale: segRange > 0 ? 255 / segRange : 1,
-        });
-      }
-    }
-
-    // 按段归一化数据行
-    let index = 0;
-    let rowOffset = 0;
-    for (const seg of segments) {
-      const segEnd = Math.min(rowOffset + seg.rowCount, actualHeight);
-      for (let y = rowOffset; y < segEnd; y++) {
-        const row = spectrumData[y];
-        for (let x = 0; x < width; x++) {
-          const normalizedValue = (row[x] - seg.rangeMin) * seg.rangeScale;
-          textureData[index++] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
-        }
-      }
-      rowOffset = segEnd;
-      if (rowOffset >= actualHeight) break;
-    }
-    // 如果段总行数不足以覆盖所有数据行（理论上不应发生），用活跃范围补齐
-    if (rowOffset < actualHeight) {
-      const fallbackScale = activeRange > 0 ? 255 / activeRange : 1;
-      for (let y = rowOffset; y < actualHeight; y++) {
-        const row = spectrumData[y];
-        for (let x = 0; x < width; x++) {
-          const normalizedValue = (row[x] - currentMin) * fallbackScale;
-          textureData[index++] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
-        }
-      }
-    }
-    // 底部填充行置 0（映射到颜色表最暗端）
-    if (index < dataSize) {
-      textureData.fill(0, index);
-    }
-
-    // 清理已完全滚出视图的冻结段
-    if (frozen.length > 0) {
-      const totalFrozenRows = frozen.reduce((sum, s) => sum + s.rowCount, 0);
-      if (activeRows + totalFrozenRows > actualHeight) {
-        // 从尾部裁剪超出的冻结段
-        let remaining = actualHeight - activeRows;
-        let keepCount = 0;
-        for (const seg of frozen) {
-          if (remaining <= 0) break;
-          remaining -= seg.rowCount;
-          keepCount++;
-        }
-        if (keepCount < frozen.length) {
-          frozenSegmentsRef.current = frozen.slice(0, keepCount);
-        }
-      }
-    }
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
-
-    // 只在纹理大小改变时设置参数
-    if (lastDataLengthRef.current !== dataSize) {
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      lastDataLengthRef.current = dataSize;
-    }
-    };
-
-    updateInternal();
-  }, [minDb, maxDb, autoRange, calculateDataRange, isTransmitting]);
-
   // 渲染
   const render = useCallback(() => {
     const gl = glRef.current;
@@ -717,6 +582,330 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }, []);
+
+  useEffect(() => {
+    renderRef.current = render;
+  }, [render]);
+
+  const updateViewState = useCallback((nextAxis: SpectrumAxis | null, hasData: boolean) => {
+    currentAxisRef.current = nextAxis;
+    setViewState(current => {
+      if (current.hasData === hasData && areAxesEqual(current.axis, nextAxis)) {
+        return current;
+      }
+      return {
+        axis: nextAxis,
+        hasData,
+      };
+    });
+  }, []);
+
+  const updateActualRangeState = useCallback((range: { min: number; max: number } | null) => {
+    if (range === null) {
+      if (actualRangeRef.current !== null) {
+        actualRangeRef.current = null;
+        setActualRange(null);
+        onActualRangeChange?.(null);
+      }
+      return;
+    }
+
+    if (
+      actualRangeRef.current
+      && Math.abs(actualRangeRef.current.min - range.min) <= 0.5
+      && Math.abs(actualRangeRef.current.max - range.max) <= 0.5
+    ) {
+      return;
+    }
+
+    actualRangeRef.current = range;
+    setActualRange(range);
+    onActualRangeChange?.(range);
+  }, [onActualRangeChange]);
+
+  const writeNormalizedRow = useCallback((
+    target: Uint8Array,
+    rowIndex: number,
+    row: ArrayLike<number>,
+    width: number,
+    rangeMin: number,
+    rangeScale: number
+  ) => {
+    const start = rowIndex * width;
+    for (let x = 0; x < width; x += 1) {
+      const normalizedValue = (row[x] - rangeMin) * rangeScale;
+      target[start + x] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
+    }
+  }, []);
+
+  const updateTextureMetadata = useCallback((textureHeight: number, headRow: number) => {
+    const gl = glRef.current;
+    const program = programRef.current;
+    if (!gl || !program || gl.isContextLost()) {
+      return;
+    }
+
+    textureHeightRef.current = textureHeight;
+    headRowRef.current = headRow;
+    gl.useProgram(program);
+    if (headRowLocationRef.current) {
+      gl.uniform1f(headRowLocationRef.current, headRow);
+    }
+    if (textureHeightLocationRef.current) {
+      gl.uniform1f(textureHeightLocationRef.current, textureHeight);
+    }
+  }, []);
+
+  const buildSegments = useCallback((actualHeight: number, currentMin: number, currentMax: number) => {
+    const segments: Array<{ rowCount: number; rangeMin: number; rangeScale: number }> = [];
+    const frozen = frozenSegmentsRef.current;
+    const activeRows = Math.min(activeRowCountRef.current, actualHeight);
+    const activeRange = currentMax - currentMin;
+
+    segments.push({
+      rowCount: activeRows,
+      rangeMin: currentMin,
+      rangeScale: activeRange > 0 ? 255 / activeRange : 1,
+    });
+
+    if (autoRange) {
+      for (const segment of frozen) {
+        const frozenRange = segment.range.max - segment.range.min;
+        segments.push({
+          rowCount: segment.rowCount,
+          rangeMin: segment.range.min,
+          rangeScale: frozenRange > 0 ? 255 / frozenRange : 1,
+        });
+      }
+    }
+
+    if (frozen.length > 0) {
+      const totalFrozenRows = frozen.reduce((sum, segment) => sum + segment.rowCount, 0);
+      if (activeRows + totalFrozenRows > actualHeight) {
+        let remaining = actualHeight - activeRows;
+        let keepCount = 0;
+        for (const segment of frozen) {
+          if (remaining <= 0) {
+            break;
+          }
+          remaining -= segment.rowCount;
+          keepCount += 1;
+        }
+        if (keepCount < frozen.length) {
+          frozenSegmentsRef.current = frozen.slice(0, keepCount);
+        }
+      }
+    }
+
+    return segments;
+  }, [autoRange]);
+
+  const rebuildTexture = useCallback((spectrumData: ArrayLike<number>[], nextAxis: SpectrumAxis | null) => {
+    const gl = glRef.current;
+    const texture = textureRef.current;
+    const program = programRef.current;
+    const width = nextAxis?.binCount ?? spectrumData[0]?.length ?? 0;
+
+    if (!gl || !texture || !program || gl.isContextLost() || width <= 0) {
+      return;
+    }
+
+    const actualHeight = spectrumData.length;
+    const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : Math.max(actualHeight, 1);
+    const dataSize = width * textureHeight;
+
+    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
+      textureDataRef.current = new Uint8Array(dataSize);
+    }
+    const textureData = textureDataRef.current;
+    textureData.fill(0);
+
+    let currentMin = minDb;
+    let currentMax = maxDb;
+
+    if (autoRange && actualHeight > 0) {
+      const range = calculateDataRange(spectrumData);
+      currentMin = range.min;
+      currentMax = range.max;
+      updateActualRangeState(range);
+    } else if (!autoRange) {
+      updateActualRangeState(null);
+    }
+
+    const segments = buildSegments(actualHeight, currentMin, currentMax);
+    const fallbackScale = currentMax > currentMin ? 255 / (currentMax - currentMin) : 1;
+
+    let rowOffset = 0;
+    for (const segment of segments) {
+      const segmentEnd = Math.min(rowOffset + segment.rowCount, actualHeight);
+      for (let y = rowOffset; y < segmentEnd; y += 1) {
+        writeNormalizedRow(textureData, y, spectrumData[y], width, segment.rangeMin, segment.rangeScale);
+      }
+      rowOffset = segmentEnd;
+      if (rowOffset >= actualHeight) {
+        break;
+      }
+    }
+
+    for (let y = rowOffset; y < actualHeight; y += 1) {
+      writeNormalizedRow(textureData, y, spectrumData[y], width, currentMin, fallbackScale);
+    }
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
+
+    if (lastDataLengthRef.current !== dataSize) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      lastDataLengthRef.current = dataSize;
+    }
+
+    rowCountRef.current = actualHeight;
+    updateTextureMetadata(textureHeight, 0);
+  }, [
+    autoRange,
+    buildSegments,
+    calculateDataRange,
+    minDb,
+    maxDb,
+    totalRows,
+    updateActualRangeState,
+    updateTextureMetadata,
+    writeNormalizedRow,
+  ]);
+
+  useEffect(() => {
+    rebuildTextureRef.current = rebuildTexture;
+  }, [rebuildTexture]);
+
+  const clearTexture = useCallback(() => {
+    const gl = glRef.current;
+    const texture = textureRef.current;
+    const program = programRef.current;
+    if (!gl || !texture || !program || gl.isContextLost()) {
+      return;
+    }
+
+    const width = Math.max(currentAxisRef.current?.binCount ?? 1, 1);
+    const textureHeight = Math.max(textureHeightRef.current, 1);
+    const dataSize = width * textureHeight;
+
+    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
+      textureDataRef.current = new Uint8Array(dataSize);
+    }
+    textureDataRef.current.fill(0);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureDataRef.current);
+    updateTextureMetadata(textureHeight, 0);
+    if (scrollRowsLocationRef.current) {
+      gl.useProgram(program);
+      gl.uniform1f(scrollRowsLocationRef.current, 0);
+    }
+    render();
+  }, [render, updateTextureMetadata]);
+
+  const appendRowsToTexture = useCallback((rowsToAppend: ArrayLike<number>[], nextAxis: SpectrumAxis | null) => {
+    const gl = glRef.current;
+    const texture = textureRef.current;
+    const program = programRef.current;
+    const width = nextAxis?.binCount ?? rowsToAppend[rowsToAppend.length - 1]?.length ?? 0;
+
+    if (!gl || !texture || !program || gl.isContextLost() || width <= 0 || rowsToAppend.length === 0) {
+      return;
+    }
+
+    const spectrumData = displayRowsRef.current;
+    const actualHeight = spectrumData.length;
+    const previousTextureHeight = textureHeightRef.current;
+    const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : Math.max(actualHeight, 1);
+    const dataSize = width * textureHeight;
+
+    if (!textureDataRef.current || textureDataRef.current.length !== dataSize) {
+      textureDataRef.current = new Uint8Array(dataSize);
+    }
+    const textureData = textureDataRef.current;
+
+    let txModeChanged = false;
+    if (autoRange && isTransmitting !== prevTransmittingRef.current && prevTransmittingRef.current !== undefined) {
+      if (cachedRangeRef.current && activeRowCountRef.current > 0) {
+        frozenSegmentsRef.current.unshift({
+          rowCount: activeRowCountRef.current,
+          range: { ...cachedRangeRef.current },
+        });
+      }
+      cachedRangeRef.current = null;
+      rangeUpdateCounterRef.current = 0;
+      activeRowCountRef.current = 0;
+      txModeChanged = true;
+    }
+    prevTransmittingRef.current = isTransmitting;
+    activeRowCountRef.current = Math.min(actualHeight, activeRowCountRef.current + rowsToAppend.length);
+
+    let currentMin = minDb;
+    let currentMax = maxDb;
+    let rangeChanged = false;
+
+    if (autoRange) {
+      const range = calculateDataRange(spectrumData);
+      currentMin = range.min;
+      currentMax = range.max;
+      rangeChanged = !actualRangeRef.current
+        || Math.abs(actualRangeRef.current.min - currentMin) > 0.5
+        || Math.abs(actualRangeRef.current.max - currentMax) > 0.5;
+      updateActualRangeState(range);
+    } else {
+      updateActualRangeState(null);
+    }
+
+    if (txModeChanged || rangeChanged || previousTextureHeight !== textureHeight || rowCountRef.current === 0) {
+      rebuildTexture(spectrumData, nextAxis);
+      return;
+    }
+
+    const rangeScale = currentMax > currentMin ? 255 / (currentMax - currentMin) : 1;
+    let headRow = headRowRef.current;
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+    for (const row of rowsToAppend) {
+      headRow = (headRow - 1 + textureHeight) % textureHeight;
+      writeNormalizedRow(textureData, headRow, row, width, currentMin, rangeScale);
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        headRow,
+        width,
+        1,
+        gl.LUMINANCE,
+        gl.UNSIGNED_BYTE,
+        textureData.subarray(headRow * width, (headRow + 1) * width)
+      );
+    }
+
+    rowCountRef.current = Math.min(textureHeight, rowCountRef.current + rowsToAppend.length);
+    updateTextureMetadata(textureHeight, headRow);
+  }, [
+    autoRange,
+    calculateDataRange,
+    isTransmitting,
+    minDb,
+    maxDb,
+    rebuildTexture,
+    totalRows,
+    updateActualRangeState,
+    updateTextureMetadata,
+    writeNormalizedRow,
+  ]);
 
   // 处理canvas尺寸变化
   const handleResize = useCallback(() => {
@@ -781,6 +970,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
   }, [render]);
 
+  useEffect(() => {
+    handleResizeRef.current = handleResize;
+  }, [handleResize]);
+
   // 初始化（使用 useLayoutEffect 确保 WebGL 在浏览器绘制前完成初始化，避免黑帧闪烁）
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -795,11 +988,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const handleContextRestored = () => {
       logger.info('WebGL context restored, reinitializing');
       if (initWebGL()) {
-        handleResize();
+        handleResizeRef.current();
         // 恢复后重新上传已有的纹理数据，避免显示黑屏
-        if (dataRef.current.length > 0) {
-          updateTexture(dataRef.current);
-          render();
+        if (displayRowsRef.current.length > 0) {
+          rebuildTextureRef.current(displayRowsRef.current, currentAxisRef.current);
+          renderRef.current();
         }
       }
     };
@@ -807,7 +1000,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     canvas.addEventListener('webglcontextrestored', handleContextRestored);
 
     if (initWebGL()) {
-      handleResize();
+      handleResizeRef.current();
     }
 
     const resizeObserver = new ResizeObserver((_entries) => {
@@ -816,7 +1009,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         cancelAnimationFrame(animationRef.current);
       }
       animationRef.current = requestAnimationFrame(() => {
-        handleResize();
+        handleResizeRef.current();
       });
     });
 
@@ -846,34 +1039,76 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         if (texCoordBufferRef.current) { gl.deleteBuffer(texCoordBufferRef.current); texCoordBufferRef.current = null; }
       }
     };
-  }, [initWebGL, handleResize]);
+  }, [initWebGL]);
 
-  // 数据更新时平滑滚动渲染
-  useEffect(() => {
-    dataRef.current = data;
-    if (data.length === 0) return;
-
-    // 取消之前的动画
-    if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
-
-    // 上传纹理（每帧只做一次）
-    updateTexture(data);
-
-    const shouldAnimateScroll = frameToken !== null && frameToken !== lastAnimatedFrameTokenRef.current;
-    lastAnimatedFrameTokenRef.current = frameToken;
-
-    if (!shouldAnimateScroll) {
-      const gl = glRef.current;
-      const program = programRef.current;
-      if (gl && program && !gl.isContextLost()) {
-        gl.useProgram(program);
-        gl.uniform1f(scrollOffsetLocationRef.current, 0.0);
-        render();
-      }
+  const processRenderBatch = useCallback((batch: SpectrumRenderBatch | null) => {
+    if (!batch) {
       return;
     }
 
-    // 帧间隔估算（EMA α=0.3，cap 500ms）
+    if (scrollAnimRef.current) {
+      cancelAnimationFrame(scrollAnimRef.current);
+    }
+
+    if (batch.mode === 'reset' || batch.rows.length === 0 || !batch.axis) {
+      displayRowsRef.current = [];
+      rowCountRef.current = 0;
+      headRowRef.current = 0;
+      lastAnimatedFrameTokenRef.current = null;
+      lastDataTimeRef.current = 0;
+      updateViewState(null, false);
+      resetAutoRangeState();
+      clearTexture();
+      return;
+    }
+
+    const nextAxis = batch.axis;
+    const maxRows = totalRows ?? batch.rows.length;
+
+    if (batch.mode === 'replace') {
+      displayRowsRef.current = batch.rows.slice(0, maxRows);
+      rowCountRef.current = displayRowsRef.current.length;
+      headRowRef.current = 0;
+      lastAnimatedFrameTokenRef.current = batch.frameToken;
+      rebuildTexture(displayRowsRef.current, nextAxis);
+      updateViewState(nextAxis, true);
+
+      const gl = glRef.current;
+      const program = programRef.current;
+      if (gl && program && !gl.isContextLost() && scrollRowsLocationRef.current) {
+        gl.useProgram(program);
+        gl.uniform1f(scrollRowsLocationRef.current, 0);
+      }
+      render();
+      return;
+    }
+
+    for (let index = 0; index < batch.rows.length; index += 1) {
+      displayRowsRef.current.unshift(batch.rows[index]);
+    }
+    if (displayRowsRef.current.length > maxRows) {
+      displayRowsRef.current.length = maxRows;
+    }
+
+    appendRowsToTexture(batch.rows, nextAxis);
+    updateViewState(nextAxis, true);
+
+    const shouldAnimateScroll = batch.frameToken !== null && batch.frameToken !== lastAnimatedFrameTokenRef.current;
+    lastAnimatedFrameTokenRef.current = batch.frameToken;
+
+    const gl = glRef.current;
+    const program = programRef.current;
+    if (!gl || !program || gl.isContextLost() || !scrollRowsLocationRef.current) {
+      return;
+    }
+
+    if (!shouldAnimateScroll) {
+      gl.useProgram(program);
+      gl.uniform1f(scrollRowsLocationRef.current, 0);
+      render();
+      return;
+    }
+
     const now = performance.now();
     if (lastDataTimeRef.current > 0) {
       const interval = Math.min(now - lastDataTimeRef.current, 500);
@@ -881,34 +1116,27 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
     lastDataTimeRef.current = now;
 
-    // 滚动动画参数
-    const textureHeight = totalRows || data.length;
-    const startOffset = 1.0 / textureHeight;
-    const animDuration = Math.max(50, frameIntervalRef.current * 0.9);
+    const startRows = Math.min(batch.rows.length, Math.max(rowCountRef.current, 1));
+    const animDuration = batch.hasBacklog
+      ? Math.max(45, Math.min(140, frameIntervalRef.current * Math.max(0.45, batch.rows.length * 0.3)))
+      : Math.max(50, Math.min(180, frameIntervalRef.current * Math.max(0.9, batch.rows.length * 0.45)));
     const animStartTime = now;
 
-    // 先渲染一帧带初始偏移的画面（视觉上保持旧位置）
-    const gl = glRef.current;
-    const program = programRef.current;
-    if (gl && program && !gl.isContextLost()) {
-      gl.useProgram(program);
-      gl.uniform1f(scrollOffsetLocationRef.current, startOffset);
-      render();
-    }
+    gl.useProgram(program);
+    gl.uniform1f(scrollRowsLocationRef.current, startRows);
+    render();
 
-    // 启动平滑滚动动画
     const animate = () => {
       const elapsed = performance.now() - animStartTime;
       const progress = Math.min(1, elapsed / animDuration);
-      // ease-out quadratic: 开始快，结束慢
       const eased = 1 - (1 - progress) * (1 - progress);
-      const offset = startOffset * (1 - eased);
+      const offset = startRows * (1 - eased);
 
-      const gl = glRef.current;
-      const program = programRef.current;
-      if (gl && program && !gl.isContextLost()) {
-        gl.useProgram(program);
-        gl.uniform1f(scrollOffsetLocationRef.current, offset);
+      const currentGl = glRef.current;
+      const currentProgram = programRef.current;
+      if (currentGl && currentProgram && !currentGl.isContextLost() && scrollRowsLocationRef.current) {
+        currentGl.useProgram(currentProgram);
+        currentGl.uniform1f(scrollRowsLocationRef.current, offset);
         render();
       }
 
@@ -918,25 +1146,43 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
 
     scrollAnimRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
-    };
-  }, [data, frameToken, updateTexture, render, totalRows]);
+  }, [
+    appendRowsToTexture,
+    clearTexture,
+    rebuildTexture,
+    render,
+    resetAutoRangeState,
+    totalRows,
+    updateViewState,
+  ]);
 
   useEffect(() => {
-    if (data.length === 0) {
+    processRenderBatchRef.current = processRenderBatch;
+  }, [processRenderBatch]);
+
+  useEffect(() => {
+    processRenderBatchRef.current(controller.primeRenderBatch());
+
+    const handleFrameTick = () => {
+      processRenderBatchRef.current(controller.consumeRenderBatch());
+    };
+
+    return controller.subscribeFrameTick(handleFrameTick);
+  }, [controller]);
+
+  useEffect(() => {
+    if (!viewState.hasData) {
       resetAutoRangeState();
     }
-  }, [data.length, resetAutoRangeState]);
+  }, [viewState.hasData, resetAutoRangeState]);
 
   useEffect(() => {
     resetAutoRangeState();
   }, [
     autoRange,
-    frequencies.length,
-    frequencies[0],
-    frequencies[frequencies.length - 1],
+    axis?.binCount,
+    axis?.minHz,
+    axis?.maxHz,
     resetAutoRangeState,
   ]);
 
@@ -961,7 +1207,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return () => clearTimeout(timer);
   }, [height, handleResize]);
 
-  // 监听 minDb 和 maxDb 变化，更新着色器 uniform（关键修复！）
+  // 参数变化只重建纹理/重绘，不重建 WebGL context
   useEffect(() => {
     const gl = glRef.current;
     const program = programRef.current;
@@ -973,9 +1219,27 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.uniform1f(minDbLocation, minDb);
     gl.uniform1f(maxDbLocation, maxDb);
 
-    // 立即重新渲染以应用新的范围
+    if (displayRowsRef.current.length > 0 && currentAxisRef.current) {
+      rebuildTexture(displayRowsRef.current, currentAxisRef.current);
+    }
     render();
-  }, [minDb, maxDb, render]);
+  }, [minDb, maxDb, rebuildTexture, render]);
+
+  useEffect(() => {
+    if (!displayRowsRef.current.length || !currentAxisRef.current) {
+      return;
+    }
+    rebuildTexture(displayRowsRef.current, currentAxisRef.current);
+    render();
+  }, [
+    autoRange,
+    autoRangeConfig.updateInterval,
+    autoRangeConfig.minPercentile,
+    autoRangeConfig.maxPercentile,
+    autoRangeConfig.rangeExpansionFactor,
+    rebuildTexture,
+    render,
+  ]);
 
 
   if (!webglSupported || error) {
@@ -996,6 +1260,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const FREQ_POSITION_OFFSET = 15;
   const isAbsoluteDisplayMode = frequencyRangeMode === 'absolute-center' || frequencyRangeMode === 'absolute-fixed';
   const isAbsoluteWindowedMode = frequencyRangeMode === 'absolute-windowed';
+  const minFrequency = axis?.minHz ?? 0;
+  const maxFrequency = axis?.maxHz ?? 0;
+  const hasAxis = Boolean(axis && axis.binCount > 0 && maxFrequency > minFrequency);
 
   const snapFrequency = useCallback((frequency: number) => {
     const stepHz = typeof interactionFrequencyStepHz === 'number' && Number.isFinite(interactionFrequencyStepHz) && interactionFrequencyStepHz > 0
@@ -1016,7 +1283,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [interactionFrequencyRange, snapFrequency]);
 
   const getDisplayFrequency = useCallback((basebandFrequency: number) => {
-    if (!frequencies || frequencies.length === 0) return null;
+    if (!hasAxis) return null;
     if (isAbsoluteWindowedMode) {
       return basebandFrequency;
     }
@@ -1028,16 +1295,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return referenceFrequency + basebandFrequency;
     }
     return basebandFrequency;
-  }, [frequencies, isAbsoluteDisplayMode, isAbsoluteWindowedMode, referenceFrequencyHz]);
+  }, [hasAxis, isAbsoluteDisplayMode, isAbsoluteWindowedMode, referenceFrequencyHz]);
 
   // 计算频率到位置的百分比
   const getFrequencyPosition = useCallback((displayFrequency: number) => {
-    if (!frequencies || frequencies.length === 0) return 0;
-    const minFreq = frequencies[0];
-    const maxFreq = frequencies[frequencies.length - 1];
-    if (maxFreq <= minFreq) return 0;
-    return ((displayFrequency + FREQ_POSITION_OFFSET - minFreq) / (maxFreq - minFreq)) * 100;
-  }, [frequencies]);
+    if (!hasAxis) return 0;
+    return ((displayFrequency + FREQ_POSITION_OFFSET - minFrequency) / (maxFrequency - minFrequency)) * 100;
+  }, [hasAxis, maxFrequency, minFrequency]);
 
   const getMarkerPosition = useCallback((basebandFrequency: number) => {
     const displayFrequency = getDisplayFrequency(basebandFrequency);
@@ -1054,42 +1318,38 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   // 从鼠标位置计算频率
   const getFrequencyFromMousePosition = useCallback((clientX: number) => {
     const container = containerRef.current;
-    if (!container || !frequencies || frequencies.length === 0) return 0;
+    if (!container || !hasAxis) return 0;
 
     const containerRect = container.getBoundingClientRect();
     const relativeX = clientX - containerRect.left;
     const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
 
-    const minFreq = frequencies[0];
-    const maxFreq = frequencies[frequencies.length - 1];
-    const displayFrequency = minFreq + percentage * (maxFreq - minFreq) - FREQ_POSITION_OFFSET;
+    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - FREQ_POSITION_OFFSET;
     const basebandFrequency = isAbsoluteDisplayMode
-      ? displayFrequency - (referenceFrequencyHz ?? minFreq)
+      ? displayFrequency - (referenceFrequencyHz ?? minFrequency)
       : displayFrequency;
 
     return clampBasebandFrequency(basebandFrequency);
-  }, [clampBasebandFrequency, frequencies, isAbsoluteDisplayMode, referenceFrequencyHz]);
+  }, [clampBasebandFrequency, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, referenceFrequencyHz]);
 
   const getInteractionFrequencyFromMousePosition = useCallback((clientX: number) => {
     const container = containerRef.current;
-    if (!container || !frequencies || frequencies.length === 0) return 0;
+    if (!container || !hasAxis) return 0;
 
     const containerRect = container.getBoundingClientRect();
     const relativeX = clientX - containerRect.left;
     const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
-    const minFreq = frequencies[0];
-    const maxFreq = frequencies[frequencies.length - 1];
-    const displayFrequency = minFreq + percentage * (maxFreq - minFreq) - FREQ_POSITION_OFFSET;
+    const displayFrequency = minFrequency + percentage * (maxFrequency - minFrequency) - FREQ_POSITION_OFFSET;
 
     if (interactionFrequencyMode === 'absolute') {
       return clampInteractionFrequency(displayFrequency);
     }
 
     return getFrequencyFromMousePosition(clientX);
-  }, [clampInteractionFrequency, frequencies, getFrequencyFromMousePosition, interactionFrequencyMode]);
+  }, [clampInteractionFrequency, getFrequencyFromMousePosition, hasAxis, interactionFrequencyMode, maxFrequency, minFrequency]);
 
   const handleGenericFrequencyDragMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!onDragFrequencyChange || event.button !== 0 || frequencies.length === 0) {
+    if (!onDragFrequencyChange || event.button !== 0 || !hasAxis) {
       return;
     }
 
@@ -1110,7 +1370,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     const rect = container.getBoundingClientRect();
     const hzPerPixel = rect.width > 0
-      ? (frequencies[frequencies.length - 1] - frequencies[0]) / rect.width
+      ? (maxFrequency - minFrequency) / rect.width
       : 0;
     const startFrequency = getInteractionFrequencyFromMousePosition(event.clientX);
 
@@ -1122,7 +1382,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       hzPerPixel,
       hasExceededThreshold: false,
     });
-  }, [frequencies, getInteractionFrequencyFromMousePosition, onDragFrequencyChange]);
+  }, [getInteractionFrequencyFromMousePosition, hasAxis, maxFrequency, minFrequency, onDragFrequencyChange]);
 
   // 拖动处理函数
   const handleMouseDown = useCallback((operatorId: string) => {
