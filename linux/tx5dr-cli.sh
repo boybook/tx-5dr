@@ -271,7 +271,6 @@ cmd_token() {
 
 cmd_update() {
     detect_os
-    local repo="boybook/tx-5dr"
     local current_ver="unknown"
     [[ -f /usr/share/tx5dr/version ]] && current_ver=$(cat /usr/share/tx5dr/version)
 
@@ -284,42 +283,60 @@ cmd_update() {
     local pkg_ext="deb"
     [[ "$(os_family)" == "rhel" ]] && pkg_ext="rpm"
     local asset_name="TX-5DR-nightly-server-linux-${pkg_arch}.${pkg_ext}"
-    local download_url="https://github.com/${repo}/releases/download/nightly-server/${asset_name}"
+    local fallback_url
+    fallback_url=$(get_github_release_asset_url "nightly-server" "$asset_name")
 
-    # Get remote release info (commit sha as "version" for nightly)
-    local remote_info
-    remote_info=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/tags/nightly-server" 2>/dev/null) || {
-        log_error "$(msg UPDATE_FAILED)"
-        log_error "Cannot reach GitHub API. Check your network."
-        return 1
-    }
+    local manifest_json=""
+    local download_url=""
+    local package_sha256=""
+    local remote_sha="unknown"
+    local remote_date="unknown"
+    local use_oss=false
 
-    # Use asset updated_at for actual build date (published_at is stale with allowUpdates)
-    local remote_date
-    remote_date=$(echo "$remote_info" | grep -oP '"updated_at":\s*"\K[^"]+' | grep -v "0001" | tail -1 | cut -dT -f1)
-    # Extract commit SHA from release body (target_commitish may be branch name, not SHA)
-    local remote_sha
-    remote_sha=$(echo "$remote_info" | grep -oP '\*\*Commit\*\*: \[\K[a-f0-9]{7}' | head -1)
-    if [[ -z "$remote_sha" ]]; then
-        remote_sha=$(echo "$remote_info" | grep -oP '"target_commitish":\s*"\K[^"]+' | head -1 | cut -c1-7)
+    if should_prefer_oss_download; then
+        use_oss=true
+        log_info "Detected mainland China or OSS override. Preferring OSS mirror."
+        if manifest_json=$(fetch_server_manifest 2>/dev/null); then
+            download_url=$(get_server_manifest_package_url "$manifest_json" "$pkg_arch" "$pkg_ext")
+            package_sha256=$(get_server_manifest_package_sha256 "$manifest_json" "$pkg_arch" "$pkg_ext")
+            remote_sha=$(get_server_manifest_commit "$manifest_json")
+            remote_date=$(get_server_manifest_published_at "$manifest_json")
+            remote_date="${remote_date%%T*}"
+        else
+            log_warn "OSS manifest unavailable, falling back to GitHub metadata."
+        fi
     fi
 
-    # Check if asset exists
-    if ! echo "$remote_info" | grep -q "$asset_name"; then
-        log_error "Asset not found: $asset_name"
-        log_error "Available assets may not include server packages for $pkg_arch."
-        return 1
+    if [[ -z "$download_url" ]]; then
+        download_url="$fallback_url"
     fi
 
-    log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "nightly (${remote_sha}, ${remote_date})")"
+    log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "nightly (${remote_sha:-unknown}, ${remote_date:-unknown})")"
 
     # Download
     local tmp_pkg="/tmp/${asset_name}"
     echo "$(printf "$(msg DOWNLOADING)" "$asset_name")"
     if ! curl -fSL --progress-bar -o "$tmp_pkg" "$download_url"; then
-        log_error "$(msg UPDATE_FAILED)"
-        rm -f "$tmp_pkg"
-        return 1
+        if $use_oss; then
+            log_warn "Primary download failed, falling back to GitHub release..."
+        fi
+        if ! curl -fSL --progress-bar -o "$tmp_pkg" "$fallback_url"; then
+            log_error "$(msg UPDATE_FAILED)"
+            rm -f "$tmp_pkg"
+            return 1
+        fi
+        package_sha256=""
+    fi
+
+    if [[ -n "$package_sha256" ]] && command -v sha256sum &>/dev/null; then
+        if ! printf "%s  %s\n" "$package_sha256" "$tmp_pkg" | sha256sum -c - >/dev/null 2>&1; then
+            log_warn "OSS package checksum mismatch, falling back to GitHub release..."
+            rm -f "$tmp_pkg"
+            if ! curl -fSL --progress-bar -o "$tmp_pkg" "$fallback_url"; then
+                log_error "$(msg UPDATE_FAILED)"
+                return 1
+            fi
+        fi
     fi
 
     # Install using install.sh (handles stop → dpkg/dnf → restart → verify)

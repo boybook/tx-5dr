@@ -112,6 +112,7 @@ Thumbs.db
 
 # Electron
 out/
+.tools/
 
 # macOS Code Signing (NEVER commit these!)
 *.p12
