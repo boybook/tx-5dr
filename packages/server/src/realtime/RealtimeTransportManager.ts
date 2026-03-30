@@ -128,6 +128,10 @@ export class RealtimeTransportManager {
     return this.determinePreferredTransport(scope, direction, forceCompat);
   }
 
+  getScopeHealth(scope: RealtimeScope): { healthy: boolean; updatedAt: number; issueCode: string | null } {
+    return this.liveKitBridgeManager.getScopeHealth(scope);
+  }
+
   acceptCompatConnection(socket: WebSocket, rawUrl: string): void {
     const url = new URL(rawUrl, 'http://localhost');
     const token = url.searchParams.get('token');

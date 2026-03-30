@@ -14,7 +14,16 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
 import { Button } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { PSKReporterConfig, PSKReporterStatus, AuthStatus, NetworkInfo, RealtimeTransportPolicy } from '@tx5dr/contracts';
+import type {
+  PSKReporterConfig,
+  PSKReporterStatus,
+  AuthStatus,
+  NetworkInfo,
+  RealtimeConnectivityHints,
+  RealtimeConnectivityErrorCode,
+  RealtimeTransportKind,
+  RealtimeTransportPolicy,
+} from '@tx5dr/contracts';
 import { FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { createLogger } from '../utils/logger';
@@ -25,6 +34,14 @@ interface DecodeWindowState {
   ft4Preset: string;
   ft4CustomWindows: number[];
 }
+
+type RealtimeRuntimeView = {
+  liveKitEnabled: boolean;
+  connectivityHints: RealtimeConnectivityHints;
+  radioReceiveTransport: RealtimeTransportKind;
+  radioBridgeHealthy: boolean;
+  radioBridgeIssueCode: RealtimeConnectivityErrorCode | null;
+};
 
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
   ft8Preset: 'maximum',
@@ -58,6 +75,49 @@ function getCpuLoadInfo(count: number, t: (key: string) => string): { label: str
   if (count <= 3) return { label: t('system.cpuMedium'), color: 'primary' };
   if (count <= 5) return { label: t('system.cpuHigh'), color: 'warning' };
   return { label: t('system.cpuVeryHigh'), color: 'danger' };
+}
+
+function getRealtimeTransportLabel(
+  transport: 'livekit' | 'ws-compat' | null | undefined,
+  t: (key: string) => string,
+): string {
+  if (transport === 'livekit') {
+    return t('system.realtimePathLiveKit');
+  }
+  if (transport === 'ws-compat') {
+    return t('system.realtimePathCompat');
+  }
+  return t('system.realtimeUnknown');
+}
+
+function getRealtimeIssueLabel(
+  issueCode: RealtimeConnectivityErrorCode | null | undefined,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (!issueCode) {
+    return t('system.realtimeNoRecentIssue');
+  }
+
+  switch (issueCode) {
+    case 'PUBLIC_URL_MISCONFIGURED':
+      return t('radio:realtime.publicUrlMisconfigured', { scope: t('radio:realtime.scopeRadio') });
+    case 'SIGNALING_UNREACHABLE':
+      return t('radio:realtime.signalingUnreachable', { scope: t('radio:realtime.scopeRadio') });
+    case 'ICE_CONNECTION_FAILED':
+      return t('radio:realtime.iceFailed', { scope: t('radio:realtime.scopeRadio') });
+    case 'NO_AUDIO_TRACK':
+      return t('radio:realtime.noAudioTrack', { scope: t('radio:realtime.scopeRadio') });
+    case 'AUDIO_PLAYBACK_BLOCKED':
+      return t('radio:realtime.audioPlaybackBlocked', { scope: t('radio:realtime.scopeRadio') });
+    case 'MEDIA_DEVICE_PERMISSION_DENIED':
+      return t('radio:realtime.mediaPermissionDenied');
+    case 'SESSION_EXPIRED_OR_INVALID':
+      return t('radio:realtime.sessionExpired', { scope: t('radio:realtime.scopeRadio') });
+    case 'TOKEN_REQUEST_FAILED':
+      return t('radio:realtime.tokenRequestFailed', { scope: t('radio:realtime.scopeRadio') });
+    default:
+      return t('radio:realtime.unknownFailure', { scope: t('radio:realtime.scopeRadio') });
+  }
 }
 
 const logger = createLogger('SystemSettings');
@@ -110,6 +170,7 @@ export const SystemSettings = forwardRef<
   const [originalLiveKitPublicUrl, setOriginalLiveKitPublicUrl] = useState('');
   const [realtimeTransportPolicy, setRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
   const [originalRealtimeTransportPolicy, setOriginalRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
+  const [realtimeRuntime, setRealtimeRuntime] = useState<RealtimeRuntimeView | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
 
   // 解码窗口设置
@@ -233,7 +294,7 @@ export const SystemSettings = forwardRef<
     }
   };
 
-  const loadRealtimeSettings = async () => {
+  const loadRealtimeSettings = useCallback(async () => {
     try {
       const result = await api.getRealtimeSettings();
       const value = result.data.publicWsUrl ?? '';
@@ -242,10 +303,19 @@ export const SystemSettings = forwardRef<
       const policy = result.data.transportPolicy ?? 'auto';
       setRealtimeTransportPolicy(policy);
       setOriginalRealtimeTransportPolicy(policy);
+      setRealtimeRuntime(result.data.runtime ?? null);
     } catch (err) {
       logger.error('Failed to load realtime settings:', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void loadRealtimeSettings();
+    }, 15000);
+
+    return () => window.clearInterval(interval);
+  }, [loadRealtimeSettings]);
 
   // 定期刷新 PSKReporter 状态
   useEffect(() => {
@@ -374,6 +444,7 @@ export const SystemSettings = forwardRef<
         const savedPolicy = realtimeResult.data.transportPolicy ?? 'auto';
         setRealtimeTransportPolicy(savedPolicy);
         setOriginalRealtimeTransportPolicy(savedPolicy);
+        setRealtimeRuntime(realtimeResult.data.runtime ?? null);
       }
 
       // 保存 Electron 关闭行为设置
@@ -413,6 +484,9 @@ export const SystemSettings = forwardRef<
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
   }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, closeBehavior, originalCloseBehavior, onUnsavedChanges]);
+
+  const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
+  const runtimeIssueLabel = getRealtimeIssueLabel(realtimeRuntime?.radioBridgeIssueCode ?? null, t);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -576,6 +650,116 @@ export const SystemSettings = forwardRef<
                   ? t('system.realtimeTransportPolicyCompatHint')
                   : t('system.realtimeTransportPolicyAutoHint')}
               </p>
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-divider space-y-3">
+              <div>
+                <h5 className="text-sm font-medium text-default-900">{t('system.realtimeAdminGuideTitle')}</h5>
+                <p className="text-xs text-default-500 mt-1">{t('system.realtimeAdminGuideDesc')}</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                  <p className="text-xs text-default-500">{t('system.realtimeCurrentPolicyLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={realtimeTransportPolicy === 'force-compat' ? 'warning' : 'primary'}
+                      variant="flat"
+                    >
+                      {realtimeTransportPolicy === 'force-compat'
+                        ? t('system.realtimeTransportPolicyCompat')
+                        : t('system.realtimeTransportPolicyAuto')}
+                    </Chip>
+                  </div>
+                </div>
+
+                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                  <p className="text-xs text-default-500">{t('system.realtimeCurrentPathLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'livekit' ? 'primary' : 'warning'}
+                      variant="flat"
+                    >
+                      {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
+                    </Chip>
+                  </div>
+                  <p className="mt-2 text-xs text-default-400">{t('system.realtimeCurrentPathHint')}</p>
+                </div>
+
+                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                  <p className="text-xs text-default-500">{t('system.realtimeLiveKitServiceLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={realtimeRuntime?.liveKitEnabled ? 'success' : 'warning'}
+                      variant="flat"
+                    >
+                      {realtimeRuntime?.liveKitEnabled
+                        ? t('system.realtimeStatusEnabled')
+                        : t('system.realtimeStatusDisabled')}
+                    </Chip>
+                  </div>
+                </div>
+
+                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                  <p className="text-xs text-default-500">{t('system.realtimeBridgeHealthLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={realtimeRuntime?.radioBridgeHealthy === false ? 'danger' : 'success'}
+                      variant="flat"
+                    >
+                      {realtimeRuntime?.radioBridgeHealthy === false
+                        ? t('system.realtimeBridgeHealthUnhealthy')
+                        : t('system.realtimeBridgeHealthHealthy')}
+                    </Chip>
+                  </div>
+                  <p className="mt-2 text-xs text-default-400">{runtimeIssueLabel}</p>
+                </div>
+              </div>
+
+              <div className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h6 className="text-sm font-medium text-default-900">{t('system.realtimePortRequirementsTitle')}</h6>
+                    <p className="mt-1 text-xs text-default-500">{t('system.realtimePortRequirementsDesc')}</p>
+                  </div>
+                  <Chip size="sm" color="default" variant="flat">{t('system.realtimeAdminOnly')}</Chip>
+                </div>
+
+                <div className="mt-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                    <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
+                    <code className="text-xs text-default-500">{runtimeHints?.signalingPort ?? 7880}</code>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                    <span className="text-default-700">{t('system.realtimePortIceTcp')}</span>
+                    <code className="text-xs text-default-500">{runtimeHints?.rtcTcpPort ?? 7881}</code>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                    <span className="text-default-700">{t('system.realtimePortUdp')}</span>
+                    <code className="text-xs text-default-500">{runtimeHints?.udpPortRange ?? '50000-50100'}</code>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                    <span className="text-default-700">{t('system.realtimePortCompat')}</span>
+                    <code className="text-xs text-default-500">{t('system.realtimeCompatEndpointValue')}</code>
+                  </div>
+                  <div className="rounded-medium bg-content1 px-3 py-2">
+                    <p className="text-xs text-default-500">{t('system.realtimeEffectiveUrlLabel')}</p>
+                    <code className="mt-1 block break-all text-xs text-default-600">
+                      {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
+                    </code>
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-1 text-xs text-default-500">
+                  <p>{t('system.realtimePortHintAuto')}</p>
+                  <p>{t('system.realtimePortHintCompat')}</p>
+                  <p>{t('system.realtimePortHintFallback')}</p>
+                </div>
+              </div>
             </div>
           </CardBody>
         </Card>
