@@ -937,7 +937,7 @@ export class HamlibConnection
    * 因此需要尝试实际通信（读取频率）来确认电台在线。
    *
    * 此时状态仍为 CONNECTING，不能使用 this.getFrequency()（会 checkConnected 失败），
-   * 直接调用 this.rig.getFrequency()。
+   * 直接调用 this.rig.getFrequency('VFO-A')，与运行态读频保持一致。
    */
   private async verifyRadioCommunication(): Promise<void> {
     if (!this.rig) {
@@ -1129,13 +1129,13 @@ export class HamlibConnection
   private async pollMeters(): Promise<void> {
     if (!this.rig) return;
 
-    // 如果没有任何支持的 level，使用 getFrequency 做健康检查
+    // 如果没有任何支持的 level，使用 VFO-A 读频做健康检查
     const hasAnyLevel = this.supportedLevels.has('STRENGTH') || this.supportedLevels.has('SWR')
       || this.supportedLevels.has('ALC') || this.supportedLevels.has('RFPOWER_METER');
 
     if (!hasAnyLevel) {
       try {
-        await this.rig.getFrequency();
+        await this.rig.getFrequency('VFO-A');
         this.meterPollFailCount = 0;
         this.lastSuccessfulOperation = Date.now();
       } catch {
