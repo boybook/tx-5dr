@@ -234,10 +234,15 @@ jobs:
 
       - name: Configure ossutil
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
+        shell: bash
         run: |
-          OSS_ENDPOINT_VALUE="${OSS_ENDPOINT#https://}"
-          OSS_ENDPOINT_VALUE="${OSS_ENDPOINT_VALUE#http://}"
-          ossutil config -e "${OSS_ENDPOINT_VALUE}" -i "${OSS_ACCESS_KEY_ID}" -k "${OSS_ACCESS_KEY_SECRET}" -c "${RUNNER_TEMP}/.ossutilconfig"
+          cat > "${RUNNER_TEMP}/.ossutilconfig" <<EOF
+          [Credentials]
+          language = EN
+          endpoint = ${OSS_ENDPOINT}
+          accessKeyID = ${OSS_ACCESS_KEY_ID}
+          accessKeySecret = ${OSS_ACCESS_KEY_SECRET}
+          EOF
 
       - name: Generate OSS docker manifest
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
