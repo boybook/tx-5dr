@@ -1,9 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
-  AudioMonitorCodec,
   DecodeErrorInfo,
   JWTPayload,
   ModeDescriptor,
@@ -24,8 +23,6 @@ import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js
 import { AuthManager } from '../auth/AuthManager.js';
 import { buildAbility, emptyAbility, canWithData, type AppAbility } from '../auth/ability.js';
 import { createLogger } from '../utils/logger.js';
-import { createOpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
-import type { OpusMonitorEncoder } from '../audio/OpusMonitorEncoder.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
 
@@ -330,35 +327,19 @@ export class WSConnection extends WSMessageHandler {
  * WebSocket服务器
  * 管理多个客户端连接和消息广播，集成业务逻辑处理
  */
-/**
- * AudioMonitorWSServer 接口定义
- */
-interface AudioMonitorWSServer {
-  getAllClientIds(): string[];
-  sendAudioData(clientId: string, opusBuffer: Buffer | null, pcmBuffer: ArrayBuffer): void;
-  hasOpusClients(): boolean;
-  getServerCodec(): AudioMonitorCodec;
-}
-
 export class WSServer extends WSMessageHandler {
   private connections = new Map<string, WSConnection>();
   private clientInstanceConnections = new Map<string, string>();
   private connectionIdCounter = 0;
   private digitalRadioEngine: DigitalRadioEngine;
-  private audioMonitorWSServer: AudioMonitorWSServer; // AudioMonitorWSServer实例
   private processMonitor: ProcessMonitor | null = null;
-  private audioMonitorListenersSetup = false; // 标记AudioMonitor监听器是否已设置
-  private opusMonitorEncoder: OpusMonitorEncoder | null = null;
-  private opusAccumBuffer: Float32Array = new Float32Array(0);
-  private readonly OPUS_FRAME_SIZE = 960; // 20ms at 48kHz
   private spectrumCoordinator: SpectrumCoordinator;
   private spectrumSessionCoordinator: SpectrumSessionCoordinator;
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
-  constructor(digitalRadioEngine: DigitalRadioEngine, audioMonitorWSServer: AudioMonitorWSServer, processMonitor?: ProcessMonitor) {
+  constructor(digitalRadioEngine: DigitalRadioEngine, processMonitor?: ProcessMonitor) {
     super();
     this.digitalRadioEngine = digitalRadioEngine;
-    this.audioMonitorWSServer = audioMonitorWSServer;
     if (processMonitor) {
       this.processMonitor = processMonitor;
       processMonitor.setBroadcastCallback((snapshot) => {
@@ -368,7 +349,6 @@ export class WSServer extends WSMessageHandler {
     this.spectrumCoordinator = new SpectrumCoordinator(digitalRadioEngine);
     this.spectrumSessionCoordinator = new SpectrumSessionCoordinator(digitalRadioEngine, this.spectrumCoordinator);
     this.setupEngineEventListeners();
-    this.setupAudioMonitorEventListeners(); // 初始化时设置音频监听事件（广播模式）
     this.setupOpenWebRXEventListeners();
 
     this.commandHandlers = {
@@ -474,18 +454,6 @@ export class WSServer extends WSMessageHandler {
     });
 
     this.digitalRadioEngine.on('systemStatus', (status) => {
-      // 如果引擎正在运行且AudioMonitor监听器未设置，尝试设置
-      if (status.isRunning && !this.audioMonitorListenersSetup) {
-        logger.debug('engine started, setting up AudioMonitor listeners');
-        this.setupAudioMonitorEventListeners();
-      }
-
-      // 引擎停止时重置标志，确保下次启动时重新注册监听器到新的 AudioMonitorService 实例
-      if (!status.isRunning && this.audioMonitorListenersSetup) {
-        logger.debug('engine stopped, resetting AudioMonitor listener flag');
-        this.audioMonitorListenersSetup = false;
-      }
-
       this.broadcastSystemStatus(status);
     });
 
@@ -571,6 +539,32 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('radioDisconnectedDuringTransmission', (data) => {
       logger.debug('radio disconnected during transmission event received', data);
       this.broadcast(WSMessageType.RADIO_DISCONNECTED_DURING_TRANSMISSION, data);
+    });
+
+    this.digitalRadioEngine.on('realtimeConnectivityIssue' as any, (data: any) => {
+      const issue = data as {
+        code?: string;
+        userMessage?: string;
+        technicalDetails?: string;
+        context?: Record<string, string>;
+      };
+      const key = issue.code === 'NO_AUDIO_TRACK'
+        ? ServerMessageKey.REALTIME_NO_AUDIO
+        : ServerMessageKey.REALTIME_BRIDGE_DOWN;
+      this.broadcastTextMessage(
+        'Realtime connectivity issue',
+        issue.userMessage || 'Realtime voice service encountered an error',
+        'danger',
+        null,
+        key,
+        {
+          details: issue.technicalDetails || issue.userMessage || 'Unknown realtime error',
+          signalingUrl: issue.context?.signalingUrl || 'unknown',
+          signalingPort: issue.context?.signalingPort || 'unknown',
+          rtcTcpPort: issue.context?.rtcTcpPort || 'unknown',
+          udpPortRange: issue.context?.udpPortRange || 'unknown',
+        },
+      );
     });
 
     // 监听频率变化事件
@@ -1727,28 +1721,10 @@ export class WSServer extends WSMessageHandler {
     }
   }
 
-  /**
-   * 设置AudioMonitorService事件监听器（广播模式）
-   * 支持延迟设置和自动重试
-   */
-  private openwebrxListenWSServer: AudioMonitorWSServer | null = null;
-  private openwebrxAudioListenerCleanup: (() => void) | null = null;
-
-  setOpenWebRXListenWSServer(wsServer: AudioMonitorWSServer): void {
-    this.openwebrxListenWSServer = wsServer;
-  }
-
   private setupOpenWebRXEventListeners(): void {
     const stationManager = OpenWebRXStationManager.getInstance();
     stationManager.on('listenStatusChanged', (status) => {
       this.broadcast(WSMessageType.OPENWEBRX_LISTEN_STATUS, status);
-
-      // When listen session starts/stops, attach/detach audio routing
-      if (status.isListening) {
-        this.attachOpenWebRXAudioRouting();
-      } else {
-        this.detachOpenWebRXAudioRouting();
-      }
     });
 
     // Forward profile select requests from engine to clients
@@ -1769,137 +1745,6 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('openwebrxCooldownNotice' as any, (data: any) => {
       this.broadcast(WSMessageType.OPENWEBRX_COOLDOWN_NOTICE, data);
     });
-  }
-
-  private attachOpenWebRXAudioRouting(): void {
-    this.detachOpenWebRXAudioRouting();
-
-    const stationManager = OpenWebRXStationManager.getInstance();
-    const audioMonitorService = stationManager.getAudioMonitorService();
-    if (!audioMonitorService || !this.openwebrxListenWSServer) return;
-
-    const wsServer = this.openwebrxListenWSServer;
-
-    const handleAudioData = (data: { audioData: ArrayBuffer; sampleRate: number; samples: number; timestamp: number; sequence: number }) => {
-      const clientIds = wsServer.getAllClientIds();
-      for (const clientId of clientIds) {
-        wsServer.sendAudioData(clientId, null, data.audioData);
-      }
-    };
-
-    audioMonitorService.on('audioData', handleAudioData);
-    this.openwebrxAudioListenerCleanup = () => {
-      audioMonitorService.off('audioData', handleAudioData);
-    };
-  }
-
-  private detachOpenWebRXAudioRouting(): void {
-    if (this.openwebrxAudioListenerCleanup) {
-      this.openwebrxAudioListenerCleanup();
-      this.openwebrxAudioListenerCleanup = null;
-    }
-  }
-
-  private setupAudioMonitorEventListeners(): void {
-    // 如果已经设置过，直接返回
-    if (this.audioMonitorListenersSetup) {
-      return;
-    }
-
-    const audioMonitorService = this.digitalRadioEngine.getAudioMonitorService();
-    if (!audioMonitorService) {
-      logger.warn('AudioMonitorService not initialized, listeners will be set up when engine starts');
-      return;
-    }
-
-    logger.info('setting up AudioMonitorService event listeners (broadcast mode)');
-
-    // Initialize Opus encoder asynchronously
-    createOpusMonitorEncoder(48000, 1).then((encoder) => {
-      this.opusMonitorEncoder = encoder;
-      if (encoder) {
-        logger.info('Opus monitor encoder ready for audio broadcast');
-      }
-    }).catch((err) => {
-      logger.warn('Failed to create Opus monitor encoder', err);
-    });
-
-    // 监听音频数据事件（广播给所有已连接的客户端）
-    let audioDataCount = 0;
-    audioMonitorService.on('audioData', (data) => {
-      // 获取所有已连接的音频WebSocket客户端
-      const clientIds = this.audioMonitorWSServer.getAllClientIds();
-
-      if (clientIds.length === 0) {
-        return; // 没有客户端连接，跳过广播
-      }
-
-      audioDataCount++;
-
-      // 1. 广播元数据到所有控制WebSocket（JSON）
-      this.broadcast(WSMessageType.AUDIO_MONITOR_DATA, {
-        sampleRate: data.sampleRate,
-        samples: data.samples,
-        timestamp: data.timestamp
-      });
-
-      // 2. Determine codec path
-      const useOpus =
-        this.audioMonitorWSServer.getServerCodec() === 'opus' &&
-        this.audioMonitorWSServer.hasOpusClients() &&
-        this.opusMonitorEncoder;
-
-      if (!useOpus) {
-        // PCM path: send raw data directly
-        clientIds.forEach((clientId: string) => {
-          this.audioMonitorWSServer.sendAudioData(clientId, null, data.audioData);
-        });
-        return;
-      }
-
-      // Opus path: encode 960-sample frames
-      const pcmFloat32 = new Float32Array(data.audioData);
-      if (pcmFloat32.length === 0) return;
-
-      if (audioDataCount === 1) {
-        logger.info('First audio frame for Opus encoding', { samples: pcmFloat32.length });
-      }
-
-      const sendOpusFrame = (frame: Float32Array) => {
-        const opusBuffer = this.opusMonitorEncoder!.encode(frame);
-        const pcmFallback = frame.buffer as ArrayBuffer;
-        clientIds.forEach((clientId: string) => {
-          this.audioMonitorWSServer.sendAudioData(clientId, opusBuffer, pcmFallback);
-        });
-      };
-
-      // Fast path: frame is exactly 960 samples and no leftover — skip accumulation
-      if (this.opusAccumBuffer.length === 0 && pcmFloat32.length === this.OPUS_FRAME_SIZE) {
-        sendOpusFrame(pcmFloat32);
-        return;
-      }
-
-      // Slow path: accumulate partial frames
-      const newBuf = new Float32Array(this.opusAccumBuffer.length + pcmFloat32.length);
-      newBuf.set(this.opusAccumBuffer);
-      newBuf.set(pcmFloat32, this.opusAccumBuffer.length);
-      this.opusAccumBuffer = newBuf;
-
-      while (this.opusAccumBuffer.length >= this.OPUS_FRAME_SIZE) {
-        const frame = this.opusAccumBuffer.slice(0, this.OPUS_FRAME_SIZE);
-        this.opusAccumBuffer = this.opusAccumBuffer.slice(this.OPUS_FRAME_SIZE);
-        sendOpusFrame(frame);
-      }
-    });
-
-    // 监听统计信息事件（广播给所有客户端）
-    audioMonitorService.on('stats', (stats) => {
-      this.broadcast(WSMessageType.AUDIO_MONITOR_STATS, stats);
-    });
-
-    // 标记监听器已成功设置
-    this.audioMonitorListenersSetup = true;
-    logger.info('AudioMonitor event listeners set up successfully');
   }
 
   /**

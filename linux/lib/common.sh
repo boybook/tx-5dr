@@ -88,6 +88,22 @@ MSG_EN_CHECK_NGINX_RUNNING="nginx running"
 MSG_ZH_CHECK_NGINX_RUNNING="nginx 运行中"
 MSG_EN_CHECK_SERVICE="TX-5DR service"
 MSG_ZH_CHECK_SERVICE="TX-5DR 服务"
+MSG_EN_CHECK_LIVEKIT_BINARY="LiveKit binary"
+MSG_ZH_CHECK_LIVEKIT_BINARY="LiveKit 二进制"
+MSG_EN_CHECK_LIVEKIT_CONFIG="LiveKit config"
+MSG_ZH_CHECK_LIVEKIT_CONFIG="LiveKit 配置"
+MSG_EN_CHECK_LIVEKIT_URL="LiveKit bridge URL"
+MSG_ZH_CHECK_LIVEKIT_URL="LiveKit 桥接 URL"
+MSG_EN_CHECK_LIVEKIT_SERVICE="LiveKit service"
+MSG_ZH_CHECK_LIVEKIT_SERVICE="LiveKit 服务"
+MSG_EN_CHECK_LIVEKIT_SIGNAL_PORT="LiveKit signaling port %s"
+MSG_ZH_CHECK_LIVEKIT_SIGNAL_PORT="LiveKit signaling 端口 %s"
+MSG_EN_CHECK_LIVEKIT_TCP_PORT="LiveKit RTC TCP port %s"
+MSG_ZH_CHECK_LIVEKIT_TCP_PORT="LiveKit RTC TCP 端口 %s"
+MSG_EN_CHECK_LIVEKIT_UDP_RANGE="LiveKit UDP range %s-%s"
+MSG_ZH_CHECK_LIVEKIT_UDP_RANGE="LiveKit UDP 范围 %s-%s"
+MSG_EN_CHECK_LIVEKIT_CREDENTIALS="LiveKit credentials"
+MSG_ZH_CHECK_LIVEKIT_CREDENTIALS="LiveKit 凭据"
 MSG_EN_CHECK_PORT_BACKEND="Backend port %s"
 MSG_ZH_CHECK_PORT_BACKEND="后端端口 %s"
 MSG_EN_CHECK_PORT_HTTP="HTTP port %s"
@@ -103,6 +119,10 @@ MSG_EN_FIX_GLIBCXX="Run: sudo bash /usr/share/tx5dr/install.sh"
 MSG_ZH_FIX_GLIBCXX="运行: sudo bash /usr/share/tx5dr/install.sh"
 MSG_EN_FIX_NGINX="Install nginx manually: sudo dnf install nginx  or  sudo apt install nginx"
 MSG_ZH_FIX_NGINX="请手动安装 nginx：sudo dnf install nginx  或  sudo apt install nginx"
+MSG_EN_FIX_LIVEKIT_BINARY="Reinstall the tx5dr package, or install manually: curl -sSL https://get.livekit.io | bash"
+MSG_ZH_FIX_LIVEKIT_BINARY="重新安装 tx5dr 软件包，或手动安装: curl -sSL https://get.livekit.io | bash"
+MSG_EN_FIX_LIVEKIT_CONFIG="Regenerate config: sudo rm -f /etc/tx5dr/livekit.yaml && sudo /usr/share/tx5dr/postinstall.sh"
+MSG_ZH_FIX_LIVEKIT_CONFIG="重新生成配置: sudo rm -f /etc/tx5dr/livekit.yaml && sudo /usr/share/tx5dr/postinstall.sh"
 
 MSG_EN_INSTALLING_NODEJS="Installing Node.js 22..."
 MSG_ZH_INSTALLING_NODEJS="正在安装 Node.js 22..."
@@ -221,8 +241,67 @@ load_config() {
     fi
     HTTP_PORT="${TX5DR_HTTP_PORT:-8076}"
     API_PORT="${PORT:-4000}"
+    LIVEKIT_SIGNAL_PORT="${LIVEKIT_SIGNAL_PORT:-7880}"
+    LIVEKIT_TCP_PORT="${LIVEKIT_TCP_PORT:-7881}"
+    LIVEKIT_UDP_PORT_START="${LIVEKIT_UDP_PORT_START:-50000}"
+    LIVEKIT_UDP_PORT_END="${LIVEKIT_UDP_PORT_END:-50100}"
+    LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-tx5dr}"
+    LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-tx5dr-change-me-0123456789abcdef}"
+    LIVEKIT_URL="${LIVEKIT_URL:-ws://127.0.0.1:${LIVEKIT_SIGNAL_PORT}}"
+    LIVEKIT_CONFIG_FILE="${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
     CONFIG_DIR="${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}"
     DATA_DIR="${TX5DR_DATA_DIR:-/var/lib/tx5dr}"
+}
+
+get_livekit_binary_path() {
+    local bundled="${LIVEKIT_BINARY_PATH:-/usr/share/tx5dr/bin/livekit-server}"
+    if [[ -x "$bundled" ]]; then
+        printf "%s" "$bundled"
+        return 0
+    fi
+
+    command -v livekit-server 2>/dev/null || return 1
+}
+
+get_livekit_config_path() {
+    printf "%s" "${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
+}
+
+read_file_maybe_sudo() {
+    local file="$1"
+    if [[ ! -f "$file" ]]; then
+        return 1
+    fi
+    if [[ -r "$file" || $EUID -eq 0 ]]; then
+        cat "$file"
+        return 0
+    fi
+    sudo cat "$file" 2>/dev/null
+}
+
+can_read_file_noninteractive() {
+    local file="$1"
+    if [[ ! -f "$file" ]]; then
+        return 1
+    fi
+    if [[ -r "$file" || $EUID -eq 0 ]]; then
+        return 0
+    fi
+    sudo -n test -r "$file" 2>/dev/null
+}
+
+get_url_port() {
+    local url="$1"
+    local rest="${url#*://}"
+    local host_port="${rest%%/*}"
+    if [[ "$host_port" == *:* ]]; then
+        printf "%s" "${host_port##*:}"
+        return 0
+    fi
+    case "$url" in
+        wss://*|https://*) printf "443" ;;
+        *) printf "80" ;;
+    esac
 }
 
 # Wait for a TCP port to become available
@@ -242,6 +321,44 @@ wait_for_port() {
 # Check if a port is open
 is_port_open() {
     ss -tlnp 2>/dev/null | grep -q ":${1} "
+}
+
+list_udp_ports_in_range() {
+    local start_port="$1"
+    local end_port="$2"
+    ss -ulnH 2>/dev/null | awk -v start="$start_port" -v end="$end_port" '
+        {
+            n = split($5, parts, ":");
+            port = parts[n];
+            gsub(/[^0-9]/, "", port);
+            if (port >= start && port <= end) {
+                print port;
+            }
+        }
+    ' | sort -n -u
+}
+
+count_udp_ports_in_range() {
+    local start_port="$1"
+    local end_port="$2"
+    local count
+    count=$(list_udp_ports_in_range "$start_port" "$end_port" | wc -l | tr -d ' ')
+    printf "%s" "${count:-0}"
+}
+
+get_systemd_state() {
+    local service_name="$1"
+    local active_state
+    local sub_state
+    active_state=$(systemctl is-active "$service_name" 2>/dev/null || true)
+    sub_state=$(systemctl show "$service_name" --property=SubState --value 2>/dev/null || true)
+
+    if [[ -n "$sub_state" && "$sub_state" != "$active_state" ]]; then
+        printf "%s/%s" "${active_state:-unknown}" "$sub_state"
+        return 0
+    fi
+
+    printf "%s" "${active_state:-unknown}"
 }
 
 # Get local non-loopback IPv4 address

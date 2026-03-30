@@ -379,12 +379,12 @@ interface MixedAudio {
 
 | 事件名称 | 数据结构 | 触发条件 | 频率 | 订阅者 |
 |---------|---------|---------|------|--------|
-| `audioData` | `{ audioData, sampleRate, samples, timestamp }` | 音频监听数据 | **~20次/秒** | WSServer |
-| `stats` | `AudioMonitorStats` | 监听统计信息 | ~1次/秒 | WSServer |
+| `audioData` | `{ audioData, sampleRate, samples, timestamp }` | 音频监听数据 | **~20次/秒** | LiveKitBridgeManager |
+| `stats` | `AudioMonitorStats` | 监听统计信息 | ~1次/秒 | 内部调试/统计 |
 
 **代码位置**:
 - 发布: `packages/server/src/audio/AudioMonitorService.ts`
-- 订阅: `packages/server/src/websocket/WSServer.ts` Line 1168-1198
+- 订阅: `packages/server/src/realtime/LiveKitBridgeManager.ts`
 
 ---
 
@@ -475,8 +475,6 @@ WSServer 订阅 DigitalRadioEngine 的所有事件并通过 WebSocket 广播。
 | `frequencyChanged` | `FREQUENCY_CHANGED` | 直接转发 | 全部客户端 |
 | `pttStatusChanged` | `PTT_STATUS_CHANGED` | 直接转发 | 全部客户端 |
 | `meterData` | `METER_DATA` | 静默广播 (无日志) | 全部客户端 |
-| `audioMonitorData` | `AUDIO_MONITOR_DATA` | 元数据+二进制分离 | 全部客户端 |
-| `audioMonitorStats` | `AUDIO_MONITOR_STATS` | 直接转发 | 全部客户端 |
 | `timingWarning` | `TEXT_MESSAGE` | 转换为Toast | 全部客户端 |
 
 **代码位置**: `packages/server/src/websocket/WSServer.ts`
@@ -540,8 +538,6 @@ if (connection.isOperatorEnabled(operatorStatus.id)) {
 | `VOLUME_GAIN_CHANGED` | `volumeGainChanged` | `{ gain, gainDb }` |
 | `SERVER_HANDSHAKE_COMPLETE` | `handshakeComplete` | `{ serverVersion, ... }` |
 | `TEXT_MESSAGE` | `textMessage` | `{ title, text, color, timeout }` |
-| `AUDIO_MONITOR_DATA` | `audioMonitorData` | `{ audioData, sampleRate, ... }` |
-| `AUDIO_MONITOR_STATS` | `audioMonitorStats` | `AudioMonitorStats` |
 
 **代码位置**: `packages/core/src/websocket/WSMessageHandler.ts` Line 8-53
 
@@ -692,18 +688,17 @@ useEffect(() => {
    每10ms检查缓冲区
    达到120ms水位 → 读取60ms块
       ↓
-3. 重采样 12kHz → 48kHz
-   emit('audioData', { audioData, sampleRate, ... })
+3. LiveKitBridgeManager 订阅音频块
+   转换 Float32 → PCM16
       ↓
-4. WSServer 订阅
-   broadcast(AUDIO_MONITOR_DATA, metadata)
-   AudioMonitorWSServer.sendAudioData(clientId, binary)
+4. 作为 bridge participant 发布到 LiveKit 房间
+   room = radio:<profileId> / openwebrx-preview:<sessionId>
       ↓
-5. 浏览器 WebSocket 接收
-   AudioWorklet 处理音频
-   客户端音量控制
+5. 浏览器通过 `/api/realtime/token` 获取 token
+   再直连 LiveKit signaling（默认 `ws(s)://当前主机:7880`）
       ↓
-6. 播放到扬声器
+6. livekit-client 订阅远端音轨
+   直接播放到扬声器
 ```
 
 ---
@@ -715,7 +710,7 @@ useEffect(() => {
 | 事件 | 频率 | 数据量 | 性能影响 | 优化措施 |
 |-----|------|--------|---------|---------|
 | `audioFrame` | ~50Hz | ~480字节/帧 | 中 | 环形缓冲区 |
-| `audioMonitorData` | ~20Hz | ~5.8KB/次 (48kHz 60ms) | 高 | 二进制传输 + 客户端缓冲 |
+| `AudioMonitorService.audioData` | ~20Hz | ~5.8KB/次 (48kHz 60ms) | 中 | 服务端桥接到 LiveKit |
 | `spectrumData` | ~6.7Hz | ~32KB (4096点FFT) | 中 | WebWorker并行 |
 
 ### 中频事件 (1-10次/秒)
@@ -726,7 +721,7 @@ useEffect(() => {
 | `subWindow` | ~20/分钟 | <1KB | 低 |
 | `slotPackUpdated` | ~4/分钟 | 可变 (取决于解码结果) | 中 |
 | `meterData` | ~3.3Hz | ~200字节 | 低 |
-| `audioMonitorStats` | ~1Hz | ~100字节 | 低 |
+| `AudioMonitorService.stats` | ~1Hz | ~100字节 | 低 |
 
 ### 按需事件
 
@@ -773,8 +768,8 @@ useEffect(() => {
 
 ### P2 - 辅助功能
 
-1. **音频监听**: `audioMonitorData` (20Hz)
-   - 影响: 音频监听质量
+1. **音频监听**: LiveKit 远端音轨
+   - 影响: 音频监听与 OpenWebRX 试听质量
    - 延迟容忍: <200ms
 
 2. **数值表**: `meterData` (3.3Hz)
@@ -820,9 +815,9 @@ useEffect(() => {
    - 当前: 环形缓冲区
    - 建议: 已优化,无需改进
 
-4. **audioMonitorData** (20Hz)
-   - 当前: 二进制传输
-   - 建议: 考虑降采样到44.1kHz或增加缓冲区大小
+4. **LiveKit 音频桥接**
+   - 当前: WebRTC 实时传输
+   - 建议: 优先关注公网映射、ICE/UDP 端口和服务端桥接负载
 
 ### 内存泄漏风险
 
@@ -914,7 +909,7 @@ useEffect(() => {
 **变更内容**:
 - ✅ 深度分析所有事件优化空间
   - `audioFrame` (50Hz): 确认已充分优化（环形缓冲区）
-  - `audioMonitorData` (20Hz): 确认已充分优化（2层路径）
+  - `LiveKit audio bridge` (20Hz): 已迁移到统一 WebRTC 实时链路
   - `operatorStatusUpdate` (0.2Hz): 发现 70-80% 冗余触发
 - ✅ 实现 `operatorStatusUpdate` 状态去重
   - 添加关键字段哈希计算

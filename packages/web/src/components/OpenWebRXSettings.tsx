@@ -28,6 +28,11 @@ import { api } from '@tx5dr/core';
 import type { OpenWebRXStationConfig, OpenWebRXListenStatus, OpenWebRXProfile } from '@tx5dr/contracts';
 import { useAudioMonitorPlayback } from '../hooks/useAudioMonitorPlayback';
 import { createLogger } from '../utils/logger';
+import {
+  RealtimeConnectivityError,
+  buildRealtimeConnectivityIssue,
+  showRealtimeConnectivityIssueToast,
+} from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('OpenWebRXSettings');
 
@@ -66,7 +71,10 @@ export function OpenWebRXSettings() {
   const [isFetchingProfiles, setIsFetchingProfiles] = useState(false);
 
   // Audio playback via reusable hook
-  const audioPlayback = useAudioMonitorPlayback({ wsPath: '/ws/openwebrx-listen' });
+  const audioPlayback = useAudioMonitorPlayback({
+    scope: 'openwebrx-preview',
+    previewSessionId: listenStatus?.previewSessionId ?? null,
+  });
 
   // Load stations
   const loadStations = useCallback(async () => {
@@ -225,10 +233,21 @@ export function OpenWebRXSettings() {
         modulation: listenModulation || undefined,
       });
       setListenStatus(result.status);
-      await audioPlayback.start();
+      await audioPlayback.start(result.status.previewSessionId);
     } catch (error) {
       logger.error('Failed to start listen', error);
       audioPlayback.stop();
+      const issue = error instanceof RealtimeConnectivityError
+        ? error.issue
+        : buildRealtimeConnectivityIssue(error, {
+          scope: 'openwebrx-preview',
+          stage: 'connect',
+        });
+      showRealtimeConnectivityIssueToast(issue, {
+        onRetry: () => {
+          void handleStartListen();
+        },
+      });
     } finally {
       setIsStartingListen(false);
     }

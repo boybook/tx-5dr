@@ -35,6 +35,12 @@ export interface ErrorToastOptions {
     handler: () => void;
   };
 
+  /** 多个操作按钮配置（可选） */
+  actions?: Array<{
+    label: string;
+    handler: () => void;
+  }>;
+
   /** 技术错误详情（可选，仅开发环境显示） */
   technicalDetails?: string;
 
@@ -84,6 +90,7 @@ export function showErrorToast(options: ErrorToastOptions): void {
     severity = 'error',
     code,
     action,
+    actions,
     technicalDetails,
     context
   } = options;
@@ -126,15 +133,26 @@ export function showErrorToast(options: ErrorToastOptions): void {
   const timeout = timeoutMap[severity] || 10000;
 
   // 构建操作按钮（如果提供）
-  const endContent = action ? (
-    <Button
-      size="sm"
-      color="primary"
-      variant="flat"
-      onPress={action.handler}
-    >
-      {action.label}
-    </Button>
+  const normalizedActions = actions && actions.length > 0
+    ? actions
+    : action
+      ? [action]
+      : [];
+
+  const endContent = normalizedActions.length > 0 ? (
+    <div className="flex items-center gap-2">
+      {normalizedActions.map((item) => (
+        <Button
+          key={item.label}
+          size="sm"
+          color="primary"
+          variant="flat"
+          onPress={item.handler}
+        >
+          {item.label}
+        </Button>
+      ))}
+    </div>
   ) : undefined;
 
   // 设置标题

@@ -33,7 +33,6 @@ export type CapabilitySubject =
   | 'Engine'
   | 'ModeSwitch'
   | 'SettingsDecodeWindows'
-  | 'SettingsAudioCodec'
   | 'SettingsFrequencyPresets'
   | 'StationInfo';
 
@@ -55,7 +54,6 @@ export enum Permission {
   ENGINE_START_STOP = 'engine:start_stop',
   MODE_SWITCH = 'mode:switch',
   SETTINGS_DECODE_WINDOWS = 'settings:decode_windows',
-  SETTINGS_AUDIO_CODEC = 'settings:audio_codec',
   SETTINGS_FREQUENCY_PRESETS = 'settings:frequency_presets',
   STATION_UPDATE = 'station:update',
 }
@@ -74,7 +72,6 @@ export const PERMISSION_RULE_MAP: Record<Permission, { action: AppAction; subjec
   [Permission.ENGINE_START_STOP]: { action: 'execute', subject: 'Engine' },
   [Permission.MODE_SWITCH]: { action: 'execute', subject: 'ModeSwitch' },
   [Permission.SETTINGS_DECODE_WINDOWS]: { action: 'update', subject: 'SettingsDecodeWindows' },
-  [Permission.SETTINGS_AUDIO_CODEC]: { action: 'update', subject: 'SettingsAudioCodec' },
   [Permission.SETTINGS_FREQUENCY_PRESETS]: { action: 'update', subject: 'SettingsFrequencyPresets' },
   [Permission.STATION_UPDATE]: { action: 'update', subject: 'StationInfo' },
 };
@@ -178,7 +175,6 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
     key: 'settings',
     permissions: [
       Permission.SETTINGS_DECODE_WINDOWS,
-      Permission.SETTINGS_AUDIO_CODEC,
       Permission.SETTINGS_FREQUENCY_PRESETS,
     ],
   },

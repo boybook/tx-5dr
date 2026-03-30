@@ -2,7 +2,7 @@
 // ConfigManager - 配置合并和动态类型需要使用any
 
 import { promises as fs } from 'fs';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary, type RealtimeTransportPolicy } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
@@ -71,8 +71,10 @@ export interface AppConfig {
   voiceCallsign?: string;
   /** Voice mode operator grid */
   voiceGrid?: string;
-  /** Audio monitor codec: 'opus' for low bandwidth, 'pcm' for compatibility. Default: 'opus'. */
-  audioMonitorCodec?: 'opus' | 'pcm';
+  /** Optional externally reachable LiveKit signaling URL override. */
+  livekitPublicUrl?: string | null;
+  /** Realtime transport strategy preference. */
+  realtimeTransportPolicy?: RealtimeTransportPolicy;
   /** Station basic information visible to all connected users */
   stationInfo?: StationInfo;
   /** OpenWebRX SDR station configurations */
@@ -1021,14 +1023,21 @@ export class ConfigManager {
     await this.saveConfig();
   }
 
-  // ===== 音频监听编码设置 =====
-
-  getAudioMonitorCodec(): 'opus' | 'pcm' {
-    return this.config.audioMonitorCodec ?? 'opus';
+  getLiveKitPublicUrl(): string | null {
+    return this.config.livekitPublicUrl ?? null;
   }
 
-  async updateAudioMonitorCodec(codec: 'opus' | 'pcm'): Promise<void> {
-    this.config.audioMonitorCodec = codec;
+  async updateLiveKitPublicUrl(url: string | null): Promise<void> {
+    this.config.livekitPublicUrl = url;
+    await this.saveConfig();
+  }
+
+  getRealtimeTransportPolicy(): RealtimeTransportPolicy {
+    return this.config.realtimeTransportPolicy ?? 'auto';
+  }
+
+  async updateRealtimeTransportPolicy(policy: RealtimeTransportPolicy): Promise<void> {
+    this.config.realtimeTransportPolicy = policy;
     await this.saveConfig();
   }
 

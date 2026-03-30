@@ -11,8 +11,18 @@ TX-5DR is a modern, web-based amateur radio application designed for FT8 digital
 ### Run with Docker
 
 ```bash
-# Run the application
-docker run -d -p 8076:80 --name tx-5dr boybook/tx-5dr:latest
+# Run the web/API container
+docker run -d -p 8076:80 --name tx5dr boybook/tx-5dr:latest
+
+# Run LiveKit sidecar for direct browser signaling/media
+docker run -d \
+  -p 7880:7880/tcp \
+  -p 7881:7881/tcp \
+  -p 50000-50100:50000-50100/udp \
+  -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
+  --name tx5dr-livekit \
+  livekit/livekit-server:latest \
+  --config /etc/livekit.yaml
 
 # Access the web interface
 # Open http://localhost:8076 in your browser
@@ -28,6 +38,8 @@ services:
     image: boybook/tx-5dr:latest
     container_name: tx5dr
     restart: unless-stopped
+    depends_on:
+      - livekit
     ports:
       - "8076:80"
     volumes:
@@ -52,6 +64,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=tx5dr
+      - LIVEKIT_API_SECRET=tx5dr-change-me-0123456789abcdef
       - TX5DR_CONFIG_DIR=/app/data/config
       - TX5DR_DATA_DIR=/app/data
       - TX5DR_LOGS_DIR=/app/data/logs
@@ -68,6 +83,18 @@ services:
       - SYS_RESOURCE
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=100m
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: tx5dr-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    ports:
+      - "7880:7880/tcp"
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
 ```
 
 ## ✨ Features
@@ -145,11 +172,12 @@ docker run --privileged ...
 
 ### Basic FT8 Operation
 
-1. **Start the container**: `docker run -d -p 8076:80 boybook/tx-5dr:latest`
+1. **Start the containers**: launch both `tx5dr` and `tx5dr-livekit`
 2. **Access web interface**: Open `http://localhost:8076`
-3. **Configure audio devices**: Select input/output devices in settings
-4. **Configure radio**: Set up CAT control for your transceiver
-5. **Start operating**: Begin FT8 communication
+3. **Expose LiveKit ports**: ensure `7880/tcp`, `7881/tcp`, `50000-50100/udp` are reachable for browser voice features
+4. **Configure audio devices**: Select input/output devices in settings
+5. **Configure radio**: Set up CAT control for your transceiver
+6. **Start operating**: Begin FT8 communication
 
 ### With External Audio Interface
 
@@ -159,6 +187,14 @@ docker run -d \
   --device=/dev/snd \
   --group-add audio \
   boybook/tx-5dr:latest
+
+docker run -d \
+  -p 7880:7880/tcp \
+  -p 7881:7881/tcp \
+  -p 50000-50100:50000-50100/udp \
+  -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
+  livekit/livekit-server:latest \
+  --config /etc/livekit.yaml
 ```
 
 ### Development Mode
@@ -169,6 +205,14 @@ docker run -d \
   -v $(pwd)/config:/app/data/config \
   -e NODE_ENV=development \
   boybook/tx-5dr:latest
+
+docker run -d \
+  -p 7880:7880/tcp \
+  -p 7881:7881/tcp \
+  -p 50000-50100:50000-50100/udp \
+  -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
+  livekit/livekit-server:latest \
+  --config /etc/livekit.yaml
 ```
 
 ## 🔍 Troubleshooting

@@ -5,6 +5,7 @@ import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createLogger } from './utils/logger.js';
@@ -18,8 +19,11 @@ const logger = createLogger('ElectronMain');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let serverCheckInterval: any = null;
+let livekitProcess: import('node:child_process').ChildProcess | null = null;
 let serverProcess: import('node:child_process').ChildProcess | null = null;
 let webProcess: import('node:child_process').ChildProcess | null = null;
+let selectedLiveKitPort: number | null = null;
+let selectedLiveKitTcpPort: number | null = null;
 let selectedWebPort: number | null = null;
 let selectedServerPort: number | null = null;
 
@@ -164,19 +168,23 @@ function nodePath() {
   return path.join(res, 'bin', triplet(), exe);
 }
 
+function livekitServerPath() {
+  if (process.env.LIVEKIT_BINARY_PATH) {
+    return process.env.LIVEKIT_BINARY_PATH;
+  }
+
+  const res = resourcesRoot();
+  const exe = process.platform === 'win32' ? 'livekit-server.exe' : 'livekit-server';
+  const bundled = path.join(res, 'bin', triplet(), exe);
+  return fs.existsSync(bundled) ? bundled : exe;
+}
+
 // no quarantine/permission fallbacks; we assume portable node file is valid
 
-function runChild(name: string, entryAbs: string, extraEnv: Record<string, string> = {}) {
+function createChildEnv(extraEnv: Record<string, string> = {}) {
   const res = resourcesRoot();
-  const NODE = nodePath();
-  if (!fs.existsSync(NODE)) {
-    logger.error(`[child:${name}] node binary not found: ${NODE}`);
-  }
-  if (!fs.existsSync(entryAbs)) {
-    logger.error(`[child:${name}] entry not found: ${entryAbs}`);
-  }
   const wsjtxPrebuildDir = path.join(res, 'app', 'node_modules', 'wsjtx-lib', 'prebuilds', triplet());
-  const env = {
+  return {
     ...process.env,
     NODE_ENV: 'production',
     APP_RESOURCES: res,
@@ -197,17 +205,9 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
         }),
     ...extraEnv,
   } as NodeJS.ProcessEnv;
+}
 
-  const cwd = path.dirname(entryAbs);
-
-  // 使用 pipe 捕获子进程输出，转发到 electron-log（GUI 模式下 inherit 的输出不可见）
-  const child = spawn(NODE, [entryAbs], {
-    cwd,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  // 转发子进程 stdout/stderr 到主进程日志
+function wireChildProcess(name: string, child: import('node:child_process').ChildProcess) {
   child.stdout?.on('data', (data: Buffer) => {
     const lines = data.toString().trimEnd();
     if (lines) logger.debug(`[child:${name}] ${lines}`);
@@ -220,10 +220,8 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
   child.on('exit', (code, signal) => {
     logger.info(`[child:${name}] exited with code ${code}, signal ${signal}`);
 
-    // 主动退出流程中，子进程被杀是预期行为，不弹错误
     if (isQuitting) return;
 
-    // 非正常退出：非零退出码 或 被信号杀死（code=null, signal='SIGSEGV' 等）
     if (code !== 0) {
       if (!errorType) {
         errorType = 'CRASH';
@@ -243,8 +241,64 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
     dialog.showErrorBox('TX-5DR - Startup Failed',
       `${name} process failed to start: ${err.message}\n\nLog file: ${logPath}`);
   });
+}
 
+function runChild(name: string, entryAbs: string, extraEnv: Record<string, string> = {}) {
+  const NODE = nodePath();
+  if (!fs.existsSync(NODE)) {
+    logger.error(`[child:${name}] node binary not found: ${NODE}`);
+  }
+  if (!fs.existsSync(entryAbs)) {
+    logger.error(`[child:${name}] entry not found: ${entryAbs}`);
+  }
+
+  const child = spawn(NODE, [entryAbs], {
+    cwd: path.dirname(entryAbs),
+    env: createChildEnv(extraEnv),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  wireChildProcess(name, child);
   return child;
+}
+
+function runBinaryChild(
+  name: string,
+  binaryPath: string,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+  cwd = path.dirname(binaryPath)
+) {
+  const child = spawn(binaryPath, args, {
+    cwd,
+    env: createChildEnv(extraEnv),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  wireChildProcess(name, child);
+  return child;
+}
+
+function buildLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: string, apiSecret: string): string {
+  return [
+    `port: ${signalingPort}`,
+    'rtc:',
+    `  tcp_port: ${tcpPort}`,
+    '  port_range_start: 50000',
+    '  port_range_end: 50100',
+    '  use_external_ip: false',
+    'keys:',
+    `  ${apiKey}: ${apiSecret}`,
+    'logging:',
+    '  level: info',
+    '',
+  ].join('\n');
+}
+
+function ensureLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: string, apiSecret: string): string {
+  const configDir = getAppConfigDir();
+  fs.mkdirSync(configDir, { recursive: true });
+  const configPath = path.join(configDir, 'livekit.yaml');
+  fs.writeFileSync(configPath, buildLiveKitConfig(signalingPort, tcpPort, apiKey, apiSecret), 'utf-8');
+  return configPath;
 }
 
 // 简单 HTTP 等待
@@ -714,6 +768,10 @@ async function cleanup() {
       await killProcess(serverProcess, 'server');
       serverProcess = null;
     }
+    if (livekitProcess) {
+      await killProcess(livekitProcess, 'livekit');
+      livekitProcess = null;
+    }
   }
 
   // 清理系统托盘
@@ -786,24 +844,90 @@ async function createWindow() {
 
     logger.info('backend server connected');
   } else {
-    // 生产模式：使用便携 Node 启动子进程（server + web）
-    logger.info('production mode: starting child processes with portable Node');
+    // 生产模式：启动 LiveKit -> server -> web
+    logger.info('production mode: starting livekit, server, and web child processes');
     const res = resourcesRoot();
+    const livekitBinary = livekitServerPath();
     const serverEntry = join(res, 'app', 'packages', 'server', 'dist', 'index.js');
     const webEntry = join(res, 'app', 'packages', 'client-tools', 'src', 'proxy.js');
 
+    const shouldCheckLiveKitPath = livekitBinary.includes(path.sep) || livekitBinary.startsWith('.');
+    if (shouldCheckLiveKitPath && !fs.existsSync(livekitBinary)) {
+      logger.error(`livekit binary not found: ${livekitBinary}`);
+      errorType = 'MISSING_LIVEKIT';
+      hasStartupError = true;
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `LiveKit binary not found: ${livekitBinary}\n\nLog file: ${logPath}`);
+      return;
+    }
+
     // 自动端口探测，避免端口占用导致启动失败
+    const livekitPort = await findFreePort(7880, 50, undefined, '127.0.0.1');
+    const livekitTcpPort = await findFreePort(7881, 50, livekitPort, '127.0.0.1');
     const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
     const webPort = await findFreePort(5173, 50, serverPort, '0.0.0.0'); // 避免和 serverPort 冲突
+    selectedLiveKitPort = livekitPort;
+    selectedLiveKitTcpPort = livekitTcpPort;
     selectedServerPort = serverPort;
     selectedWebPort = webPort;
 
-    logger.info(`ports selected: server=${serverPort}, web=${webPort}`);
+    logger.info(`ports selected: livekit=${livekitPort}, livekitTcp=${livekitTcpPort}, server=${serverPort}, web=${webPort}`);
+
+    const livekitApiKey = `tx5dr-electron-${Date.now()}`;
+    const livekitApiSecret = randomBytes(24).toString('hex');
+    const livekitConfigPath = ensureLiveKitConfig(livekitPort, livekitTcpPort, livekitApiKey, livekitApiSecret);
+
+    livekitProcess = runBinaryChild('livekit', livekitBinary, ['--config', livekitConfigPath]);
+
+    const livekitOk = await waitForHttp(`http://127.0.0.1:${livekitPort}`, 15000, 200);
+    if (!livekitOk) {
+      logger.error('livekit startup timeout');
+      errorType = 'TIMEOUT';
+      hasStartupError = true;
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `LiveKit startup timeout\n\n` +
+        `Signaling port: ${livekitPort}\n` +
+        `ICE/TCP port: ${livekitTcpPort}\n` +
+        `UDP range: 50000-50100\n` +
+        `Config file: ${livekitConfigPath}\n` +
+        `Log file: ${logPath}\n\n` +
+        'Please check whether the LiveKit process started successfully and whether these ports are already occupied or blocked.');
+      return;
+    }
+    logger.info('livekit service ready');
 
     serverProcess = runChild('server', serverEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
+      LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`,
+      LIVEKIT_API_KEY: livekitApiKey,
+      LIVEKIT_API_SECRET: livekitApiSecret,
+      LIVEKIT_TCP_PORT: String(livekitTcpPort),
+      LIVEKIT_UDP_PORT_RANGE: '50000-50100',
     });
+
+    logger.info('waiting for backend server...');
+    const serverOk = await waitForHttp(`http://127.0.0.1:${selectedServerPort}`, 15000, 200);
+    if (!serverOk) {
+      logger.error('backend server startup timeout');
+      errorType = 'TIMEOUT';
+      hasStartupError = true;
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Backend server startup timeout\n\n` +
+        `Backend port: ${serverPort}\n` +
+        `LiveKit signaling port: ${livekitPort}\n` +
+        `LiveKit ICE/TCP port: ${livekitTcpPort}\n` +
+        `UDP range: 50000-50100\n` +
+        `Config file: ${livekitConfigPath}\n` +
+        `Log file: ${logPath}\n\n` +
+        'Please inspect the backend and LiveKit logs to confirm the realtime voice service is reachable.');
+      return;
+    }
+    logger.info('backend server ready');
+
     webProcess = runChild('client-tools', webEntry, {
       PORT: String(webPort),
       STATIC_DIR: join(res, 'app', 'packages', 'web', 'dist'),
@@ -821,23 +945,8 @@ async function createWindow() {
       dialog.showErrorBox('TX-5DR - Startup Failed',
         `Web service startup timeout\n\nLog file: ${logPath}`);
       return;
-    } else {
-      logger.info('web service ready');
     }
-
-    // 等待后端服务器 HTTP 就绪
-    logger.info('waiting for backend server...');
-    const serverOk = await waitForHttp(`http://127.0.0.1:${selectedServerPort}`, 15000, 200);
-    if (!serverOk) {
-      logger.error('backend server startup timeout');
-      errorType = 'TIMEOUT';
-      hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Backend server startup timeout\n\nLog file: ${logPath}`);
-      return;
-    }
-    logger.info('backend server ready');
+    logger.info('web service ready');
   }
 
   // 最后检查：如果子进程已经崩溃

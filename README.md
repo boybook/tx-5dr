@@ -42,7 +42,7 @@ This turns a single half-duplex transceiver into an effectively full-duplex FT8/
 - **Remote Voice QSO**: Transmit and receive voice (SSB/FM) remotely through the browser — your microphone audio is streamed to the server and transmitted via the radio (requires HTTPS)
 - **Logbook & Sync**: Built-in ADIF logbook with two-way sync to WaveLog, QRZ.com, and LoTW
 - **PSKReporter**: Auto-report decoded signals to the global PSKReporter network
-- **Audio Monitoring**: Real-time audio stream (Opus/PCM) to the browser
+- **Audio Monitoring**: Real-time browser audio monitoring over LiveKit/WebRTC
 - **Multi-language**: Full English and Chinese UI
 
 ---
@@ -103,20 +103,14 @@ sudo bash /usr/share/tx5dr/install.sh
 - **Debian 12+** (recommended) or **Ubuntu 22.04+**
 - **Node.js 20+** (auto-installed by `install.sh`)
 - **nginx** (auto-installed)
+- **LiveKit service**: Linux packages bundle `livekit-server` at `/usr/share/tx5dr/bin/livekit-server`
 - For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)
+- Public voice / OpenWebRX preview deployments must also expose `7880/tcp`, `7881/tcp`, and `50000-50100/udp`
+- Browser clients connect to LiveKit directly. By default the server derives `ws(s)://<current-host>:7880`; if you use public mapping or a dedicated domain/port, set the public LiveKit URL in System Settings. The value is persisted in `/var/lib/tx5dr/config/config.json`
 
 ---
 
 ## Docker
-
-### Quick Start
-
-```bash
-docker run -d -p 8076:80 --name tx5dr boybook/tx-5dr:latest
-
-# View admin token
-docker exec tx5dr cat /app/data/config/.admin-token
-```
 
 ### Docker Compose (recommended)
 
@@ -127,22 +121,47 @@ services:
     image: boybook/tx-5dr:latest
     container_name: tx5dr
     restart: unless-stopped
+    depends_on:
+      - livekit
     ports:
       - "8076:80"
     volumes:
       - ./data/config:/app/data/config
       - ./data/logs:/app/data/logs
+      - ./data/cache:/app/data/cache
       - /dev/snd:/dev/snd:rw
     devices:
       - /dev/bus/usb:/dev/bus/usb:rwm
     group_add:
       - audio
+    environment:
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=tx5dr
+      - LIVEKIT_API_SECRET=tx5dr-change-me-0123456789abcdef
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: tx5dr-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    ports:
+      - "7880:7880/tcp"
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
 ```
 
 ```bash
-docker-compose up -d
+docker compose up -d
 # Access: http://localhost:8076
+
+# View admin token
+docker exec tx5dr cat /app/data/config/.admin-token
 ```
+
+- Browser clients connect directly to the LiveKit signaling URL; configure any public URL override from System Settings, which persists to `/app/data/config/config.json`
+- If your public domain, TLS termination, or port mapping differs from the container-internal address, you must set the externally reachable LiveKit WebSocket URL in the settings page
 
 See [nightly-docker releases](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details.
 

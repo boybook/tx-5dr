@@ -14,7 +14,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
 import { Button } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { PSKReporterConfig, PSKReporterStatus, AuthStatus, NetworkInfo } from '@tx5dr/contracts';
+import type { PSKReporterConfig, PSKReporterStatus, AuthStatus, NetworkInfo, RealtimeTransportPolicy } from '@tx5dr/contracts';
 import { FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { createLogger } from '../utils/logger';
@@ -32,6 +32,20 @@ const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
   ft4Preset: 'balanced',
   ft4CustomWindows: [0],
 };
+
+function buildLiveKitExampleUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.port = '7880';
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return 'ws://127.0.0.1:7880';
+  }
+}
 
 function getWindowCount(preset: string, customWindows: number[], presets: Record<string, number[]>): number {
   if (preset === 'custom') return customWindows.length;
@@ -92,15 +106,15 @@ export const SystemSettings = forwardRef<
 
   // 网络信息
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
+  const [liveKitPublicUrl, setLiveKitPublicUrl] = useState('');
+  const [originalLiveKitPublicUrl, setOriginalLiveKitPublicUrl] = useState('');
+  const [realtimeTransportPolicy, setRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
+  const [originalRealtimeTransportPolicy, setOriginalRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
   const [urlCopied, setUrlCopied] = useState(false);
 
   // 解码窗口设置
   const [decodeWindowState, setDecodeWindowState] = useState<DecodeWindowState>({ ...DEFAULT_DECODE_WINDOW_STATE });
   const [originalDecodeWindowState, setOriginalDecodeWindowState] = useState<DecodeWindowState>({ ...DEFAULT_DECODE_WINDOW_STATE });
-
-  // 音频监听编码设置
-  const [audioMonitorCodec, setAudioMonitorCodec] = useState<'opus' | 'pcm'>('opus');
-  const [originalAudioMonitorCodec, setOriginalAudioMonitorCodec] = useState<'opus' | 'pcm'>('opus');
 
   // Electron 关闭行为设置（仅桌面应用）
   const [closeBehavior, setCloseBehavior] = useState<string>('ask');
@@ -114,7 +128,7 @@ export const SystemSettings = forwardRef<
     loadPSKReporterConfig();
     loadPSKReporterStatus();
     loadDecodeWindowSettings();
-    loadAudioMonitorCodec();
+    loadRealtimeSettings();
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
     loadElectronCloseBehavior();
   }, []);
@@ -205,19 +219,6 @@ export const SystemSettings = forwardRef<
     }
   };
 
-  const loadAudioMonitorCodec = async () => {
-    try {
-      const result = await api.getAudioMonitorCodec();
-      if (result.success && result.data) {
-        const codec = result.data.codec === 'pcm' ? 'pcm' as const : 'opus' as const;
-        setAudioMonitorCodec(codec);
-        setOriginalAudioMonitorCodec(codec);
-      }
-    } catch (err) {
-      logger.error('Failed to load audio monitor codec:', err);
-    }
-  };
-
   // 加载 Electron 关闭行为设置
   const loadElectronCloseBehavior = async () => {
     try {
@@ -228,6 +229,20 @@ export const SystemSettings = forwardRef<
       }
     } catch {
       // Not in Electron environment, ignore
+    }
+  };
+
+  const loadRealtimeSettings = async () => {
+    try {
+      const result = await api.getRealtimeSettings();
+      const value = result.data.publicWsUrl ?? '';
+      setLiveKitPublicUrl(value);
+      setOriginalLiveKitPublicUrl(value);
+      const policy = result.data.transportPolicy ?? 'auto';
+      setRealtimeTransportPolicy(policy);
+      setOriginalRealtimeTransportPolicy(policy);
+    } catch (err) {
+      logger.error('Failed to load realtime settings:', err);
     }
   };
 
@@ -276,7 +291,8 @@ export const SystemSettings = forwardRef<
       hasAuthChanges() ||
       hasPskrChanges() ||
       hasDecodeWindowChanges() ||
-      audioMonitorCodec !== originalAudioMonitorCodec ||
+      liveKitPublicUrl !== originalLiveKitPublicUrl ||
+      realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
       (isElectron && closeBehavior !== originalCloseBehavior)
     );
   };
@@ -345,10 +361,18 @@ export const SystemSettings = forwardRef<
         setOriginalDecodeWindowState({ ...decodeWindowState });
       }
 
-      // 保存音频监听编码设置
-      if (audioMonitorCodec !== originalAudioMonitorCodec) {
-        await api.updateAudioMonitorCodec(audioMonitorCodec);
-        setOriginalAudioMonitorCodec(audioMonitorCodec);
+      if (liveKitPublicUrl !== originalLiveKitPublicUrl || realtimeTransportPolicy !== originalRealtimeTransportPolicy) {
+        const normalizedPublicUrl = liveKitPublicUrl.trim();
+        const realtimeResult = await api.updateRealtimeSettings({
+          publicWsUrl: normalizedPublicUrl || null,
+          transportPolicy: realtimeTransportPolicy,
+        });
+        const savedValue = realtimeResult.data.publicWsUrl ?? '';
+        setLiveKitPublicUrl(savedValue);
+        setOriginalLiveKitPublicUrl(savedValue);
+        const savedPolicy = realtimeResult.data.transportPolicy ?? 'auto';
+        setRealtimeTransportPolicy(savedPolicy);
+        setOriginalRealtimeTransportPolicy(savedPolicy);
       }
 
       // 保存 Electron 关闭行为设置
@@ -387,7 +411,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, audioMonitorCodec, originalAudioMonitorCodec, closeBehavior, originalCloseBehavior, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, closeBehavior, originalCloseBehavior, onUnsavedChanges]);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -491,6 +515,60 @@ export const SystemSettings = forwardRef<
                 ))}
               </div>
             )}
+
+            <div className="mt-3 pt-3 border-t border-divider space-y-2">
+              <div>
+                <h5 className="text-sm font-medium text-default-900">{t('system.liveKitPublicUrl')}</h5>
+                <p className="text-xs text-default-500 mt-1">{t('system.liveKitPublicUrlDesc')}</p>
+              </div>
+              <Input
+                value={liveKitPublicUrl}
+                onValueChange={setLiveKitPublicUrl}
+                placeholder={t('system.liveKitPublicUrlPlaceholder')}
+                isDisabled={isSaving}
+                size="sm"
+                variant="bordered"
+              />
+              <p className="text-xs text-default-400">
+                {liveKitPublicUrl.trim()
+                  ? t('system.liveKitPublicUrlManualHint')
+                  : t('system.liveKitPublicUrlAutoHint')}
+              </p>
+              {networkInfo && networkInfo.addresses.length > 0 && (
+                <p className="text-xs text-default-400">
+                  {t('system.liveKitPublicUrlExample', {
+                    url: buildLiveKitExampleUrl(networkInfo.addresses[0].url),
+                  })}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-divider space-y-2">
+              <div>
+                <h5 className="text-sm font-medium text-default-900">{t('system.realtimeTransportPolicy')}</h5>
+                <p className="text-xs text-default-500 mt-1">{t('system.realtimeTransportPolicyDesc')}</p>
+              </div>
+              <Select
+                selectedKeys={[realtimeTransportPolicy]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0] as RealtimeTransportPolicy | undefined;
+                  if (value) {
+                    setRealtimeTransportPolicy(value);
+                  }
+                }}
+                isDisabled={isSaving}
+                size="sm"
+                variant="bordered"
+              >
+                <SelectItem key="auto">{t('system.realtimeTransportPolicyAuto')}</SelectItem>
+                <SelectItem key="force-compat">{t('system.realtimeTransportPolicyCompat')}</SelectItem>
+              </Select>
+              <p className="text-xs text-default-400">
+                {realtimeTransportPolicy === 'force-compat'
+                  ? t('system.realtimeTransportPolicyCompatHint')
+                  : t('system.realtimeTransportPolicyAutoHint')}
+              </p>
+            </div>
           </CardBody>
         </Card>
       )}
@@ -796,39 +874,6 @@ export const SystemSettings = forwardRef<
               )}
             </div>
           )}
-        </CardBody>
-      </Card>
-
-      {/* 音频监听编码设置 */}
-      <Divider className="my-4" />
-
-      <Card shadow="none" radius="lg" classNames={{
-        base: "border border-divider bg-content1"
-      }}>
-        <CardBody className="p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1">
-              <h4 className="font-semibold text-default-900 mb-1">{t('system.audioMonitorCodec')}</h4>
-              <p className="text-sm text-default-600 mb-3">{t('system.audioMonitorCodecDesc')}</p>
-              <Select
-                label={t('system.audioMonitorCodec')}
-                selectedKeys={[audioMonitorCodec]}
-                onSelectionChange={(keys) => {
-                  const value = Array.from(keys)[0] as string;
-                  if (value === 'opus' || value === 'pcm') {
-                    setAudioMonitorCodec(value);
-                  }
-                }}
-                isDisabled={isSaving}
-                size="sm"
-                variant="bordered"
-                className="max-w-xs"
-              >
-                <SelectItem key="opus">{t('system.codecOpus')}</SelectItem>
-                <SelectItem key="pcm">{t('system.codecPcm')}</SelectItem>
-              </Select>
-            </div>
-          </div>
         </CardBody>
       </Card>
 

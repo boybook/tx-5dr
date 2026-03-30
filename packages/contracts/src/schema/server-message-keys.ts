@@ -11,4 +11,13 @@ export enum ServerMessageKey {
 
   /** QSO 已记录 */
   QSO_LOGGED = 'qsoLogged',
+
+  /** 实时语音连接异常 */
+  REALTIME_CONNECTIVITY_WARNING = 'realtimeConnectivityWarning',
+
+  /** 服务端实时语音桥接异常 */
+  REALTIME_BRIDGE_DOWN = 'realtimeBridgeDown',
+
+  /** 实时语音链路无音频数据 */
+  REALTIME_NO_AUDIO = 'realtimeNoAudio',
 }

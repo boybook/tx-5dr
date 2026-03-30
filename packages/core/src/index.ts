@@ -1,4 +1,5 @@
 export * from './api.js'; 
+export * from './realtime/wsCompatProtocol.js';
 
 export * from './parser/ft8-message-parser.js';
 export * from './cycle/cycle-manager.js';

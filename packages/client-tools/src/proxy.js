@@ -63,10 +63,11 @@ function serveFile(res, absPath) {
   });
 }
 
-function proxyHttp(req, res) {
-  const targetUrl = new URL(TARGET);
+function proxyHttp(req, res, targetBase = TARGET, rewritePath = null) {
+  const targetUrl = new URL(targetBase);
   const isTLS = targetUrl.protocol === 'https:';
   const client = isTLS ? https : http;
+  const pathValue = rewritePath ? rewritePath(req.url || '/') : (req.url || '/');
 
   const headers = { ...req.headers };
   headers['host'] = targetUrl.host;
@@ -79,7 +80,7 @@ function proxyHttp(req, res) {
     hostname: targetUrl.hostname,
     port: targetUrl.port || (isTLS ? 443 : 80),
     method: req.method,
-    path: req.url, // keep /api prefix
+    path: pathValue,
     headers,
   };
 
@@ -160,20 +161,22 @@ const server = http.createServer((req, res) => {
   }
 });
 
-// WebSocket proxy for /api/ws (and any /api/* upgrades)
+// WebSocket proxy for /api/* upgrades
 server.on('upgrade', (req, socket, head) => {
   try {
     const u = url.parse(req.url || '/');
     const pathname = u.pathname || '';
-    if (!(pathname === '/api/ws' || pathname.startsWith('/api/'))) {
+    const isApiUpgrade = pathname === '/api/ws' || pathname.startsWith('/api/');
+    if (!isApiUpgrade) {
       socket.destroy();
       return;
     }
     const target = new URL(TARGET);
     const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
+    const upstreamPath = req.url;
     const upstream = net.connect(port, target.hostname, () => {
       const headers = [
-        `GET ${req.url} HTTP/1.1`,
+        `GET ${upstreamPath} HTTP/1.1`,
         `Host: ${target.host}`,
         'Connection: Upgrade',
         'Upgrade: websocket',

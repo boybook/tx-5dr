@@ -22,6 +22,7 @@ export interface OpenWebRXStationManagerEvents {
 }
 
 interface ListenSession {
+  previewSessionId: string;
   client: OpenWebRXClient;
   stationId: string;
   status: OpenWebRXListenStatus;
@@ -39,7 +40,7 @@ interface ListenSession {
  *     → Float32Array conversion
  *     → RingBufferAudioProvider (12kHz ring buffer)
  *     → AudioMonitorService (20ms chunking, resample to 48kHz, sequence numbers)
- *     → AudioMonitorWSServer (binary WS to client)
+ *     → LiveKit bridge (WebRTC audio room)
  */
 export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManagerEvents> {
   private static instance: OpenWebRXStationManager | null = null;
@@ -156,6 +157,7 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
     });
 
     const status: OpenWebRXListenStatus = {
+      previewSessionId: randomUUID(),
       stationId: options.stationId,
       connected: false,
       profiles: [],
@@ -167,6 +169,7 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
     const audioMonitorService = new AudioMonitorService(audioProvider);
 
     const session: ListenSession = {
+      previewSessionId: status.previewSessionId!,
       client,
       stationId: options.stationId,
       status,

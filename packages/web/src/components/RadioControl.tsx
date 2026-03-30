@@ -19,6 +19,11 @@ import { useTranslation } from 'react-i18next';
 import { useAudioMonitorPlayback } from '../hooks/useAudioMonitorPlayback';
 import { useWSEvent } from '../hooks/useWSEvent';
 import { createLogger } from '../utils/logger';
+import {
+  RealtimeConnectivityError,
+  buildRealtimeConnectivityIssue,
+  showRealtimeConnectivityIssueToast,
+} from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('RadioControl');
 
@@ -277,7 +282,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [volumeGain, setVolumeGain] = useState(1.0);
 
   // 音频监听 (reusable hook)
-  const audioMonitor = useAudioMonitorPlayback({ wsPath: '/ws/audio-monitor' });
+  const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
 
   // OpenWebRX client count (for multi-user confirmation)
@@ -540,10 +545,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
         await audioMonitor.start();
       } catch (error) {
         logger.error('Failed to start audio monitor', error);
-        addToast({
-          title: t('monitor.startFailed'),
-          description: error instanceof Error ? error.message : t('error.unknown'),
-          color: 'danger'
+        const issue = error instanceof RealtimeConnectivityError
+          ? error.issue
+          : buildRealtimeConnectivityIssue(error, {
+            scope: 'radio',
+            stage: 'connect',
+          });
+        showRealtimeConnectivityIssueToast(issue, {
+          onRetry: () => {
+            void audioMonitor.start().catch((retryError) => {
+              logger.error('Failed to retry audio monitor start', retryError);
+            });
+          },
         });
       }
     }
@@ -555,7 +568,22 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     if (radioMode.engineMode === 'voice' && !audioMonitor.isPlaying && connection.state.isConnected && !voiceAutoMonitorTriggered.current) {
       voiceAutoMonitorTriggered.current = true;
       logger.info('Voice mode detected, auto-starting audio monitor');
-      audioMonitor.start().catch(err => logger.error('Voice auto-monitor failed', err));
+      audioMonitor.start().catch((err) => {
+        logger.error('Voice auto-monitor failed', err);
+        const issue = err instanceof RealtimeConnectivityError
+          ? err.issue
+          : buildRealtimeConnectivityIssue(err, {
+            scope: 'radio',
+            stage: 'connect',
+          });
+        showRealtimeConnectivityIssueToast(issue, {
+          onRetry: () => {
+            void audioMonitor.start().catch((retryError) => {
+              logger.error('Failed to retry voice auto-monitor start', retryError);
+            });
+          },
+        });
+      });
     }
     if (radioMode.engineMode !== 'voice') {
       voiceAutoMonitorTriggered.current = false;

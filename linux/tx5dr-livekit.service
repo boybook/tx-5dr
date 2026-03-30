@@ -1,0 +1,19 @@
+[Unit]
+Description=TX-5DR LiveKit Realtime Server
+After=network.target
+PartOf=tx5dr.service
+
+[Service]
+Type=simple
+User=tx5dr
+Group=tx5dr
+EnvironmentFile=-/etc/tx5dr/config.env
+ExecStart=/usr/share/tx5dr/bin/livekit-server --config /etc/tx5dr/livekit.yaml
+WorkingDirectory=/usr/share/tx5dr
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

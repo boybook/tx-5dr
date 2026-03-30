@@ -186,6 +186,53 @@ if [[ "$MODE" != "docker" ]] && command -v getenforce &>/dev/null && [[ "$(geten
     fi
 fi
 
+# LiveKit server binary (native only)
+if [[ "$MODE" != "docker" ]]; then
+    if check_livekit_binary; then
+        log_ok "livekit-server ($(get_livekit_binary_path))"
+    elif [[ "$MODE" == "check" ]]; then
+        log_fail "livekit-server not found"
+        echo "      expected bundled path: /usr/share/tx5dr/bin/livekit-server"
+        echo "      $(msg FIX_LIVEKIT_BINARY)"
+        ISSUES=$((ISSUES + 1))
+    else
+        require_root
+        if fix_livekit_binary; then
+            log_ok "livekit-server ($(get_livekit_binary_path))"
+        else
+            log_fail "livekit-server (fix failed)"
+            ISSUES=$((ISSUES + 1))
+        fi
+    fi
+
+    if check_livekit_config; then
+        log_ok "LiveKit config ($(get_livekit_config_path))"
+    elif [[ "$MODE" == "check" ]]; then
+        log_fail "LiveKit config missing or mismatched"
+        echo "      $(msg FIX_LIVEKIT_CONFIG)"
+        ISSUES=$((ISSUES + 1))
+    else
+        require_root
+        if fix_livekit_config; then
+            log_ok "LiveKit config ($(get_livekit_config_path))"
+        else
+            log_fail "LiveKit config (fix failed)"
+            ISSUES=$((ISSUES + 1))
+        fi
+    fi
+
+    if check_livekit_url_consistency; then
+        log_ok "LiveKit bridge URL (${LIVEKIT_URL})"
+    elif [[ "$MODE" == "check" ]]; then
+        log_fail "LiveKit bridge URL port mismatch: ${LIVEKIT_URL}"
+        echo "      expected to target signaling port ${LIVEKIT_SIGNAL_PORT}"
+        ISSUES=$((ISSUES + 1))
+    else
+        log_warn "LiveKit bridge URL port mismatch: ${LIVEKIT_URL}"
+        log_warn "Update LIVEKIT_URL to target signaling port ${LIVEKIT_SIGNAL_PORT} if you changed the port."
+    fi
+fi
+
 # Check-only mode: done
 if [[ "$MODE" == "check" ]]; then
     echo ""
@@ -244,6 +291,19 @@ if $IS_UPGRADE; then
     systemctl restart tx5dr
 else
     systemctl start tx5dr
+fi
+
+echo -n "  "
+if wait_for_port "${LIVEKIT_SIGNAL_PORT:-7880}" 15; then
+    log_ok "$(msg PORT_READY "${LIVEKIT_SIGNAL_PORT:-7880}") (livekit)"
+else
+    log_fail "$(msg PORT_FAIL "${LIVEKIT_SIGNAL_PORT:-7880}" "15")"
+    echo ""
+    log_error "$(msg START_FAIL)"
+    journalctl -u tx5dr-livekit -n 10 --no-pager 2>/dev/null | sed 's/^/    /'
+    echo ""
+    log_info "$(msg RUN_DOCTOR)"
+    exit 1
 fi
 
 echo -n "  "

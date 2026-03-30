@@ -86,6 +86,72 @@ check_tx5dr_service() {
     systemctl is-active --quiet tx5dr 2>/dev/null
 }
 
+check_livekit_service() {
+    systemctl is-active --quiet tx5dr-livekit 2>/dev/null
+}
+
+check_livekit_binary() {
+    get_livekit_binary_path >/dev/null 2>&1
+}
+
+check_livekit_config_exists() {
+    [[ -f "$(get_livekit_config_path)" ]]
+}
+
+get_livekit_config_contents() {
+    local file
+    file=$(get_livekit_config_path)
+    read_file_maybe_sudo "$file"
+}
+
+_escape_regex() {
+    printf '%s' "$1" | sed 's/[][(){}.^$*+?|\/-]/\\&/g'
+}
+
+check_livekit_config_consistency() {
+    local content
+    content=$(get_livekit_config_contents) || return 1
+
+    local api_key_pattern
+    local api_secret_pattern
+    api_key_pattern=$(_escape_regex "${LIVEKIT_API_KEY}")
+    api_secret_pattern=$(_escape_regex "${LIVEKIT_API_SECRET}")
+
+    echo "$content" | grep -Eq "^port:[[:space:]]*${LIVEKIT_SIGNAL_PORT}[[:space:]]*$" || return 1
+    echo "$content" | grep -Eq "^[[:space:]]+tcp_port:[[:space:]]*${LIVEKIT_TCP_PORT}[[:space:]]*$" || return 1
+    echo "$content" | grep -Eq "^[[:space:]]+port_range_start:[[:space:]]*${LIVEKIT_UDP_PORT_START}[[:space:]]*$" || return 1
+    echo "$content" | grep -Eq "^[[:space:]]+port_range_end:[[:space:]]*${LIVEKIT_UDP_PORT_END}[[:space:]]*$" || return 1
+    echo "$content" | grep -Eq "^[[:space:]]+${api_key_pattern}:[[:space:]]*${api_secret_pattern}[[:space:]]*$" || return 1
+}
+
+check_livekit_config() {
+    check_livekit_config_exists && check_livekit_config_consistency
+}
+
+check_livekit_url_consistency() {
+    local url_port
+    url_port=$(get_url_port "${LIVEKIT_URL}")
+    [[ "$url_port" == "${LIVEKIT_SIGNAL_PORT}" ]]
+}
+
+check_livekit_tcp_port() {
+    is_port_open "${LIVEKIT_TCP_PORT}"
+}
+
+describe_livekit_udp_binding() {
+    local ports
+    ports=$(list_udp_ports_in_range "${LIVEKIT_UDP_PORT_START}" "${LIVEKIT_UDP_PORT_END}" | paste -sd ',' -)
+    if [[ -n "$ports" ]]; then
+        printf "bound: %s" "$ports"
+    else
+        printf "idle (no active UDP allocations observed)"
+    fi
+}
+
+is_livekit_default_credentials() {
+    [[ "${LIVEKIT_API_KEY}" == "tx5dr" && "${LIVEKIT_API_SECRET}" == "tx5dr-change-me-0123456789abcdef" ]]
+}
+
 check_ports() {
     local api_port="${API_PORT:-4000}"
     local http_port="${HTTP_PORT:-8076}"
@@ -201,6 +267,36 @@ fix_nginx() {
     check_nginx_installed
 }
 
+fix_livekit_binary() {
+    log_info "Installing LiveKit server"
+    curl -sSL https://get.livekit.io | bash 2>&1 || true
+    check_livekit_binary
+}
+
+fix_livekit_config() {
+    local template="/usr/share/tx5dr/livekit.yaml.template"
+    local target
+    target=$(get_livekit_config_path)
+
+    [[ -f "$template" ]] || return 1
+    mkdir -p "$(dirname "$target")"
+
+    sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT}|g" \
+        -e "s|%%LIVEKIT_TCP_PORT%%|${LIVEKIT_TCP_PORT}|g" \
+        -e "s|%%LIVEKIT_UDP_PORT_START%%|${LIVEKIT_UDP_PORT_START}|g" \
+        -e "s|%%LIVEKIT_UDP_PORT_END%%|${LIVEKIT_UDP_PORT_END}|g" \
+        -e "s|%%LIVEKIT_API_KEY%%|${LIVEKIT_API_KEY}|g" \
+        -e "s|%%LIVEKIT_API_SECRET%%|${LIVEKIT_API_SECRET}|g" \
+        "$template" > "$target"
+
+    chmod 640 "$target"
+    if id tx5dr &>/dev/null; then
+        chown tx5dr:tx5dr "$target" 2>/dev/null || true
+    fi
+
+    check_livekit_config
+}
+
 fix_tx5dr_user_groups() {
     if id tx5dr &>/dev/null; then
         usermod -a -G audio,dialout tx5dr 2>/dev/null || true
@@ -257,6 +353,7 @@ fix_selinux_nginx() {
 run_doctor() {
     load_config
     local issues=0
+    local livekit_diag_needed=0
 
     echo ""
     echo -e "${_BOLD}TX-5DR $(msg ALL_CHECKS_PASSED | head -c0)Environment Check${_NC}"
@@ -342,12 +439,78 @@ run_doctor() {
         issues=$((issues + 1))
     fi
 
+    if check_livekit_binary; then
+        check_line "$(msg CHECK_LIVEKIT_BINARY)" "ok" "$(get_livekit_binary_path)"
+    else
+        check_line "$(msg CHECK_LIVEKIT_BINARY)" "fail" "not found"
+        echo -e "      ${_DIM}$(msg FIX_LIVEKIT_BINARY)${_NC}"
+        issues=$((issues + 1))
+        livekit_diag_needed=1
+    fi
+
+    if check_livekit_config_exists; then
+        if check_livekit_config_consistency; then
+            check_line "$(msg CHECK_LIVEKIT_CONFIG)" "ok" "$(get_livekit_config_path)"
+        else
+            check_line "$(msg CHECK_LIVEKIT_CONFIG)" "fail" "mismatch with /etc/tx5dr/config.env"
+            echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CONFIG)${_NC}"
+            issues=$((issues + 1))
+            livekit_diag_needed=1
+        fi
+    else
+        check_line "$(msg CHECK_LIVEKIT_CONFIG)" "fail" "missing: $(get_livekit_config_path)"
+        echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CONFIG)${_NC}"
+        issues=$((issues + 1))
+        livekit_diag_needed=1
+    fi
+
+    if check_livekit_url_consistency; then
+        check_line "$(msg CHECK_LIVEKIT_URL)" "ok" "${LIVEKIT_URL}"
+    else
+        check_line "$(msg CHECK_LIVEKIT_URL)" "fail" "${LIVEKIT_URL} (expected port ${LIVEKIT_SIGNAL_PORT})"
+        issues=$((issues + 1))
+        livekit_diag_needed=1
+    fi
+
+    if check_livekit_service; then
+        check_line "$(msg CHECK_LIVEKIT_SERVICE)" "ok" "$(get_systemd_state tx5dr-livekit)"
+    else
+        check_line "$(msg CHECK_LIVEKIT_SERVICE)" "fail" "$(get_systemd_state tx5dr-livekit)"
+        issues=$((issues + 1))
+        livekit_diag_needed=1
+    fi
+
     # Ports
     if is_port_open "${API_PORT}"; then
         check_line "$(msg CHECK_PORT_BACKEND "$API_PORT")" "ok" "open"
     else
         check_line "$(msg CHECK_PORT_BACKEND "$API_PORT")" "fail" "closed"
         issues=$((issues + 1))
+    fi
+
+    if is_port_open "${LIVEKIT_SIGNAL_PORT:-7880}"; then
+        check_line "$(msg CHECK_LIVEKIT_SIGNAL_PORT "${LIVEKIT_SIGNAL_PORT:-7880}")" "ok" "open"
+    else
+        check_line "$(msg CHECK_LIVEKIT_SIGNAL_PORT "${LIVEKIT_SIGNAL_PORT:-7880}")" "fail" "closed"
+        issues=$((issues + 1))
+        livekit_diag_needed=1
+    fi
+
+    if check_livekit_tcp_port; then
+        check_line "$(msg CHECK_LIVEKIT_TCP_PORT "${LIVEKIT_TCP_PORT}")" "ok" "open"
+    else
+        check_line "$(msg CHECK_LIVEKIT_TCP_PORT "${LIVEKIT_TCP_PORT}")" "fail" "closed"
+        issues=$((issues + 1))
+        livekit_diag_needed=1
+    fi
+
+    check_line "$(msg CHECK_LIVEKIT_UDP_RANGE "${LIVEKIT_UDP_PORT_START}" "${LIVEKIT_UDP_PORT_END}")" "ok" "$(describe_livekit_udp_binding)"
+
+    if is_livekit_default_credentials; then
+        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "fail" "default package credentials"
+        echo -e "      ${_DIM}/etc/tx5dr/config.env → LIVEKIT_API_KEY / LIVEKIT_API_SECRET${_NC}"
+    else
+        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "ok" "customized"
     fi
 
     if is_port_open "${HTTP_PORT}"; then
@@ -387,6 +550,20 @@ run_doctor() {
     else
         check_line "$(msg CHECK_SSL)" "fail" "$(msg SSL_NOT_CONFIGURED)"
         echo -e "      ${_DIM}$(msg SSL_HINT)${_NC}"
+    fi
+
+    if [[ $livekit_diag_needed -eq 1 ]]; then
+        echo ""
+        log_warn "LiveKit diagnostics"
+        echo -e "      ${_DIM}Config: $(get_livekit_config_path)${_NC}"
+        echo -e "      ${_DIM}Expected ports: signaling ${LIVEKIT_SIGNAL_PORT}, tcp ${LIVEKIT_TCP_PORT}, udp ${LIVEKIT_UDP_PORT_START}-${LIVEKIT_UDP_PORT_END}${_NC}"
+        echo -e "      ${_DIM}Bridge URL: ${LIVEKIT_URL}${_NC}"
+        local recent_logs
+        recent_logs=$(sudo journalctl -u tx5dr-livekit -n 8 --no-pager 2>/dev/null || true)
+        if [[ -n "$recent_logs" ]]; then
+            echo -e "      ${_DIM}Recent tx5dr-livekit logs:${_NC}"
+            echo "$recent_logs" | sed 's/^/        /'
+        fi
     fi
 
     echo ""

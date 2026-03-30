@@ -134,22 +134,38 @@ cmd_status() {
     local srv_status="inactive"
     local srv_detail=""
     if systemctl is-active --quiet tx5dr 2>/dev/null; then
-        srv_status="active"
+        srv_status=$(get_systemd_state tx5dr)
         local uptime
         uptime=$(systemctl show tx5dr --property=ActiveEnterTimestamp 2>/dev/null | cut -d= -f2)
         [[ -n "$uptime" ]] && srv_detail="(since $uptime)"
+    else
+        srv_status=$(get_systemd_state tx5dr)
     fi
     echo -e "  Server:     ${srv_status} ${_DIM}${srv_detail}${_NC}"
 
+    local livekit_status
+    livekit_status=$(get_systemd_state tx5dr-livekit)
+    echo -e "  LiveKit:    ${livekit_status}"
+
     # Nginx
-    local ngx_status="inactive"
-    systemctl is-active --quiet nginx 2>/dev/null && ngx_status="active"
+    local ngx_status
+    ngx_status=$(get_systemd_state nginx)
     echo -e "  Nginx:      ${ngx_status}"
 
     # Ports
     local be_status="closed"
     is_port_open "${API_PORT}" && be_status="open"
     echo -e "  Backend:    port ${API_PORT} ${be_status}"
+
+    local livekit_port_status="closed"
+    is_port_open "${LIVEKIT_SIGNAL_PORT}" && livekit_port_status="open"
+    echo -e "  Signaling:  port ${LIVEKIT_SIGNAL_PORT} ${livekit_port_status}"
+
+    local livekit_tcp_status="closed"
+    check_livekit_tcp_port && livekit_tcp_status="open"
+    echo -e "  RTC TCP:    port ${LIVEKIT_TCP_PORT} ${livekit_tcp_status}"
+
+    echo -e "  RTC UDP:    ${LIVEKIT_UDP_PORT_START}-${LIVEKIT_UDP_PORT_END} ${_DIM}$(describe_livekit_udp_binding)${_NC}"
 
     local http_status="closed"
     is_port_open "${HTTP_PORT}" && http_status="open"
@@ -170,6 +186,40 @@ cmd_status() {
     local node_ver="not found"
     command -v node &>/dev/null && node_ver=$(node --version 2>/dev/null)
     echo -e "  Node.js:    ${node_ver}"
+
+    if check_livekit_binary; then
+        echo -e "  LK Binary:  $(get_livekit_binary_path)"
+    else
+        echo -e "  LK Binary:  ${_RED}missing${_NC}"
+    fi
+
+    local lk_config_path
+    lk_config_path=$(get_livekit_config_path)
+    if check_livekit_config_exists; then
+        if can_read_file_noninteractive "${lk_config_path}"; then
+            if check_livekit_config_consistency; then
+                echo -e "  LK Config:  ${lk_config_path}"
+            else
+                echo -e "  LK Config:  ${_YELLOW}${lk_config_path} (mismatch with config.env)${_NC}"
+            fi
+        else
+            echo -e "  LK Config:  ${lk_config_path} ${_DIM}(run sudo tx5dr doctor to validate contents)${_NC}"
+        fi
+    else
+        echo -e "  LK Config:  ${_RED}missing (${lk_config_path})${_NC}"
+    fi
+
+    if check_livekit_url_consistency; then
+        echo -e "  LK URL:     ${LIVEKIT_URL}"
+    else
+        echo -e "  LK URL:     ${_YELLOW}${LIVEKIT_URL} ${_DIM}(expected port ${LIVEKIT_SIGNAL_PORT})${_NC}"
+    fi
+
+    if is_livekit_default_credentials; then
+        echo -e "  LK Creds:   ${_YELLOW}default${_NC} ${_DIM}(change LIVEKIT_API_KEY / LIVEKIT_API_SECRET in /etc/tx5dr/config.env)${_NC}"
+    else
+        echo -e "  LK Creds:   customized"
+    fi
 
     # Version
     local version="unknown"
@@ -293,7 +343,7 @@ cmd_logs() {
             sudo tail -f /var/log/nginx/error.log
             ;;
         --all)
-            sudo journalctl -u tx5dr -u nginx -f
+            sudo journalctl -u tx5dr -u tx5dr-livekit -u nginx -f
             ;;
         *)
             journalctl -u tx5dr -f

@@ -17,6 +17,7 @@ import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.j
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('AudioStreamManager');
+const INTERNAL_SAMPLE_RATE = 12000;
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
@@ -59,7 +60,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private playbackStartTime: number = 0;        // 播放开始时间戳
   private currentPlaybackPromise: Promise<void> | null = null;  // 当前播放的Promise
   private shouldStopPlayback: boolean = false;  // 停止播放标志
-  
+
   constructor() {
     super();
 
@@ -72,7 +73,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     this.currentSampleRate = this.sampleRate;
 
     // 创建音频缓冲区提供者，使用统一的内部采样率（12kHz）
-    const INTERNAL_SAMPLE_RATE = 12000;
     this.audioProvider = new RingBufferAudioProvider(INTERNAL_SAMPLE_RATE, INTERNAL_SAMPLE_RATE * 5); // 5秒缓冲
     logger.info('audio stream manager initialized', { sampleRate: this.sampleRate, bufferSize: this.bufferSize, internalSampleRate: INTERNAL_SAMPLE_RATE });
   }
@@ -543,7 +543,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                   const samples = this.convertBufferToFloat32(pcm);
                   if (samples.length === 0) return;
 
-                  const INTERNAL_SAMPLE_RATE = 12000;
                   if (this.sampleRate !== INTERNAL_SAMPLE_RATE) {
                     resampleAudioProfessional(
                       samples,
@@ -1049,22 +1048,34 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * Stream voice audio frames for real-time playback.
    * Unlike playAudio() which plays a complete FT8 audio clip,
-   * this method accepts small PCM frames (e.g. 20ms Opus decoded)
+   * this method accepts small PCM frames from the realtime voice bridge
    * and writes them directly to the output device with minimal latency.
    *
    * @param pcmData PCM audio data (Float32Array, -1.0 to 1.0)
-   * @param frameSampleRate Sample rate of the input data (typically 48000)
+   * @param frameSampleRate Sample rate of the input data (typically 16000)
    */
-  /** Accumulation buffer for voice audio frames (adapts Opus frame size to RtAudio buffer size) */
+  /** Accumulation buffer for voice audio frames (adapts incoming frame chunks to RtAudio buffer size) */
   private voiceAccumBuffer: Float32Array = new Float32Array(0);
 
-  playVoiceAudio(pcmData: Float32Array, frameSampleRate: number): void {
+  async playVoiceAudio(pcmData: Float32Array, frameSampleRate: number): Promise<void> {
+    let playbackFrame = pcmData;
+
     // ICOM WLAN output path
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
+      const icomTargetRate = this.icomWlanAudioAdapter.getSampleRate();
+      if (frameSampleRate !== icomTargetRate) {
+        playbackFrame = await resampleAudioProfessional(
+          pcmData,
+          frameSampleRate,
+          icomTargetRate,
+          1
+        );
+      }
+
       const gain = this.volumeGain;
-      const processed = new Float32Array(pcmData.length);
-      for (let i = 0; i < pcmData.length; i++) {
-        const s = pcmData[i] * gain;
+      const processed = new Float32Array(playbackFrame.length);
+      for (let i = 0; i < playbackFrame.length; i++) {
+        const s = playbackFrame[i] * gain;
         processed[i] = s > 1 ? 1 : (s < -1 ? -1 : s);
       }
       this.icomWlanAudioAdapter.sendAudio(processed).catch((err) => {
@@ -1079,14 +1090,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     if (frameSampleRate !== this.sampleRate) {
-      logger.warn(`Voice audio sample rate mismatch: ${frameSampleRate} vs device ${this.sampleRate}, dropping frame`);
-      return;
+      playbackFrame = await resampleAudioProfessional(
+        pcmData,
+        frameSampleRate,
+        this.sampleRate,
+        1
+      );
     }
 
-    // Accumulate incoming samples (Opus frame = 960 samples, RtAudio buffer = bufferSize samples)
-    const newBuf = new Float32Array(this.voiceAccumBuffer.length + pcmData.length);
+    // Accumulate incoming samples until enough data is available for one RtAudio write.
+    const newBuf = new Float32Array(this.voiceAccumBuffer.length + playbackFrame.length);
     newBuf.set(this.voiceAccumBuffer);
-    newBuf.set(pcmData, this.voiceAccumBuffer.length);
+    newBuf.set(playbackFrame, this.voiceAccumBuffer.length);
     this.voiceAccumBuffer = newBuf;
 
     // Write complete bufferSize chunks to RtAudio

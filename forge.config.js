@@ -343,6 +343,10 @@ module.exports = {
       console.log('🔨 Building all packages...');
       const { execSync } = require('child_process');
       execSync('yarn build', { stdio: 'inherit' });
+      const targetPlatform = process.env.PLATFORM || process.platform;
+      const targetArch = process.env.ARCH || process.arch;
+      console.log(`📡 Preparing LiveKit binary for ${targetPlatform}-${targetArch}...`);
+      execSync(`node scripts/prepare-livekit-binary.mjs --target ${targetPlatform}-${targetArch}`, { stdio: 'inherit' });
       console.log('✅ Build completed');
     },
     // 签名前的文件清理：在签名之前精简 node_modules 与平台特定清理
@@ -421,10 +425,6 @@ module.exports = {
         // naudiodon2: 清理编译源码
         rmrf(join(nm, 'naudiodon2', 'src'));
         rmrf(join(nm, 'naudiodon2', 'binding.gyp'));
-        // @discordjs/opus: deps/ 含捆绑的 libopus C++ 源码 (~5.6MB)，运行时只需 prebuild/
-        rmrf(join(nm, '@discordjs', 'opus', 'deps'));
-        rmrf(join(nm, '@discordjs', 'opus', 'src'));
-        rmrf(join(nm, '@discordjs', 'opus', 'binding.gyp'));
         console.log('✅ native 模块编译源码清理完成');
       } catch (err) {
         console.warn('⚠️ 清理 native 模块编译源码遇到问题：', (err && err.message) || err);
@@ -620,29 +620,34 @@ module.exports = {
         }
       }
 
-      // macOS: 签名外部 Node 二进制 (必须在 electron-osx-sign 之前)
+      // macOS: 签名外部资源二进制 (必须在 electron-osx-sign 之前)
       if (platform === 'darwin' && process.env.APPLE_IDENTITY) {
         try {
-          console.log('🔐 [macOS] 签名外部 Node 二进制 (签名前)...');
+          console.log('🔐 [macOS] 签名外部资源二进制 (签名前)...');
           const path = require('path');
 
           const entitlementsPath = path.join(process.cwd(), 'build/entitlements.mac.plist');
           const triplet = `darwin-${arch}`;
           // buildPath 指向 app 内容根目录, 外部资源在 Resources/ 下
-          const nodeBinaryPath = path.join(buildPath, 'Resources', 'bin', triplet, 'node');
+          const binaries = [
+            path.join(buildPath, 'Resources', 'bin', triplet, 'node'),
+            path.join(buildPath, 'Resources', 'bin', triplet, 'livekit-server'),
+          ];
 
-          if (fs.existsSync(nodeBinaryPath)) {
-            console.log(`  签名: ${nodeBinaryPath}`);
+          for (const binaryPath of binaries) {
+            if (!fs.existsSync(binaryPath)) {
+              console.log(`⚠️  [macOS] 外部二进制不存在: ${binaryPath}`);
+              continue;
+            }
+            console.log(`  签名: ${binaryPath}`);
             execSync(
-              `codesign --force --sign "${process.env.APPLE_IDENTITY}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${nodeBinaryPath}"`,
+              `codesign --force --sign "${process.env.APPLE_IDENTITY}" --options runtime --entitlements "${entitlementsPath}" --timestamp "${binaryPath}"`,
               { stdio: 'inherit' }
             );
-            console.log('✅ [macOS] Node 二进制签名完成 (签名前)');
-          } else {
-            console.log(`⚠️  [macOS] Node 二进制不存在: ${nodeBinaryPath}`);
           }
+          console.log('✅ [macOS] 外部资源二进制签名完成 (签名前)');
         } catch (error) {
-          console.error('❌ [macOS] Node 二进制签名失败:', error.message);
+          console.error('❌ [macOS] 外部资源二进制签名失败:', error.message);
           throw error; // 签名失败应该中止构建
         }
       }

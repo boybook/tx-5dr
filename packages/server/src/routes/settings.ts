@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema, AudioMonitorCodecSchema } from '@tx5dr/contracts';
+import { DecodeWindowSettingsSchema, resolveWindowTiming, CustomFrequencyPresetsSchema, RealtimeSettingsSchema } from '@tx5dr/contracts';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
@@ -102,36 +102,45 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // ==================== 音频监听编码设置 ====================
+  // ==================== 频率预设管理 ====================
 
-  fastify.get('/audio-monitor-codec', async (_request, reply) => {
+  fastify.get('/realtime', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
     try {
-      const codec = configManager.getAudioMonitorCodec();
-      return reply.code(200).send({ success: true, data: { codec } });
+      return reply.code(200).send({
+        success: true,
+        data: {
+          publicWsUrl: configManager.getLiveKitPublicUrl(),
+          transportPolicy: configManager.getRealtimeTransportPolicy(),
+        },
+      });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
 
-  fastify.put('/audio-monitor-codec', {
-    preHandler: [requireAbility('update', 'SettingsAudioCodec')],
+  fastify.put('/realtime', {
+    preHandler: [requireAbility('manage', 'all')],
   }, async (request, reply) => {
     try {
-      const body = request.body as { codec?: string };
-      const codec = AudioMonitorCodecSchema.parse(body?.codec);
-      await configManager.updateAudioMonitorCodec(codec);
+      const body = RealtimeSettingsSchema.parse(request.body);
+      const publicWsUrl = body.publicWsUrl?.trim() || null;
+      await configManager.updateLiveKitPublicUrl(publicWsUrl);
+      await configManager.updateRealtimeTransportPolicy(body.transportPolicy ?? 'auto');
 
       return reply.code(200).send({
         success: true,
-        message: 'Audio monitor codec updated',
-        data: { codec },
+        message: 'Realtime settings updated',
+        data: {
+          publicWsUrl,
+          transportPolicy: configManager.getRealtimeTransportPolicy(),
+        },
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });
-
-  // ==================== 频率预设管理 ====================
 
   // 获取频率预设列表（包含所有模式：FT8/FT4/VOICE）
   fastify.get('/frequency-presets', async (_request, reply) => {

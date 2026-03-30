@@ -1,7 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import type { VoicePTTLock } from '@tx5dr/contracts';
 import { VoicePTTLockManager } from './VoicePTTLockManager.js';
-import { VoiceAudioReceiver } from './VoiceAudioReceiver.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import { createLogger } from '../utils/logger.js';
@@ -25,15 +24,15 @@ export interface VoiceSessionManagerDeps {
  */
 export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents> {
   private pttLockManager: VoicePTTLockManager;
-  private voiceAudioReceiver: VoiceAudioReceiver;
   private radioManager: PhysicalRadioManager;
+  private audioStreamManager: AudioStreamManager;
   private isStarted = false;
 
   constructor(deps: VoiceSessionManagerDeps) {
     super();
     this.radioManager = deps.radioManager;
+    this.audioStreamManager = deps.audioStreamManager;
     this.pttLockManager = new VoicePTTLockManager();
-    this.voiceAudioReceiver = new VoiceAudioReceiver(deps.audioStreamManager);
 
     // Forward lock change events
     this.pttLockManager.on('lockChanged', (lock) => {
@@ -42,7 +41,6 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   }
 
   async initialize(): Promise<void> {
-    await this.voiceAudioReceiver.initialize();
     logger.info('Voice session manager initialized');
   }
 
@@ -87,10 +85,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       // 2. Activate radio PTT
       await this.radioManager.setPTT(true);
 
-      // 3. Start receiving voice audio frames
-      this.voiceAudioReceiver.start();
-
-      // 4. Broadcast PTT status (frontend handles monitor muting via gain node)
+      // 3. Broadcast PTT status (frontend handles monitor muting via gain node)
       this.emit('pttStatusChanged', { isTransmitting: true, operatorIds: [] });
 
       logger.info('Voice transmission started', { clientId, label });
@@ -98,7 +93,6 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     } catch (err) {
       // Rollback on failure
       logger.error('Failed to start voice transmission, rolling back', err);
-      this.voiceAudioReceiver.stop();
       try { await this.radioManager.setPTT(false); } catch { /* best effort */ }
       this.pttLockManager.releaseLock(clientId);
       return { success: false, reason: 'Failed to activate PTT' };
@@ -137,22 +131,17 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     logger.info('Radio mode changed', { mode });
   }
 
-  /**
-   * Handle incoming Opus audio frame from a client.
-   * Only processes audio from the client that holds the PTT lock
-   * or from the associated voice audio WebSocket client.
-   */
-  handleAudioFrame(clientId: string, opusData: Buffer): void {
+  async handleParticipantAudioFrame(participantIdentity: string, pcmData: Float32Array, sampleRate: number): Promise<void> {
     if (!this.pttLockManager.isLocked()) {
       return;
     }
-    // Accept audio from the PTT lock holder OR from the associated voice audio WS client
-    const lockHolder = this.pttLockManager.getLockHolder();
-    const voiceAudioClientId = this.pttLockManager.getVoiceAudioClientId();
-    if (clientId !== lockHolder && clientId !== voiceAudioClientId) {
+
+    const associatedParticipantIdentity = this.pttLockManager.getVoiceAudioClientId();
+    if (!associatedParticipantIdentity || participantIdentity !== associatedParticipantIdentity) {
       return;
     }
-    this.voiceAudioReceiver.handleOpusFrame(opusData);
+
+    await this.audioStreamManager.playVoiceAudio(pcmData, sampleRate);
   }
 
   getPTTLockState(): VoicePTTLock {
@@ -164,7 +153,6 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   }
 
   destroy(): void {
-    this.voiceAudioReceiver.destroy();
     this.pttLockManager.destroy();
     this.removeAllListeners();
   }
@@ -172,17 +160,14 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   // ---- Private helpers ----
 
   private async stopTransmitInternal(reason: string): Promise<void> {
-    // 1. Stop receiving audio
-    this.voiceAudioReceiver.stop();
-
-    // 2. Deactivate radio PTT
+    // 1. Deactivate radio PTT
     try {
       await this.radioManager.setPTT(false);
     } catch (err) {
       logger.error('Failed to deactivate radio PTT', err);
     }
 
-    // 3. Broadcast PTT status (frontend handles monitor unmuting via gain node)
+    // 2. Broadcast PTT status (frontend handles monitor unmuting via gain node)
     this.emit('pttStatusChanged', { isTransmitting: false, operatorIds: [] });
 
     logger.info('Voice transmission stopped', { reason });

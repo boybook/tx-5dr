@@ -1,10 +1,11 @@
 import { EventEmitter } from 'eventemitter3';
-import { Resampler } from 'rubato-fft-node';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('AudioMonitorService');
-const RESAMPLER_QUALITY_HIGH = 1;
+const MONITOR_STREAM_SAMPLE_RATE = 16000;
+const MONITOR_FRAME_MS = 20;
+const HIGH_LATENCY_WARN_MS = 120;
 
 /**
  * 音频监听统计信息
@@ -37,49 +38,39 @@ export interface AudioMonitorServiceEvents {
  * 负责独立于数字电台引擎的音频监听功能
  * - 广播模式：自动启动，向所有已连接客户端推送音频
  * - 解耦设计：直接从 RingBufferAudioProvider 读取，不依赖现有发射链路
- * - 统一采样率：固定48kHz输出（浏览器标准采样率）
- * - 客户端音量：音量控制在客户端AudioWorklet中实现
+ * - 统一采样率：固定16kHz输出（足够覆盖电台监听所需带宽）
+ * - 客户端音量：在浏览器播放侧调整
  */
 export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents> {
   private audioProvider: RingBufferAudioProvider;
   private pushInterval: NodeJS.Timeout | null = null;
-  private readonly CHECK_INTERVAL_MS = 10;      // 检查间隔：10ms（高频检查）
-  private readonly TARGET_BUFFER_MS = 40;       // 目标缓冲区水位：40ms（小块高频发送）
+  private readonly CHECK_INTERVAL_MS = 5;       // 检查间隔：5ms（更快达到首帧发送）
+  private readonly TARGET_BUFFER_MS = 20;       // 目标缓冲区水位：20ms（降低监听预缓冲）
   private readonly TARGET_CHUNK_MS = 20;        // 输入块大小：20ms（低延迟流式处理）
-  private readonly TARGET_SAMPLE_RATE = 48000;  // 目标采样率：48kHz（浏览器标准）
-  private readonly OUTPUT_FRAME_SAMPLES = 960;  // 20ms @ 48kHz
-  private readonly RESAMPLER_QUALITY = RESAMPLER_QUALITY_HIGH;
+  private readonly TARGET_SAMPLE_RATE = MONITOR_STREAM_SAMPLE_RATE;
+  private readonly OUTPUT_FRAME_SAMPLES = (this.TARGET_SAMPLE_RATE * MONITOR_FRAME_MS) / 1000;
   private readonly sourceSampleRate: number;
-  private readonly resampler: Resampler | null = null;
+  private readonly needsResample: boolean;
   private outputBuffer = new Float32Array(0);
   private isProcessingChunk = false;
 
   // 统计信息
-  private lastPushTimestamp = 0;
   private droppedSamplesCount = 0;
   private isRunning = false;
   private sequenceNumber = 0;
-  private lastPushStartTime = 0;
+  private latestStats: AudioMonitorStats | null = null;
 
   constructor(audioProvider: RingBufferAudioProvider) {
     super();
     this.audioProvider = audioProvider;
     this.sourceSampleRate = audioProvider.getSampleRate();
-
-    if (this.sourceSampleRate !== this.TARGET_SAMPLE_RATE) {
-      this.resampler = new Resampler(
-        this.sourceSampleRate,
-        this.TARGET_SAMPLE_RATE,
-        1,
-        this.RESAMPLER_QUALITY
-      );
-    }
+    this.needsResample = this.sourceSampleRate !== this.TARGET_SAMPLE_RATE;
 
     logger.info('Audio monitor service initialized (broadcast mode)', {
       sourceSampleRate: this.sourceSampleRate,
       targetSampleRate: this.TARGET_SAMPLE_RATE,
-      streamingResampler: !!this.resampler,
-      quality: this.resampler ? this.RESAMPLER_QUALITY : 'bypass',
+      streamingResampler: false,
+      quality: this.needsResample ? 'linear' : 'bypass',
     });
 
     // 自动启动推送
@@ -98,7 +89,6 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       `Starting adaptive audio push (checkInterval=${this.CHECK_INTERVAL_MS}ms, ` +
       `targetBuffer=${this.TARGET_BUFFER_MS}ms, targetChunk=${this.TARGET_CHUNK_MS}ms)`
     );
-    this.lastPushTimestamp = Date.now();
     this.isRunning = true;
 
     this.pushInterval = setInterval(() => {
@@ -150,7 +140,6 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
    */
   private async pushAudioChunk(): Promise<void> {
     try {
-      const t0 = performance.now();
       const now = Date.now();
 
       // 计算需要读取的样本数
@@ -171,10 +160,13 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       const isActive = rms > 0.001;
 
       let processedAudio = sourceAudioData;
-      if (this.resampler) {
-        processedAudio = await this.resampler.process(sourceAudioData);
+      if (this.needsResample) {
+        processedAudio = this.resampleChunkLinear(
+          sourceAudioData,
+          this.sourceSampleRate,
+          this.TARGET_SAMPLE_RATE,
+        );
       }
-      const t1 = performance.now();
 
       if (processedAudio.length === 0) {
         return;
@@ -182,25 +174,22 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
 
       this.appendToOutputBuffer(processedAudio);
       const emittedFrames = this.emitReadyFrames(now);
+      const stats = this.calculateStats(this.TARGET_SAMPLE_RATE, isActive, rms);
+      this.latestStats = stats;
 
-      // 每秒输出一次统计日志
-      if (this.sequenceNumber % 50 === 0) {
-        const availableMs = this.audioProvider.getAvailableMs();
-        const pushInterval = this.lastPushStartTime > 0 ? t0 - this.lastPushStartTime : 0;
-
-        logger.debug(
-          `seq=${this.sequenceNumber}, buffer=${availableMs.toFixed(1)}ms, ` +
-          `in=${sourceAudioData.length}, out=${processedAudio.length}, ` +
-          `queued=${this.outputBuffer.length}, emitted=${emittedFrames}, ` +
-          `interval=${pushInterval.toFixed(1)}ms, process=${(t1-t0).toFixed(1)}ms`
-        );
-
-        const stats = this.calculateStats(this.TARGET_SAMPLE_RATE, isActive, rms);
-        this.emit('stats', stats);
+      if (stats.latencyMs >= HIGH_LATENCY_WARN_MS) {
+        logger.warn('Audio monitor source latency is high', {
+          sourceLatencyMs: Number(stats.latencyMs.toFixed(1)),
+          bufferFillPercent: Number(stats.bufferFillPercent.toFixed(1)),
+          providerAvailableMs: Number(this.audioProvider.getAvailableMs().toFixed(1)),
+          outputQueuedMs: Number(((this.outputBuffer.length / this.TARGET_SAMPLE_RATE) * 1000).toFixed(1)),
+          emittedFrames,
+          sourceSamples: sourceAudioData.length,
+          outputSamples: processedAudio.length,
+        });
       }
 
-      this.lastPushStartTime = t0;
-      this.lastPushTimestamp = now;
+      this.emit('stats', stats);
     } catch (error) {
       logger.error('Push audio failed', error);
     }
@@ -247,27 +236,26 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
     return emittedFrames;
   }
 
-  private async flushResampler(): Promise<void> {
-    if (!this.resampler) return;
-
-    try {
-      const remaining = await this.resampler.flush();
-      if (remaining.length > 0) {
-        this.appendToOutputBuffer(remaining);
-        this.emitReadyFrames(Date.now());
-      }
-    } catch (error) {
-      logger.warn('Failed to flush audio monitor resampler', error);
+  private resampleChunkLinear(samples: Float32Array, inputRate: number, outputRate: number): Float32Array {
+    if (samples.length === 0 || inputRate === outputRate) {
+      return samples;
     }
-  }
 
-  private disposeResampler(): void {
-    if (!this.resampler) return;
-    try {
-      this.resampler.dispose();
-    } catch (error) {
-      logger.warn('Failed to dispose audio monitor resampler', error);
+    const outputLength = Math.max(1, Math.round((samples.length * outputRate) / inputRate));
+    const output = new Float32Array(outputLength);
+    const ratio = inputRate / outputRate;
+
+    for (let i = 0; i < outputLength; i += 1) {
+      const sourceIndex = i * ratio;
+      const left = Math.floor(sourceIndex);
+      const right = Math.min(left + 1, samples.length - 1);
+      const fraction = sourceIndex - left;
+      const leftSample = samples[left] ?? 0;
+      const rightSample = samples[right] ?? leftSample;
+      output[i] = leftSample * (1 - fraction) + rightSample * fraction;
     }
+
+    return output;
   }
 
   /**
@@ -287,12 +275,11 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
    * 计算统计信息
    */
   private calculateStats(sampleRate: number, isActive: boolean, audioLevel: number): AudioMonitorStats {
-    const now = Date.now();
-    const latencyMs = now - this.lastPushTimestamp;
-
     // 基于目标缓冲区水位计算填充百分比
     const availableMs = this.audioProvider.getAvailableMs();
     const bufferFillPercent = Math.min(100, (availableMs / this.TARGET_BUFFER_MS) * 100);
+    const queuedOutputMs = (this.outputBuffer.length / this.TARGET_SAMPLE_RATE) * 1000;
+    const latencyMs = availableMs + queuedOutputMs;
 
     return {
       latencyMs,
@@ -309,6 +296,10 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
    */
   isServiceRunning(): boolean {
     return this.isRunning;
+  }
+
+  getLatestStats(): AudioMonitorStats | null {
+    return this.latestStats;
   }
 
   /**
@@ -335,10 +326,8 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
 
   destroy(): void {
     this.stopPushingAudio();
-    void this.flushResampler().finally(() => {
-      this.disposeResampler();
-    });
     this.outputBuffer = new Float32Array(0);
+    this.latestStats = null;
     this.removeAllListeners();
     logger.info('Service destroyed');
   }
