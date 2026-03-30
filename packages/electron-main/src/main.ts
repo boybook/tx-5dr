@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -170,16 +170,81 @@ function nodePath() {
 
 function livekitServerPath() {
   if (process.env.LIVEKIT_BINARY_PATH) {
-    return process.env.LIVEKIT_BINARY_PATH;
+    return fs.existsSync(process.env.LIVEKIT_BINARY_PATH) ? process.env.LIVEKIT_BINARY_PATH : null;
   }
 
   const res = resourcesRoot();
   const exe = process.platform === 'win32' ? 'livekit-server.exe' : 'livekit-server';
   const bundled = path.join(res, 'bin', triplet(), exe);
-  return fs.existsSync(bundled) ? bundled : exe;
+  if (fs.existsSync(bundled)) {
+    return bundled;
+  }
+
+  const candidates = [resolveCommand(exe)];
+  if (process.platform === 'darwin') {
+    candidates.push(
+      '/opt/homebrew/bin/livekit-server',
+      '/opt/homebrew/opt/livekit/bin/livekit-server',
+      '/usr/local/bin/livekit-server',
+      '/usr/local/opt/livekit/bin/livekit-server',
+    );
+  } else if (process.platform === 'linux') {
+    candidates.push('/usr/local/bin/livekit-server', '/usr/bin/livekit-server');
+  }
+
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
+function resolveCommand(command: string): string | null {
+  const probe = process.platform === 'win32'
+    ? spawnSync('where', [command], { encoding: 'utf8' })
+    : spawnSync('which', [command], { encoding: 'utf8' });
+  if (probe.status !== 0) {
+    return null;
+  }
+
+  const resolved = probe.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return resolved || null;
 }
 
 // no quarantine/permission fallbacks; we assume portable node file is valid
+
+function killProcess(proc: import('node:child_process').ChildProcess | null, name: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (!proc || proc.killed) {
+      resolve();
+      return;
+    }
+
+    logger.info(`stopping child process: ${name} (PID: ${proc.pid})`);
+
+    const timeout = setTimeout(() => {
+      if (proc && !proc.killed) {
+        logger.warn(`child process ${name} did not exit, force killing`);
+        try {
+          proc.kill('SIGKILL');
+        } catch (err) {
+          logger.error(`failed to force kill ${name}`, err);
+        }
+      }
+      resolve();
+    }, 5000);
+
+    proc.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      logger.info(`child process ${name} exited (code: ${code}, signal: ${signal})`);
+      resolve();
+    });
+
+    try {
+      proc.kill('SIGTERM');
+    } catch (err) {
+      logger.error(`failed to send SIGTERM to ${name}`, err);
+      clearTimeout(timeout);
+      resolve();
+    }
+  });
+}
 
 function createChildEnv(extraEnv: Record<string, string> = {}) {
   const res = resourcesRoot();
@@ -719,46 +784,6 @@ async function cleanup() {
 
   // 生产模式：关闭子进程
   if (!isDevelopment) {
-    const killProcess = (proc: import('node:child_process').ChildProcess | null, name: string): Promise<void> => {
-      return new Promise((resolve) => {
-        if (!proc || proc.killed) {
-          resolve();
-          return;
-        }
-
-        logger.info(`stopping child process: ${name} (PID: ${proc.pid})`);
-
-        // 设置超时:如果进程在5秒内没有退出,强制kill
-        const timeout = setTimeout(() => {
-          if (proc && !proc.killed) {
-            logger.warn(`child process ${name} did not exit, force killing`);
-            try {
-              proc.kill('SIGKILL');
-            } catch (err) {
-              logger.error(`failed to force kill ${name}`, err);
-            }
-          }
-          resolve();
-        }, 5000);
-
-        // 监听进程退出
-        proc.once('exit', (code, signal) => {
-          clearTimeout(timeout);
-          logger.info(`child process ${name} exited (code: ${code}, signal: ${signal})`);
-          resolve();
-        });
-
-        // 发送SIGTERM信号优雅关闭
-        try {
-          proc.kill('SIGTERM');
-        } catch (err) {
-          logger.error(`failed to send SIGTERM to ${name}`, err);
-          clearTimeout(timeout);
-          resolve();
-        }
-      });
-    };
-
     // 依次关闭进程
     if (webProcess) {
       await killProcess(webProcess, 'web');
@@ -850,21 +875,14 @@ async function createWindow() {
     const livekitBinary = livekitServerPath();
     const serverEntry = join(res, 'app', 'packages', 'server', 'dist', 'index.js');
     const webEntry = join(res, 'app', 'packages', 'client-tools', 'src', 'proxy.js');
-
-    const shouldCheckLiveKitPath = livekitBinary.includes(path.sep) || livekitBinary.startsWith('.');
-    if (shouldCheckLiveKitPath && !fs.existsSync(livekitBinary)) {
-      logger.error(`livekit binary not found: ${livekitBinary}`);
-      errorType = 'MISSING_LIVEKIT';
-      hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `LiveKit binary not found: ${livekitBinary}\n\nLog file: ${logPath}`);
-      return;
+    const livekitEnabled = Boolean(livekitBinary);
+    if (!livekitEnabled) {
+      logger.warn('livekit binary not found, starting in ws compatibility mode');
     }
 
     // 自动端口探测，避免端口占用导致启动失败
-    const livekitPort = await findFreePort(7880, 50, undefined, '127.0.0.1');
-    const livekitTcpPort = await findFreePort(7881, 50, livekitPort, '127.0.0.1');
+    const livekitPort = livekitEnabled ? await findFreePort(7880, 50, undefined, '127.0.0.1') : null;
+    const livekitTcpPort = livekitEnabled ? await findFreePort(7881, 50, livekitPort ?? undefined, '127.0.0.1') : null;
     const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
     const webPort = await findFreePort(5173, 50, serverPort, '0.0.0.0'); // 避免和 serverPort 冲突
     selectedLiveKitPort = livekitPort;
@@ -872,40 +890,49 @@ async function createWindow() {
     selectedServerPort = serverPort;
     selectedWebPort = webPort;
 
-    logger.info(`ports selected: livekit=${livekitPort}, livekitTcp=${livekitTcpPort}, server=${serverPort}, web=${webPort}`);
+    logger.info(`ports selected: livekit=${livekitPort ?? 'disabled'}, livekitTcp=${livekitTcpPort ?? 'disabled'}, server=${serverPort}, web=${webPort}`);
 
-    const livekitApiKey = `tx5dr-electron-${Date.now()}`;
-    const livekitApiSecret = randomBytes(24).toString('hex');
-    const livekitConfigPath = ensureLiveKitConfig(livekitPort, livekitTcpPort, livekitApiKey, livekitApiSecret);
+    let livekitApiKey: string | null = null;
+    let livekitApiSecret: string | null = null;
+    let livekitConfigPath: string | null = null;
 
-    livekitProcess = runBinaryChild('livekit', livekitBinary, ['--config', livekitConfigPath]);
+    if (livekitEnabled && livekitBinary && livekitPort && livekitTcpPort) {
+      livekitApiKey = `tx5dr-electron-${Date.now()}`;
+      livekitApiSecret = randomBytes(24).toString('hex');
+      livekitConfigPath = ensureLiveKitConfig(livekitPort, livekitTcpPort, livekitApiKey, livekitApiSecret);
 
-    const livekitOk = await waitForHttp(`http://127.0.0.1:${livekitPort}`, 15000, 200);
-    if (!livekitOk) {
-      logger.error('livekit startup timeout');
-      errorType = 'TIMEOUT';
-      hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
-      dialog.showErrorBox('TX-5DR - Startup Failed',
-        `LiveKit startup timeout\n\n` +
-        `Signaling port: ${livekitPort}\n` +
-        `ICE/TCP port: ${livekitTcpPort}\n` +
-        `UDP range: 50000-50100\n` +
-        `Config file: ${livekitConfigPath}\n` +
-        `Log file: ${logPath}\n\n` +
-        'Please check whether the LiveKit process started successfully and whether these ports are already occupied or blocked.');
-      return;
+      livekitProcess = runBinaryChild('livekit', livekitBinary, ['--config', livekitConfigPath]);
+
+      const livekitOk = await waitForHttp(`http://127.0.0.1:${livekitPort}`, 15000, 200);
+      if (!livekitOk) {
+        logger.warn('livekit startup timeout, falling back to ws compatibility mode');
+        if (livekitProcess) {
+          await killProcess(livekitProcess, 'livekit');
+          livekitProcess = null;
+        }
+        selectedLiveKitPort = null;
+        selectedLiveKitTcpPort = null;
+        livekitApiKey = null;
+        livekitApiSecret = null;
+        livekitConfigPath = null;
+      } else {
+        logger.info('livekit service ready');
+      }
     }
-    logger.info('livekit service ready');
 
     serverProcess = runChild('server', serverEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
-      LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`,
-      LIVEKIT_API_KEY: livekitApiKey,
-      LIVEKIT_API_SECRET: livekitApiSecret,
-      LIVEKIT_TCP_PORT: String(livekitTcpPort),
-      LIVEKIT_UDP_PORT_RANGE: '50000-50100',
+      LIVEKIT_DISABLED: livekitProcess ? '0' : '1',
+      ...(livekitProcess && livekitPort && livekitTcpPort && livekitApiKey && livekitApiSecret
+        ? {
+            LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`,
+            LIVEKIT_API_KEY: livekitApiKey,
+            LIVEKIT_API_SECRET: livekitApiSecret,
+            LIVEKIT_TCP_PORT: String(livekitTcpPort),
+            LIVEKIT_UDP_PORT_RANGE: '50000-50100',
+          }
+        : {}),
     });
 
     logger.info('waiting for backend server...');
@@ -918,10 +945,10 @@ async function createWindow() {
       dialog.showErrorBox('TX-5DR - Startup Failed',
         `Backend server startup timeout\n\n` +
         `Backend port: ${serverPort}\n` +
-        `LiveKit signaling port: ${livekitPort}\n` +
-        `LiveKit ICE/TCP port: ${livekitTcpPort}\n` +
-        `UDP range: 50000-50100\n` +
-        `Config file: ${livekitConfigPath}\n` +
+        `LiveKit mode: ${livekitProcess ? 'enabled' : 'disabled (ws-compat fallback)'}\n` +
+        `${livekitPort ? `LiveKit signaling port: ${livekitPort}\n` : ''}` +
+        `${livekitTcpPort ? `LiveKit ICE/TCP port: ${livekitTcpPort}\n` : ''}` +
+        `${livekitConfigPath ? `Config file: ${livekitConfigPath}\n` : ''}` +
         `Log file: ${logPath}\n\n` +
         'Please inspect the backend and LiveKit logs to confirm the realtime voice service is reachable.');
       return;
