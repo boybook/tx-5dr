@@ -49,9 +49,14 @@ export interface UseAudioMonitorPlaybackOptions {
   previewSessionId?: string | null;
 }
 
+export interface AudioMonitorStartOptions {
+  previewSessionId?: string;
+  transportOverride?: RealtimeTransportKind;
+}
+
 export interface UseAudioMonitorPlaybackReturn {
   isPlaying: boolean;
-  start: (overridePreviewSessionId?: string) => Promise<void>;
+  start: (options?: string | AudioMonitorStartOptions) => Promise<void>;
   stop: () => void;
   stats: MonitorStatsData | null;
   setVolume: (db: number) => void;
@@ -599,9 +604,13 @@ export function useAudioMonitorPlayback(
     }
   }, [recomputeStats, resolvePendingTrackWaiters]);
 
-  const start = useCallback(async (overridePreviewSessionId?: string) => {
+  const start = useCallback(async (startOptions?: string | AudioMonitorStartOptions) => {
     if (isPlaying || isInitializingRef.current) return;
-    const effectivePreviewSessionId = overridePreviewSessionId ?? previewSessionId;
+    const normalizedOptions = typeof startOptions === 'string'
+      ? { previewSessionId: startOptions, transportOverride: undefined }
+      : (startOptions ?? {});
+    const effectivePreviewSessionId = normalizedOptions.previewSessionId ?? previewSessionId;
+    const transportOverride = normalizedOptions.transportOverride;
     let errorStage: 'token' | 'connect' | 'subscribe' = 'token';
     let compatFallbackAttempted = false;
     let liveKitFailureIssue: ReturnType<typeof buildRealtimeConnectivityIssue> | null = null;
@@ -621,14 +630,17 @@ export function useAudioMonitorPlayback(
         ...(effectivePreviewSessionId ? { previewSessionId: effectivePreviewSessionId } : {}),
       });
       connectivityHintsRef.current = session.connectivityHints;
+      const offers = transportOverride
+        ? session.offers.filter((offer) => offer.transport === transportOverride)
+        : session.offers;
 
       let lastError: unknown = null;
-      for (const offer of session.offers) {
+      for (const offer of offers) {
         try {
           errorStage = 'connect';
           if (offer.transport === 'livekit') {
             await startLiveKitPlayback(offer, {
-              fastFallback: session.offers.some((candidate) => candidate.transport === 'ws-compat'),
+              fastFallback: offers.some((candidate) => candidate.transport === 'ws-compat'),
             });
           } else {
             compatFallbackAttempted = liveKitFailureIssue !== null;

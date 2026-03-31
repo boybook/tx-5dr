@@ -22,7 +22,7 @@ import { createLogger } from '../utils/logger';
 import {
   RealtimeConnectivityError,
   buildRealtimeConnectivityIssue,
-  showRealtimeConnectivityIssueToast,
+  openRealtimeCompatFallbackModal,
 } from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('RadioControl');
@@ -551,7 +551,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             scope: 'radio',
             stage: 'connect',
           });
-        showRealtimeConnectivityIssueToast(issue);
+        openRealtimeCompatFallbackModal({
+          issue,
+          onConfirm: async () => {
+            await audioMonitor.start({ transportOverride: 'ws-compat' });
+          },
+        });
       }
     }
   };
@@ -570,7 +575,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             scope: 'radio',
             stage: 'connect',
           });
-        showRealtimeConnectivityIssueToast(issue);
+        openRealtimeCompatFallbackModal({
+          issue,
+          onConfirm: async () => {
+            await audioMonitor.start({ transportOverride: 'ws-compat' });
+          },
+        });
       });
     }
     if (radioMode.engineMode !== 'voice') {
