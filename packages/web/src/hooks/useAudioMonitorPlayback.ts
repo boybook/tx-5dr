@@ -3,7 +3,6 @@ import { Room, RoomEvent, Track, type RemoteAudioTrack } from 'livekit-client';
 import { api } from '@tx5dr/core';
 import { decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
 import type {
-  RealtimeConnectivityHints,
   RealtimeScope,
   RealtimeSourceStats,
   RealtimeTransportKind,
@@ -16,10 +15,10 @@ import {
   type CompatPlaybackStats,
 } from '../audio/compatAudioBackends';
 import {
-  buildRealtimeConnectivityIssue,
-  showRealtimeFallbackActivatedToast,
-  toRealtimeConnectivityError,
-} from '../realtime/realtimeConnectivity';
+  ensureInteractiveAudioContext,
+  closeAudioContext,
+} from '../audio/audioRuntime';
+import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
@@ -27,6 +26,7 @@ const AUDIO_TRACK_WAIT_TIMEOUT_MS = 5000;
 const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
 const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
 const LIVEKIT_FAST_TRACK_TIMEOUT_MS = 1500;
+const TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS = 1200;
 
 interface ReceiverStatsData {
   latencyMs?: number;
@@ -39,6 +39,49 @@ interface ReceiverStatsData {
   bufferFillPercent?: number;
   queueDurationMs?: number;
   targetBufferMs?: number;
+}
+
+function waitForSocketClosed(socket: WebSocket, timeoutMs = TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS): Promise<void> {
+  if (socket.readyState === WebSocket.CLOSED) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const previousOnClose = socket.onclose;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.onclose = previousOnClose;
+      resolve();
+    };
+
+    socket.onclose = (event) => {
+      previousOnClose?.call(socket, event);
+      finish();
+    };
+
+    window.setTimeout(finish, timeoutMs);
+  });
+}
+
+function waitForRoomDisconnected(room: Room, timeoutMs = TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      room.off(RoomEvent.Disconnected, finish);
+      resolve();
+    };
+
+    room.on(RoomEvent.Disconnected, finish);
+    window.setTimeout(finish, timeoutMs);
+  });
 }
 
 export interface MonitorStatsData {
@@ -60,8 +103,14 @@ export interface AudioMonitorStartOptions {
 }
 
 export interface UseAudioMonitorPlaybackReturn {
+  preparePlaybackFromGesture: () => Promise<void>;
+  startFromGesture: (options?: string | AudioMonitorStartOptions) => Promise<RealtimeTransportKind>;
+  switchTransportFromGesture: (
+    transport: RealtimeTransportKind,
+    options?: Omit<AudioMonitorStartOptions, 'transportOverride'>,
+  ) => Promise<RealtimeTransportKind>;
   isPlaying: boolean;
-  start: (options?: string | AudioMonitorStartOptions) => Promise<void>;
+  start: (options?: string | AudioMonitorStartOptions) => Promise<RealtimeTransportKind>;
   stop: () => void;
   stats: MonitorStatsData | null;
   setVolume: (db: number) => void;
@@ -77,6 +126,8 @@ export function useAudioMonitorPlayback(
   const [isPlaying, setIsPlaying] = useState(false);
   const [stats, setStats] = useState<MonitorStatsData | null>(null);
   const [transportKind, setTransportKind] = useState<RealtimeTransportKind | null>(null);
+  const isPlayingRef = useRef(false);
+  const transportKindRef = useRef<RealtimeTransportKind | null>(null);
   const roomRef = useRef<Room | null>(null);
   const attachedTracksRef = useRef<Map<string, RemoteAudioTrack>>(new Map());
   const attachedElementsRef = useRef<Map<string, HTMLMediaElement>>(new Map());
@@ -92,7 +143,6 @@ export function useAudioMonitorPlayback(
   const displayLatencyRef = useRef<number | null>(null);
   const displayBufferFillRef = useRef<number | null>(null);
   const activePreviewSessionIdRef = useRef<string | null>(previewSessionId ?? null);
-  const connectivityHintsRef = useRef<RealtimeConnectivityHints | null>(null);
   const intentionalDisconnectRef = useRef(false);
   const pendingTrackWaitersRef = useRef<Array<{
     resolve: () => void;
@@ -149,7 +199,27 @@ export function useAudioMonitorPlayback(
     attachedElementsRef.current.clear();
   }, []);
 
-  const cleanupTransportState = useCallback((preserveSessionContext = false) => {
+  const updateIsPlaying = useCallback((next: boolean) => {
+    isPlayingRef.current = next;
+    setIsPlaying(next);
+  }, []);
+
+  const updateTransportKind = useCallback((next: RealtimeTransportKind | null) => {
+    transportKindRef.current = next;
+    setTransportKind(next);
+  }, []);
+
+  const cleanupTransportState = useCallback((
+    options: {
+      preserveSessionContext?: boolean;
+      preserveAudioContext?: boolean;
+    } = {},
+  ) => {
+    const {
+      preserveSessionContext = false,
+      preserveAudioContext = false,
+    } = options;
+
     if (statsPollTimerRef.current !== null) {
       window.clearInterval(statsPollTimerRef.current);
       statsPollTimerRef.current = null;
@@ -190,8 +260,8 @@ export function useAudioMonitorPlayback(
       gainNodeRef.current = null;
     }
 
-    if (audioContextRef.current) {
-      void audioContextRef.current.close().catch(() => {});
+    if (!preserveAudioContext && audioContextRef.current) {
+      void closeAudioContext(audioContextRef.current);
       audioContextRef.current = null;
     }
 
@@ -199,19 +269,19 @@ export function useAudioMonitorPlayback(
     receiverStatsRef.current = null;
     displayLatencyRef.current = null;
     displayBufferFillRef.current = null;
-    setTransportKind(null);
-    setIsPlaying(false);
+    updateTransportKind(null);
+    updateIsPlaying(false);
     setStats(null);
 
     if (!preserveSessionContext) {
-      connectivityHintsRef.current = null;
       activePreviewSessionIdRef.current = null;
-      isInitializingRef.current = false;
     }
-  }, [detachAllTracks, rejectPendingTrackWaiters]);
+
+    isInitializingRef.current = false;
+  }, [detachAllTracks, rejectPendingTrackWaiters, updateIsPlaying, updateTransportKind]);
 
   const cleanup = useCallback(() => {
-    cleanupTransportState(false);
+    cleanupTransportState();
   }, [cleanupTransportState]);
 
   useEffect(() => {
@@ -396,18 +466,16 @@ export function useAudioMonitorPlayback(
     });
   }, [attachBridgeTrackPublication]);
 
+  const preparePlaybackFromGesture = useCallback(async () => {
+    audioContextRef.current = await ensureInteractiveAudioContext(audioContextRef.current);
+  }, []);
+
   const startLiveKitPlayback = useCallback(async (
     offer: RealtimeTransportOffer,
     options?: { fastFallback?: boolean },
   ) => {
-    const audioContext = new AudioContext({
-      latencyHint: 'interactive',
-    });
+    const audioContext = await ensureInteractiveAudioContext(audioContextRef.current);
     audioContextRef.current = audioContext;
-
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
-    }
 
     const room = new Room({
       adaptiveStream: false,
@@ -472,7 +540,7 @@ export function useAudioMonitorPlayback(
       attachExistingBridgeTracks(room);
       await waitForPlaybackPath(options?.fastFallback ? LIVEKIT_FAST_TRACK_TIMEOUT_MS : AUDIO_TRACK_WAIT_TIMEOUT_MS);
       roomRef.current = room;
-      setTransportKind('livekit');
+      updateTransportKind('livekit');
       resolvePendingTrackWaiters();
     } catch (error) {
       room.off(RoomEvent.Disconnected, handleDisconnected);
@@ -483,17 +551,11 @@ export function useAudioMonitorPlayback(
       }
       throw error;
     }
-  }, [attachBridgeTrackPublication, attachExistingBridgeTracks, cleanup, pollReceiverStats, recomputeStats, resolvePendingTrackWaiters, waitForPlaybackPath]);
+  }, [attachBridgeTrackPublication, attachExistingBridgeTracks, cleanup, pollReceiverStats, recomputeStats, resolvePendingTrackWaiters, updateTransportKind, waitForPlaybackPath]);
 
   const startCompatPlayback = useCallback(async (offer: RealtimeTransportOffer) => {
-    const audioContext = new AudioContext({
-      latencyHint: 'interactive',
-    });
+    const audioContext = await ensureInteractiveAudioContext(audioContextRef.current);
     audioContextRef.current = audioContext;
-
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
-    }
 
     const backend = await createCompatPlaybackBackend(audioContext, (backendStats: CompatPlaybackStats) => {
       receiverStatsRef.current = {
@@ -527,7 +589,7 @@ export function useAudioMonitorPlayback(
       }, AUDIO_TRACK_WAIT_TIMEOUT_MS);
 
       ws.onopen = () => {
-        setTransportKind('ws-compat');
+        updateTransportKind('ws-compat');
       };
 
       ws.onmessage = (event) => {
@@ -588,24 +650,32 @@ export function useAudioMonitorPlayback(
     resolvePendingTrackWaiters();
 
     if (compatSocketRef.current) {
+      const activeSocket = compatSocketRef.current;
       compatSocketRef.current.onclose = () => {
-        if (!intentionalDisconnectRef.current) {
+        if (compatSocketRef.current === activeSocket && !intentionalDisconnectRef.current) {
           cleanup();
         }
       };
     }
-  }, [recomputeStats, resolvePendingTrackWaiters]);
+  }, [recomputeStats, resolvePendingTrackWaiters, updateTransportKind]);
 
   const start = useCallback(async (startOptions?: string | AudioMonitorStartOptions) => {
-    if (isPlaying || isInitializingRef.current) return;
+    if (isPlayingRef.current) {
+      if (!transportKindRef.current) {
+        throw new Error('Realtime playback is already running without an active transport');
+      }
+      return transportKindRef.current;
+    }
+
+    if (isInitializingRef.current) {
+      throw new Error('Realtime playback is already initializing');
+    }
+
     const normalizedOptions = typeof startOptions === 'string'
       ? { previewSessionId: startOptions, transportOverride: undefined }
       : (startOptions ?? {});
-    const effectivePreviewSessionId = normalizedOptions.previewSessionId ?? previewSessionId;
+    const effectivePreviewSessionId = normalizedOptions.previewSessionId ?? previewSessionId ?? undefined;
     const transportOverride = normalizedOptions.transportOverride;
-    let errorStage: 'token' | 'connect' | 'subscribe' = 'token';
-    let compatFallbackAttempted = false;
-    let liveKitFailureIssue: ReturnType<typeof buildRealtimeConnectivityIssue> | null = null;
 
     if (scope === 'openwebrx-preview' && !effectivePreviewSessionId) {
       throw new Error('previewSessionId is required for OpenWebRX preview playback');
@@ -616,74 +686,76 @@ export function useAudioMonitorPlayback(
     activePreviewSessionIdRef.current = effectivePreviewSessionId ?? null;
 
     try {
-      const session = await api.getRealtimeSession({
+      const result = await executeRealtimeSessionFlow({
         scope,
         direction: 'recv',
-        ...(effectivePreviewSessionId ? { previewSessionId: effectivePreviewSessionId } : {}),
-        ...(transportOverride ? { transportOverride } : {}),
-      });
-      connectivityHintsRef.current = transportOverride === 'ws-compat' ? null : session.connectivityHints;
-      const offers = session.offers;
-
-      let lastError: unknown = null;
-      for (const offer of offers) {
-        try {
-          errorStage = 'connect';
-          if (offer.transport === 'livekit') {
-            await startLiveKitPlayback(offer, {
-              fastFallback: offers.some((candidate) => candidate.transport === 'ws-compat'),
-            });
-          } else {
-            compatFallbackAttempted = liveKitFailureIssue !== null;
-            await startCompatPlayback(offer);
-            if (liveKitFailureIssue) {
-              showRealtimeFallbackActivatedToast(liveKitFailureIssue);
-            }
-          }
-          startStatsPolling();
-          setIsPlaying(true);
-          return;
-        } catch (error) {
-          lastError = error;
-          if (offer.transport === 'livekit') {
-            liveKitFailureIssue = buildRealtimeConnectivityIssue(error, {
-              scope,
-              stage: errorStage,
-              hints: connectivityHintsRef.current ?? undefined,
-            });
-            logger.warn('LiveKit playback path failed, trying compatibility fallback', {
-              scope,
-              code: liveKitFailureIssue.code,
-              details: liveKitFailureIssue.technicalDetails,
-            });
-          }
-          cleanupTransportState(true);
+        previewSessionId: effectivePreviewSessionId,
+        transportOverride,
+        connectStage: 'connect',
+        startLiveKit: startLiveKitPlayback,
+        startCompat: startCompatPlayback,
+        cleanupFailedAttempt: async () => {
+          cleanupTransportState({ preserveSessionContext: true });
           if (intentionalDisconnectRef.current) {
-            throw error;
+            throw new Error('Realtime playback intentionally interrupted');
           }
-        }
-      }
-
-      throw lastError ?? new Error('No realtime playback transport succeeded');
-    } catch (error) {
-      const currentHints = connectivityHintsRef.current ?? undefined;
-      const realtimeError = toRealtimeConnectivityError(error, {
-        scope,
-        stage: errorStage,
-        hints: currentHints,
+        },
       });
-      if (!realtimeError.issue.context) {
-        realtimeError.issue.context = {};
-      }
-      realtimeError.issue.context.compatFallbackAttempted = String(compatFallbackAttempted);
+      updateTransportKind(result.transport);
+      startStatsPolling();
+      updateIsPlaying(true);
+      return result.transport;
+    } catch (error) {
       intentionalDisconnectRef.current = true;
       cleanup();
       logger.error('Failed to start realtime playback', error);
-      throw realtimeError;
+      throw error;
     } finally {
       isInitializingRef.current = false;
     }
-  }, [cleanup, cleanupTransportState, isPlaying, previewSessionId, scope, startCompatPlayback, startLiveKitPlayback, startStatsPolling]);
+  }, [cleanup, cleanupTransportState, previewSessionId, scope, startCompatPlayback, startLiveKitPlayback, startStatsPolling, updateIsPlaying, updateTransportKind]);
+
+  const startFromGesture = useCallback(async (
+    startOptions?: string | AudioMonitorStartOptions,
+  ): Promise<RealtimeTransportKind> => {
+    await preparePlaybackFromGesture();
+    return start(startOptions);
+  }, [preparePlaybackFromGesture, start]);
+
+  const switchTransportFromGesture = useCallback(async (
+    transport: RealtimeTransportKind,
+    switchOptions?: Omit<AudioMonitorStartOptions, 'transportOverride'>,
+  ): Promise<RealtimeTransportKind> => {
+    await preparePlaybackFromGesture();
+
+    if (isInitializingRef.current) {
+      throw new Error('Realtime playback is already initializing');
+    }
+
+    if (isPlayingRef.current) {
+      const activeRoom = roomRef.current;
+      const activeCompatSocket = compatSocketRef.current;
+      const drainTasks: Promise<void>[] = [];
+      if (activeRoom) {
+        drainTasks.push(waitForRoomDisconnected(activeRoom));
+      }
+      if (activeCompatSocket) {
+        drainTasks.push(waitForSocketClosed(activeCompatSocket));
+      }
+
+      intentionalDisconnectRef.current = true;
+      cleanupTransportState({ preserveAudioContext: true });
+
+      if (drainTasks.length > 0) {
+        await Promise.allSettled(drainTasks);
+      }
+    }
+
+    return start({
+      previewSessionId: switchOptions?.previewSessionId,
+      transportOverride: transport,
+    });
+  }, [cleanupTransportState, preparePlaybackFromGesture, start]);
 
   const stop = useCallback(() => {
     intentionalDisconnectRef.current = true;
@@ -702,6 +774,9 @@ export function useAudioMonitorPlayback(
   }, []);
 
   return {
+    preparePlaybackFromGesture,
+    startFromGesture,
+    switchTransportFromGesture,
     isPlaying,
     start,
     stop,

@@ -98,19 +98,27 @@ export const RealtimeTransportOfferSchema = z.object({
 
 export type RealtimeTransportOffer = z.infer<typeof RealtimeTransportOfferSchema>;
 
+export const RealtimeTransportPolicySchema = z.enum(['auto', 'force-compat']);
+export type RealtimeTransportPolicy = z.infer<typeof RealtimeTransportPolicySchema>;
+
 export const RealtimeSessionResponseSchema = z.object({
   scope: RealtimeScopeSchema,
   direction: RealtimeSessionDirectionSchema,
   preferredTransport: RealtimeTransportKindSchema,
+  effectiveTransportPolicy: RealtimeTransportPolicySchema,
+  selectionReason: z.enum([
+    'client-override',
+    'server-policy',
+    'bridge-unhealthy',
+    'livekit-disabled',
+    'default-livekit',
+  ]),
   forcedCompatibilityMode: z.boolean(),
   offers: z.array(RealtimeTransportOfferSchema).min(1),
   connectivityHints: RealtimeConnectivityHintsSchema,
 });
 
 export type RealtimeSessionResponse = z.infer<typeof RealtimeSessionResponseSchema>;
-
-export const RealtimeTransportPolicySchema = z.enum(['auto', 'force-compat']);
-export type RealtimeTransportPolicy = z.infer<typeof RealtimeTransportPolicySchema>;
 
 export const RealtimeSettingsSchema = z.object({
   publicWsUrl: z.string().url().nullable().optional(),

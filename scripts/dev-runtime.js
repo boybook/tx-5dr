@@ -21,6 +21,8 @@ let shuttingDown = false;
 let livekitRuntime = {
   mode: 'disabled',
   reason: null,
+  credentialPath: null,
+  configPath: null,
 };
 
 function triplet() {
@@ -199,6 +201,26 @@ function ensureLiveKitConfig() {
   return credentials;
 }
 
+function canReuseManagedDevLiveKit() {
+  try {
+    if (!fs.existsSync(LIVEKIT_CREDENTIAL_PATH) || !fs.existsSync(LIVEKIT_CONFIG_PATH)) {
+      return false;
+    }
+
+    const credentials = parseEnvFile(fs.readFileSync(LIVEKIT_CREDENTIAL_PATH, 'utf-8'));
+    if (!credentials.LIVEKIT_API_KEY?.trim() || !credentials.LIVEKIT_API_SECRET?.trim()) {
+      return false;
+    }
+
+    const config = fs.readFileSync(LIVEKIT_CONFIG_PATH, 'utf-8');
+    return config.includes(`port: ${LIVEKIT_SIGNAL_PORT}`)
+      && config.includes(`tcp_port: ${LIVEKIT_TCP_PORT}`);
+  } catch (error) {
+    console.warn(`[dev-runtime] Failed to inspect managed LiveKit dev files: ${error.message}`);
+    return false;
+  }
+}
+
 function waitForHttp(url, timeoutMs = 15000, intervalMs = 250) {
   const started = Date.now();
   return new Promise((resolve) => {
@@ -261,11 +283,23 @@ async function startLiveKit() {
       livekitRuntime = {
         mode: 'external-configured',
         reason: null,
+        credentialPath: process.env.LIVEKIT_CREDENTIALS_FILE || null,
+        configPath: process.env.LIVEKIT_CONFIG_FILE || process.env.LIVEKIT_CONFIG_PATH || null,
       };
+    } else if (canReuseManagedDevLiveKit()) {
+      livekitRuntime = {
+        mode: 'external-configured',
+        reason: null,
+        credentialPath: LIVEKIT_CREDENTIAL_PATH,
+        configPath: LIVEKIT_CONFIG_PATH,
+      };
+      console.log('[dev-runtime] Reusing existing LiveKit with managed dev credentials');
     } else {
       livekitRuntime = {
         mode: 'external-unknown',
         reason: 'Existing LiveKit is already listening on the signaling port, but its credentials are unknown to the dev runtime. Falling back to ws-compat to avoid issuing invalid tokens.',
+        credentialPath: null,
+        configPath: null,
       };
       console.warn(`[dev-runtime] ${livekitRuntime.reason}`);
     }
@@ -296,6 +330,8 @@ async function startLiveKit() {
   livekitRuntime = {
     mode: 'managed',
     reason: null,
+    credentialPath: LIVEKIT_CREDENTIAL_PATH,
+    configPath: LIVEKIT_CONFIG_PATH,
   };
 }
 
@@ -315,15 +351,26 @@ function startTurbo() {
     env.LIVEKIT_DISABLED = '0';
     delete env.LIVEKIT_API_KEY;
     delete env.LIVEKIT_API_SECRET;
-    env.LIVEKIT_CREDENTIALS_FILE = LIVEKIT_CREDENTIAL_PATH;
-    env.LIVEKIT_CONFIG_PATH = LIVEKIT_CONFIG_PATH;
+    env.LIVEKIT_CREDENTIALS_FILE = livekitRuntime.credentialPath || LIVEKIT_CREDENTIAL_PATH;
+    env.LIVEKIT_CONFIG_FILE = livekitRuntime.configPath || LIVEKIT_CONFIG_PATH;
+    env.LIVEKIT_CONFIG_PATH = livekitRuntime.configPath || LIVEKIT_CONFIG_PATH;
   } else if (livekitRuntime.mode === 'external-configured') {
     env.LIVEKIT_DISABLED = '0';
+    if (livekitRuntime.credentialPath) {
+      delete env.LIVEKIT_API_KEY;
+      delete env.LIVEKIT_API_SECRET;
+      env.LIVEKIT_CREDENTIALS_FILE = livekitRuntime.credentialPath;
+    }
+    if (livekitRuntime.configPath) {
+      env.LIVEKIT_CONFIG_FILE = livekitRuntime.configPath;
+      env.LIVEKIT_CONFIG_PATH = livekitRuntime.configPath;
+    }
   } else {
     env.LIVEKIT_DISABLED = '1';
     delete env.LIVEKIT_API_KEY;
     delete env.LIVEKIT_API_SECRET;
     delete env.LIVEKIT_CREDENTIALS_FILE;
+    delete env.LIVEKIT_CONFIG_FILE;
     delete env.LIVEKIT_CONFIG_PATH;
   }
 

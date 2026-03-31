@@ -13,6 +13,8 @@ import { LiveKitConfig } from '../realtime/LiveKitConfig.js';
 import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
 import { getLiveKitCredentialRuntimeStatus } from '../realtime/LiveKitCredentialState.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
+import { WSServer } from '../websocket/WSServer.js';
+import { WSMessageType } from '@tx5dr/contracts';
 
 /**
  * 设置管理API路由
@@ -171,10 +173,13 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       await configManager.updateLiveKitPublicUrl(publicWsUrl);
       await configManager.updateRealtimeTransportPolicy(body.transportPolicy ?? 'auto');
 
+      const data = buildRealtimeSettingsData(request);
+      WSServer.getInstance()?.broadcast(WSMessageType.REALTIME_SETTINGS_CHANGED, data);
+
       return reply.code(200).send({
         success: true,
         message: 'Realtime settings updated',
-        data: buildRealtimeSettingsData(request),
+        data,
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);

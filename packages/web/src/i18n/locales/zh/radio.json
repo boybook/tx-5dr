@@ -65,7 +65,12 @@
     "toggleListen": "切换监听状态",
     "listen": "监听",
     "startFailed": "监听启动失败",
-    "codec": "编解码"
+    "codec": "编解码",
+    "transportMode": "链路模式",
+    "transportWebrtc": "WebRTC",
+    "transportWsPcm": "WS/PCM",
+    "switchToWebrtc": "切换到 WebRTC",
+    "switchToWsPcm": "切换到 WS/PCM"
   },
   "realtime": {
     "scopeRadio": "电台监听",

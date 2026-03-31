@@ -91,6 +91,7 @@ public
 .storybook-out
 
 # Temporary folders
+.tmp/
 tmp/
 temp/
 

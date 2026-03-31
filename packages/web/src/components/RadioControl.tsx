@@ -8,7 +8,7 @@ import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
 import { TunerCapabilitySurface } from '../radio-capability/components/TunerCapability';
 import { api, ApiError } from '@tx5dr/core';
-import type { ModeDescriptor } from '@tx5dr/contracts';
+import type { ModeDescriptor, RealtimeTransportKind } from '@tx5dr/contracts';
 import type { ConnectionState } from '../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
@@ -19,10 +19,9 @@ import { useTranslation } from 'react-i18next';
 import { useAudioMonitorPlayback } from '../hooks/useAudioMonitorPlayback';
 import { useWSEvent } from '../hooks/useWSEvent';
 import { createLogger } from '../utils/logger';
+import { detectBrowserAudioRuntime } from '../audio/browserAudioRuntime';
 import {
-  RealtimeConnectivityError,
-  buildRealtimeConnectivityIssue,
-  openRealtimeCompatFallbackModal,
+  presentRealtimeConnectivityFailure,
 } from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('RadioControl');
@@ -278,6 +277,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   // 简化的UI状态管理
   const [isTogglingListen, setIsTogglingListen] = useState(false);
+  const [isSwitchingMonitorTransport, setIsSwitchingMonitorTransport] = useState(false);
 
   const [volumeGain, setVolumeGain] = useState(1.0);
 
@@ -303,6 +303,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
   const [_customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
+
+  const getMonitorTransportLabel = React.useCallback((transport: RealtimeTransportKind | null | undefined): string => {
+    if (transport === 'ws-compat') {
+      return t('monitor.transportWsPcm');
+    }
+    return t('monitor.transportWebrtc');
+  }, [t]);
+
+  const getNextMonitorTransport = React.useCallback((): RealtimeTransportKind => (
+    audioMonitor.transportKind === 'ws-compat' ? 'livekit' : 'ws-compat'
+  ), [audioMonitor.transportKind]);
 
 
   // 加载可用模式列表
@@ -542,43 +553,60 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       audioMonitor.stop();
     } else {
       try {
-        await audioMonitor.start();
+        await audioMonitor.startFromGesture();
       } catch (error) {
         logger.error('Failed to start audio monitor', error);
-        const issue = error instanceof RealtimeConnectivityError
-          ? error.issue
-          : buildRealtimeConnectivityIssue(error, {
-            scope: 'radio',
-            stage: 'connect',
-          });
-        openRealtimeCompatFallbackModal({
-          issue,
-          onConfirm: async () => {
-            await audioMonitor.start({ transportOverride: 'ws-compat' });
+        presentRealtimeConnectivityFailure(error, {
+          scope: 'radio',
+          stage: 'connect',
+          onCompatFallbackConfirm: async () => {
+            await audioMonitor.switchTransportFromGesture('ws-compat');
           },
         });
       }
     }
   };
 
+  const handleSwitchMonitorTransport = async () => {
+    if (!audioMonitor.isPlaying || !audioMonitor.transportKind || isSwitchingMonitorTransport) {
+      return;
+    }
+
+    const nextTransport = getNextMonitorTransport();
+    setIsSwitchingMonitorTransport(true);
+    try {
+      await audioMonitor.switchTransportFromGesture(nextTransport);
+    } catch (error) {
+      logger.error('Failed to switch monitor transport', error);
+      presentRealtimeConnectivityFailure(error, {
+        scope: 'radio',
+        stage: 'connect',
+        onCompatFallbackConfirm: async () => {
+          await audioMonitor.switchTransportFromGesture('ws-compat');
+        },
+      });
+    } finally {
+      setIsSwitchingMonitorTransport(false);
+    }
+  };
+
   // Auto-start audio monitoring in voice mode
+  const browserRuntime = React.useMemo(() => detectBrowserAudioRuntime(), []);
   const voiceAutoMonitorTriggered = React.useRef(false);
   React.useEffect(() => {
+    if (browserRuntime.family === 'safari-webkit') {
+      return;
+    }
     if (radioMode.engineMode === 'voice' && !audioMonitor.isPlaying && connection.state.isConnected && !voiceAutoMonitorTriggered.current) {
       voiceAutoMonitorTriggered.current = true;
       logger.info('Voice mode detected, auto-starting audio monitor');
       audioMonitor.start().catch((err) => {
         logger.error('Voice auto-monitor failed', err);
-        const issue = err instanceof RealtimeConnectivityError
-          ? err.issue
-          : buildRealtimeConnectivityIssue(err, {
-            scope: 'radio',
-            stage: 'connect',
-          });
-        openRealtimeCompatFallbackModal({
-          issue,
-          onConfirm: async () => {
-            await audioMonitor.start({ transportOverride: 'ws-compat' });
+        presentRealtimeConnectivityFailure(err, {
+          scope: 'radio',
+          stage: 'connect',
+          onCompatFallbackConfirm: async () => {
+            await audioMonitor.switchTransportFromGesture('ws-compat');
           },
         });
       });
@@ -586,7 +614,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     if (radioMode.engineMode !== 'voice') {
       voiceAutoMonitorTriggered.current = false;
     }
-  }, [radioMode.engineMode, connection.state.isConnected, audioMonitor.isPlaying]);
+  }, [audioMonitor.isPlaying, audioMonitor.start, browserRuntime.family, connection.state.isConnected, radioMode.engineMode]);
 
   // 频率格式验证和转换
   const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
@@ -1105,37 +1133,41 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                   </div>
 
                   {/* 状态指示器 */}
-                  {audioMonitor.isPlaying && audioMonitor.stats && (
+                  {audioMonitor.isPlaying && (
                     <div className="space-y-1 pt-2 border-t border-divider text-xs">
-                      {/* 延迟显示 */}
-                      <div className="flex justify-between items-center">
-                        {t('monitor.latency')}
-                        <span className={`font-mono ${
-                          audioMonitor.stats.latencyMs < 50 ? 'text-success' :
-                          audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
-                          'text-danger'
-                        }`}>
-                          {audioMonitor.stats.latencyMs.toFixed(0)}ms
-                        </span>
-                      </div>
+                      {audioMonitor.stats && (
+                        <>
+                          {/* 延迟显示 */}
+                          <div className="flex justify-between items-center">
+                            {t('monitor.latency')}
+                            <span className={`font-mono ${
+                              audioMonitor.stats.latencyMs < 50 ? 'text-success' :
+                              audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
+                              'text-danger'
+                            }`}>
+                              {audioMonitor.stats.latencyMs.toFixed(0)}ms
+                            </span>
+                          </div>
 
-                      {/* 缓冲区状态 */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center">
-                          {t('monitor.buffer')}
-                          <span className="font-mono text-default-400">
-                            {audioMonitor.stats.bufferFillPercent.toFixed(0)}%
-                          </span>
-                        </div>
-                      </div>
+                          {/* 缓冲区状态 */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center">
+                              {t('monitor.buffer')}
+                              <span className="font-mono text-default-400">
+                                {audioMonitor.stats.bufferFillPercent.toFixed(0)}%
+                              </span>
+                            </div>
+                          </div>
 
-                      {/* 音频活动指示 */}
-                      <div className="flex justify-between items-center">
-                        {t('monitor.active')}
-                        <div className={`w-2 h-2 rounded-full ${
-                          audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
-                        }`} />
-                      </div>
+                          {/* 音频活动指示 */}
+                          <div className="flex justify-between items-center">
+                            {t('monitor.active')}
+                            <div className={`w-2 h-2 rounded-full ${
+                              audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
+                            }`} />
+                          </div>
+                        </>
+                      )}
 
                       {/* 编解码器 */}
                       <div className="flex justify-between items-center">
@@ -1144,6 +1176,27 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                           {audioMonitor.codec}
                         </span>
                       </div>
+
+                      <div className="flex justify-between items-center">
+                        {t('monitor.transportMode')}
+                        <span className="font-mono text-default-400">
+                          {getMonitorTransportLabel(audioMonitor.transportKind)}
+                        </span>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color={audioMonitor.transportKind === 'ws-compat' ? 'primary' : 'warning'}
+                        className="w-full"
+                        onPress={handleSwitchMonitorTransport}
+                        isLoading={isSwitchingMonitorTransport}
+                        isDisabled={!audioMonitor.transportKind || isSwitchingMonitorTransport}
+                      >
+                        {audioMonitor.transportKind === 'ws-compat'
+                          ? t('monitor.switchToWebrtc')
+                          : t('monitor.switchToWsPcm')}
+                      </Button>
                     </div>
                   )}
 

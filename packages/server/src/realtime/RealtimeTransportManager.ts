@@ -37,6 +37,13 @@ interface CompatSocketContext {
   cleanup?: () => void;
 }
 
+type RealtimeTransportSelectionReason =
+  | 'client-override'
+  | 'server-policy'
+  | 'bridge-unhealthy'
+  | 'livekit-disabled'
+  | 'default-livekit';
+
 export interface IssueRealtimeSessionParams {
   scope: RealtimeScope;
   direction: RealtimeSessionDirection;
@@ -114,11 +121,13 @@ export class RealtimeTransportManager {
 
   async issueSession(params: IssueRealtimeSessionParams): Promise<RealtimeSessionResponse> {
     const hints = LiveKitConfig.getConnectivityHints();
-    const forceCompat = params.transportOverride === 'ws-compat'
-      || ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat'
-      || !LiveKitConfig.isEnabled();
-    const preferredTransport = params.transportOverride
-      ?? this.determinePreferredTransport(params.scope, params.direction, forceCompat);
+    const selection = this.determineTransportSelection(
+      params.scope,
+      params.direction,
+      params.transportOverride,
+    );
+    const forceCompat = selection.forcedCompatibilityMode;
+    const preferredTransport = selection.transport;
     const liveKitOffer = forceCompat || params.transportOverride === 'ws-compat'
       ? null
       : await this.buildLiveKitOffer(params, hints);
@@ -139,10 +148,23 @@ export class RealtimeTransportManager {
       throw new Error('No realtime transport offers are available');
     }
 
+    logger.info('Realtime session issued', {
+      scope: params.scope,
+      direction: params.direction,
+      transportOverride: params.transportOverride ?? null,
+      policy: selection.policy,
+      preferredTransport,
+      forcedCompatibilityMode: forceCompat,
+      selectionReason: selection.reason,
+      offers: offers.map((offer) => offer.transport),
+    });
+
     return {
       scope: params.scope,
       direction: params.direction,
       preferredTransport,
+      effectiveTransportPolicy: selection.policy,
+      selectionReason: selection.reason,
       forcedCompatibilityMode: forceCompat,
       offers,
       connectivityHints: hints,
@@ -150,9 +172,7 @@ export class RealtimeTransportManager {
   }
 
   getPreferredTransport(scope: RealtimeScope, direction: RealtimeSessionDirection): RealtimeTransportKind {
-    const forceCompat = ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat'
-      || !LiveKitConfig.isEnabled();
-    return this.determinePreferredTransport(scope, direction, forceCompat);
+    return this.determineTransportSelection(scope, direction).transport;
   }
 
   getScopeHealth(scope: RealtimeScope): { healthy: boolean; updatedAt: number; issueCode: string | null } {
@@ -272,23 +292,73 @@ export class RealtimeTransportManager {
     socket.once('error', cleanup);
   }
 
-  private determinePreferredTransport(
+  private determineTransportSelection(
     scope: RealtimeScope,
     direction: RealtimeSessionDirection,
-    forceCompat: boolean,
-  ): RealtimeTransportKind {
-    if (forceCompat) {
-      return 'ws-compat';
+    transportOverride?: RealtimeTransportKind,
+  ): {
+    transport: RealtimeTransportKind;
+    forcedCompatibilityMode: boolean;
+    policy: 'auto' | 'force-compat';
+    reason: RealtimeTransportSelectionReason;
+  } {
+    const policy = ConfigManager.getInstance().getRealtimeTransportPolicy();
+    const liveKitEnabled = LiveKitConfig.isEnabled();
+
+    if (transportOverride === 'ws-compat') {
+      return {
+        transport: 'ws-compat',
+        forcedCompatibilityMode: true,
+        policy,
+        reason: 'client-override',
+      };
+    }
+
+    if (policy === 'force-compat') {
+      return {
+        transport: 'ws-compat',
+        forcedCompatibilityMode: true,
+        policy,
+        reason: 'server-policy',
+      };
+    }
+
+    if (!liveKitEnabled) {
+      return {
+        transport: 'ws-compat',
+        forcedCompatibilityMode: true,
+        policy,
+        reason: 'livekit-disabled',
+      };
+    }
+
+    if (transportOverride === 'livekit') {
+      return {
+        transport: 'livekit',
+        forcedCompatibilityMode: false,
+        policy,
+        reason: 'client-override',
+      };
     }
 
     if (direction === 'recv') {
       const health = this.liveKitBridgeManager.getScopeHealth(scope);
       if (!health.healthy) {
-        return 'ws-compat';
+        return {
+          transport: 'ws-compat',
+          forcedCompatibilityMode: false,
+          policy,
+          reason: 'bridge-unhealthy',
+        };
       }
     }
 
-    return 'livekit';
+    return {
+      transport: 'livekit',
+      forcedCompatibilityMode: false,
+      policy,
+      reason: 'default-livekit',
+    };
   }
 
   private async buildLiveKitOffer(

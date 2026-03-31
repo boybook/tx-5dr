@@ -22,12 +22,15 @@ import type {
   RealtimeConnectivityHints,
   RealtimeConnectivityErrorCode,
   RealtimeCredentialStatus,
+  RealtimeSettingsResponseData,
   RealtimeTransportKind,
   RealtimeTransportPolicy,
 } from '@tx5dr/contracts';
 import { FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
 import { createLogger } from '../utils/logger';
+import { useConnection } from '../store/radioStore';
+import { useWSEvent } from '../hooks/useWSEvent';
 
 interface DecodeWindowState {
   ft8Preset: string;
@@ -163,6 +166,7 @@ export const SystemSettings = forwardRef<
   SystemSettingsProps
 >(({ onUnsavedChanges }, ref) => {
   const { t } = useTranslation();
+  const connection = useConnection();
   const REPORT_INTERVAL_OPTIONS = useMemo(() => getReportIntervalOptions(t), [t]);
   const [decodeWhileTransmitting, setDecodeWhileTransmitting] = useState(false);
   const [originalDecodeValue, setOriginalDecodeValue] = useState(false);
@@ -312,20 +316,49 @@ export const SystemSettings = forwardRef<
     }
   };
 
+  const applyRealtimeSettingsSnapshot = useCallback((
+    data: RealtimeSettingsResponseData,
+    options?: { preserveDraft?: boolean },
+  ) => {
+    const nextPublicUrl = data.publicWsUrl ?? '';
+    const nextPolicy = data.transportPolicy ?? 'auto';
+    const preserveDraft = options?.preserveDraft === true;
+    const hasLocalDraft = liveKitPublicUrl !== originalLiveKitPublicUrl
+      || realtimeTransportPolicy !== originalRealtimeTransportPolicy;
+
+    if (!preserveDraft || !hasLocalDraft) {
+      setLiveKitPublicUrl(nextPublicUrl);
+      setRealtimeTransportPolicy(nextPolicy);
+    }
+
+    setOriginalLiveKitPublicUrl(nextPublicUrl);
+    setOriginalRealtimeTransportPolicy(nextPolicy);
+    setRealtimeRuntime(data.runtime ?? null);
+  }, [
+    liveKitPublicUrl,
+    originalLiveKitPublicUrl,
+    realtimeTransportPolicy,
+    originalRealtimeTransportPolicy,
+  ]);
+
   const loadRealtimeSettings = useCallback(async () => {
     try {
       const result = await api.getRealtimeSettings();
-      const value = result.data.publicWsUrl ?? '';
-      setLiveKitPublicUrl(value);
-      setOriginalLiveKitPublicUrl(value);
-      const policy = result.data.transportPolicy ?? 'auto';
-      setRealtimeTransportPolicy(policy);
-      setOriginalRealtimeTransportPolicy(policy);
-      setRealtimeRuntime(result.data.runtime ?? null);
+      applyRealtimeSettingsSnapshot(result.data, { preserveDraft: true });
     } catch (err) {
       logger.error('Failed to load realtime settings:', err);
     }
-  }, []);
+  }, [applyRealtimeSettingsSnapshot]);
+
+  useWSEvent(
+    connection.state.radioService,
+    'realtimeSettingsChanged',
+    (data) => {
+      logger.debug('Realtime settings changed via WebSocket', data);
+      applyRealtimeSettingsSnapshot(data, { preserveDraft: true });
+    },
+    [applyRealtimeSettingsSnapshot],
+  );
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -456,13 +489,7 @@ export const SystemSettings = forwardRef<
           publicWsUrl: normalizedPublicUrl || null,
           transportPolicy: realtimeTransportPolicy,
         });
-        const savedValue = realtimeResult.data.publicWsUrl ?? '';
-        setLiveKitPublicUrl(savedValue);
-        setOriginalLiveKitPublicUrl(savedValue);
-        const savedPolicy = realtimeResult.data.transportPolicy ?? 'auto';
-        setRealtimeTransportPolicy(savedPolicy);
-        setOriginalRealtimeTransportPolicy(savedPolicy);
-        setRealtimeRuntime(realtimeResult.data.runtime ?? null);
+        applyRealtimeSettingsSnapshot(realtimeResult.data);
       }
 
       // 保存 Electron 关闭行为设置

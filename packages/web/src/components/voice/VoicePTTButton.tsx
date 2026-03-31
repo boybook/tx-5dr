@@ -6,9 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { VoiceCapture } from '../../audio/VoiceCapture';
 import {
-  RealtimeConnectivityError,
-  buildRealtimeConnectivityIssue,
-  openRealtimeCompatFallbackModal,
+  presentRealtimeConnectivityFailure,
 } from '../../realtime/realtimeConnectivity';
 
 const logger = createLogger('VoicePTTButton');
@@ -55,7 +53,7 @@ export const VoicePTTButton: React.FC = () => {
     }
   }, [voicePttLock]);
 
-  // Initialize voice capture when in voice mode
+  // Initialize voice capture instance when in voice mode.
   useEffect(() => {
     if (!radioService || radioMode.engineMode !== 'voice') {
       return;
@@ -67,29 +65,17 @@ export const VoicePTTButton: React.FC = () => {
       },
       onError: (error) => {
         logger.error('Voice capture error:', error);
-        const issue = error instanceof RealtimeConnectivityError
-          ? error.issue
-          : buildRealtimeConnectivityIssue(error, {
-            scope: 'radio',
-            stage: 'publish',
-          });
-        openRealtimeCompatFallbackModal({
-          issue,
-          onConfirm: async () => {
-            await capture.start({ transportOverride: 'ws-compat' });
+        presentRealtimeConnectivityFailure(error, {
+          scope: 'radio',
+          stage: 'publish',
+          onCompatFallbackConfirm: async () => {
+            await capture.switchTransportFromGesture('ws-compat');
           },
         });
       },
     });
 
-    // Set ref immediately so PTT can queue activation before start() completes
     voiceCaptureRef.current = capture;
-
-    capture.start().then(() => {
-      logger.info('Voice capture initialized');
-    }).catch((error) => {
-      logger.error('Failed to initialize voice capture:', error);
-    });
 
     return () => {
       capture.stop();
@@ -122,20 +108,27 @@ export const VoicePTTButton: React.FC = () => {
     if (!isOperator || !radioService || isPttDownRef.current) return;
     if (pttState === 'locked-by-other') return;
 
-    if (voiceCaptureRef.current?.captureState !== 'capturing') {
-      await voiceCaptureRef.current?.whenReady();
-    }
-    const participantIdentity = voiceCaptureRef.current?.participantIdentity;
-    if (!participantIdentity) {
-      logger.warn('PTT requested before voice participant identity became available');
-      return;
-    }
-
     isPttDownRef.current = true;
     setPttState('requesting');
 
-    radioService.requestVoicePTT(participantIdentity);
-    voiceCaptureRef.current?.setPTTActive(true);
+    try {
+      await voiceCaptureRef.current?.startFromGesture();
+      const participantIdentity = voiceCaptureRef.current?.participantIdentity;
+      if (!participantIdentity) {
+        logger.warn('PTT requested before voice participant identity became available');
+        isPttDownRef.current = false;
+        setPttState('idle');
+        return;
+      }
+
+      radioService.requestVoicePTT(participantIdentity);
+      voiceCaptureRef.current?.setPTTActive(true);
+    } catch (error) {
+      isPttDownRef.current = false;
+      setPttState('idle');
+      logger.error('PTT initialization failed', error);
+      return;
+    }
 
     acquireWakeLock();
     if (navigator.vibrate) {
