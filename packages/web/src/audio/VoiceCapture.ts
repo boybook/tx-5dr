@@ -89,11 +89,10 @@ export class VoiceCapture {
         const session = await api.getRealtimeSession({
           scope: 'radio',
           direction: 'send',
+          ...(options?.transportOverride ? { transportOverride: options.transportOverride } : {}),
         });
-        connectivityHints = session.connectivityHints;
-        const offers = options?.transportOverride
-          ? session.offers.filter((offer) => offer.transport === options.transportOverride)
-          : session.offers;
+        connectivityHints = options?.transportOverride === 'ws-compat' ? undefined : session.connectivityHints;
+        const offers = session.offers;
 
         let lastError: unknown = null;
         for (const offer of offers) {

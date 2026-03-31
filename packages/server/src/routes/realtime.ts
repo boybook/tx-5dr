@@ -2,7 +2,6 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   UserRole,
   type RealtimeStatsRequest,
-  type RealtimeSessionRequest,
   RealtimeStatsRequestSchema,
   RealtimeStatsResponseSchema,
   RealtimeSessionRequestSchema,
@@ -16,6 +15,13 @@ import { LiveKitConfig } from '../realtime/LiveKitConfig.js';
 import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
 import { buildOpenWebRXPreviewRoomName, buildRadioRoomName } from '../realtime/room-names.js';
 
+type ParsedRealtimeSessionRequest = {
+  scope: 'radio' | 'openwebrx-preview';
+  direction: 'recv' | 'send';
+  previewSessionId?: string;
+  transportOverride?: 'livekit' | 'ws-compat';
+};
+
 export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
   const authManager = AuthManager.getInstance();
   const transportManager = RealtimeTransportManager.getInstance();
@@ -23,7 +29,7 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
 
   fastify.post('/session', async (request: FastifyRequest, reply) => {
-    const body = RealtimeSessionRequestSchema.parse(request.body) as RealtimeSessionRequest;
+    const body = RealtimeSessionRequestSchema.parse(request.body) as ParsedRealtimeSessionRequest;
     const authUser = request.authUser;
 
     if (body.scope === 'openwebrx-preview' && !body.previewSessionId) {
@@ -79,6 +85,7 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
       roomName,
       scope: body.scope,
       direction: body.direction,
+      transportOverride: body.transportOverride,
       publicLiveKitUrl: LiveKitConfig.resolvePublicWsUrl(request),
       role,
       tokenId,

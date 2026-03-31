@@ -628,11 +628,10 @@ export function useAudioMonitorPlayback(
         scope,
         direction: 'recv',
         ...(effectivePreviewSessionId ? { previewSessionId: effectivePreviewSessionId } : {}),
+        ...(transportOverride ? { transportOverride } : {}),
       });
-      connectivityHintsRef.current = session.connectivityHints;
-      const offers = transportOverride
-        ? session.offers.filter((offer) => offer.transport === transportOverride)
-        : session.offers;
+      connectivityHintsRef.current = transportOverride === 'ws-compat' ? null : session.connectivityHints;
+      const offers = session.offers;
 
       let lastError: unknown = null;
       for (const offer of offers) {

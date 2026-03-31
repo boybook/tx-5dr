@@ -225,6 +225,7 @@ export function OpenWebRXSettings() {
   const handleStartListen = async () => {
     if (!listenStationId || !listenProfileId) return;
     setIsStartingListen(true);
+    let previewSessionId: string | undefined;
     try {
       const result = await api.startOpenWebRXListen({
         stationId: listenStationId,
@@ -232,6 +233,7 @@ export function OpenWebRXSettings() {
         frequency: listenFrequency ? parseInt(listenFrequency) : undefined,
         modulation: listenModulation || undefined,
       });
+      previewSessionId = result.status.previewSessionId;
       setListenStatus(result.status);
       await audioPlayback.start(result.status.previewSessionId);
     } catch (error) {
@@ -247,7 +249,7 @@ export function OpenWebRXSettings() {
         issue,
         onConfirm: async () => {
           await audioPlayback.start({
-            previewSessionId: result.status.previewSessionId,
+            previewSessionId,
             transportOverride: 'ws-compat',
           });
         },
