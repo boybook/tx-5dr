@@ -17,13 +17,14 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
-import { useConnection, useRadioState } from '../../store/radioStore';
+import { useConnection, useRadioConnectionState, useRadioState } from '../../store/radioStore';
 import { useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
 import { showErrorToast } from '../../utils/errorToast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
+import { isCoreCapabilityAvailable } from '../../utils/radioControl';
 
 const logger = createLogger('VoiceFrequencyControl');
 
@@ -220,11 +221,14 @@ interface FrequencyPreset {
 export const VoiceFrequencyControl: React.FC = () => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
+  const radioConnection = useRadioConnectionState();
   const radio = useRadioState();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canManageFrequencyPresets = useCan('update', 'SettingsFrequencyPresets');
   const ability = useAbility();
+  const canWriteFrequency = canSetFrequency && isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeFrequency');
+  const canWriteRadioMode = canSetFrequency && isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeRadioMode');
 
   const [presets, setPresets] = useState<FrequencyPreset[]>([]);
   const [isLoadingPresets, setIsLoadingPresets] = useState(false);
@@ -428,7 +432,7 @@ export const VoiceFrequencyControl: React.FC = () => {
 
   // Handle frequency preset selection
   const handlePresetSelect = async (key: string) => {
-    if (!canSetFrequency || !connection.state.isConnected) return;
+    if (!canWriteFrequency || !connection.state.isConnected) return;
 
     const preset = presets.find(p => p.key === key);
     if (!preset) return;
@@ -462,7 +466,7 @@ export const VoiceFrequencyControl: React.FC = () => {
 
   // Handle radio mode change
   const handleRadioModeChange = (mode: string) => {
-    if (!canSetFrequency) return;
+    if (!canWriteRadioMode) return;
     setCurrentRadioMode(mode);
     connection.state.radioService?.setVoiceRadioMode(mode);
   };
@@ -550,7 +554,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                   key={`d-${i}`}
                   digit={entry.char}
                   placeValue={entry.placeValue}
-                  disabled={!canSetFrequency}
+                  disabled={!canWriteFrequency}
                   isLeadingZero={entry.isLeadingZero}
                   onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
                   onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
@@ -571,7 +575,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                 color={currentRadioMode === mode ? 'primary' : 'default'}
                 variant={currentRadioMode === mode ? 'solid' : 'flat'}
                 onPress={() => handleRadioModeChange(mode)}
-                isDisabled={!canSetFrequency}
+                isDisabled={!canWriteRadioMode}
                 className="min-w-12"
               >
                 {mode}
@@ -590,13 +594,13 @@ export const VoiceFrequencyControl: React.FC = () => {
               selectionMode="single"
               selectedKeys={new Set([String(currentFrequency)])}
               onSelectionChange={(keys) => {
-                if (!canSetFrequency) return;
+                if (!canWriteFrequency) return;
                 if (keys === 'all') return;
                 const key = Array.from(keys)[0] as string;
                 if (key) handlePresetSelect(key);
               }}
               variant="flat"
-              className={`p-0${!canSetFrequency ? ' opacity-50 pointer-events-none' : ''}`}
+              className={`p-0${!canWriteFrequency ? ' opacity-50 pointer-events-none' : ''}`}
             >
               {Object.entries(groupedPresets).map(([band, bandPresets]) => (
                 <ListboxSection key={band} title={band} showDivider>
@@ -619,10 +623,10 @@ export const VoiceFrequencyControl: React.FC = () => {
         </div>
 
         {/* Voice frequency actions */}
-        {(canSetFrequency || canManageFrequencyPresets) && (
+        {(canWriteFrequency || canManageFrequencyPresets) && (
           <div className="flex-shrink-0">
-            <div className={`grid gap-2 ${canSetFrequency && canManageFrequencyPresets ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              {canSetFrequency && (
+            <div className={`grid gap-2 ${canWriteFrequency && canManageFrequencyPresets ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {canWriteFrequency && (
                 <Button
                   size="sm"
                   variant="flat"

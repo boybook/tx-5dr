@@ -1211,13 +1211,16 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
     let radioMode: string | null = this.cachedVoiceState.radioMode;
     let bandwidthLabel: string | number | null = this.cachedVoiceState.bandwidthLabel;
+    const coreCapabilities = this.engine.getRadioManager().getCoreCapabilities();
 
-    try {
-      const modeInfo = await this.engine.getRadioManager().getMode();
-      radioMode = modeInfo.mode || null;
-      bandwidthLabel = modeInfo.bandwidth || null;
-    } catch (error) {
-      logger.debug('Failed to read voice radio mode for spectrum session', error);
+    if (coreCapabilities.readRadioMode) {
+      try {
+        const modeInfo = await this.engine.getRadioManager().getMode();
+        radioMode = modeInfo.mode || null;
+        bandwidthLabel = modeInfo.bandwidth || null;
+      } catch (error) {
+        logger.debug('Failed to read voice radio mode for spectrum session', error);
+      }
     }
 
     const normalized = this.normalizeVoiceMode(radioMode, bandwidthLabel);

@@ -88,6 +88,7 @@ export class RadioBridge {
         radioInfo: null,
         radioConfig: radioManager.getConfig(),
         connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities: radioManager.getCoreCapabilities(),
       });
     });
 
@@ -106,6 +107,7 @@ export class RadioBridge {
         radioInfo,
         radioConfig,
         connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities: radioManager.getCoreCapabilities(),
         meterCapabilities: radioManager.getMeterCapabilities(),
         tunerCapabilities,
       });
@@ -192,6 +194,7 @@ export class RadioBridge {
         message: `Reconnecting to radio... (${attempt}/${maxAttempts})`,
         reconnectProgress: { attempt, maxAttempts, nextRetryMs: delayMs },
         connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities: radioManager.getCoreCapabilities(),
       });
     });
 
@@ -246,7 +249,8 @@ export class RadioBridge {
         reason,
         message: wasReconnecting ? 'Radio connection lost' : 'Radio disconnected',
         recommendation: this.getDisconnectRecommendation(reason),
-        connectionHealth: radioManager.getConnectionHealth()
+        connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities: radioManager.getCoreCapabilities(),
       });
 
       this._wasRunningBeforeDisconnect = false;
@@ -291,6 +295,20 @@ export class RadioBridge {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.lm.listen(radioManager, 'capabilityChanged', (state: any) => {
       engineEmitter.emit('radioCapabilityChanged', state);
+    });
+
+    this.lm.listen(radioManager, 'coreCapabilitiesChanged', async (coreCapabilities) => {
+      const radioInfo = radioManager.isConnected()
+        ? await radioManager.getRadioInfo()
+        : null;
+      engineEmitter.emit('radioStatusChanged', {
+        connected: radioManager.isConnected(),
+        status: radioManager.getConnectionStatus(),
+        radioInfo,
+        radioConfig: radioManager.getConfig(),
+        connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities,
+      });
     });
 
     // 监听电台频率变化（自动同步）
