@@ -7,6 +7,7 @@ import type {
   RealtimeScope,
 } from '@tx5dr/contracts';
 import i18n from '../i18n';
+import { detectBrowserAudioRuntime } from '../audio/browserAudioRuntime';
 
 type RealtimeErrorStage = RealtimeConnectivityIssue['stage'];
 const REALTIME_TOAST_DEDUPE_WINDOW_MS = 4000;
@@ -85,7 +86,17 @@ function isNetworkStyleRealtimeIssue(code: RealtimeConnectivityErrorCode): boole
     || code === 'UNKNOWN_REALTIME_ERROR';
 }
 
+function isBrowserRuntimeIssue(issue: RealtimeConnectivityIssue): boolean {
+  return issue.context?.browserRuntimeIssue === 'true';
+}
+
 function getFallbackClue(issue: RealtimeConnectivityIssue): string {
+  if (isBrowserRuntimeIssue(issue)) {
+    return i18n.t('radio:realtime.compatFallbackClueBrowserRuntime', {
+      browser: issue.context?.browserRuntimeLabel || i18n.t('radio:realtime.genericBrowserRuntimeLabel'),
+    });
+  }
+
   switch (issue.code) {
     case 'PUBLIC_URL_MISCONFIGURED':
       return i18n.t('radio:realtime.compatFallbackCluePublicUrl');
@@ -192,6 +203,7 @@ export function buildRealtimeConnectivityIssue(
   const scopeLabel = getScopeLabel(options.scope);
   const hints = options.hints;
   const overrideActive = hints?.publicUrlOverrideActive ?? false;
+  const browserRuntime = detectBrowserAudioRuntime();
 
   if (error instanceof RealtimeConnectivityError) {
     return error.issue;
@@ -272,6 +284,32 @@ export function buildRealtimeConnectivityIssue(
   }
 
   if (
+    lowerMessage.includes('abort handler called')
+    || lowerMessage.includes('audioworklet')
+    || lowerMessage.includes('addmodule')
+    || lowerMessage.includes('audioworkletnode')
+  ) {
+    return buildIssue(
+      options,
+      'UNKNOWN_REALTIME_ERROR',
+      i18n.t('radio:realtime.browserRuntimeFailed', {
+        scope: scopeLabel,
+        browser: browserRuntime.label,
+      }),
+      [
+        i18n.t('radio:realtime.suggestionTryRecommendedBrowser'),
+        i18n.t('radio:realtime.suggestionRetryLater'),
+      ],
+      message,
+      {
+        browserRuntimeIssue: 'true',
+        browserRuntimeLabel: browserRuntime.label,
+        audioWorkletSupported: String(browserRuntime.audioWorkletSupported),
+      },
+    );
+  }
+
+  if (
     lowerMessage.includes('websocket') ||
     lowerMessage.includes('signal') ||
     lowerMessage.includes('connection refused') ||
@@ -348,7 +386,12 @@ export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIs
 
   if (compatFallbackAttempted) {
     descriptionLines.push(i18n.t('radio:realtime.compatFallbackFailed'));
-  } else if (isNetworkStyleRealtimeIssue(issue.code)) {
+    if (isBrowserRuntimeIssue(issue)) {
+      descriptionLines.push(i18n.t('radio:realtime.compatFallbackBrowserRuntimeHint', {
+        browser: issue.context?.browserRuntimeLabel || i18n.t('radio:realtime.genericBrowserRuntimeLabel'),
+      }));
+    }
+  } else if (isNetworkStyleRealtimeIssue(issue.code) && !isBrowserRuntimeIssue(issue)) {
     descriptionLines.push(i18n.t('radio:realtime.compactNetworkHint'));
   }
 
