@@ -58,12 +58,11 @@ download_block = f'''    # Auto-download latest nightly from OSS metadata (fallb
         _fallback_tag="nightly-server"
         if [[ "$_dl_family" == "rhel" ]]; then
             _asset_name="TX-5DR-nightly-server-linux-${{ARCH}}.rpm"
-            PKG_FILE="/tmp/tx5dr-nightly-${{ARCH}}.rpm"
         else
             _asset_name="TX-5DR-nightly-server-linux-${{ARCH}}.deb"
-            PKG_FILE="/tmp/tx5dr-nightly-${{ARCH}}.deb"
         fi
         _fallback_url="$(get_github_release_asset_url "$_fallback_tag" "$_asset_name")"
+        PKG_FILE="/tmp/${{_asset_name}}"
         _resolved_url=""
         _resolved_sha=""
         if should_prefer_oss_download; then
