@@ -1,16 +1,18 @@
-import { api, encodeWsCompatAudioFrame } from '@tx5dr/core';
-import type { RealtimeConnectivityHints, RealtimeTransportOffer, RealtimeTransportKind } from '@tx5dr/contracts';
-import { Room, RoomEvent, Track, createLocalAudioTrack, type LocalAudioTrack } from 'livekit-client';
+import { encodeWsCompatAudioFrame } from '@tx5dr/core';
+import type { RealtimeTransportOffer, RealtimeTransportKind } from '@tx5dr/contracts';
+import { Room, RoomEvent, Track, LocalAudioTrack } from 'livekit-client';
 import { createLogger } from '../utils/logger';
 import {
   createCompatCaptureBackend,
   type CompatCaptureBackend,
 } from './compatAudioBackends';
 import {
-  buildRealtimeConnectivityIssue,
-  showRealtimeFallbackActivatedToast,
-  toRealtimeConnectivityError,
-} from '../realtime/realtimeConnectivity';
+  ensureInteractiveAudioContext,
+  requestInteractiveMicrophone,
+  closeAudioContext,
+  stopMediaStream,
+} from './audioRuntime';
+import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
 
 const logger = createLogger('VoiceCapture');
 const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
@@ -24,6 +26,10 @@ export interface VoiceCaptureOptions {
 
 interface VoiceCaptureStartOptions {
   transportOverride?: RealtimeTransportKind;
+}
+
+interface VoiceCaptureCleanupOptions {
+  preserveInteractiveRuntime?: boolean;
 }
 
 export type VoiceCaptureState = 'idle' | 'starting' | 'capturing' | 'error';
@@ -72,10 +78,30 @@ export class VoiceCapture {
     return this.transportKind;
   }
 
-  async whenReady(): Promise<void> {
-    if (this.startPromise) {
-      await this.startPromise;
+  async prepareCaptureFromGesture(): Promise<void> {
+    this.mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
+    this.audioContext = await ensureInteractiveAudioContext(this.audioContext);
+    if (!this.mediaSource) {
+      this.mediaSource = this.audioContext.createMediaStreamSource(this.mediaStream);
     }
+  }
+
+  async ensureStartedFromGesture(options?: VoiceCaptureStartOptions): Promise<void> {
+    await this.startFromGesture(options);
+  }
+
+  async startFromGesture(options?: VoiceCaptureStartOptions): Promise<void> {
+    await this.prepareCaptureFromGesture();
+    await this.start(options);
+  }
+
+  async switchTransportFromGesture(transport: RealtimeTransportKind): Promise<void> {
+    await this.prepareCaptureFromGesture();
+    if (this.state === 'capturing') {
+      this.cleanup({ preserveInteractiveRuntime: true });
+      this.setState('idle');
+    }
+    await this.start({ transportOverride: transport });
   }
 
   async start(options?: VoiceCaptureStartOptions): Promise<void> {
@@ -86,69 +112,26 @@ export class VoiceCapture {
     this.setState('starting');
 
     this.startPromise = (async () => {
-      let errorStage: 'token' | 'connect' | 'publish' = 'token';
-      let connectivityHints: RealtimeConnectivityHints | undefined;
-      let compatFallbackAttempted = false;
-      let liveKitFailureIssue: ReturnType<typeof buildRealtimeConnectivityIssue> | null = null;
       try {
-        const session = await api.getRealtimeSession({
+        const result = await executeRealtimeSessionFlow({
           scope: 'radio',
           direction: 'send',
-          ...(options?.transportOverride ? { transportOverride: options.transportOverride } : {}),
+          transportOverride: options?.transportOverride,
+          connectStage: 'connect',
+          startLiveKit: (offer, startOptions) => this.startLiveKitCapture(offer, startOptions),
+          startCompat: (offer) => this.startCompatCapture(offer),
+          cleanupFailedAttempt: () => {
+            this.cleanupTransportOnly();
+          },
         });
-        connectivityHints = options?.transportOverride === 'ws-compat' ? undefined : session.connectivityHints;
-        const offers = session.offers;
-
-        let lastError: unknown = null;
-        for (const offer of offers) {
-          try {
-            errorStage = 'connect';
-            if (offer.transport === 'livekit') {
-              await this.startLiveKitCapture(offer, {
-                fastFallback: offers.some((candidate) => candidate.transport === 'ws-compat'),
-              });
-            } else {
-              compatFallbackAttempted = liveKitFailureIssue !== null;
-              await this.startCompatCapture(offer);
-              if (liveKitFailureIssue) {
-                showRealtimeFallbackActivatedToast(liveKitFailureIssue);
-              }
-            }
-            this.setState('capturing');
-            return;
-          } catch (error) {
-            lastError = error;
-            if (offer.transport === 'livekit') {
-              liveKitFailureIssue = buildRealtimeConnectivityIssue(error, {
-                scope: 'radio',
-                stage: errorStage,
-                hints: connectivityHints,
-              });
-              logger.warn('LiveKit voice capture path failed, trying compatibility fallback', {
-                code: liveKitFailureIssue.code,
-                details: liveKitFailureIssue.technicalDetails,
-              });
-            }
-            this.cleanup();
-          }
-        }
-
-        throw lastError ?? new Error('No realtime uplink transport succeeded');
+        this.transportKind = result.transport;
+        this.setState('capturing');
       } catch (error) {
         logger.error('Failed to start voice capture', error);
         this.setState('error');
-        const realtimeError = toRealtimeConnectivityError(error, {
-          scope: 'radio',
-          stage: errorStage,
-          hints: connectivityHints,
-        });
-        if (!realtimeError.issue.context) {
-          realtimeError.issue.context = {};
-        }
-        realtimeError.issue.context.compatFallbackAttempted = String(compatFallbackAttempted);
-        this.options.onError?.(realtimeError);
+        this.options.onError?.(error as Error);
         this.cleanup();
-        throw realtimeError;
+        throw error;
       }
     })();
 
@@ -189,6 +172,12 @@ export class VoiceCapture {
     offer: RealtimeTransportOffer,
     options?: { fastFallback?: boolean },
   ): Promise<void> {
+    const mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
+    const sourceTrack = mediaStream.getAudioTracks()[0];
+    if (!sourceTrack) {
+      throw new Error('No microphone track is available for LiveKit capture');
+    }
+
     const room = new Room({
       adaptiveStream: false,
       dynacast: false,
@@ -203,7 +192,12 @@ export class VoiceCapture {
       peerConnectionTimeout: options?.fastFallback ? LIVEKIT_FAST_PEER_TIMEOUT_MS : undefined,
     });
 
-    const localTrack = await createLocalAudioTrack(AUDIO_CONSTRAINTS);
+    const localTrack = new LocalAudioTrack(
+      sourceTrack,
+      AUDIO_CONSTRAINTS,
+      true,
+      this.audioContext ?? undefined,
+    );
     await room.localParticipant.publishTrack(localTrack, {
       source: Track.Source.Microphone,
       name: 'voice-tx',
@@ -213,6 +207,7 @@ export class VoiceCapture {
     this.transportKind = 'livekit';
     this.room = room;
     this.localTrack = localTrack;
+    this.mediaStream = mediaStream;
     this._participantIdentity = offer.participantIdentity ?? null;
 
     if (this.pttActive) {
@@ -226,18 +221,9 @@ export class VoiceCapture {
   }
 
   private async startCompatCapture(offer: RealtimeTransportOffer): Promise<void> {
-    const mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: AUDIO_CONSTRAINTS,
-      video: false,
-    });
-    const audioContext = new AudioContext({
-      latencyHint: 'interactive',
-    });
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
-    }
-
-    const mediaSource = audioContext.createMediaStreamSource(mediaStream);
+    const mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
+    const audioContext = await ensureInteractiveAudioContext(this.audioContext);
+    const mediaSource = this.mediaSource ?? audioContext.createMediaStreamSource(mediaStream);
     const captureBackend = await createCompatCaptureBackend(audioContext);
 
     await new Promise<void>((resolve, reject) => {
@@ -319,7 +305,7 @@ export class VoiceCapture {
     this.options.onStateChange?.(state);
   }
 
-  private cleanup(): void {
+  private cleanupTransportOnly(): void {
     if (this.captureBackend) {
       try {
         this.captureBackend.close();
@@ -327,31 +313,6 @@ export class VoiceCapture {
         // ignore
       }
       this.captureBackend = null;
-    }
-
-    if (this.mediaSource) {
-      try {
-        this.mediaSource.disconnect();
-      } catch {
-        // ignore
-      }
-      this.mediaSource = null;
-    }
-
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch {
-          // ignore
-        }
-      });
-      this.mediaStream = null;
-    }
-
-    if (this.audioContext) {
-      void this.audioContext.close().catch(() => {});
-      this.audioContext = null;
     }
 
     if (this.localTrack) {
@@ -379,6 +340,33 @@ export class VoiceCapture {
 
     this.transportKind = null;
     this._participantIdentity = null;
+    this.compatSequence = 0;
+  }
+
+  private cleanup(options: VoiceCaptureCleanupOptions = {}): void {
+    const { preserveInteractiveRuntime = false } = options;
+
+    this.cleanupTransportOnly();
+
+    if (!preserveInteractiveRuntime && this.mediaSource) {
+      try {
+        this.mediaSource.disconnect();
+      } catch {
+        // ignore
+      }
+      this.mediaSource = null;
+    }
+
+    if (!preserveInteractiveRuntime) {
+      stopMediaStream(this.mediaStream);
+      this.mediaStream = null;
+    }
+
+    if (!preserveInteractiveRuntime) {
+      void closeAudioContext(this.audioContext);
+      this.audioContext = null;
+    }
+
     this.startPromise = null;
   }
 }

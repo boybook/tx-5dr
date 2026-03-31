@@ -90,33 +90,6 @@ function isBrowserRuntimeIssue(issue: RealtimeConnectivityIssue): boolean {
   return issue.context?.browserRuntimeIssue === 'true';
 }
 
-function getFallbackClue(issue: RealtimeConnectivityIssue): string {
-  if (isBrowserRuntimeIssue(issue)) {
-    return i18n.t('radio:realtime.compatFallbackClueBrowserRuntime', {
-      browser: issue.context?.browserRuntimeLabel || i18n.t('radio:realtime.genericBrowserRuntimeLabel'),
-    });
-  }
-
-  switch (issue.code) {
-    case 'PUBLIC_URL_MISCONFIGURED':
-      return i18n.t('radio:realtime.compatFallbackCluePublicUrl');
-    case 'SIGNALING_UNREACHABLE':
-      return i18n.t('radio:realtime.compatFallbackClueSignaling', {
-        port: issue.context?.signalingPort || 'unknown',
-      });
-    case 'ICE_CONNECTION_FAILED':
-      return i18n.t('radio:realtime.compatFallbackClueIce', {
-        port: issue.context?.rtcTcpPort || 'unknown',
-      });
-    case 'NO_AUDIO_TRACK':
-      return i18n.t('radio:realtime.compatFallbackClueNoTrack');
-    case 'MEDIA_DEVICE_PERMISSION_DENIED':
-      return i18n.t('radio:realtime.compatFallbackCluePermission');
-    default:
-      return i18n.t('radio:realtime.compatFallbackClueGeneric');
-  }
-}
-
 function toContextRecord(
   options: BuildRealtimeConnectivityIssueOptions,
   extra: Record<string, string | undefined> = {},
@@ -365,20 +338,6 @@ export function toRealtimeConnectivityError(
   return new RealtimeConnectivityError(buildRealtimeConnectivityIssue(error, options));
 }
 
-export function showRealtimeFallbackActivatedToast(issue: RealtimeConnectivityIssue): void {
-  const scopeLabel = getScopeLabel(issue.scope);
-  showCompactRealtimeToast({
-    dedupeKey: `realtime-fallback:${issue.scope}:${issue.code}`,
-    title: i18n.t('radio:realtime.compatFallbackActivatedTitle', { scope: scopeLabel }),
-    description: [
-      i18n.t('radio:realtime.compatFallbackActivatedDescription', { scope: scopeLabel }),
-      i18n.t('radio:realtime.compatFallbackClueLabel', { clue: getFallbackClue(issue) }),
-    ].join('\n'),
-    color: 'warning',
-    timeout: 5000,
-  });
-}
-
 export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIssue): void {
   const scopeLabel = getScopeLabel(issue.scope);
   const compatFallbackAttempted = issue.context?.compatFallbackAttempted === 'true';
@@ -404,9 +363,37 @@ export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIs
   });
 }
 
+export function shouldOfferRealtimeCompatFallback(issue: RealtimeConnectivityIssue): boolean {
+  return issue.context?.selectedTransport === 'livekit'
+    && issue.context?.compatFallbackAvailable === 'true'
+    && issue.context?.compatFallbackAttempted !== 'true';
+}
+
 export function openRealtimeCompatFallbackModal(detail: RealtimeCompatFallbackModalDetail): void {
   window.dispatchEvent(new CustomEvent<RealtimeCompatFallbackModalDetail>(
     OPEN_REALTIME_COMPAT_FALLBACK_MODAL_EVENT,
     { detail },
   ));
+}
+
+export function presentRealtimeConnectivityFailure(
+  error: unknown,
+  options: BuildRealtimeConnectivityIssueOptions & {
+    onCompatFallbackConfirm?: () => Promise<void>;
+  },
+): RealtimeConnectivityIssue {
+  const issue = error instanceof RealtimeConnectivityError
+    ? error.issue
+    : buildRealtimeConnectivityIssue(error, options);
+
+  if (options.onCompatFallbackConfirm && shouldOfferRealtimeCompatFallback(issue)) {
+    openRealtimeCompatFallbackModal({
+      issue,
+      onConfirm: options.onCompatFallbackConfirm,
+    });
+  } else {
+    showRealtimeConnectivityIssueToast(issue);
+  }
+
+  return issue;
 }

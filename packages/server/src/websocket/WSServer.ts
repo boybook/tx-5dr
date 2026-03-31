@@ -328,6 +328,7 @@ export class WSConnection extends WSMessageHandler {
  * 管理多个客户端连接和消息广播，集成业务逻辑处理
  */
 export class WSServer extends WSMessageHandler {
+  private static instance: WSServer | null = null;
   private connections = new Map<string, WSConnection>();
   private clientInstanceConnections = new Map<string, string>();
   private connectionIdCounter = 0;
@@ -337,8 +338,13 @@ export class WSServer extends WSMessageHandler {
   private spectrumSessionCoordinator: SpectrumSessionCoordinator;
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
+  static getInstance(): WSServer | null {
+    return WSServer.instance;
+  }
+
   constructor(digitalRadioEngine: DigitalRadioEngine, processMonitor?: ProcessMonitor) {
     super();
+    WSServer.instance = this;
     this.digitalRadioEngine = digitalRadioEngine;
     if (processMonitor) {
       this.processMonitor = processMonitor;

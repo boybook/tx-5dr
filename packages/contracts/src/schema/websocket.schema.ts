@@ -10,6 +10,7 @@ import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
 import { CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
+import type { RealtimeSettingsResponseData } from './realtime.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -107,6 +108,7 @@ export enum WSMessageType {
   // ===== Profile 管理 =====
   PROFILE_CHANGED = 'profileChanged',
   PROFILE_LIST_UPDATED = 'profileListUpdated',
+  REALTIME_SETTINGS_CHANGED = 'realtimeSettingsChanged',
 
   // ===== 认证 =====
   AUTH_REQUIRED = 'authRequired',
@@ -1131,6 +1133,7 @@ export interface DigitalRadioEngineEvents {
   // Profile 管理事件
   profileChanged: (data: z.infer<typeof ProfileChangedEventSchema>) => void;
   profileListUpdated: (data: { profiles: z.infer<typeof RadioProfileSchema>[]; activeProfileId: string | null }) => void;
+  realtimeSettingsChanged: (data: RealtimeSettingsResponseData) => void;
 
   // 认证事件
   authRequired: (data: { allowPublicViewing: boolean }) => void;

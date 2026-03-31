@@ -65,7 +65,12 @@
     "toggleListen": "Toggle listen",
     "listen": "Listen",
     "startFailed": "Failed to start monitor",
-    "codec": "Monitor Audio Codec"
+    "codec": "Monitor Audio Codec",
+    "transportMode": "Transport",
+    "transportWebrtc": "WebRTC",
+    "transportWsPcm": "WS/PCM",
+    "switchToWebrtc": "Switch to WebRTC",
+    "switchToWsPcm": "Switch to WS/PCM"
   },
   "realtime": {
     "scopeRadio": "radio monitoring",

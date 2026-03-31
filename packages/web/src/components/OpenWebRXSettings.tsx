@@ -29,9 +29,7 @@ import type { OpenWebRXStationConfig, OpenWebRXListenStatus, OpenWebRXProfile } 
 import { useAudioMonitorPlayback } from '../hooks/useAudioMonitorPlayback';
 import { createLogger } from '../utils/logger';
 import {
-  RealtimeConnectivityError,
-  buildRealtimeConnectivityIssue,
-  openRealtimeCompatFallbackModal,
+  presentRealtimeConnectivityFailure,
 } from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('OpenWebRXSettings');
@@ -227,6 +225,7 @@ export function OpenWebRXSettings() {
     setIsStartingListen(true);
     let previewSessionId: string | undefined;
     try {
+      await audioPlayback.preparePlaybackFromGesture();
       const result = await api.startOpenWebRXListen({
         stationId: listenStationId,
         profileId: listenProfileId,
@@ -239,18 +238,12 @@ export function OpenWebRXSettings() {
     } catch (error) {
       logger.error('Failed to start listen', error);
       audioPlayback.stop();
-      const issue = error instanceof RealtimeConnectivityError
-        ? error.issue
-        : buildRealtimeConnectivityIssue(error, {
-          scope: 'openwebrx-preview',
-          stage: 'connect',
-        });
-      openRealtimeCompatFallbackModal({
-        issue,
-        onConfirm: async () => {
-          await audioPlayback.start({
+      presentRealtimeConnectivityFailure(error, {
+        scope: 'openwebrx-preview',
+        stage: 'connect',
+        onCompatFallbackConfirm: async () => {
+          await audioPlayback.switchTransportFromGesture('ws-compat', {
             previewSessionId,
-            transportOverride: 'ws-compat',
           });
         },
       });

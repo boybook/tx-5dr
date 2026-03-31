@@ -24,10 +24,21 @@ CONFIG_ENV="/etc/tx5dr/config.env"
 LIVEKIT_TEMPLATE="/usr/share/tx5dr/livekit.yaml.template"
 LIVEKIT_CONF="/etc/tx5dr/livekit.yaml"
 LIVEKIT_CREDENTIALS_FILE="/etc/tx5dr/livekit-credentials.env"
+LIB_DIR="/usr/share/tx5dr/lib"
+SHARED_LIB_READY=0
 
 if [[ -f "$CONFIG_ENV" ]]; then
     # shellcheck disable=SC1090
     source "$CONFIG_ENV" 2>/dev/null || true
+fi
+
+if [[ -f "$LIB_DIR/common.sh" && -f "$LIB_DIR/checks.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$LIB_DIR/common.sh"
+    # shellcheck disable=SC1091
+    source "$LIB_DIR/checks.sh"
+    load_config 2>/dev/null || true
+    SHARED_LIB_READY=1
 fi
 
 random_hex() {
@@ -75,6 +86,16 @@ if [[ -f "$NGINX_TEMPLATE" ]]; then
             "To reset to default: sudo rm $NGINX_CONF && tx5dr doctor" \
             "如需恢复默认: sudo rm $NGINX_CONF && tx5dr doctor")"
         echo ""
+
+        if [[ "$SHARED_LIB_READY" == "1" ]] && ! check_nginx_realtime_proxy_config; then
+            if fix_nginx_realtime_proxy_config; then
+                _msg "Patched preserved nginx config with realtime ws-compat proxy updates." \
+                     "已为保留的 nginx 配置补齐实时语音 ws-compat 代理。"
+            else
+                _msg "WARNING: failed to patch the preserved nginx realtime ws-compat proxy config." \
+                     "警告: 补齐保留 nginx 配置中的实时语音 ws-compat 代理失败。"
+            fi
+        fi
     else
         sed -e "s|%%LISTEN_PORT%%|${LISTEN_PORT}|g" \
             -e "s|%%WEB_ROOT%%|${WEB_ROOT}|g" \
@@ -158,11 +179,7 @@ systemctl enable tx5dr-livekit 2>/dev/null || true
 systemctl enable tx5dr 2>/dev/null || true
 
 # ── Environment check (using shared library if available) ────────────────────
-LIB_DIR="/usr/share/tx5dr/lib"
-if [[ -f "$LIB_DIR/common.sh" && -f "$LIB_DIR/checks.sh" ]]; then
-    source "$LIB_DIR/common.sh"
-    source "$LIB_DIR/checks.sh"
-
+if [[ "$SHARED_LIB_READY" == "1" ]]; then
     ISSUES=0
     echo ""
 

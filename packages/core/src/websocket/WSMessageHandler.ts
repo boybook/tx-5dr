@@ -57,6 +57,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // Profile 管理事件
   [WSMessageType.PROFILE_CHANGED]: 'profileChanged',
   [WSMessageType.PROFILE_LIST_UPDATED]: 'profileListUpdated',
+  [WSMessageType.REALTIME_SETTINGS_CHANGED]: 'realtimeSettingsChanged',
 
   // 认证相关事件
   [WSMessageType.AUTH_REQUIRED]: 'authRequired',
