@@ -16,6 +16,7 @@ import { hamlibStrengthToLevelMeterReading } from './meterUtils.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
+import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 
 const logger = createLogger('HamlibConnection');
 import {
@@ -406,7 +407,7 @@ export class HamlibConnection
       this.lastSuccessfulOperation = Date.now();
       return modeInfo;
     } catch (error) {
-      throw this.convertError(error, 'getMode');
+      throw this.convertOptionalOperationError(error, 'getMode');
     }
   }
 
@@ -851,7 +852,7 @@ export class HamlibConnection
       logger.debug(`NB state read: ${value ? 'enabled' : 'disabled'}`);
       return value ? 1 : 0;
     } catch (error) {
-      throw this.convertError(error, 'getNBEnabled');
+      throw this.convertOptionalOperationError(error, 'getNBEnabled');
     }
   }
 
@@ -884,7 +885,7 @@ export class HamlibConnection
       logger.debug(`NR state read: ${value ? 'enabled' : 'disabled'}`);
       return value ? 1 : 0;
     } catch (error) {
-      throw this.convertError(error, 'getNREnabled');
+      throw this.convertOptionalOperationError(error, 'getNREnabled');
     }
   }
 
@@ -1399,6 +1400,32 @@ export class HamlibConnection
       cause: error,
       context: { operation: context },
     });
+  }
+
+  private convertOptionalOperationError(error: unknown, context: string): RadioError {
+    if (isRecoverableOptionalRadioError(error)) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+
+      return new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: `Optional radio operation unavailable (${context}): ${errorMessage}`,
+        userMessage: 'Radio operation is not supported by this model',
+        severity: RadioErrorSeverity.WARNING,
+        suggestions: [
+          'This control can be ignored on older radios',
+          'Continue using the supported basic radio operations',
+        ],
+        cause: error,
+        context: {
+          operation: context,
+          optional: true,
+          recoverable: true,
+        },
+      });
+    }
+
+    return this.convertError(error, context);
   }
 
   private getSpectrumRig(): HamLib & {
