@@ -11,6 +11,12 @@ import i18n from '../i18n';
 type RealtimeErrorStage = RealtimeConnectivityIssue['stage'];
 const REALTIME_TOAST_DEDUPE_WINDOW_MS = 4000;
 const realtimeToastHistory = new Map<string, number>();
+export const OPEN_REALTIME_COMPAT_FALLBACK_MODAL_EVENT = 'openRealtimeCompatFallbackModal';
+
+export interface RealtimeCompatFallbackModalDetail {
+  issue: RealtimeConnectivityIssue;
+  onConfirm?: () => Promise<void>;
+}
 
 export interface BuildRealtimeConnectivityIssueOptions {
   scope: RealtimeScope;
@@ -353,4 +359,11 @@ export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIs
     color: 'danger',
     timeout: 8000,
   });
+}
+
+export function openRealtimeCompatFallbackModal(detail: RealtimeCompatFallbackModalDetail): void {
+  window.dispatchEvent(new CustomEvent<RealtimeCompatFallbackModalDetail>(
+    OPEN_REALTIME_COMPAT_FALLBACK_MODAL_EVENT,
+    { detail },
+  ));
 }

@@ -31,7 +31,7 @@ import { createLogger } from '../utils/logger';
 import {
   RealtimeConnectivityError,
   buildRealtimeConnectivityIssue,
-  showRealtimeConnectivityIssueToast,
+  openRealtimeCompatFallbackModal,
 } from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('OpenWebRXSettings');
@@ -243,7 +243,15 @@ export function OpenWebRXSettings() {
           scope: 'openwebrx-preview',
           stage: 'connect',
         });
-      showRealtimeConnectivityIssueToast(issue);
+      openRealtimeCompatFallbackModal({
+        issue,
+        onConfirm: async () => {
+          await audioPlayback.start({
+            previewSessionId: result.status.previewSessionId,
+            transportOverride: 'ws-compat',
+          });
+        },
+      });
     } finally {
       setIsStartingListen(false);
     }

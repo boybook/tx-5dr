@@ -8,7 +8,7 @@ import { VoiceCapture } from '../../audio/VoiceCapture';
 import {
   RealtimeConnectivityError,
   buildRealtimeConnectivityIssue,
-  showRealtimeConnectivityIssueToast,
+  openRealtimeCompatFallbackModal,
 } from '../../realtime/realtimeConnectivity';
 
 const logger = createLogger('VoicePTTButton');
@@ -73,7 +73,12 @@ export const VoicePTTButton: React.FC = () => {
             scope: 'radio',
             stage: 'publish',
           });
-        showRealtimeConnectivityIssueToast(issue);
+        openRealtimeCompatFallbackModal({
+          issue,
+          onConfirm: async () => {
+            await capture.start({ transportOverride: 'ws-compat' });
+          },
+        });
       },
     });
 

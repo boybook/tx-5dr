@@ -3,6 +3,9 @@ import path from 'path';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('LiveKitCredentialState');
+const MANAGED_LINUX_LIVEKIT_CREDENTIAL_PATH = '/etc/tx5dr/livekit-credentials.env';
+const MANAGED_LINUX_LIVEKIT_CONFIG_PATH = '/etc/tx5dr/livekit.yaml';
+const MANAGED_LINUX_TX5DR_CONFIG_DIR = '/var/lib/tx5dr/config';
 
 export type LiveKitCredentialSource = 'managed-file' | 'environment-override' | 'missing';
 
@@ -25,10 +28,28 @@ interface ParsedCredentialFile extends LiveKitCredentialValues {
   rotatedAt: string | null;
 }
 
-function getCredentialFilePath(): string | null {
+function isManagedLinuxDeployment(): boolean {
+  const liveKitConfigFile = process.env.LIVEKIT_CONFIG_FILE?.trim();
+  if (liveKitConfigFile === MANAGED_LINUX_LIVEKIT_CONFIG_PATH) {
+    return true;
+  }
+
+  const configDir = process.env.TX5DR_CONFIG_DIR?.trim();
+  if (configDir === MANAGED_LINUX_TX5DR_CONFIG_DIR) {
+    return true;
+  }
+
+  return fs.existsSync('/etc/tx5dr/config.env') || fs.existsSync(MANAGED_LINUX_LIVEKIT_CREDENTIAL_PATH);
+}
+
+export function resolveLiveKitCredentialFilePath(): string | null {
   const explicit = process.env.LIVEKIT_CREDENTIALS_FILE?.trim();
   if (explicit) {
     return explicit;
+  }
+
+  if (isManagedLinuxDeployment()) {
+    return MANAGED_LINUX_LIVEKIT_CREDENTIAL_PATH;
   }
 
   const configDir = process.env.TX5DR_CONFIG_DIR?.trim();
@@ -116,7 +137,7 @@ export function getLiveKitCredentialValues(): LiveKitCredentialValues | null {
     return envCredentials;
   }
 
-  const fileCredentials = readCredentialFile(getCredentialFilePath());
+  const fileCredentials = readCredentialFile(resolveLiveKitCredentialFilePath());
   if (!fileCredentials) {
     return null;
   }
@@ -128,7 +149,7 @@ export function getLiveKitCredentialValues(): LiveKitCredentialValues | null {
 }
 
 export function getLiveKitCredentialRuntimeStatus(): LiveKitCredentialRuntimeStatus {
-  const filePath = getCredentialFilePath();
+  const filePath = resolveLiveKitCredentialFilePath();
   const envCredentials = readEnvironmentCredentials();
   if (envCredentials) {
     return {
@@ -168,7 +189,7 @@ export function assertLiveKitCredentialsReady(): void {
     return;
   }
 
-  const filePath = getCredentialFilePath();
+  const filePath = resolveLiveKitCredentialFilePath();
   const hint = filePath
     ? `Expected managed credential file: ${filePath}`
     : 'Set LIVEKIT_CREDENTIALS_FILE or provide LIVEKIT_API_KEY / LIVEKIT_API_SECRET explicitly.';

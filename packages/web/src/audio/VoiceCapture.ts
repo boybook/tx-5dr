@@ -17,6 +17,10 @@ export interface VoiceCaptureOptions {
   onError?: (error: Error) => void;
 }
 
+interface VoiceCaptureStartOptions {
+  transportOverride?: RealtimeTransportKind;
+}
+
 export type VoiceCaptureState = 'idle' | 'starting' | 'capturing' | 'error';
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
@@ -69,7 +73,7 @@ export class VoiceCapture {
     }
   }
 
-  async start(): Promise<void> {
+  async start(options?: VoiceCaptureStartOptions): Promise<void> {
     if (this.startPromise) {
       return this.startPromise;
     }
@@ -87,14 +91,17 @@ export class VoiceCapture {
           direction: 'send',
         });
         connectivityHints = session.connectivityHints;
+        const offers = options?.transportOverride
+          ? session.offers.filter((offer) => offer.transport === options.transportOverride)
+          : session.offers;
 
         let lastError: unknown = null;
-        for (const offer of session.offers) {
+        for (const offer of offers) {
           try {
             errorStage = 'connect';
             if (offer.transport === 'livekit') {
               await this.startLiveKitCapture(offer, {
-                fastFallback: session.offers.some((candidate) => candidate.transport === 'ws-compat'),
+                fastFallback: offers.some((candidate) => candidate.transport === 'ws-compat'),
               });
             } else {
               compatFallbackAttempted = liveKitFailureIssue !== null;
