@@ -1,7 +1,9 @@
 import React from 'react';
 import type { MeterData, MeterCapabilities } from '@tx5dr/contracts';
-import { Progress } from '@heroui/react';
+import { Popover, PopoverContent, PopoverTrigger, Progress } from '@heroui/react';
+import { useTranslation } from 'react-i18next';
 import { useBufferedMeterData } from '../hooks/useBufferedMeterData';
+import { TxVolumeGainControl } from './TxVolumeGainControl';
 
 const LEVEL_DBM_MIN_CARD_WIDTH = 480;
 
@@ -103,9 +105,12 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   meterCapabilities,
   className = ''
 }) => {
+  const { t } = useTranslation('radio');
   const buffered = useBufferedMeterData(meterData);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const [showLevelDbmDetail, setShowLevelDbmDetail] = React.useState(true);
+  const [isAlcPopoverOpen, setIsAlcPopoverOpen] = React.useState(false);
+  const [hasAlcPopoverInteraction, setHasAlcPopoverInteraction] = React.useState(false);
 
   React.useEffect(() => {
     const container = containerRef.current;
@@ -136,6 +141,45 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   const showLevelPower = meterCapabilities === null || meterCapabilities.strength || meterCapabilities.power;
   const showSwr = meterCapabilities === null || meterCapabilities.swr;
   const showAlc = meterCapabilities === null || meterCapabilities.alc;
+  const isAlcOverLimit = showAlc
+    && isPttActive
+    && buffered.alc.value !== null
+    && !buffered.alc.isTimeout
+    && buffered.alc.value.percent >= 100;
+
+  React.useEffect(() => {
+    if (!showAlc) {
+      setIsAlcPopoverOpen(false);
+      setHasAlcPopoverInteraction(false);
+      return;
+    }
+
+    if (isAlcOverLimit) {
+      setIsAlcPopoverOpen(true);
+      return;
+    }
+
+    if (!hasAlcPopoverInteraction) {
+      setIsAlcPopoverOpen(false);
+    }
+  }, [hasAlcPopoverInteraction, isAlcOverLimit, showAlc]);
+
+  const handleAlcPopoverOpenChange = React.useCallback((open: boolean) => {
+    if (!open) {
+      if (isAlcOverLimit) {
+        setIsAlcPopoverOpen(true);
+        return;
+      }
+
+      setIsAlcPopoverOpen(false);
+      setHasAlcPopoverInteraction(false);
+      return;
+    }
+
+    if (isAlcOverLimit || hasAlcPopoverInteraction) {
+      setIsAlcPopoverOpen(true);
+    }
+  }, [hasAlcPopoverInteraction, isAlcOverLimit]);
 
   // 全部不支持时隐藏整个组件
   if (!showLevelPower && !showSwr && !showAlc) {
@@ -145,7 +189,13 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`w-full px-2 py-2 pt-1.5 bg-default-50 dark:bg-default-100/50 rounded-lg border border-default-200 dark:border-default-100 ${className}`}
+      className={[
+        'w-full px-2 py-2 pt-1.5 rounded-lg border transition-colors',
+        isAlcOverLimit
+          ? 'bg-danger-50 dark:bg-danger-500/15 border-danger/60 dark:border-danger-400/60 shadow-sm'
+          : 'bg-default-50 dark:bg-default-100/50 border-default-200 dark:border-default-100',
+        className,
+      ].filter(Boolean).join(' ')}
     >
       <div className="flex items-center gap-2">
         {/* 第一个仪表：根据 PTT 状态动态切换 Level/Power */}
@@ -205,13 +255,51 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
 
         {/* ALC 自动电平控制表 */}
         {showAlc && (
-          <Meter
-            label="ALC"
-            value={buffered.alc.value?.percent ?? null}
-            unit="%"
-            alert={buffered.alc.value?.alert}
-            isTimeout={buffered.alc.isTimeout || !isPttActive}
-          />
+          <Popover
+            isOpen={isAlcPopoverOpen}
+            onOpenChange={handleAlcPopoverOpenChange}
+            placement="top"
+            offset={12}
+          >
+            <PopoverTrigger>
+              <div className="flex-1 min-w-0">
+                <div className={`rounded-md transition-colors ${isAlcOverLimit ? 'bg-danger-100/80 dark:bg-danger-500/10' : ''}`}>
+                  <Meter
+                    label="ALC"
+                    value={buffered.alc.value?.percent ?? null}
+                    unit="%"
+                    alert={buffered.alc.value?.alert}
+                    isTimeout={buffered.alc.isTimeout || !isPttActive}
+                  />
+                </div>
+              </div>
+            </PopoverTrigger>
+            <PopoverContent className="w-80 max-w-[calc(100vw-2rem)] p-0">
+              <div className="space-y-3 p-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-danger">
+                    {t('alcWarning.title')}
+                  </div>
+                  <div className="text-xs leading-relaxed text-default-600 dark:text-default-300">
+                    {t('alcWarning.description')}
+                  </div>
+                </div>
+                <TxVolumeGainControl
+                  orientation="horizontal"
+                  onInteracted={() => {
+                    setHasAlcPopoverInteraction(true);
+                    setIsAlcPopoverOpen(true);
+                  }}
+                  ariaLabel={t('alcWarning.gainControl')}
+                  className="w-full"
+                  sliderClassName="w-full"
+                />
+                <div className="text-[11px] text-default-400">
+                  {t('alcWarning.dismissHint')}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
         )}
       </div>
     </div>

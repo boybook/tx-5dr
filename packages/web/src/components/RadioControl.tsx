@@ -20,6 +20,7 @@ import { useAudioMonitorPlayback } from '../hooks/useAudioMonitorPlayback';
 import { useWSEvent } from '../hooks/useWSEvent';
 import { createLogger } from '../utils/logger';
 import { detectBrowserAudioRuntime } from '../audio/browserAudioRuntime';
+import { TxVolumeGainControl } from './TxVolumeGainControl';
 import {
   presentRealtimeConnectivityFailure,
 } from '../realtime/realtimeConnectivity';
@@ -279,8 +280,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const [isTogglingListen, setIsTogglingListen] = useState(false);
   const [isSwitchingMonitorTransport, setIsSwitchingMonitorTransport] = useState(false);
 
-  const [volumeGain, setVolumeGain] = useState(1.0);
-
   // 音频监听 (reusable hook)
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
@@ -522,18 +521,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
       return `+${db.toFixed(1)}dB`;
     } else {
       return `${db.toFixed(1)}dB`;
-    }
-  };
-
-  // 处理音量变化（现在使用dB单位）
-  const handleVolumeChange = (value: number | number[]) => {
-    const dbValue = Array.isArray(value) ? value[0] : value;
-    // 确保dB值有效
-    if (!isNaN(dbValue) && dbValue >= -60 && dbValue <= 20) {
-      const gainValue = dbToGain(dbValue);
-      setVolumeGain(gainValue);
-      // 使用新的dB API发送到后端
-      connection.state.radioService?.setVolumeGainDb(dbValue);
     }
   };
 
@@ -910,91 +897,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     }
   };
 
-  // 监听音量变化事件
-  useEffect(() => {
-    if (!connection.state.radioService) return;
-
-    // 直接订阅 WSClient 事件
-    const wsClient = connection.state.radioService.wsClientInstance;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleVolumeGainChanged = (data: any) => {
-      // 处理新的数据格式（包含gain和gainDb）
-      if (data && typeof data === 'object' && data.gain !== undefined) {
-        // 新格式：{ gain: number, gainDb: number }
-        if (!isNaN(data.gain) && data.gain >= 0) {
-          setVolumeGain(data.gain);
-        } else {
-          logger.debug('Received invalid volume gain value:', data);
-        }
-      } else if (typeof data === 'number') {
-        // 向后兼容：直接是gain数值
-        if (!isNaN(data) && data >= 0) {
-          setVolumeGain(data);
-        } else {
-          logger.debug('Received invalid volume gain value:', data);
-        }
-      } else {
-        logger.debug('Received unknown format volume gain data:', data);
-      }
-    };
-
-    wsClient.onWSEvent('volumeGainChanged', handleVolumeGainChanged);
-
-    return () => {
-      wsClient.offWSEvent('volumeGainChanged', handleVolumeGainChanged);
-    };
-  }, [connection.state.radioService]);
-
-  // 在连接成功后获取当前音量
-  useEffect(() => {
-    if (connection.state.isConnected && connection.state.radioService) {
-      // 获取系统状态，其中包含当前音量
-      connection.state.radioService.getSystemStatus();
-    }
-  }, [connection.state.isConnected]);
-
   // Voice PTT mute: mute monitor during voice transmission to prevent echo
   useEffect(() => {
     if (radioMode.engineMode !== 'voice') return;
     const shouldMute = pttStatus.isTransmitting;
     audioMonitor.setVolume(shouldMute ? -60 : gainToDb(monitorVolume));
   }, [pttStatus.isTransmitting, radioMode.engineMode, monitorVolume]);
-
-  // 监听系统状态更新
-  useEffect(() => {
-    if (!connection.state.radioService) return;
-
-    // 直接订阅 WSClient 事件
-    const wsClient = connection.state.radioService.wsClientInstance;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleSystemStatus = (status: any) => {
-      if (status.volumeGain !== undefined) {
-        // 确保系统状态中的gain值有效
-        const gain = status.volumeGain;
-        if (!isNaN(gain) && gain >= 0) {
-          setVolumeGain(gain);
-        } else {
-          logger.debug('Received invalid volume gain in system status:', gain);
-        }
-      }
-      // 支持dB格式的系统状态（如果后续添加）
-      if (status.volumeGainDb !== undefined) {
-        const gainDb = status.volumeGainDb;
-        if (!isNaN(gainDb) && gainDb >= -60 && gainDb <= 20) {
-          const gain = dbToGain(gainDb);
-          setVolumeGain(gain);
-        }
-      }
-    };
-
-    wsClient.onWSEvent('systemStatus', handleSystemStatus);
-
-    return () => {
-      wsClient.offWSEvent('systemStatus', handleSystemStatus);
-    };
-  }, [connection.state.radioService]);
 
   // 监听频率变化事件
   useEffect(() => {
@@ -1078,26 +986,16 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                     size="sm"
                     className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
                     aria-label={t('control.txVolumeGain')}
-                  >
-                    <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
-                  </Button>
+                >
+                  <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
+                </Button>
                 </PopoverTrigger>
                 <PopoverContent className="py-2 pt-3 space-y-1">
-                  <Slider
+                  <TxVolumeGainControl
                     orientation="vertical"
-                    minValue={-60}
-                    maxValue={20}
-                    step={0.1}
-                    value={[gainToDb(volumeGain)]}
-                    onChange={handleVolumeChange}
-                    style={{
-                      height: '120px'
-                    }}
-                    aria-label={t('control.volumeControl')}
+                    sliderStyle={{ height: '120px' }}
+                    ariaLabel={t('control.volumeControl')}
                   />
-                  <div className="text-sm text-default-400 text-center font-mono">
-                    {formatDbDisplay(gainToDb(volumeGain))}
-                  </div>
                 </PopoverContent>
               </Popover>
             )}
