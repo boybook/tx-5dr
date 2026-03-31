@@ -237,21 +237,72 @@ require_root() {
     fi
 }
 
+env_file_has_key() {
+    local file="$1" key="$2"
+    local content
+    content=$(read_file_maybe_sudo "$file" 2>/dev/null || true)
+    [[ -n "$content" ]] || return 1
+    printf "%s\n" "$content" | grep -Eq "^[[:space:]]*${key}="
+}
+
+read_env_file_value() {
+    local file="$1" key="$2"
+    local content
+    content=$(read_file_maybe_sudo "$file" 2>/dev/null || true)
+    [[ -n "$content" ]] || return 1
+    printf "%s\n" "$content" | grep -E "^[[:space:]]*${key}=" | head -1 | cut -d= -f2-
+}
+
 # Load TX-5DR config
 load_config() {
+    local config_env="/etc/tx5dr/config.env"
+    local inherited_livekit_api_key="${LIVEKIT_API_KEY:-}"
+    local inherited_livekit_api_secret="${LIVEKIT_API_SECRET:-}"
+    local config_file_livekit_override=0
+
+    unset LIVEKIT_API_KEY LIVEKIT_API_SECRET
+
+    if env_file_has_key "$config_env" "LIVEKIT_API_KEY" && env_file_has_key "$config_env" "LIVEKIT_API_SECRET"; then
+        config_file_livekit_override=1
+    fi
+
     if [[ -f /etc/tx5dr/config.env ]]; then
         # shellcheck disable=SC1091
         source /etc/tx5dr/config.env 2>/dev/null || true
     fi
+
     LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=0
-    if [[ -n "${LIVEKIT_API_KEY:-}" && -n "${LIVEKIT_API_SECRET:-}" ]]; then
-        LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=1
-    fi
+    LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE=""
     LIVEKIT_CREDENTIALS_FILE="${LIVEKIT_CREDENTIALS_FILE:-/etc/tx5dr/livekit-credentials.env}"
-    if [[ (-z "${LIVEKIT_API_KEY:-}" || -z "${LIVEKIT_API_SECRET:-}") && -f "${LIVEKIT_CREDENTIALS_FILE}" ]]; then
-        # shellcheck disable=SC1090
-        source "${LIVEKIT_CREDENTIALS_FILE}" 2>/dev/null || true
+
+    local managed_livekit_api_key=""
+    local managed_livekit_api_secret=""
+    managed_livekit_api_key=$(read_env_file_value "${LIVEKIT_CREDENTIALS_FILE}" "LIVEKIT_API_KEY" 2>/dev/null || true)
+    managed_livekit_api_secret=$(read_env_file_value "${LIVEKIT_CREDENTIALS_FILE}" "LIVEKIT_API_SECRET" 2>/dev/null || true)
+
+    if [[ -n "$inherited_livekit_api_key" && -n "$inherited_livekit_api_secret" ]]; then
+        if [[ -z "$managed_livekit_api_key" || -z "$managed_livekit_api_secret" \
+           || "$inherited_livekit_api_key" != "$managed_livekit_api_key" \
+           || "$inherited_livekit_api_secret" != "$managed_livekit_api_secret" ]]; then
+            LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=1
+            LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE="environment"
+        fi
+        LIVEKIT_API_KEY="$inherited_livekit_api_key"
+        LIVEKIT_API_SECRET="$inherited_livekit_api_secret"
+    elif [[ $config_file_livekit_override -eq 1 && -n "${LIVEKIT_API_KEY:-}" && -n "${LIVEKIT_API_SECRET:-}" ]]; then
+        if [[ -z "$managed_livekit_api_key" || -z "$managed_livekit_api_secret" \
+           || "${LIVEKIT_API_KEY}" != "$managed_livekit_api_key" \
+           || "${LIVEKIT_API_SECRET}" != "$managed_livekit_api_secret" ]]; then
+            LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=1
+            LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE="$config_env"
+        fi
     fi
+
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" != "1" && (-z "${LIVEKIT_API_KEY:-}" || -z "${LIVEKIT_API_SECRET:-}") ]]; then
+        [[ -n "$managed_livekit_api_key" ]] && LIVEKIT_API_KEY="$managed_livekit_api_key"
+        [[ -n "$managed_livekit_api_secret" ]] && LIVEKIT_API_SECRET="$managed_livekit_api_secret"
+    fi
+
     HTTP_PORT="${TX5DR_HTTP_PORT:-8076}"
     API_PORT="${PORT:-4000}"
     LIVEKIT_SIGNAL_PORT="${LIVEKIT_SIGNAL_PORT:-7880}"

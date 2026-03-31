@@ -170,7 +170,7 @@ describe_livekit_udp_binding() {
 
 describe_livekit_credentials_state() {
     if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
-        printf "environment override"
+        printf "environment override (%s)" "${LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE:-environment}"
         return 0
     fi
     if ! check_livekit_credentials_exists; then
