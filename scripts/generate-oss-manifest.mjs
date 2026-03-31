@@ -35,6 +35,17 @@ function trimSlash(value) {
   return value.replace(/\/+$/, '');
 }
 
+function ensureAbsoluteUrl(value) {
+  const trimmed = value.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('//')) {
+    return `https:${trimmed}`;
+  }
+  return `https://${trimmed.replace(/^\/+/, '')}`;
+}
+
 function joinUrl(base, suffix) {
   return `${trimSlash(base)}/${suffix.replace(/^\/+/, '')}`;
 }
@@ -114,7 +125,7 @@ async function main() {
   const version = requireArg(args, 'version');
   const commit = requireArg(args, 'commit');
   const publishedAt = requireArg(args, 'published-at');
-  const baseUrl = trimSlash(requireArg(args, 'base-url'));
+  const baseUrl = trimSlash(ensureAbsoluteUrl(requireArg(args, 'base-url')));
   const objectPrefix = requireArg(args, 'object-prefix').replace(/^\/+|\/+$/g, '');
   const outputPath = requireArg(args, 'output');
   const assetsDir = args['assets-dir'];

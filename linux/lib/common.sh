@@ -324,7 +324,7 @@ get_download_base_url() {
     if [[ -z "${TX5DR_DOWNLOAD_BASE_URL:-}" ]]; then
         return 1
     fi
-    printf "%s" "${TX5DR_DOWNLOAD_BASE_URL%/}"
+    normalize_remote_url "${TX5DR_DOWNLOAD_BASE_URL%/}"
 }
 
 get_server_manifest_url() {
@@ -337,6 +337,24 @@ get_server_latest_install_script_url() {
     local base_url
     base_url=$(get_download_base_url) || return 1
     printf "%s/tx-5dr/server/latest/install-online.sh" "$base_url"
+}
+
+normalize_remote_url() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        return 1
+    fi
+    case "$value" in
+        http://*|https://*)
+            printf "%s" "$value"
+            ;;
+        //*)
+            printf "https:%s" "$value"
+            ;;
+        *)
+            printf "https://%s" "$value"
+            ;;
+    esac
 }
 
 get_github_release_asset_url() {
@@ -431,7 +449,10 @@ try {
 
 get_server_manifest_package_url() {
     local manifest_json="$1" pkg_arch="$2" pkg_ext="$3"
-    manifest_lookup_value "$manifest_json" "latest_url_${pkg_arch}_${pkg_ext}"
+    local value=""
+    value=$(manifest_lookup_value "$manifest_json" "latest_url_${pkg_arch}_${pkg_ext}")
+    [[ -n "$value" ]] || return 1
+    normalize_remote_url "$value"
 }
 
 get_server_manifest_package_sha256() {
