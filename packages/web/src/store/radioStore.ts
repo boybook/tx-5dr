@@ -25,6 +25,7 @@ import type {
   EngineMode,
   StationInfo,
   CapabilityState,
+  CoreRadioCapabilities,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { RadioService } from '../services/radioService';
@@ -117,6 +118,7 @@ export interface RadioState {
   radioConnectionHealth: {
     connectionHealthy: boolean;
   } | null;
+  coreCapabilities: CoreRadioCapabilities | null;
   // Profile 管理
   profiles: RadioProfile[];
   activeProfileId: string | null;
@@ -189,7 +191,7 @@ export type RadioAction =
   | { type: 'operatorsList'; payload: OperatorStatus[] }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string }
-  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; meterCapabilities?: MeterCapabilities; tunerCapabilities?: TunerCapabilities } }
+  | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; coreCapabilities?: CoreRadioCapabilities; meterCapabilities?: MeterCapabilities; tunerCapabilities?: TunerCapabilities } }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
   | { type: 'meterData'; payload: MeterData }
   | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
@@ -229,6 +231,7 @@ const initialRadioState: RadioState = {
   tunerCapabilities: null,
   capabilityStates: new Map<string, CapabilityState>(),
   radioConnectionHealth: null,
+  coreCapabilities: null,
   profiles: [],
   activeProfileId: null,
   profilesLoaded: false,
@@ -343,6 +346,9 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         radioConnectionHealth: action.payload.radioConnectionHealth !== undefined
           ? action.payload.radioConnectionHealth
           : state.radioConnectionHealth,
+        coreCapabilities: action.payload.radioConnected
+          ? (action.payload.coreCapabilities ?? state.coreCapabilities)
+          : null,
         // 数值表能力：连接时更新，断开时重置为 null
         meterCapabilities: action.payload.radioConnected
           ? (action.payload.meterCapabilities ?? state.meterCapabilities)
@@ -676,6 +682,7 @@ const RadioConnectionContext = createContext<{
   radioConfig: HamlibConfig;
   reconnectProgress: ReconnectProgress | null;
   radioConnectionHealth: { connectionHealthy: boolean } | null;
+  coreCapabilities: CoreRadioCapabilities | null;
 } | undefined>(undefined);
 
 const RadioModeContext = createContext<{
@@ -1202,6 +1209,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           radioConfig?: HamlibConfig;
           connectionHealth?: ConnectionHealthInfo;
           reconnectProgress?: ReconnectProgress | null;
+          coreCapabilities?: CoreRadioCapabilities;
           meterCapabilities?: MeterCapabilities;
           tunerCapabilities?: TunerCapabilities;
           reason?: string;
@@ -1218,6 +1226,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             radioConfig: radioData.radioConfig,
             radioConnectionHealth: radioData.connectionHealth,
             reconnectProgress: radioData.reconnectProgress ?? null,
+            coreCapabilities: radioData.coreCapabilities,
             meterCapabilities: radioData.meterCapabilities,
             tunerCapabilities: radioData.tunerCapabilities,
           }
@@ -1409,6 +1418,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     radioConfig: radioState.radioConfig,
     reconnectProgress: radioState.reconnectProgress,
     radioConnectionHealth: radioState.radioConnectionHealth,
+    coreCapabilities: radioState.coreCapabilities,
   }), [
     radioState.radioConnected,
     radioState.radioConnectionStatus,
@@ -1416,6 +1426,7 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     radioState.radioConfig,
     radioState.reconnectProgress,
     radioState.radioConnectionHealth,
+    radioState.coreCapabilities,
   ]);
 
   const radioModeContextValue = useMemo(() => ({

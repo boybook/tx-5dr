@@ -21,6 +21,7 @@ import { useWSEvent } from '../hooks/useWSEvent';
 import { createLogger } from '../utils/logger';
 import { detectBrowserAudioRuntime } from '../audio/browserAudioRuntime';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
+import { filterDigitalFrequencyOptions, isCoreCapabilityAvailable } from '../utils/radioControl';
 import {
   presentRealtimeConnectivityFailure,
 } from '../realtime/realtimeConnectivity';
@@ -260,6 +261,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canSwitchMode = useCan('execute', 'ModeSwitch');
   const canStartStopEngine = useCan('execute', 'Engine');
+  const canWriteFrequency = isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeFrequency');
   // RadioControlPanel 弹窗状态
   const [isControlPanelOpen, setIsControlPanelOpen] = useState(false);
 
@@ -406,7 +408,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
             freq.frequency === lastFreq.frequency && freq.mode === lastFreq.mode
           );
 
-          if (matchingFreq && radioMode.currentMode?.name === lastFreq.mode) {
+          if (matchingFreq && (!radioMode.currentMode || radioMode.currentMode.name === lastFreq.mode)) {
             logger.debug(`Restoring last frequency: ${matchingFreq.label}`);
             setCurrentFrequency(matchingFreq.key);
             // 自动设置频率到电台
@@ -420,7 +422,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
     };
 
     // 延迟执行，等待频率列表和模式都加载完成
-    if (availableFrequencies.length > 0 && radioMode.currentMode) {
+    if (availableFrequencies.length > 0) {
       setTimeout(loadLastFrequency, 500);
     }
   }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected]);
@@ -721,21 +723,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
 
   // 根据当前模式筛选频率
   const filteredFrequencies = React.useMemo(() => {
-    if (!radioMode.currentMode) {
-      return availableFrequencies;
-    }
-
-    const currentModeName = radioMode.currentMode.name;
-    let filtered = availableFrequencies.filter(freq => freq.mode === currentModeName);
-
-    // 如果存在自定义频率选项且模式匹配，添加到列表开头
-    if (customFrequencyOption && customFrequencyOption.mode === currentModeName) {
-      // 确保不重复添加
-      const exists = filtered.some(f => f.key === customFrequencyOption.key);
-      if (!exists) {
-        filtered = [customFrequencyOption, ...filtered];
-      }
-    }
+    let filtered = filterDigitalFrequencyOptions(
+      availableFrequencies,
+      radioMode.currentMode?.name,
+      customFrequencyOption,
+    );
 
     // CASL 条件过滤：如果有频率限制条件，只显示允许的预设
     if (!isAdmin && canSetFrequency) {
@@ -1196,7 +1188,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 innerWrapper: "shadow-none",
                 mainWrapper: "shadow-none"
               }}
-              isDisabled={!connection.state.isConnected || isLoadingFrequencies || !radioMode.currentMode}
+              isDisabled={!connection.state.isConnected || isLoadingFrequencies || !canWriteFrequency}
               isLoading={isLoadingFrequencies}
               onSelectionChange={handleFrequencyChange}
               renderValue={() => {

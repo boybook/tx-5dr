@@ -1101,6 +1101,7 @@ export class WSServer extends WSMessageHandler {
         radioInfo: null,
         radioConfig: radioManager.getConfig(),
         connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities: radioManager.getCoreCapabilities(),
       });
     } catch (error) {
       logger.error('failed to send radio connection status', error);
@@ -1653,7 +1654,8 @@ export class WSServer extends WSMessageHandler {
           reason: 'manual reconnect failed',
           radioInfo: null,
           radioConfig: radioManager.getConfig(),
-          connectionHealth
+          connectionHealth,
+          coreCapabilities: radioManager.getCoreCapabilities(),
         });
       } catch {}
     }

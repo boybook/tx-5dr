@@ -15,7 +15,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, MeterCapabilities, RadioInfo, ReconnectProgress, CapabilityState } from '@tx5dr/contracts';
+import type { HamlibConfig, MeterCapabilities, RadioInfo, ReconnectProgress, CapabilityState, CoreRadioCapabilities } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
@@ -46,11 +46,31 @@ interface PhysicalRadioManagerEvents {
   radioFrequencyChanged: (frequency: number) => void;
   meterData: (data: MeterData) => void;
   tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void;
+  coreCapabilitiesChanged: (capabilities: CoreRadioCapabilities) => void;
   /** 能力快照（连接/断开时触发） */
   capabilityList: (data: { capabilities: CapabilityState[] }) => void;
   /** 单个能力值变化 */
   capabilityChanged: (state: CapabilityState) => void;
 }
+
+type CoreCapabilityKey = keyof CoreRadioCapabilities;
+type CoreCapabilityState = 'unknown' | 'supported' | 'unsupported';
+
+function createInitialCoreCapabilityStates(): Record<CoreCapabilityKey, CoreCapabilityState> {
+  return {
+    readFrequency: 'unknown',
+    writeFrequency: 'unknown',
+    readRadioMode: 'unknown',
+    writeRadioMode: 'unknown',
+  };
+}
+
+const CORE_CAPABILITY_LABELS: Record<CoreCapabilityKey, string> = {
+  readFrequency: 'read frequency',
+  writeFrequency: 'write frequency',
+  readRadioMode: 'read radio mode',
+  writeRadioMode: 'write radio mode',
+};
 
 /**
  * PhysicalRadioManager - 重构后的物理电台管理器
@@ -86,6 +106,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 统一电台控制能力管理器
    */
   private capabilityManager: RadioCapabilityManager = new RadioCapabilityManager();
+
+  /**
+   * 当前连接会话的核心能力状态缓存。
+   * 一旦明确判定为 unsupported，当前会话内不再重复访问底层连接。
+   */
+  private coreCapabilityStates: Record<CoreCapabilityKey, CoreCapabilityState> = createInitialCoreCapabilityStates();
 
   /**
    * 断开保护标志（防止重复断开导致 hamlib 线程冲突）
@@ -322,6 +348,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   /**
+   * 获取当前连接会话的核心能力摘要。
+   * 仅在明确判定 unsupported 时返回 false；unknown 与 supported 都返回 true。
+   */
+  getCoreCapabilities(): CoreRadioCapabilities {
+    return {
+      readFrequency: this.coreCapabilityStates.readFrequency !== 'unsupported',
+      writeFrequency: this.coreCapabilityStates.writeFrequency !== 'unsupported',
+      readRadioMode: this.coreCapabilityStates.readRadioMode !== 'unsupported',
+      writeRadioMode: this.coreCapabilityStates.writeRadioMode !== 'unsupported',
+    };
+  }
+
+  /**
    * 获取电台信息
    * 统一方法，根据不同电台模式返回标准化的 RadioInfo
    */
@@ -399,11 +438,22 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return false;
     }
 
+    if (this.isCoreCapabilityUnsupported('writeFrequency')) {
+      logger.debug('Skipping setFrequency because write frequency is marked unsupported');
+      return false;
+    }
+
     try {
       await this.connection.setFrequency(freq);
+      this.markCoreCapabilitySupported('writeFrequency');
       logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
       return true;
     } catch (error) {
+      if (isRecoverableOptionalRadioError(error)) {
+        this.markCoreCapabilityUnsupported('writeFrequency', error);
+        logger.warn(`Frequency write is unavailable for this radio: ${(error as Error).message}`);
+        return false;
+      }
       logger.error(`Failed to set frequency: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
       return false;
@@ -419,10 +469,21 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return 0;
     }
 
+    if (this.isCoreCapabilityUnsupported('readFrequency')) {
+      logger.debug('Skipping getFrequency because read frequency is marked unsupported');
+      return 0;
+    }
+
     try {
       const frequency = await this.connection.getFrequency();
+       this.markCoreCapabilitySupported('readFrequency');
       return frequency;
     } catch (error) {
+      if (isRecoverableOptionalRadioError(error)) {
+        this.markCoreCapabilityUnsupported('readFrequency', error);
+        logger.warn(`Frequency read is unavailable for this radio: ${(error as Error).message}`);
+        return 0;
+      }
       logger.error(`Failed to get frequency: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
       return 0;
@@ -478,10 +539,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       throw new Error('radio not connected');
     }
 
+    if (this.isCoreCapabilityUnsupported('writeRadioMode')) {
+      throw new Error('set mode failed: radio mode control not supported');
+    }
+
     try {
       await this.connection.setMode(mode, bandwidth);
+      this.markCoreCapabilitySupported('writeRadioMode');
       logger.info(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`);
     } catch (error) {
+      if (isRecoverableOptionalRadioError(error)) {
+        this.markCoreCapabilityUnsupported('writeRadioMode', error);
+        throw new Error(`set mode failed: ${(error as Error).message}`);
+      }
       this.handleConnectionError(error as Error);
       throw new Error(`set mode failed: ${(error as Error).message}`);
     }
@@ -495,12 +565,18 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       throw new Error('radio not connected');
     }
 
+    if (this.isCoreCapabilityUnsupported('readRadioMode')) {
+      throw new Error('get mode failed: radio mode read not supported');
+    }
+
     try {
       const modeInfo = await this.connection.getMode();
+      this.markCoreCapabilitySupported('readRadioMode');
       // logger.debug(`Mode read: ${modeInfo.mode}`);
       return modeInfo;
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
+        this.markCoreCapabilityUnsupported('readRadioMode', error);
         logger.warn(`Mode read failed but connection remains healthy: ${(error as Error).message}`);
         throw new Error(`get mode failed: ${(error as Error).message}`);
       }
@@ -771,6 +847,56 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.connection;
   }
 
+  private isCoreCapabilityUnsupported(key: CoreCapabilityKey): boolean {
+    return this.coreCapabilityStates[key] === 'unsupported';
+  }
+
+  private markCoreCapabilitySupported(key: CoreCapabilityKey): void {
+    this.updateCoreCapabilityState(key, 'supported');
+  }
+
+  private markCoreCapabilityUnsupported(key: CoreCapabilityKey, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.updateCoreCapabilityState(key, 'unsupported', message);
+  }
+
+  private resetCoreCapabilities(): void {
+    const previous = JSON.stringify(this.getCoreCapabilities());
+    this.coreCapabilityStates = createInitialCoreCapabilityStates();
+    if (JSON.stringify(this.getCoreCapabilities()) !== previous) {
+      this.emit('coreCapabilitiesChanged', this.getCoreCapabilities());
+    }
+  }
+
+  private updateCoreCapabilityState(
+    key: CoreCapabilityKey,
+    nextState: CoreCapabilityState,
+    reason?: string,
+  ): void {
+    const previousState = this.coreCapabilityStates[key];
+    if (previousState === nextState) {
+      return;
+    }
+
+    const previousCapabilities = JSON.stringify(this.getCoreCapabilities());
+    this.coreCapabilityStates[key] = nextState;
+
+    if (nextState === 'unsupported') {
+      logger.info(`Core radio capability marked unsupported: ${CORE_CAPABILITY_LABELS[key]}`, {
+        key,
+        reason,
+      });
+    } else if (previousState === 'unsupported' && nextState === 'unknown') {
+      logger.debug(`Core radio capability reset: ${CORE_CAPABILITY_LABELS[key]}`);
+    } else if (previousState === 'unknown' && nextState === 'supported') {
+      logger.debug(`Core radio capability confirmed: ${CORE_CAPABILITY_LABELS[key]}`);
+    }
+
+    if (JSON.stringify(this.getCoreCapabilities()) !== previousCapabilities) {
+      this.emit('coreCapabilitiesChanged', this.getCoreCapabilities());
+    }
+  }
+
   // ==================== 静态方法 ====================
 
   /**
@@ -862,6 +988,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private async doConnect(config: HamlibConfig): Promise<void> {
     logger.info(`Executing connection: ${config.type}`);
+    this.resetCoreCapabilities();
 
     // 总是先清理旧连接（解决重连时资源竞争）
     if (this.connection) {
@@ -912,6 +1039,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
     this.capabilityManager.onDisconnected();
+    this.resetCoreCapabilities();
 
     if (this.connection) {
       try {
@@ -1045,6 +1173,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private cleanupAfterDisconnect(): void {
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
+    this.capabilityManager.onDisconnected();
+    this.resetCoreCapabilities();
     if (this.connection) {
       this.cleanupConnectionListeners();
       // 不调用 connection.disconnect()，因为连接已断（被动断线）
@@ -1196,6 +1326,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private async checkFrequencyChange(): Promise<void> {
     if (!this.connection || !this.isConnected()) {
+      return;
+    }
+
+    if (this.isCoreCapabilityUnsupported('readFrequency')) {
       return;
     }
 

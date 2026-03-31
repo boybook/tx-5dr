@@ -386,7 +386,7 @@ export class HamlibConnection
       this.lastSuccessfulOperation = Date.now();
       logger.debug(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`);
     } catch (error) {
-      throw this.convertError(error, 'setMode');
+      throw this.convertOptionalOperationError(error, 'setMode');
     }
   }
 

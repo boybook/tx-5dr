@@ -127,7 +127,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
       radioInfo,
       radioConfig: config,
       reason: 'Configuration updated',
-      connectionHealth: radioManager.getConnectionHealth()
+      connectionHealth: radioManager.getConnectionHealth(),
+      coreCapabilities: radioManager.getCoreCapabilities(),
     });
     logger.debug(`Config change event broadcast: type=${config.type}, connected=${radioManager.isConnected()}`);
 
@@ -448,6 +449,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         radioInfo,
         radioConfig: config,
         connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities: radioManager.getCoreCapabilities(),
       },
     });
   });

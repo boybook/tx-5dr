@@ -268,6 +268,21 @@ export type ReconnectProgress = z.infer<typeof ReconnectProgressSchema>;
 export const RadioConnectionStatusSchema = z.nativeEnum(RadioConnectionStatus);
 
 /**
+ * 核心电台能力
+ * 用于描述主流程是否仍可继续使用某项核心读写能力。
+ *
+ * 语义：
+ * - true: 当前连接仍可继续尝试该能力（已确认支持，或尚未确认不支持）
+ * - false: 已明确确认当前电台/连接不支持该能力，后续不再重复访问底层
+ */
+export const CoreRadioCapabilitiesSchema = z.object({
+  readFrequency: z.boolean(),
+  writeFrequency: z.boolean(),
+  readRadioMode: z.boolean(),
+  writeRadioMode: z.boolean(),
+});
+
+/**
  * 自定义频率预设设置Schema
  */
 export const CustomFrequencyPresetsSchema = z.object({
@@ -295,3 +310,4 @@ export type TunerCapabilities = z.infer<typeof TunerCapabilitiesSchema>;
 export type TunerStatus = z.infer<typeof TunerStatusSchema>;
 export type TunerCapabilitiesResponse = z.infer<typeof TunerCapabilitiesResponseSchema>;
 export type TunerStatusResponse = z.infer<typeof TunerStatusResponseSchema>;
+export type CoreRadioCapabilities = z.infer<typeof CoreRadioCapabilitiesSchema>;
