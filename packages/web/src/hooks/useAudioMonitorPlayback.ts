@@ -11,6 +11,11 @@ import type {
 } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import {
+  createCompatPlaybackBackend,
+  type CompatPlaybackBackend,
+  type CompatPlaybackStats,
+} from '../audio/compatAudioBackends';
+import {
   buildRealtimeConnectivityIssue,
   showRealtimeFallbackActivatedToast,
   toRealtimeConnectivityError,
@@ -76,7 +81,7 @@ export function useAudioMonitorPlayback(
   const attachedTracksRef = useRef<Map<string, RemoteAudioTrack>>(new Map());
   const attachedElementsRef = useRef<Map<string, HTMLMediaElement>>(new Map());
   const audioContextRef = useRef<AudioContext | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const compatPlaybackBackendRef = useRef<CompatPlaybackBackend | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const compatSocketRef = useRef<WebSocket | null>(null);
   const isInitializingRef = useRef(false);
@@ -167,14 +172,13 @@ export function useAudioMonitorPlayback(
       roomRef.current = null;
     }
 
-    if (workletNodeRef.current) {
+    if (compatPlaybackBackendRef.current) {
       try {
-        workletNodeRef.current.disconnect();
+        compatPlaybackBackendRef.current.close();
       } catch {
         // ignore
       }
-      workletNodeRef.current.port.onmessage = null;
-      workletNodeRef.current = null;
+      compatPlaybackBackendRef.current = null;
     }
 
     if (gainNodeRef.current) {
@@ -491,32 +495,21 @@ export function useAudioMonitorPlayback(
       await audioContext.resume();
     }
 
-    await audioContext.audioWorklet.addModule('/audio-monitor-worklet.js');
-    const worklet = new AudioWorkletNode(audioContext, 'audio-monitor-processor', {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
+    const backend = await createCompatPlaybackBackend(audioContext, (backendStats: CompatPlaybackStats) => {
+      receiverStatsRef.current = {
+        latencyMs: backendStats.latencyMs,
+        bufferFillPercent: backendStats.bufferFillPercent,
+        droppedSamples: backendStats.droppedSamples,
+        queueDurationMs: backendStats.queueDurationMs,
+        targetBufferMs: backendStats.targetBufferMs,
+      };
+      recomputeStats();
     });
     const gainNode = audioContext.createGain();
     gainNode.gain.value = currentVolumeRef.current;
-    worklet.connect(gainNode);
+    backend.outputNode.connect(gainNode);
     gainNode.connect(audioContext.destination);
-
-    worklet.port.onmessage = (event) => {
-      if (event.data?.type !== 'stats') {
-        return;
-      }
-      receiverStatsRef.current = {
-        latencyMs: event.data.data?.latencyMs,
-        bufferFillPercent: event.data.data?.bufferFillPercent,
-        droppedSamples: event.data.data?.droppedSamples,
-        queueDurationMs: event.data.data?.queueDurationMs,
-        targetBufferMs: event.data.data?.targetBufferMs,
-      };
-      recomputeStats();
-    };
-
-    workletNodeRef.current = worklet;
+    compatPlaybackBackendRef.current = backend;
     gainNodeRef.current = gainNode;
 
     await new Promise<void>((resolve, reject) => {
@@ -555,12 +548,11 @@ export function useAudioMonitorPlayback(
         try {
           const decoded = decodeWsCompatAudioFrame(event.data as ArrayBuffer);
           const float32 = int16ToFloat32Pcm(decoded.pcm);
-          worklet.port.postMessage({
-            type: 'audioData',
+          backend.handleAudioData({
             buffer: float32.buffer,
             sampleRate: decoded.sampleRate,
             clientTimestamp: decoded.timestampMs,
-          }, [float32.buffer]);
+          });
 
           if (!settled) {
             settled = true;

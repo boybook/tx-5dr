@@ -3,6 +3,10 @@ import type { RealtimeConnectivityHints, RealtimeTransportOffer, RealtimeTranspo
 import { Room, RoomEvent, Track, createLocalAudioTrack, type LocalAudioTrack } from 'livekit-client';
 import { createLogger } from '../utils/logger';
 import {
+  createCompatCaptureBackend,
+  type CompatCaptureBackend,
+} from './compatAudioBackends';
+import {
   buildRealtimeConnectivityIssue,
   showRealtimeFallbackActivatedToast,
   toRealtimeConnectivityError,
@@ -40,7 +44,7 @@ export class VoiceCapture {
   private mediaStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private mediaSource: MediaStreamAudioSourceNode | null = null;
-  private captureNode: AudioWorkletNode | null = null;
+  private captureBackend: CompatCaptureBackend | null = null;
   private startPromise: Promise<void> | null = null;
   private pttActive = false;
   private _participantIdentity: string | null = null;
@@ -232,15 +236,8 @@ export class VoiceCapture {
       await audioContext.resume();
     }
 
-    await audioContext.audioWorklet.addModule('/voice-capture-worklet.js');
     const mediaSource = audioContext.createMediaStreamSource(mediaStream);
-    const captureNode = new AudioWorkletNode(audioContext, 'voice-capture-processor', {
-      numberOfInputs: 1,
-      numberOfOutputs: 0,
-      channelCount: 1,
-      channelCountMode: 'explicit',
-      channelInterpretation: 'speakers',
-    });
+    const captureBackend = await createCompatCaptureBackend(audioContext);
 
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`${offer.url}?token=${encodeURIComponent(offer.token)}`);
@@ -270,18 +267,11 @@ export class VoiceCapture {
       };
     }
 
-    captureNode.port.onmessage = (event) => {
-      if (event.data?.type !== 'audioFrame' || !this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
+    captureBackend.setFrameHandler((frame) => {
+      if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
         return;
       }
       if (!this.pttActive) {
-        return;
-      }
-
-      const frameBuffer = event.data.buffer as ArrayBuffer | undefined;
-      const sampleRate = Number(event.data.sampleRate ?? 16000);
-      const samplesPerChannel = Number(event.data.samplesPerChannel ?? 320);
-      if (!frameBuffer) {
         return;
       }
 
@@ -289,24 +279,24 @@ export class VoiceCapture {
         const payload = encodeWsCompatAudioFrame({
           sequence: this.compatSequence++,
           timestampMs: Date.now(),
-          sampleRate,
+          sampleRate: frame.sampleRate,
           channels: 1,
-          samplesPerChannel,
-          pcm: new Int16Array(frameBuffer),
+          samplesPerChannel: frame.samplesPerChannel,
+          pcm: new Int16Array(frame.buffer),
         });
         this.compatSocket.send(payload);
       } catch (error) {
         logger.debug('Failed to send compatibility uplink audio frame', error);
       }
-    };
+    });
 
-    mediaSource.connect(captureNode);
+    mediaSource.connect(captureBackend.inputNode);
 
     this.transportKind = 'ws-compat';
     this.mediaStream = mediaStream;
     this.audioContext = audioContext;
     this.mediaSource = mediaSource;
-    this.captureNode = captureNode;
+    this.captureBackend = captureBackend;
     this._participantIdentity = offer.participantIdentity ?? null;
 
     logger.info('Voice capture connected via compatibility WebSocket', {
@@ -320,14 +310,13 @@ export class VoiceCapture {
   }
 
   private cleanup(): void {
-    if (this.captureNode) {
+    if (this.captureBackend) {
       try {
-        this.captureNode.disconnect();
+        this.captureBackend.close();
       } catch {
         // ignore
       }
-      this.captureNode.port.onmessage = null;
-      this.captureNode = null;
+      this.captureBackend = null;
     }
 
     if (this.mediaSource) {
