@@ -358,8 +358,91 @@ cmd_update() {
     return $rc
 }
 
-cmd_doctor() {
+remove_config_env_livekit_overrides() {
+    local config_env="/etc/tx5dr/config.env"
+    [[ -f "$config_env" ]] || return 0
+
+    local tmp_file
+    tmp_file=$(mktemp)
+    grep -Ev '^[[:space:]]*LIVEKIT_API_KEY=|^[[:space:]]*LIVEKIT_API_SECRET=' "$config_env" > "$tmp_file" || true
+    cat "$tmp_file" > "$config_env"
+    rm -f "$tmp_file"
+}
+
+cmd_doctor_fix_internal() {
+    require_root
+    load_config
+    detect_os
+
+    local changed_livekit=0
+
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" && "${LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE:-}" == "/etc/tx5dr/config.env" ]]; then
+        log_info "Removing legacy LiveKit credential overrides from /etc/tx5dr/config.env"
+        remove_config_env_livekit_overrides
+        load_config
+    fi
+
+    if ! check_nodejs; then
+        fix_nodejs || true
+    fi
+    if ! check_glibcxx; then
+        fix_glibcxx || true
+    fi
+    if ! check_nginx_installed; then
+        fix_nginx || true
+    fi
+    if ! check_livekit_binary; then
+        fix_livekit_binary || true
+    fi
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" != "1" ]]; then
+        if ! check_livekit_credentials_exists || ! check_livekit_credentials_loaded; then
+            if fix_livekit_credentials; then
+                changed_livekit=1
+            fi
+            load_config
+        fi
+    fi
+    if ! check_livekit_config_exists || ! check_livekit_config_consistency; then
+        if fix_livekit_config; then
+            changed_livekit=1
+        fi
+        load_config
+    fi
+    if ! check_tx5dr_user; then
+        fix_tx5dr_user_groups || true
+    fi
+
+    if [[ $changed_livekit -eq 1 ]]; then
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl restart tx5dr-livekit 2>/dev/null || true
+        systemctl restart tx5dr 2>/dev/null || true
+    fi
+
     run_doctor
+}
+
+cmd_doctor() {
+    case "${1:-}" in
+        --fix|fix)
+            if [[ $EUID -ne 0 ]]; then
+                exec sudo "$0" __doctor_fix
+            fi
+            "$0" __doctor_fix
+            ;;
+        --help|-h|help)
+            echo "Usage: tx5dr doctor [--fix]"
+            ;;
+        *)
+            run_doctor
+            ;;
+    esac
+}
+
+cmd_livekit_creds_help() {
+    echo "Usage: tx5dr livekit-creds [status|rotate]"
+    echo ""
+    echo "  status   Show managed LiveKit credential status"
+    echo "  rotate   Regenerate managed credentials and LiveKit config"
 }
 
 cmd_livekit_creds() {
@@ -371,7 +454,9 @@ cmd_livekit_creds() {
             echo -e "${_BOLD}LiveKit Credentials${_NC}"
             echo "─────────────────────────────────────"
             echo -e "  State:      $(describe_livekit_credentials_state)"
-            if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" != "1" ]]; then
+            if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
+                echo -e "  Source:     ${LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE:-environment}"
+            else
                 echo -e "  File:       $(get_livekit_credentials_path)"
             fi
             local created_at rotated_at
@@ -387,9 +472,12 @@ cmd_livekit_creds() {
             fi
             "$0" __rotate_livekit_creds
             ;;
+        --help|-h|help)
+            cmd_livekit_creds_help
+            ;;
         *)
             log_error "Unknown livekit-creds action: $action"
-            echo "Usage: tx5dr livekit-creds [status|rotate]"
+            cmd_livekit_creds_help
             return 1
             ;;
     esac
@@ -398,8 +486,14 @@ cmd_livekit_creds() {
 cmd_livekit_creds_rotate_internal() {
     load_config
     if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
-        log_error "Cannot rotate managed LiveKit credentials while environment override is active."
-        return 1
+        if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE:-}" == "/etc/tx5dr/config.env" ]]; then
+            log_info "Removing legacy LiveKit credential overrides from /etc/tx5dr/config.env"
+            remove_config_env_livekit_overrides
+            load_config
+        else
+            log_error "Cannot rotate managed LiveKit credentials while environment override is active (${LIVEKIT_CREDENTIAL_OVERRIDE_SOURCE:-environment})."
+            return 1
+        fi
     fi
     if ! write_livekit_credentials_file; then
         log_error "Failed to generate LiveKit credentials."
@@ -462,7 +556,7 @@ cmd_help() {
     echo "  logs     Follow service logs (--nginx / --all)"
     echo "  token    Show admin token (--reset to regenerate)"
     echo "  update   Download and install latest nightly build"
-    echo "  doctor   Run full environment diagnostics"
+    echo "  doctor   Run full environment diagnostics (--fix to auto-repair)"
     echo "  livekit-creds  Show or rotate managed LiveKit credentials"
     echo "  enable   Enable auto-start on boot"
     echo "  disable  Disable auto-start on boot"
@@ -479,9 +573,10 @@ case "${1:-help}" in
     status)  cmd_status ;;
     token)   cmd_token "${2:-}" ;;
     update)  cmd_update ;;
-    doctor)  cmd_doctor ;;
+    doctor)  cmd_doctor "${2:-}" ;;
     livekit-creds) cmd_livekit_creds "${2:-}" ;;
     logs)    cmd_logs "${2:-}" ;;
+    __doctor_fix) cmd_doctor_fix_internal ;;
     __rotate_livekit_creds) cmd_livekit_creds_rotate_internal ;;
     enable)
         sudo systemctl enable tx5dr
