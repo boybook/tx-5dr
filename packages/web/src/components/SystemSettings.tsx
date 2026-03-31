@@ -21,6 +21,7 @@ import type {
   NetworkInfo,
   RealtimeConnectivityHints,
   RealtimeConnectivityErrorCode,
+  RealtimeCredentialStatus,
   RealtimeTransportKind,
   RealtimeTransportPolicy,
 } from '@tx5dr/contracts';
@@ -41,6 +42,7 @@ type RealtimeRuntimeView = {
   radioReceiveTransport: RealtimeTransportKind;
   radioBridgeHealthy: boolean;
   radioBridgeIssueCode: RealtimeConnectivityErrorCode | null;
+  credentialStatus: RealtimeCredentialStatus;
 };
 
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
@@ -117,6 +119,22 @@ function getRealtimeIssueLabel(
       return t('radio:realtime.tokenRequestFailed', { scope: t('radio:realtime.scopeRadio') });
     default:
       return t('radio:realtime.unknownFailure', { scope: t('radio:realtime.scopeRadio') });
+  }
+}
+
+function getRealtimeCredentialSourceLabel(
+  source: RealtimeCredentialStatus['source'] | null | undefined,
+  t: (key: string) => string,
+): string {
+  switch (source) {
+    case 'managed-file':
+      return t('system.realtimeCredentialManaged');
+    case 'environment-override':
+      return t('system.realtimeCredentialEnvOverride');
+    case 'missing':
+      return t('system.realtimeCredentialMissing');
+    default:
+      return t('system.realtimeUnknown');
   }
 }
 
@@ -487,6 +505,7 @@ export const SystemSettings = forwardRef<
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const runtimeIssueLabel = getRealtimeIssueLabel(realtimeRuntime?.radioBridgeIssueCode ?? null, t);
+  const runtimeCredential = realtimeRuntime?.credentialStatus ?? null;
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -718,6 +737,43 @@ export const SystemSettings = forwardRef<
                   </div>
                   <p className="mt-2 text-xs text-default-400">{runtimeIssueLabel}</p>
                 </div>
+
+                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                  <p className="text-xs text-default-500">{t('system.realtimeCredentialStatusLabel')}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Chip
+                      size="sm"
+                      color={runtimeCredential?.initialized ? 'success' : 'danger'}
+                      variant="flat"
+                    >
+                      {runtimeCredential?.initialized
+                        ? t('system.realtimeCredentialReady')
+                        : t('system.realtimeCredentialMissing')}
+                    </Chip>
+                    <Chip
+                      size="sm"
+                      color={runtimeCredential?.source === 'environment-override' ? 'warning' : 'default'}
+                      variant="flat"
+                    >
+                      {getRealtimeCredentialSourceLabel(runtimeCredential?.source ?? null, t)}
+                    </Chip>
+                  </div>
+                  <p className="mt-2 text-xs text-default-400">
+                    {runtimeCredential?.apiKeyPreview
+                      ? t('system.realtimeCredentialPreview', { value: runtimeCredential.apiKeyPreview })
+                      : t('system.realtimeCredentialMissingHint')}
+                  </p>
+                  {runtimeCredential?.rotatedAt && (
+                    <p className="mt-1 text-xs text-default-400">
+                      {t('system.realtimeCredentialRotatedAt', { value: runtimeCredential.rotatedAt })}
+                    </p>
+                  )}
+                  {runtimeCredential?.filePath && (
+                    <p className="mt-1 break-all text-xs text-default-400">
+                      {t('system.realtimeCredentialFile', { value: runtimeCredential.filePath })}
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
@@ -758,6 +814,7 @@ export const SystemSettings = forwardRef<
                   <p>{t('system.realtimePortHintAuto')}</p>
                   <p>{t('system.realtimePortHintCompat')}</p>
                   <p>{t('system.realtimePortHintFallback')}</p>
+                  <p>{t('system.realtimeCredentialLinuxHint')}</p>
                 </div>
               </div>
             </div>

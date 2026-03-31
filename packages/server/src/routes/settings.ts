@@ -11,6 +11,7 @@ import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { requireAbility } from '../auth/authPlugin.js';
 import { LiveKitConfig } from '../realtime/LiveKitConfig.js';
 import { RealtimeTransportManager } from '../realtime/RealtimeTransportManager.js';
+import { getLiveKitCredentialRuntimeStatus } from '../realtime/LiveKitCredentialState.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
 /**
@@ -52,6 +53,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         radioReceiveTransport: transportManager.getPreferredTransport('radio', 'recv'),
         radioBridgeHealthy: health.healthy,
         radioBridgeIssueCode: health.issueCode,
+        credentialStatus: getLiveKitCredentialRuntimeStatus(),
       },
     };
   };

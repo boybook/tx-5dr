@@ -118,12 +118,26 @@ export const RealtimeSettingsSchema = z.object({
 
 export type RealtimeSettings = z.infer<typeof RealtimeSettingsSchema>;
 
+export const RealtimeCredentialSourceSchema = z.enum(['managed-file', 'environment-override', 'missing']);
+export type RealtimeCredentialSource = z.infer<typeof RealtimeCredentialSourceSchema>;
+
+export const RealtimeCredentialStatusSchema = z.object({
+  initialized: z.boolean(),
+  source: RealtimeCredentialSourceSchema,
+  filePath: z.string().nullable(),
+  apiKeyPreview: z.string().nullable(),
+  createdAt: z.string().nullable(),
+  rotatedAt: z.string().nullable(),
+});
+export type RealtimeCredentialStatus = z.infer<typeof RealtimeCredentialStatusSchema>;
+
 export const RealtimeSettingsRuntimeSchema = z.object({
   liveKitEnabled: z.boolean(),
   connectivityHints: RealtimeConnectivityHintsSchema,
   radioReceiveTransport: RealtimeTransportKindSchema,
   radioBridgeHealthy: z.boolean(),
   radioBridgeIssueCode: RealtimeConnectivityErrorCodeSchema.nullable(),
+  credentialStatus: RealtimeCredentialStatusSchema,
 });
 
 export type RealtimeSettingsRuntime = z.infer<typeof RealtimeSettingsRuntimeSchema>;

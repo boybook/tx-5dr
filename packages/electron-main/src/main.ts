@@ -41,6 +41,13 @@ interface ElectronSettings {
   closeBehavior: 'ask' | 'tray' | 'quit';
 }
 
+interface LiveKitCredentialFileData {
+  apiKey: string;
+  apiSecret: string;
+  createdAt: string;
+  rotatedAt: string;
+}
+
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = { closeBehavior: 'ask' };
 
 function getElectronSettingsPath(): string {
@@ -356,6 +363,81 @@ function buildLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: stri
     '  level: info',
     '',
   ].join('\n');
+}
+
+function getLiveKitCredentialPath(): string {
+  return path.join(getAppConfigDir(), 'livekit-credentials.env');
+}
+
+function parseEnvFile(content: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    let value = line.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith('\'') && value.endsWith('\''))
+    ) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+function renderLiveKitCredentialEnv(data: LiveKitCredentialFileData): string {
+  return [
+    '# Managed by TX-5DR. Rotate this file only via TX-5DR tools.',
+    `LIVEKIT_API_KEY=${data.apiKey}`,
+    `LIVEKIT_API_SECRET=${data.apiSecret}`,
+    `LIVEKIT_CREDENTIALS_CREATED_AT=${data.createdAt}`,
+    `LIVEKIT_CREDENTIALS_ROTATED_AT=${data.rotatedAt}`,
+    '',
+  ].join('\n');
+}
+
+function ensureLiveKitCredentials(): { path: string; data: LiveKitCredentialFileData } {
+  const configDir = getAppConfigDir();
+  fs.mkdirSync(configDir, { recursive: true });
+  const credentialPath = getLiveKitCredentialPath();
+
+  try {
+    if (fs.existsSync(credentialPath)) {
+      const parsed = parseEnvFile(fs.readFileSync(credentialPath, 'utf-8'));
+      const apiKey = parsed.LIVEKIT_API_KEY?.trim();
+      const apiSecret = parsed.LIVEKIT_API_SECRET?.trim();
+      if (apiKey && apiSecret) {
+        const createdAt = parsed.LIVEKIT_CREDENTIALS_CREATED_AT?.trim() || new Date().toISOString();
+        const rotatedAt = parsed.LIVEKIT_CREDENTIALS_ROTATED_AT?.trim() || createdAt;
+        return {
+          path: credentialPath,
+          data: { apiKey, apiSecret, createdAt, rotatedAt },
+        };
+      }
+    }
+  } catch (error) {
+    logger.warn('failed to read existing LiveKit credentials, regenerating', error);
+  }
+
+  const now = new Date().toISOString();
+  const data: LiveKitCredentialFileData = {
+    apiKey: `tx5dr-${randomBytes(8).toString('hex')}`,
+    apiSecret: randomBytes(24).toString('hex'),
+    createdAt: now,
+    rotatedAt: now,
+  };
+  fs.writeFileSync(credentialPath, renderLiveKitCredentialEnv(data), 'utf-8');
+  return { path: credentialPath, data };
 }
 
 function ensureLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: string, apiSecret: string): string {
@@ -892,14 +974,18 @@ async function createWindow() {
 
     logger.info(`ports selected: livekit=${livekitPort ?? 'disabled'}, livekitTcp=${livekitTcpPort ?? 'disabled'}, server=${serverPort}, web=${webPort}`);
 
-    let livekitApiKey: string | null = null;
-    let livekitApiSecret: string | null = null;
+    let livekitCredentialPath: string | null = null;
     let livekitConfigPath: string | null = null;
 
     if (livekitEnabled && livekitBinary && livekitPort && livekitTcpPort) {
-      livekitApiKey = `tx5dr-electron-${Date.now()}`;
-      livekitApiSecret = randomBytes(24).toString('hex');
-      livekitConfigPath = ensureLiveKitConfig(livekitPort, livekitTcpPort, livekitApiKey, livekitApiSecret);
+      const credentialState = ensureLiveKitCredentials();
+      livekitCredentialPath = credentialState.path;
+      livekitConfigPath = ensureLiveKitConfig(
+        livekitPort,
+        livekitTcpPort,
+        credentialState.data.apiKey,
+        credentialState.data.apiSecret,
+      );
 
       livekitProcess = runBinaryChild('livekit', livekitBinary, ['--config', livekitConfigPath]);
 
@@ -912,8 +998,7 @@ async function createWindow() {
         }
         selectedLiveKitPort = null;
         selectedLiveKitTcpPort = null;
-        livekitApiKey = null;
-        livekitApiSecret = null;
+        livekitCredentialPath = null;
         livekitConfigPath = null;
       } else {
         logger.info('livekit service ready');
@@ -924,11 +1009,11 @@ async function createWindow() {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
       LIVEKIT_DISABLED: livekitProcess ? '0' : '1',
-      ...(livekitProcess && livekitPort && livekitTcpPort && livekitApiKey && livekitApiSecret
+      ...(livekitProcess && livekitPort && livekitTcpPort && livekitCredentialPath && livekitConfigPath
         ? {
             LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`,
-            LIVEKIT_API_KEY: livekitApiKey,
-            LIVEKIT_API_SECRET: livekitApiSecret,
+            LIVEKIT_CREDENTIALS_FILE: livekitCredentialPath,
+            LIVEKIT_CONFIG_PATH: livekitConfigPath,
             LIVEKIT_TCP_PORT: String(livekitTcpPort),
             LIVEKIT_UDP_PORT_RANGE: '50000-50100',
           }

@@ -104,6 +104,8 @@ MSG_EN_CHECK_LIVEKIT_UDP_RANGE="LiveKit UDP range %s-%s"
 MSG_ZH_CHECK_LIVEKIT_UDP_RANGE="LiveKit UDP 范围 %s-%s"
 MSG_EN_CHECK_LIVEKIT_CREDENTIALS="LiveKit credentials"
 MSG_ZH_CHECK_LIVEKIT_CREDENTIALS="LiveKit 凭据"
+MSG_EN_CHECK_LIVEKIT_CREDENTIAL_FILE="LiveKit credential file"
+MSG_ZH_CHECK_LIVEKIT_CREDENTIAL_FILE="LiveKit 凭据文件"
 MSG_EN_CHECK_PORT_BACKEND="Backend port %s"
 MSG_ZH_CHECK_PORT_BACKEND="后端端口 %s"
 MSG_EN_CHECK_PORT_HTTP="HTTP port %s"
@@ -123,6 +125,8 @@ MSG_EN_FIX_LIVEKIT_BINARY="Reinstall the tx5dr package, or install manually: cur
 MSG_ZH_FIX_LIVEKIT_BINARY="重新安装 tx5dr 软件包，或手动安装: curl -sSL https://get.livekit.io | bash"
 MSG_EN_FIX_LIVEKIT_CONFIG="Regenerate config: sudo rm -f /etc/tx5dr/livekit.yaml && sudo /usr/share/tx5dr/postinstall.sh"
 MSG_ZH_FIX_LIVEKIT_CONFIG="重新生成配置: sudo rm -f /etc/tx5dr/livekit.yaml && sudo /usr/share/tx5dr/postinstall.sh"
+MSG_EN_FIX_LIVEKIT_CREDENTIALS="Regenerate credentials: sudo tx5dr livekit-creds rotate"
+MSG_ZH_FIX_LIVEKIT_CREDENTIALS="重新生成凭据: sudo tx5dr livekit-creds rotate"
 
 MSG_EN_INSTALLING_NODEJS="Installing Node.js 22..."
 MSG_ZH_INSTALLING_NODEJS="正在安装 Node.js 22..."
@@ -239,14 +243,23 @@ load_config() {
         # shellcheck disable=SC1091
         source /etc/tx5dr/config.env 2>/dev/null || true
     fi
+    LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=0
+    if [[ -n "${LIVEKIT_API_KEY:-}" && -n "${LIVEKIT_API_SECRET:-}" ]]; then
+        LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE=1
+    fi
+    LIVEKIT_CREDENTIALS_FILE="${LIVEKIT_CREDENTIALS_FILE:-/etc/tx5dr/livekit-credentials.env}"
+    if [[ (-z "${LIVEKIT_API_KEY:-}" || -z "${LIVEKIT_API_SECRET:-}") && -f "${LIVEKIT_CREDENTIALS_FILE}" ]]; then
+        # shellcheck disable=SC1090
+        source "${LIVEKIT_CREDENTIALS_FILE}" 2>/dev/null || true
+    fi
     HTTP_PORT="${TX5DR_HTTP_PORT:-8076}"
     API_PORT="${PORT:-4000}"
     LIVEKIT_SIGNAL_PORT="${LIVEKIT_SIGNAL_PORT:-7880}"
     LIVEKIT_TCP_PORT="${LIVEKIT_TCP_PORT:-7881}"
     LIVEKIT_UDP_PORT_START="${LIVEKIT_UDP_PORT_START:-50000}"
     LIVEKIT_UDP_PORT_END="${LIVEKIT_UDP_PORT_END:-50100}"
-    LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-tx5dr}"
-    LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-tx5dr-change-me-0123456789abcdef}"
+    LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-}"
+    LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-}"
     LIVEKIT_URL="${LIVEKIT_URL:-ws://127.0.0.1:${LIVEKIT_SIGNAL_PORT}}"
     LIVEKIT_CONFIG_FILE="${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
     CONFIG_DIR="${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}"
@@ -378,6 +391,10 @@ get_livekit_binary_path() {
 
 get_livekit_config_path() {
     printf "%s" "${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
+}
+
+get_livekit_credentials_path() {
+    printf "%s" "${LIVEKIT_CREDENTIALS_FILE:-/etc/tx5dr/livekit-credentials.env}"
 }
 
 read_file_maybe_sudo() {

@@ -31,6 +31,7 @@ import { realtimeRoutes } from './routes/realtime.js';
 import { LiveKitConfig } from './realtime/LiveKitConfig.js';
 import { LiveKitBridgeManager } from './realtime/LiveKitBridgeManager.js';
 import { RealtimeTransportManager } from './realtime/RealtimeTransportManager.js';
+import { getLiveKitCredentialRuntimeStatus } from './realtime/LiveKitCredentialState.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
 
 /**
@@ -127,6 +128,12 @@ export async function createServer() {
   const authManager = AuthManager.getInstance();
   await authManager.initialize();
   fastify.log.info('Auth manager initialized');
+  const liveKitCredentialStatus = getLiveKitCredentialRuntimeStatus();
+  if (!LiveKitConfig.isExplicitlyDisabled() && !liveKitCredentialStatus.initialized) {
+    fastify.log.warn({
+      credentialFilePath: liveKitCredentialStatus.filePath,
+    }, 'LiveKit credentials are missing, realtime transport will fall back to ws-compat mode');
+  }
   LiveKitConfig.logEffectiveConfig();
 
   // 注册认证插件（全局 JWT 验证）

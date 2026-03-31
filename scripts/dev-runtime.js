@@ -12,13 +12,16 @@ if (!['web', 'electron'].includes(mode)) {
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const LIVEKIT_SIGNAL_PORT = Number(process.env.LIVEKIT_SIGNAL_PORT || 7880);
 const LIVEKIT_TCP_PORT = Number(process.env.LIVEKIT_TCP_PORT || 7881);
-const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'tx5drdev';
-const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'tx5dr-dev-secret-0123456789abcdef';
+const LIVEKIT_CREDENTIAL_PATH = path.join(PROJECT_ROOT, '.tmp', 'livekit-credentials.env');
 const LIVEKIT_CONFIG_PATH = path.join(PROJECT_ROOT, '.tmp', 'livekit.dev.yaml');
 
 let livekitChild = null;
 let turboChild = null;
 let shuttingDown = false;
+let livekitRuntime = {
+  mode: 'disabled',
+  reason: null,
+};
 
 function triplet() {
   const platform = process.env.PLATFORM || process.platform;
@@ -102,6 +105,69 @@ function getInstallHint() {
   return 'LiveKit server not found. Install livekit-server locally or set LIVEKIT_BINARY_PATH.';
 }
 
+function parseEnvFile(content) {
+  const result = {};
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const separatorIndex = line.indexOf('=');
+    if (separatorIndex <= 0) continue;
+    const key = line.slice(0, separatorIndex).trim();
+    let value = line.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+function renderCredentialEnv(data) {
+  return [
+    '# Managed by TX-5DR dev runtime.',
+    `LIVEKIT_API_KEY=${data.apiKey}`,
+    `LIVEKIT_API_SECRET=${data.apiSecret}`,
+    `LIVEKIT_CREDENTIALS_CREATED_AT=${data.createdAt}`,
+    `LIVEKIT_CREDENTIALS_ROTATED_AT=${data.rotatedAt}`,
+    '',
+  ].join('\n');
+}
+
+function ensureLiveKitCredentials() {
+  fs.mkdirSync(path.dirname(LIVEKIT_CREDENTIAL_PATH), { recursive: true });
+  try {
+    if (fs.existsSync(LIVEKIT_CREDENTIAL_PATH)) {
+      const parsed = parseEnvFile(fs.readFileSync(LIVEKIT_CREDENTIAL_PATH, 'utf-8'));
+      const apiKey = parsed.LIVEKIT_API_KEY && parsed.LIVEKIT_API_KEY.trim();
+      const apiSecret = parsed.LIVEKIT_API_SECRET && parsed.LIVEKIT_API_SECRET.trim();
+      if (apiKey && apiSecret) {
+        const createdAt = (parsed.LIVEKIT_CREDENTIALS_CREATED_AT || '').trim() || new Date().toISOString();
+        const rotatedAt = (parsed.LIVEKIT_CREDENTIALS_ROTATED_AT || '').trim() || createdAt;
+        return { apiKey, apiSecret, createdAt, rotatedAt };
+      }
+    }
+  } catch (error) {
+    console.warn(`[dev-runtime] Failed to read existing LiveKit credentials, regenerating: ${error.message}`);
+  }
+
+  const now = new Date().toISOString();
+  const data = {
+    apiKey: `tx5dr-${randomHex(8)}`,
+    apiSecret: randomHex(24),
+    createdAt: now,
+    rotatedAt: now,
+  };
+  fs.writeFileSync(LIVEKIT_CREDENTIAL_PATH, renderCredentialEnv(data), 'utf-8');
+  return data;
+}
+
+function randomHex(bytes) {
+  return require('crypto').randomBytes(bytes).toString('hex');
+}
+
 function ensureLiveKitBinary() {
   const binaryPath = findLiveKitBinary();
   if (!binaryPath) {
@@ -110,7 +176,7 @@ function ensureLiveKitBinary() {
   return binaryPath;
 }
 
-function buildLiveKitConfig() {
+function buildLiveKitConfig(credentials) {
   return [
     `port: ${LIVEKIT_SIGNAL_PORT}`,
     'rtc:',
@@ -119,7 +185,7 @@ function buildLiveKitConfig() {
     '  port_range_end: 50100',
     '  use_external_ip: false',
     'keys:',
-    `  ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}`,
+    `  ${credentials.apiKey}: ${credentials.apiSecret}`,
     'logging:',
     '  level: info',
     '',
@@ -128,7 +194,9 @@ function buildLiveKitConfig() {
 
 function ensureLiveKitConfig() {
   fs.mkdirSync(path.dirname(LIVEKIT_CONFIG_PATH), { recursive: true });
-  fs.writeFileSync(LIVEKIT_CONFIG_PATH, buildLiveKitConfig(), 'utf-8');
+  const credentials = ensureLiveKitCredentials();
+  fs.writeFileSync(LIVEKIT_CONFIG_PATH, buildLiveKitConfig(credentials), 'utf-8');
+  return credentials;
 }
 
 function waitForHttp(url, timeoutMs = 15000, intervalMs = 250) {
@@ -186,6 +254,21 @@ async function startLiveKit() {
   const ready = await waitForHttp(`http://127.0.0.1:${LIVEKIT_SIGNAL_PORT}`, 500, 100);
   if (ready) {
     console.log(`[dev-runtime] Reusing existing LiveKit on http://127.0.0.1:${LIVEKIT_SIGNAL_PORT}`);
+    if (
+      (process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET)
+      || process.env.LIVEKIT_CREDENTIALS_FILE
+    ) {
+      livekitRuntime = {
+        mode: 'external-configured',
+        reason: null,
+      };
+    } else {
+      livekitRuntime = {
+        mode: 'external-unknown',
+        reason: 'Existing LiveKit is already listening on the signaling port, but its credentials are unknown to the dev runtime. Falling back to ws-compat to avoid issuing invalid tokens.',
+      };
+      console.warn(`[dev-runtime] ${livekitRuntime.reason}`);
+    }
     return;
   }
 
@@ -210,6 +293,10 @@ async function startLiveKit() {
   if (!livekitOk) {
     throw new Error('LiveKit did not become ready in time');
   }
+  livekitRuntime = {
+    mode: 'managed',
+    reason: null,
+  };
 }
 
 function startTurbo() {
@@ -221,9 +308,24 @@ function startTurbo() {
   const env = {
     ...process.env,
     LIVEKIT_URL: `ws://127.0.0.1:${LIVEKIT_SIGNAL_PORT}`,
-    LIVEKIT_API_KEY,
-    LIVEKIT_API_SECRET,
   };
+
+  if (livekitRuntime.mode === 'managed') {
+    ensureLiveKitCredentials();
+    env.LIVEKIT_DISABLED = '0';
+    delete env.LIVEKIT_API_KEY;
+    delete env.LIVEKIT_API_SECRET;
+    env.LIVEKIT_CREDENTIALS_FILE = LIVEKIT_CREDENTIAL_PATH;
+    env.LIVEKIT_CONFIG_PATH = LIVEKIT_CONFIG_PATH;
+  } else if (livekitRuntime.mode === 'external-configured') {
+    env.LIVEKIT_DISABLED = '0';
+  } else {
+    env.LIVEKIT_DISABLED = '1';
+    delete env.LIVEKIT_API_KEY;
+    delete env.LIVEKIT_API_SECRET;
+    delete env.LIVEKIT_CREDENTIALS_FILE;
+    delete env.LIVEKIT_CONFIG_PATH;
+  }
 
   turboChild = spawn('yarn', args, {
     cwd: PROJECT_ROOT,

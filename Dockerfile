@@ -145,9 +145,11 @@ COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # 复制entrypoint脚本
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+COPY docker/init-livekit.sh /init-livekit.sh
+RUN chmod +x /init-livekit.sh
 
 # 创建数据目录
-RUN mkdir -p /app/data/config /app/data/logs /app/data/cache
+RUN mkdir -p /app/data/config /app/data/logs /app/data/cache /app/data/realtime
 
 # 设置权限
 RUN chown -R www-data:www-data /app/data && \
