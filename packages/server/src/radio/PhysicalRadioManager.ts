@@ -22,6 +22,7 @@ import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js'
 import type { IRadioConnection, MeterData } from './connections/IRadioConnection.js';
 import { RadioConnectionType } from './connections/IRadioConnection.js';
 import { RadioCapabilityManager } from './RadioCapabilityManager.js';
+import { isRecoverableOptionalRadioError } from './optionalRadioError.js';
 import {
   createRadioActor,
   isRadioState,
@@ -499,6 +500,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // logger.debug(`Mode read: ${modeInfo.mode}`);
       return modeInfo;
     } catch (error) {
+      if (isRecoverableOptionalRadioError(error)) {
+        logger.warn(`Mode read failed but connection remains healthy: ${(error as Error).message}`);
+        throw new Error(`get mode failed: ${(error as Error).message}`);
+      }
+
       this.handleConnectionError(error as Error);
       throw new Error(`get mode failed: ${(error as Error).message}`);
     }
@@ -890,7 +896,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     // 启动天调状态监控（过渡期保留，阶段3清理）
     void this.startTunerMonitoring();
     // 启动统一能力管理（异步探测+轮询）
-    void this.capabilityManager.onConnected(this.connection);
+    void this.capabilityManager.onConnected(this.connection).catch((error) => {
+      logger.warn('Capability manager initialization failed unexpectedly', error);
+    });
 
     logger.info('Connection established');
   }

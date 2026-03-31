@@ -12,8 +12,8 @@ import { EventEmitter } from 'eventemitter3';
 import type { CapabilityState } from '@tx5dr/contracts';
 import type { IRadioConnection } from './connections/IRadioConnection.js';
 import { RadioConnectionType } from './connections/IRadioConnection.js';
-import { HamlibConnection } from './connections/HamlibConnection.js';
 import { createLogger } from '../utils/logger.js';
+import { isRecoverableOptionalRadioError } from './optionalRadioError.js';
 
 const logger = createLogger('RadioCapabilityManager');
 
@@ -74,6 +74,14 @@ export interface RadioCapabilityManagerEvents {
   capabilityChanged: (state: CapabilityState) => void;
 }
 
+interface HamlibLevelSupportConnection extends IRadioConnection {
+  isSupportedLevel(level: string): boolean;
+}
+
+function hasSupportedLevelProbe(connection: IRadioConnection): connection is HamlibLevelSupportConnection {
+  return typeof (connection as Partial<HamlibLevelSupportConnection>).isSupportedLevel === 'function';
+}
+
 // ===== 主类 =====
 
 export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerEvents> {
@@ -90,8 +98,18 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     this.connection = connection;
 
     logger.info('Probing radio capabilities');
-    await this.probeCapabilities();
-    await this.readInitialValues();
+    try {
+      await this.probeCapabilities();
+    } catch (error) {
+      logger.warn('Capability probe encountered an unexpected error', error);
+    }
+
+    try {
+      await this.readInitialValues();
+    } catch (error) {
+      logger.warn('Initial capability read encountered an unexpected error', error);
+    }
+
     this.startPolling();
 
     logger.info('Capability probe complete', {
@@ -208,8 +226,8 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     }
 
     // ----- Hamlib Level 类（基于 supportedLevels Set，零额外 CAT 命令）-----
-    if (this.connection.getType() === RadioConnectionType.HAMLIB) {
-      const hamlibConn = this.connection as HamlibConnection;
+    if (this.connection.getType() === RadioConnectionType.HAMLIB && hasSupportedLevelProbe(this.connection)) {
+      const hamlibConn = this.connection;
       const levelMap: Record<string, string> = {
         rf_power: 'RFPOWER',
         af_gain:  'AF',
@@ -225,7 +243,7 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     }
 
     // ----- 需要主动探测的可选能力（icom-wlan / hamlib function）-----
-    const optionalProbes: Array<[string, () => Promise<number> | undefined]> = [
+    const optionalProbes: Array<[string, () => Promise<boolean | number> | undefined]> = [
       ['af_gain',  () => this.connection?.getAFGain?.()],
       ['sql',      () => this.connection?.getSQL?.()],
       ['rf_power', () => this.connection?.getRFPower?.()],
@@ -239,13 +257,19 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
         continue;
       }
 
-      if (!probeFn()) continue;
+      const probePromise = probeFn();
+      if (!probePromise) continue;
       try {
-        await probeFn();
+        await probePromise;
         this.supportedCapabilities.add(capId);
         logger.debug(`Capability supported: ${capId} (probe succeeded)`);
-      } catch {
-        logger.debug(`Capability not supported: ${capId} (probe failed)`);
+      } catch (error) {
+        if (isRecoverableOptionalRadioError(error)) {
+          logger.debug(`Capability not supported: ${capId} (recoverable probe failure)`);
+          continue;
+        }
+
+        logger.warn(`Capability probe failed for ${capId}`, error);
       }
     }
   }
@@ -326,7 +350,39 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
         }
       }
     } catch (error) {
+      if (isRecoverableOptionalRadioError(error)) {
+        this.markCapabilityUnsupported(id, error);
+        return;
+      }
+
       logger.debug(`Failed to poll capability ${id}`, error);
+    }
+  }
+
+  private markCapabilityUnsupported(id: string, error: unknown): void {
+    const hadCachedState = this.valueCache.has(id);
+    const hadPollingTimer = this.pollingTimers.has(id);
+
+    this.supportedCapabilities.delete(id);
+    this.valueCache.delete(id);
+
+    const timer = this.pollingTimers.get(id);
+    if (timer) {
+      clearInterval(timer);
+      this.pollingTimers.delete(id);
+    }
+
+    logger.info(`Capability downgraded to unsupported: ${id}`, {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+
+    if (hadCachedState || hadPollingTimer) {
+      this.emit('capabilityChanged', {
+        id,
+        supported: false,
+        value: null,
+        updatedAt: Date.now(),
+      });
     }
   }
 
