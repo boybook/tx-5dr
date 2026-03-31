@@ -346,6 +346,7 @@ fix_nginx_realtime_proxy_config() {
             if (pending_xff == "") {
                 return;
             }
+
             print pending_xff;
             if (!has_forwarded_host_after_xff) {
                 print pending_indent "proxy_set_header X-Forwarded-Host $http_host;";
@@ -353,6 +354,7 @@ fix_nginx_realtime_proxy_config() {
             if (!has_forwarded_port_after_xff) {
                 print pending_indent "proxy_set_header X-Forwarded-Port $server_port;";
             }
+
             pending_xff = "";
             pending_indent = "";
             has_forwarded_host_after_xff = 0;
@@ -378,27 +380,58 @@ fix_nginx_realtime_proxy_config() {
             print block_indent "}";
         }
 
+        function brace_delta(line, opens, closes, temp) {
+            temp = line;
+            opens = gsub(/\{/, "{", temp);
+            temp = line;
+            closes = gsub(/\}/, "}", temp);
+            return opens - closes;
+        }
+
         {
             line = $0;
+            delta = brace_delta(line);
+
+            if (line ~ /^[[:space:]]*server[[:space:]]*\{[[:space:]]*$/) {
+                in_server = 1;
+                server_depth = delta;
+                has_compat_block = 0;
+                compat_inserted = 0;
+            }
+
             gsub(/proxy_set_header Host \$host;/, "proxy_set_header Host $http_host;", line);
 
-            if (line ~ /^[[:space:]]*location \/api\/realtime\/ws-compat[[:space:]]*\{/) {
+            if (in_server && line ~ /^[[:space:]]*location \/api\/realtime\/ws-compat[[:space:]]*\{/) {
                 has_compat_block = 1;
             }
 
             if (pending_xff != "") {
                 if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-Host \$http_host;/) {
                     has_forwarded_host_after_xff = 1;
+                    server_depth += delta;
+                    if (in_server && server_depth == 0) {
+                        flush_pending_xff();
+                        in_server = 0;
+                        has_compat_block = 0;
+                        compat_inserted = 0;
+                    }
                     next;
                 }
                 if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-Port \$server_port;/) {
                     has_forwarded_port_after_xff = 1;
+                    server_depth += delta;
+                    if (in_server && server_depth == 0) {
+                        flush_pending_xff();
+                        in_server = 0;
+                        has_compat_block = 0;
+                        compat_inserted = 0;
+                    }
                     next;
                 }
                 flush_pending_xff();
             }
 
-            if (!has_compat_block && !compat_inserted && line ~ /^[[:space:]]*location \/api\/ \{/) {
+            if (in_server && !has_compat_block && !compat_inserted && line ~ /^[[:space:]]*location \/api\/ \{/) {
                 match(line, /^[[:space:]]*/);
                 block_indent = substr(line, RSTART, RLENGTH);
                 inner_indent = block_indent "    ";
@@ -411,10 +444,24 @@ fix_nginx_realtime_proxy_config() {
                 pending_xff = line;
                 match(line, /^[[:space:]]*/);
                 pending_indent = substr(line, RSTART, RLENGTH);
+                server_depth += delta;
+                if (in_server && server_depth == 0) {
+                    flush_pending_xff();
+                    in_server = 0;
+                    has_compat_block = 0;
+                    compat_inserted = 0;
+                }
                 next;
             }
 
             print line;
+            server_depth += delta;
+
+            if (in_server && server_depth == 0) {
+                in_server = 0;
+                has_compat_block = 0;
+                compat_inserted = 0;
+            }
         }
 
         END {

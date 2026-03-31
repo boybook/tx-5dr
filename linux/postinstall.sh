@@ -49,6 +49,20 @@ random_hex() {
 LISTEN_PORT="${TX5DR_HTTP_PORT:-8076}"
 WEB_ROOT="/usr/share/tx5dr/web"
 API_HOST="127.0.0.1:${PORT:-4000}"
+POSTINSTALL_ACTION="${1:-}"
+POSTINSTALL_PREVIOUS_VERSION="${2:-}"
+
+is_package_upgrade() {
+    if [[ "$POSTINSTALL_ACTION" == "configure" && -n "$POSTINSTALL_PREVIOUS_VERSION" ]]; then
+        return 0
+    fi
+
+    if [[ "$POSTINSTALL_ACTION" =~ ^[0-9]+$ ]] && [[ "$POSTINSTALL_ACTION" -gt 1 ]]; then
+        return 0
+    fi
+
+    return 1
+}
 
 # ── Create system user ──────────────────────────────────────────────────────
 if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
@@ -178,6 +192,25 @@ systemctl daemon-reload 2>/dev/null || true
 systemctl enable tx5dr-livekit 2>/dev/null || true
 systemctl enable tx5dr 2>/dev/null || true
 
+if systemctl is-active --quiet tx5dr 2>/dev/null; then
+    systemctl restart tx5dr 2>/dev/null || true
+else
+    systemctl start tx5dr 2>/dev/null || true
+fi
+
+if systemctl is-active --quiet tx5dr 2>/dev/null; then
+    if is_package_upgrade; then
+        _msg "TX-5DR services restarted after upgrade." \
+             "TX-5DR 服务已在升级后自动重启。"
+    else
+        _msg "TX-5DR services started." \
+             "TX-5DR 服务已启动。"
+    fi
+else
+    _msg "WARNING: TX-5DR service did not start automatically. Check: journalctl -u tx5dr -u tx5dr-livekit -n 50 --no-pager" \
+         "警告: TX-5DR 服务未能自动启动。请检查: journalctl -u tx5dr -u tx5dr-livekit -n 50 --no-pager"
+fi
+
 # ── Environment check (using shared library if available) ────────────────────
 if [[ "$SHARED_LIB_READY" == "1" ]]; then
     ISSUES=0
@@ -202,7 +235,12 @@ if [[ "$SHARED_LIB_READY" == "1" ]]; then
 fi
 
 echo ""
-_msg "TX-5DR installed. Run 'tx5dr start' to start the server." \
-     "TX-5DR 已安装。运行 'tx5dr start' 启动服务。"
+if systemctl is-active --quiet tx5dr 2>/dev/null; then
+    _msg "TX-5DR installed and running." \
+         "TX-5DR 已安装并正在运行。"
+else
+    _msg "TX-5DR installed. Run 'tx5dr start' to start the server." \
+         "TX-5DR 已安装。运行 'tx5dr start' 启动服务。"
+fi
 _msg "Web UI will be available at http://localhost:${LISTEN_PORT}" \
      "Web UI 地址: http://localhost:${LISTEN_PORT}"
