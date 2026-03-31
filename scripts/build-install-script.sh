@@ -25,7 +25,8 @@ for f in "$COMMON" "$CHECKS" "$INSTALL"; do
 done
 
 REPO="boybook/tx-5dr"
-DOWNLOAD_BASE_URL="${TX5DR_DOWNLOAD_BASE_URL:-}"
+DEFAULT_DOWNLOAD_BASE_URL="https://tx5dr.oss-cn-hangzhou.aliyuncs.com"
+DOWNLOAD_BASE_URL="${TX5DR_DOWNLOAD_BASE_URL:-$DEFAULT_DOWNLOAD_BASE_URL}"
 
 python3 - "$COMMON" "$CHECKS" "$INSTALL" "$OUTPUT" "$REPO" "$DOWNLOAD_BASE_URL" << 'PYEOF'
 import sys, re

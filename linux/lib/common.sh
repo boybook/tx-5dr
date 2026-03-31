@@ -259,6 +259,7 @@ read_env_file_value() {
 
 # Load TX-5DR config
 load_config() {
+    local default_download_base_url="https://tx5dr.oss-cn-hangzhou.aliyuncs.com"
     local config_env="/etc/tx5dr/config.env"
     local inherited_livekit_api_key="${LIVEKIT_API_KEY:-}"
     local inherited_livekit_api_secret="${LIVEKIT_API_SECRET:-}"
@@ -320,7 +321,7 @@ load_config() {
     CONFIG_DIR="${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}"
     DATA_DIR="${TX5DR_DATA_DIR:-/var/lib/tx5dr}"
     TX5DR_GITHUB_REPO="${TX5DR_GITHUB_REPO:-boybook/tx-5dr}"
-    TX5DR_DOWNLOAD_BASE_URL="${TX5DR_DOWNLOAD_BASE_URL:-}"
+    TX5DR_DOWNLOAD_BASE_URL="${TX5DR_DOWNLOAD_BASE_URL:-$default_download_base_url}"
     TX5DR_DOWNLOAD_SOURCE="${TX5DR_DOWNLOAD_SOURCE:-auto}"
 }
 
