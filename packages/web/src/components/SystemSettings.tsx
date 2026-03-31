@@ -1,6 +1,7 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Alert,
   Card,
   CardBody,
   Switch,
@@ -47,6 +48,10 @@ type RealtimeRuntimeView = {
   radioBridgeIssueCode: RealtimeConnectivityErrorCode | null;
   credentialStatus: RealtimeCredentialStatus;
 };
+
+const SETTINGS_CARD_CLASS_NAMES = {
+  base: 'border border-divider bg-content1',
+} as const;
 
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
   ft8Preset: 'maximum',
@@ -581,9 +586,7 @@ export const SystemSettings = forwardRef<
 
       {/* 公开查看权限 */}
       {authConfig && (
-        <Card shadow="none" radius="lg" classNames={{
-          base: "border border-divider bg-content1"
-        }}>
+        <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
           <CardBody className="p-4">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1">
@@ -636,218 +639,227 @@ export const SystemSettings = forwardRef<
                 ))}
               </div>
             )}
-
-            <div className="mt-3 pt-3 border-t border-divider space-y-2">
-              <div>
-                <h5 className="text-sm font-medium text-default-900">{t('system.liveKitPublicUrl')}</h5>
-                <p className="text-xs text-default-500 mt-1">{t('system.liveKitPublicUrlDesc')}</p>
-              </div>
-              <Input
-                value={liveKitPublicUrl}
-                onValueChange={setLiveKitPublicUrl}
-                placeholder={t('system.liveKitPublicUrlPlaceholder')}
-                isDisabled={isSaving}
-                size="sm"
-                variant="bordered"
-              />
-              <p className="text-xs text-default-400">
-                {liveKitPublicUrl.trim()
-                  ? t('system.liveKitPublicUrlManualHint')
-                  : t('system.liveKitPublicUrlAutoHint')}
-              </p>
-              {networkInfo && networkInfo.addresses.length > 0 && (
-                <p className="text-xs text-default-400">
-                  {t('system.liveKitPublicUrlExample', {
-                    url: buildLiveKitExampleUrl(networkInfo.addresses[0].url),
-                  })}
-                </p>
-              )}
-              {isMacElectron && (
-                <div className="rounded-medium border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-900 dark:border-warning-800 dark:bg-warning-950/30 dark:text-warning-200">
-                  <p>{t('system.liveKitMacInstallHint')}</p>
-                  <p className="mt-1 font-mono">brew install livekit</p>
-                  <p className="mt-1 text-warning-800 dark:text-warning-300">{t('system.liveKitMacFallbackHint')}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-3 pt-3 border-t border-divider space-y-2">
-              <div>
-                <h5 className="text-sm font-medium text-default-900">{t('system.realtimeTransportPolicy')}</h5>
-                <p className="text-xs text-default-500 mt-1">{t('system.realtimeTransportPolicyDesc')}</p>
-              </div>
-              <Select
-                selectedKeys={[realtimeTransportPolicy]}
-                onSelectionChange={(keys) => {
-                  const value = Array.from(keys)[0] as RealtimeTransportPolicy | undefined;
-                  if (value) {
-                    setRealtimeTransportPolicy(value);
-                  }
-                }}
-                isDisabled={isSaving}
-                size="sm"
-                variant="bordered"
-              >
-                <SelectItem key="auto">{t('system.realtimeTransportPolicyAuto')}</SelectItem>
-                <SelectItem key="force-compat">{t('system.realtimeTransportPolicyCompat')}</SelectItem>
-              </Select>
-              <p className="text-xs text-default-400">
-                {realtimeTransportPolicy === 'force-compat'
-                  ? t('system.realtimeTransportPolicyCompatHint')
-                  : t('system.realtimeTransportPolicyAutoHint')}
-              </p>
-            </div>
-
-            <div className="mt-3 pt-3 border-t border-divider space-y-3">
-              <div>
-                <h5 className="text-sm font-medium text-default-900">{t('system.realtimeAdminGuideTitle')}</h5>
-                <p className="text-xs text-default-500 mt-1">{t('system.realtimeAdminGuideDesc')}</p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                  <p className="text-xs text-default-500">{t('system.realtimeCurrentPolicyLabel')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={realtimeTransportPolicy === 'force-compat' ? 'warning' : 'primary'}
-                      variant="flat"
-                    >
-                      {realtimeTransportPolicy === 'force-compat'
-                        ? t('system.realtimeTransportPolicyCompat')
-                        : t('system.realtimeTransportPolicyAuto')}
-                    </Chip>
-                  </div>
-                </div>
-
-                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                  <p className="text-xs text-default-500">{t('system.realtimeCurrentPathLabel')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'livekit' ? 'primary' : 'warning'}
-                      variant="flat"
-                    >
-                      {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
-                    </Chip>
-                  </div>
-                  <p className="mt-2 text-xs text-default-400">{t('system.realtimeCurrentPathHint')}</p>
-                </div>
-
-                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                  <p className="text-xs text-default-500">{t('system.realtimeLiveKitServiceLabel')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={realtimeRuntime?.liveKitEnabled ? 'success' : 'warning'}
-                      variant="flat"
-                    >
-                      {realtimeRuntime?.liveKitEnabled
-                        ? t('system.realtimeStatusEnabled')
-                        : t('system.realtimeStatusDisabled')}
-                    </Chip>
-                  </div>
-                </div>
-
-                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                  <p className="text-xs text-default-500">{t('system.realtimeBridgeHealthLabel')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={realtimeRuntime?.radioBridgeHealthy === false ? 'danger' : 'success'}
-                      variant="flat"
-                    >
-                      {realtimeRuntime?.radioBridgeHealthy === false
-                        ? t('system.realtimeBridgeHealthUnhealthy')
-                        : t('system.realtimeBridgeHealthHealthy')}
-                    </Chip>
-                  </div>
-                  <p className="mt-2 text-xs text-default-400">{runtimeIssueLabel}</p>
-                </div>
-
-                <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                  <p className="text-xs text-default-500">{t('system.realtimeCredentialStatusLabel')}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Chip
-                      size="sm"
-                      color={runtimeCredential?.initialized ? 'success' : 'danger'}
-                      variant="flat"
-                    >
-                      {runtimeCredential?.initialized
-                        ? t('system.realtimeCredentialReady')
-                        : t('system.realtimeCredentialMissing')}
-                    </Chip>
-                    <Chip
-                      size="sm"
-                      color={runtimeCredential?.source === 'environment-override' ? 'warning' : 'default'}
-                      variant="flat"
-                    >
-                      {getRealtimeCredentialSourceLabel(runtimeCredential?.source ?? null, t)}
-                    </Chip>
-                  </div>
-                  <p className="mt-2 text-xs text-default-400">
-                    {runtimeCredential?.apiKeyPreview
-                      ? t('system.realtimeCredentialPreview', { value: runtimeCredential.apiKeyPreview })
-                      : t('system.realtimeCredentialMissingHint')}
-                  </p>
-                  {runtimeCredential?.rotatedAt && (
-                    <p className="mt-1 text-xs text-default-400">
-                      {t('system.realtimeCredentialRotatedAt', { value: runtimeCredential.rotatedAt })}
-                    </p>
-                  )}
-                  {runtimeCredential?.filePath && (
-                    <p className="mt-1 break-all text-xs text-default-400">
-                      {t('system.realtimeCredentialFile', { value: runtimeCredential.filePath })}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h6 className="text-sm font-medium text-default-900">{t('system.realtimePortRequirementsTitle')}</h6>
-                    <p className="mt-1 text-xs text-default-500">{t('system.realtimePortRequirementsDesc')}</p>
-                  </div>
-                  <Chip size="sm" color="default" variant="flat">{t('system.realtimeAdminOnly')}</Chip>
-                </div>
-
-                <div className="mt-3 space-y-2 text-sm">
-                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                    <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
-                    <code className="text-xs text-default-500">{runtimeHints?.signalingPort ?? 7880}</code>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                    <span className="text-default-700">{t('system.realtimePortIceTcp')}</span>
-                    <code className="text-xs text-default-500">{runtimeHints?.rtcTcpPort ?? 7881}</code>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                    <span className="text-default-700">{t('system.realtimePortUdp')}</span>
-                    <code className="text-xs text-default-500">{runtimeHints?.udpPortRange ?? '50000-50100'}</code>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                    <span className="text-default-700">{t('system.realtimePortCompat')}</span>
-                    <code className="text-xs text-default-500">{t('system.realtimeCompatEndpointValue')}</code>
-                  </div>
-                  <div className="rounded-medium bg-content1 px-3 py-2">
-                    <p className="text-xs text-default-500">{t('system.realtimeEffectiveUrlLabel')}</p>
-                    <code className="mt-1 block break-all text-xs text-default-600">
-                      {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
-                    </code>
-                  </div>
-                </div>
-
-                <div className="mt-3 space-y-1 text-xs text-default-500">
-                  <p>{t('system.realtimePortHintAuto')}</p>
-                  <p>{t('system.realtimePortHintCompat')}</p>
-                  <p>{t('system.realtimePortHintFallback')}</p>
-                  <p>{t('system.realtimeCredentialLinuxHint')}</p>
-                </div>
-              </div>
-            </div>
           </CardBody>
         </Card>
       )}
+
+      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className="p-4 space-y-3">
+          <div>
+            <h4 className="font-semibold text-default-900">{t('system.realtimeSettingsCardTitle')}</h4>
+            <p className="mt-1 text-sm text-default-600">{t('system.realtimeSettingsCardDesc')}</p>
+          </div>
+
+          <div className="pt-3 border-t border-divider space-y-2">
+            <div>
+              <h5 className="text-sm font-medium text-default-900">{t('system.liveKitPublicUrl')}</h5>
+              <p className="text-xs text-default-500 mt-1">{t('system.liveKitPublicUrlDesc')}</p>
+            </div>
+            <Input
+              value={liveKitPublicUrl}
+              onValueChange={setLiveKitPublicUrl}
+              placeholder={t('system.liveKitPublicUrlPlaceholder')}
+              isDisabled={isSaving}
+              size="sm"
+              variant="bordered"
+            />
+            <p className="text-xs text-default-400">
+              {liveKitPublicUrl.trim()
+                ? t('system.liveKitPublicUrlManualHint')
+                : t('system.liveKitPublicUrlAutoHint')}
+            </p>
+            {networkInfo && networkInfo.addresses.length > 0 && (
+              <p className="text-xs text-default-400">
+                {t('system.liveKitPublicUrlExample', {
+                  url: buildLiveKitExampleUrl(networkInfo.addresses[0].url),
+                })}
+              </p>
+            )}
+            {isMacElectron && (
+              <Alert color="warning" variant="flat" className="text-xs">
+                <p>{t('system.liveKitMacInstallHint')}</p>
+                <p className="mt-1 font-mono">brew install livekit</p>
+                <p className="mt-1">{t('system.liveKitMacFallbackHint')}</p>
+              </Alert>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-divider space-y-2">
+            <div>
+              <h5 className="text-sm font-medium text-default-900">{t('system.realtimeTransportPolicy')}</h5>
+              <p className="text-xs text-default-500 mt-1">{t('system.realtimeTransportPolicyDesc')}</p>
+            </div>
+            <Select
+              selectedKeys={[realtimeTransportPolicy]}
+              onSelectionChange={(keys) => {
+                const value = Array.from(keys)[0] as RealtimeTransportPolicy | undefined;
+                if (value) {
+                  setRealtimeTransportPolicy(value);
+                }
+              }}
+              isDisabled={isSaving}
+              size="sm"
+              variant="bordered"
+            >
+              <SelectItem key="auto">{t('system.realtimeTransportPolicyAuto')}</SelectItem>
+              <SelectItem key="force-compat">{t('system.realtimeTransportPolicyCompat')}</SelectItem>
+            </Select>
+            <p className="text-xs text-default-400">
+              {realtimeTransportPolicy === 'force-compat'
+                ? t('system.realtimeTransportPolicyCompatHint')
+                : t('system.realtimeTransportPolicyAutoHint')}
+            </p>
+          </div>
+
+          <div className="pt-3 border-t border-divider space-y-3">
+            <div>
+              <h5 className="text-sm font-medium text-default-900">{t('system.realtimeAdminGuideTitle')}</h5>
+              <p className="text-xs text-default-500 mt-1">{t('system.realtimeAdminGuideDesc')}</p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                <p className="text-xs text-default-500">{t('system.realtimeCurrentPolicyLabel')}</p>
+                <div className="mt-2">
+                  <Chip
+                    size="sm"
+                    color={realtimeTransportPolicy === 'force-compat' ? 'warning' : 'primary'}
+                    variant="flat"
+                  >
+                    {realtimeTransportPolicy === 'force-compat'
+                      ? t('system.realtimeTransportPolicyCompat')
+                      : t('system.realtimeTransportPolicyAuto')}
+                  </Chip>
+                </div>
+              </div>
+
+              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                <p className="text-xs text-default-500">{t('system.realtimeCurrentPathLabel')}</p>
+                <div className="mt-2">
+                  <Chip
+                    size="sm"
+                    color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'livekit' ? 'primary' : 'warning'}
+                    variant="flat"
+                  >
+                    {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
+                  </Chip>
+                </div>
+                <p className="mt-2 text-xs text-default-400">{t('system.realtimeCurrentPathHint')}</p>
+              </div>
+
+              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                <p className="text-xs text-default-500">{t('system.realtimeLiveKitServiceLabel')}</p>
+                <div className="mt-2">
+                  <Chip
+                    size="sm"
+                    color={realtimeRuntime?.liveKitEnabled ? 'success' : 'warning'}
+                    variant="flat"
+                  >
+                    {realtimeRuntime?.liveKitEnabled
+                      ? t('system.realtimeStatusEnabled')
+                      : t('system.realtimeStatusDisabled')}
+                  </Chip>
+                </div>
+              </div>
+
+              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                <p className="text-xs text-default-500">{t('system.realtimeBridgeHealthLabel')}</p>
+                <div className="mt-2">
+                  <Chip
+                    size="sm"
+                    color={realtimeRuntime?.radioBridgeHealthy === false ? 'danger' : 'success'}
+                    variant="flat"
+                  >
+                    {realtimeRuntime?.radioBridgeHealthy === false
+                      ? t('system.realtimeBridgeHealthUnhealthy')
+                      : t('system.realtimeBridgeHealthHealthy')}
+                  </Chip>
+                </div>
+                <p className="mt-2 text-xs text-default-400">{runtimeIssueLabel}</p>
+              </div>
+
+              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
+                <p className="text-xs text-default-500">{t('system.realtimeCredentialStatusLabel')}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Chip
+                    size="sm"
+                    color={runtimeCredential?.initialized ? 'success' : 'danger'}
+                    variant="flat"
+                  >
+                    {runtimeCredential?.initialized
+                      ? t('system.realtimeCredentialReady')
+                      : t('system.realtimeCredentialMissing')}
+                  </Chip>
+                  <Chip
+                    size="sm"
+                    color={runtimeCredential?.source === 'environment-override' ? 'warning' : 'default'}
+                    variant="flat"
+                  >
+                    {getRealtimeCredentialSourceLabel(runtimeCredential?.source ?? null, t)}
+                  </Chip>
+                </div>
+                <p className="mt-2 text-xs text-default-400">
+                  {runtimeCredential?.apiKeyPreview
+                    ? t('system.realtimeCredentialPreview', { value: runtimeCredential.apiKeyPreview })
+                    : t('system.realtimeCredentialMissingHint')}
+                </p>
+                {runtimeCredential?.rotatedAt && (
+                  <p className="mt-1 text-xs text-default-400">
+                    {t('system.realtimeCredentialRotatedAt', { value: runtimeCredential.rotatedAt })}
+                  </p>
+                )}
+                {runtimeCredential?.filePath && (
+                  <p className="mt-1 break-all text-xs text-default-400">
+                    {t('system.realtimeCredentialFile', { value: runtimeCredential.filePath })}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h6 className="text-sm font-medium text-default-900">{t('system.realtimePortRequirementsTitle')}</h6>
+                  <p className="mt-1 text-xs text-default-500">{t('system.realtimePortRequirementsDesc')}</p>
+                </div>
+                <Chip size="sm" color="default" variant="flat">{t('system.realtimeAdminOnly')}</Chip>
+              </div>
+
+              <div className="mt-3 space-y-2 text-sm">
+                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                  <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
+                  <code className="text-xs text-default-500">{runtimeHints?.signalingPort ?? 7880}</code>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                  <span className="text-default-700">{t('system.realtimePortIceTcp')}</span>
+                  <code className="text-xs text-default-500">{runtimeHints?.rtcTcpPort ?? 7881}</code>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                  <span className="text-default-700">{t('system.realtimePortUdp')}</span>
+                  <code className="text-xs text-default-500">{runtimeHints?.udpPortRange ?? '50000-50100'}</code>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
+                  <span className="text-default-700">{t('system.realtimePortCompat')}</span>
+                  <code className="text-xs text-default-500">{t('system.realtimeCompatEndpointValue')}</code>
+                </div>
+                <div className="rounded-medium bg-content1 px-3 py-2">
+                  <p className="text-xs text-default-500">{t('system.realtimeEffectiveUrlLabel')}</p>
+                  <code className="mt-1 block break-all text-xs text-default-600">
+                    {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
+                  </code>
+                </div>
+              </div>
+
+              <div className="mt-3 space-y-1 text-xs text-default-500">
+                <p>{t('system.realtimePortHintAuto')}</p>
+                <p>{t('system.realtimePortHintCompat')}</p>
+                <p>{t('system.realtimePortHintFallback')}</p>
+                <p>{t('system.realtimeCredentialLinuxHint')}</p>
+              </div>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
 
       <Divider className="my-4" />
 

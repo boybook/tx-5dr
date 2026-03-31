@@ -181,6 +181,8 @@
     "allowPublicViewing": "允许公开查看",
     "allowPublicViewingOnDesc": "未登录用户可以以观察者身份查看界面，但无法操作",
     "allowPublicViewingOffDesc": "未登录用户必须输入令牌登录后才能访问",
+    "realtimeSettingsCardTitle": "监听 / 语音服务器",
+    "realtimeSettingsCardDesc": "这里单独管理实时音频链路，包括 LiveKit 地址、服务端优先策略，以及当前运行状态与部署诊断信息。",
     "liveKitPublicUrl": "LiveKit 公网地址",
     "liveKitPublicUrlDesc": "此地址用于 LiveKit 实时音频主链路。若语音服务经过公网映射、反向代理或独立域名暴露，请填写浏览器应连接的 WebSocket 地址。留空时自动根据当前访问地址推导。",
     "liveKitPublicUrlPlaceholder": "例如 wss://radio.example.com:7880",

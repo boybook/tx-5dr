@@ -181,6 +181,8 @@
     "allowPublicViewing": "Allow Public Viewing",
     "allowPublicViewingOnDesc": "Unauthenticated users can view as observers, but cannot operate",
     "allowPublicViewingOffDesc": "Unauthenticated users must log in with a token to access",
+    "realtimeSettingsCardTitle": "Monitoring / Voice Server",
+    "realtimeSettingsCardDesc": "This card separately manages the realtime audio path, including the LiveKit URL, the server transport preference, and the current runtime and deployment diagnostics.",
     "liveKitPublicUrl": "LiveKit Public URL",
     "liveKitPublicUrlDesc": "This URL is used by the LiveKit realtime audio primary path. Set the WebSocket URL browsers should use when voice traffic is exposed through public NAT, reverse proxy, or a dedicated domain. Leave empty to derive it from the current access address.",
     "liveKitPublicUrlPlaceholder": "Example: wss://radio.example.com:7880",
