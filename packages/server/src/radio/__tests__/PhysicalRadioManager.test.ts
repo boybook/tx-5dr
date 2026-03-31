@@ -4,6 +4,10 @@ vi.mock('hamlib', () => ({
   HamLib: class MockHamLib {},
 }));
 
+vi.mock('hamlib/spectrum', () => ({
+  SpectrumController: class MockSpectrumController {},
+}));
+
 vi.mock('icom-wlan-node', () => ({
   IcomControl: class MockIcomControl {},
   AUDIO_RATE: 48000,

@@ -1,6 +1,6 @@
 import type { SpectrumFrame } from '@tx5dr/contracts';
 import type { IcomScopeFrame } from 'icom-wlan-node';
-import type { SpectrumLine } from 'hamlib';
+import type { SpectrumLine } from 'hamlib/spectrum';
 import type { OpenWebRXSpectrumFrame } from '@openwebrx-js/api';
 
 export const SPECTRUM_DISPLAY_BIN_COUNT = 1024;

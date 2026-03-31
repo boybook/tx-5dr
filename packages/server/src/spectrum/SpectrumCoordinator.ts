@@ -1,6 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import type { SpectrumCapabilities, SpectrumFrame, SpectrumKind, SpectrumSourceAvailability, SupportedRig } from '@tx5dr/contracts';
-import type { SpectrumLine, SpectrumSupportSummary } from 'hamlib';
+import type { SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
 import type { IRadioConnection } from '../radio/connections/IRadioConnection.js';
 import { RadioConnectionType } from '../radio/connections/IRadioConnection.js';
 import { HamlibConnection } from '../radio/connections/HamlibConnection.js';
