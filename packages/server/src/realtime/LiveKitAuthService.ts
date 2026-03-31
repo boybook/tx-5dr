@@ -45,9 +45,12 @@ function buildIdentity(prefix: string, stablePart: string): string {
 }
 
 export class LiveKitAuthService {
-  private config = LiveKitConfig.getConnectionConfig();
+  private getConfig() {
+    return LiveKitConfig.getConnectionConfig();
+  }
 
   issueClientToken(params: IssueClientTokenParams): RealtimeTokenResponse {
+    const config = this.getConfig();
     const participantKind: RealtimeParticipantKind = params.publish ? 'publisher' : 'listener';
     const participantName = toParticipantName(params.label, params.role);
     const participantIdentity = buildIdentity(
@@ -79,7 +82,7 @@ export class LiveKitAuthService {
         : { canPublish: false }),
     };
 
-    const token = new AccessToken(this.config.apiKey, this.config.apiSecret, {
+    const token = new AccessToken(config.apiKey, config.apiSecret, {
       identity: participantIdentity,
       name: participantName,
       metadata: JSON.stringify(metadata),
@@ -96,7 +99,7 @@ export class LiveKitAuthService {
     });
 
     return {
-      url: params.publicWsUrl || this.config.publicWsUrl || this.config.wsUrl,
+      url: params.publicWsUrl || config.publicWsUrl || config.wsUrl,
       roomName: params.roomName,
       token: '',
       participantIdentity,
@@ -107,7 +110,8 @@ export class LiveKitAuthService {
   }
 
   async finalizeToken(response: RealtimeTokenResponse): Promise<RealtimeTokenResponse> {
-    const token = new AccessToken(this.config.apiKey, this.config.apiSecret, {
+    const config = this.getConfig();
+    const token = new AccessToken(config.apiKey, config.apiSecret, {
       identity: response.participantIdentity,
       name: response.participantName,
       metadata: JSON.stringify(response.participantMetadata),
@@ -131,6 +135,7 @@ export class LiveKitAuthService {
   }
 
   async issueBridgeToken(params: IssueBridgeTokenParams): Promise<{ url: string; token: string; identity: string }> {
+    const config = this.getConfig();
     const identity = buildIdentity('bridge', params.roomName);
     const metadata: RealtimeParticipantMetadata = {
       role: UserRole.ADMIN,
@@ -142,7 +147,7 @@ export class LiveKitAuthService {
       ...(params.previewSessionId ? { previewSessionId: params.previewSessionId } : {}),
     };
 
-    const token = new AccessToken(this.config.apiKey, this.config.apiSecret, {
+    const token = new AccessToken(config.apiKey, config.apiSecret, {
       identity,
       name: params.participantName,
       metadata: JSON.stringify(metadata),
@@ -158,7 +163,7 @@ export class LiveKitAuthService {
     });
 
     return {
-      url: this.config.wsUrl,
+      url: config.wsUrl,
       token: await token.toJwt(),
       identity,
     };

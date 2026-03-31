@@ -1,12 +1,14 @@
 import { createLogger } from '../utils/logger.js';
 import { ConfigManager } from '../config/config-manager.js';
 import type { RealtimeConnectivityHints } from '@tx5dr/contracts';
+import {
+  getLiveKitCredentialRuntimeStatus,
+  getLiveKitCredentialValues,
+} from './LiveKitCredentialState.js';
 
 const logger = createLogger('LiveKitConfig');
 
 const DEFAULT_LIVEKIT_WS_URL = 'ws://127.0.0.1:7880';
-const DEFAULT_LIVEKIT_API_KEY = 'tx5drdev';
-const DEFAULT_LIVEKIT_API_SECRET = 'tx5dr-dev-secret-0123456789abcdef';
 const DEFAULT_LIVEKIT_TCP_PORT = 7881;
 const DEFAULT_LIVEKIT_UDP_PORT_RANGE = '50000-50100';
 
@@ -17,9 +19,18 @@ export interface LiveKitConnectionConfig {
   apiSecret: string;
 }
 
+interface LiveKitWsConfig {
+  wsUrl: string;
+  publicWsUrl: string | null;
+}
+
 export class LiveKitConfig {
   static isEnabled(): boolean {
-    return process.env.LIVEKIT_DISABLED !== '1';
+    return process.env.LIVEKIT_DISABLED !== '1' && Boolean(getLiveKitCredentialValues());
+  }
+
+  static isExplicitlyDisabled(): boolean {
+    return process.env.LIVEKIT_DISABLED === '1';
   }
 
   private static getHeaderValue(value: string | string[] | undefined): string | undefined {
@@ -38,22 +49,30 @@ export class LiveKitConfig {
     }
   }
 
+  private static getWsConfig(): LiveKitWsConfig {
+    return {
+      wsUrl: process.env.LIVEKIT_URL || DEFAULT_LIVEKIT_WS_URL,
+      publicWsUrl: ConfigManager.getInstance().getLiveKitPublicUrl() || null,
+    };
+  }
+
   static getConnectionConfig(): LiveKitConnectionConfig {
-    const wsUrl = process.env.LIVEKIT_URL || DEFAULT_LIVEKIT_WS_URL;
-    const publicWsUrl = ConfigManager.getInstance().getLiveKitPublicUrl() || null;
-    const apiKey = process.env.LIVEKIT_API_KEY || DEFAULT_LIVEKIT_API_KEY;
-    const apiSecret = process.env.LIVEKIT_API_SECRET || DEFAULT_LIVEKIT_API_SECRET;
+    const wsConfig = this.getWsConfig();
+    const credentials = getLiveKitCredentialValues();
+    if (!credentials) {
+      throw new Error('LiveKit credentials are not initialized');
+    }
 
     return {
-      wsUrl,
-      publicWsUrl,
-      apiKey,
-      apiSecret,
+      wsUrl: wsConfig.wsUrl,
+      publicWsUrl: wsConfig.publicWsUrl,
+      apiKey: credentials.apiKey,
+      apiSecret: credentials.apiSecret,
     };
   }
 
   static getConnectivityHints(): RealtimeConnectivityHints {
-    const config = this.getConnectionConfig();
+    const config = this.getWsConfig();
 
     let signalingPort = 7880;
     try {
@@ -76,13 +95,18 @@ export class LiveKitConfig {
   }
 
   static logEffectiveConfig(): void {
-    const config = this.getConnectionConfig();
+    const status = getLiveKitCredentialRuntimeStatus();
+    const explicitlyDisabled = this.isExplicitlyDisabled();
+    const enabled = this.isEnabled();
     logger.info('LiveKit config loaded', {
-      enabled: this.isEnabled(),
-      wsUrl: config.wsUrl,
-      publicWsUrl: config.publicWsUrl || '<derived-from-request>',
-      apiKey: config.apiKey,
-      apiSecretConfigured: Boolean(config.apiSecret),
+      enabled,
+      explicitlyDisabled,
+      wsUrl: process.env.LIVEKIT_URL || DEFAULT_LIVEKIT_WS_URL,
+      publicWsUrl: ConfigManager.getInstance().getLiveKitPublicUrl() || '<derived-from-request>',
+      credentialSource: status.source,
+      apiKeyPreview: status.apiKeyPreview,
+      credentialFilePath: status.filePath,
+      fallbackMode: !enabled && !explicitlyDisabled ? 'ws-compat' : null,
     });
   }
 
@@ -90,7 +114,7 @@ export class LiveKitConfig {
     headers?: Record<string, string | string[] | undefined>;
     protocol?: string;
   }): string {
-    const config = this.getConnectionConfig();
+    const config = this.getWsConfig();
     if (config.publicWsUrl) {
       return config.publicWsUrl;
     }

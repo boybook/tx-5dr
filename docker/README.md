@@ -65,8 +65,8 @@ services:
       - NODE_ENV=production
       - PORT=4000
       - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=tx5dr
-      - LIVEKIT_API_SECRET=tx5dr-change-me-0123456789abcdef
+      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
       - TX5DR_CONFIG_DIR=/app/data/config
       - TX5DR_DATA_DIR=/app/data
       - TX5DR_LOGS_DIR=/app/data/logs
@@ -88,13 +88,13 @@ services:
     image: livekit/livekit-server:latest
     container_name: tx5dr-livekit
     restart: unless-stopped
-    command: --config /etc/livekit.yaml
+    command: --config /var/lib/tx5dr-runtime/livekit.yaml
     ports:
       - "7880:7880/tcp"
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:
-      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
+      - ./data/realtime:/var/lib/tx5dr-runtime
 ```
 
 ## ✨ Features

@@ -102,6 +102,18 @@ sudo bash /usr/share/tx5dr/install.sh
 | `tx5dr update` | 下载并安装最新 nightly 版本 |
 | `tx5dr doctor` | 全面环境诊断 |
 | `tx5dr logs` | 跟踪服务日志（`--nginx` 查看 nginx 日志） |
+| `tx5dr livekit-creds status` | 查看托管的 LiveKit 凭据状态 |
+| `tx5dr livekit-creds rotate` | 轮换托管的 LiveKit 凭据并重建配置 |
+
+### 服务关系
+
+Linux 服务器版并不是单个独立进程。一键安装脚本会自动安装并编排以下几个组件：
+
+- `tx5dr`：后端应用和 Web API
+- `livekit-server`：随包提供的实时音频与 signaling 服务
+- `nginx`：对外反向代理与 HTTPS 入口
+
+`install.sh` 与 `tx5dr` 命令行会负责这些组件的安装、配置、诊断和联动重启。
 
 ### 系统要求
 
@@ -142,20 +154,20 @@ services:
       - audio
     environment:
       - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=tx5dr
-      - LIVEKIT_API_SECRET=tx5dr-change-me-0123456789abcdef
+      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
 
   livekit:
     image: livekit/livekit-server:latest
     container_name: tx5dr-livekit
     restart: unless-stopped
-    command: --config /etc/livekit.yaml
+    command: --config /var/lib/tx5dr-runtime/livekit.yaml
     ports:
       - "7880:7880/tcp"
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:
-      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
+      - ./data/realtime:/var/lib/tx5dr-runtime
 ```
 
 ```bash
@@ -167,6 +179,7 @@ docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
 - 浏览器会直连 LiveKit signaling 地址，公网地址覆盖请在系统设置中配置，值会写入 `/app/data/config/config.json`
+- Docker 方案会在首次启动时自动把托管的 LiveKit 凭据和 `livekit.yaml` 生成到 `./data/realtime`，后续重启会继续复用
 - 如果外部域名、TLS 终止或端口映射与容器内部地址不一致，必须在设置页填写对外可达的 LiveKit WebSocket 地址
 
 详见 [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker)。Docker 元数据也会在发布流程中同步到 OSS 国内镜像。
@@ -198,6 +211,10 @@ yarn dev
 # Electron 模式
 yarn dev:electron
 ```
+
+- `yarn dev` / `yarn dev:electron` 会尽量自动托管本地 LiveKit 进程及其凭据文件
+- 如果 `7880` 端口上已经有一个来源未知的 LiveKit 实例，开发模式会自动回退到 `ws-compat`，避免签发错误令牌
+- 单独运行 `yarn workspace @tx5dr/server dev` 时，即使没有 LiveKit 凭据，后端也会正常启动，并以告警形式提示当前处于 `ws-compat` 模式
 
 ### 构建
 

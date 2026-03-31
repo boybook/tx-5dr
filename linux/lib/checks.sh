@@ -94,6 +94,25 @@ check_livekit_binary() {
     get_livekit_binary_path >/dev/null 2>&1
 }
 
+check_livekit_credentials_exists() {
+    [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]] && return 0
+    [[ -f "$(get_livekit_credentials_path)" ]]
+}
+
+check_livekit_credentials_loaded() {
+    [[ -n "${LIVEKIT_API_KEY:-}" && -n "${LIVEKIT_API_SECRET:-}" ]]
+}
+
+get_livekit_credential_timestamp() {
+    local key="$1"
+    local file
+    file=$(get_livekit_credentials_path)
+    if [[ ! -f "$file" ]]; then
+        return 1
+    fi
+    grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
 check_livekit_config_exists() {
     [[ -f "$(get_livekit_config_path)" ]]
 }
@@ -111,6 +130,7 @@ _escape_regex() {
 check_livekit_config_consistency() {
     local content
     content=$(get_livekit_config_contents) || return 1
+    check_livekit_credentials_loaded || return 1
 
     local api_key_pattern
     local api_secret_pattern
@@ -148,8 +168,28 @@ describe_livekit_udp_binding() {
     fi
 }
 
-is_livekit_default_credentials() {
-    [[ "${LIVEKIT_API_KEY}" == "tx5dr" && "${LIVEKIT_API_SECRET}" == "tx5dr-change-me-0123456789abcdef" ]]
+describe_livekit_credentials_state() {
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
+        printf "environment override"
+        return 0
+    fi
+    if ! check_livekit_credentials_exists; then
+        printf "missing"
+        return 0
+    fi
+    if ! check_livekit_credentials_loaded; then
+        printf "invalid"
+        return 0
+    fi
+
+    local rotated_at
+    rotated_at=$(get_livekit_credential_timestamp "LIVEKIT_CREDENTIALS_ROTATED_AT" 2>/dev/null || true)
+    if [[ -n "$rotated_at" ]]; then
+        printf "managed (%s)" "$rotated_at"
+        return 0
+    fi
+
+    printf "managed"
 }
 
 check_ports() {
@@ -273,12 +313,58 @@ fix_livekit_binary() {
     check_livekit_binary
 }
 
+random_hex() {
+    local bytes="${1:-16}"
+    od -An -N"${bytes}" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
+}
+
+write_livekit_credentials_file() {
+    local target
+    target=$(get_livekit_credentials_path)
+    local now created_at
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    created_at="$now"
+
+    if [[ -f "$target" ]]; then
+        created_at=$(get_livekit_credential_timestamp "LIVEKIT_CREDENTIALS_CREATED_AT" 2>/dev/null || true)
+        [[ -n "$created_at" ]] || created_at="$now"
+    fi
+
+    mkdir -p "$(dirname "$target")"
+    cat > "$target" <<EOF
+# Managed by TX-5DR. Rotate via tx5dr livekit-creds rotate.
+LIVEKIT_API_KEY=tx5dr-$(random_hex 8)
+LIVEKIT_API_SECRET=$(random_hex 24)
+LIVEKIT_CREDENTIALS_CREATED_AT=${created_at}
+LIVEKIT_CREDENTIALS_ROTATED_AT=${now}
+EOF
+
+    chmod 640 "$target"
+    if id tx5dr &>/dev/null; then
+        chown tx5dr:tx5dr "$target" 2>/dev/null || true
+    fi
+
+    load_config
+    check_livekit_credentials_loaded
+}
+
+fix_livekit_credentials() {
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
+        return 0
+    fi
+    if check_livekit_credentials_loaded && check_livekit_credentials_exists; then
+        return 0
+    fi
+    write_livekit_credentials_file
+}
+
 fix_livekit_config() {
     local template="/usr/share/tx5dr/livekit.yaml.template"
     local target
     target=$(get_livekit_config_path)
 
     [[ -f "$template" ]] || return 1
+    check_livekit_credentials_loaded || return 1
     mkdir -p "$(dirname "$target")"
 
     sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT}|g" \
@@ -448,11 +534,29 @@ run_doctor() {
         livekit_diag_needed=1
     fi
 
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
+        check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "ok" "environment override"
+    elif check_livekit_credentials_exists; then
+        if check_livekit_credentials_loaded; then
+            check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "ok" "$(get_livekit_credentials_path)"
+        else
+            check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "fail" "invalid: $(get_livekit_credentials_path)"
+            echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CREDENTIALS)${_NC}"
+            issues=$((issues + 1))
+            livekit_diag_needed=1
+        fi
+    else
+        check_line "$(msg CHECK_LIVEKIT_CREDENTIAL_FILE)" "fail" "missing: $(get_livekit_credentials_path)"
+        echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CREDENTIALS)${_NC}"
+        issues=$((issues + 1))
+        livekit_diag_needed=1
+    fi
+
     if check_livekit_config_exists; then
         if check_livekit_config_consistency; then
             check_line "$(msg CHECK_LIVEKIT_CONFIG)" "ok" "$(get_livekit_config_path)"
         else
-            check_line "$(msg CHECK_LIVEKIT_CONFIG)" "fail" "mismatch with /etc/tx5dr/config.env"
+            check_line "$(msg CHECK_LIVEKIT_CONFIG)" "fail" "mismatch with current ports or credential file"
             echo -e "      ${_DIM}$(msg FIX_LIVEKIT_CONFIG)${_NC}"
             issues=$((issues + 1))
             livekit_diag_needed=1
@@ -506,11 +610,12 @@ run_doctor() {
 
     check_line "$(msg CHECK_LIVEKIT_UDP_RANGE "${LIVEKIT_UDP_PORT_START}" "${LIVEKIT_UDP_PORT_END}")" "ok" "$(describe_livekit_udp_binding)"
 
-    if is_livekit_default_credentials; then
-        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "fail" "default package credentials"
-        echo -e "      ${_DIM}/etc/tx5dr/config.env → LIVEKIT_API_KEY / LIVEKIT_API_SECRET${_NC}"
+    local credential_state
+    credential_state=$(describe_livekit_credentials_state)
+    if [[ "$credential_state" == "missing" || "$credential_state" == "invalid" ]]; then
+        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "fail" "$credential_state"
     else
-        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "ok" "customized"
+        check_line "$(msg CHECK_LIVEKIT_CREDENTIALS)" "ok" "$credential_state"
     fi
 
     if is_port_open "${HTTP_PORT}"; then

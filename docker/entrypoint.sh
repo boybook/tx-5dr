@@ -31,11 +31,18 @@ fi
 
 log "Starting TX-5DR Docker container initialization..."
 
+export LIVEKIT_CREDENTIALS_FILE="${LIVEKIT_CREDENTIALS_FILE:-/app/data/realtime/livekit-credentials.env}"
+export LIVEKIT_CONFIG_PATH="${LIVEKIT_CONFIG_PATH:-/app/data/realtime/livekit.yaml}"
+if [[ -f "$LIVEKIT_CREDENTIALS_FILE" ]]; then
+    log "Using LiveKit managed credential file: $LIVEKIT_CREDENTIALS_FILE"
+fi
+
 # 定义数据目录
 DATA_DIRS=(
     "/app/data/config"
     "/app/data/logs"
     "/app/data/cache"
+    "/app/data/realtime"
     "/var/log/nginx"
     "/var/log/supervisor"
 )
@@ -180,4 +187,4 @@ else
     # 默认启动supervisor
     log "Starting TX-5DR services with supervisor..."
     exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
-fi 
+fi

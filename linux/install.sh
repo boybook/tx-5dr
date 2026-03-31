@@ -205,6 +205,22 @@ if [[ "$MODE" != "docker" ]]; then
         fi
     fi
 
+    if check_livekit_credentials_exists && check_livekit_credentials_loaded; then
+        log_ok "LiveKit credentials ($(get_livekit_credentials_path))"
+    elif [[ "$MODE" == "check" ]]; then
+        log_fail "LiveKit credentials missing or invalid"
+        echo "      $(msg FIX_LIVEKIT_CREDENTIALS)"
+        ISSUES=$((ISSUES + 1))
+    else
+        require_root
+        if fix_livekit_credentials; then
+            log_ok "LiveKit credentials ($(get_livekit_credentials_path))"
+        else
+            log_fail "LiveKit credentials (fix failed)"
+            ISSUES=$((ISSUES + 1))
+        fi
+    fi
+
     if check_livekit_config; then
         log_ok "LiveKit config ($(get_livekit_config_path))"
     elif [[ "$MODE" == "check" ]]; then

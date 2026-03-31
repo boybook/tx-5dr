@@ -1,12 +1,31 @@
 version: '3.8'
 
 services:
+  livekit-init:
+    build: .
+    container_name: tx5dr-livekit-init
+    restart: "no"
+    entrypoint: ["/bin/bash", "/init-livekit.sh"]
+    environment:
+      - LIVEKIT_RUNTIME_DIR=/app/data/realtime
+      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
+      - LIVEKIT_SIGNAL_PORT=7880
+      - LIVEKIT_TCP_PORT=7881
+      - LIVEKIT_UDP_PORT_START=50000
+      - LIVEKIT_UDP_PORT_END=50100
+    volumes:
+      - ./data/realtime:/app/data/realtime
+
   tx5dr:
     build: .
     container_name: tx5dr
     restart: unless-stopped
     depends_on:
-      - livekit
+      livekit-init:
+        condition: service_completed_successfully
+      livekit:
+        condition: service_started
     ports:
       - "8076:80"
     volumes:
@@ -14,6 +33,7 @@ services:
       - ./data/config:/app/data/config
       - ./data/logs:/app/data/logs
       - ./data/cache:/app/data/cache
+      - ./data/realtime:/app/data/realtime
       # nginx日志
       - ./data/logs/nginx:/var/log/nginx
       # supervisor日志
@@ -33,8 +53,8 @@ services:
       - NODE_ENV=production
       - PORT=4000
       - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=tx5dr
-      - LIVEKIT_API_SECRET=tx5dr-change-me-0123456789abcdef
+      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
       # TX-5DR应用路径配置
       - TX5DR_CONFIG_DIR=/app/data/config
       - TX5DR_DATA_DIR=/app/data
@@ -60,10 +80,13 @@ services:
     image: livekit/livekit-server:latest
     container_name: tx5dr-livekit
     restart: unless-stopped
-    command: --config /etc/livekit.yaml
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    command: --config /var/lib/tx5dr-runtime/livekit.yaml
     ports:
       - "7880:7880/tcp"
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:
-      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
+      - ./data/realtime:/var/lib/tx5dr-runtime

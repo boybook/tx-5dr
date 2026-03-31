@@ -23,11 +23,17 @@ NGINX_CONF="/etc/nginx/conf.d/tx5dr.conf"
 CONFIG_ENV="/etc/tx5dr/config.env"
 LIVEKIT_TEMPLATE="/usr/share/tx5dr/livekit.yaml.template"
 LIVEKIT_CONF="/etc/tx5dr/livekit.yaml"
+LIVEKIT_CREDENTIALS_FILE="/etc/tx5dr/livekit-credentials.env"
 
 if [[ -f "$CONFIG_ENV" ]]; then
     # shellcheck disable=SC1090
     source "$CONFIG_ENV" 2>/dev/null || true
 fi
+
+random_hex() {
+    local bytes="${1:-16}"
+    od -An -N"${bytes}" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
+}
 
 LISTEN_PORT="${TX5DR_HTTP_PORT:-8076}"
 WEB_ROOT="/usr/share/tx5dr/web"
@@ -93,12 +99,33 @@ fi
 
 # ── LiveKit config ──────────────────────────────────────────────────────────
 if [[ -f "$LIVEKIT_TEMPLATE" ]]; then
+    if [[ -z "${LIVEKIT_API_KEY:-}" || -z "${LIVEKIT_API_SECRET:-}" ]] && [[ ! -f "$LIVEKIT_CREDENTIALS_FILE" ]]; then
+        mkdir -p "$(dirname "$LIVEKIT_CREDENTIALS_FILE")"
+        _now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        cat > "$LIVEKIT_CREDENTIALS_FILE" <<EOF
+# Managed by TX-5DR. Rotate via tx5dr livekit-creds rotate.
+LIVEKIT_API_KEY=tx5dr-$(random_hex 8)
+LIVEKIT_API_SECRET=$(random_hex 24)
+LIVEKIT_CREDENTIALS_CREATED_AT=${_now}
+LIVEKIT_CREDENTIALS_ROTATED_AT=${_now}
+EOF
+        chmod 640 "$LIVEKIT_CREDENTIALS_FILE"
+        chown "$APP_USER:$APP_GROUP" "$LIVEKIT_CREDENTIALS_FILE" 2>/dev/null || true
+        _msg "Generated LiveKit credentials: $LIVEKIT_CREDENTIALS_FILE" \
+             "已生成 LiveKit 凭据: $LIVEKIT_CREDENTIALS_FILE"
+    fi
+
+    if [[ -z "${LIVEKIT_API_KEY:-}" || -z "${LIVEKIT_API_SECRET:-}" ]]; then
+        # shellcheck disable=SC1090
+        source "$LIVEKIT_CREDENTIALS_FILE" 2>/dev/null || true
+    fi
+
     sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT:-7880}|g" \
         -e "s|%%LIVEKIT_TCP_PORT%%|${LIVEKIT_TCP_PORT:-7881}|g" \
         -e "s|%%LIVEKIT_UDP_PORT_START%%|${LIVEKIT_UDP_PORT_START:-50000}|g" \
         -e "s|%%LIVEKIT_UDP_PORT_END%%|${LIVEKIT_UDP_PORT_END:-50100}|g" \
-        -e "s|%%LIVEKIT_API_KEY%%|${LIVEKIT_API_KEY:-tx5dr}|g" \
-        -e "s|%%LIVEKIT_API_SECRET%%|${LIVEKIT_API_SECRET:-tx5dr-change-me-0123456789abcdef}|g" \
+        -e "s|%%LIVEKIT_API_KEY%%|${LIVEKIT_API_KEY}|g" \
+        -e "s|%%LIVEKIT_API_SECRET%%|${LIVEKIT_API_SECRET}|g" \
         "$LIVEKIT_TEMPLATE" > "$LIVEKIT_CONF"
     chmod 640 "$LIVEKIT_CONF"
     chown "$APP_USER:$APP_GROUP" "$LIVEKIT_CONF" 2>/dev/null || true

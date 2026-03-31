@@ -215,10 +215,18 @@ cmd_status() {
         echo -e "  LK URL:     ${_YELLOW}${LIVEKIT_URL} ${_DIM}(expected port ${LIVEKIT_SIGNAL_PORT})${_NC}"
     fi
 
-    if is_livekit_default_credentials; then
-        echo -e "  LK Creds:   ${_YELLOW}default${_NC} ${_DIM}(change LIVEKIT_API_KEY / LIVEKIT_API_SECRET in /etc/tx5dr/config.env)${_NC}"
+    local livekit_cred_state
+    livekit_cred_state=$(describe_livekit_credentials_state)
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
+        echo -e "  LK Creds:   ${_YELLOW}${livekit_cred_state}${_NC}"
+    elif check_livekit_credentials_exists; then
+        local rotated_at=""
+        rotated_at=$(get_livekit_credential_timestamp "LIVEKIT_CREDENTIALS_ROTATED_AT" 2>/dev/null || true)
+        echo -e "  LK Creds:   ${livekit_cred_state}"
+        echo -e "  LK CredFile:${_DIM} $(get_livekit_credentials_path)${_NC}"
+        [[ -n "$rotated_at" ]] && echo -e "  LK Rotated:${_DIM} ${rotated_at}${_NC}"
     else
-        echo -e "  LK Creds:   customized"
+        echo -e "  LK Creds:   ${_RED}missing${_NC} ${_DIM}(run: sudo tx5dr livekit-creds rotate)${_NC}"
     fi
 
     # Version
@@ -354,6 +362,78 @@ cmd_doctor() {
     run_doctor
 }
 
+cmd_livekit_creds() {
+    local action="${1:-status}"
+    case "$action" in
+        status)
+            load_config
+            echo ""
+            echo -e "${_BOLD}LiveKit Credentials${_NC}"
+            echo "─────────────────────────────────────"
+            echo -e "  State:      $(describe_livekit_credentials_state)"
+            if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" != "1" ]]; then
+                echo -e "  File:       $(get_livekit_credentials_path)"
+            fi
+            local created_at rotated_at
+            created_at=$(get_livekit_credential_timestamp "LIVEKIT_CREDENTIALS_CREATED_AT" 2>/dev/null || true)
+            rotated_at=$(get_livekit_credential_timestamp "LIVEKIT_CREDENTIALS_ROTATED_AT" 2>/dev/null || true)
+            [[ -n "$created_at" ]] && echo -e "  Created:    ${created_at}"
+            [[ -n "$rotated_at" ]] && echo -e "  Rotated:    ${rotated_at}"
+            echo ""
+            ;;
+        rotate)
+            if [[ $EUID -ne 0 ]]; then
+                exec sudo "$0" __rotate_livekit_creds
+            fi
+            "$0" __rotate_livekit_creds
+            ;;
+        *)
+            log_error "Unknown livekit-creds action: $action"
+            echo "Usage: tx5dr livekit-creds [status|rotate]"
+            return 1
+            ;;
+    esac
+}
+
+cmd_livekit_creds_rotate_internal() {
+    load_config
+    if [[ "${LIVEKIT_CREDENTIAL_OVERRIDE_ACTIVE:-0}" == "1" ]]; then
+        log_error "Cannot rotate managed LiveKit credentials while environment override is active."
+        return 1
+    fi
+    if ! write_livekit_credentials_file; then
+        log_error "Failed to generate LiveKit credentials."
+        return 1
+    fi
+    if ! fix_livekit_config; then
+        log_error "Failed to regenerate LiveKit config."
+        return 1
+    fi
+
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl restart tx5dr-livekit
+    systemctl restart tx5dr
+
+    echo -n "  "
+    if wait_for_port "${LIVEKIT_SIGNAL_PORT}" 15; then
+        log_ok "$(msg PORT_READY "${LIVEKIT_SIGNAL_PORT}") (livekit)"
+    else
+        log_fail "$(msg PORT_FAIL "${LIVEKIT_SIGNAL_PORT}" "15")"
+        return 1
+    fi
+
+    echo -n "  "
+    if wait_for_port "${API_PORT}" 15; then
+        log_ok "$(msg PORT_READY "${API_PORT}") (backend)"
+    else
+        log_fail "$(msg PORT_FAIL "${API_PORT}" "15")"
+        return 1
+    fi
+
+    log_info "LiveKit credentials rotated."
+    log_info "Credential file: $(get_livekit_credentials_path)"
+}
+
 cmd_logs() {
     case "${1:-}" in
         --nginx)
@@ -383,6 +463,7 @@ cmd_help() {
     echo "  token    Show admin token (--reset to regenerate)"
     echo "  update   Download and install latest nightly build"
     echo "  doctor   Run full environment diagnostics"
+    echo "  livekit-creds  Show or rotate managed LiveKit credentials"
     echo "  enable   Enable auto-start on boot"
     echo "  disable  Disable auto-start on boot"
     echo "  version  Show version"
@@ -399,7 +480,9 @@ case "${1:-help}" in
     token)   cmd_token "${2:-}" ;;
     update)  cmd_update ;;
     doctor)  cmd_doctor ;;
+    livekit-creds) cmd_livekit_creds "${2:-}" ;;
     logs)    cmd_logs "${2:-}" ;;
+    __rotate_livekit_creds) cmd_livekit_creds_rotate_internal ;;
     enable)
         sudo systemctl enable tx5dr
         log_ok "TX-5DR enabled for auto-start on boot."

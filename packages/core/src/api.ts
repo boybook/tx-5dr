@@ -93,6 +93,14 @@ type RealtimeSettingsApiData = RealtimeSettings & {
     radioReceiveTransport: RealtimeTransportKind;
     radioBridgeHealthy: boolean;
     radioBridgeIssueCode: RealtimeConnectivityErrorCode | null;
+    credentialStatus: {
+      initialized: boolean;
+      source: 'managed-file' | 'environment-override' | 'missing';
+      filePath: string | null;
+      apiKeyPreview: string | null;
+      createdAt: string | null;
+      rotatedAt: string | null;
+    };
   };
 };
 

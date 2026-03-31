@@ -102,6 +102,18 @@ sudo bash /usr/share/tx5dr/install.sh
 | `tx5dr update` | Download and install latest nightly |
 | `tx5dr doctor` | Full environment diagnostics |
 | `tx5dr logs` | Follow server logs (`--nginx` for nginx) |
+| `tx5dr livekit-creds status` | Show managed LiveKit credential status |
+| `tx5dr livekit-creds rotate` | Rotate managed LiveKit credentials and config |
+
+### Service Layout
+
+Linux Server is not a single standalone process. The installer sets up and wires together:
+
+- `tx5dr`: the backend application and Web API
+- `livekit-server`: the bundled realtime audio and signaling service
+- `nginx`: the public reverse proxy and HTTPS entrypoint
+
+`install.sh` and the `tx5dr` CLI handle installation, configuration, diagnostics, and coordinated restarts across these components.
 
 ### System Requirements
 
@@ -142,20 +154,20 @@ services:
       - audio
     environment:
       - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=tx5dr
-      - LIVEKIT_API_SECRET=tx5dr-change-me-0123456789abcdef
+      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
 
   livekit:
     image: livekit/livekit-server:latest
     container_name: tx5dr-livekit
     restart: unless-stopped
-    command: --config /etc/livekit.yaml
+    command: --config /var/lib/tx5dr-runtime/livekit.yaml
     ports:
       - "7880:7880/tcp"
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:
-      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
+      - ./data/realtime:/var/lib/tx5dr-runtime
 ```
 
 ```bash
@@ -167,6 +179,7 @@ docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
 - Browser clients connect directly to the LiveKit signaling URL; configure any public URL override from System Settings, which persists to `/app/data/config/config.json`
+- The Docker stack auto-generates managed LiveKit credentials and `livekit.yaml` into `./data/realtime` on first startup, then reuses them on later restarts
 - If your public domain, TLS termination, or port mapping differs from the container-internal address, you must set the externally reachable LiveKit WebSocket URL in the settings page
 
 See [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details. Docker metadata is also published to the OSS mirror during release workflows.
@@ -198,6 +211,10 @@ yarn dev
 # Electron mode
 yarn dev:electron
 ```
+
+- `yarn dev` / `yarn dev:electron` auto-manage a local LiveKit instance and its credential file when possible
+- If port `7880` is already occupied by an unknown LiveKit instance, development mode automatically falls back to `ws-compat` instead of issuing invalid tokens
+- Running `yarn workspace @tx5dr/server dev` without LiveKit credentials is supported; the backend starts in `ws-compat` mode and logs a warning
 
 ### Build
 
