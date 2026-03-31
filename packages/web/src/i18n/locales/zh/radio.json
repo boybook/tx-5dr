@@ -28,6 +28,12 @@
     "selectFrequency": "选择频率",
     "selectMode": "选择通联模式"
   },
+  "alcWarning": {
+    "title": "ALC 过高",
+    "description": "当前发射自动电平控制已达到或超过 100%，建议立即降低总增益，避免过驱和失真。",
+    "gainControl": "总增益控制",
+    "dismissHint": "如需关闭此提示，请点击浮窗外部区域。"
+  },
   "mode": {
     "noModes": "没有可用的模式",
     "loadFailed": "加载模式列表失败: 数据格式错误",

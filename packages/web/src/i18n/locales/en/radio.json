@@ -28,6 +28,12 @@
     "selectFrequency": "Select frequency",
     "selectMode": "Select mode"
   },
+  "alcWarning": {
+    "title": "ALC Too High",
+    "description": "The current TX ALC has reached or exceeded 100%. Reduce the master gain now to avoid overdrive and distortion.",
+    "gainControl": "Master gain control",
+    "dismissHint": "Click outside the popover to dismiss this reminder."
+  },
   "mode": {
     "noModes": "No modes available",
     "loadFailed": "Failed to load modes: invalid data format",
