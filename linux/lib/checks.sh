@@ -82,6 +82,32 @@ check_nginx() {
     check_nginx_installed && check_nginx_config && check_nginx_running
 }
 
+get_tx5dr_nginx_conf_path() {
+    printf "%s" "/etc/nginx/conf.d/tx5dr.conf"
+}
+
+check_nginx_realtime_proxy_config() {
+    local conf
+    conf=$(get_tx5dr_nginx_conf_path)
+    [[ -f "$conf" ]] || return 1
+
+    local content
+    content=$(read_file_maybe_sudo "$conf" 2>/dev/null || true)
+    [[ -n "$content" ]] || return 1
+
+    local api_block_count compat_block_count
+    api_block_count=$(printf "%s\n" "$content" | grep -c 'location /api/ {')
+    compat_block_count=$(printf "%s\n" "$content" | grep -c 'location /api/realtime/ws-compat {')
+    [[ "$api_block_count" -gt 0 ]] || return 1
+    [[ "$compat_block_count" -ge "$api_block_count" ]] || return 1
+
+    printf "%s\n" "$content" | grep -Fq 'proxy_set_header Upgrade $http_upgrade;' || return 1
+    printf "%s\n" "$content" | grep -Fq 'proxy_set_header Connection $connection_upgrade;' || return 1
+    printf "%s\n" "$content" | grep -Fq 'proxy_set_header Host $http_host;' || return 1
+    printf "%s\n" "$content" | grep -Fq 'proxy_set_header X-Forwarded-Host $http_host;' || return 1
+    printf "%s\n" "$content" | grep -Fq 'proxy_set_header X-Forwarded-Port $server_port;' || return 1
+}
+
 check_tx5dr_service() {
     systemctl is-active --quiet tx5dr 2>/dev/null
 }
@@ -307,6 +333,105 @@ fix_nginx() {
     check_nginx_installed
 }
 
+fix_nginx_realtime_proxy_config() {
+    local conf
+    conf=$(get_tx5dr_nginx_conf_path)
+    [[ -f "$conf" ]] || return 1
+
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    awk -v api_port="${API_PORT}" '
+        function flush_pending_xff() {
+            if (pending_xff == "") {
+                return;
+            }
+            print pending_xff;
+            if (!has_forwarded_host_after_xff) {
+                print pending_indent "proxy_set_header X-Forwarded-Host $http_host;";
+            }
+            if (!has_forwarded_port_after_xff) {
+                print pending_indent "proxy_set_header X-Forwarded-Port $server_port;";
+            }
+            pending_xff = "";
+            pending_indent = "";
+            has_forwarded_host_after_xff = 0;
+            has_forwarded_port_after_xff = 0;
+        }
+
+        function print_compat_block(block_indent, inner_indent) {
+            print block_indent "location /api/realtime/ws-compat {";
+            print inner_indent "proxy_pass http://127.0.0.1:" api_port ";";
+            print inner_indent "proxy_http_version 1.1;";
+            print inner_indent "proxy_set_header Upgrade $http_upgrade;";
+            print inner_indent "proxy_set_header Connection $connection_upgrade;";
+            print inner_indent "proxy_set_header Host $http_host;";
+            print inner_indent "proxy_set_header X-Real-IP $remote_addr;";
+            print inner_indent "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;";
+            print inner_indent "proxy_set_header X-Forwarded-Host $http_host;";
+            print inner_indent "proxy_set_header X-Forwarded-Port $server_port;";
+            print inner_indent "proxy_set_header X-Forwarded-Proto $scheme;";
+            print "";
+            print inner_indent "proxy_connect_timeout 7d;";
+            print inner_indent "proxy_send_timeout 7d;";
+            print inner_indent "proxy_read_timeout 7d;";
+            print block_indent "}";
+        }
+
+        {
+            line = $0;
+            gsub(/proxy_set_header Host \$host;/, "proxy_set_header Host $http_host;", line);
+
+            if (line ~ /^[[:space:]]*location \/api\/realtime\/ws-compat[[:space:]]*\{/) {
+                has_compat_block = 1;
+            }
+
+            if (pending_xff != "") {
+                if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-Host \$http_host;/) {
+                    has_forwarded_host_after_xff = 1;
+                    next;
+                }
+                if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-Port \$server_port;/) {
+                    has_forwarded_port_after_xff = 1;
+                    next;
+                }
+                flush_pending_xff();
+            }
+
+            if (!has_compat_block && !compat_inserted && line ~ /^[[:space:]]*location \/api\/ \{/) {
+                match(line, /^[[:space:]]*/);
+                block_indent = substr(line, RSTART, RLENGTH);
+                inner_indent = block_indent "    ";
+                print_compat_block(block_indent, inner_indent);
+                print "";
+                compat_inserted = 1;
+            }
+
+            if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/) {
+                pending_xff = line;
+                match(line, /^[[:space:]]*/);
+                pending_indent = substr(line, RSTART, RLENGTH);
+                next;
+            }
+
+            print line;
+        }
+
+        END {
+            flush_pending_xff();
+        }
+    ' "$conf" > "$tmp_file"
+
+    cat "$tmp_file" > "$conf"
+    rm -f "$tmp_file"
+
+    if check_nginx_config; then
+        systemctl reload nginx 2>/dev/null || true
+    fi
+
+    check_nginx_realtime_proxy_config
+}
+
 fix_livekit_binary() {
     log_info "Installing LiveKit server"
     curl -sSL https://get.livekit.io | bash 2>&1 || true
@@ -502,6 +627,14 @@ run_doctor() {
             check_line "$(msg CHECK_NGINX_RUNNING)" "ok" "active"
         else
             check_line "$(msg CHECK_NGINX_RUNNING)" "fail" "inactive"
+            issues=$((issues + 1))
+        fi
+
+        if check_nginx_realtime_proxy_config; then
+            check_line "$(msg CHECK_NGINX_REALTIME_PROXY)" "ok" "ws-compat + forwarded host/port"
+        else
+            check_line "$(msg CHECK_NGINX_REALTIME_PROXY)" "fail" "missing ws-compat upgrade or forwarded port preservation"
+            echo -e "      ${_DIM}$(msg FIX_NGINX_REALTIME_PROXY)${_NC}"
             issues=$((issues + 1))
         fi
     fi

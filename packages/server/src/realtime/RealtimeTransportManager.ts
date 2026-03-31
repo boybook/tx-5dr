@@ -60,6 +60,28 @@ function getHeaderValue(value: string | string[] | undefined): string | undefine
   return value;
 }
 
+function hostIncludesExplicitPort(host: string): boolean {
+  if (host.startsWith('[')) {
+    return /\]:\d+$/.test(host);
+  }
+
+  const firstColon = host.indexOf(':');
+  const lastColon = host.lastIndexOf(':');
+  return firstColon !== -1 && firstColon === lastColon;
+}
+
+function tryGetUrlHost(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value).host || null;
+  } catch {
+    return null;
+  }
+}
+
 function buildCompatIdentity(direction: RealtimeSessionDirection, stablePart: string): string {
   const safeStablePart = stablePart.replace(/[^a-zA-Z0-9:_-]/g, '-');
   return `compat-${direction}:${safeStablePart}:${randomUUID()}`;
@@ -349,7 +371,21 @@ export class RealtimeTransportManager {
       || 'http';
     const forwardedHost = getHeaderValue(headers?.['x-forwarded-host'])?.split(',')[0]?.trim();
     const hostHeader = getHeaderValue(headers?.host)?.split(',')[0]?.trim();
-    const host = forwardedHost || hostHeader || '127.0.0.1:4000';
+    const forwardedPort = getHeaderValue(headers?.['x-forwarded-port'])?.split(',')[0]?.trim();
+    const originHost = tryGetUrlHost(getHeaderValue(headers?.origin)?.split(',')[0]?.trim());
+    const refererHost = tryGetUrlHost(getHeaderValue(headers?.referer)?.split(',')[0]?.trim());
+
+    let host = forwardedHost || hostHeader || originHost || refererHost || '127.0.0.1:4000';
+    if (!hostIncludesExplicitPort(host)) {
+      const originHostWithPort = [originHost, refererHost]
+        .find((candidate): candidate is string => Boolean(candidate && hostIncludesExplicitPort(candidate)));
+      if (originHostWithPort) {
+        host = originHostWithPort;
+      } else if (forwardedPort && forwardedPort.length > 0) {
+        host = `${host}:${forwardedPort}`;
+      }
+    }
+
     const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
     return `${wsProtocol}://${host}/api/realtime/ws-compat`;
   }
