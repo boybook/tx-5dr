@@ -40,6 +40,7 @@ interface CompatSocketContext {
 export interface IssueRealtimeSessionParams {
   scope: RealtimeScope;
   direction: RealtimeSessionDirection;
+  transportOverride?: RealtimeTransportKind;
   role: UserRole;
   tokenId?: string | null;
   operatorIds?: string[];
@@ -91,10 +92,14 @@ export class RealtimeTransportManager {
 
   async issueSession(params: IssueRealtimeSessionParams): Promise<RealtimeSessionResponse> {
     const hints = LiveKitConfig.getConnectivityHints();
-    const forceCompat = ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat'
+    const forceCompat = params.transportOverride === 'ws-compat'
+      || ConfigManager.getInstance().getRealtimeTransportPolicy() === 'force-compat'
       || !LiveKitConfig.isEnabled();
-    const preferredTransport = this.determinePreferredTransport(params.scope, params.direction, forceCompat);
-    const liveKitOffer = forceCompat ? null : await this.buildLiveKitOffer(params, hints);
+    const preferredTransport = params.transportOverride
+      ?? this.determinePreferredTransport(params.scope, params.direction, forceCompat);
+    const liveKitOffer = forceCompat || params.transportOverride === 'ws-compat'
+      ? null
+      : await this.buildLiveKitOffer(params, hints);
     const compatOffer = this.buildCompatOffer(params);
 
     const offers: RealtimeTransportOffer[] = [];
@@ -104,7 +109,7 @@ export class RealtimeTransportManager {
     if (preferredOffer) {
       offers.push(preferredOffer);
     }
-    if (secondaryOffer && secondaryOffer.transport !== preferredTransport) {
+    if (secondaryOffer && secondaryOffer.transport !== preferredTransport && !params.transportOverride) {
       offers.push(secondaryOffer);
     }
 

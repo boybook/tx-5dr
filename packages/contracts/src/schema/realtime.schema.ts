@@ -57,6 +57,7 @@ export const RealtimeSessionRequestSchema = z.object({
   scope: RealtimeScopeSchema,
   direction: RealtimeSessionDirectionSchema,
   previewSessionId: z.string().optional(),
+  transportOverride: RealtimeTransportKindSchema.optional(),
 });
 
 export type RealtimeSessionRequest = z.infer<typeof RealtimeSessionRequestSchema>;
