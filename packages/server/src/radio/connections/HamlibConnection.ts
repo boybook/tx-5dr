@@ -10,7 +10,9 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
-import type { PttType, SpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib';
+import type { PttType } from 'hamlib';
+import { SpectrumController } from 'hamlib/spectrum';
+import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
 import type { LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
 import { hamlibStrengthToLevelMeterReading } from './meterUtils.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
@@ -28,6 +30,25 @@ import {
   type RadioConnectionConfig,
   type MeterData,
 } from './IRadioConnection.js';
+
+interface SpectrumControllerLike {
+  getSpectrumSupportSummary(): Promise<SpectrumSupportSummary>;
+  getSpectrumDisplayState(): Promise<{
+    mode: RadioSpectrumDisplayState['mode'];
+    spanHz: number | null;
+    edgeSlot: number | null;
+    edgeLowHz: number | null;
+    edgeHighHz: number | null;
+    supportedSpans: number[];
+    supportsFixedEdges: boolean;
+    supportsEdgeSlotSelection: boolean;
+  }>;
+  configureSpectrumDisplay(config?: ManagedSpectrumConfig): Promise<unknown>;
+  startManagedSpectrum(config?: ManagedSpectrumConfig): Promise<boolean>;
+  stopManagedSpectrum(): Promise<boolean>;
+  on(event: 'spectrumLine', listener: (line: SpectrumLine) => void): unknown;
+  off(event: 'spectrumLine', listener: (line: SpectrumLine) => void): unknown;
+}
 
 /**
  * HamlibConnection 实现类
@@ -47,6 +68,11 @@ export class HamlibConnection
    * 底层 Hamlib 实例
    */
   private rig: HamLib | null = null;
+
+  /**
+   * Hamlib 0.4.0 频谱控制器
+   */
+  private spectrumController: SpectrumControllerLike | null = null;
 
   /**
    * 当前连接状态
@@ -199,6 +225,7 @@ export class HamlibConnection
       // 创建 HamLib 实例
       const rig = new HamLib(model as any, port as any) as HamLib;
       this.rig = rig;
+      this.spectrumController = new SpectrumController(rig);
 
       // 配置 PTT 类型（必须在 open() 前调用）
       this.pttMethod = config.pttMethod || 'cat';
@@ -298,7 +325,7 @@ export class HamlibConnection
 
     try {
       await Promise.race([
-        this.rig!.setFrequency(frequency, 'VFO-A'),
+        this.rig!.setFrequency(frequency),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
         ),
@@ -327,7 +354,7 @@ export class HamlibConnection
 
     try {
       const frequency = (await Promise.race([
-        this.rig!.getFrequency('VFO-A'),
+        this.rig!.getFrequency(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Get frequency timeout')), 5000)
         ),
@@ -429,7 +456,7 @@ export class HamlibConnection
   async getSpectrumSupportSummary(): Promise<SpectrumSupportSummary> {
     this.checkConnected();
     try {
-      return await this.getSpectrumRig().getSpectrumSupportSummary();
+      return await this.getSpectrumController().getSpectrumSupportSummary();
     } catch (error) {
       throw this.convertError(error, 'getSpectrumSupportSummary');
     }
@@ -438,7 +465,7 @@ export class HamlibConnection
   async getSpectrumSpans(): Promise<number[]> {
     this.checkConnected();
     try {
-      const summary = await this.getSpectrumRig().getSpectrumSupportSummary();
+      const summary = await this.getSpectrumController().getSpectrumSupportSummary();
       return Array.from(new Set((summary.spans ?? []).filter((span): span is number => Number.isFinite(span) && span > 0)))
         .sort((left, right) => right - left);
     } catch (error) {
@@ -449,12 +476,7 @@ export class HamlibConnection
   async getCurrentSpectrumSpan(): Promise<number | null> {
     this.checkConnected();
     try {
-      const rig = this.getSpectrumRig();
-      if (typeof (rig as any).getLevel !== 'function') {
-        return null;
-      }
-
-      const currentSpan = await (rig as any).getLevel('SPECTRUM_SPAN');
+      const currentSpan = await this.getSpectrumRig().getLevel('SPECTRUM_SPAN');
       return typeof currentSpan === 'number' && Number.isFinite(currentSpan) && currentSpan > 0 ? currentSpan : null;
     } catch (error) {
       throw this.convertError(error, 'getCurrentSpectrumSpan');
@@ -473,12 +495,7 @@ export class HamlibConnection
   async getSpectrumDisplayState(): Promise<RadioSpectrumDisplayState | null> {
     this.checkConnected();
     try {
-      const rig = this.getSpectrumRig();
-      if (typeof (rig as any).getSpectrumDisplayState !== 'function') {
-        return null;
-      }
-
-      const state = await (rig as any).getSpectrumDisplayState();
+      const state = await this.getSpectrumController().getSpectrumDisplayState();
       return {
         mode: state?.mode ?? null,
         spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
@@ -505,11 +522,7 @@ export class HamlibConnection
   }): Promise<void> {
     this.checkConnected();
     try {
-      const rig = this.getSpectrumRig();
-      if (typeof (rig as any).configureSpectrumDisplay !== 'function') {
-        throw new Error('Spectrum display control is not supported by this rig');
-      }
-      await (rig as any).configureSpectrumDisplay(config);
+      await this.getSpectrumController().configureSpectrumDisplay(config);
     } catch (error) {
       throw this.convertError(error, 'configureSpectrumDisplay');
     }
@@ -517,34 +530,33 @@ export class HamlibConnection
 
   async startManagedSpectrum(
     listener: (line: SpectrumLine) => void,
-    config?: SpectrumConfig
+    config?: ManagedSpectrumConfig
   ): Promise<void> {
     this.checkConnected();
 
-    const rig = this.getSpectrumRig();
+    const controller = this.getSpectrumController();
     this.spectrumListener = listener;
-    rig.removeListener('spectrumLine', this.onRigSpectrumLine);
-    rig.on('spectrumLine', this.onRigSpectrumLine);
+    controller.off('spectrumLine', this.onRigSpectrumLine);
+    controller.on('spectrumLine', this.onRigSpectrumLine);
 
     try {
-      await rig.startManagedSpectrum(config);
+      await controller.startManagedSpectrum(config);
     } catch (error) {
-      rig.removeListener('spectrumLine', this.onRigSpectrumLine);
+      controller.off('spectrumLine', this.onRigSpectrumLine);
       this.spectrumListener = null;
       throw this.convertError(error, 'startManagedSpectrum');
     }
   }
 
   async stopManagedSpectrum(): Promise<void> {
-    const rig = this.rig;
-    if (!rig) {
+    const controller = this.spectrumController;
+    if (!controller) {
       this.spectrumListener = null;
       return;
     }
     try {
-      const spectrumRig = this.getSpectrumRig();
-      spectrumRig.removeListener('spectrumLine', this.onRigSpectrumLine);
-      await spectrumRig.stopManagedSpectrum();
+      controller.off('spectrumLine', this.onRigSpectrumLine);
+      await controller.stopManagedSpectrum();
     } catch (error) {
       throw this.convertError(error, 'stopManagedSpectrum');
     } finally {
@@ -938,7 +950,7 @@ export class HamlibConnection
    * 因此需要尝试实际通信（读取频率）来确认电台在线。
    *
    * 此时状态仍为 CONNECTING，不能使用 this.getFrequency()（会 checkConnected 失败），
-   * 直接调用 this.rig.getFrequency('VFO-A')，与运行态读频保持一致。
+   * 直接调用 this.rig.getFrequency()，默认使用当前 VFO，与运行态读频保持一致。
    */
   private async verifyRadioCommunication(): Promise<void> {
     if (!this.rig) {
@@ -951,7 +963,7 @@ export class HamlibConnection
       logger.debug('Verifying radio communication...');
 
       await Promise.race([
-        this.rig.getFrequency('VFO-A'),
+        this.rig.getFrequency(),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Communication verification timeout')), VERIFY_TIMEOUT)
         ),
@@ -1085,6 +1097,7 @@ export class HamlibConnection
         }
 
         this.rig = null;
+        this.spectrumController = null;
       }
 
       this.currentConfig = null;
@@ -1130,13 +1143,13 @@ export class HamlibConnection
   private async pollMeters(): Promise<void> {
     if (!this.rig) return;
 
-    // 如果没有任何支持的 level，使用 VFO-A 读频做健康检查
+    // 如果没有任何支持的 level，使用当前 VFO 读频做健康检查
     const hasAnyLevel = this.supportedLevels.has('STRENGTH') || this.supportedLevels.has('SWR')
       || this.supportedLevels.has('ALC') || this.supportedLevels.has('RFPOWER_METER');
 
     if (!hasAnyLevel) {
       try {
-        await this.rig.getFrequency('VFO-A');
+        await this.rig.getFrequency();
         this.meterPollFailCount = 0;
         this.lastSuccessfulOperation = Date.now();
       } catch {
@@ -1428,12 +1441,7 @@ export class HamlibConnection
     return this.convertError(error, context);
   }
 
-  private getSpectrumRig(): HamLib & {
-    getSpectrumSupportSummary?: () => Promise<SpectrumSupportSummary>;
-    startManagedSpectrum?: (config?: SpectrumConfig) => Promise<boolean>;
-    stopManagedSpectrum?: () => Promise<boolean>;
-    getLevel?: (level: string) => Promise<number>;
-  } {
+  private getSpectrumRig(): HamLib {
     const rig = this.rig;
     if (!rig) {
       throw new RadioError({
@@ -1443,20 +1451,21 @@ export class HamlibConnection
       });
     }
 
-    if (
-      typeof rig.getSpectrumSupportSummary !== 'function'
-      || typeof rig.startManagedSpectrum !== 'function'
-      || typeof rig.stopManagedSpectrum !== 'function'
-    ) {
+    return rig;
+  }
+
+  private getSpectrumController(): SpectrumControllerLike {
+    const controller = this.spectrumController;
+    if (!controller) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_OPERATION,
         severity: RadioErrorSeverity.ERROR,
-        message: 'Official Hamlib spectrum API is not available in current hamlib package',
-        userMessage: 'Current Hamlib package does not provide official spectrum support',
+        message: 'Hamlib spectrum controller is not initialized',
+        userMessage: 'Hamlib spectrum support is not available',
         context: { operation: 'hamlibSpectrumApi' },
       });
     }
 
-    return rig;
+    return controller;
   }
 }
