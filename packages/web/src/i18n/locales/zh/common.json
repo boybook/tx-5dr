@@ -245,6 +245,7 @@
     "realtimeFallbackDialogActionDescription": "点击下方按钮后，仅本次连接会直接跳过 LiveKit，改用兼容模式（WS/PCM）重新进入音频链路。",
     "realtimeFallbackDialogConfirm": "改用兼容模式重试",
     "realtimeFallbackDialogRetryFailedTitle": "兼容模式重试仍失败",
+    "realtimeFallbackDialogRetryTimeout": "兼容模式重试超时，请检查当前站点入口与 /api/realtime/ws-compat 是否可达。",
     "decodeWhileTransmitting": "发射时允许解码",
     "decodeWhileTransmittingOffDesc": "任何操作员发射时停止解码，避免误解码残留信号",
     "decodeWhileTransmittingOnDesc": "发射周期继续解码，支持双周期异地收发",

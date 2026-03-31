@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -10,10 +10,14 @@ import {
 } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import type { RealtimeConnectivityIssue } from '@tx5dr/contracts';
-import { buildRealtimeConnectivityIssue } from '../realtime/realtimeConnectivity';
+import {
+  buildRealtimeConnectivityIssue,
+  showRealtimeConnectivityIssueToast,
+} from '../realtime/realtimeConnectivity';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('RealtimeCompatFallbackModal');
+const COMPAT_RETRY_TIMEOUT_MS = 12000;
 
 interface RealtimeCompatFallbackModalProps {
   isOpen: boolean;
@@ -57,6 +61,13 @@ export function RealtimeCompatFallbackModal({
 
   const contextHints = useMemo(() => getContextHints(issue, t), [issue, t]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setIsRetrying(false);
+      setRetryIssue(null);
+    }
+  }, [isOpen]);
+
   const handleClose = () => {
     if (isRetrying) {
       return;
@@ -73,16 +84,32 @@ export function RealtimeCompatFallbackModal({
 
     setIsRetrying(true);
     setRetryIssue(null);
+    let timeoutId: number | null = null;
     try {
-      await onConfirm();
+      await Promise.race([
+        onConfirm(),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(() => {
+            reject(new Error(t('system.realtimeFallbackDialogRetryTimeout')));
+          }, COMPAT_RETRY_TIMEOUT_MS);
+        }),
+      ]);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
       handleClose();
     } catch (error) {
       logger.error('Compatibility fallback retry failed', error);
-      setRetryIssue(buildRealtimeConnectivityIssue(error, {
+      const nextRetryIssue = buildRealtimeConnectivityIssue(error, {
         scope: issue?.scope ?? 'radio',
         stage: issue?.stage ?? 'connect',
-      }));
+      });
+      setRetryIssue(nextRetryIssue);
+      showRealtimeConnectivityIssueToast(nextRetryIssue);
     } finally {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
       setIsRetrying(false);
     }
   };

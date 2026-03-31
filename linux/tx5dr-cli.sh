@@ -391,6 +391,9 @@ cmd_doctor_fix_internal() {
     if ! check_nginx_installed; then
         fix_nginx || true
     fi
+    if check_nginx_installed && ! check_nginx_realtime_proxy_config; then
+        fix_nginx_realtime_proxy_config || true
+    fi
     if ! check_livekit_binary; then
         fix_livekit_binary || true
     fi

@@ -245,6 +245,7 @@
     "realtimeFallbackDialogActionDescription": "When you click the button below, only this connection attempt will skip LiveKit and retry through compatibility mode (WS/PCM).",
     "realtimeFallbackDialogConfirm": "Retry in Compatibility Mode",
     "realtimeFallbackDialogRetryFailedTitle": "Compatibility retry also failed",
+    "realtimeFallbackDialogRetryTimeout": "The compatibility retry timed out. Check whether the current site entrypoint and /api/realtime/ws-compat are reachable.",
     "decodeWhileTransmitting": "Decode While Transmitting",
     "decodeWhileTransmittingOffDesc": "Stop decoding when any operator is transmitting, avoids residual signals",
     "decodeWhileTransmittingOnDesc": "Continue decoding during TX cycle, supports dual-cycle remote TX/RX",

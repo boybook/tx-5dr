@@ -15,6 +15,7 @@ import {
 const logger = createLogger('VoiceCapture');
 const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
 const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
+const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
 
 export interface VoiceCaptureOptions {
   onStateChange?: (state: VoiceCaptureState) => void;
@@ -243,19 +244,28 @@ export class VoiceCapture {
       const ws = new WebSocket(`${offer.url}?token=${encodeURIComponent(offer.token)}`);
       ws.binaryType = 'arraybuffer';
       let resolved = false;
+      const timer = window.setTimeout(() => {
+        if (resolved) {
+          return;
+        }
+        reject(new Error('Realtime compatibility uplink timed out before ready'));
+      }, COMPAT_CAPTURE_CONNECT_TIMEOUT_MS);
 
       ws.onopen = () => {
         resolved = true;
+        window.clearTimeout(timer);
         this.compatSocket = ws;
         resolve();
       };
 
       ws.onerror = () => {
+        window.clearTimeout(timer);
         reject(new Error('Realtime compatibility uplink WebSocket failed'));
       };
 
       ws.onclose = () => {
         if (!resolved) {
+          window.clearTimeout(timer);
           reject(new Error('Realtime compatibility uplink closed before ready'));
         }
       };
