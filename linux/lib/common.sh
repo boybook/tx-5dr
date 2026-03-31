@@ -356,6 +356,25 @@ should_prefer_oss_download() {
 
 manifest_lookup_value() {
     local manifest_json="$1" lookup_key="$2"
+    if command -v node >/dev/null 2>&1; then
+        printf "%s" "$manifest_json" | env LOOKUP_KEY="$lookup_key" node -e '
+const fs = require("fs");
+const input = fs.readFileSync(0, "utf8");
+const key = process.env.LOOKUP_KEY;
+if (!key) process.exit(1);
+try {
+  const data = JSON.parse(input);
+  const value = data[key];
+  if (typeof value === "string") {
+    process.stdout.write(value);
+  }
+} catch {
+  process.exit(1);
+}
+'
+        return
+    fi
+
     printf "%s" "$manifest_json" | tr -d '\n' | grep -oP "\"${lookup_key}\":\\s*\"\\K[^\"]+" | head -1
 }
 
