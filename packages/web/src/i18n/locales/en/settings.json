@@ -188,6 +188,8 @@
     "selectRigModelBeforeEndpoint": "Select a radio model first to show the correct serial port or server address input.",
     "connectionParamsTitle": "Connection Parameters",
     "connectionParamsDesc": "These parameters directly affect connection setup and device communication.",
+    "multicastParamsTitle": "Multicast UDP",
+    "multicastParamsDesc": "Adjust these only when the selected Hamlib backend uses UDP multicast data or command channels.",
     "backendAdvancedTitle": "Advanced Parameters",
     "backendAdvancedDesc": "Adjust these only if you know the backend or radio requires them.",
     "defaultOption": "Use default ({{value}})",

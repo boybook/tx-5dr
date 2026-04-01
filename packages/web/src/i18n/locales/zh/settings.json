@@ -188,6 +188,8 @@
     "selectRigModelBeforeEndpoint": "请先选择电台型号，再显示对应的串口或服务器地址输入。",
     "connectionParamsTitle": "连接参数",
     "connectionParamsDesc": "这些参数会直接影响连接建立和设备通信。",
+    "multicastParamsTitle": "多播 UDP",
+    "multicastParamsDesc": "仅在该 Hamlib backend 使用 UDP 多播数据或命令通道时再调整。",
     "backendAdvancedTitle": "高级参数",
     "backendAdvancedDesc": "仅在您明确知道设备或 backend 需要时再调整。",
     "defaultOption": "使用默认（{{value}}）",
