@@ -89,6 +89,10 @@ export interface RadioSpectrumDisplayState {
   supportsEdgeSlotSelection: boolean;
 }
 
+export interface RadioSpectrumRuntimeConfig {
+  speed: number;
+}
+
 /**
  * 电台连接事件
  */
@@ -264,6 +268,12 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @optional 仅支持 SDR 显示控制的连接实现
    */
   configureSpectrumDisplay?(config: RadioSpectrumDisplayConfig): Promise<void>;
+
+  /**
+   * 运行中更新 SDR 频谱配置（不重启频谱流）
+   * @optional 仅支持 Hamlib 官方频谱流的连接实现
+   */
+  applySpectrumRuntimeConfig?(config: RadioSpectrumRuntimeConfig): Promise<void>;
 
   /**
    * 获取连接信息（用于调试和日志）

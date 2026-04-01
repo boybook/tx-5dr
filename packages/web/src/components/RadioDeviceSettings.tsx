@@ -314,6 +314,19 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     setTestResult(null);
   };
 
+  const updateSpectrumConfig = (speed?: number) => {
+    setConfig((prev) => {
+      const nextSpectrum = speed === undefined ? undefined : { ...(prev.spectrum || {}), speed };
+      const next = {
+        ...prev,
+        spectrum: nextSpectrum,
+      };
+      onChange?.(next);
+      return next;
+    });
+    setTestResult(null);
+  };
+
   // 更新 Hamlib backend 配置
   const updateBackendConfig = (name: string, value?: string) => {
     setConfig((prev) => {
@@ -1104,6 +1117,85 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       <p>• {t('radio.tipUsbSerial')}</p>
                       <p className="text-danger-600 font-semibold">⚠️ {t('radio.tipLargeWarning')}</p>
                       <p>• {t('radio.tipAdjustByStats')}</p>
+                    </div>
+                  </div>
+
+                  <Divider />
+
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium text-default-700">
+                      📈 {t('radio.spectrumSpeed')}
+                    </h5>
+                    <p className="text-xs text-default-500">
+                      {t('radio.spectrumSpeedDesc')}
+                    </p>
+
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="number"
+                        label={t('radio.spectrumSpeedValue')}
+                        value={config.spectrum?.speed?.toString() ?? ''}
+                        onChange={e => {
+                          const rawValue = e.target.value.trim();
+                          if (rawValue === '') {
+                            updateSpectrumConfig(undefined);
+                            return;
+                          }
+
+                          const value = Number.parseInt(rawValue, 10);
+                          updateSpectrumConfig(Number.isFinite(value) ? value : undefined);
+                        }}
+                        min="0"
+                        max="255"
+                        placeholder={t('radio.spectrumSpeedPlaceholder')}
+                        size="sm"
+                        className="w-40"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 flex-wrap">
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="default"
+                        onClick={() => updateSpectrumConfig(undefined)}
+                        className="cursor-pointer hover:bg-default-200"
+                      >
+                        {t('radio.spectrumSpeedUseDefault')}
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="success"
+                        onClick={() => updateSpectrumConfig(5)}
+                        className="cursor-pointer hover:bg-success-100"
+                      >
+                        5
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="primary"
+                        onClick={() => updateSpectrumConfig(10)}
+                        className="cursor-pointer hover:bg-primary-100"
+                      >
+                        10（{t('radio.recommended')}）
+                      </Chip>
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        color="warning"
+                        onClick={() => updateSpectrumConfig(20)}
+                        className="cursor-pointer hover:bg-warning-100"
+                      >
+                        20
+                      </Chip>
+                    </div>
+
+                    <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
+                      <p>{t('radio.spectrumSpeedDefaultDesc', { value: 10 })}</p>
+                      <p>{t('radio.spectrumSpeedSupportDesc')}</p>
+                      <p>{t('radio.spectrumSpeedHotUpdateDesc')}</p>
                     </div>
                   </div>
                 </div>

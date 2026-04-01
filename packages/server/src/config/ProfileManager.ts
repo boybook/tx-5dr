@@ -3,6 +3,7 @@ import type { AudioDeviceSettings } from '@tx5dr/contracts';
 import { ConfigManager } from './config-manager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { createLogger } from '../utils/logger.js';
+import { applyHamlibSpectrumRuntimeConfig } from '../spectrum/hamlibSpectrumConfig.js';
 
 const logger = createLogger('ProfileManager');
 
@@ -68,6 +69,7 @@ export class ProfileManager {
    */
   async updateProfile(id: string, updates: UpdateProfileRequest): Promise<RadioProfile> {
     const configManager = ConfigManager.getInstance();
+    const isActiveProfile = configManager.getActiveProfileId() === id;
 
     // 如果更新了电台类型为 icom-wlan，标记锁定但不强制覆盖用户的音频设备选择
     if (updates.radio?.type === 'icom-wlan') {
@@ -87,6 +89,11 @@ export class ProfileManager {
 
     const profile = await configManager.updateProfile(id, updates);
     logger.info(`Profile updated: "${profile.name}" (id: ${id})`);
+
+    if (isActiveProfile && updates.radio) {
+      const engine = DigitalRadioEngine.getInstance();
+      await applyHamlibSpectrumRuntimeConfig(engine.getRadioManager().getActiveConnection(), profile.radio);
+    }
 
     // 广播列表更新事件
     this.broadcastProfileListUpdated();

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import type { SpectrumCapabilities, SpectrumFrame, SpectrumKind, SpectrumSourceAvailability, SupportedRig } from '@tx5dr/contracts';
-import type { SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
+import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
 import type { IRadioConnection } from '../radio/connections/IRadioConnection.js';
 import { RadioConnectionType } from '../radio/connections/IRadioConnection.js';
 import { HamlibConnection } from '../radio/connections/HamlibConnection.js';
@@ -12,6 +12,7 @@ import { SPECTRUM_DISPLAY_BIN_COUNT, createHamlibRadioSpectrumFrame, createOpenW
 import type { IcomScopeFrame } from 'icom-wlan-node';
 import type { OpenWebRXSpectrumFrame } from '@openwebrx-js/api';
 import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
+import { resolveHamlibSpectrumRuntimeConfig } from './hamlibSpectrumConfig.js';
 
 const logger = createLogger('SpectrumCoordinator');
 
@@ -31,7 +32,7 @@ interface ScopeCapableConnection {
 
 interface OfficialSpectrumCapableHamlibConnection extends HamlibConnection {
   getSpectrumSupportSummary(): Promise<SpectrumSupportSummary>;
-  startManagedSpectrum(listener: (line: SpectrumLine) => void): Promise<void>;
+  startManagedSpectrum(listener: (line: SpectrumLine) => void, config?: ManagedSpectrumConfig): Promise<void>;
   stopManagedSpectrum(): Promise<void>;
 }
 
@@ -470,7 +471,8 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
 
     await this.stopRadioScope();
     try {
-      await connection.startManagedSpectrum(this.onHamlibSpectrumLine);
+      const runtimeConfig = resolveHamlibSpectrumRuntimeConfig(this.engine.getRadioManager().getConfig());
+      await connection.startManagedSpectrum(this.onHamlibSpectrumLine, runtimeConfig);
       this.currentHamlibScopeConnection = connection;
     } catch (error) {
       logger.error('Failed to start Hamlib official spectrum stream', error);
