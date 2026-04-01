@@ -27,48 +27,104 @@ import { WaveLogService } from '../services/WaveLogService.js';
 import { QRZService } from '../services/QRZService.js';
 import { LoTWService } from '../services/LoTWService.js';
 import { LogManager } from '../log/LogManager.js';
+import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireCallsignAccess } from '../auth/authPlugin.js';
+import { normalizeCallsign } from '../utils/callsign.js';
+import { getBandFromFrequency, type ILogProvider } from '@tx5dr/core';
 
 /**
- * 通用：根据呼号和时间范围在本地日志本中查找匹配的 QSO
+ * LoTW 匹配允许 LoTW 返回的分钟级时间与本地秒级时间存在偏差。
  */
-async function findMatchingLocalQSO(
-  callsign: string,
-  startTime: number,
-  logManager: LogManager
-): Promise<{ qsoId: string; logBookProvider: any } | null> {
-  const logBooks = logManager.getLogBooks();
-  // 允许 ±30 秒的时间偏差
-  const timeTolerance = 30000;
+const LOTW_TIME_TOLERANCE_MS = 2 * 60 * 1000;
+const LOTW_FREQUENCY_TOLERANCE_HZ = 3000;
 
-  for (const logBook of logBooks) {
-    try {
-      const matches = await logBook.provider.queryQSOs({
-        callsign,
-        timeRange: {
-          start: startTime - timeTolerance,
-          end: startTime + timeTolerance,
-        },
-        limit: 5,
-      });
-      // 精确匹配呼号
-      const exact = matches.find(
-        (q: any) => q.callsign.toUpperCase() === callsign.toUpperCase()
-      );
-      if (exact) {
-        return { qsoId: exact.id, logBookProvider: logBook.provider };
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return null;
+async function getTargetLogBook(
+  callsign: string,
+  logManager: LogManager
+): Promise<{ id: string; provider: ILogProvider; operatorId?: string }> {
+  const logBook = await logManager.getOrCreateLogBookByCallsign(callsign);
+  const operatorId = logManager.getOperatorIdsForLogBook(logBook.id)[0];
+  return {
+    id: logBook.id,
+    provider: logBook.provider,
+    operatorId,
+  };
 }
 
 /**
- * 通用：批量标记本地 QSO 的上传状态
+ * 仅在当前呼号所属日志本内查找最可能的本地 QSO，避免跨日志本误写。
  */
+async function findMatchingLocalQSO(
+  provider: ILogProvider,
+  remoteQSO: any
+): Promise<any | null> {
+  const matches = await provider.queryQSOs({
+    callsign: remoteQSO.callsign,
+    timeRange: {
+      start: remoteQSO.startTime - LOTW_TIME_TOLERANCE_MS,
+      end: remoteQSO.startTime + LOTW_TIME_TOLERANCE_MS,
+    },
+    limit: 20,
+  });
+
+  const normalizedCallsign = remoteQSO.callsign.toUpperCase();
+  const normalizedMode = remoteQSO.mode?.toUpperCase();
+  const remoteBand = remoteQSO.frequency ? getBandFromFrequency(remoteQSO.frequency) : undefined;
+
+  const candidates = matches
+    .filter((qso: any) => qso.callsign.toUpperCase() === normalizedCallsign)
+    .filter((qso: any) => {
+      if (!normalizedMode || !qso.mode) return true;
+      return qso.mode.toUpperCase() === normalizedMode;
+    })
+    .filter((qso: any) => {
+      if (!remoteQSO.frequency || !qso.frequency) return true;
+      if (Math.abs(qso.frequency - remoteQSO.frequency) <= LOTW_FREQUENCY_TOLERANCE_HZ) {
+        return true;
+      }
+      if (!remoteBand) return false;
+      return getBandFromFrequency(qso.frequency) === remoteBand;
+    })
+    .sort((left: any, right: any) => {
+      const leftTimeDiff = Math.abs(left.startTime - remoteQSO.startTime);
+      const rightTimeDiff = Math.abs(right.startTime - remoteQSO.startTime);
+      if (leftTimeDiff !== rightTimeDiff) {
+        return leftTimeDiff - rightTimeDiff;
+      }
+      const leftFreqDiff = Math.abs((left.frequency || 0) - (remoteQSO.frequency || 0));
+      const rightFreqDiff = Math.abs((right.frequency || 0) - (remoteQSO.frequency || 0));
+      return leftFreqDiff - rightFreqDiff;
+    });
+
+  return candidates[0] || null;
+}
+
+/**
+ * 对上传成功的本地记录回写 LoTW sent 状态。
+ */
+async function markLotwUploadSent(
+  provider: ILogProvider,
+  qsos: any[]
+): Promise<number> {
+  let updatedCount = 0;
+  const now = Date.now();
+
+  for (const qso of qsos) {
+    try {
+      await provider.updateQSO(qso.id, {
+        lotwQslSent: 'Y',
+        lotwQslSentDate: qso.lotwQslSentDate || now,
+      });
+      updatedCount++;
+    } catch (error) {
+      logger.warn('Failed to mark QSO as LoTW sent', { qsoId: qso.id, error });
+    }
+  }
+
+  return updatedCount;
+}
+
 async function markQSOsAsSent(
   qsos: any[],
   platform: 'lotw' | 'qrz',
@@ -76,31 +132,32 @@ async function markQSOsAsSent(
 ): Promise<number> {
   let marked = 0;
   const now = Date.now();
+
   for (const qso of qsos) {
-    const match = await findMatchingLocalQSO(qso.callsign, qso.startTime, logManager);
-    if (match) {
+    const logBooks = logManager.getLogBooks();
+    for (const logBook of logBooks) {
       try {
-        const updates: any = {};
-        if (platform === 'lotw') {
-          updates.lotwQslSent = 'Y';
-          updates.lotwQslSentDate = now;
-        } else {
-          updates.qrzQslSent = 'Y';
-          updates.qrzQslSentDate = now;
+        const match = await findMatchingLocalQSO(logBook.provider, qso);
+        if (!match) {
+          continue;
         }
-        await match.logBookProvider.updateQSO(match.qsoId, updates);
+
+        const updates: any = platform === 'lotw'
+          ? { lotwQslSent: 'Y', lotwQslSentDate: qso.lotwQslSentDate || now }
+          : { qrzQslSent: 'Y', qrzQslSentDate: qso.qrzQslSentDate || now };
+
+        await logBook.provider.updateQSO(match.id, updates);
         marked++;
+        break;
       } catch {
         // ignore individual failures
       }
     }
   }
+
   return marked;
 }
 
-/**
- * 通用：获取本地 QSO 记录（最近一周，最多 1000 条）
- */
 async function getRecentQSOs() {
   const logManager = LogManager.getInstance();
   const logBooks = logManager.getLogBooks();
@@ -118,11 +175,74 @@ async function getRecentQSOs() {
       });
       allQSOs.push(...qsos);
     } catch (error) {
-      logger.warn(`Failed to get QSO records from log book ${logBook.name}:`, error);
+      logger.warn(`Failed to get QSO records from log book ${logBook.id}:`, error);
     }
   }
 
   return allQSOs;
+}
+
+function buildLotwWriteBackUpdates(record: any, existing?: any) {
+  const now = Date.now();
+  return {
+    lotwQslReceived: record.lotwQslReceived || existing?.lotwQslReceived || 'Y',
+    lotwQslReceivedDate: record.lotwQslReceivedDate || existing?.lotwQslReceivedDate || now,
+    lotwQslSent: record.lotwQslSent || existing?.lotwQslSent || 'Y',
+    lotwQslSentDate: record.lotwQslSentDate || existing?.lotwQslSentDate || now,
+  };
+}
+
+function getChangedLotwWriteBackUpdates(record: any, existing?: any) {
+  const desiredUpdates = buildLotwWriteBackUpdates(record, existing);
+  const changedUpdates: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(desiredUpdates)) {
+    if (value !== undefined && existing?.[key] !== value) {
+      changedUpdates[key] = value;
+    }
+  }
+
+  return changedUpdates;
+}
+
+function resolveLotwConfirmationSince(
+  explicitSince: string | undefined,
+  lastDownloadTime: number | undefined
+): string | undefined {
+  if (explicitSince) {
+    return explicitSince;
+  }
+  if (typeof lastDownloadTime !== 'number' || Number.isNaN(lastDownloadTime)) {
+    return undefined;
+  }
+
+  return new Date(lastDownloadTime).toISOString().slice(0, 10);
+}
+
+function buildImportedLoTWQSO(record: any, callsign: string) {
+  return {
+    ...record,
+    id: record.id || `lotw-${record.callsign}-${record.startTime}`,
+    myCallsign: record.myCallsign || normalizeCallsign(callsign),
+    messages: Array.isArray(record.messages) ? record.messages : [],
+  };
+}
+
+async function emitLogbookRefresh(logBookId: string, operatorId?: string): Promise<void> {
+  try {
+    const digitalRadioEngine = DigitalRadioEngine.getInstance();
+    const logBook = LogManager.getInstance().getLogBook(logBookId);
+    if (!logBook) return;
+
+    const statistics = await logBook.provider.getStatistics();
+    digitalRadioEngine.emit('logbookUpdated' as any, {
+      logBookId,
+      statistics,
+      operatorId: operatorId || '',
+    });
+  } catch (error) {
+    logger.warn('Failed to emit logbook refresh after sync', error);
+  }
 }
 
 /**
@@ -636,59 +756,109 @@ export async function syncRoutes(fastify: FastifyInstance) {
 
       switch (syncRequest.operation) {
         case 'upload': {
-          const allQSOs = await getRecentQSOs();
-          if (allQSOs.length === 0) {
+          const logManager = LogManager.getInstance();
+          const targetLogBook = await getTargetLogBook(callsign, logManager);
+          const allQSOs = await targetLogBook.provider.queryQSOs({});
+          const pendingQSOs = allQSOs.filter((qso: any) => qso.lotwQslSent !== 'Y');
+
+          if (pendingQSOs.length === 0) {
             result = {
               success: true,
-              message: 'No QSO records found to upload',
-              uploadedCount: 0, downloadedCount: 0, confirmedCount: 0, errorCount: 0,
+              message: 'No pending QSO records found to upload',
+              uploadedCount: 0,
+              downloadedCount: 0,
+              confirmedCount: 0,
+              updatedCount: 0,
+              importedCount: 0,
+              errorCount: 0,
               syncTime: Date.now(),
             };
           } else {
-            logger.debug(`Uploading ${allQSOs.length} QSOs to LoTW (${callsign})`);
-            result = await service.uploadQSOs(allQSOs);
-            // 上传成功后标记本地 QSO 的 lotwQslSent
+            logger.debug(`Uploading ${pendingQSOs.length} QSOs to LoTW (${callsign})`);
+            result = await service.uploadQSOs(pendingQSOs);
             if (result.success && result.uploadedCount > 0) {
-              const logManager = LogManager.getInstance();
-              const markedCount = await markQSOsAsSent(allQSOs, 'lotw', logManager);
+              const markedCount = await markLotwUploadSent(targetLogBook.provider, pendingQSOs);
+              const existingConfig = configManager.getCallsignSyncConfig(callsign);
+              await configManager.updateCallsignSyncConfig(callsign, {
+                lotw: {
+                  ...(existingConfig?.lotw || {}),
+                  lastUploadTime: Date.now(),
+                } as LoTWConfig,
+              });
+              result.updatedCount = markedCount;
+              result.importedCount = 0;
               logger.info(`Marked ${markedCount} QSOs as LoTW sent`);
+              await emitLogbookRefresh(targetLogBook.id, targetLogBook.operatorId);
             }
           }
           break;
         }
 
         case 'download_confirmations': {
-          const { records, confirmedCount } = await service.downloadConfirmations(syncRequest.since);
-          // 将确认状态回写到本地 QSO
           const logManager = LogManager.getInstance();
+          const targetLogBook = await getTargetLogBook(callsign, logManager);
+          const existingConfig = configManager.getCallsignSyncConfig(callsign);
+          const effectiveSince = resolveLotwConfirmationSince(
+            syncRequest.since,
+            existingConfig?.lotw?.lastDownloadTime
+          );
+          const { records, confirmedCount } = await service.downloadConfirmations(effectiveSince);
           let updatedCount = 0;
+          let importedCount = 0;
+          let errorCount = 0;
+          const errors: string[] = [];
+
           for (const record of records) {
-            const match = await findMatchingLocalQSO(record.callsign, record.startTime, logManager);
-            if (match) {
-              try {
-                const updates: any = {
-                  lotwQslReceived: record.lotwQslReceived || 'Y',
-                  lotwQslReceivedDate: record.lotwQslReceivedDate || Date.now(),
-                };
-                // 同时标记 sent（确认的前提是已上传）
-                if (!record.lotwQslSent) {
-                  updates.lotwQslSent = 'Y';
+            try {
+              const match = await findMatchingLocalQSO(targetLogBook.provider, record);
+              if (match) {
+                const changedUpdates = getChangedLotwWriteBackUpdates(record, match);
+                if (Object.keys(changedUpdates).length > 0) {
+                  await targetLogBook.provider.updateQSO(match.id, changedUpdates);
+                  updatedCount++;
                 }
-                await match.logBookProvider.updateQSO(match.qsoId, updates);
-                updatedCount++;
-              } catch {
-                // ignore individual failures
+                continue;
               }
+
+              await targetLogBook.provider.addQSO(
+                buildImportedLoTWQSO(record, callsign),
+                targetLogBook.operatorId
+              );
+              importedCount++;
+            } catch (error) {
+              errorCount++;
+              const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+              errors.push(`${record.callsign}@${record.startTime}: ${errorMessage}`);
+              logger.warn('Failed to process LoTW confirmation record', {
+                callsign: record.callsign,
+                startTime: record.startTime,
+                error,
+              });
             }
           }
-          logger.info(`LoTW confirmation write-back: ${updatedCount}/${records.length} QSOs updated`);
+
+          await configManager.updateCallsignSyncConfig(callsign, {
+            lotw: {
+              ...(existingConfig?.lotw || {}),
+              lastDownloadTime: Date.now(),
+            } as LoTWConfig,
+          });
+
+          if (updatedCount > 0 || importedCount > 0) {
+            await emitLogbookRefresh(targetLogBook.id, targetLogBook.operatorId);
+          }
+
+          logger.info(`LoTW confirmation sync completed: updated=${updatedCount}, imported=${importedCount}, total=${records.length}`);
           result = {
-            success: true,
-            message: `Downloaded ${confirmedCount} LoTW confirmation records, updated ${updatedCount} local QSOs`,
+            success: errorCount === 0,
+            message: `Downloaded ${confirmedCount} LoTW confirmation records, updated ${updatedCount} local QSOs, imported ${importedCount} missing QSOs`,
             uploadedCount: 0,
             downloadedCount: records.length,
-            confirmedCount: updatedCount,
-            errorCount: 0,
+            confirmedCount,
+            updatedCount,
+            importedCount,
+            errorCount,
+            errors: errors.length > 0 ? errors : undefined,
             syncTime: Date.now(),
           };
           break;

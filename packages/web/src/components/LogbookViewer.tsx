@@ -75,6 +75,29 @@ interface QSOFilters {
   qslStatus?: 'none' | 'confirmed' | 'uploaded';
 }
 
+interface LoTWSyncStatus {
+  configured?: boolean;
+  tqslConfigured?: boolean;
+  serviceAvailable?: boolean;
+  lastUploadTime?: number;
+  lastDownloadTime?: number;
+  autoUpload?: boolean;
+}
+
+function formatDateInputValue(timestamp?: number): string {
+  if (typeof timestamp !== 'number' || Number.isNaN(timestamp)) {
+    return '';
+  }
+
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+function getDateDaysAgo(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
   const [qsos, setQsos] = useState<QSORecord[]>([]);
@@ -200,15 +223,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 加载呼号的同步配置摘要
   useEffect(() => {
     if (operatorCallsign) {
-      api.getCallsignSyncSummary(operatorCallsign).then((res: unknown) => {
-        const result = res as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
-        if (result.success && result.summary) {
-          setSyncSummary(result.summary);
-          // 同步到旧的启用状态以保持兼容
-          setIsQRZEnabled(result.summary.qrz);
-          setIsLoTWEnabled(result.summary.lotw);
-        }
-      }).catch(() => {});
+      refreshSyncSummary(operatorCallsign).catch(() => {});
+      refreshLoTWStatus(operatorCallsign).catch(() => {});
     }
   }, [operatorCallsign]);
 
@@ -236,6 +252,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [isLoTWSyncing, setIsLoTWSyncing] = useState(false);
   const [lotwSyncError, setLotwSyncError] = useState<string | null>(null);
   const [lotwSyncSuccess, setLotwSyncSuccess] = useState<string | null>(null);
+  const [isLoTWDownloadModalOpen, setIsLoTWDownloadModalOpen] = useState(false);
+  const [lotwSyncSinceDate, setLotwSyncSinceDate] = useState('');
+  const [lotwLastDownloadTime, setLotwLastDownloadTime] = useState<number | undefined>(undefined);
 
   // 平台启用状态（旧的，保留兼容）
   const [_isQRZEnabled, setIsQRZEnabled] = useState(false);
@@ -244,6 +263,26 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 同步配置摘要（按呼号）
   const [syncSummary, setSyncSummary] = useState<{ wavelog: boolean; qrz: boolean; lotw: boolean }>({ wavelog: false, qrz: false, lotw: false });
   const [isSyncConfigOpen, setIsSyncConfigOpen] = useState(false);
+
+  const refreshSyncSummary = async (callsign: string) => {
+    const res = await api.getCallsignSyncSummary(callsign) as {
+      success?: boolean;
+      summary?: { wavelog: boolean; qrz: boolean; lotw: boolean };
+    };
+
+    if (res.success && res.summary) {
+      setSyncSummary(res.summary);
+      setIsQRZEnabled(res.summary.qrz);
+      setIsLoTWEnabled(res.summary.lotw);
+    }
+  };
+
+  const refreshLoTWStatus = async (callsign: string) => {
+    const status = await api.getLoTWSyncStatus(callsign) as LoTWSyncStatus;
+    setLotwLastDownloadTime(status.lastDownloadTime);
+  };
+
+  const getDefaultLoTWSinceDate = () => formatDateInputValue(lotwLastDownloadTime) || getDateDaysAgo(30);
 
   const handleExport = async (format: 'adif' | 'csv') => {
     if (isExporting) return;
@@ -358,7 +397,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   };
 
   // LoTW同步功能
-  const handleLoTWSync = async (operation: 'upload' | 'download_confirmations') => {
+  const handleLoTWSync = async (
+    operation: 'upload' | 'download_confirmations',
+    since?: string
+  ) => {
     if (isLoTWSyncing) return;
 
     try {
@@ -366,12 +408,23 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setLotwSyncError(null);
       setLotwSyncSuccess(null);
 
-      const result = await api.syncLoTW(operatorCallsign || '', operation) as LoTWSyncResponse;
+      const result = await api.syncLoTW(operatorCallsign || '', operation, since) as LoTWSyncResponse;
 
       if (result.success) {
-        setLotwSyncSuccess(result.message);
+        const successMessage = operation === 'download_confirmations'
+          ? t('sync.lotw.downloadResult', {
+            downloaded: result.downloadedCount ?? 0,
+            updated: result.updatedCount ?? 0,
+            imported: result.importedCount ?? 0,
+          })
+          : result.message;
+
+        setLotwSyncSuccess(successMessage);
         await loadQSOs();
         await loadStatistics();
+        if (operatorCallsign) {
+          await refreshLoTWStatus(operatorCallsign);
+        }
       } else {
         setLotwSyncError(result.message || t('sync.lotw.syncError'));
       }
@@ -391,6 +444,35 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     } finally {
       setIsLoTWSyncing(false);
     }
+  };
+
+  const openLoTWDownloadModal = () => {
+    setLotwSyncSinceDate(getDefaultLoTWSinceDate());
+    setIsLoTWDownloadModalOpen(true);
+  };
+
+  const closeLoTWDownloadModal = () => {
+    if (isLoTWSyncing) return;
+    setIsLoTWDownloadModalOpen(false);
+  };
+
+  const handleLoTWDownloadConfirm = async () => {
+    if (!lotwSyncSinceDate) {
+      setLotwSyncError(t('sync.lotw.selectDateRequired'));
+      return;
+    }
+
+    setIsLoTWDownloadModalOpen(false);
+    await handleLoTWSync('download_confirmations', lotwSyncSinceDate);
+  };
+
+  const handleLoTWAction = (operation: 'upload' | 'download_confirmations') => {
+    if (operation === 'download_confirmations') {
+      openLoTWDownloadModal();
+      return;
+    }
+
+    void handleLoTWSync(operation);
   };
 
   // 打开日志文件目录（仅Electron）
@@ -1055,7 +1137,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 </DropdownTrigger>
                 <DropdownMenu
                   aria-label={t('sync.lotw.ariaLabel')}
-                  onAction={(key) => handleLoTWSync(key as 'upload' | 'download_confirmations')}
+                  onAction={(key) => handleLoTWAction(key as 'upload' | 'download_confirmations')}
                 >
                   <DropdownItem
                     key="download_confirmations"
@@ -1185,7 +1267,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     syncSummary,
     isSyncConfigOpen,
     handleQRZSync,
-    handleLoTWSync
+    handleLoTWAction
   ]);
 
   // 底部内容：分页
@@ -1491,6 +1573,50 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         mode="add"
       />
 
+      <Modal
+        isOpen={isLoTWDownloadModalOpen}
+        onClose={closeLoTWDownloadModal}
+        size="sm"
+      >
+        <ModalContent>
+          <ModalHeader>{t('sync.lotw.dateModalTitle')}</ModalHeader>
+          <ModalBody className="gap-3">
+            <p className="text-sm text-default-600">
+              {t('sync.lotw.dateModalDesc')}
+            </p>
+            <Input
+              type="date"
+              label={t('sync.lotw.sinceDateLabel')}
+              value={lotwSyncSinceDate}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(event) => setLotwSyncSinceDate(event.target.value)}
+              description={lotwLastDownloadTime
+                ? t('sync.lotw.lastDownloadHint', {
+                  time: new Date(lotwLastDownloadTime).toLocaleString(undefined, { timeZone: 'UTC' }),
+                })
+                : t('sync.lotw.noLastDownloadHint')}
+            />
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="flat"
+              onPress={closeLoTWDownloadModal}
+              isDisabled={isLoTWSyncing}
+            >
+              {t('common:button.cancel')}
+            </Button>
+            <Button
+              color="success"
+              onPress={handleLoTWDownloadConfirm}
+              isLoading={isLoTWSyncing}
+              isDisabled={!lotwSyncSinceDate}
+            >
+              {t('sync.lotw.confirmDownload')}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       {/* 同步配置弹窗 */}
       {operatorCallsign && (
         <SyncConfigModal
@@ -1498,15 +1624,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           onClose={() => setIsSyncConfigOpen(false)}
           callsign={operatorCallsign}
           onSaved={() => {
-            // 刷新同步摘要
-            api.getCallsignSyncSummary(operatorCallsign).then((res: unknown) => {
-              const result = res as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
-              if (result.success && result.summary) {
-                setSyncSummary(result.summary);
-                setIsQRZEnabled(result.summary.qrz);
-                setIsLoTWEnabled(result.summary.lotw);
-              }
-            }).catch(() => {});
+            refreshSyncSummary(operatorCallsign).catch(() => {});
+            refreshLoTWStatus(operatorCallsign).catch(() => {});
           }}
         />
       )}
