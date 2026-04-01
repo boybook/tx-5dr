@@ -30,9 +30,9 @@ export function ProfileSetupOverlay({ isOpen }: ProfileSetupOverlayProps) {
   const { t } = useTranslation();
   const RADIO_TYPE_OPTIONS = useMemo(() => [
     { type: 'none' as RadioType, icon: faBan, title: t('settings:radioType.none'), description: t('settings:radioType.noneDesc') },
-    { type: 'icom-wlan' as RadioType, icon: faWifi, title: t('settings:radioType.icomWlan'), description: t('settings:radioType.icomWlanDesc') },
-    { type: 'network' as RadioType, icon: faSatelliteDish, title: t('settings:radioType.network'), description: t('settings:radioType.networkDesc') },
     { type: 'serial' as RadioType, icon: faPlug, title: t('settings:radioType.serial'), description: t('settings:radioType.serialDesc') },
+    { type: 'network' as RadioType, icon: faSatelliteDish, title: t('settings:radioType.network'), description: t('settings:radioType.networkDesc') },
+    { type: 'icom-wlan' as RadioType, icon: faWifi, title: t('settings:radioType.icomWlan'), description: t('settings:radioType.icomWlanDesc') },
   ], [t]);
   const [step, setStep] = useState(0); // 0=选类型, 1=填配置, 2=选音频, 3=命名
   const [selectedType, setSelectedType] = useState<RadioType | null>(null);
