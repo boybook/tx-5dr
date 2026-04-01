@@ -48,6 +48,10 @@ function createEmptyOperatorIndex(): OperatorIndex {
   };
 }
 
+function formatADIFDateOnly(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10).replace(/-/g, '');
+}
+
 function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
   // 前缀/CQ/ITU（使用 core 的高效实现）
   try {
@@ -335,7 +339,7 @@ export class ADIFLogProvider implements ILogProvider {
     // 解析频率（MHz转Hz）
     const frequency = fields.freq ? parseFloat(fields.freq) * 1000000 : 0;
     
-    return {
+    const record: QSORecord = {
       id,
       callsign,
       grid: fields.gridsquare,
@@ -351,6 +355,44 @@ export class ADIFLogProvider implements ILogProvider {
       qth: fields.qth ?? undefined,
       remarks: fields.note ?? undefined,
     };
+
+    const lotwSent = fields.lotw_qsl_sent?.toUpperCase();
+    if (lotwSent && ['Y', 'N', 'R', 'Q', 'I'].includes(lotwSent)) {
+      record.lotwQslSent = lotwSent as QSORecord['lotwQslSent'];
+    }
+
+    const lotwReceived = fields.lotw_qsl_rcvd?.toUpperCase();
+    if (lotwReceived && ['Y', 'N', 'R', 'I', 'V'].includes(lotwReceived)) {
+      record.lotwQslReceived = lotwReceived as QSORecord['lotwQslReceived'];
+    }
+
+    if (fields.lotw_qslsdate) {
+      record.lotwQslSentDate = new Date(`${fields.lotw_qslsdate.slice(0, 4)}-${fields.lotw_qslsdate.slice(4, 6)}-${fields.lotw_qslsdate.slice(6, 8)}T00:00:00Z`).getTime();
+    }
+    if (fields.lotw_qslrdate) {
+      record.lotwQslReceivedDate = new Date(`${fields.lotw_qslrdate.slice(0, 4)}-${fields.lotw_qslrdate.slice(4, 6)}-${fields.lotw_qslrdate.slice(6, 8)}T00:00:00Z`).getTime();
+    }
+
+    const qrzSent = fields.app_tx5dr_qrz_qsl_sent?.toUpperCase();
+    if (qrzSent && ['Y', 'N'].includes(qrzSent)) {
+      record.qrzQslSent = qrzSent as QSORecord['qrzQslSent'];
+    }
+
+    const qrzReceived = fields.app_tx5dr_qrz_qsl_rcvd?.toUpperCase() || fields.app_qrzlog_status?.toUpperCase();
+    if (qrzReceived === 'C' || qrzReceived === 'Y') {
+      record.qrzQslReceived = 'Y';
+    } else if (qrzReceived === 'N') {
+      record.qrzQslReceived = 'N';
+    }
+
+    if (fields.app_tx5dr_qrz_qslsdate) {
+      record.qrzQslSentDate = new Date(`${fields.app_tx5dr_qrz_qslsdate.slice(0, 4)}-${fields.app_tx5dr_qrz_qslsdate.slice(4, 6)}-${fields.app_tx5dr_qrz_qslsdate.slice(6, 8)}T00:00:00Z`).getTime();
+    }
+    if (fields.app_tx5dr_qrz_qslrdate) {
+      record.qrzQslReceivedDate = new Date(`${fields.app_tx5dr_qrz_qslrdate.slice(0, 4)}-${fields.app_tx5dr_qrz_qslrdate.slice(4, 6)}-${fields.app_tx5dr_qrz_qslrdate.slice(6, 8)}T00:00:00Z`).getTime();
+    }
+
+    return record;
   }
   
   /**
@@ -413,6 +455,35 @@ export class ADIFLogProvider implements ILogProvider {
 
     if (qso.myCallsign) {
       adifRecord += `<STATION_CALLSIGN:${qso.myCallsign.length}>${qso.myCallsign}`;
+    }
+
+    if (qso.lotwQslSent) {
+      adifRecord += `<LOTW_QSL_SENT:${qso.lotwQslSent.length}>${qso.lotwQslSent}`;
+    }
+    if (qso.lotwQslReceived) {
+      adifRecord += `<LOTW_QSL_RCVD:${qso.lotwQslReceived.length}>${qso.lotwQslReceived}`;
+    }
+    if (qso.lotwQslSentDate) {
+      adifRecord += `<LOTW_QSLSDATE:8>${formatADIFDateOnly(qso.lotwQslSentDate)}`;
+    }
+    if (qso.lotwQslReceivedDate) {
+      adifRecord += `<LOTW_QSLRDATE:8>${formatADIFDateOnly(qso.lotwQslReceivedDate)}`;
+    }
+
+    if (qso.qrzQslSent) {
+      adifRecord += `<APP_TX5DR_QRZ_QSL_SENT:${qso.qrzQslSent.length}>${qso.qrzQslSent}`;
+    }
+    if (qso.qrzQslReceived) {
+      adifRecord += `<APP_TX5DR_QRZ_QSL_RCVD:${qso.qrzQslReceived.length}>${qso.qrzQslReceived}`;
+      if (qso.qrzQslReceived === 'Y') {
+        adifRecord += `<APP_QRZLOG_STATUS:1>C`;
+      }
+    }
+    if (qso.qrzQslSentDate) {
+      adifRecord += `<APP_TX5DR_QRZ_QSLSDATE:8>${formatADIFDateOnly(qso.qrzQslSentDate)}`;
+    }
+    if (qso.qrzQslReceivedDate) {
+      adifRecord += `<APP_TX5DR_QRZ_QSLRDATE:8>${formatADIFDateOnly(qso.qrzQslReceivedDate)}`;
     }
 
     if (operatorId) {

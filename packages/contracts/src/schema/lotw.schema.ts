@@ -68,6 +68,8 @@ export const LoTWSyncResponseSchema = z.object({
   uploadedCount: z.number().default(0),
   downloadedCount: z.number().default(0),
   confirmedCount: z.number().default(0),
+  updatedCount: z.number().default(0),
+  importedCount: z.number().default(0),
   errorCount: z.number().default(0),
   errors: z.array(z.string()).optional(),
   syncTime: z.number(),

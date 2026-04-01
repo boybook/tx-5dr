@@ -204,6 +204,8 @@ export class LoTWService {
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
+        updatedCount: 0,
+        importedCount: 0,
         errorCount: 1,
         errors: ['TQSL path not configured'],
         syncTime: Date.now(),
@@ -217,6 +219,8 @@ export class LoTWService {
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
+        updatedCount: 0,
+        importedCount: 0,
         errorCount: 1,
         errors: ['Station Callsign not configured'],
         syncTime: Date.now(),
@@ -230,6 +234,8 @@ export class LoTWService {
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
+        updatedCount: 0,
+        importedCount: 0,
         errorCount: 0,
         syncTime: Date.now(),
       };
@@ -277,6 +283,8 @@ export class LoTWService {
         uploadedCount: qsos.length,
         downloadedCount: 0,
         confirmedCount: 0,
+        updatedCount: 0,
+        importedCount: 0,
         errorCount: 0,
         syncTime: Date.now(),
       };
@@ -291,6 +299,8 @@ export class LoTWService {
           uploadedCount: 0,
           downloadedCount: 0,
           confirmedCount: 0,
+          updatedCount: 0,
+          importedCount: 0,
           errorCount: 1,
           errors: ['User cancelled'],
           syncTime: Date.now(),
@@ -302,6 +312,8 @@ export class LoTWService {
           uploadedCount: 0,
           downloadedCount: 0,
           confirmedCount: 0,
+          updatedCount: 0,
+          importedCount: 0,
           errorCount: 1,
           errors: [error.stderr || error.message || 'TQSL upload failed'],
           syncTime: Date.now(),
@@ -315,6 +327,8 @@ export class LoTWService {
         uploadedCount: 0,
         downloadedCount: 0,
         confirmedCount: 0,
+        updatedCount: 0,
+        importedCount: 0,
         errorCount: 1,
         errors: [error.message || 'Unknown error'],
         syncTime: Date.now(),
@@ -403,24 +417,27 @@ export class LoTWService {
    * 处理网络连接错误
    */
   private handleNetworkError(error: any, url: string): Error {
+    const errorCode = error.code || error.cause?.code;
+    const sanitizedUrl = this.sanitizeLoTWUrl(url);
+
     logger.error('Network error:', {
       message: error.message,
-      code: error.code,
+      code: errorCode,
       cause: error.cause,
-      url,
+      url: sanitizedUrl,
     });
 
     if (error instanceof Error && error.message.includes('LoTW')) {
       return error;
     }
 
-    if (error.name === 'AbortError' || error.code === 'ABORT_ERR') {
+    if (error.name === 'AbortError' || errorCode === 'ABORT_ERR') {
       return new Error('Connection timeout: LoTW server response too slow, check network connection');
     }
 
-    if (error.code === 'UND_ERR_SOCKET') {
+    if (errorCode === 'UND_ERR_SOCKET') {
       if (error.cause?.message?.includes('ECONNREFUSED')) {
-        return new Error(`Connection refused: cannot connect to LoTW server ${url}`);
+        return new Error(`Connection refused: cannot connect to LoTW server ${sanitizedUrl}`);
       }
       if (error.cause?.message?.includes('ENOTFOUND')) {
         return new Error(`DNS resolution failed: LoTW server not found, check network connection`);
@@ -428,7 +445,7 @@ export class LoTWService {
       return new Error(`Network connection error: ${error.cause?.message || error.message}`);
     }
 
-    if (error.code === 'UND_ERR_CONNECT_TIMEOUT') {
+    if (errorCode === 'UND_ERR_CONNECT_TIMEOUT') {
       return new Error('Connection timeout: unable to connect to LoTW server within time limit');
     }
 
@@ -437,6 +454,21 @@ export class LoTWService {
     }
 
     return new Error(`LoTW connection failed: ${error.message || 'Unknown network error'}`);
+  }
+
+  private sanitizeLoTWUrl(url: string): string {
+    try {
+      const parsed = new URL(url);
+      if (parsed.searchParams.has('login')) {
+        parsed.searchParams.set('login', '***');
+      }
+      if (parsed.searchParams.has('password')) {
+        parsed.searchParams.set('password', '***');
+      }
+      return parsed.toString();
+    } catch {
+      return url;
+    }
   }
 }
 
