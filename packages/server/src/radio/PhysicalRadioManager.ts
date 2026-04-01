@@ -15,7 +15,16 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, MeterCapabilities, RadioInfo, ReconnectProgress, CapabilityState, CoreRadioCapabilities } from '@tx5dr/contracts';
+import type {
+  HamlibConfig,
+  MeterCapabilities,
+  RadioInfo,
+  ReconnectProgress,
+  CapabilityState,
+  CoreRadioCapabilities,
+  CoreCapabilityDiagnostic,
+  CoreCapabilityDiagnostics,
+} from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
@@ -55,6 +64,7 @@ interface PhysicalRadioManagerEvents {
 
 type CoreCapabilityKey = keyof CoreRadioCapabilities;
 type CoreCapabilityState = 'unknown' | 'supported' | 'unsupported';
+type CoreCapabilityDiagnosticsMap = Partial<Record<CoreCapabilityKey, CoreCapabilityDiagnostic>>;
 
 function createInitialCoreCapabilityStates(): Record<CoreCapabilityKey, CoreCapabilityState> {
   return {
@@ -71,6 +81,34 @@ const CORE_CAPABILITY_LABELS: Record<CoreCapabilityKey, string> = {
   readRadioMode: 'read radio mode',
   writeRadioMode: 'write radio mode',
 };
+
+function buildCapabilityDiagnosticMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function buildCapabilityDiagnosticStack(error: unknown, visited = new Set<object>()): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+
+  if (visited.has(error)) {
+    return error.stack ?? error.message;
+  }
+  visited.add(error);
+
+  const primaryStack = error.stack ?? error.message;
+  const cause = (error as Error & { cause?: unknown }).cause;
+
+  if (!cause) {
+    return primaryStack;
+  }
+
+  return `${primaryStack}\nCaused by: ${buildCapabilityDiagnosticStack(cause, visited)}`;
+}
 
 type HamlibPortCaps = {
   portType?: string;
@@ -213,6 +251,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 一旦明确判定为 unsupported，当前会话内不再重复访问底层连接。
    */
   private coreCapabilityStates: Record<CoreCapabilityKey, CoreCapabilityState> = createInitialCoreCapabilityStates();
+
+  /**
+   * 当前连接会话的核心能力诊断信息。
+   * 仅保留第一次将能力降级为 unsupported 的原始错误详情。
+   */
+  private coreCapabilityDiagnostics: CoreCapabilityDiagnosticsMap = {};
 
   /**
    * 断开保护标志（防止重复断开导致 hamlib 线程冲突）
@@ -459,6 +503,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       readRadioMode: this.coreCapabilityStates.readRadioMode !== 'unsupported',
       writeRadioMode: this.coreCapabilityStates.writeRadioMode !== 'unsupported',
     };
+  }
+
+  getCoreCapabilityDiagnostics(): CoreCapabilityDiagnostics {
+    return { ...this.coreCapabilityDiagnostics };
   }
 
   /**
@@ -955,17 +1003,27 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private markCoreCapabilitySupported(key: CoreCapabilityKey): void {
+    delete this.coreCapabilityDiagnostics[key];
     this.updateCoreCapabilityState(key, 'supported');
   }
 
   private markCoreCapabilityUnsupported(key: CoreCapabilityKey, error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
+    if (!this.coreCapabilityDiagnostics[key]) {
+      this.coreCapabilityDiagnostics[key] = {
+        capability: key,
+        message: buildCapabilityDiagnosticMessage(error),
+        stack: buildCapabilityDiagnosticStack(error),
+        recordedAt: Date.now(),
+      };
+    }
+    const message = buildCapabilityDiagnosticMessage(error);
     this.updateCoreCapabilityState(key, 'unsupported', message);
   }
 
   private resetCoreCapabilities(): void {
     const previous = JSON.stringify(this.getCoreCapabilities());
     this.coreCapabilityStates = createInitialCoreCapabilityStates();
+    this.coreCapabilityDiagnostics = {};
     if (JSON.stringify(this.getCoreCapabilities()) !== previous) {
       this.emit('coreCapabilitiesChanged', this.getCoreCapabilities());
     }

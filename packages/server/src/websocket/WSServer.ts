@@ -1102,6 +1102,7 @@ export class WSServer extends WSMessageHandler {
         radioConfig: radioManager.getConfig(),
         connectionHealth: radioManager.getConnectionHealth(),
         coreCapabilities: radioManager.getCoreCapabilities(),
+        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
       });
     } catch (error) {
       logger.error('failed to send radio connection status', error);
@@ -1656,6 +1657,7 @@ export class WSServer extends WSMessageHandler {
           radioConfig: radioManager.getConfig(),
           connectionHealth,
           coreCapabilities: radioManager.getCoreCapabilities(),
+          coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
         });
       } catch {}
     }

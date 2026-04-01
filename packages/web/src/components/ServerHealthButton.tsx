@@ -3,13 +3,14 @@ import { Button, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faHeartPulse } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
-import { useConnection } from '../store/radioStore';
+import { useConnection, useRadioConnectionState } from '../store/radioStore';
 import { useServerHealth } from '../hooks/useServerHealth';
 import { ServerHealthModal } from './ServerHealthModal';
 
 export const ServerHealthButton: React.FC = () => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
+  const radioConnection = useRadioConnectionState();
   const { snapshots, health } = useServerHealth(connection.state.radioService);
   const [isOpen, setIsOpen] = useState(false);
 
@@ -46,6 +47,8 @@ export const ServerHealthButton: React.FC = () => {
         onClose={() => setIsOpen(false)}
         snapshots={snapshots}
         health={health}
+        coreCapabilities={radioConnection.coreCapabilities}
+        coreCapabilityDiagnostics={radioConnection.coreCapabilityDiagnostics}
       />
     </>
   );
