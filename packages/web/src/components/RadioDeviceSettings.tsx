@@ -45,6 +45,9 @@ const CONNECTION_FIELD_ORDER = [
   'post_ptt_delay',
   'poll_interval',
   'client',
+] as const;
+
+const MULTICAST_FIELD_ORDER = [
   'multicast_data_addr',
   'multicast_data_port',
   'multicast_cmd_addr',
@@ -52,11 +55,13 @@ const CONNECTION_FIELD_ORDER = [
 ] as const;
 
 const CONNECTION_FIELD_NAME_SET = new Set(CONNECTION_FIELD_ORDER);
+const MULTICAST_FIELD_NAME_SET = new Set(MULTICAST_FIELD_ORDER);
+const FIELD_ORDER = [...CONNECTION_FIELD_ORDER, ...MULTICAST_FIELD_ORDER] as const;
 
 function orderHamlibFields(fields: HamlibConfigField[]): HamlibConfigField[] {
   return [...fields].sort((left, right) => {
-    const leftIndex = CONNECTION_FIELD_ORDER.indexOf(left.name as typeof CONNECTION_FIELD_ORDER[number]);
-    const rightIndex = CONNECTION_FIELD_ORDER.indexOf(right.name as typeof CONNECTION_FIELD_ORDER[number]);
+    const leftIndex = FIELD_ORDER.indexOf(left.name as typeof FIELD_ORDER[number]);
+    const rightIndex = FIELD_ORDER.indexOf(right.name as typeof FIELD_ORDER[number]);
 
     const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
     const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
@@ -141,7 +146,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     ))
   );
   const connectionRigConfigFields = visibleRigConfigFields.filter((field) => CONNECTION_FIELD_NAME_SET.has(field.name));
-  const advancedRigConfigFields = visibleRigConfigFields.filter((field) => !CONNECTION_FIELD_NAME_SET.has(field.name));
+  const multicastRigConfigFields = visibleRigConfigFields.filter((field) => MULTICAST_FIELD_NAME_SET.has(field.name));
+  const advancedRigConfigFields = visibleRigConfigFields.filter((field) => !CONNECTION_FIELD_NAME_SET.has(field.name) && !MULTICAST_FIELD_NAME_SET.has(field.name));
   const endpointKind = rigConfigSchema?.endpointKind;
   const usesSerialPortEndpoint = endpointKind === 'serial-port';
   const usesNetworkEndpoint = endpointKind === 'network-address';
@@ -914,6 +920,31 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                               {connectionRigConfigFields.map((field) => renderHamlibConfigField(field))}
                             </div>
                           </div>
+                        )}
+
+                        {multicastRigConfigFields.length > 0 && (
+                          <Accordion variant="light" className="px-0">
+                            <AccordionItem
+                              key="multicast"
+                              aria-label={t('radio.multicastParamsTitle')}
+                              className="px-0"
+                              title={(
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <h6 className="text-sm font-medium text-default-700">{t('radio.multicastParamsTitle')}</h6>
+                                    <p className="text-xs text-default-500">{t('radio.multicastParamsDesc')}</p>
+                                  </div>
+                                  <Chip size="sm" variant="flat">
+                                    {multicastRigConfigFields.length}
+                                  </Chip>
+                                </div>
+                              )}
+                            >
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                                {multicastRigConfigFields.map((field) => renderHamlibConfigField(field))}
+                              </div>
+                            </AccordionItem>
+                          </Accordion>
                         )}
 
                         {advancedRigConfigFields.length > 0 && (
