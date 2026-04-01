@@ -14,6 +14,10 @@ const SERIAL_CONFIG_TO_BACKEND_TOKEN: Record<keyof SerialConfig, string> = {
   post_write_delay: 'post_write_delay',
 };
 
+const MANAGED_BACKEND_FIELD_NAMES = new Set([
+  'async',
+]);
+
 function toBackendValue(value: string | number | boolean | undefined): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -29,6 +33,10 @@ export function buildBackendConfig(
   }
 ): Record<string, string> {
   const backendConfig: Record<string, string> = { ...(serial?.backendConfig ?? {}) };
+
+  for (const managedFieldName of MANAGED_BACKEND_FIELD_NAMES) {
+    delete backendConfig[managedFieldName];
+  }
 
   if (serial?.path && !backendConfig.rig_pathname) {
     backendConfig.rig_pathname = serial.path;

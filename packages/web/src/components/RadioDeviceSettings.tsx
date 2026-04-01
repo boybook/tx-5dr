@@ -24,6 +24,7 @@ interface PortInfo {
 }
 
 const HIDDEN_BACKEND_FIELD_NAMES = new Set([
+  'async',
   'rig_pathname',
   'ptt_type',
   'ptt_pathname',
@@ -39,24 +40,45 @@ const CONNECTION_FIELD_ORDER = [
   'serial_parity',
   'serial_handshake',
   'timeout',
+] as const;
+
+const CONNECTION_CONTROL_FIELD_ORDER = [
+  'rts_state',
+  'dtr_state',
+] as const;
+
+const ADVANCED_PRIORITY_FIELD_ORDER = [
   'retry',
   'write_delay',
   'post_write_delay',
   'post_ptt_delay',
   'poll_interval',
   'client',
+] as const;
+
+const MULTICAST_FIELD_ORDER = [
   'multicast_data_addr',
   'multicast_data_port',
   'multicast_cmd_addr',
   'multicast_cmd_port',
 ] as const;
 
-const CONNECTION_FIELD_NAME_SET = new Set(CONNECTION_FIELD_ORDER);
+const CONNECTION_FIELD_NAME_SET = new Set([
+  ...CONNECTION_FIELD_ORDER,
+  ...CONNECTION_CONTROL_FIELD_ORDER,
+] as const);
+const MULTICAST_FIELD_NAME_SET = new Set(MULTICAST_FIELD_ORDER);
+const FIELD_ORDER = [
+  ...CONNECTION_FIELD_ORDER,
+  ...CONNECTION_CONTROL_FIELD_ORDER,
+  ...ADVANCED_PRIORITY_FIELD_ORDER,
+  ...MULTICAST_FIELD_ORDER,
+] as const;
 
 function orderHamlibFields(fields: HamlibConfigField[]): HamlibConfigField[] {
   return [...fields].sort((left, right) => {
-    const leftIndex = CONNECTION_FIELD_ORDER.indexOf(left.name as typeof CONNECTION_FIELD_ORDER[number]);
-    const rightIndex = CONNECTION_FIELD_ORDER.indexOf(right.name as typeof CONNECTION_FIELD_ORDER[number]);
+    const leftIndex = FIELD_ORDER.indexOf(left.name as typeof FIELD_ORDER[number]);
+    const rightIndex = FIELD_ORDER.indexOf(right.name as typeof FIELD_ORDER[number]);
 
     const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
     const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
@@ -141,7 +163,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     ))
   );
   const connectionRigConfigFields = visibleRigConfigFields.filter((field) => CONNECTION_FIELD_NAME_SET.has(field.name));
-  const advancedRigConfigFields = visibleRigConfigFields.filter((field) => !CONNECTION_FIELD_NAME_SET.has(field.name));
+  const multicastRigConfigFields = visibleRigConfigFields.filter((field) => MULTICAST_FIELD_NAME_SET.has(field.name));
+  const advancedRigConfigFields = visibleRigConfigFields.filter((field) => !CONNECTION_FIELD_NAME_SET.has(field.name) && !MULTICAST_FIELD_NAME_SET.has(field.name));
   const endpointKind = rigConfigSchema?.endpointKind;
   const usesSerialPortEndpoint = endpointKind === 'serial-port';
   const usesNetworkEndpoint = endpointKind === 'network-address';
@@ -916,29 +939,58 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                           </div>
                         )}
 
-                        {advancedRigConfigFields.length > 0 && (
-                          <Accordion variant="light" className="px-0">
-                            <AccordionItem
-                              key="advanced"
-                              aria-label={t('radio.backendAdvancedTitle')}
-                              className="px-0"
-                              title={(
-                                <div className="flex items-center justify-between gap-3">
-                                  <div>
-                                    <h6 className="text-sm font-medium text-default-700">{t('radio.backendAdvancedTitle')}</h6>
-                                    <p className="text-xs text-default-500">{t('radio.backendAdvancedDesc')}</p>
+                        {(advancedRigConfigFields.length > 0 || multicastRigConfigFields.length > 0) && (
+                          <div className="space-y-1">
+                            {advancedRigConfigFields.length > 0 && (
+                              <Accordion variant="light" className="px-0">
+                                <AccordionItem
+                                  key="advanced"
+                                  aria-label={t('radio.backendAdvancedTitle')}
+                                  className="px-0"
+                                  title={(
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div>
+                                        <h6 className="text-sm font-medium text-default-700">{t('radio.backendAdvancedTitle')}</h6>
+                                        <p className="text-xs text-default-500">{t('radio.backendAdvancedDesc')}</p>
+                                      </div>
+                                      <Chip size="sm" variant="flat">
+                                        {advancedRigConfigFields.length}
+                                      </Chip>
+                                    </div>
+                                  )}
+                                >
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                                    {advancedRigConfigFields.map((field) => renderHamlibConfigField(field))}
                                   </div>
-                                  <Chip size="sm" variant="flat">
-                                    {advancedRigConfigFields.length}
-                                  </Chip>
-                                </div>
-                              )}
-                            >
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                                {advancedRigConfigFields.map((field) => renderHamlibConfigField(field))}
-                              </div>
-                            </AccordionItem>
-                          </Accordion>
+                                </AccordionItem>
+                              </Accordion>
+                            )}
+
+                            {multicastRigConfigFields.length > 0 && (
+                              <Accordion variant="light" className="px-0">
+                                <AccordionItem
+                                  key="multicast"
+                                  aria-label={t('radio.multicastParamsTitle')}
+                                  className="px-0"
+                                  title={(
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div>
+                                        <h6 className="text-sm font-medium text-default-700">{t('radio.multicastParamsTitle')}</h6>
+                                        <p className="text-xs text-default-500">{t('radio.multicastParamsDesc')}</p>
+                                      </div>
+                                      <Chip size="sm" variant="flat">
+                                        {multicastRigConfigFields.length}
+                                      </Chip>
+                                    </div>
+                                  )}
+                                >
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                                    {multicastRigConfigFields.map((field) => renderHamlibConfigField(field))}
+                                  </div>
+                                </AccordionItem>
+                              </Accordion>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
