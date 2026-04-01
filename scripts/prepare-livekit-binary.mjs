@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const CACHE_DIR = path.join(PROJECT_ROOT, '.cache', 'livekit');
 const CANDIDATE_REPOS = ['livekit/livekit', 'livekit/livekit-server'];
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null;
 
 function parseArgs(argv) {
   const options = {
@@ -144,17 +145,64 @@ function extractArchive(archivePath, extractDir, platform) {
   throw new Error(`Unsupported archive format for ${platform}: ${archivePath}`);
 }
 
+function buildGitHubHeaders(accept) {
+  const headers = {
+    'User-Agent': 'tx5dr-livekit-prep',
+    Accept: accept,
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (GITHUB_TOKEN) {
+    headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+  }
+  return headers;
+}
+
+function formatGitHubApiError(url, statusCode, responseHeaders, body) {
+  const details = [];
+  if (statusCode) {
+    details.push(`status=${statusCode}`);
+  }
+
+  const remaining = responseHeaders['x-ratelimit-remaining'];
+  if (remaining) {
+    details.push(`rateLimitRemaining=${remaining}`);
+  }
+
+  const reset = responseHeaders['x-ratelimit-reset'];
+  if (reset) {
+    const resetTime = Number(reset);
+    if (Number.isFinite(resetTime)) {
+      details.push(`rateLimitReset=${new Date(resetTime * 1000).toISOString()}`);
+    }
+  }
+
+  if (body) {
+    try {
+      const payload = JSON.parse(body);
+      if (payload?.message) {
+        details.push(`message=${payload.message}`);
+      }
+      if (payload?.documentation_url) {
+        details.push(`docs=${payload.documentation_url}`);
+      }
+    } catch {
+      const excerpt = body.trim().slice(0, 200);
+      if (excerpt) {
+        details.push(`body=${excerpt}`);
+      }
+    }
+  }
+
+  const suffix = details.length > 0 ? ` (${details.join(', ')})` : '';
+  return `Request failed: ${url}${suffix}`;
+}
+
 function fetchJson(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = get(url, { headers: { 'User-Agent': 'tx5dr-livekit-prep', Accept: 'application/vnd.github+json', ...headers } }, (res) => {
+    const req = get(url, { headers: { ...buildGitHubHeaders('application/vnd.github+json'), ...headers } }, (res) => {
       const { statusCode = 0, headers: responseHeaders } = res;
       if ([301, 302, 307, 308].includes(statusCode) && responseHeaders.location) {
         resolve(fetchJson(responseHeaders.location, headers));
-        res.resume();
-        return;
-      }
-      if (statusCode < 200 || statusCode >= 300) {
-        reject(new Error(`Request failed: ${url} (${statusCode})`));
         res.resume();
         return;
       }
@@ -165,6 +213,10 @@ function fetchJson(url, headers = {}) {
         body += chunk;
       });
       res.on('end', () => {
+        if (statusCode < 200 || statusCode >= 300) {
+          reject(new Error(formatGitHubApiError(url, statusCode, responseHeaders, body)));
+          return;
+        }
         try {
           resolve(JSON.parse(body));
         } catch (error) {
@@ -178,7 +230,7 @@ function fetchJson(url, headers = {}) {
 
 function downloadFile(url, destination) {
   return new Promise((resolve, reject) => {
-    const req = get(url, { headers: { 'User-Agent': 'tx5dr-livekit-prep', Accept: 'application/octet-stream' } }, async (res) => {
+    const req = get(url, { headers: buildGitHubHeaders('application/octet-stream') }, async (res) => {
       const { statusCode = 0, headers } = res;
       if ([301, 302, 307, 308].includes(statusCode) && headers.location) {
         res.resume();
@@ -186,7 +238,7 @@ function downloadFile(url, destination) {
         return;
       }
       if (statusCode < 200 || statusCode >= 300) {
-        reject(new Error(`Download failed: ${url} (${statusCode})`));
+        reject(new Error(formatGitHubApiError(url, statusCode, headers, '')));
         res.resume();
         return;
       }
@@ -226,6 +278,7 @@ function matchesAsset(assetName, target) {
 }
 
 async function resolveAsset(target) {
+  const lookupErrors = [];
   for (const repo of CANDIDATE_REPOS) {
     try {
       const release = await fetchJson(`https://api.github.com/repos/${repo}/releases/latest`);
@@ -239,12 +292,21 @@ async function resolveAsset(target) {
           url: asset.browser_download_url,
         };
       }
-    } catch {
-      // try next repo
+      const availableAssets = assets
+        .map((candidate) => candidate?.name)
+        .filter((name) => typeof name === 'string');
+      lookupErrors.push(
+        `${repo}@${release.tag_name || 'unknown'}: no asset matched ${target.platform}-${target.arch}; available assets: ${availableAssets.length > 0 ? availableAssets.join(', ') : 'none'}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lookupErrors.push(`${repo}: ${message}`);
     }
   }
 
-  throw new Error(`Could not find a LiveKit release asset for ${target.platform}-${target.arch}`);
+  throw new Error(
+    `Could not find a LiveKit release asset for ${target.platform}-${target.arch}. Checked repos:\n- ${lookupErrors.join('\n- ')}`
+  );
 }
 
 function copyExecutable(sourcePath, outputPath) {
@@ -317,6 +379,9 @@ async function prepareBinary(options) {
 
   let asset;
   try {
+    if (!GITHUB_TOKEN) {
+      console.warn('GitHub token not provided; LiveKit release lookup is unauthenticated and may be rate limited.');
+    }
     asset = await resolveAsset(target);
   } catch (error) {
     if (shouldAllowMissingBinary(target, error)) {
