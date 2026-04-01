@@ -126,7 +126,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
    * Set the radio modulation mode (USB/LSB/FM/AM).
    */
   async setRadioMode(mode: string): Promise<void> {
-    await this.radioManager.setMode(mode);
+    await this.radioManager.setMode(mode, undefined, { intent: 'voice' });
     this.emit('voiceRadioModeChanged', { radioMode: mode });
     logger.info('Radio mode changed', { mode });
   }

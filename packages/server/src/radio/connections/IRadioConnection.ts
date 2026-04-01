@@ -139,6 +139,12 @@ export interface IRadioConnectionEvents {
   meterData: (data: MeterData) => void;
 }
 
+export type RadioModeIntent = 'voice' | 'digital';
+
+export interface SetRadioModeOptions {
+  intent?: RadioModeIntent;
+}
+
 /**
  * 电台连接配置（扩展 HamlibConfig）
  */
@@ -209,9 +215,10 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    *
    * @param mode - 模式名称 (USB, LSB, AM, CW, FM, etc.)
    * @param bandwidth - 带宽设置（可选）: 'narrow' | 'wide'
+   * @param options - 模式设置上下文（语音/数字）
    * @throws {RadioError} 设置失败时抛出
    */
-  setMode(mode: string, bandwidth?: 'narrow' | 'wide'): Promise<void>;
+  setMode(mode: string, bandwidth?: 'narrow' | 'wide', options?: SetRadioModeOptions): Promise<void>;
 
   /**
    * 获取当前工作模式
@@ -220,6 +227,13 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @throws {RadioError} 获取失败时抛出
    */
   getMode(): Promise<{ mode: string; bandwidth: string }>;
+
+  /**
+   * 获取电台声明支持的模式列表
+   *
+   * @optional 仅支持底层能力探测的连接实现
+   */
+  getSupportedModes?(): Promise<string[]>;
 
   /**
    * 获取当前 SDR 频谱支持的 span 列表（Hz）

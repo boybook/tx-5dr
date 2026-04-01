@@ -30,6 +30,7 @@ import {
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
   type MeterData,
+  type SetRadioModeOptions,
 } from './IRadioConnection.js';
 
 interface SpectrumControllerLike {
@@ -52,6 +53,24 @@ interface SpectrumControllerLike {
 }
 
 type SplitSupportState = 'unknown' | 'supported' | 'unsupported';
+
+const DATA_TO_BASE_MODE: Record<string, string> = {
+  PKTUSB: 'USB',
+  PKTLSB: 'LSB',
+  PKTFM: 'FM',
+  PKTAM: 'AM',
+};
+
+const BASE_TO_DATA_MODE: Record<string, string> = {
+  USB: 'PKTUSB',
+  LSB: 'PKTLSB',
+  FM: 'PKTFM',
+  AM: 'PKTAM',
+};
+
+function normalizeModeName(mode: string): string {
+  return mode.trim().toUpperCase();
+}
 
 /**
  * HamlibConnection 实现类
@@ -122,6 +141,11 @@ export class HamlibConnection
    * 电台支持的 level 集合（连接时检测）
    */
   private supportedLevels: Set<string> = new Set();
+
+  /**
+   * 电台支持的模式集合（连接时检测）
+   */
+  private supportedModes: Set<string> = new Set();
 
   /**
    * 当前工作频率（Hz），由 PhysicalRadioManager 通过 setKnownFrequency 更新
@@ -294,6 +318,8 @@ export class HamlibConnection
         this.supportedLevels = new Set(['STRENGTH', 'SWR', 'ALC', 'RFPOWER_METER']);
       }
 
+      await this.detectSupportedModes();
+
       // 启动数值表轮询
       this.startMeterPolling();
 
@@ -318,6 +344,7 @@ export class HamlibConnection
     // 停止数值表轮询
     this.stopMeterPolling();
     this.supportedLevels.clear();
+    this.supportedModes.clear();
 
     // 清理资源
     await this.cleanup();
@@ -414,19 +441,26 @@ export class HamlibConnection
   /**
    * 设置模式
    */
-  async setMode(mode: string, bandwidth?: 'narrow' | 'wide'): Promise<void> {
+  async setMode(mode: string, bandwidth?: 'narrow' | 'wide', options?: SetRadioModeOptions): Promise<void> {
     this.checkConnected();
 
     try {
+      const requestedMode = normalizeModeName(mode);
+      const resolvedMode = this.resolveModeForIntent(requestedMode, options);
+
       await Promise.race([
-        this.rig!.setMode(mode, bandwidth),
+        this.rig!.setMode(resolvedMode, bandwidth),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Set mode timeout')), 5000)
         ),
       ]);
 
       this.lastSuccessfulOperation = Date.now();
-      logger.debug(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`);
+      logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth ? ` (${bandwidth})` : ''}`, {
+        requestedMode,
+        resolvedMode,
+        intent: options?.intent ?? 'unspecified',
+      });
     } catch (error) {
       throw this.convertOptionalOperationError(error, 'setMode');
     }
@@ -453,6 +487,10 @@ export class HamlibConnection
     }
   }
 
+  async getSupportedModes(): Promise<string[]> {
+    return Array.from(this.supportedModes).sort();
+  }
+
   /**
    * 获取连接信息
    */
@@ -466,6 +504,60 @@ export class HamlibConnection
         serial: this.currentConfig?.type === 'serial' ? this.currentConfig.serial : undefined,
       },
     };
+  }
+
+  private async detectSupportedModes(): Promise<void> {
+    if (!this.rig || typeof (this.rig as any).getSupportedModes !== 'function') {
+      this.supportedModes.clear();
+      logger.warn('Hamlib mode detection is not available on this build');
+      return;
+    }
+
+    try {
+      const modes = ((this.rig as any).getSupportedModes() as unknown[])
+        .filter((mode): mode is string => typeof mode === 'string')
+        .map((mode) => normalizeModeName(mode))
+        .filter((mode) => mode.length > 0);
+      this.supportedModes = new Set(modes);
+      logger.info('Supported radio modes detected', { modes: Array.from(this.supportedModes).sort() });
+    } catch (error) {
+      this.supportedModes.clear();
+      logger.warn('Failed to detect supported radio modes, using standard mode fallback only', error);
+    }
+  }
+
+  private resolveModeForIntent(mode: string, options?: SetRadioModeOptions): string {
+    const intent = options?.intent;
+    const candidates = this.buildModeCandidates(mode, intent);
+
+    if (this.supportedModes.size === 0) {
+      return intent === 'digital' ? candidates[candidates.length - 1] : candidates[0];
+    }
+
+    for (const candidate of candidates) {
+      if (this.supportedModes.has(candidate)) {
+        return candidate;
+      }
+    }
+
+    return intent === 'digital' ? candidates[candidates.length - 1] : candidates[0];
+  }
+
+  private buildModeCandidates(mode: string, intent?: SetRadioModeOptions['intent']): string[] {
+    const normalizedMode = normalizeModeName(mode);
+    const baseMode = DATA_TO_BASE_MODE[normalizedMode] ?? normalizedMode;
+    const dataMode = BASE_TO_DATA_MODE[normalizedMode]
+      ?? (normalizedMode in DATA_TO_BASE_MODE ? normalizedMode : undefined);
+
+    if (intent === 'voice') {
+      return [baseMode];
+    }
+
+    if (intent === 'digital' && dataMode && dataMode !== baseMode) {
+      return Array.from(new Set([dataMode, baseMode]));
+    }
+
+    return [normalizedMode];
   }
 
   async getSpectrumSupportSummary(): Promise<SpectrumSupportSummary> {

@@ -126,6 +126,16 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('passes mode intent through to the active connection', async () => {
+    const setMode = vi.fn().mockResolvedValue(undefined);
+    (manager as any).connection = { setMode };
+
+    await expect(manager.setMode('USB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
+
+    expect(setMode).toHaveBeenCalledWith('USB', undefined, { intent: 'voice' });
+    expect(manager.getCoreCapabilities().writeRadioMode).toBe(true);
+  });
+
   it('still reports real getMode failures to the connection health state machine', async () => {
     (manager as any).connection = {
       getMode: vi.fn().mockRejectedValue(new Error('device disconnected')),
