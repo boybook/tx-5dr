@@ -201,6 +201,38 @@ describe('HamlibConnection', () => {
     expect((connection as any).resolveCurrentTxPowerMaxWatts()).toBe(10);
   });
 
+  it('applies spectrum runtime speed updates when the backend supports SPECTRUM_SPEED', async () => {
+    const { connection } = createConnectedConnection();
+    const configureSpectrum = vi.fn().mockResolvedValue(undefined);
+
+    (connection as any).spectrumController = {
+      configureSpectrum,
+      getSpectrumSupportSummary: vi.fn().mockResolvedValue({
+        configurableLevels: ['SPECTRUM_SPEED'],
+      }),
+    };
+
+    await expect(connection.applySpectrumRuntimeConfig?.({ speed: 10 })).resolves.toBeUndefined();
+
+    expect(configureSpectrum).toHaveBeenCalledWith({ speed: 10 });
+  });
+
+  it('ignores spectrum runtime speed updates when the backend does not support SPECTRUM_SPEED', async () => {
+    const { connection } = createConnectedConnection();
+    const configureSpectrum = vi.fn().mockResolvedValue(undefined);
+
+    (connection as any).spectrumController = {
+      configureSpectrum,
+      getSpectrumSupportSummary: vi.fn().mockResolvedValue({
+        configurableLevels: [],
+      }),
+    };
+
+    await expect(connection.applySpectrumRuntimeConfig?.({ speed: 10 })).resolves.toBeUndefined();
+
+    expect(configureSpectrum).not.toHaveBeenCalled();
+  });
+
   it('clamps percent to 100 when the absolute power reading exceeds the matched max watts', () => {
     const { connection } = createConnectedConnection();
     (connection as any).txFrequencyRanges = [

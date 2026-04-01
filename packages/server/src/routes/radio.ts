@@ -22,6 +22,7 @@ import type { SetRadioModeOptions } from '../radio/connections/IRadioConnection.
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
+import { applyHamlibSpectrumRuntimeConfig } from '../spectrum/hamlibSpectrumConfig.js';
 
 /** 判断两个配置是否指向同一硬件目标（用于复用判断） */
 function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
@@ -127,6 +128,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
     } else {
       logger.debug('Engine running, radio resource has auto-applied config');
     }
+
+    await applyHamlibSpectrumRuntimeConfig(radioManager.getActiveConnection(), config);
 
     // 如果 engine 已运行，立即更新 SlotClock 的发射补偿值（热更新）
     if (engine.getStatus().isRunning) {

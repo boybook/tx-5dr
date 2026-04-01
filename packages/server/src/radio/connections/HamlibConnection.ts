@@ -26,6 +26,7 @@ import {
   RadioConnectionType,
   RadioConnectionState,
   type RadioSpectrumDisplayState,
+  type RadioSpectrumRuntimeConfig,
   type IRadioConnection,
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
@@ -35,6 +36,7 @@ import {
 
 interface SpectrumControllerLike {
   getSpectrumSupportSummary(): Promise<SpectrumSupportSummary>;
+  configureSpectrum(config?: ManagedSpectrumConfig): Promise<unknown>;
   getSpectrumDisplayState(): Promise<{
     mode: RadioSpectrumDisplayState['mode'];
     spanHz: number | null;
@@ -760,6 +762,26 @@ export class HamlibConnection
       await this.getSpectrumController().configureSpectrumDisplay(config);
     } catch (error) {
       throw this.convertError(error, 'configureSpectrumDisplay');
+    }
+  }
+
+  async applySpectrumRuntimeConfig(config: RadioSpectrumRuntimeConfig): Promise<void> {
+    this.checkConnected();
+
+    const controller = this.getSpectrumController();
+    const summary = await this.getSpectrumSupportSummary();
+    if (!summary.configurableLevels.includes('SPECTRUM_SPEED')) {
+      logger.debug('Ignoring Hamlib spectrum runtime speed update because backend does not support SPECTRUM_SPEED', {
+        speed: config.speed,
+      });
+      return;
+    }
+
+    try {
+      await controller.configureSpectrum({ speed: config.speed });
+      logger.info('Applied Hamlib spectrum runtime speed', { speed: config.speed });
+    } catch (error) {
+      throw this.convertError(error, 'applySpectrumRuntimeConfig');
     }
   }
 
