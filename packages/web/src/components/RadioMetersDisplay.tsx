@@ -24,6 +24,10 @@ interface MeterProps {
   renderDisplayValue?: () => React.ReactNode;
 }
 
+function clampProgressValue(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
 /**
  * 单个仪表组件
  */
@@ -40,7 +44,7 @@ const Meter: React.FC<MeterProps> = ({
     ? '--'
     : formatValue ? formatValue(value) : value.toFixed(1);
 
-  const progressValue = value === null || isTimeout ? 0 : value;
+  const progressValue = value === null || isTimeout ? 0 : clampProgressValue(value);
   const showUnit = displayValue !== '--';
 
   const getColor = () => {
@@ -203,11 +207,12 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
           <Meter
             label="Power"
             value={buffered.power.value?.percent ?? null}
-            unit={buffered.power.value?.watts != null ? 'W' : '%'}
+            unit={buffered.power.value?.watts != null && buffered.power.value?.maxWatts != null ? '' : (buffered.power.value?.watts != null ? 'W' : '%')}
             isTimeout={buffered.power.isTimeout}
             formatValue={(_value) => {
               if (!buffered.power.value) return '--';
-              const { watts, percent } = buffered.power.value;
+              const { watts, percent, maxWatts } = buffered.power.value;
+              if (watts != null && maxWatts != null) return `${watts.toFixed(1)}/${maxWatts.toFixed(1)}W`;
               if (watts != null) return watts.toFixed(1);
               return percent.toFixed(1);
             }}

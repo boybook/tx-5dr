@@ -65,7 +65,7 @@ export interface MeterData {
   swr: { raw: number; swr: number; alert: boolean } | null;
   alc: { raw: number; percent: number; alert: boolean } | null;
   level: LevelMeterReading | null;
-  power: { raw: number; percent: number; watts: number | null } | null;
+  power: { raw: number; percent: number; watts: number | null; maxWatts: number | null } | null;
 }
 
 export type SpectrumDisplayMode = 'center' | 'fixed' | 'scroll-center' | 'scroll-fixed';
