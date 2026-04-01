@@ -19,7 +19,7 @@ import type { HamlibConfig, MeterCapabilities, RadioInfo, ReconnectProgress, Cap
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
-import type { IRadioConnection, MeterData } from './connections/IRadioConnection.js';
+import type { IRadioConnection, MeterData, SetRadioModeOptions } from './connections/IRadioConnection.js';
 import { RadioConnectionType } from './connections/IRadioConnection.js';
 import { RadioCapabilityManager } from './RadioCapabilityManager.js';
 import { isRecoverableOptionalRadioError } from './optionalRadioError.js';
@@ -635,7 +635,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   /**
    * 设置模式
    */
-  async setMode(mode: string, bandwidth?: 'narrow' | 'wide'): Promise<void> {
+  async setMode(mode: string, bandwidth?: 'narrow' | 'wide', options?: SetRadioModeOptions): Promise<void> {
     if (!this.connection) {
       throw new Error('radio not connected');
     }
@@ -645,9 +645,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     try {
-      await this.connection.setMode(mode, bandwidth);
+      await this.connection.setMode(mode, bandwidth, options);
       this.markCoreCapabilitySupported('writeRadioMode');
-      logger.info(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`);
+      logger.info(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`, {
+        intent: options?.intent ?? 'unspecified',
+      });
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
         this.markCoreCapabilityUnsupported('writeRadioMode', error);

@@ -15,6 +15,7 @@ type MockRig = {
   setFrequency: ReturnType<typeof vi.fn>;
   getSplit: ReturnType<typeof vi.fn>;
   setSplitFreq: ReturnType<typeof vi.fn>;
+  setMode: ReturnType<typeof vi.fn>;
 };
 
 function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
@@ -26,6 +27,7 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     setFrequency: vi.fn().mockResolvedValue(0),
     getSplit: vi.fn().mockResolvedValue({ enabled: false }),
     setSplitFreq: vi.fn().mockResolvedValue(0),
+    setMode: vi.fn().mockResolvedValue(0),
     ...rigOverrides,
   };
 
@@ -103,5 +105,41 @@ describe('HamlibConnection', () => {
 
     expect(rig.getSplit).not.toHaveBeenCalled();
     expect(rig.setSplitFreq).not.toHaveBeenCalled();
+  });
+
+  it('prefers DATA mode for digital intent when supported', async () => {
+    const { connection, rig } = createConnectedConnection();
+    (connection as any).supportedModes = new Set(['USB', 'PKTUSB']);
+
+    await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+  });
+
+  it('falls back to standard mode for digital intent when DATA mode is unsupported', async () => {
+    const { connection, rig } = createConnectedConnection();
+    (connection as any).supportedModes = new Set(['USB']);
+
+    await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith('USB', undefined);
+  });
+
+  it('keeps standard mode for voice intent even when DATA mode is supported', async () => {
+    const { connection, rig } = createConnectedConnection();
+    (connection as any).supportedModes = new Set(['USB', 'PKTUSB']);
+
+    await expect(connection.setMode('USB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith('USB', undefined);
+  });
+
+  it('normalizes explicit DATA mode back to standard mode for voice intent', async () => {
+    const { connection, rig } = createConnectedConnection();
+    (connection as any).supportedModes = new Set(['USB', 'PKTUSB']);
+
+    await expect(connection.setMode('PKTUSB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith('USB', undefined);
   });
 });

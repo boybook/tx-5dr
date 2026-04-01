@@ -7,7 +7,12 @@
 
 import { EventEmitter } from 'eventemitter3';
 import type { MeterCapabilities } from '@tx5dr/contracts';
-import type { IRadioConnection, IRadioConnectionEvents, RadioConnectionConfig } from './IRadioConnection.js';
+import type {
+  IRadioConnection,
+  IRadioConnectionEvents,
+  RadioConnectionConfig,
+  SetRadioModeOptions,
+} from './IRadioConnection.js';
 import { RadioConnectionType, RadioConnectionState } from './IRadioConnection.js';
 
 export class NullConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {
@@ -45,7 +50,7 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
     // no-op
   }
 
-  async setMode(_mode: string, _bandwidth?: 'narrow' | 'wide'): Promise<void> {
+  async setMode(_mode: string, _bandwidth?: 'narrow' | 'wide', _options?: SetRadioModeOptions): Promise<void> {
     // no-op
   }
 

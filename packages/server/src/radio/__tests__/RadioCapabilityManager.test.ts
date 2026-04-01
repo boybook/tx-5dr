@@ -42,7 +42,7 @@ class MockConnection extends EventEmitter<IRadioConnectionEvents> {
 
   async setPTT(_enabled: boolean): Promise<void> {}
 
-  async setMode(_mode: string, _bandwidth?: 'narrow' | 'wide'): Promise<void> {}
+  async setMode(_mode: string, _bandwidth?: 'narrow' | 'wide', _options?: { intent?: 'voice' | 'digital' }): Promise<void> {}
 
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
     return { mode: 'USB', bandwidth: 'wide' };

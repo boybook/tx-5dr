@@ -25,6 +25,7 @@ import {
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
   type MeterData,
+  type SetRadioModeOptions,
 } from './IRadioConnection.js';
 
 /**
@@ -295,7 +296,7 @@ export class IcomWlanConnection
   /**
    * 设置电台工作模式
    */
-  async setMode(mode: string, bandwidth?: 'narrow' | 'wide'): Promise<void> {
+  async setMode(mode: string, bandwidth?: 'narrow' | 'wide', _options?: SetRadioModeOptions): Promise<void> {
     this.checkConnected();
 
     try {

@@ -18,6 +18,7 @@ import serialport from 'serialport';
 const { SerialPort } = serialport;
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
+import type { SetRadioModeOptions } from '../radio/connections/IRadioConnection.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
@@ -52,6 +53,20 @@ function describeHardware(config: HamlibConfig): string {
     case 'icom-wlan': return `ICOM WLAN ${config.icomWlan?.ip || ''}`;
     default: return 'Unknown';
   }
+}
+
+function inferModeOptions(appMode: string | undefined, engineMode: 'digital' | 'voice'): SetRadioModeOptions {
+  const normalizedAppMode = appMode?.trim().toUpperCase();
+
+  if (normalizedAppMode === 'VOICE') {
+    return { intent: 'voice' };
+  }
+
+  if (normalizedAppMode === 'FT8' || normalizedAppMode === 'FT4') {
+    return { intent: 'digital' };
+  }
+
+  return { intent: engineMode === 'voice' ? 'voice' : 'digital' };
 }
 
 export async function radioRoutes(fastify: FastifyInstance) {
@@ -286,7 +301,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     // 如果提供了电台调制模式，也设置该模式
     if (radioMode) {
       try {
-        await radioManager.setMode(radioMode);
+        await radioManager.setMode(radioMode, undefined, inferModeOptions(mode, engine.getEngineMode()));
         logger.debug(`Radio mode set: ${radioMode}`);
       } catch (modeError) {
         logger.warn(`Failed to set radio mode: ${(modeError as Error).message}`);
