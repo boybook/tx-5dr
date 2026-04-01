@@ -7,6 +7,7 @@ import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, 
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
+import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio/hamlibConfigUtils.js';
 
 const logger = createLogger('ConfigManager');
 
@@ -404,12 +405,14 @@ export class ConfigManager {
     }
 
     if (oldConfig.path !== undefined || oldConfig.rigModel !== undefined) {
-      newConfig.serial = {
+      newConfig.serial = normalizeSerialConnectionConfig({
         path: oldConfig.path || '',
         rigModel: oldConfig.rigModel || 0,
         serialConfig: oldConfig.serialConfig,
-      };
-      logger.info(`Migrated serial config: ${newConfig.serial.path} (rigModel: ${newConfig.serial.rigModel})`);
+      });
+      if (newConfig.serial) {
+        logger.info(`Migrated serial config: ${newConfig.serial.path} (rigModel: ${newConfig.serial.rigModel})`);
+      }
     }
 
     return newConfig;
@@ -578,7 +581,7 @@ export class ConfigManager {
    */
   getRadioConfig(): HamlibConfig {
     const profile = this.getActiveProfile();
-    return profile?.radio ? { ...profile.radio } as HamlibConfig : { ...DEFAULT_RADIO };
+    return profile?.radio ? normalizeHamlibConfig({ ...profile.radio } as HamlibConfig) : { ...DEFAULT_RADIO };
   }
 
   /**
@@ -587,7 +590,7 @@ export class ConfigManager {
   async updateRadioConfig(radioConfig: Partial<HamlibConfig>): Promise<void> {
     const profile = this.getActiveProfile();
     if (profile) {
-      profile.radio = { ...profile.radio, ...radioConfig } as HamlibConfig;
+      profile.radio = normalizeHamlibConfig({ ...profile.radio, ...radioConfig } as HamlibConfig);
       profile.updatedAt = Date.now();
       await this.saveConfig();
     }

@@ -43,6 +43,42 @@ export const SerialConfigSchema = z.object({
   post_write_delay: z.number().int().min(0).optional(), // 命令间延迟(ms)
 });
 
+export const HamlibBackendConfigSchema = z.record(z.string());
+
+export const HamlibConfigFieldTypeSchema = z.enum([
+  'string',
+  'combo',
+  'numeric',
+  'checkbutton',
+  'button',
+  'binary',
+  'int',
+  'unknown',
+]);
+
+export const HamlibConfigFieldSchema = z.object({
+  token: z.number().int(),
+  name: z.string(),
+  label: z.string(),
+  tooltip: z.string(),
+  defaultValue: z.string(),
+  effectiveDefaultValue: z.string().optional(),
+  effectiveDefaultSource: z.enum(['hamlib-schema', 'rig-caps']).optional(),
+  type: HamlibConfigFieldTypeSchema,
+  numeric: z.object({
+    min: z.number(),
+    max: z.number(),
+    step: z.number(),
+  }).optional(),
+  options: z.array(z.string()).optional(),
+});
+
+export const RigEndpointKindSchema = z.enum([
+  'serial-port',
+  'network-address',
+  'device-path',
+]);
+
 /**
  * 网络 RigCtld 连接配置Schema
  */
@@ -74,6 +110,7 @@ export const SerialConnectionConfigSchema = z.object({
   path: z.string(),
   rigModel: z.number().int(),
   serialConfig: SerialConfigSchema.optional(),
+  backendConfig: HamlibBackendConfigSchema.optional(),
 });
 
 /**
@@ -143,6 +180,13 @@ export const SupportedRigSchema = z.object({
  */
 export const SupportedRigsResponseSchema = z.object({
   rigs: z.array(SupportedRigSchema),
+});
+
+export const RigConfigSchemaResponseSchema = z.object({
+  rigModel: z.number().int(),
+  portType: z.string(),
+  endpointKind: RigEndpointKindSchema,
+  fields: z.array(HamlibConfigFieldSchema),
 });
 
 /**
@@ -294,6 +338,9 @@ export type CustomFrequencyPresets = z.infer<typeof CustomFrequencyPresetsSchema
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;
 export type FrequencyListResponse = z.infer<typeof FrequencyListResponseSchema>;
 export type SerialConfig = z.infer<typeof SerialConfigSchema>;
+export type HamlibBackendConfig = z.infer<typeof HamlibBackendConfigSchema>;
+export type HamlibConfigFieldType = z.infer<typeof HamlibConfigFieldTypeSchema>;
+export type HamlibConfigField = z.infer<typeof HamlibConfigFieldSchema>;
 export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;
 export type IcomWlanConfig = z.infer<typeof IcomWlanConfigSchema>;
 export type SerialConnectionConfig = z.infer<typeof SerialConnectionConfigSchema>;
@@ -302,6 +349,7 @@ export type HamlibConfig = z.infer<typeof HamlibConfigSchema>;
 export type RadioConfigResponse = z.infer<typeof RadioConfigResponseSchema>;
 export type SupportedRig = z.infer<typeof SupportedRigSchema>;
 export type SupportedRigsResponse = z.infer<typeof SupportedRigsResponseSchema>;
+export type RigConfigSchemaResponse = z.infer<typeof RigConfigSchemaResponseSchema>;
 export type RadioInfo = z.infer<typeof RadioInfoSchema>;
 export type SerialPort = z.infer<typeof SerialPortSchema>;
 export type SerialPortsResponse = z.infer<typeof SerialPortsResponseSchema>;

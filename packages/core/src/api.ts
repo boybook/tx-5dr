@@ -43,6 +43,7 @@ import type {
   RadioConfigResponse,
   UpdateRadioConfigResponse,
   SupportedRigsResponse,
+  RigConfigSchemaResponse,
   SerialPortsResponse,
   TestResponse,
   RadioStatusResponse,
@@ -710,6 +711,10 @@ export const api = {
 
   async getSupportedRigs(apiBase?: string): Promise<SupportedRigsResponse> {
     return apiRequest<SupportedRigsResponse>('/radio/rigs', undefined, apiBase);
+  },
+
+  async getRigConfigSchema(rigModel: number, apiBase?: string): Promise<RigConfigSchemaResponse> {
+    return apiRequest<RigConfigSchemaResponse>(`/radio/rigs/${encodeURIComponent(String(rigModel))}/config-schema`, undefined, apiBase);
   },
 
   async getSerialPorts(apiBase?: string): Promise<SerialPortsResponse> {

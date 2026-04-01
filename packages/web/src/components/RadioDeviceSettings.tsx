@@ -1,11 +1,12 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle, useRef } from 'react';
 import { createLogger } from '../utils/logger';
+import { localizeHamlibConfigText } from '../utils/hamlibConfigTextMap';
 
 const logger = createLogger('RadioDeviceSettings');
 import { useTranslation } from 'react-i18next';
-import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip } from '@heroui/react';
+import { Input, Select, SelectItem, Autocomplete, AutocompleteItem, Tabs, Tab, Card, CardBody, Divider, Button, Chip, Tooltip, Accordion, AccordionItem } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
-import type { HamlibConfig, SerialConfig, PttMethod } from '@tx5dr/contracts';
+import type { HamlibConfig, HamlibConfigField, PttMethod, RigConfigSchemaResponse } from '@tx5dr/contracts';
 
 interface RigInfo {
   rigModel: number;
@@ -20,6 +21,81 @@ interface PortInfo {
   pnpId?: string;
   vendorId?: string;
   productId?: string;
+}
+
+const HIDDEN_BACKEND_FIELD_NAMES = new Set([
+  'rig_pathname',
+  'ptt_type',
+  'ptt_pathname',
+  'ptt_bitnum',
+  'dcd_type',
+  'dcd_pathname',
+]);
+
+const CONNECTION_FIELD_ORDER = [
+  'serial_speed',
+  'serial_data_bits',
+  'serial_stop_bits',
+  'serial_parity',
+  'serial_handshake',
+  'timeout',
+  'retry',
+  'write_delay',
+  'post_write_delay',
+  'post_ptt_delay',
+  'poll_interval',
+  'client',
+  'multicast_data_addr',
+  'multicast_data_port',
+  'multicast_cmd_addr',
+  'multicast_cmd_port',
+] as const;
+
+const CONNECTION_FIELD_NAME_SET = new Set(CONNECTION_FIELD_ORDER);
+
+function orderHamlibFields(fields: HamlibConfigField[]): HamlibConfigField[] {
+  return [...fields].sort((left, right) => {
+    const leftIndex = CONNECTION_FIELD_ORDER.indexOf(left.name as typeof CONNECTION_FIELD_ORDER[number]);
+    const rightIndex = CONNECTION_FIELD_ORDER.indexOf(right.name as typeof CONNECTION_FIELD_ORDER[number]);
+
+    const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+    const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+
+    if (normalizedLeft !== normalizedRight) {
+      return normalizedLeft - normalizedRight;
+    }
+
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function getFieldEffectiveDefaultValue(field: HamlibConfigField): string | undefined {
+  return field.effectiveDefaultValue || field.defaultValue || undefined;
+}
+
+function formatFieldDefaultLabel(t: (key: string, options?: Record<string, unknown>) => string, field: HamlibConfigField): string | undefined {
+  const effectiveDefaultValue = getFieldEffectiveDefaultValue(field);
+  if (!effectiveDefaultValue) {
+    return undefined;
+  }
+
+  if (field.type === 'checkbutton') {
+    const normalized = effectiveDefaultValue.toLowerCase();
+    const label = normalized === '1' || normalized === 'true'
+      ? t('radio.toggleOn')
+      : t('radio.toggleOff');
+    return t('radio.defaultOption', { value: label });
+  }
+
+  return t('radio.defaultOption', { value: effectiveDefaultValue });
+}
+
+function buildFieldDescription(
+  _t: (key: string, options?: Record<string, unknown>) => string,
+  field: HamlibConfigField,
+  tooltip: string | undefined,
+): string | undefined {
+  return tooltip || undefined;
 }
 
 export interface RadioDeviceSettingsRef {
@@ -37,21 +113,110 @@ interface RadioDeviceSettingsProps {
 
 export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDeviceSettingsProps>(
   ({ onUnsavedChanges, initialConfig, onChange }, ref) => {
-  const { t } = useTranslation('settings');
+  const { t, i18n } = useTranslation('settings');
   const isControlled = initialConfig !== undefined;
   const [config, setConfig] = useState<HamlibConfig>(initialConfig ?? { type: 'none' } as HamlibConfig);
   const [originalConfig, setOriginalConfig] = useState<HamlibConfig>(initialConfig ?? { type: 'none' } as HamlibConfig);
   const [rigs, setRigs] = useState<RigInfo[]>([]);
   const [ports, setPorts] = useState<PortInfo[]>([]);
+  const [rigConfigSchema, setRigConfigSchema] = useState<RigConfigSchemaResponse | null>(null);
   const [_isSaving, setIsSaving] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isTestingPTT, setIsTestingPTT] = useState(false);
   const [isRefreshingPorts, setIsRefreshingPorts] = useState(false);
+  const [isLoadingRigConfigSchema, setIsLoadingRigConfigSchema] = useState(false);
   const [testResult, setTestResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const pendingEndpointKindResetRef = useRef<{
+    previousEndpointKind: RigConfigSchemaResponse['endpointKind'] | null;
+    rigModel: number;
+  } | null>(null);
+
+  const selectedRig = rigs.find((item) => item.rigModel === config.serial?.rigModel);
+  const rigConfigFields = rigConfigSchema?.fields || [];
+  const visibleRigConfigFields = orderHamlibFields(
+    rigConfigFields.filter((field) => (
+      field.type !== 'button' &&
+      field.type !== 'binary' &&
+      !HIDDEN_BACKEND_FIELD_NAMES.has(field.name)
+    ))
+  );
+  const connectionRigConfigFields = visibleRigConfigFields.filter((field) => CONNECTION_FIELD_NAME_SET.has(field.name));
+  const advancedRigConfigFields = visibleRigConfigFields.filter((field) => !CONNECTION_FIELD_NAME_SET.has(field.name));
+  const endpointKind = rigConfigSchema?.endpointKind;
+  const usesSerialPortEndpoint = endpointKind === 'serial-port';
+  const usesNetworkEndpoint = endpointKind === 'network-address';
+  const usesDevicePathEndpoint = endpointKind === 'device-path';
+  const effectiveRigPath = config.serial?.backendConfig?.rig_pathname ?? config.serial?.path ?? '';
 
     useEffect(() => {
       loadData();
     }, []);
+
+    useEffect(() => {
+      const rigModel = config.type === 'serial' ? config.serial?.rigModel : undefined;
+      if (!rigModel) {
+        setRigConfigSchema(null);
+        return;
+      }
+
+      let cancelled = false;
+      setIsLoadingRigConfigSchema(true);
+      setRigConfigSchema(null);
+
+      api.getRigConfigSchema(rigModel)
+        .then((response) => {
+          if (!cancelled) {
+            setRigConfigSchema(response);
+
+            const pendingReset = pendingEndpointKindResetRef.current;
+            if (pendingReset && pendingReset.rigModel === rigModel) {
+              pendingEndpointKindResetRef.current = null;
+
+              if (pendingReset.previousEndpointKind && pendingReset.previousEndpointKind !== response.endpointKind) {
+                setConfig((prev) => {
+                  if (prev.type !== 'serial' || prev.serial?.rigModel !== rigModel) {
+                    return prev;
+                  }
+
+                  const currentBackendConfig = prev.serial.backendConfig || {};
+                  if (!prev.serial.path && !currentBackendConfig.rig_pathname) {
+                    return prev;
+                  }
+
+                  const nextBackendConfig = { ...currentBackendConfig };
+                  delete nextBackendConfig.rig_pathname;
+
+                  const next = {
+                    ...prev,
+                    serial: {
+                      ...prev.serial,
+                      path: '',
+                      backendConfig: nextBackendConfig,
+                    },
+                  };
+                  onChange?.(next);
+                  return next;
+                });
+              }
+            }
+          }
+        })
+        .catch((error) => {
+          logger.error('Failed to load rig config schema:', error);
+          if (!cancelled) {
+            setRigConfigSchema(null);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsLoadingRigConfigSchema(false);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [config.type, config.serial?.rigModel, onChange]);
 
     const loadData = async () => {
       if (isControlled) {
@@ -126,15 +291,29 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     setTestResult(null);
   };
 
-  // 更新串口配置
-  const updateSerialConfig = (updates: Partial<SerialConfig>) => {
+  // 更新 Hamlib backend 配置
+  const updateBackendConfig = (name: string, value?: string) => {
     setConfig((prev) => {
+      const prevSerial = prev.serial;
+      const backendConfig = { ...(prevSerial?.backendConfig || {}) };
+
+      if (!value) {
+        delete backendConfig[name];
+      } else {
+        backendConfig[name] = value;
+      }
+
+      const path = name === 'rig_pathname'
+        ? (value || '')
+        : (prevSerial?.path ?? backendConfig.rig_pathname ?? '');
+
       const next = {
         ...prev,
         serial: {
-          path: prev.serial?.path ?? '',
-          rigModel: prev.serial?.rigModel ?? 0,
-          serialConfig: { ...prev.serial?.serialConfig, ...updates }
+          path,
+          rigModel: prevSerial?.rigModel ?? 0,
+          serialConfig: prevSerial?.serialConfig,
+          backendConfig,
         }
       };
       onChange?.(next);
@@ -142,6 +321,123 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     });
     // 清除之前的测试结果
     setTestResult(null);
+  };
+
+  const getBackendValue = (name: string): string => {
+    if (name === 'rig_pathname') {
+      return config.serial?.backendConfig?.rig_pathname ?? config.serial?.path ?? '';
+    }
+    return config.serial?.backendConfig?.[name] ?? '';
+  };
+
+  const renderHamlibConfigField = (field: HamlibConfigField) => {
+    const currentValue = getBackendValue(field.name);
+    const effectiveDefaultValue = getFieldEffectiveDefaultValue(field);
+    const defaultLabel = formatFieldDefaultLabel(t, field);
+    const localizedTooltip = localizeHamlibConfigText(field.tooltip, 'tooltip', i18n.language);
+    const description = buildFieldDescription(t, field, localizedTooltip);
+    const label = localizeHamlibConfigText(field.label, 'label', i18n.language) || field.name;
+
+    if (field.name.endsWith('pathname')) {
+      return (
+        <Autocomplete
+          key={field.name}
+          label={label}
+          description={description}
+          allowsCustomValue
+          inputValue={currentValue}
+          selectedKey={currentValue || null}
+          onInputChange={value => updateBackendConfig(field.name, value || undefined)}
+          onSelectionChange={selectedKey => {
+            if (selectedKey !== null) {
+              updateBackendConfig(field.name, String(selectedKey) || undefined);
+            }
+          }}
+          variant="flat"
+          size="md"
+          placeholder={effectiveDefaultValue || undefined}
+          defaultItems={ports}
+        >
+          {(item: PortInfo) => (
+            <AutocompleteItem key={item.path} textValue={item.path}>
+              {item.path}
+            </AutocompleteItem>
+          )}
+        </Autocomplete>
+      );
+    }
+
+    if (field.type === 'combo' && field.options?.length) {
+      return (
+        <Select
+          key={field.name}
+          label={label}
+          description={description}
+          size="sm"
+          selectedKeys={currentValue ? [currentValue] : []}
+          onSelectionChange={keys => {
+            const value = Array.from(keys)[0] as string | undefined;
+            updateBackendConfig(field.name, value === '__default__' ? undefined : (value || undefined));
+          }}
+          variant="flat"
+          placeholder={defaultLabel}
+        >
+          {defaultLabel ? (
+            <SelectItem key="__default__" textValue={defaultLabel}>{defaultLabel}</SelectItem>
+          ) : null}
+          {field.options.map((option) => (
+            <SelectItem key={option} textValue={option}>{option}</SelectItem>
+          ))}
+        </Select>
+      );
+    }
+
+    if (field.type === 'checkbutton') {
+      return (
+        <Select
+          key={field.name}
+          label={label}
+          description={description}
+          size="sm"
+          selectedKeys={currentValue ? [currentValue] : []}
+          onSelectionChange={keys => {
+            const value = Array.from(keys)[0] as string | undefined;
+            if (value === '__default__' || !value) {
+              updateBackendConfig(field.name, undefined);
+              return;
+            }
+            updateBackendConfig(field.name, value === '1' ? '1' : '0');
+          }}
+          variant="flat"
+          placeholder={defaultLabel}
+        >
+          {defaultLabel ? (
+            <SelectItem key="__default__" textValue={defaultLabel}>{defaultLabel}</SelectItem>
+          ) : null}
+          <SelectItem key="1" textValue="1">{t('radio.toggleOn')}</SelectItem>
+          <SelectItem key="0" textValue="0">{t('radio.toggleOff')}</SelectItem>
+        </Select>
+      );
+    }
+
+    const isNumeric = field.type === 'numeric' || field.type === 'int';
+
+    return (
+      <Input
+        key={field.name}
+        label={label}
+        description={description}
+        size="sm"
+        type={isNumeric ? 'number' : field.name.toLowerCase().includes('password') ? 'password' : 'text'}
+        min={field.numeric?.min !== undefined ? String(field.numeric.min) : undefined}
+        max={field.numeric?.max !== undefined ? String(field.numeric.max) : undefined}
+        step={field.numeric?.step !== undefined ? String(field.numeric.step) : undefined}
+        value={currentValue}
+        onChange={e => updateBackendConfig(field.name, e.target.value || undefined)}
+        variant="flat"
+        placeholder={effectiveDefaultValue || undefined}
+      />
+    );
   };
 
   // 测试连接
@@ -414,45 +710,29 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
               <CardBody className="space-y-4 p-4">
                 <div className="flex items-center justify-between">
                   <h4 className="font-semibold text-default-900">{t('radio.serialTitle')}</h4>
-                  <Tooltip content={t('radio.refreshPortsTooltip')} placement="left">
-                    <Button
-                      size="sm"
-                      variant="light"
-                      isIconOnly
-                      onPress={refreshPorts}
-                      isLoading={isRefreshingPorts}
-                    >
-                      {isRefreshingPorts ? '' : '↻'}
-                    </Button>
-                  </Tooltip>
+                  {usesSerialPortEndpoint && (
+                    <Tooltip content={t('radio.refreshPortsTooltip')} placement="left">
+                      <Button
+                        size="sm"
+                        variant="light"
+                        isIconOnly
+                        onPress={refreshPorts}
+                        isLoading={isRefreshingPorts}
+                      >
+                        {isRefreshingPorts ? '' : '↻'}
+                      </Button>
+                    </Tooltip>
+                  )}
                 </div>
-                <p className="text-sm text-default-600">{t('radio.serialDesc')}</p>
+                <p className="text-sm text-default-600">
+                  {usesNetworkEndpoint
+                    ? t('radio.backendEndpointModeDesc')
+                    : usesDevicePathEndpoint
+                      ? t('radio.deviceEndpointModeDesc')
+                      : t('radio.serialDesc')}
+                </p>
                 <Divider />
                 <div className="space-y-4">
-                  <Autocomplete
-                    label={t('radio.serialPort')}
-                    placeholder={t('radio.serialPortPlaceholder')}
-                    allowsCustomValue
-                    inputValue={config.serial?.path || ''}
-                    selectedKey={config.serial?.path || null}
-                    onInputChange={value => {
-                      updateConfig({ serial: { path: value, rigModel: config.serial?.rigModel ?? 0, serialConfig: config.serial?.serialConfig } });
-                    }}
-                    onSelectionChange={selectedKey => {
-                      if (selectedKey !== null) {
-                        updateConfig({ serial: { path: String(selectedKey), rigModel: config.serial?.rigModel ?? 0, serialConfig: config.serial?.serialConfig } });
-                      }
-                    }}
-                    variant="flat"
-                    size="md"
-                    defaultItems={ports}
-                  >
-                    {(item: PortInfo) => (
-                      <AutocompleteItem key={item.path} textValue={item.path}>
-                        {item.path}
-                      </AutocompleteItem>
-                    )}
-                  </Autocomplete>
                   <Autocomplete
                     label={t('radio.rigModel')}
                     placeholder={t('radio.rigModelPlaceholder')}
@@ -460,7 +740,25 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     onSelectionChange={selectedKey => {
                       if (selectedKey) {
                         logger.debug('Radio model selected:', selectedKey);
-                        updateConfig({ serial: { path: config.serial?.path ?? '', rigModel: Number(selectedKey), serialConfig: config.serial?.serialConfig } });
+                        const nextRigModel = Number(selectedKey);
+                        const currentRigModel = config.serial?.rigModel;
+                        const rigPath = config.serial?.backendConfig?.rig_pathname ?? config.serial?.path ?? '';
+
+                        if (currentRigModel && currentRigModel !== nextRigModel) {
+                          pendingEndpointKindResetRef.current = {
+                            previousEndpointKind: endpointKind ?? null,
+                            rigModel: nextRigModel,
+                          };
+                        }
+
+                        updateConfig({
+                          serial: {
+                            path: rigPath,
+                            rigModel: nextRigModel,
+                            serialConfig: config.serial?.serialConfig,
+                            backendConfig: rigPath ? { rig_pathname: rigPath } : {},
+                          }
+                        });
                       }
                     }}
                     variant="flat"
@@ -481,220 +779,169 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       </AutocompleteItem>
                     )}
                   </Autocomplete>
+                  {!config.serial?.rigModel ? (
+                    <div className="text-xs text-default-400 bg-default-50 p-3 rounded-lg">
+                      {t('radio.selectRigModelBeforeEndpoint')}
+                    </div>
+                  ) : isLoadingRigConfigSchema && !rigConfigSchema ? (
+                    <div className="text-xs text-default-400 bg-default-50 p-3 rounded-lg">
+                      {t('radio.loadingRigConfigSchema')}
+                    </div>
+                  ) : usesNetworkEndpoint ? (
+                    <Input
+                      label={t('radio.backendEndpoint')}
+                      placeholder={t('radio.backendEndpointPlaceholder')}
+                      description={selectedRig ? t('radio.backendEndpointDesc', { model: `${selectedRig.mfgName} ${selectedRig.modelName}` }) : t('radio.backendEndpointDescGeneric')}
+                      value={effectiveRigPath}
+                      onChange={e => {
+                        const value = e.target.value;
+                        updateConfig({
+                          serial: {
+                            path: value,
+                            rigModel: config.serial?.rigModel ?? 0,
+                            serialConfig: config.serial?.serialConfig,
+                            backendConfig: {
+                              ...(config.serial?.backendConfig || {}),
+                              rig_pathname: value,
+                            },
+                          }
+                        });
+                      }}
+                      variant="flat"
+                      size="md"
+                    />
+                  ) : usesDevicePathEndpoint ? (
+                    <Input
+                      label={t('radio.deviceEndpoint')}
+                      placeholder={t('radio.deviceEndpointPlaceholder')}
+                      description={t('radio.deviceEndpointDesc')}
+                      value={effectiveRigPath}
+                      onChange={e => {
+                        const value = e.target.value;
+                        updateConfig({
+                          serial: {
+                            path: value,
+                            rigModel: config.serial?.rigModel ?? 0,
+                            serialConfig: config.serial?.serialConfig,
+                            backendConfig: {
+                              ...(config.serial?.backendConfig || {}),
+                              rig_pathname: value,
+                            },
+                          }
+                        });
+                      }}
+                      variant="flat"
+                      size="md"
+                    />
+                  ) : (
+                    <Autocomplete
+                      label={t('radio.serialPort')}
+                      placeholder={t('radio.serialPortPlaceholder')}
+                      description={t('radio.serialPortDesc')}
+                      allowsCustomValue
+                      inputValue={effectiveRigPath}
+                      selectedKey={effectiveRigPath || null}
+                      onInputChange={value => {
+                        updateConfig({
+                          serial: {
+                            path: value,
+                            rigModel: config.serial?.rigModel ?? 0,
+                            serialConfig: config.serial?.serialConfig,
+                            backendConfig: {
+                              ...(config.serial?.backendConfig || {}),
+                              rig_pathname: value,
+                            },
+                          }
+                        });
+                      }}
+                      onSelectionChange={selectedKey => {
+                        if (selectedKey !== null) {
+                          updateConfig({
+                            serial: {
+                              path: String(selectedKey),
+                              rigModel: config.serial?.rigModel ?? 0,
+                              serialConfig: config.serial?.serialConfig,
+                              backendConfig: {
+                                ...(config.serial?.backendConfig || {}),
+                                rig_pathname: String(selectedKey),
+                              },
+                            }
+                          });
+                        }
+                      }}
+                      variant="flat"
+                      size="md"
+                      defaultItems={ports}
+                    >
+                      {(item: PortInfo) => (
+                        <AutocompleteItem key={item.path} textValue={item.path}>
+                          {item.path}
+                        </AutocompleteItem>
+                      )}
+                    </Autocomplete>
+                  )}
                   <Divider />
-                  
-                  {/* 串口参数配置 */}
                   <div className="space-y-4">
-                    <h5 className="font-medium text-default-700">{t('radio.serialParamsTitle')}</h5>
-
-                    {/* 基础串口设置 */}
-                    <div>
-                      <h6 className="text-sm font-medium text-default-600 mb-2">{t('radio.serialBasicSettings')}</h6>
-                      <div className="grid grid-cols-2 gap-3">
-                        {/* 波特率 */}
-                        <Select
-                          label={t('radio.baudRate')}
-                          size="sm"
-                          selectedKeys={config.serial?.serialConfig?.rate ? [config.serial?.serialConfig.rate.toString()] : ['9600']}
-                          onSelectionChange={keys => {
-                            const value = Array.from(keys)[0] as string;
-                            updateSerialConfig({ rate: parseInt(value) });
-                          }}
-                          variant="flat"
-                        >
-                          <SelectItem key="1200" textValue="1200">1200</SelectItem>
-                          <SelectItem key="2400" textValue="2400">2400</SelectItem>
-                          <SelectItem key="4800" textValue="4800">4800</SelectItem>
-                          <SelectItem key="9600" textValue="9600">9600 ({t('radio.defaultValue')})</SelectItem>
-                          <SelectItem key="19200" textValue="19200">19200</SelectItem>
-                          <SelectItem key="38400" textValue="38400">38400</SelectItem>
-                          <SelectItem key="57600" textValue="57600">57600</SelectItem>
-                          <SelectItem key="115200" textValue="115200">115200</SelectItem>
-                        </Select>
-
-                        {/* 数据位 */}
-                        <Select
-                          label={t('radio.dataBits')}
-                          size="sm"
-                          selectedKeys={config.serial?.serialConfig?.data_bits ? [config.serial?.serialConfig.data_bits] : ['8']}
-                          onSelectionChange={keys => {
-                            const value = Array.from(keys)[0] as string;
-                            updateSerialConfig({ data_bits: value as '5' | '6' | '7' | '8' });
-                          }}
-                          variant="flat"
-                        >
-                          <SelectItem key="5" textValue="5">{t('radio.bits', { n: 5 })}</SelectItem>
-                          <SelectItem key="6" textValue="6">{t('radio.bits', { n: 6 })}</SelectItem>
-                          <SelectItem key="7" textValue="7">{t('radio.bits', { n: 7 })}</SelectItem>
-                          <SelectItem key="8" textValue="8">{t('radio.bits', { n: 8 })} ({t('radio.defaultValue')})</SelectItem>
-                        </Select>
-
-                        {/* 停止位 */}
-                        <Select
-                          label={t('radio.stopBits')}
-                          size="sm"
-                          selectedKeys={config.serial?.serialConfig?.stop_bits ? [config.serial?.serialConfig.stop_bits] : ['1']}
-                          onSelectionChange={keys => {
-                            const value = Array.from(keys)[0] as string;
-                            updateSerialConfig({ stop_bits: value as '1' | '2' });
-                          }}
-                          variant="flat"
-                        >
-                          <SelectItem key="1" textValue="1">{t('radio.bits', { n: 1 })} ({t('radio.defaultValue')})</SelectItem>
-                          <SelectItem key="2" textValue="2">{t('radio.bits', { n: 2 })}</SelectItem>
-                        </Select>
-
-                        {/* 奇偶校验 */}
-                        <Select
-                          label={t('radio.parity')}
-                          size="sm"
-                          selectedKeys={config.serial?.serialConfig?.serial_parity ? [config.serial?.serialConfig.serial_parity] : ['None']}
-                          onSelectionChange={keys => {
-                            const value = Array.from(keys)[0] as string;
-                            updateSerialConfig({ serial_parity: value as 'None' | 'Even' | 'Odd' | 'Mark' | 'Space' });
-                          }}
-                          variant="flat"
-                        >
-                          <SelectItem key="None" textValue="None">{t('radio.parityNone')} ({t('radio.defaultValue')})</SelectItem>
-                          <SelectItem key="Even" textValue="Even">{t('radio.parityEven')}</SelectItem>
-                          <SelectItem key="Odd" textValue="Odd">{t('radio.parityOdd')}</SelectItem>
-                          <SelectItem key="Mark" textValue="Mark">{t('radio.parityMark')}</SelectItem>
-                          <SelectItem key="Space" textValue="Space">{t('radio.paritySpace')}</SelectItem>
-                        </Select>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h5 className="font-medium text-default-700">{t('radio.hamlibBackendConfigTitle')}</h5>
+                        <p className="text-xs text-default-500">{t('radio.hamlibBackendConfigDesc')}</p>
                       </div>
+                      {isLoadingRigConfigSchema && (
+                        <Chip size="sm" variant="flat" color="primary">
+                          {t('radio.loadingRigConfigSchema')}
+                        </Chip>
+                      )}
                     </div>
 
-                    {/* 流控和控制信号 */}
-                    <div>
-                      <h6 className="text-sm font-medium text-default-600 mb-2">{t('radio.flowControl')}</h6>
-                      <div className="grid grid-cols-3 gap-3">
-                        {/* 握手方式 */}
-                        <Select
-                          label={t('radio.handshake')}
-                          size="sm"
-                          selectedKeys={config.serial?.serialConfig?.serial_handshake ? [config.serial?.serialConfig.serial_handshake] : ['None']}
-                          onSelectionChange={keys => {
-                            const value = Array.from(keys)[0] as string;
-                            updateSerialConfig({ serial_handshake: value as 'None' | 'Hardware' | 'Software' });
-                          }}
-                          variant="flat"
-                        >
-                          <SelectItem key="None" textValue="None">{t('radio.parityNone')} ({t('radio.defaultValue')})</SelectItem>
-                          <SelectItem key="Software" textValue="Software">{t('radio.handshakeSoftware')}</SelectItem>
-                          <SelectItem key="Hardware" textValue="Hardware">{t('radio.handshakeHardware')}</SelectItem>
-                        </Select>
-
-                        {/* RTS控制线 */}
-                        <Select
-                          label={t('radio.rtsControl')}
-                          size="sm"
-                          selectedKeys={config.serial?.serialConfig?.rts_state ? [config.serial?.serialConfig.rts_state] : ['UNSET']}
-                          onSelectionChange={keys => {
-                            const value = Array.from(keys)[0] as string;
-                            updateSerialConfig({ rts_state: value === 'UNSET' ? undefined : value as 'ON' | 'OFF' | 'UNSET' });
-                          }}
-                          variant="flat"
-                        >
-                          <SelectItem key="UNSET" textValue="UNSET">{t('radio.defaultValue')}</SelectItem>
-                          <SelectItem key="OFF" textValue="OFF">{t('radio.low')}</SelectItem>
-                          <SelectItem key="ON" textValue="ON">{t('radio.high')}</SelectItem>
-                        </Select>
-
-                        {/* DTR控制线 */}
-                        <Select
-                          label={t('radio.dtrControl')}
-                          size="sm"
-                          selectedKeys={config.serial?.serialConfig?.dtr_state ? [config.serial?.serialConfig.dtr_state] : ['UNSET']}
-                          onSelectionChange={keys => {
-                            const value = Array.from(keys)[0] as string;
-                            updateSerialConfig({ dtr_state: value === 'UNSET' ? undefined : value as 'ON' | 'OFF' | 'UNSET' });
-                          }}
-                          variant="flat"
-                        >
-                          <SelectItem key="UNSET" textValue="UNSET">{t('radio.defaultValue')}</SelectItem>
-                          <SelectItem key="OFF" textValue="OFF">{t('radio.low')}</SelectItem>
-                          <SelectItem key="ON" textValue="ON">{t('radio.high')}</SelectItem>
-                        </Select>
+                    {!config.serial?.rigModel ? (
+                      <div className="text-xs text-default-400 bg-default-50 p-3 rounded-lg">
+                        {t('radio.selectRigModelFirst')}
                       </div>
-                    </div>
-
-                    {/* 时序与重试设置 */}
-                    <div>
-                      <h6 className="text-sm font-medium text-default-600 mb-2">{t('radio.timingRetry')}</h6>
-                      <div className="grid grid-cols-2 gap-3">
-                        {/* 超时时间 */}
-                        <Input
-                          label={t('radio.timeout')}
-                          size="sm"
-                          type="number"
-                          min="0"
-                          max="60000"
-                          value={config.serial?.serialConfig?.timeout?.toString() || ''}
-                          onChange={e => {
-                            const value = e.target.value;
-                            updateSerialConfig({ timeout: value ? parseInt(value) : undefined });
-                          }}
-                          variant="flat"
-                          placeholder={t('radio.defaultValue')}
-                        />
-
-                        {/* 重试次数 */}
-                        <Input
-                          label={t('radio.retryCount')}
-                          size="sm"
-                          type="number"
-                          min="0"
-                          max="10"
-                          value={config.serial?.serialConfig?.retry?.toString() || ''}
-                          onChange={e => {
-                            const value = e.target.value;
-                            updateSerialConfig({ retry: value ? parseInt(value) : undefined });
-                          }}
-                          variant="flat"
-                          placeholder={t('radio.defaultValue')}
-                        />
-
-                        {/* 字节间延迟 */}
-                        <Input
-                          label={t('radio.writeDelay')}
-                          size="sm"
-                          type="number"
-                          min="0"
-                          max="1000"
-                          value={config.serial?.serialConfig?.write_delay?.toString() || ''}
-                          onChange={e => {
-                            const value = e.target.value;
-                            updateSerialConfig({ write_delay: value ? parseInt(value) : undefined });
-                          }}
-                          variant="flat"
-                          placeholder={t('radio.defaultValue')}
-                        />
-
-                        {/* 命令间延迟 */}
-                        <Input
-                          label={t('radio.postWriteDelay')}
-                          size="sm"
-                          type="number"
-                          min="0"
-                          max="5000"
-                          value={config.serial?.serialConfig?.post_write_delay?.toString() || ''}
-                          onChange={e => {
-                            const value = e.target.value;
-                            updateSerialConfig({ post_write_delay: value ? parseInt(value) : undefined });
-                          }}
-                          variant="flat"
-                          placeholder={t('radio.defaultValue')}
-                        />
+                    ) : visibleRigConfigFields.length === 0 ? (
+                      <div className="text-xs text-default-400 bg-default-50 p-3 rounded-lg">
+                        {t('radio.noRigConfigSchema')}
                       </div>
-                    </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {connectionRigConfigFields.length > 0 && (
+                          <div className="space-y-3">
+                            <div>
+                              <h6 className="text-sm font-medium text-default-700">{t('radio.connectionParamsTitle')}</h6>
+                              <p className="text-xs text-default-500">{t('radio.connectionParamsDesc')}</p>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {connectionRigConfigFields.map((field) => renderHamlibConfigField(field))}
+                            </div>
+                          </div>
+                        )}
 
-                    <div className="text-xs text-default-400 space-y-1 bg-default-50 p-3 rounded-lg">
-                      <p className="font-medium">💡 {t('radio.serialConfigTips')}</p>
-                      <p>• {t('radio.tipModernRadio')}</p>
-                      <p>• {t('radio.tipOldRadio')}</p>
-                      <p>• {t('radio.tipUnstableConnection')}</p>
-                      <p>• {t('radio.tipPTTIssue')}</p>
-                    </div>
+                        {advancedRigConfigFields.length > 0 && (
+                          <Accordion variant="light" className="px-0">
+                            <AccordionItem
+                              key="advanced"
+                              aria-label={t('radio.backendAdvancedTitle')}
+                              className="px-0"
+                              title={(
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <h6 className="text-sm font-medium text-default-700">{t('radio.backendAdvancedTitle')}</h6>
+                                    <p className="text-xs text-default-500">{t('radio.backendAdvancedDesc')}</p>
+                                  </div>
+                                  <Chip size="sm" variant="flat">
+                                    {advancedRigConfigFields.length}
+                                  </Chip>
+                                </div>
+                              )}
+                            >
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                                {advancedRigConfigFields.map((field) => renderHamlibConfigField(field))}
+                              </div>
+                            </AccordionItem>
+                          </Accordion>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <Divider />
@@ -707,7 +954,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="primary"
                       onPress={handleTestConnection}
                       isLoading={isTestingConnection}
-                      isDisabled={!config.serial?.path || !config.serial?.rigModel || isTestingPTT}
+                      isDisabled={!effectiveRigPath || !config.serial?.rigModel || isTestingPTT}
                     >
                       {isTestingConnection ? t('radio.testingConnection') : t('radio.testConnection')}
                     </Button>
@@ -717,7 +964,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       color="secondary"
                       onPress={handleTestPTT}
                       isLoading={isTestingPTT}
-                      isDisabled={!config.serial?.path || !config.serial?.rigModel || config.pttMethod === 'vox' || isTestingConnection}
+                      isDisabled={!effectiveRigPath || !config.serial?.rigModel || config.pttMethod === 'vox' || isTestingConnection}
                     >
                       {config.pttMethod === 'vox' ? t('radio.voxNoTest') : isTestingPTT ? t('radio.testingPTT') : t('radio.testPTT')}
                     </Button>
@@ -1031,8 +1278,8 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
             size="lg"
           >
             <Tab key="none" title={`📻 ${t('radio.modeNone')}`} />
-            <Tab key="network" title={`🌐 ${t('radio.modeNetwork')}`} />
             <Tab key="serial" title={`🔌 ${t('radio.modeSerial')}`} />
+            <Tab key="network" title={`🌐 ${t('radio.modeNetwork')}`} />
             <Tab key="icom-wlan" title={`📡 ${t('radio.modeIcomWlan')}`} />
           </Tabs>
         </div>
