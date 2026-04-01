@@ -72,6 +72,107 @@ const CORE_CAPABILITY_LABELS: Record<CoreCapabilityKey, string> = {
   writeRadioMode: 'write radio mode',
 };
 
+type HamlibPortCaps = {
+  portType?: string;
+  serialRateMin?: number;
+  serialRateMax?: number;
+  serialDataBits?: number;
+  serialStopBits?: number;
+  serialParity?: string;
+  serialHandshake?: string;
+  writeDelay?: number;
+  postWriteDelay?: number;
+  timeout?: number;
+  retry?: number;
+};
+
+type RigEndpointKind = 'serial-port' | 'network-address' | 'device-path';
+
+type RigConfigFieldSchema = {
+  token: number;
+  name: string;
+  label: string;
+  tooltip: string;
+  defaultValue: string;
+  effectiveDefaultValue?: string;
+  effectiveDefaultSource?: 'hamlib-schema' | 'rig-caps';
+  type: string;
+  numeric?: { min: number; max: number; step: number };
+  options?: string[];
+};
+
+function deriveRigEndpointKind(portType?: string): RigEndpointKind {
+  switch (portType) {
+    case 'serial':
+      return 'serial-port';
+    case 'network':
+    case 'udp-network':
+      return 'network-address';
+    default:
+      return 'device-path';
+  }
+}
+
+function getRigCapsDefaultValue(fieldName: string, caps?: HamlibPortCaps): string | undefined {
+  if (!caps) {
+    return undefined;
+  }
+
+  switch (fieldName) {
+    case 'serial_speed':
+      return caps.serialRateMax ? String(caps.serialRateMax) : undefined;
+    case 'serial_data_bits':
+      return caps.serialDataBits ? String(caps.serialDataBits) : undefined;
+    case 'serial_stop_bits':
+      return caps.serialStopBits ? String(caps.serialStopBits) : undefined;
+    case 'serial_parity':
+      return caps.serialParity;
+    case 'serial_handshake':
+      return caps.serialHandshake;
+    case 'write_delay':
+      return caps.writeDelay !== undefined ? String(caps.writeDelay) : undefined;
+    case 'post_write_delay':
+      return caps.postWriteDelay !== undefined ? String(caps.postWriteDelay) : undefined;
+    case 'timeout':
+      return caps.timeout !== undefined ? String(caps.timeout) : undefined;
+    case 'retry':
+      return caps.retry !== undefined ? String(caps.retry) : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function enrichRigConfigFields(fields: unknown[], caps?: HamlibPortCaps): RigConfigFieldSchema[] {
+  if (!Array.isArray(fields)) {
+    return [];
+  }
+
+  return fields.flatMap((field): RigConfigFieldSchema[] => {
+    if (!field || typeof field !== 'object') {
+      return [];
+    }
+
+    const raw = field as Record<string, unknown>;
+    const defaultValue = typeof raw.defaultValue === 'string' ? raw.defaultValue : '';
+    const capsDefaultValue = getRigCapsDefaultValue(typeof raw.name === 'string' ? raw.name : '', caps);
+    const effectiveDefaultValue = capsDefaultValue ?? defaultValue;
+    const effectiveDefaultSource = capsDefaultValue ? 'rig-caps' : (defaultValue ? 'hamlib-schema' : undefined);
+
+    return [{
+      token: typeof raw.token === 'number' ? raw.token : 0,
+      name: typeof raw.name === 'string' ? raw.name : '',
+      label: typeof raw.label === 'string' ? raw.label : '',
+      tooltip: typeof raw.tooltip === 'string' ? raw.tooltip : '',
+      defaultValue,
+      effectiveDefaultValue: effectiveDefaultValue || undefined,
+      effectiveDefaultSource,
+      type: typeof raw.type === 'string' ? raw.type : 'unknown',
+      numeric: raw.numeric as RigConfigFieldSchema['numeric'] | undefined,
+      options: Array.isArray(raw.options) ? raw.options.filter((option): option is string => typeof option === 'string') : undefined,
+    }];
+  });
+}
+
 /**
  * PhysicalRadioManager - 重构后的物理电台管理器
  */
@@ -912,6 +1013,38 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     } catch (error) {
       logger.warn('Failed to get HamLib supported rig list:', (error as Error).message);
       return [];
+    }
+  }
+
+  static async getRigConfigSchema(rigModel: number): Promise<{
+    rigModel: number;
+    portType: string;
+    endpointKind: RigEndpointKind;
+    fields: RigConfigFieldSchema[];
+  }> {
+    try {
+      const hamlibModule = await import('hamlib');
+      const { HamLib } = hamlibModule;
+      const rig = new HamLib(rigModel) as any;
+      const fields = typeof rig.getConfigSchema === 'function' ? rig.getConfigSchema() : [];
+      const portCaps = typeof rig.getPortCaps === 'function' ? rig.getPortCaps() as HamlibPortCaps : undefined;
+      await rig.destroy().catch(() => {});
+
+      const portType = typeof portCaps?.portType === 'string' ? portCaps.portType : 'other';
+      return {
+        rigModel,
+        portType,
+        endpointKind: deriveRigEndpointKind(portType),
+        fields: enrichRigConfigFields(fields, portCaps),
+      };
+    } catch (error) {
+      logger.warn('Failed to get HamLib rig config schema', { rigModel, error });
+      return {
+        rigModel,
+        portType: 'other',
+        endpointKind: 'device-path',
+        fields: [],
+      };
     }
   }
 

@@ -387,10 +387,6 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                       title={getTabTitle('operator', isMobile)}
                     />
                   )}
-                  <Tab
-                    key="display"
-                    title={getTabTitle('display', isMobile)}
-                  />
                   {canRadioConfig && (
                     <Tab
                       key="radio_profile"
@@ -409,6 +405,10 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                       title={getTabTitle('frequency_presets', isMobile)}
                     />
                   )}
+                  <Tab
+                    key="display"
+                    title={getTabTitle('display', isMobile)}
+                  />
                   {isAdmin && (
                     <Tab
                       key="tokens"
