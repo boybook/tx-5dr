@@ -51,6 +51,8 @@ interface SpectrumControllerLike {
   off(event: 'spectrumLine', listener: (line: SpectrumLine) => void): unknown;
 }
 
+type SplitSupportState = 'unknown' | 'supported' | 'unsupported';
+
 /**
  * HamlibConnection 实现类
  * 支持串口和网络连接方式
@@ -126,6 +128,17 @@ export class HamlibConnection
    * 用于选择正确的 S 表标准（HF: S9=-73dBm vs VHF/UHF: S9=-93dBm）
    */
   private currentFrequencyHz: number = 0;
+
+  /**
+   * 当前连接会话的 split 能力探测状态。
+   * 仅用于决定是否在写 RX 后补写同频 TX，不向上层暴露。
+   */
+  private splitSupportState: SplitSupportState = 'unknown';
+
+  /**
+   * 当前连接会话中探测到的 split 开关状态。
+   */
+  private splitEnabled = false;
 
   constructor() {
     super();
@@ -332,6 +345,7 @@ export class HamlibConnection
         ),
       ]);
 
+      await this.syncSplitFrequencyIfNeeded(frequency);
       this.lastSuccessfulOperation = Date.now();
       this.currentFrequencyHz = frequency;
       logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
@@ -1047,6 +1061,77 @@ export class HamlibConnection
     }
   }
 
+  private async syncSplitFrequencyIfNeeded(frequency: number): Promise<void> {
+    const splitEnabled = await this.isSplitEnabled();
+
+    if (!splitEnabled) {
+      return;
+    }
+
+    try {
+      await Promise.race([
+        this.rig!.setSplitFreq(frequency),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Set split frequency timeout')), 5000)
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`Split TX frequency synchronized: ${(frequency / 1000000).toFixed(3)} MHz`);
+    } catch (error) {
+      logger.warn(`Split TX frequency sync failed: ${this.getErrorMessage(error)}`, {
+        frequency,
+      });
+    }
+  }
+
+  private async isSplitEnabled(): Promise<boolean> {
+    if (this.splitSupportState === 'supported') {
+      return this.splitEnabled;
+    }
+
+    if (this.splitSupportState === 'unsupported') {
+      return false;
+    }
+
+    return this.probeSplitStatus();
+  }
+
+  private async probeSplitStatus(): Promise<boolean> {
+    if (!this.rig) {
+      throw new Error('Radio instance not initialized');
+    }
+
+    try {
+      const splitStatus = await Promise.race([
+        this.rig.getSplit(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Get split status timeout')), 5000)
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+      this.splitSupportState = 'supported';
+      this.splitEnabled = Boolean(splitStatus?.enabled);
+      logger.debug(`Split status detected via getSplit: ${this.splitEnabled ? 'enabled' : 'disabled'}`);
+      return this.splitEnabled;
+    } catch (error) {
+      if (isRecoverableOptionalRadioError(error)) {
+        this.splitSupportState = 'unsupported';
+        this.splitEnabled = false;
+        logger.debug(`Split status probe unavailable: ${this.getErrorMessage(error)}`);
+        return false;
+      }
+
+      logger.warn(`Failed to probe split status: ${this.getErrorMessage(error)}`);
+      return false;
+    }
+  }
+
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   /**
    * 清理资源
    */
@@ -1090,6 +1175,8 @@ export class HamlibConnection
       this.currentConfig = null;
       this.pttMethod = 'cat';
       this.meterPollFailCount = 0;
+      this.splitSupportState = 'unknown';
+      this.splitEnabled = false;
       this.removeAllListeners();
     } finally {
       // 确保标志位被重置
