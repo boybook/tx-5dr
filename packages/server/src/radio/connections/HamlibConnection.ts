@@ -19,6 +19,7 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/erro
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
+import { buildBackendConfig } from '../hamlibConfigUtils.js';
 
 const logger = createLogger('HamlibConnection');
 import {
@@ -219,7 +220,7 @@ export class HamlibConnection
       const port =
         config.type === 'network'
           ? `${config.network!.host}:${config.network!.port}`
-          : config.serial!.path;
+          : undefined;
       const model = config.type === 'network' ? 2 : config.serial!.rigModel;
 
       // 创建 HamLib 实例
@@ -239,9 +240,9 @@ export class HamlibConnection
       logger.debug(`Configuring PTT type: ${this.pttMethod} -> ${hamlibPttType}`);
       await rig.setPttType(hamlibPttType);
 
-      // 应用串口配置（如果有）
-      if (config.type === 'serial' && config.serial?.serialConfig) {
-        await this.applySerialConfig(config.serial.serialConfig);
+      // 应用 Hamlib backend 配置（如果有）
+      if (config.type === 'serial' && config.serial) {
+        await this.applyBackendConfig(config.serial);
       }
 
       // 打开连接（带超时保护）
@@ -996,39 +997,25 @@ export class HamlibConnection
   /**
    * 应用串口配置参数
    */
-  private async applySerialConfig(serialConfig: SerialConfig): Promise<void> {
+  private async applyBackendConfig(serial: { path?: string; serialConfig?: SerialConfig; backendConfig?: Record<string, string> }): Promise<void> {
     if (!this.rig) {
       throw new Error('Radio instance not initialized');
     }
 
-    logger.debug('Applying serial config parameters...');
+    logger.debug('Applying Hamlib backend config parameters...');
 
     try {
-      // 基础串口设置
-      const configs = [
-        { param: 'data_bits', value: serialConfig.data_bits },
-        { param: 'stop_bits', value: serialConfig.stop_bits },
-        { param: 'serial_parity', value: serialConfig.serial_parity },
-        { param: 'serial_handshake', value: serialConfig.serial_handshake },
-        { param: 'rts_state', value: serialConfig.rts_state },
-        { param: 'dtr_state', value: serialConfig.dtr_state },
-        // 通信设置
-        { param: 'rate', value: serialConfig.rate?.toString() },
-        { param: 'timeout', value: serialConfig.timeout?.toString() },
-        { param: 'retry', value: serialConfig.retry?.toString() },
-        // 时序控制
-        { param: 'write_delay', value: serialConfig.write_delay?.toString() },
-        {
-          param: 'post_write_delay',
-          value: serialConfig.post_write_delay?.toString(),
-        },
-      ];
+      const backendConfig = buildBackendConfig(serial as any, {
+        pttMethod: this.currentConfig?.pttMethod,
+        pttPort: this.currentConfig?.pttPort,
+      });
+      const configs = Object.entries(backendConfig).map(([param, value]) => ({ param, value }));
 
       for (const config of configs) {
         if (config.value !== undefined && config.value !== null) {
           logger.debug(`Setting ${config.param}: ${config.value}`);
           await Promise.race([
-            this.rig!.setSerialConfig(config.param as any, config.value),
+            this.rig!.setConf(config.param, config.value),
             new Promise((_, reject) =>
               setTimeout(
                 () => reject(new Error(`Set ${config.param} timeout`)),
@@ -1039,10 +1026,10 @@ export class HamlibConnection
         }
       }
 
-      logger.debug('Serial config parameters applied successfully');
+      logger.debug('Hamlib backend config parameters applied successfully');
     } catch (error) {
-      logger.warn('Failed to apply serial config:', (error as Error).message);
-      throw new Error(`Serial configuration failed: ${(error as Error).message}`);
+      logger.warn('Failed to apply Hamlib backend config:', (error as Error).message);
+      throw new Error(`Hamlib backend configuration failed: ${(error as Error).message}`);
     }
   }
 

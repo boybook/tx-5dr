@@ -20,6 +20,7 @@ import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
+import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
 
 /** 判断两个配置是否指向同一硬件目标（用于复用判断） */
 function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
@@ -63,7 +64,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/config', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, preHandler: [requireAbility('update', 'RadioConfig')] }, async (req, reply) => {
-    const config = HamlibConfigSchema.parse(req.body);
+    const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
     await configManager.updateRadioConfig(config);
 
     // 标记是否刚刚触发了引擎重启（用于避免重复调用 applyConfig）
@@ -137,6 +138,22 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
   fastify.get('/rigs', async (_req, reply) => {
     return reply.send({ rigs: await PhysicalRadioManager.listSupportedRigs() });
+  });
+
+  fastify.get('/rigs/:rigModel/config-schema', async (req: any, reply) => {
+    const rigModel = Number(req.params?.rigModel);
+
+    if (!Number.isInteger(rigModel) || rigModel <= 0) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `Invalid rigModel parameter: ${req.params?.rigModel}`,
+        userMessage: 'Invalid radio model',
+        suggestions: ['Select a valid radio model from the supported rig list'],
+      });
+    }
+
+    const schema = await PhysicalRadioManager.getRigConfigSchema(rigModel);
+    return reply.send(schema);
   });
 
   fastify.get('/serial-ports', async (_req, reply) => {
@@ -309,7 +326,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/test', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
-    const config = HamlibConfigSchema.parse(req.body);
+    const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     if (config.type === 'none') {
       return reply.send({ success: true, message: 'No radio mode, connection test not needed' });
@@ -360,7 +377,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/test-ptt', { schema: { body: zodToJsonSchema(HamlibConfigSchema) } }, async (req, reply) => {
-    const config = HamlibConfigSchema.parse(req.body);
+    const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     if (config.type === 'none') {
       throw new RadioError({
