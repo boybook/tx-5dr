@@ -48,7 +48,19 @@ interface LiveKitCredentialFileData {
   rotatedAt: string;
 }
 
+interface WindowsVCRuntimeStatus {
+  installed: boolean;
+  source: 'registry' | 'filesystem' | 'missing';
+  detail: string;
+}
+
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = { closeBehavior: 'ask' };
+const VC_REDIST_X64_URL = 'https://aka.ms/vc14/vc_redist.x64.exe';
+const VC_REDIST_REGISTRY_KEYS = [
+  'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
+  'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
+] as const;
+const VC_REDIST_REQUIRED_DLLS = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'] as const;
 
 function getElectronSettingsPath(): string {
   return path.join(getAppConfigDir(), ELECTRON_SETTINGS_FILE);
@@ -212,6 +224,90 @@ function resolveCommand(command: string): string | null {
 
   const resolved = probe.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
   return resolved || null;
+}
+
+function queryWindowsRegistryValue(key: string, valueName: string): string | null {
+  const probe = spawnSync('reg', ['query', key, '/v', valueName], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (probe.status !== 0) {
+    return null;
+  }
+
+  const pattern = new RegExp(`^\\s*${valueName}\\s+REG_\\w+\\s+(.+)$`, 'im');
+  const match = probe.stdout.match(pattern);
+  return match?.[1]?.trim() || null;
+}
+
+function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
+  if (process.platform !== 'win32') {
+    return { installed: true, source: 'registry', detail: 'not-applicable' };
+  }
+
+  for (const key of VC_REDIST_REGISTRY_KEYS) {
+    const installed = queryWindowsRegistryValue(key, 'Installed');
+    if (installed === '0x1' || installed === '1') {
+      const version = queryWindowsRegistryValue(key, 'Version') || 'unknown';
+      return {
+        installed: true,
+        source: 'registry',
+        detail: `${key} (Version=${version})`,
+      };
+    }
+  }
+
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+  const system32 = path.join(systemRoot, 'System32');
+  const missingDlls = VC_REDIST_REQUIRED_DLLS.filter((dllName) => !fs.existsSync(path.join(system32, dllName)));
+  if (missingDlls.length === 0) {
+    return {
+      installed: true,
+      source: 'filesystem',
+      detail: system32,
+    };
+  }
+
+  return {
+    installed: false,
+    source: 'missing',
+    detail: `missing DLLs: ${missingDlls.join(', ')}`,
+  };
+}
+
+async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
+  if (process.platform !== 'win32') {
+    return true;
+  }
+
+  const runtimeStatus = detectWindowsVCRuntime();
+  if (runtimeStatus.installed) {
+    logger.info(`windows VC runtime detected via ${runtimeStatus.source}: ${runtimeStatus.detail}`);
+    return true;
+  }
+
+  logger.error(`windows VC runtime check failed: ${runtimeStatus.detail}`);
+  const msgs = getMessages(app.getLocale());
+  const response = await dialog.showMessageBox({
+    type: 'error',
+    title: msgs.vcRuntimeMissing.title,
+    message: msgs.vcRuntimeMissing.message,
+    detail: `${msgs.vcRuntimeMissing.detail}\n${VC_REDIST_X64_URL}`,
+    buttons: msgs.vcRuntimeMissing.buttons,
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+
+  if (response.response === 0) {
+    try {
+      await shell.openExternal(VC_REDIST_X64_URL);
+    } catch (error) {
+      logger.error('failed to open VC runtime download link', error);
+    }
+  }
+
+  return true;
 }
 
 // no quarantine/permission fallbacks; we assume portable node file is valid
@@ -1105,6 +1201,8 @@ const startApp = async () => {
   log.initialize();
   Object.assign(console, log.functions);
   log.errorHandler.startCatching();
+
+  await ensureWindowsVCRuntimeInstalled();
 
   // 阻止 macOS App Nap 挂起进程（不阻止屏保，仅保证进程调度持续）
   powerSaveBlocker.start('prevent-app-suspension');
