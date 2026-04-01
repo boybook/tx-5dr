@@ -53,6 +53,7 @@ interface SpectrumControllerLike {
 }
 
 type SplitSupportState = 'unknown' | 'supported' | 'unsupported';
+type TxFrequencyRange = ReturnType<HamLib['getFrequencyRanges']>['tx'][number];
 
 const DATA_TO_BASE_MODE: Record<string, string> = {
   PKTUSB: 'USB',
@@ -70,6 +71,10 @@ const BASE_TO_DATA_MODE: Record<string, string> = {
 
 function normalizeModeName(mode: string): string {
   return mode.trim().toUpperCase();
+}
+
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, value));
 }
 
 /**
@@ -146,6 +151,16 @@ export class HamlibConnection
    * 电台支持的模式集合（连接时检测）
    */
   private supportedModes: Set<string> = new Set();
+
+  /**
+   * Hamlib rig caps 中声明的 TX 频率/功率范围。
+   */
+  private txFrequencyRanges: TxFrequencyRange[] = [];
+
+  /**
+   * 当前已知的电台工作模式（USB/PKTUSB/AM 等）。
+   */
+  private currentRadioMode: string | null = null;
 
   /**
    * 当前工作频率（Hz），由 PhysicalRadioManager 通过 setKnownFrequency 更新
@@ -319,6 +334,8 @@ export class HamlibConnection
       }
 
       await this.detectSupportedModes();
+      this.detectTxFrequencyRanges();
+      await this.initializeRigStateSnapshot();
 
       // 启动数值表轮询
       this.startMeterPolling();
@@ -345,6 +362,8 @@ export class HamlibConnection
     this.stopMeterPolling();
     this.supportedLevels.clear();
     this.supportedModes.clear();
+    this.txFrequencyRanges = [];
+    this.currentRadioMode = null;
 
     // 清理资源
     await this.cleanup();
@@ -456,6 +475,7 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
+      this.currentRadioMode = normalizeModeName(resolvedMode);
       logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth ? ` (${bandwidth})` : ''}`, {
         requestedMode,
         resolvedMode,
@@ -481,6 +501,7 @@ export class HamlibConnection
       ])) as { mode: string; bandwidth: string };
 
       this.lastSuccessfulOperation = Date.now();
+      this.currentRadioMode = normalizeModeName(modeInfo.mode);
       return modeInfo;
     } catch (error) {
       throw this.convertOptionalOperationError(error, 'getMode');
@@ -526,6 +547,46 @@ export class HamlibConnection
     }
   }
 
+  private detectTxFrequencyRanges(): void {
+    if (!this.rig || typeof this.rig.getFrequencyRanges !== 'function') {
+      this.txFrequencyRanges = [];
+      logger.warn('Hamlib TX frequency range detection is not available on this build');
+      return;
+    }
+
+    try {
+      const { tx } = this.rig.getFrequencyRanges();
+      this.txFrequencyRanges = Array.isArray(tx) ? tx : [];
+      logger.info('TX frequency ranges detected', { count: this.txFrequencyRanges.length });
+    } catch (error) {
+      this.txFrequencyRanges = [];
+      logger.warn('Failed to detect TX frequency ranges', error);
+    }
+  }
+
+  private async initializeRigStateSnapshot(): Promise<void> {
+    if (!this.rig) {
+      return;
+    }
+
+    try {
+      const [frequency, modeInfo] = await Promise.all([
+        this.rig.getFrequency().catch(() => null),
+        this.rig.getMode().catch(() => null),
+      ]);
+
+      if (typeof frequency === 'number' && frequency > 0) {
+        this.currentFrequencyHz = frequency;
+      }
+
+      if (modeInfo && typeof modeInfo.mode === 'string' && modeInfo.mode.trim().length > 0) {
+        this.currentRadioMode = normalizeModeName(modeInfo.mode);
+      }
+    } catch (error) {
+      logger.warn('Failed to initialize radio state snapshot', error);
+    }
+  }
+
   private resolveModeForIntent(mode: string, options?: SetRadioModeOptions): string {
     const intent = options?.intent;
     const candidates = this.buildModeCandidates(mode, intent);
@@ -558,6 +619,73 @@ export class HamlibConnection
     }
 
     return [normalizedMode];
+  }
+
+  private getRangeMatchModeCandidates(mode: string | null): string[] {
+    if (!mode) {
+      return [];
+    }
+
+    const normalizedMode = normalizeModeName(mode);
+    const baseMode = DATA_TO_BASE_MODE[normalizedMode] ?? normalizedMode;
+    const dataMode = BASE_TO_DATA_MODE[normalizedMode]
+      ?? (normalizedMode in DATA_TO_BASE_MODE ? normalizedMode : undefined);
+
+    return Array.from(new Set(
+      [normalizedMode, baseMode, dataMode].filter((candidate): candidate is string => Boolean(candidate))
+    ));
+  }
+
+  private resolveCurrentTxPowerMaxWatts(): number | null {
+    if (this.txFrequencyRanges.length === 0) {
+      return null;
+    }
+
+    const fallbackHighPower = Math.max(...this.txFrequencyRanges.map((range) => range.highPower), 0);
+    const fallbackMaxWatts = fallbackHighPower > 0 ? fallbackHighPower / 1000 : null;
+
+    if (this.currentFrequencyHz <= 0 || !this.currentRadioMode) {
+      return fallbackMaxWatts;
+    }
+
+    const normalizedCurrentMode = normalizeModeName(this.currentRadioMode);
+    const modeCandidates = this.getRangeMatchModeCandidates(this.currentRadioMode);
+    const matchingRange = this.txFrequencyRanges
+      .filter((range) => this.currentFrequencyHz >= range.startFreq && this.currentFrequencyHz <= range.endFreq)
+      .map((range) => {
+        const normalizedModes = range.modes
+          .filter((mode): mode is string => typeof mode === 'string' && mode.trim().length > 0)
+          .map((mode) => normalizeModeName(mode));
+        const rangeModes = new Set(normalizedModes);
+        const matchedCandidate = modeCandidates.find((candidate) => rangeModes.has(candidate));
+
+        if (!matchedCandidate) {
+          return null;
+        }
+
+        return {
+          range,
+          exactModeMatch: rangeModes.has(normalizedCurrentMode),
+          modeCount: rangeModes.size,
+          spanWidth: range.endFreq - range.startFreq,
+        };
+      })
+      .filter((entry): entry is { range: TxFrequencyRange; exactModeMatch: boolean; modeCount: number; spanWidth: number } => entry !== null)
+      .sort((left, right) => {
+        if (left.exactModeMatch !== right.exactModeMatch) {
+          return left.exactModeMatch ? -1 : 1;
+        }
+        if (left.modeCount !== right.modeCount) {
+          return left.modeCount - right.modeCount;
+        }
+        return left.spanWidth - right.spanWidth;
+      })[0]?.range;
+
+    if (!matchingRange) {
+      return fallbackMaxWatts;
+    }
+
+    return matchingRange.highPower > 0 ? matchingRange.highPower / 1000 : fallbackMaxWatts;
   }
 
   async getSpectrumSupportSummary(): Promise<SpectrumSupportSummary> {
@@ -1415,28 +1543,34 @@ export class HamlibConnection
   private convertPower(
     meterValue: number | null,
     meterWattsValue: number | null
-  ): { raw: number; percent: number; watts: number | null } {
+  ): { raw: number; percent: number; watts: number | null; maxWatts: number | null } {
+    const maxWatts = this.resolveCurrentTxPowerMaxWatts();
+
     // 优先使用 RFPOWER_METER_WATTS（绝对瓦数，可信）
     if (meterWattsValue !== null) {
-      const percent = (meterValue !== null && meterValue <= 1.0)
-        ? meterValue * 100
-        : 0;
+      const percent = maxWatts && maxWatts > 0
+        ? clampPercent((meterWattsValue / maxWatts) * 100)
+        : (meterValue !== null && meterValue <= 1.0 ? clampPercent(meterValue * 100) : 0);
       const raw = Math.round(percent * 2.55);
-      return { raw, percent, watts: meterWattsValue };
+      return { raw, percent, watts: meterWattsValue, maxWatts };
     }
 
     // 仅有 RFPOWER_METER
     if (meterValue !== null) {
       if (meterValue > 1.0) {
         // 异常：RFPOWER_METER 返回了瓦数而非百分比（如 IC-705 Hamlib 后端）
-        return { raw: 0, percent: 0, watts: meterValue };
+        const percent = maxWatts && maxWatts > 0
+          ? clampPercent((meterValue / maxWatts) * 100)
+          : 0;
+        const raw = Math.round(percent * 2.55);
+        return { raw, percent, watts: meterValue, maxWatts };
       }
-      const percent = meterValue * 100;
+      const percent = clampPercent(meterValue * 100);
       const raw = Math.round(meterValue * 255);
-      return { raw, percent, watts: null };
+      return { raw, percent, watts: null, maxWatts };
     }
 
-    return { raw: 0, percent: 0, watts: null };
+    return { raw: 0, percent: 0, watts: null, maxWatts };
   }
 
   /**

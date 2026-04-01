@@ -16,6 +16,8 @@ type MockRig = {
   getSplit: ReturnType<typeof vi.fn>;
   setSplitFreq: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
+  getFrequency: ReturnType<typeof vi.fn>;
+  getMode: ReturnType<typeof vi.fn>;
 };
 
 function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
@@ -28,6 +30,8 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getSplit: vi.fn().mockResolvedValue({ enabled: false }),
     setSplitFreq: vi.fn().mockResolvedValue(0),
     setMode: vi.fn().mockResolvedValue(0),
+    getFrequency: vi.fn().mockResolvedValue(7100000),
+    getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 'wide' }),
     ...rigOverrides,
   };
 
@@ -141,5 +145,85 @@ describe('HamlibConnection', () => {
     await expect(connection.setMode('PKTUSB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith('USB', undefined);
+  });
+
+  it('uses the matched TX range max watts when converting absolute power readings', () => {
+    const { connection } = createConnectedConnection();
+    (connection as any).txFrequencyRanges = [
+      {
+        startFreq: 1000000,
+        endFreq: 30000000,
+        modes: ['USB', 'AM'],
+        lowPower: 100,
+        highPower: 100000,
+        vfo: 0,
+        antenna: 0,
+      },
+      {
+        startFreq: 1000000,
+        endFreq: 30000000,
+        modes: ['AM'],
+        lowPower: 100,
+        highPower: 25000,
+        vfo: 0,
+        antenna: 0,
+      },
+    ];
+    (connection as any).currentFrequencyHz = 14074000;
+    (connection as any).currentRadioMode = 'AM';
+
+    const result = (connection as any).convertPower(null, 12.5);
+
+    expect(result).toEqual({
+      raw: 127,
+      percent: 50,
+      watts: 12.5,
+      maxWatts: 25,
+    });
+  });
+
+  it('falls back to the rig-wide TX max watts when no exact range matches', () => {
+    const { connection } = createConnectedConnection();
+    (connection as any).txFrequencyRanges = [
+      {
+        startFreq: 1000000,
+        endFreq: 30000000,
+        modes: ['USB'],
+        lowPower: 100,
+        highPower: 10000,
+        vfo: 0,
+        antenna: 0,
+      },
+    ];
+    (connection as any).currentFrequencyHz = 50000000;
+    (connection as any).currentRadioMode = 'FM';
+
+    expect((connection as any).resolveCurrentTxPowerMaxWatts()).toBe(10);
+  });
+
+  it('clamps percent to 100 when the absolute power reading exceeds the matched max watts', () => {
+    const { connection } = createConnectedConnection();
+    (connection as any).txFrequencyRanges = [
+      {
+        startFreq: 1000000,
+        endFreq: 30000000,
+        modes: ['USB'],
+        lowPower: 100,
+        highPower: 10000,
+        vfo: 0,
+        antenna: 0,
+      },
+    ];
+    (connection as any).currentFrequencyHz = 14074000;
+    (connection as any).currentRadioMode = 'USB';
+
+    const result = (connection as any).convertPower(15, null);
+
+    expect(result).toEqual({
+      raw: 255,
+      percent: 100,
+      watts: 15,
+      maxWatts: 10,
+    });
   });
 });

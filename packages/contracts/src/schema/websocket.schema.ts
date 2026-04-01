@@ -251,6 +251,7 @@ export const MeterDataSchema = z.object({
     raw: z.number(),
     percent: z.number(),
     watts: z.number().nullable(),  // 绝对瓦数（仅当电台支持 RFPOWER_METER_WATTS 时非 null）
+    maxWatts: z.number().nullable(), // 当前频率+模式对应的量程瓦数
   }).nullable(),
 });
 
