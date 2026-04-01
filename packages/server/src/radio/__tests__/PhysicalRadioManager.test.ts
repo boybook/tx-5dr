@@ -85,6 +85,43 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('stores diagnostic details for unsupported capabilities and preserves the first failure', async () => {
+    const firstCause = new Error('rig_set_freq invalid parameter');
+    const secondCause = new Error('another failure');
+    const setFrequency = vi.fn()
+      .mockRejectedValueOnce(new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: 'Optional radio operation unavailable (setFrequency): invalid parameter',
+        userMessage: 'Radio operation is not supported by this model',
+        severity: RadioErrorSeverity.WARNING,
+        cause: firstCause,
+        context: { operation: 'setFrequency', optional: true, recoverable: true },
+      }))
+      .mockRejectedValueOnce(new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: 'Optional radio operation unavailable (setFrequency): protocol error',
+        userMessage: 'Radio operation is not supported by this model',
+        severity: RadioErrorSeverity.WARNING,
+        cause: secondCause,
+        context: { operation: 'setFrequency', optional: true, recoverable: true },
+      }));
+
+    (manager as any).connection = { setFrequency };
+
+    await expect(manager.setFrequency(7100000)).resolves.toBe(false);
+    (manager as any).markCoreCapabilityUnsupported('writeFrequency', new Error('manual overwrite should be ignored'));
+
+    const diagnostics = manager.getCoreCapabilityDiagnostics();
+
+    expect(diagnostics.writeFrequency).toMatchObject({
+      capability: 'writeFrequency',
+      message: 'Optional radio operation unavailable (setFrequency): invalid parameter',
+    });
+    expect(diagnostics.writeFrequency?.recordedAt).toBeTypeOf('number');
+    expect(diagnostics.writeFrequency?.stack).toContain('Optional radio operation unavailable (setFrequency): invalid parameter');
+    expect(diagnostics.writeFrequency?.stack).toContain('Caused by: Error: rig_set_freq invalid parameter');
+  });
+
   it('does not report recoverable setMode failures as connection health failures', async () => {
     (manager as any).connection = {
       setMode: vi.fn().mockRejectedValue(new RadioError({
@@ -134,6 +171,30 @@ describe('PhysicalRadioManager', () => {
 
     expect(setMode).toHaveBeenCalledWith('USB', undefined, { intent: 'voice' });
     expect(manager.getCoreCapabilities().writeRadioMode).toBe(true);
+  });
+
+  it('clears diagnostics when a capability becomes supported again', async () => {
+    const setMode = vi.fn()
+      .mockRejectedValueOnce(new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: 'Optional radio operation unavailable (setMode): Feature not available',
+        userMessage: 'Radio operation is not supported by this model',
+        severity: RadioErrorSeverity.WARNING,
+        context: { operation: 'setMode', optional: true, recoverable: true },
+      }))
+      .mockResolvedValueOnce(undefined);
+
+    (manager as any).connection = { setMode };
+
+    await expect(manager.setMode('USB')).rejects.toThrow(
+      'set mode failed: Optional radio operation unavailable (setMode): Feature not available'
+    );
+    expect(manager.getCoreCapabilityDiagnostics().writeRadioMode).toBeDefined();
+
+    (manager as any).coreCapabilityStates.writeRadioMode = 'unknown';
+    await expect(manager.setMode('USB')).resolves.toBeUndefined();
+
+    expect(manager.getCoreCapabilityDiagnostics().writeRadioMode).toBeUndefined();
   });
 
   it('still reports real getMode failures to the connection health state machine', async () => {

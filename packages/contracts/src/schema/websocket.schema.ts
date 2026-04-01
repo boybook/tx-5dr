@@ -4,7 +4,7 @@ import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
-import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabilitiesSchema, RadioConnectionStatusSchema, ReconnectProgressSchema, CoreRadioCapabilitiesSchema } from './radio.schema.js';
+import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabilitiesSchema, RadioConnectionStatusSchema, ReconnectProgressSchema, CoreRadioCapabilitiesSchema, CoreCapabilityDiagnosticsSchema } from './radio.schema.js';
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
@@ -667,6 +667,7 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
       connectionHealthy: z.boolean(),
     }).optional(),
     coreCapabilities: CoreRadioCapabilitiesSchema.optional(),
+    coreCapabilityDiagnostics: CoreCapabilityDiagnosticsSchema.optional(),
     meterCapabilities: MeterCapabilitiesSchema.optional(), // 电台数值表能力（连接时检测）
     /** @deprecated Tuner capability is now in radioCapabilityList event. Kept for backward compat. */
     tunerCapabilities: TunerCapabilitiesSchema.optional(),

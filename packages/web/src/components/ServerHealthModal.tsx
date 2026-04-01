@@ -8,8 +8,9 @@ import {
   Chip,
 } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import type { ProcessSnapshot } from '@tx5dr/contracts';
+import type { CoreCapabilityDiagnostics, CoreRadioCapabilities, ProcessSnapshot } from '@tx5dr/contracts';
 import type { HealthLevel } from '../hooks/useServerHealth';
+import { getActiveCoreCapabilityDiagnostics } from '../utils/coreCapabilityDiagnostics';
 
 const MB = 1024 * 1024;
 
@@ -396,6 +397,8 @@ interface ServerHealthModalProps {
   onClose: () => void;
   snapshots: ProcessSnapshot[];
   health: HealthLevel;
+  coreCapabilities: CoreRadioCapabilities | null;
+  coreCapabilityDiagnostics: CoreCapabilityDiagnostics | null;
 }
 
 const healthChipColors: Record<HealthLevel, 'success' | 'warning' | 'danger' | 'default'> = {
@@ -410,6 +413,8 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
   onClose,
   snapshots,
   health,
+  coreCapabilities,
+  coreCapabilityDiagnostics,
 }) => {
   const { t } = useTranslation('settings');
   const [timeRange, setTimeRange] = useState<TimeRange>(15);
@@ -443,12 +448,23 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
     () => displaySnapshots.map(s => s.eventLoop.p99),
     [displaySnapshots]
   );
+  const unsupportedCoreCapabilities = useMemo(
+    () => getActiveCoreCapabilityDiagnostics(coreCapabilities, coreCapabilityDiagnostics),
+    [coreCapabilities, coreCapabilityDiagnostics]
+  );
 
   const statusLabel =
     health === 'good' ? t('serverHealth.statusGood') :
     health === 'warn' ? t('serverHealth.statusWarn') :
     health === 'critical' ? t('serverHealth.statusCritical') :
     t('serverHealth.statusUnknown');
+
+  const capabilityLabelMap = useMemo(() => ({
+    readFrequency: t('serverHealth.coreCapabilityLabels.readFrequency'),
+    writeFrequency: t('serverHealth.coreCapabilityLabels.writeFrequency'),
+    readRadioMode: t('serverHealth.coreCapabilityLabels.readRadioMode'),
+    writeRadioMode: t('serverHealth.coreCapabilityLabels.writeRadioMode'),
+  }), [t]);
 
   const timeRangeKey: Record<TimeRange, string> = {
     5: t('serverHealth.timeRange5m'),
@@ -577,6 +593,65 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   formatValue={(v) => `${v.toFixed(1)} ms`}
                 />
               </div>
+
+              {unsupportedCoreCapabilities.length > 0 && (
+                <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold text-default-500 uppercase tracking-wider">
+                      {t('serverHealth.coreCapabilityDiagnosticsTitle')}
+                    </div>
+                    <Chip
+                      size="sm"
+                      color="warning"
+                      variant="flat"
+                      className="text-xs"
+                    >
+                      {t('serverHealth.coreCapabilityCount', { count: unsupportedCoreCapabilities.length })}
+                    </Chip>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    {unsupportedCoreCapabilities.map((diagnostic) => (
+                      <details
+                        key={`${diagnostic.capability}-${diagnostic.recordedAt}`}
+                        className="group rounded-lg border border-default-200 bg-content1 px-3 py-2"
+                      >
+                        <summary className="list-none cursor-pointer">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <Chip size="sm" color="warning" variant="flat" className="text-[11px]">
+                                  {t('serverHealth.coreCapabilityUnsupported')}
+                                </Chip>
+                                <span className="text-sm font-semibold text-foreground">
+                                  {capabilityLabelMap[diagnostic.capability]}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-xs text-default-500">
+                                {t('serverHealth.recordedAt')}: {new Date(diagnostic.recordedAt).toLocaleString()}
+                              </div>
+                              <div className="mt-2 text-sm text-default-700 break-words">
+                                {diagnostic.message}
+                              </div>
+                            </div>
+                            <span className="mt-0.5 text-xs text-default-400 group-open:rotate-90 transition-transform">
+                              &gt;
+                            </span>
+                          </div>
+                        </summary>
+                        <div className="mt-3 border-t border-default-200 pt-3">
+                          <div className="text-xs text-default-500 mb-1">
+                            {t('serverHealth.stackTrace')}
+                          </div>
+                          <pre className="text-xs leading-5 whitespace-pre-wrap break-all text-default-700 bg-default-100 rounded-md p-3 overflow-x-auto">
+                            {diagnostic.stack}
+                          </pre>
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Time range selector */}
               <div className="flex items-center gap-2 justify-end">

@@ -89,6 +89,7 @@ export class RadioBridge {
         radioConfig: radioManager.getConfig(),
         connectionHealth: radioManager.getConnectionHealth(),
         coreCapabilities: radioManager.getCoreCapabilities(),
+        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
       });
     });
 
@@ -108,6 +109,7 @@ export class RadioBridge {
         radioConfig,
         connectionHealth: radioManager.getConnectionHealth(),
         coreCapabilities: radioManager.getCoreCapabilities(),
+        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
         meterCapabilities: radioManager.getMeterCapabilities(),
         tunerCapabilities,
       });
@@ -195,6 +197,7 @@ export class RadioBridge {
         reconnectProgress: { attempt, maxAttempts, nextRetryMs: delayMs },
         connectionHealth: radioManager.getConnectionHealth(),
         coreCapabilities: radioManager.getCoreCapabilities(),
+        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
       });
     });
 
@@ -251,6 +254,7 @@ export class RadioBridge {
         recommendation: this.getDisconnectRecommendation(reason),
         connectionHealth: radioManager.getConnectionHealth(),
         coreCapabilities: radioManager.getCoreCapabilities(),
+        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
       });
 
       this._wasRunningBeforeDisconnect = false;
@@ -308,6 +312,7 @@ export class RadioBridge {
         radioConfig: radioManager.getConfig(),
         connectionHealth: radioManager.getConnectionHealth(),
         coreCapabilities,
+        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
       });
     });
 
