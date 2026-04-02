@@ -113,6 +113,10 @@ export const SerialConnectionConfigSchema = z.object({
   backendConfig: HamlibBackendConfigSchema.optional(),
 });
 
+export const HamlibSpectrumConfigSchema = z.object({
+  speed: z.number().int().min(0).max(255).optional(),
+});
+
 /**
  * PTT (Push-to-Talk) 方法Schema
  *
@@ -143,6 +147,9 @@ export const HamlibConfigSchema = z.object({
 
   // 串口模式配置
   serial: SerialConnectionConfigSchema.optional(),
+
+  // Hamlib 频谱配置（当前仅用于官方频谱流 speed）
+  spectrum: HamlibSpectrumConfigSchema.optional(),
 
   // 发射时序补偿（毫秒）- 用于补偿电台和网络的处理延迟
   // 正值表示提前发射，负值表示延后发射
@@ -358,6 +365,7 @@ export type HamlibConfigField = z.infer<typeof HamlibConfigFieldSchema>;
 export type NetworkConfig = z.infer<typeof NetworkConfigSchema>;
 export type IcomWlanConfig = z.infer<typeof IcomWlanConfigSchema>;
 export type SerialConnectionConfig = z.infer<typeof SerialConnectionConfigSchema>;
+export type HamlibSpectrumConfig = z.infer<typeof HamlibSpectrumConfigSchema>;
 export type PttMethod = z.infer<typeof PttMethodSchema>;
 export type HamlibConfig = z.infer<typeof HamlibConfigSchema>;
 export type RadioConfigResponse = z.infer<typeof RadioConfigResponseSchema>;
