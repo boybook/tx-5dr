@@ -1,17 +1,15 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { Card, CardBody, CardHeader, Input, Button } from '@heroui/react';
+import React, { useState, useEffect } from 'react';
+import { Card, CardBody, CardHeader } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faKey, faChevronRight, faChevronDown } from '@fortawesome/free-solid-svg-icons';
-import { useAuth } from '../store/authStore';
+import { faChevronRight, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { api } from '@tx5dr/core';
 import type { StationInfo } from '@tx5dr/contracts';
 import { StationInfoCard } from '../components/StationInfoCard';
+import { AuthLoginForm } from '../components/AuthLoginForm';
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const { login, state } = useAuth();
-  const [token, setToken] = useState('');
   const [helpExpanded, setHelpExpanded] = useState(false);
   const [stationInfo, setStationInfo] = useState<StationInfo | null>(null);
 
@@ -23,17 +21,6 @@ export function LoginPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleSubmit = useCallback(async () => {
-    if (!token.trim()) return;
-    await login(token.trim());
-  }, [token, login]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleSubmit();
-    }
-  }, [handleSubmit]);
-
   return (
     <div className="h-screen w-full flex flex-col items-center justify-center bg-default-50">
       {stationInfo && <StationInfoCard stationInfo={stationInfo} />}
@@ -43,33 +30,7 @@ export function LoginPage() {
           <p className="text-default-500 text-sm">{t('auth:loginPage.subtitle')}</p>
         </CardHeader>
         <CardBody className="gap-4 px-8 pb-8">
-          <Input
-            label={t('auth:loginPage.tokenLabel')}
-            placeholder={t('auth:loginPage.tokenPlaceholder')}
-            type="password"
-            variant="bordered"
-            value={token}
-            onValueChange={setToken}
-            onKeyDown={handleKeyDown}
-            startContent={<FontAwesomeIcon icon={faKey} className="text-default-400" />}
-            isDisabled={state.loginLoading}
-            autoFocus
-          />
-
-          {state.loginError && (
-            <p className="text-danger text-sm">{state.loginError}</p>
-          )}
-
-          <Button
-            color="primary"
-            variant="solid"
-            fullWidth
-            isLoading={state.loginLoading}
-            onPress={handleSubmit}
-            isDisabled={!token.trim()}
-          >
-            {t('auth:loginPage.submit')}
-          </Button>
+          <AuthLoginForm autoFocus />
 
           {/* 折叠式帮助文字 */}
           <div className="mt-1">

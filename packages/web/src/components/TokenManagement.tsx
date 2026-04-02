@@ -37,6 +37,8 @@ const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
   admin: 'warning',
 };
 
+type CreateLoginCredentialInitMode = 'none' | 'admin' | 'self-service';
+
 function expiryKeyToTimestamp(key: string): number | undefined {
   if (key === 'never') return undefined;
   const days = parseInt(key);
@@ -172,6 +174,20 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
             ))}
           </div>
         )}
+        {(token.loginCredential || token.allowSelfLoginCredential) && (
+          <div className="flex flex-wrap gap-2 text-xs text-default-500">
+            {token.loginCredential && (
+              <span>
+                {t('auth:token.loginCredential.username')}: {token.loginCredential.username}
+              </span>
+            )}
+            <span>
+              {token.allowSelfLoginCredential
+                ? t('auth:token.loginCredential.selfServiceEnabled')
+                : t('auth:token.loginCredential.selfServiceDisabled')}
+            </span>
+          </div>
+        )}
         {token.token && !token.revoked && (
           <div className="flex items-center gap-1 bg-default-100 rounded-md px-2 py-1.5">
             <code className="flex-1 text-xs break-all text-default-600 select-all">
@@ -244,6 +260,12 @@ export function TokenManagement() {
   const [newOperatorIds, setNewOperatorIds] = useState<string[]>([]);
   const [newExpiry, setNewExpiry] = useState('never');
   const [newMaxOperators, setNewMaxOperators] = useState('1');
+  const [loginCredentialInitMode, setLoginCredentialInitMode] = useState<CreateLoginCredentialInitMode>('none');
+  const [loginCredentialUsername, setLoginCredentialUsername] = useState('');
+  const [loginCredentialPassword, setLoginCredentialPassword] = useState('');
+  const [allowSelfLoginCredential, setAllowSelfLoginCredential] = useState(false);
+  const [showCredentialEditor, setShowCredentialEditor] = useState(false);
+  const [clearExistingCredential, setClearExistingCredential] = useState(false);
   const [creating, setCreating] = useState(false);
 
   // 权限授予状态
@@ -298,6 +320,17 @@ export function TokenManagement() {
     });
   }, [selectedPermissions, selectedPresetFrequencies]);
 
+  const isCreateAdminCredentialMode = !editingToken && loginCredentialInitMode === 'admin';
+  const isEditingConfiguredCredential = Boolean(editingToken?.loginCredential) && !clearExistingCredential;
+  const isEditingAdminCredentialMode = Boolean(editingToken) && (showCredentialEditor || isEditingConfiguredCredential);
+  const shouldShowCredentialInputs = isCreateAdminCredentialMode || isEditingAdminCredentialMode;
+  const isCredentialUsernameValid = loginCredentialUsername.trim().length >= 3;
+  const isCredentialPasswordValid = loginCredentialPassword.length === 0 || loginCredentialPassword.length >= 8;
+  const isCredentialFormValid = !shouldShowCredentialInputs
+    || (isCredentialUsernameValid
+      && isCredentialPasswordValid
+      && (editingToken?.loginCredential ? true : loginCredentialPassword.length >= 8));
+
   // 关闭创建/编辑 Modal 并重置表单
   const closeFormModal = useCallback(() => {
     setCreateModalOpen(false);
@@ -307,6 +340,12 @@ export function TokenManagement() {
     setNewOperatorIds([]);
     setNewExpiry('never');
     setNewMaxOperators('1');
+    setLoginCredentialInitMode('none');
+    setLoginCredentialUsername('');
+    setLoginCredentialPassword('');
+    setAllowSelfLoginCredential(false);
+    setShowCredentialEditor(false);
+    setClearExistingCredential(false);
     setSelectedPermissions([]);
     setSelectedPresetFrequencies([]);
   }, []);
@@ -314,6 +353,15 @@ export function TokenManagement() {
   // 创建 Token
   const handleCreate = useCallback(async () => {
     if (!newLabel.trim()) return;
+    if (loginCredentialInitMode === 'admin' && (!loginCredentialUsername.trim() || loginCredentialPassword.length < 8)) {
+      addToast({
+        title: t('auth:token.loginCredential.validationFailed'),
+        description: t('auth:token.loginCredential.passwordRequiredForCreate'),
+        color: 'danger',
+        timeout: 4000,
+      });
+      return;
+    }
     setCreating(true);
     try {
       const permissionGrants = newRole === UserRole.OPERATOR ? buildPermissionGrants() : undefined;
@@ -323,7 +371,18 @@ export function TokenManagement() {
         operatorIds: newRole === UserRole.ADMIN ? [] : newOperatorIds,
         expiresAt: expiryKeyToTimestamp(newExpiry),
         maxOperators: parseInt(newMaxOperators) || 1,
+        allowSelfLoginCredential: loginCredentialInitMode === 'self-service'
+          ? true
+          : loginCredentialInitMode === 'admin'
+            ? allowSelfLoginCredential
+            : false,
         ...(permissionGrants ? { permissionGrants } : {}),
+        ...(loginCredentialInitMode === 'admin' ? {
+          loginCredential: {
+            username: loginCredentialUsername.trim(),
+            password: loginCredentialPassword,
+          },
+        } : {}),
       };
       const resp = await api.createToken(req);
       closeFormModal();
@@ -337,6 +396,8 @@ export function TokenManagement() {
         operatorIds: resp.operatorIds,
         maxOperators: resp.maxOperators,
         permissionGrants: resp.permissionGrants,
+        allowSelfLoginCredential: resp.allowSelfLoginCredential,
+        loginCredential: resp.loginCredential,
         createdBy: null,
         createdAt: Date.now(),
         revoked: false,
@@ -347,14 +408,16 @@ export function TokenManagement() {
     } catch (err) {
       addToast({
         title: t('auth:token.createFailed'),
-        description: err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
+        description: typeof err === 'object' && err !== null && 'userMessage' in err && typeof err.userMessage === 'string'
+          ? err.userMessage
+          : err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
         color: 'danger',
         timeout: 5000,
       });
     } finally {
       setCreating(false);
     }
-  }, [newLabel, newRole, newOperatorIds, newExpiry, newMaxOperators, loadTokens, buildPermissionGrants, closeFormModal]);
+  }, [allowSelfLoginCredential, buildPermissionGrants, closeFormModal, loadTokens, loginCredentialInitMode, loginCredentialPassword, loginCredentialUsername, newExpiry, newLabel, newMaxOperators, newOperatorIds, newRole, t]);
 
   // 打开编辑 Modal（复用创建 Modal 的表单状态）
   const handleEdit = useCallback((token: TokenInfo) => {
@@ -363,6 +426,12 @@ export function TokenManagement() {
     setNewRole(token.role as UserRole);
     setNewOperatorIds(token.operatorIds);
     setNewMaxOperators(String(token.maxOperators ?? 1));
+    setLoginCredentialInitMode('none');
+    setLoginCredentialUsername(token.loginCredential?.username ?? '');
+    setLoginCredentialPassword('');
+    setAllowSelfLoginCredential(token.allowSelfLoginCredential ?? false);
+    setShowCredentialEditor(false);
+    setClearExistingCredential(false);
     // 从现有 permissionGrants 恢复选中的权限和频率条件
     const perms = (token.permissionGrants ?? []).map(g => g.permission);
     setSelectedPermissions(perms);
@@ -378,6 +447,33 @@ export function TokenManagement() {
   // 更新 Token
   const handleUpdate = useCallback(async () => {
     if (!editingToken || !newLabel.trim()) return;
+    if (shouldShowCredentialInputs && !loginCredentialUsername.trim()) {
+      addToast({
+        title: t('auth:token.loginCredential.validationFailed'),
+        description: t('auth:token.loginCredential.usernameRequired'),
+        color: 'danger',
+        timeout: 4000,
+      });
+      return;
+    }
+    if (showCredentialEditor && !editingToken.loginCredential && loginCredentialPassword.length < 8) {
+      addToast({
+        title: t('auth:token.loginCredential.validationFailed'),
+        description: t('auth:token.loginCredential.passwordRequiredForCreate'),
+        color: 'danger',
+        timeout: 4000,
+      });
+      return;
+    }
+    if (shouldShowCredentialInputs && loginCredentialPassword.length > 0 && loginCredentialPassword.length < 8) {
+      addToast({
+        title: t('auth:token.loginCredential.validationFailed'),
+        description: t('auth:token.loginCredential.passwordTooShort'),
+        color: 'danger',
+        timeout: 4000,
+      });
+      return;
+    }
     setCreating(true);
     try {
       const permissionGrants = newRole === UserRole.OPERATOR ? (buildPermissionGrants() ?? null) : null;
@@ -386,7 +482,18 @@ export function TokenManagement() {
         role: newRole,
         operatorIds: newRole === UserRole.ADMIN ? [] : newOperatorIds,
         maxOperators: parseInt(newMaxOperators) || 1,
+        allowSelfLoginCredential,
         permissionGrants,
+        ...(clearExistingCredential
+          ? { loginCredential: null }
+          : shouldShowCredentialInputs
+          ? {
+            loginCredential: {
+              username: loginCredentialUsername.trim(),
+              ...(loginCredentialPassword ? { password: loginCredentialPassword } : {}),
+            },
+          }
+          : {}),
       };
       await api.updateToken(editingToken.id, req);
       addToast({ title: t('auth:token.updateSuccess'), color: 'success', timeout: 3000 });
@@ -395,14 +502,16 @@ export function TokenManagement() {
     } catch (err) {
       addToast({
         title: t('auth:token.updateFailed'),
-        description: err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
+        description: typeof err === 'object' && err !== null && 'userMessage' in err && typeof err.userMessage === 'string'
+          ? err.userMessage
+          : err instanceof Error ? err.message : t('errors:code.UNKNOWN_ERROR.userMessage'),
         color: 'danger',
         timeout: 5000,
       });
     } finally {
       setCreating(false);
     }
-  }, [editingToken, newLabel, newRole, newOperatorIds, newMaxOperators, loadTokens, buildPermissionGrants, closeFormModal, t]);
+  }, [allowSelfLoginCredential, buildPermissionGrants, clearExistingCredential, closeFormModal, editingToken, loadTokens, loginCredentialPassword, loginCredentialUsername, newLabel, newMaxOperators, newOperatorIds, newRole, shouldShowCredentialInputs, showCredentialEditor, t]);
 
   // 撤销 Token
   const handleRevoke = useCallback(async (tokenId: string) => {
@@ -435,6 +544,8 @@ export function TokenManagement() {
         operatorIds: resp.operatorIds,
         maxOperators: resp.maxOperators,
         permissionGrants: resp.permissionGrants,
+        allowSelfLoginCredential: resp.allowSelfLoginCredential,
+        loginCredential: resp.loginCredential,
         createdBy: null,
         createdAt: Date.now(),
         revoked: false,
@@ -617,6 +728,146 @@ export function TokenManagement() {
               </div>
             )}
 
+            <div>
+              <p className="text-sm font-medium">{t('auth:token.loginCredential.sectionTitle')}</p>
+              <p className="text-xs text-default-400 mb-2">{t('auth:token.loginCredential.sectionDesc')}</p>
+              <div className="border border-default-200 rounded-lg p-3 space-y-3">
+                {!editingToken ? (
+                  <>
+                    <RadioGroup
+                      size="sm"
+                      value={loginCredentialInitMode}
+                      onValueChange={(value) => setLoginCredentialInitMode(value as CreateLoginCredentialInitMode)}
+                    >
+                      <Radio value="none" description={t('auth:token.loginCredential.initNoneDesc')}>
+                        {t('auth:token.loginCredential.initNone')}
+                      </Radio>
+                      <Radio value="admin" description={t('auth:token.loginCredential.initAdminDesc')}>
+                        {t('auth:token.loginCredential.initAdmin')}
+                      </Radio>
+                      <Radio value="self-service" description={t('auth:token.loginCredential.initSelfServiceDesc')}>
+                        {t('auth:token.loginCredential.initSelfService')}
+                      </Radio>
+                    </RadioGroup>
+
+                    {loginCredentialInitMode === 'admin' && (
+                      <>
+                        <Input
+                          size="sm"
+                          label={t('auth:token.loginCredential.usernameLabel')}
+                          placeholder={t('auth:token.loginCredential.usernamePlaceholder')}
+                          value={loginCredentialUsername}
+                          onValueChange={setLoginCredentialUsername}
+                        />
+                        <Input
+                          size="sm"
+                          type="password"
+                          label={t('auth:token.loginCredential.passwordLabel')}
+                          placeholder={t('auth:token.loginCredential.passwordPlaceholderRequired')}
+                          description={t('auth:token.loginCredential.passwordDescriptionRequired')}
+                          value={loginCredentialPassword}
+                          onValueChange={setLoginCredentialPassword}
+                        />
+                        <Checkbox
+                          size="sm"
+                          isSelected={allowSelfLoginCredential}
+                          onValueChange={setAllowSelfLoginCredential}
+                        >
+                          {t('auth:token.loginCredential.allowSelfService')}
+                        </Checkbox>
+                      </>
+                    )}
+
+                    {loginCredentialInitMode === 'self-service' && (
+                      <p className="text-xs text-default-500">
+                        {t('auth:token.loginCredential.selfServiceInitHint')}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="rounded-lg bg-content2 px-3 py-2 text-xs text-default-600 space-y-1">
+                      <p>
+                        {editingToken.loginCredential && !clearExistingCredential
+                          ? t('auth:token.loginCredential.statusConfigured', { username: editingToken.loginCredential.username })
+                          : t('auth:token.loginCredential.statusNotConfigured')}
+                      </p>
+                      <p className="text-default-500">
+                        {(allowSelfLoginCredential
+                          ? t('auth:token.loginCredential.selfServiceEnabledHint')
+                          : t('auth:token.loginCredential.selfServiceDisabledHint'))}
+                      </p>
+                    </div>
+
+                    <Checkbox
+                      size="sm"
+                      isSelected={allowSelfLoginCredential}
+                      onValueChange={setAllowSelfLoginCredential}
+                    >
+                      {t('auth:token.loginCredential.allowSelfService')}
+                    </Checkbox>
+
+                    {shouldShowCredentialInputs ? (
+                      <>
+                        <Input
+                          size="sm"
+                          label={t('auth:token.loginCredential.usernameLabel')}
+                          placeholder={t('auth:token.loginCredential.usernamePlaceholder')}
+                          value={loginCredentialUsername}
+                          onValueChange={setLoginCredentialUsername}
+                        />
+                        <Input
+                          size="sm"
+                          type="password"
+                          label={t('auth:token.loginCredential.passwordLabel')}
+                          placeholder={editingToken.loginCredential
+                            ? t('auth:token.loginCredential.passwordPlaceholderOptional')
+                            : t('auth:token.loginCredential.passwordPlaceholderRequired')}
+                          description={editingToken.loginCredential
+                            ? t('auth:token.loginCredential.passwordDescriptionOptional')
+                            : t('auth:token.loginCredential.passwordDescriptionRequired')}
+                          value={loginCredentialPassword}
+                          onValueChange={setLoginCredentialPassword}
+                        />
+                        {editingToken.loginCredential && !clearExistingCredential && (
+                          <Button
+                            size="sm"
+                            variant="flat"
+                            color="danger"
+                            onPress={() => {
+                              setClearExistingCredential(true);
+                              setShowCredentialEditor(false);
+                              setLoginCredentialUsername('');
+                              setLoginCredentialPassword('');
+                            }}
+                          >
+                            {t('auth:token.loginCredential.clearAction')}
+                          </Button>
+                        )}
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        onPress={() => {
+                          setShowCredentialEditor(true);
+                          setClearExistingCredential(false);
+                        }}
+                      >
+                        {t('auth:token.loginCredential.setNowAction')}
+                      </Button>
+                    )}
+
+                    {clearExistingCredential && (
+                      <p className="text-xs text-warning">
+                        {t('auth:token.loginCredential.clearHint')}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
             {/* 额外权限（仅 OPERATOR 角色显示） */}
             {newRole === UserRole.OPERATOR && (
               <div>
@@ -714,7 +965,7 @@ export function TokenManagement() {
               color="primary"
               onPress={editingToken ? handleUpdate : handleCreate}
               isLoading={creating}
-              isDisabled={!newLabel.trim()}
+              isDisabled={!newLabel.trim() || !isCredentialFormValid}
             >
               {editingToken ? t('common:button.save') : t('auth:token.create')}
             </Button>

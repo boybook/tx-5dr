@@ -2,12 +2,12 @@ import React, { useState, useCallback } from 'react';
 import type { QSORecord } from '@tx5dr/contracts';
 import {
   Button,
-  Input,
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from '@heroui/react';
 import { useAuth } from '../store/authStore';
+import { AuthLoginForm } from '../components/AuthLoginForm';
 import { RadioControl } from '../components/RadioControl';
 import { VoiceQSOLogCard } from '../components/voice/VoiceQSOLogCard';
 import { VoiceRecentQSOList } from '../components/voice/VoiceRecentQSOList';
@@ -15,8 +15,9 @@ import { VoicePTTButton } from '../components/voice/VoicePTTButton';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { ServerHealthButton } from '../components/ServerHealthButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faKey, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
+import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/GlobalModalHost';
 
 /**
  * VoiceRightLayout
@@ -34,12 +35,13 @@ export const VoiceRightLayout: React.FC = () => {
     operator: t('common:role.operator'),
     admin: t('common:role.admin'),
   };
-  const { state: authState, login, logout } = useAuth();
-  const [loginToken, setLoginToken] = useState('');
+  const { state: authState, logout } = useAuth();
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
   const [selectedQSO, setSelectedQSO] = useState<QSORecord | null>(null);
   const [lastUpdatedQSO, setLastUpdatedQSO] = useState<QSORecord | null>(null);
   const [lastDeletedId, setLastDeletedId] = useState<string | null>(null);
+  const showAuthenticatedIdentity = Boolean(authState.role) && (Boolean(authState.jwt) || !authState.authEnabled);
+  const showLoginEntry = authState.authEnabled && !authState.jwt && authState.isPublicViewer;
 
   const handleEditComplete = useCallback((updated: QSORecord) => {
     setLastUpdatedQSO(updated);
@@ -51,15 +53,6 @@ export const VoiceRightLayout: React.FC = () => {
     setSelectedQSO(null);
   }, []);
 
-  const handlePopoverLogin = useCallback(async () => {
-    if (!loginToken.trim()) return;
-    const ok = await login(loginToken.trim());
-    if (ok) {
-      setLoginToken('');
-      setLoginPopoverOpen(false);
-    }
-  }, [loginToken, login]);
-
   const handleOpenSettings = () => {
     window.dispatchEvent(new CustomEvent('openSettingsModal', { detail: { tab: 'radio' } }));
   };
@@ -67,6 +60,10 @@ export const VoiceRightLayout: React.FC = () => {
   const handleOpenRadioSettings = () => {
     window.dispatchEvent(new Event('openProfileModal'));
   };
+
+  const handleOpenAccountSecurity = useCallback(() => {
+    window.dispatchEvent(new Event(OPEN_ACCOUNT_SECURITY_MODAL_EVENT));
+  }, []);
 
   return (
     <div className="h-full flex flex-col">
@@ -79,8 +76,7 @@ export const VoiceRightLayout: React.FC = () => {
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           <div className="flex items-center gap-1">
             {/* Auth UI */}
-            {authState.authEnabled && (
-              authState.jwt ? (
+            {showAuthenticatedIdentity ? (
                 <Popover placement="bottom-end">
                   <PopoverTrigger>
                     <Button
@@ -93,60 +89,55 @@ export const VoiceRightLayout: React.FC = () => {
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="p-3 gap-2">
-                    <div className="text-sm font-medium">{authState.label}</div>
+                    <div className="text-sm font-medium">
+                      {authState.label || ROLE_LABELS[authState.role || ''] || t('auth.user')}
+                    </div>
                     <div className="text-xs text-default-500">{t('auth.role')}: {ROLE_LABELS[authState.role || ''] || authState.role}</div>
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      color="danger"
-                      startContent={<FontAwesomeIcon icon={faRightFromBracket} />}
-                      onPress={logout}
-                      className="mt-1"
-                    >
-                      {t('auth.logout')}
-                    </Button>
+                    {authState.authEnabled && authState.jwt && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          startContent={<FontAwesomeIcon icon={faLock} />}
+                          onPress={handleOpenAccountSecurity}
+                        >
+                          {t('auth:accountSecurity.trigger')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          color="danger"
+                          startContent={<FontAwesomeIcon icon={faRightFromBracket} />}
+                          onPress={logout}
+                          className="mt-1"
+                        >
+                          {t('auth.logout')}
+                        </Button>
+                      </>
+                    )}
                   </PopoverContent>
                 </Popover>
-              ) : authState.isPublicViewer ? (
+              ) : showLoginEntry ? (
                 <Popover
                   placement="bottom-end"
                   isOpen={loginPopoverOpen}
                   onOpenChange={setLoginPopoverOpen}
-                >
-                  <PopoverTrigger>
-                    <Button variant="light" size="sm" className="bg-content2 rounded-md px-3 h-6 text-xs text-default-500 leading-none">
+                  >
+                    <PopoverTrigger>
+                      <Button variant="light" size="sm" className="bg-content2 rounded-md px-3 h-6 text-xs text-default-500 leading-none">
                       <FontAwesomeIcon icon={faKey} className="text-default-400 text-xs" />
                       {t('auth.login')}
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="p-3 gap-2 w-64">
-                    <div className="text-sm font-medium">{t('auth.enterToken')}</div>
-                    <Input
-                      size="sm"
-                      type="password"
-                      placeholder={t('auth.pasteToken')}
-                      value={loginToken}
-                      onValueChange={setLoginToken}
-                      onKeyDown={(e) => e.key === 'Enter' && handlePopoverLogin()}
+                  <PopoverContent className="p-3 w-80">
+                    <AuthLoginForm
+                      compact
                       autoFocus
+                      onSuccess={() => setLoginPopoverOpen(false)}
                     />
-                    {authState.loginError && (
-                      <p className="text-danger text-xs">{authState.loginError}</p>
-                    )}
-                    <Button
-                      size="sm"
-                      color="primary"
-                      isLoading={authState.loginLoading}
-                      onPress={handlePopoverLogin}
-                      isDisabled={!loginToken.trim()}
-                      fullWidth
-                    >
-                      {t('auth.login')}
-                    </Button>
                   </PopoverContent>
                 </Popover>
-              ) : null
-            )}
+              ) : null}
           </div>
           <div className="flex items-center gap-0">
             <ServerHealthButton />

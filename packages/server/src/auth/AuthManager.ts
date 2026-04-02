@@ -7,6 +7,9 @@ import {
   type TokenInfo,
   type CreateTokenRequest,
   type CreateTokenResponse,
+  type LoginCredentialSummary,
+  type AuthMeLoginCredential,
+  type UpdateSelfLoginCredentialRequest,
   type UpdateTokenRequest,
   type UpdateAuthConfigRequest,
   type PermissionGrant,
@@ -22,6 +25,13 @@ const logger = createLogger('AuthManager');
 const BCRYPT_ROUNDS = 10;
 const TOKEN_PREFIX = 'txdr_';
 const TOKEN_BYTES = 32;
+
+export class AuthManagerError extends Error {
+  constructor(public readonly code: string, message?: string) {
+    super(message ?? code);
+    this.name = 'AuthManagerError';
+  }
+}
 
 export class AuthManager {
   private static instance: AuthManager;
@@ -143,6 +153,73 @@ export class AuthManager {
     return TOKEN_PREFIX + randomBytes(TOKEN_BYTES).toString('base64url');
   }
 
+  private normalizeUsername(username: string): string {
+    return username.trim().toLowerCase();
+  }
+
+  private findTokenByUsernameNormalized(usernameNormalized: string): AuthToken | null {
+    return this.config.tokens.find(token => token.loginCredential?.usernameNormalized === usernameNormalized) ?? null;
+  }
+
+  private ensureUsernameAvailable(username: string, excludeTokenId?: string): void {
+    const usernameNormalized = this.normalizeUsername(username);
+    const existing = this.findTokenByUsernameNormalized(usernameNormalized);
+    if (existing && existing.id !== excludeTokenId) {
+      throw new AuthManagerError('USERNAME_TAKEN', 'Username is already in use');
+    }
+  }
+
+  private buildLoginCredentialSummary(token: AuthToken): LoginCredentialSummary | undefined {
+    if (!token.loginCredential) return undefined;
+    return {
+      username: token.loginCredential.username,
+      allowSelfService: token.allowSelfLoginCredential ?? false,
+    };
+  }
+
+  getAuthMeLoginCredential(tokenId: string): AuthMeLoginCredential {
+    const token = this.config.tokens.find(t => t.id === tokenId);
+    if (!token?.loginCredential) {
+      return {
+        configured: false,
+        username: null,
+        allowSelfService: token?.allowSelfLoginCredential ?? false,
+      };
+    }
+
+    return {
+      configured: true,
+      username: token.loginCredential.username,
+      allowSelfService: token.allowSelfLoginCredential ?? false,
+    };
+  }
+
+  private async assignLoginCredential(
+    token: AuthToken,
+    credential: NonNullable<CreateTokenRequest['loginCredential']> | NonNullable<UpdateTokenRequest['loginCredential']>,
+    options?: { excludeTokenId?: string },
+  ): Promise<void> {
+    const username = credential.username.trim();
+    this.ensureUsernameAvailable(username, options?.excludeTokenId);
+
+    const existingPasswordHash = token.loginCredential?.passwordHash;
+    let passwordHash = existingPasswordHash;
+    if ('password' in credential && credential.password) {
+      passwordHash = await bcrypt.hash(credential.password, BCRYPT_ROUNDS);
+    }
+
+    if (!passwordHash) {
+      throw new AuthManagerError('PASSWORD_REQUIRED', 'Password is required');
+    }
+
+    token.loginCredential = {
+      username,
+      usernameNormalized: this.normalizeUsername(username),
+      passwordHash,
+      updatedAt: Date.now(),
+    };
+  }
+
   private async createTokenInternal(
     req: Omit<CreateTokenRequest, 'expiresAt'> & { expiresAt?: number },
     createdBy: string | null,
@@ -167,7 +244,12 @@ export class AuthManager {
       ...(system ? { system: true } : {}),
       ...(req.maxOperators !== undefined ? { maxOperators: req.maxOperators } : {}),
       ...('permissionGrants' in req && req.permissionGrants ? { permissionGrants: req.permissionGrants } : {}),
+      ...(req.allowSelfLoginCredential !== undefined ? { allowSelfLoginCredential: req.allowSelfLoginCredential } : {}),
     };
+
+    if (req.loginCredential) {
+      await this.assignLoginCredential(authToken, req.loginCredential, { excludeTokenId: id });
+    }
 
     this.config.tokens.push(authToken);
     await this.saveConfig();
@@ -180,6 +262,8 @@ export class AuthManager {
       operatorIds: req.operatorIds,
       maxOperators: authToken.maxOperators,
       permissionGrants: authToken.permissionGrants,
+      allowSelfLoginCredential: authToken.allowSelfLoginCredential,
+      loginCredential: this.buildLoginCredentialSummary(authToken),
     };
   }
 
@@ -201,6 +285,20 @@ export class AuthManager {
       }
     }
     return null;
+  }
+
+  async validatePasswordLogin(username: string, password: string): Promise<AuthToken | null> {
+    const token = this.findTokenByUsernameNormalized(this.normalizeUsername(username));
+    if (!token?.loginCredential) return null;
+    if (token.revoked) return null;
+    if (token.expiresAt && token.expiresAt < Date.now()) return null;
+
+    const match = await bcrypt.compare(password, token.loginCredential.passwordHash);
+    if (!match) return null;
+
+    token.lastUsedAt = Date.now();
+    this.saveConfig().catch(() => {});
+    return token;
   }
 
   private async findTokenByPlainText(plainToken: string): Promise<AuthToken | null> {
@@ -247,6 +345,8 @@ export class AuthManager {
       operatorIds: token.operatorIds,
       maxOperators: token.maxOperators,
       permissionGrants: token.permissionGrants,
+      allowSelfLoginCredential: token.allowSelfLoginCredential,
+      loginCredential: this.buildLoginCredentialSummary(token),
     };
   }
 
@@ -266,9 +366,43 @@ export class AuthManager {
     if (updates.permissionGrants !== undefined) {
       token.permissionGrants = updates.permissionGrants ?? undefined; // null → clear grants
     }
+    if (updates.allowSelfLoginCredential !== undefined) {
+      token.allowSelfLoginCredential = updates.allowSelfLoginCredential;
+    }
+    if (updates.loginCredential !== undefined) {
+      if (updates.loginCredential === null) {
+        token.loginCredential = undefined;
+      } else {
+        await this.assignLoginCredential(token, updates.loginCredential, { excludeTokenId: token.id });
+      }
+    }
 
     await this.saveConfig();
     return this.toTokenInfo(token);
+  }
+
+  async updateSelfLoginCredential(
+    tokenId: string,
+    updates: UpdateSelfLoginCredentialRequest,
+  ): Promise<{ tokenInfo?: TokenInfo; error?: string }> {
+    const token = this.config.tokens.find(t => t.id === tokenId);
+    if (!token) return { error: 'NOT_FOUND' };
+    if (!token.allowSelfLoginCredential) return { error: 'SELF_SERVICE_DISABLED' };
+
+    try {
+      await this.assignLoginCredential(token, {
+        username: updates.username,
+        password: updates.password,
+      }, { excludeTokenId: token.id });
+    } catch (error) {
+      if (error instanceof AuthManagerError) {
+        return { error: error.code };
+      }
+      throw error;
+    }
+
+    await this.saveConfig();
+    return { tokenInfo: this.toTokenInfo(token) };
   }
 
   listTokens(): TokenInfo[] {
@@ -295,6 +429,8 @@ export class AuthManager {
       system: token.system,
       maxOperators: token.maxOperators,
       permissionGrants: token.permissionGrants,
+      allowSelfLoginCredential: token.allowSelfLoginCredential,
+      loginCredential: this.buildLoginCredentialSummary(token),
     };
   }
 
