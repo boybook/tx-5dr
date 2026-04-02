@@ -23,11 +23,17 @@ export interface FrameDisplayMessage {
   flag?: string;
   logbookAnalysis?: {
     isNewCallsign?: boolean;
+    isNewDxccEntity?: boolean;
+    isNewBandDxccEntity?: boolean;
+    isConfirmedDxcc?: boolean;
     isNewPrefix?: boolean;
     isNewGrid?: boolean;
     callsign?: string;
     grid?: string;
     prefix?: string;
+    dxccEntity?: string;
+    dxccId?: number;
+    dxccStatus?: 'current' | 'deleted' | 'unknown' | 'none';
   };
 }
 

@@ -1444,9 +1444,14 @@ export class WSServer extends WSMessageHandler {
 
     // 合并所有操作员的分析结果
     let isNewCallsign = true;
-    let isNewPrefix = true;
+    let isNewDxccEntity = true;
+    let isNewBandDxccEntity = true;
+    let isConfirmedDxcc = false;
     let isNewGrid = true;
     let prefix: string | undefined;
+    let dxccId: number | undefined;
+    let dxccEntity: string | undefined;
+    let dxccStatus: 'current' | 'deleted' | 'none' | 'unknown' | undefined;
 
     for (const operatorId of enabledOperatorIds) {
       try {
@@ -1458,8 +1463,14 @@ export class WSServer extends WSMessageHandler {
           if (!analysis.isNewCallsign) {
             isNewCallsign = false;
           }
-          if (!analysis.isNewPrefix) {
-            isNewPrefix = false;
+          if (!analysis.isNewDxccEntity) {
+            isNewDxccEntity = false;
+          }
+          if (!analysis.isNewBandDxccEntity) {
+            isNewBandDxccEntity = false;
+          }
+          if (analysis.isConfirmedDxcc) {
+            isConfirmedDxcc = true;
           }
           if (grid && !analysis.isNewGrid) {
             isNewGrid = false;
@@ -1469,6 +1480,15 @@ export class WSServer extends WSMessageHandler {
           if (analysis.prefix) {
             prefix = analysis.prefix;
           }
+          if (analysis.dxccId) {
+            dxccId = analysis.dxccId;
+          }
+          if (analysis.dxccEntity) {
+            dxccEntity = analysis.dxccEntity;
+          }
+          if (analysis.dxccStatus) {
+            dxccStatus = analysis.dxccStatus;
+          }
         }
       } catch (error) {
         logger.warn(`failed to analyze logbook for operator ${operatorId}`, error);
@@ -1476,13 +1496,18 @@ export class WSServer extends WSMessageHandler {
       }
     }
 
-    return {
+      return {
       isNewCallsign,
-      isNewPrefix,
+      isNewDxccEntity,
+      isNewBandDxccEntity,
+      isConfirmedDxcc,
       isNewGrid: grid ? isNewGrid : undefined,
       callsign,
       grid,
-      prefix
+      prefix,
+      dxccId,
+      dxccEntity,
+      dxccStatus,
     };
   }
 

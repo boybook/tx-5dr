@@ -127,6 +127,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     direction: 'ascending' | 'descending';
   }>({ column: 'startTime', direction: 'descending' });
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+  const [isDxccStatsExpanded, setIsDxccStatsExpanded] = useState(false);
 
   // 编辑 Modal 状态
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -816,18 +817,31 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         );
       case "callsign":
         return (
-          <div className="font-semibold flex items-center gap-1 md:gap-2">
-            <span className="text-sm md:text-base">{qso.callsign}</span>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                openExternalLink(`https://www.qrz.com/db/${qso.callsign}`);
-              }}
-              className="text-default-400 hover:text-primary transition-colors"
-              title={t('qso.callsignInfo', { callsign: qso.callsign })}
-            >
-              <FontAwesomeIcon icon={faExternalLinkAlt} size="sm" />
-            </button>
+          <div className="flex flex-col gap-1">
+            <div className="font-semibold flex items-center gap-1 md:gap-2">
+              <span className="text-sm md:text-base">{qso.callsign}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openExternalLink(`https://www.qrz.com/db/${qso.callsign}`);
+                }}
+                className="text-default-400 hover:text-primary transition-colors"
+                title={t('qso.callsignInfo', { callsign: qso.callsign })}
+              >
+                <FontAwesomeIcon icon={faExternalLinkAlt} size="sm" />
+              </button>
+            </div>
+            {(qso.dxccEntity || qso.dxccId) && (
+              <div className="flex flex-wrap items-center gap-1 text-xs text-default-500">
+                {qso.dxccEntity && <span>{qso.dxccEntity}</span>}
+                {qso.dxccId && <span>· DXCC {qso.dxccId}</span>}
+                {qso.dxccStatus === 'deleted' && (
+                  <Chip size="sm" variant="flat" color="warning" className="h-4">
+                    {t('editQso.statusValue.deleted')}
+                  </Chip>
+                )}
+              </div>
+            )}
           </div>
         );
       case "grid":
@@ -1310,12 +1324,120 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           {statistics && (
             <span className="flex flex-wrap gap-2 md:gap-0">
               <span>{t('stats.uniqueCallsigns', { count: statistics.uniqueCallsigns })}</span>
+              {statistics.firstQSO && (
+                <span className="hidden md:inline"> | {t('stats.firstQSO', { date: new Date(statistics.firstQSO).toLocaleDateString(undefined, { timeZone: 'UTC' }) })}</span>
+              )}
               {statistics.lastQSO && (
                 <span className="hidden md:inline"> | {t('stats.lastQSO', { date: new Date(statistics.lastQSO).toLocaleDateString(undefined, { timeZone: 'UTC' }) })}</span>
               )}
             </span>
           )}
         </div>
+
+        {statistics?.dxcc && (
+          <div className="rounded-xl border border-default-200 bg-default-50/60">
+            <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-default-700">{t('stats.dxccOverview')}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Chip size="sm" variant="flat" color="primary">
+                    {t('stats.dxccWorked')}: {statistics.dxcc.worked.current}
+                  </Chip>
+                  <Chip size="sm" variant="flat" color="success">
+                    {t('stats.dxccConfirmed')}: {statistics.dxcc.confirmed.current}
+                  </Chip>
+                  <Chip size="sm" variant="flat" color="warning">
+                    {t('stats.dxccDeleted')}: {statistics.dxcc.worked.deleted}
+                  </Chip>
+                  <Chip size="sm" variant="flat" color="secondary">
+                    {t('stats.dxccReview')}: {statistics.dxcc.reviewCount}
+                  </Chip>
+                </div>
+              </div>
+
+              <Button
+                size="sm"
+                variant="light"
+                endContent={(
+                  <FontAwesomeIcon
+                    icon={faChevronDown}
+                    className={`transition-transform ${isDxccStatsExpanded ? 'rotate-180' : ''}`}
+                  />
+                )}
+                onPress={() => setIsDxccStatsExpanded((value) => !value)}
+              >
+                {isDxccStatsExpanded ? t('stats.collapseDxcc') : t('stats.expandDxcc')}
+              </Button>
+            </div>
+
+            {isDxccStatsExpanded && (
+              <div className="grid grid-cols-1 gap-3 border-t border-default-200 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
+                    <p className="text-xs text-default-500">{t('stats.dxccWorked')}</p>
+                    <p className="text-lg font-semibold text-primary">{statistics.dxcc.worked.current}</p>
+                    <p className="text-xs text-default-500">
+                      {t('stats.dxccWorkedCount', {
+                        current: statistics.dxcc.worked.current,
+                        total: statistics.dxcc.worked.total,
+                      })}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
+                    <p className="text-xs text-default-500">{t('stats.dxccConfirmed')}</p>
+                    <p className="text-lg font-semibold text-success">{statistics.dxcc.confirmed.current}</p>
+                    <p className="text-xs text-default-500">
+                      {t('stats.dxccConfirmedCount', {
+                        current: statistics.dxcc.confirmed.current,
+                        total: statistics.dxcc.confirmed.total,
+                      })}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
+                    <p className="text-xs text-default-500">{t('stats.dxccDeleted')}</p>
+                    <p className="text-lg font-semibold text-warning">{statistics.dxcc.worked.deleted}</p>
+                    <p className="text-xs text-default-500">
+                      {t('stats.dxccDeletedCount', { count: statistics.dxcc.worked.deleted })}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
+                    <p className="text-xs text-default-500">{t('stats.dxccReview')}</p>
+                    <p className="text-lg font-semibold text-secondary">{statistics.dxcc.reviewCount}</p>
+                    <p className="text-xs text-default-500">
+                      {t('stats.dxccReviewCount', { count: statistics.dxcc.reviewCount })}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-default-500">{t('stats.dxccByBand')}</p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {statistics.dxcc.byBand.length > 0 ? statistics.dxcc.byBand.slice(0, 8).map((bucket) => (
+                      <Chip key={`band-${bucket.key}`} size="sm" variant="flat" color="primary">
+                        {bucket.key} · {t('stats.dxccBucketCount', { worked: bucket.worked, confirmed: bucket.confirmed })}
+                      </Chip>
+                    )) : <span className="text-xs text-default-400">-</span>}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-default-500">{t('stats.dxccByMode')}</p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {statistics.dxcc.byMode.length > 0 ? statistics.dxcc.byMode.slice(0, 8).map((bucket) => (
+                      <Chip key={`mode-${bucket.key}`} size="sm" variant="flat" color="secondary">
+                        {bucket.key} · {t('stats.dxccBucketCount', { worked: bucket.worked, confirmed: bucket.confirmed })}
+                      </Chip>
+                    )) : <span className="text-xs text-default-400">-</span>}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }, [
@@ -1513,14 +1635,13 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         />
       )}
 
-      {/* 表格 - 固定高度 */}
+      {/* 表格 */}
       <Table
         aria-label={t('qso.tableAriaLabel')}
-        isHeaderSticky
         bottomContent={bottomContent}
         bottomContentPlacement="outside"
         classNames={{
-          wrapper: "max-h-[calc(100vh-280px)] md:max-h-[calc(100vh-228px)] overflow-auto",
+          wrapper: "overflow-visible",
           base: "overflow-x-visible",
           table: "min-w-full",
         }}

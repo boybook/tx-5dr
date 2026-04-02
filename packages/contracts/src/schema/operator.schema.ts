@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ModeDescriptorSchema } from './mode.schema.js';
+import { TargetSelectionPriorityModeSchema } from './qso.schema.js';
 
 // 操作员配置 Schema (重命名以避免冲突)
 export const RadioOperatorConfigSchema = z.object({
@@ -16,6 +17,7 @@ export const RadioOperatorConfigSchema = z.object({
   autoResumeCQAfterSuccess: z.boolean().default(false),
   replyToWorkedStations: z.boolean().default(false), // 是否回复已通联过的电台
   prioritizeNewCalls: z.boolean().default(true), // 是否优先选择新呼号
+  targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.default('dxcc_first'),
   mode: ModeDescriptorSchema.optional(),
   logBookId: z.string().optional(), // 连接的日志本ID，如果未指定则使用默认日志本
 });
@@ -72,6 +74,7 @@ export const RadioOperatorStatusResponseSchema = z.object({
       autoResumeCQAfterSuccess: z.boolean().optional(),
       replyToWorkedStations: z.boolean().optional(),
       prioritizeNewCalls: z.boolean().optional(),
+      targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.optional(),
     }),
     strategy: z.object({
       name: z.string(),

@@ -1,6 +1,34 @@
 import { z } from 'zod';
 import { ModeDescriptorSchema } from './mode.schema.js';
 
+export const TargetSelectionPriorityModeSchema = z.enum([
+  'balanced',
+  'dxcc_first',
+  'new_callsign_first',
+]);
+
+export const DxccStatusSchema = z.enum([
+  'current',
+  'deleted',
+  'none',
+  'unknown',
+]);
+
+export const DxccSourceSchema = z.enum([
+  'resolver',
+  'adif',
+  'lotw',
+  'manual_override',
+]);
+
+export const DxccConfidenceSchema = z.enum([
+  'exception',
+  'prefix',
+  'heuristic',
+  'manual',
+  'unknown',
+]);
+
 // 操作配置
 export const OperatorConfigSchema = z.object({
   id: z.string(),
@@ -15,7 +43,8 @@ export const OperatorConfigSchema = z.object({
   autoResumeCQAfterFail: z.boolean().default(false),
   autoResumeCQAfterSuccess: z.boolean().default(false),
   replyToWorkedStations: z.boolean().default(false),
-  prioritizeNewCalls: z.boolean().default(true)
+  prioritizeNewCalls: z.boolean().default(true),
+  targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.default('dxcc_first'),
 });
 
 // QSO状态机上下文
@@ -54,6 +83,24 @@ export const QSORecordSchema = z.object({
   myCallsign: z.string().optional(), // 我的呼号（操作员呼号）
   myGrid: z.string().optional(), // 我的网格定位（操作员网格）
   qth: z.string().optional(), // 对方 QTH（地点，语音通联常用）
+  dxccId: z.number().int().positive().optional(),
+  dxccEntity: z.string().optional(),
+  dxccStatus: DxccStatusSchema.optional(),
+  countryCode: z.string().optional(),
+  cqZone: z.number().int().positive().optional(),
+  ituZone: z.number().int().positive().optional(),
+  dxccSource: DxccSourceSchema.optional(),
+  dxccConfidence: DxccConfidenceSchema.optional(),
+  dxccResolvedAt: z.number().optional(),
+  dxccResolverVersion: z.string().optional(),
+  dxccNeedsReview: z.boolean().optional(),
+  stationLocationId: z.string().optional(),
+  myDxccId: z.number().int().positive().optional(),
+  myCqZone: z.number().int().positive().optional(),
+  myItuZone: z.number().int().positive().optional(),
+  myState: z.string().optional(),
+  myCounty: z.string().optional(),
+  myIota: z.string().optional(),
 
   // LoTW QSL 确认状态
   lotwQslSent: QslSentStatusSchema,
@@ -77,6 +124,10 @@ export const StrategiesResultSchema = z.object({
 });
 
 export type OperatorConfig = z.infer<typeof OperatorConfigSchema>;
+export type TargetSelectionPriorityMode = z.infer<typeof TargetSelectionPriorityModeSchema>;
+export type DxccStatus = z.infer<typeof DxccStatusSchema>;
+export type DxccSource = z.infer<typeof DxccSourceSchema>;
+export type DxccConfidence = z.infer<typeof DxccConfidenceSchema>;
 export type QSOContext = z.infer<typeof QSOContextSchema>;
 export type QSOCommand = z.infer<typeof QSOCommandSchema>;
 export type QSORecord = z.infer<typeof QSORecordSchema>;

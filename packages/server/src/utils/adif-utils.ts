@@ -4,7 +4,7 @@
  */
 
 import { QSORecord } from '@tx5dr/contracts';
-import { getBandFromFrequency } from '@tx5dr/core';
+import { getBandFromFrequency, resolveDXCCEntity, DXCC_RESOLVER_VERSION } from '@tx5dr/core';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('ADIFUtils');
@@ -98,6 +98,21 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   if (qso.grid) {
     adifFields.push(`<gridsquare:${qso.grid.length}>${qso.grid}`);
   }
+  if (qso.dxccId) {
+    const value = String(qso.dxccId);
+    adifFields.push(`<dxcc:${value.length}>${value}`);
+  }
+  if (qso.dxccEntity) {
+    adifFields.push(`<country:${qso.dxccEntity.length}>${qso.dxccEntity}`);
+  }
+  if (qso.cqZone) {
+    const value = String(qso.cqZone);
+    adifFields.push(`<cqz:${value.length}>${value}`);
+  }
+  if (qso.ituZone) {
+    const value = String(qso.ituZone);
+    adifFields.push(`<ituz:${value.length}>${value}`);
+  }
 
   // 信号报告
   if (qso.reportSent) {
@@ -110,6 +125,27 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   // 我的呼号
   if (opts.includeStationCallsign && qso.myCallsign) {
     adifFields.push(`<station_callsign:${qso.myCallsign.length}>${qso.myCallsign}`);
+  }
+  if (qso.myDxccId) {
+    const value = String(qso.myDxccId);
+    adifFields.push(`<my_dxcc:${value.length}>${value}`);
+  }
+  if (qso.myCqZone) {
+    const value = String(qso.myCqZone);
+    adifFields.push(`<my_cq_zone:${value.length}>${value}`);
+  }
+  if (qso.myItuZone) {
+    const value = String(qso.myItuZone);
+    adifFields.push(`<my_itu_zone:${value.length}>${value}`);
+  }
+  if (qso.myState) {
+    adifFields.push(`<state:${qso.myState.length}>${qso.myState}`);
+  }
+  if (qso.myCounty) {
+    adifFields.push(`<cnty:${qso.myCounty.length}>${qso.myCounty}`);
+  }
+  if (qso.myIota) {
+    adifFields.push(`<iota:${qso.myIota.length}>${qso.myIota}`);
   }
 
   // 我的网格坐标
@@ -131,6 +167,21 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   if (qso.lotwQslReceivedDate) {
     const dateStr = formatADIFDate(new Date(qso.lotwQslReceivedDate));
     adifFields.push(`<lotw_qslrdate:8>${dateStr}`);
+  }
+  if (qso.dxccStatus) {
+    adifFields.push(`<app_tx5dr_dxcc_status:${qso.dxccStatus.length}>${qso.dxccStatus}`);
+  }
+  if (qso.dxccSource) {
+    adifFields.push(`<app_tx5dr_dxcc_source:${qso.dxccSource.length}>${qso.dxccSource}`);
+  }
+  if (qso.dxccConfidence) {
+    adifFields.push(`<app_tx5dr_dxcc_confidence:${qso.dxccConfidence.length}>${qso.dxccConfidence}`);
+  }
+  if (qso.dxccNeedsReview !== undefined) {
+    adifFields.push(`<app_tx5dr_dxcc_needs_review:1>${qso.dxccNeedsReview ? 'Y' : 'N'}`);
+  }
+  if (qso.stationLocationId) {
+    adifFields.push(`<app_tx5dr_station_location_id:${qso.stationLocationId.length}>${qso.stationLocationId}`);
   }
 
   // 结束标记
@@ -194,6 +245,70 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       messages: [`QSO imported from ${source} at ${new Date().toISOString()}`]
     };
 
+    if (fields.dxcc) {
+      const parsedDxcc = Number.parseInt(fields.dxcc, 10);
+      if (Number.isFinite(parsedDxcc)) {
+        record.dxccId = parsedDxcc;
+      }
+    }
+    if (fields.country) {
+      record.dxccEntity = fields.country;
+    }
+    if (fields.cqz) {
+      const parsedCqz = Number.parseInt(fields.cqz, 10);
+      if (Number.isFinite(parsedCqz)) {
+        record.cqZone = parsedCqz;
+      }
+    }
+    if (fields.ituz) {
+      const parsedItuz = Number.parseInt(fields.ituz, 10);
+      if (Number.isFinite(parsedItuz)) {
+        record.ituZone = parsedItuz;
+      }
+    }
+    if (fields.my_dxcc) {
+      const parsedMyDxcc = Number.parseInt(fields.my_dxcc, 10);
+      if (Number.isFinite(parsedMyDxcc)) {
+        record.myDxccId = parsedMyDxcc;
+      }
+    }
+    if (fields.my_cq_zone) {
+      const parsedMyCq = Number.parseInt(fields.my_cq_zone, 10);
+      if (Number.isFinite(parsedMyCq)) {
+        record.myCqZone = parsedMyCq;
+      }
+    }
+    if (fields.my_itu_zone) {
+      const parsedMyItu = Number.parseInt(fields.my_itu_zone, 10);
+      if (Number.isFinite(parsedMyItu)) {
+        record.myItuZone = parsedMyItu;
+      }
+    }
+    if (fields.state) {
+      record.myState = fields.state;
+    }
+    if (fields.cnty) {
+      record.myCounty = fields.cnty;
+    }
+    if (fields.iota) {
+      record.myIota = fields.iota;
+    }
+    if (fields.app_tx5dr_dxcc_status) {
+      record.dxccStatus = fields.app_tx5dr_dxcc_status as QSORecord['dxccStatus'];
+    }
+    if (fields.app_tx5dr_dxcc_source) {
+      record.dxccSource = fields.app_tx5dr_dxcc_source as QSORecord['dxccSource'];
+    }
+    if (fields.app_tx5dr_dxcc_confidence) {
+      record.dxccConfidence = fields.app_tx5dr_dxcc_confidence as QSORecord['dxccConfidence'];
+    }
+    if (fields.app_tx5dr_dxcc_needs_review) {
+      record.dxccNeedsReview = fields.app_tx5dr_dxcc_needs_review === 'Y';
+    }
+    if (fields.app_tx5dr_station_location_id) {
+      record.stationLocationId = fields.app_tx5dr_station_location_id;
+    }
+
     // LoTW QSL 确认状态
     const lotwSent = fields.lotw_qsl_sent?.toUpperCase();
     if (lotwSent && ['Y', 'N', 'R', 'Q', 'I'].includes(lotwSent)) {
@@ -218,6 +333,35 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
     const qrzStatus = fields.app_qrzlog_status?.toUpperCase();
     if (qrzStatus === 'C' || qrzStatus === 'Y') {
       record.qrzQslReceived = 'Y';
+    }
+
+    if (record.dxccSource !== 'manual_override') {
+      const resolution = resolveDXCCEntity(record.callsign, record.startTime);
+      if (resolution.entity) {
+        record.dxccId = resolution.entity.entityCode;
+        record.dxccEntity = resolution.entity.name;
+        record.countryCode = resolution.entity.countryCode;
+        record.cqZone = resolution.entity.cqZone;
+        record.ituZone = resolution.entity.ituZone;
+        record.dxccStatus = resolution.entity.deleted ? 'deleted' : 'current';
+        record.dxccConfidence = resolution.confidence;
+        record.dxccSource = 'resolver';
+        record.dxccNeedsReview = resolution.needsReview;
+        record.dxccResolvedAt = Date.now();
+        record.dxccResolverVersion = DXCC_RESOLVER_VERSION;
+      } else {
+        record.dxccId = undefined;
+        record.dxccEntity = undefined;
+        record.countryCode = undefined;
+        record.cqZone = undefined;
+        record.ituZone = undefined;
+        record.dxccStatus = 'unknown';
+        record.dxccConfidence = resolution.confidence;
+        record.dxccSource = 'resolver';
+        record.dxccNeedsReview = true;
+        record.dxccResolvedAt = Date.now();
+        record.dxccResolverVersion = DXCC_RESOLVER_VERSION;
+      }
     }
 
     return record;

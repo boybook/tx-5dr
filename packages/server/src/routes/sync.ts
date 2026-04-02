@@ -656,6 +656,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
     password: '',
     certificates: [],
     uploadLocation: {
+      name: 'Default Station Location',
       callsign: normalizeCallsign(callsign),
       gridSquare: '',
       cqZone: '',
@@ -663,7 +664,9 @@ export async function syncRoutes(fastify: FastifyInstance) {
       iota: '',
       state: '',
       county: '',
+      certificateIds: [],
     },
+    stationLocations: [],
     autoUploadQSO: false,
   });
 

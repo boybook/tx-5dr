@@ -56,14 +56,14 @@
     "label": {
       "myCall": "新呼号",
       "cq": "CQ",
-      "dxcc": "新前缀",
+      "dxcc": "新DXCC",
       "grid": "新网格",
       "band": "新波段"
     },
     "description": {
       "myCall": "从未通联过的新呼号",
       "cq": "高亮显示所有 CQ 呼叫",
-      "dxcc": "从未通联过的新国家/地区前缀",
+      "dxcc": "从未通联过的新 DXCC 实体",
       "grid": "从未通联过的新网格方块",
       "band": "该波段的新实体"
     }
@@ -72,10 +72,10 @@
   "unsavedChanges": "● 设置已修改，请保存更改",
   "display": {
     "title": "显示通知设置",
-    "description": "配置FT8消息的高亮显示，帮助您快速识别新的呼号、前缀和网格。",
+    "description": "配置 FT8 消息高亮，帮助您快速识别新的呼号、DXCC 实体和网格。",
     "presetColors": "预设颜色",
     "enableHighlight": "启用高亮显示",
-    "enableHighlightDesc": "开启后将根据日志本分析结果高亮显示新的呼号、前缀和网格",
+    "enableHighlightDesc": "开启后将根据日志本分析结果高亮显示新的呼号、DXCC 实体和网格",
     "highlightTypeConfig": "高亮类型配置",
     "preview": "效果预览",
     "resetToDefault": "重置为默认值"
@@ -323,7 +323,15 @@
     "autoResumeCQAfterFail": "失败后自动恢复CQ",
     "autoResumeCQAfterSuccess": "成功后自动恢复CQ",
     "replyToWorkedStations": "回复已通联电台",
-    "prioritizeNewCalls": "优先选择新呼号"
+    "prioritizeNewCalls": "优先选择新呼号",
+    "targetSelectionPriorityMode": "自动目标优先级",
+    "targetSelectionPriorityModeDesc": "决定自动回复 CQ 时优先追逐新 DXCC、新网格还是新呼号。",
+    "priorityModeBalanced": "平衡模式",
+    "priorityModeDxccFirst": "优先 DXCC 新实体",
+    "priorityModeNewCallsignFirst": "优先新呼号",
+    "priorityModeBalancedDesc": "先看网格和信号，再兼顾 DXCC 与新呼号。",
+    "priorityModeDxccFirstDesc": "优先顺序：新 DXCC > 新网格 > 新呼号。",
+    "priorityModeNewCallsignFirstDesc": "优先顺序：新呼号 > 新 DXCC > 新网格。"
   },
   "serverHealth": {
     "title": "服务器进程健康状态",

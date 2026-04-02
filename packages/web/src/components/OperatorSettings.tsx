@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import {
   Button,
   Input,
+  Select,
+  SelectItem,
   Switch,
   Card,
   CardBody,
@@ -48,6 +50,17 @@ interface OperatorSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
+type TargetSelectionPriorityMode = 'balanced' | 'dxcc_first' | 'new_callsign_first';
+
+function getTargetSelectionPriorityMode(
+  operator: Partial<Pick<RadioOperatorConfig, 'targetSelectionPriorityMode' | 'prioritizeNewCalls'>>
+): TargetSelectionPriorityMode {
+  if (operator.targetSelectionPriorityMode) {
+    return operator.targetSelectionPriorityMode;
+  }
+  return operator.prioritizeNewCalls === false ? 'balanced' : 'dxcc_first';
+}
+
 export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettingsProps>(
   ({ onUnsavedChanges }, ref) => {
     const { t } = useTranslation('radio');
@@ -80,8 +93,28 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       autoReplyToCQ: false,
       autoResumeCQAfterFail: false,
       autoResumeCQAfterSuccess: false,
+      prioritizeNewCalls: true,
+      targetSelectionPriorityMode: 'dxcc_first',
       mode: MODES.FT8,
     });
+
+    const targetPriorityOptions = [
+      {
+        key: 'dxcc_first' as const,
+        label: t('settings.priorityModeDxccFirst'),
+        description: t('settings.priorityModeDxccFirstDesc'),
+      },
+      {
+        key: 'balanced' as const,
+        label: t('settings.priorityModeBalanced'),
+        description: t('settings.priorityModeBalancedDesc'),
+      },
+      {
+        key: 'new_callsign_first' as const,
+        label: t('settings.priorityModeNewCallsignFirst'),
+        description: t('settings.priorityModeNewCallsignFirstDesc'),
+      },
+    ];
 
     // 台站网格加载后（异步），若用户未手动填写则自动同步
     useEffect(() => {
@@ -458,9 +491,11 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               </div>
 
               <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.prioritizeNewCalls')}</span>
-                <Chip size="sm" variant="flat" color={operator.prioritizeNewCalls ? "success" : "default"}>
-                  {operator.prioritizeNewCalls ? t('settings.enabled') : t('settings.disabled')}
+                <span className="text-sm">{t('settings.targetSelectionPriorityMode')}</span>
+                <Chip size="sm" variant="flat" color="secondary">
+                  {targetPriorityOptions.find(
+                    (option) => option.key === getTargetSelectionPriorityMode(operator)
+                  )?.label || t('settings.priorityModeDxccFirst')}
                 </Chip>
               </div>
             </div>
@@ -582,19 +617,34 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 {t('settings.replyToWorked')}
               </Switch>
 
-              <Switch
-                isSelected={formData.prioritizeNewCalls !== false}
-                onValueChange={(checked) => {
+              <Select
+                label={t('settings.targetSelectionPriorityMode')}
+                description={t('settings.targetSelectionPriorityModeDesc')}
+                selectedKeys={[getTargetSelectionPriorityMode(formData)]}
+                onSelectionChange={(keys) => {
+                  const selected = Array.from(keys as Set<string>)[0] as TargetSelectionPriorityMode | undefined;
+                  if (!selected) {
+                    return;
+                  }
+
                   if (isNewOperator) {
-                    setNewOperatorData({ ...newOperatorData, prioritizeNewCalls: checked });
+                    setNewOperatorData({
+                      ...newOperatorData,
+                      targetSelectionPriorityMode: selected,
+                      prioritizeNewCalls: selected !== 'balanced',
+                    });
                   } else {
-                    updateEditFormData(operatorId!, 'prioritizeNewCalls', checked);
+                    updateEditFormData(operatorId!, 'targetSelectionPriorityMode', selected);
+                    updateEditFormData(operatorId!, 'prioritizeNewCalls', selected !== 'balanced');
                   }
                 }}
-                size="sm"
               >
-                {t('settings.prioritizeNewCalls')}
-              </Switch>
+                {targetPriorityOptions.map((option) => (
+                  <SelectItem key={option.key} description={option.description}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </Select>
             </div>
           </div>
 

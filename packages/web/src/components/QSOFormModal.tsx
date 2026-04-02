@@ -52,6 +52,15 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
 }) => {
   const { t } = useTranslation('logbook');
   const isAdd = mode === 'add';
+  const dxccStatusLabel = formData.dxccStatus
+    ? t(`editQso.statusValue.${formData.dxccStatus}`, { defaultValue: formData.dxccStatus })
+    : '-';
+  const dxccSourceLabel = formData.dxccSource
+    ? t(`editQso.sourceValue.${formData.dxccSource}`, { defaultValue: formData.dxccSource })
+    : '-';
+  const dxccConfidenceLabel = formData.dxccConfidence
+    ? t(`editQso.confidenceValue.${formData.dxccConfidence}`, { defaultValue: formData.dxccConfidence })
+    : '-';
 
   // 频率以 MHz 展示（内部状态，避免受控输入的小数精度丢失问题）
   const [freqMHz, setFreqMHz] = useState('');
@@ -171,6 +180,58 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
                 value={formData.reportReceived || ''}
                 onChange={e => onChange({ ...formData, reportReceived: e.target.value || undefined })}
               />
+            </div>
+
+            <div className="border-t border-default-200 dark:border-default-100 pt-4">
+              <p className="text-sm font-medium text-default-500 mb-3">
+                {t('editQso.dxccSection')}
+              </p>
+              {formData.dxccId || formData.dxccEntity ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.dxccEntity')}</p>
+                    <p className="font-medium">{formData.dxccEntity || '-'}</p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.dxccId')}</p>
+                    <p className="font-medium">{formData.dxccId || '-'}</p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.dxccStatus')}</p>
+                    <p className="font-medium">{dxccStatusLabel}</p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.dxccSource')}</p>
+                    <p className="font-medium">{dxccSourceLabel}</p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.dxccConfidence')}</p>
+                    <p className="font-medium">{dxccConfidenceLabel}</p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.needsReview')}</p>
+                    <p className="font-medium">
+                      {formData.dxccNeedsReview ? t('editQso.needsReviewYes') : t('editQso.needsReviewNo')}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.cqZone')}</p>
+                    <p className="font-medium">{formData.cqZone || '-'}</p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5">
+                    <p className="text-xs text-default-500">{t('editQso.ituZone')}</p>
+                    <p className="font-medium">{formData.ituZone || '-'}</p>
+                  </div>
+                  <div className="rounded-lg bg-default-50 dark:bg-default-100/5 px-3.5 py-2.5 md:col-span-2">
+                    <p className="text-xs text-default-500">{t('editQso.countryCode')}</p>
+                    <p className="font-medium">{formData.countryCode || '-'}</p>
+                  </div>
+                </div>
+              ) : (
+                <Alert color="default" variant="flat" className="text-sm">
+                  {t('editQso.dxccMissing')}
+                </Alert>
+              )}
             </div>
 
             {/* 备注（全行） */}

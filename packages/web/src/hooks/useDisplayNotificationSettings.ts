@@ -42,16 +42,17 @@ export function useDisplayNotificationSettings() {
   // 获取最高优先级的高亮类型
   const getHighestPriorityHighlight = (analysis: {
     isNewGrid?: boolean;
+    isNewDxccEntity?: boolean;
     isNewPrefix?: boolean;
     isNewCallsign?: boolean;
   }): HighlightType | null => {
     if (!settings.enabled) return null;
 
-    // 按优先级顺序检查：新网格 > 新前缀 > 新呼号
+    // 按优先级顺序检查：新网格 > 新 DXCC > 新呼号
     if (analysis.isNewGrid && settings.highlights.newGrid.enabled) {
       return HighlightType.NEW_GRID;
     }
-    if (analysis.isNewPrefix && settings.highlights.newPrefix.enabled) {
+    if ((analysis.isNewDxccEntity || analysis.isNewPrefix) && settings.highlights.newPrefix.enabled) {
       return HighlightType.NEW_PREFIX;
     }
     if (analysis.isNewCallsign && settings.highlights.newCallsign.enabled) {

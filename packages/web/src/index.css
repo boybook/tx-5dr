@@ -51,6 +51,12 @@ html, body {
   color-scheme: light dark;
 }
 
+html.logbook-page,
+body.logbook-page {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 /* 为根元素应用默认HeroUI背景 */
 html {
   background-color: hsl(var(--heroui-background));

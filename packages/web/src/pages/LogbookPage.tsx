@@ -168,6 +168,16 @@ const ThemedLogbookWrapper: React.FC = () => {
   // 使用主题钩子来确保主题正确应用
   useTheme();
 
+  useEffect(() => {
+    document.documentElement.classList.add('logbook-page');
+    document.body.classList.add('logbook-page');
+
+    return () => {
+      document.documentElement.classList.remove('logbook-page');
+      document.body.classList.remove('logbook-page');
+    };
+  }, []);
+
   return (
     <LogbookContent />
   );

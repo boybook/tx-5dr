@@ -30,6 +30,50 @@ interface StandardState {
     onEnter?(strategy: StandardQSOStrategy): void;
 }
 
+function getCandidatePriorityTuple(strategy: StandardQSOStrategy, candidate: ParsedFT8Message): [number, number, number] {
+    const analysis = candidate.logbookAnalysis;
+    const isNewDxcc = analysis?.isNewDxccEntity && analysis.dxccStatus !== 'deleted' ? 1 : 0;
+    const isNewGrid = analysis?.isNewGrid ? 1 : 0;
+    const isNewCallsign = analysis?.isNewCallsign ? 1 : 0;
+
+    switch (strategy.operator.config.targetSelectionPriorityMode) {
+        case 'new_callsign_first':
+            return [isNewCallsign, isNewGrid, isNewDxcc];
+        case 'balanced':
+            return [isNewGrid, isNewDxcc, isNewCallsign];
+        case 'dxcc_first':
+        default:
+            return [isNewDxcc, isNewGrid, isNewCallsign];
+    }
+}
+
+function compareCandidates(strategy: StandardQSOStrategy, left: ParsedFT8Message, right: ParsedFT8Message): number {
+    if (strategy.operator.config.targetSelectionPriorityMode === 'balanced') {
+        const snrDiff = right.snr - left.snr;
+        if (Math.abs(snrDiff) > 3) {
+            return snrDiff;
+        }
+    }
+
+    const leftTuple = getCandidatePriorityTuple(strategy, left);
+    const rightTuple = getCandidatePriorityTuple(strategy, right);
+    for (let index = 0; index < leftTuple.length; index += 1) {
+        if (leftTuple[index] !== rightTuple[index]) {
+            return rightTuple[index] - leftTuple[index];
+        }
+    }
+
+    if (left.snr !== right.snr) {
+        return right.snr - left.snr;
+    }
+    const leftDf = Math.abs(left.df);
+    const rightDf = Math.abs(right.df);
+    if (leftDf !== rightDf) {
+        return leftDf - rightDf;
+    }
+    return right.timestamp - left.timestamp;
+}
+
 const states: { [key in SlotsIndex]: StandardState } = {
     TX1: {
         async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
@@ -89,7 +133,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                      msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
                     msg.message.targetCallsign === strategy.context.config.myCallsign &&
                     msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除当前目标
-                .sort((a, b) => b.snr - a.snr); // 降序排序: 信号最强的在前
+                .sort((a, b) => compareCandidates(strategy, a, b));
 
             if (directCalls.length > 0) {
                 const newCall = directCalls[0];
@@ -359,7 +403,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     msg.message.type === FT8MessageType.SIGNAL_REPORT &&
                     msg.message.targetCallsign === strategy.context.config.myCallsign &&
                     msg.message.senderCallsign === strategy.context.targetCallsign)
-                .sort((a, b) => b.snr - a.snr)  // 按SNR降序，取最强信号
+                .sort((a, b) => compareCandidates(strategy, a, b))
                 .shift();  // 取第一个（SNR最高的）
 
             if (msgSignalReport) {
@@ -452,7 +496,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                          msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
                         msg.message.targetCallsign === strategy.context.config.myCallsign &&
                         msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除刚完成的QSO对象
-                    .sort((a, b) => b.snr - a.snr); // 降序排序: 信号最强的在前
+                    .sort((a, b) => compareCandidates(strategy, a, b));
 
                 if (directCalls.length > 0) {
                     const newCall = directCalls[0];
@@ -638,7 +682,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                      msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
                     msg.message.targetCallsign === strategy.context.config.myCallsign &&
                     msg.message.senderCallsign !== strategy.context.targetCallsign) // 排除刚完成的QSO对象
-                .sort((a, b) => b.snr - a.snr);
+                .sort((a, b) => compareCandidates(strategy, a, b));
 
             if (directCalls.length > 0) {
                 const msg = directCalls[0].message;
@@ -740,7 +784,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                     (msg.message.type === FT8MessageType.CALL ||
                      msg.message.type === FT8MessageType.SIGNAL_REPORT) &&
                     msg.message.targetCallsign === strategy.context.config.myCallsign)
-                .sort((a, b) => b.snr - a.snr); // 降序排序: 信号最强的在前
+                .sort((a, b) => compareCandidates(strategy, a, b));
 
             // 收集所有CQ消息
             const cqCalls = messages
@@ -829,7 +873,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 其次处理CQ呼叫
             if (cqCalls.length > 0) {
                 // 始终按信号强度从高到低排序，遍历找到第一个未通联过的电台
-                const sortedCalls = cqCalls.sort((a, b) => b.snr - a.snr);
+                const sortedCalls = cqCalls.sort((a, b) => compareCandidates(strategy, a, b));
 
                 for (const cqCall of sortedCalls) {
                     const msg = cqCall.message as FT8MessageCQ;

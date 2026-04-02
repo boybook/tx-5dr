@@ -63,7 +63,7 @@
     "description": {
       "myCall": "New callsign never worked before",
       "cq": "Highlight all CQ calls",
-      "dxcc": "New country/prefix never worked before",
+      "dxcc": "New DXCC entity never worked before",
       "grid": "New grid square never worked before",
       "band": "New entity on this band"
     }
@@ -72,10 +72,10 @@
   "unsavedChanges": "● Settings modified, please save",
   "display": {
     "title": "Display & Notification Settings",
-    "description": "Configure FT8 message highlighting to quickly identify new callsigns, prefixes, and grids.",
+    "description": "Configure FT8 highlighting to quickly identify new callsigns, DXCC entities, and grids.",
     "presetColors": "Preset Colors",
     "enableHighlight": "Enable Highlighting",
-    "enableHighlightDesc": "When enabled, highlights new callsigns, prefixes, and grids based on logbook analysis",
+    "enableHighlightDesc": "When enabled, highlights new callsigns, DXCC entities, and grids based on logbook analysis",
     "highlightTypeConfig": "Highlight Type Config",
     "preview": "Preview",
     "resetToDefault": "Reset to Default"
@@ -323,7 +323,15 @@
     "autoResumeCQAfterFail": "Resume CQ after fail",
     "autoResumeCQAfterSuccess": "Resume CQ after success",
     "replyToWorkedStations": "Reply to worked stations",
-    "prioritizeNewCalls": "Prioritize new callsigns"
+    "prioritizeNewCalls": "Prioritize new callsigns",
+    "targetSelectionPriorityMode": "Auto target priority",
+    "targetSelectionPriorityModeDesc": "Controls whether auto-reply prefers new DXCC entities, new grids, or new callsigns first.",
+    "priorityModeBalanced": "Balanced",
+    "priorityModeDxccFirst": "Prefer new DXCC",
+    "priorityModeNewCallsignFirst": "Prefer new callsigns",
+    "priorityModeBalancedDesc": "Balance signal quality with grid, DXCC, and callsign novelty.",
+    "priorityModeDxccFirstDesc": "Priority order: new DXCC > new grid > new callsign.",
+    "priorityModeNewCallsignFirstDesc": "Priority order: new callsign > new DXCC > new grid."
   },
   "serverHealth": {
     "title": "Server Process Health",
