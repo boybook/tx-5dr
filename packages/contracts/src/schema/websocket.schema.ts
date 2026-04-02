@@ -8,7 +8,7 @@ import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabiliti
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
-import { CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
+import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
 import type { RealtimeSettingsResponseData } from './realtime.schema.js';
 
@@ -844,9 +844,7 @@ export type WSTextMessage = z.infer<typeof WSTextMessageSchema>;
  */
 export const WSRadioCapabilityListMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.RADIO_CAPABILITY_LIST),
-  data: z.object({
-    capabilities: z.array(CapabilityStateSchema),
-  }),
+  data: CapabilityListSchema,
 });
 
 export type WSRadioCapabilityListMessage = z.infer<typeof WSRadioCapabilityListMessageSchema>;
@@ -1127,7 +1125,7 @@ export interface DigitalRadioEngineEvents {
   tunerStatusChanged: (status: z.infer<typeof TunerStatusSchema>) => void;
 
   // 统一电台控制能力事件
-  radioCapabilityList: (data: { capabilities: z.infer<typeof CapabilityStateSchema>[] }) => void;
+  radioCapabilityList: (data: z.infer<typeof CapabilityListSchema>) => void;
   radioCapabilityChanged: (data: z.infer<typeof CapabilityStateSchema>) => void;
 
   // 电台连接状态事件

@@ -1,17 +1,18 @@
 /**
- * NumberLevelCapability - 通用数值滑块面板组件
+ * NumberLevelCapability - 通用数值能力面板组件
  *
- * 适用于 rf_power、af_gain、sql 等 number 类能力。
- * 拖动时节流 150ms 避免命令打满 CAT 总线。
+ * - percent 模式：使用 Slider，适合 rf_power / af_gain / sql / mic_gain / nb / nr
+ * - value 模式：使用数字输入框，适合 RIT/XIT/中继偏移等非归一化参数
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Slider, Tooltip } from '@heroui/react';
+import { Input, Slider, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import type { CapabilityComponentProps } from '../CapabilityRegistry';
 import { useCan } from '../../store/authStore';
+import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber } from '../display-utils';
 
 const WRITE_DEBOUNCE_MS = 150;
 
@@ -26,20 +27,22 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 
   const isSupported = state?.supported ?? false;
   const serverValue = typeof state?.value === 'number' ? state.value : null;
-  const range = descriptor.range ?? { min: 0, max: 1 };
+  const range = descriptor.range ?? { min: 0, max: 1, step: 0.01 };
+  const usesSlider = descriptor.display?.mode === 'percent';
 
-  // 本地展示值（跟随拖动实时更新，不等待服务端确认）
   const [localValue, setLocalValue] = useState<number | null>(serverValue);
+  const [inputValue, setInputValue] = useState<string>(
+    serverValue !== null ? formatCapabilityNumber(serverValue, descriptor, false) : ''
+  );
 
-  // 当服务端值变化时同步（用户不在拖动时才更新）
   const isDragging = useRef(false);
   useEffect(() => {
     if (!isDragging.current && serverValue !== null) {
       setLocalValue(serverValue);
+      setInputValue(formatCapabilityNumber(serverValue, descriptor, false));
     }
-  }, [serverValue]);
+  }, [descriptor, serverValue]);
 
-  // 节流写入
   const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingValue = useRef<number | null>(null);
 
@@ -58,19 +61,34 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
     [capabilityId, onWrite],
   );
 
-  const handleChange = useCallback(
+  const commitInputValue = useCallback(() => {
+    const parsed = Number(inputValue);
+    if (!Number.isFinite(parsed)) {
+      if (serverValue !== null) {
+        setInputValue(formatCapabilityNumber(serverValue, descriptor, false));
+      }
+      return;
+    }
+
+    const rawValue = fromDisplayNumber(parsed, descriptor);
+    const clamped = Math.min(range.max, Math.max(range.min, rawValue));
+    setLocalValue(clamped);
+    setInputValue(formatCapabilityNumber(clamped, descriptor, false));
+    onWrite(capabilityId, clamped);
+  }, [capabilityId, descriptor, inputValue, onWrite, range.max, range.min, serverValue]);
+
+  const handleSliderChange = useCallback(
     (value: number | number[]) => {
-      const v = Array.isArray(value) ? value[0] : value;
+      const nextValue = Array.isArray(value) ? value[0] : value;
       isDragging.current = true;
-      setLocalValue(v);
-      scheduleWrite(v);
+      setLocalValue(nextValue);
+      scheduleWrite(nextValue);
     },
     [scheduleWrite],
   );
 
-  const handleChangeEnd = useCallback(() => {
+  const handleSliderChangeEnd = useCallback(() => {
     isDragging.current = false;
-    // 立即触发最后一次写入
     if (writeTimer.current) {
       clearTimeout(writeTimer.current);
       writeTimer.current = null;
@@ -82,10 +100,12 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   }, [capabilityId, onWrite]);
 
   const displayValue = localValue ?? serverValue ?? range.min;
-  const displayPercent = Math.round(((displayValue - range.min) / (range.max - range.min)) * 100);
+  const minDisplayValue = usesSlider ? range.min : toDisplayNumber(range.min, descriptor);
+  const maxDisplayValue = usesSlider ? range.max : toDisplayNumber(range.max, descriptor);
+  const displayText = isSupported ? formatCapabilityNumber(displayValue, descriptor, true) : '—';
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
           <span className="text-sm font-medium">{t(descriptor.labelI18nKey)}</span>
@@ -95,22 +115,42 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
             </Tooltip>
           )}
         </div>
-        <span className="text-xs text-default-400 font-mono">
-          {isSupported ? `${displayPercent}%` : '—'}
-        </span>
+        <span className="text-xs text-default-400 font-mono">{displayText}</span>
       </div>
-      <Slider
-        size="sm"
-        minValue={range.min}
-        maxValue={range.max}
-        step={descriptor.range?.step ?? 0.01}
-        value={displayValue}
-        onChange={handleChange}
-        onChangeEnd={handleChangeEnd}
-        isDisabled={!isSupported || !canControl}
-        className="w-full"
-        aria-label={t(descriptor.labelI18nKey)}
-      />
+
+      {usesSlider ? (
+        <Slider
+          size="sm"
+          minValue={range.min}
+          maxValue={range.max}
+          step={range.step ?? 0.01}
+          value={displayValue}
+          onChange={handleSliderChange}
+          onChangeEnd={handleSliderChangeEnd}
+          isDisabled={!isSupported || !canControl}
+          className="w-full"
+          aria-label={t(descriptor.labelI18nKey)}
+        />
+      ) : (
+        <Input
+          size="sm"
+          type="number"
+          value={inputValue}
+          onValueChange={setInputValue}
+          onBlur={commitInputValue}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              commitInputValue();
+            }
+          }}
+          min={String(minDisplayValue)}
+          max={String(maxDisplayValue)}
+          step={String(toDisplayNumber(range.step ?? 1, descriptor))}
+          isDisabled={!isSupported || !canControl}
+          aria-label={t(descriptor.labelI18nKey)}
+        />
+      )}
+
       {!isSupported && (
         <p className="text-xs text-default-400">{t('radio:capability.panel.notSupported')}</p>
       )}

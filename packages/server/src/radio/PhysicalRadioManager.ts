@@ -20,6 +20,7 @@ import type {
   MeterCapabilities,
   RadioInfo,
   ReconnectProgress,
+  CapabilityDescriptor,
   CapabilityState,
   CoreRadioCapabilities,
   CoreCapabilityDiagnostic,
@@ -57,7 +58,7 @@ interface PhysicalRadioManagerEvents {
   tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void;
   coreCapabilitiesChanged: (capabilities: CoreRadioCapabilities) => void;
   /** 能力快照（连接/断开时触发） */
-  capabilityList: (data: { capabilities: CapabilityState[] }) => void;
+  capabilityList: (data: { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] }) => void;
   /** 单个能力值变化 */
   capabilityChanged: (state: CapabilityState) => void;
 }
@@ -794,8 +795,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   /**
    * 获取当前所有能力的状态快照（用于 REST 接口和客户端首次连接）
    */
-  getCapabilityStates(): import('@tx5dr/contracts').CapabilityState[] {
-    return this.capabilityManager.getCapabilityStates();
+  getCapabilitySnapshot(): { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] } {
+    return this.capabilityManager.getCapabilitySnapshot();
   }
 
   /**

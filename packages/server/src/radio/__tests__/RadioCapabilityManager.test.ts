@@ -1,6 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CapabilityState, HamlibConfig } from '@tx5dr/contracts';
+import type { CapabilityDescriptor, CapabilityState, HamlibConfig } from '@tx5dr/contracts';
 import { RadioCapabilityManager } from '../RadioCapabilityManager.js';
 import {
   RadioConnectionState,
@@ -57,6 +57,14 @@ function getCapability(snapshot: CapabilityState[], id: string): CapabilityState
   return capability;
 }
 
+function getDescriptor(snapshot: CapabilityDescriptor[], id: string): CapabilityDescriptor {
+  const descriptor = snapshot.find((item) => item.id === id);
+  if (!descriptor) {
+    throw new Error(`Descriptor ${id} not found`);
+  }
+  return descriptor;
+}
+
 describe('RadioCapabilityManager', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -110,6 +118,47 @@ describe('RadioCapabilityManager', () => {
       id: 'sql',
       supported: false,
       value: null,
+    });
+
+    manager.onDisconnected();
+  });
+
+  it('emits runtime descriptors and richer capability values for dynamically resolved hamlib capabilities', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getTuningStep: vi.fn().mockResolvedValue(50),
+      getSupportedTuningSteps: vi.fn().mockResolvedValue([10, 50, 100]),
+      getPowerState: vi.fn().mockResolvedValue('operate'),
+    });
+
+    let descriptors: CapabilityDescriptor[] = [];
+    let capabilities: CapabilityState[] = [];
+    manager.on('capabilityList', (snapshot) => {
+      descriptors = snapshot.descriptors;
+      capabilities = snapshot.capabilities;
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    expect(getDescriptor(descriptors, 'tuning_step')).toMatchObject({
+      id: 'tuning_step',
+      valueType: 'enum',
+      options: [{ value: 10 }, { value: 50 }, { value: 100 }],
+    });
+    expect(getCapability(capabilities, 'tuning_step')).toMatchObject({
+      id: 'tuning_step',
+      supported: true,
+      value: 50,
+    });
+
+    expect(getDescriptor(descriptors, 'power_state')).toMatchObject({
+      id: 'power_state',
+      valueType: 'enum',
+    });
+    expect(getCapability(capabilities, 'power_state')).toMatchObject({
+      id: 'power_state',
+      supported: true,
+      value: 'operate',
     });
 
     manager.onDisconnected();

@@ -13,27 +13,30 @@ import {
   ModalBody,
 } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import { CAPABILITY_DESCRIPTORS } from '../radio-capability/capability-descriptors';
+import {
+  CAPABILITY_CATEGORY_ORDER,
+  groupCapabilityDescriptors,
+} from '../radio-capability/capability-descriptors';
 import { getPanelComponent, useCapabilityWriter } from '../radio-capability/CapabilityRegistry';
-import { useCapabilityStates, useRadioState, useProfiles } from '../store/radioStore';
-import type { CapabilityDescriptor } from '@tx5dr/contracts';
+import {
+  useCapabilityDescriptors,
+  useCapabilityStates,
+  useRadioState,
+  useProfiles,
+} from '../store/radioStore';
+import type { CapabilityCategory, CapabilityDescriptor } from '@tx5dr/contracts';
 
 interface RadioControlPanelProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type CategoryKey = 'antenna' | 'rf' | 'audio';
-
-const CATEGORY_ORDER: CategoryKey[] = ['antenna', 'rf', 'audio'];
-
 /**
  * 复合能力卡片（如天调开关+调谐按钮合并显示）
  */
 const CompoundCard: React.FC<{
-  groupId: string;
   descriptors: CapabilityDescriptor[];
-  onWrite: (id: string, value?: boolean | number, action?: boolean) => void;
+  onWrite: (id: string, value?: boolean | number | string, action?: boolean) => void;
 }> = ({ descriptors, onWrite }) => {
   const capabilityStates = useCapabilityStates();
 
@@ -62,7 +65,7 @@ const CompoundCard: React.FC<{
  */
 const CapabilityCard: React.FC<{
   descriptor: CapabilityDescriptor;
-  onWrite: (id: string, value?: boolean | number, action?: boolean) => void;
+  onWrite: (id: string, value?: boolean | number | string, action?: boolean) => void;
 }> = ({ descriptor, onWrite }) => {
   const capabilityStates = useCapabilityStates();
   const Component = getPanelComponent(descriptor.id);
@@ -86,40 +89,24 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
   const { t } = useTranslation();
   const { state: radioState } = useRadioState();
   const { activeProfile } = useProfiles();
+  const capabilityDescriptors = useCapabilityDescriptors();
   const onWrite = useCapabilityWriter();
 
   // 按 category 分组，同一 compoundGroup 合并
   const groupedCapabilities = useMemo(() => {
-    const result: Record<CategoryKey, Array<{ type: 'compound'; groupId: string; items: CapabilityDescriptor[] } | { type: 'single'; item: CapabilityDescriptor }>> = {
-      antenna: [],
-      rf: [],
-      audio: [],
-    };
+    const descriptors = Array.from(capabilityDescriptors.values()).filter((descriptor) => Boolean(getPanelComponent(descriptor.id)));
+    return groupCapabilityDescriptors(descriptors);
+  }, [capabilityDescriptors]);
 
-    const processedGroups = new Set<string>();
-
-    for (const desc of CAPABILITY_DESCRIPTORS) {
-      const cat = desc.category as CategoryKey;
-      if (!result[cat]) continue;
-
-      if (desc.compoundGroup) {
-        if (processedGroups.has(desc.compoundGroup)) continue;
-        processedGroups.add(desc.compoundGroup);
-        const groupItems = CAPABILITY_DESCRIPTORS.filter((d) => d.compoundGroup === desc.compoundGroup);
-        result[cat].push({ type: 'compound', groupId: desc.compoundGroup, items: groupItems });
-      } else {
-        result[cat].push({ type: 'single', item: desc });
-      }
-    }
-
-    return result;
-  }, []);
-
-  const categoryLabels: Record<CategoryKey, string> = {
-    antenna: t('radio:capability.panel.antenna'),
-    rf: t('radio:capability.panel.rf'),
-    audio: t('radio:capability.panel.audio'),
-  };
+  const categoryLabels = useMemo(
+    () => Object.fromEntries(
+      CAPABILITY_CATEGORY_ORDER.map((category) => [
+        category,
+        t(`radio:capability.panel.${category}`),
+      ]),
+    ) as Record<CapabilityCategory, string>,
+    [t],
+  );
 
   const radioName = activeProfile?.name ?? t('radio:connection.none');
   const isNoRadioMode = radioState.radioConfig?.type === 'none';
@@ -142,7 +129,7 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
             </p>
           ) : (
             <div className="space-y-5">
-              {CATEGORY_ORDER.map((cat) => {
+              {CAPABILITY_CATEGORY_ORDER.map((cat) => {
                 const items = groupedCapabilities[cat];
                 if (!items || items.length === 0) return null;
 
@@ -157,7 +144,6 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
                           return (
                             <CompoundCard
                               key={entry.groupId}
-                              groupId={entry.groupId}
                               descriptors={entry.items}
                               onWrite={onWrite}
                             />

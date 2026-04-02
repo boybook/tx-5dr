@@ -305,7 +305,9 @@
       "notSupported": "Not supported by current radio",
       "antenna": "Antenna",
       "rf": "RF",
-      "audio": "Audio"
+      "audio": "Audio",
+      "operation": "Operation",
+      "system": "System"
     },
     "tuner_switch": {
       "label": "Auto Tuner",
@@ -338,6 +340,64 @@
     "nr": {
       "label": "Noise Reduction",
       "description": "Digital Signal Processing noise reduction (NR) reduces background white noise using DSP algorithms, improving weak signal readability. 0 means off. For FT8 and other digital mode decoding, set to 0 to avoid DSP processing affecting decode accuracy."
+    },
+    "lock_mode": {
+      "label": "Panel Lock",
+      "description": "Locks the radio front panel or tuning controls to prevent accidental changes to frequency or settings. Remote control may still work depending on the radio model."
+    },
+    "mute": {
+      "label": "Mute",
+      "description": "Controls whether the radio local audio output is muted. This affects the speaker or headphone output on the rig, not the software decoding or network audio path."
+    },
+    "vox": {
+      "label": "VOX",
+      "description": "Enables voice-operated transmit. When microphone audio exceeds the VOX threshold, the radio can switch to transmit automatically. Usually keep this off for digital modes."
+    },
+    "rit_offset": {
+      "label": "RIT Offset",
+      "description": "Adjusts the receive incremental tuning offset without changing transmit frequency. Useful for fine-tuning received audio pitch."
+    },
+    "xit_offset": {
+      "label": "XIT Offset",
+      "description": "Adjusts the transmit incremental tuning offset without changing receive frequency. Useful when TX and RX need to be separated slightly."
+    },
+    "tuning_step": {
+      "label": "Tuning Step",
+      "description": "Sets the step size used by tuning controls. Smaller steps help with precise tuning, while larger steps make it easier to move quickly across a band."
+    },
+    "power_state": {
+      "label": "Power State",
+      "description": "Reads or changes the radio power operating state. Supported states vary by model and may include off, standby, on, or operate."
+    },
+    "repeater_shift": {
+      "label": "Repeater Shift",
+      "description": "Sets the repeater duplex direction: no offset, minus offset, or plus offset. Usually used together with the repeater offset value."
+    },
+    "repeater_offset": {
+      "label": "Repeater Offset",
+      "description": "Sets the repeater frequency offset. The UI displays this in kHz while the radio interface uses raw Hz values."
+    },
+    "ctcss_tone": {
+      "label": "CTCSS Tone",
+      "description": "Selects the continuous tone-coded squelch system (CTCSS) tone frequency used for repeater access or squelch control."
+    },
+    "dcs_code": {
+      "label": "DCS Code",
+      "description": "Selects the digital-coded squelch (DCS) code used to match repeater or radio network squelch settings."
+    },
+    "options": {
+      "power_state": {
+        "off": "Off",
+        "on": "On",
+        "standby": "Standby",
+        "operate": "Operate",
+        "unknown": "Unknown"
+      },
+      "repeater_shift": {
+        "none": "None",
+        "minus": "Minus",
+        "plus": "Plus"
+      }
     }
   }
 }

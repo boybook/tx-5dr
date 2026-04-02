@@ -21,7 +21,7 @@ export interface CapabilityComponentProps {
   /** 静态描述符 */
   descriptor: CapabilityDescriptor;
   /** 写入回调（由父组件通过 WS 发送命令） */
-  onWrite: (id: string, value?: boolean | number, action?: boolean) => void;
+  onWrite: (id: string, value?: boolean | number | string, action?: boolean) => void;
 }
 
 export type PanelCapabilityComponent = React.ComponentType<CapabilityComponentProps>;
@@ -69,11 +69,11 @@ export function getSurfaceComponent(id: string): SurfaceCapabilityComponent | un
 /**
  * 返回能力写入回调，通过 WebSocket 发送 WRITE_RADIO_CAPABILITY 命令
  */
-export function useCapabilityWriter(): (id: string, value?: boolean | number, action?: boolean) => void {
+export function useCapabilityWriter(): (id: string, value?: boolean | number | string, action?: boolean) => void {
   const connection = useConnection();
 
   return React.useCallback(
-    (id: string, value?: boolean | number, action?: boolean) => {
+    (id: string, value?: boolean | number | string, action?: boolean) => {
       const wsClient = connection.state.radioService?.wsClientInstance;
       if (!wsClient) return;
       wsClient.send(WSMessageType.WRITE_RADIO_CAPABILITY, { id, value, action });

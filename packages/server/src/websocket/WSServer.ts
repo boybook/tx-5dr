@@ -1881,9 +1881,9 @@ export class WSServer extends WSMessageHandler {
       // 5. 推送当前能力快照（电台已连接时有意义，未连接时为空列表）
       try {
         const radioManager = this.digitalRadioEngine.getRadioManager();
-        const capabilities = radioManager.getCapabilityStates();
-        connection.send(WSMessageType.RADIO_CAPABILITY_LIST, { capabilities });
-        logger.debug(`sent capability snapshot to connection ${connectionId}`, { count: capabilities.length });
+        const snapshot = radioManager.getCapabilitySnapshot();
+        connection.send(WSMessageType.RADIO_CAPABILITY_LIST, snapshot);
+        logger.debug(`sent capability snapshot to connection ${connectionId}`, { count: snapshot.capabilities.length });
       } catch (error) {
         logger.warn('failed to send capability snapshot', error);
       }

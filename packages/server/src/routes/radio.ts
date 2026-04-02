@@ -633,8 +633,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
    * GET /radio/capabilities
    */
   fastify.get('/capabilities', async (_req, reply) => {
-    const capabilities = radioManager.getCapabilityStates();
-    return reply.send({ success: true, capabilities });
+    const snapshot = radioManager.getCapabilitySnapshot();
+    return reply.send({ success: true, ...snapshot });
   });
 
   /**
