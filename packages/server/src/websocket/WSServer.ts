@@ -4,6 +4,7 @@
 import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   DecodeErrorInfo,
+  FrameMessage,
   JWTPayload,
   ModeDescriptor,
   SlotInfo,
@@ -980,12 +981,32 @@ export class WSServer extends WSMessageHandler {
    */
   private async handleOperatorRequestCall(data: any): Promise<void> {
     try {
-      const { operatorId, callsign } = data;
+      const { operatorId, callsign, selectedFrame } = data;
       const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
       if (!operator) {
         throw new Error(`Operator ${operatorId} does not exist`);
       }
-      const lastMessage = this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign, operatorId);
+      const currentMode = this.digitalRadioEngine.getStatus().currentMode;
+      const lastMessage = selectedFrame
+        ? {
+            message: {
+              message: selectedFrame.message,
+              snr: selectedFrame.snr,
+              dt: selectedFrame.dt,
+              freq: selectedFrame.freq,
+              confidence: 1,
+            } as FrameMessage,
+            slotInfo: {
+              id: `manual-${selectedFrame.slotStartMs}`,
+              startMs: selectedFrame.slotStartMs,
+              phaseMs: 0,
+              driftMs: 0,
+              cycleNumber: Math.floor(selectedFrame.slotStartMs / currentMode.slotMs) % 2,
+              utcSeconds: Math.floor(selectedFrame.slotStartMs / 1000),
+              mode: currentMode.name,
+            } as SlotInfo,
+          }
+        : this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign, operatorId);
       operator.requestCall(callsign, lastMessage);
       // 调用manager中的start，来启用中途发射
       this.digitalRadioEngine.operatorManager.startOperator(operatorId);

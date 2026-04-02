@@ -142,6 +142,7 @@ export class RadioOperator {
                         operatorId: this._config.id,
                         transmission
                     });
+                    this.notifyTransmissionQueued(transmission);
                     logger.debug(`onEncodeStart (${this.config.myCallsign}): transmit slot, queued transmission: ${transmission}`);
                 } else {
                     logger.debug(`onEncodeStart (${this.config.myCallsign}): transmit slot but no transmission content`);
@@ -302,6 +303,10 @@ export class RadioOperator {
      */
     getTransmitCycles(): number[] {
         return [...this._config.transmitCycles];
+    }
+
+    notifyTransmissionQueued(transmission: string): void {
+        this._transmissionStrategy?.onTransmissionQueued?.(transmission);
     }
 
     recordQSOLog(qsoRecord: QSORecord): void {

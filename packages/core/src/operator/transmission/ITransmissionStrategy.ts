@@ -35,4 +35,10 @@ export interface ITransmissionStrategy {
      * 如果返回字符串，表示发射该字符串
      */
     handleTransmitSlot(): string | null;
-} 
+
+    /**
+     * 当某条发射内容已经被排队进入发送链路时通知策略。
+     * 用于区分“已经决定要发”与“已经真实进入发送流程”。
+     */
+    onTransmissionQueued?(transmission: string): void;
+}

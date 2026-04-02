@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useRadioState, useSlotPacks } from '../store/radioStore';
-import type { FrameMessage } from '@tx5dr/contracts';
+import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { useSplitLayoutActions } from './SplitLayout';
 import { useTranslation } from 'react-i18next';
@@ -122,12 +122,24 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     setFrameGroups(groups);
   }, [slotPacks.state.slotPacks, radio.state.currentMode]);
 
+  const buildSelectedFrame = (message: FrameDisplayMessage, group: FrameGroup): WSSelectedFrame | undefined => {
+    if (typeof message.db !== 'number' || typeof message.dt !== 'number') {
+      return undefined;
+    }
+    return {
+      message: message.message,
+      snr: message.db,
+      dt: message.dt,
+      freq: message.freq,
+      slotStartMs: group.startMs,
+    };
+  };
 
   const handleRowDoubleClick = (message: FrameDisplayMessage, _group: FrameGroup) => {
     const callsign = message.logbookAnalysis?.callsign;
     if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
       if (connection.state.radioService) {
-        connection.state.radioService.sendRequestCall(currentOperatorId, callsign);
+        connection.state.radioService.sendRequestCall(currentOperatorId, callsign, buildSelectedFrame(message, _group));
         // 在移动端双击后自动切换到"呼叫"tab
         splitLayoutActions?.switchToRight();
       }

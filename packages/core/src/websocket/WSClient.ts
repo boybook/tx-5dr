@@ -1,4 +1,4 @@
-import { WSMessageType, ModeDescriptor, type SpectrumKind } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -259,8 +259,8 @@ export class WSClient extends WSMessageHandler {
   /**
    * 操作员请求呼叫某人
    */
-  requestCall(operatorId: string, callsign: string): void {
-    this.send(WSMessageType.OPERATOR_REQUEST_CALL, { operatorId, callsign });
+  requestCall(operatorId: string, callsign: string, selectedFrame?: WSSelectedFrame): void {
+    this.send(WSMessageType.OPERATOR_REQUEST_CALL, { operatorId, callsign, selectedFrame });
   }
 
   // ===== 认证相关方法 =====

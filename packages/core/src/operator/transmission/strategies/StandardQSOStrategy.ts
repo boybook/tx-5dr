@@ -674,6 +674,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 return {}; // 保持当前状态，不转换
             }
 
+            if (!strategy.tx5TransmissionQueued) {
+                logger.debug('TX5: 73 has not been queued yet, staying in TX5');
+                return {};
+            }
+
             // 发送1次73后，检查是否有新的直接呼叫
             // 如果有直接呼叫，优先处理；否则转到TX6
             const directCalls = messages
@@ -699,6 +704,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             logger.debug(`TX5: new call ${callsign} conflicts with other operator`);
                         } else {
                             logger.debug(`TX5: switching to new direct call ${callsign}`);
+                            strategy.clearPost73RetryContext('switching to new direct call from TX5');
 
                             // 清空旧QSO上下文（自动保存到缓存）
                             strategy.clearQSOContext();
@@ -731,6 +737,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             logger.debug(`TX5: new signal report ${callsign} conflicts with other operator`);
                         } else {
                             logger.debug(`TX5: switching to new direct signal report ${callsign}`);
+                            strategy.clearPost73RetryContext('switching to new direct signal report from TX5');
 
                             // 清空旧QSO上下文（自动保存到缓存）
                             strategy.clearQSOContext();
@@ -756,13 +763,20 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             // 没有新的直接呼叫，转到TX6（CQ或等待新消息）
             // 这样确保只发送1次73后就转到TX6
+            strategy.armPost73RetryContext();
             strategy.clearQSOContext();
             return { changeState: 'TX6' };
         },
         onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
             logger.debug(`TX5 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterSuccess=${strategy.operator.config.autoResumeCQAfterSuccess}`);
 
+            if (!strategy.tx5TransmissionQueued) {
+                logger.debug('TX5 timeout: 73 has not been queued yet, staying in TX5');
+                return {};
+            }
+
             // 清理QSO上下文
+            strategy.armPost73RetryContext();
             strategy.clearQSOContext();
 
             // TX5超时表示QSO已成功（已记录日志），对方没有回复73
@@ -778,6 +792,24 @@ const states: { [key in SlotsIndex]: StandardState } = {
     },
     TX6: {
         async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
+            const retryContext = strategy.getActivePost73RetryContext();
+            if (retryContext) {
+                const retryRRR = messages
+                    .filter((msg) =>
+                        msg.message.type === FT8MessageType.RRR &&
+                        msg.message.senderCallsign === retryContext.targetCallsign &&
+                        msg.message.targetCallsign === strategy.context.config.myCallsign)
+                    .sort((a, b) => a.snr - b.snr)
+                    .pop();
+
+                if (retryRRR) {
+                    logger.debug(`TX6: resuming post-73 retry for ${retryContext.targetCallsign}`);
+                    strategy.restorePost73RetryContext(retryContext);
+                    strategy.clearPost73RetryContext('resumed into TX5');
+                    return { changeState: 'TX5' };
+                }
+            }
+
             // 收集所有TX1和TX2形式的消息
             const directCalls = messages
                 .filter((msg) =>
@@ -939,6 +971,15 @@ interface CachedQSOContext {
     lastUpdated: number;
 }
 
+interface Post73RetryContext {
+    targetCallsign: string;
+    targetGrid?: string;
+    reportSent?: number;
+    reportReceived?: number;
+    actualFrequency?: number;
+    expiresAt: number;
+}
+
 export class StandardQSOStrategy implements ITransmissionStrategy {
     public readonly operator: RadioOperator;
     private state: SlotsIndex = 'TX6';
@@ -954,6 +995,8 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     private timeoutCycles: number = 0;
     public callAttempts: number = 0; // 呼叫尝试次数计数器（TX1状态专用）
     public qsoStartTime?: number; // QSO开始时间
+    public tx5TransmissionQueued = false;
+    public post73RetryContext?: Post73RetryContext;
 
     // QSO上下文历史缓存（呼号 -> 上下文）
     private qsoContextHistory = new Map<string, CachedQSOContext>();
@@ -978,6 +1021,12 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         const oldState = this.state;
         this.state = state;
         this.timeoutCycles = 0;
+
+        this.tx5TransmissionQueued = false;
+
+        if (state === 'TX1' || state === 'TX2' || state === 'TX3' || state === 'TX4') {
+            this.clearPost73RetryContext(`state changed to ${state}`);
+        }
 
         // 从TX1转换到其他状态时，重置呼叫计数器（表示已成功建立通联）
         if (oldState === 'TX1' && state !== 'TX1') {
@@ -1043,8 +1092,15 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         return this.slots[this.state];
     }
 
+    onTransmissionQueued(transmission: string): void {
+        if (this.state === 'TX5' && transmission === this.slots.TX5) {
+            this.tx5TransmissionQueued = true;
+        }
+    }
+
     requestCall(callsign: string, lastMessage: { message: FrameMessage, slotInfo: SlotInfo } | undefined): void {
         logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
+        this.clearPost73RetryContext('manual requestCall');
         if (!lastMessage) {
             this.context.targetCallsign = callsign;
             this.updateSlots();
@@ -1158,6 +1214,10 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             case 'set_state': {
                 const oldState = this.state;
                 this.state = command.args;
+                this.tx5TransmissionQueued = false;
+                if (command.args !== 'TX6') {
+                    this.clearPost73RetryContext(`manual set_state ${command.args}`);
+                }
                 // 手动设置状态时也通知槽位更新
                 if (oldState !== this.state) {
                     this.notifyStateChanged();
@@ -1297,6 +1357,56 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
             return true;
         }
         return false;
+    }
+
+    public armPost73RetryContext(): void {
+        if (!this.context.targetCallsign) {
+            return;
+        }
+
+        const retryWindowMs = this.context.config.mode.slotMs * 2;
+        this.post73RetryContext = {
+            targetCallsign: this.context.targetCallsign,
+            targetGrid: this.context.targetGrid,
+            reportSent: this.context.reportSent,
+            reportReceived: this.context.reportReceived,
+            actualFrequency: this.context.actualFrequency,
+            expiresAt: Date.now() + retryWindowMs,
+        };
+
+        logger.debug(`Armed post-73 retry context for ${this.context.targetCallsign} (window=${retryWindowMs}ms)`);
+    }
+
+    public clearPost73RetryContext(reason: string): void {
+        if (!this.post73RetryContext) {
+            return;
+        }
+
+        logger.debug(`Clearing post-73 retry context for ${this.post73RetryContext.targetCallsign}: ${reason}`);
+        this.post73RetryContext = undefined;
+    }
+
+    public getActivePost73RetryContext(): Post73RetryContext | undefined {
+        if (!this.post73RetryContext) {
+            return undefined;
+        }
+
+        if (this.post73RetryContext.expiresAt < Date.now()) {
+            this.clearPost73RetryContext('expired');
+            return undefined;
+        }
+
+        return this.post73RetryContext;
+    }
+
+    public restorePost73RetryContext(context: Post73RetryContext): void {
+        this.context.targetCallsign = context.targetCallsign;
+        this.context.targetGrid = context.targetGrid;
+        this.context.reportSent = context.reportSent;
+        this.context.reportReceived = context.reportReceived;
+        this.context.actualFrequency = context.actualFrequency;
+        this.tx5TransmissionQueued = false;
+        this.updateSlots();
     }
 
     /**
