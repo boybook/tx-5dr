@@ -24,7 +24,9 @@ import type {
   VoicePTTLock,
   EngineMode,
   StationInfo,
+  CapabilityDescriptor,
   CapabilityState,
+  CapabilityList,
   CoreRadioCapabilities,
   CoreCapabilityDiagnostics,
 } from '@tx5dr/contracts';
@@ -111,6 +113,8 @@ export interface RadioState {
   // 天调能力（null = 未连接；连接时由 radioStatusChanged 事件推送）
   // TODO: remove after capability system migration (Phase 3)
   tunerCapabilities: TunerCapabilities | null;
+  // 统一能力系统：当前会话下发的运行时描述符
+  capabilityDescriptors: Map<string, CapabilityDescriptor>;
   // 统一能力系统：所有可控能力的当前状态
   capabilityStates: Map<string, CapabilityState>;
   // 电台重连进度
@@ -207,13 +211,13 @@ export type RadioAction =
   | { type: 'setCurrentRadioFrequency'; payload: number | null }
   | { type: 'setSpectrumSessionState'; payload: SpectrumSessionState | null }
   | { type: 'setStationInfo'; payload: StationInfo }
-  | { type: 'setCapabilityList'; payload: { capabilities: CapabilityState[] } }
+  | { type: 'setCapabilityList'; payload: CapabilityList }
   | { type: 'updateCapabilityState'; payload: CapabilityState }
   | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities | null }
   | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
   | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null };
 
-const initialRadioState: RadioState = {
+export const initialRadioState: RadioState = {
   isDecoding: false,
   currentMode: null,
   systemStatus: null,
@@ -231,6 +235,7 @@ const initialRadioState: RadioState = {
   meterData: null,
   meterCapabilities: null,
   tunerCapabilities: null,
+  capabilityDescriptors: new Map<string, CapabilityDescriptor>(),
   capabilityStates: new Map<string, CapabilityState>(),
   radioConnectionHealth: null,
   coreCapabilities: null,
@@ -251,7 +256,7 @@ const initialRadioState: RadioState = {
   subscribedSpectrumKind: null,
 };
 
-function radioReducer(state: RadioState, action: RadioAction): RadioState {
+export function radioReducer(state: RadioState, action: RadioAction): RadioState {
   switch (action.type) {
     case 'modeChanged':
       return {
@@ -364,7 +369,10 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
         tunerCapabilities: action.payload.radioConnected
           ? (action.payload.tunerCapabilities ?? state.tunerCapabilities)
           : null,
-        // 断开时清空能力状态（重连后由 radioCapabilityList 事件重新填充）
+        // 断开时清空能力描述符和状态（重连后由 radioCapabilityList 事件重新填充）
+        capabilityDescriptors: action.payload.radioConnected
+          ? state.capabilityDescriptors
+          : new Map<string, CapabilityDescriptor>(),
         capabilityStates: action.payload.radioConnected
           ? state.capabilityStates
           : new Map<string, CapabilityState>(),
@@ -453,11 +461,20 @@ function radioReducer(state: RadioState, action: RadioAction): RadioState {
       return { ...state, stationInfo: action.payload };
 
     case 'setCapabilityList': {
+      const descriptorMap = new Map<string, CapabilityDescriptor>();
+      for (const descriptor of action.payload.descriptors) {
+        descriptorMap.set(descriptor.id, descriptor);
+      }
+
       const newMap = new Map<string, CapabilityState>();
       for (const cap of action.payload.capabilities) {
         newMap.set(cap.id, cap);
       }
-      return { ...state, capabilityStates: newMap };
+      return {
+        ...state,
+        capabilityDescriptors: descriptorMap,
+        capabilityStates: newMap,
+      };
     }
 
     case 'updateCapabilityState': {
@@ -714,6 +731,7 @@ const RadioErrorsContext = createContext<{
   clearErrors: () => void;
 } | undefined>(undefined);
 
+const CapabilityDescriptorsContext = createContext<Map<string, CapabilityDescriptor> | undefined>(undefined);
 const CapabilityStatesContext = createContext<Map<string, CapabilityState> | undefined>(undefined);
 
 // Provider组件
@@ -1321,8 +1339,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       },
       // 统一能力系统事件
       radioCapabilityList: (data: unknown) => {
-        const listData = data as { capabilities: CapabilityState[] };
-        logger.debug('Radio capability list received', { count: listData.capabilities.length });
+        const listData = data as CapabilityList;
+        logger.debug('Radio capability list received', {
+          descriptorCount: listData.descriptors.length,
+          stateCount: listData.capabilities.length,
+        });
         radioDispatch({ type: 'setCapabilityList', payload: listData });
       },
       radioCapabilityChanged: (data: unknown) => {
@@ -1467,6 +1488,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     clearErrors: clearRadioErrors,
   }), [radioState.radioErrors, radioState.latestRadioError, clearRadioErrors]);
 
+  const capabilityDescriptorsContextValue = useMemo(
+    () => radioState.capabilityDescriptors,
+    [radioState.capabilityDescriptors],
+  );
+
   return React.createElement(
     ConnectionContext.Provider, { value: connectionContextValue },
     React.createElement(
@@ -1490,8 +1516,11 @@ export const RadioProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                       React.createElement(
                         RadioErrorsContext.Provider, { value: radioErrorsContextValue },
                         React.createElement(
-                          CapabilityStatesContext.Provider, { value: radioState.capabilityStates },
-                          children
+                          CapabilityDescriptorsContext.Provider, { value: capabilityDescriptorsContextValue },
+                          React.createElement(
+                            CapabilityStatesContext.Provider, { value: radioState.capabilityStates },
+                            children
+                          )
                         )
                       )
                     )
@@ -1650,6 +1679,24 @@ export const useCapabilityState = (id: string): CapabilityState | undefined => {
   const context = useContext(CapabilityStatesContext);
   if (!context) throw new Error('useCapabilityState must be used within RadioProvider');
   return context.get(id);
+};
+
+/**
+ * 获取单个能力的运行时描述符
+ */
+export const useCapabilityDescriptor = (id: string): CapabilityDescriptor | undefined => {
+  const context = useContext(CapabilityDescriptorsContext);
+  if (!context) throw new Error('useCapabilityDescriptor must be used within RadioProvider');
+  return context.get(id);
+};
+
+/**
+ * 获取所有能力的描述符 Map
+ */
+export const useCapabilityDescriptors = (): Map<string, CapabilityDescriptor> => {
+  const context = useContext(CapabilityDescriptorsContext);
+  if (!context) throw new Error('useCapabilityDescriptors must be used within RadioProvider');
+  return context;
 };
 
 /**

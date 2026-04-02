@@ -410,4 +410,145 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @optional Hamlib: setLevel('NR', value), icom-wlan: CI-V 0x14 0x13
    */
   setNREnabled?(value: number): Promise<void>;
+
+  // ===== Rich capability controls（主要由 Hamlib 提供）=====
+
+  /**
+   * 获取面板锁定状态。
+   */
+  getLockMode?(): Promise<boolean>;
+
+  /**
+   * 设置面板锁定状态。
+   */
+  setLockMode?(enabled: boolean): Promise<void>;
+
+  /**
+   * 获取静音状态。
+   */
+  getMuteEnabled?(): Promise<boolean>;
+
+  /**
+   * 设置静音状态。
+   */
+  setMuteEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * 获取 VOX 开关状态。
+   */
+  getVOXEnabled?(): Promise<boolean>;
+
+  /**
+   * 设置 VOX 开关状态。
+   */
+  setVOXEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * 获取 RIT 偏移（Hz）。
+   */
+  getRitOffset?(): Promise<number>;
+
+  /**
+   * 设置 RIT 偏移（Hz）。
+   */
+  setRitOffset?(offsetHz: number): Promise<void>;
+
+  /**
+   * 获取 XIT 偏移（Hz）。
+   */
+  getXitOffset?(): Promise<number>;
+
+  /**
+   * 设置 XIT 偏移（Hz）。
+   */
+  setXitOffset?(offsetHz: number): Promise<void>;
+
+  /**
+   * 获取当前调谐步进（Hz）。
+   */
+  getTuningStep?(): Promise<number>;
+
+  /**
+   * 设置当前调谐步进（Hz）。
+   */
+  setTuningStep?(stepHz: number): Promise<void>;
+
+  /**
+   * 获取当前连接支持的调谐步进列表（Hz）。
+   */
+  getSupportedTuningSteps?(): Promise<number[]>;
+
+  /**
+   * 获取当前电源状态。
+   * 推荐值：off/on/standby/operate/unknown
+   */
+  getPowerState?(): Promise<string>;
+
+  /**
+   * 设置当前电源状态。
+   * 推荐值：off/on/standby/operate/unknown
+   */
+  setPowerState?(state: string): Promise<void>;
+
+  /**
+   * 获取中继差频方向。
+   * 推荐值：none/minus/plus
+   */
+  getRepeaterShift?(): Promise<string>;
+
+  /**
+   * 设置中继差频方向。
+   * 推荐值：none/minus/plus
+   */
+  setRepeaterShift?(shift: string): Promise<void>;
+
+  /**
+   * 获取中继偏移（Hz）。
+   */
+  getRepeaterOffset?(): Promise<number>;
+
+  /**
+   * 设置中继偏移（Hz）。
+   */
+  setRepeaterOffset?(offsetHz: number): Promise<void>;
+
+  /**
+   * 获取当前 CTCSS 发射音调（单位：0.1Hz）。
+   */
+  getCtcssTone?(): Promise<number>;
+
+  /**
+   * 设置 CTCSS 发射音调（单位：0.1Hz）。
+   */
+  setCtcssTone?(tone: number): Promise<void>;
+
+  /**
+   * 获取当前连接支持的 CTCSS 音调列表（单位：0.1Hz）。
+   */
+  getAvailableCtcssTones?(): Promise<number[]>;
+
+  /**
+   * 获取当前 DCS 码。
+   */
+  getDcsCode?(): Promise<number>;
+
+  /**
+   * 设置当前 DCS 码。
+   */
+  setDcsCode?(code: number): Promise<void>;
+
+  /**
+   * 获取当前连接支持的 DCS 码列表。
+   */
+  getAvailableDcsCodes?(): Promise<number[]>;
+
+  /**
+   * 获取支持的最大 RIT 偏移（Hz）。
+   */
+  getMaxRit?(): Promise<number>;
+
+  /**
+   * 获取支持的最大 XIT 偏移（Hz）。
+   */
+  getMaxXit?(): Promise<number>;
 }

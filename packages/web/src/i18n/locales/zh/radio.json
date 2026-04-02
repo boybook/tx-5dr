@@ -305,7 +305,9 @@
       "notSupported": "当前电台不支持此功能",
       "antenna": "天馈",
       "rf": "射频",
-      "audio": "音频"
+      "audio": "音频",
+      "operation": "操作",
+      "system": "系统"
     },
     "tuner_switch": {
       "label": "自动天调",
@@ -338,6 +340,64 @@
     "nr": {
       "label": "数字降噪",
       "description": "数字信号处理降噪（NR），通过 DSP 算法降低背景白噪声，提升弱信号可读性。0 表示关闭；进行 FT8 等数字模式解码时建议设为 0，避免 DSP 处理影响解码准确性。"
+    },
+    "lock_mode": {
+      "label": "面板锁定",
+      "description": "锁定电台前面板或本机旋钮操作，防止误触导致频率或参数被意外改动。远程控制仍可按设备实现继续工作。"
+    },
+    "mute": {
+      "label": "静音",
+      "description": "控制电台本机音频输出静音状态。开启后，电台扬声器或耳机口将静音，但不影响软件侧解码或网络音频链路。"
+    },
+    "vox": {
+      "label": "VOX",
+      "description": "启用语音控制发射（VOX）。当麦克风检测到语音输入时，电台可自动切换到发射状态。数字模式通常建议关闭。"
+    },
+    "rit_offset": {
+      "label": "RIT 偏移",
+      "description": "调整接收增量调谐（RIT）偏移，仅改变接收频率，不改变发射频率，适合微调对方信号音调。"
+    },
+    "xit_offset": {
+      "label": "XIT 偏移",
+      "description": "调整发射增量调谐（XIT）偏移，仅改变发射频率，不影响当前接收频率，适合分开发收频点。"
+    },
+    "tuning_step": {
+      "label": "步进",
+      "description": "设置旋钮或上下调谐时使用的步进值。较小步进适合精细调谐，较大步进适合快速跨频段移动。"
+    },
+    "power_state": {
+      "label": "电源状态",
+      "description": "读取或切换电台电源工作状态。不同机型可能支持关机、待机、上电或工作等状态。"
+    },
+    "repeater_shift": {
+      "label": "中继方向",
+      "description": "设置中继台收发频移方向，可选无频移、负频移或正频移。通常与中继偏移量配合使用。"
+    },
+    "repeater_offset": {
+      "label": "中继偏移",
+      "description": "设置中继工作时的频率偏移量。界面以 kHz 显示，实际写入为 Hz。"
+    },
+    "ctcss_tone": {
+      "label": "CTCSS 亚音",
+      "description": "选择连续音频编码静噪系统（CTCSS）亚音频率，用于中继接入或静噪控制。"
+    },
+    "dcs_code": {
+      "label": "DCS 码",
+      "description": "选择数字编码静噪（DCS）代码，用于匹配中继或对讲系统的数字静噪设置。"
+    },
+    "options": {
+      "power_state": {
+        "off": "关机",
+        "on": "开机",
+        "standby": "待机",
+        "operate": "工作",
+        "unknown": "未知"
+      },
+      "repeater_shift": {
+        "none": "无频移",
+        "minus": "负频移",
+        "plus": "正频移"
+      }
     }
   }
 }

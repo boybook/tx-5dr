@@ -7,6 +7,8 @@
 
 import { registerCapabilityComponent } from './CapabilityRegistry';
 import { TunerCapabilityPanel, TunerCapabilitySurface } from './components/TunerCapability';
+import { BooleanCapabilityPanel } from './components/BooleanCapability';
+import { EnumCapabilityPanel } from './components/EnumCapability';
 import { NumberLevelCapabilityPanel } from './components/NumberLevelCapability';
 
 // 天调：panel + surface（surface 在工具栏 Popover 中露出）
@@ -24,3 +26,14 @@ registerCapabilityComponent('sql', NumberLevelCapabilityPanel);
 registerCapabilityComponent('mic_gain', NumberLevelCapabilityPanel);
 registerCapabilityComponent('nb', NumberLevelCapabilityPanel);
 registerCapabilityComponent('nr', NumberLevelCapabilityPanel);
+registerCapabilityComponent('lock_mode', BooleanCapabilityPanel);
+registerCapabilityComponent('mute', BooleanCapabilityPanel);
+registerCapabilityComponent('vox', BooleanCapabilityPanel);
+registerCapabilityComponent('rit_offset', NumberLevelCapabilityPanel);
+registerCapabilityComponent('xit_offset', NumberLevelCapabilityPanel);
+registerCapabilityComponent('tuning_step', EnumCapabilityPanel);
+registerCapabilityComponent('power_state', EnumCapabilityPanel);
+registerCapabilityComponent('repeater_shift', EnumCapabilityPanel);
+registerCapabilityComponent('repeater_offset', NumberLevelCapabilityPanel);
+registerCapabilityComponent('ctcss_tone', EnumCapabilityPanel);
+registerCapabilityComponent('dcs_code', EnumCapabilityPanel);
