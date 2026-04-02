@@ -18,14 +18,16 @@ import {
   LoTWConfig,
   LoTWConfigSchema,
   LoTWTestConnectionRequestSchema,
-  LoTWTQSLDetectRequestSchema,
+  LoTWUploadPreflightRequestSchema,
   LoTWSyncRequestSchema,
+  getLoTWLocationRule,
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { SyncServiceRegistry } from '../services/SyncServiceRegistry.js';
 import { WaveLogService } from '../services/WaveLogService.js';
 import { QRZService } from '../services/QRZService.js';
 import { LoTWService } from '../services/LoTWService.js';
+import { LoTWCertificateStore } from '../services/LoTWCertificateStore.js';
 import { LogManager } from '../log/LogManager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
@@ -649,12 +651,44 @@ export async function syncRoutes(fastify: FastifyInstance) {
   //  LoTW 子路由
   // =============================================
 
+  const buildDefaultLoTWConfig = (callsign: string): LoTWConfig => ({
+    username: '',
+    password: '',
+    certificates: [],
+    uploadLocation: {
+      callsign: normalizeCallsign(callsign),
+      gridSquare: '',
+      cqZone: '',
+      ituZone: '',
+      iota: '',
+      state: '',
+      county: '',
+    },
+    autoUploadQSO: false,
+  });
+
+  const isUploadLocationConfigured = (lotwConfig?: LoTWConfig | null): boolean => {
+    const location = lotwConfig?.uploadLocation;
+    if (!location) return false;
+    if (!location.callsign || !location.dxccId || !location.gridSquare || !location.cqZone || !location.ituZone) {
+      return false;
+    }
+    const rule = getLoTWLocationRule(location.dxccId);
+    if (rule.requiresState && !location.state) {
+      return false;
+    }
+    if (rule.requiresCounty && !location.county) {
+      return false;
+    }
+    return true;
+  };
+
   // GET /:callsign/lotw/config
   fastify.get('/:callsign/lotw/config', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { callsign } = request.params as { callsign: string };
       const config = configManager.getCallsignSyncConfig(callsign);
-      return reply.send({ success: true, config: config?.lotw || null });
+      return reply.send({ success: true, config: config?.lotw || buildDefaultLoTWConfig(callsign) });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
@@ -666,7 +700,16 @@ export async function syncRoutes(fastify: FastifyInstance) {
       const { callsign } = request.params as { callsign: string };
       const lotwUpdates = LoTWConfigSchema.partial().parse(request.body);
       const existing = configManager.getCallsignSyncConfig(callsign);
-      const mergedLotw = { ...(existing?.lotw || {}), ...lotwUpdates } as LoTWConfig;
+      const base = existing?.lotw || buildDefaultLoTWConfig(callsign);
+      const mergedLotw: LoTWConfig = {
+        ...base,
+        ...lotwUpdates,
+        certificates: lotwUpdates.certificates ?? base.certificates ?? [],
+        uploadLocation: {
+          ...(base.uploadLocation || buildDefaultLoTWConfig(callsign).uploadLocation),
+          ...(lotwUpdates.uploadLocation || {}),
+        },
+      };
       await configManager.updateCallsignSyncConfig(callsign, { lotw: mergedLotw });
 
       const newConfig = configManager.getCallsignSyncConfig(callsign);
@@ -685,11 +728,9 @@ export async function syncRoutes(fastify: FastifyInstance) {
     try {
       const testRequest = LoTWTestConnectionRequestSchema.parse(request.body);
       const testConfig: LoTWConfig = {
+        ...buildDefaultLoTWConfig(''),
         username: testRequest.username,
         password: testRequest.password,
-        tqslPath: '',
-        stationCallsign: '',
-        autoUploadQSO: false,
       };
 
       const testService = new LoTWService(testConfig);
@@ -700,35 +741,125 @@ export async function syncRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // POST /:callsign/lotw/detect-tqsl
-  fastify.post('/:callsign/lotw/detect-tqsl', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+  // POST /:callsign/lotw/certificates/import
+  fastify.post('/:callsign/lotw/certificates/import', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { callsign } = request.params as { callsign: string };
-      const detectRequest = LoTWTQSLDetectRequestSchema.parse(request.body);
-
-      // 使用注册表中的服务或创建临时实例
-      const existingService = registry.getLoTWService(callsign);
-      const config = configManager.getCallsignSyncConfig(callsign);
-      const service = existingService || new LoTWService(config?.lotw || {
-        username: '',
-        password: '',
-        tqslPath: '',
-        stationCallsign: '',
-        autoUploadQSO: false,
-      });
-      const result = await service.detectTQSL(detectRequest.tqslPath);
-
-      // 如果检测到TQSL，自动保存路径到配置
-      if (result.found && result.path) {
-        const existing = configManager.getCallsignSyncConfig(callsign);
-        const mergedLotw = { ...(existing?.lotw || {}), tqslPath: result.path } as LoTWConfig;
-        await configManager.updateCallsignSyncConfig(callsign, { lotw: mergedLotw });
-        const newConfig = configManager.getCallsignSyncConfig(callsign);
-        if (newConfig) {
-          registry.updateServicesForCallsign(callsign, newConfig);
-        }
+      const file = await (request as any).file();
+      if (!file) {
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_OPERATION,
+          message: 'certificate_file_required',
+          userMessage: 'Please choose a .p12 certificate file first',
+          severity: RadioErrorSeverity.WARNING,
+        });
       }
 
+      const buffer = await file.toBuffer();
+      const store = new LoTWCertificateStore();
+      let imported;
+      try {
+        imported = await store.importCertificate(buffer);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'certificate_invalid';
+        if (message === 'certificate_password_protected') {
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_OPERATION,
+            message,
+            userMessage: 'This .p12 certificate is password protected. Please export it from TQSL again without a password.',
+            severity: RadioErrorSeverity.WARNING,
+          });
+        }
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_OPERATION,
+          message,
+          userMessage: 'The uploaded certificate could not be parsed. Please confirm it is a LoTW .p12 certificate exported from TQSL.',
+          severity: RadioErrorSeverity.WARNING,
+        });
+      }
+
+      const existing = configManager.getCallsignSyncConfig(callsign);
+      const base = existing?.lotw || buildDefaultLoTWConfig(callsign);
+      const summary = store.toSummary(imported);
+      const duplicate = (base.certificates || []).find((item) => item.fingerprint === summary.fingerprint);
+      if (duplicate) {
+        await store.deleteCertificate(summary.id).catch(() => {});
+        return reply.send({ success: true, message: 'This LoTW certificate has already been imported', certificate: duplicate });
+      }
+
+      const mergedLotw: LoTWConfig = {
+        ...base,
+        certificates: [...(base.certificates || []), summary].sort((left, right) => left.qsoStartDate - right.qsoStartDate),
+        uploadLocation: {
+          ...(base.uploadLocation || buildDefaultLoTWConfig(callsign).uploadLocation),
+          callsign: base.uploadLocation?.callsign || summary.callsign || normalizeCallsign(callsign),
+          dxccId: base.uploadLocation?.dxccId || summary.dxccId,
+        },
+      };
+
+      await configManager.updateCallsignSyncConfig(callsign, { lotw: mergedLotw });
+      const newConfig = configManager.getCallsignSyncConfig(callsign);
+      if (newConfig) {
+        registry.updateServicesForCallsign(callsign, newConfig);
+      }
+
+      return reply.send({ success: true, message: 'LoTW certificate imported successfully', certificate: summary });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // DELETE /:callsign/lotw/certificates/:certId
+  fastify.delete('/:callsign/lotw/certificates/:certId', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign, certId } = request.params as { callsign: string; certId: string };
+      const existing = configManager.getCallsignSyncConfig(callsign);
+      const base = existing?.lotw || buildDefaultLoTWConfig(callsign);
+      const nextCertificates = (base.certificates || []).filter((item) => item.id !== certId);
+
+      if (nextCertificates.length === (base.certificates || []).length) {
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_OPERATION,
+          message: 'certificate_not_found',
+          userMessage: 'The selected LoTW certificate was not found',
+          severity: RadioErrorSeverity.WARNING,
+        });
+      }
+
+      await new LoTWCertificateStore().deleteCertificate(certId).catch(() => {});
+      await configManager.updateCallsignSyncConfig(callsign, {
+        lotw: {
+          ...base,
+          certificates: nextCertificates,
+        },
+      });
+
+      const newConfig = configManager.getCallsignSyncConfig(callsign);
+      if (newConfig) {
+        registry.updateServicesForCallsign(callsign, newConfig);
+      }
+
+      return reply.send({ success: true, message: 'LoTW certificate deleted', deletedId: certId });
+    } catch (error) {
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  // POST /:callsign/lotw/upload-preflight
+  fastify.post('/:callsign/lotw/upload-preflight', { preHandler: [callsignAccess] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { callsign } = request.params as { callsign: string };
+      LoTWUploadPreflightRequestSchema.parse(request.body || {});
+      const config = configManager.getCallsignSyncConfig(callsign);
+      const mergedConfig: LoTWConfig = config?.lotw || buildDefaultLoTWConfig(callsign);
+
+      const logManager = LogManager.getInstance();
+      const targetLogBook = await getTargetLogBook(callsign, logManager);
+      const allQSOs = await targetLogBook.provider.queryQSOs({});
+      const pendingQSOs = allQSOs.filter((qso: any) => qso.lotwQslSent !== 'Y');
+
+      const service = new LoTWService(mergedConfig);
+      const result = await service.getUploadPreflight(pendingQSOs, callsign);
       return reply.send(result);
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
@@ -745,10 +876,10 @@ export async function syncRoutes(fastify: FastifyInstance) {
       if (!service) {
         throw new RadioError({
           code: RadioErrorCode.NOT_INITIALIZED,
-          message: `LoTW service for callsign ${callsign} not initialized`,
+          message: 'lotw_not_configured',
           userMessage: 'Please configure LoTW settings for this callsign first',
           severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Configure LoTW username and password in sync settings page', 'Ensure LoTW service is enabled'],
+          suggestions: ['Configure LoTW username/password and upload certificate in sync settings page'],
         });
       }
 
@@ -774,20 +905,20 @@ export async function syncRoutes(fastify: FastifyInstance) {
               syncTime: Date.now(),
             };
           } else {
-            logger.debug(`Uploading ${pendingQSOs.length} QSOs to LoTW (${callsign})`);
-            result = await service.uploadQSOs(pendingQSOs);
+            logger.debug('Uploading ' + pendingQSOs.length + ' QSOs to LoTW (' + callsign + ')');
+            result = await service.uploadQSOs(pendingQSOs, callsign);
             if (result.success && result.uploadedCount > 0) {
               const markedCount = await markLotwUploadSent(targetLogBook.provider, pendingQSOs);
               const existingConfig = configManager.getCallsignSyncConfig(callsign);
               await configManager.updateCallsignSyncConfig(callsign, {
                 lotw: {
-                  ...(existingConfig?.lotw || {}),
+                  ...((existingConfig?.lotw || buildDefaultLoTWConfig(callsign)) as LoTWConfig),
                   lastUploadTime: Date.now(),
-                } as LoTWConfig,
+                },
               });
               result.updatedCount = markedCount;
               result.importedCount = 0;
-              logger.info(`Marked ${markedCount} QSOs as LoTW sent`);
+              logger.info('Marked ' + markedCount + ' QSOs as LoTW sent');
               await emitLogbookRefresh(targetLogBook.id, targetLogBook.operatorId);
             }
           }
@@ -798,17 +929,15 @@ export async function syncRoutes(fastify: FastifyInstance) {
           const logManager = LogManager.getInstance();
           const targetLogBook = await getTargetLogBook(callsign, logManager);
           const existingConfig = configManager.getCallsignSyncConfig(callsign);
-          const effectiveSince = resolveLotwConfirmationSince(
-            syncRequest.since,
-            existingConfig?.lotw?.lastDownloadTime
-          );
-          const { records, confirmedCount } = await service.downloadConfirmations(effectiveSince);
+          const effectiveSince = resolveLotwConfirmationSince(syncRequest.since, existingConfig?.lotw?.lastDownloadTime);
+          const downloadService = registry.getLoTWService(callsign) || new LoTWService(existingConfig?.lotw || buildDefaultLoTWConfig(callsign));
+          const downloadResult = await downloadService.downloadConfirmations(effectiveSince);
           let updatedCount = 0;
           let importedCount = 0;
           let errorCount = 0;
           const errors: string[] = [];
 
-          for (const record of records) {
+          for (const record of downloadResult.records) {
             try {
               const match = await findMatchingLocalQSO(targetLogBook.provider, record);
               if (match) {
@@ -820,15 +949,12 @@ export async function syncRoutes(fastify: FastifyInstance) {
                 continue;
               }
 
-              await targetLogBook.provider.addQSO(
-                buildImportedLoTWQSO(record, callsign),
-                targetLogBook.operatorId
-              );
+              await targetLogBook.provider.addQSO(buildImportedLoTWQSO(record, callsign), targetLogBook.operatorId);
               importedCount++;
             } catch (error) {
               errorCount++;
               const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-              errors.push(`${record.callsign}@${record.startTime}: ${errorMessage}`);
+              errors.push(record.callsign + '@' + record.startTime + ': ' + errorMessage);
               logger.warn('Failed to process LoTW confirmation record', {
                 callsign: record.callsign,
                 startTime: record.startTime,
@@ -839,22 +965,22 @@ export async function syncRoutes(fastify: FastifyInstance) {
 
           await configManager.updateCallsignSyncConfig(callsign, {
             lotw: {
-              ...(existingConfig?.lotw || {}),
+              ...((existingConfig?.lotw || buildDefaultLoTWConfig(callsign)) as LoTWConfig),
               lastDownloadTime: Date.now(),
-            } as LoTWConfig,
+            },
           });
 
           if (updatedCount > 0 || importedCount > 0) {
             await emitLogbookRefresh(targetLogBook.id, targetLogBook.operatorId);
           }
 
-          logger.info(`LoTW confirmation sync completed: updated=${updatedCount}, imported=${importedCount}, total=${records.length}`);
+          logger.info('LoTW confirmation sync completed: updated=' + updatedCount + ', imported=' + importedCount + ', total=' + downloadResult.records.length);
           result = {
             success: errorCount === 0,
-            message: `Downloaded ${confirmedCount} LoTW confirmation records, updated ${updatedCount} local QSOs, imported ${importedCount} missing QSOs`,
+            message: 'Downloaded ' + downloadResult.confirmedCount + ' LoTW confirmation records, updated ' + updatedCount + ' local QSOs, imported ' + importedCount + ' missing QSOs',
             uploadedCount: 0,
-            downloadedCount: records.length,
-            confirmedCount,
+            downloadedCount: downloadResult.records.length,
+            confirmedCount: downloadResult.confirmedCount,
             updatedCount,
             importedCount,
             errorCount,
@@ -867,7 +993,7 @@ export async function syncRoutes(fastify: FastifyInstance) {
         default:
           throw new RadioError({
             code: RadioErrorCode.INVALID_OPERATION,
-            message: `Unsupported sync operation type: ${(syncRequest as any).operation}`,
+            message: 'Unsupported sync operation type: ' + (syncRequest as any).operation,
             userMessage: 'Unsupported sync operation type',
             severity: RadioErrorSeverity.WARNING,
             suggestions: ['Supported operation types: upload, download_confirmations'],
@@ -885,16 +1011,18 @@ export async function syncRoutes(fastify: FastifyInstance) {
     try {
       const { callsign } = request.params as { callsign: string };
       const config = configManager.getCallsignSyncConfig(callsign);
-      const lotwConfig = config?.lotw;
+      const lotwConfig = config?.lotw || buildDefaultLoTWConfig(callsign);
       const service = registry.getLoTWService(callsign);
 
       return reply.send({
-        configured: !!(lotwConfig?.username && lotwConfig?.password),
-        tqslConfigured: !!lotwConfig?.tqslPath,
+        configured: !!(lotwConfig.username && lotwConfig.password),
+        certificateCount: lotwConfig.certificates?.length || 0,
+        uploadLocationConfigured: isUploadLocationConfigured(lotwConfig),
+        uploadConfigured: (lotwConfig.certificates?.length || 0) > 0 && isUploadLocationConfigured(lotwConfig),
         serviceAvailable: !!service,
-        lastUploadTime: lotwConfig?.lastUploadTime,
-        lastDownloadTime: lotwConfig?.lastDownloadTime,
-        autoUpload: lotwConfig?.autoUploadQSO,
+        lastUploadTime: lotwConfig.lastUploadTime,
+        lastDownloadTime: lotwConfig.lastDownloadTime,
+        autoUpload: lotwConfig.autoUploadQSO,
       });
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);

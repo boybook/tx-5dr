@@ -4,6 +4,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
+import multipart from '@fastify/multipart';
 import type { WebSocket } from 'ws';
 import type { HelloResponse } from '@tx5dr/contracts';
 import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
@@ -172,6 +173,13 @@ export async function createServer() {
   });
 
   // Register WebSocket plugin
+  await fastify.register(multipart, {
+    limits: {
+      fileSize: 5 * 1024 * 1024,
+      files: 1,
+    },
+  });
+
   await fastify.register(websocket, {
     options: {
       maxPayload: 1048576, // 1MB 最大消息大小

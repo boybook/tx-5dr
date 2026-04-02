@@ -34,6 +34,10 @@ export const LogbookSyncSettings = forwardRef<LogbookSyncSettingsRef, LogbookSyn
     const qrzRef = React.useRef<QRZSettingsRef>(null);
     const lotwRef = React.useRef<LoTWSettingsRef>(null);
 
+    useEffect(() => {
+      setActiveTab(initialTab || 'wavelog');
+    }, [initialTab, callsign]);
+
     // 暴露给父组件的方法
     useImperativeHandle(ref, () => ({
       hasUnsavedChanges: () => {
