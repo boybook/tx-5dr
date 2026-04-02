@@ -145,7 +145,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
             totalOperators: connectedOperators.length,
             uniqueCallsigns: statistics.uniqueCallsigns || 0,
             lastQSO: statistics.lastQSOTime ? new Date(statistics.lastQSOTime).toISOString() : undefined,
-            firstQSO: undefined // 需要从provider获取第一次QSO时间
+            firstQSO: statistics.firstQSOTime ? new Date(statistics.firstQSOTime).toISOString() : undefined,
+            dxcc: statistics.dxcc,
           },
           connectedOperators
         }

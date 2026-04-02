@@ -344,6 +344,7 @@ export class RadioOperatorManager {
       autoResumeCQAfterSuccess: config.autoResumeCQAfterSuccess,
       replyToWorkedStations: config.replyToWorkedStations ?? false,
       prioritizeNewCalls: config.prioritizeNewCalls ?? true,
+      targetSelectionPriorityMode: config.targetSelectionPriorityMode ?? (config.prioritizeNewCalls === false ? 'balanced' : 'dxcc_first'),
       mode: config.mode || MODES.FT8,
     };
   }
@@ -575,6 +576,7 @@ export class RadioOperatorManager {
           autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
           replyToWorkedStations: operator.config.replyToWorkedStations,
           prioritizeNewCalls: operator.config.prioritizeNewCalls,
+          targetSelectionPriorityMode: operator.config.targetSelectionPriorityMode,
         },
         strategy: {
           name: 'StandardQSOStrategy',
@@ -644,6 +646,10 @@ export class RadioOperatorManager {
       operator.config.prioritizeNewCalls = context.prioritizeNewCalls;
       updates.prioritizeNewCalls = context.prioritizeNewCalls;
     }
+    if (context.targetSelectionPriorityMode !== undefined && context.targetSelectionPriorityMode !== operator.config.targetSelectionPriorityMode) {
+      operator.config.targetSelectionPriorityMode = context.targetSelectionPriorityMode;
+      updates.targetSelectionPriorityMode = context.targetSelectionPriorityMode;
+    }
 
     // 如果有任何字段发生了变化，保存到配置文件
     if (Object.keys(updates).length > 0) {
@@ -696,6 +702,9 @@ export class RadioOperatorManager {
     }
     if (context.prioritizeNewCalls !== undefined && context.prioritizeNewCalls !== operator.config.prioritizeNewCalls) {
       updates.prioritizeNewCalls = context.prioritizeNewCalls;
+    }
+    if (context.targetSelectionPriorityMode !== undefined && context.targetSelectionPriorityMode !== operator.config.targetSelectionPriorityMode) {
+      updates.targetSelectionPriorityMode = context.targetSelectionPriorityMode;
     }
 
     if (Object.keys(updates).length > 0) {

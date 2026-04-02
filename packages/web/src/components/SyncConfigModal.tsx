@@ -24,7 +24,7 @@ interface SyncConfigModalProps {
 }
 
 export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved }: SyncConfigModalProps) {
-  const { t } = useTranslation('settings');
+  const { t } = useTranslation(['settings', 'logbook']);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const logbookSyncSettingsRef = useRef<LogbookSyncSettingsRef | null>(null);
@@ -88,7 +88,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
       >
         <ModalContent>
           <ModalHeader>
-            <h2 className="text-xl font-bold">{t('sync.title', { callsign })}</h2>
+            <h2 className="text-xl font-bold">{t('logbook:logbookSyncSettings.title')}</h2>
           </ModalHeader>
 
           <ModalBody>

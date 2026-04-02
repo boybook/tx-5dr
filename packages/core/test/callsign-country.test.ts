@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getCallsignInfo, parseFT8LocationInfo } from '../src/callsign/callsign.js';
+import { getCallsignInfo, parseFT8LocationInfo, resolveDXCCEntity } from '../src/callsign/callsign.js';
 
 test('日本呼号基础国家解析', () => {
   const a = getCallsignInfo('JF1TPR');
@@ -174,4 +174,37 @@ test('前缀冲突优先级 - CE0前缀应优先匹配复活节岛', () => {
     assert.equal(info?.countryZh, '复活节岛', `呼号 "${callsign}" 中文应为复活节岛`);
     assert.equal(info?.entityCode, 47, `呼号 "${callsign}" 实体代码应为 47`);
   }
+});
+
+test('DXCC 解析应根据通联日期选择历史实体', () => {
+  const westGermany = getCallsignInfo('DA1ABC', Date.UTC(1970, 0, 1));
+  const germany = getCallsignInfo('DA1ABC', Date.UTC(1980, 0, 1));
+  const czechoslovakia = getCallsignInfo('OK1ABC', Date.UTC(1992, 5, 1));
+  const czechRepublic = getCallsignInfo('OK1ABC', Date.UTC(1994, 5, 1));
+
+  assert.equal(westGermany?.country, 'West Germany');
+  assert.equal(westGermany?.entityCode, 81);
+  assert.equal(westGermany?.dxccStatus, 'deleted');
+
+  assert.equal(germany?.country, 'Germany');
+  assert.equal(germany?.entityCode, 230);
+  assert.equal(germany?.dxccStatus, 'current');
+
+  assert.equal(czechoslovakia?.country, 'Czechoslovakia');
+  assert.equal(czechoslovakia?.entityCode, 218);
+  assert.equal(czechoslovakia?.dxccStatus, 'deleted');
+
+  assert.equal(czechRepublic?.country, 'Czech Republic');
+  assert.equal(czechRepublic?.entityCode, 503);
+  assert.equal(czechRepublic?.dxccStatus, 'current');
+});
+
+test('DXCC 解析缓存不应丢失启发式置信度', () => {
+  const ts = Date.UTC(2026, 3, 2);
+  const first = resolveDXCCEntity('JF1TPR', ts);
+  const second = resolveDXCCEntity('JF1TPR', ts);
+
+  assert.equal(first.confidence, 'heuristic');
+  assert.equal(second.confidence, 'heuristic');
+  assert.equal(second.entity?.entityCode, 339);
 });

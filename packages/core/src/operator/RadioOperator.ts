@@ -35,6 +35,7 @@ export class RadioOperator {
         autoResumeCQAfterSuccess: false,
         replyToWorkedStations: false,
         prioritizeNewCalls: true,
+        targetSelectionPriorityMode: 'dxcc_first',
     };
 
     constructor(
@@ -211,7 +212,8 @@ export class RadioOperator {
                 autoResumeCQAfterFail,
                 autoResumeCQAfterSuccess,
                 replyToWorkedStations,
-                prioritizeNewCalls
+                prioritizeNewCalls,
+                targetSelectionPriorityMode,
             } = command.args;
             
             // 更新操作员配置字段
@@ -246,6 +248,9 @@ export class RadioOperator {
             }
             if (prioritizeNewCalls !== undefined) {
                 this._config.prioritizeNewCalls = prioritizeNewCalls;
+            }
+            if (targetSelectionPriorityMode !== undefined) {
+                this._config.targetSelectionPriorityMode = targetSelectionPriorityMode;
             }
             
             // 通知状态变化
@@ -414,7 +419,8 @@ export class RadioOperator {
                 df: frame.freq,
                 rawMessage: frame.message,
                 slotId: slotPack.slotId,
-                timestamp: slotPack.startMs
+                timestamp: slotPack.startMs,
+                logbookAnalysis: frame.logbookAnalysis,
             };
         });
     }

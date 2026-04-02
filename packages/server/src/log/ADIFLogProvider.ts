@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // ADIFLogProvider - 日志解析需要使用any
 
-import { QSORecord } from '@tx5dr/contracts';
+import { type LogBookDxccSummary, type QSORecord } from '@tx5dr/contracts';
 import {
   ILogProvider,
   LogQueryOptions,
@@ -9,9 +9,10 @@ import {
   CallsignAnalysis,
   getBandFromFrequency,
   extractPrefix,
-  getPrefixInfo,
   getCQZone,
-  getITUZone
+  getITUZone,
+  resolveDXCCEntity,
+  DXCC_RESOLVER_VERSION,
 } from '@tx5dr/core';
 import { AdifParser } from 'adif-parser-ts';
 import * as path from 'path';
@@ -33,6 +34,12 @@ interface OperatorIndex {
   prefixes: Set<string>;
   cqZones: Set<number>;
   ituZones: Set<number>;
+  workedDxccEntities: Set<number>;
+  confirmedDxccEntities: Set<number>;
+  workedBandDxcc: Map<string, Set<number>>;
+  confirmedBandDxcc: Map<string, Set<number>>;
+  workedModeDxcc: Map<string, Set<number>>;
+  confirmedModeDxcc: Map<string, Set<number>>;
   perCallsign: Map<string, PerCallsignInfo>;
   // 每个呼号对应已通联过的频段集合（用于O(1)按频段判重）
   perCallsignBands: Map<string, Set<string>>;
@@ -43,6 +50,12 @@ function createEmptyOperatorIndex(): OperatorIndex {
     prefixes: new Set<string>(),
     cqZones: new Set<number>(),
     ituZones: new Set<number>(),
+    workedDxccEntities: new Set<number>(),
+    confirmedDxccEntities: new Set<number>(),
+    workedBandDxcc: new Map<string, Set<number>>(),
+    confirmedBandDxcc: new Map<string, Set<number>>(),
+    workedModeDxcc: new Map<string, Set<number>>(),
+    confirmedModeDxcc: new Map<string, Set<number>>(),
     perCallsign: new Map<string, PerCallsignInfo>(),
     perCallsignBands: new Map<string, Set<string>>()
   };
@@ -50,6 +63,65 @@ function createEmptyOperatorIndex(): OperatorIndex {
 
 function formatADIFDateOnly(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+function addEntityToBucket(bucket: Map<string, Set<number>>, key: string, dxccId: number): void {
+  let entitySet = bucket.get(key);
+  if (!entitySet) {
+    entitySet = new Set<number>();
+    bucket.set(key, entitySet);
+  }
+  entitySet.add(dxccId);
+}
+
+function normalizeMode(mode?: string): string {
+  return (mode || 'UNKNOWN').toUpperCase();
+}
+
+function isQSOConfirmed(qso: QSORecord): boolean {
+  return qso.lotwQslReceived === 'Y'
+    || qso.lotwQslReceived === 'V'
+    || qso.qrzQslReceived === 'Y';
+}
+
+function enrichQSOWithDXCC(qso: QSORecord): QSORecord {
+  if (qso.dxccSource === 'manual_override' && qso.dxccId) {
+    return qso;
+  }
+
+  const resolution = resolveDXCCEntity(qso.callsign, qso.startTime);
+  const info = resolution.entity;
+  if (!info) {
+    return {
+      ...qso,
+      dxccId: undefined,
+      dxccEntity: undefined,
+      countryCode: undefined,
+      cqZone: undefined,
+      ituZone: undefined,
+      dxccStatus: 'unknown',
+      dxccSource: 'resolver',
+      dxccConfidence: resolution.confidence,
+      dxccResolvedAt: Date.now(),
+      dxccResolverVersion: DXCC_RESOLVER_VERSION,
+      dxccNeedsReview: true,
+    };
+  }
+
+  return {
+    ...qso,
+    dxccId: info.entityCode,
+    dxccEntity: info.name,
+    dxccStatus: info.deleted ? 'deleted' : 'current',
+    countryCode: info.countryCode,
+    cqZone: info.cqZone,
+    ituZone: info.ituZone,
+    dxccSource: 'resolver',
+    dxccConfidence: resolution.confidence,
+    dxccResolvedAt: Date.now(),
+    dxccResolverVersion: DXCC_RESOLVER_VERSION,
+    dxccNeedsReview: resolution.needsReview,
+  };
 }
 
 function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
@@ -66,6 +138,22 @@ function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
     const itu = getITUZone(qso.callsign.toUpperCase());
     if (itu !== null) index.ituZones.add(itu);
   } catch {}
+  if (qso.dxccId) {
+    index.workedDxccEntities.add(qso.dxccId);
+    const band = getBandFromFrequency(qso.frequency);
+    if (band && band !== 'Unknown') {
+      addEntityToBucket(index.workedBandDxcc, band, qso.dxccId);
+    }
+    addEntityToBucket(index.workedModeDxcc, normalizeMode(qso.mode), qso.dxccId);
+
+    if (isQSOConfirmed(qso)) {
+      index.confirmedDxccEntities.add(qso.dxccId);
+      if (band && band !== 'Unknown') {
+        addEntityToBucket(index.confirmedBandDxcc, band, qso.dxccId);
+      }
+      addEntityToBucket(index.confirmedModeDxcc, normalizeMode(qso.mode), qso.dxccId);
+    }
+  }
 
   // 按呼号的统计
   const key = qso.callsign.toUpperCase();
@@ -356,6 +444,70 @@ export class ADIFLogProvider implements ILogProvider {
       remarks: fields.note ?? undefined,
     };
 
+    if (fields.dxcc) {
+      const parsedDxcc = Number.parseInt(fields.dxcc, 10);
+      if (Number.isFinite(parsedDxcc)) {
+        record.dxccId = parsedDxcc;
+      }
+    }
+    if (fields.country) {
+      record.dxccEntity = fields.country;
+    }
+    if (fields.cqz) {
+      const parsedCqz = Number.parseInt(fields.cqz, 10);
+      if (Number.isFinite(parsedCqz)) {
+        record.cqZone = parsedCqz;
+      }
+    }
+    if (fields.ituz) {
+      const parsedItuz = Number.parseInt(fields.ituz, 10);
+      if (Number.isFinite(parsedItuz)) {
+        record.ituZone = parsedItuz;
+      }
+    }
+    if (fields.app_tx5dr_dxcc_status) {
+      record.dxccStatus = fields.app_tx5dr_dxcc_status;
+    }
+    if (fields.app_tx5dr_dxcc_source) {
+      record.dxccSource = fields.app_tx5dr_dxcc_source;
+    }
+    if (fields.app_tx5dr_dxcc_confidence) {
+      record.dxccConfidence = fields.app_tx5dr_dxcc_confidence;
+    }
+    if (fields.app_tx5dr_dxcc_needs_review) {
+      record.dxccNeedsReview = fields.app_tx5dr_dxcc_needs_review === 'Y';
+    }
+    if (fields.app_tx5dr_station_location_id) {
+      record.stationLocationId = fields.app_tx5dr_station_location_id;
+    }
+    if (fields.my_dxcc) {
+      const parsedMyDxcc = Number.parseInt(fields.my_dxcc, 10);
+      if (Number.isFinite(parsedMyDxcc)) {
+        record.myDxccId = parsedMyDxcc;
+      }
+    }
+    if (fields.my_cq_zone) {
+      const parsedMyCq = Number.parseInt(fields.my_cq_zone, 10);
+      if (Number.isFinite(parsedMyCq)) {
+        record.myCqZone = parsedMyCq;
+      }
+    }
+    if (fields.my_itu_zone) {
+      const parsedMyItu = Number.parseInt(fields.my_itu_zone, 10);
+      if (Number.isFinite(parsedMyItu)) {
+        record.myItuZone = parsedMyItu;
+      }
+    }
+    if (fields.state) {
+      record.myState = fields.state;
+    }
+    if (fields.cnty) {
+      record.myCounty = fields.cnty;
+    }
+    if (fields.iota) {
+      record.myIota = fields.iota;
+    }
+
     const lotwSent = fields.lotw_qsl_sent?.toUpperCase();
     if (lotwSent && ['Y', 'N', 'R', 'Q', 'I'].includes(lotwSent)) {
       record.lotwQslSent = lotwSent as QSORecord['lotwQslSent'];
@@ -392,7 +544,7 @@ export class ADIFLogProvider implements ILogProvider {
       record.qrzQslReceivedDate = new Date(`${fields.app_tx5dr_qrz_qslrdate.slice(0, 4)}-${fields.app_tx5dr_qrz_qslrdate.slice(4, 6)}-${fields.app_tx5dr_qrz_qslrdate.slice(6, 8)}T00:00:00Z`).getTime();
     }
 
-    return record;
+    return enrichQSOWithDXCC(record);
   }
   
   /**
@@ -420,7 +572,22 @@ export class ADIFLogProvider implements ILogProvider {
     if (qso.grid) {
       adifRecord += `<GRIDSQUARE:${qso.grid.length}>${qso.grid}`;
     }
-    
+    if (qso.dxccId) {
+      const value = String(qso.dxccId);
+      adifRecord += `<DXCC:${value.length}>${value}`;
+    }
+    if (qso.dxccEntity) {
+      adifRecord += `<COUNTRY:${qso.dxccEntity.length}>${qso.dxccEntity}`;
+    }
+    if (qso.cqZone) {
+      const value = String(qso.cqZone);
+      adifRecord += `<CQZ:${value.length}>${value}`;
+    }
+    if (qso.ituZone) {
+      const value = String(qso.ituZone);
+      adifRecord += `<ITUZ:${value.length}>${value}`;
+    }
+
     if (qso.endTime) {
       const endDate = new Date(qso.endTime);
       const timeOffStr = endDate.toISOString().slice(11, 19).replace(/:/g, '');
@@ -455,6 +622,42 @@ export class ADIFLogProvider implements ILogProvider {
 
     if (qso.myCallsign) {
       adifRecord += `<STATION_CALLSIGN:${qso.myCallsign.length}>${qso.myCallsign}`;
+    }
+    if (qso.myDxccId) {
+      const value = String(qso.myDxccId);
+      adifRecord += `<MY_DXCC:${value.length}>${value}`;
+    }
+    if (qso.myCqZone) {
+      const value = String(qso.myCqZone);
+      adifRecord += `<MY_CQ_ZONE:${value.length}>${value}`;
+    }
+    if (qso.myItuZone) {
+      const value = String(qso.myItuZone);
+      adifRecord += `<MY_ITU_ZONE:${value.length}>${value}`;
+    }
+    if (qso.myState) {
+      adifRecord += `<STATE:${qso.myState.length}>${qso.myState}`;
+    }
+    if (qso.myCounty) {
+      adifRecord += `<CNTY:${qso.myCounty.length}>${qso.myCounty}`;
+    }
+    if (qso.myIota) {
+      adifRecord += `<IOTA:${qso.myIota.length}>${qso.myIota}`;
+    }
+    if (qso.stationLocationId) {
+      adifRecord += `<APP_TX5DR_STATION_LOCATION_ID:${qso.stationLocationId.length}>${qso.stationLocationId}`;
+    }
+    if (qso.dxccStatus) {
+      adifRecord += `<APP_TX5DR_DXCC_STATUS:${qso.dxccStatus.length}>${qso.dxccStatus}`;
+    }
+    if (qso.dxccSource) {
+      adifRecord += `<APP_TX5DR_DXCC_SOURCE:${qso.dxccSource.length}>${qso.dxccSource}`;
+    }
+    if (qso.dxccConfidence) {
+      adifRecord += `<APP_TX5DR_DXCC_CONFIDENCE:${qso.dxccConfidence.length}>${qso.dxccConfidence}`;
+    }
+    if (qso.dxccNeedsReview !== undefined) {
+      adifRecord += `<APP_TX5DR_DXCC_NEEDS_REVIEW:1>${qso.dxccNeedsReview ? 'Y' : 'N'}`;
     }
 
     if (qso.lotwQslSent) {
@@ -519,6 +722,7 @@ export class ADIFLogProvider implements ILogProvider {
   
   async addQSO(record: QSORecord, operatorId?: string): Promise<void> {
     this.ensureInitialized();
+    record = enrichQSOWithDXCC(record);
     
     // 生成唯一ID
     if (!record.id || this.qsoCache.has(record.id)) {
@@ -546,7 +750,7 @@ export class ADIFLogProvider implements ILogProvider {
     }
     
     const updated = { ...existing, ...updates, id };
-    this.qsoCache.set(id, updated);
+    this.qsoCache.set(id, enrichQSOWithDXCC(updated));
     // 简化处理：更新后重建索引（更新频率低，成本可接受）
     this.rebuildIndexes();
     await this.saveCache();
@@ -740,9 +944,12 @@ export class ADIFLogProvider implements ILogProvider {
     const info = idx.perCallsign.get(upper);
 
     const prefix = extractPrefix(upper);
-    const prefixInfo = getPrefixInfo(upper);
-    const cqZone = getCQZone(upper);
-    const ituZone = getITUZone(upper);
+    const resolution = resolveDXCCEntity(upper, Date.now());
+    const dxccEntity = resolution.entity;
+    const cqZone = dxccEntity?.cqZone ?? getCQZone(upper);
+    const ituZone = dxccEntity?.ituZone ?? getITUZone(upper);
+    const dxccId = dxccEntity?.entityCode;
+    const dxccStatus = dxccEntity ? (dxccEntity.deleted ? 'deleted' : 'current') : 'unknown';
 
     let isNewCallsign: boolean;
     if (band && band !== 'Unknown') {
@@ -757,7 +964,11 @@ export class ADIFLogProvider implements ILogProvider {
     // 只有在"有网格 且 是新呼号"时才标记为新网格
     // 根据需求：只要呼号不是新的，就不提示新网格
     const isNewGrid = !!grid && !info;
-    const isNewPrefix = !idx.prefixes.has(prefix);
+    const isNewDxccEntity = dxccId ? !idx.workedDxccEntities.has(dxccId) : false;
+    const isNewBandDxccEntity = dxccId && band && band !== 'Unknown'
+      ? !(idx.workedBandDxcc.get(band)?.has(dxccId))
+      : false;
+    const isConfirmedDxcc = dxccId ? idx.confirmedDxccEntities.has(dxccId) : false;
     const isNewCQZone = cqZone !== null && !idx.cqZones.has(cqZone);
     const isNewITUZone = ituZone !== null && !idx.ituZones.has(ituZone);
 
@@ -766,13 +977,18 @@ export class ADIFLogProvider implements ILogProvider {
       lastQSO,
       qsoCount,
       isNewGrid,
-      isNewPrefix,
+      isNewDxccEntity,
+      isNewBandDxccEntity,
+      isConfirmedDxcc,
       isNewCQZone,
       isNewITUZone,
       prefix,
       cqZone: cqZone || undefined,
       ituZone: ituZone || undefined,
-      dxccEntity: prefixInfo?.name
+      dxccEntity: dxccEntity?.name,
+      dxccId,
+      dxccStatus,
+      dxccNeedsReview: resolution.needsReview,
     };
   }
   
@@ -786,6 +1002,7 @@ export class ADIFLogProvider implements ILogProvider {
     const byMode = new Map<string, number>();
     const byBand = new Map<string, number>();
     let lastQSOTime: number | undefined;
+    let firstQSOTime: number | undefined;
     
     for (const qso of qsos) {
       uniqueCallsigns.add(qso.callsign);
@@ -807,15 +1024,95 @@ export class ADIFLogProvider implements ILogProvider {
       if (!lastQSOTime || qso.startTime > lastQSOTime) {
         lastQSOTime = qso.startTime;
       }
+      if (!firstQSOTime || qso.startTime < firstQSOTime) {
+        firstQSOTime = qso.startTime;
+      }
     }
-    
+    const dxcc = await this.getDXCCSummary(operatorId);
+
     return {
       totalQSOs: qsos.length,
       uniqueCallsigns: uniqueCallsigns.size,
       uniqueGrids: uniqueGrids.size,
       byMode,
       byBand,
-      lastQSOTime
+      lastQSOTime,
+      firstQSOTime,
+      dxcc,
+    };
+  }
+
+  async getDXCCSummary(operatorId?: string): Promise<LogBookDxccSummary> {
+    this.ensureInitialized();
+
+    const qsos = await this.queryQSOs({ operatorId });
+    const workedCurrent = new Set<number>();
+    const workedDeleted = new Set<number>();
+    const confirmedCurrent = new Set<number>();
+    const confirmedDeleted = new Set<number>();
+    const byBand = new Map<string, { worked: Set<number>; confirmed: Set<number> }>();
+    const byMode = new Map<string, { worked: Set<number>; confirmed: Set<number> }>();
+    let reviewCount = 0;
+
+    for (const qso of qsos) {
+      if (qso.dxccNeedsReview) {
+        reviewCount += 1;
+      }
+      if (!qso.dxccId) {
+        continue;
+      }
+
+      const isDeleted = qso.dxccStatus === 'deleted';
+      const isConfirmed = isQSOConfirmed(qso);
+      const band = getBandFromFrequency(qso.frequency);
+      const mode = normalizeMode(qso.mode);
+
+      (isDeleted ? workedDeleted : workedCurrent).add(qso.dxccId);
+      if (isConfirmed) {
+        (isDeleted ? confirmedDeleted : confirmedCurrent).add(qso.dxccId);
+      }
+
+      if (band && band !== 'Unknown') {
+        let bandEntry = byBand.get(band);
+        if (!bandEntry) {
+          bandEntry = { worked: new Set<number>(), confirmed: new Set<number>() };
+          byBand.set(band, bandEntry);
+        }
+        bandEntry.worked.add(qso.dxccId);
+        if (isConfirmed) {
+          bandEntry.confirmed.add(qso.dxccId);
+        }
+      }
+
+      let modeEntry = byMode.get(mode);
+      if (!modeEntry) {
+        modeEntry = { worked: new Set<number>(), confirmed: new Set<number>() };
+        byMode.set(mode, modeEntry);
+      }
+      modeEntry.worked.add(qso.dxccId);
+      if (isConfirmed) {
+        modeEntry.confirmed.add(qso.dxccId);
+      }
+    }
+
+    return {
+      worked: {
+        current: workedCurrent.size,
+        total: workedCurrent.size + workedDeleted.size,
+        deleted: workedDeleted.size,
+      },
+      confirmed: {
+        current: confirmedCurrent.size,
+        total: confirmedCurrent.size + confirmedDeleted.size,
+        deleted: confirmedDeleted.size,
+      },
+      reviewCount,
+      byBand: Array.from(byBand.entries())
+        .map(([key, value]) => ({ key, worked: value.worked.size, confirmed: value.confirmed.size }))
+        .sort((left, right) => left.key.localeCompare(right.key)),
+      byMode: Array.from(byMode.entries())
+        .map(([key, value]) => ({ key, worked: value.worked.size, confirmed: value.confirmed.size }))
+        .sort((left, right) => left.key.localeCompare(right.key)),
     };
   }
   
@@ -923,7 +1220,8 @@ export class ADIFLogProvider implements ILogProvider {
         }
       }
     }
-    
+
+    this.rebuildIndexes();
     await this.saveCache();
   }
   

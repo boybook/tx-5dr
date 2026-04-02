@@ -119,6 +119,8 @@ export const LoTWCertificateSummarySchema = z.object({
 });
 
 export const LoTWUploadLocationSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().default('Default Station Location'),
   callsign: z.string().default(''),
   dxccId: z.number().int().positive().optional(),
   gridSquare: z.string().default(''),
@@ -127,9 +129,13 @@ export const LoTWUploadLocationSchema = z.object({
   iota: z.string().default(''),
   state: z.string().default(''),
   county: z.string().default(''),
+  validFrom: z.number().optional(),
+  validTo: z.number().optional(),
+  certificateIds: z.array(z.string()).default([]),
 });
 
 const DEFAULT_UPLOAD_LOCATION: z.infer<typeof LoTWUploadLocationSchema> = {
+  name: 'Default Station Location',
   callsign: '',
   gridSquare: '',
   cqZone: '',
@@ -137,6 +143,7 @@ const DEFAULT_UPLOAD_LOCATION: z.infer<typeof LoTWUploadLocationSchema> = {
   iota: '',
   state: '',
   county: '',
+  certificateIds: [],
 };
 
 /**
@@ -149,6 +156,8 @@ export const LoTWConfigSchema = z.object({
   // 上传用
   certificates: z.array(LoTWCertificateSummarySchema).default([]),
   uploadLocation: LoTWUploadLocationSchema.default(DEFAULT_UPLOAD_LOCATION),
+  stationLocations: z.array(LoTWUploadLocationSchema).default([]),
+  defaultStationLocationId: z.string().optional(),
   autoUploadQSO: z.boolean().default(false),
   lastUploadTime: z.number().optional(),
   lastDownloadTime: z.number().optional(),

@@ -1,5 +1,25 @@
 import { z } from 'zod';
 
+export const DxccCountSummarySchema = z.object({
+  current: z.number().default(0),
+  total: z.number().default(0),
+  deleted: z.number().default(0),
+});
+
+export const DxccBucketItemSchema = z.object({
+  key: z.string(),
+  worked: z.number().default(0),
+  confirmed: z.number().default(0),
+});
+
+export const LogBookDxccSummarySchema = z.object({
+  worked: DxccCountSummarySchema,
+  confirmed: DxccCountSummarySchema,
+  reviewCount: z.number().default(0),
+  byBand: z.array(DxccBucketItemSchema).default([]),
+  byMode: z.array(DxccBucketItemSchema).default([]),
+});
+
 /**
  * 日志本信息Schema
  */
@@ -51,6 +71,7 @@ export const LogBookStatisticsSchema = z.object({
   uniqueCallsigns: z.number(),
   lastQSO: z.string().optional(),
   firstQSO: z.string().optional(),
+  dxcc: LogBookDxccSummarySchema.optional(),
 });
 
 /**
@@ -180,6 +201,7 @@ export type CreateLogBookRequest = z.infer<typeof CreateLogBookRequestSchema>;
 export type UpdateLogBookRequest = z.infer<typeof UpdateLogBookRequestSchema>;
 export type ConnectOperatorToLogBookRequest = z.infer<typeof ConnectOperatorToLogBookRequestSchema>;
 export type LogBookStatistics = z.infer<typeof LogBookStatisticsSchema>;
+export type LogBookDxccSummary = z.infer<typeof LogBookDxccSummarySchema>;
 export type LogBookListResponse = z.infer<typeof LogBookListResponseSchema>;
 export type LogBookDetailResponse = z.infer<typeof LogBookDetailResponseSchema>;
 export type LogBookActionResponse = z.infer<typeof LogBookActionResponseSchema>;

@@ -130,6 +130,7 @@ const DEFAULT_CONFIG: AppConfig = {
     password: '',
     certificates: [],
     uploadLocation: {
+      name: 'Default Station Location',
       callsign: '',
       gridSquare: '',
       cqZone: '',
@@ -137,7 +138,9 @@ const DEFAULT_CONFIG: AppConfig = {
       iota: '',
       state: '',
       county: '',
+      certificateIds: [],
     },
+    stationLocations: [],
     autoUploadQSO: false,
   },
   pskreporter: {
@@ -282,6 +285,7 @@ export class ConfigManager {
             autoResumeCQAfterSuccess: false,
             replyToWorkedStations: false,
             prioritizeNewCalls: true,
+            targetSelectionPriorityMode: 'dxcc_first',
             ...operator,  // 用户配置覆盖默认值
           };
         });

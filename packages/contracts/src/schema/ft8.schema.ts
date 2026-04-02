@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LogbookAnalysisSchema } from './slot-info.schema.js';
 
 // FT8解码帧信息（基于wsjtx-lib的数据类型）
 export const FT8DecodeSchema = z.object({
@@ -214,6 +215,7 @@ export const ParsedFT8MessageSchema = z.object({
   message: FT8MessageSchema,
   slotId: z.string(),
   timestamp: z.number(),
+  logbookAnalysis: LogbookAnalysisSchema.optional(),
 });
 
 export type FT8Decode = z.infer<typeof FT8DecodeSchema>;

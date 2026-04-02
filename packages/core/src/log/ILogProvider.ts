@@ -1,4 +1,4 @@
-import { QSORecord } from '@tx5dr/contracts';
+import type { DxccStatus, LogBookDxccSummary, QSORecord } from '@tx5dr/contracts';
 
 /**
  * 日志查询选项
@@ -107,6 +107,16 @@ export interface LogStatistics {
    * 最后一次QSO时间
    */
   lastQSOTime?: number;
+
+  /**
+   * 第一次 QSO 时间
+   */
+  firstQSOTime?: number;
+
+  /**
+   * DXCC 摘要
+   */
+  dxcc?: LogBookDxccSummary;
 }
 
 /**
@@ -134,9 +144,19 @@ export interface CallsignAnalysis {
   isNewGrid: boolean;
   
   /**
-   * 是否是新前缀
+   * 是否是新 DXCC 实体
    */
-  isNewPrefix: boolean;
+  isNewDxccEntity: boolean;
+
+  /**
+   * 是否是当前波段的新 DXCC 实体
+   */
+  isNewBandDxccEntity: boolean;
+
+  /**
+   * 该 DXCC 是否已确认
+   */
+  isConfirmedDxcc: boolean;
   
   /**
    * 是否是新CQ分区
@@ -167,6 +187,21 @@ export interface CallsignAnalysis {
    * DXCC实体
    */
   dxccEntity?: string;
+
+  /**
+   * DXCC 实体编号
+   */
+  dxccId?: number;
+
+  /**
+   * DXCC current/deleted 状态
+   */
+  dxccStatus?: DxccStatus;
+
+  /**
+   * 是否需要人工复核
+   */
+  dxccNeedsReview?: boolean;
 }
 
 /**
@@ -245,6 +280,12 @@ export interface ILogProvider {
    * @param operatorId 操作员ID（可选）
    */
   getStatistics(operatorId?: string): Promise<LogStatistics>;
+
+  /**
+   * 获取 DXCC 统计摘要
+   * @param operatorId 操作员ID（可选）
+   */
+  getDXCCSummary(operatorId?: string): Promise<LogBookDxccSummary>;
   
   /**
    * 导出日志（ADIF格式）

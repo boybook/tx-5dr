@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { FT8DecodeSchema } from './ft8.schema.js';
 import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
-import { QSORecordSchema } from './qso.schema.js';
+import { QSORecordSchema, TargetSelectionPriorityModeSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
 import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabilitiesSchema, RadioConnectionStatusSchema, ReconnectProgressSchema, CoreRadioCapabilitiesSchema, CoreCapabilityDiagnosticsSchema } from './radio.schema.js';
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
@@ -416,6 +416,7 @@ export const OperatorStatusSchema = z.object({
     autoResumeCQAfterSuccess: z.boolean().optional(),
     replyToWorkedStations: z.boolean().optional(),
     prioritizeNewCalls: z.boolean().optional(),
+    targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.optional(),
   }),
   strategy: z.object({
     name: z.string(),
@@ -488,6 +489,7 @@ export const WSSetOperatorContextMessageSchema = WSBaseMessageSchema.extend({
       autoResumeCQAfterSuccess: z.boolean().optional(),
       replyToWorkedStations: z.boolean().optional(),
       prioritizeNewCalls: z.boolean().optional(),
+      targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.optional(),
     }),
   }),
 });

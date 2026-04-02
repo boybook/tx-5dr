@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DxccStatusSchema } from './qso.schema.js';
 
 /**
  * 时隙周期（偶数奇数）
@@ -32,8 +33,12 @@ export type SlotInfo = z.infer<typeof SlotInfoSchema>;
 export const LogbookAnalysisSchema = z.object({
   /** 是否为新呼号（之前没有通联过） */
   isNewCallsign: z.boolean().optional(),
-  /** 是否为新前缀（之前没有通联过类似前缀） */
-  isNewPrefix: z.boolean().optional(),
+  /** 是否为新 DXCC 实体（之前没有通联过该实体） */
+  isNewDxccEntity: z.boolean().optional(),
+  /** 是否为该波段的新 DXCC 实体 */
+  isNewBandDxccEntity: z.boolean().optional(),
+  /** 是否为已确认 DXCC */
+  isConfirmedDxcc: z.boolean().optional(),
   /** 是否为新网格（之前没有通联过此网格） */
   isNewGrid: z.boolean().optional(),
   /** 解析出的呼号（如果有） */
@@ -41,7 +46,13 @@ export const LogbookAnalysisSchema = z.object({
   /** 解析出的网格（如果有） */
   grid: z.string().optional(),
   /** 解析出的前缀（如果有） */
-  prefix: z.string().optional()
+  prefix: z.string().optional(),
+  /** DXCC 实体编号 */
+  dxccId: z.number().int().positive().optional(),
+  /** DXCC 实体名 */
+  dxccEntity: z.string().optional(),
+  /** 实体状态 */
+  dxccStatus: DxccStatusSchema.optional(),
 });
 
 export type LogbookAnalysis = z.infer<typeof LogbookAnalysisSchema>;
