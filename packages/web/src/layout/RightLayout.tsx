@@ -1,22 +1,23 @@
 import React, { useState, useCallback } from 'react';
 import {
   Button,
-  Input,
   Popover,
   PopoverContent,
   PopoverTrigger
 } from '@heroui/react';
 import { useOperators } from '../store/radioStore';
 import { useAuth } from '../store/authStore';
+import { AuthLoginForm } from '../components/AuthLoginForm';
 import { RadioControl } from '../components/RadioControl';
 import { RadioOperatorList } from '../components/RadioOperatorList';
 import { MyRelatedFramesTable } from '../components/MyRelatedFramesTable';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faCog, faKey, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { AutomationSettingsPanel } from '../components/AutomationSettingsPanel';
 import { ServerHealthButton } from '../components/ServerHealthButton';
 import { useTranslation } from 'react-i18next';
+import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/GlobalModalHost';
 
 export const RightLayout: React.FC = () => {
   const { t } = useTranslation('common');
@@ -26,20 +27,11 @@ export const RightLayout: React.FC = () => {
     admin: t('common:role.admin'),
   };
   const { operators } = useOperators();
-  const { state: authState, login, logout } = useAuth();
+  const { state: authState, logout } = useAuth();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
-  const [loginToken, setLoginToken] = useState('');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
-
-  // 处理 Popover 内的登录
-  const handlePopoverLogin = useCallback(async () => {
-    if (!loginToken.trim()) return;
-    const ok = await login(loginToken.trim());
-    if (ok) {
-      setLoginToken('');
-      setLoginPopoverOpen(false);
-    }
-  }, [loginToken, login]);
+  const showAuthenticatedIdentity = Boolean(authState.role) && (Boolean(authState.jwt) || !authState.authEnabled);
+  const showLoginEntry = authState.authEnabled && !authState.jwt && authState.isPublicViewer;
 
   // 判断是否为自动模式
   const isAutoMode = selectedMode.startsWith('auto');
@@ -65,6 +57,10 @@ export const RightLayout: React.FC = () => {
   const handleOpenRadioSettings = () => {
     window.dispatchEvent(new Event('openProfileModal'));
   };
+
+  const handleOpenAccountSecurity = useCallback(() => {
+    window.dispatchEvent(new Event(OPEN_ACCOUNT_SECURITY_MODAL_EVENT));
+  }, []);
 
   return (
     <div className="h-full flex flex-col">
@@ -104,8 +100,7 @@ export const RightLayout: React.FC = () => {
             )}
 
             {/* 认证状态 UI */}
-            {authState.authEnabled && (
-              authState.jwt ? (
+            {showAuthenticatedIdentity ? (
                 // 已认证：显示用户信息 + 登出
                 <Popover placement="bottom-end">
                   <PopoverTrigger>
@@ -119,61 +114,56 @@ export const RightLayout: React.FC = () => {
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="p-3 gap-2">
-                    <div className="text-sm font-medium">{authState.label}</div>
+                    <div className="text-sm font-medium">
+                      {authState.label || ROLE_LABELS[authState.role || ''] || t('auth.user')}
+                    </div>
                     <div className="text-xs text-default-500">{t('auth.role')}: {ROLE_LABELS[authState.role || ''] || authState.role}</div>
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      color="danger"
-                      startContent={<FontAwesomeIcon icon={faRightFromBracket} />}
-                      onPress={logout}
-                      className="mt-1"
-                    >
-                      {t('auth.logout')}
-                    </Button>
+                    {authState.authEnabled && authState.jwt && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          startContent={<FontAwesomeIcon icon={faLock} />}
+                          onPress={handleOpenAccountSecurity}
+                        >
+                          {t('auth:accountSecurity.trigger')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          color="danger"
+                          startContent={<FontAwesomeIcon icon={faRightFromBracket} />}
+                          onPress={logout}
+                          className="mt-1"
+                        >
+                          {t('auth.logout')}
+                        </Button>
+                      </>
+                    )}
                   </PopoverContent>
                 </Popover>
-              ) : authState.isPublicViewer ? (
+              ) : showLoginEntry ? (
                 // 公开观察者：显示登录入口
                 <Popover
                   placement="bottom-end"
                   isOpen={loginPopoverOpen}
                   onOpenChange={setLoginPopoverOpen}
-                >
-                  <PopoverTrigger>
-                    <Button variant="light" size="sm" className="bg-content2 rounded-md px-3 h-6 text-xs text-default-500 leading-none">
+                  >
+                    <PopoverTrigger>
+                      <Button variant="light" size="sm" className="bg-content2 rounded-md px-3 h-6 text-xs text-default-500 leading-none">
                       <FontAwesomeIcon icon={faKey} className="text-default-400 text-xs" />
                       {t('auth.login')}
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="p-3 gap-2 w-64">
-                    <div className="text-sm font-medium">{t('auth.enterToken')}</div>
-                    <Input
-                      size="sm"
-                      type="password"
-                      placeholder={t('auth.pasteToken')}
-                      value={loginToken}
-                      onValueChange={setLoginToken}
-                      onKeyDown={(e) => e.key === 'Enter' && handlePopoverLogin()}
+                  <PopoverContent className="p-3 w-80">
+                    <AuthLoginForm
+                      compact
                       autoFocus
+                      onSuccess={() => setLoginPopoverOpen(false)}
                     />
-                    {authState.loginError && (
-                      <p className="text-danger text-xs">{authState.loginError}</p>
-                    )}
-                    <Button
-                      size="sm"
-                      color="primary"
-                      isLoading={authState.loginLoading}
-                      onPress={handlePopoverLogin}
-                      isDisabled={!loginToken.trim()}
-                      fullWidth
-                    >
-                      {t('auth.login')}
-                    </Button>
                   </PopoverContent>
                 </Popover>
-              ) : null
-            )}
+              ) : null}
           </div>
           <div className="flex items-center gap-0">
             <ServerHealthButton />

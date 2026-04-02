@@ -50,7 +50,7 @@ export const authPlugin = fp(async function authPluginInner(fastify: FastifyInst
     }
 
     // 跳过不需认证的路由
-    const skipPaths = ['/api/auth/login', '/api/auth/status'];
+    const skipPaths = ['/api/auth/login', '/api/auth/login-password', '/api/auth/status'];
     if (skipPaths.includes(request.url) || request.url === '/' || request.url === '/api/hello') {
       return;
     }

@@ -200,6 +200,7 @@ interface AuthContextValue {
   state: AuthState;
   dispatch: React.Dispatch<AuthAction>;
   login: (token: string) => Promise<boolean>;
+  loginWithPassword: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
   /** 已认证（含公开观察者） */
   isAuthenticated: boolean;
@@ -217,6 +218,13 @@ interface AuthProviderProps {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
+
+  const getAuthErrorMessage = useCallback((err: unknown): string => {
+    if (typeof err === 'object' && err !== null && 'userMessage' in err && typeof err.userMessage === 'string') {
+      return err.userMessage;
+    }
+    return err instanceof Error ? err.message : i18n.t('auth:login.failed');
+  }, []);
 
   // 同步 JWT 到 API 层
   useEffect(() => {
@@ -359,11 +367,36 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
       return true;
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : i18n.t('auth:login.failed');
+      const message = getAuthErrorMessage(err);
       dispatch({ type: 'LOGIN_FAIL', payload: message });
       return false;
     }
-  }, []);
+  }, [getAuthErrorMessage]);
+
+  const loginWithPassword = useCallback(async (username: string, password: string): Promise<boolean> => {
+    dispatch({ type: 'LOGIN_START' });
+    try {
+      const resp = await api.loginWithPassword({ username, password });
+      saveJwt(resp.jwt);
+      configureAuthToken(resp.jwt);
+      dispatch({
+        type: 'LOGIN_SUCCESS',
+        payload: {
+          jwt: resp.jwt,
+          role: resp.role,
+          label: resp.label,
+          operatorIds: resp.operatorIds,
+          maxOperators: resp.maxOperators,
+          permissionGrants: resp.permissionGrants,
+        },
+      });
+      return true;
+    } catch (err: unknown) {
+      const message = getAuthErrorMessage(err);
+      dispatch({ type: 'LOGIN_FAIL', payload: message });
+      return false;
+    }
+  }, [getAuthErrorMessage]);
 
   // 登出方法
   const logout = useCallback(() => {
@@ -384,6 +417,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     state,
     dispatch,
     login,
+    loginWithPassword,
     logout,
     isAuthenticated,
     requiresLogin,

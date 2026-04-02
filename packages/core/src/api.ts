@@ -64,12 +64,14 @@ import type {
   CreateProfileRequest,
   UpdateProfileRequest,
   LoginResponse,
+  PasswordLoginRequest,
   AuthStatus,
   AuthMeResponse,
   TokenInfo,
   CreateTokenRequest,
   CreateTokenResponse,
   UpdateTokenRequest,
+  UpdateSelfLoginCredentialRequest,
   UpdateAuthConfigRequest,
   NetworkInfo,
   PresetFrequency,
@@ -574,6 +576,21 @@ export const api = {
   },
 
   /**
+   * 用户名密码登录（返回 JWT）
+   * 无需认证
+   */
+  async loginWithPassword(credentials: PasswordLoginRequest, apiBase?: string): Promise<LoginResponse> {
+    return apiRequest<LoginResponse>(
+      '/auth/login-password',
+      {
+        method: 'POST',
+        body: JSON.stringify(credentials),
+      },
+      apiBase
+    );
+  },
+
+  /**
    * 获取当前用户信息
    * 需要认证
    */
@@ -649,6 +666,23 @@ export const api = {
         body: JSON.stringify(updates),
       },
       apiBase
+    );
+  },
+
+  /**
+   * 更新当前用户绑定的账号密码登录方式
+   */
+  async updateSelfLoginCredential(
+    updates: UpdateSelfLoginCredentialRequest,
+    apiBase?: string,
+  ): Promise<AuthMeResponse> {
+    return apiRequest<AuthMeResponse>(
+      '/auth/me/login-credential',
+      {
+        method: 'PUT',
+        body: JSON.stringify(updates),
+      },
+      apiBase,
     );
   },
 

@@ -33,6 +33,13 @@ export const AuthTokenSchema = z.object({
   system: z.boolean().optional(),
   maxOperators: z.number().min(0).optional(), // 该 Token 可创建的操作员上限
   permissionGrants: z.array(PermissionGrantSchema).optional(), // CASL permission grants
+  allowSelfLoginCredential: z.boolean().optional(),
+  loginCredential: z.object({
+    username: z.string(),
+    usernameNormalized: z.string(),
+    passwordHash: z.string(),
+    updatedAt: z.number(),
+  }).optional(),
 });
 
 export type AuthToken = z.infer<typeof AuthTokenSchema>;
@@ -57,6 +64,13 @@ export const LoginRequestSchema = z.object({
 
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 
+export const PasswordLoginRequestSchema = z.object({
+  username: z.string().trim().min(3).max(32),
+  password: z.string().min(1),
+});
+
+export type PasswordLoginRequest = z.infer<typeof PasswordLoginRequestSchema>;
+
 export const LoginResponseSchema = z.object({
   jwt: z.string(),
   role: z.nativeEnum(UserRole),
@@ -70,6 +84,35 @@ export type LoginResponse = z.infer<typeof LoginResponseSchema>;
 
 // ===== Token 管理（Admin API） =====
 
+export const LoginCredentialSummarySchema = z.object({
+  username: z.string(),
+  allowSelfService: z.boolean(),
+});
+
+export type LoginCredentialSummary = z.infer<typeof LoginCredentialSummarySchema>;
+
+export const AuthMeLoginCredentialSchema = z.object({
+  configured: z.boolean(),
+  username: z.string().nullable(),
+  allowSelfService: z.boolean(),
+});
+
+export type AuthMeLoginCredential = z.infer<typeof AuthMeLoginCredentialSchema>;
+
+export const CreateTokenLoginCredentialRequestSchema = z.object({
+  username: z.string().trim().min(3).max(32).regex(/^[A-Za-z0-9._-]+$/),
+  password: z.string().min(8).max(128),
+});
+
+export type CreateTokenLoginCredentialRequest = z.infer<typeof CreateTokenLoginCredentialRequestSchema>;
+
+export const UpdateTokenLoginCredentialRequestSchema = z.object({
+  username: z.string().trim().min(3).max(32).regex(/^[A-Za-z0-9._-]+$/),
+  password: z.string().min(8).max(128).optional(),
+});
+
+export type UpdateTokenLoginCredentialRequest = z.infer<typeof UpdateTokenLoginCredentialRequestSchema>;
+
 export const CreateTokenRequestSchema = z.object({
   label: z.string().min(1).max(100),
   role: z.nativeEnum(UserRole),
@@ -77,6 +120,8 @@ export const CreateTokenRequestSchema = z.object({
   expiresAt: z.number().optional(),
   maxOperators: z.number().min(0), // 必选，0 表示不限制
   permissionGrants: z.array(PermissionGrantSchema).optional(),
+  allowSelfLoginCredential: z.boolean().optional(),
+  loginCredential: CreateTokenLoginCredentialRequestSchema.optional(),
 });
 
 export type CreateTokenRequest = z.infer<typeof CreateTokenRequestSchema>;
@@ -89,6 +134,8 @@ export const CreateTokenResponseSchema = z.object({
   operatorIds: z.array(z.string()),
   maxOperators: z.number().optional(),
   permissionGrants: z.array(PermissionGrantSchema).optional(),
+  allowSelfLoginCredential: z.boolean().optional(),
+  loginCredential: LoginCredentialSummarySchema.optional(),
 });
 
 export type CreateTokenResponse = z.infer<typeof CreateTokenResponseSchema>;
@@ -107,6 +154,8 @@ export const TokenInfoSchema = z.object({
   system: z.boolean().optional(),
   maxOperators: z.number().optional(),
   permissionGrants: z.array(PermissionGrantSchema).optional(),
+  allowSelfLoginCredential: z.boolean().optional(),
+  loginCredential: LoginCredentialSummarySchema.optional(),
 });
 
 export type TokenInfo = z.infer<typeof TokenInfoSchema>;
@@ -118,6 +167,8 @@ export const UpdateTokenRequestSchema = z.object({
   expiresAt: z.number().nullable().optional(),
   maxOperators: z.number().min(0).nullable().optional(), // null 表示移除限制
   permissionGrants: z.array(PermissionGrantSchema).nullable().optional(), // null to clear
+  allowSelfLoginCredential: z.boolean().optional(),
+  loginCredential: UpdateTokenLoginCredentialRequestSchema.nullable().optional(),
 });
 
 export type UpdateTokenRequest = z.infer<typeof UpdateTokenRequestSchema>;
@@ -140,9 +191,17 @@ export const AuthMeResponseSchema = z.object({
   tokenId: z.string(),
   maxOperators: z.number().optional(),
   permissionGrants: z.array(PermissionGrantSchema).optional(),
+  loginCredential: AuthMeLoginCredentialSchema,
 });
 
 export type AuthMeResponse = z.infer<typeof AuthMeResponseSchema>;
+
+export const UpdateSelfLoginCredentialRequestSchema = z.object({
+  username: z.string().trim().min(3).max(32).regex(/^[A-Za-z0-9._-]+$/),
+  password: z.string().min(8).max(128).optional(),
+});
+
+export type UpdateSelfLoginCredentialRequest = z.infer<typeof UpdateSelfLoginCredentialRequestSchema>;
 
 // ===== 更新认证配置请求（PATCH /api/auth/config） =====
 

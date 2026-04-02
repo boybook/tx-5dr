@@ -7,13 +7,12 @@ import {
   ModalBody,
   ModalFooter,
   Button,
-  Input,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faKey, faEye } from '@fortawesome/free-solid-svg-icons';
-import { useAuth } from '../store/authStore';
+import { faEye } from '@fortawesome/free-solid-svg-icons';
 import { useStationInfo } from '../store/radioStore';
 import { StationInfoCard } from './StationInfoCard';
+import { AuthLoginForm } from './AuthLoginForm';
 
 interface ViewerWelcomeOverlayProps {
   isOpen: boolean;
@@ -21,34 +20,8 @@ interface ViewerWelcomeOverlayProps {
 
 export function ViewerWelcomeOverlay({ isOpen }: ViewerWelcomeOverlayProps) {
   const { t } = useTranslation();
-  const { login, state: authState } = useAuth();
   const stationInfo = useStationInfo();
-  const [token, setToken] = useState('');
   const [dismissed, setDismissed] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [loginLoading, setLoginLoading] = useState(false);
-
-  const handleLogin = useCallback(async () => {
-    if (!token.trim()) return;
-    setLoginError(null);
-    setLoginLoading(true);
-    try {
-      const success = await login(token.trim());
-      if (!success) {
-        setLoginError(authState.loginError || t('settings:profileSetup.viewerPermissionInsufficient'));
-      }
-    } catch {
-      setLoginError(t('settings:profileSetup.viewerPermissionInsufficient'));
-    } finally {
-      setLoginLoading(false);
-    }
-  }, [token, login, authState.loginError, t]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleLogin();
-    }
-  }, [handleLogin]);
 
   const handleDismiss = useCallback(() => {
     setDismissed(true);
@@ -90,32 +63,7 @@ export function ViewerWelcomeOverlay({ isOpen }: ViewerWelcomeOverlayProps) {
             </p>
 
             <div className="w-full max-w-sm space-y-3">
-              <Input
-                label={t('settings:profileSetup.viewerTokenLabel')}
-                placeholder={t('settings:profileSetup.viewerTokenPlaceholder')}
-                type="password"
-                variant="bordered"
-                value={token}
-                onValueChange={setToken}
-                onKeyDown={handleKeyDown}
-                startContent={<FontAwesomeIcon icon={faKey} className="text-default-400" />}
-                isDisabled={loginLoading}
-              />
-
-              {loginError && (
-                <p className="text-danger text-sm">{loginError}</p>
-              )}
-
-              <Button
-                color="primary"
-                variant="solid"
-                fullWidth
-                isLoading={loginLoading}
-                onPress={handleLogin}
-                isDisabled={!token.trim()}
-              >
-                {t('settings:profileSetup.viewerLogin')}
-              </Button>
+              <AuthLoginForm autoFocus />
             </div>
           </div>
         </ModalBody>
