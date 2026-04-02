@@ -538,6 +538,29 @@ export const WSStopOperatorMessageSchema = WSBaseMessageSchema.extend({
 });
 
 /**
+ * 手动双击消息行时附带的原始解码快照
+ */
+export const WSSelectedFrameSchema = z.object({
+  message: z.string(),
+  snr: z.number(),
+  dt: z.number(),
+  freq: z.number(),
+  slotStartMs: z.number(),
+});
+
+/**
+ * 操作员请求手动呼叫消息
+ */
+export const WSOperatorRequestCallMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.OPERATOR_REQUEST_CALL),
+  data: z.object({
+    operatorId: z.string(),
+    callsign: z.string(),
+    selectedFrame: WSSelectedFrameSchema.optional(),
+  }),
+});
+
+/**
  * 设置客户端启用的操作员列表消息
  */
 export const WSSetClientEnabledOperatorsMessageSchema = WSBaseMessageSchema.extend({
@@ -580,6 +603,8 @@ export type WSSetOperatorSlotMessage = z.infer<typeof WSSetOperatorSlotMessageSc
 export type WSUserCommandMessage = z.infer<typeof WSUserCommandMessageSchema>;
 export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
 export type WSStopOperatorMessage = z.infer<typeof WSStopOperatorMessageSchema>;
+export type WSSelectedFrame = z.infer<typeof WSSelectedFrameSchema>;
+export type WSOperatorRequestCallMessage = z.infer<typeof WSOperatorRequestCallMessageSchema>;
 export type WSSetClientEnabledOperatorsMessage = z.infer<typeof WSSetClientEnabledOperatorsMessageSchema>;
 export type WSClientHandshakeMessage = z.infer<typeof WSClientHandshakeMessageSchema>;
 export type WSServerHandshakeCompleteMessage = z.infer<typeof WSServerHandshakeCompleteMessageSchema>;
@@ -970,6 +995,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSUserCommandMessageSchema,
   WSStartOperatorMessageSchema,
   WSStopOperatorMessageSchema,
+  WSOperatorRequestCallMessageSchema,
   
   // 音量控制消息
   WSSetVolumeGainMessageSchema,

@@ -890,6 +890,7 @@ export class RadioOperatorManager {
       replaceExisting: options?.replaceExisting,
     };
     this.pendingTransmissions.push(request);
+    operator.notifyTransmissionQueued(transmission);
 
     // 由统一的队列消费层处理：构造当前时隙信息并消费队列
     // 这样可以确保：

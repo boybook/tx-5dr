@@ -443,4 +443,99 @@ test('QSO通联周期测试', async (t) => {
         console.log('✅ TX5→TX6优先级测试通过');
     });
 
-}); 
+    await t.test('手动双击RR73后，应先发送73而不是立即回到CQ', async () => {
+        console.log('⌛️ 手动双击RR73后优先发送73');
+        const dummyRadioEngine = new DummyRadioEngine();
+
+        const me = new RadioOperator({
+            id: 'BG5DRB',
+            mode: MODES.FT8,
+            myCallsign: 'BG5DRB',
+            myGrid: 'PL09',
+            frequency: 14074000,
+            transmitCycles: [1],
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: true,
+            autoResumeCQAfterFail: true,
+            autoResumeCQAfterSuccess: true,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        const clickedMessage = {
+            message: {
+                message: 'BG5DRB BG8TFN RR73',
+                snr: -18,
+                dt: -0.2,
+                freq: 1553,
+                confidence: 0.9
+            },
+            slotInfo: createSlotInfo('clicked-slot', dummyRadioEngine.startTime)
+        };
+
+        me.requestCall('BG8TFN', clickedMessage as any);
+
+        const slotInfo = createSlotInfo('slot1', dummyRadioEngine.startTime + 15000);
+        const emptyLastSlotPack = createSlotPack('slot0', dummyRadioEngine.startTime, []);
+        const promises: Promise<void>[] = [];
+        dummyRadioEngine.sharedEventEmitter.listeners('slotStart').forEach((listener: any) => {
+            const result = listener(slotInfo, emptyLastSlotPack);
+            if (result instanceof Promise) {
+                promises.push(result);
+            }
+        });
+        await Promise.all(promises);
+        dummyRadioEngine.sharedEventEmitter.emit('encodeStart' as any, slotInfo);
+
+        const queuedMessages = dummyRadioEngine.messagesPool.map(request => request.transmission);
+        assert.deepStrictEqual(queuedMessages, ['BG8TFN BG5DRB 73']);
+
+        console.log('✅ 手动RR73优先发送73测试通过');
+    });
+
+    await t.test('TX5退出到CQ后收到晚到RR73，应恢复为73重发', async () => {
+        console.log('⌛️ TX5退出到CQ后收到晚到RR73');
+        const dummyRadioEngine = new DummyRadioEngine();
+
+        const me = new RadioOperator({
+            id: 'BG8TFN',
+            mode: MODES.FT8,
+            myCallsign: 'BG8TFN',
+            myGrid: 'PL09',
+            frequency: 14074000,
+            transmitCycles: [1],
+            maxQSOTimeoutCycles: 10,
+            maxCallAttempts: 10,
+            autoReplyToCQ: true,
+            autoResumeCQAfterFail: true,
+            autoResumeCQAfterSuccess: true,
+            replyToWorkedStations: true
+        }, dummyRadioEngine.sharedEventEmitter, (operator) => new StandardQSOStrategy(operator));
+
+        me.start();
+        me.userCommand({
+            command: 'update_context',
+            args: {
+                targetCallsign: 'BG5DRB',
+                reportSent: -19
+            }
+        } as any);
+        me.userCommand({ command: 'set_state', args: 'TX5' } as any);
+
+        await dummyRadioEngine.nextCycle();
+        await dummyRadioEngine.nextCycle();
+
+        assert.strictEqual(me.transmissionStrategy?.handleTransmitSlot(), 'CQ BG8TFN PL09');
+
+        const lateRR73Pack = createSlotPack('late-slot', dummyRadioEngine.startTime + 15000, [
+            'BG8TFN BG5DRB RR73'
+        ]);
+
+        const changed = await me.reDecideWithUpdatedSlotPack(lateRR73Pack);
+        assert.strictEqual(changed, true);
+        assert.strictEqual(me.transmissionStrategy?.handleTransmitSlot(), 'BG5DRB BG8TFN 73');
+
+        console.log('✅ 晚到RR73恢复73测试通过');
+    });
+
+});

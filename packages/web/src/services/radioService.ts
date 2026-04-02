@@ -1,5 +1,5 @@
 import { api, WSClient } from '@tx5dr/core';
-import type { SpectrumKind } from '@tx5dr/contracts';
+import type { SpectrumKind, WSSelectedFrame } from '@tx5dr/contracts';
 import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
 
@@ -284,9 +284,9 @@ export class RadioService {
    * @param operatorId 操作员ID
    * @param callsign 呼号
    */
-  sendRequestCall(operatorId: string, callsign: string): void {
+  sendRequestCall(operatorId: string, callsign: string, selectedFrame?: WSSelectedFrame): void {
     if (this.isConnected) {
-      this.wsClient.requestCall(operatorId, callsign);
+      this.wsClient.requestCall(operatorId, callsign, selectedFrame);
     }
   }
 

@@ -5,7 +5,7 @@ const logger = createLogger('MyRelatedFramesTable');
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { parseFT8LocationInfo } from '@tx5dr/core';
 import { useSlotPacks, useOperators, useRadioModeState, useConnection, useCurrentOperatorId } from '../store/radioStore';
-import { FrameMessage } from '@tx5dr/contracts';
+import { FrameMessage, type WSSelectedFrame } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 
@@ -391,11 +391,24 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     setRecentSlotGroupKeys([]);
   };
 
-  const handleRowDoubleClick = (message: FrameDisplayMessage, _group: FrameGroup) => {
+  const buildSelectedFrame = (message: FrameDisplayMessage, group: FrameGroup): WSSelectedFrame | undefined => {
+    if (typeof message.db !== 'number' || typeof message.dt !== 'number') {
+      return undefined;
+    }
+    return {
+      message: message.message,
+      snr: message.db,
+      dt: message.dt,
+      freq: message.freq,
+      slotStartMs: group.startMs,
+    };
+  };
+
+  const handleRowDoubleClick = (message: FrameDisplayMessage, group: FrameGroup) => {
     const callsign = message.logbookAnalysis?.callsign;
     if (currentOperatorId && callsign && !getMyCallsigns().includes(callsign)) {
       if (connection.state.radioService) {
-        connection.state.radioService.sendRequestCall(currentOperatorId, callsign);
+        connection.state.radioService.sendRequestCall(currentOperatorId, callsign, buildSelectedFrame(message, group));
       }
     }
   };
