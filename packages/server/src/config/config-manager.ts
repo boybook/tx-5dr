@@ -128,8 +128,16 @@ const DEFAULT_CONFIG: AppConfig = {
   lotw: {
     username: '',
     password: '',
-    tqslPath: '',
-    stationCallsign: '',
+    certificates: [],
+    uploadLocation: {
+      callsign: '',
+      gridSquare: '',
+      cqZone: '',
+      ituZone: '',
+      iota: '',
+      state: '',
+      county: '',
+    },
     autoUploadQSO: false,
   },
   pskreporter: {
@@ -915,7 +923,7 @@ export class ConfigManager {
     // 有全局同步配置且至少一个启用了 → 需要迁移
     const hasWavelog = parsedConfig.wavelog?.url && parsedConfig.wavelog?.apiKey;
     const hasQrz = parsedConfig.qrz?.apiKey;
-    const hasLotw = parsedConfig.lotw?.username || parsedConfig.lotw?.tqslPath;
+    const hasLotw = parsedConfig.lotw?.username || (parsedConfig.lotw?.certificates?.length ?? 0) > 0;
     return !!(hasWavelog || hasQrz || hasLotw);
   }
 
@@ -948,7 +956,19 @@ export class ConfigManager {
         config.qrz = { ...parsedConfig.qrz };
       }
       if (parsedConfig.lotw) {
-        config.lotw = { ...parsedConfig.lotw, stationCallsign: callsign };
+        config.lotw = {
+          ...parsedConfig.lotw,
+          uploadLocation: {
+            callsign,
+            gridSquare: '',
+            cqZone: '',
+            ituZone: '',
+            iota: '',
+            state: '',
+            county: '',
+          },
+          certificates: [],
+        };
       }
       callsignSyncConfigs[callsign] = config;
     }
@@ -1005,7 +1025,7 @@ export class ConfigManager {
     return {
       wavelog: !!(config?.wavelog?.url && config?.wavelog?.apiKey),
       qrz: !!(config?.qrz?.apiKey),
-      lotw: !!(config?.lotw?.username || config?.lotw?.tqslPath),
+      lotw: !!(config?.lotw?.username || (config?.lotw?.certificates?.length ?? 0) > 0),
     };
   }
 

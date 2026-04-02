@@ -93,6 +93,7 @@ export function SyncConfigModal({ isOpen, onClose, callsign, initialTab, onSaved
 
           <ModalBody>
             <LogbookSyncSettings
+              key={`${callsign}:${initialTab || 'wavelog'}:${isOpen ? 'open' : 'closed'}`}
               ref={logbookSyncSettingsRef}
               callsign={callsign}
               initialTab={initialTab}

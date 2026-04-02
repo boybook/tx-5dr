@@ -81,7 +81,7 @@ export class SyncServiceRegistry {
       this.qrzServices.set(key, new QRZService(config.qrz));
     }
 
-    if (config.lotw && (config.lotw.username || config.lotw.tqslPath)) {
+    if (config.lotw && (config.lotw.username || (config.lotw.certificates?.length ?? 0) > 0)) {
       this.lotwServices.set(key, new LoTWService(config.lotw));
     }
   }
@@ -140,8 +140,8 @@ export class SyncServiceRegistry {
       this.qrzServices.delete(key);
     }
 
-    // LoTW：有 username（下载确认）或 tqslPath（上传）即可
-    if (config.lotw && (config.lotw.username || config.lotw.tqslPath)) {
+    // LoTW：有下载账号或已上传证书即可
+    if (config.lotw && (config.lotw.username || (config.lotw.certificates?.length ?? 0) > 0)) {
       const existing = this.lotwServices.get(key);
       if (existing) {
         existing.updateConfig(config.lotw);

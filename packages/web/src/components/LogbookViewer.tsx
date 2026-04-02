@@ -27,7 +27,7 @@ import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, CreateQSORequest } from '@tx5dr/contracts';
+import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, LoTWUploadPreflightResponse, LoTWSyncStatus, CreateQSORequest } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
@@ -75,15 +75,6 @@ interface QSOFilters {
   qslStatus?: 'none' | 'confirmed' | 'uploaded';
 }
 
-interface LoTWSyncStatus {
-  configured?: boolean;
-  tqslConfigured?: boolean;
-  serviceAvailable?: boolean;
-  lastUploadTime?: number;
-  lastDownloadTime?: number;
-  autoUpload?: boolean;
-}
-
 function formatDateInputValue(timestamp?: number): string {
   if (typeof timestamp !== 'number' || Number.isNaN(timestamp)) {
     return '';
@@ -100,6 +91,27 @@ function getDateDaysAgo(days: number): string {
 
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
+  const getLoTWIssueMessage = (issue: { code: string; message: string }) => {
+    const key = `lotwSettings.issue.${issue.code}`;
+    const translated = t(key);
+    return translated === key ? issue.message : translated;
+  };
+  const getLoTWGuidanceMessage = (guidanceKey: string) => {
+    const key = `lotwSettings.guidance.${guidanceKey}`;
+    const translated = t(key);
+    return translated === key ? guidanceKey : translated;
+  };
+  const translateLoTWServerMessage = (message?: string | null, fallback?: string) => {
+    if (!message) {
+      return fallback || t('sync.lotw.syncError');
+    }
+    const key = `lotwSettings.serverError.${message}`;
+    const translated = t(key);
+    return translated === key ? (fallback || message) : translated;
+  };
+  const getLoTWApiErrorMessage = (error: ApiError) => {
+    return translateLoTWServerMessage(error.message, error.userMessage);
+  };
   const [qsos, setQsos] = useState<QSORecord[]>([]);
   const [statistics, setStatistics] = useState<LogBookStatistics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -253,6 +265,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [lotwSyncError, setLotwSyncError] = useState<string | null>(null);
   const [lotwSyncSuccess, setLotwSyncSuccess] = useState<string | null>(null);
   const [isLoTWDownloadModalOpen, setIsLoTWDownloadModalOpen] = useState(false);
+  const [isLoTWUploadModalOpen, setIsLoTWUploadModalOpen] = useState(false);
+  const [isCheckingLoTWUpload, setIsCheckingLoTWUpload] = useState(false);
+  const [lotwUploadPreflight, setLotwUploadPreflight] = useState<LoTWUploadPreflightResponse | null>(null);
   const [lotwSyncSinceDate, setLotwSyncSinceDate] = useState('');
   const [lotwLastDownloadTime, setLotwLastDownloadTime] = useState<number | undefined>(undefined);
 
@@ -263,6 +278,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 同步配置摘要（按呼号）
   const [syncSummary, setSyncSummary] = useState<{ wavelog: boolean; qrz: boolean; lotw: boolean }>({ wavelog: false, qrz: false, lotw: false });
   const [isSyncConfigOpen, setIsSyncConfigOpen] = useState(false);
+  const [syncConfigInitialTab, setSyncConfigInitialTab] = useState<'wavelog' | 'qrz' | 'lotw'>('wavelog');
 
   const refreshSyncSummary = async (callsign: string) => {
     const res = await api.getCallsignSyncSummary(callsign) as {
@@ -283,6 +299,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   };
 
   const getDefaultLoTWSinceDate = () => formatDateInputValue(lotwLastDownloadTime) || getDateDaysAgo(30);
+
+  const openSyncConfig = (tab: 'wavelog' | 'qrz' | 'lotw' = 'wavelog') => {
+    setSyncConfigInitialTab(tab);
+    setIsSyncConfigOpen(true);
+  };
 
   const handleExport = async (format: 'adif' | 'csv') => {
     if (isExporting) return;
@@ -426,14 +447,20 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           await refreshLoTWStatus(operatorCallsign);
         }
       } else {
-        setLotwSyncError(result.message || t('sync.lotw.syncError'));
+        const errorMessage = translateLoTWServerMessage(result.errorCode || result.message, result.message || t('sync.lotw.syncError'));
+        setLotwSyncError(errorMessage);
+        showErrorToast({
+          userMessage: errorMessage,
+          severity: 'warning',
+        });
       }
     } catch (error) {
       logger.error('LoTW sync failed:', error);
       if (error instanceof ApiError) {
-        setLotwSyncError(error.userMessage);
+        const errorMessage = getLoTWApiErrorMessage(error);
+        setLotwSyncError(errorMessage);
         showErrorToast({
-          userMessage: error.userMessage,
+          userMessage: errorMessage,
           suggestions: error.suggestions,
           severity: error.severity,
           code: error.code
@@ -466,13 +493,58 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     await handleLoTWSync('download_confirmations', lotwSyncSinceDate);
   };
 
+  const openLoTWUploadModal = async () => {
+    if (!operatorCallsign || isCheckingLoTWUpload) return;
+
+    setIsLoTWUploadModalOpen(true);
+    setLotwUploadPreflight(null);
+    setIsCheckingLoTWUpload(true);
+    setLotwSyncError(null);
+
+    try {
+      const result = await api.getLoTWUploadPreflight(operatorCallsign);
+      setLotwUploadPreflight(result);
+    } catch (error) {
+      logger.error('LoTW upload preflight failed:', error);
+      if (error instanceof ApiError) {
+        const errorMessage = getLoTWApiErrorMessage(error);
+        setLotwSyncError(errorMessage);
+        showErrorToast({
+          userMessage: errorMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code,
+        });
+      } else {
+        setLotwSyncError(error instanceof Error ? error.message : t('sync.lotw.syncError'));
+      }
+      setIsLoTWUploadModalOpen(false);
+    } finally {
+      setIsCheckingLoTWUpload(false);
+    }
+  };
+
+  const closeLoTWUploadModal = () => {
+    if (isLoTWSyncing || isCheckingLoTWUpload) return;
+    setIsLoTWUploadModalOpen(false);
+  };
+
+  const handleLoTWUploadConfirm = async () => {
+    if (!lotwUploadPreflight?.ready || lotwUploadPreflight.uploadableCount === 0) {
+      return;
+    }
+
+    setIsLoTWUploadModalOpen(false);
+    await handleLoTWSync('upload');
+  };
+
   const handleLoTWAction = (operation: 'upload' | 'download_confirmations') => {
     if (operation === 'download_confirmations') {
       openLoTWDownloadModal();
       return;
     }
 
-    void handleLoTWSync(operation);
+    void openLoTWUploadModal();
   };
 
   // 打开日志文件目录（仅Electron）
@@ -1217,7 +1289,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   variant="flat"
                   size="sm"
                   isIconOnly
-                  onPress={() => setIsSyncConfigOpen(true)}
+                  onPress={() => openSyncConfig('wavelog')}
                   className="min-w-0"
                 >
                   <FontAwesomeIcon icon={faCog} />
@@ -1265,7 +1337,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     isQRZSyncing,
     isLoTWSyncing,
     syncSummary,
-    isSyncConfigOpen,
+    openSyncConfig,
     handleQRZSync,
     handleLoTWAction
   ]);
@@ -1617,12 +1689,121 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         </ModalContent>
       </Modal>
 
+      <Modal
+        isOpen={isLoTWUploadModalOpen}
+        onClose={closeLoTWUploadModal}
+        size="lg"
+      >
+        <ModalContent>
+          <ModalHeader>{t('sync.lotw.uploadModalTitle')}</ModalHeader>
+          <ModalBody className="gap-3">
+            <p className="text-sm text-default-600">
+              {t('sync.lotw.uploadModalDesc')}
+            </p>
+
+            {isCheckingLoTWUpload && (
+              <div className="flex items-center gap-2 py-4">
+                <Spinner size="sm" />
+                <span className="text-sm text-default-600">{t('sync.lotw.uploadChecking')}</span>
+              </div>
+            )}
+
+            {!isCheckingLoTWUpload && lotwUploadPreflight && (
+              <>
+                <Alert color={lotwUploadPreflight.ready ? 'success' : 'warning'} variant="flat">
+                  <div className="space-y-2">
+                    <p className="font-medium">
+                      {lotwUploadPreflight.ready
+                        ? t('sync.lotw.uploadReadySummary')
+                        : t('sync.lotw.uploadNeedsConfigSummary')}
+                    </p>
+                    <div className="text-xs space-y-1">
+                      <p>{t('sync.lotw.uploadPendingCount', { count: lotwUploadPreflight.pendingCount })}</p>
+                      <p>{t('sync.lotw.uploadReadyCount', { count: lotwUploadPreflight.uploadableCount })}</p>
+                      <p>{t('sync.lotw.uploadBlockedCount', { count: lotwUploadPreflight.blockedCount })}</p>
+                    </div>
+                  </div>
+                </Alert>
+
+                {lotwUploadPreflight.issues.length > 0 && (
+                  <Alert color={lotwUploadPreflight.ready ? 'primary' : 'warning'} variant="flat">
+                    <div className="space-y-2 text-sm">
+                      <p className="font-medium">{t('sync.lotw.uploadChecklist')}</p>
+                      <ul className="space-y-1 text-xs">
+                        {lotwUploadPreflight.issues.map((issue) => (
+                          <li key={`${issue.code}-${issue.message}`}>• {getLoTWIssueMessage(issue)}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </Alert>
+                )}
+
+                {lotwUploadPreflight.selectedCertificates.length > 0 && (
+                  <div className="rounded-lg bg-default-100 px-3 py-3">
+                    <p className="text-sm font-medium mb-2">{t('sync.lotw.uploadCertificatesTitle')}</p>
+                    <ul className="space-y-1 text-xs text-default-600">
+                      {lotwUploadPreflight.selectedCertificates.map((item) => (
+                        <li key={item.id}>• {t('sync.lotw.uploadCertificateItem', { callsign: item.callsign, from: new Date(item.qsoStartDate).toLocaleDateString(), to: new Date(item.qsoEndDate).toLocaleDateString() })}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {lotwUploadPreflight.guidance.length > 0 && (
+                  <div className="rounded-lg bg-default-100 px-3 py-3">
+                    <p className="text-sm font-medium mb-2">{t('sync.lotw.uploadGuidanceTitle')}</p>
+                      <ul className="space-y-1 text-xs text-default-600">
+                        {lotwUploadPreflight.guidance.map((item) => (
+                          <li key={item}>• {getLoTWGuidanceMessage(item)}</li>
+                        ))}
+                      </ul>
+                    </div>
+                )}
+              </>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="flat"
+              onPress={closeLoTWUploadModal}
+              isDisabled={isLoTWSyncing || isCheckingLoTWUpload}
+            >
+              {t('common:button.cancel')}
+            </Button>
+            <Button
+              variant="flat"
+              color="primary"
+              onPress={() => {
+                setIsLoTWUploadModalOpen(false);
+                openSyncConfig('lotw');
+              }}
+              isDisabled={isCheckingLoTWUpload}
+            >
+              {t('sync.lotw.openLotwSettings')}
+            </Button>
+            <Button
+              color="success"
+              onPress={handleLoTWUploadConfirm}
+              isLoading={isLoTWSyncing}
+              isDisabled={
+                isCheckingLoTWUpload
+                || !lotwUploadPreflight?.ready
+                || (lotwUploadPreflight?.uploadableCount ?? 0) === 0
+              }
+            >
+              {t('sync.lotw.confirmUpload')}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
       {/* 同步配置弹窗 */}
       {operatorCallsign && (
         <SyncConfigModal
           isOpen={isSyncConfigOpen}
           onClose={() => setIsSyncConfigOpen(false)}
           callsign={operatorCallsign}
+          initialTab={syncConfigInitialTab}
           onSaved={() => {
             refreshSyncSummary(operatorCallsign).catch(() => {});
             refreshLoTWStatus(operatorCallsign).catch(() => {});

@@ -1410,8 +1410,7 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 自动上传 QSO 到已启用的同步服务（WaveLog / QRZ）
-   * LoTW 不支持逐条上传（需 TQSL 批量签名），跳过
+   * 自动上传 QSO 到已启用的同步服务（WaveLog / QRZ / LoTW）
    */
   private async handleAutoSync(qsoRecord: QSORecord, callsign: string, operatorId: string): Promise<void> {
     const registry = SyncServiceRegistry.getInstance();
@@ -1452,6 +1451,39 @@ export class RadioOperatorManager {
         }
       } catch (error) {
         logger.error(`[QRZ] QSO auto-upload error: ${qsoRecord.callsign}`, error);
+      }
+    }
+
+    // LoTW 自动上传
+    const lotwService = registry.getLoTWService(callsign);
+    if (lotwService && syncConfig?.lotw?.autoUploadQSO) {
+      try {
+        logger.info(`[LoTW] Auto-uploading QSO: ${qsoRecord.callsign} (callsign: ${callsign})`);
+        const result = await lotwService.uploadQSOs([qsoRecord], callsign);
+        if (result.success && result.uploadedCount > 0) {
+          const existingSyncConfig = configManager.getCallsignSyncConfig(callsign);
+          if (existingSyncConfig?.lotw) {
+            await configManager.updateCallsignSyncConfig(callsign, {
+              lotw: {
+                ...existingSyncConfig.lotw,
+                lastUploadTime: Date.now(),
+              },
+            });
+          }
+          const logBook = await this.logManager.getOperatorLogBook(operatorId);
+          if (logBook) {
+            const now = Date.now();
+            await logBook.provider.updateQSO(qsoRecord.id, {
+              lotwQslSent: 'Y',
+              lotwQslSentDate: qsoRecord.lotwQslSentDate || now,
+            });
+          }
+          logger.info(`[LoTW] QSO upload successful: ${qsoRecord.callsign}`);
+        } else {
+          logger.warn(`[LoTW] QSO upload failed: ${qsoRecord.callsign} - ${result.message}`);
+        }
+      } catch (error) {
+        logger.error(`[LoTW] QSO auto-upload error: ${qsoRecord.callsign}`, error);
       }
     }
   }

@@ -1545,6 +1545,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@fastify/busboy@npm:^3.0.0":
+  version: 3.2.0
+  resolution: "@fastify/busboy@npm:3.2.0"
+  checksum: 10c0/3e4fb00a27e3149d1c68de8ff14007d2bbcbbc171a9d050d0a8772e836727329d4d3f130995ebaa19cf537d5d2f5ce2a88000366e6192e751457bfcc2125f351
+  languageName: node
+  linkType: hard
+
 "@fastify/cors@npm:^11.0.1":
   version: 11.0.1
   resolution: "@fastify/cors@npm:11.0.1"
@@ -1552,6 +1559,13 @@ __metadata:
     fastify-plugin: "npm:^5.0.0"
     toad-cache: "npm:^3.7.0"
   checksum: 10c0/0b29e8ef1cc234f97f157d3f05ae7ed8ef332ef121fcbaa23d4de3b97593f54cb96c54fdd42a492530b520777a76a7a19ffc5087cd27da34c63838f4b185cae0
+  languageName: node
+  linkType: hard
+
+"@fastify/deepmerge@npm:^3.0.0":
+  version: 3.2.1
+  resolution: "@fastify/deepmerge@npm:3.2.1"
+  checksum: 10c0/2c0f8b627537834822ec761842e3a57965d3fb59e011ac5f2215b618ce34698e277bcbe4f586b09e4f03347391f292cfef9dccb6bda7b019ea9420d8767ade49
   languageName: node
   linkType: hard
 
@@ -1597,6 +1611,19 @@ __metadata:
   dependencies:
     dequal: "npm:^2.0.3"
   checksum: 10c0/dfa884a8f62d53f71de273fdcd0e501b213367767a7d8c522ae87ba6fb571b3eea85175d6e019036d7c0c5419be60305abe54899b9459f76ed5333358699efcb
+  languageName: node
+  linkType: hard
+
+"@fastify/multipart@npm:^9.4.0":
+  version: 9.4.0
+  resolution: "@fastify/multipart@npm:9.4.0"
+  dependencies:
+    "@fastify/busboy": "npm:^3.0.0"
+    "@fastify/deepmerge": "npm:^3.0.0"
+    "@fastify/error": "npm:^4.0.0"
+    fastify-plugin: "npm:^5.0.0"
+    secure-json-parse: "npm:^4.0.0"
+  checksum: 10c0/4e82b59333dca720ef71b409249291db1955ac6fa7eb6769a83d22e08342fb48fd6e9ca28e553dc2222b58aaebc09392fcf8f680297f2fc259597a7bddd80243
   languageName: node
   linkType: hard
 
@@ -6393,6 +6420,7 @@ __metadata:
     "@casl/ability": "npm:^6.8.0"
     "@fastify/cors": "npm:^11.0.1"
     "@fastify/jwt": "npm:^10.0.0"
+    "@fastify/multipart": "npm:^9.4.0"
     "@fastify/websocket": "npm:^11.1.0"
     "@livekit/rtc-node": "npm:^0.13.24"
     "@openwebrx-js/api": "npm:0.1.6"
@@ -6402,6 +6430,7 @@ __metadata:
     "@tx5dr/shared-config": "workspace:*"
     "@types/bcrypt": "npm:^6.0.0"
     "@types/node": "npm:^20.0.0"
+    "@types/node-forge": "npm:^1"
     "@types/node-wav": "npm:^0"
     "@types/wav": "npm:^1.0.4"
     "@types/ws": "npm:^8.18.1"
@@ -6418,6 +6447,7 @@ __metadata:
     icom-wlan-node: "npm:0.5.1"
     livekit-server-sdk: "npm:^2.15.0"
     mic: "npm:^2.1.2"
+    node-forge: "npm:^1.4.0"
     node-wav: "npm:^0.0.2"
     rubato-fft-node: "npm:^0.1.0"
     serialport: "npm:^13.0.0"
@@ -6676,6 +6706,15 @@ __metadata:
   version: 2.1.0
   resolution: "@types/ms@npm:2.1.0"
   checksum: 10c0/5ce692ffe1549e1b827d99ef8ff71187457e0eb44adbae38fdf7b9a74bae8d20642ee963c14516db1d35fa2652e65f47680fdf679dcbde52bbfadd021f497225
+  languageName: node
+  linkType: hard
+
+"@types/node-forge@npm:^1":
+  version: 1.3.14
+  resolution: "@types/node-forge@npm:1.3.14"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/da6158fd34fa7652aa7f8164508f97a76b558724ab292f13c257e39d54d95d4d77604e8fb14dc454a867f1aeec7af70118294889195ec4400cecbb8a5c77a212
   languageName: node
   linkType: hard
 
@@ -15136,6 +15175,13 @@ __metadata:
     encoding:
       optional: true
   checksum: 10c0/39719aa365a76e5a338f20e156917ffb5c8aa8ffbe14a494f96bad785a267f3b320bf704d3481fd6df3d24d02f09cbfb8cd62fbe8f5d3ab32a812ecb7748dcac
+  languageName: node
+  linkType: hard
+
+"node-forge@npm:^1.4.0":
+  version: 1.4.0
+  resolution: "node-forge@npm:1.4.0"
+  checksum: 10c0/67330a5f1f95257a4c8a93b7d555abe87b5f15e350123aa396c97a21a8ca94f9c6549008eb2c73668a91e0d7e3a905785acbd8f8bd0751c29401292011f8f8e1
   languageName: node
   linkType: hard
 

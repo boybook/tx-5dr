@@ -35,9 +35,12 @@ import type {
   LoTWConfig,
   LoTWTestConnectionRequest,
   LoTWTestConnectionResponse,
-  LoTWTQSLDetectRequest,
-  LoTWTQSLDetectResponse,
+  LoTWCertificateImportResponse,
+  LoTWCertificateDeleteResponse,
+  LoTWUploadPreflightRequest,
+  LoTWUploadPreflightResponse,
   LoTWSyncResponse,
+  LoTWSyncStatus,
   TunerCapabilities,
   TunerStatus,
   RadioConfigResponse,
@@ -306,7 +309,8 @@ async function apiRequest<T = unknown>(
       ...(options?.headers as Record<string, string>),
     };
 
-    if (options?.body) {
+    const isFormDataBody = typeof FormData !== 'undefined' && options?.body instanceof FormData;
+    if (options?.body && !isFormDataBody && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
     }
 
@@ -1483,9 +1487,31 @@ export const api = {
     );
   },
 
-  async detectTQSL(callsign: string, request?: LoTWTQSLDetectRequest, apiBase?: string): Promise<LoTWTQSLDetectResponse> {
-    return apiRequest<LoTWTQSLDetectResponse>(
-      `/sync/${encodeURIComponent(callsign)}/lotw/detect-tqsl`,
+  async importLoTWCertificate(callsign: string, file: File, apiBase?: string): Promise<LoTWCertificateImportResponse> {
+    const formData = new FormData();
+    formData.append('certificate', file);
+    return apiRequest<LoTWCertificateImportResponse>(
+      `/sync/${encodeURIComponent(callsign)}/lotw/certificates/import`,
+      { method: 'POST', body: formData },
+      apiBase
+    );
+  },
+
+  async deleteLoTWCertificate(callsign: string, certId: string, apiBase?: string): Promise<LoTWCertificateDeleteResponse> {
+    return apiRequest<LoTWCertificateDeleteResponse>(
+      `/sync/${encodeURIComponent(callsign)}/lotw/certificates/${encodeURIComponent(certId)}`,
+      { method: 'DELETE' },
+      apiBase
+    );
+  },
+
+  async getLoTWUploadPreflight(
+    callsign: string,
+    request?: LoTWUploadPreflightRequest,
+    apiBase?: string
+  ): Promise<LoTWUploadPreflightResponse> {
+    return apiRequest<LoTWUploadPreflightResponse>(
+      `/sync/${encodeURIComponent(callsign)}/lotw/upload-preflight`,
       { method: 'POST', body: JSON.stringify(request || {}) },
       apiBase
     );
@@ -1507,8 +1533,8 @@ export const api = {
   /**
    * 获取LoTW同步状态
    */
-  async getLoTWSyncStatus(callsign: string, apiBase?: string): Promise<unknown> {
-    return apiRequest(`/sync/${encodeURIComponent(callsign)}/lotw/status`, undefined, apiBase);
+  async getLoTWSyncStatus(callsign: string, apiBase?: string): Promise<LoTWSyncStatus> {
+    return apiRequest<LoTWSyncStatus>(`/sync/${encodeURIComponent(callsign)}/lotw/status`, undefined, apiBase);
   },
 
   /**
@@ -1792,7 +1818,9 @@ export const {
   getLoTWConfig,
   updateLoTWConfig,
   testLoTWConnection,
-  detectTQSL,
+  importLoTWCertificate,
+  deleteLoTWCertificate,
+  getLoTWUploadPreflight,
   syncLoTW,
   getLoTWSyncStatus,
   // 日志本数据路径
