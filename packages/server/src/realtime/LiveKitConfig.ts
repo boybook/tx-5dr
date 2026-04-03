@@ -5,12 +5,14 @@ import {
   getLiveKitCredentialRuntimeStatus,
   getLiveKitCredentialValues,
 } from './LiveKitCredentialState.js';
+import { resolveBrowserFacingRequestOrigin } from './requestOrigin.js';
 
 const logger = createLogger('LiveKitConfig');
 
 const DEFAULT_LIVEKIT_WS_URL = 'ws://127.0.0.1:7880';
 const DEFAULT_LIVEKIT_TCP_PORT = 7881;
 const DEFAULT_LIVEKIT_UDP_PORT_RANGE = '50000-50100';
+const DEFAULT_LIVEKIT_PUBLIC_PATH = '/livekit';
 
 export interface LiveKitConnectionConfig {
   wsUrl: string;
@@ -24,6 +26,11 @@ interface LiveKitWsConfig {
   publicWsUrl: string | null;
 }
 
+interface LiveKitRequestContext {
+  headers?: Record<string, string | string[] | undefined>;
+  protocol?: string;
+}
+
 export class LiveKitConfig {
   static isEnabled(): boolean {
     return process.env.LIVEKIT_DISABLED !== '1' && Boolean(getLiveKitCredentialValues());
@@ -33,13 +40,6 @@ export class LiveKitConfig {
     return process.env.LIVEKIT_DISABLED === '1';
   }
 
-  private static getHeaderValue(value: string | string[] | undefined): string | undefined {
-    if (Array.isArray(value)) {
-      return value[0];
-    }
-    return value;
-  }
-
   private static getSignalingPort(wsUrl: string): string {
     try {
       const parsed = new URL(wsUrl);
@@ -47,6 +47,10 @@ export class LiveKitConfig {
     } catch {
       return '7880';
     }
+  }
+
+  private static getPublicPathPrefix(): string {
+    return DEFAULT_LIVEKIT_PUBLIC_PATH;
   }
 
   private static getWsConfig(): LiveKitWsConfig {
@@ -71,12 +75,13 @@ export class LiveKitConfig {
     };
   }
 
-  static getConnectivityHints(): RealtimeConnectivityHints {
+  static getConnectivityHints(request?: LiveKitRequestContext): RealtimeConnectivityHints {
     const config = this.getWsConfig();
+    const signalingUrl = this.resolvePublicWsUrl(request);
 
     let signalingPort = 7880;
     try {
-      const parsed = new URL(config.publicWsUrl || config.wsUrl);
+      const parsed = new URL(signalingUrl);
       signalingPort = Number(parsed.port || (parsed.protocol === 'wss:' ? '443' : '80'));
     } catch {
       signalingPort = Number(this.getSignalingPort(config.wsUrl));
@@ -86,7 +91,7 @@ export class LiveKitConfig {
     const udpPortRange = process.env.LIVEKIT_UDP_PORT_RANGE || DEFAULT_LIVEKIT_UDP_PORT_RANGE;
 
     return {
-      signalingUrl: config.publicWsUrl || config.wsUrl,
+      signalingUrl,
       signalingPort: Number.isFinite(signalingPort) ? signalingPort : 7880,
       rtcTcpPort: Number.isFinite(rtcTcpPort) ? rtcTcpPort : DEFAULT_LIVEKIT_TCP_PORT,
       udpPortRange,
@@ -102,7 +107,7 @@ export class LiveKitConfig {
       enabled,
       explicitlyDisabled,
       wsUrl: process.env.LIVEKIT_URL || DEFAULT_LIVEKIT_WS_URL,
-      publicWsUrl: ConfigManager.getInstance().getLiveKitPublicUrl() || '<derived-from-request>',
+      publicWsUrl: ConfigManager.getInstance().getLiveKitPublicUrl() || `<derived-from-request>${DEFAULT_LIVEKIT_PUBLIC_PATH}`,
       credentialSource: status.source,
       apiKeyPreview: status.apiKeyPreview,
       credentialFilePath: status.filePath,
@@ -110,32 +115,25 @@ export class LiveKitConfig {
     });
   }
 
-  static resolvePublicWsUrl(request?: {
-    headers?: Record<string, string | string[] | undefined>;
-    protocol?: string;
-  }): string {
+  static resolvePublicWsUrl(request?: LiveKitRequestContext): string {
     const config = this.getWsConfig();
     if (config.publicWsUrl) {
       return config.publicWsUrl;
     }
 
-    const headers = request?.headers ?? {};
-    const protocol = this.getHeaderValue(headers['x-forwarded-proto'])?.split(',')[0]?.trim();
-    const forwardedHost = this.getHeaderValue(headers['x-forwarded-host'])?.split(',')[0]?.trim();
-    const hostHeader = this.getHeaderValue(headers.host)?.split(',')[0]?.trim();
-    const host = forwardedHost || hostHeader;
+    const publicPathPrefix = this.getPublicPathPrefix();
+    const origin = resolveBrowserFacingRequestOrigin({
+      headers: request?.headers,
+      requestProtocol: request?.protocol,
+      fallbackHost: new URL(config.wsUrl).host,
+    });
 
-    if (!host) {
-      return config.wsUrl;
-    }
-
-    const wsProtocol = (protocol || request?.protocol || 'http') === 'https' ? 'wss' : 'ws';
-    const publicUrl = new URL(`${wsProtocol}://${host}`);
+    const wsProtocol = origin.protocol === 'https' ? 'wss' : 'ws';
+    const publicUrl = new URL(`${wsProtocol}://${origin.host}`);
     publicUrl.protocol = `${wsProtocol}:`;
-    publicUrl.port = this.getSignalingPort(config.wsUrl);
-    publicUrl.pathname = '';
+    publicUrl.pathname = publicPathPrefix;
     publicUrl.search = '';
     publicUrl.hash = '';
-    return publicUrl.toString().replace(/\/$/, '');
+    return publicUrl.toString().replace(/\/$/, publicPathPrefix === '/' ? '/' : '');
   }
 }

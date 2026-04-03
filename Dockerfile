@@ -136,6 +136,7 @@ COPY linux/nginx-site.conf /tmp/nginx-site.conf.template
 RUN sed -e 's|%%LISTEN_PORT%%|80|g' \
         -e 's|%%WEB_ROOT%%|/app/packages/web/dist|g' \
         -e 's|%%API_HOST%%|127.0.0.1:4000|g' \
+        -e 's|%%LIVEKIT_HOST%%|livekit:7880|g' \
         /tmp/nginx-site.conf.template > /etc/nginx/conf.d/tx5dr.conf \
     && rm /tmp/nginx-site.conf.template
 

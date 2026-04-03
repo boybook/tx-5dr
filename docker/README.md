@@ -14,9 +14,8 @@ TX-5DR is a modern, web-based amateur radio application designed for FT8 digital
 # Run the web/API container
 docker run -d -p 8076:80 --name tx5dr boybook/tx-5dr:latest
 
-# Run LiveKit sidecar for direct browser signaling/media
+# Run LiveKit sidecar for same-origin browser signaling/media
 docker run -d \
-  -p 7880:7880/tcp \
   -p 7881:7881/tcp \
   -p 50000-50100:50000-50100/udp \
   -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
@@ -90,7 +89,6 @@ services:
     restart: unless-stopped
     command: --config /var/lib/tx5dr-runtime/livekit.yaml
     ports:
-      - "7880:7880/tcp"
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:
@@ -174,7 +172,7 @@ docker run --privileged ...
 
 1. **Start the containers**: launch both `tx5dr` and `tx5dr-livekit`
 2. **Access web interface**: Open `http://localhost:8076`
-3. **Expose LiveKit ports**: ensure `7880/tcp`, `7881/tcp`, `50000-50100/udp` are reachable for browser voice features
+3. **Expose LiveKit media ports**: browsers will enter signaling through the site's same-origin `/livekit` route, so expose `7881/tcp` plus `50000-50100/udp` for voice media
 4. **Configure audio devices**: Select input/output devices in settings
 5. **Configure radio**: Set up CAT control for your transceiver
 6. **Start operating**: Begin FT8 communication
@@ -189,7 +187,6 @@ docker run -d \
   boybook/tx-5dr:latest
 
 docker run -d \
-  -p 7880:7880/tcp \
   -p 7881:7881/tcp \
   -p 50000-50100:50000-50100/udp \
   -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
@@ -207,7 +204,6 @@ docker run -d \
   boybook/tx-5dr:latest
 
 docker run -d \
-  -p 7880:7880/tcp \
   -p 7881:7881/tcp \
   -p 50000-50100:50000-50100/udp \
   -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \

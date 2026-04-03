@@ -141,3 +141,6 @@ export * from './schema/radio-capability.schema.js';
 
 // Realtime Schema
 export * from './schema/realtime.schema.js';
+
+// Desktop HTTPS Schema
+export * from './schema/desktop-https.schema.js';

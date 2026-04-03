@@ -103,17 +103,18 @@ if [[ -f "$NGINX_TEMPLATE" ]]; then
 
         if [[ "$SHARED_LIB_READY" == "1" ]] && ! check_nginx_realtime_proxy_config; then
             if fix_nginx_realtime_proxy_config; then
-                _msg "Patched preserved nginx config with realtime ws-compat proxy updates." \
-                     "已为保留的 nginx 配置补齐实时语音 ws-compat 代理。"
+                _msg "Patched preserved nginx config with realtime proxy updates." \
+                     "已为保留的 nginx 配置补齐实时语音反向代理。"
             else
-                _msg "WARNING: failed to patch the preserved nginx realtime ws-compat proxy config." \
-                     "警告: 补齐保留 nginx 配置中的实时语音 ws-compat 代理失败。"
+                _msg "WARNING: failed to patch the preserved nginx realtime proxy config." \
+                     "警告: 补齐保留 nginx 配置中的实时语音反向代理失败。"
             fi
         fi
     else
         sed -e "s|%%LISTEN_PORT%%|${LISTEN_PORT}|g" \
             -e "s|%%WEB_ROOT%%|${WEB_ROOT}|g" \
             -e "s|%%API_HOST%%|${API_HOST}|g" \
+            -e "s|%%LIVEKIT_HOST%%|127.0.0.1:${LIVEKIT_SIGNAL_PORT:-7880}|g" \
             "$NGINX_TEMPLATE" > "$NGINX_CONF"
         _msg "Generated nginx config: $NGINX_CONF (port ${LISTEN_PORT})" \
              "已生成 nginx 配置: $NGINX_CONF (端口 ${LISTEN_PORT})"

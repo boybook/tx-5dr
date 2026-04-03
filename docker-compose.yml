@@ -85,7 +85,6 @@ services:
         condition: service_completed_successfully
     command: --config /var/lib/tx5dr-runtime/livekit.yaml
     ports:
-      - "7880:7880/tcp"
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:

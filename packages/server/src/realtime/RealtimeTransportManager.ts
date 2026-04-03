@@ -20,6 +20,7 @@ import { createLogger } from '../utils/logger.js';
 import { LiveKitAuthService } from './LiveKitAuthService.js';
 import { LiveKitBridgeManager } from './LiveKitBridgeManager.js';
 import { LiveKitConfig } from './LiveKitConfig.js';
+import { resolveBrowserFacingRequestOrigin } from './requestOrigin.js';
 
 const logger = createLogger('RealtimeTransportManager');
 const COMPAT_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -60,35 +61,6 @@ export interface IssueRealtimeSessionParams {
   requestProtocol?: string;
 }
 
-function getHeaderValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
-}
-
-function hostIncludesExplicitPort(host: string): boolean {
-  if (host.startsWith('[')) {
-    return /\]:\d+$/.test(host);
-  }
-
-  const firstColon = host.indexOf(':');
-  const lastColon = host.lastIndexOf(':');
-  return firstColon !== -1 && firstColon === lastColon;
-}
-
-function tryGetUrlHost(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    return new URL(value).host || null;
-  } catch {
-    return null;
-  }
-}
-
 function buildCompatIdentity(direction: RealtimeSessionDirection, stablePart: string): string {
   const safeStablePart = stablePart.replace(/[^a-zA-Z0-9:_-]/g, '-');
   return `compat-${direction}:${safeStablePart}:${randomUUID()}`;
@@ -120,7 +92,10 @@ export class RealtimeTransportManager {
   ) {}
 
   async issueSession(params: IssueRealtimeSessionParams): Promise<RealtimeSessionResponse> {
-    const hints = LiveKitConfig.getConnectivityHints();
+    const hints = LiveKitConfig.getConnectivityHints({
+      headers: params.requestHeaders,
+      protocol: params.requestProtocol,
+    });
     const selection = this.determineTransportSelection(
       params.scope,
       params.direction,
@@ -446,28 +421,14 @@ export class RealtimeTransportManager {
     headers?: Record<string, string | string[] | undefined>,
     requestProtocol?: string,
   ): string {
-    const protocol = getHeaderValue(headers?.['x-forwarded-proto'])?.split(',')[0]?.trim()
-      || requestProtocol
-      || 'http';
-    const forwardedHost = getHeaderValue(headers?.['x-forwarded-host'])?.split(',')[0]?.trim();
-    const hostHeader = getHeaderValue(headers?.host)?.split(',')[0]?.trim();
-    const forwardedPort = getHeaderValue(headers?.['x-forwarded-port'])?.split(',')[0]?.trim();
-    const originHost = tryGetUrlHost(getHeaderValue(headers?.origin)?.split(',')[0]?.trim());
-    const refererHost = tryGetUrlHost(getHeaderValue(headers?.referer)?.split(',')[0]?.trim());
+    const origin = resolveBrowserFacingRequestOrigin({
+      headers,
+      requestProtocol,
+      fallbackHost: '127.0.0.1:4000',
+    });
 
-    let host = forwardedHost || hostHeader || originHost || refererHost || '127.0.0.1:4000';
-    if (!hostIncludesExplicitPort(host)) {
-      const originHostWithPort = [originHost, refererHost]
-        .find((candidate): candidate is string => Boolean(candidate && hostIncludesExplicitPort(candidate)));
-      if (originHostWithPort) {
-        host = originHostWithPort;
-      } else if (forwardedPort && forwardedPort.length > 0) {
-        host = `${host}:${forwardedPort}`;
-      }
-    }
-
-    const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
-    return `${wsProtocol}://${host}/api/realtime/ws-compat`;
+    const wsProtocol = origin.protocol === 'https' ? 'wss' : 'ws';
+    return `${wsProtocol}://${origin.host}/api/realtime/ws-compat`;
   }
 
   private resolveAudioMonitor(scope: RealtimeScope, previewSessionId?: string): AudioMonitorService | null {

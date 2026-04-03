@@ -16,6 +16,10 @@ export interface ElectronMessages {
     detail: string;
     buttons: [string, string];
   };
+  httpsSelfSigned: {
+    title: string;
+    detail: string;
+  };
   menu: {
     openMainWindow: string;
     logViewer: string;
@@ -37,6 +41,10 @@ const ZH: ElectronMessages = {
     detail: '建议先安装 Microsoft Visual C++ Redistributable (x64)。你也可以继续尝试启动。下载链接如下：',
     buttons: ['打开下载链接', '继续启动'],
   },
+  httpsSelfSigned: {
+    title: '浏览器可能提示证书不安全',
+    detail: '当前浏览器入口使用自签名证书。首次访问时，浏览器可能会提示连接不安全；如果这是你自己的设备，请手动放行后继续访问。',
+  },
   menu: {
     openMainWindow: '打开主窗口',
     logViewer: '日志查看器',
@@ -57,6 +65,10 @@ const EN: ElectronMessages = {
     message: 'Microsoft Visual C++ Redistributable may be missing, and TX-5DR may fail during startup.',
     detail: 'Installing Microsoft Visual C++ Redistributable (x64) is recommended. You can also continue startup anyway. Download link:',
     buttons: ['Open Download Link', 'Continue Startup'],
+  },
+  httpsSelfSigned: {
+    title: 'Your browser may warn about the certificate',
+    detail: 'This browser entrypoint currently uses a self-signed certificate. The first visit may show a security warning; if this is your own device, continue manually after confirming it is expected.',
   },
   menu: {
     openMainWindow: 'Open Main Window',

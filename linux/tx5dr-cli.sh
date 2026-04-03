@@ -159,7 +159,8 @@ cmd_status() {
 
     local livekit_port_status="closed"
     is_port_open "${LIVEKIT_SIGNAL_PORT}" && livekit_port_status="open"
-    echo -e "  Signaling:  port ${LIVEKIT_SIGNAL_PORT} ${livekit_port_status}"
+    echo -e "  Signaling:  internal port ${LIVEKIT_SIGNAL_PORT} ${livekit_port_status}"
+    echo -e "  Browser RT: same-origin ${_DIM}/livekit${_NC}"
 
     local livekit_tcp_status="closed"
     check_livekit_tcp_port && livekit_tcp_status="open"
@@ -210,9 +211,9 @@ cmd_status() {
     fi
 
     if check_livekit_url_consistency; then
-        echo -e "  LK URL:     ${LIVEKIT_URL}"
+        echo -e "  LK URL:     ${LIVEKIT_URL} ${_DIM}(internal bridge)${_NC}"
     else
-        echo -e "  LK URL:     ${_YELLOW}${LIVEKIT_URL} ${_DIM}(expected port ${LIVEKIT_SIGNAL_PORT})${_NC}"
+        echo -e "  LK URL:     ${_YELLOW}${LIVEKIT_URL} ${_DIM}(internal bridge, expected port ${LIVEKIT_SIGNAL_PORT})${_NC}"
     fi
 
     local livekit_cred_state

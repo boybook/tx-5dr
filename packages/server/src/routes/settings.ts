@@ -27,17 +27,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   const buildRealtimeSettingsData = (request: FastifyRequest) => {
     const publicWsUrl = configManager.getLiveKitPublicUrl();
     const transportPolicy = configManager.getRealtimeTransportPolicy();
-    const resolvedSignalingUrl = LiveKitConfig.resolvePublicWsUrl(request);
-    const connectivityHints = LiveKitConfig.getConnectivityHints();
-    const resolvedSignalingPort = (() => {
-      try {
-        const parsed = new URL(resolvedSignalingUrl);
-        const fallbackPort = parsed.protocol === 'wss:' ? 443 : 80;
-        return Number(parsed.port || fallbackPort);
-      } catch {
-        return connectivityHints.signalingPort;
-      }
-    })();
+    const connectivityHints = LiveKitConfig.getConnectivityHints(request);
     const health = transportManager.getScopeHealth('radio');
 
     return {
@@ -45,13 +35,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       transportPolicy,
       runtime: {
         liveKitEnabled: LiveKitConfig.isEnabled(),
-        connectivityHints: {
-          ...connectivityHints,
-          signalingUrl: resolvedSignalingUrl,
-          signalingPort: Number.isFinite(resolvedSignalingPort)
-            ? resolvedSignalingPort
-            : connectivityHints.signalingPort,
-        },
+        connectivityHints,
         radioReceiveTransport: transportManager.getPreferredTransport('radio', 'recv'),
         radioBridgeHealthy: health.healthy,
         radioBridgeIssueCode: health.issueCode,

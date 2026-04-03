@@ -163,4 +163,22 @@ describe('RealtimeTransportManager', () => {
     expect(session.forcedCompatibilityMode).toBe(false);
     expect(session.offers.map((offer) => offer.transport)).toEqual(['ws-compat', 'livekit']);
   });
+
+  it('derives the compat websocket URL from the browser origin when a dev proxy rewrites host to the backend', async () => {
+    mockGetRealtimeTransportPolicy.mockReturnValue('force-compat');
+
+    const manager = await createManager();
+    const session = await manager.issueSession(createIssueSessionParams({
+      requestHeaders: {
+        host: '127.0.0.1:4000',
+        origin: 'http://localhost:5173',
+        referer: 'http://localhost:5173/',
+      },
+      requestProtocol: 'http',
+    }));
+
+    expect(session.offers).toHaveLength(1);
+    expect(session.offers[0]?.transport).toBe('ws-compat');
+    expect(session.offers[0]?.url).toBe('ws://localhost:5173/api/realtime/ws-compat');
+  });
 });
