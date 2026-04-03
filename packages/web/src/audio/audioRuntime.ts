@@ -2,6 +2,14 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('audioRuntime');
 
+type AudioTrackConstraints = {
+  sampleRate?: number;
+  channelCount?: number;
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
+  autoGainControl?: boolean;
+};
+
 export async function ensureInteractiveAudioContext(existing?: AudioContext | null): Promise<AudioContext> {
   const audioContext = existing ?? new AudioContext({
     latencyHint: 'interactive',
@@ -27,7 +35,7 @@ export async function closeAudioContext(audioContext?: AudioContext | null): Pro
 }
 
 export async function requestInteractiveMicrophone(
-  constraints: MediaTrackConstraints,
+  constraints: AudioTrackConstraints,
   existing?: MediaStream | null,
 ): Promise<MediaStream> {
   if (existing) {

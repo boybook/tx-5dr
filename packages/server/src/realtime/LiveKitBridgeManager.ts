@@ -322,7 +322,7 @@ export class LiveKitBridgeManager {
     };
 
     logger.warn('LiveKit bridge issue detected', issue);
-    this.engine.emit('realtimeConnectivityIssue' as any, issue as any);
+    this.engine.emit('realtimeConnectivityIssue', issue);
   }
 
   private markScopeHealthy(scope: RealtimeScope): void {
@@ -425,7 +425,7 @@ export class LiveKitBridgeManager {
     reader: ReadableStreamDefaultReader<AudioFrame>,
   ): Promise<void> {
     try {
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done || !value) {
           break;

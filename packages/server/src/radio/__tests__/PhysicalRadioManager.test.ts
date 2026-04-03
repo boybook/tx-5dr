@@ -16,6 +16,27 @@ vi.mock('icom-wlan-node', () => ({
 import { PhysicalRadioManager } from '../PhysicalRadioManager.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 
+type TestRadioActor = {
+  send: ReturnType<typeof vi.fn>;
+};
+
+type TestRadioConnection = {
+  getMode?: ReturnType<typeof vi.fn>;
+  setFrequency?: ReturnType<typeof vi.fn>;
+  setMode?: ReturnType<typeof vi.fn>;
+};
+
+type PhysicalRadioManagerTestAccessor = {
+  radioActor: TestRadioActor;
+  connection: TestRadioConnection;
+  markCoreCapabilityUnsupported: (capability: string, error: Error) => void;
+  coreCapabilityStates: Record<string, 'unknown' | 'supported' | 'unsupported'>;
+};
+
+function asTestManager(manager: PhysicalRadioManager): PhysicalRadioManagerTestAccessor {
+  return manager as unknown as PhysicalRadioManagerTestAccessor;
+}
+
 describe('PhysicalRadioManager', () => {
   let manager: PhysicalRadioManager;
   let send: ReturnType<typeof vi.fn>;
@@ -23,11 +44,11 @@ describe('PhysicalRadioManager', () => {
   beforeEach(() => {
     manager = new PhysicalRadioManager();
     send = vi.fn();
-    (manager as any).radioActor = { send };
+    asTestManager(manager).radioActor = { send };
   });
 
   it('does not report recoverable getMode failures as connection health failures', async () => {
-    (manager as any).connection = {
+    asTestManager(manager).connection = {
       getMode: vi.fn().mockRejectedValue(new RadioError({
         code: RadioErrorCode.INVALID_OPERATION,
         message: 'Optional radio operation unavailable (getMode): Feature not available',
@@ -52,7 +73,7 @@ describe('PhysicalRadioManager', () => {
       context: { operation: 'getMode', optional: true, recoverable: true },
     }));
 
-    (manager as any).connection = { getMode };
+    asTestManager(manager).connection = { getMode };
 
     await expect(manager.getMode()).rejects.toThrow(
       'get mode failed: Optional radio operation unavailable (getMode): Feature not available'
@@ -75,7 +96,7 @@ describe('PhysicalRadioManager', () => {
       context: { operation: 'setFrequency', optional: true, recoverable: true },
     }));
 
-    (manager as any).connection = { setFrequency };
+    asTestManager(manager).connection = { setFrequency };
 
     await expect(manager.setFrequency(7100000)).resolves.toBe(false);
     await expect(manager.setFrequency(7100000)).resolves.toBe(false);
@@ -106,10 +127,11 @@ describe('PhysicalRadioManager', () => {
         context: { operation: 'setFrequency', optional: true, recoverable: true },
       }));
 
-    (manager as any).connection = { setFrequency };
+    const testManager = asTestManager(manager);
+    testManager.connection = { setFrequency };
 
     await expect(manager.setFrequency(7100000)).resolves.toBe(false);
-    (manager as any).markCoreCapabilityUnsupported('writeFrequency', new Error('manual overwrite should be ignored'));
+    testManager.markCoreCapabilityUnsupported('writeFrequency', new Error('manual overwrite should be ignored'));
 
     const diagnostics = manager.getCoreCapabilityDiagnostics();
 
@@ -123,7 +145,7 @@ describe('PhysicalRadioManager', () => {
   });
 
   it('does not report recoverable setMode failures as connection health failures', async () => {
-    (manager as any).connection = {
+    asTestManager(manager).connection = {
       setMode: vi.fn().mockRejectedValue(new RadioError({
         code: RadioErrorCode.UNKNOWN_ERROR,
         message: 'Hamlib unknown error (setMode): rig_set_mode returning(-11) Feature not available',
@@ -149,7 +171,7 @@ describe('PhysicalRadioManager', () => {
       context: { operation: 'setMode', optional: true, recoverable: true },
     }));
 
-    (manager as any).connection = { setMode };
+    asTestManager(manager).connection = { setMode };
 
     await expect(manager.setMode('USB')).rejects.toThrow(
       'set mode failed: Optional radio operation unavailable (setMode): Feature not available'
@@ -165,7 +187,7 @@ describe('PhysicalRadioManager', () => {
 
   it('passes mode intent through to the active connection', async () => {
     const setMode = vi.fn().mockResolvedValue(undefined);
-    (manager as any).connection = { setMode };
+    asTestManager(manager).connection = { setMode };
 
     await expect(manager.setMode('USB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
 
@@ -184,21 +206,22 @@ describe('PhysicalRadioManager', () => {
       }))
       .mockResolvedValueOnce(undefined);
 
-    (manager as any).connection = { setMode };
+    const testManager = asTestManager(manager);
+    testManager.connection = { setMode };
 
     await expect(manager.setMode('USB')).rejects.toThrow(
       'set mode failed: Optional radio operation unavailable (setMode): Feature not available'
     );
     expect(manager.getCoreCapabilityDiagnostics().writeRadioMode).toBeDefined();
 
-    (manager as any).coreCapabilityStates.writeRadioMode = 'unknown';
+    testManager.coreCapabilityStates.writeRadioMode = 'unknown';
     await expect(manager.setMode('USB')).resolves.toBeUndefined();
 
     expect(manager.getCoreCapabilityDiagnostics().writeRadioMode).toBeUndefined();
   });
 
   it('still reports real getMode failures to the connection health state machine', async () => {
-    (manager as any).connection = {
+    asTestManager(manager).connection = {
       getMode: vi.fn().mockRejectedValue(new Error('device disconnected')),
     };
 

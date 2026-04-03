@@ -336,7 +336,7 @@ class ScriptProcessorCaptureBackend implements CompatCaptureBackend {
   private emitFrames(sourceSampleRate: number): void {
     const ratio = sourceSampleRate / CAPTURE_TARGET_SAMPLE_RATE;
 
-    while (true) {
+    for (;;) {
       const requiredSamples = Math.ceil(this.sourceOffset + (CAPTURE_FRAME_SAMPLES * ratio)) + 1;
       if (this.sourceBuffer.length < requiredSamples) {
         return;
