@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/react';
 import { createLogger } from '../../utils/logger';
 import type { VoiceCaptureController } from '../../hooks/useVoiceCaptureController';
+import { VoicePttPressTracker } from './voicePttPressTracker';
 
 const logger = createLogger('VoicePTTButton');
 
@@ -83,6 +84,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const isPttDownRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const voiceCaptureControllerRef = useRef(voiceCaptureController);
+  const pressTrackerRef = useRef(new VoicePttPressTracker());
 
   const radioService = connection.state.radioService;
 
@@ -179,28 +181,48 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     if (!isOperator || !radioService || isPttDownRef.current) return;
     if (pttState === 'locked-by-other') return;
 
+    const pressId = pressTrackerRef.current.beginPress();
     isPttDownRef.current = true;
     setPttState('requesting');
 
     try {
       const participantIdentity = await voiceCaptureController.startFromGesture();
+      if (!pressTrackerRef.current.isActive(pressId) || !isPttDownRef.current) {
+        pressTrackerRef.current.cancelPress(pressId);
+        voiceCaptureController.setPTTActive(false);
+        setPttState('idle');
+        logger.debug('PTT press canceled before voice capture became ready', { pressId });
+        return;
+      }
+
       if (!participantIdentity) {
-        logger.warn('PTT requested before voice participant identity became available');
+        pressTrackerRef.current.cancelPress(pressId);
         isPttDownRef.current = false;
         setPttState('idle');
+        logger.warn('PTT requested before voice participant identity became available');
+        return;
+      }
+
+      if (!pressTrackerRef.current.markRequestIssued(pressId)) {
+        voiceCaptureController.setPTTActive(false);
+        setPttState('idle');
+        logger.debug('PTT press became stale before request was issued', { pressId });
         return;
       }
 
       radioService.requestVoicePTT(participantIdentity);
       voiceCaptureController.setPTTActive(true);
     } catch (error) {
-      isPttDownRef.current = false;
+      pressTrackerRef.current.cancelPress(pressId);
+      if (isPttDownRef.current) {
+        isPttDownRef.current = false;
+      }
       setPttState('idle');
       logger.error('PTT initialization failed', error);
       return;
     }
 
-    acquireWakeLock();
+    void acquireWakeLock();
     if (navigator.vibrate) {
       navigator.vibrate(50);
     }
@@ -216,11 +238,14 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
   // PTT release handler
   const handlePTTUp = useCallback(() => {
-    if (!isPttDownRef.current) return;
+    const { pressId, shouldRelease } = pressTrackerRef.current.releaseActivePress();
+    if (pressId === null) return;
 
     isPttDownRef.current = false;
 
-    radioService?.releaseVoicePTT();
+    if (shouldRelease) {
+      radioService?.releaseVoicePTT();
+    }
     voiceCaptureController.setPTTActive(false);
 
     releaseWakeLock();
@@ -293,10 +318,13 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (isPttDownRef.current) {
+      const { shouldRelease } = pressTrackerRef.current.releaseActivePress();
+      if (shouldRelease) {
         radioService?.releaseVoicePTT();
-        voiceCaptureControllerRef.current.setPTTActive(false);
       }
+      isPttDownRef.current = false;
+      pressTrackerRef.current.reset();
+      voiceCaptureControllerRef.current.setPTTActive(false);
       releaseWakeLock();
     };
   }, [radioService, releaseWakeLock]);
