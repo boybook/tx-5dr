@@ -35,6 +35,7 @@ describe('VoiceTxDiagnostics', () => {
       queueWaitMs: 28,
       writeMs: 4,
       endToEndMs: 36,
+      outputBufferedMs: 24,
       outputSampleRate: 48000,
       outputBufferSize: 768,
     });
@@ -46,6 +47,7 @@ describe('VoiceTxDiagnostics', () => {
     expect(snapshot.transport.clientToServerMs.current).toBe(12);
     expect(snapshot.serverIngress.queueDepthFrames).toBe(1);
     expect(snapshot.serverOutput.queueWaitMs.current).toBe(28);
+    expect(snapshot.serverOutput.outputBufferedMs.current).toBe(24);
     expect(snapshot.serverOutput.outputBufferSize).toBe(768);
     expect(snapshot.summary.bottleneckStage).toBe('server-queue');
 

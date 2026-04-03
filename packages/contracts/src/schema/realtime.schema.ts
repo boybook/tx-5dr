@@ -237,6 +237,7 @@ export const RealtimeVoiceTxServerOutputStatsSchema = z.object({
   queueWaitMs: RealtimeVoiceTxMetricWindowSchema,
   writeMs: RealtimeVoiceTxMetricWindowSchema,
   endToEndMs: RealtimeVoiceTxMetricWindowSchema,
+  outputBufferedMs: RealtimeVoiceTxMetricWindowSchema,
   outputSampleRate: z.number().nullable(),
   outputBufferSize: z.number().nullable(),
   writeFailures: z.number().int().nonnegative(),
