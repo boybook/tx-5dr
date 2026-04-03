@@ -7,10 +7,12 @@ import { initializeConsoleLogger, ConsoleLogger } from './utils/console-logger.j
 import { setGlobalInspector } from './state-machines/inspector.js';
 import { createLogger, setLogLevel, getActiveLogLevel } from './utils/logger.js';
 import { ConfigManager } from './config/config-manager.js';
+import { markProcessShuttingDown } from './utils/process-shutdown.js';
 
 const logger = createLogger('Server');
 
 const PORT = Number(process.env.PORT) || 4000;
+const SERVER_SHUTDOWN_TIMEOUT_MS = 1800;
 
 // ===== 全局错误处理器 =====
 // 防止未捕获的 Promise rejection 导致进程崩溃
@@ -171,30 +173,63 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
     consoleLogger.restore();
   };
 
+  let shutdownPromise: Promise<void> | null = null;
+
   const handleSignal = async (signal: NodeJS.Signals) => {
-    logger.info(`received ${signal} signal, shutting down server`);
+    if (shutdownPromise) {
+      logger.info(`received ${signal} during shutdown, reusing in-flight shutdown`);
+      return shutdownPromise;
+    }
 
-    try {
-      // 停止 DigitalRadioEngine（这会关闭电台连接和音频流）
-      const engine = DigitalRadioEngine.getInstance();
-      if (engine.getStatus().isRunning) {
-        logger.info('stopping digital radio engine');
-        await engine.stop();
-        logger.info('digital radio engine stopped');
+    shutdownPromise = (async () => {
+      const shutdownStartedAt = Date.now();
+      const engineStopStartedAt = Date.now();
+      let engineStopMs = 0;
+      let fastShutdownFallback = false;
+
+      logger.info(`received ${signal} signal, shutting down server`);
+      markProcessShuttingDown();
+
+      try {
+        const engine = DigitalRadioEngine.getInstance();
+        if (engine.getStatus().isRunning) {
+          logger.info('stopping digital radio engine');
+          await Promise.race([
+            engine.stop(),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('server shutdown timeout')), SERVER_SHUTDOWN_TIMEOUT_MS);
+            }),
+          ]);
+          engineStopMs = Date.now() - engineStopStartedAt;
+          logger.info('digital radio engine stopped');
+        }
+      } catch (error) {
+        engineStopMs = Date.now() - engineStopStartedAt;
+        fastShutdownFallback = true;
+        logger.warn('digital radio engine stop exceeded shutdown budget, continuing to exit', {
+          timeoutMs: SERVER_SHUTDOWN_TIMEOUT_MS,
+          engineStopMs,
+          error,
+        });
       }
-    } catch (error) {
-      logger.error('failed to stop digital radio engine', error);
-    }
 
-    try {
-      cleanup();
-      logger.info('cleanup complete');
-    } catch (error) {
-      logger.error('cleanup failed', error);
-    }
+      try {
+        cleanup();
+        logger.info('cleanup complete');
+      } catch (error) {
+        logger.error('cleanup failed', error);
+      }
 
-    // 确保进程在收到信号后真正退出
-    process.exit(0);
+      logger.info('server shutdown complete', {
+        signal,
+        engineStopMs,
+        fastShutdownFallback,
+        totalMs: Date.now() - shutdownStartedAt,
+      });
+      process.exit(0);
+    })();
+
+    return shutdownPromise;
   };
 
   process.on('SIGINT', () => handleSignal('SIGINT'));

@@ -15,6 +15,7 @@ import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
+import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 
 const logger = createLogger('IcomWlanConnection');
 import {
@@ -892,6 +893,7 @@ export class IcomWlanConnection
       // 清理 rig 实例
       if (this.rig) {
         try {
+          const disconnectTimeoutMs = isProcessShuttingDown() ? 1000 : 5000;
           if (this.rig.events) {
             // 先移除所有业务监听器，防止 disconnect 过程中触发真实操作
             this.rig.events.removeAllListeners();
@@ -902,7 +904,12 @@ export class IcomWlanConnection
             this.rig.events.on('error', () => {});
           }
 
-          await this.rig.disconnect();
+          await Promise.race([
+            this.rig.disconnect(),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('Disconnect timeout')), disconnectTimeoutMs);
+            }),
+          ]);
           logger.debug('Event listeners cleared and connection closed');
         } catch (error: any) {
           logger.warn('Failed to disconnect during cleanup:', error);
