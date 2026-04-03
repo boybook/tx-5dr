@@ -13,11 +13,16 @@ import {
   stopMediaStream,
 } from './audioRuntime';
 import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
+import {
+  VoiceTxLocalStatsCollector,
+  type VoiceTxLocalDiagnostics,
+} from './voiceTxDiagnostics';
 
 const logger = createLogger('VoiceCapture');
 const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
 const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
 const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
+const LIVEKIT_SENDER_STATS_INTERVAL_MS = 1000;
 
 export interface VoiceCaptureOptions {
   onStateChange?: (state: VoiceCaptureState) => void;
@@ -61,6 +66,8 @@ export class VoiceCapture {
   private transportKind: RealtimeTransportKind | null = null;
   private compatSequence = 0;
   private _inputLevel = 0;
+  private readonly localTxStats = new VoiceTxLocalStatsCollector();
+  private liveKitStatsTimer: number | null = null;
 
   constructor(options: VoiceCaptureOptions) {
     this.options = options;
@@ -84,6 +91,10 @@ export class VoiceCapture {
 
   get inputLevel(): number {
     return this._inputLevel;
+  }
+
+  get diagnostics(): VoiceTxLocalDiagnostics {
+    return this.localTxStats.getSnapshot();
   }
 
   async prepareCaptureFromGesture(): Promise<void> {
@@ -164,9 +175,16 @@ export class VoiceCapture {
   setPTTActive(active: boolean): void {
     this.pttActive = active;
 
+    if (active) {
+      this.localTxStats.notePTTActivated();
+    }
+
     if (this.transportKind === 'livekit' && this.localTrack) {
       if (active) {
-        void this.localTrack.unmute().catch((error) => {
+        const unmuteStartedAt = performance.now();
+        void this.localTrack.unmute().then(() => {
+          this.localTxStats.noteTrackUnmuted(performance.now() - unmuteStartedAt);
+        }).catch((error) => {
           logger.error('Failed to unmute LiveKit microphone track', error);
         });
       } else {
@@ -216,6 +234,7 @@ export class VoiceCapture {
     await localTrack.mute();
 
     this.transportKind = 'livekit';
+    this.localTxStats.reset('livekit');
     this.room = room;
     this.localTrack = localTrack;
     this.mediaStream = mediaStream;
@@ -232,6 +251,7 @@ export class VoiceCapture {
       roomName: offer.roomName,
       participantIdentity: offer.participantIdentity,
     });
+    this.startLiveKitSenderStatsPolling();
   }
 
   private async startCompatCapture(offer: RealtimeTransportOffer): Promise<void> {
@@ -279,14 +299,16 @@ export class VoiceCapture {
 
     let hasLoggedFirstCompatFrame = false;
     captureBackend.setFrameHandler((frame) => {
-      if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
+      if (!this.pttActive) {
         return;
       }
-      if (!this.pttActive) {
+      if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
+        this.localTxStats.noteFrameSkipped();
         return;
       }
 
       try {
+        const sendStartedAt = performance.now();
         const payload = encodeWsCompatAudioFrame({
           sequence: this.compatSequence++,
           timestampMs: Date.now(),
@@ -296,6 +318,11 @@ export class VoiceCapture {
           pcm: new Int16Array(frame.buffer),
         });
         this.compatSocket.send(payload);
+        this.localTxStats.noteFrameSent(
+          frame.samplesPerChannel,
+          performance.now() - sendStartedAt,
+          this.compatSocket.bufferedAmount,
+        );
         if (!hasLoggedFirstCompatFrame) {
           hasLoggedFirstCompatFrame = true;
           logger.info('First compatibility uplink audio frame sent', {
@@ -311,6 +338,7 @@ export class VoiceCapture {
     mediaSource.connect(captureBackend.inputNode);
 
     this.transportKind = 'ws-compat';
+    this.localTxStats.reset('ws-compat');
     this.mediaStream = mediaStream;
     this.audioContext = audioContext;
     this.mediaSource = mediaSource;
@@ -401,6 +429,11 @@ export class VoiceCapture {
   }
 
   private cleanupTransportOnly(): void {
+    if (this.liveKitStatsTimer !== null) {
+      window.clearInterval(this.liveKitStatsTimer);
+      this.liveKitStatsTimer = null;
+    }
+
     if (this.captureBackend) {
       try {
         this.captureBackend.close();
@@ -436,6 +469,61 @@ export class VoiceCapture {
     this.transportKind = null;
     this._participantIdentity = null;
     this.compatSequence = 0;
+    this.localTxStats.reset(null);
+  }
+
+  private startLiveKitSenderStatsPolling(): void {
+    if (!this.localTrack) {
+      return;
+    }
+
+    if (this.liveKitStatsTimer !== null) {
+      window.clearInterval(this.liveKitStatsTimer);
+      this.liveKitStatsTimer = null;
+    }
+
+    const pollStats = async () => {
+      if (!this.localTrack) {
+        return;
+      }
+
+      try {
+        const report = await this.localTrack.getRTCStatsReport();
+        let packetsSent: number | null = null;
+        let roundTripTimeMs: number | null = null;
+        let jitterMs: number | null = null;
+
+        report?.forEach((entry) => {
+          if (entry.type === 'outbound-rtp') {
+            const outbound = entry as RTCOutboundRtpStreamStats & {
+              roundTripTime?: number;
+              jitter?: number;
+            };
+            packetsSent = typeof outbound.packetsSent === 'number' ? outbound.packetsSent : packetsSent;
+            roundTripTimeMs = typeof outbound.roundTripTime === 'number'
+              ? outbound.roundTripTime * 1000
+              : roundTripTimeMs;
+            jitterMs = typeof outbound.jitter === 'number'
+              ? outbound.jitter * 1000
+              : jitterMs;
+          }
+        });
+
+        this.localTxStats.noteLiveKitSenderStats({
+          bitrateKbps: Number.isFinite(this.localTrack.currentBitrate) ? this.localTrack.currentBitrate / 1000 : null,
+          packetsSent,
+          roundTripTimeMs,
+          jitterMs,
+        });
+      } catch (error) {
+        logger.debug('Failed to poll LiveKit sender stats', error);
+      }
+    };
+
+    void pollStats();
+    this.liveKitStatsTimer = window.setInterval(() => {
+      void pollStats();
+    }, LIVEKIT_SENDER_STATS_INTERVAL_MS);
   }
 
   private cleanup(options: VoiceCaptureCleanupOptions = {}): void {

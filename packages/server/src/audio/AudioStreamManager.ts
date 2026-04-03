@@ -15,6 +15,7 @@ import { performance } from 'node:perf_hooks';
 import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
 import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { createLogger } from '../utils/logger.js';
+import type { VoiceTxFrameMeta, VoiceTxProcessedFrameStats } from '../voice/VoiceTxDiagnostics.js';
 
 const logger = createLogger('AudioStreamManager');
 const INTERNAL_SAMPLE_RATE = 12000;
@@ -24,6 +25,34 @@ export interface AudioStreamEvents {
   'error': (error: Error) => void;
   'started': () => void;
   'stopped': () => void;
+}
+
+export interface VoiceTxOutputObserver {
+  onFrameEnqueued?: (data: {
+    meta: VoiceTxFrameMeta;
+    queueDepthFrames: number;
+    queuedAudioMs: number;
+  }) => void;
+  onFrameDropped?: (data: {
+    meta: VoiceTxFrameMeta;
+    queueDepthFrames: number;
+    queuedAudioMs: number;
+    reason: 'backpressure' | 'output-unavailable';
+  }) => void;
+  onFrameProcessed?: (data: VoiceTxProcessedFrameStats) => void;
+  onWriteFailure?: (data: {
+    meta: VoiceTxFrameMeta;
+    queueDepthFrames: number;
+    queuedAudioMs: number;
+  }) => void;
+}
+
+interface QueuedVoiceFrame {
+  pcmData: Float32Array;
+  frameSampleRate: number;
+  meta: VoiceTxFrameMeta;
+  enqueuedAt: number;
+  durationMs: number;
 }
 
 /**
@@ -60,6 +89,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private playbackStartTime: number = 0;        // 播放开始时间戳
   private currentPlaybackPromise: Promise<void> | null = null;  // 当前播放的Promise
   private shouldStopPlayback: boolean = false;  // 停止播放标志
+  private voiceOutputObserver: VoiceTxOutputObserver | null = null;
+  private readonly voiceFrameQueue: QueuedVoiceFrame[] = [];
+  private voiceQueueDurationMs = 0;
+  private voiceQueueProcessing = false;
+  private static readonly MAX_VOICE_QUEUE_FRAMES = 25;
+  private static readonly MAX_VOICE_QUEUE_DURATION_MS = 500;
 
   constructor() {
     super();
@@ -676,6 +711,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
       this.isOutputting = false;
       this.outputDeviceId = null;
+      this.clearVoicePlaybackQueue();
 
       logger.info('audio output stopped');
 
@@ -751,6 +787,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   getVolumeGainDb(): number {
     return this.volumeGainDb;
+  }
+
+  setVoiceOutputObserver(observer: VoiceTxOutputObserver | null): void {
+    this.voiceOutputObserver = observer;
+  }
+
+  clearVoicePlaybackQueue(): void {
+    this.voiceFrameQueue.length = 0;
+    this.voiceQueueDurationMs = 0;
+    this.voiceAccumBuffer = new Float32Array(0);
   }
 
   /**
@@ -1057,71 +1103,184 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /** Accumulation buffer for voice audio frames (adapts incoming frame chunks to RtAudio buffer size) */
   private voiceAccumBuffer: Float32Array = new Float32Array(0);
 
-  async playVoiceAudio(pcmData: Float32Array, frameSampleRate: number): Promise<void> {
-    let playbackFrame = pcmData;
+  async playVoiceAudio(pcmData: Float32Array, frameSampleRate: number, meta: VoiceTxFrameMeta): Promise<void> {
+    const queuedFrame: QueuedVoiceFrame = {
+      pcmData,
+      frameSampleRate,
+      meta,
+      enqueuedAt: Date.now(),
+      durationMs: frameSampleRate > 0 ? (pcmData.length / frameSampleRate) * 1000 : 0,
+    };
 
-    // ICOM WLAN output path
-    if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
-      const icomTargetRate = this.icomWlanAudioAdapter.getSampleRate();
-      if (frameSampleRate !== icomTargetRate) {
-        playbackFrame = await resampleAudioProfessional(
-          pcmData,
-          frameSampleRate,
-          icomTargetRate,
-          1
-        );
-      }
+    this.enqueueVoiceFrame(queuedFrame);
+    if (!this.voiceQueueProcessing) {
+      void this.processVoiceFrameQueue();
+    }
+  }
 
-      const gain = this.volumeGain;
-      const processed = new Float32Array(playbackFrame.length);
-      for (let i = 0; i < playbackFrame.length; i++) {
-        const s = playbackFrame[i] * gain;
-        processed[i] = s > 1 ? 1 : (s < -1 ? -1 : s);
+  private enqueueVoiceFrame(frame: QueuedVoiceFrame): void {
+    this.voiceFrameQueue.push(frame);
+    this.voiceQueueDurationMs += frame.durationMs;
+
+    while (
+      this.voiceFrameQueue.length > AudioStreamManager.MAX_VOICE_QUEUE_FRAMES ||
+      this.voiceQueueDurationMs > AudioStreamManager.MAX_VOICE_QUEUE_DURATION_MS
+    ) {
+      const dropped = this.voiceFrameQueue.shift();
+      if (!dropped) {
+        break;
       }
-      this.icomWlanAudioAdapter.sendAudio(processed).catch((err) => {
-        logger.error('Voice audio ICOM WLAN send failed', err);
+      this.voiceQueueDurationMs = Math.max(0, this.voiceQueueDurationMs - dropped.durationMs);
+      this.voiceOutputObserver?.onFrameDropped?.({
+        meta: dropped.meta,
+        queueDepthFrames: this.voiceFrameQueue.length,
+        queuedAudioMs: this.getCurrentVoiceQueuedMs(),
+        reason: 'backpressure',
       });
+    }
+
+    this.voiceOutputObserver?.onFrameEnqueued?.({
+      meta: frame.meta,
+      queueDepthFrames: this.voiceFrameQueue.length,
+      queuedAudioMs: this.getCurrentVoiceQueuedMs(),
+    });
+  }
+
+  private async processVoiceFrameQueue(): Promise<void> {
+    if (this.voiceQueueProcessing) {
       return;
     }
 
-    // RtAudio output path
-    if (!this.isOutputting || !this.rtAudioOutput) {
-      return;
-    }
+    this.voiceQueueProcessing = true;
+    try {
+      while (this.voiceFrameQueue.length > 0) {
+        const frame = this.voiceFrameQueue.shift();
+        if (!frame) {
+          continue;
+        }
 
-    if (frameSampleRate !== this.sampleRate) {
-      playbackFrame = await resampleAudioProfessional(
-        pcmData,
-        frameSampleRate,
-        this.sampleRate,
-        1
-      );
-    }
+        this.voiceQueueDurationMs = Math.max(0, this.voiceQueueDurationMs - frame.durationMs);
 
-    // Accumulate incoming samples until enough data is available for one RtAudio write.
-    const newBuf = new Float32Array(this.voiceAccumBuffer.length + playbackFrame.length);
-    newBuf.set(this.voiceAccumBuffer);
-    newBuf.set(playbackFrame, this.voiceAccumBuffer.length);
-    this.voiceAccumBuffer = newBuf;
+        if ((this.usingIcomWlanOutput && !this.icomWlanAudioAdapter) || (!this.usingIcomWlanOutput && (!this.isOutputting || !this.rtAudioOutput))) {
+          this.voiceOutputObserver?.onFrameDropped?.({
+            meta: frame.meta,
+            queueDepthFrames: this.voiceFrameQueue.length,
+            queuedAudioMs: this.getCurrentVoiceQueuedMs(),
+            reason: 'output-unavailable',
+          });
+          continue;
+        }
 
-    // Write complete bufferSize chunks to RtAudio
-    const gain = this.volumeGain;
-    while (this.voiceAccumBuffer.length >= this.bufferSize) {
-      const chunk = this.voiceAccumBuffer.subarray(0, this.bufferSize);
-      this.voiceAccumBuffer = this.voiceAccumBuffer.slice(this.bufferSize);
+        const queueWaitMs = Math.max(0, Date.now() - frame.enqueuedAt);
+        const resampleStart = performance.now();
+        let playbackFrame = frame.pcmData;
+        let outputSampleRate: number | null = null;
+        let outputBufferSize: number | null = null;
 
-      const buffer = Buffer.allocUnsafe(this.bufferSize * 4);
-      for (let i = 0; i < this.bufferSize; i++) {
-        const s = chunk[i] * gain;
-        const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
-        buffer.writeFloatLE(clamped, i * 4);
+        if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
+          outputSampleRate = this.icomWlanAudioAdapter.getSampleRate();
+          outputBufferSize = frame.meta.samplesPerChannel;
+          if (frame.frameSampleRate !== outputSampleRate) {
+            playbackFrame = await resampleAudioProfessional(
+              frame.pcmData,
+              frame.frameSampleRate,
+              outputSampleRate,
+              1,
+            );
+          }
+        } else {
+          outputSampleRate = this.sampleRate;
+          outputBufferSize = this.bufferSize;
+          if (frame.frameSampleRate !== this.sampleRate) {
+            playbackFrame = await resampleAudioProfessional(
+              frame.pcmData,
+              frame.frameSampleRate,
+              this.sampleRate,
+              1,
+            );
+          }
+        }
+        const resampleMs = performance.now() - resampleStart;
+
+        const writeStart = performance.now();
+        let writeFailed = false;
+
+        if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
+          const processed = new Float32Array(playbackFrame.length);
+          const gain = this.volumeGain;
+          for (let i = 0; i < playbackFrame.length; i++) {
+            const s = playbackFrame[i] * gain;
+            processed[i] = s > 1 ? 1 : (s < -1 ? -1 : s);
+          }
+
+          try {
+            await this.icomWlanAudioAdapter.sendAudio(processed);
+          } catch (error) {
+            writeFailed = true;
+            logger.error('Voice audio ICOM WLAN send failed', error);
+          }
+        } else if (this.rtAudioOutput) {
+          const newBuf = new Float32Array(this.voiceAccumBuffer.length + playbackFrame.length);
+          newBuf.set(this.voiceAccumBuffer);
+          newBuf.set(playbackFrame, this.voiceAccumBuffer.length);
+          this.voiceAccumBuffer = newBuf;
+
+          const gain = this.volumeGain;
+          while (this.voiceAccumBuffer.length >= this.bufferSize) {
+            const chunk = this.voiceAccumBuffer.subarray(0, this.bufferSize);
+            this.voiceAccumBuffer = this.voiceAccumBuffer.slice(this.bufferSize);
+
+            const buffer = Buffer.allocUnsafe(this.bufferSize * 4);
+            for (let i = 0; i < this.bufferSize; i++) {
+              const s = chunk[i] * gain;
+              const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
+              buffer.writeFloatLE(clamped, i * 4);
+            }
+
+            try {
+              this.rtAudioOutput.write(buffer);
+            } catch {
+              writeFailed = true;
+              break;
+            }
+          }
+        }
+
+        const writeMs = performance.now() - writeStart;
+        if (writeFailed) {
+          this.voiceAccumBuffer = new Float32Array(0);
+          this.voiceOutputObserver?.onWriteFailure?.({
+            meta: frame.meta,
+            queueDepthFrames: this.voiceFrameQueue.length,
+            queuedAudioMs: this.getCurrentVoiceQueuedMs(),
+          });
+        }
+
+        const endToEndMs = typeof frame.meta.clientSentAtMs === 'number'
+          ? Math.max(0, Date.now() - frame.meta.clientSentAtMs)
+          : Math.max(0, Date.now() - frame.meta.serverReceivedAtMs);
+
+        this.voiceOutputObserver?.onFrameProcessed?.({
+          meta: frame.meta,
+          queueDepthFrames: this.voiceFrameQueue.length,
+          queuedAudioMs: this.getCurrentVoiceQueuedMs(),
+          resampleMs,
+          queueWaitMs,
+          writeMs,
+          endToEndMs,
+          outputSampleRate,
+          outputBufferSize,
+        });
       }
-
-      try {
-        this.rtAudioOutput.write(buffer);
-      } catch {
-        // Buffer full or device error - drop frame silently
-      }
+    } finally {
+      this.voiceQueueProcessing = false;
     }
+  }
+
+  private getCurrentVoiceQueuedMs(): number {
+    const accumQueuedMs = this.sampleRate > 0
+      ? (this.voiceAccumBuffer.length / this.sampleRate) * 1000
+      : 0;
+    return Math.max(0, this.voiceQueueDurationMs + accumQueuedMs);
   }
 } 

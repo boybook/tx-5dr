@@ -183,3 +183,73 @@ export const RealtimeStatsResponseSchema = z.object({
 });
 
 export type RealtimeStatsResponse = z.infer<typeof RealtimeStatsResponseSchema>;
+
+export const RealtimeVoiceTxMetricWindowSchema = z.object({
+  current: z.number().nullable(),
+  rolling: z.number().nullable(),
+  peak: z.number().nullable(),
+});
+
+export type RealtimeVoiceTxMetricWindow = z.infer<typeof RealtimeVoiceTxMetricWindowSchema>;
+
+export const RealtimeVoiceTxBottleneckStageSchema = z.enum([
+  'client-capture',
+  'transport',
+  'server-ingress',
+  'server-queue',
+  'server-output',
+]);
+
+export type RealtimeVoiceTxBottleneckStage = z.infer<typeof RealtimeVoiceTxBottleneckStageSchema>;
+
+export const RealtimeVoiceTxSummarySchema = z.object({
+  active: z.boolean(),
+  transport: RealtimeTransportKindSchema.nullable(),
+  bottleneckStage: RealtimeVoiceTxBottleneckStageSchema.nullable(),
+  startedAt: z.number().nullable(),
+  updatedAt: z.number().nullable(),
+  clientId: z.string().nullable(),
+  label: z.string().nullable(),
+});
+
+export type RealtimeVoiceTxSummary = z.infer<typeof RealtimeVoiceTxSummarySchema>;
+
+export const RealtimeVoiceTxTransportStatsSchema = z.object({
+  receivedFrames: z.number().int().nonnegative(),
+  sequenceGaps: z.number().int().nonnegative(),
+  lastSequence: z.number().int().nullable(),
+  clientToServerMs: RealtimeVoiceTxMetricWindowSchema,
+});
+
+export type RealtimeVoiceTxTransportStats = z.infer<typeof RealtimeVoiceTxTransportStatsSchema>;
+
+export const RealtimeVoiceTxServerIngressStatsSchema = z.object({
+  frameIntervalMs: RealtimeVoiceTxMetricWindowSchema,
+  queueDepthFrames: z.number().int().nonnegative(),
+  queuedAudioMs: z.number().nonnegative(),
+  droppedFrames: z.number().int().nonnegative(),
+});
+
+export type RealtimeVoiceTxServerIngressStats = z.infer<typeof RealtimeVoiceTxServerIngressStatsSchema>;
+
+export const RealtimeVoiceTxServerOutputStatsSchema = z.object({
+  resampleMs: RealtimeVoiceTxMetricWindowSchema,
+  queueWaitMs: RealtimeVoiceTxMetricWindowSchema,
+  writeMs: RealtimeVoiceTxMetricWindowSchema,
+  endToEndMs: RealtimeVoiceTxMetricWindowSchema,
+  outputSampleRate: z.number().nullable(),
+  outputBufferSize: z.number().nullable(),
+  writeFailures: z.number().int().nonnegative(),
+});
+
+export type RealtimeVoiceTxServerOutputStats = z.infer<typeof RealtimeVoiceTxServerOutputStatsSchema>;
+
+export const RealtimeVoiceTxStatsResponseSchema = z.object({
+  scope: RealtimeScopeSchema,
+  summary: RealtimeVoiceTxSummarySchema,
+  transport: RealtimeVoiceTxTransportStatsSchema,
+  serverIngress: RealtimeVoiceTxServerIngressStatsSchema,
+  serverOutput: RealtimeVoiceTxServerOutputStatsSchema,
+});
+
+export type RealtimeVoiceTxStatsResponse = z.infer<typeof RealtimeVoiceTxStatsResponseSchema>;

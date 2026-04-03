@@ -90,6 +90,7 @@ import type {
   RealtimeSessionResponse,
   RealtimeStatsRequest,
   RealtimeStatsResponse,
+  RealtimeVoiceTxStatsResponse,
 } from '@tx5dr/contracts';
 
 type RealtimeSettingsApiData = RealtimeSettings & {
@@ -1786,6 +1787,11 @@ export const api = {
     });
     return apiRequest<RealtimeStatsResponse>(`/realtime/stats?${params.toString()}`, undefined, apiBase);
   },
+
+  async getRealtimeVoiceTxStats(scope: 'radio', apiBase?: string): Promise<RealtimeVoiceTxStatsResponse> {
+    const params = new URLSearchParams({ scope });
+    return apiRequest<RealtimeVoiceTxStatsResponse>(`/realtime/tx-stats?${params.toString()}`, undefined, apiBase);
+  },
 }
 
 // 为了向后兼容,也导出单独的函数
@@ -1901,4 +1907,5 @@ export const {
   ,getOpenWebRXListenStatus
   ,getRealtimeSession
   ,getRealtimeStats
+  ,getRealtimeVoiceTxStats
 } = api;
