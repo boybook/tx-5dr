@@ -28,6 +28,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const isOperator = useHasMinRole(UserRole.OPERATOR);
 
   const [pttState, setPttState] = useState<PTTState>('idle');
+  const [inputLevel, setInputLevel] = useState(0);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const isPttDownRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -68,6 +69,28 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     voiceCaptureController.captureState,
     voiceCaptureController.preferredTransport,
   ]);
+
+  useEffect(() => {
+    let animationFrame = 0;
+    let lastSampleAt = 0;
+
+    const updateLevel = (timestamp: number) => {
+      if (timestamp - lastSampleAt >= 50) {
+        lastSampleAt = timestamp;
+        const nextLevel = voiceCaptureController.getInputLevel();
+        setInputLevel((currentLevel) => (
+          Math.abs(currentLevel - nextLevel) < 0.01 ? currentLevel : nextLevel
+        ));
+      }
+      animationFrame = window.requestAnimationFrame(updateLevel);
+    };
+
+    animationFrame = window.requestAnimationFrame(updateLevel);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, [voiceCaptureController]);
 
   // Request WakeLock during TX
   const acquireWakeLock = useCallback(async () => {
@@ -216,7 +239,8 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
       case 'requesting':
         return {
           bgClass: 'bg-warning-500 shadow-lg shadow-warning-500/50',
-          label: t('ptt.requesting'),
+          label: t('ptt.idle'),
+          subLabel: t('ptt.requesting'),
         };
       case 'transmitting':
         return {
@@ -241,43 +265,99 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
   const { bgClass, label, subLabel } = getButtonStyle();
   const isDisabled = !isOperator || pttState === 'locked-by-other';
+  const meterPercent = Math.round(Math.max(0, Math.min(1, inputLevel)) * 100);
+  const meterIsArmed = voiceCaptureController.captureState !== 'idle';
+  const meterFillPercent = meterIsArmed
+    ? Math.max(0, Math.min(100, meterPercent))
+    : 0;
+  const peakMarkerPercent = meterIsArmed
+    ? Math.max(0, Math.min(100, meterFillPercent))
+    : 0;
+  const meterContainerClass = voiceCaptureController.captureState === 'error'
+    ? 'border-danger-400/70 bg-danger-50/40 dark:bg-danger-950/20'
+    : meterIsArmed
+      ? 'border-success-400/60 bg-content2/90'
+      : 'border-default-300/80 bg-content2/70';
+  const meterFillClass = pttState === 'transmitting'
+    ? 'from-danger-500 via-warning-400 to-success-300'
+    : 'from-primary-500 via-success-400 to-warning-300';
 
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      className={`
-        w-full py-3 md:w-28 md:py-0 md:h-full rounded-lg flex flex-col items-center justify-center
-        transition-all duration-150 select-none touch-none
-        text-white font-bold whitespace-nowrap
-        [-webkit-touch-callout:none] [-webkit-user-select:none]
-        ${bgClass}
-        ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
-      `}
-      onMouseDown={(e) => {
-        e.preventDefault();
-        handlePTTDown();
-      }}
-      onMouseUp={handlePTTUp}
-      onMouseLeave={() => {
-        if (isPttDownRef.current) handlePTTUp();
-      }}
-      onTouchStart={(e) => {
-        e.preventDefault();
-        handlePTTDown();
-      }}
-      onTouchEnd={(e) => {
-        e.preventDefault();
-        handlePTTUp();
-      }}
-      onTouchCancel={handlePTTUp}
-      disabled={isDisabled}
-      aria-label={t('ptt.title')}
-    >
-      <span className="text-xl leading-tight">{label}</span>
-      {subLabel && (
-        <span className="text-xs font-normal opacity-80 mt-1">{subLabel}</span>
-      )}
-    </button>
+    <div className="flex h-20 w-full items-stretch gap-1.5 md:h-full md:w-[7.75rem] md:self-stretch">
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`
+          h-full flex-1 rounded-lg px-2 flex flex-col items-center justify-center
+          transition-all duration-150 select-none touch-none
+          text-white font-bold whitespace-nowrap
+          [-webkit-touch-callout:none] [-webkit-user-select:none]
+          ${bgClass}
+          ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
+        `}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          handlePTTDown();
+        }}
+        onMouseUp={handlePTTUp}
+        onMouseLeave={() => {
+          if (isPttDownRef.current) handlePTTUp();
+        }}
+        onTouchStart={(e) => {
+          e.preventDefault();
+          handlePTTDown();
+        }}
+        onTouchEnd={(e) => {
+          e.preventDefault();
+          handlePTTUp();
+        }}
+        onTouchCancel={handlePTTUp}
+        disabled={isDisabled}
+        aria-label={t('ptt.title')}
+      >
+        <span className="text-xl leading-tight">{label}</span>
+        {subLabel && (
+          <span className="text-xs font-normal opacity-80 mt-1">{subLabel}</span>
+        )}
+      </button>
+
+      <div
+        className={`
+          relative h-full w-3.5 shrink-0 rounded-lg border p-[2px] overflow-hidden md:w-4
+          transition-colors duration-150
+          ${meterContainerClass}
+        `}
+        title={t('ptt.inputLevelTitle', { percent: meterPercent })}
+        aria-label={t('ptt.inputLevelAria', { percent: meterPercent })}
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={meterPercent}
+        aria-valuetext={t('ptt.inputLevelAria', { percent: meterPercent })}
+      >
+        <div className="relative h-full w-full rounded-md bg-default-200/70 dark:bg-default-100/10 overflow-hidden">
+          <div
+            className={`
+              absolute inset-x-0 bottom-0 rounded-md bg-gradient-to-t transition-[height,opacity] duration-75 ease-out
+              ${meterFillClass}
+            `}
+            style={{
+              height: `${meterFillPercent}%`,
+              opacity: meterIsArmed ? 1 : 0.35,
+            }}
+          />
+          <div
+            className="absolute inset-x-0 h-[2px] rounded-full bg-white/90 transition-[bottom,opacity] duration-100 ease-out"
+            style={{
+              bottom: `${Math.max(0, peakMarkerPercent - 2)}%`,
+              opacity: meterIsArmed && meterFillPercent > 0 ? 1 : 0,
+            }}
+          />
+          {!meterIsArmed && (
+            <div className="absolute inset-x-0 bottom-0 h-1.5 rounded-full bg-default-400/35" />
+          )}
+        </div>
+      </div>
+    </div>
   );
 };

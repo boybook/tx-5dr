@@ -13,6 +13,7 @@ export interface VoiceCaptureController {
   activeTransport: RealtimeTransportKind | null;
   participantIdentity: string | null;
   isPTTActive: boolean;
+  getInputLevel: () => number;
   startFromGesture: () => Promise<string | null>;
   switchTransportFromGesture: (transport: RealtimeTransportKind) => Promise<void>;
   setPreferredTransport: (transport: RealtimeTransportKind) => void;
@@ -90,6 +91,10 @@ export function useVoiceCaptureController(
     syncFromCapture();
   }, [syncFromCapture]);
 
+  const getInputLevel = useCallback(() => {
+    return captureRef.current?.inputLevel ?? 0;
+  }, []);
+
   useEffect(() => {
     if (!radioService || engineMode !== 'voice') {
       captureRef.current?.stop();
@@ -142,6 +147,7 @@ export function useVoiceCaptureController(
     activeTransport,
     participantIdentity,
     isPTTActive,
+    getInputLevel,
     startFromGesture,
     switchTransportFromGesture,
     setPreferredTransport,
@@ -150,6 +156,7 @@ export function useVoiceCaptureController(
   }), [
     activeTransport,
     captureState,
+    getInputLevel,
     isPTTActive,
     participantIdentity,
     preferredTransport,
