@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { DesktopHttpsStatus } from '@tx5dr/contracts';
+import { DesktopUpdateService } from './desktopUpdate.js';
 import { createLogger } from './utils/logger.js';
 import { getMessages } from './i18n.js';
 import {
@@ -27,6 +28,7 @@ import {
 // const __dirname = dirname(__filename);
 
 const logger = createLogger('ElectronMain');
+const desktopUpdateService = new DesktopUpdateService();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let serverCheckInterval: any = null;
@@ -1475,6 +1477,12 @@ const startApp = async () => {
   logger.info('calling createWindow');
   await createWindow();
   logger.info('createWindow complete');
+
+  if (app.isPackaged) {
+    void desktopUpdateService.checkForUpdates().catch((error) => {
+      logger.warn('initial desktop update check failed', error);
+    });
+  }
 };
 
 // 跟踪清理状态,防止重复清理
@@ -1723,6 +1731,20 @@ function setupIpcHandlers() {
       logger.error('IPC shell:openExternal failed', error);
       throw error;
     }
+  });
+
+  ipcMain.handle('app:getVersion', () => app.getVersion());
+
+  ipcMain.handle('updater:getStatus', () => {
+    return desktopUpdateService.getStatus();
+  });
+
+  ipcMain.handle('updater:check', async () => {
+    return desktopUpdateService.checkForUpdates();
+  });
+
+  ipcMain.handle('updater:openDownload', async (_event, url?: string) => {
+    await desktopUpdateService.openDownload(url);
   });
 
   ipcMain.handle('https:getStatus', async () => {

@@ -117,6 +117,14 @@ async function listFiles(dirPath) {
     .sort((left, right) => left.localeCompare(right));
 }
 
+async function readOptionalTextFile(filePath) {
+  if (!filePath) {
+    return '';
+  }
+  const content = await readFile(filePath, 'utf8');
+  return content.trim();
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const product = requireArg(args, 'product');
@@ -129,6 +137,9 @@ async function main() {
   const objectPrefix = requireArg(args, 'object-prefix').replace(/^\/+|\/+$/g, '');
   const outputPath = requireArg(args, 'output');
   const assetsDir = args['assets-dir'];
+  const releaseNotes = (args['release-notes'] && args['release-notes'] !== true)
+    ? String(args['release-notes']).trim()
+    : await readOptionalTextFile(args['release-notes-file']);
 
   const assetFiles = await listFiles(assetsDir);
   const assets = [];
@@ -144,6 +155,7 @@ async function main() {
     commit,
     published_at: publishedAt,
     base_url: joinUrl(baseUrl, objectPrefix),
+    release_notes: releaseNotes || '',
     assets,
   };
 

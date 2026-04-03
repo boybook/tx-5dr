@@ -1,5 +1,32 @@
 import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 
+type DesktopUpdateSource = 'oss' | 'github';
+
+interface DesktopUpdateStatus {
+  channel: 'release' | 'nightly';
+  currentVersion: string;
+  currentCommit: string | null;
+  checking: boolean;
+  updateAvailable: boolean;
+  latestVersion: string | null;
+  latestCommit: string | null;
+  publishedAt: string | null;
+  releaseNotes: string | null;
+  downloadUrl: string | null;
+  downloadOptions: Array<{
+    name: string;
+    url: string;
+    packageType: string;
+    platform: string;
+    arch: string;
+    recommended: boolean;
+    source: DesktopUpdateSource;
+  }>;
+  metadataSource: DesktopUpdateSource | null;
+  downloadSource: DesktopUpdateSource | null;
+  errorMessage: string | null;
+}
+
 interface ElectronAPI {
   getApiBase(): string;
   isEmbedded(): boolean;
@@ -17,6 +44,11 @@ interface ElectronAPI {
     quit(): Promise<void>;
     minimize(): Promise<void>;
     toggleMaximize(): Promise<void>;
+  };
+  updater?: {
+    getStatus(): Promise<DesktopUpdateStatus>;
+    check(): Promise<DesktopUpdateStatus>;
+    openDownload(url?: string): Promise<void>;
   };
   window?: {
     openLogbookWindow(queryString: string): Promise<void>;

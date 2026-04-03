@@ -157,6 +157,26 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: node scripts/generate-ico.js
 
+      - name: Prepare desktop build metadata
+        shell: bash
+        env:
+          TZ: UTC
+        run: |
+          CHANNEL="release"
+          if [ -z "${{ github.event.inputs.version }}" ]; then
+            CHANNEL="nightly"
+          fi
+
+          COMMIT_TIMESTAMP=$(git show -s --format=%cI "${{ github.sha }}")
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
+
+          node scripts/prepare-electron-release.mjs \
+            --channel "$CHANNEL" \
+            --version "${{ github.event.inputs.version }}" \
+            --commit "${{ github.sha }}" \
+            --build-timestamp "$COMMIT_TIMESTAMP" \
+            --build-stamp "$COMMIT_STAMP"
+
       - name: Import Code Signing Certificate (macOS)
         if: matrix.platform == 'darwin'
         env:
@@ -455,26 +475,60 @@ jobs:
         shell: bash
         run: |
           echo "=== 准备 release 产物 ==="
+          mkdir -p publish-assets
           mkdir -p release-assets
-          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" -o -name "*.7z" \) -exec cp {} release-assets/ \;
+          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.msi" -o -name "*.7z" \) -exec cp {} publish-assets/ \;
+          find publish-assets/ -type f -exec cp {} release-assets/ \;
           echo "=== Release 产物列表 ==="
           ls -lh release-assets/
 
       - name: Generate release info
         id: release_info
+        env:
+          TZ: UTC
         run: |
           echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
           echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0].split('+')[0]")
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
           if [ -z "${{ github.event.inputs.version }}" ]; then
             echo "tag=nightly-app" >> $GITHUB_OUTPUT
             echo "version=nightly" >> $GITHUB_OUTPUT
             echo "channel=nightly" >> $GITHUB_OUTPUT
+            echo "channel_path=nightly" >> $GITHUB_OUTPUT
+            echo "app_version=${BASE_VERSION}-nightly.${COMMIT_STAMP}+$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           else
             echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
             echo "channel=release" >> $GITHUB_OUTPUT
+            echo "channel_path=release" >> $GITHUB_OUTPUT
+            echo "app_version=${{ github.event.inputs.version }}" | sed 's/^app_version=v/app_version=/' >> $GITHUB_OUTPUT
           fi
+
+      - name: Prepare app release metadata
+        shell: bash
+        run: |
+          mkdir -p release-metadata
+          cat > release-metadata/app-release-notes.md <<EOF
+          Channel: ${{ steps.release_info.outputs.channel }}
+          Version: ${{ steps.release_info.outputs.app_version }}
+          Commit: ${{ steps.release_info.outputs.short_sha }}
+          Built at: ${{ steps.release_info.outputs.timestamp }}
+          EOF
+
+          node scripts/generate-oss-manifest.mjs \
+            --product app \
+            --channel "${{ steps.release_info.outputs.channel }}" \
+            --tag "${{ steps.release_info.outputs.tag }}" \
+            --version "${{ steps.release_info.outputs.app_version }}" \
+            --commit "${{ steps.release_info.outputs.short_sha }}" \
+            --published-at "${{ steps.release_info.outputs.timestamp }}" \
+            --base-url "https://github.com/${{ github.repository }}/releases/download" \
+            --object-prefix "${{ steps.release_info.outputs.tag }}" \
+            --assets-dir "publish-assets" \
+            --release-notes-file "release-metadata/app-release-notes.md" \
+            --output "release-assets/latest.json"
 
       # Nightly Release
       - name: Create or Update Nightly Release
@@ -493,27 +547,27 @@ jobs:
             ### 📦 Downloads 下载
 
             #### Windows (x64)
-            - **MSI Installer** （安装包）: `TX-5DR-nightly-windows-x64.msi` — recommended for installation, supports custom install directory
-            - **7z Portable** （便携版，推荐）: `TX-5DR-nightly-windows-x64.7z` — LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
-            - **ZIP Portable** （便携版）: `TX-5DR-nightly-windows-x64.zip` — larger file size
+            - [**MSI Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.msi) （安装包）— recommended for installation, supports custom install directory
+            - [**7z Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.7z) （压缩包，推荐）— LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.zip) （压缩包）— larger file size
 
             #### macOS (ARM64 — Apple Silicon)
-            - **DMG Installer** （安装包）: `TX-5DR-nightly-macos-arm64.dmg` — recommended
-            - **ZIP Portable** （便携版）: `TX-5DR-nightly-macos-arm64.zip`
+            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-arm64.dmg) （安装包）— recommended
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-arm64.zip) （压缩包）
 
             #### macOS (x64 — Intel)
-            - **DMG Installer** （安装包）: `TX-5DR-nightly-macos-x64.dmg` — recommended
-            - **ZIP Portable** （便携版）: `TX-5DR-nightly-macos-x64.zip`
+            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-x64.dmg) （安装包）— recommended
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-x64.zip) （压缩包）
 
             #### Linux Desktop (x64) — Electron App
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-linux-x64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-linux-x64.rpm`
-            - **ZIP Portable** （便携版）: `TX-5DR-nightly-linux-x64.zip`
+            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.deb) (Ubuntu/Debian)
+            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.rpm) (Fedora/RHEL)
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.zip) （压缩包）
 
             #### Linux Desktop (ARM64) — Electron App
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-linux-arm64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-linux-arm64.rpm`
-            - **ZIP Portable** （便携版）: `TX-5DR-nightly-linux-arm64.zip`
+            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.deb) (Ubuntu/Debian)
+            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.rpm) (Fedora/RHEL)
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.zip) （压缩包）
 
             > Looking for **Linux Server** (headless, no Electron)? See [nightly-server](https://github.com/${{ github.repository }}/releases/tag/nightly-server).
             > 寻找 **Linux 服务器版**（无桌面环境）？请查看 [nightly-server](https://github.com/${{ github.repository }}/releases/tag/nightly-server)。
@@ -551,27 +605,27 @@ jobs:
             ### 📦 Downloads 下载
 
             #### Windows (x64)
-            - **MSI Installer** （安装包）: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.msi` — recommended, supports custom install directory
-            - **7z Portable** （便携版，推荐）: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.7z` — LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
-            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip` — larger file size
+            - [**MSI Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.msi) （安装包）— recommended, supports custom install directory
+            - [**7z Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.7z) （压缩包，推荐）— LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip) （压缩包）— larger file size
 
             #### macOS (ARM64 — Apple Silicon)
-            - **DMG Installer** （安装包）: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg` — recommended
-            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-macos-arm64.zip`
+            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg) （安装包）— recommended
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-arm64.zip) （压缩包）
 
             #### macOS (x64 — Intel)
-            - **DMG Installer** （安装包）: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.dmg` — recommended
-            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-macos-x64.zip`
+            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-x64.dmg) （安装包）— recommended
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-x64.zip) （压缩包）
 
             #### Linux Desktop (x64) — Electron App
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-x64.rpm`
-            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-linux-x64.zip`
+            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb) (Ubuntu/Debian)
+            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.rpm) (Fedora/RHEL)
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.zip) （压缩包）
 
             #### Linux Desktop (ARM64) — Electron App
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm`
-            - **ZIP Portable** （便携版）: `TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip`
+            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.deb) (Ubuntu/Debian)
+            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm) (Fedora/RHEL)
+            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip) （压缩包）
 
             ### 🔧 System Requirements 系统要求
             - Node.js >= 22.15.1 (bundled / 已内置)
@@ -624,23 +678,25 @@ jobs:
       - name: Generate OSS app manifest
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: |
+          mkdir -p oss-metadata/app
           node scripts/generate-oss-manifest.mjs \
             --product app \
             --channel "${{ steps.release_info.outputs.channel }}" \
             --tag "${{ steps.release_info.outputs.tag }}" \
-            --version "${{ steps.release_info.outputs.version }}" \
+            --version "${{ steps.release_info.outputs.app_version }}" \
             --commit "${{ steps.release_info.outputs.short_sha }}" \
             --published-at "${{ steps.release_info.outputs.timestamp }}" \
             --base-url "${OSS_BASE_URL}" \
             --object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
-            --assets-dir "release-assets" \
+            --assets-dir "publish-assets" \
+            --release-notes-file "release-metadata/app-release-notes.md" \
             --output "oss-metadata/app/latest.json"
 
       - name: Upload app assets to OSS
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: |
-          for file in release-assets/*; do
+          for file in publish-assets/*; do
             ossutil cp "$file" "oss://${OSS_BUCKET}/tx-5dr/app/${{ steps.release_info.outputs.tag }}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
           done
           ossutil cp "oss-metadata/app/latest.json" "oss://${OSS_BUCKET}/tx-5dr/app/${{ steps.release_info.outputs.tag }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          ossutil cp "oss-metadata/app/latest.json" "oss://${OSS_BUCKET}/tx-5dr/app/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          ossutil cp "oss-metadata/app/latest.json" "oss://${OSS_BUCKET}/tx-5dr/app/${{ steps.release_info.outputs.channel_path }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"

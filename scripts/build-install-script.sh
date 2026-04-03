@@ -66,15 +66,30 @@ download_block = f'''    # Auto-download latest nightly from OSS metadata (fallb
         PKG_FILE="/tmp/${{_asset_name}}"
         _resolved_url=""
         _resolved_sha=""
+        _preferred_source="github"
         if should_prefer_oss_download; then
+            _preferred_source="oss"
             log_info "Detected mainland China or OSS override. Preferring OSS mirror."
-            if _manifest_json=$(fetch_server_manifest 2>/dev/null); then
-                _resolved_url=$(get_server_manifest_package_url "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}")
-                _resolved_sha=$(get_server_manifest_package_sha256 "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}")
-            else
-                log_warn "OSS manifest unavailable, falling back to GitHub..."
-            fi
         fi
+        if [[ "$_preferred_source" == "oss" ]]; then
+            _sources=(oss github)
+        else
+            _sources=(github oss)
+        fi
+        for _source in "${{_sources[@]}}"; do
+            if _manifest_json=$(fetch_server_manifest_from_source "$_source" 2>/dev/null); then
+                _resolved_url=$(get_server_manifest_package_url "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}" 2>/dev/null || true)
+                _resolved_sha=$(get_server_manifest_package_sha256 "$_manifest_json" "${{ARCH}}" "${{_asset_name##*.}}" 2>/dev/null || true)
+                if [[ -n "$_resolved_url" ]]; then
+                    break
+                fi
+            fi
+            if [[ "$_source" == "oss" ]]; then
+                log_warn "OSS manifest unavailable, falling back to GitHub metadata..."
+            else
+                log_warn "GitHub manifest unavailable, falling back to GitHub release asset..."
+            fi
+        done
         [[ -n "$_resolved_url" ]] || _resolved_url="$_fallback_url"
         if curl -fSL --progress-bar -o "$PKG_FILE" "$_resolved_url"; then
             if [[ -n "$_resolved_sha" ]] && command -v sha256sum &>/dev/null; then

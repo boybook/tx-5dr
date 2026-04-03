@@ -357,7 +357,40 @@
     "closeBehaviorDesc": "Default behavior when closing the main window (desktop app only)",
     "closeBehaviorAsk": "Ask every time",
     "closeBehaviorTray": "Minimize to system tray",
-    "closeBehaviorQuit": "Quit application"
+    "closeBehaviorQuit": "Quit application",
+    "desktopUpdateTitle": "Desktop Updates",
+    "desktopUpdateDesc": "Checks whether a newer build exists and provides the download link. The app does not download or install updates automatically.",
+    "desktopUpdateSource": "Source",
+    "desktopUpdateSourceValue": {
+      "oss": "OSS mirror",
+      "github": "GitHub Releases",
+      "unknown": "Not checked"
+    },
+    "desktopUpdateChannelRelease": "Release",
+    "desktopUpdateChannelNightly": "Nightly",
+    "desktopUpdateCurrentVersion": "Current version",
+    "desktopUpdateCurrentCommit": "Current commit: {{value}}",
+    "desktopUpdateLatestVersion": "Remote version",
+    "desktopUpdateLatestCommit": "Remote commit: {{value}}",
+    "desktopUpdatePublishedAt": "Published at: {{value}}",
+    "desktopUpdateAvailable": "Update available",
+    "desktopUpdateUpToDate": "Up to date",
+    "desktopUpdateNoNotes": "No release notes available.",
+    "desktopUpdateDownloadOptionsTitle": "Download Options",
+    "desktopUpdateDownloadOptionsDesc": "Each release can provide installer and archive packages. Choose the one that matches how you use the app.",
+    "desktopUpdatePackageType": {
+      "msi": "Windows Installer (MSI)",
+      "dmg": "macOS Installer (DMG)",
+      "7z": "Windows Archive (7z)",
+      "zip": "Archive (ZIP)",
+      "deb": "Linux Package (DEB)",
+      "rpm": "Linux Package (RPM)",
+      "AppImage": "Linux AppImage"
+    },
+    "desktopUpdateCheck": "Check for updates",
+    "desktopUpdateDownload": "Download update",
+    "desktopUpdateCheckFailed": "Failed to check for updates.",
+    "desktopUpdateOpenFailed": "Failed to open the download link."
   },
   "freqPresets": {
     "title": "Frequency Preset Management",

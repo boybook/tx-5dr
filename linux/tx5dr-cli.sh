@@ -298,37 +298,59 @@ cmd_update() {
     local manifest_json=""
     local download_url=""
     local package_sha256=""
+    local remote_version="nightly"
     local remote_sha="unknown"
     local remote_date="unknown"
-    local use_oss=false
+    local preferred_source="github"
+    local sources=()
 
     if should_prefer_oss_download; then
-        use_oss=true
+        preferred_source="oss"
         log_info "Detected mainland China or OSS override. Preferring OSS mirror."
-        if manifest_json=$(fetch_server_manifest 2>/dev/null); then
-            download_url=$(get_server_manifest_package_url "$manifest_json" "$pkg_arch" "$pkg_ext")
-            package_sha256=$(get_server_manifest_package_sha256 "$manifest_json" "$pkg_arch" "$pkg_ext")
-            remote_sha=$(get_server_manifest_commit "$manifest_json")
-            remote_date=$(get_server_manifest_published_at "$manifest_json")
-            remote_date="${remote_date%%T*}"
-        else
-            log_warn "OSS manifest unavailable, falling back to GitHub metadata."
-        fi
     fi
 
+    if [[ "$preferred_source" == "oss" ]]; then
+        sources=(oss github)
+    else
+        sources=(github oss)
+    fi
+
+    local source
+    for source in "${sources[@]}"; do
+        if manifest_json=$(fetch_server_manifest_from_source "$source" 2>/dev/null); then
+            download_url=$(get_server_manifest_package_url "$manifest_json" "$pkg_arch" "$pkg_ext" 2>/dev/null || true)
+            package_sha256=$(get_server_manifest_package_sha256 "$manifest_json" "$pkg_arch" "$pkg_ext" 2>/dev/null || true)
+            remote_version=$(get_server_manifest_version "$manifest_json" 2>/dev/null || true)
+            remote_sha=$(get_server_manifest_commit "$manifest_json" 2>/dev/null || true)
+            remote_date=$(get_server_manifest_published_at "$manifest_json" 2>/dev/null || true)
+            remote_date="${remote_date%%T*}"
+            if [[ -n "$download_url" ]]; then
+                break
+            fi
+        fi
+        if [[ "$source" == "oss" ]]; then
+            log_warn "OSS manifest unavailable, falling back to GitHub metadata."
+        else
+            log_warn "GitHub manifest unavailable, falling back to direct release asset."
+        fi
+    done
+
     if [[ -z "$download_url" ]]; then
+        package_sha256=""
         download_url="$fallback_url"
     fi
 
-    log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "nightly (${remote_sha:-unknown}, ${remote_date:-unknown})")"
+    local remote_label="${remote_version:-nightly}"
+    if [[ "$remote_label" == "nightly" && ( -n "${remote_sha:-}" || -n "${remote_date:-}" ) ]]; then
+        remote_label="nightly (${remote_sha:-unknown}, ${remote_date:-unknown})"
+    fi
+    log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "$remote_label")"
 
     # Download
     local tmp_pkg="/tmp/${asset_name}"
     echo "$(printf "$(msg DOWNLOADING)" "$asset_name")"
     if ! curl -fSL --progress-bar -o "$tmp_pkg" "$download_url"; then
-        if $use_oss; then
-            log_warn "Primary download failed, falling back to GitHub release..."
-        fi
+        log_warn "Primary download failed, falling back to GitHub release..."
         if ! curl -fSL --progress-bar -o "$tmp_pkg" "$fallback_url"; then
             log_error "$(msg UPDATE_FAILED)"
             rm -f "$tmp_pkg"

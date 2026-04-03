@@ -1,5 +1,32 @@
 import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 
+type DesktopUpdateSource = 'oss' | 'github';
+
+interface DesktopUpdateStatus {
+  channel: 'release' | 'nightly';
+  currentVersion: string;
+  currentCommit: string | null;
+  checking: boolean;
+  updateAvailable: boolean;
+  latestVersion: string | null;
+  latestCommit: string | null;
+  publishedAt: string | null;
+  releaseNotes: string | null;
+  downloadUrl: string | null;
+  downloadOptions: Array<{
+    name: string;
+    url: string;
+    packageType: string;
+    platform: string;
+    arch: string;
+    recommended: boolean;
+    source: DesktopUpdateSource;
+  }>;
+  metadataSource: DesktopUpdateSource | null;
+  downloadSource: DesktopUpdateSource | null;
+  errorMessage: string | null;
+}
+
 const { contextBridge, ipcRenderer } = require('electron');
 
 /**
@@ -75,6 +102,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 最大化/还原窗口
      */
     toggleMaximize: () => ipcRenderer.invoke('app:toggleMaximize')
+  },
+
+  updater: {
+    getStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:getStatus'),
+    check: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:check'),
+    openDownload: (url?: string): Promise<void> => ipcRenderer.invoke('updater:openDownload', url),
   },
 
   // 窗口管理
@@ -172,6 +205,11 @@ declare global {
         quit(): Promise<void>;
         minimize(): Promise<void>;
         toggleMaximize(): Promise<void>;
+      };
+      updater: {
+        getStatus(): Promise<DesktopUpdateStatus>;
+        check(): Promise<DesktopUpdateStatus>;
+        openDownload(url?: string): Promise<void>;
       };
       window: {
         openLogbookWindow(queryString: string): Promise<void>;
