@@ -38,7 +38,8 @@
     "noModes": "No modes available",
     "loadFailed": "Failed to load modes: invalid data format",
     "loadFailedDetail": "Failed to load modes: {{detail}}",
-    "placeholder": "Mode"
+    "placeholder": "Mode",
+    "voice": "Voice"
   },
   "frequency": {
     "custom": "Custom",

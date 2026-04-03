@@ -38,7 +38,8 @@
     "noModes": "没有可用的模式",
     "loadFailed": "加载模式列表失败: 数据格式错误",
     "loadFailedDetail": "加载模式列表失败: {{detail}}",
-    "placeholder": "通联模式"
+    "placeholder": "通联模式",
+    "voice": "语音"
   },
   "frequency": {
     "custom": "自定义",
