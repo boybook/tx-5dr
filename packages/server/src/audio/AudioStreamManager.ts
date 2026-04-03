@@ -1176,6 +1176,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         let playbackFrame = frame.pcmData;
         let outputSampleRate: number | null = null;
         let outputBufferSize: number | null = null;
+        let outputBufferedMs: number | null = null;
 
         if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
           outputSampleRate = this.icomWlanAudioAdapter.getSampleRate();
@@ -1204,6 +1205,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         const writeStart = performance.now();
         let writeFailed = false;
+        let wroteOutputChunk = false;
 
         if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
           const processed = new Float32Array(playbackFrame.length);
@@ -1215,11 +1217,16 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
           try {
             await this.icomWlanAudioAdapter.sendAudio(processed);
+            wroteOutputChunk = processed.length > 0;
+            outputBufferedMs = this.estimateIcomOutputBufferedMs(processed.length, outputSampleRate);
           } catch (error) {
             writeFailed = true;
             logger.error('Voice audio ICOM WLAN send failed', error);
           }
         } else if (this.rtAudioOutput) {
+          const preWriteAccumMs = this.sampleRate > 0
+            ? (this.voiceAccumBuffer.length / this.sampleRate) * 1000
+            : 0;
           const newBuf = new Float32Array(this.voiceAccumBuffer.length + playbackFrame.length);
           newBuf.set(this.voiceAccumBuffer);
           newBuf.set(playbackFrame, this.voiceAccumBuffer.length);
@@ -1239,11 +1246,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
             try {
               this.rtAudioOutput.write(buffer);
+              wroteOutputChunk = true;
             } catch {
               writeFailed = true;
               break;
             }
           }
+
+          outputBufferedMs = this.estimateRtAudioOutputBufferedMs(preWriteAccumMs, wroteOutputChunk);
         }
 
         const writeMs = performance.now() - writeStart;
@@ -1268,6 +1278,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           queueWaitMs,
           writeMs,
           endToEndMs,
+          outputBufferedMs,
           outputSampleRate,
           outputBufferSize,
         });
@@ -1283,4 +1294,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       : 0;
     return Math.max(0, this.voiceQueueDurationMs + accumQueuedMs);
   }
-} 
+
+  private estimateRtAudioOutputBufferedMs(preWriteAccumMs: number, wroteOutputChunk: boolean): number {
+    const deviceBufferMs = wroteOutputChunk && this.sampleRate > 0
+      ? (this.bufferSize / this.sampleRate) * 1000
+      : 0;
+    return Math.max(0, preWriteAccumMs + deviceBufferMs);
+  }
+
+  private estimateIcomOutputBufferedMs(samples: number, outputSampleRate: number | null): number {
+    if (!outputSampleRate || outputSampleRate <= 0 || samples <= 0) {
+      return 0;
+    }
+    return Math.max(0, (samples / outputSampleRate) * 1000);
+  }
+}

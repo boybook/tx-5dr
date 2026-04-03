@@ -17,8 +17,10 @@ export interface VoiceTxDiagnosticsData extends RealtimeVoiceTxStatsResponse {
   client: VoiceTxLocalDiagnostics | null;
   display: {
     transportLatencyMs: number | null;
-    totalLatencyMs: number | null;
-    totalLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable';
+    softwareLatencyMs: number | null;
+    softwareLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable';
+    estimatedFinalLatencyMs: number | null;
+    estimatedFinalLatencyKind: 'estimated' | 'partial' | 'unavailable';
     bottleneckStage: RealtimeVoiceTxBottleneckStage | null;
     transport: RealtimeTransportKind | null;
   };
@@ -53,6 +55,7 @@ function pickBottleneckStage(
       value: Math.max(
         server?.serverOutput.resampleMs.rolling ?? 0,
         server?.serverOutput.writeMs.rolling ?? 0,
+        server?.serverOutput.outputBufferedMs.rolling ?? 0,
       ),
     },
   ];
@@ -137,19 +140,30 @@ export function useVoiceTxDiagnostics(
       ? clientStats.livekitRoundTripTimeMs / 2
       : null;
 
-    let totalLatencyMs: number | null = null;
-    let totalLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable' = 'unavailable';
+    let softwareLatencyMs: number | null = null;
+    let softwareLatencyKind: 'measured' | 'estimated' | 'partial' | 'unavailable' = 'unavailable';
 
     if (transport === 'ws-compat' && clientStartupMs != null && serverEndToEndMs != null) {
-      totalLatencyMs = clientStartupMs + serverEndToEndMs;
-      totalLatencyKind = 'measured';
+      softwareLatencyMs = clientStartupMs + serverEndToEndMs;
+      softwareLatencyKind = 'measured';
     } else if (transport === 'livekit' && clientStartupMs != null && serverEndToEndMs != null && livekitOneWayEstimateMs != null) {
-      totalLatencyMs = clientStartupMs + livekitOneWayEstimateMs + serverEndToEndMs;
-      totalLatencyKind = 'estimated';
+      softwareLatencyMs = clientStartupMs + livekitOneWayEstimateMs + serverEndToEndMs;
+      softwareLatencyKind = 'estimated';
     } else if (clientStartupMs != null && serverEndToEndMs != null) {
-      totalLatencyMs = clientStartupMs + serverEndToEndMs;
-      totalLatencyKind = 'partial';
+      softwareLatencyMs = clientStartupMs + serverEndToEndMs;
+      softwareLatencyKind = 'partial';
     }
+
+    const outputBufferedMs = serverStats?.serverOutput.outputBufferedMs.rolling ?? null;
+    const estimatedFinalLatencyMs = softwareLatencyMs != null && outputBufferedMs != null
+      ? softwareLatencyMs + outputBufferedMs
+      : null;
+    const estimatedFinalLatencyKind: 'estimated' | 'partial' | 'unavailable' =
+      estimatedFinalLatencyMs != null
+        ? 'estimated'
+        : softwareLatencyMs != null
+          ? 'partial'
+          : 'unavailable';
 
     return {
       scope: serverStats?.scope ?? 'radio',
@@ -206,6 +220,11 @@ export function useVoiceTxDiagnostics(
           rolling: null,
           peak: null,
         },
+        outputBufferedMs: {
+          current: null,
+          rolling: null,
+          peak: null,
+        },
         outputSampleRate: null,
         outputBufferSize: null,
         writeFailures: 0,
@@ -213,8 +232,10 @@ export function useVoiceTxDiagnostics(
       client: clientStats,
       display: {
         transportLatencyMs,
-        totalLatencyMs,
-        totalLatencyKind,
+        softwareLatencyMs,
+        softwareLatencyKind,
+        estimatedFinalLatencyMs,
+        estimatedFinalLatencyKind,
         bottleneckStage,
         transport,
       },

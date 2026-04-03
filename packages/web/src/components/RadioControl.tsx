@@ -392,19 +392,31 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   }, [t, voiceTxDiagnostics?.display.bottleneckStage]);
 
   const isLiveKitVoiceTx = voiceTxDiagnostics?.display.transport === 'livekit';
-  const totalLatencyLabel = React.useMemo(() => {
-    switch (voiceTxDiagnostics?.display.totalLatencyKind) {
+  const softwareLatencyLabel = React.useMemo(() => {
+    switch (voiceTxDiagnostics?.display.softwareLatencyKind) {
       case 'measured':
-        return t('voiceTx.totalLatencyMeasured');
+        return t('voiceTx.softwareLatencyMeasured');
       case 'estimated':
-        return t('voiceTx.totalLatencyEstimated');
+        return t('voiceTx.softwareLatencyEstimated');
       case 'partial':
-        return t('voiceTx.totalLatencyPartial');
+        return t('voiceTx.softwareLatencyPartial');
       case 'unavailable':
       default:
-        return t('voiceTx.totalLatencyUnavailable');
+        return t('voiceTx.softwareLatencyUnavailable');
     }
-  }, [t, voiceTxDiagnostics?.display.totalLatencyKind]);
+  }, [t, voiceTxDiagnostics?.display.softwareLatencyKind]);
+
+  const finalLatencyLabel = React.useMemo(() => {
+    switch (voiceTxDiagnostics?.display.estimatedFinalLatencyKind) {
+      case 'estimated':
+        return t('voiceTx.finalLatencyEstimated');
+      case 'partial':
+        return t('voiceTx.finalLatencyPartial');
+      case 'unavailable':
+      default:
+        return t('voiceTx.finalLatencyUnavailable');
+    }
+  }, [t, voiceTxDiagnostics?.display.estimatedFinalLatencyKind]);
 
   const handleSwitchVoiceTransport = React.useCallback(async () => {
     if (!voiceCaptureController || isSwitchingVoiceTransport) {
@@ -1276,17 +1288,32 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                         </div>
 
                         <div className="flex justify-between items-center gap-3">
-                          <span className="text-default-500">{t('voiceTx.totalLatency')}</span>
+                          <span className="text-default-500">{t('voiceTx.softwareLatency')}</span>
                           <span className="font-mono text-default-400 text-right">
-                            {voiceTxDiagnostics.display.totalLatencyMs != null
-                              ? formatLatencyMetric(voiceTxDiagnostics.display.totalLatencyMs)
-                              : totalLatencyLabel}
+                            {voiceTxDiagnostics.display.softwareLatencyMs != null
+                              ? formatLatencyMetric(voiceTxDiagnostics.display.softwareLatencyMs)
+                              : softwareLatencyLabel}
                           </span>
                         </div>
 
-                        {voiceTxDiagnostics.display.totalLatencyMs != null && (
+                        {voiceTxDiagnostics.display.softwareLatencyMs != null && (
                           <div className="text-[10px] text-default-400 text-right">
-                            {totalLatencyLabel}
+                            {softwareLatencyLabel}
+                          </div>
+                        )}
+
+                        <div className="flex justify-between items-center gap-3">
+                          <span className="text-default-500">{t('voiceTx.finalLatency')}</span>
+                          <span className="font-mono text-default-400 text-right">
+                            {voiceTxDiagnostics.display.estimatedFinalLatencyMs != null
+                              ? formatLatencyMetric(voiceTxDiagnostics.display.estimatedFinalLatencyMs)
+                              : finalLatencyLabel}
+                          </span>
+                        </div>
+
+                        {voiceTxDiagnostics.display.estimatedFinalLatencyMs != null && (
+                          <div className="text-[10px] text-default-400 text-right">
+                            {finalLatencyLabel}
                           </div>
                         )}
 
@@ -1374,6 +1401,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                           <span className="text-default-500">{t('voiceTx.endToEnd')}</span>
                           <span className="font-mono text-right text-default-400">
                             {formatLatencyMetric(voiceTxDiagnostics.serverOutput.endToEndMs.rolling)}
+                          </span>
+
+                          <span className="text-default-500">{t('voiceTx.outputBuffered')}</span>
+                          <span className="font-mono text-right text-default-400">
+                            {formatLatencyMetric(voiceTxDiagnostics.serverOutput.outputBufferedMs.rolling)}
                           </span>
 
                           <span className="text-default-500">{t('voiceTx.droppedFrames')}</span>
