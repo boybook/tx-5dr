@@ -251,6 +251,7 @@ export class RealtimeTransportManager {
         participantIdentity: session.participantIdentity,
       }));
 
+      let hasLoggedFirstCompatUplinkFrame = false;
       socket.on('message', (payload: Buffer | ArrayBuffer | Buffer[]) => {
         if (!session.participantIdentity) {
           return;
@@ -271,6 +272,15 @@ export class RealtimeTransportManager {
             buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
           );
           const float32 = int16ToFloat32Pcm(decoded.pcm);
+          if (!hasLoggedFirstCompatUplinkFrame) {
+            hasLoggedFirstCompatUplinkFrame = true;
+            logger.info('First compatibility uplink audio frame received', {
+              scope: session.scope,
+              participantIdentity: session.participantIdentity,
+              sampleRate: decoded.sampleRate,
+              samplesPerChannel: decoded.samplesPerChannel,
+            });
+          }
           void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(
             session.participantIdentity,
             float32,

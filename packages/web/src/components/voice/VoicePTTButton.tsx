@@ -1,13 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useConnection, useRadioModeState, usePTTState } from '../../store/radioStore';
+import { useConnection, usePTTState } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
-import { VoiceCapture } from '../../audio/VoiceCapture';
-import {
-  presentRealtimeConnectivityFailure,
-} from '../../realtime/realtimeConnectivity';
+import type { VoiceCaptureController } from '../../hooks/useVoiceCaptureController';
 
 const logger = createLogger('VoicePTTButton');
 
@@ -20,20 +17,27 @@ type PTTState = 'idle' | 'requesting' | 'transmitting' | 'locked-by-other';
  * Supports mouse, touch, and keyboard (Space) interactions.
  * Manages WakeLock and vibration feedback for mobile.
  */
-export const VoicePTTButton: React.FC = () => {
+interface VoicePTTButtonProps {
+  voiceCaptureController: VoiceCaptureController;
+}
+
+export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureController }) => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
-  const radioMode = useRadioModeState();
   const { voicePttLock } = usePTTState();
   const isOperator = useHasMinRole(UserRole.OPERATOR);
 
   const [pttState, setPttState] = useState<PTTState>('idle');
-  const voiceCaptureRef = useRef<VoiceCapture | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const isPttDownRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const voiceCaptureControllerRef = useRef(voiceCaptureController);
 
   const radioService = connection.state.radioService;
+
+  useEffect(() => {
+    voiceCaptureControllerRef.current = voiceCaptureController;
+  }, [voiceCaptureController]);
 
   // Derive PTT state from voice lock state
   useEffect(() => {
@@ -53,35 +57,17 @@ export const VoicePTTButton: React.FC = () => {
     }
   }, [voicePttLock]);
 
-  // Initialize voice capture instance when in voice mode.
   useEffect(() => {
-    if (!radioService || radioMode.engineMode !== 'voice') {
-      return;
-    }
-
-    const capture = new VoiceCapture({
-      onStateChange: (state) => {
-        logger.debug('Voice capture state changed:', state);
-      },
-      onError: (error) => {
-        logger.error('Voice capture error:', error);
-        presentRealtimeConnectivityFailure(error, {
-          scope: 'radio',
-          stage: 'publish',
-          onCompatFallbackConfirm: async () => {
-            await capture.switchTransportFromGesture('ws-compat');
-          },
-        });
-      },
+    logger.debug('Voice capture state changed', {
+      captureState: voiceCaptureController.captureState,
+      activeTransport: voiceCaptureController.activeTransport,
+      preferredTransport: voiceCaptureController.preferredTransport,
     });
-
-    voiceCaptureRef.current = capture;
-
-    return () => {
-      capture.stop();
-      voiceCaptureRef.current = null;
-    };
-  }, [radioService, radioMode.engineMode]);
+  }, [
+    voiceCaptureController.activeTransport,
+    voiceCaptureController.captureState,
+    voiceCaptureController.preferredTransport,
+  ]);
 
   // Request WakeLock during TX
   const acquireWakeLock = useCallback(async () => {
@@ -112,8 +98,7 @@ export const VoicePTTButton: React.FC = () => {
     setPttState('requesting');
 
     try {
-      await voiceCaptureRef.current?.startFromGesture();
-      const participantIdentity = voiceCaptureRef.current?.participantIdentity;
+      const participantIdentity = await voiceCaptureController.startFromGesture();
       if (!participantIdentity) {
         logger.warn('PTT requested before voice participant identity became available');
         isPttDownRef.current = false;
@@ -122,7 +107,7 @@ export const VoicePTTButton: React.FC = () => {
       }
 
       radioService.requestVoicePTT(participantIdentity);
-      voiceCaptureRef.current?.setPTTActive(true);
+      voiceCaptureController.setPTTActive(true);
     } catch (error) {
       isPttDownRef.current = false;
       setPttState('idle');
@@ -136,7 +121,7 @@ export const VoicePTTButton: React.FC = () => {
     }
 
     logger.debug('PTT pressed');
-  }, [isOperator, radioService, pttState, acquireWakeLock]);
+  }, [acquireWakeLock, isOperator, pttState, radioService, voiceCaptureController]);
 
   // PTT release handler
   const handlePTTUp = useCallback(() => {
@@ -145,7 +130,7 @@ export const VoicePTTButton: React.FC = () => {
     isPttDownRef.current = false;
 
     radioService?.releaseVoicePTT();
-    voiceCaptureRef.current?.setPTTActive(false);
+    voiceCaptureController.setPTTActive(false);
 
     releaseWakeLock();
     setPttState('idle');
@@ -155,7 +140,7 @@ export const VoicePTTButton: React.FC = () => {
     }
 
     logger.debug('PTT released');
-  }, [radioService, releaseWakeLock]);
+  }, [radioService, releaseWakeLock, voiceCaptureController]);
 
   // Keyboard handler (Space key)
   useEffect(() => {
@@ -219,7 +204,7 @@ export const VoicePTTButton: React.FC = () => {
     return () => {
       if (isPttDownRef.current) {
         radioService?.releaseVoicePTT();
-        voiceCaptureRef.current?.setPTTActive(false);
+        voiceCaptureControllerRef.current.setPTTActive(false);
       }
       releaseWakeLock();
     };

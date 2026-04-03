@@ -53,8 +53,12 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
     }
   }
 
-  process(inputs) {
+  process(inputs, outputs) {
     const input = inputs[0]?.[0];
+    const output = outputs[0]?.[0];
+    if (output) {
+      output.fill(0);
+    }
     if (input && input.length > 0) {
       this.appendInput(input);
       this.emitFrames();

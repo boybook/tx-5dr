@@ -18,6 +18,8 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/GlobalModalHost';
+import { useConnection, useRadioModeState } from '../store/radioStore';
+import { useVoiceCaptureController } from '../hooks/useVoiceCaptureController';
 
 /**
  * VoiceRightLayout
@@ -30,6 +32,8 @@ import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/GlobalModalHost
  */
 export const VoiceRightLayout: React.FC = () => {
   const { t } = useTranslation('common');
+  const connection = useConnection();
+  const radioMode = useRadioModeState();
   const ROLE_LABELS: Record<string, string> = {
     viewer: t('common:role.viewer'),
     operator: t('common:role.operator'),
@@ -64,6 +68,11 @@ export const VoiceRightLayout: React.FC = () => {
   const handleOpenAccountSecurity = useCallback(() => {
     window.dispatchEvent(new Event(OPEN_ACCOUNT_SECURITY_MODAL_EVENT));
   }, []);
+
+  const voiceCaptureController = useVoiceCaptureController(
+    connection.state.radioService,
+    radioMode.engineMode,
+  );
 
   return (
     <div className="h-full flex flex-col">
@@ -183,10 +192,13 @@ export const VoiceRightLayout: React.FC = () => {
         {/* Mobile: stacked vertically. Desktop: side-by-side */}
         <div className="flex-shrink-0 flex flex-col md:flex-row gap-2 md:gap-3 md:items-stretch">
           <div className="flex-shrink-0 md:order-none">
-            <VoicePTTButton />
+            <VoicePTTButton voiceCaptureController={voiceCaptureController} />
           </div>
           <div className="flex-1 min-w-0">
-            <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
+            <RadioControl
+              onOpenRadioSettings={handleOpenRadioSettings}
+              voiceCaptureController={voiceCaptureController}
+            />
           </div>
         </div>
       </div>

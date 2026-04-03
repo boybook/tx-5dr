@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState } from '../store/radioStore';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
@@ -22,6 +22,7 @@ import { createLogger } from '../utils/logger';
 import { detectBrowserAudioRuntime } from '../audio/browserAudioRuntime';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
 import { filterDigitalFrequencyOptions, isCoreCapabilityAvailable } from '../utils/radioControl';
+import type { VoiceCaptureController } from '../hooks/useVoiceCaptureController';
 import {
   presentRealtimeConnectivityFailure,
 } from '../realtime/realtimeConnectivity';
@@ -246,14 +247,15 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: Radi
 
 interface RadioControlProps {
   onOpenRadioSettings?: () => void;
+  voiceCaptureController?: VoiceCaptureController;
 }
 
-export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings }) => {
+export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings, voiceCaptureController }) => {
   const { t } = useTranslation('radio');
   const connection = useConnection();
   const radioConnection = useRadioConnectionState();
   const radioMode = useRadioModeState();
-  const { pttStatus } = usePTTState();
+  const { pttStatus, voicePttLock } = usePTTState();
   const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -281,6 +283,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   // 简化的UI状态管理
   const [isTogglingListen, setIsTogglingListen] = useState(false);
   const [isSwitchingMonitorTransport, setIsSwitchingMonitorTransport] = useState(false);
+  const [isSwitchingVoiceTransport, setIsSwitchingVoiceTransport] = useState(false);
 
   // 音频监听 (reusable hook)
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
@@ -315,6 +318,61 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
   const getNextMonitorTransport = React.useCallback((): RealtimeTransportKind => (
     audioMonitor.transportKind === 'ws-compat' ? 'livekit' : 'ws-compat'
   ), [audioMonitor.transportKind]);
+
+  const getVoiceTransportLabel = React.useCallback((transport: RealtimeTransportKind | null | undefined): string => {
+    if (transport === 'ws-compat') {
+      return t('monitor.transportWsPcm');
+    }
+    return t('monitor.transportWebrtc');
+  }, [t]);
+
+  const currentVoiceTransport = voiceCaptureController?.activeTransport ?? null;
+  const effectiveVoiceTransport = currentVoiceTransport ?? voiceCaptureController?.preferredTransport ?? null;
+  const nextVoiceTransport = effectiveVoiceTransport === 'ws-compat' ? 'livekit' : 'ws-compat';
+  const voiceTxStatusLabel = React.useMemo(() => {
+    if (voiceCaptureController?.isPTTActive) {
+      return t('voiceTx.statusTransmitting');
+    }
+    if (voicePttLock?.locked && !voiceCaptureController?.isPTTActive) {
+      return t('voiceTx.statusLockedByOther', { user: voicePttLock.lockedByLabel || '?' });
+    }
+    switch (voiceCaptureController?.captureState) {
+      case 'starting':
+        return t('voiceTx.statusStarting');
+      case 'capturing':
+        return t('voiceTx.statusReady');
+      case 'error':
+        return t('voiceTx.statusError');
+      case 'idle':
+      default:
+        return t('voiceTx.statusIdle');
+    }
+  }, [
+    t,
+    voiceCaptureController?.captureState,
+    voiceCaptureController?.isPTTActive,
+    voicePttLock?.locked,
+    voicePttLock?.lockedByLabel,
+  ]);
+
+  const handleSwitchVoiceTransport = React.useCallback(async () => {
+    if (!voiceCaptureController || isSwitchingVoiceTransport) {
+      return;
+    }
+
+    setIsSwitchingVoiceTransport(true);
+    try {
+      if (voiceCaptureController.activeTransport) {
+        await voiceCaptureController.switchTransportFromGesture(nextVoiceTransport);
+      } else {
+        voiceCaptureController.setPreferredTransport(nextVoiceTransport);
+      }
+    } catch (error) {
+      logger.error('Failed to switch voice transport', error);
+    } finally {
+      setIsSwitchingVoiceTransport(false);
+    }
+  }, [isSwitchingVoiceTransport, nextVoiceTransport, voiceCaptureController]);
 
 
   // 加载可用模式列表
@@ -1102,6 +1160,84 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings 
                 </div>
               </PopoverContent>
             </Popover>
+            {radioMode.engineMode === 'voice' && isOperator && voiceCaptureController && (
+              <Popover>
+                <PopoverTrigger>
+                  <Button
+                    isIconOnly
+                    variant="light"
+                    size="sm"
+                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${
+                      voiceCaptureController.isPTTActive
+                        ? 'text-danger'
+                        : currentVoiceTransport
+                        ? 'text-success'
+                        : 'text-default-400'
+                    }`}
+                    aria-label={t('voiceTx.audioUplink')}
+                  >
+                    <FontAwesomeIcon icon={faMicrophone} className="text-xs" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="py-2 pt-3 space-y-2">
+                  <div className="space-y-2 text-xs">
+                    <div className="font-medium text-sm text-default-700">
+                      {t('voiceTx.audioUplink')}
+                    </div>
+
+                    <div className="flex justify-between items-center gap-3">
+                      <span className="text-default-500">{t('voiceTx.status')}</span>
+                      <span className="font-mono text-default-400 text-right">
+                        {voiceTxStatusLabel}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center gap-3">
+                      <span className="text-default-500">{t('voiceTx.codec')}</span>
+                      <span className="font-mono text-default-400 uppercase text-right">
+                        {effectiveVoiceTransport === 'ws-compat' ? 'pcm/ws' : 'webrtc'}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center gap-3">
+                      <span className="text-default-500">{t('voiceTx.currentTransport')}</span>
+                      <span className="font-mono text-default-400 text-right">
+                        {currentVoiceTransport
+                          ? getVoiceTransportLabel(currentVoiceTransport)
+                          : t('voiceTx.notEstablished')}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center gap-3">
+                      <span className="text-default-500">{t('voiceTx.plannedTransport')}</span>
+                      <span className="font-mono text-default-400 text-right">
+                        {getVoiceTransportLabel(voiceCaptureController.preferredTransport)}
+                      </span>
+                    </div>
+
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      color={effectiveVoiceTransport === 'ws-compat' ? 'primary' : 'warning'}
+                      className="w-full"
+                      onPress={handleSwitchVoiceTransport}
+                      isLoading={isSwitchingVoiceTransport}
+                      isDisabled={isSwitchingVoiceTransport || voiceCaptureController.isPTTActive || voiceCaptureController.captureState === 'starting'}
+                    >
+                      {effectiveVoiceTransport === 'ws-compat'
+                        ? t('monitor.switchToWebrtc')
+                        : t('monitor.switchToWsPcm')}
+                    </Button>
+
+                    {voiceCaptureController.isPTTActive && (
+                      <div className="text-[11px] text-warning text-center">
+                        {t('voiceTx.switchDisabledDuringTx')}
+                      </div>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
             {/* 天调控制（能力驱动）：连接时始终显示入口 */}
             {radioConnection.radioConnected && (
               <Popover>
