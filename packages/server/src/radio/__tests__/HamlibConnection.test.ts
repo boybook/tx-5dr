@@ -20,6 +20,42 @@ type MockRig = {
   getMode: ReturnType<typeof vi.fn>;
 };
 
+type MockSpectrumController = {
+  configureSpectrum: ReturnType<typeof vi.fn>;
+  getSpectrumSupportSummary: ReturnType<typeof vi.fn>;
+};
+
+type TestFrequencyRange = {
+  startFreq: number;
+  endFreq: number;
+  modes: string[];
+  lowPower: number;
+  highPower: number;
+  vfo: number;
+  antenna: number;
+};
+
+type HamlibConnectionTestAccessor = {
+  rig: MockRig;
+  state: RadioConnectionState;
+  supportedModes?: Set<string>;
+  txFrequencyRanges?: TestFrequencyRange[];
+  currentFrequencyHz?: number;
+  currentRadioMode?: string;
+  spectrumController?: MockSpectrumController;
+  convertPower: (rawValue: number | null, wattsValue: number | null) => {
+    raw: number;
+    percent: number;
+    watts: number | null;
+    maxWatts: number | null;
+  };
+  resolveCurrentTxPowerMaxWatts: () => number | null;
+};
+
+function asTestConnection(connection: HamlibConnection): HamlibConnectionTestAccessor {
+  return connection as unknown as HamlibConnectionTestAccessor;
+}
+
 function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
   connection: HamlibConnection;
   rig: MockRig;
@@ -34,9 +70,10 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 'wide' }),
     ...rigOverrides,
   };
+  const testConnection = asTestConnection(connection);
 
-  (connection as any).rig = rig;
-  (connection as any).state = RadioConnectionState.CONNECTED;
+  testConnection.rig = rig;
+  testConnection.state = RadioConnectionState.CONNECTED;
 
   return { connection, rig };
 }
@@ -113,7 +150,7 @@ describe('HamlibConnection', () => {
 
   it('prefers DATA mode for digital intent when supported', async () => {
     const { connection, rig } = createConnectedConnection();
-    (connection as any).supportedModes = new Set(['USB', 'PKTUSB']);
+    asTestConnection(connection).supportedModes = new Set(['USB', 'PKTUSB']);
 
     await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
 
@@ -122,7 +159,7 @@ describe('HamlibConnection', () => {
 
   it('falls back to standard mode for digital intent when DATA mode is unsupported', async () => {
     const { connection, rig } = createConnectedConnection();
-    (connection as any).supportedModes = new Set(['USB']);
+    asTestConnection(connection).supportedModes = new Set(['USB']);
 
     await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
 
@@ -131,7 +168,7 @@ describe('HamlibConnection', () => {
 
   it('keeps standard mode for voice intent even when DATA mode is supported', async () => {
     const { connection, rig } = createConnectedConnection();
-    (connection as any).supportedModes = new Set(['USB', 'PKTUSB']);
+    asTestConnection(connection).supportedModes = new Set(['USB', 'PKTUSB']);
 
     await expect(connection.setMode('USB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
 
@@ -140,7 +177,7 @@ describe('HamlibConnection', () => {
 
   it('normalizes explicit DATA mode back to standard mode for voice intent', async () => {
     const { connection, rig } = createConnectedConnection();
-    (connection as any).supportedModes = new Set(['USB', 'PKTUSB']);
+    asTestConnection(connection).supportedModes = new Set(['USB', 'PKTUSB']);
 
     await expect(connection.setMode('PKTUSB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
 
@@ -149,7 +186,8 @@ describe('HamlibConnection', () => {
 
   it('uses the matched TX range max watts when converting absolute power readings', () => {
     const { connection } = createConnectedConnection();
-    (connection as any).txFrequencyRanges = [
+    const testConnection = asTestConnection(connection);
+    testConnection.txFrequencyRanges = [
       {
         startFreq: 1000000,
         endFreq: 30000000,
@@ -169,10 +207,10 @@ describe('HamlibConnection', () => {
         antenna: 0,
       },
     ];
-    (connection as any).currentFrequencyHz = 14074000;
-    (connection as any).currentRadioMode = 'AM';
+    testConnection.currentFrequencyHz = 14074000;
+    testConnection.currentRadioMode = 'AM';
 
-    const result = (connection as any).convertPower(null, 12.5);
+    const result = testConnection.convertPower(null, 12.5);
 
     expect(result).toEqual({
       raw: 127,
@@ -184,7 +222,8 @@ describe('HamlibConnection', () => {
 
   it('falls back to the rig-wide TX max watts when no exact range matches', () => {
     const { connection } = createConnectedConnection();
-    (connection as any).txFrequencyRanges = [
+    const testConnection = asTestConnection(connection);
+    testConnection.txFrequencyRanges = [
       {
         startFreq: 1000000,
         endFreq: 30000000,
@@ -195,17 +234,17 @@ describe('HamlibConnection', () => {
         antenna: 0,
       },
     ];
-    (connection as any).currentFrequencyHz = 50000000;
-    (connection as any).currentRadioMode = 'FM';
+    testConnection.currentFrequencyHz = 50000000;
+    testConnection.currentRadioMode = 'FM';
 
-    expect((connection as any).resolveCurrentTxPowerMaxWatts()).toBe(10);
+    expect(testConnection.resolveCurrentTxPowerMaxWatts()).toBe(10);
   });
 
   it('applies spectrum runtime speed updates when the backend supports SPECTRUM_SPEED', async () => {
     const { connection } = createConnectedConnection();
     const configureSpectrum = vi.fn().mockResolvedValue(undefined);
 
-    (connection as any).spectrumController = {
+    asTestConnection(connection).spectrumController = {
       configureSpectrum,
       getSpectrumSupportSummary: vi.fn().mockResolvedValue({
         configurableLevels: ['SPECTRUM_SPEED'],
@@ -221,7 +260,7 @@ describe('HamlibConnection', () => {
     const { connection } = createConnectedConnection();
     const configureSpectrum = vi.fn().mockResolvedValue(undefined);
 
-    (connection as any).spectrumController = {
+    asTestConnection(connection).spectrumController = {
       configureSpectrum,
       getSpectrumSupportSummary: vi.fn().mockResolvedValue({
         configurableLevels: [],
@@ -235,7 +274,8 @@ describe('HamlibConnection', () => {
 
   it('clamps percent to 100 when the absolute power reading exceeds the matched max watts', () => {
     const { connection } = createConnectedConnection();
-    (connection as any).txFrequencyRanges = [
+    const testConnection = asTestConnection(connection);
+    testConnection.txFrequencyRanges = [
       {
         startFreq: 1000000,
         endFreq: 30000000,
@@ -246,10 +286,10 @@ describe('HamlibConnection', () => {
         antenna: 0,
       },
     ];
-    (connection as any).currentFrequencyHz = 14074000;
-    (connection as any).currentRadioMode = 'USB';
+    testConnection.currentFrequencyHz = 14074000;
+    testConnection.currentRadioMode = 'USB';
 
-    const result = (connection as any).convertPower(15, null);
+    const result = testConnection.convertPower(15, null);
 
     expect(result).toEqual({
       raw: 255,

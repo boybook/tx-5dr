@@ -28,6 +28,15 @@ const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
 const LIVEKIT_FAST_TRACK_TIMEOUT_MS = 1500;
 const TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS = 1200;
 
+type InboundRtpStatsLike = {
+  jitterBufferEmittedCount?: number;
+  jitterBufferDelay?: number;
+  jitter?: number;
+  packetsLost?: number;
+  packetsReceived?: number;
+  concealedSamples?: number;
+};
+
 interface ReceiverStatsData {
   latencyMs?: number;
   jitterMs?: number;
@@ -382,9 +391,7 @@ export function useAudioMonitorPlayback(
           return;
         }
 
-        const inbound = entry as RTCInboundRtpStreamStats & {
-          jitterBufferEmittedCount?: number;
-        };
+        const inbound = entry as InboundRtpStatsLike;
         const emittedCount = inbound.jitterBufferEmittedCount ?? 0;
         const latencyMs = emittedCount > 0 && typeof inbound.jitterBufferDelay === 'number'
           ? (inbound.jitterBufferDelay / emittedCount) * 1000

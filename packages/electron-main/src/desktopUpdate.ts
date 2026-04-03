@@ -141,7 +141,9 @@ function createInitialStatus(): DesktopUpdateStatus {
   };
 }
 
-function createRequestInit(timeoutMs = 5000, headers?: Record<string, string>): RequestInit {
+type FetchRequestInit = NonNullable<Parameters<typeof fetch>[1]>;
+
+function createRequestInit(timeoutMs = 5000, headers?: Record<string, string>): FetchRequestInit {
   return {
     headers,
     signal: AbortSignal.timeout(timeoutMs),

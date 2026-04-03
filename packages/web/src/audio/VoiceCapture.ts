@@ -24,6 +24,19 @@ const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
 const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
 const LIVEKIT_SENDER_STATS_INTERVAL_MS = 1000;
 
+type AudioTrackConstraints = {
+  sampleRate?: number;
+  channelCount?: number;
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
+  autoGainControl?: boolean;
+};
+type OutboundRtpStatsLike = {
+  packetsSent?: number;
+  roundTripTime?: number;
+  jitter?: number;
+};
+
 export interface VoiceCaptureOptions {
   onStateChange?: (state: VoiceCaptureState) => void;
   onError?: (error: Error) => void;
@@ -39,7 +52,7 @@ interface VoiceCaptureCleanupOptions {
 
 export type VoiceCaptureState = 'idle' | 'starting' | 'capturing' | 'error';
 
-const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+const AUDIO_CONSTRAINTS: AudioTrackConstraints = {
   sampleRate: 16000,
   channelCount: 1,
   echoCancellation: true,
@@ -495,10 +508,7 @@ export class VoiceCapture {
 
         report?.forEach((entry) => {
           if (entry.type === 'outbound-rtp') {
-            const outbound = entry as RTCOutboundRtpStreamStats & {
-              roundTripTime?: number;
-              jitter?: number;
-            };
+            const outbound = entry as OutboundRtpStatsLike;
             packetsSent = typeof outbound.packetsSent === 'number' ? outbound.packetsSent : packetsSent;
             roundTripTimeMs = typeof outbound.roundTripTime === 'number'
               ? outbound.roundTripTime * 1000
