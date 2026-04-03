@@ -335,7 +335,17 @@ get_download_base_url() {
 get_server_manifest_url() {
     local base_url
     base_url=$(get_download_base_url) || return 1
+    printf "%s/tx-5dr/server/nightly/latest.json" "$base_url"
+}
+
+get_server_legacy_manifest_url() {
+    local base_url
+    base_url=$(get_download_base_url) || return 1
     printf "%s/tx-5dr/server/latest.json" "$base_url"
+}
+
+get_server_github_manifest_url() {
+    printf "https://github.com/%s/releases/download/nightly-server/latest.json" "${TX5DR_GITHUB_REPO:-boybook/tx-5dr}"
 }
 
 get_server_latest_install_script_url() {
@@ -370,7 +380,16 @@ get_github_release_asset_url() {
 fetch_server_manifest() {
     local manifest_url
     manifest_url=$(get_server_manifest_url) || return 1
-    curl -fsSL "$manifest_url"
+    curl -fsSL "$manifest_url" || curl -fsSL "$(get_server_legacy_manifest_url)"
+}
+
+fetch_server_manifest_from_source() {
+    local source="${1:-oss}"
+    if [[ "$source" == "github" ]]; then
+        curl -fsSL "$(get_server_github_manifest_url)"
+        return
+    fi
+    fetch_server_manifest
 }
 
 normalize_country_code() {
@@ -473,6 +492,11 @@ get_server_manifest_commit() {
 get_server_manifest_published_at() {
     local manifest_json="$1"
     manifest_lookup_value "$manifest_json" "published_at"
+}
+
+get_server_manifest_version() {
+    local manifest_json="$1"
+    manifest_lookup_value "$manifest_json" "version"
 }
 
 get_livekit_binary_path() {

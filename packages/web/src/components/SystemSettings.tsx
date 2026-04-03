@@ -42,6 +42,31 @@ interface DecodeWindowState {
   ft4CustomWindows: number[];
 }
 
+interface DesktopUpdateState {
+  channel: 'release' | 'nightly';
+  currentVersion: string;
+  currentCommit: string | null;
+  checking: boolean;
+  updateAvailable: boolean;
+  latestVersion: string | null;
+  latestCommit: string | null;
+  publishedAt: string | null;
+  releaseNotes: string | null;
+  downloadUrl: string | null;
+  downloadOptions: Array<{
+    name: string;
+    url: string;
+    packageType: string;
+    platform: string;
+    arch: string;
+    recommended: boolean;
+    source: 'oss' | 'github';
+  }>;
+  metadataSource: 'oss' | 'github' | null;
+  downloadSource: 'oss' | 'github' | null;
+  errorMessage: string | null;
+}
+
 type RealtimeRuntimeView = {
   liveKitEnabled: boolean;
   connectivityHints: RealtimeConnectivityHints;
@@ -96,6 +121,36 @@ function getDesktopHttpsStatusColor(status: DesktopHttpsStatus['certificateStatu
   if (status === 'valid') return 'success';
   if (status === 'invalid') return 'danger';
   return 'warning';
+}
+
+function getDesktopUpdateSourceColor(source: DesktopUpdateState['metadataSource']): 'success' | 'primary' | 'default' {
+  if (source === 'oss') return 'success';
+  if (source === 'github') return 'primary';
+  return 'default';
+}
+
+function getDesktopUpdateOptionLabel(
+  packageType: string,
+  t: (key: string) => string,
+): string {
+  switch (packageType) {
+    case 'msi':
+      return t('system.desktopUpdatePackageType.msi');
+    case 'dmg':
+      return t('system.desktopUpdatePackageType.dmg');
+    case '7z':
+      return t('system.desktopUpdatePackageType.7z');
+    case 'zip':
+      return t('system.desktopUpdatePackageType.zip');
+    case 'deb':
+      return t('system.desktopUpdatePackageType.deb');
+    case 'rpm':
+      return t('system.desktopUpdatePackageType.rpm');
+    case 'AppImage':
+      return t('system.desktopUpdatePackageType.AppImage');
+    default:
+      return packageType.toUpperCase();
+  }
 }
 
 function getWindowCount(preset: string, customWindows: number[], presets: Record<string, number[]>): number {
@@ -244,6 +299,9 @@ export const SystemSettings = forwardRef<
   const [originalDesktopHttpsRedirectExternalHttp, setOriginalDesktopHttpsRedirectExternalHttp] = useState(true);
   const [desktopHttpsBusy, setDesktopHttpsBusy] = useState(false);
   const [desktopHttpsUrlCopied, setDesktopHttpsUrlCopied] = useState(false);
+  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateState | null>(null);
+  const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
+  const [desktopUpdateError, setDesktopUpdateError] = useState('');
 
   // 加载配置
   useEffect(() => {
@@ -257,6 +315,7 @@ export const SystemSettings = forwardRef<
     loadElectronCloseBehavior();
     if (isElectron) {
       void loadDesktopHttpsSettings();
+      void loadDesktopUpdateStatus();
     }
   }, []);
 
@@ -403,6 +462,48 @@ export const SystemSettings = forwardRef<
       logger.error('Failed to load desktop HTTPS settings:', err);
     }
   }, [applyDesktopHttpsSnapshot]);
+
+  const loadDesktopUpdateStatus = useCallback(async () => {
+    if (!window.electronAPI?.updater?.getStatus) return;
+    try {
+      const status = await window.electronAPI.updater.getStatus();
+      setDesktopUpdateStatus(status);
+      setDesktopUpdateError(status.errorMessage || '');
+    } catch (err) {
+      logger.error('Failed to load desktop update status:', err);
+      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
+    }
+  }, [t]);
+
+  const handleCheckDesktopUpdate = useCallback(async () => {
+    if (!window.electronAPI?.updater?.check) return;
+    setDesktopUpdateBusy(true);
+    setDesktopUpdateError('');
+    try {
+      const status = await window.electronAPI.updater.check();
+      setDesktopUpdateStatus(status);
+      setDesktopUpdateError(status.errorMessage || '');
+    } catch (err) {
+      logger.error('Failed to check desktop update:', err);
+      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  }, [t]);
+
+  const handleOpenDesktopUpdateDownload = useCallback(async (url?: string) => {
+    if (!window.electronAPI?.updater?.openDownload) return;
+    setDesktopUpdateBusy(true);
+    setDesktopUpdateError('');
+    try {
+      await window.electronAPI.updater.openDownload(url);
+    } catch (err) {
+      logger.error('Failed to open desktop update download:', err);
+      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  }, [t]);
 
   const copyDesktopHttpsUrl = useCallback(async () => {
     const url = desktopHttpsStatus?.browserAccessUrl;
@@ -732,6 +833,10 @@ export const SystemSettings = forwardRef<
   const realtimeUrlOverrideActive = runtimeHints?.publicUrlOverrideActive ?? false;
   const desktopHttpsCertificateMeta = desktopHttpsStatus?.certificateMeta ?? null;
   const desktopHttpsBrowserUrl = desktopHttpsStatus?.browserAccessUrl ?? null;
+  const desktopUpdateSourceLabel = desktopUpdateStatus?.metadataSource
+    ? t(`system.desktopUpdateSourceValue.${desktopUpdateStatus.metadataSource}`)
+    : t('system.desktopUpdateSourceValue.unknown');
+  const desktopDownloadOptions = desktopUpdateStatus?.downloadOptions || [];
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -1788,26 +1893,147 @@ export const SystemSettings = forwardRef<
         <>
           <Divider className="my-4" />
           <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
-            <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-              <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+            <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-3`}>
+              <div>
+                <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.closeBehavior')}</h4>
+                <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.closeBehaviorDesc')}</p>
+              </div>
+              <Select
+                selectedKeys={[closeBehavior]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0] as string;
+                  if (value) setCloseBehavior(value);
+                }}
+                isDisabled={isSaving}
+                variant="bordered"
+                className="max-w-xs"
+              >
+                <SelectItem key="ask">{t('system.closeBehaviorAsk')}</SelectItem>
+                <SelectItem key="tray">{t('system.closeBehaviorTray')}</SelectItem>
+                <SelectItem key="quit">{t('system.closeBehaviorQuit')}</SelectItem>
+              </Select>
+            </CardBody>
+          </Card>
+
+          <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+            <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-4`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.closeBehavior')}</h4>
-                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.closeBehaviorDesc')}</p>
+                  <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.desktopUpdateTitle')}</h4>
+                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.desktopUpdateDesc')}</p>
                 </div>
-                <Select
-                  selectedKeys={[closeBehavior]}
-                  onSelectionChange={(keys) => {
-                    const value = Array.from(keys)[0] as string;
-                    if (value) setCloseBehavior(value);
-                  }}
-                  isDisabled={isSaving}
-                  variant="bordered"
-                  className="max-w-xs"
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip size="sm" color="default" variant="flat">
+                    {desktopUpdateStatus?.channel === 'nightly'
+                      ? t('system.desktopUpdateChannelNightly')
+                      : t('system.desktopUpdateChannelRelease')}
+                  </Chip>
+                  <Chip size="sm" color={getDesktopUpdateSourceColor(desktopUpdateStatus?.metadataSource ?? null)} variant="flat">
+                    {t('system.desktopUpdateSource')}: {desktopUpdateSourceLabel}
+                  </Chip>
+                </div>
+              </div>
+
+              {desktopUpdateError && (
+                <Alert color="danger" variant="flat" title={desktopUpdateError} />
+              )}
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className={SETTINGS_SOFT_PANEL_CLASS}>
+                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateCurrentVersion')}</p>
+                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{desktopUpdateStatus?.currentVersion || '-'}</p>
+                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
+                    {t('system.desktopUpdateCurrentCommit', { value: desktopUpdateStatus?.currentCommit || '-' })}
+                  </p>
+                </div>
+
+                <div className={SETTINGS_SOFT_PANEL_CLASS}>
+                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateLatestVersion')}</p>
+                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{desktopUpdateStatus?.latestVersion || '-'}</p>
+                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
+                    {t('system.desktopUpdatePublishedAt', { value: formatDateTimeValue(desktopUpdateStatus?.publishedAt) })}
+                  </p>
+                </div>
+              </div>
+
+              <div className={`${SETTINGS_SOFT_PANEL_CLASS} space-y-2`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip
+                    size="sm"
+                    color={desktopUpdateStatus?.updateAvailable ? 'warning' : 'success'}
+                    variant="flat"
+                  >
+                    {desktopUpdateStatus?.updateAvailable
+                      ? t('system.desktopUpdateAvailable')
+                      : t('system.desktopUpdateUpToDate')}
+                  </Chip>
+                  {desktopUpdateStatus?.latestCommit && (
+                    <Chip size="sm" color="default" variant="flat">
+                      {t('system.desktopUpdateLatestCommit', { value: desktopUpdateStatus.latestCommit })}
+                    </Chip>
+                  )}
+                </div>
+
+                <p className={`${SETTINGS_SUBDESC_CLASS} whitespace-pre-wrap`}>
+                  {desktopUpdateStatus?.releaseNotes || t('system.desktopUpdateNoNotes')}
+                </p>
+              </div>
+
+              {desktopDownloadOptions.length > 0 && (
+                <div className={`${SETTINGS_SOFT_PANEL_CLASS} space-y-3`}>
+                  <div>
+                    <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateDownloadOptionsTitle')}</p>
+                    <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopUpdateDownloadOptionsDesc')}</p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {desktopDownloadOptions.map((option) => (
+                      <div key={option.url} className="rounded-medium border border-divider bg-content1 px-3 py-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className={SETTINGS_SUBTITLE_CLASS}>{getDesktopUpdateOptionLabel(option.packageType, t)}</p>
+                          {option.recommended && (
+                            <Chip size="sm" color="primary" variant="flat">
+                              {t('system.recommended')}
+                            </Chip>
+                          )}
+                        </div>
+                        <p className={`mt-1 break-all ${SETTINGS_MUTED_CLASS}`}>{option.name}</p>
+                        <div className="mt-3">
+                          <Button
+                            size="sm"
+                            color={option.recommended ? 'primary' : 'default'}
+                            variant={option.recommended ? 'solid' : 'flat'}
+                            onPress={() => { void handleOpenDesktopUpdateDownload(option.url); }}
+                            isDisabled={!desktopUpdateStatus?.updateAvailable || isSaving || desktopUpdateBusy}
+                          >
+                            {t('system.desktopUpdateDownload')}
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  color="primary"
+                  variant="flat"
+                  onPress={() => { void handleCheckDesktopUpdate(); }}
+                  isLoading={desktopUpdateBusy || desktopUpdateStatus?.checking}
+                  isDisabled={isSaving || desktopHttpsBusy}
                 >
-                  <SelectItem key="ask">{t('system.closeBehaviorAsk')}</SelectItem>
-                  <SelectItem key="tray">{t('system.closeBehaviorTray')}</SelectItem>
-                  <SelectItem key="quit">{t('system.closeBehaviorQuit')}</SelectItem>
-                </Select>
+                  {t('system.desktopUpdateCheck')}
+                </Button>
+
+                {desktopDownloadOptions.length === 0 && (
+                  <Button
+                    color="primary"
+                    onPress={() => { void handleOpenDesktopUpdateDownload(); }}
+                    isDisabled={!desktopUpdateStatus?.downloadUrl || !desktopUpdateStatus?.updateAvailable || isSaving || desktopUpdateBusy}
+                  >
+                    {t('system.desktopUpdateDownload')}
+                  </Button>
+                )}
               </div>
             </CardBody>
           </Card>

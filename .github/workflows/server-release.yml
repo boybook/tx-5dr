@@ -139,27 +139,59 @@ jobs:
 
       - name: Prepare release assets
         run: |
+          mkdir -p publish-assets
           mkdir -p release-assets
-          find dist/ -type f \( -name "*.deb" -o -name "*.rpm" \) -exec cp {} release-assets/ \;
+          find dist/ -type f \( -name "*.deb" -o -name "*.rpm" \) -exec cp {} publish-assets/ \;
           # install-online.sh was already copied above
-          cp dist/install-online.sh release-assets/ 2>/dev/null || true
+          cp dist/install-online.sh publish-assets/ 2>/dev/null || true
+          find publish-assets/ -type f -exec cp {} release-assets/ \;
           ls -lh release-assets/
 
       - name: Generate release info
         id: release_info
+        env:
+          TZ: UTC
         run: |
           echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
           echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0].split('+')[0]")
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
           if [ -z "${{ github.event.inputs.version }}" ]; then
             echo "tag=nightly-server" >> $GITHUB_OUTPUT
-            echo "version=nightly" >> $GITHUB_OUTPUT
+            echo "version=${BASE_VERSION}-nightly.${COMMIT_STAMP}+$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
             echo "channel=nightly" >> $GITHUB_OUTPUT
+            echo "channel_path=nightly" >> $GITHUB_OUTPUT
           else
+            VERSION_NO_V="${{ github.event.inputs.version }}"
             echo "tag=${{ github.event.inputs.version }}-server" >> $GITHUB_OUTPUT
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version=${VERSION_NO_V#v}" >> $GITHUB_OUTPUT
             echo "channel=release" >> $GITHUB_OUTPUT
+            echo "channel_path=release" >> $GITHUB_OUTPUT
           fi
+
+      - name: Prepare server release metadata
+        run: |
+          mkdir -p release-metadata
+          cat > release-metadata/server-release-notes.md <<EOF
+          Channel: ${{ steps.release_info.outputs.channel }}
+          Version: ${{ steps.release_info.outputs.version }}
+          Commit: ${{ steps.release_info.outputs.short_sha }}
+          Built at: ${{ steps.release_info.outputs.timestamp }}
+          EOF
+
+          node scripts/generate-oss-manifest.mjs \
+            --product server \
+            --channel "${{ steps.release_info.outputs.channel }}" \
+            --tag "${{ steps.release_info.outputs.tag }}" \
+            --version "${{ steps.release_info.outputs.version }}" \
+            --commit "${{ steps.release_info.outputs.short_sha }}" \
+            --published-at "${{ steps.release_info.outputs.timestamp }}" \
+            --base-url "https://github.com/${{ github.repository }}/releases/download" \
+            --object-prefix "${{ steps.release_info.outputs.tag }}" \
+            --assets-dir "publish-assets" \
+            --release-notes-file "release-metadata/server-release-notes.md" \
+            --output "release-assets/latest.json"
 
       # Nightly Release
       - name: Create or Update Nightly Release
@@ -364,6 +396,7 @@ jobs:
       - name: Generate OSS server manifest
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: |
+          mkdir -p oss-metadata/server
           node scripts/generate-oss-manifest.mjs \
             --product server \
             --channel "${{ steps.release_info.outputs.channel }}" \
@@ -373,17 +406,19 @@ jobs:
             --published-at "${{ steps.release_info.outputs.timestamp }}" \
             --base-url "${OSS_BASE_URL}" \
             --object-prefix "tx-5dr/server/${{ steps.release_info.outputs.tag }}" \
-            --assets-dir "release-assets" \
+            --assets-dir "publish-assets" \
+            --release-notes-file "release-metadata/server-release-notes.md" \
             --output "oss-metadata/server/latest.json"
 
       - name: Upload server assets to OSS
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
         run: |
-          for file in release-assets/*; do
+          for file in publish-assets/*; do
             ossutil cp "$file" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.tag }}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
           done
           ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.tag }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.channel_path }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
           ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          if [ -f "release-assets/install-online.sh" ]; then
-            ossutil cp "release-assets/install-online.sh" "oss://${OSS_BUCKET}/tx-5dr/server/latest/install-online.sh" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          if [ -f "publish-assets/install-online.sh" ]; then
+            ossutil cp "publish-assets/install-online.sh" "oss://${OSS_BUCKET}/tx-5dr/server/latest/install-online.sh" --force -c "${RUNNER_TEMP}/.ossutilconfig"
           fi
