@@ -33,6 +33,8 @@
     "lockedByOther": "Locked by {{user}}",
     "releaseHint": "Release to stop",
     "spaceHint": "Hold Space to transmit",
+    "inputLevelTitle": "Microphone level {{percent}}%",
+    "inputLevelAria": "Microphone input level {{percent}}%",
     "micPermissionNeeded": "Microphone permission needed",
     "micPermissionDenied": "Microphone permission denied",
     "captureError": "Audio capture error",

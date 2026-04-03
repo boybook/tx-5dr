@@ -51,12 +51,16 @@ export class VoiceCapture {
   private mediaStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private mediaSource: MediaStreamAudioSourceNode | null = null;
+  private levelAnalyser: AnalyserNode | null = null;
+  private levelAnalyserBuffer: Float32Array | null = null;
+  private levelMonitorTimer: number | null = null;
   private captureBackend: CompatCaptureBackend | null = null;
   private startPromise: Promise<void> | null = null;
   private pttActive = false;
   private _participantIdentity: string | null = null;
   private transportKind: RealtimeTransportKind | null = null;
   private compatSequence = 0;
+  private _inputLevel = 0;
 
   constructor(options: VoiceCaptureOptions) {
     this.options = options;
@@ -78,12 +82,17 @@ export class VoiceCapture {
     return this.transportKind;
   }
 
+  get inputLevel(): number {
+    return this._inputLevel;
+  }
+
   async prepareCaptureFromGesture(): Promise<void> {
     this.mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
     this.audioContext = await ensureInteractiveAudioContext(this.audioContext);
     if (!this.mediaSource) {
       this.mediaSource = this.audioContext.createMediaStreamSource(this.mediaStream);
     }
+    this.ensureInputLevelMonitor();
   }
 
   async ensureStartedFromGesture(options?: VoiceCaptureStartOptions): Promise<void> {
@@ -173,6 +182,8 @@ export class VoiceCapture {
     options?: { fastFallback?: boolean },
   ): Promise<void> {
     const mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
+    const audioContext = await ensureInteractiveAudioContext(this.audioContext);
+    const mediaSource = this.mediaSource ?? audioContext.createMediaStreamSource(mediaStream);
     const sourceTrack = mediaStream.getAudioTracks()[0];
     if (!sourceTrack) {
       throw new Error('No microphone track is available for LiveKit capture');
@@ -196,7 +207,7 @@ export class VoiceCapture {
       sourceTrack,
       AUDIO_CONSTRAINTS,
       true,
-      this.audioContext ?? undefined,
+      audioContext,
     );
     await room.localParticipant.publishTrack(localTrack, {
       source: Track.Source.Microphone,
@@ -208,7 +219,10 @@ export class VoiceCapture {
     this.room = room;
     this.localTrack = localTrack;
     this.mediaStream = mediaStream;
+    this.audioContext = audioContext;
+    this.mediaSource = mediaSource;
     this._participantIdentity = offer.participantIdentity ?? null;
+    this.ensureInputLevelMonitor();
 
     if (this.pttActive) {
       await this.localTrack.unmute();
@@ -300,6 +314,7 @@ export class VoiceCapture {
     this.mediaStream = mediaStream;
     this.audioContext = audioContext;
     this.mediaSource = mediaSource;
+    this.ensureInputLevelMonitor();
     this.captureBackend = captureBackend;
     this._participantIdentity = offer.participantIdentity ?? null;
 
@@ -311,6 +326,78 @@ export class VoiceCapture {
   private setState(state: VoiceCaptureState): void {
     this.state = state;
     this.options.onStateChange?.(state);
+  }
+
+  private ensureInputLevelMonitor(): void {
+    if (!this.audioContext || !this.mediaSource) {
+      return;
+    }
+
+    if (!this.levelAnalyser) {
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.65;
+      this.mediaSource.connect(analyser);
+      this.levelAnalyser = analyser;
+      this.levelAnalyserBuffer = new Float32Array(analyser.fftSize);
+    }
+
+    if (this.levelMonitorTimer !== null) {
+      return;
+    }
+
+    this.levelMonitorTimer = window.setInterval(() => {
+      this.sampleInputLevel();
+    }, 50);
+  }
+
+  private sampleInputLevel(): void {
+    if (!this.levelAnalyser || !this.levelAnalyserBuffer) {
+      this._inputLevel = 0;
+      return;
+    }
+
+    this.levelAnalyser.getFloatTimeDomainData(this.levelAnalyserBuffer);
+
+    let sumSquares = 0;
+    let peak = 0;
+    for (const sample of this.levelAnalyserBuffer) {
+      const amplitude = Math.abs(sample);
+      sumSquares += sample * sample;
+      if (amplitude > peak) {
+        peak = amplitude;
+      }
+    }
+
+    const rms = Math.sqrt(sumSquares / this.levelAnalyserBuffer.length);
+    const rmsDb = 20 * Math.log10(Math.max(rms, 1e-4));
+    const normalizedRms = Math.max(0, Math.min(1, (rmsDb + 55) / 45));
+    const normalizedPeak = Math.max(0, Math.min(1, peak * 1.25));
+    const nextLevel = Math.max(normalizedRms, normalizedPeak * 0.85);
+    const smoothedLevel = nextLevel >= this._inputLevel
+      ? nextLevel
+      : (this._inputLevel * 0.8) + (nextLevel * 0.2);
+
+    this._inputLevel = smoothedLevel < 0.01 ? 0 : smoothedLevel;
+  }
+
+  private resetInputLevelMonitor(): void {
+    if (this.levelMonitorTimer !== null) {
+      window.clearInterval(this.levelMonitorTimer);
+      this.levelMonitorTimer = null;
+    }
+
+    if (this.levelAnalyser) {
+      try {
+        this.levelAnalyser.disconnect();
+      } catch {
+        // ignore
+      }
+      this.levelAnalyser = null;
+    }
+
+    this.levelAnalyserBuffer = null;
+    this._inputLevel = 0;
   }
 
   private cleanupTransportOnly(): void {
@@ -355,6 +442,10 @@ export class VoiceCapture {
     const { preserveInteractiveRuntime = false } = options;
 
     this.cleanupTransportOnly();
+
+    if (!preserveInteractiveRuntime) {
+      this.resetInputLevelMonitor();
+    }
 
     if (!preserveInteractiveRuntime && this.mediaSource) {
       try {

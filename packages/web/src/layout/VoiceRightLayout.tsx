@@ -191,7 +191,7 @@ export const VoiceRightLayout: React.FC = () => {
         {/* PTT Button + Radio Control */}
         {/* Mobile: stacked vertically. Desktop: side-by-side */}
         <div className="flex-shrink-0 flex flex-col md:flex-row gap-2 md:gap-3 md:items-stretch">
-          <div className="flex-shrink-0 md:order-none">
+          <div className="flex-shrink-0 md:order-none md:self-stretch md:flex">
             <VoicePTTButton voiceCaptureController={voiceCaptureController} />
           </div>
           <div className="flex-1 min-w-0">
