@@ -30,6 +30,48 @@ import {
 
 const logger = createLogger('RadioControl');
 
+const SELECT_TEXT_MEASURE_CLASS = 'fixed left-0 top-0 invisible pointer-events-none whitespace-nowrap font-bold text-lg';
+const SELECT_CHROME_WIDTH_PX = 52;
+const FREQUENCY_SELECT_MIN_WIDTH_PX = 132;
+const FREQUENCY_SELECT_MAX_WIDTH_PX = 280;
+const MODE_SELECT_MIN_WIDTH_PX = 92;
+const MODE_SELECT_MAX_WIDTH_PX = 160;
+
+const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
+  Math.min(maxWidth, Math.max(minWidth, value))
+);
+
+const useMeasuredSelectWidth = (
+  text: string,
+  minWidth: number,
+  maxWidth: number,
+) => {
+  const measureRef = React.useRef<HTMLSpanElement>(null);
+  const [width, setWidth] = React.useState(minWidth);
+
+  React.useLayoutEffect(() => {
+    const measure = () => {
+      if (!measureRef.current) {
+        return;
+      }
+
+      const textWidth = Math.ceil(measureRef.current.getBoundingClientRect().width);
+      setWidth(clampWidth(textWidth + SELECT_CHROME_WIDTH_PX, minWidth, maxWidth));
+    };
+
+    measure();
+
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const rafId = window.requestAnimationFrame(measure);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [text, minWidth, maxWidth]);
+
+  return { measureRef, width };
+};
+
 interface FrequencyOption {
   key: string;
   label: string;
@@ -325,6 +367,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       return t('monitor.transportWsPcm');
     }
     return t('monitor.transportWebrtc');
+  }, [t]);
+
+  const getModeDisplayLabel = React.useCallback((modeName: string): string => {
+    if (modeName === 'VOICE') {
+      return t('mode.voice');
+    }
+    return modeName;
   }, [t]);
 
   const currentVoiceTransport = voiceCaptureController?.activeTransport ?? null;
@@ -863,6 +912,40 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     return filtered;
   }, [availableFrequencies, radioMode.currentMode, customFrequencyOption, isAdmin, canSetFrequency, ability]);
 
+  const selectedFrequencyOption = React.useMemo(
+    () => filteredFrequencies.find(freq => freq.key === currentFrequency) ?? null,
+    [filteredFrequencies, currentFrequency],
+  );
+
+  const frequencySelectLabel = selectedFrequencyOption?.label
+    || (radioMode.currentMode ? `${radioMode.currentMode.name} ${t('control.frequency')}` : t('control.frequency'));
+
+  const modeOptions = React.useMemo(() => {
+    const modes = (availableModes || []).filter(mode => mode && mode.name);
+
+    if (radioMode.engineMode !== 'voice' || modes.some(mode => mode.name === 'VOICE')) {
+      return modes;
+    }
+
+    return [{ name: 'VOICE' } as ModeDescriptor, ...modes];
+  }, [availableModes, radioMode.engineMode]);
+
+  const modeSelectLabel = radioMode.engineMode === 'voice'
+    ? getModeDisplayLabel('VOICE')
+    : (radioMode.currentMode?.name ? getModeDisplayLabel(radioMode.currentMode.name) : (modeError || t('mode.placeholder')));
+
+  const { measureRef: frequencyMeasureRef, width: frequencySelectWidth } = useMeasuredSelectWidth(
+    frequencySelectLabel,
+    FREQUENCY_SELECT_MIN_WIDTH_PX,
+    FREQUENCY_SELECT_MAX_WIDTH_PX,
+  );
+
+  const { measureRef: modeMeasureRef, width: modeSelectWidth } = useMeasuredSelectWidth(
+    modeSelectLabel,
+    MODE_SELECT_MIN_WIDTH_PX,
+    MODE_SELECT_MAX_WIDTH_PX,
+  );
+
   // 自动设置频率到后端（避免递归调用）
   const autoSetFrequency = async (frequency: FrequencyOption) => {
     if (!connection.state.isConnected) return;
@@ -1062,7 +1145,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   }, [connection.state.radioService, availableFrequencies]);
 
   return (
-    <div className="flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
+    <div className="relative flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
+      <span ref={frequencyMeasureRef} aria-hidden="true" className={SELECT_TEXT_MEASURE_CLASS}>
+        {frequencySelectLabel}
+      </span>
+      <span ref={modeMeasureRef} aria-hidden="true" className={SELECT_TEXT_MEASURE_CLASS}>
+        {modeSelectLabel}
+      </span>
       {/* 顶部标题栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -1511,11 +1600,13 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       {/* 主控制区域 */}
       <div className="flex items-center">
         {/* 左侧选择器 */}
-        <div className="flex gap-1 flex-1 -ml-3">
+        <div className="flex gap-1 flex-1 min-w-0 -ml-3">
           {canSetFrequency ? (
             <Select
               disableSelectorIconRotation
-              className="w-[200px]"
+              fullWidth={false}
+              className="min-w-0"
+              style={{ width: frequencySelectWidth, maxWidth: '100%' }}
               labelPlacement="outside"
               placeholder={radioMode.currentMode ? `${radioMode.currentMode.name} ${t('control.frequency')}` : t('control.frequency')}
               selectorIcon={<SelectorIcon />}
@@ -1525,6 +1616,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               radius="md"
               aria-label={t('control.selectFrequency')}
               classNames={{
+                base: "min-w-0",
                 trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
                 value: "font-bold text-lg",
                 innerWrapper: "shadow-none",
@@ -1534,9 +1626,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               isLoading={isLoadingFrequencies}
               onSelectionChange={handleFrequencyChange}
               renderValue={() => {
-                // 直接在 filteredFrequencies 中查找（现在包含了自定义频率）
-                const selectedFreq = filteredFrequencies.find(f => f.key === currentFrequency);
-                return selectedFreq ? <span className="font-bold text-lg">{selectedFreq.label}</span> : null;
+                return selectedFrequencyOption ? <span className="font-bold text-lg">{selectedFrequencyOption.label}</span> : null;
               }}
             >
               {[...filteredFrequencies.map((frequency) => (
@@ -1558,7 +1648,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
           {canSwitchMode ? (
             <Select
               disableSelectorIconRotation
-              className="w-[88px]"
+              fullWidth={false}
+              className="min-w-0"
+              style={{ width: modeSelectWidth, maxWidth: '100%' }}
               labelPlacement="outside"
               placeholder={modeError || t('mode.placeholder')}
               selectorIcon={<SelectorIcon />}
@@ -1568,6 +1660,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               radius="md"
               aria-label={t('control.selectMode')}
               classNames={{
+                base: "min-w-0",
                 trigger: "font-bold text-lg border-0 bg-transparent hover:border-1 hover:border-default-300 transition-all duration-200 shadow-none",
                 value: "font-bold text-lg",
                 innerWrapper: "shadow-none",
@@ -1576,21 +1669,24 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               isDisabled={!connection.state.isConnected || isLoadingModes}
               onSelectionChange={handleModeChange}
               isLoading={isLoadingModes}
+              renderValue={() => (
+                <span className="font-bold text-lg">{modeSelectLabel}</span>
+              )}
             >
-              {(availableModes || []).filter(mode => mode && mode.name).map((mode) => (
+              {modeOptions.map((mode) => (
                 <SelectItem
                   key={mode.name}
-                  textValue={mode.name}
+                  textValue={getModeDisplayLabel(mode.name)}
                   className="text-xs py-1 px-2 min-h-6"
                 >
-                  {mode.name}
+                  {getModeDisplayLabel(mode.name)}
                 </SelectItem>
               ))}
             </Select>
           ) : (
             <div className="flex items-center px-2 h-10 cursor-not-allowed">
               <span className="font-bold text-lg text-default-foreground">
-                {radioMode.engineMode === 'voice' ? 'VOICE' : (radioMode.currentMode?.name || '')}
+                {modeSelectLabel}
               </span>
             </div>
           )}
