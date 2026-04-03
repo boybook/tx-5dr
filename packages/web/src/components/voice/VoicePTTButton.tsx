@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useConnection, usePTTState } from '../../store/radioStore';
-import { useHasMinRole } from '../../store/authStore';
+import { useAuth, useHasMinRole } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
+import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/react';
 import { createLogger } from '../../utils/logger';
 import type { VoiceCaptureController } from '../../hooks/useVoiceCaptureController';
 
@@ -21,14 +22,63 @@ interface VoicePTTButtonProps {
   voiceCaptureController: VoiceCaptureController;
 }
 
+const HTTP_PTT_HTTPS_WARNING_BYPASS_KEY = 'tx5dr.voice.ptt.httpHttpsWarningBypass';
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname === '[::1]';
+}
+
+function requiresHttpsForVoiceTransmit(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.location.protocol === 'http:' && !isLoopbackHostname(window.location.hostname);
+}
+
+function loadHttpsWarningBypass(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    return window.localStorage.getItem(HTTP_PTT_HTTPS_WARNING_BYPASS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistHttpsWarningBypass(enabled: boolean): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    if (enabled) {
+      window.localStorage.setItem(HTTP_PTT_HTTPS_WARNING_BYPASS_KEY, '1');
+    } else {
+      window.localStorage.removeItem(HTTP_PTT_HTTPS_WARNING_BYPASS_KEY);
+    }
+  } catch {
+    // ignore storage failures
+  }
+}
+
 export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureController }) => {
-  const { t } = useTranslation('voice');
+  const { t } = useTranslation(['voice', 'common']);
+  const { state: authState } = useAuth();
   const connection = useConnection();
   const { voicePttLock } = usePTTState();
   const isOperator = useHasMinRole(UserRole.OPERATOR);
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
 
   const [pttState, setPttState] = useState<PTTState>('idle');
   const [inputLevel, setInputLevel] = useState(0);
+  const [httpsRequiredModalOpen, setHttpsRequiredModalOpen] = useState(false);
+  const [httpsWarningBypassEnabled, setHttpsWarningBypassEnabled] = useState(loadHttpsWarningBypass);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const isPttDownRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -39,6 +89,19 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   useEffect(() => {
     voiceCaptureControllerRef.current = voiceCaptureController;
   }, [voiceCaptureController]);
+
+  const shouldBlockForHttpsWarning = useCallback(() => {
+    if (httpsWarningBypassEnabled) {
+      return false;
+    }
+
+    if (!requiresHttpsForVoiceTransmit()) {
+      return false;
+    }
+
+    setHttpsRequiredModalOpen(true);
+    return true;
+  }, [httpsWarningBypassEnabled]);
 
   // Derive PTT state from voice lock state
   useEffect(() => {
@@ -112,8 +175,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     }
   }, []);
 
-  // PTT press handler
-  const handlePTTDown = useCallback(async () => {
+  const attemptPTTDown = useCallback(async () => {
     if (!isOperator || !radioService || isPttDownRef.current) return;
     if (pttState === 'locked-by-other') return;
 
@@ -145,6 +207,12 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
     logger.debug('PTT pressed');
   }, [acquireWakeLock, isOperator, pttState, radioService, voiceCaptureController]);
+
+  // PTT press handler
+  const handlePTTDown = useCallback(async () => {
+    if (shouldBlockForHttpsWarning()) return;
+    await attemptPTTDown();
+  }, [attemptPTTDown, shouldBlockForHttpsWarning]);
 
   // PTT release handler
   const handlePTTUp = useCallback(() => {
@@ -265,6 +333,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
   const { bgClass, label, subLabel } = getButtonStyle();
   const isDisabled = !isOperator || pttState === 'locked-by-other';
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const meterPercent = Math.round(Math.max(0, Math.min(1, inputLevel)) * 100);
   const meterIsArmed = voiceCaptureController.captureState !== 'idle';
   const meterFillPercent = meterIsArmed
@@ -281,83 +350,144 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const meterFillClass = pttState === 'transmitting'
     ? 'from-danger-500 via-warning-400 to-success-300'
     : 'from-primary-500 via-success-400 to-warning-300';
+  const httpsRoleTitle = isAdmin
+    ? t('ptt.httpsRequiredRoleTitleAdmin')
+    : isOperator
+      ? t('ptt.httpsRequiredRoleTitleOperator')
+      : t('ptt.httpsRequiredRoleTitleViewer');
+  const httpsRoleBody = isAdmin
+    ? t('ptt.httpsRequiredRoleBodyAdmin')
+    : isOperator
+      ? t('ptt.httpsRequiredRoleBodyOperator')
+      : t('ptt.httpsRequiredRoleBodyViewer');
+  const currentRoleLabel = authState.isPublicViewer
+    ? t('ptt.httpsRequiredRolePublicViewer')
+    : authState.role
+      ? t(`common:role.${authState.role}`)
+      : t('ptt.httpsRequiredRoleUnauthenticated');
+
+  const dismissHttpsWarning = useCallback((rememberChoice: boolean) => {
+    if (rememberChoice) {
+      persistHttpsWarningBypass(true);
+      setHttpsWarningBypassEnabled(true);
+    }
+    setHttpsRequiredModalOpen(false);
+  }, []);
 
   return (
-    <div className="flex h-20 w-full items-stretch gap-1.5 md:h-full md:w-[7.75rem] md:self-stretch">
-      <button
-        ref={buttonRef}
-        type="button"
-        className={`
-          h-full flex-1 rounded-lg px-2 flex flex-col items-center justify-center
-          transition-all duration-150 select-none touch-none
-          text-white font-bold whitespace-nowrap
-          [-webkit-touch-callout:none] [-webkit-user-select:none]
-          ${bgClass}
-          ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
-        `}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          handlePTTDown();
-        }}
-        onMouseUp={handlePTTUp}
-        onMouseLeave={() => {
-          if (isPttDownRef.current) handlePTTUp();
-        }}
-        onTouchStart={(e) => {
-          e.preventDefault();
-          handlePTTDown();
-        }}
-        onTouchEnd={(e) => {
-          e.preventDefault();
-          handlePTTUp();
-        }}
-        onTouchCancel={handlePTTUp}
-        disabled={isDisabled}
-        aria-label={t('ptt.title')}
-      >
-        <span className="text-xl leading-tight">{label}</span>
-        {subLabel && (
-          <span className="text-xs font-normal opacity-80 mt-1">{subLabel}</span>
-        )}
-      </button>
-
-      <div
-        className={`
-          relative h-full w-3.5 shrink-0 rounded-lg border p-[2px] overflow-hidden md:w-4
-          transition-colors duration-150
-          ${meterContainerClass}
-        `}
-        title={t('ptt.inputLevelTitle', { percent: meterPercent })}
-        aria-label={t('ptt.inputLevelAria', { percent: meterPercent })}
-        role="meter"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={meterPercent}
-        aria-valuetext={t('ptt.inputLevelAria', { percent: meterPercent })}
-      >
-        <div className="relative h-full w-full rounded-md bg-default-200/70 dark:bg-default-100/10 overflow-hidden">
-          <div
-            className={`
-              absolute inset-x-0 bottom-0 rounded-md bg-gradient-to-t transition-[height,opacity] duration-75 ease-out
-              ${meterFillClass}
-            `}
-            style={{
-              height: `${meterFillPercent}%`,
-              opacity: meterIsArmed ? 1 : 0.35,
-            }}
-          />
-          <div
-            className="absolute inset-x-0 h-[2px] rounded-full bg-white/90 transition-[bottom,opacity] duration-100 ease-out"
-            style={{
-              bottom: `${Math.max(0, peakMarkerPercent - 2)}%`,
-              opacity: meterIsArmed && meterFillPercent > 0 ? 1 : 0,
-            }}
-          />
-          {!meterIsArmed && (
-            <div className="absolute inset-x-0 bottom-0 h-1.5 rounded-full bg-default-400/35" />
+    <>
+      <div className="flex h-20 w-full items-stretch gap-1.5 md:h-full md:w-[7.75rem] md:self-stretch">
+        <button
+          ref={buttonRef}
+          type="button"
+          className={`
+            h-full flex-1 rounded-lg px-2 flex flex-col items-center justify-center
+            transition-all duration-150 select-none touch-none
+            text-white font-bold whitespace-nowrap
+            [-webkit-touch-callout:none] [-webkit-user-select:none]
+            ${bgClass}
+            ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
+          `}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            handlePTTDown();
+          }}
+          onMouseUp={handlePTTUp}
+          onMouseLeave={() => {
+            if (isPttDownRef.current) handlePTTUp();
+          }}
+          onTouchStart={(e) => {
+            e.preventDefault();
+            handlePTTDown();
+          }}
+          onTouchEnd={(e) => {
+            e.preventDefault();
+            handlePTTUp();
+          }}
+          onTouchCancel={handlePTTUp}
+          disabled={isDisabled}
+          aria-label={t('ptt.title')}
+        >
+          <span className="text-xl leading-tight">{label}</span>
+          {subLabel && (
+            <span className="text-xs font-normal opacity-80 mt-1">{subLabel}</span>
           )}
+        </button>
+
+        <div
+          className={`
+            relative h-full w-3.5 shrink-0 rounded-lg border p-[2px] overflow-hidden md:w-4
+            transition-colors duration-150
+            ${meterContainerClass}
+          `}
+          title={t('ptt.inputLevelTitle', { percent: meterPercent })}
+          aria-label={t('ptt.inputLevelAria', { percent: meterPercent })}
+          role="meter"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={meterPercent}
+          aria-valuetext={t('ptt.inputLevelAria', { percent: meterPercent })}
+        >
+          <div className="relative h-full w-full rounded-md bg-default-200/70 dark:bg-default-100/10 overflow-hidden">
+            <div
+              className={`
+                absolute inset-x-0 bottom-0 rounded-md bg-gradient-to-t transition-[height,opacity] duration-75 ease-out
+                ${meterFillClass}
+              `}
+              style={{
+                height: `${meterFillPercent}%`,
+                opacity: meterIsArmed ? 1 : 0.35,
+              }}
+            />
+            <div
+              className="absolute inset-x-0 h-[2px] rounded-full bg-white/90 transition-[bottom,opacity] duration-100 ease-out"
+              style={{
+                bottom: `${Math.max(0, peakMarkerPercent - 2)}%`,
+                opacity: meterIsArmed && meterFillPercent > 0 ? 1 : 0,
+              }}
+            />
+            {!meterIsArmed && (
+              <div className="absolute inset-x-0 bottom-0 h-1.5 rounded-full bg-default-400/35" />
+            )}
+          </div>
         </div>
       </div>
-    </div>
+
+      <Modal isOpen={httpsRequiredModalOpen} onOpenChange={setHttpsRequiredModalOpen} placement="center">
+        <ModalContent>
+          {(onClose) => (
+            <>
+              <ModalHeader>{t('ptt.httpsRequiredTitle')}</ModalHeader>
+              <ModalBody className="space-y-3">
+                <p className="text-sm text-default-700">
+                  {t('ptt.httpsRequiredDescription', { origin: currentOrigin })}
+                </p>
+                <div className="rounded-lg border border-divider bg-default-50 px-3 py-3 text-sm text-default-700">
+                  <p className="font-medium">{httpsRoleTitle}</p>
+                  <p className="mt-1 text-default-600">{httpsRoleBody}</p>
+                </div>
+                <div className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-3 text-sm text-warning-900">
+                  <p className="font-medium">{t('ptt.httpsRequiredCurrentIdentityLabel')}</p>
+                  <p className="mt-1">
+                    {t('ptt.httpsRequiredCurrentIdentityValue', { role: currentRoleLabel })}
+                  </p>
+                </div>
+                <p className="text-xs text-default-500">
+                  {t('ptt.httpsRequiredBypassHint')}
+                </p>
+              </ModalBody>
+              <ModalFooter>
+                <Button variant="light" onPress={onClose}>
+                  {t('ptt.httpsRequiredCancel')}
+                </Button>
+                <Button color="primary" onPress={() => dismissHttpsWarning(true)}>
+                  {t('ptt.httpsRequiredDontWarnAgain')}
+                </Button>
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+    </>
   );
 };

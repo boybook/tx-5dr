@@ -1,3 +1,5 @@
+import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
+
 const { contextBridge, ipcRenderer } = require('electron');
 
 /**
@@ -132,6 +134,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 获取所有配置
      */
     getAll: () => ipcRenderer.invoke('config:getAll')
+  },
+
+  https: {
+    getStatus: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:getStatus'),
+    getShareUrls: (): Promise<string[]> => ipcRenderer.invoke('https:getShareUrls'),
+    generateSelfSigned: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:generateSelfSigned'),
+    importPemCertificate: (certPath: string, keyPath: string): Promise<DesktopHttpsStatus> =>
+      ipcRenderer.invoke('https:importPemCertificate', certPath, keyPath),
+    applySettings: (update: {
+      enabled?: boolean;
+      mode?: DesktopHttpsMode;
+      httpsPort?: number;
+      redirectExternalHttp?: boolean;
+    }): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:applySettings', update),
+    disable: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:disable'),
   }
 });
 
@@ -173,6 +190,19 @@ declare global {
         set(key: string, value: any): Promise<void>;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         getAll(): Promise<Record<string, any>>;
+      };
+      https: {
+        getStatus(): Promise<DesktopHttpsStatus>;
+        getShareUrls(): Promise<string[]>;
+        generateSelfSigned(): Promise<DesktopHttpsStatus>;
+        importPemCertificate(certPath: string, keyPath: string): Promise<DesktopHttpsStatus>;
+        applySettings(update: {
+          enabled?: boolean;
+          mode?: DesktopHttpsMode;
+          httpsPort?: number;
+          redirectExternalHttp?: boolean;
+        }): Promise<DesktopHttpsStatus>;
+        disable(): Promise<DesktopHttpsStatus>;
       };
     };
   }

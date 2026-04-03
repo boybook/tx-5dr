@@ -1,11 +1,12 @@
 // Minimal static+proxy server for production and standalone access.
 // - Serves built web (packages/web/dist)
 // - Proxies /api and WebSocket to backend (TARGET)
-// - Can bind 0.0.0.0 to be reachable on LAN/Internet
+// - Optionally exposes an HTTPS entrypoint for browser/LAN access
 
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import tls from 'node:tls';
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
@@ -13,6 +14,13 @@ import url from 'node:url';
 const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || (process.env.PUBLIC === '1' ? '0.0.0.0' : '127.0.0.1');
 const TARGET = process.env.TARGET || 'http://127.0.0.1:4000';
+const DEV_WEB_TARGET = process.env.DEV_WEB_TARGET || '';
+const LIVEKIT_TARGET = process.env.LIVEKIT_TARGET || '';
+const HTTPS_ENABLE = process.env.HTTPS_ENABLE === '1';
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || 8443);
+const HTTPS_CERT_FILE = process.env.HTTPS_CERT_FILE || '';
+const HTTPS_KEY_FILE = process.env.HTTPS_KEY_FILE || '';
+const HTTPS_REDIRECT_EXTERNAL_HTTP = process.env.HTTPS_REDIRECT_EXTERNAL_HTTP !== '0';
 
 // DEFAULT to packaged path layout; allow override via STATIC_DIR
 const resourcesPath = process.env.APP_RESOURCES || process.cwd();
@@ -63,17 +71,50 @@ function serveFile(res, absPath) {
   });
 }
 
-function proxyHttp(req, res, targetBase = TARGET, rewritePath = null) {
+function parseHostHeader(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { hostname: '', port: '' };
+  if (raw.startsWith('[')) {
+    const end = raw.indexOf(']');
+    if (end !== -1) {
+      const hostname = raw.slice(1, end);
+      const port = raw.slice(end + 1).replace(/^:/, '');
+      return { hostname, port };
+    }
+  }
+  const [hostname, port = ''] = raw.split(':');
+  return { hostname, port };
+}
+
+function isLoopbackHostname(hostname) {
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname === '[::1]';
+}
+
+function buildForwardedHeaders(req, entryScheme, targetBase = TARGET) {
+  const hostHeader = req.headers.host || '';
+  const parsedHost = parseHostHeader(hostHeader);
+  const forwardedPort = parsedHost.port || String(entryScheme === 'https' ? HTTPS_PORT : PORT);
+  const targetUrl = new URL(targetBase);
+
+  return {
+    ...req.headers,
+    host: targetUrl.host,
+    'x-forwarded-for': (req.socket.remoteAddress || '') + (req.headers['x-forwarded-for'] ? `, ${req.headers['x-forwarded-for']}` : ''),
+    'x-forwarded-proto': entryScheme,
+    'x-forwarded-host': hostHeader,
+    'x-forwarded-port': forwardedPort,
+  };
+}
+
+function proxyHttp(req, res, entryScheme, targetBase = TARGET, rewritePath = null) {
   const targetUrl = new URL(targetBase);
   const isTLS = targetUrl.protocol === 'https:';
   const client = isTLS ? https : http;
   const pathValue = rewritePath ? rewritePath(req.url || '/') : (req.url || '/');
-
-  const headers = { ...req.headers };
-  headers['host'] = targetUrl.host;
-  headers['x-forwarded-for'] = (req.socket.remoteAddress || '') + (headers['x-forwarded-for'] ? `, ${headers['x-forwarded-for']}` : '');
-  headers['x-forwarded-proto'] = 'http';
-  headers['x-forwarded-host'] = req.headers.host || '';
+  const headers = buildForwardedHeaders(req, entryScheme, targetBase);
 
   const options = {
     protocol: targetUrl.protocol,
@@ -82,10 +123,10 @@ function proxyHttp(req, res, targetBase = TARGET, rewritePath = null) {
     method: req.method,
     path: pathValue,
     headers,
+    rejectUnauthorized: false,
   };
 
   const proxyReq = client.request(options, (proxyRes) => {
-    // Pass through headers; add minimal CORS
     for (const [k, v] of Object.entries(proxyRes.headers)) {
       if (typeof v !== 'undefined') res.setHeader(k, v);
     }
@@ -94,11 +135,9 @@ function proxyHttp(req, res, targetBase = TARGET, rewritePath = null) {
     proxyRes.pipe(res, { end: true });
   });
   proxyReq.on('error', (err) => {
-    // 更明确地返回“后端未启动/不可达”的语义，便于前端识别
     const offlineCodes = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET']);
     const isOffline = offlineCodes.has(err && err.code);
     const status = isOffline ? 503 : 502;
-    // 需要在发送响应头之前设置所有 header，避免 headersSent 后再次 setHeader
     const headers = {
       'Content-Type': 'application/json; charset=utf-8',
       'x-proxy-error': isOffline ? 'backend_offline' : 'proxy_error',
@@ -121,27 +160,73 @@ function proxyHttp(req, res, targetBase = TARGET, rewritePath = null) {
   }
 }
 
-const server = http.createServer((req, res) => {
+function stripPrefixFromUrl(rawUrl, prefix) {
+  const parsed = url.parse(rawUrl || '/');
+  const pathname = parsed.pathname || '/';
+  let nextPathname = pathname;
+
+  if (pathname === prefix) {
+    nextPathname = '/';
+  } else if (pathname.startsWith(`${prefix}/`)) {
+    nextPathname = pathname.slice(prefix.length) || '/';
+  }
+
+  return url.format({
+    ...parsed,
+    pathname: nextPathname,
+  });
+}
+
+function shouldRedirectToHttps(req) {
+  if (!HTTPS_ENABLE || !HTTPS_REDIRECT_EXTERNAL_HTTP) return false;
+  const { hostname } = parseHostHeader(req.headers.host || '');
+  return Boolean(hostname) && !isLoopbackHostname(hostname);
+}
+
+function buildHttpsRedirectUrl(req) {
+  const parsed = parseHostHeader(req.headers.host || '');
+  const hostname = parsed.hostname || 'localhost';
+  const targetHost = hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname;
+  return `https://${targetHost}:${HTTPS_PORT}${req.url || '/'}`;
+}
+
+function handleRequest(req, res, entryScheme) {
   try {
     const parsed = url.parse(req.url || '/');
     let pathname = decodeURIComponent(parsed.pathname || '/');
 
-    // CORS preflight
+    if (entryScheme === 'http' && shouldRedirectToHttps(req)) {
+      res.writeHead(308, { Location: buildHttpsRedirectUrl(req) });
+      return res.end();
+    }
+
     if (req.method === 'OPTIONS') {
       addCors(res);
       res.statusCode = 204;
       return res.end();
     }
 
-    // Reverse proxy for API
     if (pathname === '/api' || pathname.startsWith('/api/')) {
-      return proxyHttp(req, res);
+      return proxyHttp(req, res, entryScheme);
+    }
+
+    if (LIVEKIT_TARGET && (pathname === '/livekit' || pathname.startsWith('/livekit/'))) {
+      return proxyHttp(
+        req,
+        res,
+        entryScheme,
+        LIVEKIT_TARGET,
+        (requestUrl) => stripPrefixFromUrl(requestUrl, '/livekit'),
+      );
+    }
+
+    if (DEV_WEB_TARGET) {
+      return proxyHttp(req, res, entryScheme, DEV_WEB_TARGET);
     }
 
     if (pathname === '/') pathname = '/index.html';
     const absPath = path.join(STATIC_DIR, pathname);
 
-    // Prevent path traversal
     if (!absPath.startsWith(path.resolve(STATIC_DIR))) {
       res.statusCode = 403;
       addCors(res);
@@ -149,7 +234,6 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // If not exists and looks like SPA route, fall back to index.html
     if (!fs.existsSync(absPath)) {
       return serveFile(res, path.join(STATIC_DIR, 'index.html'));
     }
@@ -159,66 +243,122 @@ const server = http.createServer((req, res) => {
     addCors(res);
     res.end('Internal Server Error');
   }
-});
+}
 
-// WebSocket proxy for /api/* upgrades
-server.on('upgrade', (req, socket, head) => {
-  try {
-    const u = url.parse(req.url || '/');
-    const pathname = u.pathname || '';
-    const isApiUpgrade = pathname === '/api/ws' || pathname.startsWith('/api/');
-    if (!isApiUpgrade) {
-      socket.destroy();
-      return;
-    }
-    const target = new URL(TARGET);
-    const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
-    const upstreamPath = req.url;
-    const upstream = net.connect(port, target.hostname, () => {
-      const headers = [
-        `GET ${upstreamPath} HTTP/1.1`,
-        `Host: ${target.host}`,
-        'Connection: Upgrade',
-        'Upgrade: websocket',
-      ];
-      const hopByHop = new Set(['connection', 'upgrade', 'host']);
-      for (const [k, v] of Object.entries(req.headers)) {
-        if (!v) continue;
-        if (hopByHop.has(k.toLowerCase())) continue;
-        if (Array.isArray(v)) {
-          for (const vv of v) headers.push(`${k}: ${vv}`);
-        } else {
-          headers.push(`${k}: ${v}`);
-        }
+function attachUpgrade(server, entryScheme) {
+  server.on('upgrade', (req, socket, head) => {
+    try {
+      const u = url.parse(req.url || '/');
+      const pathname = u.pathname || '';
+      const isApiUpgrade = pathname === '/api/ws' || pathname.startsWith('/api/');
+      const isLiveKitUpgrade = LIVEKIT_TARGET && (pathname === '/livekit' || pathname.startsWith('/livekit/'));
+      const targetBase = isApiUpgrade ? TARGET : (isLiveKitUpgrade ? LIVEKIT_TARGET : DEV_WEB_TARGET);
+      if (!targetBase) {
+        socket.destroy();
+        return;
       }
-      headers.push('', '');
-      upstream.write(headers.join('\r\n'));
-      if (head && head.length) upstream.write(head);
-      upstream.pipe(socket);
-      socket.pipe(upstream);
-    });
-    socket.on('error', () => upstream.destroy());
-    upstream.on('error', () => socket.destroy());
-  } catch {
-    socket.destroy();
+      if (entryScheme === 'http' && shouldRedirectToHttps(req)) {
+        socket.write('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
+      const target = new URL(targetBase);
+      const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
+      const upstreamPath = isLiveKitUpgrade
+        ? stripPrefixFromUrl(req.url || '/', '/livekit')
+        : (req.url || '/');
+      const connect = () => {
+        const forwardedHeaders = buildForwardedHeaders(req, entryScheme, targetBase);
+        const headers = [
+          `GET ${upstreamPath} HTTP/1.1`,
+          `Host: ${target.host}`,
+          'Connection: Upgrade',
+          'Upgrade: websocket',
+        ];
+        const hopByHop = new Set(['connection', 'upgrade', 'host']);
+        for (const [k, v] of Object.entries(forwardedHeaders)) {
+          if (!v) continue;
+          if (hopByHop.has(k.toLowerCase())) continue;
+          if (Array.isArray(v)) {
+            for (const vv of v) headers.push(`${k}: ${vv}`);
+          } else {
+            headers.push(`${k}: ${v}`);
+          }
+        }
+        headers.push('', '');
+        return headers.join('\r\n');
+      };
+
+      const upstream = target.protocol === 'https:'
+        ? tls.connect({ host: target.hostname, port, rejectUnauthorized: false }, () => {
+            upstream.write(connect());
+            if (head && head.length) upstream.write(head);
+            upstream.pipe(socket);
+            socket.pipe(upstream);
+          })
+        : net.connect(port, target.hostname, () => {
+            upstream.write(connect());
+            if (head && head.length) upstream.write(head);
+            upstream.pipe(socket);
+            socket.pipe(upstream);
+          });
+
+      socket.on('error', () => upstream.destroy());
+      upstream.on('error', () => socket.destroy());
+    } catch {
+      socket.destroy();
+    }
+  });
+}
+
+const httpServer = http.createServer((req, res) => handleRequest(req, res, 'http'));
+attachUpgrade(httpServer, 'http');
+
+let httpsServer = null;
+if (HTTPS_ENABLE && HTTPS_CERT_FILE && HTTPS_KEY_FILE && fs.existsSync(HTTPS_CERT_FILE) && fs.existsSync(HTTPS_KEY_FILE)) {
+  try {
+    httpsServer = https.createServer({
+      cert: fs.readFileSync(HTTPS_CERT_FILE),
+      key: fs.readFileSync(HTTPS_KEY_FILE),
+    }, (req, res) => handleRequest(req, res, 'https'));
+    attachUpgrade(httpsServer, 'https');
+  } catch (err) {
+    console.error('[client-tools] failed to create HTTPS server:', err);
+    httpsServer = null;
+  }
+}
+
+httpServer.on('listening', () => {
+  const addr = httpServer.address();
+  const finalPort = typeof addr === 'object' && addr ? addr.port : PORT;
+  console.log(`[client-tools] http server listening on http://${HOST}:${finalPort}`);
+  console.log(`[client-tools] static dir: ${STATIC_DIR}`);
+  console.log(`[client-tools] api target: ${TARGET}`);
+  if (LIVEKIT_TARGET) {
+    console.log(`[client-tools] livekit target: ${LIVEKIT_TARGET}`);
+  }
+  if (DEV_WEB_TARGET) {
+    console.log(`[client-tools] dev web target: ${DEV_WEB_TARGET}`);
   }
 });
 
-server.on('listening', () => {
-  const addr = server.address();
-  const finalPort = typeof addr === 'object' && addr ? addr.port : PORT;
-  console.log(`[client-tools] static server listening on http://${HOST}:${finalPort}`);
-  console.log(`[client-tools] static dir: ${STATIC_DIR}`);
-  console.log(`[client-tools] api target: ${TARGET}`);
-});
-
-server.on('error', (err) => {
+httpServer.on('error', (err) => {
   console.error('[client-tools] server error:', err);
   process.exit(1);
 });
 
-// 支持端口回退：若端口占用则尝试下一个，最多尝试 50 次
-function listenWithFallback(startPort, host) {
+if (httpsServer) {
+  httpsServer.on('listening', () => {
+    console.log(`[client-tools] https server listening on https://${HOST}:${HTTPS_PORT}`);
+  });
+
+  httpsServer.on('error', (err) => {
+    console.error('[client-tools] https server error:', err);
+  });
+}
+
+function listenWithFallback(server, startPort, host) {
   return new Promise((resolve) => {
     let attempt = 0;
     function tryListen(p) {
@@ -244,17 +384,36 @@ function listenWithFallback(startPort, host) {
   });
 }
 
-listenWithFallback(Number(PORT), HOST).then((ok) => {
-  if (!ok) process.exit(1);
+function listenExact(server, port, host) {
+  return new Promise((resolve) => {
+    server.once('error', (err) => {
+      console.error('[client-tools] failed to bind HTTPS port:', err?.code || err);
+      resolve(false);
+    });
+    server.listen(port, host, () => resolve(true));
+  });
+}
+
+Promise.all([
+  listenWithFallback(httpServer, Number(PORT), HOST),
+  httpsServer ? listenExact(httpsServer, Number(HTTPS_PORT), HOST) : Promise.resolve(true),
+]).then(([httpOk, httpsOk]) => {
+  if (!httpOk) process.exit(1);
+  if (!httpsOk && httpsServer) {
+    try { httpsServer.close(); } catch {}
+  }
 });
 
-// graceful shutdown
 function shutdown() {
-  try {
-    server.close(() => process.exit(0));
-  } catch {
-    process.exit(0);
-  }
+  const closers = [
+    new Promise((resolve) => {
+      try { httpServer.close(() => resolve()); } catch { resolve(); }
+    }),
+    httpsServer ? new Promise((resolve) => {
+      try { httpsServer.close(() => resolve()); } catch { resolve(); }
+    }) : Promise.resolve(),
+  ];
+  Promise.allSettled(closers).finally(() => process.exit(0));
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

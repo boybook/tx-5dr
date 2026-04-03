@@ -38,7 +38,22 @@
     "micPermissionNeeded": "需要麦克风权限",
     "micPermissionDenied": "麦克风权限被拒绝",
     "captureError": "音频采集错误",
-    "wakeLockFailed": "屏幕保持唤醒失败"
+    "wakeLockFailed": "屏幕保持唤醒失败",
+    "httpsRequiredTitle": "发射功能需要 HTTPS",
+    "httpsRequiredDescription": "当前页面是非本机的 HTTP 地址（{{origin}}）。浏览器安全策略会阻止麦克风与实时语音发射能力，因此这里无法启用 PTT 发射。",
+    "httpsRequiredRoleTitleAdmin": "你当前是管理员",
+    "httpsRequiredRoleBodyAdmin": "请先为当前入口配置 HTTPS，再重新用 HTTPS 地址访问。桌面版可在系统设置里开启浏览器 HTTPS；服务器部署请配置反向代理证书或正式签名证书。",
+    "httpsRequiredRoleTitleOperator": "你当前有操作权限",
+    "httpsRequiredRoleBodyOperator": "你的身份已经可以操作电台，但当前页面不是安全入口。请联系管理员开启 HTTPS，或改用 HTTPS 地址重新访问后再发射。",
+    "httpsRequiredRoleTitleViewer": "你当前没有发射权限",
+    "httpsRequiredRoleBodyViewer": "即使解决 HTTPS，观察者身份也不能直接发射。请联系管理员同时处理两件事：为当前入口开启 HTTPS，并授予可发射的操作权限。",
+    "httpsRequiredCurrentIdentityLabel": "当前身份",
+    "httpsRequiredCurrentIdentityValue": "你现在是：{{role}}",
+    "httpsRequiredRolePublicViewer": "公开观察者",
+    "httpsRequiredRoleUnauthenticated": "未登录用户",
+    "httpsRequiredBypassHint": "如果你已经在当前浏览器中手动放行了相关安全限制，可以先记住本次选择并关闭提示，随后再回到主 PTT 按钮重新发射。",
+    "httpsRequiredCancel": "取消",
+    "httpsRequiredDontWarnAgain": "不再提示"
   },
   "qso": {
     "title": "语音通联日志",

@@ -1,15 +1,26 @@
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker } from 'electron';
 import log from 'electron-log/main';
-import { homedir } from 'node:os';
+import { homedir, hostname as getHostname, networkInterfaces } from 'node:os';
 import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
+import https from 'https';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
+import type { DesktopHttpsStatus } from '@tx5dr/contracts';
 import { createLogger } from './utils/logger.js';
 import { getMessages } from './i18n.js';
+import {
+  DEFAULT_DESKTOP_HTTPS_CONFIG,
+  buildDesktopHttpsStatus,
+  disableDesktopHttps,
+  generateSelfSignedCertificate,
+  importPemCertificate,
+  sanitizeDesktopHttpsConfig,
+  type PersistentDesktopHttpsConfig,
+} from './desktopHttps.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +34,6 @@ let livekitProcess: import('node:child_process').ChildProcess | null = null;
 let serverProcess: import('node:child_process').ChildProcess | null = null;
 let webProcess: import('node:child_process').ChildProcess | null = null;
 let selectedLiveKitPort: number | null = null;
-let selectedLiveKitTcpPort: number | null = null;
 let selectedWebPort: number | null = null;
 let selectedServerPort: number | null = null;
 
@@ -39,6 +49,7 @@ const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
 
 interface ElectronSettings {
   closeBehavior: 'ask' | 'tray' | 'quit';
+  desktopHttps?: PersistentDesktopHttpsConfig;
 }
 
 interface LiveKitCredentialFileData {
@@ -54,7 +65,10 @@ interface WindowsVCRuntimeStatus {
   detail: string;
 }
 
-const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = { closeBehavior: 'ask' };
+const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
+  closeBehavior: 'ask',
+  desktopHttps: DEFAULT_DESKTOP_HTTPS_CONFIG,
+};
 const VC_REDIST_X64_URL = 'https://aka.ms/vc14/vc_redist.x64.exe';
 const VC_REDIST_REGISTRY_KEYS = [
   'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
@@ -70,7 +84,11 @@ function loadElectronSettings(): ElectronSettings {
   try {
     const raw = fs.readFileSync(getElectronSettingsPath(), 'utf-8');
     const parsed = JSON.parse(raw);
-    return { ...DEFAULT_ELECTRON_SETTINGS, ...parsed };
+    return {
+      ...DEFAULT_ELECTRON_SETTINGS,
+      ...parsed,
+      desktopHttps: sanitizeDesktopHttpsConfig(parsed?.desktopHttps),
+    };
   } catch {
     return { ...DEFAULT_ELECTRON_SETTINGS };
   }
@@ -84,6 +102,172 @@ function saveElectronSettings(settings: ElectronSettings): void {
   } catch (err) {
     logger.error('failed to save electron settings', err);
   }
+}
+
+function getDesktopHttpsConfig(): PersistentDesktopHttpsConfig {
+  return sanitizeDesktopHttpsConfig(loadElectronSettings().desktopHttps);
+}
+
+function isDevelopmentRuntime(): boolean {
+  return process.env.NODE_ENV === 'development' && !app.isPackaged;
+}
+
+function getLanIpv4Addresses(): string[] {
+  const interfaces = networkInterfaces();
+  const addresses = new Set<string>();
+
+  for (const nets of Object.values(interfaces)) {
+    if (!nets) continue;
+    for (const item of nets) {
+      if (item.family !== 'IPv4' || item.internal || item.address.startsWith('169.254.')) continue;
+      addresses.add(item.address);
+    }
+  }
+
+  return Array.from(addresses);
+}
+
+async function getDesktopHttpsStatus(): Promise<DesktopHttpsStatus> {
+  return buildDesktopHttpsStatus({
+    configDir: getAppConfigDir(),
+    config: getDesktopHttpsConfig(),
+    hostname: getHostname(),
+    httpPort: selectedWebPort || 5173,
+    lanAddresses: getLanIpv4Addresses(),
+  });
+}
+
+function buildWebChildEnv(serverPort: number): Record<string, string> {
+  const httpsConfig = getDesktopHttpsConfig();
+  const env: Record<string, string> = {
+    PORT: String(selectedWebPort || 5173),
+    TARGET: `http://127.0.0.1:${serverPort}`,
+    PUBLIC: '1',
+  };
+
+  if (isDevelopmentRuntime()) {
+    env.DEV_WEB_TARGET = 'http://127.0.0.1:5173';
+  } else {
+    env.STATIC_DIR = join(resourcesRoot(), 'app', 'packages', 'web', 'dist');
+  }
+
+  const livekitTarget = resolveLiveKitGatewayTarget();
+  if (livekitTarget) {
+    env.LIVEKIT_TARGET = livekitTarget;
+  }
+
+  if (
+    httpsConfig.enabled &&
+    httpsConfig.certPath &&
+    httpsConfig.keyPath &&
+    fs.existsSync(httpsConfig.certPath) &&
+    fs.existsSync(httpsConfig.keyPath)
+  ) {
+    env.HTTPS_ENABLE = '1';
+    env.HTTPS_PORT = String(httpsConfig.httpsPort);
+    env.HTTPS_CERT_FILE = httpsConfig.certPath;
+    env.HTTPS_KEY_FILE = httpsConfig.keyPath;
+    env.HTTPS_REDIRECT_EXTERNAL_HTTP = httpsConfig.redirectExternalHttp ? '1' : '0';
+  }
+
+  return env;
+}
+
+function resolveLiveKitGatewayTarget(): string | null {
+  if (process.env.LIVEKIT_DISABLED === '1' && !selectedLiveKitPort) {
+    return null;
+  }
+
+  if (selectedLiveKitPort) {
+    return `http://127.0.0.1:${selectedLiveKitPort}`;
+  }
+
+  const raw = process.env.LIVEKIT_URL?.trim();
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
+    return parsed.toString().replace(/\/$/, '');
+  } catch (error) {
+    logger.warn('failed to resolve livekit gateway target from environment', { raw, error });
+    return null;
+  }
+}
+
+function webGatewayEntryPath(): string {
+  if (app.isPackaged) {
+    return join(resourcesRoot(), 'app', 'packages', 'client-tools', 'src', 'proxy.js');
+  }
+  return path.resolve(__dirname, '../../client-tools/src/proxy.js');
+}
+
+async function restartWebGateway(): Promise<void> {
+  if (!selectedServerPort || !selectedWebPort) {
+    throw new Error('web_gateway_not_ready');
+  }
+
+  const webEntry = webGatewayEntryPath();
+  const env = buildWebChildEnv(selectedServerPort);
+
+  if (webProcess) {
+    await killProcess(webProcess, 'web');
+    webProcess = null;
+  }
+
+  webProcess = runChild('client-tools', webEntry, env);
+
+  try {
+    await waitForWebGatewayReady(env, selectedWebPort);
+  } catch (error) {
+    if (webProcess) {
+      await killProcess(webProcess, 'web');
+      webProcess = null;
+    }
+    throw error;
+  }
+}
+
+async function persistDesktopHttpsConfig(
+  nextConfig: Partial<PersistentDesktopHttpsConfig>,
+): Promise<DesktopHttpsStatus> {
+  const settings = loadElectronSettings();
+  settings.desktopHttps = sanitizeDesktopHttpsConfig({
+    ...settings.desktopHttps,
+    ...nextConfig,
+  });
+  saveElectronSettings(settings);
+
+  if (webProcess && selectedServerPort && selectedWebPort) {
+    await restartWebGateway();
+  }
+
+  return getDesktopHttpsStatus();
+}
+
+async function applyDesktopHttpsSettings(update: Partial<PersistentDesktopHttpsConfig>): Promise<DesktopHttpsStatus> {
+  const current = getDesktopHttpsConfig();
+  const next = sanitizeDesktopHttpsConfig({
+    ...current,
+    ...update,
+  });
+
+  if (next.enabled) {
+    const nextStatus = await buildDesktopHttpsStatus({
+      configDir: getAppConfigDir(),
+      config: next,
+      hostname: getHostname(),
+      httpPort: selectedWebPort || 5173,
+      lanAddresses: getLanIpv4Addresses(),
+    });
+    if (nextStatus.certificateStatus !== 'valid') {
+      throw new Error('https_certificate_required');
+    }
+  }
+
+  return persistDesktopHttpsConfig(next);
 }
 
 // ===== macOS 后台节流防护 =====
@@ -545,14 +729,22 @@ function ensureLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: str
 }
 
 // 简单 HTTP 等待
-async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Promise<boolean> {
+async function waitForUrl(url: string, timeoutMs = 15000, intervalMs = 300): Promise<boolean> {
   const started = Date.now();
   return new Promise((resolve) => {
     function once() {
       try {
         const u = new URL(url);
-        const req = http.request(
-          { hostname: u.hostname, port: Number(u.port || 80), path: u.pathname, method: 'GET', timeout: 2000 },
+        const client = u.protocol === 'https:' ? https : http;
+        const req = client.request(
+          {
+            hostname: u.hostname,
+            port: Number(u.port || (u.protocol === 'https:' ? 443 : 80)),
+            path: `${u.pathname}${u.search}`,
+            method: 'GET',
+            timeout: 2000,
+            ...(u.protocol === 'https:' ? { rejectUnauthorized: false } : {}),
+          },
           (res) => {
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 500) return resolve(true);
             res.resume();
@@ -575,6 +767,29 @@ async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Pr
     }
     once();
   });
+}
+
+async function waitForHttp(url: string, timeoutMs = 15000, intervalMs = 300): Promise<boolean> {
+  return waitForUrl(url, timeoutMs, intervalMs);
+}
+
+async function waitForWebGatewayReady(
+  env: Record<string, string>,
+  webPort: number,
+  timeoutMs = 15000,
+  intervalMs = 200,
+): Promise<void> {
+  const httpOk = await waitForUrl(`http://127.0.0.1:${webPort}`, timeoutMs, intervalMs);
+  if (!httpOk) {
+    throw new Error('web_service_restart_timeout');
+  }
+
+  if (env.HTTPS_ENABLE === '1' && env.HTTPS_PORT) {
+    const httpsOk = await waitForUrl(`https://127.0.0.1:${env.HTTPS_PORT}`, timeoutMs, intervalMs);
+    if (!httpsOk) {
+      throw new Error('web_https_restart_timeout');
+    }
+  }
 }
 
 /**
@@ -669,7 +884,7 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     mainWindowInstance = null;
   }
 
-  const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
+  const isDevelopment = isDevelopmentRuntime();
 
   const mainWindow = new BrowserWindow({
     width: 1200,
@@ -899,12 +1114,26 @@ function openLogInTerminal() {
 /**
  * 在系统浏览器中打开 web 界面（附带认证 token）
  */
-function openInBrowser() {
-  const base = getWebUrl();
+async function openInBrowser() {
+  const status = await getDesktopHttpsStatus().catch(() => null);
+  const base = status?.browserAccessUrl || getWebUrl();
+
+  if (status?.usingSelfSigned) {
+    const msgs = getMessages(app.getLocale());
+    await dialog.showMessageBox({
+      type: 'info',
+      title: 'TX-5DR',
+      message: msgs.httpsSelfSigned?.title || 'Self-signed certificate',
+      detail: msgs.httpsSelfSigned?.detail || 'Your browser may show a security warning the first time. Continue manually if you trust this device.',
+      buttons: ['OK'],
+      noLink: true,
+    });
+  }
+
   const url = embeddedAdminToken
     ? `${base}?auth_token=${encodeURIComponent(embeddedAdminToken)}`
     : base;
-  void shell.openExternal(url);
+  await shell.openExternal(url);
 }
 
 async function checkServerHealth(): Promise<boolean> {
@@ -960,13 +1189,13 @@ async function cleanup() {
     serverCheckInterval = null;
   }
 
+  if (webProcess) {
+    await killProcess(webProcess, 'web');
+    webProcess = null;
+  }
+
   // 生产模式：关闭子进程
   if (!isDevelopment) {
-    // 依次关闭进程
-    if (webProcess) {
-      await killProcess(webProcess, 'web');
-      webProcess = null;
-    }
     if (serverProcess) {
       await killProcess(serverProcess, 'server');
       serverProcess = null;
@@ -976,6 +1205,10 @@ async function cleanup() {
       livekitProcess = null;
     }
   }
+
+  selectedLiveKitPort = null;
+  selectedServerPort = null;
+  selectedWebPort = null;
 
   // 清理系统托盘
   if (trayInstance) {
@@ -1046,13 +1279,39 @@ async function createWindow() {
     }
 
     logger.info('backend server connected');
+
+    selectedServerPort = 4000;
+    selectedWebPort = await findFreePort(5174, 50, selectedServerPort, '0.0.0.0');
+
+    const webEntry = webGatewayEntryPath();
+    const webEnv = buildWebChildEnv(selectedServerPort);
+
+    logger.info(`starting development browser gateway on port ${selectedWebPort}`);
+    webProcess = runChild('client-tools', webEntry, webEnv);
+
+    try {
+      await waitForWebGatewayReady(webEnv, selectedWebPort);
+      logger.info('development browser gateway ready');
+    } catch (error) {
+      if (webProcess) {
+        await killProcess(webProcess, 'web');
+        webProcess = null;
+      }
+      logger.error('development browser gateway startup timeout', error);
+      errorType = 'TIMEOUT';
+      hasStartupError = true;
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Development browser gateway startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}Log file: ${logPath}`);
+      return;
+    }
   } else {
     // 生产模式：启动 LiveKit -> server -> web
     logger.info('production mode: starting livekit, server, and web child processes');
     const res = resourcesRoot();
     const livekitBinary = livekitServerPath();
     const serverEntry = join(res, 'app', 'packages', 'server', 'dist', 'index.js');
-    const webEntry = join(res, 'app', 'packages', 'client-tools', 'src', 'proxy.js');
+    const webEntry = webGatewayEntryPath();
     const livekitEnabled = Boolean(livekitBinary);
     if (!livekitEnabled) {
       logger.warn('livekit binary not found, starting in ws compatibility mode');
@@ -1064,7 +1323,6 @@ async function createWindow() {
     const serverPort = await findFreePort(4000, 50, undefined, '0.0.0.0');
     const webPort = await findFreePort(5173, 50, serverPort, '0.0.0.0'); // 避免和 serverPort 冲突
     selectedLiveKitPort = livekitPort;
-    selectedLiveKitTcpPort = livekitTcpPort;
     selectedServerPort = serverPort;
     selectedWebPort = webPort;
 
@@ -1092,8 +1350,6 @@ async function createWindow() {
           await killProcess(livekitProcess, 'livekit');
           livekitProcess = null;
         }
-        selectedLiveKitPort = null;
-        selectedLiveKitTcpPort = null;
         livekitCredentialPath = null;
         livekitConfigPath = null;
       } else {
@@ -1136,22 +1392,22 @@ async function createWindow() {
     }
     logger.info('backend server ready');
 
-    webProcess = runChild('client-tools', webEntry, {
-      PORT: String(webPort),
-      STATIC_DIR: join(res, 'app', 'packages', 'web', 'dist'),
-      TARGET: `http://127.0.0.1:${serverPort}`,
-      // 默认对外开放（监听 0.0.0.0）
-      PUBLIC: '1',
-    });
+    const webEnv = buildWebChildEnv(serverPort);
+    webProcess = runChild('client-tools', webEntry, webEnv);
 
-    const webOk = await waitForHttp(`http://127.0.0.1:${selectedWebPort}`, 15000, 200);
-    if (!webOk) {
+    try {
+      await waitForWebGatewayReady(webEnv, selectedWebPort);
+    } catch (error) {
+      if (webProcess) {
+        await killProcess(webProcess, 'web');
+        webProcess = null;
+      }
       logger.error('web service startup timeout');
       errorType = 'TIMEOUT';
       hasStartupError = true;
       const logPath = log.transports.file.getFile().path;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Web service startup timeout\n\nLog file: ${logPath}`);
+        `Web service startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}Log file: ${logPath}`);
       return;
     }
     logger.info('web service ready');
@@ -1469,15 +1725,68 @@ function setupIpcHandlers() {
     }
   });
 
+  ipcMain.handle('https:getStatus', async () => {
+    return getDesktopHttpsStatus();
+  });
+
+  ipcMain.handle('https:getShareUrls', async () => {
+    const status = await getDesktopHttpsStatus();
+    return status.shareUrls;
+  });
+
+  ipcMain.handle('https:generateSelfSigned', async () => {
+    const settings = loadElectronSettings();
+    const nextConfig = await generateSelfSignedCertificate({
+      configDir: getAppConfigDir(),
+      hostname: getHostname(),
+      lanAddresses: getLanIpv4Addresses(),
+      existingConfig: settings.desktopHttps,
+    });
+    return persistDesktopHttpsConfig(nextConfig);
+  });
+
+  ipcMain.handle('https:importPemCertificate', async (_event, certPath: string, keyPath: string) => {
+    if (!certPath || !keyPath) {
+      throw new Error('certificate_paths_required');
+    }
+
+    const settings = loadElectronSettings();
+    const nextConfig = await importPemCertificate({
+      configDir: getAppConfigDir(),
+      certPath,
+      keyPath,
+      existingConfig: settings.desktopHttps,
+    });
+    return persistDesktopHttpsConfig(nextConfig);
+  });
+
+  ipcMain.handle('https:applySettings', async (
+    _event,
+    update: Partial<Pick<PersistentDesktopHttpsConfig, 'enabled' | 'mode' | 'httpsPort' | 'redirectExternalHttp'>>,
+  ) => {
+    return applyDesktopHttpsSettings({
+      enabled: update.enabled,
+      mode: update.mode,
+      httpsPort: update.httpsPort,
+      redirectExternalHttp: update.redirectExternalHttp,
+    });
+  });
+
+  ipcMain.handle('https:disable', async () => {
+    const settings = loadElectronSettings();
+    const nextConfig = await disableDesktopHttps(settings.desktopHttps);
+    return persistDesktopHttpsConfig(nextConfig);
+  });
+
   // 配置管理 IPC
   ipcMain.handle('config:get', (_event, key: keyof ElectronSettings) => {
     const settings = loadElectronSettings();
     return settings[key] ?? null;
   });
 
-  ipcMain.handle('config:set', (_event, key: keyof ElectronSettings, value: ElectronSettings[keyof ElectronSettings]) => {
+  ipcMain.handle('config:set', (_event, key: string, value: unknown) => {
     const settings = loadElectronSettings();
-    settings[key] = value;
+    (settings as unknown as Record<string, unknown>)[key] = value;
     saveElectronSettings(settings);
   });
 

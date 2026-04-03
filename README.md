@@ -122,8 +122,9 @@ Linux Server is not a single standalone process. The installer sets up and wires
 - **nginx** (auto-installed)
 - **LiveKit service**: Linux packages bundle `livekit-server` at `/usr/share/tx5dr/bin/livekit-server`
 - For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)
-- Public voice / OpenWebRX preview deployments must also expose `7880/tcp`, `7881/tcp`, and `50000-50100/udp`
-- Browser clients connect to LiveKit directly. By default the server derives `ws(s)://<current-host>:7880`; if you use public mapping or a dedicated domain/port, set the public LiveKit URL in System Settings. The value is persisted in `/var/lib/tx5dr/config/config.json`
+- For public voice / OpenWebRX preview deployments, browsers should normally enter signaling through the site's same-origin `/livekit` path, so `7880/tcp` does not need to be exposed publicly by default
+- If you enable the LiveKit primary path, you still need to expose `7881/tcp` and `50000-50100/udp` for media transport
+- If you use a dedicated domain, an extra reverse proxy layer, or a non-standard path, set a custom realtime voice entrypoint in System Settings. The value is persisted in `/var/lib/tx5dr/config/config.json`
 - Download source override: set `TX5DR_DOWNLOAD_SOURCE=github|oss|auto` in `/etc/tx5dr/config.env` if you need to force a specific source
 
 ---
@@ -163,7 +164,6 @@ services:
     restart: unless-stopped
     command: --config /var/lib/tx5dr-runtime/livekit.yaml
     ports:
-      - "7880:7880/tcp"
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
     volumes:
@@ -178,9 +178,9 @@ docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
-- Browser clients connect directly to the LiveKit signaling URL; configure any public URL override from System Settings, which persists to `/app/data/config/config.json`
+- Browser clients normally connect through the current site's same-origin `/livekit` path. Only configure an advanced override in System Settings when that path does not match your external deployment topology; the value persists to `/app/data/config/config.json`
 - The Docker stack auto-generates managed LiveKit credentials and `livekit.yaml` into `./data/realtime` on first startup, then reuses them on later restarts
-- If your public domain, TLS termination, or port mapping differs from the container-internal address, you must set the externally reachable LiveKit WebSocket URL in the settings page
+- If your public domain, TLS termination, or path mapping prevents the current site's `/livekit` route from reaching LiveKit signaling directly, set a custom realtime voice entrypoint in the settings page
 
 See [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details. Docker metadata is also published to the OSS mirror during release workflows.
 
@@ -212,7 +212,7 @@ yarn dev
 yarn dev:electron
 ```
 
-- `yarn dev` / `yarn dev:electron` auto-manage a local LiveKit instance and its credential file when possible
+- `yarn dev` / `yarn dev:electron` auto-manage a local LiveKit instance and its credential file when possible, then expose it to browsers through the same-origin `/livekit` proxy
 - If port `7880` is already occupied by an unknown LiveKit instance, development mode automatically falls back to `ws-compat` instead of issuing invalid tokens
 - Running `yarn workspace @tx5dr/server dev` without LiveKit credentials is supported; the backend starts in `ws-compat` mode and logs a warning
 

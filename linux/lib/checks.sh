@@ -95,11 +95,13 @@ check_nginx_realtime_proxy_config() {
     content=$(read_file_maybe_sudo "$conf" 2>/dev/null || true)
     [[ -n "$content" ]] || return 1
 
-    local api_block_count compat_block_count
+    local api_block_count compat_block_count livekit_block_count
     api_block_count=$(printf "%s\n" "$content" | grep -c 'location /api/ {')
     compat_block_count=$(printf "%s\n" "$content" | grep -c 'location /api/realtime/ws-compat {')
+    livekit_block_count=$(printf "%s\n" "$content" | grep -c 'location /livekit/ {')
     [[ "$api_block_count" -gt 0 ]] || return 1
     [[ "$compat_block_count" -ge "$api_block_count" ]] || return 1
+    [[ "$livekit_block_count" -ge "$api_block_count" ]] || return 1
 
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header Upgrade $http_upgrade;' || return 1
     printf "%s\n" "$content" | grep -Fq 'proxy_set_header Connection $connection_upgrade;' || return 1
@@ -341,7 +343,7 @@ fix_nginx_realtime_proxy_config() {
     local tmp_file
     tmp_file=$(mktemp)
 
-    awk -v api_port="${API_PORT}" '
+    awk -v api_port="${API_PORT}" -v livekit_host="127.0.0.1:${LIVEKIT_SIGNAL_PORT}" '
         function flush_pending_xff() {
             if (pending_xff == "") {
                 return;
@@ -380,6 +382,25 @@ fix_nginx_realtime_proxy_config() {
             print block_indent "}";
         }
 
+        function print_livekit_block(block_indent, inner_indent) {
+            print block_indent "location /livekit/ {";
+            print inner_indent "proxy_pass http://" livekit_host "/;";
+            print inner_indent "proxy_http_version 1.1;";
+            print inner_indent "proxy_set_header Upgrade $http_upgrade;";
+            print inner_indent "proxy_set_header Connection $connection_upgrade;";
+            print inner_indent "proxy_set_header Host $http_host;";
+            print inner_indent "proxy_set_header X-Real-IP $remote_addr;";
+            print inner_indent "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;";
+            print inner_indent "proxy_set_header X-Forwarded-Host $http_host;";
+            print inner_indent "proxy_set_header X-Forwarded-Port $server_port;";
+            print inner_indent "proxy_set_header X-Forwarded-Proto $scheme;";
+            print "";
+            print inner_indent "proxy_connect_timeout 7d;";
+            print inner_indent "proxy_send_timeout 7d;";
+            print inner_indent "proxy_read_timeout 7d;";
+            print block_indent "}";
+        }
+
         function brace_delta(line, opens, closes, temp) {
             temp = line;
             opens = gsub(/\{/, "{", temp);
@@ -396,13 +417,17 @@ fix_nginx_realtime_proxy_config() {
                 in_server = 1;
                 server_depth = delta;
                 has_compat_block = 0;
-                compat_inserted = 0;
+                has_livekit_block = 0;
+                realtime_blocks_inserted = 0;
             }
 
             gsub(/proxy_set_header Host \$host;/, "proxy_set_header Host $http_host;", line);
 
             if (in_server && line ~ /^[[:space:]]*location \/api\/realtime\/ws-compat[[:space:]]*\{/) {
                 has_compat_block = 1;
+            }
+            if (in_server && line ~ /^[[:space:]]*location \/livekit\/[[:space:]]*\{/) {
+                has_livekit_block = 1;
             }
 
             if (pending_xff != "") {
@@ -413,7 +438,8 @@ fix_nginx_realtime_proxy_config() {
                         flush_pending_xff();
                         in_server = 0;
                         has_compat_block = 0;
-                        compat_inserted = 0;
+                        has_livekit_block = 0;
+                        realtime_blocks_inserted = 0;
                     }
                     next;
                 }
@@ -424,20 +450,27 @@ fix_nginx_realtime_proxy_config() {
                         flush_pending_xff();
                         in_server = 0;
                         has_compat_block = 0;
-                        compat_inserted = 0;
+                        has_livekit_block = 0;
+                        realtime_blocks_inserted = 0;
                     }
                     next;
                 }
                 flush_pending_xff();
             }
 
-            if (in_server && !has_compat_block && !compat_inserted && line ~ /^[[:space:]]*location \/api\/ \{/) {
+            if (in_server && !realtime_blocks_inserted && line ~ /^[[:space:]]*location \/api\/ \{/) {
                 match(line, /^[[:space:]]*/);
                 block_indent = substr(line, RSTART, RLENGTH);
                 inner_indent = block_indent "    ";
-                print_compat_block(block_indent, inner_indent);
-                print "";
-                compat_inserted = 1;
+                if (!has_compat_block) {
+                    print_compat_block(block_indent, inner_indent);
+                    print "";
+                }
+                if (!has_livekit_block) {
+                    print_livekit_block(block_indent, inner_indent);
+                    print "";
+                }
+                realtime_blocks_inserted = 1;
             }
 
             if (line ~ /^[[:space:]]*proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/) {
@@ -449,7 +482,8 @@ fix_nginx_realtime_proxy_config() {
                     flush_pending_xff();
                     in_server = 0;
                     has_compat_block = 0;
-                    compat_inserted = 0;
+                    has_livekit_block = 0;
+                    realtime_blocks_inserted = 0;
                 }
                 next;
             }
@@ -460,7 +494,8 @@ fix_nginx_realtime_proxy_config() {
             if (in_server && server_depth == 0) {
                 in_server = 0;
                 has_compat_block = 0;
-                compat_inserted = 0;
+                has_livekit_block = 0;
+                realtime_blocks_inserted = 0;
             }
         }
 
@@ -841,7 +876,8 @@ run_doctor() {
         echo ""
         log_warn "LiveKit diagnostics"
         echo -e "      ${_DIM}Config: $(get_livekit_config_path)${_NC}"
-        echo -e "      ${_DIM}Expected ports: signaling ${LIVEKIT_SIGNAL_PORT}, tcp ${LIVEKIT_TCP_PORT}, udp ${LIVEKIT_UDP_PORT_START}-${LIVEKIT_UDP_PORT_END}${_NC}"
+        echo -e "      ${_DIM}Browser entry: same-origin /livekit${_NC}"
+        echo -e "      ${_DIM}Expected ports: internal signaling ${LIVEKIT_SIGNAL_PORT}, tcp ${LIVEKIT_TCP_PORT}, udp ${LIVEKIT_UDP_PORT_START}-${LIVEKIT_UDP_PORT_END}${_NC}"
         echo -e "      ${_DIM}Bridge URL: ${LIVEKIT_URL}${_NC}"
         local recent_logs
         recent_logs=$(sudo journalctl -u tx5dr-livekit -n 8 --no-pager 2>/dev/null || true)

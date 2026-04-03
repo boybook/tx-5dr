@@ -38,7 +38,22 @@
     "micPermissionNeeded": "Microphone permission needed",
     "micPermissionDenied": "Microphone permission denied",
     "captureError": "Audio capture error",
-    "wakeLockFailed": "Screen wake lock failed"
+    "wakeLockFailed": "Screen wake lock failed",
+    "httpsRequiredTitle": "HTTPS is required for transmit",
+    "httpsRequiredDescription": "This page is being opened over a non-local HTTP address ({{origin}}). Browser security rules block the microphone and realtime voice transmit path here, so PTT transmit cannot be enabled.",
+    "httpsRequiredRoleTitleAdmin": "You are currently an administrator",
+    "httpsRequiredRoleBodyAdmin": "Please enable HTTPS for this entrypoint, then reopen the app over HTTPS. On desktop builds you can enable browser HTTPS in System Settings; on server deployments configure a reverse-proxy certificate or a properly signed certificate.",
+    "httpsRequiredRoleTitleOperator": "You currently have operating permission",
+    "httpsRequiredRoleBodyOperator": "Your identity is already allowed to operate the radio, but this page is not a secure entrypoint. Ask an administrator to enable HTTPS, or reopen the app through an HTTPS URL before transmitting.",
+    "httpsRequiredRoleTitleViewer": "You currently do not have transmit permission",
+    "httpsRequiredRoleBodyViewer": "Even after HTTPS is fixed, a viewer identity still cannot transmit. Ask an administrator to handle both: enable HTTPS for this entrypoint and grant an identity that is allowed to transmit.",
+    "httpsRequiredCurrentIdentityLabel": "Current identity",
+    "httpsRequiredCurrentIdentityValue": "You are currently: {{role}}",
+    "httpsRequiredRolePublicViewer": "Public viewer",
+    "httpsRequiredRoleUnauthenticated": "Unauthenticated user",
+    "httpsRequiredBypassHint": "If you have already manually allowed the relevant browser security restrictions for this page, you can remember that choice and close this warning first, then go back to the main PTT button and transmit again.",
+    "httpsRequiredCancel": "Cancel",
+    "httpsRequiredDontWarnAgain": "Don't warn again"
   },
   "qso": {
     "title": "Voice QSO Log",

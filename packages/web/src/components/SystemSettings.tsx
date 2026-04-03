@@ -26,6 +26,8 @@ import type {
   RealtimeSettingsResponseData,
   RealtimeTransportKind,
   RealtimeTransportPolicy,
+  DesktopHttpsStatus,
+  DesktopHttpsMode,
 } from '@tx5dr/contracts';
 import { FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
 import { showErrorToast } from '../utils/errorToast';
@@ -53,6 +55,16 @@ const SETTINGS_CARD_CLASS_NAMES = {
   base: 'border border-divider bg-content1',
 } as const;
 
+const SETTINGS_CARD_BODY_CLASS = 'p-5 space-y-4';
+const SETTINGS_CARD_TITLE_CLASS = 'text-base font-semibold text-default-900';
+const SETTINGS_CARD_DESC_CLASS = 'text-sm leading-6 text-default-600';
+const SETTINGS_SUBTITLE_CLASS = 'text-sm font-medium text-default-900';
+const SETTINGS_SUBDESC_CLASS = 'text-xs leading-5 text-default-500';
+const SETTINGS_MUTED_CLASS = 'text-xs leading-5 text-default-400';
+const SETTINGS_PANEL_CLASS = 'rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5';
+const SETTINGS_SOFT_PANEL_CLASS = 'rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5';
+const SETTINGS_METRIC_CLASS = 'rounded-medium bg-content1 px-3 py-2';
+
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
   ft8Preset: 'maximum',
   ft8CustomWindows: [-1500, -1000, -500, 0, 250],
@@ -64,14 +76,26 @@ function buildLiveKitExampleUrl(baseUrl: string): string {
   try {
     const url = new URL(baseUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.port = '7880';
-    url.pathname = '';
+    url.pathname = '/livekit';
     url.search = '';
     url.hash = '';
-    return url.toString().replace(/\/$/, '');
+    return url.toString().replace(/\/$/, '/livekit');
   } catch {
-    return 'ws://127.0.0.1:7880';
+    return 'ws://127.0.0.1/livekit';
   }
+}
+
+function formatDateTimeValue(value?: string | null): string {
+  if (!value) return '-';
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return value;
+  return time.toLocaleString();
+}
+
+function getDesktopHttpsStatusColor(status: DesktopHttpsStatus['certificateStatus'] | undefined): 'success' | 'warning' | 'danger' {
+  if (status === 'valid') return 'success';
+  if (status === 'invalid') return 'danger';
+  return 'warning';
 }
 
 function getWindowCount(preset: string, customWindows: number[], presets: Record<string, number[]>): number {
@@ -209,6 +233,17 @@ export const SystemSettings = forwardRef<
   const [originalCloseBehavior, setOriginalCloseBehavior] = useState<string>('ask');
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
   const isMacElectron = isElectron && typeof window !== 'undefined' && window.navigator.userAgent.includes('Macintosh');
+  const [desktopHttpsStatus, setDesktopHttpsStatus] = useState<DesktopHttpsStatus | null>(null);
+  const [desktopHttpsEnabled, setDesktopHttpsEnabled] = useState(false);
+  const [originalDesktopHttpsEnabled, setOriginalDesktopHttpsEnabled] = useState(false);
+  const [desktopHttpsMode, setDesktopHttpsMode] = useState<DesktopHttpsMode>('self-signed');
+  const [originalDesktopHttpsMode, setOriginalDesktopHttpsMode] = useState<DesktopHttpsMode>('self-signed');
+  const [desktopHttpsPort, setDesktopHttpsPort] = useState('8443');
+  const [originalDesktopHttpsPort, setOriginalDesktopHttpsPort] = useState('8443');
+  const [desktopHttpsRedirectExternalHttp, setDesktopHttpsRedirectExternalHttp] = useState(true);
+  const [originalDesktopHttpsRedirectExternalHttp, setOriginalDesktopHttpsRedirectExternalHttp] = useState(true);
+  const [desktopHttpsBusy, setDesktopHttpsBusy] = useState(false);
+  const [desktopHttpsUrlCopied, setDesktopHttpsUrlCopied] = useState(false);
 
   // 加载配置
   useEffect(() => {
@@ -220,6 +255,9 @@ export const SystemSettings = forwardRef<
     loadRealtimeSettings();
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
     loadElectronCloseBehavior();
+    if (isElectron) {
+      void loadDesktopHttpsSettings();
+    }
   }, []);
 
   const loadSettings = async () => {
@@ -321,6 +359,133 @@ export const SystemSettings = forwardRef<
     }
   };
 
+  const applyDesktopHttpsSnapshot = useCallback((
+    status: DesktopHttpsStatus,
+    options?: { preserveDraft?: boolean },
+  ) => {
+    const preserveDraft = options?.preserveDraft === true;
+    const hasLocalDraft = (
+      desktopHttpsEnabled !== originalDesktopHttpsEnabled ||
+      desktopHttpsMode !== originalDesktopHttpsMode ||
+      desktopHttpsPort !== originalDesktopHttpsPort ||
+      desktopHttpsRedirectExternalHttp !== originalDesktopHttpsRedirectExternalHttp
+    );
+
+    if (!preserveDraft || !hasLocalDraft) {
+      setDesktopHttpsEnabled(status.enabled);
+      setDesktopHttpsMode(status.mode);
+      setDesktopHttpsPort(String(status.httpsPort));
+      setDesktopHttpsRedirectExternalHttp(status.redirectExternalHttp);
+    }
+
+    setOriginalDesktopHttpsEnabled(status.enabled);
+    setOriginalDesktopHttpsMode(status.mode);
+    setOriginalDesktopHttpsPort(String(status.httpsPort));
+    setOriginalDesktopHttpsRedirectExternalHttp(status.redirectExternalHttp);
+    setDesktopHttpsStatus(status);
+  }, [
+    desktopHttpsEnabled,
+    originalDesktopHttpsEnabled,
+    desktopHttpsMode,
+    originalDesktopHttpsMode,
+    desktopHttpsPort,
+    originalDesktopHttpsPort,
+    desktopHttpsRedirectExternalHttp,
+    originalDesktopHttpsRedirectExternalHttp,
+  ]);
+
+  const loadDesktopHttpsSettings = useCallback(async () => {
+    if (!window.electronAPI?.https?.getStatus) return;
+    try {
+      const status = await window.electronAPI.https.getStatus();
+      applyDesktopHttpsSnapshot(status, { preserveDraft: true });
+    } catch (err) {
+      logger.error('Failed to load desktop HTTPS settings:', err);
+    }
+  }, [applyDesktopHttpsSnapshot]);
+
+  const copyDesktopHttpsUrl = useCallback(async () => {
+    const url = desktopHttpsStatus?.browserAccessUrl;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setDesktopHttpsUrlCopied(true);
+      window.setTimeout(() => setDesktopHttpsUrlCopied(false), 1500);
+    } catch (err) {
+      logger.error('Failed to copy desktop HTTPS URL:', err);
+    }
+  }, [desktopHttpsStatus?.browserAccessUrl]);
+
+  const handleGenerateSelfSignedCertificate = useCallback(async () => {
+    if (!window.electronAPI?.https?.generateSelfSigned) return;
+    setDesktopHttpsBusy(true);
+    setError('');
+    try {
+      await window.electronAPI.https.generateSelfSigned();
+
+      const parsedPort = Number.parseInt(desktopHttpsPort, 10);
+      const status = await window.electronAPI.https.applySettings?.({
+        enabled: true,
+        mode: 'self-signed',
+        httpsPort: Number.isFinite(parsedPort) ? parsedPort : 8443,
+        redirectExternalHttp: desktopHttpsRedirectExternalHttp,
+      });
+
+      if (status) {
+        applyDesktopHttpsSnapshot(status);
+      } else {
+        setDesktopHttpsEnabled(true);
+        setDesktopHttpsMode('self-signed');
+      }
+    } catch (err) {
+      logger.error('Failed to generate self-signed certificate:', err);
+      setError(err instanceof Error ? err.message : t('system.saveFailed'));
+    } finally {
+      setDesktopHttpsBusy(false);
+    }
+  }, [applyDesktopHttpsSnapshot, desktopHttpsPort, desktopHttpsRedirectExternalHttp, t]);
+
+  const handleImportDesktopCertificate = useCallback(async () => {
+    if (!window.electronAPI?.fs?.selectFile || !window.electronAPI?.https?.importPemCertificate) return;
+    setDesktopHttpsBusy(true);
+    setError('');
+    try {
+      const certPath = await window.electronAPI.fs.selectFile({
+        title: t('system.desktopHttpsSelectCertTitle'),
+        filters: [{ name: 'PEM Certificate', extensions: ['pem', 'crt', 'cer'] }],
+      });
+      if (!certPath) return;
+
+      const keyPath = await window.electronAPI.fs.selectFile({
+        title: t('system.desktopHttpsSelectKeyTitle'),
+        filters: [{ name: 'PEM Private Key', extensions: ['pem', 'key'] }],
+      });
+      if (!keyPath) return;
+
+      await window.electronAPI.https.importPemCertificate(certPath, keyPath);
+
+      const parsedPort = Number.parseInt(desktopHttpsPort, 10);
+      const status = await window.electronAPI.https.applySettings?.({
+        enabled: true,
+        mode: 'imported-pem',
+        httpsPort: Number.isFinite(parsedPort) ? parsedPort : 8443,
+        redirectExternalHttp: desktopHttpsRedirectExternalHttp,
+      });
+
+      if (status) {
+        applyDesktopHttpsSnapshot(status);
+      } else {
+        setDesktopHttpsMode('imported-pem');
+        setDesktopHttpsEnabled(true);
+      }
+    } catch (err) {
+      logger.error('Failed to import desktop HTTPS certificate:', err);
+      setError(err instanceof Error ? err.message : t('system.saveFailed'));
+    } finally {
+      setDesktopHttpsBusy(false);
+    }
+  }, [applyDesktopHttpsSnapshot, desktopHttpsPort, desktopHttpsRedirectExternalHttp, t]);
+
   const applyRealtimeSettingsSnapshot = useCallback((
     data: RealtimeSettingsResponseData,
     options?: { preserveDraft?: boolean },
@@ -420,7 +585,13 @@ export const SystemSettings = forwardRef<
       hasDecodeWindowChanges() ||
       liveKitPublicUrl !== originalLiveKitPublicUrl ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
-      (isElectron && closeBehavior !== originalCloseBehavior)
+      (isElectron && closeBehavior !== originalCloseBehavior) ||
+      (isElectron && (
+        desktopHttpsEnabled !== originalDesktopHttpsEnabled ||
+        desktopHttpsMode !== originalDesktopHttpsMode ||
+        desktopHttpsPort !== originalDesktopHttpsPort ||
+        desktopHttpsRedirectExternalHttp !== originalDesktopHttpsRedirectExternalHttp
+      ))
     );
   };
 
@@ -503,6 +674,26 @@ export const SystemSettings = forwardRef<
         setOriginalCloseBehavior(closeBehavior);
       }
 
+      if (isElectron && window.electronAPI?.https?.applySettings) {
+        const hasDesktopHttpsChanges = (
+          desktopHttpsEnabled !== originalDesktopHttpsEnabled ||
+          desktopHttpsMode !== originalDesktopHttpsMode ||
+          desktopHttpsPort !== originalDesktopHttpsPort ||
+          desktopHttpsRedirectExternalHttp !== originalDesktopHttpsRedirectExternalHttp
+        );
+
+        if (hasDesktopHttpsChanges) {
+          const parsedPort = Number.parseInt(desktopHttpsPort, 10);
+          const status = await window.electronAPI.https.applySettings({
+            enabled: desktopHttpsEnabled,
+            mode: desktopHttpsMode,
+            httpsPort: Number.isFinite(parsedPort) ? parsedPort : 8443,
+            redirectExternalHttp: desktopHttpsRedirectExternalHttp,
+          });
+          applyDesktopHttpsSnapshot(status);
+        }
+      }
+
       onUnsavedChanges?.(false);
     } catch (err) {
       logger.error('Failed to save settings:', err);
@@ -533,11 +724,14 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, closeBehavior, originalCloseBehavior, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const runtimeIssueLabel = getRealtimeIssueLabel(realtimeRuntime?.radioBridgeIssueCode ?? null, t);
   const runtimeCredential = realtimeRuntime?.credentialStatus ?? null;
+  const realtimeUrlOverrideActive = runtimeHints?.publicUrlOverrideActive ?? false;
+  const desktopHttpsCertificateMeta = desktopHttpsStatus?.certificateMeta ?? null;
+  const desktopHttpsBrowserUrl = desktopHttpsStatus?.browserAccessUrl ?? null;
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -587,11 +781,11 @@ export const SystemSettings = forwardRef<
       {/* 公开查看权限 */}
       {authConfig && (
         <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
-          <CardBody className="p-4">
+          <CardBody className={SETTINGS_CARD_BODY_CLASS}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1">
-                <h4 className="font-semibold text-default-900 mb-1">{t('system.allowPublicViewing')}</h4>
-                <div className="text-sm text-default-600 space-y-1">
+                <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.allowPublicViewing')}</h4>
+                <div className={`${SETTINGS_CARD_DESC_CLASS} mt-1 space-y-1`}>
                   <p>
                     <strong>{t('system.on')}</strong>：{t('system.allowPublicViewingOnDesc')}
                   </p>
@@ -610,7 +804,7 @@ export const SystemSettings = forwardRef<
             {/* 网络访问地址 */}
             {networkInfo && networkInfo.addresses.length > 0 && (
               <div className="mt-3 pt-3 border-t border-divider">
-                <p className="text-xs text-default-400 mb-1.5">
+                <p className={`${SETTINGS_MUTED_CLASS} mb-1.5`}>
                   {t('common:remoteAccess.networkAddress')}
                 </p>
                 {networkInfo.addresses.map((addr) => (
@@ -643,235 +837,471 @@ export const SystemSettings = forwardRef<
         </Card>
       )}
 
-      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className="p-4 space-y-3">
-          <div>
-            <h4 className="font-semibold text-default-900">{t('system.realtimeSettingsCardTitle')}</h4>
-            <p className="mt-1 text-sm text-default-600">{t('system.realtimeSettingsCardDesc')}</p>
-          </div>
-
-          <div className="pt-3 border-t border-divider space-y-2">
+      {isElectron && (
+        <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+          <CardBody className={SETTINGS_CARD_BODY_CLASS}>
             <div>
-              <h5 className="text-sm font-medium text-default-900">{t('system.liveKitPublicUrl')}</h5>
-              <p className="text-xs text-default-500 mt-1">{t('system.liveKitPublicUrlDesc')}</p>
-            </div>
-            <Input
-              value={liveKitPublicUrl}
-              onValueChange={setLiveKitPublicUrl}
-              placeholder={t('system.liveKitPublicUrlPlaceholder')}
-              isDisabled={isSaving}
-              size="sm"
-              variant="bordered"
-            />
-            <p className="text-xs text-default-400">
-              {liveKitPublicUrl.trim()
-                ? t('system.liveKitPublicUrlManualHint')
-                : t('system.liveKitPublicUrlAutoHint')}
-            </p>
-            {networkInfo && networkInfo.addresses.length > 0 && (
-              <p className="text-xs text-default-400">
-                {t('system.liveKitPublicUrlExample', {
-                  url: buildLiveKitExampleUrl(networkInfo.addresses[0].url),
-                })}
-              </p>
-            )}
-            {isMacElectron && (
-              <Alert color="warning" variant="flat" className="text-xs">
-                <p>{t('system.liveKitMacInstallHint')}</p>
-                <p className="mt-1 font-mono">brew install livekit</p>
-                <p className="mt-1">{t('system.liveKitMacFallbackHint')}</p>
-              </Alert>
-            )}
-          </div>
-
-          <div className="pt-3 border-t border-divider space-y-2">
-            <div>
-              <h5 className="text-sm font-medium text-default-900">{t('system.realtimeTransportPolicy')}</h5>
-              <p className="text-xs text-default-500 mt-1">{t('system.realtimeTransportPolicyDesc')}</p>
-            </div>
-            <Select
-              selectedKeys={[realtimeTransportPolicy]}
-              onSelectionChange={(keys) => {
-                const value = Array.from(keys)[0] as RealtimeTransportPolicy | undefined;
-                if (value) {
-                  setRealtimeTransportPolicy(value);
-                }
-              }}
-              isDisabled={isSaving}
-              size="sm"
-              variant="bordered"
-            >
-              <SelectItem key="auto">{t('system.realtimeTransportPolicyAuto')}</SelectItem>
-              <SelectItem key="force-compat">{t('system.realtimeTransportPolicyCompat')}</SelectItem>
-            </Select>
-            <p className="text-xs text-default-400">
-              {realtimeTransportPolicy === 'force-compat'
-                ? t('system.realtimeTransportPolicyCompatHint')
-                : t('system.realtimeTransportPolicyAutoHint')}
-            </p>
-          </div>
-
-          <div className="pt-3 border-t border-divider space-y-3">
-            <div>
-              <h5 className="text-sm font-medium text-default-900">{t('system.realtimeAdminGuideTitle')}</h5>
-              <p className="text-xs text-default-500 mt-1">{t('system.realtimeAdminGuideDesc')}</p>
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.desktopHttpsTitle')}</h4>
+              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.desktopHttpsDesc')}</p>
             </div>
 
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                <p className="text-xs text-default-500">{t('system.realtimeCurrentPolicyLabel')}</p>
-                <div className="mt-2">
-                  <Chip
-                    size="sm"
-                    color={realtimeTransportPolicy === 'force-compat' ? 'warning' : 'primary'}
-                    variant="flat"
-                  >
-                    {realtimeTransportPolicy === 'force-compat'
-                      ? t('system.realtimeTransportPolicyCompat')
-                      : t('system.realtimeTransportPolicyAuto')}
-                  </Chip>
-                </div>
-              </div>
+            <Alert color="primary" variant="flat" className="text-xs">
+              {t('system.desktopHttpsPurpose')}
+            </Alert>
 
-              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                <p className="text-xs text-default-500">{t('system.realtimeCurrentPathLabel')}</p>
-                <div className="mt-2">
-                  <Chip
-                    size="sm"
-                    color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'livekit' ? 'primary' : 'warning'}
-                    variant="flat"
-                  >
-                    {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
-                  </Chip>
-                </div>
-                <p className="mt-2 text-xs text-default-400">{t('system.realtimeCurrentPathHint')}</p>
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <div className={SETTINGS_PANEL_CLASS}>
+                <p className={SETTINGS_MUTED_CLASS}>01</p>
+                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioDesktopTitle')}</p>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioDesktopDesc')}</p>
               </div>
-
-              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                <p className="text-xs text-default-500">{t('system.realtimeLiveKitServiceLabel')}</p>
-                <div className="mt-2">
-                  <Chip
-                    size="sm"
-                    color={realtimeRuntime?.liveKitEnabled ? 'success' : 'warning'}
-                    variant="flat"
-                  >
-                    {realtimeRuntime?.liveKitEnabled
-                      ? t('system.realtimeStatusEnabled')
-                      : t('system.realtimeStatusDisabled')}
-                  </Chip>
-                </div>
+              <div className="rounded-medium border border-primary/20 bg-primary-50/60 px-3 py-3 dark:bg-primary-500/10">
+                <p className={SETTINGS_MUTED_CLASS}>02</p>
+                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioLanTitle')}</p>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioLanDesc')}</p>
               </div>
-
-              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                <p className="text-xs text-default-500">{t('system.realtimeBridgeHealthLabel')}</p>
-                <div className="mt-2">
-                  <Chip
-                    size="sm"
-                    color={realtimeRuntime?.radioBridgeHealthy === false ? 'danger' : 'success'}
-                    variant="flat"
-                  >
-                    {realtimeRuntime?.radioBridgeHealthy === false
-                      ? t('system.realtimeBridgeHealthUnhealthy')
-                      : t('system.realtimeBridgeHealthHealthy')}
-                  </Chip>
-                </div>
-                <p className="mt-2 text-xs text-default-400">{runtimeIssueLabel}</p>
+              <div className={SETTINGS_PANEL_CLASS}>
+                <p className={SETTINGS_MUTED_CLASS}>03</p>
+                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioPublicTitle')}</p>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioPublicDesc')}</p>
               </div>
+            </div>
 
-              <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 dark:bg-default-100/5">
-                <p className="text-xs text-default-500">{t('system.realtimeCredentialStatusLabel')}</p>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Chip
-                    size="sm"
-                    color={runtimeCredential?.initialized ? 'success' : 'danger'}
-                    variant="flat"
-                  >
-                    {runtimeCredential?.initialized
-                      ? t('system.realtimeCredentialReady')
-                      : t('system.realtimeCredentialMissing')}
-                  </Chip>
-                  <Chip
-                    size="sm"
-                    color={runtimeCredential?.source === 'environment-override' ? 'warning' : 'default'}
-                    variant="flat"
-                  >
-                    {getRealtimeCredentialSourceLabel(runtimeCredential?.source ?? null, t)}
-                  </Chip>
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+              <div className="space-y-4">
+                <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
+                  <div className="flex flex-col gap-3 border-b border-divider pb-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="space-y-1">
+                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsEnable')}</p>
+                      <p className={SETTINGS_SUBDESC_CLASS}>{t('system.desktopHttpsEnableDesc')}</p>
+                    </div>
+                    <Switch
+                      isSelected={desktopHttpsEnabled}
+                      onValueChange={setDesktopHttpsEnabled}
+                      isDisabled={isSaving || desktopHttpsBusy}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <Select
+                      selectedKeys={[desktopHttpsMode]}
+                      onSelectionChange={(keys) => {
+                        const value = Array.from(keys)[0] as DesktopHttpsMode | undefined;
+                        if (value) {
+                          setDesktopHttpsMode(value);
+                        }
+                      }}
+                      isDisabled={isSaving || desktopHttpsBusy}
+                      size="sm"
+                      variant="bordered"
+                      label={t('system.desktopHttpsMode')}
+                    >
+                      <SelectItem key="self-signed">{t('system.desktopHttpsModeSelfSigned')}</SelectItem>
+                      <SelectItem key="imported-pem">{t('system.desktopHttpsModeImported')}</SelectItem>
+                    </Select>
+
+                    <Input
+                      label={t('system.desktopHttpsPort')}
+                      value={desktopHttpsPort}
+                      onValueChange={setDesktopHttpsPort}
+                      isDisabled={isSaving || desktopHttpsBusy}
+                      size="sm"
+                      variant="bordered"
+                      type="number"
+                    />
+                  </div>
+
+                  <div className={`${SETTINGS_SOFT_PANEL_CLASS} space-y-3`}>
+                    <div>
+                      <p className={SETTINGS_SUBTITLE_CLASS}>
+                        {desktopHttpsMode === 'self-signed'
+                          ? t('system.desktopHttpsModeSelfSigned')
+                          : t('system.desktopHttpsModeImported')}
+                      </p>
+                      <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
+                        {desktopHttpsMode === 'self-signed'
+                          ? t('system.desktopHttpsModeSelfSignedDesc')
+                          : t('system.desktopHttpsModeImportedDesc')}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant={desktopHttpsMode === 'self-signed' ? 'solid' : 'flat'}
+                        color="primary"
+                        isLoading={desktopHttpsBusy}
+                        isDisabled={isSaving || desktopHttpsBusy}
+                        onPress={() => void handleGenerateSelfSignedCertificate()}
+                      >
+                        {t('system.desktopHttpsGenerate')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={desktopHttpsMode === 'imported-pem' ? 'solid' : 'flat'}
+                        color="secondary"
+                        isLoading={desktopHttpsBusy}
+                        isDisabled={isSaving || desktopHttpsBusy}
+                        onPress={() => void handleImportDesktopCertificate()}
+                      >
+                        {t('system.desktopHttpsImport')}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-divider pt-4">
+                    <Switch
+                      isSelected={desktopHttpsRedirectExternalHttp}
+                      onValueChange={setDesktopHttpsRedirectExternalHttp}
+                      isDisabled={isSaving || desktopHttpsBusy}
+                      size="sm"
+                    >
+                      {t('system.desktopHttpsRedirect')}
+                    </Switch>
+                  </div>
                 </div>
-                <p className="mt-2 text-xs text-default-400">
-                  {runtimeCredential?.apiKeyPreview
-                    ? t('system.realtimeCredentialPreview', { value: runtimeCredential.apiKeyPreview })
-                    : t('system.realtimeCredentialMissingHint')}
-                </p>
-                {runtimeCredential?.rotatedAt && (
-                  <p className="mt-1 text-xs text-default-400">
-                    {t('system.realtimeCredentialRotatedAt', { value: runtimeCredential.rotatedAt })}
-                  </p>
+
+                {desktopHttpsStatus?.usingSelfSigned && (
+                  <Alert color="warning" variant="flat" className="text-xs">
+                    {t('system.desktopHttpsSelfSignedLimitations')}
+                  </Alert>
                 )}
-                {runtimeCredential?.filePath && (
-                  <p className="mt-1 break-all text-xs text-default-400">
-                    {t('system.realtimeCredentialFile', { value: runtimeCredential.filePath })}
-                  </p>
+
+                {desktopHttpsMode === 'imported-pem' && (
+                  <Alert color="secondary" variant="flat" className="text-xs">
+                    {t('system.desktopHttpsImportedHint')}
+                  </Alert>
                 )}
               </div>
-            </div>
 
-            <div className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
-              <div className="flex items-start justify-between gap-4">
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
                 <div>
-                  <h6 className="text-sm font-medium text-default-900">{t('system.realtimePortRequirementsTitle')}</h6>
-                  <p className="mt-1 text-xs text-default-500">{t('system.realtimePortRequirementsDesc')}</p>
+                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsStatusTitle')}</p>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsStatusDesc')}</p>
                 </div>
-                <Chip size="sm" color="default" variant="flat">{t('system.realtimeAdminOnly')}</Chip>
-              </div>
 
-              <div className="mt-3 space-y-2 text-sm">
-                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                  <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
-                  <code className="text-xs text-default-500">{runtimeHints?.signalingPort ?? 7880}</code>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip size="sm" color={getDesktopHttpsStatusColor(desktopHttpsStatus?.certificateStatus)} variant="flat">
+                    {t(`system.desktopHttpsCertificateStatusValue.${desktopHttpsStatus?.certificateStatus ?? 'missing'}`)}
+                  </Chip>
+                  {desktopHttpsStatus?.usingSelfSigned && (
+                    <Chip size="sm" color="warning" variant="flat">
+                      {t('system.desktopHttpsSelfSignedBadge')}
+                    </Chip>
+                  )}
+                  <Chip size="sm" color={desktopHttpsStatus?.activeScheme === 'https' ? 'success' : 'default'} variant="flat">
+                    {desktopHttpsStatus?.activeScheme?.toUpperCase() || 'HTTP'}
+                  </Chip>
                 </div>
-                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                  <span className="text-default-700">{t('system.realtimePortIceTcp')}</span>
-                  <code className="text-xs text-default-500">{runtimeHints?.rtcTcpPort ?? 7881}</code>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                  <span className="text-default-700">{t('system.realtimePortUdp')}</span>
-                  <code className="text-xs text-default-500">{runtimeHints?.udpPortRange ?? '50000-50100'}</code>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-2">
-                  <span className="text-default-700">{t('system.realtimePortCompat')}</span>
-                  <code className="text-xs text-default-500">{t('system.realtimeCompatEndpointValue')}</code>
-                </div>
-                <div className="rounded-medium bg-content1 px-3 py-2">
-                  <p className="text-xs text-default-500">{t('system.realtimeEffectiveUrlLabel')}</p>
-                  <code className="mt-1 block break-all text-xs text-default-600">
-                    {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
-                  </code>
-                </div>
-              </div>
 
-              <div className="mt-3 space-y-1 text-xs text-default-500">
-                <p>{t('system.realtimePortHintAuto')}</p>
-                <p>{t('system.realtimePortHintCompat')}</p>
-                <p>{t('system.realtimePortHintFallback')}</p>
-                <p>{t('system.realtimeCredentialLinuxHint')}</p>
+                <div className="space-y-2">
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.desktopHttpsAccessUrl')}</p>
+                  <p className="break-all text-sm text-default-700">
+                    {desktopHttpsBrowserUrl || t('system.desktopHttpsAccessUrlPending')}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {desktopHttpsStatus?.browserAccessUrl && (
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        startContent={<FontAwesomeIcon icon={desktopHttpsUrlCopied ? faCheck : faCopy} />}
+                        isDisabled={isSaving || desktopHttpsBusy}
+                        onPress={() => void copyDesktopHttpsUrl()}
+                      >
+                        {desktopHttpsUrlCopied ? t('system.desktopHttpsCopied') : t('system.desktopHttpsCopyUrl')}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className={`space-y-2 ${SETTINGS_SUBDESC_CLASS}`}>
+                  <p>{desktopHttpsCertificateMeta?.subject || t('system.desktopHttpsNoCertificate')}</p>
+                  <p>{t('system.desktopHttpsValidTo', { value: formatDateTimeValue(desktopHttpsCertificateMeta?.validTo) })}</p>
+                  <p>{desktopHttpsStatus?.shareUrls?.slice(1).join(' · ') || t('system.desktopHttpsLanHint')}</p>
+                </div>
               </div>
             </div>
+          </CardBody>
+        </Card>
+      )}
+
+      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
+          <div>
+            <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.realtimeSettingsCardTitle')}</h4>
+            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.realtimeSettingsCardDesc')}</p>
           </div>
+
+          <Alert color="default" variant="flat" className="text-xs">
+            {t('system.realtimeSettingsSimpleGuide')}
+          </Alert>
+
+          <Alert color="primary" variant="flat" className="text-xs">
+            <p>{t('system.realtimeLiveKitBenefitsTitle')}</p>
+            <p className="mt-1">{t('system.realtimeLiveKitBenefitsDesc')}</p>
+          </Alert>
+
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+              <div>
+                <p className={SETTINGS_MUTED_CLASS}>01</p>
+                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeBrowserEntryTitle')}</h5>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeBrowserEntryDesc')}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip
+                  size="sm"
+                  color={realtimeUrlOverrideActive ? 'warning' : 'success'}
+                  variant="flat"
+                >
+                  {realtimeUrlOverrideActive
+                    ? t('system.realtimeBrowserEntryOverrideBadge')
+                    : t('system.realtimeBrowserEntryDefaultBadge')}
+                </Chip>
+                <Chip
+                  size="sm"
+                  color={(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'success' : 'default'}
+                  variant="flat"
+                >
+                  {(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'WSS' : 'WS'}
+                </Chip>
+              </div>
+              <div className="space-y-2">
+                <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeBrowserEntryCurrentLabel')}</p>
+                <code className="block break-all text-xs leading-5 text-default-600">
+                  {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
+                </code>
+              </div>
+              <p className={SETTINGS_MUTED_CLASS}>
+                {realtimeUrlOverrideActive
+                  ? t('system.liveKitPublicUrlManualHint')
+                  : t('system.liveKitPublicUrlAutoHint')}
+              </p>
+              {networkInfo && networkInfo.addresses.length > 0 && (
+                <p className={SETTINGS_MUTED_CLASS}>
+                  {t('system.liveKitPublicUrlExample', {
+                    url: buildLiveKitExampleUrl(networkInfo.addresses[0].url),
+                  })}
+                </p>
+              )}
+            </div>
+
+            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+              <div>
+                <p className={SETTINGS_MUTED_CLASS}>02</p>
+                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeTransportPolicy')}</h5>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeTransportPolicyDesc')}</p>
+              </div>
+              <Select
+                selectedKeys={[realtimeTransportPolicy]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0] as RealtimeTransportPolicy | undefined;
+                  if (value) {
+                    setRealtimeTransportPolicy(value);
+                  }
+                }}
+                isDisabled={isSaving}
+                size="sm"
+                variant="bordered"
+              >
+                <SelectItem key="auto">{t('system.realtimeTransportPolicyAuto')}</SelectItem>
+                <SelectItem key="force-compat">{t('system.realtimeTransportPolicyCompat')}</SelectItem>
+              </Select>
+              <p className={SETTINGS_MUTED_CLASS}>
+                {realtimeTransportPolicy === 'force-compat'
+                  ? t('system.realtimeTransportPolicyCompatHint')
+                  : t('system.realtimeTransportPolicyAutoHint')}
+              </p>
+            </div>
+          </div>
+
+          <details className="pt-3 border-t border-divider group">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1">
+              <div>
+                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeAdminGuideTitle')}</h5>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeAdminGuideDesc')}</p>
+              </div>
+              <Chip size="sm" color="default" variant="flat">{t('system.realtimeAdminOnly')}</Chip>
+            </summary>
+
+            <div className="mt-4 space-y-3">
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+                <div>
+                  <p className={SETTINGS_MUTED_CLASS}>{t('system.advanced')}</p>
+                  <h6 className={SETTINGS_SUBTITLE_CLASS}>{t('system.liveKitPublicUrl')}</h6>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.liveKitPublicUrlDesc')}</p>
+                </div>
+                <Input
+                  value={liveKitPublicUrl}
+                  onValueChange={setLiveKitPublicUrl}
+                  placeholder={t('system.liveKitPublicUrlPlaceholder')}
+                  isDisabled={isSaving}
+                  size="sm"
+                  variant="bordered"
+                />
+                <p className={SETTINGS_MUTED_CLASS}>
+                  {liveKitPublicUrl.trim()
+                    ? t('system.liveKitPublicUrlManualHint')
+                    : t('system.liveKitPublicUrlAutoHint')}
+                </p>
+                {isMacElectron && (
+                  <Alert color="warning" variant="flat" className="text-xs">
+                    <p>{t('system.liveKitMacInstallHint')}</p>
+                    <p className="mt-1 font-mono">brew install livekit</p>
+                    <p className="mt-1">{t('system.liveKitMacFallbackHint')}</p>
+                  </Alert>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCurrentPolicyLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={realtimeTransportPolicy === 'force-compat' ? 'warning' : 'primary'}
+                      variant="flat"
+                    >
+                      {realtimeTransportPolicy === 'force-compat'
+                        ? t('system.realtimeTransportPolicyCompat')
+                        : t('system.realtimeTransportPolicyAuto')}
+                    </Chip>
+                  </div>
+                </div>
+
+                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCurrentPathLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'livekit' ? 'primary' : 'warning'}
+                      variant="flat"
+                    >
+                      {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
+                    </Chip>
+                  </div>
+                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{t('system.realtimeCurrentPathHint')}</p>
+                </div>
+
+                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeLiveKitServiceLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={realtimeRuntime?.liveKitEnabled ? 'success' : 'warning'}
+                      variant="flat"
+                    >
+                      {realtimeRuntime?.liveKitEnabled
+                        ? t('system.realtimeStatusEnabled')
+                        : t('system.realtimeStatusDisabled')}
+                    </Chip>
+                  </div>
+                </div>
+
+                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeBridgeHealthLabel')}</p>
+                  <div className="mt-2">
+                    <Chip
+                      size="sm"
+                      color={realtimeRuntime?.radioBridgeHealthy === false ? 'danger' : 'success'}
+                      variant="flat"
+                    >
+                      {realtimeRuntime?.radioBridgeHealthy === false
+                        ? t('system.realtimeBridgeHealthUnhealthy')
+                        : t('system.realtimeBridgeHealthHealthy')}
+                    </Chip>
+                  </div>
+                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{runtimeIssueLabel}</p>
+                </div>
+
+                <div className={`${SETTINGS_PANEL_CLASS} py-2 md:col-span-2 xl:col-span-2`}>
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCredentialStatusLabel')}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Chip
+                      size="sm"
+                      color={runtimeCredential?.initialized ? 'success' : 'danger'}
+                      variant="flat"
+                    >
+                      {runtimeCredential?.initialized
+                        ? t('system.realtimeCredentialReady')
+                        : t('system.realtimeCredentialMissing')}
+                    </Chip>
+                    <Chip
+                      size="sm"
+                      color={runtimeCredential?.source === 'environment-override' ? 'warning' : 'default'}
+                      variant="flat"
+                    >
+                      {getRealtimeCredentialSourceLabel(runtimeCredential?.source ?? null, t)}
+                    </Chip>
+                  </div>
+                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>
+                    {runtimeCredential?.apiKeyPreview
+                      ? t('system.realtimeCredentialPreview', { value: runtimeCredential.apiKeyPreview })
+                      : t('system.realtimeCredentialMissingHint')}
+                  </p>
+                  {runtimeCredential?.rotatedAt && (
+                    <p className={`mt-1 ${SETTINGS_MUTED_CLASS}`}>
+                      {t('system.realtimeCredentialRotatedAt', { value: runtimeCredential.rotatedAt })}
+                    </p>
+                  )}
+                  {runtimeCredential?.filePath && (
+                    <p className={`mt-1 break-all ${SETTINGS_MUTED_CLASS}`}>
+                      {t('system.realtimeCredentialFile', { value: runtimeCredential.filePath })}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className={SETTINGS_PANEL_CLASS}>
+                <h6 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimePortRequirementsTitle')}</h6>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimePortRequirementsDesc')}</p>
+
+                <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                    <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
+                    <code className={SETTINGS_SUBDESC_CLASS}>{runtimeHints?.signalingPort ?? 7880}</code>
+                  </div>
+                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                    <span className="text-default-700">{t('system.realtimePortIceTcp')}</span>
+                    <code className={SETTINGS_SUBDESC_CLASS}>{runtimeHints?.rtcTcpPort ?? 7881}</code>
+                  </div>
+                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                    <span className="text-default-700">{t('system.realtimePortUdp')}</span>
+                    <code className={SETTINGS_SUBDESC_CLASS}>{runtimeHints?.udpPortRange ?? '50000-50100'}</code>
+                  </div>
+                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                    <span className="text-default-700">{t('system.realtimePortCompat')}</span>
+                    <code className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCompatEndpointValue')}</code>
+                  </div>
+                  <div className={`${SETTINGS_METRIC_CLASS} lg:col-span-2`}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeEffectiveUrlLabel')}</p>
+                    <code className="mt-1 block break-all text-xs leading-5 text-default-600">
+                      {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
+                    </code>
+                  </div>
+                </div>
+
+                <div className={`mt-3 space-y-1 ${SETTINGS_SUBDESC_CLASS}`}>
+                  <p>{t('system.realtimePortHintAuto')}</p>
+                  <p>{t('system.realtimePortHintCompat')}</p>
+                  <p>{t('system.realtimePortHintFallback')}</p>
+                  <p>{t('system.realtimeCredentialLinuxHint')}</p>
+                </div>
+              </div>
+            </div>
+          </details>
         </CardBody>
       </Card>
 
       <Divider className="my-4" />
 
       {/* 发射时解码设置 */}
-      <Card shadow="none" radius="lg" classNames={{
-        base: "border border-divider bg-content1"
-      }}>
-        <CardBody className="p-4">
+      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
-              <h4 className="font-semibold text-default-900 mb-1">{t('system.decodeWhileTransmitting')}</h4>
-              <div className="text-sm text-default-600 space-y-1">
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.decodeWhileTransmitting')}</h4>
+              <div className={`${SETTINGS_CARD_DESC_CLASS} mt-1 space-y-1`}>
                 <p>
                   <strong>{t('system.off')}（{t('system.recommended')}）</strong>：{t('system.decodeWhileTransmittingOffDesc')}
                 </p>
@@ -892,14 +1322,12 @@ export const SystemSettings = forwardRef<
       </Card>
 
       {/* 发射时频谱分析设置 */}
-      <Card shadow="none" radius="lg" classNames={{
-        base: "border border-divider bg-content1"
-      }}>
-        <CardBody className="p-4">
+      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
-              <h4 className="font-semibold text-default-900 mb-1">{t('system.spectrumWhileTransmitting')}</h4>
-              <div className="text-sm text-default-600 space-y-1">
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.spectrumWhileTransmitting')}</h4>
+              <div className={`${SETTINGS_CARD_DESC_CLASS} mt-1 space-y-1`}>
                 <p>
                   <strong>{t('system.on')}（{t('system.recommended')}）</strong>：{t('system.spectrumWhileTransmittingOnDesc')}
                 </p>
@@ -922,13 +1350,11 @@ export const SystemSettings = forwardRef<
       {/* 解码窗口设置 */}
       <Divider className="my-4" />
 
-      <Card shadow="none" radius="lg" classNames={{
-        base: "border border-divider bg-content1"
-      }}>
-        <CardBody className="p-4 space-y-4">
+      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div>
-            <h4 className="font-semibold text-default-900 mb-1">{t('system.decodeWindowTitle')}</h4>
-            <p className="text-sm text-default-600">{t('system.decodeWindowDesc')}</p>
+            <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.decodeWindowTitle')}</h4>
+            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.decodeWindowDesc')}</p>
           </div>
 
           {/* FT8 解码策略 */}
@@ -1013,8 +1439,8 @@ export const SystemSettings = forwardRef<
 
           {/* FT8 自定义编辑区 */}
           {decodeWindowState.ft8Preset === 'custom' && (
-            <div className="space-y-2 p-3 border border-divider rounded-lg">
-              <p className="text-sm font-medium text-default-700">FT8 {t('system.presetCustom')}</p>
+            <div className={`${SETTINGS_PANEL_CLASS} space-y-2`}>
+              <p className={SETTINGS_SUBTITLE_CLASS}>FT8 {t('system.presetCustom')}</p>
               {decodeWindowState.ft8CustomWindows.map((offset, idx) => (
                 <div key={idx} className="flex items-center gap-2">
                   <Input
@@ -1089,8 +1515,8 @@ export const SystemSettings = forwardRef<
 
           {/* FT4 自定义编辑区 */}
           {decodeWindowState.ft4Preset === 'custom' && (
-            <div className="space-y-2 p-3 border border-divider rounded-lg">
-              <p className="text-sm font-medium text-default-700">FT4 {t('system.presetCustom')}</p>
+            <div className={`${SETTINGS_PANEL_CLASS} space-y-2`}>
+              <p className={SETTINGS_SUBTITLE_CLASS}>FT4 {t('system.presetCustom')}</p>
               {decodeWindowState.ft4CustomWindows.map((offset, idx) => (
                 <div key={idx} className="flex items-center gap-2">
                   <Input
@@ -1168,17 +1594,14 @@ export const SystemSettings = forwardRef<
       {/* PSKReporter 设置分隔 */}
       <Divider className="my-4" />
 
-      {/* PSKReporter 启用开关卡片 */}
-      <Card shadow="none" radius="lg" classNames={{
-        base: "border border-divider bg-content1"
-      }}>
-        <CardBody className="p-4">
+      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex items-start justify-between gap-4">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <h4 className="font-semibold text-default-900">{t('system.pskrTitle')}</h4>
+            <div className="flex-1 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.pskrTitle')}</h4>
                 {pskrConfig?.enabled && pskrStatus && (
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
                     {pskrStatus.configValid ? (
                       <Chip size="sm" color="success" variant="flat">{t('system.configValid')}</Chip>
                     ) : (
@@ -1192,13 +1615,19 @@ export const SystemSettings = forwardRef<
                   </div>
                 )}
               </div>
-              <div className="text-sm text-default-600 space-y-1">
+              <div className={SETTINGS_CARD_DESC_CLASS}>
                 <p>
-                  {t('system.pskrDesc')} <a href="https://pskreporter.info" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">PSKReporter</a>
+                  {t('system.pskrDesc')}{' '}
+                  <a href="https://pskreporter.info" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                    PSKReporter
+                  </a>
                 </p>
                 {pskrConfig?.enabled && pskrStatus?.activeCallsign && (
-                  <p className="text-default-500">
-                    {t('system.pskrActiveInfo', { callsign: pskrStatus.activeCallsign, locator: pskrStatus.activeLocator || t('system.gridNotSet') })}
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
+                    {t('system.pskrActiveInfo', {
+                      callsign: pskrStatus.activeCallsign,
+                      locator: pskrStatus.activeLocator || t('system.gridNotSet'),
+                    })}
                   </p>
                 )}
               </div>
@@ -1211,174 +1640,159 @@ export const SystemSettings = forwardRef<
               color={pskrConfig?.enabled ? 'success' : 'default'}
             />
           </div>
-        </CardBody>
-      </Card>
 
-      {/* PSKReporter 详细配置（启用后显示） */}
-      {pskrConfig?.enabled && (
-        <>
-          {/* 接收站信息卡片 */}
-          <Card shadow="none" radius="lg" classNames={{
-            base: "border border-divider bg-content1"
-          }}>
-            <CardBody className="p-4 space-y-4">
-              <div>
-                <h4 className="font-semibold text-default-900 mb-1">{t('system.receiverInfo')}</h4>
-                <p className="text-sm text-default-500">
-                  {t('system.receiverInfoDesc')}
-                </p>
-              </div>
+          {pskrConfig?.enabled && (
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
+                <div>
+                  <p className={SETTINGS_MUTED_CLASS}>01</p>
+                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.receiverInfo')}</h5>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.receiverInfoDesc')}</p>
+                </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Input
-                  label={t('system.rxCallsign')}
-                  placeholder={t('system.rxCallsignPlaceholder')}
-                  value={pskrConfig.receiverCallsign}
-                  onValueChange={(v) => updatePskrConfig({ receiverCallsign: v.toUpperCase() })}
-                  isDisabled={isSaving}
-                  size="sm"
-                  variant="bordered"
-                  description={pskrStatus?.activeCallsign && !pskrConfig.receiverCallsign
-                    ? t('system.willUse', { val: pskrStatus.activeCallsign })
-                    : undefined}
-                />
-                <Input
-                  label={t('system.rxLocator')}
-                  placeholder={t('system.rxLocatorPlaceholder')}
-                  value={pskrConfig.receiverLocator}
-                  onValueChange={(v) => updatePskrConfig({ receiverLocator: v.toUpperCase() })}
-                  isDisabled={isSaving}
-                  size="sm"
-                  variant="bordered"
-                  description={pskrStatus?.activeLocator && !pskrConfig.receiverLocator
-                    ? t('system.willUse', { val: pskrStatus.activeLocator })
-                    : undefined}
-                />
-              </div>
-            </CardBody>
-          </Card>
-
-          {/* 可选配置卡片 */}
-          <Card shadow="none" radius="lg" classNames={{
-            base: "border border-divider bg-content1"
-          }}>
-            <CardBody className="p-4 space-y-4">
-              <div>
-                <h4 className="font-semibold text-default-900 mb-1">{t('system.optionalConfig')}</h4>
-              </div>
-
-              <Input
-                label={t('system.antennaInfo')}
-                placeholder={t('system.antennaInfoPlaceholder')}
-                value={pskrConfig.antennaInformation}
-                onValueChange={(v) => updatePskrConfig({ antennaInformation: v })}
-                isDisabled={isSaving}
-                size="sm"
-                variant="bordered"
-                maxLength={64}
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Select
-                  label={t('system.reportInterval')}
-                  selectedKeys={[String(pskrConfig.reportIntervalSeconds)]}
-                  onSelectionChange={(keys) => {
-                    const value = Array.from(keys)[0] as string;
-                    if (value) {
-                      updatePskrConfig({ reportIntervalSeconds: parseInt(value) });
-                    }
-                  }}
-                  isDisabled={isSaving}
-                  size="sm"
-                  variant="bordered"
-                >
-                  {REPORT_INTERVAL_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value}>{opt.label}</SelectItem>
-                  ))}
-                </Select>
-
-                <div className="flex items-center justify-between p-3 border border-divider rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium text-default-700">{t('system.testServer')}</p>
-                    <p className="text-xs text-default-500">{t('system.testServerDesc')}</p>
-                  </div>
-                  <Switch
-                    isSelected={pskrConfig.useTestServer}
-                    onValueChange={(v) => updatePskrConfig({ useTestServer: v })}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <Input
+                    label={t('system.rxCallsign')}
+                    placeholder={t('system.rxCallsignPlaceholder')}
+                    value={pskrConfig.receiverCallsign}
+                    onValueChange={(v) => updatePskrConfig({ receiverCallsign: v.toUpperCase() })}
                     isDisabled={isSaving}
                     size="sm"
-                    color="warning"
+                    variant="bordered"
+                    description={pskrStatus?.activeCallsign && !pskrConfig.receiverCallsign
+                      ? t('system.willUse', { val: pskrStatus.activeCallsign })
+                      : undefined}
+                  />
+                  <Input
+                    label={t('system.rxLocator')}
+                    placeholder={t('system.rxLocatorPlaceholder')}
+                    value={pskrConfig.receiverLocator}
+                    onValueChange={(v) => updatePskrConfig({ receiverLocator: v.toUpperCase() })}
+                    isDisabled={isSaving}
+                    size="sm"
+                    variant="bordered"
+                    description={pskrStatus?.activeLocator && !pskrConfig.receiverLocator
+                      ? t('system.willUse', { val: pskrStatus.activeLocator })
+                      : undefined}
                   />
                 </div>
               </div>
-            </CardBody>
-          </Card>
 
-          {/* 统计信息卡片 */}
-          <Card shadow="none" radius="lg" classNames={{
-            base: "border border-divider bg-content1"
-          }}>
-            <CardBody className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="font-semibold text-default-900">{t('system.runningStatus')}</h4>
-                <Chip
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className={SETTINGS_MUTED_CLASS}>03</p>
+                    <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.runningStatus')}</h5>
+                  </div>
+                  <Chip
+                    size="sm"
+                    color={pskrStatus?.isReporting ? 'primary' : 'default'}
+                    variant="flat"
+                  >
+                    {pskrStatus?.isReporting ? t('system.reporting') : t('system.waiting')}
+                  </Chip>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <div className={SETTINGS_METRIC_CLASS}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.todayCount')}</p>
+                    <p className="mt-1 text-sm font-semibold text-default-900">
+                      {pskrConfig.stats?.todayReportCount ?? 0}
+                    </p>
+                  </div>
+                  <div className={SETTINGS_METRIC_CLASS}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.totalCount')}</p>
+                    <p className="mt-1 text-sm font-semibold text-default-900">
+                      {pskrConfig.stats?.totalReportCount ?? 0}
+                    </p>
+                  </div>
+                  <div className={SETTINGS_METRIC_CLASS}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.lastReport')}</p>
+                    <p className="mt-1 text-sm font-semibold text-default-900">
+                      {formatTime(pskrStatus?.lastReportTime)}
+                    </p>
+                  </div>
+                  <div className={SETTINGS_METRIC_CLASS}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.nextReport')}</p>
+                    <p className="mt-1 text-sm font-semibold text-default-900">
+                      {formatNextReport(pskrStatus?.nextReportIn)}
+                    </p>
+                  </div>
+                </div>
+
+                {pskrStatus?.lastError && (
+                  <div className="rounded-medium border border-danger-200 bg-danger-50 px-3 py-2">
+                    <p className="text-sm text-danger-700">{pskrStatus.lastError}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-4 xl:col-span-2`}>
+                <div>
+                  <p className={SETTINGS_MUTED_CLASS}>02</p>
+                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.optionalConfig')}</h5>
+                </div>
+
+                <Input
+                  label={t('system.antennaInfo')}
+                  placeholder={t('system.antennaInfoPlaceholder')}
+                  value={pskrConfig.antennaInformation}
+                  onValueChange={(v) => updatePskrConfig({ antennaInformation: v })}
+                  isDisabled={isSaving}
                   size="sm"
-                  color={pskrStatus?.isReporting ? 'primary' : 'default'}
-                  variant="flat"
-                >
-                  {pskrStatus?.isReporting ? t('system.reporting') : t('system.waiting')}
-                </Chip>
-              </div>
+                  variant="bordered"
+                  maxLength={64}
+                />
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <p className="text-default-500">{t('system.todayCount')}</p>
-                  <p className="font-semibold text-default-900">
-                    {pskrConfig.stats?.todayReportCount ?? 0}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-default-500">{t('system.totalCount')}</p>
-                  <p className="font-semibold text-default-900">
-                    {pskrConfig.stats?.totalReportCount ?? 0}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-default-500">{t('system.lastReport')}</p>
-                  <p className="font-semibold text-default-900">
-                    {formatTime(pskrStatus?.lastReportTime)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-default-500">{t('system.nextReport')}</p>
-                  <p className="font-semibold text-default-900">
-                    {formatNextReport(pskrStatus?.nextReportIn)}
-                  </p>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <Select
+                    label={t('system.reportInterval')}
+                    selectedKeys={[String(pskrConfig.reportIntervalSeconds)]}
+                    onSelectionChange={(keys) => {
+                      const value = Array.from(keys)[0] as string;
+                      if (value) {
+                        updatePskrConfig({ reportIntervalSeconds: parseInt(value) });
+                      }
+                    }}
+                    isDisabled={isSaving}
+                    size="sm"
+                    variant="bordered"
+                  >
+                    {REPORT_INTERVAL_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </Select>
+
+                  <div className={`${SETTINGS_SOFT_PANEL_CLASS} flex items-center justify-between gap-3`}>
+                    <div>
+                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.testServer')}</p>
+                      <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.testServerDesc')}</p>
+                    </div>
+                    <Switch
+                      isSelected={pskrConfig.useTestServer}
+                      onValueChange={(v) => updatePskrConfig({ useTestServer: v })}
+                      isDisabled={isSaving}
+                      size="sm"
+                      color="warning"
+                    />
+                  </div>
                 </div>
               </div>
-
-              {pskrStatus?.lastError && (
-                <div className="mt-3 p-2 bg-danger-50 border border-danger-200 rounded-lg">
-                  <p className="text-sm text-danger-700">{pskrStatus.lastError}</p>
-                </div>
-              )}
-            </CardBody>
-          </Card>
-        </>
-      )}
+            </div>
+          )}
+        </CardBody>
+      </Card>
 
       {/* 桌面应用设置 - 仅 Electron 环境显示 */}
       {isElectron && (
         <>
           <Divider className="my-4" />
-          <Card shadow="none" radius="lg" classNames={{
-            base: "border border-divider bg-content1"
-          }}>
-            <CardBody className="p-4">
-              <div className="space-y-3">
+          <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+            <CardBody className={SETTINGS_CARD_BODY_CLASS}>
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
                 <div>
-                  <h4 className="font-semibold text-default-900 mb-1">{t('system.closeBehavior')}</h4>
-                  <p className="text-sm text-default-600">{t('system.closeBehaviorDesc')}</p>
+                  <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.closeBehavior')}</h4>
+                  <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.closeBehaviorDesc')}</p>
                 </div>
                 <Select
                   selectedKeys={[closeBehavior]}
