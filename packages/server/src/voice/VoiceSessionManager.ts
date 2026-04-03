@@ -4,6 +4,10 @@ import { VoicePTTLockManager } from './VoicePTTLockManager.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  VoiceTxDiagnostics,
+  type VoiceTxFrameMeta,
+} from './VoiceTxDiagnostics.js';
 
 const logger = createLogger('VoiceSessionManager');
 
@@ -27,6 +31,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   private radioManager: PhysicalRadioManager;
   private audioStreamManager: AudioStreamManager;
   private isStarted = false;
+  private diagnostics = new VoiceTxDiagnostics();
 
   constructor(deps: VoiceSessionManagerDeps) {
     super();
@@ -37,6 +42,21 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     // Forward lock change events
     this.pttLockManager.on('lockChanged', (lock) => {
       this.emit('voicePttLockChanged', lock);
+    });
+
+    this.audioStreamManager.setVoiceOutputObserver({
+      onFrameEnqueued: ({ queueDepthFrames, queuedAudioMs }) => {
+        this.diagnostics.noteQueueState(queueDepthFrames, queuedAudioMs);
+      },
+      onFrameDropped: ({ queueDepthFrames, queuedAudioMs }) => {
+        this.diagnostics.noteDropped(queueDepthFrames, queuedAudioMs);
+      },
+      onFrameProcessed: (stats) => {
+        this.diagnostics.noteProcessed(stats);
+      },
+      onWriteFailure: () => {
+        this.diagnostics.noteWriteFailure();
+      },
     });
   }
 
@@ -82,6 +102,9 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     }
 
     try {
+      this.audioStreamManager.clearVoicePlaybackQueue();
+      this.diagnostics.startSession(clientId, label);
+
       // 2. Activate radio PTT
       await this.radioManager.setPTT(true);
 
@@ -95,6 +118,8 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
       logger.error('Failed to start voice transmission, rolling back', err);
       try { await this.radioManager.setPTT(false); } catch { /* best effort */ }
       this.pttLockManager.releaseLock(clientId);
+      this.audioStreamManager.clearVoicePlaybackQueue();
+      this.diagnostics.endSession();
       return { success: false, reason: 'Failed to activate PTT' };
     }
   }
@@ -131,17 +156,22 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     logger.info('Radio mode changed', { mode });
   }
 
-  async handleParticipantAudioFrame(participantIdentity: string, pcmData: Float32Array, sampleRate: number): Promise<void> {
+  async handleParticipantAudioFrame(meta: VoiceTxFrameMeta, pcmData: Float32Array): Promise<void> {
     if (!this.pttLockManager.isLocked()) {
       return;
     }
 
     const associatedParticipantIdentity = this.pttLockManager.getVoiceAudioClientId();
-    if (!associatedParticipantIdentity || participantIdentity !== associatedParticipantIdentity) {
+    if (!associatedParticipantIdentity || meta.participantIdentity !== associatedParticipantIdentity) {
       return;
     }
 
-    await this.audioStreamManager.playVoiceAudio(pcmData, sampleRate);
+    this.diagnostics.noteIngress(meta);
+    await this.audioStreamManager.playVoiceAudio(pcmData, meta.sampleRate, meta);
+  }
+
+  getTxDiagnosticsSnapshot() {
+    return this.diagnostics.getSnapshot();
   }
 
   getPTTLockState(): VoicePTTLock {
@@ -153,6 +183,7 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
   }
 
   destroy(): void {
+    this.audioStreamManager.setVoiceOutputObserver(null);
     this.pttLockManager.destroy();
     this.removeAllListeners();
   }
@@ -166,6 +197,9 @@ export class VoiceSessionManager extends EventEmitter<VoiceSessionManagerEvents>
     } catch (err) {
       logger.error('Failed to deactivate radio PTT', err);
     }
+
+    this.audioStreamManager.clearVoicePlaybackQueue();
+    this.diagnostics.endSession();
 
     // 2. Broadcast PTT status (frontend handles monitor unmuting via gain node)
     this.emit('pttStatusChanged', { isTransmitting: false, operatorIds: [] });

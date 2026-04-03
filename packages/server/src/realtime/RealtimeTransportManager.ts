@@ -20,6 +20,7 @@ import { createLogger } from '../utils/logger.js';
 import { LiveKitAuthService } from './LiveKitAuthService.js';
 import { LiveKitBridgeManager } from './LiveKitBridgeManager.js';
 import { LiveKitConfig } from './LiveKitConfig.js';
+import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
 import { resolveBrowserFacingRequestOrigin } from './requestOrigin.js';
 
 const logger = createLogger('RealtimeTransportManager');
@@ -256,11 +257,22 @@ export class RealtimeTransportManager {
               samplesPerChannel: decoded.samplesPerChannel,
             });
           }
-          void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(
-            session.participantIdentity,
-            float32,
-            decoded.sampleRate,
-          );
+          const serverReceivedAtMs = Date.now();
+          const wrappedNow = serverReceivedAtMs >>> 0;
+          const transportDelta = (wrappedNow - decoded.timestampMs) >>> 0;
+          const clientSentAtMs = transportDelta <= 60_000
+            ? serverReceivedAtMs - transportDelta
+            : null;
+          const meta: VoiceTxFrameMeta = {
+            transport: 'ws-compat',
+            participantIdentity: session.participantIdentity,
+            sequence: decoded.sequence,
+            clientSentAtMs,
+            serverReceivedAtMs,
+            sampleRate: decoded.sampleRate,
+            samplesPerChannel: decoded.samplesPerChannel,
+          };
+          void this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, float32);
         } catch (error) {
           logger.debug('Failed to decode compatibility uplink audio frame', error);
         }

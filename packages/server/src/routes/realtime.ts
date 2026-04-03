@@ -5,6 +5,7 @@ import {
   RealtimeStatsRequestSchema,
   RealtimeStatsResponseSchema,
   RealtimeSessionRequestSchema,
+  RealtimeVoiceTxStatsResponseSchema,
 } from '@tx5dr/contracts';
 import { AuthManager } from '../auth/AuthManager.js';
 import { ConfigManager } from '../config/config-manager.js';
@@ -145,5 +146,70 @@ export async function realtimeRoutes(fastify: FastifyInstance): Promise<void> {
       source,
       transport: transportManager.getPreferredTransport(query.scope, 'recv'),
     }));
+  });
+
+  fastify.get('/tx-stats', async (_request: FastifyRequest, reply) => {
+    const voiceSessionManager = digitalRadioEngine.getVoiceSessionManager();
+    const snapshot = voiceSessionManager?.getTxDiagnosticsSnapshot();
+
+    return reply.send(RealtimeVoiceTxStatsResponseSchema.parse(
+      snapshot ?? {
+        scope: 'radio',
+        summary: {
+          active: false,
+          transport: null,
+          bottleneckStage: null,
+          startedAt: null,
+          updatedAt: null,
+          clientId: null,
+          label: null,
+        },
+        transport: {
+          receivedFrames: 0,
+          sequenceGaps: 0,
+          lastSequence: null,
+          clientToServerMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+        },
+        serverIngress: {
+          frameIntervalMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+          queueDepthFrames: 0,
+          queuedAudioMs: 0,
+          droppedFrames: 0,
+        },
+        serverOutput: {
+          resampleMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+          queueWaitMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+          writeMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+          endToEndMs: {
+            current: null,
+            rolling: null,
+            peak: null,
+          },
+          outputSampleRate: null,
+          outputBufferSize: null,
+          writeFailures: 0,
+        },
+      },
+    ));
   });
 }

@@ -13,6 +13,7 @@ import { createLogger } from '../utils/logger.js';
 import { buildOpenWebRXPreviewRoomName, buildRadioRoomName } from './room-names.js';
 import { LiveKitAuthService } from './LiveKitAuthService.js';
 import { LiveKitConfig } from './LiveKitConfig.js';
+import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
 
 const logger = createLogger('LiveKitBridge');
 const LIVEKIT_AUDIO_SAMPLE_RATE = 16000;
@@ -431,11 +432,16 @@ export class LiveKitBridgeManager {
         }
 
         const frame = int16ToFloat32(value.data);
-        await this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(
+        const meta: VoiceTxFrameMeta = {
+          transport: 'livekit',
           participantIdentity,
-          frame,
-          value.sampleRate,
-        );
+          sequence: null,
+          clientSentAtMs: null,
+          serverReceivedAtMs: Date.now(),
+          sampleRate: value.sampleRate,
+          samplesPerChannel: value.samplesPerChannel,
+        };
+        await this.engine.getVoiceSessionManager()?.handleParticipantAudioFrame(meta, frame);
       }
     } catch (error) {
       logger.debug('LiveKit remote track reader ended with error', { trackId, error });

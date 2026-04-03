@@ -4,6 +4,7 @@ import type { RadioService } from '../services/radioService';
 import { VoiceCapture, type VoiceCaptureState } from '../audio/VoiceCapture';
 import { createLogger } from '../utils/logger';
 import { presentRealtimeConnectivityFailure } from '../realtime/realtimeConnectivity';
+import type { VoiceTxLocalDiagnostics } from '../audio/voiceTxDiagnostics';
 
 const logger = createLogger('useVoiceCaptureController');
 
@@ -14,6 +15,7 @@ export interface VoiceCaptureController {
   participantIdentity: string | null;
   isPTTActive: boolean;
   getInputLevel: () => number;
+  getDiagnostics: () => VoiceTxLocalDiagnostics | null;
   startFromGesture: () => Promise<string | null>;
   switchTransportFromGesture: (transport: RealtimeTransportKind) => Promise<void>;
   setPreferredTransport: (transport: RealtimeTransportKind) => void;
@@ -95,6 +97,10 @@ export function useVoiceCaptureController(
     return captureRef.current?.inputLevel ?? 0;
   }, []);
 
+  const getDiagnostics = useCallback(() => {
+    return captureRef.current?.diagnostics ?? null;
+  }, []);
+
   useEffect(() => {
     if (!radioService || engineMode !== 'voice') {
       captureRef.current?.stop();
@@ -148,6 +154,7 @@ export function useVoiceCaptureController(
     participantIdentity,
     isPTTActive,
     getInputLevel,
+    getDiagnostics,
     startFromGesture,
     switchTransportFromGesture,
     setPreferredTransport,
@@ -157,6 +164,7 @@ export function useVoiceCaptureController(
     activeTransport,
     captureState,
     getInputLevel,
+    getDiagnostics,
     isPTTActive,
     participantIdentity,
     preferredTransport,
