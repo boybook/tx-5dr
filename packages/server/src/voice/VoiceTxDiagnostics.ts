@@ -31,6 +31,7 @@ export interface VoiceTxProcessedFrameStats {
   queueWaitMs: number;
   writeMs: number;
   endToEndMs: number | null;
+  outputBufferedMs: number | null;
   outputSampleRate: number | null;
   outputBufferSize: number | null;
 }
@@ -115,6 +116,7 @@ export class VoiceTxDiagnostics {
   private readonly queueWaitMs = new MetricSeries();
   private readonly writeMs = new MetricSeries();
   private readonly endToEndMs = new MetricSeries();
+  private readonly outputBufferedMs = new MetricSeries();
 
   startSession(clientId: string, label: string): void {
     const now = Date.now();
@@ -196,6 +198,9 @@ export class VoiceTxDiagnostics {
     if (typeof stats.endToEndMs === 'number' && stats.endToEndMs >= 0) {
       this.endToEndMs.record(stats.endToEndMs);
     }
+    if (typeof stats.outputBufferedMs === 'number' && stats.outputBufferedMs >= 0) {
+      this.outputBufferedMs.record(stats.outputBufferedMs);
+    }
     this.activeSession.updatedAt = Date.now();
   }
 
@@ -247,6 +252,7 @@ export class VoiceTxDiagnostics {
         queueWaitMs: this.queueWaitMs.snapshot(now),
         writeMs: this.writeMs.snapshot(now),
         endToEndMs: this.endToEndMs.snapshot(now),
+        outputBufferedMs: this.outputBufferedMs.snapshot(now),
         outputSampleRate: this.outputSampleRate,
         outputBufferSize: this.outputBufferSize,
         writeFailures: this.writeFailures,
@@ -279,6 +285,7 @@ export class VoiceTxDiagnostics {
         value: Math.max(
           snapshot.serverOutput.resampleMs.rolling ?? 0,
           snapshot.serverOutput.writeMs.rolling ?? 0,
+          snapshot.serverOutput.outputBufferedMs.rolling ?? 0,
         ),
       },
     ];
@@ -325,6 +332,7 @@ export class VoiceTxDiagnostics {
         queueWaitMs: this.emptyMetricWindow(),
         writeMs: this.emptyMetricWindow(),
         endToEndMs: this.emptyMetricWindow(),
+        outputBufferedMs: this.emptyMetricWindow(),
         outputSampleRate: null,
         outputBufferSize: null,
         writeFailures: 0,
@@ -357,5 +365,6 @@ export class VoiceTxDiagnostics {
     this.queueWaitMs.reset();
     this.writeMs.reset();
     this.endToEndMs.reset();
+    this.outputBufferedMs.reset();
   }
 }
