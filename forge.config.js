@@ -362,49 +362,63 @@ module.exports = {
       // ====== 通用：删除明显的开发/打包期依赖 ======
       try {
         console.log('🧹 正在精简 node_modules...');
-        const toRemoveExact = [
+        const scopeDirsToRemove = [
           // Electron 打包相关 & 自身
-          'electron', 'electron-winstaller', '@electron', '@electron-forge',
+          '@electron', '@electron-forge',
           // 构建工具/打包器
-          'rollup', '@rollup', 'vite', '@vitejs', 'esbuild', '@esbuild', 'postject', 'sucrase',
-          'appdmg', 'jiti', '@swc',
+          '@rollup', '@esbuild', '@vitejs', '@swc', '@turbo',
           // 代码质量/类型
-          'typescript', '@types', 'eslint', '@eslint', '@eslint-community', '@typescript-eslint', 'prettier',
+          '@types', '@eslint', '@eslint-community', '@typescript-eslint',
           // UI/前端开发依赖（运行时使用的是打包后的 web/dist）
-          '@heroui', '@heroicons', '@fortawesome', 'caniuse-lite', 'tailwindcss', 'tailwind-merge', 'tailwind-variants',
-          '@react-aria', '@react-stately', '@react-types', '@formatjs', 'react', 'react-dom', 'framer-motion', 'rxjs', '@babel',
+          '@heroui', '@heroicons', '@fortawesome', '@react-aria', '@react-stately', '@react-types', '@formatjs', '@babel',
+          // 前端构建/CSS 工具链残留
+          '@jridgewell', '@internationalized',
+          // 测试/性能分析工具
+          '@vitest', '@statelyai', '@clinic', '@tensorflow',
+          // Electron Forge 打包工具链残留
+          '@malept', '@gar', '@hapi', '@jest'
+        ];
+        const packageDirsToRemove = [
+          // Electron 打包相关 & 自身
+          'electron', 'electron-winstaller',
+          // 构建工具/打包器
+          'rollup', 'vite', 'esbuild', 'postject', 'sucrase', 'appdmg', 'jiti', 'turbo',
+          // 代码质量/类型
+          'typescript', 'eslint', 'prettier',
+          // UI/前端开发依赖（运行时使用的是打包后的 web/dist）
+          'caniuse-lite', 'tailwindcss', 'tailwind-merge', 'tailwind-variants',
+          'react', 'react-dom', 'framer-motion', 'rxjs',
           // 其他只在构建期使用
-          'png-to-ico', 'vitest', '@vitest', 'tsx', 'node-gyp', 'electron-installer-redhat', 'electron-installer-debian', 'segfault-handler',
+          'png-to-ico', 'vitest', 'tsx', 'node-gyp', 'electron-installer-redhat', 'electron-installer-debian', 'segfault-handler',
           // === 以下为体积优化新增 ===
           // 已确认无源码引用的间接依赖
           'superjson', 'lodash', 'axios',
           // 前端构建/CSS 工具链（web 已构建为 dist，不需要）
           'postcss', 'autoprefixer', 'lilconfig', 'postcss-load-config',
-          'react-refresh', 'react-is', 'scheduler',
-          '@jridgewell', 'yaml', 'csstype',
+          'react-refresh', 'react-is', 'scheduler', 'yaml', 'csstype',
           // framer-motion 子包（主包已删除）
           'motion-dom', 'motion-utils',
-          // @heroui 间接依赖（主包已删除）
-          '@internationalized',
           // ESLint/代码分析工具链残留
           'esquery', 'graphemer', 'espree', 'esrecurse', 'estraverse', 'estree-walker', 'esutils',
           'acorn', 'acorn-jsx', 'acorn-walk', 'doctrine', 'optionator',
           // 测试/性能分析工具
-          'chai', '@statelyai', 'autocannon', 'clinic',
+          'chai', 'autocannon', 'clinic', 'insight', 'inquirer',
           // 构建辅助（source-map 等）
           'source-map', 'pngjs', 'bluebird',
-          // Electron Forge 打包工具链残留
-          'electron-installer-common', 'resedit', 'pe-library',
+          // Electron Forge / 原生模块构建工具链残留
+          'electron-installer-common', 'electron-wix-msi', 'rcedit', 'pe-library', 'cmake-js',
           'dir-compare', 'flora-colossus', 'galactus',
           'got', 'global-agent', 'global-dirs', 'roarr', 'serialize-error',
           'listr2', 'ora', 'log-symbols', 'log-update',
-          'sudo-prompt', 'cross-zip', 'sumchecker',
-          '@malept', '@gar', '@hapi', '@jest'
+          'sudo-prompt', 'cross-zip', 'sumchecker'
         ];
 
-        // 删除精确匹配的包
-        for (const pkg of toRemoveExact) {
-          rmrf(join(nm, pkg));
+        // 作用域目录和普通包目录分开处理，避免遗漏 @scope/* 残留
+        for (const scopeDir of scopeDirsToRemove) {
+          rmrf(join(nm, scopeDir));
+        }
+        for (const pkgDir of packageDirsToRemove) {
+          rmrf(join(nm, pkgDir));
         }
 
         // 删除 turbo* 开头的包
