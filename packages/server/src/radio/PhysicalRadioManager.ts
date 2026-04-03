@@ -28,6 +28,7 @@ import type {
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
+import { isProcessShuttingDown } from '../utils/process-shutdown.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
 import type { IRadioConnection, MeterData, SetRadioModeOptions } from './connections/IRadioConnection.js';
 import { RadioConnectionType } from './connections/IRadioConnection.js';
@@ -372,6 +373,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.isDisconnecting = true;
 
     try {
+      const fastShutdown = isProcessShuttingDown();
       logger.info(`Disconnecting: ${reason || 'user request'}`);
 
       this.stopFrequencyMonitoring();
@@ -387,7 +389,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 然后通知状态机
       if (this.radioActor) {
         this.radioActor.send({ type: 'DISCONNECT', reason });
-        try { await this.waitForState(RadioState.DISCONNECTED, 5000); } catch {}
+        if (!fastShutdown) {
+          try { await this.waitForState(RadioState.DISCONNECTED, 5000); } catch {}
+        } else {
+          logger.info('Skipping radio state wait during process shutdown');
+        }
       }
     } finally {
       this.isDisconnecting = false;

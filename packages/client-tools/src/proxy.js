@@ -312,8 +312,76 @@ function attachUpgrade(server, entryScheme) {
   });
 }
 
+function trackSockets(server) {
+  const sockets = new Set();
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => {
+      sockets.delete(socket);
+    });
+  });
+  return sockets;
+}
+
+function destroyTrackedSockets(sockets) {
+  for (const socket of sockets) {
+    try {
+      socket.destroy();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function closeServerFast(server, sockets) {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      resolve();
+    };
+
+    const timeout = setTimeout(() => {
+      destroyTrackedSockets(sockets);
+      finish();
+    }, 400);
+
+    try {
+      server.close(() => {
+        clearTimeout(timeout);
+        finish();
+      });
+    } catch {
+      clearTimeout(timeout);
+      finish();
+      return;
+    }
+
+    try {
+      if (typeof server.closeIdleConnections === 'function') {
+        server.closeIdleConnections();
+      }
+    } catch {
+      // ignore
+    }
+
+    setTimeout(() => {
+      try {
+        if (typeof server.closeAllConnections === 'function') {
+          server.closeAllConnections();
+        }
+      } catch {
+        // ignore
+      }
+      destroyTrackedSockets(sockets);
+    }, 0);
+  });
+}
+
 const httpServer = http.createServer((req, res) => handleRequest(req, res, 'http'));
 attachUpgrade(httpServer, 'http');
+const httpSockets = trackSockets(httpServer);
 
 let httpsServer = null;
 if (HTTPS_ENABLE && HTTPS_CERT_FILE && HTTPS_KEY_FILE && fs.existsSync(HTTPS_CERT_FILE) && fs.existsSync(HTTPS_KEY_FILE)) {
@@ -328,6 +396,8 @@ if (HTTPS_ENABLE && HTTPS_CERT_FILE && HTTPS_KEY_FILE && fs.existsSync(HTTPS_CER
     httpsServer = null;
   }
 }
+
+const httpsSockets = httpsServer ? trackSockets(httpsServer) : null;
 
 httpServer.on('listening', () => {
   const addr = httpServer.address();
@@ -404,14 +474,15 @@ Promise.all([
   }
 });
 
+let shuttingDown = false;
+
 function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
   const closers = [
-    new Promise((resolve) => {
-      try { httpServer.close(() => resolve()); } catch { resolve(); }
-    }),
-    httpsServer ? new Promise((resolve) => {
-      try { httpsServer.close(() => resolve()); } catch { resolve(); }
-    }) : Promise.resolve(),
+    closeServerFast(httpServer, httpSockets),
+    httpsServer && httpsSockets ? closeServerFast(httpsServer, httpsSockets) : Promise.resolve(),
   ];
   Promise.allSettled(closers).finally(() => process.exit(0));
 }

@@ -18,6 +18,7 @@ import { hamlibStrengthToLevelMeterReading } from './meterUtils.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
+import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { buildBackendConfig } from '../hamlibConfigUtils.js';
 
@@ -1899,20 +1900,27 @@ export class HamlibConnection
 
     try {
       if (this.rig) {
+        const isFastShutdown = isProcessShuttingDown();
+        const spectrumStopTimeoutMs = isFastShutdown ? 250 : 1000;
+        const closeTimeoutMs = isFastShutdown ? 750 : 5000;
+
         try {
-          await this.stopManagedSpectrum();
+          await Promise.race([
+            this.stopManagedSpectrum(),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('Stop managed spectrum timeout')), spectrumStopTimeoutMs);
+            }),
+          ]);
         } catch (error) {
           logger.warn('Failed to stop managed spectrum during cleanup', error);
         }
 
         try {
-          // hamlib close() 返回 Promise，不接受回调参数
-          // 增加超时时间到 5 秒，给 pthread 清理更多时间
           await Promise.race([
             this.rig.close(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Close connection timeout')), 5000)
-            ),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('Close connection timeout')), closeTimeoutMs);
+            }),
           ]);
         } catch (error) {
           logger.warn('Failed to close connection during cleanup:', error);

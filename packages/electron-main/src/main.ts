@@ -46,6 +46,26 @@ let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
 
+type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
+
+interface ChildShutdownOptions {
+  softTimeoutMs?: number;
+  forceTimeoutMs?: number;
+}
+
+interface ChildShutdownResult {
+  name: string;
+  durationMs: number;
+  forced: boolean;
+  skipped: boolean;
+}
+
+const CHILD_SHUTDOWN_OPTIONS: Record<'web' | 'server' | 'livekit', ChildShutdownOptions> = {
+  web: { softTimeoutMs: 1000, forceTimeoutMs: 400 },
+  server: { softTimeoutMs: 1800, forceTimeoutMs: 500 },
+  livekit: { softTimeoutMs: 1000, forceTimeoutMs: 400 },
+};
+
 // ===== Electron 本地设置 =====
 const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
 
@@ -498,39 +518,104 @@ async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
 
 // no quarantine/permission fallbacks; we assume portable node file is valid
 
-function killProcess(proc: import('node:child_process').ChildProcess | null, name: string): Promise<void> {
+function hasChildExited(proc: import('node:child_process').ChildProcess): boolean {
+  return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+function forceKillChild(proc: import('node:child_process').ChildProcess, name: string): void {
+  if (!proc.pid || hasChildExited(proc)) {
+    return;
+  }
+
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      proc.kill('SIGKILL');
+    }
+  } catch (error) {
+    logger.error(`failed to force kill ${name}`, error);
+  }
+}
+
+function killProcess(
+  proc: import('node:child_process').ChildProcess | null,
+  name: string,
+  options: ChildShutdownOptions = {},
+): Promise<ChildShutdownResult> {
   return new Promise((resolve) => {
-    if (!proc || proc.killed) {
-      resolve();
+    const startedAt = Date.now();
+    const softTimeoutMs = options.softTimeoutMs ?? 1500;
+    const forceTimeoutMs = options.forceTimeoutMs ?? 500;
+
+    if (!proc || hasChildExited(proc)) {
+      resolve({
+        name,
+        durationMs: Date.now() - startedAt,
+        forced: false,
+        skipped: true,
+      });
       return;
     }
 
     logger.info(`stopping child process: ${name} (PID: ${proc.pid})`);
 
-    const timeout = setTimeout(() => {
-      if (proc && !proc.killed) {
-        logger.warn(`child process ${name} did not exit, force killing`);
-        try {
-          proc.kill('SIGKILL');
-        } catch (err) {
-          logger.error(`failed to force kill ${name}`, err);
-        }
-      }
-      resolve();
-    }, 5000);
+    let forced = false;
+    let softTimer: NodeJS.Timeout | null = null;
+    let forceTimer: NodeJS.Timeout | null = null;
+    let finished = false;
 
-    proc.once('exit', (code, signal) => {
-      clearTimeout(timeout);
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (softTimer) {
+        clearTimeout(softTimer);
+      }
+      if (forceTimer) {
+        clearTimeout(forceTimer);
+      }
+      proc.off('exit', onExit);
+      resolve({
+        name,
+        durationMs: Date.now() - startedAt,
+        forced,
+        skipped: false,
+      });
+    };
+
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       logger.info(`child process ${name} exited (code: ${code}, signal: ${signal})`);
-      resolve();
-    });
+      finish();
+    };
+
+    const escalate = () => {
+      if (hasChildExited(proc)) {
+        finish();
+        return;
+      }
+
+      forced = true;
+      logger.warn(`child process ${name} exceeded soft timeout, force killing`);
+      forceKillChild(proc, name);
+
+      forceTimer = setTimeout(() => {
+        if (!hasChildExited(proc)) {
+          logger.warn(`child process ${name} did not exit after force kill request`);
+        }
+        finish();
+      }, forceTimeoutMs);
+    };
+
+    proc.once('exit', onExit);
+    softTimer = setTimeout(escalate, softTimeoutMs);
 
     try {
       proc.kill('SIGTERM');
-    } catch (err) {
-      logger.error(`failed to send SIGTERM to ${name}`, err);
-      clearTimeout(timeout);
-      resolve();
+    } catch (error) {
+      logger.error(`failed to send SIGTERM to ${name}`, error);
+      escalate();
     }
   });
 }
@@ -812,7 +897,7 @@ function buildContextMenu(includQuit: boolean): Menu {
       {
         label: msgs.menu.quit,
         click: () => {
-          void cleanupAndQuit();
+          void cleanupAndQuit('tray-menu');
         },
       },
     );
@@ -928,7 +1013,7 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
       }
 
       if (settings.closeBehavior === 'quit') {
-        void cleanupAndQuit();
+        void cleanupAndQuit('window-close');
         return;
       }
 
@@ -957,7 +1042,7 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
           if (checkboxChecked) {
             saveElectronSettings({ ...settings, closeBehavior: 'quit' });
           }
-          void cleanupAndQuit();
+          void cleanupAndQuit('window-close');
         }
       });
     });
@@ -1181,32 +1266,61 @@ async function checkServerHealth(): Promise<boolean> {
   });
 }
 
-// 清理函数
-async function cleanup() {
-  const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
+function closeFrontendWindowsImmediately(): number {
+  const startedAt = Date.now();
 
-  // 清理服务器健康检查定时器
   if (serverCheckInterval) {
     clearInterval(serverCheckInterval);
     serverCheckInterval = null;
   }
 
-  if (webProcess) {
-    await killProcess(webProcess, 'web');
-    webProcess = null;
+  const windows = BrowserWindow.getAllWindows();
+  logger.info(`closing frontend windows immediately (${windows.length} windows)`);
+
+  for (const windowInstance of windows) {
+    try {
+      if (!windowInstance.isDestroyed()) {
+        windowInstance.destroy();
+      }
+    } catch (error) {
+      logger.warn('failed to destroy window during quit', error);
+    }
   }
 
-  // 生产模式：关闭子进程
+  mainWindowInstance = null;
+  return Date.now() - startedAt;
+}
+
+async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutdownResult[]> {
+  const tasks: Array<Promise<ChildShutdownResult>> = [];
+
+  const currentWebProcess = webProcess;
+  webProcess = null;
+  if (currentWebProcess) {
+    tasks.push(killProcess(currentWebProcess, 'web', CHILD_SHUTDOWN_OPTIONS.web));
+  }
+
   if (!isDevelopment) {
-    if (serverProcess) {
-      await killProcess(serverProcess, 'server');
-      serverProcess = null;
+    const currentServerProcess = serverProcess;
+    serverProcess = null;
+    if (currentServerProcess) {
+      tasks.push(killProcess(currentServerProcess, 'server', CHILD_SHUTDOWN_OPTIONS.server));
     }
-    if (livekitProcess) {
-      await killProcess(livekitProcess, 'livekit');
-      livekitProcess = null;
+
+    const currentLivekitProcess = livekitProcess;
+    livekitProcess = null;
+    if (currentLivekitProcess) {
+      tasks.push(killProcess(currentLivekitProcess, 'livekit', CHILD_SHUTDOWN_OPTIONS.livekit));
     }
   }
+
+  return Promise.all(tasks);
+}
+
+// 清理函数
+async function cleanup(): Promise<ChildShutdownResult[]> {
+  const isDevelopment = process.env.NODE_ENV === 'development' && !app.isPackaged;
+  const childResults = await cleanupChildProcesses(isDevelopment);
 
   selectedLiveKitPort = null;
   selectedServerPort = null;
@@ -1219,6 +1333,7 @@ async function cleanup() {
   }
 
   logger.info('cleanup complete');
+  return childResults;
 }
 
 async function createWindow() {
@@ -1488,45 +1603,70 @@ const startApp = async () => {
 // 跟踪清理状态,防止重复清理
 let isCleaningUp = false;
 let hasCleanedUp = false;
+let cleanupPromise: Promise<void> | null = null;
+let lastQuitSource: QuitSource = 'unknown';
 
 // 统一的清理和退出处理函数
-async function cleanupAndQuit() {
-  if (hasCleanedUp || isCleaningUp) {
-    return;
+async function cleanupAndQuit(source: QuitSource = 'unknown'): Promise<void> {
+  if (cleanupPromise) {
+    return cleanupPromise;
   }
 
-  isQuitting = true;
-  isCleaningUp = true;
-  try {
-    await cleanup();
-    hasCleanedUp = true;
-    logger.info('cleanup done, quitting');
-  } catch (err) {
-    logger.error('cleanup failed', err);
-    hasCleanedUp = true;
-  } finally {
-    isCleaningUp = false;
-    app.quit();
-  }
+  lastQuitSource = source;
+  cleanupPromise = (async () => {
+    const totalStartedAt = Date.now();
+
+    isQuitting = true;
+    isCleaningUp = true;
+
+    const visualCloseMs = closeFrontendWindowsImmediately();
+
+    try {
+      const childResults = await cleanup();
+      hasCleanedUp = true;
+      logger.info('cleanup done, exiting app', {
+        source: lastQuitSource,
+        visualCloseMs,
+        totalMs: Date.now() - totalStartedAt,
+        childResults,
+      });
+    } catch (error) {
+      hasCleanedUp = true;
+      logger.error('cleanup failed', {
+        source: lastQuitSource,
+        visualCloseMs,
+        totalMs: Date.now() - totalStartedAt,
+        error,
+      });
+    } finally {
+      isCleaningUp = false;
+      app.exit(0);
+    }
+  })();
+
+  return cleanupPromise;
 }
 
 // 应用退出事件处理
 app.on('will-quit', (event) => {
   logger.info('app will-quit');
 
-  // 如果还没有清理完成,阻止退出并执行清理
-  if (!hasCleanedUp && !isCleaningUp) {
+  if (!hasCleanedUp) {
     event.preventDefault();
-    void cleanupAndQuit();
+    if (!isCleaningUp) {
+      void cleanupAndQuit('will-quit');
+    }
   }
 });
 
 app.on('before-quit', (event) => {
   logger.info('app before-quit');
-  // 如果还没有清理完成,阻止退出并执行清理
-  if (!hasCleanedUp && !isCleaningUp) {
+
+  if (!hasCleanedUp) {
     event.preventDefault();
-    void cleanupAndQuit();
+    if (!isCleaningUp) {
+      void cleanupAndQuit('before-quit');
+    }
   }
 });
 
@@ -1544,16 +1684,12 @@ app.on('activate', () => {
 // 处理进程退出信号
 process.on('SIGINT', () => {
   logger.info('received SIGINT');
-  void cleanup().then(() => {
-    process.exit(0);
-  });
+  void cleanupAndQuit('unknown');
 });
 
 process.on('SIGTERM', () => {
   logger.info('received SIGTERM');
-  void cleanup().then(() => {
-    process.exit(0);
-  });
+  void cleanupAndQuit('unknown');
 });
 
 /**
@@ -1734,6 +1870,9 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
+  ipcMain.handle('app:quit', async () => {
+    await cleanupAndQuit('renderer');
+  });
 
   ipcMain.handle('updater:getStatus', () => {
     return desktopUpdateService.getStatus();
