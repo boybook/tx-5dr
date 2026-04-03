@@ -263,6 +263,7 @@ export class VoiceCapture {
       };
     }
 
+    let hasLoggedFirstCompatFrame = false;
     captureBackend.setFrameHandler((frame) => {
       if (!this.compatSocket || this.compatSocket.readyState !== WebSocket.OPEN) {
         return;
@@ -281,6 +282,13 @@ export class VoiceCapture {
           pcm: new Int16Array(frame.buffer),
         });
         this.compatSocket.send(payload);
+        if (!hasLoggedFirstCompatFrame) {
+          hasLoggedFirstCompatFrame = true;
+          logger.info('First compatibility uplink audio frame sent', {
+            sampleRate: frame.sampleRate,
+            samplesPerChannel: frame.samplesPerChannel,
+          });
+        }
       } catch (error) {
         logger.debug('Failed to send compatibility uplink audio frame', error);
       }

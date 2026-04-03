@@ -371,9 +371,14 @@ class ScriptProcessorCaptureBackend implements CompatCaptureBackend {
 class WorkletCaptureBackend implements CompatCaptureBackend {
   readonly backendType = 'audio-worklet' as const;
   readonly inputNode: AudioWorkletNode;
+  private readonly muteGainNode: GainNode;
 
-  constructor(node: AudioWorkletNode) {
+  constructor(audioContext: AudioContext, node: AudioWorkletNode) {
     this.inputNode = node;
+    this.muteGainNode = audioContext.createGain();
+    this.muteGainNode.gain.value = 0;
+    this.inputNode.connect(this.muteGainNode);
+    this.muteGainNode.connect(audioContext.destination);
   }
 
   setFrameHandler(handler: ((frame: CompatCaptureFrame) => void) | null): void {
@@ -394,6 +399,11 @@ class WorkletCaptureBackend implements CompatCaptureBackend {
     this.inputNode.port.onmessage = null;
     try {
       this.inputNode.disconnect();
+    } catch {
+      // ignore
+    }
+    try {
+      this.muteGainNode.disconnect();
     } catch {
       // ignore
     }
@@ -429,7 +439,8 @@ export async function createCompatCaptureBackend(audioContext: AudioContext): Pr
     await audioContext.audioWorklet.addModule('/voice-capture-worklet.js');
     const node = new AudioWorkletNode(audioContext, 'voice-capture-processor', {
       numberOfInputs: 1,
-      numberOfOutputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
       channelCount: 1,
       channelCountMode: 'explicit',
       channelInterpretation: 'speakers',
@@ -438,7 +449,7 @@ export async function createCompatCaptureBackend(audioContext: AudioContext): Pr
       backendType: 'audio-worklet',
       browser: detectBrowserAudioRuntime().label,
     });
-    return new WorkletCaptureBackend(node);
+    return new WorkletCaptureBackend(audioContext, node);
   }
 
   logger.warn('AudioWorklet is unavailable, using script processor capture fallback', {

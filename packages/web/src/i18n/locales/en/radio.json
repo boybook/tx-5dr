@@ -78,6 +78,21 @@
     "switchToWebrtc": "Switch to WebRTC",
     "switchToWsPcm": "Switch to WS/PCM"
   },
+  "voiceTx": {
+    "audioUplink": "Voice uplink",
+    "status": "Status",
+    "statusIdle": "Not connected",
+    "statusStarting": "Starting",
+    "statusReady": "Ready",
+    "statusError": "Connection failed",
+    "statusTransmitting": "Transmitting",
+    "statusLockedByOther": "Locked by {{user}}",
+    "codec": "Uplink codec",
+    "currentTransport": "Current transport",
+    "plannedTransport": "Planned transport",
+    "notEstablished": "Not connected",
+    "switchDisabledDuringTx": "Transport cannot be switched while transmitting"
+  },
   "realtime": {
     "scopeRadio": "radio monitoring",
     "scopeOpenWebRX": "OpenWebRX preview",

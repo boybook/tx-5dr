@@ -78,6 +78,21 @@
     "switchToWebrtc": "切换到 WebRTC",
     "switchToWsPcm": "切换到 WS/PCM"
   },
+  "voiceTx": {
+    "audioUplink": "语音发送",
+    "status": "状态",
+    "statusIdle": "未建立",
+    "statusStarting": "初始化中",
+    "statusReady": "已就绪",
+    "statusError": "连接失败",
+    "statusTransmitting": "正在发射",
+    "statusLockedByOther": "被 {{user}} 占用",
+    "codec": "发送编解码",
+    "currentTransport": "当前链路",
+    "plannedTransport": "计划链路",
+    "notEstablished": "未建立",
+    "switchDisabledDuringTx": "发射中不可切换链路"
+  },
   "realtime": {
     "scopeRadio": "电台监听",
     "scopeOpenWebRX": "OpenWebRX 试听",
