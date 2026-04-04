@@ -302,7 +302,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
     // 如果提供了电台调制模式，也设置该模式
     if (radioMode) {
       try {
-        await radioManager.setMode(radioMode, undefined, inferModeOptions(mode, engine.getEngineMode()));
+        // Preserve the rig's current filter width when a frequency switch also needs to sync radio mode.
+        await radioManager.setMode(radioMode, 'nochange', inferModeOptions(mode, engine.getEngineMode()));
         logger.debug(`Radio mode set: ${radioMode}`);
       } catch (modeError) {
         logger.warn(`Failed to set radio mode: ${(modeError as Error).message}`);

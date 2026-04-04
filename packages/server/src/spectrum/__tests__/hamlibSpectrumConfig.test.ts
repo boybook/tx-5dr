@@ -1,13 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('hamlib', () => ({
-  HamLib: class MockHamLib {},
-}));
-
-vi.mock('hamlib/spectrum', () => ({
-  SpectrumController: class MockSpectrumController {},
-}));
-
 import { HamlibConnection } from '../../radio/connections/HamlibConnection.js';
 import {
   applyHamlibSpectrumRuntimeConfig,

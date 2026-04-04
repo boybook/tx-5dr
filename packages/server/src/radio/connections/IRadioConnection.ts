@@ -144,6 +144,7 @@ export interface IRadioConnectionEvents {
 }
 
 export type RadioModeIntent = 'voice' | 'digital';
+export type RadioModeBandwidth = 'narrow' | 'wide' | 'normal' | 'nochange' | number;
 
 export interface SetRadioModeOptions {
   intent?: RadioModeIntent;
@@ -218,11 +219,11 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * 设置电台工作模式
    *
    * @param mode - 模式名称 (USB, LSB, AM, CW, FM, etc.)
-   * @param bandwidth - 带宽设置（可选）: 'narrow' | 'wide'
+   * @param bandwidth - 带宽设置（可选）: 'narrow' | 'wide' | 'normal' | 'nochange' | Hz
    * @param options - 模式设置上下文（语音/数字）
    * @throws {RadioError} 设置失败时抛出
    */
-  setMode(mode: string, bandwidth?: 'narrow' | 'wide', options?: SetRadioModeOptions): Promise<void>;
+  setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void>;
 
   /**
    * 获取当前工作模式

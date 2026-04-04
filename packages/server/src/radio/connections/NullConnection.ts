@@ -11,6 +11,7 @@ import type {
   IRadioConnection,
   IRadioConnectionEvents,
   RadioConnectionConfig,
+  RadioModeBandwidth,
   SetRadioModeOptions,
 } from './IRadioConnection.js';
 import { RadioConnectionType, RadioConnectionState } from './IRadioConnection.js';
@@ -50,7 +51,7 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
     // no-op
   }
 
-  async setMode(_mode: string, _bandwidth?: 'narrow' | 'wide', _options?: SetRadioModeOptions): Promise<void> {
+  async setMode(_mode: string, _bandwidth?: RadioModeBandwidth, _options?: SetRadioModeOptions): Promise<void> {
     // no-op
   }
 

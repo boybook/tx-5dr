@@ -1,13 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('hamlib', () => ({
-  HamLib: class MockHamLib {},
-}));
-
-vi.mock('hamlib/spectrum', () => ({
-  SpectrumController: class MockSpectrumController {},
-}));
-
 vi.mock('icom-wlan-node', () => ({
   IcomControl: class MockIcomControl {},
   AUDIO_RATE: 48000,
@@ -192,6 +184,16 @@ describe('PhysicalRadioManager', () => {
     await expect(manager.setMode('USB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
 
     expect(setMode).toHaveBeenCalledWith('USB', undefined, { intent: 'voice' });
+    expect(manager.getCoreCapabilities().writeRadioMode).toBe(true);
+  });
+
+  it('passes nochange bandwidth selectors through to the active connection', async () => {
+    const setMode = vi.fn().mockResolvedValue(undefined);
+    asTestManager(manager).connection = { setMode };
+
+    await expect(manager.setMode('USB', 'nochange', { intent: 'digital' })).resolves.toBeUndefined();
+
+    expect(setMode).toHaveBeenCalledWith('USB', 'nochange', { intent: 'digital' });
     expect(manager.getCoreCapabilities().writeRadioMode).toBe(true);
   });
 

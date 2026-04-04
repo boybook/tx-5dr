@@ -6,6 +6,7 @@ import {
   RadioConnectionState,
   RadioConnectionType,
   type IRadioConnectionEvents,
+  type RadioModeBandwidth,
 } from '../connections/IRadioConnection.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 
@@ -42,7 +43,7 @@ class MockConnection extends EventEmitter<IRadioConnectionEvents> {
 
   async setPTT(_enabled: boolean): Promise<void> {}
 
-  async setMode(_mode: string, _bandwidth?: 'narrow' | 'wide', _options?: { intent?: 'voice' | 'digital' }): Promise<void> {}
+  async setMode(_mode: string, _bandwidth?: RadioModeBandwidth, _options?: { intent?: 'voice' | 'digital' }): Promise<void> {}
 
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
     return { mode: 'USB', bandwidth: 'wide' };

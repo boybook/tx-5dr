@@ -30,7 +30,7 @@ import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { isProcessShuttingDown } from '../utils/process-shutdown.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
-import type { IRadioConnection, MeterData, SetRadioModeOptions } from './connections/IRadioConnection.js';
+import type { IRadioConnection, MeterData, RadioModeBandwidth, SetRadioModeOptions } from './connections/IRadioConnection.js';
 import { RadioConnectionType } from './connections/IRadioConnection.js';
 import { RadioCapabilityManager } from './RadioCapabilityManager.js';
 import { isRecoverableOptionalRadioError } from './optionalRadioError.js';
@@ -690,7 +690,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   /**
    * 设置模式
    */
-  async setMode(mode: string, bandwidth?: 'narrow' | 'wide', options?: SetRadioModeOptions): Promise<void> {
+  async setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
     if (!this.connection) {
       throw new Error('radio not connected');
     }
