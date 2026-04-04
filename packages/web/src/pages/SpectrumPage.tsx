@@ -1,17 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { AuthProvider, useAuth } from '../store/authStore';
 import { RadioProvider } from '../store/radioStore';
 import { useTheme } from '../hooks/useTheme';
+import { useViewportHeightValue } from '../hooks/useViewportHeight';
 import { SpectrumDisplay } from '../components/SpectrumDisplay';
 import { isElectron } from '../utils/config';
-
 
 /**
  * 独立频谱图窗口内容，已在 RadioProvider 内部
  * 监听容器尺寸变化，自适应填充整个窗口
  */
 const SpectrumContent: React.FC = () => {
-  const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+  const windowHeight = useViewportHeightValue();
 
   // 仅 macOS Electron 环境需要手动绘制拖拽条
   const showTitlebar = isElectron() && navigator.userAgent.includes('Macintosh');
@@ -19,14 +19,8 @@ const SpectrumContent: React.FC = () => {
     ? { left: 80 }
     : undefined;
 
-  useEffect(() => {
-    const handler = () => setWindowHeight(window.innerHeight);
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, []);
-
   return (
-    <div className="w-full h-screen overflow-hidden bg-background">
+    <div className="app-viewport-height w-full overflow-hidden bg-background">
       {showTitlebar && (
         /* Transparent drag bar: fixed at the top, no layout space.
            outer layer pointer-events:none so mouse events pass through to buttons;

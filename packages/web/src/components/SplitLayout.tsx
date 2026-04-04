@@ -135,7 +135,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
       <SplitLayoutContext.Provider value={{ switchToRight, selectedTab }}>
         <div
           ref={containerRef}
-          className={`flex flex-col h-screen w-full ${className}`}
+          className={`app-viewport-height flex flex-col w-full ${className}`}
         >
           {/* 内容区域 */}
           <div className="flex-1 overflow-hidden relative">
@@ -159,7 +159,9 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
           </div>
 
         {/* 底部 Tabs 导航 */}
-        <div className="flex-shrink-0 border-t border-divider bg-content2">
+        <div
+          className="app-safe-area-pb flex-shrink-0 border-t border-divider bg-content2"
+        >
           <Tabs
             aria-label={t('splitLayout.pageSwitch')}
             selectedKey={selectedTab}
@@ -200,7 +202,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`flex h-screen w-full ${className}`}
+      className={`app-viewport-height flex w-full ${className}`}
     >
       {/* 左侧面板 */}
       <div
