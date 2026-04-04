@@ -1,13 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('hamlib', () => ({
-  HamLib: class MockHamLib {},
-}));
-
-vi.mock('hamlib/spectrum', () => ({
-  SpectrumController: class MockSpectrumController {},
-}));
-
 import { HamlibConnection } from '../connections/HamlibConnection.js';
 import { RadioConnectionState } from '../connections/IRadioConnection.js';
 
@@ -182,6 +174,22 @@ describe('HamlibConnection', () => {
     await expect(connection.setMode('PKTUSB', undefined, { intent: 'voice' })).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith('USB', undefined);
+  });
+
+  it('passes through nochange bandwidth selectors to hamlib', async () => {
+    const { connection, rig } = createConnectedConnection();
+
+    await expect(connection.setMode('USB', 'nochange', { intent: 'voice' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith('USB', 'nochange');
+  });
+
+  it('passes through numeric passband widths to hamlib', async () => {
+    const { connection, rig } = createConnectedConnection();
+
+    await expect(connection.setMode('USB', 2400, { intent: 'voice' })).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith('USB', 2400);
   });
 
   it('uses the matched TX range max watts when converting absolute power readings', () => {

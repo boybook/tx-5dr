@@ -32,6 +32,7 @@ import {
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
   type MeterData,
+  type RadioModeBandwidth,
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
 
@@ -499,7 +500,7 @@ export class HamlibConnection
   /**
    * 设置模式
    */
-  async setMode(mode: string, bandwidth?: 'narrow' | 'wide', options?: SetRadioModeOptions): Promise<void> {
+  async setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
     this.checkConnected();
 
     try {
@@ -507,7 +508,7 @@ export class HamlibConnection
       const resolvedMode = this.resolveModeForIntent(requestedMode, options);
 
       await Promise.race([
-        this.rig!.setMode(resolvedMode, bandwidth),
+        this.rig!.setMode(resolvedMode, bandwidth as any),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Set mode timeout')), 5000)
         ),

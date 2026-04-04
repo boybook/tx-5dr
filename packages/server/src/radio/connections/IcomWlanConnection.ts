@@ -26,6 +26,7 @@ import {
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
   type MeterData,
+  type RadioModeBandwidth,
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
 
@@ -297,16 +298,22 @@ export class IcomWlanConnection
   /**
    * 设置电台工作模式
    */
-  async setMode(mode: string, bandwidth?: 'narrow' | 'wide', _options?: SetRadioModeOptions): Promise<void> {
+  async setMode(mode: string, bandwidth?: RadioModeBandwidth, _options?: SetRadioModeOptions): Promise<void> {
     this.checkConnected();
 
     try {
+      if (typeof bandwidth === 'number') {
+        throw new Error('ICOM WLAN setMode does not support numeric passband widths');
+      }
+
       // 将 bandwidth 转换为 dataMode
       // 如果指定了 bandwidth，使用 bandwidth 映射
       // 否则使用配置的默认 dataMode
-      const dataMode = bandwidth !== undefined
-        ? bandwidth === 'wide'
-        : this.defaultDataMode;
+      const dataMode = bandwidth === 'wide'
+        ? true
+        : bandwidth === 'narrow'
+          ? false
+          : this.defaultDataMode;
 
       // 将模式字符串映射到 ICOM 模式代码
       const modeCode = this.mapModeToIcom(mode);
