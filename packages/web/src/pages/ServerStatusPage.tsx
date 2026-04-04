@@ -64,7 +64,7 @@ export function ServerStatusPage({ isConnecting, connectError, radioService }: S
 
   if (isConnecting && !connectError) {
     return (
-      <div className="h-screen w-full flex flex-col items-center justify-center gap-4 bg-background">
+      <div className="app-viewport-min-height w-full overflow-y-auto flex flex-col items-center justify-center gap-4 bg-background px-6 py-6">
         <Spinner size="lg" color="primary" />
         <p className="text-default-500 text-sm">{t('common:serverStatus.connecting')}</p>
       </div>
@@ -72,7 +72,7 @@ export function ServerStatusPage({ isConnecting, connectError, radioService }: S
   }
 
   return (
-    <div className="h-screen w-full flex flex-col items-center justify-center bg-background px-6">
+    <div className="app-viewport-min-height w-full overflow-y-auto flex flex-col items-center justify-center bg-background px-6 py-6">
       <div className="flex flex-col items-center gap-6 max-w-md w-full text-center">
         {/* 图标 */}
         <div className="w-20 h-20 rounded-full bg-danger-50 flex items-center justify-center">

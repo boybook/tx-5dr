@@ -1,8 +1,3 @@
-/* 全局样式补充 */
-.App {
-  min-height: 100vh;
-}
-
 /* 响应式设计补充 */
 @media (max-width: 768px) {
   .max-w-7xl {

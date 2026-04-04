@@ -22,7 +22,7 @@ export function LoginPage() {
   }, []);
 
   return (
-    <div className="h-screen w-full flex flex-col items-center justify-center bg-default-50">
+    <div className="app-viewport-min-height w-full overflow-y-auto bg-default-50 flex flex-col items-center justify-center py-6">
       {stationInfo && <StationInfoCard stationInfo={stationInfo} />}
       <Card className="w-full max-w-md mx-4">
         <CardHeader className="flex flex-col items-center gap-2 pt-8 pb-2">

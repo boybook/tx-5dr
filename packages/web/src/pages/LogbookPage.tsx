@@ -8,6 +8,7 @@ import LogbookViewer from '../components/LogbookViewer';
 import { useTranslation } from 'react-i18next';
 import '../index.css';
 import { createLogger } from '../utils/logger';
+import { useViewportHeightCssVar } from '../hooks/useViewportHeight';
 
 const logger = createLogger('LogbookPage');
 
@@ -60,7 +61,7 @@ const LogbookContent: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="app-viewport-min-height bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
           <p className="mt-4 text-foreground">{t('logbookPage.loading')}</p>
@@ -71,7 +72,7 @@ const LogbookContent: React.FC = () => {
 
   if (!operatorId) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="app-viewport-min-height bg-background flex items-center justify-center">
         <div className="text-center max-w-md mx-auto p-8">
           {/* 错误图标 */}
           <div className="flex justify-center mb-6">
@@ -132,7 +133,7 @@ const LogbookContent: React.FC = () => {
   const inElectron = isElectron();
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="app-viewport-min-height bg-background flex flex-col">
       {/* 顶部区域 - Electron模式下显示拖拽条，浏览器模式下只显示按钮 */}
       <div
         className={`flex-shrink-0 flex justify-end items-center px-4 ${inElectron ? 'h-8' : 'h-0'}`}
@@ -167,6 +168,7 @@ const LogbookContent: React.FC = () => {
 const ThemedLogbookWrapper: React.FC = () => {
   // 使用主题钩子来确保主题正确应用
   useTheme();
+  useViewportHeightCssVar();
 
   useEffect(() => {
     document.documentElement.classList.add('logbook-page');

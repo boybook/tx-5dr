@@ -15,6 +15,7 @@ import { ServerStatusPage } from './pages/ServerStatusPage';
 import { LoginPage } from './pages/LoginPage';
 import { OpenWebRXProfileSelectModal } from './components/OpenWebRXProfileSelectModal';
 import { GlobalModalHost } from './components/GlobalModalHost';
+import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 
 function AppContent() {
   const { state } = useRadioState();
@@ -43,7 +44,7 @@ function AppContent() {
   const isVoiceMode = engineMode === 'voice';
 
   return (
-    <div className="App h-screen w-full overflow-hidden relative">
+    <div className="App app-viewport-height w-full overflow-hidden relative">
       {/* PTT发射状态全局红色内描边 */}
       {pttStatus.isTransmitting && (
         <div
@@ -114,6 +115,7 @@ function AuthGate() {
 function App() {
   // 初始化主题系统
   useTheme();
+  useViewportHeightCssVar();
 
   return (
     <AuthProvider>
