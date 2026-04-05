@@ -225,6 +225,37 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
+  it('counts unique grids by normalized 4-char key in statistics', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'grid-stats-1',
+      callsign: 'BG2AA',
+      grid: 'OI67WS',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    await provider.addQSO({
+      id: 'grid-stats-2',
+      callsign: 'BG3BB',
+      grid: 'OI67',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:15:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const statistics = await provider.getStatistics();
+
+    expect(statistics.uniqueGrids).toBe(1);
+
+    await provider.close();
+  });
+
   it('updates the banded grid cache immediately after addQSO', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
