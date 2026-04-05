@@ -35,7 +35,7 @@ import {
   createRefreshStatusAction,
   isRetryableError,
 } from '../../utils/errorToast';
-import i18n from '../../i18n';
+import i18n from '../../i18n/index';
 import type { AuthState } from '../authStore';
 import type {
   ConnectionAction,

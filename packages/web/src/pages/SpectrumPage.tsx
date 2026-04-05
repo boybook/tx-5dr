@@ -3,7 +3,7 @@ import { AuthProvider, useAuth } from '../store/authStore';
 import { RadioProvider } from '../store/radioStore';
 import { useTheme } from '../hooks/useTheme';
 import { useViewportHeightValue } from '../hooks/useViewportHeight';
-import { SpectrumDisplay } from '../components/SpectrumDisplay';
+import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { isElectron } from '../utils/config';
 
 /**

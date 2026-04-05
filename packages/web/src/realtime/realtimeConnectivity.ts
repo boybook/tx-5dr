@@ -6,7 +6,7 @@ import type {
   RealtimeConnectivityIssue,
   RealtimeScope,
 } from '@tx5dr/contracts';
-import i18n from '../i18n';
+import i18n from '../i18n/index';
 import { detectBrowserAudioRuntime } from '../audio/browserAudioRuntime';
 
 type RealtimeErrorStage = RealtimeConnectivityIssue['stage'];

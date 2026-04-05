@@ -6,7 +6,7 @@ import { HeroUIProvider } from '@heroui/react';
 import { ToastProvider } from '@heroui/toast';
 import { configureApi } from '@tx5dr/core';
 import { getApiBaseUrl } from './utils/config';
-import App from './App.tsx';
+import App from './App';
 import './index.css';
 
 // 配置API基础URL
