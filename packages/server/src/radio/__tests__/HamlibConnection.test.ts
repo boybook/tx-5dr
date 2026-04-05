@@ -8,8 +8,10 @@ type MockRig = {
   getSplit: ReturnType<typeof vi.fn>;
   setSplitFreq: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
+  setPtt: ReturnType<typeof vi.fn>;
   getFrequency: ReturnType<typeof vi.fn>;
   getMode: ReturnType<typeof vi.fn>;
+  getLevel: ReturnType<typeof vi.fn>;
 };
 
 type MockSpectrumController = {
@@ -31,6 +33,7 @@ type HamlibConnectionTestAccessor = {
   rig: MockRig;
   state: RadioConnectionState;
   supportedModes?: Set<string>;
+  supportedLevels?: Set<string>;
   txFrequencyRanges?: TestFrequencyRange[];
   currentFrequencyHz?: number;
   currentRadioMode?: string;
@@ -69,8 +72,10 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getSplit: vi.fn().mockResolvedValue({ enabled: false }),
     setSplitFreq: vi.fn().mockResolvedValue(0),
     setMode: vi.fn().mockResolvedValue(0),
+    setPtt: vi.fn().mockResolvedValue(0),
     getFrequency: vi.fn().mockResolvedValue(7100000),
     getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 'wide' }),
+    getLevel: vi.fn().mockResolvedValue(0),
     ...rigOverrides,
   };
   const testConnection = asTestConnection(connection);
@@ -228,6 +233,98 @@ describe('HamlibConnection', () => {
     await expect(connection.setMode('USB', 2400, { intent: 'voice' })).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith('USB', 2400);
+  });
+
+  it('applies frequency and mode as a single critical operating-state update', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'LSB';
+
+    const result = await connection.applyOperatingState({
+      frequency: 7100000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    });
+
+    expect(result).toEqual({
+      frequencyApplied: true,
+      modeApplied: true,
+      modeError: undefined,
+    });
+    expect(rig.setMode).toHaveBeenCalledTimes(1);
+    expect(rig.setFrequency).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a non-fatal mode error when operating-state writes tolerate mode failures', async () => {
+    const { connection, rig } = createConnectedConnection({
+      setMode: vi.fn().mockRejectedValue(new Error('mode not supported')),
+    });
+
+    const result = await connection.applyOperatingState({
+      frequency: 7100000,
+      mode: 'USB',
+      tolerateModeFailure: true,
+    });
+
+    expect(result.frequencyApplied).toBe(true);
+    expect(result.modeApplied).toBe(false);
+    expect(result.modeError?.message).toContain('mode not supported');
+    expect(rig.setFrequency).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads meter levels sequentially inside a single polling pass', async () => {
+    const firstRead = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      getLevel: vi.fn()
+        .mockImplementationOnce(() => firstRead.promise)
+        .mockResolvedValueOnce(2)
+        .mockResolvedValueOnce(3)
+        .mockResolvedValueOnce(4)
+        .mockResolvedValueOnce(5),
+    });
+    asTestConnection(connection).supportedLevels = new Set([
+      'STRENGTH',
+      'SWR',
+      'ALC',
+      'RFPOWER_METER',
+      'RFPOWER_METER_WATTS',
+    ]);
+
+    const pollPromise = (connection as any).pollMeters();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(rig.getLevel).toHaveBeenCalledTimes(1);
+    expect(rig.getLevel).toHaveBeenNthCalledWith(1, 'STRENGTH');
+
+    firstRead.resolve(1);
+    await pollPromise;
+
+    expect(rig.getLevel).toHaveBeenCalledTimes(5);
+    expect(rig.getLevel).toHaveBeenNthCalledWith(2, 'SWR');
+    expect(rig.getLevel).toHaveBeenNthCalledWith(3, 'ALC');
+    expect(rig.getLevel).toHaveBeenNthCalledWith(4, 'RFPOWER_METER');
+    expect(rig.getLevel).toHaveBeenNthCalledWith(5, 'RFPOWER_METER_WATTS');
+  });
+
+  it('skips low-priority meter polling while a critical CAT write is active', async () => {
+    const firstWrite = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      setFrequency: vi.fn().mockReturnValue(firstWrite.promise),
+    });
+    asTestConnection(connection).supportedLevels = new Set(['STRENGTH']);
+
+    const writePromise = connection.setFrequency(7100000);
+    await Promise.resolve();
+
+    await (connection as any).pollMeters();
+
+    expect(rig.getLevel).not.toHaveBeenCalled();
+
+    firstWrite.resolve(0);
+    await writePromise;
   });
 
   it('uses the matched TX range max watts when converting absolute power readings', () => {

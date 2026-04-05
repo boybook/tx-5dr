@@ -150,6 +150,20 @@ export interface SetRadioModeOptions {
   intent?: RadioModeIntent;
 }
 
+export interface ApplyOperatingStateRequest {
+  frequency?: number;
+  mode?: string;
+  bandwidth?: RadioModeBandwidth;
+  options?: SetRadioModeOptions;
+  tolerateModeFailure?: boolean;
+}
+
+export interface ApplyOperatingStateResult {
+  frequencyApplied: boolean;
+  modeApplied: boolean;
+  modeError?: Error;
+}
+
 /**
  * 电台连接配置（扩展 HamlibConfig）
  */
@@ -200,6 +214,13 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   startBackgroundTasks?(): void;
 
   /**
+   * 是否存在关键 radio 操作（频率/模式/PTT）正在执行。
+   *
+   * 供低优先级轮询决定是否跳过本次访问，避免和关键 CAT 写入抢占同一连接。
+   */
+  isCriticalOperationActive(): boolean;
+
+  /**
    * 设置电台频率
    *
    * @param frequency - 频率（Hz）
@@ -232,6 +253,13 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @throws {RadioError} 设置失败时抛出
    */
   setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void>;
+
+  /**
+   * 在一个保守的关键区间内应用工作状态（频率/模式）。
+   *
+   * 适用于“切台 + 切模式”这类必须避免后台轮询插入的复合操作。
+   */
+  applyOperatingState(request: ApplyOperatingStateRequest): Promise<ApplyOperatingStateResult>;
 
   /**
    * 获取当前工作模式

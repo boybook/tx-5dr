@@ -8,6 +8,8 @@
 import { EventEmitter } from 'eventemitter3';
 import type { MeterCapabilities } from '@tx5dr/contracts';
 import type {
+  ApplyOperatingStateRequest,
+  ApplyOperatingStateResult,
   IRadioConnection,
   IRadioConnectionEvents,
   RadioConnectionConfig,
@@ -39,6 +41,10 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
     // no-op
   }
 
+  isCriticalOperationActive(): boolean {
+    return false;
+  }
+
   async setFrequency(_frequency: number): Promise<void> {
     // no-op
   }
@@ -53,6 +59,13 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
 
   async setMode(_mode: string, _bandwidth?: RadioModeBandwidth, _options?: SetRadioModeOptions): Promise<void> {
     // no-op
+  }
+
+  async applyOperatingState(request: ApplyOperatingStateRequest): Promise<ApplyOperatingStateResult> {
+    return {
+      frequencyApplied: request.frequency !== undefined,
+      modeApplied: Boolean(request.mode),
+    };
   }
 
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
