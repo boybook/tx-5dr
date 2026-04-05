@@ -1,4 +1,4 @@
-import { FT8Message, FT8MessageFoxRR73, FT8MessageType } from '@tx5dr/contracts';
+import { FT8Message, FT8MessageFoxRR73, FT8MessageType, getFourCharacterGrid } from '@tx5dr/contracts';
 
 // 基础呼号正则表达式（更宽松的匹配）
 const BASE_CALLSIGN_REGEX = /^[A-Z0-9]{1,6}$/;
@@ -554,21 +554,22 @@ export class FT8MessageParser {
       }
       return callsign;
     };
+    const ft8Grid = 'grid' in message ? getFourCharacterGrid(message.grid) : undefined;
 
     switch (message.type) {
       case FT8MessageType.CQ:
-        if (message.flag && message.grid) {
-          return `CQ ${message.flag} ${wrapCallsign(message.senderCallsign)} ${message.grid}`;
+        if (message.flag && ft8Grid) {
+          return `CQ ${message.flag} ${wrapCallsign(message.senderCallsign)} ${ft8Grid}`;
         } else if (message.flag) {
           return `CQ ${message.flag} ${wrapCallsign(message.senderCallsign)}`;
-        } else if (message.grid) {
-          return `CQ ${wrapCallsign(message.senderCallsign)} ${message.grid}`;
+        } else if (ft8Grid) {
+          return `CQ ${wrapCallsign(message.senderCallsign)} ${ft8Grid}`;
         } else {
           return `CQ ${wrapCallsign(message.senderCallsign)}`;
         }
       case FT8MessageType.CALL:
-        if (message.grid) {
-          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} ${message.grid}`;
+        if (ft8Grid) {
+          return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)} ${ft8Grid}`;
         } else {
           return `${wrapCallsign(message.targetCallsign)} ${wrapCallsign(message.senderCallsign)}`;
         }

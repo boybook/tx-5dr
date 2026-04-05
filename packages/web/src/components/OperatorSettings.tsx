@@ -30,7 +30,7 @@ import type {
   UpdateRadioOperatorRequest
 } from '@tx5dr/contracts';
 import { SyncConfigModal } from './SyncConfigModal';
-import { MODES } from '@tx5dr/contracts';
+import { MODES, getFourCharacterGrid, sanitizeGridInput } from '@tx5dr/contracts';
 import { useConnection, useStationInfo } from '../store/radioStore';
 import {
   setOperatorEnabled,
@@ -74,6 +74,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const connection = useConnection();
     const stationInfo = useStationInfo();
     const stationGrid = stationInfo?.qth?.grid ?? '';
+    const defaultOperatorGrid = getFourCharacterGrid(stationGrid) ?? '';
     const [localEnabledStates, setLocalEnabledStates] = useState<Record<string, boolean>>({});
     const [preferencesHasChanges, setPreferencesHasChanges] = useState(false);
 
@@ -85,7 +86,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const [isCreating, setIsCreating] = useState(false);
     const [newOperatorData, setNewOperatorData] = useState<Partial<CreateRadioOperatorRequest>>({
       myCallsign: '',
-      myGrid: stationGrid,
+      myGrid: defaultOperatorGrid,
       frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
       transmitCycles: [0],
       maxQSOTimeoutCycles: 10,
@@ -118,10 +119,10 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
     // 台站网格加载后（异步），若用户未手动填写则自动同步
     useEffect(() => {
-      if (stationGrid && !newOperatorData.myGrid) {
-        setNewOperatorData(prev => ({ ...prev, myGrid: stationGrid }));
+      if (defaultOperatorGrid && !newOperatorData.myGrid) {
+        setNewOperatorData(prev => ({ ...prev, myGrid: defaultOperatorGrid }));
       }
-    }, [stationGrid]);
+    }, [defaultOperatorGrid, newOperatorData.myGrid]);
 
     // 删除确认对话框状态
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -364,7 +365,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         setIsCreating(false);
         setNewOperatorData({
           myCallsign: '',
-          myGrid: stationGrid,
+          myGrid: defaultOperatorGrid,
           frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
           transmitCycles: [0],
           maxQSOTimeoutCycles: 10,
@@ -372,6 +373,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           autoReplyToCQ: false,
           autoResumeCQAfterFail: false,
           autoResumeCQAfterSuccess: false,
+          replyToWorkedStations: false,
+          prioritizeNewCalls: true,
+          targetSelectionPriorityMode: 'dxcc_first',
           mode: MODES.FT8,
         });
         updateUnsavedChanges(false);
@@ -546,13 +550,16 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               label={t('settings.grid')}
               placeholder={t('settings.gridPlaceholder')}
               value={formData.myGrid || ''}
-              onChange={(e) => {
+              description={t('settings.gridDesc')}
+              onValueChange={(value) => {
+                const normalizedGrid = sanitizeGridInput(value);
                 if (isNewOperator) {
-                  setNewOperatorData({ ...newOperatorData, myGrid: e.target.value });
+                  setNewOperatorData({ ...newOperatorData, myGrid: normalizedGrid });
                 } else {
-                  updateEditFormData(operatorId!, 'myGrid', e.target.value);
+                  updateEditFormData(operatorId!, 'myGrid', normalizedGrid);
                 }
               }}
+              maxLength={8}
             />
           </div>
 
