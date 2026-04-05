@@ -154,6 +154,25 @@
     "csv": "CSV 格式",
     "errorTitle": "导出失败"
   },
+  "import": {
+    "button": "导入",
+    "adif": "ADIF / ADI",
+    "csv": "CSV",
+    "guideTitle": "导入通联日志文件",
+    "guideDesc": "在导入前，请确认文件格式和内容满足要求。系统会把可识别的记录合并到当前通联日志中。",
+    "supportedFormatsTitle": "支持的文件格式",
+    "adifDesc": "支持标准 .adi / .adif 文件，内容需包含 ADIF 记录。",
+    "csvDesc": "仅支持 TX-5DR 自己导出的 CSV 文件，不支持任意第三方 CSV。",
+    "requirementsTitle": "内容要求",
+    "requirementAdifFields": "ADIF 至少需要包含 CALL、QSO_DATE、TIME_ON 等关键字段，缺少关键字段的记录会被跳过。",
+    "requirementCsvHeaders": "CSV 需要保留 TX-5DR 导出的表头格式，至少包含 Date、Time、Callsign、Frequency (MHz)、Mode。",
+    "requirementMerge": "如果同一条 QSO 已存在，系统会尝试补全空字段并更新更完整的确认状态，不会简单重复追加。",
+    "pickFile": "选择文件",
+    "successTitle": "导入完成",
+    "errorTitle": "导入失败",
+    "errorFallback": "导入失败，请稍后重试",
+    "summary": "格式：{{format}}；共读取 {{totalRead}} 条，新增 {{imported}} 条，合并 {{merged}} 条，跳过 {{skipped}} 条"
+  },
   "qso": {
     "callsignInfo": "在QRZ.com查看 {{callsign}} 的信息",
     "lotwConfirmed": "LoTW: 已确认",

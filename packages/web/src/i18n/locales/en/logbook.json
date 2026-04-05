@@ -154,6 +154,25 @@
     "csv": "CSV Format",
     "errorTitle": "Export Failed"
   },
+  "import": {
+    "button": "Import",
+    "adif": "ADIF / ADI",
+    "csv": "CSV",
+    "guideTitle": "Import logbook file",
+    "guideDesc": "Before importing, please confirm the file format and content meet the requirements. Recognized records will be merged into the current logbook.",
+    "supportedFormatsTitle": "Supported file formats",
+    "adifDesc": "Supports standard .adi / .adif files containing ADIF records.",
+    "csvDesc": "Only CSV files exported by TX-5DR are supported. Arbitrary third-party CSV files are not supported.",
+    "requirementsTitle": "Content requirements",
+    "requirementAdifFields": "ADIF files should include key fields such as CALL, QSO_DATE, and TIME_ON. Records missing required fields will be skipped.",
+    "requirementCsvHeaders": "CSV files must keep the TX-5DR export headers, including at least Date, Time, Callsign, Frequency (MHz), and Mode.",
+    "requirementMerge": "If the same QSO already exists, the system will fill missing fields and upgrade confirmation status when better data is available, instead of simply appending duplicates.",
+    "pickFile": "Choose file",
+    "successTitle": "Import complete",
+    "errorTitle": "Import failed",
+    "errorFallback": "Import failed, please try again later",
+    "summary": "Format: {{format}}; {{totalRead}} read, {{imported}} imported, {{merged}} merged, {{skipped}} skipped"
+  },
   "qso": {
     "callsignInfo": "View {{callsign}} on QRZ.com",
     "lotwConfirmed": "LoTW: Confirmed",

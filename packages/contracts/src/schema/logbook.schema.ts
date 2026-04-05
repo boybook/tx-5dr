@@ -128,6 +128,22 @@ export const LogBookExportOptionsSchema = z.object({
   callsign: z.string().optional(),
 });
 
+export const LogBookImportFormatSchema = z.enum(['adif', 'csv']);
+
+export const LogBookImportResultSchema = z.object({
+  detectedFormat: LogBookImportFormatSchema,
+  totalRead: z.number().int().nonnegative(),
+  imported: z.number().int().nonnegative(),
+  merged: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+});
+
+export const LogBookImportResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  data: LogBookImportResultSchema,
+});
+
 /**
  * 更新QSO记录请求Schema
  */
@@ -207,5 +223,8 @@ export type LogBookDetailResponse = z.infer<typeof LogBookDetailResponseSchema>;
 export type LogBookActionResponse = z.infer<typeof LogBookActionResponseSchema>;
 export type LogBookQSOQueryOptions = z.infer<typeof LogBookQSOQueryOptionsSchema>;
 export type LogBookExportOptions = z.infer<typeof LogBookExportOptionsSchema>;
+export type LogBookImportFormat = z.infer<typeof LogBookImportFormatSchema>;
+export type LogBookImportResult = z.infer<typeof LogBookImportResultSchema>;
+export type LogBookImportResponse = z.infer<typeof LogBookImportResponseSchema>;
 export type UpdateQSORequest = z.infer<typeof UpdateQSORequestSchema>;
 export type QSOActionResponse = z.infer<typeof QSOActionResponseSchema>; 

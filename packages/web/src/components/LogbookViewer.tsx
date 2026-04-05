@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Table,
   TableHeader,
@@ -27,7 +27,7 @@ import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, LoTWUploadPreflightResponse, LoTWSyncStatus, CreateQSORequest } from '@tx5dr/contracts';
+import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, LoTWUploadPreflightResponse, LoTWSyncStatus, CreateQSORequest, LogBookImportResult } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
 import { isElectron } from '../utils/config';
@@ -91,6 +91,7 @@ function getDateDaysAgo(days: number): string {
 
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const getLoTWIssueMessage = (issue: { code: string; message: string }) => {
     const key = `lotwSettings.issue.${issue.code}`;
     const translated = t(key);
@@ -250,6 +251,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 导出功能（增强错误处理）
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [isImportGuideOpen, setIsImportGuideOpen] = useState(false);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // WaveLog同步功能
   const [isSyncing, setIsSyncing] = useState(false);
@@ -337,6 +342,77 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setExportError(errorMessage);
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const buildImportSuccessMessage = (result: LogBookImportResult) => {
+    const formatLabel = result.detectedFormat === 'csv'
+      ? t('import.csv')
+      : t('import.adif');
+
+    return t('import.summary', {
+      format: formatLabel,
+      totalRead: result.totalRead,
+      imported: result.imported,
+      merged: result.merged,
+      skipped: result.skipped,
+    });
+  };
+
+  const triggerImportPicker = () => {
+    if (isImporting) {
+      return;
+    }
+    setIsImportGuideOpen(true);
+  };
+
+  const handleImportGuideConfirm = () => {
+    setIsImportGuideOpen(false);
+    importFileInputRef.current?.click();
+  };
+
+  const handleImportFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+
+    if (!file || isImporting) {
+      return;
+    }
+
+    try {
+      setIsImporting(true);
+      setImportError(null);
+      setImportSuccess(null);
+
+      const result = await api.importLogBookFile(effectiveLogBookId, file, operatorId);
+      const successMessage = buildImportSuccessMessage(result.data);
+      setImportSuccess(successMessage);
+
+      await loadQSOs();
+      await loadStatistics();
+
+      logger.info('Logbook import completed', {
+        logBookId: effectiveLogBookId,
+        detectedFormat: result.data.detectedFormat,
+        imported: result.data.imported,
+        merged: result.data.merged,
+        skipped: result.data.skipped,
+      });
+    } catch (error) {
+      logger.error('Logbook import failed:', error);
+      if (error instanceof ApiError) {
+        setImportError(error.userMessage);
+        showErrorToast({
+          userMessage: error.userMessage,
+          suggestions: error.suggestions,
+          severity: error.severity,
+          code: error.code,
+        });
+      } else {
+        setImportError(error instanceof Error ? error.message : t('import.errorFallback'));
+      }
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -602,6 +678,20 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       return () => clearTimeout(timer);
     }
   }, [lotwSyncError]);
+
+  useEffect(() => {
+    if (importSuccess) {
+      const timer = setTimeout(() => setImportSuccess(null), 7000);
+      return () => clearTimeout(timer);
+    }
+  }, [importSuccess]);
+
+  useEffect(() => {
+    if (importError) {
+      const timer = setTimeout(() => setImportError(null), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [importError]);
 
   // 筛选控制
   const handleFilterChange = (key: keyof QSOFilters, value: string | undefined) => {
@@ -971,6 +1061,14 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           </div>
 
           <div className="flex items-center gap-2 overflow-x-visible overflow-y-visible pb-2 md:pb-0">
+            <input
+              ref={importFileInputRef}
+              type="file"
+              accept=".adi,.ADI,.adif,.ADIF,.csv,.CSV"
+              className="hidden"
+              onChange={handleImportFileSelected}
+            />
+
             {/* 可展开的搜索框 */}
             {isSearchExpanded ? (
               <Input
@@ -1265,6 +1363,18 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 <DropdownItem key="csv">{t('export.csv')}</DropdownItem>
               </DropdownMenu>
             </Dropdown>
+
+            <Button
+              color="secondary"
+              variant="bordered"
+              size="sm"
+              isLoading={isImporting}
+              onPress={triggerImportPicker}
+              className="min-w-0"
+              startContent={!isImporting ? <FontAwesomeIcon icon={faUpload} className="md:hidden" /> : undefined}
+            >
+              <span className="hidden md:inline">{t('import.button')}</span>
+            </Button>
 
             {/* 补录按钮 */}
             <Button
@@ -1635,6 +1745,30 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         />
       )}
 
+      {importSuccess && (
+        <Alert
+          color="success"
+          variant="flat"
+          className="w-full mb-4"
+          title={t('import.successTitle')}
+          description={importSuccess}
+          isClosable
+          onClose={() => setImportSuccess(null)}
+        />
+      )}
+
+      {importError && (
+        <Alert
+          color="danger"
+          variant="flat"
+          className="w-full mb-4"
+          title={t('import.errorTitle')}
+          description={importError}
+          isClosable
+          onClose={() => setImportError(null)}
+        />
+      )}
+
       {/* 表格 */}
       <Table
         aria-label={t('qso.tableAriaLabel')}
@@ -1765,6 +1899,62 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         isSaving={isAddSaving}
         mode="add"
       />
+
+      <Modal
+        isOpen={isImportGuideOpen}
+        onClose={() => setIsImportGuideOpen(false)}
+        size="lg"
+      >
+        <ModalContent>
+          <ModalHeader>{t('import.guideTitle')}</ModalHeader>
+          <ModalBody className="gap-4">
+            <p className="text-sm text-default-600">
+              {t('import.guideDesc')}
+            </p>
+
+            <Alert color="primary" variant="flat">
+              <div className="space-y-2 text-sm">
+                <p className="font-medium">{t('import.supportedFormatsTitle')}</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <span className="font-medium">{t('import.adif')}</span>
+                    {' - '}
+                    {t('import.adifDesc')}
+                  </li>
+                  <li>
+                    <span className="font-medium">{t('import.csv')}</span>
+                    {' - '}
+                    {t('import.csvDesc')}
+                  </li>
+                </ul>
+              </div>
+            </Alert>
+
+            <div className="space-y-2 text-sm text-default-700">
+              <p className="font-medium text-default-900">{t('import.requirementsTitle')}</p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>{t('import.requirementAdifFields')}</li>
+                <li>{t('import.requirementCsvHeaders')}</li>
+                <li>{t('import.requirementMerge')}</li>
+              </ul>
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="flat"
+              onPress={() => setIsImportGuideOpen(false)}
+            >
+              {t('common:button.cancel')}
+            </Button>
+            <Button
+              color="secondary"
+              onPress={handleImportGuideConfirm}
+            >
+              {t('import.pickFile')}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       <Modal
         isOpen={isLoTWDownloadModalOpen}
