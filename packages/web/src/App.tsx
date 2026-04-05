@@ -3,18 +3,18 @@ import { LeftLayout } from './layout/LeftLayout';
 import { RightLayout } from './layout/RightLayout';
 import { VoiceLeftLayout } from './layout/VoiceLeftLayout';
 import { VoiceRightLayout } from './layout/VoiceRightLayout';
-import { SplitLayout } from './components/SplitLayout';
+import { SplitLayout } from './components/common/SplitLayout';
 import { RadioProvider, useRadioState, useProfiles, useConnection } from './store/radioStore';
 import { AuthProvider, useAuth, useHasMinRole } from './store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTheme } from './hooks/useTheme';
-import { ProfileSetupOverlay } from './components/ProfileSetupOverlay';
-import { ViewerWelcomeOverlay } from './components/ViewerWelcomeOverlay';
-import { ServerDisconnectedOverlay } from './components/ServerDisconnectedOverlay';
+import { ProfileSetupOverlay } from './components/radio/profile/ProfileSetupOverlay';
+import { ViewerWelcomeOverlay } from './components/app/ViewerWelcomeOverlay';
+import { ServerDisconnectedOverlay } from './components/app/ServerDisconnectedOverlay';
 import { ServerStatusPage } from './pages/ServerStatusPage';
 import { LoginPage } from './pages/LoginPage';
-import { OpenWebRXProfileSelectModal } from './components/OpenWebRXProfileSelectModal';
-import { GlobalModalHost } from './components/GlobalModalHost';
+import { OpenWebRXProfileSelectModal } from './components/radio/profile/OpenWebRXProfileSelectModal';
+import { GlobalModalHost } from './components/app/GlobalModalHost';
 import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 
 function AppContent() {

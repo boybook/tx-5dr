@@ -3,7 +3,7 @@ import { createMongoAbility, type MongoAbility, type RawRuleOf, subject as caslS
 import { api, configureAuthToken } from '@tx5dr/core';
 import { buildAbilityRules, type PermissionGrant, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type { UserRole, AuthStatus, AuthMeResponse } from '@tx5dr/contracts';
-import i18n from '../i18n';
+import i18n from '../i18n/index';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('AuthStore');

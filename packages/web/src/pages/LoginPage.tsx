@@ -5,8 +5,8 @@ import { faChevronRight, faChevronDown } from '@fortawesome/free-solid-svg-icons
 import { useTranslation } from 'react-i18next';
 import { api } from '@tx5dr/core';
 import type { StationInfo } from '@tx5dr/contracts';
-import { StationInfoCard } from '../components/StationInfoCard';
-import { AuthLoginForm } from '../components/AuthLoginForm';
+import { StationInfoCard } from '../components/station/StationInfoCard';
+import { AuthLoginForm } from '../components/auth/AuthLoginForm';
 
 export function LoginPage() {
   const { t } = useTranslation();

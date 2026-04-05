@@ -7,17 +7,17 @@ import {
 } from '@heroui/react';
 import { useOperators } from '../store/radioStore';
 import { useAuth } from '../store/authStore';
-import { AuthLoginForm } from '../components/AuthLoginForm';
-import { RadioControl } from '../components/RadioControl';
-import { RadioOperatorList } from '../components/RadioOperatorList';
-import { MyRelatedFramesTable } from '../components/MyRelatedFramesTable';
-import { ThemeToggle } from '../components/ThemeToggle';
+import { AuthLoginForm } from '../components/auth/AuthLoginForm';
+import { RadioControl } from '../components/radio/control/RadioControl';
+import { RadioOperatorList } from '../components/radio/operators/RadioOperatorList';
+import { MyRelatedFramesTable } from '../components/radio/digital/MyRelatedFramesTable';
+import { ThemeToggle } from '../components/common/ThemeToggle';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
-import { AutomationSettingsPanel } from '../components/AutomationSettingsPanel';
-import { ServerHealthButton } from '../components/ServerHealthButton';
+import { AutomationSettingsPanel } from '../components/radio/automation/AutomationSettingsPanel';
+import { ServerHealthButton } from '../components/system/ServerHealthButton';
 import { useTranslation } from 'react-i18next';
-import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/GlobalModalHost';
+import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModalHost';
 
 export const RightLayout: React.FC = () => {
   const { t } = useTranslation('common');

@@ -7,17 +7,17 @@ import {
   PopoverTrigger,
 } from '@heroui/react';
 import { useAuth } from '../store/authStore';
-import { AuthLoginForm } from '../components/AuthLoginForm';
-import { RadioControl } from '../components/RadioControl';
+import { AuthLoginForm } from '../components/auth/AuthLoginForm';
+import { RadioControl } from '../components/radio/control/RadioControl';
 import { VoiceQSOLogCard } from '../components/voice/VoiceQSOLogCard';
 import { VoiceRecentQSOList } from '../components/voice/VoiceRecentQSOList';
 import { VoicePTTButton } from '../components/voice/VoicePTTButton';
-import { ThemeToggle } from '../components/ThemeToggle';
-import { ServerHealthButton } from '../components/ServerHealthButton';
+import { ThemeToggle } from '../components/common/ThemeToggle';
+import { ServerHealthButton } from '../components/system/ServerHealthButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
-import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/GlobalModalHost';
+import { OPEN_ACCOUNT_SECURITY_MODAL_EVENT } from '../components/app/GlobalModalHost';
 import { useConnection, useRadioModeState } from '../store/radioStore';
 import { useVoiceCaptureController } from '../hooks/useVoiceCaptureController';
 

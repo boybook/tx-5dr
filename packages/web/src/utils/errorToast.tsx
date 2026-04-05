@@ -8,7 +8,7 @@
 
 import { addToast } from '@heroui/toast';
 import { Button } from '@heroui/react';
-import i18n from '../i18n';
+import i18n from '../i18n/index';
 import { createLogger } from './logger';
 
 const logger = createLogger('ErrorToast');
