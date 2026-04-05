@@ -15,7 +15,7 @@
     "name": "电台名称",
     "namePlaceholder": "例如：BG7XXX Remote Station",
     "qthGrid": "Maidenhead 格点",
-    "qthGridDesc": "业余无线电标准位置格式，如 PM01",
+    "qthGridDesc": "支持 4/6/8 位，如 PM01、PM01AA；新建 FT8 操作员默认会取前 4 位。",
     "qthLocation": "地名",
     "qthLocationPlaceholder": "例如：北京市海淀区",
     "qthLatitude": "精确纬度",

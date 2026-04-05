@@ -2,7 +2,7 @@ import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallbac
 import { Input, Textarea } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@tx5dr/core';
-import type { StationInfo } from '@tx5dr/contracts';
+import { sanitizeGridInput, type StationInfo } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 import { useRadioState } from '../store/radioStore';
 
@@ -64,6 +64,8 @@ export const StationInfoSettings = forwardRef<StationInfoSettingsRef, StationInf
     if (field === 'latitude' || field === 'longitude') {
       const num = value === '' ? undefined : parseFloat(value);
       setLocalInfo(prev => ({ ...prev, qth: { ...prev.qth, [field]: isNaN(num as number) ? undefined : num } }));
+    } else if (field === 'grid') {
+      setLocalInfo(prev => ({ ...prev, qth: { ...prev.qth, grid: sanitizeGridInput(value) } }));
     } else {
       setLocalInfo(prev => ({ ...prev, qth: { ...prev.qth, [field]: value } }));
     }
@@ -93,6 +95,7 @@ export const StationInfoSettings = forwardRef<StationInfoSettingsRef, StationInf
           onValueChange={v => updateQth('grid', v)}
           isDisabled={isSaving}
           description={t('stationInfo.qthGridDesc')}
+          maxLength={8}
         />
         <Input
           label={t('stationInfo.qthLocation')}
