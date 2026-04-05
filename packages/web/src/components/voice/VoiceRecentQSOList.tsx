@@ -79,12 +79,32 @@ export const VoiceRecentQSOList: React.FC<VoiceRecentQSOListProps> = ({
       });
     };
 
+    const handleQSORecordUpdated = (data: any) => {
+      const qsoRecord = data?.qsoRecord as QSORecord | undefined;
+      if (!qsoRecord) return;
+      if (DIGITAL_MODES.split(',').includes((qsoRecord.mode || '').toUpperCase())) return;
+      logger.debug('Voice QSO updated', { callsign: qsoRecord.callsign });
+      setRecentQSOs(prev => {
+        const existingIndex = prev.findIndex(q => q.id === qsoRecord.id);
+        if (existingIndex < 0) {
+          return [qsoRecord, ...prev].slice(0, 50);
+        }
+        const next = [...prev];
+        next[existingIndex] = qsoRecord;
+        return next;
+      });
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wsClient.onWSEvent('qsoRecordAdded' as any, handleQSORecordAdded);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wsClient.onWSEvent('qsoRecordUpdated' as any, handleQSORecordUpdated);
 
     return () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       wsClient.offWSEvent('qsoRecordAdded' as any, handleQSORecordAdded);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      wsClient.offWSEvent('qsoRecordUpdated' as any, handleQSORecordUpdated);
     };
   }, [connection.state.radioService]);
 

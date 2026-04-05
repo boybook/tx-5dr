@@ -23,7 +23,11 @@
     },
     "qsoLogged": {
       "title": "QSO已记录",
-      "description": ""
+      "description": "{{summary}}"
+    },
+    "qsoUpdated": {
+      "title": "QSO已更新",
+      "description": "{{summary}}"
     },
     "realtimeConnectivityWarning": {
       "title": "实时语音连接异常",

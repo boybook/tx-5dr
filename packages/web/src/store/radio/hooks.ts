@@ -91,6 +91,9 @@ export const useLogbook = () => {
     addQSORecord: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
       context.dispatch({ type: 'qsoRecordAdded', payload: data });
     },
+    updateQSORecord: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
+      context.dispatch({ type: 'qsoRecordUpdated', payload: data });
+    },
     loadQSOs: (operatorId: string, qsos: QSORecord[]) => {
       context.dispatch({ type: 'loadQSOs', payload: { operatorId, qsos } });
     },

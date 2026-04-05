@@ -5,7 +5,8 @@ import EventEmitter from 'eventemitter3';
 import {
   RadioOperator,
   StandardQSOStrategy,
-  ClockSourceSystem
+  ClockSourceSystem,
+  FT8MessageParser,
 } from '@tx5dr/core';
 import {
   type RadioOperatorConfig,
@@ -15,12 +16,14 @@ import {
   type ModeDescriptor,
   type QSORecord,
   type SlotPack,
+  type FrameMessage,
   MODES,
 } from '@tx5dr/contracts';
 import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
+import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import { SyncServiceRegistry } from '../services/SyncServiceRegistry.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 import { createLogger } from '../utils/logger.js';
@@ -33,6 +36,7 @@ export interface RadioOperatorManagerOptions {
   clockSource: ClockSourceSystem;
   getCurrentMode: () => ModeDescriptor;
   setRadioFrequency: (freq: number) => void;
+  slotPackManager: SlotPackManager;
   transmissionTracker?: any; // TransmissionTracker实例
   // 获取物理电台当前基频（Hz）；若无法获取，返回null
   getRadioFrequency?: () => Promise<number | null>;
@@ -49,6 +53,7 @@ export class RadioOperatorManager {
   private clockSource: ClockSourceSystem;
   private getCurrentMode: () => ModeDescriptor;
   private setRadioFrequency: (freq: number) => void;
+  private slotPackManager: SlotPackManager;
   private isRunning: boolean = false;
   private logManager: LogManager;
   private transmissionTracker: any; // TransmissionTracker实例
@@ -75,6 +80,7 @@ export class RadioOperatorManager {
     this.clockSource = options.clockSource;
     this.getCurrentMode = options.getCurrentMode;
     this.setRadioFrequency = options.setRadioFrequency;
+    this.slotPackManager = options.slotPackManager;
     this.logManager = LogManager.getInstance();
     this.transmissionTracker = options.transmissionTracker;
     this.getRadioFrequency = options.getRadioFrequency;
@@ -105,7 +111,6 @@ export class RadioOperatorManager {
         }
         
         // 兜底校正频率：防止误将音频偏移(Hz)写入为绝对频率
-        const _operator = this.operators.get(data.operatorId);
         let baseFreq = 0;
         // 优先从物理电台获取全局基频
         if (this.getRadioFrequency) {
@@ -136,27 +141,43 @@ export class RadioOperatorManager {
           logger.warn(`QSO frequency missing, using base frequency ${normalizedFreq}Hz`);
         }
 
-        const qsoToSave: QSORecord = {
+        const normalizedQSO: QSORecord = {
           ...data.qsoRecord,
           frequency: normalizedFreq
         };
 
-        logger.debug(`Saving QSO to logbook ${logBook.name}: ${qsoToSave.callsign} @ ${new Date(qsoToSave.startTime).toISOString()} (${qsoToSave.frequency}Hz)`);
-        await logBook.provider.addQSO(qsoToSave, data.operatorId);
+        const completedQSO = await this.completeAutomaticQSORecord(data.operatorId, normalizedQSO);
+        const mergeCandidate = await this.findMergeCandidate(logBook.provider, data.operatorId, completedQSO);
 
-        // QSO记录成功后，发射事件通知上层系统
-        this.eventEmitter.emit('qsoRecordAdded' as any, {
+        let persistedQSO = completedQSO;
+        let eventName: 'qsoRecordAdded' | 'qsoRecordUpdated' = 'qsoRecordAdded';
+
+        if (mergeCandidate) {
+          const mergedQSO = this.mergeQSORecord(mergeCandidate, completedQSO);
+          const { id: _id, ...updates } = mergedQSO;
+
+          logger.debug(`Updating existing QSO ${mergeCandidate.id} in logbook ${logBook.name}: ${mergedQSO.callsign} @ ${new Date(mergedQSO.startTime).toISOString()} (${mergedQSO.frequency}Hz)`);
+          await logBook.provider.updateQSO(mergeCandidate.id, updates);
+          persistedQSO = await logBook.provider.getQSO(mergeCandidate.id) ?? { ...mergedQSO, id: mergeCandidate.id };
+          eventName = 'qsoRecordUpdated';
+        } else {
+          logger.debug(`Saving QSO to logbook ${logBook.name}: ${completedQSO.callsign} @ ${new Date(completedQSO.startTime).toISOString()} (${completedQSO.frequency}Hz)`);
+          await logBook.provider.addQSO(completedQSO, data.operatorId);
+          persistedQSO = completedQSO;
+
+          // 自动上传到同步服务（WaveLog/QRZ/LoTW）仅在新增时触发，避免外部重复记录
+          const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
+          if (operatorCallsign) {
+            await this.handleAutoSync(persistedQSO, operatorCallsign, data.operatorId);
+          }
+        }
+
+        this.eventEmitter.emit(eventName as any, {
           operatorId: data.operatorId,
           logBookId: logBook.id,
-          qsoRecord: qsoToSave
+          qsoRecord: persistedQSO
         });
-        logger.debug(`Emitted qsoRecordAdded event: ${data.qsoRecord.callsign}`);
-
-        // 自动上传到同步服务（WaveLog/QRZ）- 使用修正后的频率数据
-        const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
-        if (operatorCallsign) {
-          await this.handleAutoSync(qsoToSave, operatorCallsign, data.operatorId);
-        }
+        logger.debug(`Emitted ${eventName} event: ${persistedQSO.callsign}`);
         
         // 获取更新的统计信息并发射日志本更新事件
         try {
@@ -1410,6 +1431,233 @@ export class RadioOperatorManager {
     }
 
     return false; // 无冲突
+  }
+
+  private async completeAutomaticQSORecord(operatorId: string, qsoRecord: QSORecord): Promise<QSORecord> {
+    const myCallsign = (qsoRecord.myCallsign || this.logManager.getOperatorCallsign(operatorId) || '').toUpperCase();
+    const targetCallsign = qsoRecord.callsign.toUpperCase();
+    const slotMs = this.getSlotDurationForMode(qsoRecord.mode);
+    const historyStartMs = Math.max(0, qsoRecord.startTime - slotMs);
+    const historyEndMs = qsoRecord.endTime ?? qsoRecord.startTime;
+    const historySlotPacks = await this.collectRelevantSlotPacks(historyStartMs, historyEndMs);
+    const dayStartMs = Date.parse(new Date(historyEndMs).toISOString().split('T')[0] + 'T00:00:00.000Z');
+    const dailySlotPacks = await this.collectRelevantSlotPacks(dayStartMs, historyEndMs);
+
+    const grid = qsoRecord.grid || this.findHistoricalGrid(dailySlotPacks, targetCallsign, historyEndMs);
+    const messages = this.rebuildQSOMessageHistory(historySlotPacks, {
+      operatorId,
+      myCallsign,
+      targetCallsign,
+      startMs: historyStartMs,
+      endMs: historyEndMs,
+    });
+
+    return {
+      ...qsoRecord,
+      callsign: targetCallsign,
+      myCallsign: myCallsign || qsoRecord.myCallsign,
+      grid,
+      messages,
+    };
+  }
+
+  private async collectRelevantSlotPacks(startMs: number, endMs: number): Promise<SlotPack[]> {
+    const merged = new Map<string, SlotPack>();
+    const activeSlotPacks = this.slotPackManager.getActiveSlotPacks();
+
+    for (const slotPack of activeSlotPacks) {
+      if (slotPack.startMs <= endMs && slotPack.endMs >= startMs) {
+        merged.set(slotPack.slotId, slotPack);
+      }
+    }
+
+    const dateStrings = this.getDateStringsBetween(startMs, endMs);
+    for (const dateStr of dateStrings) {
+      const records = await this.slotPackManager.readStoredRecords(dateStr);
+      const latestBySlot = new Map<string, SlotPack>();
+
+      for (const record of records) {
+        const slotPack = record.slotPack;
+        if (slotPack.startMs > endMs || slotPack.endMs < startMs) {
+          continue;
+        }
+        const existing = latestBySlot.get(slotPack.slotId);
+        if (!existing || slotPack.stats.lastUpdated >= existing.stats.lastUpdated) {
+          latestBySlot.set(slotPack.slotId, slotPack);
+        }
+      }
+
+      for (const [slotId, slotPack] of latestBySlot.entries()) {
+        if (!merged.has(slotId)) {
+          merged.set(slotId, slotPack);
+        }
+      }
+    }
+
+    return Array.from(merged.values()).sort((left, right) => {
+      if (left.startMs !== right.startMs) {
+        return left.startMs - right.startMs;
+      }
+      return left.slotId.localeCompare(right.slotId);
+    });
+  }
+
+  private findHistoricalGrid(slotPacks: SlotPack[], targetCallsign: string, endMs: number): string | undefined {
+    const sorted = [...slotPacks]
+      .filter(slotPack => slotPack.startMs <= endMs)
+      .sort((left, right) => right.startMs - left.startMs);
+
+    for (const slotPack of sorted) {
+      for (const frame of slotPack.frames) {
+        if (frame.snr === -999) {
+          continue;
+        }
+
+        try {
+          const parsed = FT8MessageParser.parseMessage(frame.message);
+          if (parsed.type === 'cq' && parsed.senderCallsign?.toUpperCase() === targetCallsign && parsed.grid) {
+            return parsed.grid;
+          }
+          if (parsed.type === 'call' && parsed.senderCallsign?.toUpperCase() === targetCallsign && parsed.grid) {
+            return parsed.grid;
+          }
+        } catch (error) {
+          logger.warn(`Failed to parse frame while resolving grid: "${frame.message}"`, error);
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private rebuildQSOMessageHistory(
+    slotPacks: SlotPack[],
+    options: { operatorId: string; myCallsign: string; targetCallsign: string; startMs: number; endMs: number }
+  ): string[] {
+    const messages: string[] = [];
+
+    for (const slotPack of slotPacks) {
+      if (slotPack.startMs > options.endMs || slotPack.endMs < options.startMs) {
+        continue;
+      }
+
+      for (const frame of slotPack.frames) {
+        if (!this.isFrameRelatedToQSO(frame, options)) {
+          continue;
+        }
+        messages.push(frame.message);
+      }
+    }
+
+    return messages;
+  }
+
+  private isFrameRelatedToQSO(
+    frame: FrameMessage,
+    options: { operatorId: string; myCallsign: string; targetCallsign: string }
+  ): boolean {
+    if (frame.snr === -999) {
+      return frame.operatorId === options.operatorId && frame.message.toUpperCase().includes(options.targetCallsign);
+    }
+
+    try {
+      const parsed = FT8MessageParser.parseMessage(frame.message);
+      switch (parsed.type) {
+        case 'cq':
+          return parsed.senderCallsign?.toUpperCase() === options.targetCallsign;
+        case 'call':
+        case 'signal_report':
+        case 'roger_report':
+        case 'rrr':
+        case '73': {
+          const sender = parsed.senderCallsign?.toUpperCase();
+          const target = parsed.targetCallsign?.toUpperCase();
+          return sender !== undefined
+            && target !== undefined
+            && (
+              (sender === options.targetCallsign && target === options.myCallsign)
+              || (sender === options.myCallsign && target === options.targetCallsign)
+            );
+        }
+        case 'fox_rr73':
+          return parsed.completedCallsign?.toUpperCase() === options.myCallsign
+            || parsed.nextCallsign?.toUpperCase() === options.myCallsign;
+        default:
+          return false;
+      }
+    } catch (error) {
+      logger.warn(`Failed to parse frame while rebuilding QSO history: "${frame.message}"`, error);
+      return false;
+    }
+  }
+
+  private async findMergeCandidate(
+    provider: { getLastQSOWithCallsign: (callsign: string, operatorId?: string) => Promise<QSORecord | null> },
+    operatorId: string,
+    qsoRecord: QSORecord
+  ): Promise<QSORecord | null> {
+    const latestQSO = await provider.getLastQSOWithCallsign(qsoRecord.callsign, operatorId);
+    if (!latestQSO) {
+      return null;
+    }
+
+    const existingBand = latestQSO.frequency > 0 ? getBandFromFrequency(latestQSO.frequency) : null;
+    const incomingBand = qsoRecord.frequency > 0 ? getBandFromFrequency(qsoRecord.frequency) : null;
+    if (!existingBand || !incomingBand || existingBand !== incomingBand) {
+      return null;
+    }
+
+    if ((latestQSO.mode || '').toUpperCase() !== (qsoRecord.mode || '').toUpperCase()) {
+      return null;
+    }
+
+    const latestTime = latestQSO.endTime ?? latestQSO.startTime;
+    const incomingTime = qsoRecord.endTime ?? qsoRecord.startTime;
+    if (Math.abs(incomingTime - latestTime) > 5 * 60 * 1000) {
+      return null;
+    }
+
+    return latestQSO;
+  }
+
+  private mergeQSORecord(existing: QSORecord, incoming: QSORecord): QSORecord {
+    const existingEndTime = existing.endTime ?? existing.startTime;
+    const incomingEndTime = incoming.endTime ?? incoming.startTime;
+
+    return {
+      ...existing,
+      ...incoming,
+      id: existing.id,
+      startTime: Math.min(existing.startTime, incoming.startTime),
+      endTime: Math.max(existingEndTime, incomingEndTime),
+      grid: incoming.grid || existing.grid,
+      reportSent: incoming.reportSent || existing.reportSent,
+      reportReceived: incoming.reportReceived || existing.reportReceived,
+      messages: incoming.messages.length > 0 ? incoming.messages : existing.messages,
+      lotwQslSent: existing.lotwQslSent,
+      lotwQslReceived: existing.lotwQslReceived,
+      lotwQslSentDate: existing.lotwQslSentDate,
+      lotwQslReceivedDate: existing.lotwQslReceivedDate,
+      qrzQslSent: existing.qrzQslSent,
+      qrzQslReceived: existing.qrzQslReceived,
+      qrzQslSentDate: existing.qrzQslSentDate,
+      qrzQslReceivedDate: existing.qrzQslReceivedDate,
+    };
+  }
+
+  private getSlotDurationForMode(mode: string): number {
+    return mode.toUpperCase() === 'FT4' ? MODES.FT4.slotMs : MODES.FT8.slotMs;
+  }
+
+  private getDateStringsBetween(startMs: number, endMs: number): string[] {
+    const startDate = new Date(startMs);
+    const endDate = new Date(endMs);
+    const results = new Set<string>();
+
+    results.add(startDate.toISOString().split('T')[0]);
+    results.add(endDate.toISOString().split('T')[0]);
+
+    return [...results];
   }
   
   /**

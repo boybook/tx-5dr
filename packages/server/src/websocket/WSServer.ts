@@ -501,17 +501,13 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('qsoRecordAdded' as any, (data: { operatorId: string; logBookId: string; qsoRecord: any }) => {
       logger.debug('QSO record added event received', { callsign: data.qsoRecord.callsign });
       this.broadcastQSORecordAdded(data);
-      // 向启用了该操作员的客户端发送简洁的Toast消息
-      try {
-        const qso = data.qsoRecord;
-        const mhz = (qso.frequency / 1_000_000).toFixed(3);
-        const gridPart = qso.grid ? ` ${qso.grid}` : '';
-        const title = 'QSO Logged';
-        const text = `${qso.callsign}${gridPart} • ${mhz} MHz • ${qso.mode}`;
-        this.broadcastOperatorTextMessage(data.operatorId, title, text, 'success', 3000, 'qsoLogged');
-      } catch (e) {
-        logger.warn('failed to send QSO record toast', e);
-      }
+      this.broadcastQSOToast(data.operatorId, data.qsoRecord, ServerMessageKey.QSO_LOGGED);
+    });
+
+    this.digitalRadioEngine.on('qsoRecordUpdated' as any, (data: { operatorId: string; logBookId: string; qsoRecord: any }) => {
+      logger.debug('QSO record updated event received', { callsign: data.qsoRecord.callsign });
+      this.broadcastQSORecordUpdated(data);
+      this.broadcastQSOToast(data.operatorId, data.qsoRecord, ServerMessageKey.QSO_UPDATED);
     });
 
     // 监听日志本更新事件
@@ -1607,6 +1603,22 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
+   * 广播QSO记录更新事件
+   */
+  broadcastQSORecordUpdated(data: { operatorId: string; logBookId: string; qsoRecord: any }): void {
+    const activeConnections = this.getActiveConnections().filter(conn => conn.isHandshakeCompleted());
+
+    activeConnections.forEach(connection => {
+      if (connection.isOperatorEnabled(data.operatorId)) {
+        connection.send(WSMessageType.QSO_RECORD_UPDATED, data);
+      }
+    });
+
+    const targetConnections = activeConnections.filter(conn => conn.isOperatorEnabled(data.operatorId));
+    logger.debug(`sent QSO record updated event to ${targetConnections.length} clients with operator ${data.operatorId} enabled`, { callsign: data.qsoRecord.callsign });
+  }
+
+  /**
    * 广播日志本更新事件
    */
   broadcastLogbookUpdated(data: { logBookId: string; statistics: any }): void {
@@ -1618,6 +1630,37 @@ export class WSServer extends WSMessageHandler {
     });
 
     logger.debug(`sent logbook updated event to ${activeConnections.length} clients`, { logBookId: data.logBookId });
+  }
+
+  private broadcastQSOToast(operatorId: string, qso: any, key: ServerMessageKey.QSO_LOGGED | ServerMessageKey.QSO_UPDATED): void {
+    try {
+      const mhz = (qso.frequency / 1_000_000).toFixed(3);
+      const reportSent = qso.reportSent || '--';
+      const reportReceived = qso.reportReceived || '--';
+      const summaryParts = [qso.callsign];
+      if (qso.grid) {
+        summaryParts.push(qso.grid);
+      }
+      summaryParts.push(`${mhz} MHz`);
+      summaryParts.push(qso.mode);
+      if (qso.reportSent || qso.reportReceived) {
+        summaryParts.push(`${reportSent}/${reportReceived}`);
+      }
+
+      const summary = summaryParts.join(' • ');
+      const title = key === ServerMessageKey.QSO_UPDATED ? 'QSO Updated' : 'QSO Logged';
+      this.broadcastOperatorTextMessage(
+        operatorId,
+        title,
+        summary,
+        'success',
+        3500,
+        key,
+        { summary }
+      );
+    } catch (error) {
+      logger.warn('failed to send QSO toast', error);
+    }
   }
 
   /**

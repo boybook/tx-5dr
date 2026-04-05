@@ -170,6 +170,7 @@ export interface LogbookState {
 
 export type LogbookAction =
   | { type: 'qsoRecordAdded'; payload: { operatorId: string; logBookId: string; qsoRecord: QSORecord } }
+  | { type: 'qsoRecordUpdated'; payload: { operatorId: string; logBookId: string; qsoRecord: QSORecord } }
   | { type: 'logbookUpdated'; payload: { logBookId: string; statistics: LogBookStatistics } }
   | { type: 'loadQSOs'; payload: { operatorId: string; qsos: QSORecord[] } }
   | { type: 'CLEAR_LOGBOOK_DATA' };
