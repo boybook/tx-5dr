@@ -380,7 +380,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     void main() {
       float textureHeight = max(u_textureHeight, 1.0);
-      float sourceRow = mod(u_headRow + v_texCoord.y * textureHeight + u_scrollRows, textureHeight);
+      // Map the vertical edge to the last texel row instead of wrapping back to the top.
+      float rowSpan = max(textureHeight - 1.0, 0.0);
+      float sourceRow = mod(u_headRow + v_texCoord.y * rowSpan + u_scrollRows, textureHeight);
       float sourceY = (sourceRow + 0.5) / textureHeight;
       float value = texture2D(u_texture, vec2(v_texCoord.x, sourceY)).r;
       float normalized;
