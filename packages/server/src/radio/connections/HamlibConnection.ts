@@ -14,7 +14,13 @@ import type { PttType } from 'hamlib';
 import { SpectrumController } from 'hamlib/spectrum';
 import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
 import type { LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
-import { hamlibStrengthToLevelMeterReading } from './meterUtils.js';
+import {
+  type MeterDecodeStrategy,
+  genericHamlibStrengthToLevelMeterReading,
+  hamlibStrengthToLevelMeterReading,
+  resolveHamlibMeterDecodeStrategy,
+  yaesuRawstrToLevelMeterReading,
+} from './meterUtils.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
@@ -38,6 +44,14 @@ import {
 } from './IRadioConnection.js';
 
 const logger = createLogger('HamlibConnection');
+
+type RigMetadata = {
+  rigModel: number;
+  mfgName: string;
+  modelName: string;
+};
+
+let rigMetadataCachePromise: Promise<Map<number, RigMetadata>> | null = null;
 
 interface SpectrumControllerLike {
   getSpectrumSupportSummary(): Promise<SpectrumSupportSummary>;
@@ -106,6 +120,27 @@ function normalizeRepeaterShiftValue(shift: string): string {
   return 'none';
 }
 
+async function getRigMetadata(rigModel: number): Promise<RigMetadata | null> {
+  if (!rigMetadataCachePromise) {
+    rigMetadataCachePromise = Promise.resolve()
+      .then(() => {
+        const rigs = HamLib.getSupportedRigs();
+        return new Map(rigs.map((rig) => [rig.rigModel, {
+          rigModel: rig.rigModel,
+          mfgName: rig.mfgName,
+          modelName: rig.modelName,
+        }]));
+      })
+      .catch((error) => {
+        logger.warn('Failed to build Hamlib rig metadata cache', error);
+        return new Map<number, RigMetadata>();
+      });
+  }
+
+  const metadataCache = await rigMetadataCachePromise;
+  return metadataCache.get(rigModel) ?? null;
+}
+
 /**
  * HamlibConnection 实现类
  * 支持串口和网络连接方式
@@ -172,6 +207,23 @@ export class HamlibConnection
    * 电台支持的 level 集合（连接时检测）
    */
   private supportedLevels: Set<string> = new Set();
+
+  /**
+   * 当前连接匹配到的数值表解码策略。
+   */
+  private meterDecodeStrategy: MeterDecodeStrategy = resolveHamlibMeterDecodeStrategy({
+    supportedLevels: [],
+  });
+
+  /**
+   * 当前连接的 Hamlib rig 元数据（仅 serial 模式可用）。
+   */
+  private meterRigMetadata: RigMetadata | null = null;
+
+  /**
+   * 首次诊断样本日志只输出一次，避免持续双读电平表。
+   */
+  private hasLoggedMeterStrategySample = false;
 
   /**
    * 电台支持的模式集合（连接时检测）
@@ -383,6 +435,8 @@ export class HamlibConnection
         this.supportedLevels = new Set(['STRENGTH', 'SWR', 'ALC', 'RFPOWER_METER']);
       }
 
+      await this.initializeMeterDecodeStrategy();
+
       await this.detectSupportedModes();
       this.detectSupportedFunctions();
       this.detectSupportedParms();
@@ -412,6 +466,9 @@ export class HamlibConnection
     // 停止数值表轮询
     this.stopMeterPolling();
     this.supportedLevels.clear();
+    this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({ supportedLevels: [] });
+    this.meterRigMetadata = null;
+    this.hasLoggedMeterStrategySample = false;
     this.supportedModes.clear();
     this.supportedFunctions.clear();
     this.supportedParms.clear();
@@ -949,12 +1006,45 @@ export class HamlibConnection
    */
   getMeterCapabilities(): MeterCapabilities {
     return {
-      strength: this.supportedLevels.has('STRENGTH'),
+      strength: this.getSelectedLevelMeterSource() !== null,
       swr: this.supportedLevels.has('SWR'),
       alc: this.supportedLevels.has('ALC'),
       power: this.supportedLevels.has('RFPOWER_METER') || this.supportedLevels.has('RFPOWER_METER_WATTS'),
       powerWatts: this.supportedLevels.has('RFPOWER_METER_WATTS'),
     };
+  }
+
+  private getSelectedLevelMeterSource(): 'STRENGTH' | 'RAWSTR' | null {
+    return this.meterDecodeStrategy.sourceLevel;
+  }
+
+  private async initializeMeterDecodeStrategy(): Promise<void> {
+    const config = this.currentConfig;
+    if (!config) {
+      this.meterRigMetadata = null;
+      this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({ supportedLevels: this.supportedLevels });
+      return;
+    }
+
+    if (config.type === 'serial' && config.serial?.rigModel) {
+      this.meterRigMetadata = await getRigMetadata(config.serial.rigModel);
+    } else {
+      this.meterRigMetadata = null;
+    }
+
+    this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({
+      manufacturer: this.meterRigMetadata?.mfgName ?? null,
+      supportedLevels: this.supportedLevels,
+    });
+    this.hasLoggedMeterStrategySample = false;
+
+    logger.info('Meter decode strategy selected', {
+      strategy: this.meterDecodeStrategy.label,
+      sourceLevel: this.meterDecodeStrategy.sourceLevel,
+      manufacturer: this.meterRigMetadata?.mfgName ?? null,
+      modelName: this.meterRigMetadata?.modelName ?? null,
+      rigModel: this.meterRigMetadata?.rigModel ?? null,
+    });
   }
 
   /**
@@ -2132,6 +2222,9 @@ export class HamlibConnection
       this.pttMethod = 'cat';
       this.backgroundTasksStarted = false;
       this.supportedLevels.clear();
+      this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({ supportedLevels: [] });
+      this.meterRigMetadata = null;
+      this.hasLoggedMeterStrategySample = false;
       this.supportedModes.clear();
       this.supportedFunctions.clear();
       this.supportedParms.clear();
@@ -2185,8 +2278,11 @@ export class HamlibConnection
         }
 
         // 如果没有任何支持的 level，使用当前 VFO 读频做健康检查
-        const hasAnyLevel = this.supportedLevels.has('STRENGTH') || this.supportedLevels.has('SWR')
-          || this.supportedLevels.has('ALC') || this.supportedLevels.has('RFPOWER_METER');
+        const levelMeterSource = this.getSelectedLevelMeterSource();
+        const hasAnyLevel = levelMeterSource !== null || this.supportedLevels.has('SWR')
+          || this.supportedLevels.has('ALC')
+          || this.supportedLevels.has('RFPOWER_METER')
+          || this.supportedLevels.has('RFPOWER_METER_WATTS');
 
         if (!hasAnyLevel) {
           try {
@@ -2198,8 +2294,8 @@ export class HamlibConnection
           return;
         }
 
-        const strength = this.supportedLevels.has('STRENGTH')
-          ? await this.readMeterLevel('STRENGTH')
+        const strength = levelMeterSource !== null
+          ? await this.readMeterLevel(levelMeterSource)
           : null;
         const swr = this.supportedLevels.has('SWR')
           ? await this.readMeterLevel('SWR')
@@ -2218,8 +2314,13 @@ export class HamlibConnection
           return;
         }
 
+        const level = strength !== null ? this.convertLevelReading(strength) : null;
+        if (strength !== null && level !== null) {
+          await this.maybeLogMeterStrategySample(strength, level);
+        }
+
         const meterData: MeterData = {
-          level: strength !== null ? this.convertStrengthToLevel(strength) : null,
+          level,
           swr: swr !== null ? this.convertSWR(swr) : null,
           alc: alc !== null ? this.convertALC(alc) : null,
           power: (power !== null || powerWatts !== null) ? this.convertPower(power, powerWatts) : null,
@@ -2247,12 +2348,43 @@ export class HamlibConnection
     }
   }
 
-  /**
-   * 将 Hamlib STRENGTH 转换为完整的 LevelMeterReading
-   * @param dbValue - Hamlib 返回的 dB 值（相对于 S9）
-   */
-  private convertStrengthToLevel(dbValue: number): LevelMeterReading {
-    return hamlibStrengthToLevelMeterReading(dbValue, this.currentFrequencyHz);
+  private convertLevelReading(rawValue: number): LevelMeterReading {
+    switch (this.meterDecodeStrategy.name) {
+      case 'icom':
+        return hamlibStrengthToLevelMeterReading(rawValue, this.currentFrequencyHz);
+      case 'yaesu':
+        return yaesuRawstrToLevelMeterReading(rawValue, this.currentFrequencyHz);
+      case 'generic':
+      default:
+        return genericHamlibStrengthToLevelMeterReading(rawValue, this.currentFrequencyHz);
+    }
+  }
+
+  private async maybeLogMeterStrategySample(primaryValue: number, level: LevelMeterReading): Promise<void> {
+    if (this.hasLoggedMeterStrategySample || this.meterDecodeStrategy.name !== 'yaesu') {
+      return;
+    }
+
+    this.hasLoggedMeterStrategySample = true;
+
+    if (!this.supportedLevels.has('STRENGTH')) {
+      return;
+    }
+
+    const fallbackStrength = await this.readMeterLevel('STRENGTH');
+    if (fallbackStrength === null) {
+      return;
+    }
+
+    logger.info('Yaesu meter sample captured', {
+      strategy: this.meterDecodeStrategy.label,
+      manufacturer: this.meterRigMetadata?.mfgName ?? null,
+      modelName: this.meterRigMetadata?.modelName ?? null,
+      rigModel: this.meterRigMetadata?.rigModel ?? null,
+      rawstr: primaryValue,
+      strength: fallbackStrength,
+      formatted: level.formatted,
+    });
   }
 
   /**

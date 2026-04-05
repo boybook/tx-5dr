@@ -946,8 +946,9 @@ export class IcomWlanConnection
 
         const swr = await this.readMeterValue('SWR', () => this.rig!.readSWR({ timeout: 200 }));
         const alcRaw = await this.readMeterValue('ALC', () => this.rig!.readALC({ timeout: 200 }));
-        const level = await this.readMeterValue('LEVEL', () => this.rig!.getLevelMeter({ timeout: 200 }));
+        const levelRaw = await this.readMeterValue('LEVEL', () => this.rig!.getLevelMeter({ timeout: 200 }));
         const power = await this.readMeterValue('POWER', () => this.rig!.readPowerLevel({ timeout: 200 }));
+        const level = levelRaw ? { ...levelRaw, displayStyle: 's-meter-dbm' as const } : null;
 
         const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
 
