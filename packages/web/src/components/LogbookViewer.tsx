@@ -700,7 +700,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   }, [importError]);
 
   // 筛选控制
-  const handleFilterChange = (key: keyof QSOFilters, value: string | undefined) => {
+  const handleFilterChange = <K extends keyof QSOFilters>(key: K, value: QSOFilters[K]) => {
     setFilters((prev) => {
       const next = { ...prev };
       if (!value) {
@@ -1116,7 +1116,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 autoFocus
                 isClearable
                 size="sm"
-                className="w-36 md:w-52 transition-all duration-200"
+                className="w-36 md:w-32 transition-all duration-200"
                 placeholder={t('filter.gridPlaceholder')}
                 startContent={<FontAwesomeIcon icon={faTableCells} className="text-default-400 text-xs" />}
                 value={filters.grid || ''}
@@ -1232,7 +1232,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 selectionMode="single"
                 onSelectionChange={(keys) => {
                   const selected = Array.from(keys as Set<string>);
-                  handleFilterChange('qslStatus', selected[0]);
+                  const value = selected[0] || undefined;
+                  handleFilterChange('qslStatus', value as QSOFilters['qslStatus']);
                 }}
               >
                 <DropdownItem key="">{t('qslStatus.allStatus')}</DropdownItem>

@@ -1174,8 +1174,9 @@ export class ADIFLogProvider implements ILogProvider {
     for (const qso of qsos) {
       uniqueCallsigns.add(qso.callsign);
       
-      if (qso.grid) {
-        uniqueGrids.add(qso.grid);
+      const gridKey = normalizeGridKey(qso.grid);
+      if (gridKey) {
+        uniqueGrids.add(gridKey);
       }
       
       // 按模式统计
