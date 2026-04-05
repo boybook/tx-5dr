@@ -75,6 +75,14 @@ PhysicalRadioManager              ← 编排器：连接启停 + 状态机驱动
 - `network` / `icomWlan` / `serial` — 三种子配置对象共存，按 type 读取对应配置
 - `transmitCompensationMs` — 发射时序补偿 (-1000~1000ms)
 
+**电台 I/O 约束**:
+- 所有底层 CAT/CI-V 访问必须经过连接对象自己的串行队列，禁止绕过连接层直接并发访问 rig handle
+- `setFrequency` / `setMode` / `setPTT` 属于关键操作，必须保守串行执行
+- “切频 + 切模式”必须走 `applyOperatingState(...)` 这类复合入口，避免拆成多个独立写操作
+- meter、capability、频率监测属于低优先级轮询；关键操作进行中应直接跳过，不得抢占
+- 低优先级轮询失败默认只记日志，不应单独作为断线依据
+- 连接后的后台轮询必须在保守 bootstrap 完成后再启动
+
 ### 双状态机架构 (XState v5)
 
 系统使用两个 XState v5 状态机分别管理引擎生命周期和电台连接，代码位于 `server/src/state-machines/`。
