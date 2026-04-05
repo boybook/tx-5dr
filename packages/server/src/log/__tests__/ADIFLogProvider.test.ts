@@ -43,8 +43,8 @@ describe('ADIFLogProvider import', () => {
       '<CALL:5>BG2AA<QSO_DATE:8>20260101<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<GRIDSQUARE:6>PM01AA<LOTW_QSL_RCVD:1>Y<EOR>',
     ]);
 
-    const firstResult = await provider.importADIF(initial, 'op1');
-    const secondResult = await provider.importADIF(complement, 'op1');
+    const firstResult = await provider.importADIF(initial);
+    const secondResult = await provider.importADIF(complement);
     const qsos = await provider.queryQSOs();
 
     expect(firstResult.imported).toBe(1);
@@ -66,7 +66,7 @@ describe('ADIFLogProvider import', () => {
       '2026-01-01,12:00:00,BG2AA,PM01AA,14.074000,FT8,-10,-08,BG2XYZ,PM00AA,"CQ TEST | RR73"',
     ].join('\n');
 
-    const result = await provider.importCSV(csv, 'op1');
+    const result = await provider.importCSV(csv);
     const qsos = await provider.queryQSOs();
 
     expect(result.detectedFormat).toBe('csv');
@@ -125,7 +125,7 @@ describe('ADIFLogProvider import', () => {
       '<CALL:5>BG2AA<QSO_DATE:8>20260101<TIME_ON:6>235955<QSO_DATE_OFF:8>20260102<TIME_OFF:6>000010<MODE:4>MFSK<SUBMODE:3>FT4<FREQ:9>14.074000<STATE:2>TX<CNTY:3>DAL<IOTA:6>EU-001<MY_STATE:2>CA<MY_CNTY:2>LA<MY_IOTA:6>AS-007<NOTES:11>Manual note<EOR>',
     ]);
 
-    await provider.importADIF(adif, 'op1');
+    await provider.importADIF(adif);
     const qsos = await provider.queryQSOs();
 
     expect(qsos).toHaveLength(1);
@@ -148,7 +148,7 @@ describe('ADIFLogProvider import', () => {
       '<CALL:5>BG2AA<QSO_DATE:8>20260101<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<STATE:2>CA<CNTY:2>LA<IOTA:6>AS-007<NOTE:11>Manual note<APP_TX5DR_DXCC_STATUS:7>current<EOR>',
     ]);
 
-    await provider.importADIF(adif, 'op1');
+    await provider.importADIF(adif);
     const qsos = await provider.queryQSOs();
 
     expect(qsos).toHaveLength(1);
@@ -242,6 +242,112 @@ describe('ADIFLogProvider import', () => {
     }, 'op1');
 
     const analysis = await provider.analyzeCallsign('BG9ZZ', 'PM01AA', { operatorId: 'op1', band: 'Unknown' });
+    expect(analysis.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
+
+  it('treats worked status as callsign-logbook scoped instead of operator UUID scoped', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: '1710000000000',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const analysis = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op2', band: '20m' });
+
+    expect(analysis.isNewCallsign).toBe(false);
+    expect(analysis.isNewDxccEntity).toBe(false);
+    expect(analysis.isNewBandDxccEntity).toBe(false);
+    expect(analysis.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
+
+  it('keeps worked callsign and grid state after updateQSO rebuilds indexes', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: '1710000000001',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    await provider.updateQSO('1710000000001', { remarks: 'rebuilt' });
+
+    const analysis = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op2', band: '20m' });
+
+    expect(analysis.isNewCallsign).toBe(false);
+    expect(analysis.isNewGrid).toBe(false);
+    expect(analysis.isNewDxccEntity).toBe(false);
+
+    await provider.close();
+  });
+
+  it('keeps worked state after provider reloads from ADIF cache', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: '1710000000002',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+      myCallsign: 'BG5DRB',
+    }, 'op1');
+
+    await provider.close();
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: true,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+
+    const analysis = await reloaded.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op2', band: '20m' });
+
+    expect(analysis.isNewCallsign).toBe(false);
+    expect(analysis.isNewGrid).toBe(false);
+    expect(analysis.isNewDxccEntity).toBe(false);
+
+    await reloaded.close();
+  });
+
+  it('does not mark a worked DXCC as new for 73-style analyses without grid', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: '1710000000003',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: ['BG5DRB BG2AA RR73'],
+    }, 'op1');
+
+    const analysis = await provider.analyzeCallsign('BG9ZZ', undefined, { operatorId: 'op2', band: '20m' });
+
+    expect(analysis.isNewCallsign).toBe(true);
+    expect(analysis.isNewDxccEntity).toBe(false);
+    expect(analysis.isNewBandDxccEntity).toBe(false);
     expect(analysis.isNewGrid).toBe(false);
 
     await provider.close();

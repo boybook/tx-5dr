@@ -518,8 +518,10 @@ export class ADIFLogProvider implements ILogProvider {
   }
 
   // —— 索引维护 ——
-  private getOperatorKey(operatorId?: string): string {
-    return operatorId || ADIFLogProvider.ALL_KEY;
+  private getOperatorKey(_operatorId?: string): string {
+    // 单个 provider 始终代表一个呼号日志本；判重和统计按整个日志本计算，
+    // 不再依赖运行时 operator UUID 做二次过滤。
+    return ADIFLogProvider.ALL_KEY;
   }
 
   private rebuildIndexes(): void {
@@ -537,21 +539,11 @@ export class ADIFLogProvider implements ILogProvider {
     return idx;
   }
 
-  private buildIndexForOperator(operatorId: string): OperatorIndex {
-    const idx = createEmptyOperatorIndex();
-    for (const qso of this.qsoCache.values()) {
-      if (this.isQSOBelongsToOperator(qso.id, operatorId)) {
-        addQSOToIndex(idx, qso);
-      }
-    }
-    return idx;
-  }
-
-  private ensureIndex(operatorId?: string): OperatorIndex {
-    const key = this.getOperatorKey(operatorId);
+  private ensureIndex(_operatorId?: string): OperatorIndex {
+    const key = this.getOperatorKey();
     let idx = this.operatorIndexMap.get(key);
     if (!idx) {
-      idx = key === ADIFLogProvider.ALL_KEY ? this.buildIndexForAll() : this.buildIndexForOperator(key);
+      idx = this.buildIndexForAll();
       this.operatorIndexMap.set(key, idx);
     }
     return idx;
@@ -927,11 +919,6 @@ export class ADIFLogProvider implements ILogProvider {
     // 增量更新 ALL 索引
     const allIdx = this.operatorIndexMap.get(ADIFLogProvider.ALL_KEY);
     if (allIdx) addQSOToIndex(allIdx, record);
-    // 增量更新指定 operator 的索引（如果已构建）
-    if (operatorId) {
-      const opIdx = this.operatorIndexMap.get(this.getOperatorKey(operatorId));
-      if (opIdx) addQSOToIndex(opIdx, record);
-    }
     await this.saveCache();
   }
   
@@ -965,32 +952,6 @@ export class ADIFLogProvider implements ILogProvider {
   async getQSO(id: string): Promise<QSORecord | null> {
     this.ensureInitialized();
     return this.qsoCache.get(id) || null;
-  }
-  
-  /**
-   * 检查QSO记录是否属于指定的操作员
-   * @param qsoId QSO记录的ID
-   * @param operatorId 操作员ID
-   * @returns 是否匹配
-   */
-  private isQSOBelongsToOperator(qsoId: string, operatorId?: string): boolean {
-    if (!operatorId) {
-      return true;
-    }
-    
-    // 检查ID中是否包含operatorId
-    if (qsoId.includes(operatorId)) {
-      return true;
-    }
-    
-    // 向后兼容：如果记录ID没有operatorId部分（旧格式），也认为匹配
-    const parts = qsoId.split('_');
-    if (parts.length === 3) {
-      // 旧格式，没有operatorId，认为匹配所有operator
-      return true;
-    }
-    
-    return false;
   }
   
   async queryQSOs(options?: LogQueryOptions): Promise<QSORecord[]> {
@@ -1059,11 +1020,6 @@ export class ADIFLogProvider implements ILogProvider {
               return true;
           }
         });
-      }
-
-      // 操作员过滤
-      if (options.operatorId) {
-        results = results.filter(qso => this.isQSOBelongsToOperator(qso.id, options.operatorId));
       }
 
       // 排序
@@ -1188,10 +1144,10 @@ export class ADIFLogProvider implements ILogProvider {
     };
   }
   
-  async getStatistics(operatorId?: string): Promise<LogStatistics> {
+  async getStatistics(_operatorId?: string): Promise<LogStatistics> {
     this.ensureInitialized();
     
-    const qsos = await this.queryQSOs({ operatorId });
+    const qsos = await this.queryQSOs();
     
     const uniqueCallsigns = new Set<string>();
     const uniqueGrids = new Set<string>();
@@ -1224,7 +1180,7 @@ export class ADIFLogProvider implements ILogProvider {
         firstQSOTime = qso.startTime;
       }
     }
-    const dxcc = await this.getDXCCSummary(operatorId);
+    const dxcc = await this.getDXCCSummary();
 
     return {
       totalQSOs: qsos.length,
@@ -1238,10 +1194,10 @@ export class ADIFLogProvider implements ILogProvider {
     };
   }
 
-  async getDXCCSummary(operatorId?: string): Promise<LogBookDxccSummary> {
+  async getDXCCSummary(_operatorId?: string): Promise<LogBookDxccSummary> {
     this.ensureInitialized();
 
-    const qsos = await this.queryQSOs({ operatorId });
+    const qsos = await this.queryQSOs();
     const workedCurrent = new Set<number>();
     const workedDeleted = new Set<number>();
     const confirmedCurrent = new Set<number>();
@@ -1394,8 +1350,11 @@ export class ADIFLogProvider implements ILogProvider {
     return field;
   }
 
-  private buildImportId(record: QSORecord, operatorId?: string): string {
-    return `${record.callsign}_${record.startTime}_${Date.now()}_${operatorId || 'import'}`;
+  private buildImportId(record: QSORecord): string {
+    const ownerKey = record.myCallsign?.trim()
+      ? record.myCallsign.trim().toUpperCase()
+      : 'import';
+    return `${record.callsign}_${record.startTime}_${Date.now()}_${ownerKey}`;
   }
 
   private buildFingerprintIndex(): Map<string, string> {
@@ -1481,8 +1440,7 @@ export class ADIFLogProvider implements ILogProvider {
     records: QSORecord[],
     detectedFormat: LogBookImportResult['detectedFormat'],
     totalRead: number,
-    initialSkipped: number,
-    operatorId?: string
+    initialSkipped: number
   ): Promise<LogBookImportResult> {
     this.ensureInitialized();
 
@@ -1509,7 +1467,7 @@ export class ADIFLogProvider implements ILogProvider {
         if (!existingId) {
           const insertedRecord = enrichQSOWithDXCC({
             ...record,
-            id: this.buildImportId(record, operatorId),
+            id: this.buildImportId(record),
           });
           this.qsoCache.set(insertedRecord.id, insertedRecord);
           fingerprintIndex.set(fingerprint, insertedRecord.id);
@@ -1546,7 +1504,7 @@ export class ADIFLogProvider implements ILogProvider {
     return result;
   }
 
-  async importADIF(adifContent: string, operatorId?: string): Promise<LogBookImportResult> {
+  async importADIF(adifContent: string): Promise<LogBookImportResult> {
     this.ensureInitialized();
 
     const adif = AdifParser.parseAdi(adifContent);
@@ -1565,13 +1523,13 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
 
-    return this.importRecords(records, 'adif', totalRead, skipped, operatorId);
+    return this.importRecords(records, 'adif', totalRead, skipped);
   }
 
-  async importCSV(csvContent: string, operatorId?: string): Promise<LogBookImportResult> {
+  async importCSV(csvContent: string): Promise<LogBookImportResult> {
     this.ensureInitialized();
     const parsed = parseTx5drCsvContent(csvContent);
-    return this.importRecords(parsed.records, 'csv', parsed.totalRead, parsed.skipped, operatorId);
+    return this.importRecords(parsed.records, 'csv', parsed.totalRead, parsed.skipped);
   }
   
   async close(): Promise<void> {

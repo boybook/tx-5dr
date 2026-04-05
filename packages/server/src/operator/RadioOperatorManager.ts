@@ -147,7 +147,7 @@ export class RadioOperatorManager {
         };
 
         const completedQSO = await this.completeAutomaticQSORecord(data.operatorId, normalizedQSO);
-        const mergeCandidate = await this.findMergeCandidate(logBook.provider, data.operatorId, completedQSO);
+        const mergeCandidate = await this.findMergeCandidate(logBook.provider, completedQSO);
 
         let persistedQSO = completedQSO;
         let eventName: 'qsoRecordAdded' | 'qsoRecordUpdated' = 'qsoRecordAdded';
@@ -235,7 +235,7 @@ export class RadioOperatorManager {
             hasWorked = false;
           }
         } else {
-          hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, { operatorId: data.operatorId, band });
+          hasWorked = await logBook.provider.hasWorkedCallsign(data.callsign, { band });
         }
 
         // 发送响应
@@ -1593,10 +1593,9 @@ export class RadioOperatorManager {
 
   private async findMergeCandidate(
     provider: { getLastQSOWithCallsign: (callsign: string, operatorId?: string) => Promise<QSORecord | null> },
-    operatorId: string,
     qsoRecord: QSORecord
   ): Promise<QSORecord | null> {
-    const latestQSO = await provider.getLastQSOWithCallsign(qsoRecord.callsign, operatorId);
+    const latestQSO = await provider.getLastQSOWithCallsign(qsoRecord.callsign);
     if (!latestQSO) {
       return null;
     }

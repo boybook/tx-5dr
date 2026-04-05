@@ -384,7 +384,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setImportError(null);
       setImportSuccess(null);
 
-      const result = await api.importLogBookFile(effectiveLogBookId, file, operatorId);
+      const result = await api.importLogBookFile(effectiveLogBookId, file);
       const successMessage = buildImportSuccessMessage(result.data);
       setImportSuccess(successMessage);
 

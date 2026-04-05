@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { MultipartFile } from '@fastify/multipart';
 import { createLogger } from '../utils/logger.js';
 import {
   LogBookListResponseSchema,
@@ -35,24 +34,11 @@ import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtil
 
 const logger = createLogger('LogbooksRoute');
 
-function getMultipartFieldValue(
-  fields: MultipartFile['fields'],
-  key: string
-): string | undefined {
-  const field = fields[key];
-  if (!field || Array.isArray(field)) {
-    return undefined;
-  }
-  const value = (field as { value?: unknown }).value;
-  return typeof value === 'string' ? value : undefined;
-}
-
 function getImportPayloadFromBody(body: unknown): {
   content: string;
   format: LogBookImportFormat;
-  operatorId?: string;
 } {
-  const payload = body as { adifContent?: string; operatorId?: string } | undefined;
+  const payload = body as { adifContent?: string } | undefined;
   const content = normalizeImportText(payload?.adifContent || '');
   if (!content) {
     throw new RadioError({
@@ -67,7 +53,6 @@ function getImportPayloadFromBody(body: unknown): {
   return {
     content,
     format: 'adif',
-    operatorId: payload?.operatorId,
   };
 }
 
@@ -593,12 +578,11 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 导入数据到日志本
    * POST /api/logbooks/:id/import
    */
-  fastify.post<{ Params: { id: string }; Body: { adifContent?: string; operatorId?: string } }>('/:id/import', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.post<{ Params: { id: string }; Body: { adifContent?: string } }>('/:id/import', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
       let content: string;
       let format: LogBookImportFormat;
-      let operatorId: string | undefined;
 
       if (request.isMultipart()) {
         const file = await request.file();
@@ -623,13 +607,11 @@ export async function logbookRoutes(fastify: FastifyInstance) {
             suggestions: ['Choose a non-empty ADI, ADIF, or CSV file'],
           });
         }
-        operatorId = getMultipartFieldValue(file.fields, 'operatorId');
         format = detectLogImportFormat(content, file.filename);
       } else {
         const payload = getImportPayloadFromBody(request.body);
         content = payload.content;
         format = payload.format;
-        operatorId = payload.operatorId;
       }
 
       let logBook = logManager.getLogBook(id);
@@ -655,8 +637,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       const result = format === 'csv'
-        ? await logBook.provider.importCSV(content, operatorId)
-        : await logBook.provider.importADIF(content, operatorId);
+        ? await logBook.provider.importCSV(content)
+        : await logBook.provider.importADIF(content);
 
       if (result.imported > 0 || result.merged > 0) {
         try {
@@ -665,7 +647,6 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           digitalRadioEngine.emit('logbookUpdated' as any, {
             logBookId: logBook.id,
             statistics,
-            operatorId: operatorId || '',
           });
         } catch (statsError) {
           logger.warn('Failed to emit logbook update after import:', statsError);
@@ -693,19 +674,6 @@ export async function logbookRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       const body = CreateQSORequestSchema.parse(request.body);
-      const authUser = request.authUser!;
-
-      // OPERATOR 取第一个关联操作员，ADMIN 时 operatorIds 为空数组
-      const operatorId = authUser.operatorIds?.[0];
-
-      // 从 operatorManager 取 myCallsign / myGrid
-      let myCallsign: string | undefined;
-      let myGrid: string | undefined;
-      if (operatorId) {
-        const op = digitalRadioEngine.operatorManager.getOperator(operatorId);
-        myCallsign = op?.config.myCallsign;
-        myGrid = op?.config.myGrid;
-      }
 
       // 支持以呼号作为 id 参数（同 PUT 路由）
       let logBook = logManager.getLogBook(id);
@@ -723,8 +691,19 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         }
       }
 
+      const logbookCallsign = logManager.getCallsignsForLogBook(logBook.id)[0];
+      const linkedOperator = logbookCallsign
+        ? digitalRadioEngine.operatorManager.getAllOperators()
+          .find(op => normalizeCallsign(op.config.myCallsign) === logbookCallsign)
+        : undefined;
+      const operatorId = linkedOperator?.config.id;
+      const myCallsign = logbookCallsign || linkedOperator?.config.myCallsign;
+      const stationGrid = ConfigManager.getInstance().getStationInfo().qth?.grid;
+      const myGrid = linkedOperator?.config.myGrid || stationGrid;
+
       // 构造 QSORecord，id 格式与自动记录保持一致
-      const newId = `${body.callsign}_${body.startTime}_${Date.now()}_${operatorId || 'manual'}`;
+      const ownerKey = myCallsign ? normalizeCallsign(myCallsign) : 'manual';
+      const newId = `${body.callsign}_${body.startTime}_${Date.now()}_${ownerKey}`;
       const record: QSORecord = {
         id: newId,
         ...body,
@@ -732,7 +711,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         myGrid,
       };
 
-      await logBook.provider.addQSO(record, operatorId);
+      await logBook.provider.addQSO(record);
       const created = await logBook.provider.getQSO(newId);
 
       logger.info('QSO record created manually', { logBookId: logBook.id, callsign: body.callsign, operatorId });
@@ -757,8 +736,8 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       }
 
       // 自动同步到外部服务（WaveLog / QRZ）
-      if (myCallsign) {
-        digitalRadioEngine.operatorManager.triggerAutoSync(record, myCallsign, operatorId || '').catch((err) => {
+      if (myCallsign && operatorId) {
+        digitalRadioEngine.operatorManager.triggerAutoSync(record, myCallsign, operatorId).catch((err) => {
           logger.warn('Auto-sync failed for manually created QSO:', err);
         });
       }
