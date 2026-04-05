@@ -7,12 +7,22 @@ vi.mock('icom-wlan-node', () => ({
 
 import { PhysicalRadioManager } from '../PhysicalRadioManager.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
+import { RadioConnectionFactory } from '../connections/RadioConnectionFactory.js';
 
 type TestRadioActor = {
   send: ReturnType<typeof vi.fn>;
 };
 
 type TestRadioConnection = {
+  on?: ReturnType<typeof vi.fn>;
+  off?: ReturnType<typeof vi.fn>;
+  connect?: ReturnType<typeof vi.fn>;
+  disconnect?: ReturnType<typeof vi.fn>;
+  isHealthy?: ReturnType<typeof vi.fn>;
+  startBackgroundTasks?: ReturnType<typeof vi.fn>;
+  setKnownFrequency?: ReturnType<typeof vi.fn>;
+  getTunerCapabilities?: ReturnType<typeof vi.fn>;
+  getFrequency?: ReturnType<typeof vi.fn>;
   getMode?: ReturnType<typeof vi.fn>;
   setFrequency?: ReturnType<typeof vi.fn>;
   setMode?: ReturnType<typeof vi.fn>;
@@ -21,6 +31,16 @@ type TestRadioConnection = {
 type PhysicalRadioManagerTestAccessor = {
   radioActor: TestRadioActor;
   connection: TestRadioConnection;
+  configManager: {
+    getLastEngineMode: ReturnType<typeof vi.fn>;
+    getLastSelectedFrequency: ReturnType<typeof vi.fn>;
+    getLastVoiceFrequency: ReturnType<typeof vi.fn>;
+  };
+  capabilityManager: {
+    onConnected: ReturnType<typeof vi.fn>;
+    onDisconnected: ReturnType<typeof vi.fn>;
+  };
+  postConnectSettleMs: number;
   markCoreCapabilityUnsupported: (capability: string, error: Error) => void;
   coreCapabilityStates: Record<string, 'unknown' | 'supported' | 'unsupported'>;
 };
@@ -34,9 +54,11 @@ describe('PhysicalRadioManager', () => {
   let send: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     manager = new PhysicalRadioManager();
     send = vi.fn();
     asTestManager(manager).radioActor = { send };
+    asTestManager(manager).postConnectSettleMs = 0;
   });
 
   it('does not report recoverable getMode failures as connection health failures', async () => {
@@ -232,5 +254,72 @@ describe('PhysicalRadioManager', () => {
       type: 'HEALTH_CHECK_FAILED',
       error: expect.any(Error),
     });
+  });
+
+  it('completes conservative post-connect bootstrap before emitting connected', async () => {
+    const order: string[] = [];
+    const testManager = asTestManager(manager);
+    const connection: TestRadioConnection = {
+      on: vi.fn(),
+      off: vi.fn(),
+      connect: vi.fn().mockImplementation(async () => {
+        order.push('connect');
+      }),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      isHealthy: vi.fn().mockReturnValue(true),
+      startBackgroundTasks: vi.fn().mockImplementation(() => {
+        order.push('background');
+      }),
+      setKnownFrequency: vi.fn(),
+      getTunerCapabilities: vi.fn().mockImplementation(async () => {
+        order.push('tuner');
+        return { supported: true, hasSwitch: true, hasManualTune: true };
+      }),
+      setFrequency: vi.fn().mockImplementation(async () => {
+        order.push('restore');
+      }),
+      getFrequency: vi.fn().mockResolvedValue(14074000),
+    };
+
+    vi.spyOn(RadioConnectionFactory, 'create').mockReturnValue(connection as any);
+    vi.spyOn(testManager.configManager, 'getLastEngineMode').mockReturnValue('digital');
+    vi.spyOn(testManager.configManager, 'getLastSelectedFrequency').mockReturnValue({
+      frequency: 14074000,
+      mode: 'FT8',
+      band: '20m',
+      description: '20m FT8',
+    });
+    vi.spyOn(testManager.configManager, 'getLastVoiceFrequency').mockReturnValue(null);
+    vi.spyOn(testManager.capabilityManager, 'onConnected').mockImplementation(async () => {
+      order.push('capability');
+    });
+    vi.spyOn(testManager as any, 'startFrequencyMonitoring').mockImplementation(() => {
+      order.push('monitor');
+    });
+    testManager.radioActor = null as any;
+
+    manager.on('connected', () => {
+      order.push('connected');
+    });
+
+    await manager.applyConfig({
+      type: 'network',
+      network: { host: '127.0.0.1', port: 4532 },
+    } as any);
+
+    expect(order).toEqual([
+      'connect',
+      'tuner',
+      'restore',
+      'capability',
+      'background',
+      'monitor',
+      'connected',
+    ]);
+    expect(connection.startBackgroundTasks).toHaveBeenCalledTimes(1);
+    expect(connection.setFrequency).toHaveBeenCalledWith(14074000);
+    expect(testManager.capabilityManager.onConnected).toHaveBeenCalledTimes(1);
+
+    await manager.disconnect('test cleanup');
   });
 });

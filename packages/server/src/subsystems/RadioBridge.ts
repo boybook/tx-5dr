@@ -1,5 +1,5 @@
 import type { EventEmitter } from 'eventemitter3';
-import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import type { CoreRadioCapabilities, DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { RadioError } from '../utils/errors/RadioError.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
@@ -27,7 +27,16 @@ export interface RadioBridgeDeps {
 /**
  * 电台事件桥接子系统
  *
- * 职责：电台事件转发、频率同步、断线恢复、健康检查
+ * 负责：
+ * - 将 RadioManager 事件投影到 engineEmitter
+ * - 在断线/重连时协调引擎恢复
+ * - 维护与电台状态相关的轻量运行时桥接
+ *
+ * 不负责：
+ * - 连接后的 bootstrap 与频率恢复
+ * - 资源注册或启动顺序
+ * - 直接下发底层 CAT 写命令
+ *
  * 监听器是永久的（整个引擎生命周期），不随 start/stop 变化。
  */
 export class RadioBridge {
@@ -75,92 +84,18 @@ export class RadioBridge {
    * 注册所有 RadioManager 事件监听器
    */
   setupListeners(): void {
-    const { engineEmitter, radioManager, frequencyManager, slotPackManager, operatorManager } = this.deps;
+    const { engineEmitter, radioManager, frequencyManager, slotPackManager } = this.deps;
 
     // 监听电台连接中
     this.lm.listen(radioManager, 'connecting', () => {
-      logger.info('Radio connecting...');
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      engineEmitter.emit('radioStatusChanged', {
-        connected: false,
-        status: RadioConnectionStatus.CONNECTING,
-        radioInfo: null,
-        radioConfig: radioManager.getConfig(),
-        connectionHealth: radioManager.getConnectionHealth(),
-        coreCapabilities: radioManager.getCoreCapabilities(),
-        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-      });
+      this.handleRadioConnecting();
     });
 
     // 监听电台连接成功
-    this.lm.listen(radioManager, 'connected', async () => {
-      logger.info('Radio connected');
-
-      const radioInfo = await radioManager.getRadioInfo();
-      const radioConfig = radioManager.getConfig();
-      const tunerCapabilities = await radioManager.getTunerCapabilities();
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      engineEmitter.emit('radioStatusChanged', {
-        connected: true,
-        status: RadioConnectionStatus.CONNECTED,
-        radioInfo,
-        radioConfig,
-        connectionHealth: radioManager.getConnectionHealth(),
-        coreCapabilities: radioManager.getCoreCapabilities(),
-        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-        meterCapabilities: radioManager.getMeterCapabilities(),
-        tunerCapabilities,
+    this.lm.listen(radioManager, 'connected', () => {
+      void this.handleRadioConnected().catch((error) => {
+        logger.error('Failed to handle radio connected event:', error);
       });
-
-      // 连接成功后自动设置频率（根据引擎模式选择对应的保存频率）
-      try {
-        const cfgMgr = ConfigManager.getInstance();
-        const engineMode = cfgMgr.getLastEngineMode();
-        let targetFrequency: number | null = null;
-
-        if (engineMode === 'voice') {
-          const lastVoice = cfgMgr.getLastVoiceFrequency();
-          if (lastVoice?.frequency) {
-            targetFrequency = lastVoice.frequency;
-            logger.info(`Auto-setting voice frequency: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz (${lastVoice.description || lastVoice.radioMode || 'voice'})`);
-          }
-        } else {
-          const lastDigital = cfgMgr.getLastSelectedFrequency();
-          if (lastDigital?.frequency) {
-            targetFrequency = lastDigital.frequency;
-            logger.info(`Auto-setting digital frequency: ${(lastDigital.frequency / 1000000).toFixed(3)} MHz (${lastDigital.description || lastDigital.mode})`);
-          }
-        }
-
-        if (targetFrequency) {
-          await radioManager.setFrequency(targetFrequency);
-        } else {
-          logger.info('No saved frequency config, skipping auto-set');
-        }
-      } catch (err) {
-        logger.error('Auto-set frequency failed:', err);
-      }
-
-      // 连接成功后恢复之前的运行状态（竞态保护）
-      if (this._wasRunningBeforeDisconnect) {
-        const lifecycle = this.deps.getEngineLifecycle();
-        // 双重检查：不在运行中 且 不在启动中
-        const engineState = lifecycle.getEngineState();
-        if (!lifecycle.getIsRunning() && engineState !== 'starting') {
-          logger.info('Radio connected, restoring previous running state');
-          this._wasRunningBeforeDisconnect = false;
-          try {
-            await lifecycle.start();
-          } catch (err) {
-            logger.error('Auto-start failed:', err);
-            this._wasRunningBeforeDisconnect = false;
-          }
-        } else {
-          this._wasRunningBeforeDisconnect = false;
-        }
-      }
     });
 
     // 监听电台自动重连中
@@ -168,121 +103,23 @@ export class RadioBridge {
       const attempt = args[0] as number;
       const maxAttempts = args[1] as number;
       const delayMs = args[2] as number | undefined;
-      logger.info(`Radio reconnecting ${attempt}/${maxAttempts}`);
-
-      const lifecycle = this.deps.getEngineLifecycle();
-
-      // 第一次重连尝试时，记录运行状态并停止引擎
-      if (attempt === 1) {
-        if (lifecycle.getIsRunning()) {
-          this._wasRunningBeforeDisconnect = true;
-        }
-        operatorManager.stopAllOperators();
-        const pipeline = this.deps.getTransmissionPipeline();
-        if (pipeline.getIsPTTActive()) {
-          pipeline.forceStopPTT();
-        }
-        if (lifecycle.getIsRunning()) {
-          lifecycle.sendRadioDisconnected('Radio disconnected, auto-reconnecting');
-        }
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      engineEmitter.emit('radioStatusChanged', {
-        connected: false,
-        status: RadioConnectionStatus.RECONNECTING,
-        radioInfo: null,
-        radioConfig: radioManager.getConfig(),
-        message: `Reconnecting to radio... (${attempt}/${maxAttempts})`,
-        reconnectProgress: { attempt, maxAttempts, nextRetryMs: delayMs },
-        connectionHealth: radioManager.getConnectionHealth(),
-        coreCapabilities: radioManager.getCoreCapabilities(),
-        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+      void this.handleRadioReconnecting(attempt, maxAttempts, delayMs).catch((error) => {
+        logger.error('Failed to handle radio reconnecting event:', error);
       });
     });
 
     // 监听电台断开连接
-    this.lm.listen(radioManager, 'disconnected', async (...args: unknown[]) => {
+    this.lm.listen(radioManager, 'disconnected', (...args: unknown[]) => {
       const reason = args[0] as string | undefined;
-      logger.info(`Radio disconnected: ${reason || 'unknown reason'}`);
-
-      const lifecycle = this.deps.getEngineLifecycle();
-
-      // 记录断开前是否在运行（兜底，reconnecting handler 可能已设置过）
-      if (lifecycle.getIsRunning() && !this._wasRunningBeforeDisconnect) {
-        this._wasRunningBeforeDisconnect = true;
-        logger.info('Recording running state before disconnect');
-      }
-
-      // 立即停止所有操作员的发射
-      operatorManager.stopAllOperators();
-
-      const pipeline = this.deps.getTransmissionPipeline();
-
-      // 如果是在PTT激活时断开连接
-      if (pipeline.getIsPTTActive()) {
-        logger.warn('Radio disconnected during transmission, stopping PTT immediately');
-
-        await pipeline.forceStopPTT();
-
-        lifecycle.sendRadioDisconnected(reason || 'Radio disconnected during transmission');
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        engineEmitter.emit('radioDisconnectedDuringTransmission', {
-          reason: reason || 'Radio disconnected during transmission',
-          message: 'Radio disconnected during transmission, possibly due to high TX power causing USB interference. Transmission and monitoring have been stopped automatically.',
-          recommendation: 'Check radio settings, reduce TX power or improve connection environment, then reconnect the radio.'
-        });
-      } else if (lifecycle.getIsRunning()) {
-        logger.warn('Radio disconnected, stopping engine automatically');
-        lifecycle.sendRadioDisconnected(reason || 'Radio disconnected');
-      }
-
-      // 区分：曾在运行中断连（CONNECTION_LOST）vs 正常断开（DISCONNECTED）
-      const wasReconnecting = this._wasRunningBeforeDisconnect;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      engineEmitter.emit('radioStatusChanged', {
-        connected: false,
-        status: wasReconnecting
-          ? RadioConnectionStatus.CONNECTION_LOST
-          : RadioConnectionStatus.DISCONNECTED,
-        radioInfo: null,
-        radioConfig: radioManager.getConfig(),
-        reason,
-        message: wasReconnecting ? 'Radio connection lost' : 'Radio disconnected',
-        recommendation: this.getDisconnectRecommendation(reason),
-        connectionHealth: radioManager.getConnectionHealth(),
-        coreCapabilities: radioManager.getCoreCapabilities(),
-        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+      void this.handleRadioDisconnected(reason).catch((error) => {
+        logger.error('Failed to handle radio disconnected event:', error);
       });
-
-      this._wasRunningBeforeDisconnect = false;
     });
 
     // 监听电台错误（提取完整 RadioError 属性 + Profile 关联）
     this.lm.listen(radioManager, 'error', (...args: unknown[]) => {
       const error = args[0] as Error;
-      logger.error(`Radio error: ${error.message}`);
-
-      const configManager = ConfigManager.getInstance();
-      const activeProfile = configManager.getActiveProfile();
-      const isRadioError = error instanceof RadioError;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      engineEmitter.emit('radioError', {
-        message: error.message,
-        userMessage: isRadioError ? error.userMessage : error.message,
-        suggestions: isRadioError ? error.suggestions : [],
-        code: isRadioError ? error.code : undefined,
-        severity: isRadioError ? error.severity : 'error',
-        timestamp: new Date().toISOString(),
-        context: isRadioError ? error.context : undefined,
-        stack: process.env.NODE_ENV !== 'production' ? error.stack : undefined,
-        connectionHealth: radioManager.getConnectionHealth(),
-        profileId: activeProfile?.id ?? null,
-        profileName: activeProfile?.name ?? null,
-      });
+      this.handleRadioError(error);
     });
 
     // 监听电台数值表数据
@@ -301,18 +138,9 @@ export class RadioBridge {
       engineEmitter.emit('radioCapabilityChanged', state);
     });
 
-    this.lm.listen(radioManager, 'coreCapabilitiesChanged', async (coreCapabilities) => {
-      const radioInfo = radioManager.isConnected()
-        ? await radioManager.getRadioInfo()
-        : null;
-      engineEmitter.emit('radioStatusChanged', {
-        connected: radioManager.isConnected(),
-        status: radioManager.getConnectionStatus(),
-        radioInfo,
-        radioConfig: radioManager.getConfig(),
-        connectionHealth: radioManager.getConnectionHealth(),
-        coreCapabilities,
-        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+    this.lm.listen(radioManager, 'coreCapabilitiesChanged', (coreCapabilities) => {
+      void this.handleCoreCapabilitiesChanged(coreCapabilities).catch((error) => {
+        logger.error('Failed to handle core capability change:', error);
       });
     });
 
@@ -380,6 +208,189 @@ export class RadioBridge {
     });
 
     logger.info(`Registered ${this.lm.count} RadioManager event listeners`);
+  }
+
+  private handleRadioConnecting(): void {
+    logger.info('Radio connecting...');
+
+    this.deps.engineEmitter.emit('radioStatusChanged', {
+      connected: false,
+      status: RadioConnectionStatus.CONNECTING,
+      radioInfo: null,
+      radioConfig: this.deps.radioManager.getConfig(),
+      connectionHealth: this.deps.radioManager.getConnectionHealth(),
+      coreCapabilities: this.deps.radioManager.getCoreCapabilities(),
+      coreCapabilityDiagnostics: this.deps.radioManager.getCoreCapabilityDiagnostics(),
+    });
+  }
+
+  private async handleRadioConnected(): Promise<void> {
+    logger.info('Radio connected');
+
+    const { engineEmitter, radioManager } = this.deps;
+    const radioInfo = await radioManager.getRadioInfo();
+    const radioConfig = radioManager.getConfig();
+    const tunerCapabilities = await radioManager.getTunerCapabilities();
+
+    engineEmitter.emit('radioStatusChanged', {
+      connected: true,
+      status: RadioConnectionStatus.CONNECTED,
+      radioInfo,
+      radioConfig,
+      connectionHealth: radioManager.getConnectionHealth(),
+      coreCapabilities: radioManager.getCoreCapabilities(),
+      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+      meterCapabilities: radioManager.getMeterCapabilities(),
+      tunerCapabilities,
+    });
+
+    await this.restoreRunningStateIfNeeded();
+  }
+
+  private async restoreRunningStateIfNeeded(): Promise<void> {
+    if (!this._wasRunningBeforeDisconnect) {
+      return;
+    }
+
+    const lifecycle = this.deps.getEngineLifecycle();
+    const engineState = lifecycle.getEngineState();
+    if (!lifecycle.getIsRunning() && engineState !== 'starting') {
+      logger.info('Radio connected, restoring previous running state');
+      this._wasRunningBeforeDisconnect = false;
+      try {
+        await lifecycle.start();
+      } catch (err) {
+        logger.error('Auto-start failed:', err);
+        this._wasRunningBeforeDisconnect = false;
+      }
+      return;
+    }
+
+    this._wasRunningBeforeDisconnect = false;
+  }
+
+  private async handleRadioReconnecting(
+    attempt: number,
+    maxAttempts: number,
+    delayMs?: number,
+  ): Promise<void> {
+    logger.info(`Radio reconnecting ${attempt}/${maxAttempts}`);
+
+    const { engineEmitter, operatorManager, radioManager } = this.deps;
+    const lifecycle = this.deps.getEngineLifecycle();
+
+    if (attempt === 1) {
+      if (lifecycle.getIsRunning()) {
+        this._wasRunningBeforeDisconnect = true;
+      }
+      operatorManager.stopAllOperators();
+      const pipeline = this.deps.getTransmissionPipeline();
+      if (pipeline.getIsPTTActive()) {
+        await pipeline.forceStopPTT();
+      }
+      if (lifecycle.getIsRunning()) {
+        lifecycle.sendRadioDisconnected('Radio disconnected, auto-reconnecting');
+      }
+    }
+
+    engineEmitter.emit('radioStatusChanged', {
+      connected: false,
+      status: RadioConnectionStatus.RECONNECTING,
+      radioInfo: null,
+      radioConfig: radioManager.getConfig(),
+      message: `Reconnecting to radio... (${attempt}/${maxAttempts})`,
+      reconnectProgress: { attempt, maxAttempts, nextRetryMs: delayMs },
+      connectionHealth: radioManager.getConnectionHealth(),
+      coreCapabilities: radioManager.getCoreCapabilities(),
+      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+    });
+  }
+
+  private async handleRadioDisconnected(reason?: string): Promise<void> {
+    logger.info(`Radio disconnected: ${reason || 'unknown reason'}`);
+
+    const { engineEmitter, operatorManager, radioManager } = this.deps;
+    const lifecycle = this.deps.getEngineLifecycle();
+
+    if (lifecycle.getIsRunning() && !this._wasRunningBeforeDisconnect) {
+      this._wasRunningBeforeDisconnect = true;
+      logger.info('Recording running state before disconnect');
+    }
+
+    operatorManager.stopAllOperators();
+
+    const pipeline = this.deps.getTransmissionPipeline();
+    if (pipeline.getIsPTTActive()) {
+      logger.warn('Radio disconnected during transmission, stopping PTT immediately');
+      await pipeline.forceStopPTT();
+      lifecycle.sendRadioDisconnected(reason || 'Radio disconnected during transmission');
+
+      engineEmitter.emit('radioDisconnectedDuringTransmission', {
+        reason: reason || 'Radio disconnected during transmission',
+        message: 'Radio disconnected during transmission, possibly due to high TX power causing USB interference. Transmission and monitoring have been stopped automatically.',
+        recommendation: 'Check radio settings, reduce TX power or improve connection environment, then reconnect the radio.'
+      });
+    } else if (lifecycle.getIsRunning()) {
+      logger.warn('Radio disconnected, stopping engine automatically');
+      lifecycle.sendRadioDisconnected(reason || 'Radio disconnected');
+    }
+
+    const wasReconnecting = this._wasRunningBeforeDisconnect;
+    engineEmitter.emit('radioStatusChanged', {
+      connected: false,
+      status: wasReconnecting
+        ? RadioConnectionStatus.CONNECTION_LOST
+        : RadioConnectionStatus.DISCONNECTED,
+      radioInfo: null,
+      radioConfig: radioManager.getConfig(),
+      reason,
+      message: wasReconnecting ? 'Radio connection lost' : 'Radio disconnected',
+      recommendation: this.getDisconnectRecommendation(reason),
+      connectionHealth: radioManager.getConnectionHealth(),
+      coreCapabilities: radioManager.getCoreCapabilities(),
+      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+    });
+
+    this._wasRunningBeforeDisconnect = false;
+  }
+
+  private handleRadioError(error: Error): void {
+    logger.error(`Radio error: ${error.message}`);
+
+    const configManager = ConfigManager.getInstance();
+    const activeProfile = configManager.getActiveProfile();
+    const isRadioError = error instanceof RadioError;
+
+    this.deps.engineEmitter.emit('radioError', {
+      message: error.message,
+      userMessage: isRadioError ? error.userMessage : error.message,
+      suggestions: isRadioError ? error.suggestions : [],
+      code: isRadioError ? error.code : undefined,
+      severity: isRadioError ? error.severity : 'error',
+      timestamp: new Date().toISOString(),
+      context: isRadioError ? error.context : undefined,
+      stack: process.env.NODE_ENV !== 'production' ? error.stack : undefined,
+      connectionHealth: this.deps.radioManager.getConnectionHealth(),
+      profileId: activeProfile?.id ?? null,
+      profileName: activeProfile?.name ?? null,
+    });
+  }
+
+  private async handleCoreCapabilitiesChanged(coreCapabilities: CoreRadioCapabilities): Promise<void> {
+    const radioManager = this.deps.radioManager;
+    const radioInfo = radioManager.isConnected()
+      ? await radioManager.getRadioInfo()
+      : null;
+
+    this.deps.engineEmitter.emit('radioStatusChanged', {
+      connected: radioManager.isConnected(),
+      status: radioManager.getConnectionStatus(),
+      radioInfo,
+      radioConfig: radioManager.getConfig(),
+      connectionHealth: radioManager.getConnectionHealth(),
+      coreCapabilities,
+      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+    });
   }
 
   /**
