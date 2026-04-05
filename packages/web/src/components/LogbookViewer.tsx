@@ -26,7 +26,7 @@ import {
 import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
 import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, LoTWUploadPreflightResponse, LoTWSyncStatus, CreateQSORequest, LogBookImportResult } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../utils/config';
@@ -68,11 +68,16 @@ interface LogbookViewerProps {
 
 interface QSOFilters {
   callsign?: string;
+  grid?: string;
   band?: string;
   mode?: string;
   startDate?: string;
   endDate?: string;
   qslStatus?: 'none' | 'confirmed' | 'uploaded';
+}
+
+function normalizeGridFilterValue(value: string): string {
+  return value.toUpperCase().replace(/\s+/g, '').slice(0, 8);
 }
 
 function formatDateInputValue(timestamp?: number): string {
@@ -128,6 +133,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     direction: 'ascending' | 'descending';
   }>({ column: 'startTime', direction: 'descending' });
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+  const [isGridSearchExpanded, setIsGridSearchExpanded] = useState(false);
   const [isDxccStatsExpanded, setIsDxccStatsExpanded] = useState(false);
 
   // 编辑 Modal 状态
@@ -695,10 +701,15 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 筛选控制
   const handleFilterChange = (key: keyof QSOFilters, value: string | undefined) => {
-    setFilters(prev => ({
-      ...prev,
-      [key]: value || undefined,
-    }));
+    setFilters((prev) => {
+      const next = { ...prev };
+      if (!value) {
+        delete next[key];
+      } else {
+        next[key] = value;
+      }
+      return next;
+    });
     setCurrentPage(1); // 重置到第一页
   };
 
@@ -1097,6 +1108,37 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               >
                 <span className="hidden md:inline">{t('action.search')}</span>
                 <SearchIcon className="md:hidden" />
+              </Button>
+            )}
+
+            {isGridSearchExpanded ? (
+              <Input
+                autoFocus
+                isClearable
+                size="sm"
+                className="w-36 md:w-52 transition-all duration-200"
+                placeholder={t('filter.gridPlaceholder')}
+                startContent={<FontAwesomeIcon icon={faTableCells} className="text-default-400 text-xs" />}
+                value={filters.grid || ''}
+                onClear={() => handleFilterChange('grid', undefined)}
+                onValueChange={(value) => handleFilterChange('grid', normalizeGridFilterValue(value))}
+                onBlur={() => {
+                  if (!filters.grid) {
+                    setIsGridSearchExpanded(false);
+                  }
+                }}
+              />
+            ) : (
+              <Button
+                variant="flat"
+                size="sm"
+                color={filters.grid ? 'primary' : 'default'}
+                startContent={<FontAwesomeIcon icon={faTableCells} className="hidden md:inline text-xs" />}
+                onPress={() => setIsGridSearchExpanded(true)}
+                className="transition-all duration-200 min-w-0"
+              >
+                <span className="hidden md:inline">{t('filter.grid')}</span>
+                <FontAwesomeIcon icon={faTableCells} className="md:hidden text-xs" />
               </Button>
             )}
 
@@ -1554,7 +1596,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     t,
     operatorCallsign,
     isSearchExpanded,
+    isGridSearchExpanded,
     filters.callsign,
+    filters.grid,
     filters.band,
     filters.mode,
     filters.qslStatus,
