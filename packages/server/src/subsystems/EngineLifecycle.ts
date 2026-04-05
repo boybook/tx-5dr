@@ -8,7 +8,7 @@ import type { SpectrumScheduler } from '../audio/SpectrumScheduler.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
 import type { VoiceSessionManager } from '../voice/VoiceSessionManager.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { ResourceManager } from '../utils/ResourceManager.js';
+import { ResourceManager, type SimplifiedResourceConfig } from '../utils/ResourceManager.js';
 import { IcomWlanAudioAdapter } from '../audio/IcomWlanAudioAdapter.js';
 import { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
@@ -46,7 +46,15 @@ export interface EngineLifecycleDeps {
 /**
  * 引擎生命周期管理子系统
  *
- * 职责：资源注册、XState 状态机、doStart/doStop、状态标志
+ * 负责：
+ * - 维护资源蓝图与启动/停止顺序
+ * - 驱动引擎状态机与资源回滚
+ * - 暴露运行态查询
+ *
+ * 不负责：
+ * - 电台连接后的 bootstrap 细节
+ * - WebSocket/UI 事件投影
+ * - 连接成功后的频率/能力初始化
  */
 export class EngineLifecycle {
   private isRunning = false;
@@ -113,257 +121,261 @@ export class EngineLifecycle {
    * 注册所有资源到 ResourceManager
    */
   registerResources(): void {
-    logger.info('Registering engine resources...');
+    this.rebuildResourcePlan();
+  }
 
-    const { resourceManager, radioManager, audioStreamManager, slotClock, slotScheduler, spectrumScheduler, operatorManager } = this.deps;
+  rebuildResourcePlan(): void {
+    logger.info('Rebuilding engine resource plan...');
+
+    const resources = this.buildResourcePlan();
+    const { resourceManager } = this.deps;
+
+    resourceManager.clear();
+    for (const resource of resources) {
+      resourceManager.register(resource);
+    }
+
+    logger.info(`Engine resource plan ready (${resources.length} resources)`);
+  }
+
+  private buildResourcePlan(): SimplifiedResourceConfig[] {
     const configManager = ConfigManager.getInstance();
+    const mode = this.deps.getCurrentMode();
+    const resources = [
+      ...this.buildCoreResourcePlan(configManager),
+      ...(mode.name === 'VOICE'
+        ? this.buildVoiceModeResourcePlan()
+        : this.buildDigitalModeResourcePlan()),
+    ];
 
-    // 1. 物理电台 (优先级最高)
-    // NullConnection 会瞬间成功，非 none 类型如果连接失败则 applyConfig() 会抛异常
-    // optional: false 确保连接失败时 ResourceManager 回滚并阻止引擎启动
-    resourceManager.register({
-      name: 'radio',
-      start: async () => {
-        const radioConfig = configManager.getRadioConfig();
-        if (radioConfig.type === 'icom-wlan') {
-          if (!radioConfig.icomWlan?.ip || !radioConfig.icomWlan?.port) {
-            logger.error('ICOM WLAN config incomplete:', radioConfig.icomWlan);
-            throw new Error('ICOM WLAN IP or port missing');
+    logger.info(`Built ${mode.name === 'VOICE' ? 'voice' : 'digital'} resource plan`);
+    return resources;
+  }
+
+  private buildCoreResourcePlan(configManager: ConfigManager): SimplifiedResourceConfig[] {
+    const { radioManager, audioStreamManager } = this.deps;
+
+    return [
+      {
+        name: 'radio',
+        start: async () => {
+          const radioConfig = configManager.getRadioConfig();
+          if (radioConfig.type === 'icom-wlan') {
+            if (!radioConfig.icomWlan?.ip || !radioConfig.icomWlan?.port) {
+              logger.error('ICOM WLAN config incomplete:', radioConfig.icomWlan);
+              throw new Error('ICOM WLAN IP or port missing');
+            }
+            logger.debug(`ICOM WLAN config validated: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
           }
-          logger.debug(`ICOM WLAN config validated: IP=${radioConfig.icomWlan.ip}, Port=${radioConfig.icomWlan.port}`);
-        }
-        logger.debug('Applying radio config:', radioConfig);
-        await radioManager.applyConfig(radioConfig);
-      },
-      stop: async () => {
-        if (radioManager.isConnected()) {
-          await radioManager.disconnect('Engine stopped');
-        }
-      },
-      priority: 1,
-      optional: false,
-    });
-
-    // 2. ICOM WLAN 音频适配器
-    resourceManager.register({
-      name: 'icomWlanAudioAdapter',
-      start: async () => {
-        const radioConfig = configManager.getRadioConfig();
-        if (radioConfig.type !== 'icom-wlan') {
-          logger.debug('Not ICOM WLAN mode, skipping adapter init');
-          return;
-        }
-        logger.debug('Initializing ICOM WLAN audio adapter');
-        const icomWlanManager = radioManager.getIcomWlanManager();
-        if (!icomWlanManager || !icomWlanManager.isConnected()) {
-          logger.warn('ICOM WLAN radio not connected, falling back to normal audio input');
-          return;
-        }
-        this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(icomWlanManager);
-        audioStreamManager.setIcomWlanAudioAdapter(this.icomWlanAudioAdapter);
-        const audioDeviceManager = AudioDeviceManager.getInstance();
-        audioDeviceManager.setIcomWlanConnectedCallback(() => {
-          return icomWlanManager.isConnected();
-        });
-        logger.debug('ICOM WLAN audio adapter initialized');
-      },
-      stop: async () => {
-        if (this.icomWlanAudioAdapter) {
-          this.icomWlanAudioAdapter.stopReceiving();
-          audioStreamManager.setIcomWlanAudioAdapter(null);
-          this.icomWlanAudioAdapter = null;
-          logger.debug('ICOM WLAN audio adapter cleaned up');
-        }
-      },
-      priority: 2,
-      dependencies: [],
-      optional: true,
-    });
-
-    // 2.5. OpenWebRX 音频适配器
-    resourceManager.register({
-      name: 'openwebrxAudioAdapter',
-      start: async () => {
-        const audioConfig = configManager.getAudioConfig();
-        if (!audioConfig.inputDeviceName?.startsWith('[SDR]')) {
-          logger.debug('Not OpenWebRX input mode, skipping adapter init');
-          return;
-        }
-        logger.debug('Initializing OpenWebRX audio adapter');
-        // Extract station ID from device name: "[SDR] StationName" → find by name
-        const stationName = audioConfig.inputDeviceName.replace(/^\[SDR\]\s*/, '');
-        const stations = configManager.getOpenWebRXStations();
-        const station = stations.find(s => s.name === stationName);
-        if (!station) {
-          logger.warn('OpenWebRX station not found for device', { deviceName: audioConfig.inputDeviceName });
-          return;
-        }
-        this.openwebrxAudioAdapter = new OpenWebRXAudioAdapter(station);
-        try {
-          await this.openwebrxAudioAdapter.connect();
-          // Set initial frequency from last selected frequency
-          const lastFreq = configManager.getLastSelectedFrequency();
-          if (lastFreq?.frequency) {
-            await this.openwebrxAudioAdapter.setTargetFrequency(lastFreq.frequency);
+          logger.debug('Applying radio config:', radioConfig);
+          await radioManager.applyConfig(radioConfig);
+        },
+        stop: async () => {
+          if (radioManager.isConnected()) {
+            await radioManager.disconnect('Engine stopped');
           }
-          audioStreamManager.setOpenWebRXAudioAdapter(this.openwebrxAudioAdapter);
+        },
+        priority: 1,
+        optional: false,
+      },
+      {
+        name: 'icomWlanAudioAdapter',
+        start: async () => {
+          const radioConfig = configManager.getRadioConfig();
+          if (radioConfig.type !== 'icom-wlan') {
+            logger.debug('Not ICOM WLAN mode, skipping adapter init');
+            return;
+          }
+          logger.debug('Initializing ICOM WLAN audio adapter');
+          const icomWlanManager = radioManager.getIcomWlanManager();
+          if (!icomWlanManager || !icomWlanManager.isConnected()) {
+            logger.warn('ICOM WLAN radio not connected, falling back to normal audio input');
+            return;
+          }
+          this.icomWlanAudioAdapter = new IcomWlanAudioAdapter(icomWlanManager);
+          audioStreamManager.setIcomWlanAudioAdapter(this.icomWlanAudioAdapter);
+          const audioDeviceManager = AudioDeviceManager.getInstance();
+          audioDeviceManager.setIcomWlanConnectedCallback(() => icomWlanManager.isConnected());
+          logger.debug('ICOM WLAN audio adapter initialized');
+        },
+        stop: async () => {
+          if (this.icomWlanAudioAdapter) {
+            this.icomWlanAudioAdapter.stopReceiving();
+            audioStreamManager.setIcomWlanAudioAdapter(null);
+            this.icomWlanAudioAdapter = null;
+            logger.debug('ICOM WLAN audio adapter cleaned up');
+          }
+        },
+        priority: 2,
+        dependencies: [],
+        optional: true,
+      },
+      {
+        name: 'openwebrxAudioAdapter',
+        start: async () => {
+          const audioConfig = configManager.getAudioConfig();
+          if (!audioConfig.inputDeviceName?.startsWith('[SDR]')) {
+            logger.debug('Not OpenWebRX input mode, skipping adapter init');
+            return;
+          }
+          logger.debug('Initializing OpenWebRX audio adapter');
+          const stationName = audioConfig.inputDeviceName.replace(/^\[SDR\]\s*/, '');
+          const stations = configManager.getOpenWebRXStations();
+          const station = stations.find(s => s.name === stationName);
+          if (!station) {
+            logger.warn('OpenWebRX station not found for device', { deviceName: audioConfig.inputDeviceName });
+            return;
+          }
+          this.openwebrxAudioAdapter = new OpenWebRXAudioAdapter(station);
+          try {
+            await this.openwebrxAudioAdapter.connect();
+            const lastFreq = configManager.getLastSelectedFrequency();
+            if (lastFreq?.frequency) {
+              await this.openwebrxAudioAdapter.setTargetFrequency(lastFreq.frequency);
+            }
+            audioStreamManager.setOpenWebRXAudioAdapter(this.openwebrxAudioAdapter);
 
-          // Forward profileSelectRequired to engine emitter for WSServer to broadcast
-          this.openwebrxAudioAdapter.on('profileSelectRequired', (data) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            this.deps.engineEmitter.emit('openwebrxProfileSelectRequest' as any, data);
-          });
+            this.openwebrxAudioAdapter.on('profileSelectRequired', (data) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              this.deps.engineEmitter.emit('openwebrxProfileSelectRequest' as any, data);
+            });
 
-          this.openwebrxAudioAdapter.on('connected', () => {
+            this.openwebrxAudioAdapter.on('connected', () => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: true });
+            });
+
+            this.openwebrxAudioAdapter.on('disconnected', () => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: false });
+            });
+
+            this.openwebrxAudioAdapter.on('profileChanged', (profileId: string) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              this.deps.engineEmitter.emit('openwebrxProfileChanged' as any, { profileId });
+            });
+
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: true });
-          });
 
-          this.openwebrxAudioAdapter.on('disconnected', () => {
+            this.openwebrxAudioAdapter.on('error', (err: Error) => {
+              this.deps.engineEmitter.emit('radioError', {
+                message: err.message,
+                userMessage: err.message,
+                code: 'OPENWEBRX_ERROR',
+                severity: 'error' as const,
+                suggestions: [] as string[],
+                timestamp: new Date().toISOString(),
+                profileId: null,
+                profileName: null,
+              });
+            });
+
+            this.openwebrxAudioAdapter.on('clientCountChanged', (count: number) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              this.deps.engineEmitter.emit('openwebrxClientCount' as any, { count });
+            });
+
+            this.openwebrxAudioAdapter.on('cooldownWait', (data) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              this.deps.engineEmitter.emit('openwebrxCooldownNotice' as any, data);
+            });
+
+            this.deps.engineEmitter.on('frequencyChanged', (data: { frequency: number }) => {
+              if (this.openwebrxAudioAdapter?.isConnected()) {
+                this.openwebrxAudioAdapter.setTargetFrequency(data.frequency).catch(err => {
+                  if (err?.name === 'ProfileSwitchCancelledError') {
+                    logger.debug('OpenWebRX profile switch cancelled by newer request');
+                  } else {
+                    logger.error('Failed to sync OpenWebRX frequency', err);
+                  }
+                });
+              }
+            });
+
+            logger.debug('OpenWebRX audio adapter initialized');
+          } catch (error) {
+            logger.error('Failed to connect OpenWebRX adapter', error);
+            this.openwebrxAudioAdapter = null;
+            throw error;
+          }
+        },
+        stop: async () => {
+          if (this.openwebrxAudioAdapter) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: false });
-          });
-
-          this.openwebrxAudioAdapter.on('profileChanged', (profileId: string) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            this.deps.engineEmitter.emit('openwebrxProfileChanged' as any, { profileId });
-          });
-
-          // connect() 返回时适配器已连上，补发一次状态变化供频谱能力重新协商。
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: true });
-
-          // Forward errors (including ban/backoff) as radioError for WSServer to broadcast
-          this.openwebrxAudioAdapter.on('error', (err: Error) => {
-            this.deps.engineEmitter.emit('radioError', {
-              message: err.message,
-              userMessage: err.message,
-              code: 'OPENWEBRX_ERROR',
-              severity: 'error' as const,
-              suggestions: [] as string[],
-              timestamp: new Date().toISOString(),
-              profileId: null,
-              profileName: null,
-            });
-          });
-
-          // Forward client count changes for multi-user awareness
-          this.openwebrxAudioAdapter.on('clientCountChanged', (count: number) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            this.deps.engineEmitter.emit('openwebrxClientCount' as any, { count });
-          });
-
-          // Forward cooldown wait notices to frontend
-          this.openwebrxAudioAdapter.on('cooldownWait', (data) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            this.deps.engineEmitter.emit('openwebrxCooldownNotice' as any, data);
-          });
-
-          // Subscribe to frequency changes for auto-tuning
-          this.deps.engineEmitter.on('frequencyChanged', (data: { frequency: number }) => {
-            if (this.openwebrxAudioAdapter?.isConnected()) {
-              this.openwebrxAudioAdapter.setTargetFrequency(data.frequency).catch(err => {
-                // ProfileSwitchCancelledError is expected when rapid frequency changes
-                // supersede pending profile switches — not a real error
-                if (err?.name === 'ProfileSwitchCancelledError') {
-                  logger.debug('OpenWebRX profile switch cancelled by newer request');
-                } else {
-                  logger.error('Failed to sync OpenWebRX frequency', err);
-                }
-              });
-            }
-          });
-
-          logger.debug('OpenWebRX audio adapter initialized');
-        } catch (error) {
-          logger.error('Failed to connect OpenWebRX adapter', error);
-          this.openwebrxAudioAdapter = null;
-          throw error;
-        }
+            this.openwebrxAudioAdapter.stopReceiving();
+            this.openwebrxAudioAdapter.disconnect();
+            audioStreamManager.setOpenWebRXAudioAdapter(null);
+            this.openwebrxAudioAdapter = null;
+            logger.debug('OpenWebRX audio adapter cleaned up');
+          }
+        },
+        priority: 2,
+        dependencies: [],
+        optional: true,
       },
-      stop: async () => {
-        if (this.openwebrxAudioAdapter) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          this.deps.engineEmitter.emit('openwebrxConnectionChanged' as any, { connected: false });
-          this.openwebrxAudioAdapter.stopReceiving();
-          this.openwebrxAudioAdapter.disconnect();
-          audioStreamManager.setOpenWebRXAudioAdapter(null);
-          this.openwebrxAudioAdapter = null;
-          logger.debug('OpenWebRX audio adapter cleaned up');
-        }
+      {
+        name: 'audioInputStream',
+        start: async () => {
+          await audioStreamManager.startStream();
+          logger.debug('Audio input stream started');
+        },
+        stop: async () => {
+          await audioStreamManager.stopStream();
+          logger.debug('Audio input stream stopped');
+        },
+        priority: 3,
+        dependencies: [],
+        optional: false,
       },
-      priority: 2,
-      dependencies: [],
-      optional: true,
-    });
+      {
+        name: 'audioOutputStream',
+        start: async () => {
+          await audioStreamManager.startOutput();
+          logger.debug('Audio output stream started');
+          const lastVolumeGain = configManager.getLastVolumeGain();
+          if (lastVolumeGain) {
+            logger.debug(`Restoring last volume gain: ${lastVolumeGain.gainDb.toFixed(1)}dB`);
+            audioStreamManager.setVolumeGainDb(lastVolumeGain.gainDb);
+          } else {
+            logger.debug('Using default volume gain: 0.0dB');
+          }
+        },
+        stop: async () => {
+          await audioStreamManager.stopOutput();
+          logger.debug('Audio output stream stopped');
+        },
+        priority: 4,
+        dependencies: ['audioInputStream'],
+        optional: false,
+      },
+      {
+        name: 'audioMonitorService',
+        start: async () => {
+          logger.debug('Initializing audio monitor service...');
+          const audioProvider = audioStreamManager.getAudioProvider();
+          this.audioMonitorService = new AudioMonitorService(audioProvider);
+          logger.debug('Audio monitor service initialized');
+        },
+        stop: async () => {
+          if (this.audioMonitorService) {
+            this.audioMonitorService.destroy();
+            this.audioMonitorService = null;
+            logger.debug('Audio monitor service cleaned up');
+          }
+        },
+        priority: 5,
+        dependencies: ['audioInputStream'],
+        optional: false,
+      },
+    ];
+  }
 
-    // 3. 音频输入流
-    resourceManager.register({
-      name: 'audioInputStream',
-      start: async () => {
-        await audioStreamManager.startStream();
-        logger.debug('Audio input stream started');
-      },
-      stop: async () => {
-        await audioStreamManager.stopStream();
-        logger.debug('Audio input stream stopped');
-      },
-      priority: 3,
-      dependencies: [],
-      optional: false,
-    });
-
-    // 4. 音频输出流
-    resourceManager.register({
-      name: 'audioOutputStream',
-      start: async () => {
-        await audioStreamManager.startOutput();
-        logger.debug('Audio output stream started');
-        const lastVolumeGain = configManager.getLastVolumeGain();
-        if (lastVolumeGain) {
-          logger.debug(`Restoring last volume gain: ${lastVolumeGain.gainDb.toFixed(1)}dB`);
-          audioStreamManager.setVolumeGainDb(lastVolumeGain.gainDb);
-        } else {
-          logger.debug('Using default volume gain: 0.0dB');
-        }
-      },
-      stop: async () => {
-        await audioStreamManager.stopOutput();
-        logger.debug('Audio output stream stopped');
-      },
-      priority: 4,
-      dependencies: ['audioInputStream'],
-      optional: false,
-    });
-
-    // 5. 音频监听服务
-    resourceManager.register({
-      name: 'audioMonitorService',
-      start: async () => {
-        logger.debug('Initializing audio monitor service...');
-        const audioProvider = audioStreamManager.getAudioProvider();
-        this.audioMonitorService = new AudioMonitorService(audioProvider);
-        logger.debug('Audio monitor service initialized');
-      },
-      stop: async () => {
-        if (this.audioMonitorService) {
-          this.audioMonitorService.destroy();
-          this.audioMonitorService = null;
-          logger.debug('Audio monitor service cleaned up');
-        }
-      },
-      priority: 5,
-      dependencies: ['audioInputStream'],
-      optional: false,
-    });
-
-    const mode = this.deps.getCurrentMode();
-    const isVoiceMode = mode.name === 'VOICE';
-
-    if (isVoiceMode) {
-      // Voice mode: spectrum depends on audioInputStream (no clock), plus voiceSessionManager
-      // 6. 频谱调度器 (voice mode: depends on audioInputStream)
-      resourceManager.register({
+  private buildVoiceModeResourcePlan(): SimplifiedResourceConfig[] {
+    const { spectrumScheduler } = this.deps;
+    const resources: SimplifiedResourceConfig[] = [
+      {
         name: 'spectrumScheduler',
         start: async () => {
           if (spectrumScheduler) {
@@ -380,33 +392,35 @@ export class EngineLifecycle {
         priority: 6,
         dependencies: ['audioInputStream'],
         optional: false,
+      },
+    ];
+
+    const voiceSessionManager = this.deps.getVoiceSessionManager();
+    if (voiceSessionManager) {
+      resources.push({
+        name: 'voiceSessionManager',
+        start: async () => {
+          await voiceSessionManager.start();
+          logger.debug('Voice session manager started');
+        },
+        stop: async () => {
+          await voiceSessionManager.stop();
+          logger.debug('Voice session manager stopped');
+        },
+        priority: 7,
+        dependencies: ['audioOutputStream', 'audioMonitorService'],
+        optional: false,
       });
+    }
 
-      // 7. 语音会话管理器
-      const voiceSessionManager = this.deps.getVoiceSessionManager();
-      if (voiceSessionManager) {
-        resourceManager.register({
-          name: 'voiceSessionManager',
-          start: async () => {
-            await voiceSessionManager.start();
-            logger.debug('Voice session manager started');
-          },
-          stop: async () => {
-            await voiceSessionManager.stop();
-            logger.debug('Voice session manager stopped');
-          },
-          priority: 7,
-          dependencies: ['audioOutputStream', 'audioMonitorService'],
-          optional: false,
-        });
-      }
+    return resources;
+  }
 
-      logger.info('All resources registered (voice mode)');
-    } else {
-      // Digital mode: clock, slotScheduler, spectrumScheduler, operatorManager
+  private buildDigitalModeResourcePlan(): SimplifiedResourceConfig[] {
+    const { slotClock, slotScheduler, spectrumScheduler, operatorManager } = this.deps;
 
-      // 6. 时钟
-      resourceManager.register({
+    return [
+      {
         name: 'clock',
         start: async () => {
           if (!slotClock) {
@@ -418,7 +432,6 @@ export class EngineLifecycle {
         stop: async () => {
           if (slotClock) {
             slotClock.stop();
-            // 确保PTT被停止
             await this.deps.subsystems.transmissionPipeline.forceStopPTT();
             logger.debug('Clock stopped');
           }
@@ -426,10 +439,8 @@ export class EngineLifecycle {
         priority: 6,
         dependencies: ['audioOutputStream'],
         optional: false,
-      });
-
-      // 7. 解码调度器
-      resourceManager.register({
+      },
+      {
         name: 'slotScheduler',
         start: async () => {
           if (slotScheduler) {
@@ -446,10 +457,8 @@ export class EngineLifecycle {
         priority: 7,
         dependencies: ['clock'],
         optional: false,
-      });
-
-      // 8. 频谱调度器
-      resourceManager.register({
+      },
+      {
         name: 'spectrumScheduler',
         start: async () => {
           if (spectrumScheduler) {
@@ -466,10 +475,8 @@ export class EngineLifecycle {
         priority: 8,
         dependencies: ['clock'],
         optional: false,
-      });
-
-      // 9. 操作员管理器
-      resourceManager.register({
+      },
+      {
         name: 'operatorManager',
         start: async () => {
           operatorManager.start();
@@ -482,10 +489,8 @@ export class EngineLifecycle {
         priority: 9,
         dependencies: ['clock'],
         optional: false,
-      });
-
-      logger.info('All resources registered (digital mode)');
-    }
+      },
+    ];
   }
 
   /**

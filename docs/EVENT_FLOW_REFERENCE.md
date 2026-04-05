@@ -7,7 +7,7 @@
 > 📘 **文档用途**: 本文档是完整的事件流查询手册，提供所有事件的详细信息、代码位置索引和调试指南。
 >
 > 🔗 **相关文档**:
-> - **架构重构设计**: [architecture-refactor-design.md](./architecture-refactor-design.md) - 包含状态机集成策略和重构路线图
+> - **启动与电台链路架构**: [server-startup-architecture.md](./server-startup-architecture.md) - 包含启动 phase、radio bootstrap/activation 边界与接入约定
 > - **项目指南**: [../CLAUDE.md](../CLAUDE.md) - TX-5DR 项目总体说明
 
 ---

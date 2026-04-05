@@ -48,6 +48,17 @@ function asTestConnection(connection: HamlibConnection): HamlibConnectionTestAcc
   return connection as unknown as HamlibConnectionTestAccessor;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+}
+
 function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
   connection: HamlibConnection;
   rig: MockRig;
@@ -138,6 +149,33 @@ describe('HamlibConnection', () => {
 
     expect(rig.getSplit).not.toHaveBeenCalled();
     expect(rig.setSplitFreq).not.toHaveBeenCalled();
+  });
+
+  it('serializes queued CAT operations so later writes wait for earlier writes to finish', async () => {
+    const firstWrite = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      setFrequency: vi.fn()
+        .mockReturnValueOnce(firstWrite.promise)
+        .mockResolvedValueOnce(0),
+      getSplit: vi.fn().mockResolvedValue({ enabled: false }),
+    });
+
+    const first = connection.setFrequency(7100000);
+    await Promise.resolve();
+
+    const second = connection.setFrequency(7200000);
+    await Promise.resolve();
+
+    expect(rig.setFrequency).toHaveBeenCalledTimes(1);
+    expect(rig.setFrequency).toHaveBeenNthCalledWith(1, 7100000);
+
+    firstWrite.resolve(0);
+    await first;
+    await second;
+
+    expect(rig.setFrequency).toHaveBeenCalledTimes(2);
+    expect(rig.setFrequency).toHaveBeenNthCalledWith(2, 7200000);
+    expect(rig.getSplit).toHaveBeenCalledTimes(1);
   });
 
   it('prefers DATA mode for digital intent when supported', async () => {

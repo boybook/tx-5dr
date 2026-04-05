@@ -7,6 +7,8 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 ### DigitalRadioEngine (单例 Facade)
 系统控制器 Facade，所有领域逻辑已拆分至子系统 (`src/subsystems/`)。对外 API 完全不变（WSServer、路由、index.ts 零改动）。
 
+启动/电台链路的职责边界与时序，优先参考 `docs/server-startup-architecture.md`。
+
 #### 子系统架构
 
 | 子系统 | 文件 | 职责 |
@@ -30,7 +32,8 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 - 电台连接/断线处理 → `RadioBridge`
 - 新的时钟/解码事件 → `ClockCoordinator`
 - 音量控制 → `AudioVolumeController`
-- 资源启停顺序 → `EngineLifecycle.registerResources()`
+- 资源启停顺序/资源蓝图 → `EngineLifecycle.rebuildResourcePlan()`
+- 连接成功后的一次性 radio bootstrap → `PhysicalRadioManager.bootstrapConnectedSession()`
 - Profile 管理 → `config/ProfileManager.ts`
 - 状态机逻辑 → `state-machines/engineStateMachine.ts` / `radioStateMachine.ts`
 - 对外 API（路由/WSServer 调用）→ `DigitalRadioEngine` Facade 委托方法
@@ -38,6 +41,7 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 ### 电台连接与状态机
 
 详细架构见根目录 `CLAUDE.md` 的「双状态机架构」和「电台连接层」章节。
+启动 phase、bootstrap/activation 分界、接入 checklist 见 `docs/server-startup-architecture.md`。
 
 **关键文件导航**:
 ```

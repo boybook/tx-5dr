@@ -25,6 +25,7 @@ import type {
   CoreRadioCapabilities,
   CoreCapabilityDiagnostic,
   CoreCapabilityDiagnostics,
+  TunerCapabilities,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
@@ -83,6 +84,14 @@ const CORE_CAPABILITY_LABELS: Record<CoreCapabilityKey, string> = {
   readRadioMode: 'read radio mode',
   writeRadioMode: 'write radio mode',
 };
+
+function createUnsupportedTunerCapabilities(): TunerCapabilities {
+  return {
+    supported: false,
+    hasSwitch: false,
+    hasManualTune: false,
+  };
+}
 
 function buildCapabilityDiagnosticMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -215,6 +224,16 @@ function enrichRigConfigFields(fields: unknown[], caps?: HamlibPortCaps): RigCon
 
 /**
  * PhysicalRadioManager - 重构后的物理电台管理器
+ *
+ * 负责：
+ * - 创建与销毁电台连接会话
+ * - 维护连接状态机与保守 bootstrap
+ * - 对外暴露统一电台控制接口
+ *
+ * 不负责：
+ * - 引擎资源启动顺序
+ * - WebSocket/UI 状态投影
+ * - 连接成功后的业务恢复策略
  */
 export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvents> {
   /**
@@ -242,6 +261,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private frequencyPollingInterval: NodeJS.Timeout | null = null;
   private lastKnownFrequency: number | null = null;
+  private cachedTunerCapabilities: TunerCapabilities | null = null;
+  private readonly postConnectSettleMs = 250;
 
   /**
    * 统一电台控制能力管理器
@@ -602,6 +623,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       await this.connection.setFrequency(freq);
       this.markCoreCapabilitySupported('writeFrequency');
+      this.updateKnownFrequency(freq);
       logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
       return true;
     } catch (error) {
@@ -632,7 +654,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       const frequency = await this.connection.getFrequency();
-       this.markCoreCapabilitySupported('readFrequency');
+      this.markCoreCapabilitySupported('readFrequency');
+      if (frequency > 0) {
+        this.updateKnownFrequency(frequency);
+      }
       return frequency;
     } catch (error) {
       if (isRecoverableOptionalRadioError(error)) {
@@ -750,39 +775,34 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取天线调谐器能力
    */
   async getTunerCapabilities(): Promise<import('@tx5dr/contracts').TunerCapabilities> {
+    if (this.cachedTunerCapabilities) {
+      return this.cachedTunerCapabilities;
+    }
+
     if (!this.connection) {
       logger.error('Radio not connected, cannot get tuner capabilities');
-      // 返回默认值：不支持
-      return {
-        supported: false,
-        hasSwitch: false,
-        hasManualTune: false,
-      };
+      return createUnsupportedTunerCapabilities();
     }
 
     // 检查连接是否实现了天调方法
     if (!this.connection.getTunerCapabilities) {
       logger.debug('Current connection does not support tuner capabilities');
-      return {
-        supported: false,
-        hasSwitch: false,
-        hasManualTune: false,
-      };
+      const capabilities = createUnsupportedTunerCapabilities();
+      this.cachedTunerCapabilities = capabilities;
+      return capabilities;
     }
 
     try {
       const capabilities = await this.connection.getTunerCapabilities();
+      this.cachedTunerCapabilities = capabilities;
       logger.debug('Tuner capabilities', capabilities);
       return capabilities;
     } catch (error) {
       // 天调能力查询失败不影响主连接状态（某些电台不支持 TUNER 功能查询）
       logger.warn(`Failed to get tuner capabilities (does not affect main connection): ${(error as Error).message}`);
-      // 发生错误时返回不支持
-      return {
-        supported: false,
-        hasSwitch: false,
-        hasManualTune: false,
-      };
+      const capabilities = createUnsupportedTunerCapabilities();
+      this.cachedTunerCapabilities = capabilities;
+      return capabilities;
     }
   }
 
@@ -1188,46 +1208,79 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private async doConnect(config: HamlibConfig): Promise<void> {
     logger.info(`Executing connection: ${config.type}`);
-    this.resetCoreCapabilities();
+    this.resetConnectionSessionState();
+    await this.prepareConnectionSession(config);
 
-    // 总是先清理旧连接（解决重连时资源竞争）
-    if (this.connection) {
-      logger.debug('Cleaning up old connection');
-      this.cleanupConnectionListeners();
-      try { await this.connection.disconnect('preparing new connection'); } catch {}
-      this.connection = null;
-
-      // ICOM WLAN 需要等待电台释放旧连接资源后才能接受新连接
-      if (config.type === 'icom-wlan') {
-        logger.debug('Waiting for ICOM radio to release old connection');
-        await new Promise(resolve => setTimeout(resolve, 3000));
-      }
-    }
-
-    // 创建连接实例
-    this.connection = RadioConnectionFactory.create(config);
-
-    // 设置事件转发
-    this.setupConnectionEventForwarding();
-
-    // 执行连接
-    await this.connection.connect(config);
-
-    // 验证连接健康
-    if (!this.connection.isHealthy()) {
-      throw new Error('connection health check failed');
-    }
-
-    // 启动频率监控
-    this.startFrequencyMonitoring();
-    // 启动天调状态监控（过渡期保留，阶段3清理）
-    void this.startTunerMonitoring();
-    // 启动统一能力管理（异步探测+轮询）
-    void this.capabilityManager.onConnected(this.connection).catch((error) => {
-      logger.warn('Capability manager initialization failed unexpectedly', error);
-    });
+    const connection = this.createConnectionSession(config);
+    await this.openConnectionSession(connection, config);
+    await this.bootstrapConnectedSession(connection);
+    this.activateConnectedSession(connection);
 
     logger.info('Connection established');
+  }
+
+  private resetConnectionSessionState(): void {
+    this.resetCoreCapabilities();
+    this.cachedTunerCapabilities = null;
+  }
+
+  private async prepareConnectionSession(config: HamlibConfig): Promise<void> {
+    if (!this.connection) {
+      return;
+    }
+
+    logger.debug('Cleaning up old connection');
+    this.cleanupConnectionListeners();
+    try { await this.connection.disconnect('preparing new connection'); } catch {}
+    this.connection = null;
+
+    if (config.type === 'icom-wlan') {
+      logger.debug('Waiting for ICOM radio to release old connection');
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+  }
+
+  private createConnectionSession(config: HamlibConfig): IRadioConnection {
+    const connection = RadioConnectionFactory.create(config);
+    this.connection = connection;
+    this.setupConnectionEventForwarding();
+    return connection;
+  }
+
+  private async openConnectionSession(connection: IRadioConnection, config: HamlibConfig): Promise<void> {
+    await connection.connect(config);
+
+    if (!connection.isHealthy()) {
+      throw new Error('connection health check failed');
+    }
+  }
+
+  private activateConnectedSession(connection: IRadioConnection): void {
+    connection.startBackgroundTasks?.();
+    this.startFrequencyMonitoring();
+    void this.startTunerMonitoring();
+  }
+
+  private async bootstrapConnectedSession(connection: IRadioConnection): Promise<void> {
+    logger.debug('Bootstrap phase: settle');
+    await this.waitForConnectionSettle();
+
+    logger.debug('Bootstrap phase: tuner capabilities');
+    this.cachedTunerCapabilities = await this.readTunerCapabilities(connection);
+
+    logger.debug('Bootstrap phase: restore frequency');
+    const restoredFrequency = await this.restoreSavedFrequencyIfAvailable();
+
+    logger.debug('Bootstrap phase: capability manager');
+    await this.capabilityManager.onConnected(connection);
+
+    if (restoredFrequency !== null) {
+      this.updateKnownFrequency(restoredFrequency);
+      return;
+    }
+
+    logger.debug('Bootstrap phase: capture initial frequency');
+    await this.captureInitialFrequency();
   }
 
   /**
@@ -1239,6 +1292,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
     this.capabilityManager.onDisconnected();
+    this.cachedTunerCapabilities = null;
     this.resetCoreCapabilities();
 
     if (this.connection) {
@@ -1374,12 +1428,99 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.stopFrequencyMonitoring();
     this.stopTunerMonitoring();
     this.capabilityManager.onDisconnected();
+    this.cachedTunerCapabilities = null;
     this.resetCoreCapabilities();
     if (this.connection) {
       this.cleanupConnectionListeners();
       // 不调用 connection.disconnect()，因为连接已断（被动断线）
       this.connection = null;
     }
+  }
+
+  private async waitForConnectionSettle(): Promise<void> {
+    if (this.postConnectSettleMs > 0) {
+      logger.debug(`Waiting ${this.postConnectSettleMs}ms before post-connect bootstrap`);
+      await new Promise((resolve) => setTimeout(resolve, this.postConnectSettleMs));
+    }
+  }
+
+  private async readTunerCapabilities(connection: IRadioConnection): Promise<TunerCapabilities> {
+    if (!connection.getTunerCapabilities) {
+      logger.debug('Current connection does not support tuner capabilities');
+      return createUnsupportedTunerCapabilities();
+    }
+
+    try {
+      const capabilities = await connection.getTunerCapabilities();
+      logger.debug('Cached tuner capabilities after connect', capabilities);
+      return capabilities;
+    } catch (error) {
+      logger.warn(`Failed to read tuner capabilities during bootstrap: ${(error as Error).message}`);
+      return createUnsupportedTunerCapabilities();
+    }
+  }
+
+  private async restoreSavedFrequencyIfAvailable(): Promise<number | null> {
+    const targetFrequency = this.getSavedStartupFrequency();
+    if (!targetFrequency) {
+      logger.info('No saved frequency config, skipping bootstrap restore');
+      return null;
+    }
+
+    const success = await this.setFrequency(targetFrequency);
+    if (!success) {
+      logger.warn(`Bootstrap frequency restore failed: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
+      return null;
+    }
+
+    logger.info(`Bootstrap frequency restored: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
+    return targetFrequency;
+  }
+
+  private getSavedStartupFrequency(): number | null {
+    const engineMode = this.configManager.getLastEngineMode();
+
+    if (engineMode === 'voice') {
+      const lastVoice = this.configManager.getLastVoiceFrequency();
+      if (lastVoice?.frequency) {
+        logger.info(`Restoring voice frequency during bootstrap: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz (${lastVoice.description || lastVoice.radioMode || 'voice'})`);
+        return lastVoice.frequency;
+      }
+      return null;
+    }
+
+    const lastDigital = this.configManager.getLastSelectedFrequency();
+    if (lastDigital?.frequency) {
+      logger.info(`Restoring digital frequency during bootstrap: ${(lastDigital.frequency / 1000000).toFixed(3)} MHz (${lastDigital.description || lastDigital.mode})`);
+      return lastDigital.frequency;
+    }
+
+    return null;
+  }
+
+  private async captureInitialFrequency(): Promise<void> {
+    if (!this.connection || this.isCoreCapabilityUnsupported('readFrequency')) {
+      return;
+    }
+
+    try {
+      const currentFrequency = await this.getFrequency();
+      if (currentFrequency > 0) {
+        logger.debug(`Captured initial frequency during bootstrap: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
+        this.updateKnownFrequency(currentFrequency);
+      }
+    } catch (error) {
+      logger.debug(`Initial frequency capture skipped: ${(error as Error).message}`);
+    }
+  }
+
+  private updateKnownFrequency(frequency: number): void {
+    if (!this.connection || frequency <= 0) {
+      return;
+    }
+
+    this.lastKnownFrequency = frequency;
+    this.connection.setKnownFrequency(frequency);
   }
 
   /**
@@ -1500,12 +1641,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     logger.debug('Starting frequency monitoring (every 5s)');
 
-    // 立即获取一次初始频率
-    this.checkFrequencyChange();
-
     // 启动定时器
     this.frequencyPollingInterval = setInterval(() => {
-      this.checkFrequencyChange();
+      void this.checkFrequencyChange();
     }, 5000);
   }
 
@@ -1557,16 +1695,14 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           } MHz -> ${(currentFrequency / 1000000).toFixed(3)} MHz`
         );
 
-        this.lastKnownFrequency = currentFrequency;
-        this.connection!.setKnownFrequency(currentFrequency);
+        this.updateKnownFrequency(currentFrequency);
 
         // 发射频率变化事件
         this.emit('radioFrequencyChanged', currentFrequency);
       } else if (this.lastKnownFrequency === null && currentFrequency > 0) {
         // 首次获取频率
         logger.debug(`Initial frequency: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
-        this.lastKnownFrequency = currentFrequency;
-        this.connection!.setKnownFrequency(currentFrequency);
+        this.updateKnownFrequency(currentFrequency);
       }
     } catch (error) {
       // 静默处理错误（getFrequency 已经有错误处理）

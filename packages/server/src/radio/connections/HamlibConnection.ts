@@ -21,8 +21,7 @@ import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { buildBackendConfig } from '../hamlibConfigUtils.js';
-
-const logger = createLogger('HamlibConnection');
+import { RadioIoQueue } from './RadioIoQueue.js';
 import {
   RadioConnectionType,
   RadioConnectionState,
@@ -35,6 +34,8 @@ import {
   type RadioModeBandwidth,
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
+
+const logger = createLogger('HamlibConnection');
 
 interface SpectrumControllerLike {
   getSpectrumSupportSummary(): Promise<SpectrumSupportSummary>;
@@ -111,6 +112,9 @@ export class HamlibConnection
   extends EventEmitter<IRadioConnectionEvents>
   implements IRadioConnection
 {
+  private readonly ioQueue = new RadioIoQueue();
+  private ioSessionId = 0;
+  private backgroundTasksStarted = false;
   private spectrumListener: ((line: SpectrumLine) => void) | null = null;
   private readonly onRigSpectrumLine = (line: SpectrumLine) => {
     this.lastSuccessfulOperation = Date.now();
@@ -219,6 +223,14 @@ export class HamlibConnection
     super();
   }
 
+  startBackgroundTasks(): void {
+    if (this.backgroundTasksStarted) {
+      return;
+    }
+    this.backgroundTasksStarted = true;
+    this.startMeterPolling();
+  }
+
   /**
    * 获取连接类型
    */
@@ -295,6 +307,8 @@ export class HamlibConnection
 
     // 保存配置
     this.currentConfig = config;
+    this.ioSessionId += 1;
+    this.backgroundTasksStarted = false;
 
     // 更新状态
     this.setState(RadioConnectionState.CONNECTING);
@@ -375,9 +389,6 @@ export class HamlibConnection
       this.detectTxFrequencyRanges();
       await this.initializeRigStateSnapshot();
 
-      // 启动数值表轮询
-      this.startMeterPolling();
-
       // 触发连接成功事件
       this.emit('connected');
     } catch (error) {
@@ -395,6 +406,8 @@ export class HamlibConnection
    */
   async disconnect(reason?: string): Promise<void> {
     logger.info(`Disconnecting: ${reason || 'no reason'}`);
+    this.ioSessionId += 1;
+    this.backgroundTasksStarted = false;
 
     // 停止数值表轮询
     this.stopMeterPolling();
@@ -421,23 +434,25 @@ export class HamlibConnection
    * 设置电台频率
    */
   async setFrequency(frequency: number): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setFrequency', async () => {
+      this.checkConnected();
 
-    try {
-      await Promise.race([
-        this.rig!.setFrequency(frequency),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
-        ),
-      ]);
+      try {
+        await Promise.race([
+          this.rig!.setFrequency(frequency),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
+          ),
+        ]);
 
-      await this.syncSplitFrequencyIfNeeded(frequency);
-      this.lastSuccessfulOperation = Date.now();
-      this.currentFrequencyHz = frequency;
-      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
-    } catch (error) {
-      throw this.convertError(error, 'setFrequency');
-    }
+        await this.syncSplitFrequencyIfNeeded(frequency);
+        this.lastSuccessfulOperation = Date.now();
+        this.currentFrequencyHz = frequency;
+        logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
+      } catch (error) {
+        throw this.convertError(error, 'setFrequency');
+      }
+    });
   }
 
   /**
@@ -451,101 +466,109 @@ export class HamlibConnection
    * 获取当前频率
    */
   async getFrequency(): Promise<number> {
-    this.checkConnected();
+    return this.runSerializedTask('getFrequency', async () => {
+      this.checkConnected();
 
-    try {
-      const frequency = (await Promise.race([
-        this.rig!.getFrequency(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Get frequency timeout')), 5000)
-        ),
-      ])) as number;
+      try {
+        const frequency = (await Promise.race([
+          this.rig!.getFrequency(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Get frequency timeout')), 5000)
+          ),
+        ])) as number;
 
-      this.lastSuccessfulOperation = Date.now();
-      return frequency;
-    } catch (error) {
-      throw this.convertError(error, 'getFrequency');
-    }
+        this.lastSuccessfulOperation = Date.now();
+        return frequency;
+      } catch (error) {
+        throw this.convertError(error, 'getFrequency');
+      }
+    });
   }
 
   /**
    * 控制 PTT
    */
   async setPTT(enabled: boolean): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setPTT', async () => {
+      this.checkConnected();
 
-    // VOX 模式：电台通过检测音频信号自动切换发射/接收，不需要软件控制 PTT
-    if (this.pttMethod === 'vox') {
-      return;
-    }
+      // VOX 模式：电台通过检测音频信号自动切换发射/接收，不需要软件控制 PTT
+      if (this.pttMethod === 'vox') {
+        return;
+      }
 
-    try {
-      await Promise.race([
-        this.rig!.setPtt(enabled),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('PTT operation timeout')), 3000)
-        ),
-      ]);
+      try {
+        await Promise.race([
+          this.rig!.setPtt(enabled),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('PTT operation timeout')), 3000)
+          ),
+        ]);
 
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);
-    } catch (error) {
-      throw RadioError.pttActivationFailed(
-        `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
-        error instanceof Error ? error : new Error(String(error))
-      );
-    }
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);
+      } catch (error) {
+        throw RadioError.pttActivationFailed(
+          `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
+          error instanceof Error ? error : new Error(String(error))
+        );
+      }
+    });
   }
 
   /**
    * 设置模式
    */
   async setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setMode', async () => {
+      this.checkConnected();
 
-    try {
-      const requestedMode = normalizeModeName(mode);
-      const resolvedMode = this.resolveModeForIntent(requestedMode, options);
+      try {
+        const requestedMode = normalizeModeName(mode);
+        const resolvedMode = this.resolveModeForIntent(requestedMode, options);
 
-      await Promise.race([
-        this.rig!.setMode(resolvedMode, bandwidth as any),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Set mode timeout')), 5000)
-        ),
-      ]);
+        await Promise.race([
+          this.rig!.setMode(resolvedMode, bandwidth as any),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Set mode timeout')), 5000)
+          ),
+        ]);
 
-      this.lastSuccessfulOperation = Date.now();
-      this.currentRadioMode = normalizeModeName(resolvedMode);
-      logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth ? ` (${bandwidth})` : ''}`, {
-        requestedMode,
-        resolvedMode,
-        intent: options?.intent ?? 'unspecified',
-      });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setMode');
-    }
+        this.lastSuccessfulOperation = Date.now();
+        this.currentRadioMode = normalizeModeName(resolvedMode);
+        logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth ? ` (${bandwidth})` : ''}`, {
+          requestedMode,
+          resolvedMode,
+          intent: options?.intent ?? 'unspecified',
+        });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setMode');
+      }
+    });
   }
 
   /**
    * 获取当前模式
    */
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
-    this.checkConnected();
+    return this.runSerializedTask('getMode', async () => {
+      this.checkConnected();
 
-    try {
-      const modeInfo = (await Promise.race([
-        this.rig!.getMode(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Get mode timeout')), 5000)
-        ),
-      ])) as { mode: string; bandwidth: string };
+      try {
+        const modeInfo = (await Promise.race([
+          this.rig!.getMode(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Get mode timeout')), 5000)
+          ),
+        ])) as { mode: string; bandwidth: string };
 
-      this.lastSuccessfulOperation = Date.now();
-      this.currentRadioMode = normalizeModeName(modeInfo.mode);
-      return modeInfo;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getMode');
-    }
+        this.lastSuccessfulOperation = Date.now();
+        this.currentRadioMode = normalizeModeName(modeInfo.mode);
+        return modeInfo;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getMode');
+      }
+    });
   }
 
   async getSupportedModes(): Promise<string[]> {
@@ -650,10 +673,8 @@ export class HamlibConnection
     }
 
     try {
-      const [frequency, modeInfo] = await Promise.all([
-        this.rig.getFrequency().catch(() => null),
-        this.rig.getMode().catch(() => null),
-      ]);
+      const frequency = await this.rig.getFrequency().catch(() => null);
+      const modeInfo = await this.rig.getMode().catch(() => null);
 
       if (typeof frequency === 'number' && frequency > 0) {
         this.currentFrequencyHz = frequency;
@@ -769,63 +790,73 @@ export class HamlibConnection
   }
 
   async getSpectrumSupportSummary(): Promise<SpectrumSupportSummary> {
-    this.checkConnected();
-    try {
-      return await this.getSpectrumController().getSpectrumSupportSummary();
-    } catch (error) {
-      throw this.convertError(error, 'getSpectrumSupportSummary');
-    }
+    return this.runSerializedTask('getSpectrumSupportSummary', async () => {
+      this.checkConnected();
+      try {
+        return await this.getSpectrumController().getSpectrumSupportSummary();
+      } catch (error) {
+        throw this.convertError(error, 'getSpectrumSupportSummary');
+      }
+    });
   }
 
   async getSpectrumSpans(): Promise<number[]> {
-    this.checkConnected();
-    try {
-      const summary = await this.getSpectrumController().getSpectrumSupportSummary();
-      return Array.from(new Set((summary.spans ?? []).filter((span): span is number => Number.isFinite(span) && span > 0)))
-        .sort((left, right) => right - left);
-    } catch (error) {
-      throw this.convertError(error, 'getSpectrumSpans');
-    }
+    return this.runSerializedTask('getSpectrumSpans', async () => {
+      this.checkConnected();
+      try {
+        const summary = await this.getSpectrumController().getSpectrumSupportSummary();
+        return Array.from(new Set((summary.spans ?? []).filter((span): span is number => Number.isFinite(span) && span > 0)))
+          .sort((left, right) => right - left);
+      } catch (error) {
+        throw this.convertError(error, 'getSpectrumSpans');
+      }
+    });
   }
 
   async getCurrentSpectrumSpan(): Promise<number | null> {
-    this.checkConnected();
-    try {
-      const currentSpan = await this.getSpectrumRig().getLevel('SPECTRUM_SPAN');
-      return typeof currentSpan === 'number' && Number.isFinite(currentSpan) && currentSpan > 0 ? currentSpan : null;
-    } catch (error) {
-      throw this.convertError(error, 'getCurrentSpectrumSpan');
-    }
+    return this.runSerializedTask('getCurrentSpectrumSpan', async () => {
+      this.checkConnected();
+      try {
+        const currentSpan = await this.getSpectrumRig().getLevel('SPECTRUM_SPAN');
+        return typeof currentSpan === 'number' && Number.isFinite(currentSpan) && currentSpan > 0 ? currentSpan : null;
+      } catch (error) {
+        throw this.convertError(error, 'getCurrentSpectrumSpan');
+      }
+    });
   }
 
   async setSpectrumSpan(spanHz: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await this.getSpectrumRig().setLevel('SPECTRUM_SPAN', spanHz);
-    } catch (error) {
-      throw this.convertError(error, 'setSpectrumSpan');
-    }
+    await this.runSerializedTask('setSpectrumSpan', async () => {
+      this.checkConnected();
+      try {
+        await this.getSpectrumRig().setLevel('SPECTRUM_SPAN', spanHz);
+      } catch (error) {
+        throw this.convertError(error, 'setSpectrumSpan');
+      }
+    });
   }
 
   async getSpectrumDisplayState(): Promise<RadioSpectrumDisplayState | null> {
-    this.checkConnected();
-    try {
-      const state = await this.getSpectrumController().getSpectrumDisplayState();
-      return {
-        mode: state?.mode ?? null,
-        spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
-        edgeSlot: typeof state?.edgeSlot === 'number' && Number.isFinite(state.edgeSlot) ? state.edgeSlot : null,
-        edgeLowHz: typeof state?.edgeLowHz === 'number' && Number.isFinite(state.edgeLowHz) ? state.edgeLowHz : null,
-        edgeHighHz: typeof state?.edgeHighHz === 'number' && Number.isFinite(state.edgeHighHz) ? state.edgeHighHz : null,
-        supportedSpans: Array.isArray(state?.supportedSpans)
-          ? state.supportedSpans.filter((span: unknown): span is number => typeof span === 'number' && Number.isFinite(span) && span > 0)
-          : [],
-        supportsFixedEdges: Boolean(state?.supportsFixedEdges),
-        supportsEdgeSlotSelection: Boolean(state?.supportsEdgeSlotSelection),
-      };
-    } catch (error) {
-      throw this.convertError(error, 'getSpectrumDisplayState');
-    }
+    return this.runSerializedTask('getSpectrumDisplayState', async () => {
+      this.checkConnected();
+      try {
+        const state = await this.getSpectrumController().getSpectrumDisplayState();
+        return {
+          mode: state?.mode ?? null,
+          spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
+          edgeSlot: typeof state?.edgeSlot === 'number' && Number.isFinite(state.edgeSlot) ? state.edgeSlot : null,
+          edgeLowHz: typeof state?.edgeLowHz === 'number' && Number.isFinite(state.edgeLowHz) ? state.edgeLowHz : null,
+          edgeHighHz: typeof state?.edgeHighHz === 'number' && Number.isFinite(state.edgeHighHz) ? state.edgeHighHz : null,
+          supportedSpans: Array.isArray(state?.supportedSpans)
+            ? state.supportedSpans.filter((span: unknown): span is number => typeof span === 'number' && Number.isFinite(span) && span > 0)
+            : [],
+          supportsFixedEdges: Boolean(state?.supportsFixedEdges),
+          supportsEdgeSlotSelection: Boolean(state?.supportsEdgeSlotSelection),
+        };
+      } catch (error) {
+        throw this.convertError(error, 'getSpectrumDisplayState');
+      }
+    });
   }
 
   async configureSpectrumDisplay(config: {
@@ -835,68 +866,76 @@ export class HamlibConnection
     edgeLowHz?: number;
     edgeHighHz?: number;
   }): Promise<void> {
-    this.checkConnected();
-    try {
-      await this.getSpectrumController().configureSpectrumDisplay(config);
-    } catch (error) {
-      throw this.convertError(error, 'configureSpectrumDisplay');
-    }
+    await this.runSerializedTask('configureSpectrumDisplay', async () => {
+      this.checkConnected();
+      try {
+        await this.getSpectrumController().configureSpectrumDisplay(config);
+      } catch (error) {
+        throw this.convertError(error, 'configureSpectrumDisplay');
+      }
+    });
   }
 
   async applySpectrumRuntimeConfig(config: RadioSpectrumRuntimeConfig): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('applySpectrumRuntimeConfig', async () => {
+      this.checkConnected();
 
-    const controller = this.getSpectrumController();
-    const summary = await this.getSpectrumSupportSummary();
-    if (!summary.configurableLevels.includes('SPECTRUM_SPEED')) {
-      logger.debug('Ignoring Hamlib spectrum runtime speed update because backend does not support SPECTRUM_SPEED', {
-        speed: config.speed,
-      });
-      return;
-    }
+      const controller = this.getSpectrumController();
+      const summary = await controller.getSpectrumSupportSummary();
+      if (!summary.configurableLevels.includes('SPECTRUM_SPEED')) {
+        logger.debug('Ignoring Hamlib spectrum runtime speed update because backend does not support SPECTRUM_SPEED', {
+          speed: config.speed,
+        });
+        return;
+      }
 
-    try {
-      await controller.configureSpectrum({ speed: config.speed });
-      logger.info('Applied Hamlib spectrum runtime speed', { speed: config.speed });
-    } catch (error) {
-      throw this.convertError(error, 'applySpectrumRuntimeConfig');
-    }
+      try {
+        await controller.configureSpectrum({ speed: config.speed });
+        logger.info('Applied Hamlib spectrum runtime speed', { speed: config.speed });
+      } catch (error) {
+        throw this.convertError(error, 'applySpectrumRuntimeConfig');
+      }
+    });
   }
 
   async startManagedSpectrum(
     listener: (line: SpectrumLine) => void,
     config?: ManagedSpectrumConfig
   ): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('startManagedSpectrum', async () => {
+      this.checkConnected();
 
-    const controller = this.getSpectrumController();
-    this.spectrumListener = listener;
-    controller.off('spectrumLine', this.onRigSpectrumLine);
-    controller.on('spectrumLine', this.onRigSpectrumLine);
-
-    try {
-      await controller.startManagedSpectrum(config);
-    } catch (error) {
+      const controller = this.getSpectrumController();
+      this.spectrumListener = listener;
       controller.off('spectrumLine', this.onRigSpectrumLine);
-      this.spectrumListener = null;
-      throw this.convertError(error, 'startManagedSpectrum');
-    }
+      controller.on('spectrumLine', this.onRigSpectrumLine);
+
+      try {
+        await controller.startManagedSpectrum(config);
+      } catch (error) {
+        controller.off('spectrumLine', this.onRigSpectrumLine);
+        this.spectrumListener = null;
+        throw this.convertError(error, 'startManagedSpectrum');
+      }
+    });
   }
 
   async stopManagedSpectrum(): Promise<void> {
-    const controller = this.spectrumController;
-    if (!controller) {
-      this.spectrumListener = null;
-      return;
-    }
-    try {
-      controller.off('spectrumLine', this.onRigSpectrumLine);
-      await controller.stopManagedSpectrum();
-    } catch (error) {
-      throw this.convertError(error, 'stopManagedSpectrum');
-    } finally {
-      this.spectrumListener = null;
-    }
+    await this.runSerializedTask('stopManagedSpectrum', async () => {
+      const controller = this.spectrumController;
+      if (!controller) {
+        this.spectrumListener = null;
+        return;
+      }
+      try {
+        controller.off('spectrumLine', this.onRigSpectrumLine);
+        await controller.stopManagedSpectrum();
+      } catch (error) {
+        throw this.convertError(error, 'stopManagedSpectrum');
+      } finally {
+        this.spectrumListener = null;
+      }
+    });
   }
 
   // ===== 天线调谐器控制 =====
@@ -905,28 +944,30 @@ export class HamlibConnection
    * 获取天线调谐器能力
    */
   async getTunerCapabilities(): Promise<import('@tx5dr/contracts').TunerCapabilities> {
-    this.checkConnected();
+    return this.runSerializedTask('getTunerCapabilities', async () => {
+      this.checkConnected();
 
-    try {
-      // 通过实际读取 TUNER 函数状态来探测支持情况。
-      // getSupportedFunctions() 只返回当前激活的功能，天调关闭时 TUNER 不在列表中，
-      // 导致误判为不支持。直接调用 getFunction('TUNER') 才能准确区分「关闭」和「不存在」。
-      await Promise.race([
-        this.rig!.getFunction('TUNER'),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Tuner probe timeout')), 5000)
-        ),
-      ]);
+      try {
+        // 通过实际读取 TUNER 函数状态来探测支持情况。
+        // getSupportedFunctions() 只返回当前激活的功能，天调关闭时 TUNER 不在列表中，
+        // 导致误判为不支持。直接调用 getFunction('TUNER') 才能准确区分「关闭」和「不存在」。
+        await Promise.race([
+          this.rig!.getFunction('TUNER'),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Tuner probe timeout')), 5000)
+          ),
+        ]);
 
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('Tuner capabilities: supported (probe succeeded)');
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Tuner capabilities: supported (probe succeeded)');
 
-      return { supported: true, hasSwitch: true, hasManualTune: true };
-    } catch {
-      // getFunction('TUNER') 报错说明电台本身不支持该功能
-      logger.debug('Tuner capabilities: not supported (probe failed)');
-      return { supported: false, hasSwitch: false, hasManualTune: false };
-    }
+        return { supported: true, hasSwitch: true, hasManualTune: true };
+      } catch {
+        // getFunction('TUNER') 报错说明电台本身不支持该功能
+        logger.debug('Tuner capabilities: not supported (probe failed)');
+        return { supported: false, hasSwitch: false, hasManualTune: false };
+      }
+    });
   }
 
   /**
@@ -946,75 +987,81 @@ export class HamlibConnection
    * 设置天线调谐器开关
    */
   async setTuner(enabled: boolean): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setTuner', async () => {
+      this.checkConnected();
 
-    try {
-      await Promise.race([
-        this.rig!.setFunction('TUNER', enabled),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Set tuner timeout')), 5000)
-        ),
-      ]);
+      try {
+        await Promise.race([
+          this.rig!.setFunction('TUNER', enabled),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Set tuner timeout')), 5000)
+          ),
+        ]);
 
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`Tuner set: ${enabled ? 'enabled' : 'disabled'}`);
-    } catch (error) {
-      throw this.convertError(error, 'setTuner');
-    }
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`Tuner set: ${enabled ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        throw this.convertError(error, 'setTuner');
+      }
+    });
   }
 
   /**
    * 获取天线调谐器状态
    */
   async getTunerStatus(): Promise<import('@tx5dr/contracts').TunerStatus> {
-    this.checkConnected();
+    return this.runSerializedTask('getTunerStatus', async () => {
+      this.checkConnected();
 
-    try {
-      const enabled = await Promise.race([
-        this.rig!.getFunction('TUNER'),
-        new Promise<boolean>((_, reject) =>
-          setTimeout(() => reject(new Error('Get tuner status timeout')), 5000)
-        ),
-      ]);
+      try {
+        const enabled = await Promise.race([
+          this.rig!.getFunction('TUNER'),
+          new Promise<boolean>((_, reject) =>
+            setTimeout(() => reject(new Error('Get tuner status timeout')), 5000)
+          ),
+        ]);
 
-      this.lastSuccessfulOperation = Date.now();
+        this.lastSuccessfulOperation = Date.now();
 
-      // Hamlib 可能不提供调谐中状态和 SWR 值
-      // 返回基本状态信息
-      const status: import('@tx5dr/contracts').TunerStatus = {
-        enabled,
-        active: false,
-        status: 'idle',
-      };
+        // Hamlib 可能不提供调谐中状态和 SWR 值
+        // 返回基本状态信息
+        const status: import('@tx5dr/contracts').TunerStatus = {
+          enabled,
+          active: false,
+          status: 'idle',
+        };
 
-      return status;
-    } catch (error) {
-      throw this.convertError(error, 'getTunerStatus');
-    }
+        return status;
+      } catch (error) {
+        throw this.convertError(error, 'getTunerStatus');
+      }
+    });
   }
 
   /**
    * 启动手动调谐
    */
   async startTuning(): Promise<boolean> {
-    this.checkConnected();
+    return this.runSerializedTask('startTuning', async () => {
+      this.checkConnected();
 
-    try {
-      await Promise.race([
-        this.rig!.vfoOperation('TUNE'),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Start tuning timeout')), 10000) // tuning may require extra time
-        ),
-      ]);
+      try {
+        await Promise.race([
+          this.rig!.vfoOperation('TUNE'),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Start tuning timeout')), 10000) // tuning may require extra time
+          ),
+        ]);
 
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('Manual tuning started');
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Manual tuning started');
 
-      return true;
-    } catch (error) {
-      logger.error('Failed to start tuning:', error);
-      throw this.convertError(error, 'startTuning');
-    }
+        return true;
+      } catch (error) {
+        logger.error('Failed to start tuning:', error);
+        throw this.convertError(error, 'startTuning');
+      }
+    });
   }
 
   // ===== Level 类控制 =====
@@ -1039,649 +1086,727 @@ export class HamlibConnection
    * 获取发射功率（0.0–1.0）
    */
   async getRFPower(): Promise<number> {
-    this.checkConnected();
-    if (!this.supportedLevels.has('RFPOWER')) {
-      throw new Error('RFPOWER level not supported by this radio');
-    }
-    try {
-      const value = (await Promise.race([
-        this.rig!.getLevel('RFPOWER'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get RF power timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getRFPower');
-    }
+    return this.runSerializedTask('getRFPower', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('RFPOWER')) {
+        throw new Error('RFPOWER level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('RFPOWER'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get RF power timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getRFPower');
+      }
+    });
   }
 
   /**
    * 设置发射功率（0.0–1.0）
    */
   async setRFPower(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setLevel('RFPOWER', value),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set RF power timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setRFPower');
-    }
+    await this.runSerializedTask('setRFPower', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('RFPOWER', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set RF power timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setRFPower');
+      }
+    });
   }
 
   /**
    * 获取 AF 增益（0.0–1.0）
    */
   async getAFGain(): Promise<number> {
-    this.checkConnected();
-    if (!this.supportedLevels.has('AF')) {
-      throw new Error('AF level not supported by this radio');
-    }
-    try {
-      const value = (await Promise.race([
-        this.rig!.getLevel('AF'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get AF gain timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getAFGain');
-    }
+    return this.runSerializedTask('getAFGain', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('AF')) {
+        throw new Error('AF level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('AF'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get AF gain timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getAFGain');
+      }
+    });
   }
 
   /**
    * 设置 AF 增益（0.0–1.0）
    */
   async setAFGain(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setLevel('AF', value),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set AF gain timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setAFGain');
-    }
+    await this.runSerializedTask('setAFGain', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('AF', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set AF gain timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setAFGain');
+      }
+    });
   }
 
   /**
    * 获取静噪电平（0.0–1.0）
    */
   async getSQL(): Promise<number> {
-    this.checkConnected();
-    if (!this.supportedLevels.has('SQL')) {
-      throw new Error('SQL level not supported by this radio');
-    }
-    try {
-      const value = (await Promise.race([
-        this.rig!.getLevel('SQL'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get SQL timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getSQL');
-    }
+    return this.runSerializedTask('getSQL', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('SQL')) {
+        throw new Error('SQL level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('SQL'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get SQL timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getSQL');
+      }
+    });
   }
 
   /**
    * 设置静噪电平（0.0–1.0）
    */
   async setSQL(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setLevel('SQL', value),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set SQL timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setSQL');
-    }
+    await this.runSerializedTask('setSQL', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('SQL', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set SQL timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setSQL');
+      }
+    });
   }
 
   async getMicGain(): Promise<number> {
-    this.checkConnected();
-    if (!this.supportedLevels.has('MICGAIN')) {
-      throw new Error('MICGAIN level not supported by this radio');
-    }
-    try {
-      const value = (await Promise.race([
-        this.rig!.getLevel('MICGAIN'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get MIC gain timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`MIC gain read: ${(value * 100).toFixed(0)}%`);
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getMicGain');
-    }
+    return this.runSerializedTask('getMicGain', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('MICGAIN')) {
+        throw new Error('MICGAIN level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('MICGAIN'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get MIC gain timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`MIC gain read: ${(value * 100).toFixed(0)}%`);
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getMicGain');
+      }
+    });
   }
 
   async setMicGain(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setLevel('MICGAIN', value),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set MIC gain timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setMicGain');
-    }
+    await this.runSerializedTask('setMicGain', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('MICGAIN', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set MIC gain timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setMicGain');
+      }
+    });
   }
 
   async getNBEnabled(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getFunction('NB'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get NB state timeout')), 5000)
-        ),
-      ])) as boolean;
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NB state read: ${value ? 'enabled' : 'disabled'}`);
-      return value ? 1 : 0;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getNBEnabled');
-    }
+    return this.runSerializedTask('getNBEnabled', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getFunction('NB'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get NB state timeout')), 5000)
+          ),
+        ])) as boolean;
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`NB state read: ${value ? 'enabled' : 'disabled'}`);
+        return value ? 1 : 0;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getNBEnabled');
+      }
+    });
   }
 
   async setNBEnabled(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setFunction('NB', value > 0),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set NB state timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NB state set: ${value > 0 ? 'enabled' : 'disabled'}`);
-    } catch (error) {
-      throw this.convertError(error, 'setNBEnabled');
-    }
+    await this.runSerializedTask('setNBEnabled', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setFunction('NB', value > 0),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set NB state timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`NB state set: ${value > 0 ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        throw this.convertError(error, 'setNBEnabled');
+      }
+    });
   }
 
   async getNREnabled(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getFunction('NR'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get NR state timeout')), 5000)
-        ),
-      ])) as boolean;
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NR state read: ${value ? 'enabled' : 'disabled'}`);
-      return value ? 1 : 0;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getNREnabled');
-    }
+    return this.runSerializedTask('getNREnabled', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getFunction('NR'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get NR state timeout')), 5000)
+          ),
+        ])) as boolean;
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`NR state read: ${value ? 'enabled' : 'disabled'}`);
+        return value ? 1 : 0;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getNREnabled');
+      }
+    });
   }
 
   async setNREnabled(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setFunction('NR', value > 0),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set NR state timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`NR state set: ${value > 0 ? 'enabled' : 'disabled'}`);
-    } catch (error) {
-      throw this.convertError(error, 'setNREnabled');
-    }
+    await this.runSerializedTask('setNREnabled', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setFunction('NR', value > 0),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set NR state timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`NR state set: ${value > 0 ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        throw this.convertError(error, 'setNREnabled');
+      }
+    });
   }
 
   async getLockMode(): Promise<boolean> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getLockMode(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get lock mode timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value > 0;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getLockMode');
-    }
+    return this.runSerializedTask('getLockMode', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLockMode(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get lock mode timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value > 0;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getLockMode');
+      }
+    });
   }
 
   async setLockMode(enabled: boolean): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setLockMode(enabled ? 1 : 0),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set lock mode timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`Lock mode set: ${enabled ? 'locked' : 'unlocked'}`);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setLockMode');
-    }
+    await this.runSerializedTask('setLockMode', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLockMode(enabled ? 1 : 0),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set lock mode timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`Lock mode set: ${enabled ? 'locked' : 'unlocked'}`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setLockMode');
+      }
+    });
   }
 
   async getMuteEnabled(): Promise<boolean> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getFunction('MUTE'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get mute state timeout')), 5000)
-        ),
-      ])) as boolean;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getMuteEnabled');
-    }
+    return this.runSerializedTask('getMuteEnabled', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getFunction('MUTE'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get mute state timeout')), 5000)
+          ),
+        ])) as boolean;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getMuteEnabled');
+      }
+    });
   }
 
   async setMuteEnabled(enabled: boolean): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setFunction('MUTE', enabled),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set mute state timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`Mute state set: ${enabled ? 'enabled' : 'disabled'}`);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setMuteEnabled');
-    }
+    await this.runSerializedTask('setMuteEnabled', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setFunction('MUTE', enabled),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set mute state timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`Mute state set: ${enabled ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setMuteEnabled');
+      }
+    });
   }
 
   async getVOXEnabled(): Promise<boolean> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getFunction('VOX'),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get VOX state timeout')), 5000)
-        ),
-      ])) as boolean;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getVOXEnabled');
-    }
+    return this.runSerializedTask('getVOXEnabled', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getFunction('VOX'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get VOX state timeout')), 5000)
+          ),
+        ])) as boolean;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getVOXEnabled');
+      }
+    });
   }
 
   async setVOXEnabled(enabled: boolean): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setFunction('VOX', enabled),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set VOX state timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug(`VOX state set: ${enabled ? 'enabled' : 'disabled'}`);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setVOXEnabled');
-    }
+    await this.runSerializedTask('setVOXEnabled', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setFunction('VOX', enabled),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set VOX state timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`VOX state set: ${enabled ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setVOXEnabled');
+      }
+    });
   }
 
   async getRitOffset(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getRit(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get RIT timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getRitOffset');
-    }
+    return this.runSerializedTask('getRitOffset', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getRit(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get RIT timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getRitOffset');
+      }
+    });
   }
 
   async setRitOffset(offsetHz: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setRit(offsetHz),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set RIT timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('RIT offset set', { offsetHz });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setRitOffset');
-    }
+    await this.runSerializedTask('setRitOffset', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setRit(offsetHz),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set RIT timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('RIT offset set', { offsetHz });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setRitOffset');
+      }
+    });
   }
 
   async getXitOffset(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getXit(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get XIT timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getXitOffset');
-    }
+    return this.runSerializedTask('getXitOffset', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getXit(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get XIT timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getXitOffset');
+      }
+    });
   }
 
   async setXitOffset(offsetHz: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setXit(offsetHz),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set XIT timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('XIT offset set', { offsetHz });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setXitOffset');
-    }
+    await this.runSerializedTask('setXitOffset', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setXit(offsetHz),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set XIT timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('XIT offset set', { offsetHz });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setXitOffset');
+      }
+    });
   }
 
   async getTuningStep(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getTuningStep(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get tuning step timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getTuningStep');
-    }
+    return this.runSerializedTask('getTuningStep', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getTuningStep(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get tuning step timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getTuningStep');
+      }
+    });
   }
 
   async setTuningStep(stepHz: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setTuningStep(stepHz),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set tuning step timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('Tuning step set', { stepHz });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setTuningStep');
-    }
+    await this.runSerializedTask('setTuningStep', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setTuningStep(stepHz),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set tuning step timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Tuning step set', { stepHz });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setTuningStep');
+      }
+    });
   }
 
   async getSupportedTuningSteps(): Promise<number[]> {
-    this.checkConnected();
-    try {
-      const steps = this.rig!.getTuningSteps()
-        .map((item) => item.stepHz)
-        .filter((step) => Number.isFinite(step) && step > 0);
-      return Array.from(new Set(steps)).sort((a, b) => a - b);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getSupportedTuningSteps');
-    }
+    return this.runSerializedTask('getSupportedTuningSteps', async () => {
+      this.checkConnected();
+      try {
+        const steps = this.rig!.getTuningSteps()
+          .map((item) => item.stepHz)
+          .filter((step) => Number.isFinite(step) && step > 0);
+        return Array.from(new Set(steps)).sort((a, b) => a - b);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSupportedTuningSteps');
+      }
+    });
   }
 
   async getPowerState(): Promise<string> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getPowerstat(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get power state timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return normalizePowerStateCode(value);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getPowerState');
-    }
+    return this.runSerializedTask('getPowerState', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getPowerstat(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get power state timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return normalizePowerStateCode(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getPowerState');
+      }
+    });
   }
 
   async setPowerState(state: string): Promise<void> {
-    this.checkConnected();
-    const normalized = state.trim().toLowerCase();
-    const codeMap: Record<string, number> = {
-      off: 0,
-      on: 1,
-      standby: 2,
-      operate: 4,
-      unknown: 8,
-    };
-    const code = codeMap[normalized];
-    if (code === undefined) {
-      throw new Error(`Unsupported power state: ${state}`);
-    }
+    await this.runSerializedTask('setPowerState', async () => {
+      this.checkConnected();
+      const normalized = state.trim().toLowerCase();
+      const codeMap: Record<string, number> = {
+        off: 0,
+        on: 1,
+        standby: 2,
+        operate: 4,
+        unknown: 8,
+      };
+      const code = codeMap[normalized];
+      if (code === undefined) {
+        throw new Error(`Unsupported power state: ${state}`);
+      }
 
-    try {
-      await Promise.race([
-        this.rig!.setPowerstat(code),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set power state timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('Power state set', { state: normalized });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setPowerState');
-    }
+      try {
+        await Promise.race([
+          this.rig!.setPowerstat(code),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set power state timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Power state set', { state: normalized });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setPowerState');
+      }
+    });
   }
 
   async getRepeaterShift(): Promise<string> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getRepeaterShift(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get repeater shift timeout')), 5000)
-        ),
-      ])) as string;
-      this.lastSuccessfulOperation = Date.now();
-      return normalizeRepeaterShiftValue(value);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getRepeaterShift');
-    }
+    return this.runSerializedTask('getRepeaterShift', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getRepeaterShift(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get repeater shift timeout')), 5000)
+          ),
+        ])) as string;
+        this.lastSuccessfulOperation = Date.now();
+        return normalizeRepeaterShiftValue(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getRepeaterShift');
+      }
+    });
   }
 
   async setRepeaterShift(shift: string): Promise<void> {
-    this.checkConnected();
-    const normalized = normalizeRepeaterShiftValue(shift);
-    const valueMap: Record<string, 'NONE' | 'MINUS' | 'PLUS'> = {
-      none: 'NONE',
-      minus: 'MINUS',
-      plus: 'PLUS',
-    };
+    await this.runSerializedTask('setRepeaterShift', async () => {
+      this.checkConnected();
+      const normalized = normalizeRepeaterShiftValue(shift);
+      const valueMap: Record<string, 'NONE' | 'MINUS' | 'PLUS'> = {
+        none: 'NONE',
+        minus: 'MINUS',
+        plus: 'PLUS',
+      };
 
-    try {
-      await Promise.race([
-        this.rig!.setRepeaterShift(valueMap[normalized]),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set repeater shift timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('Repeater shift set', { shift: normalized });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setRepeaterShift');
-    }
+      try {
+        await Promise.race([
+          this.rig!.setRepeaterShift(valueMap[normalized]),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set repeater shift timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Repeater shift set', { shift: normalized });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setRepeaterShift');
+      }
+    });
   }
 
   async getRepeaterOffset(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getRepeaterOffset(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get repeater offset timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getRepeaterOffset');
-    }
+    return this.runSerializedTask('getRepeaterOffset', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getRepeaterOffset(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get repeater offset timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getRepeaterOffset');
+      }
+    });
   }
 
   async setRepeaterOffset(offsetHz: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setRepeaterOffset(offsetHz),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set repeater offset timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('Repeater offset set', { offsetHz });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setRepeaterOffset');
-    }
+    await this.runSerializedTask('setRepeaterOffset', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setRepeaterOffset(offsetHz),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set repeater offset timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Repeater offset set', { offsetHz });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setRepeaterOffset');
+      }
+    });
   }
 
   async getCtcssTone(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getCtcssTone(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get CTCSS tone timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getCtcssTone');
-    }
+    return this.runSerializedTask('getCtcssTone', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getCtcssTone(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get CTCSS tone timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getCtcssTone');
+      }
+    });
   }
 
   async setCtcssTone(tone: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setCtcssTone(tone),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set CTCSS tone timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('CTCSS tone set', { tone });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setCtcssTone');
-    }
+    await this.runSerializedTask('setCtcssTone', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setCtcssTone(tone),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set CTCSS tone timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('CTCSS tone set', { tone });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setCtcssTone');
+      }
+    });
   }
 
   async getAvailableCtcssTones(): Promise<number[]> {
-    this.checkConnected();
-    try {
-      const tones = this.rig!.getAvailableCtcssTones()
-        .filter((tone) => Number.isFinite(tone) && tone > 0);
-      return Array.from(new Set(tones)).sort((a, b) => a - b);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getAvailableCtcssTones');
-    }
+    return this.runSerializedTask('getAvailableCtcssTones', async () => {
+      this.checkConnected();
+      try {
+        const tones = this.rig!.getAvailableCtcssTones()
+          .filter((tone) => Number.isFinite(tone) && tone > 0);
+        return Array.from(new Set(tones)).sort((a, b) => a - b);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getAvailableCtcssTones');
+      }
+    });
   }
 
   async getDcsCode(): Promise<number> {
-    this.checkConnected();
-    try {
-      const value = (await Promise.race([
-        this.rig!.getDcsCode(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Get DCS code timeout')), 5000)
-        ),
-      ])) as number;
-      this.lastSuccessfulOperation = Date.now();
-      return value;
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getDcsCode');
-    }
+    return this.runSerializedTask('getDcsCode', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getDcsCode(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get DCS code timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getDcsCode');
+      }
+    });
   }
 
   async setDcsCode(code: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await Promise.race([
-        this.rig!.setDcsCode(code),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Set DCS code timeout')), 5000)
-        ),
-      ]);
-      this.lastSuccessfulOperation = Date.now();
-      logger.debug('DCS code set', { code });
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'setDcsCode');
-    }
+    await this.runSerializedTask('setDcsCode', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setDcsCode(code),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set DCS code timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('DCS code set', { code });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setDcsCode');
+      }
+    });
   }
 
   async getAvailableDcsCodes(): Promise<number[]> {
-    this.checkConnected();
-    try {
-      const codes = this.rig!.getAvailableDcsCodes()
-        .filter((code) => Number.isFinite(code) && code > 0);
-      return Array.from(new Set(codes)).sort((a, b) => a - b);
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getAvailableDcsCodes');
-    }
+    return this.runSerializedTask('getAvailableDcsCodes', async () => {
+      this.checkConnected();
+      try {
+        const codes = this.rig!.getAvailableDcsCodes()
+          .filter((code) => Number.isFinite(code) && code > 0);
+        return Array.from(new Set(codes)).sort((a, b) => a - b);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getAvailableDcsCodes');
+      }
+    });
   }
 
   async getMaxRit(): Promise<number> {
-    this.checkConnected();
-    try {
-      return this.rig!.getMaxRit();
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getMaxRit');
-    }
+    return this.runSerializedTask('getMaxRit', async () => {
+      this.checkConnected();
+      try {
+        return this.rig!.getMaxRit();
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getMaxRit');
+      }
+    });
   }
 
   async getMaxXit(): Promise<number> {
-    this.checkConnected();
-    try {
-      return this.rig!.getMaxXit();
-    } catch (error) {
-      throw this.convertOptionalOperationError(error, 'getMaxXit');
-    }
+    return this.runSerializedTask('getMaxXit', async () => {
+      this.checkConnected();
+      try {
+        return this.rig!.getMaxXit();
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getMaxXit');
+      }
+    });
   }
 
   /**
@@ -1813,6 +1938,22 @@ export class HamlibConnection
     }
   }
 
+  private ensureSession(sessionId: number): void {
+    if (sessionId !== this.ioSessionId) {
+      throw new Error('radio session changed');
+    }
+  }
+
+  private async runSerializedTask<T>(taskName: string, task: () => Promise<T>): Promise<T> {
+    const sessionId = this.ioSessionId;
+    return this.ioQueue.run({ sessionId }, async (activeSessionId) => {
+      this.ensureSession(activeSessionId);
+      const result = await task();
+      this.ensureSession(activeSessionId);
+      return result;
+    });
+  }
+
   private async syncSplitFrequencyIfNeeded(frequency: number): Promise<void> {
     const splitEnabled = await this.isSplitEnabled();
 
@@ -1934,6 +2075,7 @@ export class HamlibConnection
       this.currentConfig = null;
       this.pttMethod = 'cat';
       this.meterPollFailCount = 0;
+      this.backgroundTasksStarted = false;
       this.supportedLevels.clear();
       this.supportedModes.clear();
       this.supportedFunctions.clear();
@@ -1960,8 +2102,8 @@ export class HamlibConnection
 
     logger.debug(`Starting meter polling, interval ${this.meterPollingIntervalMs}ms`);
 
-    this.meterPollingInterval = setInterval(async () => {
-      await this.pollMeters();
+    this.meterPollingInterval = setInterval(() => {
+      void this.pollMeters();
     }, this.meterPollingIntervalMs);
   }
 
@@ -1980,64 +2122,72 @@ export class HamlibConnection
    * 轮询数值表数据
    */
   private async pollMeters(): Promise<void> {
-    if (!this.rig) return;
-
-    // 如果没有任何支持的 level，使用当前 VFO 读频做健康检查
-    const hasAnyLevel = this.supportedLevels.has('STRENGTH') || this.supportedLevels.has('SWR')
-      || this.supportedLevels.has('ALC') || this.supportedLevels.has('RFPOWER_METER');
-
-    if (!hasAnyLevel) {
-      try {
-        await this.rig.getFrequency();
-        this.meterPollFailCount = 0;
-        this.lastSuccessfulOperation = Date.now();
-      } catch {
-        this.meterPollFailCount++;
-        if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-          logger.error(`Health check failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
-          this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
-          this.stopMeterPolling();
-        }
-      }
-      return;
-    }
-
     try {
-      // 仅轮询电台支持的 level
-      const [strength, swr, alc, power, powerWatts] = await Promise.all([
-        this.supportedLevels.has('STRENGTH') ? this.rig.getLevel('STRENGTH').catch(() => null) : Promise.resolve(null),
-        this.supportedLevels.has('SWR') ? this.rig.getLevel('SWR').catch(() => null) : Promise.resolve(null),
-        this.supportedLevels.has('ALC') ? this.rig.getLevel('ALC').catch(() => null) : Promise.resolve(null),
-        this.supportedLevels.has('RFPOWER_METER') ? this.rig.getLevel('RFPOWER_METER').catch(() => null) : Promise.resolve(null),
-        this.supportedLevels.has('RFPOWER_METER_WATTS') ? this.rig.getLevel('RFPOWER_METER_WATTS').catch(() => null) : Promise.resolve(null),
-      ]);
+      await this.runSerializedTask('pollMeters', async () => {
+        if (!this.rig) {
+          return;
+        }
 
-      // 转换数据格式
-      const meterData: MeterData = {
-        level: strength !== null ? this.convertStrengthToLevel(strength) : null,
-        swr: swr !== null ? this.convertSWR(swr) : null,
-        alc: alc !== null ? this.convertALC(alc) : null,
-        power: (power !== null || powerWatts !== null) ? this.convertPower(power, powerWatts) : null,
-      };
+        // 如果没有任何支持的 level，使用当前 VFO 读频做健康检查
+        const hasAnyLevel = this.supportedLevels.has('STRENGTH') || this.supportedLevels.has('SWR')
+          || this.supportedLevels.has('ALC') || this.supportedLevels.has('RFPOWER_METER');
 
-      // 成功：重置失败计数
-      this.meterPollFailCount = 0;
-      this.lastSuccessfulOperation = Date.now();
+        if (!hasAnyLevel) {
+          try {
+            await this.rig.getFrequency();
+            this.meterPollFailCount = 0;
+            this.lastSuccessfulOperation = Date.now();
+          } catch {
+            this.meterPollFailCount++;
+            if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+              logger.error(`Health check failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
+              this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
+              this.stopMeterPolling();
+            }
+          }
+          return;
+        }
 
-      // 📝 EventBus 优化：双路径策略
-      // 原路径：用于 DigitalRadioEngine 健康检查
-      this.emit('meterData', meterData);
+        try {
+          // 仅轮询电台支持的 level
+          const [strength, swr, alc, power, powerWatts] = await Promise.all([
+            this.supportedLevels.has('STRENGTH') ? this.rig.getLevel('STRENGTH').catch(() => null) : Promise.resolve(null),
+            this.supportedLevels.has('SWR') ? this.rig.getLevel('SWR').catch(() => null) : Promise.resolve(null),
+            this.supportedLevels.has('ALC') ? this.rig.getLevel('ALC').catch(() => null) : Promise.resolve(null),
+            this.supportedLevels.has('RFPOWER_METER') ? this.rig.getLevel('RFPOWER_METER').catch(() => null) : Promise.resolve(null),
+            this.supportedLevels.has('RFPOWER_METER_WATTS') ? this.rig.getLevel('RFPOWER_METER_WATTS').catch(() => null) : Promise.resolve(null),
+          ]);
 
-      // EventBus 直达：用于 WebSocket 广播到前端
-      globalEventBus.emit('bus:meterData', meterData);
+          // 转换数据格式
+          const meterData: MeterData = {
+            level: strength !== null ? this.convertStrengthToLevel(strength) : null,
+            swr: swr !== null ? this.convertSWR(swr) : null,
+            alc: alc !== null ? this.convertALC(alc) : null,
+            power: (power !== null || powerWatts !== null) ? this.convertPower(power, powerWatts) : null,
+          };
+
+          // 成功：重置失败计数
+          this.meterPollFailCount = 0;
+          this.lastSuccessfulOperation = Date.now();
+
+          // 📝 EventBus 优化：双路径策略
+          // 原路径：用于 DigitalRadioEngine 健康检查
+          this.emit('meterData', meterData);
+
+          // EventBus 直达：用于 WebSocket 广播到前端
+          globalEventBus.emit('bus:meterData', meterData);
+        } catch (error) {
+          this.meterPollFailCount++;
+          if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+            logger.error(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
+            // 只 emit 事件，不直接修改 state —— 让上层状态机决定状态转换
+            this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
+            this.stopMeterPolling();
+          }
+        }
+      });
     } catch (error) {
-      this.meterPollFailCount++;
-      if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-        logger.error(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
-        // 只 emit 事件，不直接修改 state —— 让上层状态机决定状态转换
-        this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
-        this.stopMeterPolling();
-      }
+      logger.debug(`Skipping meter polling result: ${this.getErrorMessage(error)}`);
     }
   }
 

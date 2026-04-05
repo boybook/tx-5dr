@@ -37,12 +37,15 @@ import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
  *
- * 所有领域逻辑已拆分到子系统：
- * - TransmissionPipeline: 发射管线 (encode→mix→PTT→play)
- * - RadioBridge: 电台事件桥接
- * - ClockCoordinator: 时钟/解码/频谱事件协调
- * - AudioVolumeController: 音量控制
- * - EngineLifecycle: 资源注册 + XState 状态机 + start/stop
+ * 负责：
+ * - 装配底层组件与子系统
+ * - 维护对外 Facade API
+ * - 协调初始化阶段与模式切换
+ *
+ * 不负责：
+ * - 资源启动顺序细节（由 EngineLifecycle 负责）
+ * - 电台连接 bootstrap（由 PhysicalRadioManager 负责）
+ * - 电台事件投影（由 RadioBridge 负责）
  */
 export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private static instance: DigitalRadioEngine | null = null;
@@ -211,20 +214,27 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   async initialize(): Promise<void> {
     logger.info('Initializing...');
 
+    await this.initializeRuntimePhase();
+    const pskreporterService = await this.initializeDomainServicesPhase();
+    await this.initializeSubsystemAssemblyPhase(pskreporterService);
+    this.restorePersistedModePhase();
+    this.finalizeLifecyclePhase();
+
+    logger.info(`Initialization complete, current mode: ${this.currentMode.name}, engine mode: ${this.engineMode}`);
+  }
+
+  private async initializeRuntimePhase(): Promise<void> {
+    logger.info('Initialization phase: runtime');
+
     await printAppPaths();
 
-    // 从配置读取发射补偿值
     const radioConfig = ConfigManager.getInstance().getRadioConfig();
     const compensationMs = radioConfig.transmitCompensationMs || 0;
     logger.info(`Transmit compensation config: ${compensationMs}ms`);
 
-    // 应用解码窗口覆盖配置
     this.applyDecodeWindowOverrides();
 
-    // 创建 SlotClock
     this.slotClock = new SlotClock(this.clockSource, this.currentMode, compensationMs);
-
-    // 创建 SlotScheduler
     this.slotScheduler = new SlotScheduler(
       this.slotClock,
       this.realDecodeQueue,
@@ -233,30 +243,37 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false
     );
 
-    // 初始化频谱调度器
     await this.spectrumScheduler.initialize(
       this.audioStreamManager.getAudioProvider(),
       this.audioStreamManager.getInternalSampleRate()
     );
     this.spectrumScheduler.setPTTActive(false);
+  }
 
-    // 初始化操作员管理器
+  private async initializeDomainServicesPhase(): Promise<Awaited<ReturnType<typeof initializePSKReporterService>> | null> {
+    logger.info('Initialization phase: domain-services');
+
     await this.operatorManager.initialize();
 
-    // 初始化 PSKReporter 服务
-    let pskreporterService = null;
     try {
-      pskreporterService = await initializePSKReporterService();
+      const pskreporterService = await initializePSKReporterService();
       pskreporterService.setMode(this.currentMode.name);
       logger.info('PSKReporter service initialized');
+      return pskreporterService;
     } catch (error) {
       logger.warn('PSKReporter service initialization failed:', error);
+      return null;
     }
+  }
 
-    // 初始化 ClockCoordinator（需要 slotClock）
+  private async initializeSubsystemAssemblyPhase(
+    pskreporterService: Awaited<ReturnType<typeof initializePSKReporterService>> | null,
+  ): Promise<void> {
+    logger.info('Initialization phase: subsystem-assembly');
+
     this.clockCoordinator = new ClockCoordinator({
       engineEmitter: this,
-      slotClock: this.slotClock,
+      slotClock: this.slotClock!,
       decodeQueue: this.realDecodeQueue,
       slotPackManager: this.slotPackManager,
       spectrumScheduler: this.spectrumScheduler,
@@ -267,30 +284,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     this.clockCoordinator.setPSKReporterService(pskreporterService);
 
-    // 初始化 VoiceSessionManager
     this.voiceSessionManager = new VoiceSessionManager({
       radioManager: this.radioManager,
       audioStreamManager: this.audioStreamManager,
     });
-    await this.voiceSessionManager.initialize();
 
-    // Forward voice events through engine emitter
-    this.voiceSessionManager.on('voicePttLockChanged', (lock) => {
-      this.emit('voicePttLockChanged', lock);
-    });
-    this.voiceSessionManager.on('pttStatusChanged', (data) => {
-      this.emit('pttStatusChanged', data);
-    });
-    this.voiceSessionManager.on('voiceRadioModeChanged', (data) => {
-      this.emit('voiceRadioModeChanged', data);
-    });
+    await this.initializeVoiceSessionManager();
 
-    // 初始化 EngineLifecycle（需要 slotClock 和子系统）
     this.engineLifecycle = new EngineLifecycle({
       engineEmitter: this,
       resourceManager: this.resourceManager,
-      slotClock: this.slotClock,
-      slotScheduler: this.slotScheduler,
+      slotClock: this.slotClock!,
+      slotScheduler: this.slotScheduler!,
       audioStreamManager: this.audioStreamManager,
       radioManager: this.radioManager,
       spectrumScheduler: this.spectrumScheduler,
@@ -305,41 +310,57 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getVoiceSessionManager: () => this.voiceSessionManager,
       getStatus: () => this.getStatus(),
     });
-
-    // Pass voice session manager to engine lifecycle
     this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
+  }
 
-    // Restore last engine mode and digital sub-mode from config
+  private async initializeVoiceSessionManager(): Promise<void> {
+    if (!this.voiceSessionManager) {
+      return;
+    }
+
+    await this.voiceSessionManager.initialize();
+
+    this.voiceSessionManager.on('voicePttLockChanged', (lock) => {
+      this.emit('voicePttLockChanged', lock);
+    });
+    this.voiceSessionManager.on('pttStatusChanged', (data) => {
+      this.emit('pttStatusChanged', data);
+    });
+    this.voiceSessionManager.on('voiceRadioModeChanged', (data) => {
+      this.emit('voiceRadioModeChanged', data);
+    });
+  }
+
+  private restorePersistedModePhase(): void {
+    logger.info('Initialization phase: restore-mode');
+
     const configManager = ConfigManager.getInstance();
     const lastEngineMode = configManager.getLastEngineMode();
     const lastDigitalModeName = configManager.getLastDigitalModeName();
 
-    // Restore digital sub-mode (FT8/FT4) before registering resources
     if (lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
       const targetMode = Object.values(MODES).find(m => m.name === lastDigitalModeName);
       if (targetMode && targetMode.name !== 'VOICE') {
         this.currentMode = targetMode;
         this.applyDecodeWindowOverrides();
-        if (this.slotClock) {
-          this.slotClock.setMode(this.currentMode);
-        }
+        this.slotClock?.setMode(this.currentMode);
         this.slotPackManager.setMode(this.currentMode);
         logger.info(`Restored last digital mode: ${this.currentMode.name}`);
       }
     }
 
-    // If last mode was voice, switch engine mode (resources will be registered for voice)
     if (lastEngineMode === 'voice') {
       this.engineMode = 'voice';
       this.currentMode = MODES.VOICE;
       logger.info('Restored last engine mode: voice');
     }
+  }
 
-    // 注册资源和状态机（based on restored mode）
-    this.engineLifecycle.registerResources();
+  private finalizeLifecyclePhase(): void {
+    logger.info('Initialization phase: lifecycle');
+
+    this.engineLifecycle.rebuildResourcePlan();
     this.engineLifecycle.initializeStateMachine();
-
-    logger.info(`Initialization complete, current mode: ${this.currentMode.name}, engine mode: ${this.engineMode}`);
   }
 
   // ─── 委托方法 ────────────────────────────────────
@@ -500,10 +521,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     // Clear and re-register resources for voice mode
-    this.resourceManager.clear();
     this.engineMode = 'voice';
     this.currentMode = MODES.VOICE;
-    this.engineLifecycle.registerResources();
+    this.engineLifecycle.rebuildResourcePlan();
 
     // Persist engine mode
     ConfigManager.getInstance().setLastEngineMode('voice');
@@ -530,11 +550,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
 
     // Clear and re-register resources for digital mode
-    this.resourceManager.clear();
     this.engineMode = 'digital';
     this.currentMode = targetMode;
     this.applyDecodeWindowOverrides();
-    this.engineLifecycle.registerResources();
+    this.engineLifecycle.rebuildResourcePlan();
 
     if (this.slotClock) {
       this.slotClock.setMode(this.currentMode);

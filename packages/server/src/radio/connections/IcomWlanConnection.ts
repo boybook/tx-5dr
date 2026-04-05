@@ -16,8 +16,7 @@ import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
-
-const logger = createLogger('IcomWlanConnection');
+import { RadioIoQueue } from './RadioIoQueue.js';
 import {
   RadioConnectionType,
   RadioConnectionState,
@@ -30,6 +29,8 @@ import {
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
 
+const logger = createLogger('IcomWlanConnection');
+
 /**
  * IcomWlanConnection 实现类
  */
@@ -37,6 +38,9 @@ export class IcomWlanConnection
   extends EventEmitter<IRadioConnectionEvents>
   implements IRadioConnection
 {
+  private readonly ioQueue = new RadioIoQueue();
+  private ioSessionId = 0;
+  private backgroundTasksStarted = false;
   /**
    * icom-wlan-node 库的 IcomControl 实例
    */
@@ -84,6 +88,15 @@ export class IcomWlanConnection
     super();
   }
 
+  startBackgroundTasks(): void {
+    if (this.backgroundTasksStarted) {
+      return;
+    }
+
+    this.backgroundTasksStarted = true;
+    this.startMeterPolling();
+  }
+
   /**
    * 获取连接类型
    */
@@ -112,6 +125,22 @@ export class IcomWlanConnection
    */
   isConnected(): boolean {
     return this.isHealthy();
+  }
+
+  private ensureSession(sessionId: number): void {
+    if (sessionId !== this.ioSessionId) {
+      throw new Error('radio session changed');
+    }
+  }
+
+  private async runSerializedTask<T>(taskName: string, task: () => Promise<T>): Promise<T> {
+    const sessionId = this.ioSessionId;
+    return this.ioQueue.run({ sessionId }, async (activeSessionId) => {
+      this.ensureSession(activeSessionId);
+      const result = await task();
+      this.ensureSession(activeSessionId);
+      return result;
+    });
   }
 
   /**
@@ -157,6 +186,8 @@ export class IcomWlanConnection
     // 保存配置
     this.currentConfig = config;
     this.defaultDataMode = config.icomWlan.dataMode ?? true;
+    this.ioSessionId += 1;
+    this.backgroundTasksStarted = false;
 
     // 更新状态
     this.setState(RadioConnectionState.CONNECTING);
@@ -212,9 +243,6 @@ export class IcomWlanConnection
       this.setState(RadioConnectionState.CONNECTED);
       logger.info('ICOM radio connected successfully');
 
-      // 启动数值表轮询
-      this.startMeterPolling();
-
       // 触发连接成功事件
       this.emit('connected');
 
@@ -233,6 +261,8 @@ export class IcomWlanConnection
    */
   async disconnect(reason?: string): Promise<void> {
     logger.info(`Disconnecting: ${reason || 'no reason'}`);
+    this.ioSessionId += 1;
+    this.backgroundTasksStarted = false;
 
     // 清理资源
     await this.cleanup();
@@ -250,99 +280,109 @@ export class IcomWlanConnection
    * 设置电台频率
    */
   async setFrequency(frequency: number): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setFrequency', async () => {
+      this.checkConnected();
 
-    try {
-      await this.rig!.setFrequency(frequency);
-      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
-    } catch (error) {
-      throw this.convertError(error, 'setFrequency');
-    }
+      try {
+        await this.rig!.setFrequency(frequency);
+        logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
+      } catch (error) {
+        throw this.convertError(error, 'setFrequency');
+      }
+    });
   }
 
   /**
    * 获取当前频率
    */
   async getFrequency(): Promise<number> {
-    this.checkConnected();
+    return this.runSerializedTask('getFrequency', async () => {
+      this.checkConnected();
 
-    try {
-      const freq = await this.rig!.readOperatingFrequency({ timeout: 3000 });
-      if (freq !== null) {
-        return freq;
+      try {
+        const freq = await this.rig!.readOperatingFrequency({ timeout: 3000 });
+        if (freq !== null) {
+          return freq;
+        }
+        throw new Error('Get frequency returned null');
+      } catch (error) {
+        throw this.convertError(error, 'getFrequency');
       }
-      throw new Error('Get frequency returned null');
-    } catch (error) {
-      throw this.convertError(error, 'getFrequency');
-    }
+    });
   }
 
   /**
    * 控制 PTT
    */
   async setPTT(enabled: boolean): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setPTT', async () => {
+      this.checkConnected();
 
-    try {
-      logger.debug(`PTT ${enabled ? 'TX start' : 'RX start'}`);
-      await this.rig!.setPtt(enabled);
-      logger.debug(`PTT ${enabled ? 'TX active' : 'RX active'}`);
-    } catch (error) {
-      throw RadioError.pttActivationFailed(
-        `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
-        error instanceof Error ? error : new Error(String(error))
-      );
-    }
+      try {
+        logger.debug(`PTT ${enabled ? 'TX start' : 'RX start'}`);
+        await this.rig!.setPtt(enabled);
+        logger.debug(`PTT ${enabled ? 'TX active' : 'RX active'}`);
+      } catch (error) {
+        throw RadioError.pttActivationFailed(
+          `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
+          error instanceof Error ? error : new Error(String(error))
+        );
+      }
+    });
   }
 
   /**
    * 设置电台工作模式
    */
   async setMode(mode: string, bandwidth?: RadioModeBandwidth, _options?: SetRadioModeOptions): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setMode', async () => {
+      this.checkConnected();
 
-    try {
-      if (typeof bandwidth === 'number') {
-        throw new Error('ICOM WLAN setMode does not support numeric passband widths');
+      try {
+        if (typeof bandwidth === 'number') {
+          throw new Error('ICOM WLAN setMode does not support numeric passband widths');
+        }
+
+        // 将 bandwidth 转换为 dataMode
+        // 如果指定了 bandwidth，使用 bandwidth 映射
+        // 否则使用配置的默认 dataMode
+        const dataMode = bandwidth === 'wide'
+          ? true
+          : bandwidth === 'narrow'
+            ? false
+            : this.defaultDataMode;
+
+        // 将模式字符串映射到 ICOM 模式代码
+        const modeCode = this.mapModeToIcom(mode);
+        await this.rig!.setMode(modeCode, { dataMode });
+
+        logger.debug(`Mode set: ${mode}${dataMode ? ' (Data)' : ''}`);
+      } catch (error) {
+        throw this.convertError(error, 'setMode');
       }
-
-      // 将 bandwidth 转换为 dataMode
-      // 如果指定了 bandwidth，使用 bandwidth 映射
-      // 否则使用配置的默认 dataMode
-      const dataMode = bandwidth === 'wide'
-        ? true
-        : bandwidth === 'narrow'
-          ? false
-          : this.defaultDataMode;
-
-      // 将模式字符串映射到 ICOM 模式代码
-      const modeCode = this.mapModeToIcom(mode);
-      await this.rig!.setMode(modeCode, { dataMode });
-
-      logger.debug(`Mode set: ${mode}${dataMode ? ' (Data)' : ''}`);
-    } catch (error) {
-      throw this.convertError(error, 'setMode');
-    }
+    });
   }
 
   /**
    * 获取当前工作模式
    */
   async getMode(): Promise<{ mode: string; bandwidth: string }> {
-    this.checkConnected();
+    return this.runSerializedTask('getMode', async () => {
+      this.checkConnected();
 
-    try {
-      const result = await this.rig!.readOperatingMode({ timeout: 3000 });
-      if (result) {
-        return {
-          mode: result.modeName || `Mode ${result.mode}`,
-          bandwidth: result.filterName || 'Normal'
-        };
+      try {
+        const result = await this.rig!.readOperatingMode({ timeout: 3000 });
+        if (result) {
+          return {
+            mode: result.modeName || `Mode ${result.mode}`,
+            bandwidth: result.filterName || 'Normal'
+          };
+        }
+        throw new Error('Get mode returned null');
+      } catch (error) {
+        throw this.convertError(error, 'getMode');
       }
-      throw new Error('Get mode returned null');
-    } catch (error) {
-      throw this.convertError(error, 'getMode');
-    }
+    });
   }
 
   /**
@@ -363,18 +403,20 @@ export class IcomWlanConnection
    * 测试连接
    */
   async testConnection(): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('testConnection', async () => {
+      this.checkConnected();
 
-    try {
-      const freq = await this.rig!.readOperatingFrequency({ timeout: 5000 });
-      if (freq !== null) {
-        logger.debug(`Connection test passed, current frequency: ${(freq / 1000000).toFixed(3)} MHz`);
-      } else {
-        throw new Error('Test connection failed: unable to get frequency');
+      try {
+        const freq = await this.rig!.readOperatingFrequency({ timeout: 5000 });
+        if (freq !== null) {
+          logger.debug(`Connection test passed, current frequency: ${(freq / 1000000).toFixed(3)} MHz`);
+        } else {
+          throw new Error('Test connection failed: unable to get frequency');
+        }
+      } catch (error) {
+        throw this.convertError(error, 'testConnection');
       }
-    } catch (error) {
-      throw this.convertError(error, 'testConnection');
-    }
+    });
   }
 
   /**
@@ -399,22 +441,26 @@ export class IcomWlanConnection
   }
 
   async enableScopeStream(): Promise<void> {
-    this.checkConnected();
-    if (this.scopeEnabled) {
-      return;
-    }
+    await this.runSerializedTask('enableScopeStream', async () => {
+      this.checkConnected();
+      if (this.scopeEnabled) {
+        return;
+      }
 
-    await this.rig!.enableScope();
-    this.scopeEnabled = true;
+      await this.rig!.enableScope();
+      this.scopeEnabled = true;
+    });
   }
 
   async disableScopeStream(): Promise<void> {
-    if (!this.rig || !this.scopeEnabled) {
-      return;
-    }
+    await this.runSerializedTask('disableScopeStream', async () => {
+      if (!this.rig || !this.scopeEnabled) {
+        return;
+      }
 
-    await this.rig.disableScope();
-    this.scopeEnabled = false;
+      await this.rig.disableScope();
+      this.scopeEnabled = false;
+    });
   }
 
   addScopeFrameListener(listener: (frame: IcomScopeFrame) => void): void {
@@ -444,43 +490,49 @@ export class IcomWlanConnection
   }
 
   async getCurrentSpectrumSpan(): Promise<number | null> {
-    this.checkConnected();
-    try {
-      const info = await this.rig!.readScopeSpan();
-      return typeof info?.spanHz === 'number' && Number.isFinite(info.spanHz) && info.spanHz > 0 ? info.spanHz : null;
-    } catch (error) {
-      throw this.convertError(error, 'getCurrentSpectrumSpan');
-    }
+    return this.runSerializedTask('getCurrentSpectrumSpan', async () => {
+      this.checkConnected();
+      try {
+        const info = await this.rig!.readScopeSpan();
+        return typeof info?.spanHz === 'number' && Number.isFinite(info.spanHz) && info.spanHz > 0 ? info.spanHz : null;
+      } catch (error) {
+        throw this.convertError(error, 'getCurrentSpectrumSpan');
+      }
+    });
   }
 
   async setSpectrumSpan(spanHz: number): Promise<void> {
-    this.checkConnected();
-    try {
-      await this.rig!.setScopeSpan(spanHz);
-    } catch (error) {
-      throw this.convertError(error, 'setSpectrumSpan');
-    }
+    await this.runSerializedTask('setSpectrumSpan', async () => {
+      this.checkConnected();
+      try {
+        await this.rig!.setScopeSpan(spanHz);
+      } catch (error) {
+        throw this.convertError(error, 'setSpectrumSpan');
+      }
+    });
   }
 
   async getSpectrumDisplayState(): Promise<RadioSpectrumDisplayState | null> {
-    this.checkConnected();
-    try {
-      const state = await this.rig!.getSpectrumDisplayState();
-      return {
-        mode: state?.mode ?? null,
-        spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
-        edgeSlot: typeof state?.edgeSlot === 'number' && Number.isFinite(state.edgeSlot) ? state.edgeSlot : null,
-        edgeLowHz: typeof state?.edgeLowHz === 'number' && Number.isFinite(state.edgeLowHz) ? state.edgeLowHz : null,
-        edgeHighHz: typeof state?.edgeHighHz === 'number' && Number.isFinite(state.edgeHighHz) ? state.edgeHighHz : null,
-        supportedSpans: Array.isArray(state?.supportedSpans)
-          ? state.supportedSpans.filter((span: unknown): span is number => typeof span === 'number' && Number.isFinite(span) && span > 0)
-          : [],
-        supportsFixedEdges: Boolean(state?.supportsFixedEdges),
-        supportsEdgeSlotSelection: Boolean(state?.supportsEdgeSlotSelection),
-      };
-    } catch (error) {
-      throw this.convertError(error, 'getSpectrumDisplayState');
-    }
+    return this.runSerializedTask('getSpectrumDisplayState', async () => {
+      this.checkConnected();
+      try {
+        const state = await this.rig!.getSpectrumDisplayState();
+        return {
+          mode: state?.mode ?? null,
+          spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
+          edgeSlot: typeof state?.edgeSlot === 'number' && Number.isFinite(state.edgeSlot) ? state.edgeSlot : null,
+          edgeLowHz: typeof state?.edgeLowHz === 'number' && Number.isFinite(state.edgeLowHz) ? state.edgeLowHz : null,
+          edgeHighHz: typeof state?.edgeHighHz === 'number' && Number.isFinite(state.edgeHighHz) ? state.edgeHighHz : null,
+          supportedSpans: Array.isArray(state?.supportedSpans)
+            ? state.supportedSpans.filter((span: unknown): span is number => typeof span === 'number' && Number.isFinite(span) && span > 0)
+            : [],
+          supportsFixedEdges: Boolean(state?.supportsFixedEdges),
+          supportsEdgeSlotSelection: Boolean(state?.supportsEdgeSlotSelection),
+        };
+      } catch (error) {
+        throw this.convertError(error, 'getSpectrumDisplayState');
+      }
+    });
   }
 
   async configureSpectrumDisplay(config: {
@@ -490,12 +542,14 @@ export class IcomWlanConnection
     edgeLowHz?: number;
     edgeHighHz?: number;
   }): Promise<void> {
-    this.checkConnected();
-    try {
-      await this.rig!.configureSpectrumDisplay(config);
-    } catch (error) {
-      throw this.convertError(error, 'configureSpectrumDisplay');
-    }
+    await this.runSerializedTask('configureSpectrumDisplay', async () => {
+      this.checkConnected();
+      try {
+        await this.rig!.configureSpectrumDisplay(config);
+      } catch (error) {
+        throw this.convertError(error, 'configureSpectrumDisplay');
+      }
+    });
   }
 
   // ===== 天线调谐器控制 =====
@@ -505,11 +559,11 @@ export class IcomWlanConnection
    * ICOM 电台通常都支持内置天调
    */
   async getTunerCapabilities(): Promise<TunerCapabilities> {
-    return {
+    return this.runSerializedTask('getTunerCapabilities', async () => ({
       supported: true,
       hasSwitch: true,
       hasManualTune: true,
-    };
+    }));
   }
 
   /**
@@ -534,11 +588,11 @@ export class IcomWlanConnection
    * 获取天线调谐器状态（简化版：使用本地状态跟踪）
    */
   async getTunerStatus(): Promise<TunerStatus> {
-    return {
+    return this.runSerializedTask('getTunerStatus', async () => ({
       enabled: this.tunerEnabled,
       active: false,
       status: 'idle',
-    };
+    }));
   }
 
   /**
@@ -546,20 +600,22 @@ export class IcomWlanConnection
    * 使用 CI-V 命令 1C 01 00/01 设置
    */
   async setTuner(enabled: boolean): Promise<void> {
-    this.checkConnected();
+    await this.runSerializedTask('setTuner', async () => {
+      this.checkConnected();
 
-    try {
-      // CI-V: 1C 01 <00/01>
-      const data = Buffer.from([0x1C, 0x01, enabled ? 0x01 : 0x00]);
-      this.rig!.sendCiv(data);
+      try {
+        // CI-V: 1C 01 <00/01>
+        const data = Buffer.from([0x1C, 0x01, enabled ? 0x01 : 0x00]);
+        this.rig!.sendCiv(data);
 
-      // 更新本地状态
-      this.tunerEnabled = enabled;
-      logger.debug(`Tuner ${enabled ? 'enabled' : 'disabled'}`);
-    } catch (error) {
-      logger.error('Failed to set tuner:', error);
-      throw this.convertError(error, 'setTuner');
-    }
+        // 更新本地状态
+        this.tunerEnabled = enabled;
+        logger.debug(`Tuner ${enabled ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        logger.error('Failed to set tuner:', error);
+        throw this.convertError(error, 'setTuner');
+      }
+    });
   }
 
   /**
@@ -567,152 +623,178 @@ export class IcomWlanConnection
    * 使用 CI-V 命令 1C 01 02 启动
    */
   async startTuning(): Promise<boolean> {
-    this.checkConnected();
+    return this.runSerializedTask('startTuning', async () => {
+      this.checkConnected();
 
-    try {
-      // CI-V: 1C 01 02
-      const data = Buffer.from([0x1C, 0x01, 0x02]);
-      this.rig!.sendCiv(data);
-      logger.debug('Manual tuning started');
-      return true;
-    } catch (error) {
-      logger.error('Failed to start tuning:', error);
-      return false;
-    }
+      try {
+        // CI-V: 1C 01 02
+        const data = Buffer.from([0x1C, 0x01, 0x02]);
+        this.rig!.sendCiv(data);
+        logger.debug('Manual tuning started');
+        return true;
+      } catch (error) {
+        logger.error('Failed to start tuning:', error);
+        return false;
+      }
+    });
   }
 
   // ===== Level 类控制（AF 增益、静噪、发射功率、MIC 增益、噪声消隐、降噪） =====
 
   async getAFGain(): Promise<number> {
-    this.checkConnected();
-    try {
-      const reading = await this.rig!.getAFGain({ timeout: 3000 });
-      const value = reading?.normalized ?? 0;
-      logger.debug(`AF gain read: ${(value * 100).toFixed(0)}%`);
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getAFGain');
-    }
+    return this.runSerializedTask('getAFGain', async () => {
+      this.checkConnected();
+      try {
+        const reading = await this.rig!.getAFGain({ timeout: 3000 });
+        const value = reading?.normalized ?? 0;
+        logger.debug(`AF gain read: ${(value * 100).toFixed(0)}%`);
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getAFGain');
+      }
+    });
   }
 
   async setAFGain(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      this.rig!.setAFGain(value);
-      logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setAFGain');
-    }
+    await this.runSerializedTask('setAFGain', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setAFGain(value);
+        logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setAFGain');
+      }
+    });
   }
 
   async getSQL(): Promise<number> {
-    this.checkConnected();
-    try {
-      const reading = await this.rig!.getSQL({ timeout: 3000 });
-      const value = reading?.normalized ?? 0;
-      logger.debug(`SQL read: ${(value * 100).toFixed(0)}%`);
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getSQL');
-    }
+    return this.runSerializedTask('getSQL', async () => {
+      this.checkConnected();
+      try {
+        const reading = await this.rig!.getSQL({ timeout: 3000 });
+        const value = reading?.normalized ?? 0;
+        logger.debug(`SQL read: ${(value * 100).toFixed(0)}%`);
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getSQL');
+      }
+    });
   }
 
   async setSQL(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      this.rig!.setSQL(value);
-      logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setSQL');
-    }
+    await this.runSerializedTask('setSQL', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setSQL(value);
+        logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setSQL');
+      }
+    });
   }
 
   async getRFPower(): Promise<number> {
-    this.checkConnected();
-    try {
-      const reading = await this.rig!.getRFPower({ timeout: 3000 });
-      const value = reading?.normalized ?? 0;
-      logger.debug(`RF power read: ${(value * 100).toFixed(0)}%`);
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getRFPower');
-    }
+    return this.runSerializedTask('getRFPower', async () => {
+      this.checkConnected();
+      try {
+        const reading = await this.rig!.getRFPower({ timeout: 3000 });
+        const value = reading?.normalized ?? 0;
+        logger.debug(`RF power read: ${(value * 100).toFixed(0)}%`);
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getRFPower');
+      }
+    });
   }
 
   async setRFPower(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      this.rig!.setRFPower(value);
-      logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setRFPower');
-    }
+    await this.runSerializedTask('setRFPower', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setRFPower(value);
+        logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setRFPower');
+      }
+    });
   }
 
   async getMicGain(): Promise<number> {
-    this.checkConnected();
-    try {
-      const reading = await this.rig!.getMicGain({ timeout: 3000 });
-      const value = reading?.normalized ?? 0;
-      logger.debug(`MIC gain read: ${(value * 100).toFixed(0)}%`);
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getMicGain');
-    }
+    return this.runSerializedTask('getMicGain', async () => {
+      this.checkConnected();
+      try {
+        const reading = await this.rig!.getMicGain({ timeout: 3000 });
+        const value = reading?.normalized ?? 0;
+        logger.debug(`MIC gain read: ${(value * 100).toFixed(0)}%`);
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getMicGain');
+      }
+    });
   }
 
   async setMicGain(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      this.rig!.setMicGain(value);
-      logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setMicGain');
-    }
+    await this.runSerializedTask('setMicGain', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setMicGain(value);
+        logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setMicGain');
+      }
+    });
   }
 
   async getNBEnabled(): Promise<number> {
-    this.checkConnected();
-    try {
-      const reading = await this.rig!.getNBLevel({ timeout: 3000 });
-      const value = reading?.normalized ?? 0;
-      logger.debug(`NB level read: ${(value * 100).toFixed(0)}%`);
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getNBEnabled');
-    }
+    return this.runSerializedTask('getNBEnabled', async () => {
+      this.checkConnected();
+      try {
+        const reading = await this.rig!.getNBLevel({ timeout: 3000 });
+        const value = reading?.normalized ?? 0;
+        logger.debug(`NB level read: ${(value * 100).toFixed(0)}%`);
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getNBEnabled');
+      }
+    });
   }
 
   async setNBEnabled(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      this.rig!.setNBLevel(value);
-      logger.debug(`NB level set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setNBEnabled');
-    }
+    await this.runSerializedTask('setNBEnabled', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setNBLevel(value);
+        logger.debug(`NB level set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setNBEnabled');
+      }
+    });
   }
 
   async getNREnabled(): Promise<number> {
-    this.checkConnected();
-    try {
-      const reading = await this.rig!.getNRLevel({ timeout: 3000 });
-      const value = reading?.normalized ?? 0;
-      logger.debug(`NR level read: ${(value * 100).toFixed(0)}%`);
-      return value;
-    } catch (error) {
-      throw this.convertError(error, 'getNREnabled');
-    }
+    return this.runSerializedTask('getNREnabled', async () => {
+      this.checkConnected();
+      try {
+        const reading = await this.rig!.getNRLevel({ timeout: 3000 });
+        const value = reading?.normalized ?? 0;
+        logger.debug(`NR level read: ${(value * 100).toFixed(0)}%`);
+        return value;
+      } catch (error) {
+        throw this.convertError(error, 'getNREnabled');
+      }
+    });
   }
 
   async setNREnabled(value: number): Promise<void> {
-    this.checkConnected();
-    try {
-      this.rig!.setNRLevel(value);
-      logger.debug(`NR level set: ${(value * 100).toFixed(0)}%`);
-    } catch (error) {
-      throw this.convertError(error, 'setNREnabled');
-    }
+    await this.runSerializedTask('setNREnabled', async () => {
+      this.checkConnected();
+      try {
+        this.rig!.setNRLevel(value);
+        logger.debug(`NR level set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertError(error, 'setNREnabled');
+      }
+    });
   }
 
   /**
@@ -793,8 +875,8 @@ export class IcomWlanConnection
 
     logger.debug(`Starting meter polling, interval ${this.meterPollingIntervalMs}ms`);
 
-    this.meterPollingInterval = setInterval(async () => {
-      await this.pollMeters();
+    this.meterPollingInterval = setInterval(() => {
+      void this.pollMeters();
     }, this.meterPollingIntervalMs);
   }
 
@@ -813,56 +895,64 @@ export class IcomWlanConnection
    * 轮询数值表数据
    */
   private async pollMeters(): Promise<void> {
-    if (!this.rig) return;
-
     try {
-      // 并行读取四个数值表
-      const [swr, alcRaw, level, power] = await Promise.all([
-        this.rig.readSWR({ timeout: 200 }).catch(() => null),
-        this.rig.readALC({ timeout: 200 }).catch(() => null),
-        this.rig.getLevelMeter({ timeout: 200 }).catch(() => null),
-        this.rig.readPowerLevel({ timeout: 200 }).catch(() => null),
-      ]);
-      // Override alert: align with Hamlib semantics (true only at >= 100%)
-      const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
-
-      // 检查是否所有读取都失败
-      const allFailed = swr === null && alc === null && level === null && power === null;
-
-      if (allFailed) {
-        this.meterPollFailCount++;
-        if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-          logger.warn(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost`);
-          this.stopMeterPolling();
-          this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
+      await this.runSerializedTask('pollMeters', async () => {
+        if (!this.rig) {
           return;
         }
-      } else {
-        // 有任一成功，重置计数
-        this.meterPollFailCount = 0;
-      }
 
-      const meterData: MeterData = {
-        swr,
-        alc,
-        level,
-        power: power !== null ? { ...power, watts: null, maxWatts: null } : null,
-      };
+        try {
+          // 并行读取四个数值表
+          const [swr, alcRaw, level, power] = await Promise.all([
+            this.rig.readSWR({ timeout: 200 }).catch(() => null),
+            this.rig.readALC({ timeout: 200 }).catch(() => null),
+            this.rig.getLevelMeter({ timeout: 200 }).catch(() => null),
+            this.rig.readPowerLevel({ timeout: 200 }).catch(() => null),
+          ]);
+          // Override alert: align with Hamlib semantics (true only at >= 100%)
+          const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
 
-      // 📝 EventBus 优化：双路径策略
-      // 原路径：用于 DigitalRadioEngine 健康检查
-      this.emit('meterData', meterData);
+          // 检查是否所有读取都失败
+          const allFailed = swr === null && alc === null && level === null && power === null;
 
-      // EventBus 直达：用于 WebSocket 广播到前端
-      globalEventBus.emit('bus:meterData', meterData);
+          if (allFailed) {
+            this.meterPollFailCount++;
+            if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+              logger.warn(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost`);
+              this.stopMeterPolling();
+              this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
+              return;
+            }
+          } else {
+            // 有任一成功，重置计数
+            this.meterPollFailCount = 0;
+          }
+
+          const meterData: MeterData = {
+            swr,
+            alc,
+            level,
+            power: power !== null ? { ...power, watts: null, maxWatts: null } : null,
+          };
+
+          // 📝 EventBus 优化：双路径策略
+          // 原路径：用于 DigitalRadioEngine 健康检查
+          this.emit('meterData', meterData);
+
+          // EventBus 直达：用于 WebSocket 广播到前端
+          globalEventBus.emit('bus:meterData', meterData);
+        } catch (error) {
+          // Promise.all 本身抛异常（不应发生，因为内部都有 catch）
+          this.meterPollFailCount++;
+          if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
+            logger.warn(`Meter polling exception failed ${this.meterPollFailCount} times, connection lost`);
+            this.stopMeterPolling();
+            this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
+          }
+        }
+      });
     } catch (error) {
-      // Promise.all 本身抛异常（不应发生，因为内部都有 catch）
-      this.meterPollFailCount++;
-      if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-        logger.warn(`Meter polling exception failed ${this.meterPollFailCount} times, connection lost`);
-        this.stopMeterPolling();
-        this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
-      }
+      logger.debug(`Skipping meter polling result: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -896,6 +986,7 @@ export class IcomWlanConnection
       // 停止数值表轮询
       this.stopMeterPolling();
       this.scopeEnabled = false;
+      this.backgroundTasksStarted = false;
 
       // 清理 rig 实例
       if (this.rig) {
@@ -926,6 +1017,7 @@ export class IcomWlanConnection
       }
 
       this.currentConfig = null;
+      this.tunerEnabled = false;
       this.removeAllListeners();
     } finally {
       // 确保标志位被重置

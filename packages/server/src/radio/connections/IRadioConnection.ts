@@ -192,6 +192,14 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   disconnect(reason?: string): Promise<void>;
 
   /**
+   * 在连接后的保守初始化完成后启动后台轮询/监控。
+   *
+   * 旧机型对连接早期并发访问较敏感，因此由上层统一在 bootstrap
+   * 完成后显式开启后台任务。
+   */
+  startBackgroundTasks?(): void;
+
+  /**
    * 设置电台频率
    *
    * @param frequency - 频率（Hz）
