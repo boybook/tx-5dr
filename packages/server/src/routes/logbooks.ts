@@ -34,6 +34,15 @@ import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtil
 
 const logger = createLogger('LogbooksRoute');
 
+function normalizeGridQuery(grid?: string): string | undefined {
+  if (!grid) {
+    return undefined;
+  }
+
+  const normalized = grid.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function getImportPayloadFromBody(body: unknown): {
   content: string;
   format: LogBookImportFormat;
@@ -375,6 +384,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       // 转换查询选项格式以匹配LogQueryOptions接口
       const queryOptions: LogQueryOptions = {
         callsign: options.callsign,
+        grid: normalizeGridQuery(options.grid),
         mode: options.mode,
         excludeModes: options.excludeModes
           ? options.excludeModes.split(',').map(m => m.trim()).filter(Boolean)

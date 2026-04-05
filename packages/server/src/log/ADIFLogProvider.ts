@@ -107,6 +107,15 @@ function normalizeGridKey(grid?: string): string | undefined {
   return /^[A-R]{2}[0-9]{2}$/.test(gridKey) ? gridKey : undefined;
 }
 
+function normalizeGridSearch(grid?: string): string | undefined {
+  if (!grid) {
+    return undefined;
+  }
+
+  const normalized = grid.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeMode(mode?: string): string {
   return (mode || 'UNKNOWN').toUpperCase();
 }
@@ -337,14 +346,14 @@ function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
     index.perCallsign.set(key, {
       count: 1,
       lastQSO: qso,
-      grids: new Set(qso.grid ? [qso.grid] : [])
+      grids: new Set(gridKey ? [gridKey] : [])
     });
   } else {
     existing.count += 1;
     if (!existing.lastQSO || qso.startTime > existing.lastQSO.startTime) {
       existing.lastQSO = qso;
     }
-    if (qso.grid) existing.grids.add(qso.grid);
+    if (gridKey) existing.grids.add(gridKey);
   }
 
   // 按呼号的频段集合（用于快速判重）
@@ -970,7 +979,13 @@ export class ADIFLogProvider implements ILogProvider {
       
       // 网格过滤
       if (options.grid) {
-        results = results.filter(qso => qso.grid === options.grid);
+        const searchGrid = normalizeGridSearch(options.grid);
+        if (searchGrid) {
+          results = results.filter((qso) => {
+            const qsoGrid = normalizeGridSearch(qso.grid);
+            return qsoGrid?.startsWith(searchGrid) ?? false;
+          });
+        }
       }
       
       // 频率范围过滤

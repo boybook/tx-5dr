@@ -204,6 +204,27 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   });
 
+  it('treats 6-char worked grids as the same 4-char grid during analysis', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'BG2AA_1770004800000_oi67',
+      callsign: 'BG2AA',
+      grid: 'OI67WS',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const analysis = await provider.analyzeCallsign('BG9ZZ', 'OI67', { operatorId: 'op1', band: '20m' });
+
+    expect(analysis.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
+
   it('updates the banded grid cache immediately after addQSO', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
@@ -223,6 +244,101 @@ describe('ADIFLogProvider import', () => {
 
     const after = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op1', band: '20m' });
     expect(after.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
+
+  it('matches grid queries by normalized prefix', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'grid-query-prefix-1',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    await provider.addQSO({
+      id: 'grid-query-prefix-2',
+      callsign: 'BG3BB',
+      grid: 'PM02AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:15:00Z'),
+      messages: [],
+    }, 'op1');
+
+    await provider.addQSO({
+      id: 'grid-query-prefix-3',
+      callsign: 'BG4CC',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:30:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const fourCharMatches = await provider.queryQSOs({ grid: 'PM01' });
+    const shortPrefixMatches = await provider.queryQSOs({ grid: 'PM' });
+    const sixCharMatches = await provider.queryQSOs({ grid: 'pm01aa' });
+
+    expect(fourCharMatches.map((qso) => qso.callsign)).toEqual(['BG2AA']);
+    expect(shortPrefixMatches.map((qso) => qso.callsign)).toEqual(['BG3BB', 'BG2AA']);
+    expect(sixCharMatches.map((qso) => qso.callsign)).toEqual(['BG2AA']);
+
+    await provider.close();
+  });
+
+  it('combines grid filtering with other query options', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'grid-query-combined-1',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+      qrzQslSent: 'Y',
+    }, 'op1');
+
+    await provider.addQSO({
+      id: 'grid-query-combined-2',
+      callsign: 'BG2BB',
+      grid: 'PM01BB',
+      frequency: 14074000,
+      mode: 'FT4',
+      startTime: Date.parse('2026-01-01T12:15:00Z'),
+      messages: [],
+      qrzQslSent: 'Y',
+    }, 'op1');
+
+    await provider.addQSO({
+      id: 'grid-query-combined-3',
+      callsign: 'BG2CC',
+      grid: 'PM01CC',
+      frequency: 7074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:30:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const matches = await provider.queryQSOs({
+      grid: 'PM01',
+      mode: 'FT8',
+      qslStatus: 'uploaded',
+      frequencyRange: {
+        min: 14000000,
+        max: 14350000,
+      },
+    });
+
+    expect(matches.map((qso) => qso.callsign)).toEqual(['BG2AA']);
 
     await provider.close();
   });

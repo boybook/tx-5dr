@@ -51,6 +51,9 @@
     "confirmStatus": "确认"
   },
   "filter": {
+    "grid": "网格",
+    "gridPlaceholder": "输入网格，如 PM01 或 PM01AA",
+    "gridHelp": "支持 4/6/8 位网格前缀匹配，例如 PM01 可匹配 PM01AA。",
     "band": "频段",
     "allBands": "全部频段",
     "bandFilter": "频段筛选",

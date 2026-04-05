@@ -107,6 +107,7 @@ export const LogBookActionResponseSchema = z.object({
  */
 export const LogBookQSOQueryOptionsSchema = z.object({
   callsign: z.string().optional(),
+  grid: z.string().optional(),
   band: z.string().optional(),
   mode: z.string().optional(),
   /** 排除的模式列表，逗号分隔，如 "FT8,FT4" */
