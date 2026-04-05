@@ -86,6 +86,50 @@ function normalizeMode(mode?: string): string {
   return (mode || 'UNKNOWN').toUpperCase();
 }
 
+function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord, 'mode' | 'submode'> {
+  const normalizedMode = mode?.trim().toUpperCase();
+  const normalizedSubmode = submode?.trim().toUpperCase();
+
+  if (normalizedMode === 'MFSK' && normalizedSubmode === 'FT4') {
+    return { mode: 'FT4', submode: 'FT4' };
+  }
+
+  return {
+    mode: mode || 'FT8',
+    submode: submode || undefined,
+  };
+}
+
+function mapInternalModeToAdif(mode?: string, submode?: string): { mode: string; submode?: string } {
+  const normalizedMode = mode?.trim().toUpperCase();
+  const normalizedSubmode = submode?.trim().toUpperCase();
+
+  if (normalizedMode === 'FT4') {
+    return { mode: 'MFSK', submode: 'FT4' };
+  }
+
+  if (normalizedMode === 'MFSK' && normalizedSubmode) {
+    return { mode: 'MFSK', submode: normalizedSubmode };
+  }
+
+  return {
+    mode: mode || 'FT8',
+    submode: submode || undefined,
+  };
+}
+
+function hasLegacyTx5drFields(fields: Record<string, unknown>): boolean {
+  return [
+    'note',
+    'app_tx5dr_station_location_id',
+    'app_tx5dr_dxcc_status',
+    'app_tx5dr_qrz_qsl_sent',
+    'app_tx5dr_qrz_qsl_rcvd',
+    'app_tx5dr_qrz_qslsdate',
+    'app_tx5dr_qrz_qslrdate',
+  ].some((key) => key in fields);
+}
+
 function isQSOConfirmed(qso: QSORecord): boolean {
   return qso.lotwQslReceived === 'Y'
     || qso.lotwQslReceived === 'V'
@@ -140,6 +184,7 @@ const IMPORT_MERGE_FIELDS: Array<keyof QSORecord> = [
   'remarks',
   'reportSent',
   'reportReceived',
+  'submode',
   'endTime',
   'frequency',
   'dxccId',
@@ -510,21 +555,30 @@ export class ADIFLogProvider implements ILogProvider {
     const hour = parseInt(timeStr.substring(0, 2));
     const minute = parseInt(timeStr.substring(2, 4));
     const second = timeStr.length >= 6 ? parseInt(timeStr.substring(4, 6)) : 0;
-    
+
     const startTime = new Date(Date.UTC(year, month, day, hour, minute, second)).getTime();
     
     // 如果有结束时间，解析它
     let endTime: number | undefined;
     if (fields.time_off) {
+      const endDateStr = fields.qso_date_off || qsoDate;
       const endTimeStr = fields.time_off;
+      const endYear = parseInt(endDateStr.substring(0, 4));
+      const endMonth = parseInt(endDateStr.substring(4, 6)) - 1;
+      const endDay = parseInt(endDateStr.substring(6, 8));
       const endHour = parseInt(endTimeStr.substring(0, 2));
       const endMinute = parseInt(endTimeStr.substring(2, 4));
       const endSecond = endTimeStr.length >= 6 ? parseInt(endTimeStr.substring(4, 6)) : 0;
-      endTime = new Date(Date.UTC(year, month, day, endHour, endMinute, endSecond)).getTime();
+      endTime = new Date(Date.UTC(endYear, endMonth, endDay, endHour, endMinute, endSecond)).getTime();
     }
     
     // 解析频率（MHz转Hz）
     const frequency = fields.freq ? parseFloat(fields.freq) * 1000000 : 0;
+    const modeInfo = mapAdifModeToInternal(fields.mode, fields.submode);
+    const legacyMyLocationFallback = hasLegacyTx5drFields(fields)
+      && !fields.my_state
+      && !fields.my_cnty
+      && !fields.my_iota;
     
     const record: QSORecord = {
       id,
@@ -533,14 +587,15 @@ export class ADIFLogProvider implements ILogProvider {
       myGrid: fields.my_gridsquare ?? undefined,
       myCallsign: fields.station_callsign ?? undefined,
       frequency,
-      mode: fields.mode || 'FT8',
+      mode: modeInfo.mode,
+      submode: modeInfo.submode,
       startTime,
       endTime,
       reportSent: fields.rst_sent,
       reportReceived: fields.rst_rcvd,
       messages: fields.comment ? [fields.comment] : [],
       qth: fields.qth ?? undefined,
-      remarks: fields.note ?? undefined,
+      remarks: fields.notes ?? fields.note ?? undefined,
     };
 
     if (fields.dxcc) {
@@ -597,13 +652,19 @@ export class ADIFLogProvider implements ILogProvider {
         record.myItuZone = parsedMyItu;
       }
     }
-    if (fields.state) {
+    if (fields.my_state) {
+      record.myState = fields.my_state;
+    } else if (legacyMyLocationFallback && fields.state) {
       record.myState = fields.state;
     }
-    if (fields.cnty) {
+    if (fields.my_cnty) {
+      record.myCounty = fields.my_cnty;
+    } else if (legacyMyLocationFallback && fields.cnty) {
       record.myCounty = fields.cnty;
     }
-    if (fields.iota) {
+    if (fields.my_iota) {
+      record.myIota = fields.my_iota;
+    } else if (legacyMyLocationFallback && fields.iota) {
       record.myIota = fields.iota;
     }
 
@@ -650,10 +711,11 @@ export class ADIFLogProvider implements ILogProvider {
    * 将QSORecord转换为ADIF记录
    * @param overrideMyGrid 覆盖 qso.myGrid（用于导出时注入兜底网格）
    */
-  private qsoRecordToADIF(qso: QSORecord, operatorId?: string, overrideMyGrid?: string): string {
+  private qsoRecordToADIF(qso: QSORecord, overrideMyGrid?: string): string {
     const startDate = new Date(qso.startTime);
     const dateStr = startDate.toISOString().slice(0, 10).replace(/-/g, '');
     const timeOnStr = startDate.toISOString().slice(11, 19).replace(/:/g, '');
+    const adifMode = mapInternalModeToAdif(qso.mode, qso.submode);
     
     let adifRecord = '';
     
@@ -661,7 +723,10 @@ export class ADIFLogProvider implements ILogProvider {
     adifRecord += `<CALL:${qso.callsign.length}>${qso.callsign}`;
     adifRecord += `<QSO_DATE:8>${dateStr}`;
     adifRecord += `<TIME_ON:${timeOnStr.length}>${timeOnStr}`;
-    adifRecord += `<MODE:${qso.mode.length}>${qso.mode}`;
+    adifRecord += `<MODE:${adifMode.mode.length}>${adifMode.mode}`;
+    if (adifMode.submode) {
+      adifRecord += `<SUBMODE:${adifMode.submode.length}>${adifMode.submode}`;
+    }
     adifRecord += `<FREQ:${((qso.frequency / 1000000).toFixed(6)).length}>${(qso.frequency / 1000000).toFixed(6)}`;
     
     const band = getBandFromFrequency(qso.frequency);
@@ -689,7 +754,9 @@ export class ADIFLogProvider implements ILogProvider {
 
     if (qso.endTime) {
       const endDate = new Date(qso.endTime);
+      const endDateStr = endDate.toISOString().slice(0, 10).replace(/-/g, '');
       const timeOffStr = endDate.toISOString().slice(11, 19).replace(/:/g, '');
+      adifRecord += `<QSO_DATE_OFF:8>${endDateStr}`;
       adifRecord += `<TIME_OFF:${timeOffStr.length}>${timeOffStr}`;
     }
     
@@ -711,7 +778,7 @@ export class ADIFLogProvider implements ILogProvider {
     }
 
     if (qso.remarks) {
-      adifRecord += `<NOTE:${qso.remarks.length}>${qso.remarks}`;
+      adifRecord += `<NOTES:${qso.remarks.length}>${qso.remarks}`;
     }
 
     const effectiveMyGrid = overrideMyGrid ?? qso.myGrid;
@@ -735,13 +802,13 @@ export class ADIFLogProvider implements ILogProvider {
       adifRecord += `<MY_ITU_ZONE:${value.length}>${value}`;
     }
     if (qso.myState) {
-      adifRecord += `<STATE:${qso.myState.length}>${qso.myState}`;
+      adifRecord += `<MY_STATE:${qso.myState.length}>${qso.myState}`;
     }
     if (qso.myCounty) {
-      adifRecord += `<CNTY:${qso.myCounty.length}>${qso.myCounty}`;
+      adifRecord += `<MY_CNTY:${qso.myCounty.length}>${qso.myCounty}`;
     }
     if (qso.myIota) {
-      adifRecord += `<IOTA:${qso.myIota.length}>${qso.myIota}`;
+      adifRecord += `<MY_IOTA:${qso.myIota.length}>${qso.myIota}`;
     }
     if (qso.stationLocationId) {
       adifRecord += `<APP_TX5DR_STATION_LOCATION_ID:${qso.stationLocationId.length}>${qso.stationLocationId}`;
@@ -788,8 +855,8 @@ export class ADIFLogProvider implements ILogProvider {
       adifRecord += `<APP_TX5DR_QRZ_QSLRDATE:8>${formatADIFDateOnly(qso.qrzQslReceivedDate)}`;
     }
 
-    if (operatorId) {
-      adifRecord += `<OPERATOR:${operatorId.length}>${operatorId}`;
+    if (qso.myCallsign) {
+      adifRecord += `<OPERATOR:${qso.myCallsign.length}>${qso.myCallsign}`;
     }
 
     adifRecord += '<EOR>\n';
@@ -811,9 +878,7 @@ export class ADIFLogProvider implements ILogProvider {
     
     for (const qso of this.qsoCache.values()) {
       // 从ID中提取operatorId（如果存在）
-      const parts = qso.id.split('_');
-      const operatorId = parts.length > 3 ? parts[3] : undefined;
-      adifContent += this.qsoRecordToADIF(qso, operatorId);
+      adifContent += this.qsoRecordToADIF(qso);
     }
     
     await fs.writeFile(this.logFilePath, adifContent, 'utf-8');
@@ -1229,10 +1294,8 @@ export class ADIFLogProvider implements ILogProvider {
 `;
 
     for (const qso of qsos) {
-      const parts = qso.id.split('_');
-      const operatorId = parts.length > 3 ? parts[3] : undefined;
       const effectiveMyGrid = qso.myGrid || exportOptions?.fallbackGrid;
-      adifContent += this.qsoRecordToADIF(qso, operatorId, effectiveMyGrid);
+      adifContent += this.qsoRecordToADIF(qso, effectiveMyGrid);
     }
 
     return adifContent;

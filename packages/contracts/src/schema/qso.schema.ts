@@ -75,6 +75,7 @@ export const QSORecordSchema = z.object({
   grid: z.string().optional(), // 对方网格定位
   frequency: z.number(),       // 频率
   mode: z.string(),            // 模式（FT8）
+  submode: z.string().optional(), // ADIF 子模式（如 FT4）
   startTime: z.number(),       // 开始时间
   endTime: z.number().optional(), // 结束时间
   reportSent: z.string().optional(),     // 发送的信号报告
@@ -114,7 +115,7 @@ export const QSORecordSchema = z.object({
   qrzQslSentDate: z.number().optional(),
   qrzQslReceivedDate: z.number().optional(),
 
-  // 备注（对应 ADIF NOTE 字段）
+  // 备注（对应 ADIF NOTES 字段）
   remarks: z.string().optional(),
 });
 
