@@ -1295,7 +1295,7 @@ export const api = {
   /**
    * 导入数据到日志本
    */
-  async importToLogBook(id: string, adifContent: string, operatorId?: string, apiBase?: string): Promise<LogBookImportResponse> {
+  async importToLogBook(id: string, adifContent: string, apiBase?: string): Promise<LogBookImportResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
     const res = await fetch(`${baseUrl}/logbooks/${id}/import`, {
       method: 'POST',
@@ -1303,7 +1303,7 @@ export const api = {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),
       },
-      body: JSON.stringify({ adifContent, operatorId }),
+      body: JSON.stringify({ adifContent }),
     });
 
     if (!res.ok) {
@@ -1314,12 +1314,9 @@ export const api = {
     return await res.json();
   },
 
-  async importLogBookFile(id: string, file: File, operatorId?: string, apiBase?: string): Promise<LogBookImportResponse> {
+  async importLogBookFile(id: string, file: File, apiBase?: string): Promise<LogBookImportResponse> {
     const formData = new FormData();
     formData.append('file', file);
-    if (operatorId) {
-      formData.append('operatorId', operatorId);
-    }
 
     return apiRequest<LogBookImportResponse>(
       `/logbooks/${id}/import`,

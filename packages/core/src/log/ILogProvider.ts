@@ -307,16 +307,14 @@ export interface ILogProvider {
   /**
    * 导入日志（ADIF格式）
    * @param adifContent ADIF内容
-   * @param operatorId 操作员ID（可选）
    */
-  importADIF(adifContent: string, operatorId?: string): Promise<LogBookImportResult>;
+  importADIF(adifContent: string): Promise<LogBookImportResult>;
 
   /**
    * 导入日志（TX-5DR CSV格式）
    * @param csvContent CSV内容
-   * @param operatorId 操作员ID（可选）
    */
-  importCSV(csvContent: string, operatorId?: string): Promise<LogBookImportResult>;
+  importCSV(csvContent: string): Promise<LogBookImportResult>;
   
   /**
    * 关闭日志Provider

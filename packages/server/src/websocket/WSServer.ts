@@ -1476,7 +1476,7 @@ export class WSServer extends WSMessageHandler {
       try {
         const logBook = await logManager.getOperatorLogBook(operatorId);
         if (logBook) {
-          const analysis = await logBook.provider.analyzeCallsign(callsign, grid, { operatorId, band });
+          const analysis = await logBook.provider.analyzeCallsign(callsign, grid, { band });
           hasSuccessfulAnalysis = true;
 
           // 如果任一操作员已通联过，则不是新的
