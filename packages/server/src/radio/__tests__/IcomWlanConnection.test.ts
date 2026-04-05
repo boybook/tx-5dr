@@ -140,4 +140,26 @@ describe('IcomWlanConnection', () => {
     firstWrite.resolve(undefined);
     await writePromise;
   });
+
+  it('tags ICOM level readings with the branded display style', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.getLevelMeter.mockResolvedValueOnce({
+      raw: 120,
+      percent: 50,
+      sUnits: 9,
+      dBm: -73,
+      formatted: 'S9',
+    });
+
+    const emitted: any[] = [];
+    connection.on('meterData', (data) => emitted.push(data));
+
+    await (connection as any).pollMeters();
+
+    expect(emitted[0]?.level).toMatchObject({
+      raw: 120,
+      formatted: 'S9',
+      displayStyle: 's-meter-dbm',
+    });
+  });
 });

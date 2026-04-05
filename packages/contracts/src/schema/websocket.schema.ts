@@ -199,17 +199,23 @@ export const PTTStatusSchema = z.object({
   operatorIds: z.array(z.string()),
 });
 
+export const LevelMeterDisplayStyleSchema = z.enum([
+  's-meter-dbm',
+  's-meter',
+  'db-over-s9',
+]);
+export type LevelMeterDisplayStyle = z.infer<typeof LevelMeterDisplayStyleSchema>;
+
 /**
- * S-meter (signal strength) level reading
- * For CI-V 0x15/0x02 command
+ * Meter level reading
  *
- * Calibration (IC-705):
- * - raw=0 → S0
- * - raw=120 → S9
- * - raw=241 → S9+60dB
+ * Depending on the radio/vendor strategy, the same structure can represent:
+ * - branded S-meter output with optional dBm estimate
+ * - branded S-meter output without dBm display
+ * - generic Hamlib STRENGTH output shown as dB relative to S9
  */
 export const LevelMeterReadingSchema = z.object({
-  /** Raw 0-255 BCD value */
+  /** Raw meter reading from the radio or normalized backend value */
   raw: z.number(),
   /** Percentage (0-100%) */
   percent: z.number(),
@@ -217,10 +223,12 @@ export const LevelMeterReadingSchema = z.object({
   sUnits: z.number(),
   /** dB above S9 (only when >S9, e.g., 20 means S9+20dB) */
   dbAboveS9: z.number().optional(),
-  /** Estimated absolute power in dBm (based on HF standard S9 ≈ -73dBm) */
+  /** Estimated absolute signal level in dBm (may be approximate depending on strategy) */
   dBm: z.number(),
-  /** Human-readable formatted string (e.g., "S4", "S9+20dB") */
+  /** Human-readable formatted string (e.g., "S4", "S9+20dB", "-24 dB@S9") */
   formatted: z.string(),
+  /** Preferred frontend presentation style for this meter reading */
+  displayStyle: LevelMeterDisplayStyleSchema,
 });
 
 export type LevelMeterReading = z.infer<typeof LevelMeterReadingSchema>;

@@ -7,6 +7,17 @@ import { TxVolumeGainControl } from './TxVolumeGainControl';
 
 const LEVEL_DBM_MIN_CARD_WIDTH = 580;
 
+export function shouldShowLevelDbmDetail(
+  width: number,
+  level: MeterData['level'] | null
+): boolean {
+  if (!level) {
+    return false;
+  }
+
+  return level.displayStyle === 's-meter-dbm' && width >= LEVEL_DBM_MIN_CARD_WIDTH;
+}
+
 interface RadioMetersDisplayProps {
   meterData: MeterData;
   isPttActive: boolean;
@@ -123,7 +134,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     }
 
     const updateVisibility = (width: number) => {
-      setShowLevelDbmDetail(width >= LEVEL_DBM_MIN_CARD_WIDTH);
+      setShowLevelDbmDetail(shouldShowLevelDbmDetail(width, buffered.level.value));
     };
 
     updateVisibility(container.getBoundingClientRect().width);
@@ -139,7 +150,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     return () => {
       resizeObserver.disconnect();
     };
-  }, []);
+  }, [buffered.level.value]);
 
   // 判断各仪表是否应显示（null = 未知，保持全显示以兼容旧版后端）
   const showLevelPower = meterCapabilities === null || meterCapabilities.strength || meterCapabilities.power;

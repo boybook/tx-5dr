@@ -34,6 +34,12 @@ type HamlibConnectionTestAccessor = {
   state: RadioConnectionState;
   supportedModes?: Set<string>;
   supportedLevels?: Set<string>;
+  meterDecodeStrategy?: {
+    name: 'icom' | 'yaesu' | 'generic';
+    sourceLevel: 'STRENGTH' | 'RAWSTR' | null;
+    displayStyle: 's-meter-dbm' | 's-meter' | 'db-over-s9';
+    label: string;
+  };
   txFrequencyRanges?: TestFrequencyRange[];
   currentFrequencyHz?: number;
   currentRadioMode?: string;
@@ -82,6 +88,12 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
 
   testConnection.rig = rig;
   testConnection.state = RadioConnectionState.CONNECTED;
+  testConnection.meterDecodeStrategy = {
+    name: 'generic',
+    sourceLevel: 'STRENGTH',
+    displayStyle: 'db-over-s9',
+    label: 'generic-strength',
+  };
 
   return { connection, rig };
 }
@@ -325,6 +337,62 @@ describe('HamlibConnection', () => {
 
     firstWrite.resolve(0);
     await writePromise;
+  });
+
+  it('reads RAWSTR instead of STRENGTH when the Yaesu meter strategy is active', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getLevel: vi.fn()
+        .mockImplementation(async (level: string) => {
+          if (level === 'RAWSTR') return 150;
+          throw new Error(`unexpected level ${level}`);
+        }),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedLevels = new Set(['RAWSTR']);
+    testConnection.meterDecodeStrategy = {
+      name: 'yaesu',
+      sourceLevel: 'RAWSTR',
+      displayStyle: 's-meter',
+      label: 'yaesu-rawstr',
+    };
+
+    const emitted: any[] = [];
+    connection.on('meterData', (data) => emitted.push(data));
+
+    await (connection as any).pollMeters();
+
+    expect(rig.getLevel).toHaveBeenCalledTimes(1);
+    expect(rig.getLevel).toHaveBeenCalledWith('RAWSTR');
+    expect(emitted[0]?.level).toMatchObject({
+      raw: 150,
+      formatted: 'S9',
+      displayStyle: 's-meter',
+    });
+  });
+
+  it('keeps generic rigs on dB relative to S9 formatting', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getLevel: vi.fn().mockResolvedValue(-24),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedLevels = new Set(['STRENGTH']);
+    testConnection.meterDecodeStrategy = {
+      name: 'generic',
+      sourceLevel: 'STRENGTH',
+      displayStyle: 'db-over-s9',
+      label: 'generic-strength',
+    };
+
+    const emitted: any[] = [];
+    connection.on('meterData', (data) => emitted.push(data));
+
+    await (connection as any).pollMeters();
+
+    expect(rig.getLevel).toHaveBeenCalledWith('STRENGTH');
+    expect(emitted[0]?.level).toMatchObject({
+      formatted: '-24 dB@S9',
+      displayStyle: 'db-over-s9',
+    });
   });
 
   it('uses the matched TX range max watts when converting absolute power readings', () => {
