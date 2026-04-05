@@ -137,6 +137,10 @@ export const TunerCapabilitySurface: React.FC = () => {
   const swr = (switchState?.meta as { swr?: number } | undefined)?.swr;
   const isTuning = tuningStatus === 'tuning';
 
+  if (!canControl || !tunerSupported) {
+    return null;
+  }
+
   const handleToggle = useCallback(() => {
     if (!canControl) return;
     setIsLoading(true);
@@ -192,12 +196,6 @@ export const TunerCapabilitySurface: React.FC = () => {
             </span>
           </div>
         </div>
-      )}
-
-      {!tunerSupported && !tuneSupported && (
-        <span className="text-xs text-default-400">
-          {t('radio:capability.panel.notSupported')}
-        </span>
       )}
     </div>
   );
