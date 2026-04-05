@@ -9,6 +9,38 @@ import { createLogger } from './logger.js';
 
 const logger = createLogger('ADIFUtils');
 
+function mapAdifModeToInternal(mode?: string, submode?: string): Pick<QSORecord, 'mode' | 'submode'> {
+  const normalizedMode = mode?.trim().toUpperCase();
+  const normalizedSubmode = submode?.trim().toUpperCase();
+
+  if (normalizedMode === 'MFSK' && normalizedSubmode === 'FT4') {
+    return { mode: 'FT4', submode: 'FT4' };
+  }
+
+  return {
+    mode: mode || 'FT8',
+    submode: submode || undefined,
+  };
+}
+
+function mapInternalModeToAdif(mode?: string, submode?: string): { mode: string; submode?: string } {
+  const normalizedMode = mode?.trim().toUpperCase();
+  const normalizedSubmode = submode?.trim().toUpperCase();
+
+  if (normalizedMode === 'FT4') {
+    return { mode: 'MFSK', submode: 'FT4' };
+  }
+
+  if (normalizedMode === 'MFSK' && normalizedSubmode) {
+    return { mode: 'MFSK', submode: normalizedSubmode };
+  }
+
+  return {
+    mode: mode || 'FT8',
+    submode: submode || undefined,
+  };
+}
+
 /**
  * 格式化 ADIF 日期 (YYYYMMDD)
  */
@@ -57,6 +89,7 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
 }): string {
   const adifFields: string[] = [];
   const opts = { includeStationCallsign: false, includeMyGrid: true, ...options };
+  const adifMode = mapInternalModeToAdif(qso.mode, qso.submode);
 
   // 必需字段
   adifFields.push(`<call:${qso.callsign.length}>${qso.callsign}`);
@@ -80,8 +113,11 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   }
 
   // 模式
-  if (qso.mode) {
-    adifFields.push(`<mode:${qso.mode.length}>${qso.mode}`);
+  if (adifMode.mode) {
+    adifFields.push(`<mode:${adifMode.mode.length}>${adifMode.mode}`);
+  }
+  if (adifMode.submode) {
+    adifFields.push(`<submode:${adifMode.submode.length}>${adifMode.submode}`);
   }
 
   // 频率 (MHz)
@@ -139,18 +175,21 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
     adifFields.push(`<my_itu_zone:${value.length}>${value}`);
   }
   if (qso.myState) {
-    adifFields.push(`<state:${qso.myState.length}>${qso.myState}`);
+    adifFields.push(`<my_state:${qso.myState.length}>${qso.myState}`);
   }
   if (qso.myCounty) {
-    adifFields.push(`<cnty:${qso.myCounty.length}>${qso.myCounty}`);
+    adifFields.push(`<my_cnty:${qso.myCounty.length}>${qso.myCounty}`);
   }
   if (qso.myIota) {
-    adifFields.push(`<iota:${qso.myIota.length}>${qso.myIota}`);
+    adifFields.push(`<my_iota:${qso.myIota.length}>${qso.myIota}`);
   }
 
   // 我的网格坐标
   if (opts.includeMyGrid && qso.myGrid) {
     adifFields.push(`<my_gridsquare:${qso.myGrid.length}>${qso.myGrid}`);
+  }
+  if (qso.myCallsign) {
+    adifFields.push(`<operator:${qso.myCallsign.length}>${qso.myCallsign}`);
   }
 
   // LoTW QSL 确认状态
@@ -182,6 +221,16 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   }
   if (qso.stationLocationId) {
     adifFields.push(`<app_tx5dr_station_location_id:${qso.stationLocationId.length}>${qso.stationLocationId}`);
+  }
+  if (qso.messages?.length) {
+    const comment = qso.messages.join(' | ');
+    adifFields.push(`<comment:${comment.length}>${comment}`);
+  }
+  if (qso.qth) {
+    adifFields.push(`<qth:${qso.qth.length}>${qso.qth}`);
+  }
+  if (qso.remarks) {
+    adifFields.push(`<notes:${qso.remarks.length}>${qso.remarks}`);
   }
 
   // 结束标记
@@ -226,6 +275,7 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
     const qsoDate = fields.qso_date;
     const timeOn = fields.time_on;
     const timeOff = fields.time_off || timeOn;
+    const modeInfo = mapAdifModeToInternal(fields.mode, fields.submode);
 
     const startTime = parseADIFDateTime(qsoDate, timeOn);
     const endTime = parseADIFDateTime(fields.qso_date_off || qsoDate, timeOff);
@@ -236,13 +286,16 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       startTime: new Date(startTime).getTime(),
       endTime: new Date(endTime).getTime(),
       frequency: fields.freq ? Math.round(parseFloat(fields.freq) * 1000000) : 14074000,
-      mode: fields.mode || 'FT8',
+      mode: modeInfo.mode,
+      submode: modeInfo.submode,
       reportSent: fields.rst_sent || '',
       reportReceived: fields.rst_rcvd || '',
       grid: fields.gridsquare || '',
-      myCallsign: fields.station_callsign || '',
+      myCallsign: fields.station_callsign || fields.operator || undefined,
       myGrid: fields.my_gridsquare || '',
-      messages: [`QSO imported from ${source} at ${new Date().toISOString()}`]
+      qth: fields.qth || undefined,
+      remarks: fields.notes || fields.note || undefined,
+      messages: fields.comment ? [fields.comment] : []
     };
 
     if (fields.dxcc) {
@@ -284,14 +337,14 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
         record.myItuZone = parsedMyItu;
       }
     }
-    if (fields.state) {
-      record.myState = fields.state;
+    if (fields.my_state) {
+      record.myState = fields.my_state;
     }
-    if (fields.cnty) {
-      record.myCounty = fields.cnty;
+    if (fields.my_cnty) {
+      record.myCounty = fields.my_cnty;
     }
-    if (fields.iota) {
-      record.myIota = fields.iota;
+    if (fields.my_iota) {
+      record.myIota = fields.my_iota;
     }
     if (fields.app_tx5dr_dxcc_status) {
       record.dxccStatus = fields.app_tx5dr_dxcc_status as QSORecord['dxccStatus'];

@@ -79,4 +79,84 @@ describe('ADIFLogProvider import', () => {
 
     await provider.close();
   });
+
+  it('exports standard ADIF fields for my location, notes, operator, and FT4 submode', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'ft4-export',
+      callsign: 'BG2AA',
+      frequency: 14074000,
+      mode: 'FT4',
+      submode: 'FT4',
+      startTime: Date.parse('2026-01-01T23:59:55Z'),
+      endTime: Date.parse('2026-01-02T00:00:10Z'),
+      messages: ['CQ TEST'],
+      myCallsign: 'BG2XYZ',
+      myGrid: 'PM00AA',
+      myState: 'CA',
+      myCounty: 'LA',
+      myIota: 'AS-007',
+      remarks: 'Manual note',
+    }, 'op1');
+
+    const exported = await provider.exportADIF();
+
+    expect(exported).toContain('<MODE:4>MFSK');
+    expect(exported).toContain('<SUBMODE:3>FT4');
+    expect(exported).toContain('<QSO_DATE_OFF:8>20260102');
+    expect(exported).toContain('<MY_STATE:2>CA');
+    expect(exported).toContain('<MY_CNTY:2>LA');
+    expect(exported).toContain('<MY_IOTA:6>AS-007');
+    expect(exported).toContain('<NOTES:11>Manual note');
+    expect(exported).toContain('<OPERATOR:6>BG2XYZ');
+    expect(exported).not.toContain('<NOTE:11>Manual note');
+    expect(exported).not.toContain('<STATE:2>CA');
+
+    await provider.close();
+  });
+
+  it('imports standard MY_* fields, NOTES, and FT4 submode without misreading contacted station fields', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const adif = buildAdif([
+      '<CALL:5>BG2AA<QSO_DATE:8>20260101<TIME_ON:6>235955<QSO_DATE_OFF:8>20260102<TIME_OFF:6>000010<MODE:4>MFSK<SUBMODE:3>FT4<FREQ:9>14.074000<STATE:2>TX<CNTY:3>DAL<IOTA:6>EU-001<MY_STATE:2>CA<MY_CNTY:2>LA<MY_IOTA:6>AS-007<NOTES:11>Manual note<EOR>',
+    ]);
+
+    await provider.importADIF(adif, 'op1');
+    const qsos = await provider.queryQSOs();
+
+    expect(qsos).toHaveLength(1);
+    expect(qsos[0].mode).toBe('FT4');
+    expect(qsos[0].submode).toBe('FT4');
+    expect(qsos[0].myState).toBe('CA');
+    expect(qsos[0].myCounty).toBe('LA');
+    expect(qsos[0].myIota).toBe('AS-007');
+    expect(qsos[0].remarks).toBe('Manual note');
+    expect(qsos[0].endTime).toBe(Date.parse('2026-01-02T00:00:10Z'));
+
+    await provider.close();
+  });
+
+  it('keeps compatibility with legacy TX-5DR NOTE and my-location fields', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const adif = buildAdif([
+      '<CALL:5>BG2AA<QSO_DATE:8>20260101<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<STATE:2>CA<CNTY:2>LA<IOTA:6>AS-007<NOTE:11>Manual note<APP_TX5DR_DXCC_STATUS:7>current<EOR>',
+    ]);
+
+    await provider.importADIF(adif, 'op1');
+    const qsos = await provider.queryQSOs();
+
+    expect(qsos).toHaveLength(1);
+    expect(qsos[0].myState).toBe('CA');
+    expect(qsos[0].myCounty).toBe('LA');
+    expect(qsos[0].myIota).toBe('AS-007');
+    expect(qsos[0].remarks).toBe('Manual note');
+
+    await provider.close();
+  });
 });
