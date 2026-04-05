@@ -159,4 +159,91 @@ describe('ADIFLogProvider import', () => {
 
     await provider.close();
   });
+
+  it('treats the same 4-char grid as worked on the same band', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'BG2AA_1770004800000_1_op1',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const analysis = await provider.analyzeCallsign('BG9ZZ', 'PM01', { operatorId: 'op1', band: '20m' });
+
+    expect(analysis.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
+
+  it('tracks worked grids independently per band', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'BG2AA_1770004800000_2_op1',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const sameBand = await provider.analyzeCallsign('BG9ZZ', 'PM01BB', { operatorId: 'op1', band: '20m' });
+    const otherBand = await provider.analyzeCallsign('BG9ZZ', 'PM01BB', { operatorId: 'op1', band: '40m' });
+
+    expect(sameBand.isNewGrid).toBe(false);
+    expect(otherBand.isNewGrid).toBe(true);
+
+    await provider.close();
+  });
+
+  it('updates the banded grid cache immediately after addQSO', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    const before = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op1', band: '20m' });
+    expect(before.isNewGrid).toBe(true);
+
+    await provider.addQSO({
+      id: 'grid-band-3',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const after = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op1', band: '20m' });
+    expect(after.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
+
+  it('does not report new grid when band is unknown', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+
+    await provider.addQSO({
+      id: 'grid-band-4',
+      callsign: 'BG2AA',
+      grid: 'PM01AA',
+      frequency: 14074000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-01-01T12:00:00Z'),
+      messages: [],
+    }, 'op1');
+
+    const analysis = await provider.analyzeCallsign('BG9ZZ', 'PM01AA', { operatorId: 'op1', band: 'Unknown' });
+    expect(analysis.isNewGrid).toBe(false);
+
+    await provider.close();
+  });
 });

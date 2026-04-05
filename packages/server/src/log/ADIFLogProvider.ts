@@ -45,6 +45,7 @@ interface OperatorIndex {
   workedDxccEntities: Set<number>;
   confirmedDxccEntities: Set<number>;
   workedBandDxcc: Map<string, Set<number>>;
+  workedBandGrids: Map<string, Set<string>>;
   confirmedBandDxcc: Map<string, Set<number>>;
   workedModeDxcc: Map<string, Set<number>>;
   confirmedModeDxcc: Map<string, Set<number>>;
@@ -61,6 +62,7 @@ function createEmptyOperatorIndex(): OperatorIndex {
     workedDxccEntities: new Set<number>(),
     confirmedDxccEntities: new Set<number>(),
     workedBandDxcc: new Map<string, Set<number>>(),
+    workedBandGrids: new Map<string, Set<string>>(),
     confirmedBandDxcc: new Map<string, Set<number>>(),
     workedModeDxcc: new Map<string, Set<number>>(),
     confirmedModeDxcc: new Map<string, Set<number>>(),
@@ -80,6 +82,29 @@ function addEntityToBucket(bucket: Map<string, Set<number>>, key: string, dxccId
     bucket.set(key, entitySet);
   }
   entitySet.add(dxccId);
+}
+
+function addStringToBucket(bucket: Map<string, Set<string>>, key: string, value: string): void {
+  let valueSet = bucket.get(key);
+  if (!valueSet) {
+    valueSet = new Set<string>();
+    bucket.set(key, valueSet);
+  }
+  valueSet.add(value);
+}
+
+function normalizeGridKey(grid?: string): string | undefined {
+  if (!grid) {
+    return undefined;
+  }
+
+  const normalized = grid.trim().toUpperCase();
+  if (normalized.length < 4) {
+    return undefined;
+  }
+
+  const gridKey = normalized.slice(0, 4);
+  return /^[A-R]{2}[0-9]{2}$/.test(gridKey) ? gridKey : undefined;
 }
 
 function normalizeMode(mode?: string): string {
@@ -269,6 +294,9 @@ function mergeTimestampValue(current?: number, incoming?: number): number | unde
 }
 
 function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
+  const band = getBandFromFrequency(qso.frequency);
+  const gridKey = normalizeGridKey(qso.grid);
+
   // 前缀/CQ/ITU（使用 core 的高效实现）
   try {
     const prefix = extractPrefix(qso.callsign.toUpperCase());
@@ -284,7 +312,6 @@ function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
   } catch {}
   if (qso.dxccId) {
     index.workedDxccEntities.add(qso.dxccId);
-    const band = getBandFromFrequency(qso.frequency);
     if (band && band !== 'Unknown') {
       addEntityToBucket(index.workedBandDxcc, band, qso.dxccId);
     }
@@ -297,6 +324,10 @@ function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
       }
       addEntityToBucket(index.confirmedModeDxcc, normalizeMode(qso.mode), qso.dxccId);
     }
+  }
+
+  if (gridKey && band && band !== 'Unknown') {
+    addStringToBucket(index.workedBandGrids, band, gridKey);
   }
 
   // 按呼号的统计
@@ -318,7 +349,6 @@ function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
 
   // 按呼号的频段集合（用于快速判重）
   try {
-    const band = getBandFromFrequency(qso.frequency);
     if (band && band !== 'Unknown') {
       let bands = index.perCallsignBands.get(key);
       if (!bands) {
@@ -1125,9 +1155,11 @@ export class ADIFLogProvider implements ILogProvider {
     }
     const lastQSO = info?.lastQSO;
     const qsoCount = info?.count || 0;
-    // 只有在"有网格 且 是新呼号"时才标记为新网格
-    // 根据需求：只要呼号不是新的，就不提示新网格
-    const isNewGrid = !!grid && !info;
+    const gridKey = normalizeGridKey(grid);
+    const isNewGrid = !!gridKey
+      && !!band
+      && band !== 'Unknown'
+      && !(idx.workedBandGrids.get(band)?.has(gridKey));
     const isNewDxccEntity = dxccId ? !idx.workedDxccEntities.has(dxccId) : false;
     const isNewBandDxccEntity = dxccId && band && band !== 'Unknown'
       ? !(idx.workedBandDxcc.get(band)?.has(dxccId))
