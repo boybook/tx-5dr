@@ -1,4 +1,9 @@
-import type { DxccStatus, LogBookDxccSummary, QSORecord } from '@tx5dr/contracts';
+import type {
+  DxccStatus,
+  LogBookDxccSummary,
+  LogBookImportResult,
+  QSORecord,
+} from '@tx5dr/contracts';
 
 /**
  * 日志查询选项
@@ -304,7 +309,14 @@ export interface ILogProvider {
    * @param adifContent ADIF内容
    * @param operatorId 操作员ID（可选）
    */
-  importADIF(adifContent: string, operatorId?: string): Promise<void>;
+  importADIF(adifContent: string, operatorId?: string): Promise<LogBookImportResult>;
+
+  /**
+   * 导入日志（TX-5DR CSV格式）
+   * @param csvContent CSV内容
+   * @param operatorId 操作员ID（可选）
+   */
+  importCSV(csvContent: string, operatorId?: string): Promise<LogBookImportResult>;
   
   /**
    * 关闭日志Provider

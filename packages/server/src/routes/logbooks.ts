@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { MultipartFile } from '@fastify/multipart';
 import { createLogger } from '../utils/logger.js';
 import {
   LogBookListResponseSchema,
   LogBookDetailResponseSchema,
   LogBookActionResponseSchema,
+  LogBookImportResponseSchema,
   CreateLogBookRequestSchema,
   UpdateLogBookRequestSchema,
   ConnectOperatorToLogBookRequestSchema,
@@ -18,6 +20,7 @@ import {
   type ConnectOperatorToLogBookRequest,
   type LogBookQSOQueryOptions,
   type LogBookExportOptions,
+  type LogBookImportFormat,
   type UpdateQSORequest,
   type CreateQSORequest,
   type QSORecord,
@@ -28,8 +31,45 @@ import { LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
 import { normalizeCallsign } from '../utils/callsign.js';
+import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtils.js';
 
 const logger = createLogger('LogbooksRoute');
+
+function getMultipartFieldValue(
+  fields: MultipartFile['fields'],
+  key: string
+): string | undefined {
+  const field = fields[key];
+  if (!field || Array.isArray(field)) {
+    return undefined;
+  }
+  const value = (field as { value?: unknown }).value;
+  return typeof value === 'string' ? value : undefined;
+}
+
+function getImportPayloadFromBody(body: unknown): {
+  content: string;
+  format: LogBookImportFormat;
+  operatorId?: string;
+} {
+  const payload = body as { adifContent?: string; operatorId?: string } | undefined;
+  const content = normalizeImportText(payload?.adifContent || '');
+  if (!content) {
+    throw new RadioError({
+      code: RadioErrorCode.INVALID_OPERATION,
+      message: 'Missing logbook import content',
+      userMessage: 'Import file content is empty',
+      severity: RadioErrorSeverity.WARNING,
+      suggestions: ['Select a non-empty ADIF file and try again'],
+    });
+  }
+
+  return {
+    content,
+    format: 'adif',
+    operatorId: payload?.operatorId,
+  };
+}
 
 /**
  * 日志本管理API路由
@@ -553,10 +593,44 @@ export async function logbookRoutes(fastify: FastifyInstance) {
    * 导入数据到日志本
    * POST /api/logbooks/:id/import
    */
-  fastify.post<{ Params: { id: string }; Body: { adifContent: string; operatorId?: string } }>('/:id/import', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+  fastify.post<{ Params: { id: string }; Body: { adifContent?: string; operatorId?: string } }>('/:id/import', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const { adifContent, operatorId } = request.body;
+      let content: string;
+      let format: LogBookImportFormat;
+      let operatorId: string | undefined;
+
+      if (request.isMultipart()) {
+        const file = await request.file();
+        if (!file) {
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_OPERATION,
+            message: 'Missing import file',
+            userMessage: 'Please select an import file',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['Choose an ADI, ADIF, or CSV file and try again'],
+          });
+        }
+
+        const buffer = await file.toBuffer();
+        content = normalizeImportText(buffer.toString('utf-8'));
+        if (!content) {
+          throw new RadioError({
+            code: RadioErrorCode.INVALID_OPERATION,
+            message: 'Import file is empty',
+            userMessage: 'The selected import file is empty',
+            severity: RadioErrorSeverity.WARNING,
+            suggestions: ['Choose a non-empty ADI, ADIF, or CSV file'],
+          });
+        }
+        operatorId = getMultipartFieldValue(file.fields, 'operatorId');
+        format = detectLogImportFormat(content, file.filename);
+      } else {
+        const payload = getImportPayloadFromBody(request.body);
+        content = payload.content;
+        format = payload.format;
+        operatorId = payload.operatorId;
+      }
 
       let logBook = logManager.getLogBook(id);
 
@@ -580,12 +654,31 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         });
       }
 
-      await logBook.provider.importADIF(adifContent, operatorId);
+      const result = format === 'csv'
+        ? await logBook.provider.importCSV(content, operatorId)
+        : await logBook.provider.importADIF(content, operatorId);
 
-      return reply.send({
+      if (result.imported > 0 || result.merged > 0) {
+        try {
+          const statistics = await logBook.provider.getStatistics();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          digitalRadioEngine.emit('logbookUpdated' as any, {
+            logBookId: logBook.id,
+            statistics,
+            operatorId: operatorId || '',
+          });
+        } catch (statsError) {
+          logger.warn('Failed to emit logbook update after import:', statsError);
+        }
+      }
+
+      const response = LogBookImportResponseSchema.parse({
         success: true,
-        message: 'Data imported successfully'
+        message: 'Logbook import completed',
+        data: result,
       });
+
+      return reply.send(response);
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);

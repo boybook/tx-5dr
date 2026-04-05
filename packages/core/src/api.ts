@@ -17,6 +17,7 @@ import type {
   LogBookListResponse,
   LogBookDetailResponse,
   LogBookActionResponse,
+  LogBookImportResponse,
   CreateLogBookRequest,
   UpdateLogBookRequest,
   LogBookQSOQueryOptions,
@@ -1294,7 +1295,7 @@ export const api = {
   /**
    * 导入数据到日志本
    */
-  async importToLogBook(id: string, adifContent: string, operatorId?: string, apiBase?: string): Promise<LogBookActionResponse> {
+  async importToLogBook(id: string, adifContent: string, operatorId?: string, apiBase?: string): Promise<LogBookImportResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
     const res = await fetch(`${baseUrl}/logbooks/${id}/import`, {
       method: 'POST',
@@ -1311,6 +1312,20 @@ export const api = {
     }
 
     return await res.json();
+  },
+
+  async importLogBookFile(id: string, file: File, operatorId?: string, apiBase?: string): Promise<LogBookImportResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (operatorId) {
+      formData.append('operatorId', operatorId);
+    }
+
+    return apiRequest<LogBookImportResponse>(
+      `/logbooks/${id}/import`,
+      { method: 'POST', body: formData },
+      apiBase
+    );
   },
 
   /**
@@ -1836,6 +1851,7 @@ export const {
   getLogBookQSOs,
   exportLogBook,
   importToLogBook,
+  importLogBookFile,
   createQSO,
   updateQSO,
   deleteQSO,

@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // ADIFLogProvider - 日志解析需要使用any
 
-import { type LogBookDxccSummary, type QSORecord } from '@tx5dr/contracts';
+import {
+  type LogBookDxccSummary,
+  type LogBookImportResult,
+  type QSORecord,
+} from '@tx5dr/contracts';
 import {
   ILogProvider,
   LogQueryOptions,
@@ -20,6 +24,10 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import { getDataFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  buildImportedQsoFingerprint,
+  parseTx5drCsvContent,
+} from './logImportUtils.js';
 
 const logger = createLogger('ADIFLogProvider');
 
@@ -122,6 +130,97 @@ function enrichQSOWithDXCC(qso: QSORecord): QSORecord {
     dxccResolverVersion: DXCC_RESOLVER_VERSION,
     dxccNeedsReview: resolution.needsReview,
   };
+}
+
+const IMPORT_MERGE_FIELDS: Array<keyof QSORecord> = [
+  'grid',
+  'myGrid',
+  'myCallsign',
+  'qth',
+  'remarks',
+  'reportSent',
+  'reportReceived',
+  'endTime',
+  'frequency',
+  'dxccId',
+  'dxccEntity',
+  'dxccStatus',
+  'countryCode',
+  'cqZone',
+  'ituZone',
+  'dxccSource',
+  'dxccConfidence',
+  'dxccResolvedAt',
+  'dxccResolverVersion',
+  'dxccNeedsReview',
+  'stationLocationId',
+  'myDxccId',
+  'myCqZone',
+  'myItuZone',
+  'myState',
+  'myCounty',
+  'myIota',
+];
+
+const LOTW_SENT_PRIORITY: Record<string, number> = {
+  I: 1,
+  N: 2,
+  R: 3,
+  Q: 4,
+  Y: 5,
+};
+
+const LOTW_RECEIVED_PRIORITY: Record<string, number> = {
+  I: 1,
+  N: 2,
+  R: 3,
+  Y: 4,
+  V: 5,
+};
+
+const QRZ_PRIORITY: Record<string, number> = {
+  N: 1,
+  Y: 2,
+};
+
+function isMissingValue(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return true;
+  }
+  if (typeof value === 'string') {
+    return value.trim().length === 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  if (typeof value === 'number') {
+    return Number.isNaN(value);
+  }
+  return false;
+}
+
+function mergeStatusValue<T extends string | undefined>(
+  current: T,
+  incoming: T,
+  priority: Record<string, number>
+): T {
+  if (!incoming) {
+    return current;
+  }
+  if (!current) {
+    return incoming;
+  }
+  return (priority[incoming] || 0) > (priority[current] || 0) ? incoming : current;
+}
+
+function mergeTimestampValue(current?: number, incoming?: number): number | undefined {
+  if (!Number.isFinite(incoming)) {
+    return current;
+  }
+  if (!Number.isFinite(current)) {
+    return incoming;
+  }
+  return Math.max(current!, incoming!);
 }
 
 function addQSOToIndex(index: OperatorIndex, qso: QSORecord): void {
@@ -1199,30 +1298,185 @@ export class ADIFLogProvider implements ILogProvider {
     
     return field;
   }
-  
-  async importADIF(adifContent: string, operatorId?: string): Promise<void> {
+
+  private buildImportId(record: QSORecord, operatorId?: string): string {
+    return `${record.callsign}_${record.startTime}_${Date.now()}_${operatorId || 'import'}`;
+  }
+
+  private buildFingerprintIndex(): Map<string, string> {
+    const index = new Map<string, string>();
+    for (const [id, qso] of this.qsoCache.entries()) {
+      index.set(buildImportedQsoFingerprint(qso), id);
+    }
+    return index;
+  }
+
+  private mergeImportedRecord(existing: QSORecord, incoming: QSORecord): { changed: boolean; record: QSORecord } {
+    let changed = false;
+    const merged: QSORecord = { ...existing };
+
+    for (const field of IMPORT_MERGE_FIELDS) {
+      const currentValue = merged[field];
+      const incomingValue = incoming[field];
+      if (isMissingValue(currentValue) && !isMissingValue(incomingValue)) {
+        merged[field] = incomingValue as never;
+        changed = true;
+      }
+    }
+
+    if ((merged.messages?.length || 0) === 0 && (incoming.messages?.length || 0) > 0) {
+      merged.messages = [...incoming.messages];
+      changed = true;
+    }
+
+    const nextLotwSent = mergeStatusValue(merged.lotwQslSent, incoming.lotwQslSent, LOTW_SENT_PRIORITY);
+    if (nextLotwSent !== merged.lotwQslSent) {
+      merged.lotwQslSent = nextLotwSent;
+      changed = true;
+    }
+
+    const nextLotwReceived = mergeStatusValue(merged.lotwQslReceived, incoming.lotwQslReceived, LOTW_RECEIVED_PRIORITY);
+    if (nextLotwReceived !== merged.lotwQslReceived) {
+      merged.lotwQslReceived = nextLotwReceived;
+      changed = true;
+    }
+
+    const nextQrzSent = mergeStatusValue(merged.qrzQslSent, incoming.qrzQslSent, QRZ_PRIORITY);
+    if (nextQrzSent !== merged.qrzQslSent) {
+      merged.qrzQslSent = nextQrzSent;
+      changed = true;
+    }
+
+    const nextQrzReceived = mergeStatusValue(merged.qrzQslReceived, incoming.qrzQslReceived, QRZ_PRIORITY);
+    if (nextQrzReceived !== merged.qrzQslReceived) {
+      merged.qrzQslReceived = nextQrzReceived;
+      changed = true;
+    }
+
+    const nextLotwSentDate = mergeTimestampValue(merged.lotwQslSentDate, incoming.lotwQslSentDate);
+    if (nextLotwSentDate !== merged.lotwQslSentDate) {
+      merged.lotwQslSentDate = nextLotwSentDate;
+      changed = true;
+    }
+
+    const nextLotwReceivedDate = mergeTimestampValue(merged.lotwQslReceivedDate, incoming.lotwQslReceivedDate);
+    if (nextLotwReceivedDate !== merged.lotwQslReceivedDate) {
+      merged.lotwQslReceivedDate = nextLotwReceivedDate;
+      changed = true;
+    }
+
+    const nextQrzSentDate = mergeTimestampValue(merged.qrzQslSentDate, incoming.qrzQslSentDate);
+    if (nextQrzSentDate !== merged.qrzQslSentDate) {
+      merged.qrzQslSentDate = nextQrzSentDate;
+      changed = true;
+    }
+
+    const nextQrzReceivedDate = mergeTimestampValue(merged.qrzQslReceivedDate, incoming.qrzQslReceivedDate);
+    if (nextQrzReceivedDate !== merged.qrzQslReceivedDate) {
+      merged.qrzQslReceivedDate = nextQrzReceivedDate;
+      changed = true;
+    }
+
+    return changed
+      ? { changed: true, record: enrichQSOWithDXCC(merged) }
+      : { changed: false, record: existing };
+  }
+
+  private async importRecords(
+    records: QSORecord[],
+    detectedFormat: LogBookImportResult['detectedFormat'],
+    totalRead: number,
+    initialSkipped: number,
+    operatorId?: string
+  ): Promise<LogBookImportResult> {
     this.ensureInitialized();
-    
+
+    const result: LogBookImportResult = {
+      detectedFormat,
+      totalRead,
+      imported: 0,
+      merged: 0,
+      skipped: initialSkipped,
+    };
+    const fingerprintIndex = this.buildFingerprintIndex();
+    let didMutate = false;
+
+    for (const record of records) {
+      try {
+        if (!record.callsign || !Number.isFinite(record.startTime) || !record.mode || !Number.isFinite(record.frequency)) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const fingerprint = buildImportedQsoFingerprint(record);
+        const existingId = fingerprintIndex.get(fingerprint);
+
+        if (!existingId) {
+          const insertedRecord = enrichQSOWithDXCC({
+            ...record,
+            id: this.buildImportId(record, operatorId),
+          });
+          this.qsoCache.set(insertedRecord.id, insertedRecord);
+          fingerprintIndex.set(fingerprint, insertedRecord.id);
+          result.imported += 1;
+          didMutate = true;
+          continue;
+        }
+
+        const existingRecord = this.qsoCache.get(existingId);
+        if (!existingRecord) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const merged = this.mergeImportedRecord(existingRecord, record);
+        if (merged.changed) {
+          this.qsoCache.set(existingId, merged.record);
+          result.merged += 1;
+          didMutate = true;
+        } else {
+          result.skipped += 1;
+        }
+      } catch (error) {
+        logger.warn('Failed to import QSO record', { error, detectedFormat });
+        result.skipped += 1;
+      }
+    }
+
+    if (didMutate) {
+      this.rebuildIndexes();
+      await this.saveCache();
+    }
+
+    return result;
+  }
+
+  async importADIF(adifContent: string, operatorId?: string): Promise<LogBookImportResult> {
+    this.ensureInitialized();
+
     const adif = AdifParser.parseAdi(adifContent);
-    
+    const records: QSORecord[] = [];
+    let skipped = 0;
+    const totalRead = adif.records?.length || 0;
+
     if (adif.records) {
       for (const record of adif.records) {
-        const qso = this.adifToQSORecord(record);
-        
-        // 添加operatorId到ID中
-        if (operatorId) {
-          qso.id = `${qso.id}_${operatorId}`;
-        }
-        
-        // 避免重复导入
-        if (!this.qsoCache.has(qso.id)) {
-          this.qsoCache.set(qso.id, qso);
+        try {
+          records.push(this.adifToQSORecord(record));
+        } catch (error) {
+          logger.warn('Failed to parse ADIF record during import', { error });
+          skipped += 1;
         }
       }
     }
 
-    this.rebuildIndexes();
-    await this.saveCache();
+    return this.importRecords(records, 'adif', totalRead, skipped, operatorId);
+  }
+
+  async importCSV(csvContent: string, operatorId?: string): Promise<LogBookImportResult> {
+    this.ensureInitialized();
+    const parsed = parseTx5drCsvContent(csvContent);
+    return this.importRecords(parsed.records, 'csv', parsed.totalRead, parsed.skipped, operatorId);
   }
   
   async close(): Promise<void> {
