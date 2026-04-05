@@ -21,8 +21,10 @@ import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { buildBackendConfig } from '../hamlibConfigUtils.js';
-import { RadioIoQueue } from './RadioIoQueue.js';
+import { RADIO_IO_SKIPPED, RadioIoQueue } from './RadioIoQueue.js';
 import {
+  type ApplyOperatingStateRequest,
+  type ApplyOperatingStateResult,
   RadioConnectionType,
   RadioConnectionState,
   type RadioSpectrumDisplayState,
@@ -167,12 +169,6 @@ export class HamlibConnection
   private readonly meterPollingIntervalMs = 300;
 
   /**
-   * 数值表轮询连续失败计数（用于断线检测）
-   */
-  private meterPollFailCount = 0;
-  private readonly METER_POLL_FAIL_THRESHOLD = 3;
-
-  /**
    * 电台支持的 level 集合（连接时检测）
    */
   private supportedLevels: Set<string> = new Set();
@@ -229,6 +225,10 @@ export class HamlibConnection
     }
     this.backgroundTasksStarted = true;
     this.startMeterPolling();
+  }
+
+  isCriticalOperationActive(): boolean {
+    return this.ioQueue.isCriticalActive();
   }
 
   /**
@@ -435,24 +435,8 @@ export class HamlibConnection
    */
   async setFrequency(frequency: number): Promise<void> {
     await this.runSerializedTask('setFrequency', async () => {
-      this.checkConnected();
-
-      try {
-        await Promise.race([
-          this.rig!.setFrequency(frequency),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
-          ),
-        ]);
-
-        await this.syncSplitFrequencyIfNeeded(frequency);
-        this.lastSuccessfulOperation = Date.now();
-        this.currentFrequencyHz = frequency;
-        logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
-      } catch (error) {
-        throw this.convertError(error, 'setFrequency');
-      }
-    });
+      await this.performFrequencyWrite(frequency);
+    }, { critical: true });
   }
 
   /**
@@ -490,30 +474,8 @@ export class HamlibConnection
    */
   async setPTT(enabled: boolean): Promise<void> {
     await this.runSerializedTask('setPTT', async () => {
-      this.checkConnected();
-
-      // VOX 模式：电台通过检测音频信号自动切换发射/接收，不需要软件控制 PTT
-      if (this.pttMethod === 'vox') {
-        return;
-      }
-
-      try {
-        await Promise.race([
-          this.rig!.setPtt(enabled),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('PTT operation timeout')), 3000)
-          ),
-        ]);
-
-        this.lastSuccessfulOperation = Date.now();
-        logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);
-      } catch (error) {
-        throw RadioError.pttActivationFailed(
-          `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
-          error instanceof Error ? error : new Error(String(error))
-        );
-      }
-    });
+      await this.performPTTWrite(enabled);
+    }, { critical: true });
   }
 
   /**
@@ -521,30 +483,42 @@ export class HamlibConnection
    */
   async setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
     await this.runSerializedTask('setMode', async () => {
+      await this.performModeWrite(mode, bandwidth, options);
+    }, { critical: true });
+  }
+
+  async applyOperatingState(request: ApplyOperatingStateRequest): Promise<ApplyOperatingStateResult> {
+    return this.runSerializedTask('applyOperatingState', async () => {
       this.checkConnected();
 
-      try {
-        const requestedMode = normalizeModeName(mode);
-        const resolvedMode = this.resolveModeForIntent(requestedMode, options);
+      let frequencyApplied = false;
+      let modeApplied = false;
+      let modeError: Error | undefined;
 
-        await Promise.race([
-          this.rig!.setMode(resolvedMode, bandwidth as any),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Set mode timeout')), 5000)
-          ),
-        ]);
-
-        this.lastSuccessfulOperation = Date.now();
-        this.currentRadioMode = normalizeModeName(resolvedMode);
-        logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth ? ` (${bandwidth})` : ''}`, {
-          requestedMode,
-          resolvedMode,
-          intent: options?.intent ?? 'unspecified',
-        });
-      } catch (error) {
-        throw this.convertOptionalOperationError(error, 'setMode');
+      if (request.frequency !== undefined) {
+        await this.performFrequencyWrite(request.frequency);
+        frequencyApplied = true;
       }
-    });
+
+      if (request.mode) {
+        try {
+          const modeChanged = await this.performModeWrite(request.mode, request.bandwidth, request.options);
+          modeApplied = true;
+
+          if (request.frequency !== undefined && modeChanged) {
+            await this.performFrequencyWrite(request.frequency);
+          }
+        } catch (error) {
+          if (!request.tolerateModeFailure) {
+            throw error;
+          }
+
+          modeError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+
+      return { frequencyApplied, modeApplied, modeError };
+    }, { critical: true });
   }
 
   /**
@@ -1944,14 +1918,96 @@ export class HamlibConnection
     }
   }
 
-  private async runSerializedTask<T>(taskName: string, task: () => Promise<T>): Promise<T> {
+  private async runSerializedTask<T>(
+    taskName: string,
+    task: () => Promise<T>,
+    options?: { critical?: boolean },
+  ): Promise<T> {
     const sessionId = this.ioSessionId;
-    return this.ioQueue.run({ sessionId }, async (activeSessionId) => {
+    return this.ioQueue.run({ sessionId, critical: options?.critical }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       const result = await task();
       this.ensureSession(activeSessionId);
       return result;
     });
+  }
+
+  private async performFrequencyWrite(frequency: number): Promise<void> {
+    this.checkConnected();
+
+    try {
+      await Promise.race([
+        this.rig!.setFrequency(frequency),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Set frequency timeout')), 5000)
+        ),
+      ]);
+
+      await this.syncSplitFrequencyIfNeeded(frequency);
+      this.lastSuccessfulOperation = Date.now();
+      this.currentFrequencyHz = frequency;
+      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
+    } catch (error) {
+      throw this.convertError(error, 'setFrequency');
+    }
+  }
+
+  private async performModeWrite(
+    mode: string,
+    bandwidth?: RadioModeBandwidth,
+    options?: SetRadioModeOptions,
+  ): Promise<boolean> {
+    this.checkConnected();
+
+    try {
+      const requestedMode = normalizeModeName(mode);
+      const resolvedMode = this.resolveModeForIntent(requestedMode, options);
+      const previousMode = this.currentRadioMode;
+
+      await Promise.race([
+        this.rig!.setMode(resolvedMode, bandwidth as any),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Set mode timeout')), 5000)
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+      this.currentRadioMode = normalizeModeName(resolvedMode);
+      logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth ? ` (${bandwidth})` : ''}`, {
+        requestedMode,
+        resolvedMode,
+        intent: options?.intent ?? 'unspecified',
+      });
+
+      return previousMode !== this.currentRadioMode;
+    } catch (error) {
+      throw this.convertOptionalOperationError(error, 'setMode');
+    }
+  }
+
+  private async performPTTWrite(enabled: boolean): Promise<void> {
+    this.checkConnected();
+
+    if (this.pttMethod === 'vox') {
+      return;
+    }
+
+    try {
+      await Promise.race([
+        this.rig!.setPtt(enabled),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('PTT operation timeout')), 3000)
+        ),
+      ]);
+
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);
+    } catch (error) {
+      throw RadioError.pttActivationFailed(
+        `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
   }
 
   private async syncSplitFrequencyIfNeeded(frequency: number): Promise<void> {
@@ -2074,7 +2130,6 @@ export class HamlibConnection
 
       this.currentConfig = null;
       this.pttMethod = 'cat';
-      this.meterPollFailCount = 0;
       this.backgroundTasksStarted = false;
       this.supportedLevels.clear();
       this.supportedModes.clear();
@@ -2123,7 +2178,8 @@ export class HamlibConnection
    */
   private async pollMeters(): Promise<void> {
     try {
-      await this.runSerializedTask('pollMeters', async () => {
+      const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+        this.ensureSession(activeSessionId);
         if (!this.rig) {
           return;
         }
@@ -2135,59 +2191,59 @@ export class HamlibConnection
         if (!hasAnyLevel) {
           try {
             await this.rig.getFrequency();
-            this.meterPollFailCount = 0;
             this.lastSuccessfulOperation = Date.now();
-          } catch {
-            this.meterPollFailCount++;
-            if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-              logger.error(`Health check failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
-              this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
-              this.stopMeterPolling();
-            }
+          } catch (error) {
+            logger.debug(`Meter fallback frequency read failed: ${this.getErrorMessage(error)}`);
           }
           return;
         }
 
-        try {
-          // 仅轮询电台支持的 level
-          const [strength, swr, alc, power, powerWatts] = await Promise.all([
-            this.supportedLevels.has('STRENGTH') ? this.rig.getLevel('STRENGTH').catch(() => null) : Promise.resolve(null),
-            this.supportedLevels.has('SWR') ? this.rig.getLevel('SWR').catch(() => null) : Promise.resolve(null),
-            this.supportedLevels.has('ALC') ? this.rig.getLevel('ALC').catch(() => null) : Promise.resolve(null),
-            this.supportedLevels.has('RFPOWER_METER') ? this.rig.getLevel('RFPOWER_METER').catch(() => null) : Promise.resolve(null),
-            this.supportedLevels.has('RFPOWER_METER_WATTS') ? this.rig.getLevel('RFPOWER_METER_WATTS').catch(() => null) : Promise.resolve(null),
-          ]);
+        const strength = this.supportedLevels.has('STRENGTH')
+          ? await this.readMeterLevel('STRENGTH')
+          : null;
+        const swr = this.supportedLevels.has('SWR')
+          ? await this.readMeterLevel('SWR')
+          : null;
+        const alc = this.supportedLevels.has('ALC')
+          ? await this.readMeterLevel('ALC')
+          : null;
+        const power = this.supportedLevels.has('RFPOWER_METER')
+          ? await this.readMeterLevel('RFPOWER_METER')
+          : null;
+        const powerWatts = this.supportedLevels.has('RFPOWER_METER_WATTS')
+          ? await this.readMeterLevel('RFPOWER_METER_WATTS')
+          : null;
 
-          // 转换数据格式
-          const meterData: MeterData = {
-            level: strength !== null ? this.convertStrengthToLevel(strength) : null,
-            swr: swr !== null ? this.convertSWR(swr) : null,
-            alc: alc !== null ? this.convertALC(alc) : null,
-            power: (power !== null || powerWatts !== null) ? this.convertPower(power, powerWatts) : null,
-          };
-
-          // 成功：重置失败计数
-          this.meterPollFailCount = 0;
-          this.lastSuccessfulOperation = Date.now();
-
-          // 📝 EventBus 优化：双路径策略
-          // 原路径：用于 DigitalRadioEngine 健康检查
-          this.emit('meterData', meterData);
-
-          // EventBus 直达：用于 WebSocket 广播到前端
-          globalEventBus.emit('bus:meterData', meterData);
-        } catch (error) {
-          this.meterPollFailCount++;
-          if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-            logger.error(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost detected`);
-            // 只 emit 事件，不直接修改 state —— 让上层状态机决定状态转换
-            this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
-            this.stopMeterPolling();
-          }
+        if (strength === null && swr === null && alc === null && power === null && powerWatts === null) {
+          return;
         }
+
+        const meterData: MeterData = {
+          level: strength !== null ? this.convertStrengthToLevel(strength) : null,
+          swr: swr !== null ? this.convertSWR(swr) : null,
+          alc: alc !== null ? this.convertALC(alc) : null,
+          power: (power !== null || powerWatts !== null) ? this.convertPower(power, powerWatts) : null,
+        };
+
+        this.lastSuccessfulOperation = Date.now();
+        this.emit('meterData', meterData);
+        globalEventBus.emit('bus:meterData', meterData);
       });
+
+      if (result === RADIO_IO_SKIPPED) {
+        logger.debug('Skipping meter polling because critical or queued CAT work is in progress');
+      }
     } catch (error) {
       logger.debug(`Skipping meter polling result: ${this.getErrorMessage(error)}`);
+    }
+  }
+
+  private async readMeterLevel(level: string): Promise<number | null> {
+    try {
+      return await this.rig!.getLevel(level as any);
+    } catch (error) {
+      logger.debug(`Meter level read failed for ${level}: ${this.getErrorMessage(error)}`);
+      return null;
     }
   }
 

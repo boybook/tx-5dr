@@ -234,6 +234,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   private async pollCapabilityOnce(id: string): Promise<void> {
     if (!this.connection) return;
 
+    if (this.connection.isCriticalOperationActive?.()) {
+      logger.debug(`Skipping capability poll while critical radio operation is active: ${id}`);
+      return;
+    }
+
     const definition = CAPABILITY_DEFINITION_MAP.get(id);
     const descriptor = this.descriptorCache.get(id);
     if (!definition?.read || !descriptor?.readable) return;

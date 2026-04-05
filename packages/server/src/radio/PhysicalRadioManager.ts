@@ -31,7 +31,14 @@ import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { isProcessShuttingDown } from '../utils/process-shutdown.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
-import type { IRadioConnection, MeterData, RadioModeBandwidth, SetRadioModeOptions } from './connections/IRadioConnection.js';
+import type {
+  ApplyOperatingStateRequest,
+  ApplyOperatingStateResult,
+  IRadioConnection,
+  MeterData,
+  RadioModeBandwidth,
+  SetRadioModeOptions,
+} from './connections/IRadioConnection.js';
 import { RadioConnectionType } from './connections/IRadioConnection.js';
 import { RadioCapabilityManager } from './RadioCapabilityManager.js';
 import { isRecoverableOptionalRadioError } from './optionalRadioError.js';
@@ -635,6 +642,62 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.error(`Failed to set frequency: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
       return false;
+    }
+  }
+
+  async applyOperatingState(request: ApplyOperatingStateRequest): Promise<ApplyOperatingStateResult> {
+    if (!this.connection) {
+      throw new Error('radio not connected');
+    }
+
+    if (request.frequency !== undefined && this.isCoreCapabilityUnsupported('writeFrequency')) {
+      return {
+        frequencyApplied: false,
+        modeApplied: false,
+        modeError: request.mode ? new Error('set mode skipped because frequency control is not available') : undefined,
+      };
+    }
+
+    if (request.mode && request.frequency === undefined && this.isCoreCapabilityUnsupported('writeRadioMode')) {
+      throw new Error('set mode failed: radio mode control not supported');
+    }
+
+    try {
+      const result = await this.connection.applyOperatingState(request);
+
+      if (request.frequency !== undefined && result.frequencyApplied) {
+        this.markCoreCapabilitySupported('writeFrequency');
+        this.updateKnownFrequency(request.frequency);
+      }
+
+      if (request.mode && result.modeApplied) {
+        this.markCoreCapabilitySupported('writeRadioMode');
+      }
+
+      if (result.modeError) {
+        if (isRecoverableOptionalRadioError(result.modeError)) {
+          this.markCoreCapabilityUnsupported('writeRadioMode', result.modeError);
+        } else if (!request.tolerateModeFailure) {
+          this.handleConnectionError(result.modeError);
+        } else {
+          logger.warn('Radio mode write failed during tolerated operating-state update', result.modeError);
+        }
+      }
+
+      return result;
+    } catch (error) {
+      if (request.mode && request.frequency === undefined && isRecoverableOptionalRadioError(error)) {
+        this.markCoreCapabilityUnsupported('writeRadioMode', error);
+        throw new Error(`set mode failed: ${(error as Error).message}`);
+      }
+
+      if (request.frequency !== undefined && isRecoverableOptionalRadioError(error)) {
+        this.markCoreCapabilityUnsupported('writeFrequency', error);
+        return { frequencyApplied: false, modeApplied: false };
+      }
+
+      this.handleConnectionError(error as Error);
+      throw error;
     }
   }
 
@@ -1664,6 +1727,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private async checkFrequencyChange(): Promise<void> {
     if (!this.connection || !this.isConnected()) {
+      return;
+    }
+
+    if (this.connection.isCriticalOperationActive?.()) {
+      logger.debug('Skipping frequency monitoring because a critical radio operation is in progress');
       return;
     }
 

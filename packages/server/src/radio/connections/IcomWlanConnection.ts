@@ -16,8 +16,10 @@ import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
-import { RadioIoQueue } from './RadioIoQueue.js';
+import { RADIO_IO_SKIPPED, RadioIoQueue } from './RadioIoQueue.js';
 import {
+  type ApplyOperatingStateRequest,
+  type ApplyOperatingStateResult,
   RadioConnectionType,
   RadioConnectionState,
   type RadioSpectrumDisplayState,
@@ -73,12 +75,6 @@ export class IcomWlanConnection
   private isCleaningUp = false;
 
   /**
-   * 数值表轮询连续失败计数（用于断线检测）
-   */
-  private meterPollFailCount = 0;
-  private readonly METER_POLL_FAIL_THRESHOLD = 3;
-
-  /**
    * 天调启用状态（本地跟踪，简化版实现）
    */
   private tunerEnabled = false;
@@ -95,6 +91,10 @@ export class IcomWlanConnection
 
     this.backgroundTasksStarted = true;
     this.startMeterPolling();
+  }
+
+  isCriticalOperationActive(): boolean {
+    return this.ioQueue.isCriticalActive();
   }
 
   /**
@@ -133,14 +133,67 @@ export class IcomWlanConnection
     }
   }
 
-  private async runSerializedTask<T>(taskName: string, task: () => Promise<T>): Promise<T> {
+  private async runSerializedTask<T>(
+    taskName: string,
+    task: () => Promise<T>,
+    options?: { critical?: boolean },
+  ): Promise<T> {
     const sessionId = this.ioSessionId;
-    return this.ioQueue.run({ sessionId }, async (activeSessionId) => {
+    return this.ioQueue.run({ sessionId, critical: options?.critical }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
       const result = await task();
       this.ensureSession(activeSessionId);
       return result;
     });
+  }
+
+  private async performFrequencyWrite(frequency: number): Promise<void> {
+    this.checkConnected();
+
+    try {
+      await this.rig!.setFrequency(frequency);
+      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
+    } catch (error) {
+      throw this.convertError(error, 'setFrequency');
+    }
+  }
+
+  private async performModeWrite(mode: string, bandwidth?: RadioModeBandwidth): Promise<void> {
+    this.checkConnected();
+
+    try {
+      if (typeof bandwidth === 'number') {
+        throw new Error('ICOM WLAN setMode does not support numeric passband widths');
+      }
+
+      const dataMode = bandwidth === 'wide'
+        ? true
+        : bandwidth === 'narrow'
+          ? false
+          : this.defaultDataMode;
+
+      const modeCode = this.mapModeToIcom(mode);
+      await this.rig!.setMode(modeCode, { dataMode });
+
+      logger.debug(`Mode set: ${mode}${dataMode ? ' (Data)' : ''}`);
+    } catch (error) {
+      throw this.convertError(error, 'setMode');
+    }
+  }
+
+  private async performPTTWrite(enabled: boolean): Promise<void> {
+    this.checkConnected();
+
+    try {
+      logger.debug(`PTT ${enabled ? 'TX start' : 'RX start'}`);
+      await this.rig!.setPtt(enabled);
+      logger.debug(`PTT ${enabled ? 'TX active' : 'RX active'}`);
+    } catch (error) {
+      throw RadioError.pttActivationFailed(
+        `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
   }
 
   /**
@@ -281,15 +334,8 @@ export class IcomWlanConnection
    */
   async setFrequency(frequency: number): Promise<void> {
     await this.runSerializedTask('setFrequency', async () => {
-      this.checkConnected();
-
-      try {
-        await this.rig!.setFrequency(frequency);
-        logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
-      } catch (error) {
-        throw this.convertError(error, 'setFrequency');
-      }
-    });
+      await this.performFrequencyWrite(frequency);
+    }, { critical: true });
   }
 
   /**
@@ -316,19 +362,8 @@ export class IcomWlanConnection
    */
   async setPTT(enabled: boolean): Promise<void> {
     await this.runSerializedTask('setPTT', async () => {
-      this.checkConnected();
-
-      try {
-        logger.debug(`PTT ${enabled ? 'TX start' : 'RX start'}`);
-        await this.rig!.setPtt(enabled);
-        logger.debug(`PTT ${enabled ? 'TX active' : 'RX active'}`);
-      } catch (error) {
-        throw RadioError.pttActivationFailed(
-          `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
-          error instanceof Error ? error : new Error(String(error))
-        );
-      }
-    });
+      await this.performPTTWrite(enabled);
+    }, { critical: true });
   }
 
   /**
@@ -336,31 +371,38 @@ export class IcomWlanConnection
    */
   async setMode(mode: string, bandwidth?: RadioModeBandwidth, _options?: SetRadioModeOptions): Promise<void> {
     await this.runSerializedTask('setMode', async () => {
+      await this.performModeWrite(mode, bandwidth);
+    }, { critical: true });
+  }
+
+  async applyOperatingState(request: ApplyOperatingStateRequest): Promise<ApplyOperatingStateResult> {
+    return this.runSerializedTask('applyOperatingState', async () => {
       this.checkConnected();
 
-      try {
-        if (typeof bandwidth === 'number') {
-          throw new Error('ICOM WLAN setMode does not support numeric passband widths');
-        }
+      let frequencyApplied = false;
+      let modeApplied = false;
+      let modeError: Error | undefined;
 
-        // 将 bandwidth 转换为 dataMode
-        // 如果指定了 bandwidth，使用 bandwidth 映射
-        // 否则使用配置的默认 dataMode
-        const dataMode = bandwidth === 'wide'
-          ? true
-          : bandwidth === 'narrow'
-            ? false
-            : this.defaultDataMode;
-
-        // 将模式字符串映射到 ICOM 模式代码
-        const modeCode = this.mapModeToIcom(mode);
-        await this.rig!.setMode(modeCode, { dataMode });
-
-        logger.debug(`Mode set: ${mode}${dataMode ? ' (Data)' : ''}`);
-      } catch (error) {
-        throw this.convertError(error, 'setMode');
+      if (request.frequency !== undefined) {
+        await this.performFrequencyWrite(request.frequency);
+        frequencyApplied = true;
       }
-    });
+
+      if (request.mode) {
+        try {
+          await this.performModeWrite(request.mode, request.bandwidth);
+          modeApplied = true;
+        } catch (error) {
+          if (!request.tolerateModeFailure) {
+            throw error;
+          }
+
+          modeError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+
+      return { frequencyApplied, modeApplied, modeError };
+    }, { critical: true });
   }
 
   /**
@@ -896,63 +938,48 @@ export class IcomWlanConnection
    */
   private async pollMeters(): Promise<void> {
     try {
-      await this.runSerializedTask('pollMeters', async () => {
+      const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+        this.ensureSession(activeSessionId);
         if (!this.rig) {
           return;
         }
 
-        try {
-          // 并行读取四个数值表
-          const [swr, alcRaw, level, power] = await Promise.all([
-            this.rig.readSWR({ timeout: 200 }).catch(() => null),
-            this.rig.readALC({ timeout: 200 }).catch(() => null),
-            this.rig.getLevelMeter({ timeout: 200 }).catch(() => null),
-            this.rig.readPowerLevel({ timeout: 200 }).catch(() => null),
-          ]);
-          // Override alert: align with Hamlib semantics (true only at >= 100%)
-          const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
+        const swr = await this.readMeterValue('SWR', () => this.rig!.readSWR({ timeout: 200 }));
+        const alcRaw = await this.readMeterValue('ALC', () => this.rig!.readALC({ timeout: 200 }));
+        const level = await this.readMeterValue('LEVEL', () => this.rig!.getLevelMeter({ timeout: 200 }));
+        const power = await this.readMeterValue('POWER', () => this.rig!.readPowerLevel({ timeout: 200 }));
 
-          // 检查是否所有读取都失败
-          const allFailed = swr === null && alc === null && level === null && power === null;
+        const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
 
-          if (allFailed) {
-            this.meterPollFailCount++;
-            if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-              logger.warn(`Meter polling failed ${this.meterPollFailCount} times consecutively, connection lost`);
-              this.stopMeterPolling();
-              this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
-              return;
-            }
-          } else {
-            // 有任一成功，重置计数
-            this.meterPollFailCount = 0;
-          }
-
-          const meterData: MeterData = {
-            swr,
-            alc,
-            level,
-            power: power !== null ? { ...power, watts: null, maxWatts: null } : null,
-          };
-
-          // 📝 EventBus 优化：双路径策略
-          // 原路径：用于 DigitalRadioEngine 健康检查
-          this.emit('meterData', meterData);
-
-          // EventBus 直达：用于 WebSocket 广播到前端
-          globalEventBus.emit('bus:meterData', meterData);
-        } catch (error) {
-          // Promise.all 本身抛异常（不应发生，因为内部都有 catch）
-          this.meterPollFailCount++;
-          if (this.meterPollFailCount >= this.METER_POLL_FAIL_THRESHOLD) {
-            logger.warn(`Meter polling exception failed ${this.meterPollFailCount} times, connection lost`);
-            this.stopMeterPolling();
-            this.emit('error', new Error(`Radio communication failed ${this.meterPollFailCount} consecutive times`));
-          }
+        if (swr === null && alc === null && level === null && power === null) {
+          return;
         }
+
+        const meterData: MeterData = {
+          swr,
+          alc,
+          level,
+          power: power !== null ? { ...power, watts: null, maxWatts: null } : null,
+        };
+
+        this.emit('meterData', meterData);
+        globalEventBus.emit('bus:meterData', meterData);
       });
+
+      if (result === RADIO_IO_SKIPPED) {
+        logger.debug('Skipping meter polling because critical or queued CAT work is in progress');
+      }
     } catch (error) {
       logger.debug(`Skipping meter polling result: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async readMeterValue<T>(name: string, reader: () => Promise<T | null>): Promise<T | null> {
+    try {
+      return await reader();
+    } catch (error) {
+      logger.debug(`Meter read failed for ${name}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
     }
   }
 

@@ -19,6 +19,7 @@ type TestRadioConnection = {
   connect?: ReturnType<typeof vi.fn>;
   disconnect?: ReturnType<typeof vi.fn>;
   isHealthy?: ReturnType<typeof vi.fn>;
+  isCriticalOperationActive?: ReturnType<typeof vi.fn>;
   startBackgroundTasks?: ReturnType<typeof vi.fn>;
   setKnownFrequency?: ReturnType<typeof vi.fn>;
   getTunerCapabilities?: ReturnType<typeof vi.fn>;
@@ -26,6 +27,7 @@ type TestRadioConnection = {
   getMode?: ReturnType<typeof vi.fn>;
   setFrequency?: ReturnType<typeof vi.fn>;
   setMode?: ReturnType<typeof vi.fn>;
+  applyOperatingState?: ReturnType<typeof vi.fn>;
 };
 
 type PhysicalRadioManagerTestAccessor = {
@@ -256,6 +258,73 @@ describe('PhysicalRadioManager', () => {
     });
   });
 
+  it('applies frequency and mode through the connection-level operating state helper', async () => {
+    const applyOperatingState = vi.fn().mockResolvedValue({
+      frequencyApplied: true,
+      modeApplied: false,
+      modeError: new Error('mode unavailable'),
+    });
+    const setKnownFrequency = vi.fn();
+    asTestManager(manager).connection = {
+      applyOperatingState,
+      setKnownFrequency,
+    };
+
+    const result = await manager.applyOperatingState({
+      frequency: 14074000,
+      mode: 'USB',
+      tolerateModeFailure: true,
+    });
+
+    expect(result.frequencyApplied).toBe(true);
+    expect(result.modeApplied).toBe(false);
+    expect(result.modeError?.message).toBe('mode unavailable');
+    expect(applyOperatingState).toHaveBeenCalledWith({
+      frequency: 14074000,
+      mode: 'USB',
+      tolerateModeFailure: true,
+    });
+    expect(setKnownFrequency).toHaveBeenCalledWith(14074000);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not treat tolerated mode failures as connection health failures', async () => {
+    const applyOperatingState = vi.fn().mockResolvedValue({
+      frequencyApplied: true,
+      modeApplied: false,
+      modeError: new Error('protocol error'),
+    });
+    asTestManager(manager).connection = {
+      applyOperatingState,
+      setKnownFrequency: vi.fn(),
+    };
+
+    const result = await manager.applyOperatingState({
+      frequency: 14074000,
+      mode: 'USB',
+      tolerateModeFailure: true,
+    });
+
+    expect(result.frequencyApplied).toBe(true);
+    expect(result.modeApplied).toBe(false);
+    expect(result.modeError?.message).toBe('protocol error');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('skips frequency polling while a critical radio operation is active', async () => {
+    const getFrequency = vi.fn();
+    asTestManager(manager).connection = {
+      isCriticalOperationActive: vi.fn().mockReturnValue(true),
+      getFrequency,
+      setKnownFrequency: vi.fn(),
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+
+    await (manager as any).checkFrequencyChange();
+
+    expect(getFrequency).not.toHaveBeenCalled();
+  });
+
   it('completes conservative post-connect bootstrap before emitting connected', async () => {
     const order: string[] = [];
     const testManager = asTestManager(manager);
@@ -267,6 +336,7 @@ describe('PhysicalRadioManager', () => {
       }),
       disconnect: vi.fn().mockResolvedValue(undefined),
       isHealthy: vi.fn().mockReturnValue(true),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
       startBackgroundTasks: vi.fn().mockImplementation(() => {
         order.push('background');
       }),
