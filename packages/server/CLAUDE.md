@@ -38,6 +38,16 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 - 状态机逻辑 → `state-machines/engineStateMachine.ts` / `radioStateMachine.ts`
 - 对外 API（路由/WSServer 调用）→ `DigitalRadioEngine` Facade 委托方法
 
+#### Radio I/O 规则
+
+- 连接类负责“底层协议 + 串行化”，不要把并发控制分散到路由、subsystem 或 manager 外层
+- `PhysicalRadioManager` 负责 bootstrap、能力状态、缓存与编排；不要下沉协议细节
+- 关键操作只有频率、模式、PTT；都必须通过连接层 critical queue 执行
+- 复合切换必须走 `applyOperatingState(...)`，不要在上层手写 `setFrequency()` 后紧跟 `setMode()`
+- meter / capability / frequency monitoring 一律视为低优先级观察流，关键操作期间允许跳过
+- 观察流失败默认不打断连接；只有关键控制链路失败才进入健康状态机
+- `startBackgroundTasks()` 只能在连接完成且保守 bootstrap 结束后调用
+
 ### 电台连接与状态机
 
 详细架构见根目录 `CLAUDE.md` 的「双状态机架构」和「电台连接层」章节。

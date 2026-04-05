@@ -1,42 +1,37 @@
 # Server 启动与电台链路架构
 
 **适用范围**: `packages/server`
-**目标**: 让启动流程、电台连接 bootstrap、事件投影的职责边界稳定且可复用。
+**目标**: 固定启动流程、电台 bootstrap 与事件投影的职责边界，避免职责漂移。
 
-## 1. 总览
+## 1. 分层
 
-Server 侧的启动与电台链路固定分成 4 层：
+Server 启动与 radio 链路固定分成 4 层：
 
 | 层 | 主入口 | 负责 | 不负责 |
 |---|---|---|---|
-| Facade | `DigitalRadioEngine` | 装配组件、阶段化初始化、对外 API、模式切换 | 资源细节、电台 bootstrap、UI 事件投影 |
-| Lifecycle | `EngineLifecycle` | 资源蓝图、启动/停止顺序、状态机、回滚 | 连接后的频率恢复、能力初始化 |
-| Radio Session | `PhysicalRadioManager` | 连接会话、保守 bootstrap、后台任务激活、统一电台控制 | 引擎资源顺序、前端状态广播 |
-| Projection | `RadioBridge` | 把电台状态投影到 `engineEmitter`、断线恢复运行态 | 连接后写频、连接预热、底层 CAT 命令 |
+| Facade | `DigitalRadioEngine` | 组装系统、阶段化初始化、对外 API、模式切换 | 资源细节、radio bootstrap、事件投影 |
+| Lifecycle | `EngineLifecycle` | 资源蓝图、启动/停止顺序、引擎状态机、回滚 | 连接后预热、频率恢复、CAT 细节 |
+| Radio Session | `PhysicalRadioManager` | 连接会话、bootstrap、后台任务激活、统一 radio 编排 | 资源排序、前端广播、协议细节散落到外层 |
+| Projection | `RadioBridge` | 把 radio 状态投影到 `engineEmitter`、处理断线恢复 | 连接后写频、radio 预热、底层协议调用 |
 
-一句话判断：
+快速判断：
 
-- “这段逻辑是在组装系统吗？”→ `DigitalRadioEngine`
-- “这段逻辑是在定义资源怎么启动吗？”→ `EngineLifecycle`
-- “这段逻辑是在连接刚建立后和电台对话吗？”→ `PhysicalRadioManager`
-- “这段逻辑是在把状态告诉外界吗？”→ `RadioBridge`
+- 组装系统 → `DigitalRadioEngine`
+- 定义资源如何启动 → `EngineLifecycle`
+- 连接成功后与电台对话 → `PhysicalRadioManager`
+- 把状态通知外界 → `RadioBridge`
 
 ## 2. 启动时序
 
 ### 2.1 Server 初始化
 
 1. `server.ts` 调用 `DigitalRadioEngine.initialize()`
-2. `DigitalRadioEngine` 按固定 phase 初始化：
-   - `runtime`: 时钟、调度器、频谱底座
-   - `domain-services`: operator / PSKReporter 等领域服务
-   - `subsystem-assembly`: `ClockCoordinator` / `VoiceSessionManager` / `EngineLifecycle`
-   - `restore-mode`: 恢复上次 engine mode 与 digital sub-mode
-   - `lifecycle`: 生成资源蓝图并初始化引擎状态机
-3. 后续 `EngineLifecycle.start()` 才真正启动资源
+2. `DigitalRadioEngine` 按 phase 初始化运行时、领域服务、子系统装配与模式恢复
+3. `EngineLifecycle.start()` 才真正启动资源
 
 ### 2.2 Radio 资源启动
 
-`EngineLifecycle` 的资源蓝图中，`radio` 永远是最高优先级资源：
+`radio` 永远是最高优先级资源，固定路径如下：
 
 1. `EngineLifecycle` 调用 `radioManager.applyConfig()`
 2. `PhysicalRadioManager` 驱动 radio state machine 进入 connecting
@@ -45,18 +40,17 @@ Server 侧的启动与电台链路固定分成 4 层：
    - `openConnectionSession`
    - `bootstrapConnectedSession`
    - `activateConnectedSession`
-4. 只有在 `bootstrapConnectedSession` 完成后，才允许：
-   - `startBackgroundTasks()`
-   - 频率监控
-   - 其他后台轮询
+4. 只有 `bootstrapConnectedSession()` 完成后，才允许启动后台任务与轮询
 5. `PhysicalRadioManager` 发出 `connected`
-6. `RadioBridge` 投影 `radioStatusChanged`，必要时恢复断线前运行状态
+6. `RadioBridge` 投影连接状态，并在需要时恢复运行态
 
-## 3. Radio bootstrap 规范
+## 3. Bootstrap 与 Activation
+
+### 3.1 Bootstrap
 
 `PhysicalRadioManager.bootstrapConnectedSession()` 是唯一合法的“连接后一次性初始化”入口。
 
-当前固定顺序：
+当前顺序：
 
 1. `waitForConnectionSettle`
 2. `readTunerCapabilities`
@@ -64,74 +58,77 @@ Server 侧的启动与电台链路固定分成 4 层：
 4. `capabilityManager.onConnected`
 5. `captureInitialFrequency`（仅在未恢复保存频率时）
 
-### 什么时候放到 bootstrap？
+适合放进 bootstrap 的动作必须同时满足：
 
-放到 bootstrap 的动作必须同时满足：
-
-- 只在连接成功后做一次
+- 只在连接成功后执行一次
 - 会直接访问底层 radio
 - 必须早于后台 polling
 
-例子：
+### 3.2 Activation
 
-- 读取一次 capability / tuner capability
-- 恢复上次频率
-- 建立初始 known frequency
+activation 负责长生命周期后台行为，只能在 bootstrap 完成后开始。
 
-### 什么时候放到 activation？
-
-放到 activation 的动作通常是：
-
-- 周期性轮询
-- 长生命周期后台任务
-- 允许连接稳定后再启动
-
-例子：
+典型内容：
 
 - `startBackgroundTasks()`
 - meter polling
-- 频率监控定时器
+- frequency monitoring
+- 其他周期性观察流
 
-## 4. 新增逻辑时怎么放
+## 4. Radio I/O 规则
 
-### 4.1 新增一个启动步骤
+这些规则适用于所有 radio 实现，尤其是老机型或串口后端：
 
-| 问题 | 放置位置 |
+- 所有底层 CAT/CI-V 访问必须经过连接对象自己的串行队列
+- `setFrequency`、`setMode`、`setPTT` 属于关键操作，必须保守串行执行
+- “切频 + 切模式”必须走 `applyOperatingState(...)` 这类复合入口，不要在上层拆开调用
+- meter、capability、frequency monitoring 属于低优先级观察流；关键操作期间应直接跳过
+- 观察流失败默认只记日志，不单独作为断线依据
+- `connect()` 只负责建链与最小初始化，不负责偷偷启动后台 polling
+- `startBackgroundTasks()` 只能在 bootstrap 完成后调用
+
+## 5. 新增逻辑时的放置规则
+
+### 5.1 新增启动步骤
+
+| 场景 | 放置位置 |
 |---|---|
 | 只是构造对象、接线依赖 | `DigitalRadioEngine.initialize*Phase()` |
 | 是资源的一部分，需要 start/stop | `EngineLifecycle.build*ResourcePlan()` |
 | 必须在 radio connect 后立即跑一次 | `PhysicalRadioManager.bootstrapConnectedSession()` |
-| 只是把已有状态广播给前端/事件总线 | `RadioBridge` |
+| 只是广播已有状态 | `RadioBridge` |
 
-### 4.2 新增一种 radio 连接能力
+### 5.2 新增 radio 能力
 
 1. 在 `IRadioConnection` 定义接口
-2. 在连接实现里保证通过自身串行队列执行
-3. 若需要连接后预热，只能由 `PhysicalRadioManager.bootstrapConnectedSession()` 编排
-4. 若只是 UI 状态广播，不要在连接实现里直接操作，交给 `RadioBridge`
+2. 在连接实现里完成协议适配与串行化
+3. 如果需要连接后预热，由 `PhysicalRadioManager.bootstrapConnectedSession()` 编排
+4. 如果只是状态广播，不要下沉到连接实现，交给 `RadioBridge`
 
-### 4.3 新增一个新的 radio 连接实现
+### 5.3 新增 radio 连接实现
 
-最少要检查：
+至少满足以下约束：
 
-1. `connect()` 内只做“建立连接”与实现内部最小初始化
-2. 不要在 `connect()` 里偷偷启动后台 polling；统一走 `startBackgroundTasks()`
-3. 所有控制类 I/O 必须走串行队列
-4. `disconnect()` 必须能安全停止后台任务
-5. 如果存在会话切换风险，旧会话任务必须失效
+1. `connect()` 只做建链和最小初始化
+2. 后台 polling 统一通过 `startBackgroundTasks()` 启动
+3. 所有控制类 I/O 必须经过串行队列
+4. 复合切换必须支持 `applyOperatingState(...)`
+5. `disconnect()` 必须能安全停止后台任务
+6. 旧会话残留任务必须失效
 
-## 5. 代码导航
+## 6. 代码导航
 
 - 启动 phase：`packages/server/src/DigitalRadioEngine.ts`
 - 资源蓝图：`packages/server/src/subsystems/EngineLifecycle.ts`
-- 连接 bootstrap：`packages/server/src/radio/PhysicalRadioManager.ts`
+- radio bootstrap：`packages/server/src/radio/PhysicalRadioManager.ts`
 - 状态投影：`packages/server/src/subsystems/RadioBridge.ts`
-- 连接实现契约：`packages/server/src/radio/connections/IRadioConnection.ts`
+- 连接契约：`packages/server/src/radio/connections/IRadioConnection.ts`
 
-## 6. 守护测试
+## 7. 守护测试
 
-以下测试用于防止职责回流：
+这些测试用于防止职责回流：
 
-- `PhysicalRadioManager.test.ts`: 保证 bootstrap 在 `connected` 之前完成
-- `EngineLifecycle.test.ts`: 保证不同模式复用同一资源蓝图重建入口
-- `RadioBridge.test.ts`: 保证连接事件投影不再执行连接期写频
+- `PhysicalRadioManager.test.ts`：bootstrap 在 `connected` 前完成，关键操作期间跳过监控
+- `EngineLifecycle.test.ts`：不同模式复用同一资源蓝图重建入口
+- `RadioBridge.test.ts`：连接事件投影不执行连接期写频
+- `HamlibConnection.test.ts` / `IcomWlanConnection.test.ts`：关键 I/O 串行化、复合切换与低优先级让路
