@@ -12,6 +12,9 @@ export enum ServerMessageKey {
   /** QSO 已记录 */
   QSO_LOGGED = 'qsoLogged',
 
+  /** QSO 已更新 */
+  QSO_UPDATED = 'qsoUpdated',
+
   /** 实时语音连接异常 */
   REALTIME_CONNECTIVITY_WARNING = 'realtimeConnectivityWarning',
 

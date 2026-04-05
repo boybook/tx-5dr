@@ -106,6 +106,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       encodeQueue: this.realEncodeQueue,
       clockSource: this.clockSource,
       getCurrentMode: () => this.currentMode,
+      slotPackManager: this.slotPackManager,
       setRadioFrequency: (freq: number) => {
         if (this.radioManager) {
           try { this.radioManager.setFrequency(freq); } catch (e) { logger.error('Failed to set radio frequency', e); }

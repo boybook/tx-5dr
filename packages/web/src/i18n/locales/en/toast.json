@@ -23,7 +23,11 @@
     },
     "qsoLogged": {
       "title": "QSO Logged",
-      "description": ""
+      "description": "{{summary}}"
+    },
+    "qsoUpdated": {
+      "title": "QSO Updated",
+      "description": "{{summary}}"
     },
     "realtimeConnectivityWarning": {
       "title": "Realtime Voice Connectivity Issue",

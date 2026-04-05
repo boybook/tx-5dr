@@ -67,6 +67,7 @@ export enum WSMessageType {
   
   // ===== 通联日志 =====
   QSO_RECORD_ADDED = 'qsoRecordAdded',
+  QSO_RECORD_UPDATED = 'qsoRecordUpdated',
   LOGBOOK_UPDATED = 'logbookUpdated',
   // 仅通知的日志本变更事件（专用于日志本WS）
   LOGBOOK_CHANGE_NOTICE = 'logbookChangeNotice',
@@ -664,6 +665,20 @@ export const WSQSORecordAddedMessageSchema = WSBaseMessageSchema.extend({
 export type WSQSORecordAddedMessage = z.infer<typeof WSQSORecordAddedMessageSchema>;
 
 /**
+ * QSO记录更新消息（服务端到客户端）
+ */
+export const WSQSORecordUpdatedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.QSO_RECORD_UPDATED),
+  data: z.object({
+    operatorId: z.string(),
+    logBookId: z.string(),
+    qsoRecord: QSORecordSchema,
+  }),
+});
+
+export type WSQSORecordUpdatedMessage = z.infer<typeof WSQSORecordUpdatedMessageSchema>;
+
+/**
  * 日志本更新消息（服务端到客户端）
  */
 export const WSLogbookUpdatedMessageSchema = WSBaseMessageSchema.extend({
@@ -1003,6 +1018,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   
   // 通联日志消息
   WSQSORecordAddedMessageSchema,
+  WSQSORecordUpdatedMessageSchema,
   WSLogbookUpdatedMessageSchema,
   
   // 客户端启用操作员列表消息
@@ -1146,6 +1162,12 @@ export interface DigitalRadioEngineEvents {
 
   // 电台数值表事件
   meterData: (data: MeterData) => void;
+
+  // QSO 日志事件
+  qsoRecordAdded: (data: { operatorId: string; logBookId: string; qsoRecord: z.infer<typeof QSORecordSchema> }) => void;
+  qsoRecordUpdated: (data: { operatorId: string; logBookId: string; qsoRecord: z.infer<typeof QSORecordSchema> }) => void;
+  logbookUpdated: (data: { logBookId: string; statistics: z.infer<typeof LogBookStatisticsSchema>; operatorId?: string }) => void;
+  textMessage: (data: z.infer<typeof WSTextMessageSchema>['data']) => void;
 
   /** @deprecated Tuner state is now delivered via radioCapabilityChanged event (id='tuner_switch') */
   tunerStatusChanged: (status: z.infer<typeof TunerStatusSchema>) => void;

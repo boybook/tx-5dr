@@ -276,6 +276,11 @@ export function createRadioEventMap({
       logger.debug('QSO record added:', qsoData);
       logbookDispatch({ type: 'qsoRecordAdded', payload: qsoData });
     },
+    qsoRecordUpdated: (data: unknown) => {
+      const qsoData = data as { operatorId: string; logBookId: string; qsoRecord: QSORecord };
+      logger.debug('QSO record updated:', qsoData);
+      logbookDispatch({ type: 'qsoRecordUpdated', payload: qsoData });
+    },
     logbookUpdated: (data: unknown) => {
       const logbookData = data as { logBookId: string; statistics: LogBookStatistics };
       logger.debug('Logbook updated:', logbookData);

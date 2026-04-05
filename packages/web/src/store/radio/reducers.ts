@@ -417,6 +417,43 @@ export function logbookReducer(state: LogbookState, action: LogbookAction): Logb
         lastUpdateTime: new Date()
       };
     }
+
+    case 'qsoRecordUpdated': {
+      const { operatorId, qsoRecord } = action.payload;
+      const updatedQsosByOperator = new Map(state.qsosByOperator);
+      
+      // 获取该操作员现有的QSO记录
+      const existingQsos = updatedQsosByOperator.get(operatorId) || [];
+      
+      // 检查是否已存在相同的QSO记录（避免重复）
+      const existingIndex = existingQsos.findIndex(qso => qso.id === qsoRecord.id);
+      
+      let updatedQsos: QSORecord[];
+      if (existingIndex >= 0) {
+        // 更新现有记录
+        updatedQsos = [...existingQsos];
+        updatedQsos[existingIndex] = qsoRecord;
+      } else {
+        // 添加新记录
+        updatedQsos = [...existingQsos, qsoRecord];
+      }
+      
+      // 按时间排序（最新的在前）
+      updatedQsos.sort((a, b) => b.startTime - a.startTime);
+      
+      // 限制每个操作员保留的记录数量（例如最近1000条）
+      if (updatedQsos.length > 1000) {
+        updatedQsos = updatedQsos.slice(0, 1000);
+      }
+      
+      updatedQsosByOperator.set(operatorId, updatedQsos);
+      
+      return {
+        ...state,
+        qsosByOperator: updatedQsosByOperator,
+        lastUpdateTime: new Date()
+      };
+    }
     
     case 'logbookUpdated': {
       const { logBookId, statistics } = action.payload;

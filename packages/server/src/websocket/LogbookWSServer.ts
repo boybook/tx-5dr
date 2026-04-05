@@ -31,6 +31,9 @@ export class LogbookWSServer {
     this.engine.on('qsoRecordAdded' as any, (data: { operatorId: string; logBookId: string }) => {
       this.broadcastChangeNotice({ logBookId: data.logBookId, operatorId: data.operatorId });
     });
+    this.engine.on('qsoRecordUpdated' as any, (data: { operatorId: string; logBookId: string }) => {
+      this.broadcastChangeNotice({ logBookId: data.logBookId, operatorId: data.operatorId });
+    });
     this.engine.on('logbookUpdated' as any, (data: { logBookId: string }) => {
       this.broadcastChangeNotice({ logBookId: data.logBookId });
     });
