@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterDigitalFrequencyOptions, isCoreCapabilityAvailable } from '../radioControl';
+import { filterDigitalFrequencyOptions, isCoreCapabilityAvailable, shouldShowAutoTunerShortcut } from '../radioControl';
 
 describe('radioControl utils', () => {
   it('keeps digital presets available when current mode is unknown', () => {
@@ -33,5 +33,37 @@ describe('radioControl utils', () => {
       readRadioMode: true,
       writeRadioMode: true,
     }, 'writeFrequency')).toBe(false);
+  });
+
+  it('shows auto tuner shortcut only when connected, permitted, and supported', () => {
+    expect(shouldShowAutoTunerShortcut(true, true, {
+      id: 'tuner_switch',
+      supported: true,
+      value: false,
+      updatedAt: 1,
+    })).toBe(true);
+
+    expect(shouldShowAutoTunerShortcut(true, false, {
+      id: 'tuner_switch',
+      supported: true,
+      value: false,
+      updatedAt: 1,
+    })).toBe(false);
+
+    expect(shouldShowAutoTunerShortcut(true, true, {
+      id: 'tuner_switch',
+      supported: false,
+      value: null,
+      updatedAt: 1,
+    })).toBe(false);
+
+    expect(shouldShowAutoTunerShortcut(false, true, {
+      id: 'tuner_switch',
+      supported: true,
+      value: true,
+      updatedAt: 1,
+    })).toBe(false);
+
+    expect(shouldShowAutoTunerShortcut(true, true, undefined)).toBe(false);
   });
 });

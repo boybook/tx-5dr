@@ -1,4 +1,4 @@
-import type { CoreRadioCapabilities } from '@tx5dr/contracts';
+import type { CapabilityState, CoreRadioCapabilities } from '@tx5dr/contracts';
 
 export interface FrequencyOptionLike {
   key: string;
@@ -10,6 +10,16 @@ export function isCoreCapabilityAvailable(
   capability: keyof CoreRadioCapabilities,
 ): boolean {
   return coreCapabilities?.[capability] !== false;
+}
+
+export function shouldShowAutoTunerShortcut(
+  radioConnected: boolean,
+  canControlRadio: boolean,
+  tunerSwitchCapability: CapabilityState | null | undefined,
+): boolean {
+  return radioConnected
+    && canControlRadio
+    && tunerSwitchCapability?.supported === true;
 }
 
 export function filterDigitalFrequencyOptions<T extends FrequencyOptionLike>(

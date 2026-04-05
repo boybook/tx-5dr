@@ -22,7 +22,11 @@ import { useWSEvent } from '../../../hooks/useWSEvent';
 import { createLogger } from '../../../utils/logger';
 import { detectBrowserAudioRuntime } from '../../../audio/browserAudioRuntime';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
-import { filterDigitalFrequencyOptions, isCoreCapabilityAvailable } from '../../../utils/radioControl';
+import {
+  filterDigitalFrequencyOptions,
+  isCoreCapabilityAvailable,
+  shouldShowAutoTunerShortcut,
+} from '../../../utils/radioControl';
 import type { VoiceCaptureController } from '../../../hooks/useVoiceCaptureController';
 import {
   presentRealtimeConnectivityFailure,
@@ -306,12 +310,18 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canSwitchMode = useCan('execute', 'ModeSwitch');
   const canStartStopEngine = useCan('execute', 'Engine');
+  const canControlRadio = useCan('execute', 'RadioControl');
   const canWriteFrequency = isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeFrequency');
   // RadioControlPanel 弹窗状态
   const [isControlPanelOpen, setIsControlPanelOpen] = useState(false);
 
   // 天调按钮状态（从能力系统读取，需在顶层调用 Hook）
   const tunerSwitchCapState = useCapabilityState('tuner_switch');
+  const showTunerShortcut = shouldShowAutoTunerShortcut(
+    radioConnection.radioConnected,
+    canControlRadio,
+    tunerSwitchCapState,
+  );
   const tunerEnabled = typeof tunerSwitchCapState?.value === 'boolean' ? tunerSwitchCapState.value : false;
   const tunerIsTuning = (tunerSwitchCapState?.meta as { status?: string } | undefined)?.status === 'tuning';
   const ability = useAbility();
@@ -1533,8 +1543,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                 </PopoverContent>
               </Popover>
             )}
-            {/* 天调控制（能力驱动）：连接时始终显示入口 */}
-            {radioConnection.radioConnected && (
+            {/* 天调控制：仅在已连接、具备权限且电台支持自动天调时显示入口 */}
+            {showTunerShortcut && (
               <Popover>
                 <PopoverTrigger>
                   <Button
