@@ -1465,6 +1465,8 @@ export class WSServer extends WSMessageHandler {
     let isNewBandDxccEntity = true;
     let isConfirmedDxcc = false;
     let isNewGrid = true;
+    let hasSuccessfulAnalysis = false;
+    const canAnalyzeGridByBand = !!grid && !!band && band !== 'Unknown';
     let prefix: string | undefined;
     let dxccId: number | undefined;
     let dxccEntity: string | undefined;
@@ -1475,6 +1477,7 @@ export class WSServer extends WSMessageHandler {
         const logBook = await logManager.getOperatorLogBook(operatorId);
         if (logBook) {
           const analysis = await logBook.provider.analyzeCallsign(callsign, grid, { operatorId, band });
+          hasSuccessfulAnalysis = true;
 
           // 如果任一操作员已通联过，则不是新的
           if (!analysis.isNewCallsign) {
@@ -1489,7 +1492,7 @@ export class WSServer extends WSMessageHandler {
           if (analysis.isConfirmedDxcc) {
             isConfirmedDxcc = true;
           }
-          if (grid && !analysis.isNewGrid) {
+          if (canAnalyzeGridByBand && !analysis.isNewGrid) {
             isNewGrid = false;
           }
 
@@ -1513,12 +1516,12 @@ export class WSServer extends WSMessageHandler {
       }
     }
 
-      return {
+    return {
       isNewCallsign,
       isNewDxccEntity,
       isNewBandDxccEntity,
       isConfirmedDxcc,
-      isNewGrid: grid ? isNewGrid : undefined,
+      isNewGrid: hasSuccessfulAnalysis && canAnalyzeGridByBand ? isNewGrid : undefined,
       callsign,
       grid,
       prefix,
