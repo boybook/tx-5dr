@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useBufferedMeterData } from '../hooks/useBufferedMeterData';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
 
-const LEVEL_DBM_MIN_CARD_WIDTH = 480;
+const LEVEL_DBM_MIN_CARD_WIDTH = 580;
 
 interface RadioMetersDisplayProps {
   meterData: MeterData;
