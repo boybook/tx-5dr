@@ -1762,11 +1762,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     try {
+      const previousKnownFrequency = this.lastKnownFrequency;
       const currentFrequency = await this.getFrequency();
 
       // 容忍连接初始化期间的 0 返回（CIV 通道可能尚未完全就绪）
       if (currentFrequency === 0) {
-        if (this.lastKnownFrequency === null) {
+        if (previousKnownFrequency === null) {
           logger.debug('Frequency returned 0 (possibly initializing), waiting for next poll');
         }
         return; // 静默跳过，等待下次轮询（5秒后）
@@ -1775,12 +1776,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // 频率有效且与上次不同
       if (
         currentFrequency > 0 &&
-        currentFrequency !== this.lastKnownFrequency
+        currentFrequency !== previousKnownFrequency
       ) {
         logger.debug(
           `Frequency changed: ${
-            this.lastKnownFrequency
-              ? (this.lastKnownFrequency / 1000000).toFixed(3)
+            previousKnownFrequency
+              ? (previousKnownFrequency / 1000000).toFixed(3)
               : 'N/A'
           } MHz -> ${(currentFrequency / 1000000).toFixed(3)} MHz`
         );
@@ -1789,7 +1790,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
         // 发射频率变化事件
         this.emit('radioFrequencyChanged', currentFrequency);
-      } else if (this.lastKnownFrequency === null && currentFrequency > 0) {
+      } else if (previousKnownFrequency === null && currentFrequency > 0) {
         // 首次获取频率
         logger.debug(`Initial frequency: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
         this.updateKnownFrequency(currentFrequency);

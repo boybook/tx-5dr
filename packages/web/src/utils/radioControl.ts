@@ -36,7 +36,7 @@ export function filterDigitalFrequencyOptions<T extends FrequencyOptionLike>(
     ? availableFrequencies.filter(freq => freq.mode === currentModeName)
     : availableFrequencies.filter(freq => freq.mode !== 'VOICE');
 
-  if (customFrequencyOption && (!currentModeName || customFrequencyOption.mode === currentModeName)) {
+  if (customFrequencyOption) {
     const exists = filtered.some(freq => freq.key === customFrequencyOption.key);
     if (!exists) {
       filtered = [customFrequencyOption, ...filtered];

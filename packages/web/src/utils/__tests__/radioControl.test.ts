@@ -30,6 +30,16 @@ describe('radioControl utils', () => {
     ]);
   });
 
+  it('keeps the current custom frequency visible even when its mode differs from the active filter', () => {
+    const frequencies = [{ key: 'ft4', mode: 'FT4' }];
+    const custom = { key: 'custom', mode: 'FT8' };
+
+    expect(filterDigitalFrequencyOptions(frequencies, 'FT4', custom)).toEqual([
+      custom,
+      { key: 'ft4', mode: 'FT4' },
+    ]);
+  });
+
   it('treats missing core capability info as available until explicitly unsupported', () => {
     expect(isCoreCapabilityAvailable(null, 'writeFrequency')).toBe(true);
     expect(isCoreCapabilityAvailable({
