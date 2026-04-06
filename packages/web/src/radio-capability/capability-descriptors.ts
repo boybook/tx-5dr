@@ -13,6 +13,16 @@ export type CapabilityPanelEntry =
   | { type: 'single'; item: CapabilityDescriptor };
 
 export type CapabilityPanelGroups = Record<CapabilityCategory, CapabilityPanelEntry[]>;
+export interface CapabilityCategorySection {
+  category: CapabilityCategory;
+  items: CapabilityPanelEntry[];
+  weight: number;
+}
+
+export interface CapabilityPanelColumns {
+  left: CapabilityCategorySection[];
+  right: CapabilityCategorySection[];
+}
 
 export function groupCapabilityDescriptors(descriptors: CapabilityDescriptor[]): CapabilityPanelGroups {
   const grouped: CapabilityPanelGroups = {
@@ -52,4 +62,58 @@ export function groupCapabilityDescriptors(descriptors: CapabilityDescriptor[]):
   }
 
   return grouped;
+}
+
+export function getCapabilityCategoryWeight(items: CapabilityPanelEntry[]): number {
+  return items.length + 1;
+}
+
+export function getVisibleCapabilitySections(
+  groups: CapabilityPanelGroups,
+  categoryOrder: CapabilityCategory[] = CAPABILITY_CATEGORY_ORDER,
+): CapabilityCategorySection[] {
+  return categoryOrder.flatMap((category) => {
+    const items = groups[category];
+    if (!items || items.length === 0) {
+      return [];
+    }
+
+    return [{
+      category,
+      items,
+      weight: getCapabilityCategoryWeight(items),
+    }];
+  });
+}
+
+export function splitCapabilitySectionsForColumns(
+  sections: CapabilityCategorySection[],
+): CapabilityPanelColumns {
+  if (sections.length <= 1) {
+    return {
+      left: sections,
+      right: [],
+    };
+  }
+
+  const totalWeight = sections.reduce((sum, section) => sum + section.weight, 0);
+  let bestSplitIndex = 1;
+  let bestDiff = Number.POSITIVE_INFINITY;
+  let leftWeight = 0;
+
+  for (let index = 0; index < sections.length - 1; index += 1) {
+    leftWeight += sections[index].weight;
+    const rightWeight = totalWeight - leftWeight;
+    const diff = Math.abs(leftWeight - rightWeight);
+
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestSplitIndex = index + 1;
+    }
+  }
+
+  return {
+    left: sections.slice(0, bestSplitIndex),
+    right: sections.slice(bestSplitIndex),
+  };
 }
