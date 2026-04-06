@@ -9,6 +9,7 @@ import { getHighlightTypeLabels, HighlightType } from '../../../utils/displayNot
 import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
+import { BOTTOM_TOLERANCE_PX, getBottomGroupSignature } from './framesTableAutoScroll';
 
 export interface FrameDisplayMessage {
   utc: string;
@@ -282,11 +283,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const followBottomRef = useRef(true);
+  const pendingScrollFrameRef = useRef<number | null>(null);
+  const pendingVerifyFrameRef = useRef<number | null>(null);
+  const previousBottomGroupSignatureRef = useRef('');
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [isAtTop, setIsAtTop] = useState(true);
-  const [prevGroupsLength, setPrevGroupsLength] = useState(0);
   const [isNarrow, setIsNarrow] = useState(false);
   const { getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
+  const bottomGroupSignature = useMemo(() => getBottomGroupSignature(groups), [groups]);
 
   // ─── 组级别虚拟化 ────────────────────────
   const virtualizer = useVirtualizer({
@@ -303,27 +308,69 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const checkIfAtBottom = useCallback(() => {
     if (!scrollRef.current) return false;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    // Use 50px tolerance to account for virtualizer estimated size inaccuracies
-    return scrollTop + clientHeight >= scrollHeight - 50;
+    return scrollTop + clientHeight >= scrollHeight - BOTTOM_TOLERANCE_PX;
   }, []);
-
-  const scrollToBottom = useCallback(() => {
-    if (groups.length > 0) {
-      // Use virtualizer.scrollToIndex instead of direct scrollTop manipulation,
-      // as the virtual list's internal offset table is more accurate than DOM scrollHeight
-      virtualizer.scrollToIndex(groups.length - 1, { align: 'end' });
-    }
-  }, [virtualizer, groups.length]);
 
   const checkIfAtTop = useCallback(() => {
     if (!scrollRef.current) return true;
     return scrollRef.current.scrollTop <= 5;
   }, []);
 
-  const handleScroll = useCallback(() => {
-    setWasAtBottom(checkIfAtBottom());
-    setIsAtTop(checkIfAtTop());
+  const cancelPendingBottomScroll = useCallback(() => {
+    if (pendingScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingScrollFrameRef.current);
+      pendingScrollFrameRef.current = null;
+    }
+    if (pendingVerifyFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingVerifyFrameRef.current);
+      pendingVerifyFrameRef.current = null;
+    }
+  }, []);
+
+  const syncScrollPositionState = useCallback(() => {
+    const atBottom = checkIfAtBottom();
+    const atTop = checkIfAtTop();
+    followBottomRef.current = atBottom;
+    setWasAtBottom(atBottom);
+    setIsAtTop(atTop);
+    return atBottom;
   }, [checkIfAtBottom, checkIfAtTop]);
+
+  const scrollToBottomSafely = useCallback((forceFollow = false) => {
+    if (groups.length === 0) {
+      return;
+    }
+
+    cancelPendingBottomScroll();
+    if (forceFollow) {
+      followBottomRef.current = true;
+    }
+
+    const lastIndex = groups.length - 1;
+
+    const attemptScroll = (attempt: number) => {
+      pendingScrollFrameRef.current = window.requestAnimationFrame(() => {
+        pendingScrollFrameRef.current = null;
+        virtualizer.measure();
+        virtualizer.scrollToIndex(lastIndex, { align: 'end' });
+
+        pendingVerifyFrameRef.current = window.requestAnimationFrame(() => {
+          pendingVerifyFrameRef.current = null;
+          const atBottom = syncScrollPositionState();
+
+          if (!atBottom && attempt < 1) {
+            attemptScroll(attempt + 1);
+          }
+        });
+      });
+    };
+
+    attemptScroll(0);
+  }, [cancelPendingBottomScroll, groups.length, syncScrollPositionState, virtualizer]);
+
+  const handleScroll = useCallback(() => {
+    syncScrollPositionState();
+  }, [syncScrollPositionState]);
 
   // Manually control ScrollShadow visibility to work correctly with virtual scrolling
   const scrollShadowVisibility = useMemo(() => {
@@ -333,37 +380,39 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return 'both' as const;
   }, [isAtTop, wasAtBottom]);
 
-  // 当groups更新时，如果之前在底部且有新数据，则自动滚动到底部
   useEffect(() => {
-    const totalMessages = groups.reduce((sum, group) => sum + group.messages.length, 0);
-    const hasNewData = totalMessages > prevGroupsLength;
-
-    if (hasNewData && wasAtBottom) {
-      setTimeout(() => {
-        scrollToBottom();
-      }, 0);
+    if (!bottomGroupSignature) {
+      previousBottomGroupSignatureRef.current = '';
+      cancelPendingBottomScroll();
+      followBottomRef.current = true;
+      setWasAtBottom(true);
+      setIsAtTop(true);
+      return;
     }
 
-    setPrevGroupsLength(totalMessages);
-  }, [groups, wasAtBottom, prevGroupsLength, scrollToBottom]);
+    const previousSignature = previousBottomGroupSignatureRef.current;
+    previousBottomGroupSignatureRef.current = bottomGroupSignature;
 
-  // 初始化时滚动到底部
-  useEffect(() => {
-    if (groups.length > 0) {
-      setTimeout(() => {
-        scrollToBottom();
-      }, 0);
+    if (!previousSignature) {
+      scrollToBottomSafely(true);
+      return;
     }
-  }, []);
+
+    if (previousSignature !== bottomGroupSignature && followBottomRef.current) {
+      scrollToBottomSafely();
+    }
+  }, [bottomGroupSignature, cancelPendingBottomScroll, scrollToBottomSafely]);
 
   // 外部触发（如 tab 切回时）滚动到底部
   useEffect(() => {
     if (scrollToBottomTrigger && scrollToBottomTrigger > 0) {
-      setTimeout(() => {
-        scrollToBottom();
-      }, 0);
+      scrollToBottomSafely(true);
     }
-  }, [scrollToBottomTrigger, scrollToBottom]);
+  }, [scrollToBottomTrigger, scrollToBottomSafely]);
+
+  useEffect(() => () => {
+    cancelPendingBottomScroll();
+  }, [cancelPendingBottomScroll]);
 
   // ─── 监听容器宽度变化 ─────────────────────
   useEffect(() => {
