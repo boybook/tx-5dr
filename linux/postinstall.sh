@@ -179,12 +179,12 @@ EOF
     livekit_api_key_yaml=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_KEY}")")
     livekit_api_secret_yaml=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_SECRET}")")
 
-    sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT:-7880}|g" \
-        -e "s|%%LIVEKIT_TCP_PORT%%|${LIVEKIT_TCP_PORT:-7881}|g" \
-        -e "s|%%LIVEKIT_UDP_PORT_START%%|${LIVEKIT_UDP_PORT_START:-50000}|g" \
-        -e "s|%%LIVEKIT_UDP_PORT_END%%|${LIVEKIT_UDP_PORT_END:-50100}|g" \
-        -e "s|%%LIVEKIT_API_KEY%%|${livekit_api_key_yaml}|g" \
-        -e "s|%%LIVEKIT_API_SECRET%%|${livekit_api_secret_yaml}|g" \
+    sed -e "s|__LIVEKIT_SIGNAL_PORT__|${LIVEKIT_SIGNAL_PORT:-7880}|g" \
+        -e "s|__LIVEKIT_TCP_PORT__|${LIVEKIT_TCP_PORT:-7881}|g" \
+        -e "s|__LIVEKIT_UDP_PORT_START__|${LIVEKIT_UDP_PORT_START:-50000}|g" \
+        -e "s|__LIVEKIT_UDP_PORT_END__|${LIVEKIT_UDP_PORT_END:-50100}|g" \
+        -e "s|__LIVEKIT_API_KEY__|${livekit_api_key_yaml}|g" \
+        -e "s|__LIVEKIT_API_SECRET__|${livekit_api_secret_yaml}|g" \
         "$LIVEKIT_TEMPLATE" > "$LIVEKIT_CONF"
     chmod 640 "$LIVEKIT_CONF"
     chown "$APP_USER:$APP_GROUP" "$LIVEKIT_CONF" 2>/dev/null || true
