@@ -554,6 +554,20 @@ get_url_port() {
     esac
 }
 
+yaml_single_quote() {
+    local value="${1-}"
+    value=${value//\'/\'\'}
+    printf "'%s'" "$value"
+}
+
+escape_sed_replacement() {
+    local value="${1-}"
+    value=${value//\\/\\\\}
+    value=${value//&/\\&}
+    value=${value//|/\\|}
+    printf "%s" "$value"
+}
+
 # Wait for a TCP port to become available
 # Usage: wait_for_port PORT [TIMEOUT_SECONDS]
 wait_for_port() {

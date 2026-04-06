@@ -160,16 +160,16 @@ check_livekit_config_consistency() {
     content=$(get_livekit_config_contents) || return 1
     check_livekit_credentials_loaded || return 1
 
-    local api_key_pattern
-    local api_secret_pattern
-    api_key_pattern=$(_escape_regex "${LIVEKIT_API_KEY}")
-    api_secret_pattern=$(_escape_regex "${LIVEKIT_API_SECRET}")
+    local quoted_api_key
+    local quoted_api_secret
+    quoted_api_key=$(yaml_single_quote "${LIVEKIT_API_KEY}")
+    quoted_api_secret=$(yaml_single_quote "${LIVEKIT_API_SECRET}")
 
     echo "$content" | grep -Eq "^port:[[:space:]]*${LIVEKIT_SIGNAL_PORT}[[:space:]]*$" || return 1
     echo "$content" | grep -Eq "^[[:space:]]+tcp_port:[[:space:]]*${LIVEKIT_TCP_PORT}[[:space:]]*$" || return 1
     echo "$content" | grep -Eq "^[[:space:]]+port_range_start:[[:space:]]*${LIVEKIT_UDP_PORT_START}[[:space:]]*$" || return 1
     echo "$content" | grep -Eq "^[[:space:]]+port_range_end:[[:space:]]*${LIVEKIT_UDP_PORT_END}[[:space:]]*$" || return 1
-    echo "$content" | grep -Eq "^[[:space:]]+${api_key_pattern}:[[:space:]]*${api_secret_pattern}[[:space:]]*$" || return 1
+    printf "%s\n" "$content" | grep -Fqx "  ${quoted_api_key}: ${quoted_api_secret}" || return 1
 }
 
 check_livekit_config() {
@@ -574,12 +574,17 @@ fix_livekit_config() {
     check_livekit_credentials_loaded || return 1
     mkdir -p "$(dirname "$target")"
 
+    local quoted_api_key
+    local quoted_api_secret
+    quoted_api_key=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_KEY}")")
+    quoted_api_secret=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_SECRET}")")
+
     sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT}|g" \
         -e "s|%%LIVEKIT_TCP_PORT%%|${LIVEKIT_TCP_PORT}|g" \
         -e "s|%%LIVEKIT_UDP_PORT_START%%|${LIVEKIT_UDP_PORT_START}|g" \
         -e "s|%%LIVEKIT_UDP_PORT_END%%|${LIVEKIT_UDP_PORT_END}|g" \
-        -e "s|%%LIVEKIT_API_KEY%%|${LIVEKIT_API_KEY}|g" \
-        -e "s|%%LIVEKIT_API_SECRET%%|${LIVEKIT_API_SECRET}|g" \
+        -e "s|%%LIVEKIT_API_KEY%%|${quoted_api_key}|g" \
+        -e "s|%%LIVEKIT_API_SECRET%%|${quoted_api_secret}|g" \
         "$template" > "$target"
 
     chmod 640 "$target"
