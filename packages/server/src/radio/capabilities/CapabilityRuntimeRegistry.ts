@@ -129,6 +129,37 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.emit('capabilityChanged', updatedState);
   }
 
+  setCapabilityState(
+    id: string,
+    nextState: {
+      supported?: boolean;
+      value: CapabilityState['value'];
+      meta?: CapabilityState['meta'];
+    },
+  ): void {
+    const descriptor = this.descriptorCache.get(id);
+    if (!descriptor) {
+      return;
+    }
+
+    const supported = nextState.supported ?? this.supportedCapabilities.has(id);
+    if (supported) {
+      this.supportedCapabilities.add(id);
+    } else {
+      this.supportedCapabilities.delete(id);
+    }
+
+    const updatedState: CapabilityState = {
+      id,
+      supported,
+      value: nextState.value,
+      meta: nextState.meta,
+      updatedAt: Date.now(),
+    };
+    this.valueCache.set(id, updatedState);
+    this.emit('capabilityChanged', updatedState);
+  }
+
   getCapabilitySnapshot(): { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] } {
     return {
       descriptors: this.getCapabilityDescriptors(),

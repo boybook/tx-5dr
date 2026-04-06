@@ -12,6 +12,7 @@ import type {
   CapabilityDescriptor,
   CapabilityState,
   CapabilityValue,
+  TunerStatus,
 } from '@tx5dr/contracts';
 import type { IRadioConnection } from './connections/IRadioConnection.js';
 import { CapabilityRuntimeRegistry } from './capabilities/CapabilityRuntimeRegistry.js';
@@ -43,13 +44,22 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
 
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {
     await this.runtime.writeCapability(id, value, action);
+  }
 
-    if (action && id === 'tuner_tune') {
-      this.runtime.updateCapabilityMeta('tuner_switch', (currentMeta) => ({
+  syncTunerStatus(status: TunerStatus): void {
+    const currentState = this.runtime.getCapabilityStates().find((capability) => capability.id === 'tuner_switch');
+    const currentMeta = currentState?.meta as { status?: string; swr?: number } | undefined;
+    const nextStatus = status.status ?? (status.active ? 'tuning' : 'idle');
+
+    this.runtime.setCapabilityState('tuner_switch', {
+      supported: true,
+      value: status.enabled,
+      meta: {
         ...(currentMeta ?? {}),
-        status: 'tuning',
-      }));
-    }
+        status: nextStatus,
+        ...(status.swr !== undefined ? { swr: status.swr } : {}),
+      },
+    });
   }
 
   getCapabilitySnapshot(): { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] } {

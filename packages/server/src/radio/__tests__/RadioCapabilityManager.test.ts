@@ -164,4 +164,57 @@ describe('RadioCapabilityManager', () => {
 
     manager.onDisconnected();
   });
+
+  it('emits tuner capability updates when only tuner meta changes', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.ICOM_WLAN, {
+      getTunerCapabilities: vi.fn().mockResolvedValue({
+        supported: true,
+        hasSwitch: true,
+        hasManualTune: true,
+      }),
+      getTunerStatus: vi.fn().mockResolvedValue({
+        enabled: true,
+        active: false,
+        status: 'idle',
+      }),
+    });
+
+    const tunerEvents: CapabilityState[] = [];
+    manager.on('capabilityChanged', (state) => {
+      if (state.id === 'tuner_switch') {
+        tunerEvents.push(state);
+      }
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    tunerEvents.length = 0;
+    manager.syncTunerStatus({
+      enabled: true,
+      active: true,
+      status: 'tuning',
+    });
+    manager.syncTunerStatus({
+      enabled: true,
+      active: false,
+      status: 'success',
+    });
+
+    expect(tunerEvents).toHaveLength(2);
+    expect(tunerEvents[0]).toMatchObject({
+      id: 'tuner_switch',
+      supported: true,
+      value: true,
+      meta: { status: 'tuning' },
+    });
+    expect(tunerEvents[1]).toMatchObject({
+      id: 'tuner_switch',
+      supported: true,
+      value: true,
+      meta: { status: 'success' },
+    });
+
+    manager.onDisconnected();
+  });
 });
