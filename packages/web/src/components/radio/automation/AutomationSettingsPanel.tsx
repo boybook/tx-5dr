@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Listbox, ListboxItem, Select, SelectItem } from "@heroui/react";
+import { Listbox, ListboxItem } from "@heroui/react";
 import { useOperators, useCurrentOperatorId } from '../../../store/radioStore';
 import { api } from '@tx5dr/core';
 import type { Selection } from "@heroui/react";
@@ -19,23 +19,6 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   const [selectedKeys, setSelectedKeys] = React.useState<Selection>(new Set());
 
   const currentOperator = operators.find(op => op.id === currentOperatorId);
-  const targetPriorityOptions = [
-    {
-      key: 'dxcc_first',
-      label: t('automation.priorityModeDxccFirst'),
-      description: t('automation.priorityModeDxccFirstDesc'),
-    },
-    {
-      key: 'balanced',
-      label: t('automation.priorityModeBalanced'),
-      description: t('automation.priorityModeBalancedDesc'),
-    },
-    {
-      key: 'new_callsign_first',
-      label: t('automation.priorityModeNewCallsignFirst'),
-      description: t('automation.priorityModeNewCallsignFirstDesc'),
-    },
-  ] as const;
 
   // 初始化选中的选项
   React.useEffect(() => {
@@ -123,42 +106,6 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
           {t('automation.replyToWorkedStations')}
         </ListboxItem>
       </Listbox>
-
-      <div className="mt-4">
-        <Select
-          label={t('automation.targetSelectionPriorityMode')}
-          description={t('automation.targetSelectionPriorityModeDesc')}
-          selectedKeys={[
-            currentOperator.context.targetSelectionPriorityMode
-            || (currentOperator.context.prioritizeNewCalls === false ? 'balanced' : 'dxcc_first')
-          ]}
-          onSelectionChange={async (keys) => {
-            const selected = Array.from(keys as Set<string>)[0];
-            if (!selected) {
-              return;
-            }
-
-            try {
-              setLoading(true);
-              setError('');
-              await api.updateOperator(currentOperatorId, {
-                targetSelectionPriorityMode: selected as 'balanced' | 'dxcc_first' | 'new_callsign_first',
-                prioritizeNewCalls: selected !== 'balanced',
-              });
-            } catch (err) {
-              setError(err instanceof Error ? err.message : t('automation.updateFailed'));
-            } finally {
-              setLoading(false);
-            }
-          }}
-        >
-          {targetPriorityOptions.map((option) => (
-            <SelectItem key={option.key} description={option.description}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </Select>
-      </div>
     </div>
   );
 };
