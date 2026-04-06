@@ -39,6 +39,7 @@ export interface ConnectionState {
 
 export type ConnectionAction =
   | { type: 'connected' }
+  | { type: 'reconnecting' }
   | { type: 'disconnected' }
   | { type: 'SET_RADIO_SERVICE'; payload: RadioService }
   | { type: 'connectFailed' };

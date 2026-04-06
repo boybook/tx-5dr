@@ -67,6 +67,12 @@
       "dockerCheck": "Docker: Use docker-compose logs -f to check container logs"
     }
   },
+  "appError": {
+    "title": "The interface needs to recover",
+    "description": "The UI state became inconsistent during the recent mode switch or connection recovery. Try remounting the interface first; if that does not help, refresh the page.",
+    "retry": "Remount Interface",
+    "refresh": "Refresh Page"
+  },
   "auth": {
     "user": "User",
     "role": "Role",

@@ -93,6 +93,15 @@ export function createRadioEventMap({
   spectrumNegotiation,
   logger,
 }: CreateRadioEventMapDeps): Record<string, (data?: unknown) => void> {
+  const refreshRealtimeState = () => {
+    radioService.getSystemStatus();
+
+    const subscribedKind = radioStateRef.current.subscribedSpectrumKind;
+    if (subscribedKind) {
+      radioService.subscribeSpectrum(subscribedKind);
+    }
+  };
+
   return {
     connected: () => {
       connectionDispatch({ type: 'connected' });
@@ -104,6 +113,12 @@ export function createRadioEventMap({
         });
         radioService.sendHandshake(handshakeOperatorIds, clientInstanceId);
       }
+      refreshRealtimeState();
+    },
+    reconnecting: (data: unknown) => {
+      const reconnectData = data as { attempt: number; delayMs: number };
+      logger.info('WebSocket reconnecting', reconnectData);
+      connectionDispatch({ type: 'reconnecting' });
     },
     authRequired: (data: unknown) => {
       const authData = data as { allowPublicViewing: boolean };
@@ -126,6 +141,7 @@ export function createRadioEventMap({
         logger.info('Auth succeeded, role:', result.role);
         const handshakeOperatorIds = getHandshakeOperatorIds();
         radioService.sendHandshake(handshakeOperatorIds, clientInstanceId);
+        refreshRealtimeState();
       } else {
         const errorCode = result.error;
         const localizedError = errorCode

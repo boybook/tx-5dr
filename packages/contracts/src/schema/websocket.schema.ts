@@ -156,6 +156,14 @@ export const SystemStatusSchema = z.object({
   engineMode: z.enum(['digital', 'voice']).default('digital'),
   /** 当前电台调制模式（语音模式下使用，如 USB/LSB/FM/AM） */
   currentRadioMode: z.string().optional(),
+  /** 引擎状态机当前状态 */
+  engineState: z.enum(['idle', 'starting', 'running', 'stopping']).optional(),
+  /** 引擎状态机上下文的精简投影 */
+  engineContext: z.object({
+    error: z.string().optional(),
+    startedResources: z.array(z.string()).optional(),
+    forcedStop: z.boolean().optional(),
+  }).nullable().optional(),
 });
 
 // 子窗口信息数据结构
@@ -1156,6 +1164,7 @@ export interface DigitalRadioEngineEvents {
 
   // 连接事件
   connected: () => void;
+  reconnecting: (data: { attempt: number; delayMs: number }) => void;
   disconnected: () => void;
   error: (error: Error) => void;
 

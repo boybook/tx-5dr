@@ -11,6 +11,7 @@ import { useTheme } from './hooks/useTheme';
 import { ProfileSetupOverlay } from './components/radio/profile/ProfileSetupOverlay';
 import { ViewerWelcomeOverlay } from './components/app/ViewerWelcomeOverlay';
 import { ServerDisconnectedOverlay } from './components/app/ServerDisconnectedOverlay';
+import { AppErrorBoundary } from './components/app/AppErrorBoundary';
 import { ServerStatusPage } from './pages/ServerStatusPage';
 import { LoginPage } from './pages/LoginPage';
 import { OpenWebRXProfileSelectModal } from './components/radio/profile/OpenWebRXProfileSelectModal';
@@ -105,10 +106,12 @@ function AuthGate() {
   const authKey = state.jwt || (state.isPublicViewer ? 'public' : 'anon');
 
   return (
-    <RadioProvider key={authKey}>
-      <AppContent />
-      <GlobalModalHost />
-    </RadioProvider>
+    <AppErrorBoundary>
+      <RadioProvider key={authKey}>
+        <AppContent />
+        <GlobalModalHost />
+      </RadioProvider>
+    </AppErrorBoundary>
   );
 }
 

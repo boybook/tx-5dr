@@ -13,7 +13,14 @@ import { IcomWlanAudioAdapter } from '../audio/IcomWlanAudioAdapter.js';
 import { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
 import { AudioMonitorService } from '../audio/AudioMonitorService.js';
-import { createEngineActor, isEngineState, getEngineContext, type EngineActor } from '../state-machines/engineStateMachine.js';
+import {
+  createEngineActor,
+  isEngineState,
+  getEngineContext,
+  waitForEngineState,
+  waitForEngineStates,
+  type EngineActor,
+} from '../state-machines/engineStateMachine.js';
 import { EngineState, type EngineInput } from '../state-machines/types.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { ClockCoordinator } from './ClockCoordinator.js';
@@ -572,6 +579,45 @@ export class EngineLifecycle {
   }
 
   /**
+   * 启动引擎并等待状态机进入 RUNNING。
+   * 用于模式切换等需要“启动完成”语义的调用方。
+   */
+  async startAndWaitForRunning(timeoutMs = 15000): Promise<void> {
+    await this.start();
+
+    if (!this.engineStateMachineActor) {
+      throw new Error('Engine state machine not initialized');
+    }
+
+    if (isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
+      return;
+    }
+
+    await waitForEngineState(this.engineStateMachineActor, EngineState.RUNNING, timeoutMs);
+  }
+
+  /**
+   * 等待 STARTING 状态自然收敛到 RUNNING 或 IDLE。
+   * 用于模式切换等需要避免“启动中直接重建资源计划”的场景。
+   */
+  async waitForStartupToSettle(timeoutMs = 15000): Promise<EngineState> {
+    if (!this.engineStateMachineActor) {
+      throw new Error('Engine state machine not initialized');
+    }
+
+    const currentState = this.getEngineState();
+    if (currentState !== EngineState.STARTING) {
+      return currentState;
+    }
+
+    return waitForEngineStates(
+      this.engineStateMachineActor,
+      [EngineState.RUNNING, EngineState.IDLE],
+      timeoutMs,
+    );
+  }
+
+  /**
    * 停止引擎（外部 API，委托给状态机）
    */
   async stop(): Promise<void> {
@@ -589,7 +635,6 @@ export class EngineLifecycle {
     if (isEngineState(this.engineStateMachineActor, EngineState.STOPPING)) {
       logger.info('Engine already stopping, waiting for completion...');
       try {
-        const { waitForEngineState } = await import('../state-machines/engineStateMachine.js');
         await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 10000);
         logger.info('Stop completed');
       } catch (error) {
@@ -604,7 +649,6 @@ export class EngineLifecycle {
 
     // Wait for engine to reach IDLE state after sending STOP
     try {
-      const { waitForEngineState } = await import('../state-machines/engineStateMachine.js');
       await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 15000);
       logger.info('Stop completed');
     } catch (error) {

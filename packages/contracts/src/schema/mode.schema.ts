@@ -41,7 +41,7 @@ export const MODES = {
     name: 'FT8',
     slotMs: 15000,
     toleranceMs: 100,
-    windowTiming: [-2000, -1500, -1000, -500, 0],
+    windowTiming: [-1500, -500, 0],
     transmitTiming: 500,  // WSJT-X 标准：信号在时隙边界后 ~0.5s 开始，留 ~1.86s 给解码
     encodeAdvance: 500    // 编码在时隙开始时立即触发 (500-500=0ms delay)
   } as ModeDescriptor,
@@ -107,6 +107,15 @@ export const DecodeWindowSettingsSchema = z.object({
 });
 
 export type DecodeWindowSettings = z.infer<typeof DecodeWindowSettingsSchema>;
+
+export const DEFAULT_DECODE_WINDOW_SETTINGS: DecodeWindowSettings = {
+  ft8: {
+    preset: 'balanced',
+  },
+  ft4: {
+    preset: 'balanced',
+  },
+};
 
 /**
  * 根据模式名和设置解析实际的 windowTiming

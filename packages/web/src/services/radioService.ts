@@ -29,6 +29,14 @@ export class RadioService {
       this._isDecoding = systemStatus.isDecoding || false;
     });
 
+    this.wsClient.onWSEvent('reconnecting', () => {
+      this._isDecoding = false;
+    });
+
+    this.wsClient.onWSEvent('disconnected', () => {
+      this._isDecoding = false;
+    });
+
     // 自动尝试连接
     this.autoConnect();
   }
