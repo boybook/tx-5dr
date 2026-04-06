@@ -31,6 +31,8 @@ export function createSpectrumNegotiator({
   pendingDefaultOpenWebRXDetailProfileRef,
   logger,
 }: SpectrumNegotiationDeps) {
+  const SPECTRUM_PRIORITY: SpectrumKind[] = ['openwebrx-sdr', 'radio-sdr', 'audio'];
+
   const isSpectrumKindAvailable = (capabilities: SpectrumCapabilities, kind: SpectrumKind | null): boolean => {
     if (!kind) {
       return false;
@@ -40,15 +42,21 @@ export function createSpectrumNegotiator({
   };
 
   const pickSpectrumKindByPriority = (capabilities: SpectrumCapabilities): SpectrumKind => {
-    if (isSpectrumKindAvailable(capabilities, 'openwebrx-sdr')) {
-      return 'openwebrx-sdr';
+    return SPECTRUM_PRIORITY.find((kind) => isSpectrumKindAvailable(capabilities, kind)) ?? 'audio';
+  };
+
+  const shouldContinueAutoPriority = (
+    capabilities: SpectrumCapabilities,
+    selectedKind: SpectrumKind,
+  ): boolean => {
+    const selectedPriorityIndex = SPECTRUM_PRIORITY.indexOf(selectedKind);
+    if (selectedPriorityIndex <= 0) {
+      return false;
     }
 
-    if (isSpectrumKindAvailable(capabilities, 'radio-sdr')) {
-      return 'radio-sdr';
-    }
-
-    return 'audio';
+    return SPECTRUM_PRIORITY
+      .slice(0, selectedPriorityIndex)
+      .some((kind) => capabilities.sources.some((source) => source.kind === kind && source.supported && !source.available));
   };
 
   const shouldAcceptSpectrumProfile = (profileId: string | null | undefined): boolean => {
@@ -86,8 +94,6 @@ export function createSpectrumNegotiator({
     const profileId = capabilities.profileId;
     const currentSelectedKind = radioStateRef.current.selectedSpectrumKind;
     const shouldAutoApplyPriority = spectrumAutoPriorityPendingRef.current;
-    const openWebRXSource = capabilities.sources.find((source) => source.kind === 'openwebrx-sdr');
-    const openWebRXSupported = openWebRXSource?.supported ?? false;
     const effectiveKind = shouldAutoApplyPriority
       ? pickSpectrumKindByPriority(capabilities)
       : (
@@ -111,7 +117,7 @@ export function createSpectrumNegotiator({
       : null;
 
     if (shouldAutoApplyPriority) {
-      spectrumAutoPriorityPendingRef.current = openWebRXSupported && !isSpectrumKindAvailable(capabilities, 'openwebrx-sdr');
+      spectrumAutoPriorityPendingRef.current = shouldContinueAutoPriority(capabilities, effectiveKind);
     }
   };
 
