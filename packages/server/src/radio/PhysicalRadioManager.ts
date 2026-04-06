@@ -896,6 +896,23 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     value?: boolean | number,
     action?: boolean,
   ): Promise<void> {
+    if (id === 'tuner_switch') {
+      if (typeof value !== 'boolean') {
+        throw new Error('tuner_switch expects a boolean value');
+      }
+
+      await this.setTuner(value);
+      return;
+    }
+
+    if (id === 'tuner_tune' && action) {
+      const result = await this.startTuning();
+      if (!result) {
+        throw new Error('manual tuning failed');
+      }
+      return;
+    }
+
     return this.capabilityManager.writeCapability(id, value, action);
   }
 
@@ -920,6 +937,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       // 获取更新后的状态并广播事件
       const status = await this.getTunerStatus();
+      this.capabilityManager.syncTunerStatus(status);
       this.emit('tunerStatusChanged', status);
     } catch (error) {
       // 天调设置失败不影响主连接状态
@@ -988,6 +1006,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           active: true,
           status: 'tuning',
         };
+        this.capabilityManager.syncTunerStatus(beforeStatus);
         this.emit('tunerStatusChanged', beforeStatus);
       }
 
@@ -1001,6 +1020,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         // 根据结果更新状态
         afterStatus.status = result ? 'success' : 'failed';
         afterStatus.active = false;
+        this.capabilityManager.syncTunerStatus(afterStatus);
         this.emit('tunerStatusChanged', afterStatus);
       }
 
@@ -1016,6 +1036,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           active: false,
           status: 'failed',
         };
+        this.capabilityManager.syncTunerStatus(failedStatus);
         this.emit('tunerStatusChanged', failedStatus);
       }
 

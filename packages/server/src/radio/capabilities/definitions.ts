@@ -58,7 +58,12 @@ function createDefinitions(): CapabilityDefinition[] {
         const caps = await conn.getTunerCapabilities();
         return caps.hasManualTune;
       },
-      action: (conn) => conn.startTuning!().then(() => {}),
+      action: async (conn) => {
+        const result = await conn.startTuning!();
+        if (!result) {
+          throw new Error('manual tuning failed');
+        }
+      },
     },
     {
       id: 'rf_power',

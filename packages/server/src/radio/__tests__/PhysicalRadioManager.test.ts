@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { HamlibConfig } from '@tx5dr/contracts';
 
 vi.mock('icom-wlan-node', () => ({
   IcomControl: class MockIcomControl {},
@@ -23,15 +24,18 @@ type TestRadioConnection = {
   startBackgroundTasks?: ReturnType<typeof vi.fn>;
   setKnownFrequency?: ReturnType<typeof vi.fn>;
   getTunerCapabilities?: ReturnType<typeof vi.fn>;
+  getTunerStatus?: ReturnType<typeof vi.fn>;
   getFrequency?: ReturnType<typeof vi.fn>;
   getMode?: ReturnType<typeof vi.fn>;
   setFrequency?: ReturnType<typeof vi.fn>;
+  setTuner?: ReturnType<typeof vi.fn>;
   setMode?: ReturnType<typeof vi.fn>;
+  startTuning?: ReturnType<typeof vi.fn>;
   applyOperatingState?: ReturnType<typeof vi.fn>;
 };
 
 type PhysicalRadioManagerTestAccessor = {
-  radioActor: TestRadioActor;
+  radioActor: TestRadioActor | null;
   connection: TestRadioConnection;
   configManager: {
     getLastEngineMode: ReturnType<typeof vi.fn>;
@@ -41,8 +45,12 @@ type PhysicalRadioManagerTestAccessor = {
   capabilityManager: {
     onConnected: ReturnType<typeof vi.fn>;
     onDisconnected: ReturnType<typeof vi.fn>;
+    writeCapability: ReturnType<typeof vi.fn>;
+    syncTunerStatus: ReturnType<typeof vi.fn>;
   };
   postConnectSettleMs: number;
+  checkFrequencyChange: () => Promise<void>;
+  startFrequencyMonitoring: () => void;
   markCoreCapabilityUnsupported: (capability: string, error: Error) => void;
   coreCapabilityStates: Record<string, 'unknown' | 'supported' | 'unsupported'>;
 };
@@ -311,6 +319,35 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('routes tuner action capability writes through the manager tuning flow', async () => {
+    const startTuning = vi.spyOn(manager, 'startTuning').mockResolvedValue(true);
+    const capabilityWrite = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
+
+    await expect(manager.writeCapability('tuner_tune', undefined, true)).resolves.toBeUndefined();
+
+    expect(startTuning).toHaveBeenCalledTimes(1);
+    expect(capabilityWrite).not.toHaveBeenCalled();
+  });
+
+  it('fails tuner action capability writes when tuning does not complete successfully', async () => {
+    vi.spyOn(manager, 'startTuning').mockResolvedValue(false);
+    const capabilityWrite = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
+
+    await expect(manager.writeCapability('tuner_tune', undefined, true)).rejects.toThrow('manual tuning failed');
+
+    expect(capabilityWrite).not.toHaveBeenCalled();
+  });
+
+  it('routes tuner switch capability writes through the manager tuner control flow', async () => {
+    const setTuner = vi.spyOn(manager, 'setTuner').mockResolvedValue(undefined);
+    const capabilityWrite = vi.spyOn(asTestManager(manager).capabilityManager, 'writeCapability');
+
+    await expect(manager.writeCapability('tuner_switch', true)).resolves.toBeUndefined();
+
+    expect(setTuner).toHaveBeenCalledWith(true);
+    expect(capabilityWrite).not.toHaveBeenCalled();
+  });
+
   it('skips frequency polling while a critical radio operation is active', async () => {
     const getFrequency = vi.fn();
     asTestManager(manager).connection = {
@@ -320,7 +357,7 @@ describe('PhysicalRadioManager', () => {
     };
     vi.spyOn(manager, 'isConnected').mockReturnValue(true);
 
-    await (manager as any).checkFrequencyChange();
+    await asTestManager(manager).checkFrequencyChange();
 
     expect(getFrequency).not.toHaveBeenCalled();
   });
@@ -351,7 +388,7 @@ describe('PhysicalRadioManager', () => {
       getFrequency: vi.fn().mockResolvedValue(14074000),
     };
 
-    vi.spyOn(RadioConnectionFactory, 'create').mockReturnValue(connection as any);
+    vi.spyOn(RadioConnectionFactory, 'create').mockReturnValue(connection as never);
     vi.spyOn(testManager.configManager, 'getLastEngineMode').mockReturnValue('digital');
     vi.spyOn(testManager.configManager, 'getLastSelectedFrequency').mockReturnValue({
       frequency: 14074000,
@@ -363,10 +400,10 @@ describe('PhysicalRadioManager', () => {
     vi.spyOn(testManager.capabilityManager, 'onConnected').mockImplementation(async () => {
       order.push('capability');
     });
-    vi.spyOn(testManager as any, 'startFrequencyMonitoring').mockImplementation(() => {
+    vi.spyOn(testManager, 'startFrequencyMonitoring').mockImplementation(() => {
       order.push('monitor');
     });
-    testManager.radioActor = null as any;
+    testManager.radioActor = null;
 
     manager.on('connected', () => {
       order.push('connected');
@@ -375,7 +412,7 @@ describe('PhysicalRadioManager', () => {
     await manager.applyConfig({
       type: 'network',
       network: { host: '127.0.0.1', port: 4532 },
-    } as any);
+    } as HamlibConfig);
 
     expect(order).toEqual([
       'connect',
@@ -391,5 +428,75 @@ describe('PhysicalRadioManager', () => {
     expect(testManager.capabilityManager.onConnected).toHaveBeenCalledTimes(1);
 
     await manager.disconnect('test cleanup');
+  });
+
+  it('syncs tuner capability status before and after manual tuning completes', async () => {
+    const syncTunerStatus = vi.spyOn(asTestManager(manager).capabilityManager, 'syncTunerStatus');
+    asTestManager(manager).connection = {
+      startTuning: vi.fn().mockResolvedValue(true),
+      getTunerStatus: vi.fn().mockResolvedValue({
+        enabled: true,
+        active: false,
+        status: 'idle',
+      }),
+    };
+
+    await expect(manager.startTuning()).resolves.toBe(true);
+
+    expect(syncTunerStatus).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      enabled: true,
+      active: true,
+      status: 'tuning',
+    }));
+    expect(syncTunerStatus).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      enabled: true,
+      active: false,
+      status: 'success',
+    }));
+  });
+
+  it('syncs failed tuner capability status when manual tuning reports failure', async () => {
+    const syncTunerStatus = vi.spyOn(asTestManager(manager).capabilityManager, 'syncTunerStatus');
+    asTestManager(manager).connection = {
+      startTuning: vi.fn().mockResolvedValue(false),
+      getTunerStatus: vi.fn().mockResolvedValue({
+        enabled: true,
+        active: false,
+        status: 'idle',
+      }),
+    };
+
+    await expect(manager.startTuning()).resolves.toBe(false);
+
+    expect(syncTunerStatus).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      enabled: true,
+      active: true,
+      status: 'tuning',
+    }));
+    expect(syncTunerStatus).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      enabled: true,
+      active: false,
+      status: 'failed',
+    }));
+  });
+
+  it('syncs tuner capability status after toggling tuner state', async () => {
+    const syncTunerStatus = vi.spyOn(asTestManager(manager).capabilityManager, 'syncTunerStatus');
+    asTestManager(manager).connection = {
+      setTuner: vi.fn().mockResolvedValue(undefined),
+      getTunerStatus: vi.fn().mockResolvedValue({
+        enabled: true,
+        active: false,
+        status: 'idle',
+      }),
+    };
+
+    await expect(manager.setTuner(true)).resolves.toBeUndefined();
+
+    expect(syncTunerStatus).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true,
+      active: false,
+      status: 'idle',
+    }));
   });
 });
