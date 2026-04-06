@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import {
   Chip,
   ScrollShadow
@@ -284,9 +284,8 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const followBottomRef = useRef(true);
-  const pendingScrollFrameRef = useRef<number | null>(null);
-  const pendingVerifyFrameRef = useRef<number | null>(null);
   const previousBottomGroupSignatureRef = useRef('');
+  const [scrollRequestVersion, setScrollRequestVersion] = useState(0);
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [isAtTop, setIsAtTop] = useState(true);
   const [isNarrow, setIsNarrow] = useState(false);
@@ -316,17 +315,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return scrollRef.current.scrollTop <= 5;
   }, []);
 
-  const cancelPendingBottomScroll = useCallback(() => {
-    if (pendingScrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingScrollFrameRef.current);
-      pendingScrollFrameRef.current = null;
-    }
-    if (pendingVerifyFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingVerifyFrameRef.current);
-      pendingVerifyFrameRef.current = null;
-    }
-  }, []);
-
   const syncScrollPositionState = useCallback(() => {
     const atBottom = checkIfAtBottom();
     const atTop = checkIfAtTop();
@@ -336,37 +324,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return atBottom;
   }, [checkIfAtBottom, checkIfAtTop]);
 
-  const scrollToBottomSafely = useCallback((forceFollow = false) => {
+  const requestScrollToBottom = useCallback((forceFollow = false) => {
     if (groups.length === 0) {
       return;
     }
-
-    cancelPendingBottomScroll();
     if (forceFollow) {
       followBottomRef.current = true;
     }
-
-    const lastIndex = groups.length - 1;
-
-    const attemptScroll = (attempt: number) => {
-      pendingScrollFrameRef.current = window.requestAnimationFrame(() => {
-        pendingScrollFrameRef.current = null;
-        virtualizer.measure();
-        virtualizer.scrollToIndex(lastIndex, { align: 'end' });
-
-        pendingVerifyFrameRef.current = window.requestAnimationFrame(() => {
-          pendingVerifyFrameRef.current = null;
-          const atBottom = syncScrollPositionState();
-
-          if (!atBottom && attempt < 1) {
-            attemptScroll(attempt + 1);
-          }
-        });
-      });
-    };
-
-    attemptScroll(0);
-  }, [cancelPendingBottomScroll, groups.length, syncScrollPositionState, virtualizer]);
+    setScrollRequestVersion(prev => prev + 1);
+  }, [groups.length]);
 
   const handleScroll = useCallback(() => {
     syncScrollPositionState();
@@ -383,7 +349,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   useEffect(() => {
     if (!bottomGroupSignature) {
       previousBottomGroupSignatureRef.current = '';
-      cancelPendingBottomScroll();
       followBottomRef.current = true;
       setWasAtBottom(true);
       setIsAtTop(true);
@@ -394,25 +359,29 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     previousBottomGroupSignatureRef.current = bottomGroupSignature;
 
     if (!previousSignature) {
-      scrollToBottomSafely(true);
+      requestScrollToBottom(true);
       return;
     }
 
     if (previousSignature !== bottomGroupSignature && followBottomRef.current) {
-      scrollToBottomSafely();
+      requestScrollToBottom();
     }
-  }, [bottomGroupSignature, cancelPendingBottomScroll, scrollToBottomSafely]);
+  }, [bottomGroupSignature, requestScrollToBottom]);
 
   // 外部触发（如 tab 切回时）滚动到底部
   useEffect(() => {
     if (scrollToBottomTrigger && scrollToBottomTrigger > 0) {
-      scrollToBottomSafely(true);
+      requestScrollToBottom(true);
     }
-  }, [scrollToBottomTrigger, scrollToBottomSafely]);
+  }, [scrollToBottomTrigger, requestScrollToBottom]);
 
-  useEffect(() => () => {
-    cancelPendingBottomScroll();
-  }, [cancelPendingBottomScroll]);
+  useLayoutEffect(() => {
+    if (scrollRequestVersion === 0 || groups.length === 0 || !followBottomRef.current) {
+      return;
+    }
+
+    virtualizer.scrollToIndex(groups.length - 1, { align: 'end' });
+  }, [groups.length, scrollRequestVersion, virtualizer]);
 
   // ─── 监听容器宽度变化 ─────────────────────
   useEffect(() => {
