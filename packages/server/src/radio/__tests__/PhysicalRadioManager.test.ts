@@ -37,6 +37,7 @@ type TestRadioConnection = {
 type PhysicalRadioManagerTestAccessor = {
   radioActor: TestRadioActor | null;
   connection: TestRadioConnection;
+  lastKnownFrequency: number | null;
   configManager: {
     getLastEngineMode: ReturnType<typeof vi.fn>;
     getLastSelectedFrequency: ReturnType<typeof vi.fn>;
@@ -360,6 +361,25 @@ describe('PhysicalRadioManager', () => {
     await asTestManager(manager).checkFrequencyChange();
 
     expect(getFrequency).not.toHaveBeenCalled();
+  });
+
+  it('emits frequency change during polling even though getFrequency updates the known frequency cache', async () => {
+    const setKnownFrequency = vi.fn();
+    asTestManager(manager).lastKnownFrequency = 14074000;
+    asTestManager(manager).connection = {
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency: vi.fn().mockResolvedValue(14075000),
+      setKnownFrequency,
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+    const emitSpy = vi.spyOn(manager as unknown as { emit: (event: string, payload: number) => void }, 'emit');
+
+    await asTestManager(manager).checkFrequencyChange();
+
+    expect(asTestManager(manager).connection.getFrequency).toHaveBeenCalledTimes(1);
+    expect(setKnownFrequency).toHaveBeenCalledWith(14075000);
+    expect(asTestManager(manager).lastKnownFrequency).toBe(14075000);
+    expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14075000);
   });
 
   it('completes conservative post-connect bootstrap before emitting connected', async () => {

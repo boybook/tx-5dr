@@ -27,6 +27,7 @@ import { createLogger } from '../../utils/logger';
 import { isCoreCapabilityAvailable } from '../../utils/radioControl';
 
 const logger = createLogger('VoiceFrequencyControl');
+const CURRENT_CUSTOM_VOICE_FREQUENCY_KEY = '__current_custom_voice_frequency__';
 
 /**
  * Shared ref for tracking which digit is currently active (hovered or editing).
@@ -244,6 +245,7 @@ export const VoiceFrequencyControl: React.FC = () => {
   const [isSettingFreq, setIsSettingFreq] = useState(false);
 
   const RADIO_MODES = ['USB', 'LSB', 'FM', 'AM'];
+  const formatFrequencyLabel = useCallback((frequency: number) => `${(frequency / 1000000).toFixed(3)} MHz`, []);
   const loadVoicePresets = useCallback(async () => {
     if (!connection.state.isConnected) return;
 
@@ -350,6 +352,35 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
     return groups;
   }, [presets, isAdmin, canSetFrequency, ability]);
+
+  const currentPresetSelection = useMemo(() => {
+    const preset = presets.find(item => item.frequency === currentFrequency);
+    if (preset) {
+      return preset;
+    }
+
+    return {
+      key: CURRENT_CUSTOM_VOICE_FREQUENCY_KEY,
+      label: formatFrequencyLabel(currentFrequency),
+      frequency: currentFrequency,
+      band: t('frequency.customFrequency'),
+      mode: 'VOICE',
+      radioMode: currentRadioMode,
+    } satisfies FrequencyPreset;
+  }, [currentFrequency, currentRadioMode, formatFrequencyLabel, presets, t]);
+
+  const listboxSections = useMemo(() => {
+    const entries = Object.entries(groupedPresets);
+
+    if (currentPresetSelection.key !== CURRENT_CUSTOM_VOICE_FREQUENCY_KEY) {
+      return entries;
+    }
+
+    return [
+      [t('frequency.customFrequency'), [currentPresetSelection]],
+      ...entries,
+    ] as [string, FrequencyPreset[]][];
+  }, [currentPresetSelection, groupedPresets, t]);
 
   // Break frequency into individual digits with their place values
   // Fixed format: XXX.XXX.XXX (3+3+3 digits, leading zeros shown dimmed)
@@ -589,20 +620,21 @@ export const VoiceFrequencyControl: React.FC = () => {
           {isLoadingPresets ? (
             <div className="text-center text-default-400 py-4 text-sm">{t('frequency.noPresets')}</div>
           ) : (
-            <Listbox
+              <Listbox
               aria-label={t('frequency.presets')}
               selectionMode="single"
-              selectedKeys={new Set([String(currentFrequency)])}
+              selectedKeys={new Set([currentPresetSelection.key])}
               onSelectionChange={(keys) => {
                 if (!canWriteFrequency) return;
                 if (keys === 'all') return;
                 const key = Array.from(keys)[0] as string;
+                if (key === CURRENT_CUSTOM_VOICE_FREQUENCY_KEY) return;
                 if (key) handlePresetSelect(key);
               }}
               variant="flat"
               className={`p-0${!canWriteFrequency ? ' opacity-50 pointer-events-none' : ''}`}
             >
-              {Object.entries(groupedPresets).map(([band, bandPresets]) => (
+              {listboxSections.map(([band, bandPresets]) => (
                 <ListboxSection key={band} title={band} showDivider>
                   {bandPresets.map((preset) => (
                     <ListboxItem

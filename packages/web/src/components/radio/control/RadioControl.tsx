@@ -40,6 +40,8 @@ const FREQUENCY_SELECT_MIN_WIDTH_PX = 132;
 const FREQUENCY_SELECT_MAX_WIDTH_PX = 280;
 const MODE_SELECT_MIN_WIDTH_PX = 92;
 const MODE_SELECT_MAX_WIDTH_PX = 160;
+const CUSTOM_FREQUENCY_ACTION_KEY = '__custom__';
+const CURRENT_CUSTOM_FREQUENCY_KEY = '__custom_frequency__';
 
 const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
   Math.min(maxWidth, Math.max(minWidth, value))
@@ -359,7 +361,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [customFrequencyInput, setCustomFrequencyInput] = useState('');
   const [customFrequencyError, setCustomFrequencyError] = useState('');
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
-  const [_customFrequencyLabel, setCustomFrequencyLabel] = useState<string>(''); // 保存自定义频率的显示标签
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
 
   const getMonitorTransportLabel = React.useCallback((transport: RealtimeTransportKind | null | undefined): string => {
@@ -805,6 +806,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     return (frequencyHz / 1000000).toFixed(3);
   };
 
+  const buildCurrentCustomFrequencyOption = React.useCallback((
+    frequency: number,
+    mode: string,
+    band = '',
+    radioMode?: string,
+  ): FrequencyOption => ({
+    key: CURRENT_CUSTOM_FREQUENCY_KEY,
+    label: `${formatFrequencyDisplay(frequency)} MHz`,
+    frequency,
+    band,
+    mode,
+    radioMode,
+  }), []);
+
   // 处理自定义频率确认
   const handleCustomFrequencyConfirm = async () => {
     const result = parseFrequencyInput(customFrequencyInput);
@@ -831,9 +846,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         setCustomFrequencyError('');
 
         // 更新当前频率显示
-        const frequencyLabel = `${formatFrequencyDisplay(frequency)} MHz (${t('frequency.custom')})`;
         setCurrentFrequency(String(frequency));
-        setCustomFrequencyLabel(frequencyLabel);
+        setCustomFrequencyOption(buildCurrentCustomFrequencyOption(
+          frequency,
+          radioMode.currentMode?.name || 'FT8',
+          t('frequency.custom'),
+        ));
 
         const successMessage = t('frequency.switched', { freq: formatFrequencyDisplay(frequency) });
 
@@ -904,10 +922,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     return filtered;
   }, [availableFrequencies, radioMode.currentMode, customFrequencyOption, isAdmin, canSetFrequency, ability]);
 
-  const selectedFrequencyOption = React.useMemo(
-    () => filteredFrequencies.find(freq => freq.key === currentFrequency) ?? null,
-    [filteredFrequencies, currentFrequency],
-  );
+  const selectedFrequencyOption = React.useMemo(() => {
+    const presetOption = filteredFrequencies.find(freq => freq.key === currentFrequency);
+    if (presetOption) {
+      return presetOption;
+    }
+
+    if (customFrequencyOption && String(customFrequencyOption.frequency) === currentFrequency) {
+      return customFrequencyOption;
+    }
+
+    return null;
+  }, [filteredFrequencies, currentFrequency, customFrequencyOption]);
+
+  const selectedFrequencyKey = selectedFrequencyOption?.key ?? null;
 
   const frequencySelectLabel = selectedFrequencyOption?.label
     || (radioMode.currentMode ? `${radioMode.currentMode.name} ${t('control.frequency')}` : t('control.frequency'));
@@ -971,18 +999,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     if (radioMode.engineMode === 'voice') return;
 
     if (filteredFrequencies.length > 0) {
-      const currentFreqExists = filteredFrequencies.some(freq => freq.key === currentFrequency);
+      const currentFreqExists = filteredFrequencies.some(freq => freq.key === selectedFrequencyKey);
       if (!currentFreqExists) {
         const firstFreq = filteredFrequencies[0];
         logger.debug(`Mode changed, auto-selecting first frequency: ${firstFreq.label}`);
         setCurrentFrequency(firstFreq.key);
-        // 清除自定义频率标签
-        setCustomFrequencyLabel('');
+        setCustomFrequencyOption(null);
         // 自动设置频率到后端
         autoSetFrequency(firstFreq);
       }
     }
-  }, [filteredFrequencies, radioMode.engineMode]);
+  }, [filteredFrequencies, radioMode.engineMode, selectedFrequencyKey]);
 
   // 处理频率切换
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -995,11 +1022,15 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     if (!selectedFrequencyKey) return;
 
     // 检查是否选择了自定义频率选项
-    if (selectedFrequencyKey === '__custom__') {
+    if (selectedFrequencyKey === CUSTOM_FREQUENCY_ACTION_KEY) {
       setIsCustomFrequencyModalOpen(true);
       setCustomFrequencyInput('');
       setCustomFrequencyError('');
       // 不改变当前选中的频率
+      return;
+    }
+
+    if (selectedFrequencyKey === CURRENT_CUSTOM_FREQUENCY_KEY) {
       return;
     }
 
@@ -1036,8 +1067,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
       if (response.success) {
         setCurrentFrequency(selectedFrequencyKey);
-        // 切换到预设频率时清除自定义频率标签
-        setCustomFrequencyLabel('');
+        setCustomFrequencyOption(null);
 
         const successMessage = selectedFrequency.radioMode
           ? t('frequency.switchedWithMode', { label: selectedFrequency.label, mode: selectedFrequency.radioMode })
@@ -1109,21 +1139,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
       if (!isPreset) {
         // 自定义频率：创建临时选项并添加到列表
-        const customOption: FrequencyOption = {
-          key: frequencyKey,
-          label: data.description || `${(data.frequency / 1000000).toFixed(3)} MHz`,
-          frequency: data.frequency,
-          band: data.band || '',
-          mode: data.mode || 'FT8',
-          radioMode: data.radioMode
-        };
+        const customOption = buildCurrentCustomFrequencyOption(
+          data.frequency,
+          data.mode || 'FT8',
+          data.band || '',
+          data.radioMode,
+        );
         setCustomFrequencyOption(customOption);
-        setCustomFrequencyLabel(customOption.label);
         logger.debug('Custom frequency option added:', customOption.label);
       } else {
         // 预设频率：清除自定义选项
         setCustomFrequencyOption(null);
-        setCustomFrequencyLabel('');
       }
     };
 
@@ -1134,7 +1160,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       wsClient.offWSEvent('frequencyChanged', handleFrequencyChanged as any);
     };
-  }, [connection.state.radioService, availableFrequencies]);
+  }, [buildCurrentCustomFrequencyOption, connection.state.radioService, availableFrequencies]);
 
   return (
     <div className="relative flex flex-col gap-0 bg-content2 dark:bg-content1 px-4 py-2 pt-3 rounded-lg cursor-default select-none">
@@ -1612,7 +1638,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               labelPlacement="outside"
               placeholder={radioMode.currentMode ? `${radioMode.currentMode.name} ${t('control.frequency')}` : t('control.frequency')}
               selectorIcon={<SelectorIcon />}
-              selectedKeys={[currentFrequency]}
+              selectedKeys={selectedFrequencyKey ? [selectedFrequencyKey] : []}
               variant="flat"
               size="md"
               radius="md"
@@ -1636,14 +1662,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                   {frequency.label}
                 </SelectItem>
               )),
-              <SelectItem key="__custom__" textValue={t('frequency.customOption')} className="text-primary">
+              <SelectItem key={CUSTOM_FREQUENCY_ACTION_KEY} textValue={t('frequency.customOption')} className="text-primary">
                 {t('frequency.customOption')}
               </SelectItem>]}
             </Select>
           ) : (
             <div className="flex items-center pl-3 pr-2 h-10 cursor-not-allowed">
               <span className="font-bold text-lg text-default-foreground truncate">
-                {filteredFrequencies.find(f => f.key === currentFrequency)?.label || ''}
+                {selectedFrequencyOption?.label || ''}
               </span>
             </div>
           )}
