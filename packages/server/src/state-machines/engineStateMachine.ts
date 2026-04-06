@@ -338,3 +338,40 @@ export function waitForEngineState(
     }
   });
 }
+
+/**
+ * 工具函数：等待状态机进入目标状态集合中的任意一个状态
+ */
+export function waitForEngineStates(
+  actor: EngineActor,
+  targetStates: EngineState[],
+  timeout = 30000
+): Promise<EngineState> {
+  return new Promise((resolve, reject) => {
+    const matchesTarget = (state: unknown): state is EngineState =>
+      targetStates.includes(state as EngineState);
+
+    const timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `Waiting for states [${targetStates.join(', ')}] timed out (current state: ${actor.getSnapshot().value})`
+        )
+      );
+    }, timeout);
+
+    const subscription = actor.subscribe((snapshot) => {
+      if (matchesTarget(snapshot.value)) {
+        clearTimeout(timeoutId);
+        subscription.unsubscribe();
+        resolve(snapshot.value);
+      }
+    });
+
+    const currentState = actor.getSnapshot().value;
+    if (matchesTarget(currentState)) {
+      clearTimeout(timeoutId);
+      subscription.unsubscribe();
+      resolve(currentState);
+    }
+  });
+}

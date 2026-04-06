@@ -49,33 +49,15 @@ export async function modeRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const newMode = ModeDescriptorSchema.parse(request.body);
-      
-      // 检查引擎是否正在运行
-      const wasRunning = digitalRadioEngine.getStatus().isRunning;
-      
-      // 如果引擎正在运行，先停止它
-      if (wasRunning) {
-        fastify.log.info('Mode switch: stopping engine to apply new mode');
-        await digitalRadioEngine.stop();
-      }
-      
-      // 切换模式
+
       await digitalRadioEngine.setMode(newMode);
       fastify.log.info(`Mode switched to: ${newMode.name}`);
-      
-      // 如果引擎之前在运行，重新启动它
-      if (wasRunning) {
-        fastify.log.info('Mode switch: restarting engine');
-        await digitalRadioEngine.start();
-      }
 
       const status = digitalRadioEngine.getStatus();
-      
+
       return reply.code(200).send({
         success: true,
-        message: wasRunning 
-          ? 'Mode switched successfully, engine restarted'
-          : 'Mode switched successfully',
+        message: 'Mode switched successfully',
         data: status.currentMode,
       });
     } catch (error) {

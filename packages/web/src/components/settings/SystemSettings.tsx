@@ -16,6 +16,7 @@ import { faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
 import { Button } from '@heroui/react';
 import { api, ApiError } from '@tx5dr/core';
 import type {
+  DecodeWindowSettings,
   PSKReporterConfig,
   PSKReporterStatus,
   AuthStatus,
@@ -29,7 +30,7 @@ import type {
   DesktopHttpsStatus,
   DesktopHttpsMode,
 } from '@tx5dr/contracts';
-import { FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
+import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { useConnection } from '../../store/radioStore';
@@ -91,10 +92,10 @@ const SETTINGS_SOFT_PANEL_CLASS = 'rounded-medium bg-default-50 px-3 py-3 dark:b
 const SETTINGS_METRIC_CLASS = 'rounded-medium bg-content1 px-3 py-2';
 
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
-  ft8Preset: 'maximum',
-  ft8CustomWindows: [-1500, -1000, -500, 0, 250],
-  ft4Preset: 'balanced',
-  ft4CustomWindows: [0],
+  ft8Preset: DEFAULT_DECODE_WINDOW_SETTINGS.ft8?.preset ?? 'balanced',
+  ft8CustomWindows: [...FT8_WINDOW_PRESETS[DEFAULT_DECODE_WINDOW_SETTINGS.ft8?.preset ?? 'balanced']],
+  ft4Preset: DEFAULT_DECODE_WINDOW_SETTINGS.ft4?.preset ?? 'balanced',
+  ft4CustomWindows: [...FT4_WINDOW_PRESETS[DEFAULT_DECODE_WINDOW_SETTINGS.ft4?.preset ?? 'balanced']],
 };
 
 function buildLiveKitExampleUrl(baseUrl: string): string {
@@ -156,6 +157,20 @@ function getDesktopUpdateOptionLabel(
 function getWindowCount(preset: string, customWindows: number[], presets: Record<string, number[]>): number {
   if (preset === 'custom') return customWindows.length;
   return presets[preset]?.length ?? 1;
+}
+
+function buildDecodeWindowState(settings?: DecodeWindowSettings): DecodeWindowState {
+  const resolvedSettings = settings ?? DEFAULT_DECODE_WINDOW_SETTINGS;
+
+  const ft8Preset = resolvedSettings.ft8?.preset ?? DEFAULT_DECODE_WINDOW_STATE.ft8Preset;
+  const ft4Preset = resolvedSettings.ft4?.preset ?? DEFAULT_DECODE_WINDOW_STATE.ft4Preset;
+
+  return {
+    ft8Preset,
+    ft8CustomWindows: resolvedSettings.ft8?.customWindowTiming ?? [...(FT8_WINDOW_PRESETS[ft8Preset] ?? DEFAULT_DECODE_WINDOW_STATE.ft8CustomWindows)],
+    ft4Preset,
+    ft4CustomWindows: resolvedSettings.ft4?.customWindowTiming ?? [...(FT4_WINDOW_PRESETS[ft4Preset] ?? DEFAULT_DECODE_WINDOW_STATE.ft4CustomWindows)],
+  };
 }
 
 function getCpuLoadInfo(count: number, t: (key: string) => string): { label: string; color: 'success' | 'primary' | 'warning' | 'danger' } {
@@ -390,13 +405,8 @@ export const SystemSettings = forwardRef<
     try {
       const result = await api.getDecodeWindowSettings();
       if (result.success && result.data) {
-        const settings = result.data.settings as Record<string, { preset?: string; customWindowTiming?: number[] }>;
-        const state: DecodeWindowState = {
-          ft8Preset: settings.ft8?.preset ?? 'maximum',
-          ft8CustomWindows: settings.ft8?.customWindowTiming ?? [...(FT8_WINDOW_PRESETS['maximum'])],
-          ft4Preset: settings.ft4?.preset ?? 'balanced',
-          ft4CustomWindows: settings.ft4?.customWindowTiming ?? [...(FT4_WINDOW_PRESETS['balanced'])],
-        };
+        const settings = result.data.settings as DecodeWindowSettings | undefined;
+        const state = buildDecodeWindowState(settings);
         setDecodeWindowState(state);
         setOriginalDecodeWindowState({ ...state });
       }
@@ -1484,8 +1494,8 @@ export const SystemSettings = forwardRef<
                 variant="bordered"
                 className="flex-1"
               >
-                <SelectItem key="maximum" textValue={`${t('system.presetMaximum')}${t('system.presetDefault')}`}>{t('system.presetMaximum')}{t('system.presetDefault')}</SelectItem>
-                <SelectItem key="balanced" textValue={t('system.presetBalanced')}>{t('system.presetBalanced')}</SelectItem>
+                <SelectItem key="maximum" textValue={t('system.presetMaximum')}>{t('system.presetMaximum')}</SelectItem>
+                <SelectItem key="balanced" textValue={`${t('system.presetBalanced')}${t('system.presetDefault')}`}>{t('system.presetBalanced')}{t('system.presetDefault')}</SelectItem>
                 <SelectItem key="lightweight" textValue={t('system.presetLightweight')}>{t('system.presetLightweight')}</SelectItem>
                 <SelectItem key="minimum" textValue={t('system.presetMinimum')}>{t('system.presetMinimum')}</SelectItem>
                 <SelectItem key="custom" textValue={t('system.presetCustom')}>{t('system.presetCustom')}</SelectItem>
@@ -1605,7 +1615,7 @@ export const SystemSettings = forwardRef<
                   onPress={() => {
                     setDecodeWindowState(prev => ({
                       ...prev,
-                      ft8CustomWindows: [...FT8_WINDOW_PRESETS['maximum']],
+                      ft8CustomWindows: [...FT8_WINDOW_PRESETS['balanced']],
                     }));
                   }}
                 >

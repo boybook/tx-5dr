@@ -22,6 +22,13 @@ export class WSClient extends WSMessageHandler {
   private isConnecting = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private jwt: string | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempt = 0;
+  private manualDisconnect = false;
+  private connectPromise: Promise<void> | null = null;
+
+  private static readonly RECONNECT_BASE_DELAY_MS = 1000;
+  private static readonly RECONNECT_MAX_DELAY_MS = 8000;
 
   constructor(config: WSClientConfig) {
     super();
@@ -36,58 +43,107 @@ export class WSClient extends WSMessageHandler {
    * 连接到WebSocket服务器
    */
   async connect(): Promise<void> {
-    if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return;
     }
 
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    this.manualDisconnect = false;
+    this.stopReconnectTimer();
     this.isConnecting = true;
 
-    return new Promise((resolve, reject) => {
+    this.connectPromise = new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(this.config.url);
+        const socket = new WebSocket(this.config.url);
+        this.ws = socket;
+        let opened = false;
+        let settled = false;
 
-        this.ws.onopen = () => {
+        socket.onopen = () => {
+          if (this.ws !== socket) {
+            socket.close();
+            return;
+          }
           logger.info('Connected');
+          opened = true;
+          settled = true;
           this.isConnecting = false;
+          this.connectPromise = null;
+          this.reconnectAttempt = 0;
           this.startHeartbeat();
           this.emitWSEvent('connected');
           resolve();
         };
 
-        this.ws.onmessage = (event) => {
+        socket.onmessage = (event) => {
           this.handleRawMessage(event.data);
         };
 
-        this.ws.onclose = (event) => {
+        socket.onclose = (event) => {
+          if (this.ws === socket) {
+            this.ws = null;
+          }
           logger.info(`Disconnected: code=${event.code} reason=${event.reason}`);
           this.isConnecting = false;
+          this.connectPromise = null;
           this.stopHeartbeat();
-          this.emitWSEvent('disconnected');
+
+          if (!opened && !settled) {
+            settled = true;
+            reject(new Error(`WebSocket closed before open: code=${event.code}`));
+          }
+
+          if (this.manualDisconnect) {
+            this.emitWSEvent('disconnected');
+            return;
+          }
+
+          this.scheduleReconnect();
         };
 
-        this.ws.onerror = (error) => {
+        socket.onerror = (error) => {
           logger.error('Connection error:', error);
-          this.isConnecting = false;
           this.emitWSEvent('error', new Error('WebSocket connection error'));
-          reject(new Error('WebSocket connection failed'));
+          if (!opened && !settled) {
+            settled = true;
+            this.isConnecting = false;
+            this.connectPromise = null;
+            reject(new Error('WebSocket connection failed'));
+          }
         };
 
       } catch (error) {
         this.isConnecting = false;
+        this.connectPromise = null;
         reject(error);
       }
     });
+
+    try {
+      await this.connectPromise;
+    } catch (error) {
+      if (!this.manualDisconnect) {
+        this.scheduleReconnect();
+      }
+      throw error;
+    }
   }
 
   /**
    * 断开WebSocket连接
    */
   disconnect(): void {
+    this.manualDisconnect = true;
+    this.stopReconnectTimer();
     this.stopHeartbeat();
+    this.connectPromise = null;
+    this.isConnecting = false;
 
     if (this.ws) {
       this.ws.close();
-      this.ws = null;
     }
   }
 
@@ -191,6 +247,38 @@ export class WSClient extends WSMessageHandler {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.manualDisconnect || this.reconnectTimer || this.isConnecting) {
+      return;
+    }
+
+    const attempt = this.reconnectAttempt + 1;
+    const exponentialDelay = Math.min(
+      WSClient.RECONNECT_BASE_DELAY_MS * (2 ** (attempt - 1)),
+      WSClient.RECONNECT_MAX_DELAY_MS,
+    );
+    const jitter = Math.round(exponentialDelay * 0.2 * Math.random());
+    const delayMs = exponentialDelay + jitter;
+
+    this.reconnectAttempt = attempt;
+    logger.info('Scheduling reconnect', { attempt, delayMs });
+    this.emitWSEvent('reconnecting', { attempt, delayMs });
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect().catch((error) => {
+        logger.warn('Reconnect attempt failed', error);
+      });
+    }, delayMs);
+  }
+
+  private stopReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
   }
 

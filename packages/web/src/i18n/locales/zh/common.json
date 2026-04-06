@@ -67,6 +67,12 @@
       "dockerCheck": "Docker：使用 docker-compose logs -f 查看容器日志"
     }
   },
+  "appError": {
+    "title": "界面暂时无法恢复",
+    "description": "刚才的模式切换或连接恢复过程中，界面状态出现异常。你可以先尝试重新挂载界面；如果仍未恢复，再刷新页面。",
+    "retry": "重新挂载界面",
+    "refresh": "刷新页面"
+  },
   "auth": {
     "user": "用户",
     "role": "角色",

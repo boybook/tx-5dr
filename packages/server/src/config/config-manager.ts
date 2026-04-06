@@ -2,7 +2,7 @@
 // ConfigManager - 配置合并和动态类型需要使用any
 
 import { promises as fs } from 'fs';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary, type RealtimeTransportPolicy } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary, DEFAULT_DECODE_WINDOW_SETTINGS, type RealtimeTransportPolicy } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
@@ -104,6 +104,7 @@ const DEFAULT_CONFIG: AppConfig = {
     decodeWhileTransmitting: false, // 默认关闭,避免误解码残留信号
     spectrumWhileTransmitting: true, // 默认开启,发射时继续频谱分析
   },
+  decodeWindowSettings: DEFAULT_DECODE_WINDOW_SETTINGS,
   lastSelectedFrequency: null, // 初始时没有选择过频率
   lastVolumeGain: null, // 初始时没有设置过音量增益
   server: {
@@ -1039,7 +1040,7 @@ export class ConfigManager {
    * 获取解码窗口设置
    */
   getDecodeWindowSettings(): DecodeWindowSettings | undefined {
-    return this.config.decodeWindowSettings;
+    return this.config.decodeWindowSettings ?? DEFAULT_DECODE_WINDOW_SETTINGS;
   }
 
   /**

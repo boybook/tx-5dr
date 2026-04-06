@@ -33,6 +33,7 @@ import { TransmissionPipeline } from './subsystems/TransmissionPipeline.js';
 import { ClockCoordinator } from './subsystems/ClockCoordinator.js';
 import { EngineLifecycle } from './subsystems/EngineLifecycle.js';
 import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
+import { EngineState } from './state-machines/types.js';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -70,6 +71,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // 语音模式
   private engineMode: EngineMode = 'digital';
   private voiceSessionManager: VoiceSessionManager | null = null;
+  private modeSwitchTail: Promise<void> = Promise.resolve();
 
   // 子系统
   private audioVolumeController: AudioVolumeController;
@@ -467,93 +469,83 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   async setMode(mode: ModeDescriptor | string): Promise<void> {
-    // Handle voice mode (string 'VOICE')
-    if (mode === 'VOICE' || (typeof mode === 'object' && mode.name === 'VOICE')) {
-      if (this.engineMode === 'voice') {
-        logger.info('Already in voice mode');
+    const runSwitch = async () => {
+      // Handle voice mode (string 'VOICE')
+      if (mode === 'VOICE' || (typeof mode === 'object' && mode.name === 'VOICE')) {
+        if (this.engineMode === 'voice') {
+          logger.info('Already in voice mode');
+          this.emitStatusSnapshot();
+          return;
+        }
+        await this.switchEngineMode('voice', MODES.VOICE);
         return;
       }
-      await this.switchToVoiceMode();
-      return;
-    }
 
-    // Handle digital mode (ModeDescriptor)
-    const digitalMode = mode as ModeDescriptor;
+      const digitalMode = mode as ModeDescriptor;
 
-    // If switching from voice to digital
-    if (this.engineMode === 'voice') {
-      await this.switchToDigitalMode(digitalMode);
-      return;
-    }
+      // If switching from voice to digital
+      if (this.engineMode === 'voice') {
+        await this.switchEngineMode('digital', digitalMode);
+        return;
+      }
 
-    // Normal digital mode switch (FT8 <-> FT4)
-    if (this.currentMode.name === digitalMode.name) {
-      logger.info(`Already in mode: ${digitalMode.name}`);
-      return;
-    }
+      // Normal digital mode switch (FT8 <-> FT4)
+      if (this.currentMode.name === digitalMode.name) {
+        logger.info(`Already in mode: ${digitalMode.name}`);
+        this.emitStatusSnapshot();
+        return;
+      }
 
-    logger.info(`Switching mode: ${this.currentMode.name} -> ${digitalMode.name}`);
-    this.currentMode = digitalMode;
-    this.applyDecodeWindowOverrides();
+      logger.info(`Switching mode: ${this.currentMode.name} -> ${digitalMode.name}`);
+      this.currentMode = digitalMode;
+      this.applyDecodeWindowOverrides();
 
-    if (this.slotClock) {
-      this.slotClock.setMode(this.currentMode);
-    }
+      if (this.slotClock) {
+        this.slotClock.setMode(this.currentMode);
+      }
 
-    this.slotPackManager.setMode(this.currentMode);
-    this.clockCoordinator?.onModeChanged(this.currentMode);
+      this.slotPackManager.setMode(this.currentMode);
+      this.clockCoordinator?.onModeChanged(this.currentMode);
 
-    // Persist digital sub-mode
-    ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
+      await ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
+      this.emitModeAndStatusSnapshot();
+    };
 
-    this.emit('modeChanged', this.currentMode);
+    const queuedSwitch = this.modeSwitchTail.then(runSwitch, runSwitch);
+    this.modeSwitchTail = queuedSwitch.catch(() => undefined);
+    await queuedSwitch;
   }
 
-  private async switchToVoiceMode(): Promise<void> {
-    logger.info('Switching to voice mode');
+  private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {
+    let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
+    let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
+    logger.info(`Switching engine mode: ${this.engineMode}/${this.currentMode.name} -> ${targetEngineMode}/${targetMode.name}`);
 
-    // Stop engine if running
-    const wasRunning = this.engineLifecycle?.getIsRunning() ?? false;
-    if (wasRunning) {
+    if (engineState === EngineState.STARTING) {
+      logger.info('Mode switch requested while engine is starting, waiting for startup to settle first');
+      engineState = await this.engineLifecycle.waitForStartupToSettle();
+      shouldResumeAfterSwitch = engineState === EngineState.RUNNING;
+      logger.info(`Startup settled before mode switch: ${engineState}`);
+    }
+
+    if (engineState === EngineState.STOPPING) {
+      logger.info('Mode switch requested while engine is stopping, waiting for stop completion');
+      await this.engineLifecycle.stop();
+      engineState = this.engineLifecycle.getEngineState();
+      shouldResumeAfterSwitch = false;
+    }
+
+    if (engineState === EngineState.RUNNING) {
       // Prevent RadioBridge from auto-restarting engine after reconnect
       this.radioBridge.wasRunningBeforeDisconnect = false;
       await this.stop();
     }
 
-    // Clear and re-register resources for voice mode
-    this.engineMode = 'voice';
-    this.currentMode = MODES.VOICE;
-    this.engineLifecycle.rebuildResourcePlan();
-
-    // Persist engine mode
-    ConfigManager.getInstance().setLastEngineMode('voice');
-
-    this.emit('modeChanged', this.currentMode);
-    logger.info('Switched to voice mode');
-
-    // Restart engine if it was running
-    if (wasRunning) {
-      await this.start();
-    }
-  }
-
-  private async switchToDigitalMode(mode?: ModeDescriptor): Promise<void> {
-    const targetMode = mode ?? MODES.FT8;
-    logger.info(`Switching to digital mode: ${targetMode.name}`);
-
-    // Stop engine if running
-    const wasRunning = this.engineLifecycle?.getIsRunning() ?? false;
-    if (wasRunning) {
-      // Prevent RadioBridge from auto-restarting engine after reconnect
-      this.radioBridge.wasRunningBeforeDisconnect = false;
-      await this.stop();
-    }
-
-    // Clear and re-register resources for digital mode
-    this.engineMode = 'digital';
+    this.engineMode = targetEngineMode;
     this.currentMode = targetMode;
-    this.applyDecodeWindowOverrides();
-    this.engineLifecycle.rebuildResourcePlan();
+    if (targetEngineMode === 'digital') {
+      this.applyDecodeWindowOverrides();
+    }
 
     if (this.slotClock) {
       this.slotClock.setMode(this.currentMode);
@@ -561,19 +553,31 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.slotPackManager.setMode(this.currentMode);
     this.clockCoordinator?.onModeChanged(this.currentMode);
+    this.engineLifecycle.rebuildResourcePlan();
 
-    // Persist engine mode and digital sub-mode
-    const cfgMgr = ConfigManager.getInstance();
-    cfgMgr.setLastEngineMode('digital');
-    cfgMgr.setLastDigitalModeName(targetMode.name);
-
-    this.emit('modeChanged', this.currentMode);
-    logger.info(`Switched to digital mode: ${targetMode.name}`);
-
-    // Restart engine if it was running
-    if (wasRunning) {
-      await this.start();
+    const configManager = ConfigManager.getInstance();
+    await configManager.setLastEngineMode(targetEngineMode);
+    if (targetEngineMode === 'digital') {
+      await configManager.setLastDigitalModeName(targetMode.name);
     }
+
+    this.emitModeAndStatusSnapshot();
+
+    if (shouldResumeAfterSwitch) {
+      await this.engineLifecycle.startAndWaitForRunning();
+      this.emitStatusSnapshot();
+    }
+
+    logger.info(`Engine mode switched to ${targetEngineMode}/${targetMode.name}`);
+  }
+
+  private emitModeAndStatusSnapshot(): void {
+    this.emit('modeChanged', this.currentMode);
+    this.emitStatusSnapshot();
+  }
+
+  private emitStatusSnapshot(): void {
+    this.emit('systemStatus', this.getStatus());
   }
 
   /**

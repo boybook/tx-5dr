@@ -15,27 +15,40 @@ interface ServerDisconnectedOverlayProps {
 export function ServerDisconnectedOverlay({ isConnected, isConnecting, radioService }: ServerDisconnectedOverlayProps) {
   const { t } = useTranslation();
   const [isManualConnecting, setIsManualConnecting] = useState(false);
+  const shouldShowRecovering = !isConnected && isConnecting;
   // 控制动画：visible 决定是否渲染，shown 控制 opacity
-  const [visible, setVisible] = useState(!isConnected);
-  const [shown, setShown] = useState(!isConnected);
+  const [visible, setVisible] = useState(shouldShowRecovering);
+  const [shown, setShown] = useState(shouldShowRecovering);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const DISCONNECTED_GRACE_MS = 1200;
 
   useEffect(() => {
-    if (!isConnected) {
-      // 断连：立即显示
-      setVisible(true);
-      // 下一帧设置 opacity 触发淡入
-      requestAnimationFrame(() => setShown(true));
-    } else {
+    if (showDelayRef.current) {
+      clearTimeout(showDelayRef.current);
+      showDelayRef.current = null;
+    }
+
+    if (isConnected) {
       // 连接恢复：淡出
       setShown(false);
       // 动画结束后卸载
       timerRef.current = setTimeout(() => setVisible(false), 300);
+    } else if (isConnecting) {
+      setVisible(true);
+      requestAnimationFrame(() => setShown(true));
+    } else {
+      showDelayRef.current = setTimeout(() => {
+        setVisible(true);
+        requestAnimationFrame(() => setShown(true));
+      }, DISCONNECTED_GRACE_MS);
     }
+
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (showDelayRef.current) clearTimeout(showDelayRef.current);
     };
-  }, [isConnected]);
+  }, [isConnected, isConnecting]);
 
   // 连接恢复后重置手动连接状态
   useEffect(() => {

@@ -39,8 +39,15 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
         wasEverConnected: true,
         connectError: null,
       };
+    case 'reconnecting':
+      return {
+        ...state,
+        isConnected: false,
+        isConnecting: true,
+        connectError: null,
+      };
     case 'disconnected':
-      return { ...state, isConnected: false, isConnecting: !state.wasEverConnected };
+      return { ...state, isConnected: false, isConnecting: false };
     case 'connectFailed':
       return { ...state, isConnecting: false, connectError: 'SERVER_UNAVAILABLE' };
     case 'SET_RADIO_SERVICE':

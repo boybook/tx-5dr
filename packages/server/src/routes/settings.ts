@@ -1,6 +1,9 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   DecodeWindowSettingsSchema,
+  DEFAULT_DECODE_WINDOW_SETTINGS,
+  FT4_WINDOW_PRESETS,
+  FT8_WINDOW_PRESETS,
   resolveWindowTiming,
   CustomFrequencyPresetsSchema,
   RealtimeSettingsSchema,
@@ -89,14 +92,14 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   // 获取解码窗口设置
   fastify.get('/decode-windows', async (request, reply) => {
     try {
-      const settings = configManager.getDecodeWindowSettings();
+      const settings = configManager.getDecodeWindowSettings() ?? DEFAULT_DECODE_WINDOW_SETTINGS;
       return reply.code(200).send({
         success: true,
         data: {
-          settings: settings ?? {},
+          settings,
           resolved: {
-            ft8: resolveWindowTiming('FT8', settings) ?? [-1500, -1000, -500, 0, 250],
-            ft4: resolveWindowTiming('FT4', settings) ?? [0],
+            ft8: resolveWindowTiming('FT8', settings) ?? FT8_WINDOW_PRESETS.balanced,
+            ft4: resolveWindowTiming('FT4', settings) ?? FT4_WINDOW_PRESETS.balanced,
           },
         },
       });
@@ -123,8 +126,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         data: {
           settings: parsed,
           resolved: {
-            ft8: resolveWindowTiming('FT8', parsed) ?? [-1500, -1000, -500, 0, 250],
-            ft4: resolveWindowTiming('FT4', parsed) ?? [0],
+            ft8: resolveWindowTiming('FT8', parsed) ?? FT8_WINDOW_PRESETS.balanced,
+            ft4: resolveWindowTiming('FT4', parsed) ?? FT4_WINDOW_PRESETS.balanced,
           },
         },
       });
