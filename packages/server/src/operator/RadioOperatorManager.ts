@@ -1680,7 +1680,10 @@ export class RadioOperatorManager {
       try {
         logger.info(`[WaveLog] Auto-uploading QSO: ${qsoRecord.callsign} (callsign: ${callsign})`);
         const result = await waveLogService.uploadQSO(qsoRecord, false);
-        if (result.success) {
+        if (result.status === 'duplicate') {
+          logger.info(`[WaveLog] QSO already exists in WaveLog: ${qsoRecord.callsign} - ${result.message}`);
+          this.eventEmitter.emit('waveLogUploadSuccess' as any, { operatorId, qsoRecord, message: result.message });
+        } else if (result.success) {
           logger.info(`[WaveLog] QSO upload successful: ${qsoRecord.callsign}`);
           this.eventEmitter.emit('waveLogUploadSuccess' as any, { operatorId, qsoRecord, message: result.message });
         } else {
