@@ -26,6 +26,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const canControl = useCan('execute', 'RadioControl');
 
   const isSupported = state?.supported ?? false;
+  const canWrite = descriptor.writable;
   const serverValue = typeof state?.value === 'number' ? state.value : null;
   const range = descriptor.range ?? { min: 0, max: 1, step: 0.01 };
   const usesSlider = descriptor.display?.mode === 'percent';
@@ -127,7 +128,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
           value={displayValue}
           onChange={handleSliderChange}
           onChangeEnd={handleSliderChangeEnd}
-          isDisabled={!isSupported || !canControl}
+          isDisabled={!isSupported || !canControl || !canWrite}
           className="w-full"
           aria-label={t(descriptor.labelI18nKey)}
         />
@@ -146,7 +147,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
           min={String(minDisplayValue)}
           max={String(maxDisplayValue)}
           step={String(toDisplayNumber(range.step ?? 1, descriptor))}
-          isDisabled={!isSupported || !canControl}
+          isDisabled={!isSupported || !canControl || !canWrite}
           aria-label={t(descriptor.labelI18nKey)}
         />
       )}

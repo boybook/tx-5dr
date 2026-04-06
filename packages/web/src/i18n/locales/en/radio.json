@@ -404,6 +404,10 @@
       "label": "VOX",
       "description": "Enables voice-operated transmit. When microphone audio exceeds the VOX threshold, the radio can switch to transmit automatically. Usually keep this off for digital modes."
     },
+    "mode_bandwidth": {
+      "label": "Mode Bandwidth",
+      "description": "Reads and switches the active filter bandwidth for the current operating mode. The voice spectrum overlay prefers this real bandwidth when available."
+    },
     "rit_offset": {
       "label": "RIT Offset",
       "description": "Adjusts the receive incremental tuning offset without changing transmit frequency. Useful for fine-tuning received audio pitch."

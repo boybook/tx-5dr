@@ -217,4 +217,59 @@ describe('RadioCapabilityManager', () => {
 
     manager.onDisconnected();
   });
+
+  it('negotiates mode_bandwidth for hamlib and refreshes descriptor options when mode changes', async () => {
+    const manager = new RadioCapabilityManager();
+    let currentMode = 'USB';
+    const setModeBandwidth = vi.fn().mockResolvedValue(undefined);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      getMode: vi.fn().mockImplementation(async () => ({
+        mode: currentMode,
+        bandwidth: currentMode === 'USB' ? 2400 : 12000,
+      })),
+      getModeBandwidth: vi.fn().mockImplementation(async () => (currentMode === 'USB' ? 2400 : 12000)),
+      setModeBandwidth,
+      getSupportedModeBandwidths: vi.fn().mockImplementation(async () => (
+        currentMode === 'USB' ? [1800, 2400, 3000] : [6000, 10000, 12000]
+      )),
+    });
+
+    let latestSnapshot = manager.getCapabilitySnapshot();
+    manager.on('capabilityList', (snapshot) => {
+      latestSnapshot = snapshot;
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+
+    const usbDescriptor = getDescriptor(latestSnapshot.descriptors, 'mode_bandwidth');
+    expect(usbDescriptor).toMatchObject({
+      id: 'mode_bandwidth',
+      valueType: 'enum',
+      options: [{ value: 1800 }, { value: 2400 }, { value: 3000 }],
+    });
+    expect(getCapability(latestSnapshot.capabilities, 'mode_bandwidth')).toMatchObject({
+      id: 'mode_bandwidth',
+      supported: true,
+      value: 2400,
+    });
+
+    currentMode = 'FM';
+    await (manager as any).runtime.pollCapabilityOnce('mode_bandwidth');
+
+    const fmDescriptor = getDescriptor(latestSnapshot.descriptors, 'mode_bandwidth');
+    expect(fmDescriptor).toMatchObject({
+      id: 'mode_bandwidth',
+      options: [{ value: 6000 }, { value: 10000 }, { value: 12000 }],
+    });
+    expect(getCapability(manager.getCapabilityStates(), 'mode_bandwidth')).toMatchObject({
+      id: 'mode_bandwidth',
+      supported: true,
+      value: 12000,
+    });
+
+    await expect(manager.writeCapability('mode_bandwidth', 10000)).resolves.toBeUndefined();
+    expect(setModeBandwidth).toHaveBeenCalledWith(10000);
+
+    manager.onDisconnected();
+  });
 });

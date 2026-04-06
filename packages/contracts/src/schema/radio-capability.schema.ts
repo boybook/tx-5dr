@@ -219,6 +219,7 @@ export const CAPABILITY_IDS = [
   'lock_mode',
   'mute',
   'vox',
+  'mode_bandwidth',
   'rit_offset',
   'xit_offset',
   'tuning_step',

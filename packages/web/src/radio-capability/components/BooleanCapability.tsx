@@ -15,6 +15,7 @@ export const BooleanCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const { t } = useTranslation();
   const canControl = useCan('execute', 'RadioControl');
   const isSupported = state?.supported ?? false;
+  const canWrite = descriptor.writable;
   const enabled = typeof state?.value === 'boolean' ? state.value : false;
 
   const handleToggle = useCallback(() => {
@@ -36,7 +37,7 @@ export const BooleanCapabilityPanel: React.FC<CapabilityComponentProps> = ({
       <Switch
         isSelected={enabled}
         onValueChange={handleToggle}
-        isDisabled={!isSupported || !canControl}
+        isDisabled={!isSupported || !canControl || !canWrite}
         size="sm"
       />
     </div>

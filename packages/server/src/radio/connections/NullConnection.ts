@@ -13,6 +13,7 @@ import type {
   IRadioConnection,
   IRadioConnectionEvents,
   RadioConnectionConfig,
+  RadioModeInfo,
   RadioModeBandwidth,
   SetRadioModeOptions,
 } from './IRadioConnection.js';
@@ -68,7 +69,7 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
     };
   }
 
-  async getMode(): Promise<{ mode: string; bandwidth: string }> {
+  async getMode(): Promise<RadioModeInfo> {
     return { mode: 'NONE', bandwidth: '' };
   }
 

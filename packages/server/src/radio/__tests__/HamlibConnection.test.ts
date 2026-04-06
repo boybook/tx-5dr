@@ -12,6 +12,10 @@ type MockRig = {
   getFrequency: ReturnType<typeof vi.fn>;
   getMode: ReturnType<typeof vi.fn>;
   getLevel: ReturnType<typeof vi.fn>;
+  getFilterList: ReturnType<typeof vi.fn>;
+  getPassbandNarrow: ReturnType<typeof vi.fn>;
+  getPassbandNormal: ReturnType<typeof vi.fn>;
+  getPassbandWide: ReturnType<typeof vi.fn>;
 };
 
 type MockSpectrumController = {
@@ -80,8 +84,16 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     setMode: vi.fn().mockResolvedValue(0),
     setPtt: vi.fn().mockResolvedValue(0),
     getFrequency: vi.fn().mockResolvedValue(7100000),
-    getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 'wide' }),
+    getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
     getLevel: vi.fn().mockResolvedValue(0),
+    getFilterList: vi.fn().mockReturnValue([
+      { modes: ['USB', 'LSB'], width: 1800 },
+      { modes: ['USB', 'LSB'], width: 2400 },
+      { modes: ['USB', 'LSB'], width: 3000 },
+    ]),
+    getPassbandNarrow: vi.fn().mockReturnValue(1800),
+    getPassbandNormal: vi.fn().mockReturnValue(2400),
+    getPassbandWide: vi.fn().mockReturnValue(3000),
     ...rigOverrides,
   };
   const testConnection = asTestConnection(connection);
@@ -245,6 +257,39 @@ describe('HamlibConnection', () => {
     await expect(connection.setMode('USB', 2400, { intent: 'voice' })).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith('USB', 2400);
+  });
+
+  it('returns numeric mode bandwidth values from hamlib', async () => {
+    const { connection } = createConnectedConnection({
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
+    });
+
+    await expect(connection.getMode()).resolves.toEqual({ mode: 'USB', bandwidth: 2400 });
+    await expect(connection.getModeBandwidth()).resolves.toBe(2400);
+  });
+
+  it('derives supported mode bandwidth options from hamlib filter list', async () => {
+    const { connection } = createConnectedConnection({
+      getFilterList: vi.fn().mockReturnValue([
+        { modes: ['USB', 'LSB'], width: 3000 },
+        { modes: ['USB'], width: 2400 },
+        { modes: ['USB'], width: 1800 },
+        { modes: ['FM'], width: 12000 },
+        { modes: ['USB'], width: 0 },
+      ]),
+    });
+
+    await expect(connection.getSupportedModeBandwidths()).resolves.toEqual([1800, 2400, 3000]);
+  });
+
+  it('keeps the current mode when writing mode bandwidth', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
+    });
+
+    await expect(connection.setModeBandwidth(3000)).resolves.toBeUndefined();
+
+    expect(rig.setMode).toHaveBeenCalledWith('USB', 3000);
   });
 
   it('applies frequency and mode as a single critical operating-state update', async () => {

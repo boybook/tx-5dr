@@ -275,6 +275,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     if (!definition?.read || !descriptor?.readable) return;
 
     try {
+      await this.refreshDescriptorIfNeeded(id, definition);
       const newValue = await definition.read(this.connection);
       const cached = this.valueCache.get(id);
 
@@ -306,6 +307,32 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       }
 
       logger.debug(`Failed to poll capability ${id}`, error);
+    }
+  }
+
+  private async refreshDescriptorIfNeeded(id: string, definition = CAPABILITY_DEFINITION_MAP.get(id)): Promise<void> {
+    if (!this.connection || !definition?.resolveDescriptor) {
+      return;
+    }
+
+    try {
+      const nextDescriptor = await definition.resolveDescriptor(this.connection);
+      const currentDescriptor = this.descriptorCache.get(id);
+      if (!currentDescriptor) {
+        this.descriptorCache.set(id, nextDescriptor);
+        this.emit('capabilityList', this.getCapabilitySnapshot());
+        return;
+      }
+
+      if (JSON.stringify(currentDescriptor) === JSON.stringify(nextDescriptor)) {
+        return;
+      }
+
+      this.descriptorCache.set(id, nextDescriptor);
+      logger.debug(`Capability descriptor refreshed: ${id}`);
+      this.emit('capabilityList', this.getCapabilitySnapshot());
+    } catch (error) {
+      logger.debug(`Failed to refresh descriptor for ${id}`, error);
     }
   }
 

@@ -36,6 +36,7 @@ import type {
   ApplyOperatingStateResult,
   IRadioConnection,
   MeterData,
+  RadioModeInfo,
   RadioModeBandwidth,
   SetRadioModeOptions,
 } from './connections/IRadioConnection.js';
@@ -806,7 +807,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   /**
    * 获取当前模式
    */
-  async getMode(): Promise<{ mode: string; bandwidth: string }> {
+  async getMode(): Promise<RadioModeInfo> {
     if (!this.connection) {
       throw new Error('radio not connected');
     }
@@ -1066,7 +1067,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   async getRadioStatus(): Promise<{
     frequency: number;
-    mode: { mode: string; bandwidth: string };
+    mode: RadioModeInfo;
     signalStrength?: number;
   }> {
     if (!this.connection) {

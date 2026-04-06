@@ -29,6 +29,7 @@ registerCapabilityComponent('nr', NumberLevelCapabilityPanel);
 registerCapabilityComponent('lock_mode', BooleanCapabilityPanel);
 registerCapabilityComponent('mute', BooleanCapabilityPanel);
 registerCapabilityComponent('vox', BooleanCapabilityPanel);
+registerCapabilityComponent('mode_bandwidth', EnumCapabilityPanel);
 registerCapabilityComponent('rit_offset', NumberLevelCapabilityPanel);
 registerCapabilityComponent('xit_offset', NumberLevelCapabilityPanel);
 registerCapabilityComponent('tuning_step', EnumCapabilityPanel);

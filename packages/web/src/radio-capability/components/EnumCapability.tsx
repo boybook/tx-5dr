@@ -16,6 +16,7 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const { t } = useTranslation();
   const canControl = useCan('execute', 'RadioControl');
   const isSupported = state?.supported ?? false;
+  const canWrite = descriptor.writable;
   const options = descriptor.options ?? [];
 
   const selectedKey = useMemo(() => {
@@ -46,7 +47,7 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
             onWrite(capabilityId, option.value);
           }
         }}
-        isDisabled={!isSupported || !canControl || options.length === 0}
+        isDisabled={!isSupported || !canControl || !canWrite || options.length === 0}
         aria-label={t(descriptor.labelI18nKey)}
       >
         {options.map((option) => (
