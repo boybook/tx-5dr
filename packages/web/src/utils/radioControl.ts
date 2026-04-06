@@ -5,6 +5,11 @@ export interface FrequencyOptionLike {
   mode: string;
 }
 
+export interface MonitorActivationCtaState {
+  shouldShowActivationCta: boolean;
+  hasUserActivation: boolean;
+}
+
 export function isCoreCapabilityAvailable(
   coreCapabilities: CoreRadioCapabilities | null | undefined,
   capability: keyof CoreRadioCapabilities,
@@ -39,4 +44,23 @@ export function filterDigitalFrequencyOptions<T extends FrequencyOptionLike>(
   }
 
   return filtered;
+}
+
+export function deriveMonitorActivationCtaState(
+  isVoiceMode: boolean,
+  isConnected: boolean,
+  isPlaying: boolean,
+  hasActivatedPlaybackThisSession: boolean,
+): MonitorActivationCtaState {
+  const shouldShowActivationCta = isVoiceMode
+    && isConnected
+    && !isPlaying
+    && !hasActivatedPlaybackThisSession;
+
+  return {
+    shouldShowActivationCta,
+    hasUserActivation: typeof document !== 'undefined'
+      ? Boolean(document.userActivation?.hasBeenActive)
+      : false,
+  };
 }

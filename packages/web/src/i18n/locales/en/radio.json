@@ -64,6 +64,7 @@
   },
   "monitor": {
     "audioMonitor": "Audio monitor",
+    "activateAudioMonitor": "Enable monitor",
     "monitorVolume": "Monitor volume",
     "latency": "Latency",
     "buffer": "Buffer",
