@@ -48,6 +48,10 @@ interface VoiceState {
   offsetModel: 'upper' | 'lower' | 'symmetric' | null;
 }
 
+interface CachedVoiceState extends VoiceState {
+  rawBandwidthLabel: string | number | null;
+}
+
 interface ZoomState {
   levels: Array<{ id: string; spanHz: number }>;
   currentLevelId: string | null;
@@ -76,9 +80,10 @@ interface PendingDigitalTransition {
   expiresAt: number;
 }
 
-const EMPTY_VOICE_STATE: VoiceState = {
+const EMPTY_VOICE_STATE: CachedVoiceState = {
   radioMode: null,
   bandwidthLabel: null,
+  rawBandwidthLabel: null,
   occupiedBandwidthHz: null,
   offsetModel: null,
 };
@@ -94,7 +99,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private dirtyVersion = 0;
   private lastRadioFrame: SpectrumFrame | null = null;
   private lastKnownRadioFrequency: number | null = null;
-  private cachedVoiceState: VoiceState = EMPTY_VOICE_STATE;
+  private cachedVoiceState: CachedVoiceState = EMPTY_VOICE_STATE;
   private displayPollTimer: NodeJS.Timeout | null = null;
   private voicePollTimer: NodeJS.Timeout | null = null;
   private displayStateFailedAt: number | null = null;
@@ -1206,11 +1211,11 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private async resolveVoiceState(currentRadioFrequency: number | null): Promise<VoiceState> {
     if (!this.engine.getRadioManager().isConnected()) {
       this.cachedVoiceState = EMPTY_VOICE_STATE;
-      return this.cachedVoiceState;
+      return this.toVoiceState(this.cachedVoiceState);
     }
 
     let radioMode: string | null = this.cachedVoiceState.radioMode;
-    let bandwidthLabel: string | number | null = this.cachedVoiceState.bandwidthLabel;
+    let bandwidthLabel: string | number | null = this.cachedVoiceState.rawBandwidthLabel;
     const coreCapabilities = this.engine.getRadioManager().getCoreCapabilities();
 
     if (coreCapabilities.readRadioMode) {
@@ -1227,15 +1232,12 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     this.cachedVoiceState = {
       radioMode,
       bandwidthLabel: this.formatBandwidthLabel(bandwidthLabel),
+      rawBandwidthLabel: bandwidthLabel,
       occupiedBandwidthHz: normalized.occupiedBandwidthHz,
       offsetModel: normalized.offsetModel,
     };
 
-    if (currentRadioFrequency === null) {
-      return this.cachedVoiceState;
-    }
-
-    return this.cachedVoiceState;
+    return this.toVoiceState(this.cachedVoiceState);
   }
 
   private normalizeVoiceMode(
@@ -1307,6 +1309,11 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return `${Math.round(bandwidthLabel)} Hz`;
     }
     return String(bandwidthLabel);
+  }
+
+  private toVoiceState(cachedVoiceState: CachedVoiceState): VoiceState {
+    const { rawBandwidthLabel: _rawBandwidthLabel, ...voiceState } = cachedVoiceState;
+    return voiceState;
   }
 
   private async toggleOpenWebRXDetail(): Promise<void> {
