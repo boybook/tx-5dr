@@ -452,6 +452,36 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   setMicGain?(value: number): Promise<void>;
 
   /**
+   * 获取语音压缩开关状态。
+   */
+  getCompressorEnabled?(): Promise<boolean>;
+
+  /**
+   * 设置语音压缩开关状态。
+   */
+  setCompressorEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * 获取语音压缩电平（0.0–1.0）。
+   */
+  getCompressorLevel?(): Promise<number>;
+
+  /**
+   * 设置语音压缩电平（0.0–1.0）。
+   */
+  setCompressorLevel?(value: number): Promise<void>;
+
+  /**
+   * 获取内置监听增益（MONI，0.0–1.0）。
+   */
+  getMonitorGain?(): Promise<number>;
+
+  /**
+   * 设置内置监听增益（MONI，0.0–1.0）。
+   */
+  setMonitorGain?(value: number): Promise<void>;
+
+  /**
    * 获取噪声消隐电平（0.0–1.0，0 = 关闭）
    * @optional Hamlib: getLevel('NB'), icom-wlan: CI-V 0x14 0x12
    */
@@ -506,6 +536,57 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * 设置 VOX 开关状态。
    */
   setVOXEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * 获取 AGC 模式。
+   * 推荐值：off/superfast/fast/slow/user/medium/auto/long/on
+   */
+  getAgcMode?(): Promise<string>;
+
+  /**
+   * 设置 AGC 模式。
+   * 推荐值：off/superfast/fast/slow/user/medium/auto/long/on
+   */
+  setAgcMode?(mode: string): Promise<void>;
+
+  /**
+   * 获取当前连接支持的 AGC 模式列表。
+   */
+  getSupportedAgcModes?(): Promise<string[]>;
+
+  /**
+   * 获取前置放大（PREAMP）级别，单位 dB。
+   * 约定 0 表示关闭。
+   */
+  getPreampLevel?(): Promise<number>;
+
+  /**
+   * 设置前置放大（PREAMP）级别，单位 dB。
+   * 约定 0 表示关闭。
+   */
+  setPreampLevel?(value: number): Promise<void>;
+
+  /**
+   * 获取当前连接支持的前置放大级别列表（单位 dB，不含 0 时由上层补 off）。
+   */
+  getSupportedPreampLevels?(): Promise<number[]>;
+
+  /**
+   * 获取衰减器（ATT）级别，单位 dB。
+   * 约定 0 表示关闭。
+   */
+  getAttenuatorLevel?(): Promise<number>;
+
+  /**
+   * 设置衰减器（ATT）级别，单位 dB。
+   * 约定 0 表示关闭。
+   */
+  setAttenuatorLevel?(value: number): Promise<void>;
+
+  /**
+   * 获取当前连接支持的衰减器级别列表（单位 dB，不含 0 时由上层补 off）。
+   */
+  getSupportedAttenuatorLevels?(): Promise<number[]>;
 
   /**
    * 获取 RIT 偏移（Hz）。

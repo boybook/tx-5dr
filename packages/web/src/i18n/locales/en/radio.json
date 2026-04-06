@@ -384,6 +384,18 @@
       "label": "MIC Gain",
       "description": "Adjusts the microphone input preamplification level. Too high causes audio clipping and distortion; too low results in a weak transmitted signal. For voice, aim for the audio meter to just enter the yellow zone. Digital modes typically do not require adjustment."
     },
+    "compressor": {
+      "label": "Speech Compressor",
+      "description": "Controls the radio built-in speech compressor. Enabling it can increase average modulation and perceived loudness, but too much compression adds distortion. Usually keep this off for digital modes."
+    },
+    "compressor_level": {
+      "label": "Compression Level",
+      "description": "Adjusts how strongly the speech compressor acts on transmit audio. Higher values increase average loudness but can make voice audio sound more distorted or fatiguing."
+    },
+    "monitor_gain": {
+      "label": "Monitor Gain",
+      "description": "Adjusts the radio transmit monitor (MONI) level. A value of 0 effectively turns monitor audio off; higher values let you hear more of your own transmitted audio in the rig speaker or headphones."
+    },
     "nb": {
       "label": "Noise Blanker",
       "description": "The Noise Blanker (NB) suppresses impulse-type interference such as automotive ignition noise and industrial electrical interference. 0 means off; higher values increase blanking strength. Ineffective against continuous background noise — enable only when impulse interference is present."
@@ -403,6 +415,18 @@
     "vox": {
       "label": "VOX",
       "description": "Enables voice-operated transmit. When microphone audio exceeds the VOX threshold, the radio can switch to transmit automatically. Usually keep this off for digital modes."
+    },
+    "agc_mode": {
+      "label": "AGC Speed",
+      "description": "Sets the automatic gain control response speed. Faster modes react more aggressively to sudden strong signals, while slower modes often sound smoother for voice reception. Available modes depend on the radio model."
+    },
+    "preamp": {
+      "label": "Preamp",
+      "description": "Switches the receive preamplifier (P.AMP) level to boost weak signals. Higher gain can also amplify background noise or increase overload risk in crowded bands."
+    },
+    "attenuator": {
+      "label": "Attenuator",
+      "description": "Switches the receive attenuator (ATT) level to reduce front-end overload in strong-signal environments. Higher values apply stronger attenuation."
     },
     "mode_bandwidth": {
       "label": "Mode Bandwidth",
@@ -441,6 +465,20 @@
       "description": "Selects the digital-coded squelch (DCS) code used to match repeater or radio network squelch settings."
     },
     "options": {
+      "common": {
+        "off": "Off"
+      },
+      "agc_mode": {
+        "off": "Off",
+        "superfast": "Super Fast",
+        "fast": "Fast",
+        "slow": "Slow",
+        "user": "User",
+        "medium": "Medium",
+        "auto": "Auto",
+        "long": "Long",
+        "on": "On"
+      },
       "power_state": {
         "off": "Off",
         "on": "On",

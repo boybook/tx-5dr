@@ -12,6 +12,12 @@ type MockRig = {
   getFrequency: ReturnType<typeof vi.fn>;
   getMode: ReturnType<typeof vi.fn>;
   getLevel: ReturnType<typeof vi.fn>;
+  setLevel: ReturnType<typeof vi.fn>;
+  getFunction: ReturnType<typeof vi.fn>;
+  setFunction: ReturnType<typeof vi.fn>;
+  getPreampValues: ReturnType<typeof vi.fn>;
+  getAttenuatorValues: ReturnType<typeof vi.fn>;
+  getAgcLevels: ReturnType<typeof vi.fn>;
   getFilterList: ReturnType<typeof vi.fn>;
   getPassbandNarrow: ReturnType<typeof vi.fn>;
   getPassbandNormal: ReturnType<typeof vi.fn>;
@@ -86,6 +92,12 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getFrequency: vi.fn().mockResolvedValue(7100000),
     getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
     getLevel: vi.fn().mockResolvedValue(0),
+    setLevel: vi.fn().mockResolvedValue(0),
+    getFunction: vi.fn().mockResolvedValue(false),
+    setFunction: vi.fn().mockResolvedValue(0),
+    getPreampValues: vi.fn().mockReturnValue([]),
+    getAttenuatorValues: vi.fn().mockReturnValue([]),
+    getAgcLevels: vi.fn().mockReturnValue([]),
     getFilterList: vi.fn().mockReturnValue([
       { modes: ['USB', 'LSB'], width: 1800 },
       { modes: ['USB', 'LSB'], width: 2400 },
@@ -526,6 +538,72 @@ describe('HamlibConnection', () => {
     await expect(connection.applySpectrumRuntimeConfig?.({ speed: 10 })).resolves.toBeUndefined();
 
     expect(configureSpectrum).not.toHaveBeenCalled();
+  });
+
+  it('maps Hamlib AGC codes to normalized mode names and writes them back as numeric levels', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getLevel: vi.fn().mockResolvedValue(2),
+      getAgcLevels: vi.fn().mockReturnValue([0, 2, 6]),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedLevels = new Set(['AGC']);
+
+    await expect(connection.getAgcMode()).resolves.toBe('fast');
+    await expect(connection.getSupportedAgcModes()).resolves.toEqual(['off', 'fast', 'auto']);
+    await expect(connection.setAgcMode('auto')).resolves.toBeUndefined();
+
+    expect(rig.getLevel).toHaveBeenCalledWith('AGC');
+    expect(rig.setLevel).toHaveBeenCalledWith('AGC', 6);
+  });
+
+  it('normalizes preamp and attenuator levels to positive dB options', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getLevel: vi.fn()
+        .mockResolvedValueOnce(10)
+        .mockResolvedValueOnce(6),
+      getPreampValues: vi.fn().mockReturnValue([20, 10, 20, 0]),
+      getAttenuatorValues: vi.fn().mockReturnValue([12, 6, 12, 0]),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedLevels = new Set(['PREAMP', 'ATT']);
+
+    await expect(connection.getPreampLevel()).resolves.toBe(10);
+    await expect(connection.getSupportedPreampLevels()).resolves.toEqual([10, 20]);
+    await expect(connection.setPreampLevel(20)).resolves.toBeUndefined();
+
+    await expect(connection.getAttenuatorLevel()).resolves.toBe(6);
+    await expect(connection.getSupportedAttenuatorLevels()).resolves.toEqual([6, 12]);
+    await expect(connection.setAttenuatorLevel(12)).resolves.toBeUndefined();
+
+    expect(rig.getLevel).toHaveBeenNthCalledWith(1, 'PREAMP');
+    expect(rig.getLevel).toHaveBeenNthCalledWith(2, 'ATT');
+    expect(rig.setLevel).toHaveBeenNthCalledWith(1, 'PREAMP', 20);
+    expect(rig.setLevel).toHaveBeenNthCalledWith(2, 'ATT', 12);
+  });
+
+  it('reads and writes compressor and monitor gain controls through Hamlib function and level APIs', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getFunction: vi.fn().mockResolvedValue(true),
+      getLevel: vi.fn()
+        .mockResolvedValueOnce(0.35)
+        .mockResolvedValueOnce(0.6),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedLevels = new Set(['COMP', 'MONITOR_GAIN']);
+
+    await expect(connection.getCompressorEnabled()).resolves.toBe(true);
+    await expect(connection.setCompressorEnabled(false)).resolves.toBeUndefined();
+    await expect(connection.getCompressorLevel()).resolves.toBe(0.35);
+    await expect(connection.setCompressorLevel(0.5)).resolves.toBeUndefined();
+    await expect(connection.getMonitorGain()).resolves.toBe(0.6);
+    await expect(connection.setMonitorGain(0.25)).resolves.toBeUndefined();
+
+    expect(rig.getFunction).toHaveBeenCalledWith('COMP');
+    expect(rig.setFunction).toHaveBeenCalledWith('COMP', false);
+    expect(rig.getLevel).toHaveBeenNthCalledWith(1, 'COMP');
+    expect(rig.getLevel).toHaveBeenNthCalledWith(2, 'MONITOR_GAIN');
+    expect(rig.setLevel).toHaveBeenNthCalledWith(1, 'COMP', 0.5);
+    expect(rig.setLevel).toHaveBeenNthCalledWith(2, 'MONITOR_GAIN', 0.25);
   });
 
   it('clamps percent to 100 when the absolute power reading exceeds the matched max watts', () => {
