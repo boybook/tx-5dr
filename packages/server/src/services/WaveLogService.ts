@@ -16,6 +16,14 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('WaveLogService');
 
+type WaveLogUploadStatus = 'created' | 'duplicate' | 'failed';
+
+type WaveLogUploadResult = {
+  success: boolean;
+  status: WaveLogUploadStatus;
+  message: string;
+};
+
 /**
  * WaveLog服务类
  * 负责与WaveLog服务器的通信，参考WaveLogGate实现
@@ -115,10 +123,7 @@ export class WaveLogService {
    * 上传QSO记录到WaveLog
    * 参考WaveLogGate的send2wavelog函数实现
    */
-  async uploadQSO(qso: QSORecord, _dryRun: boolean = false): Promise<{
-    success: boolean;
-    message: string;
-  }> {
+  async uploadQSO(qso: QSORecord, _dryRun: boolean = false): Promise<WaveLogUploadResult> {
     // 转换QSO记录为ADIF格式
     const adifString = convertQSOToADIF(qso);
 
@@ -147,8 +152,9 @@ export class WaveLogService {
 
     const url = `${this.config.url.replace(/\/$/, '')}/index.php/api/qso`;
 
+    let response: Response;
     try {
-      const response = await fetch(url, {
+      response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -158,41 +164,61 @@ export class WaveLogService {
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(10000) // 10秒超时
       });
-
-      const responseText = await response.text();
-
-      logger.debug(`Server response: status=${response.status} ${response.statusText}, body=${responseText}`);
-
-      let result;
-
-      try {
-        result = JSON.parse(responseText);
-      } catch {
-        // 如果响应不是JSON，可能是HTML错误页面
-        if (responseText.includes('<html>')) {
-          throw new Error('WaveLog URL error or server returned an HTML page');
-        }
-        throw new Error('WaveLog server returned invalid response format');
-      }
-
-      if (response.ok) {
-        return {
-          success: result.status === 'created',
-          message: result.status === 'created' ? 'Upload successful' : (result.reason || 'Upload failed')
-        };
-      } else {
-        logger.error('Upload failed:', {
-          status: response.status,
-          reason: result.reason || result.message || result.messages,
-          callsign: qso.callsign,
-          mode: qso.mode,
-        });
-        throw new Error(result.reason || result.message || (result.messages ? JSON.stringify(result.messages) : `HTTP error ${response.status}`));
-      }
     } catch (error) {
       logger.error('Failed to upload QSO:', error);
       throw this.handleNetworkError(error, url);
     }
+
+    const responseText = await response.text();
+
+    logger.debug(`Server response: status=${response.status} ${response.statusText}, body=${responseText}`);
+
+    let result: any;
+
+    try {
+      result = JSON.parse(responseText);
+    } catch {
+      if (responseText.includes('<html>')) {
+        throw new Error('WaveLog URL error or server returned an HTML page');
+      }
+      throw new Error('WaveLog server returned invalid response format');
+    }
+
+    if (response.ok && result.status === 'created') {
+      return {
+        success: true,
+        status: 'created',
+        message: 'Upload successful',
+      };
+    }
+
+    const message = this.extractWaveLogResponseMessage(result, `HTTP error ${response.status}`);
+
+    if (this.isDuplicateUploadResult(result, message)) {
+      logger.info('WaveLog reported duplicate QSO', {
+        callsign: qso.callsign,
+        mode: qso.mode,
+        message,
+      });
+      return {
+        success: true,
+        status: 'duplicate',
+        message,
+      };
+    }
+
+    logger.warn('WaveLog rejected QSO upload', {
+      status: response.status,
+      reason: message,
+      callsign: qso.callsign,
+      mode: qso.mode,
+    });
+
+    return {
+      success: false,
+      status: 'failed',
+      message,
+    };
   }
 
   /**
@@ -200,14 +226,17 @@ export class WaveLogService {
    */
   async uploadMultipleQSOs(qsos: QSORecord[], dryRun: boolean = false): Promise<WaveLogSyncResponse> {
     let uploadedCount = 0;
+    let skippedCount = 0;
     let errorCount = 0;
     const errors: string[] = [];
 
     for (const qso of qsos) {
       try {
         const result = await this.uploadQSO(qso, dryRun);
-        if (result.success) {
+        if (result.status === 'created') {
           uploadedCount++;
+        } else if (result.status === 'duplicate') {
+          skippedCount++;
         } else {
           errorCount++;
           errors.push(`${qso.callsign}: ${result.message}`);
@@ -220,10 +249,10 @@ export class WaveLogService {
 
     return {
       success: errorCount === 0,
-      message: `Upload complete: ${uploadedCount} succeeded, ${errorCount} failed`,
+      message: `Upload complete: ${uploadedCount} succeeded, ${skippedCount} skipped, ${errorCount} failed`,
       uploadedCount,
       downloadedCount: 0,
-      skippedCount: 0,
+      skippedCount,
       errorCount,
       errors: errors.length > 0 ? errors : undefined,
       syncTime: Date.now()
@@ -351,6 +380,51 @@ export class WaveLogService {
     return new Error(`WaveLog connection failed: ${error.message || 'Unknown network error'}`);
   }
 
+  private extractWaveLogResponseMessage(result: any, fallback: string): string {
+    const messageParts: string[] = [];
+
+    if (typeof result?.reason === 'string') {
+      messageParts.push(result.reason);
+    }
+
+    if (typeof result?.message === 'string') {
+      messageParts.push(result.message);
+    }
+
+    if (Array.isArray(result?.messages)) {
+      for (const item of result.messages) {
+        if (typeof item === 'string') {
+          messageParts.push(item);
+        }
+      }
+    }
+
+    const normalizedMessages = messageParts
+      .map((message) => this.normalizeWaveLogMessage(message))
+      .filter((message) => message.length > 0);
+
+    if (normalizedMessages.length === 0) {
+      return fallback;
+    }
+
+    return normalizedMessages.join(' | ');
+  }
+
+  private normalizeWaveLogMessage(message: string): string {
+    return message
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private isDuplicateUploadResult(result: any, message: string): boolean {
+    if (typeof message !== 'string' || !message.toLowerCase().includes('duplicate')) {
+      return false;
+    }
+
+    return result?.status === 'abort' || result?.status === 'duplicate';
+  }
+
 
   /**
    * 网络连接诊断工具
@@ -435,4 +509,3 @@ export class WaveLogService {
     }
   }
 }
-
