@@ -162,14 +162,26 @@ check_livekit_config_consistency() {
 
     local quoted_api_key
     local quoted_api_secret
+    local plain_api_key
+    local plain_api_secret
     quoted_api_key=$(yaml_single_quote "${LIVEKIT_API_KEY}")
     quoted_api_secret=$(yaml_single_quote "${LIVEKIT_API_SECRET}")
+    plain_api_key="${LIVEKIT_API_KEY}"
+    plain_api_secret="${LIVEKIT_API_SECRET}"
 
     echo "$content" | grep -Eq "^port:[[:space:]]*${LIVEKIT_SIGNAL_PORT}[[:space:]]*$" || return 1
     echo "$content" | grep -Eq "^[[:space:]]+tcp_port:[[:space:]]*${LIVEKIT_TCP_PORT}[[:space:]]*$" || return 1
     echo "$content" | grep -Eq "^[[:space:]]+port_range_start:[[:space:]]*${LIVEKIT_UDP_PORT_START}[[:space:]]*$" || return 1
     echo "$content" | grep -Eq "^[[:space:]]+port_range_end:[[:space:]]*${LIVEKIT_UDP_PORT_END}[[:space:]]*$" || return 1
-    printf "%s\n" "$content" | grep -Fqx "  ${quoted_api_key}: ${quoted_api_secret}" || return 1
+
+    if printf "%s\n" "$content" | grep -Fqx "  ${quoted_api_key}: ${quoted_api_secret}"; then
+        return 0
+    fi
+    if printf "%s\n" "$content" | grep -Fqx "  ${plain_api_key}: ${plain_api_secret}"; then
+        return 0
+    fi
+
+    return 1
 }
 
 check_livekit_config() {
@@ -237,14 +249,46 @@ check_tx5dr_user() {
 }
 
 # Returns 0 if SSL is configured, 1 if not. Sets SSL_PORT if found.
+find_nginx_ssl_config_files() {
+    local path
+    for path in /etc/nginx/conf.d/*.conf /etc/nginx/default.d/*.conf /etc/nginx/nginx.conf; do
+        [[ -f "$path" ]] && printf "%s\n" "$path"
+    done
+}
+
 check_ssl() {
     SSL_PORT=""
-    local conf="/etc/nginx/conf.d/tx5dr.conf"
-    if [[ -f "$conf" ]] && grep -q "ssl_certificate" "$conf" 2>/dev/null; then
-        # Extract the ssl listen port
-        SSL_PORT=$(grep -oP 'listen\s+\K\d+(?=\s+ssl)' "$conf" 2>/dev/null | head -1)
-        [[ -n "$SSL_PORT" ]] && return 0
-    fi
+    local conf content port
+    while IFS= read -r conf; do
+        content=$(read_file_maybe_sudo "$conf" 2>/dev/null || true)
+        [[ -n "$content" ]] || continue
+        printf "%s\n" "$content" | grep -Eq '^[[:space:]]*ssl_certificate([[:space:]]|_)' || continue
+
+        port=$(printf "%s\n" "$content" | awk '
+            /^[[:space:]]*listen[[:space:]]+/ && /ssl/ {
+                for (i = 1; i <= NF; i++) {
+                    token = $i
+                    gsub(/;/, "", token)
+                    if (token ~ /^\[.*\]:[0-9]+$/) {
+                        sub(/^.*:/, "", token)
+                        print token
+                        exit
+                    }
+                    if (token ~ /^[0-9]+$/) {
+                        print token
+                        exit
+                    }
+                }
+            }
+        ' | head -1 || true)
+        if [[ -n "$port" ]]; then
+            SSL_PORT="$port"
+        else
+            SSL_PORT="configured"
+        fi
+        return 0
+    done < <(find_nginx_ssl_config_files)
+
     return 1
 }
 
@@ -579,12 +623,12 @@ fix_livekit_config() {
     quoted_api_key=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_KEY}")")
     quoted_api_secret=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_SECRET}")")
 
-    sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT}|g" \
-        -e "s|%%LIVEKIT_TCP_PORT%%|${LIVEKIT_TCP_PORT}|g" \
-        -e "s|%%LIVEKIT_UDP_PORT_START%%|${LIVEKIT_UDP_PORT_START}|g" \
-        -e "s|%%LIVEKIT_UDP_PORT_END%%|${LIVEKIT_UDP_PORT_END}|g" \
-        -e "s|%%LIVEKIT_API_KEY%%|${quoted_api_key}|g" \
-        -e "s|%%LIVEKIT_API_SECRET%%|${quoted_api_secret}|g" \
+    sed -e "s|__LIVEKIT_SIGNAL_PORT__|${LIVEKIT_SIGNAL_PORT}|g" \
+        -e "s|__LIVEKIT_TCP_PORT__|${LIVEKIT_TCP_PORT}|g" \
+        -e "s|__LIVEKIT_UDP_PORT_START__|${LIVEKIT_UDP_PORT_START}|g" \
+        -e "s|__LIVEKIT_UDP_PORT_END__|${LIVEKIT_UDP_PORT_END}|g" \
+        -e "s|__LIVEKIT_API_KEY__|${quoted_api_key}|g" \
+        -e "s|__LIVEKIT_API_SECRET__|${quoted_api_secret}|g" \
         "$template" > "$target"
 
     chmod 640 "$target"
