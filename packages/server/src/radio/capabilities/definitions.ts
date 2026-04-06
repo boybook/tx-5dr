@@ -3,6 +3,7 @@ import { RadioConnectionType } from '../connections/IRadioConnection.js';
 import {
   buildCtcssToneOptions,
   buildDcsCodeOptions,
+  buildModeBandwidthOptions,
   buildTuningStepOptions,
   createBooleanDescriptor,
   createOption,
@@ -220,6 +221,49 @@ function createDefinitions(): CapabilityDefinition[] {
       },
       read: (conn) => conn.getVOXEnabled!(),
       write: (conn, value) => conn.setVOXEnabled!(Boolean(value)),
+    },
+    {
+      id: 'mode_bandwidth',
+      descriptor: {
+        id: 'mode_bandwidth',
+        category: 'operation',
+        valueType: 'enum',
+        options: [],
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 2000,
+        labelI18nKey: 'radio:capability.mode_bandwidth.label',
+        descriptionI18nKey: 'radio:capability.mode_bandwidth.description',
+        display: { mode: 'value', unit: 'Hz', decimals: 0 },
+        hasSurfaceControl: false,
+      },
+      resolveDescriptor: async (conn) => ({
+        id: 'mode_bandwidth',
+        category: 'operation',
+        valueType: 'enum',
+        options: buildModeBandwidthOptions(
+          conn.getSupportedModeBandwidths ? await conn.getSupportedModeBandwidths() : [],
+        ),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 2000,
+        labelI18nKey: 'radio:capability.mode_bandwidth.label',
+        descriptionI18nKey: 'radio:capability.mode_bandwidth.description',
+        display: { mode: 'value', unit: 'Hz', decimals: 0 },
+        hasSurfaceControl: false,
+      }),
+      probeSupport: async (conn) => {
+        if (!conn.getModeBandwidth || !conn.setModeBandwidth || !conn.getSupportedModeBandwidths) {
+          return false;
+        }
+        const bandwidths = await conn.getSupportedModeBandwidths();
+        await conn.getModeBandwidth();
+        return bandwidths.length > 0;
+      },
+      read: (conn) => conn.getModeBandwidth!(),
+      write: (conn, value) => conn.setModeBandwidth!(value as any),
     },
     {
       id: 'rit_offset',

@@ -1217,7 +1217,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       try {
         const modeInfo = await this.engine.getRadioManager().getMode();
         radioMode = modeInfo.mode || null;
-        bandwidthLabel = modeInfo.bandwidth || null;
+        bandwidthLabel = modeInfo.bandwidth ?? null;
       } catch (error) {
         logger.debug('Failed to read voice radio mode for spectrum session', error);
       }

@@ -86,6 +86,20 @@ export function buildDcsCodeOptions(codes: number[]): CapabilityOption[] {
     .map((code) => createOption(code));
 }
 
+export function buildModeBandwidthOptions(values: Array<string | number>): CapabilityOption[] {
+  const numericValues = uniqueSortedNumbers(values.filter((value): value is number => typeof value === 'number'))
+    .filter((value) => value > 0)
+    .map((value) => createOption(value));
+  const stringValues = Array.from(new Set(
+    values
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+  )).map((value) => createOption(value));
+
+  return [...numericValues, ...stringValues];
+}
+
 export function createHamlibLevelProbe(level: string) {
   return async (connection: IRadioConnection, fallback?: () => Promise<void>): Promise<boolean> => {
     if (

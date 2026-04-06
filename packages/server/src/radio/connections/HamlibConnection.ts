@@ -39,6 +39,8 @@ import {
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
   type MeterData,
+  type RadioModeInfo,
+  type RadioModeReadBandwidth,
   type RadioModeBandwidth,
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
@@ -581,24 +583,53 @@ export class HamlibConnection
   /**
    * 获取当前模式
    */
-  async getMode(): Promise<{ mode: string; bandwidth: string }> {
+  async getMode(): Promise<RadioModeInfo> {
     return this.runSerializedTask('getMode', async () => {
+      return this.performModeRead();
+    });
+  }
+
+  async getModeBandwidth(): Promise<RadioModeReadBandwidth> {
+    return this.runSerializedTask('getModeBandwidth', async () => {
+      const modeInfo = await this.performModeRead();
+      return modeInfo.bandwidth;
+    });
+  }
+
+  async setModeBandwidth(bandwidth: RadioModeBandwidth): Promise<void> {
+    await this.runSerializedTask('setModeBandwidth', async () => {
+      const modeInfo = await this.performModeRead();
+      await this.performModeWrite(modeInfo.mode, bandwidth);
+    }, { critical: true });
+  }
+
+  async getSupportedModeBandwidths(): Promise<RadioModeReadBandwidth[]> {
+    return this.runSerializedTask('getSupportedModeBandwidths', async () => {
       this.checkConnected();
 
-      try {
-        const modeInfo = (await Promise.race([
-          this.rig!.getMode(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Get mode timeout')), 5000)
-          ),
-        ])) as { mode: string; bandwidth: string };
+      const modeInfo = await this.performModeRead();
+      const candidates = this.getRangeMatchModeCandidates(modeInfo.mode);
 
-        this.lastSuccessfulOperation = Date.now();
-        this.currentRadioMode = normalizeModeName(modeInfo.mode);
-        return modeInfo;
+      try {
+        const widths = this.rig!.getFilterList()
+          .filter((item) => item.modes.some((mode) => candidates.includes(normalizeModeName(mode))))
+          .map((item) => item.width)
+          .filter((width) => Number.isFinite(width) && width > 0);
+
+        if (widths.length > 0) {
+          return Array.from(new Set(widths)).sort((a, b) => a - b);
+        }
       } catch (error) {
-        throw this.convertOptionalOperationError(error, 'getMode');
+        logger.debug('Failed to read Hamlib filter list for mode bandwidth options', error);
       }
+
+      const fallbackWidths = [
+        this.rig!.getPassbandNarrow(modeInfo.mode as any),
+        this.rig!.getPassbandNormal(modeInfo.mode as any),
+        this.rig!.getPassbandWide(modeInfo.mode as any),
+      ].filter((width) => Number.isFinite(width) && width > 0);
+
+      return Array.from(new Set(fallbackWidths)).sort((a, b) => a - b);
     });
   }
 
@@ -2063,7 +2094,7 @@ export class HamlibConnection
 
       this.lastSuccessfulOperation = Date.now();
       this.currentRadioMode = normalizeModeName(resolvedMode);
-      logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth ? ` (${bandwidth})` : ''}`, {
+      logger.debug(`Mode set: ${requestedMode} -> ${resolvedMode}${bandwidth !== undefined ? ` (${bandwidth})` : ''}`, {
         requestedMode,
         resolvedMode,
         intent: options?.intent ?? 'unspecified',
@@ -2072,6 +2103,25 @@ export class HamlibConnection
       return previousMode !== this.currentRadioMode;
     } catch (error) {
       throw this.convertOptionalOperationError(error, 'setMode');
+    }
+  }
+
+  private async performModeRead(): Promise<RadioModeInfo> {
+    this.checkConnected();
+
+    try {
+      const modeInfo = (await Promise.race([
+        this.rig!.getMode(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Get mode timeout')), 5000)
+        ),
+      ])) as RadioModeInfo;
+
+      this.lastSuccessfulOperation = Date.now();
+      this.currentRadioMode = normalizeModeName(modeInfo.mode);
+      return modeInfo;
+    } catch (error) {
+      throw this.convertOptionalOperationError(error, 'getMode');
     }
   }
 

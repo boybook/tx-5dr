@@ -145,6 +145,12 @@ export interface IRadioConnectionEvents {
 
 export type RadioModeIntent = 'voice' | 'digital';
 export type RadioModeBandwidth = 'narrow' | 'wide' | 'normal' | 'nochange' | number;
+export type RadioModeReadBandwidth = string | number;
+
+export interface RadioModeInfo {
+  mode: string;
+  bandwidth: RadioModeReadBandwidth;
+}
 
 export interface SetRadioModeOptions {
   intent?: RadioModeIntent;
@@ -267,7 +273,28 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @returns 模式和带宽信息
    * @throws {RadioError} 获取失败时抛出
    */
-  getMode(): Promise<{ mode: string; bandwidth: string }>;
+  getMode(): Promise<RadioModeInfo>;
+
+  /**
+   * 获取当前模式对应的频宽值。
+   *
+   * @optional 供能力系统读取“当前模式频宽”使用
+   */
+  getModeBandwidth?(): Promise<RadioModeReadBandwidth>;
+
+  /**
+   * 设置当前模式的频宽。
+   *
+   * @optional 供能力系统写入“当前模式频宽”使用
+   */
+  setModeBandwidth?(bandwidth: RadioModeBandwidth): Promise<void>;
+
+  /**
+   * 获取当前模式可用的频宽候选项。
+   *
+   * @optional 供能力系统动态解析 mode_bandwidth 枚举项
+   */
+  getSupportedModeBandwidths?(): Promise<RadioModeReadBandwidth[]>;
 
   /**
    * 获取电台声明支持的模式列表

@@ -27,6 +27,7 @@ import {
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
   type MeterData,
+  type RadioModeInfo,
   type RadioModeBandwidth,
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
@@ -408,7 +409,7 @@ export class IcomWlanConnection
   /**
    * 获取当前工作模式
    */
-  async getMode(): Promise<{ mode: string; bandwidth: string }> {
+  async getMode(): Promise<RadioModeInfo> {
     return this.runSerializedTask('getMode', async () => {
       this.checkConnected();
 
@@ -417,7 +418,7 @@ export class IcomWlanConnection
         if (result) {
           return {
             mode: result.modeName || `Mode ${result.mode}`,
-            bandwidth: result.filterName || 'Normal'
+            bandwidth: result.filterName || 'Normal',
           };
         }
         throw new Error('Get mode returned null');
