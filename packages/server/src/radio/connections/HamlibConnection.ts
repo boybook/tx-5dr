@@ -92,6 +92,22 @@ const BASE_TO_DATA_MODE: Record<string, string> = {
   AM: 'PKTAM',
 };
 
+const HAMLIB_AGC_CODE_TO_MODE: Record<number, string> = {
+  0: 'off',
+  1: 'superfast',
+  2: 'fast',
+  3: 'slow',
+  4: 'user',
+  5: 'medium',
+  6: 'auto',
+  7: 'long',
+  8: 'on',
+};
+
+const HAMLIB_AGC_MODE_TO_CODE: Record<string, number> = Object.fromEntries(
+  Object.entries(HAMLIB_AGC_CODE_TO_MODE).map(([code, mode]) => [mode, Number(code)]),
+) as Record<string, number>;
+
 function normalizeModeName(mode: string): string {
   return mode.trim().toUpperCase();
 }
@@ -120,6 +136,18 @@ function normalizeRepeaterShiftValue(shift: string): string {
   if (normalized === '+' || normalized === 'plus') return 'plus';
   if (normalized === '-' || normalized === 'minus') return 'minus';
   return 'none';
+}
+
+function normalizeAgcModeCode(code: number): string {
+  return HAMLIB_AGC_CODE_TO_MODE[code] ?? 'off';
+}
+
+function normalizeAgcModeName(mode: string): string {
+  const normalized = mode.trim().toLowerCase();
+  if (normalized in HAMLIB_AGC_MODE_TO_CODE) {
+    return normalized;
+  }
+  throw new Error(`Unsupported AGC mode: ${mode}`);
 }
 
 async function getRigMetadata(rigModel: number): Promise<RigMetadata | null> {
@@ -1352,6 +1380,120 @@ export class HamlibConnection
     });
   }
 
+  async getCompressorEnabled(): Promise<boolean> {
+    return this.runSerializedTask('getCompressorEnabled', async () => {
+      this.checkConnected();
+      try {
+        const value = (await Promise.race([
+          this.rig!.getFunction('COMP'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get compressor state timeout')), 5000)
+          ),
+        ])) as boolean;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getCompressorEnabled');
+      }
+    });
+  }
+
+  async setCompressorEnabled(enabled: boolean): Promise<void> {
+    await this.runSerializedTask('setCompressorEnabled', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setFunction('COMP', enabled),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set compressor state timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`Compressor state set: ${enabled ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setCompressorEnabled');
+      }
+    });
+  }
+
+  async getCompressorLevel(): Promise<number> {
+    return this.runSerializedTask('getCompressorLevel', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('COMP')) {
+        throw new Error('COMP level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('COMP'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get compressor level timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getCompressorLevel');
+      }
+    });
+  }
+
+  async setCompressorLevel(value: number): Promise<void> {
+    await this.runSerializedTask('setCompressorLevel', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('COMP', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set compressor level timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`Compressor level set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setCompressorLevel');
+      }
+    });
+  }
+
+  async getMonitorGain(): Promise<number> {
+    return this.runSerializedTask('getMonitorGain', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('MONITOR_GAIN')) {
+        throw new Error('MONITOR_GAIN level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('MONITOR_GAIN'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get monitor gain timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getMonitorGain');
+      }
+    });
+  }
+
+  async setMonitorGain(value: number): Promise<void> {
+    await this.runSerializedTask('setMonitorGain', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('MONITOR_GAIN', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set monitor gain timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug(`Monitor gain set: ${(value * 100).toFixed(0)}%`);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setMonitorGain');
+      }
+    });
+  }
+
   async getNBEnabled(): Promise<number> {
     return this.runSerializedTask('getNBEnabled', async () => {
       this.checkConnected();
@@ -1530,6 +1672,167 @@ export class HamlibConnection
         logger.debug(`VOX state set: ${enabled ? 'enabled' : 'disabled'}`);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setVOXEnabled');
+      }
+    });
+  }
+
+  async getAgcMode(): Promise<string> {
+    return this.runSerializedTask('getAgcMode', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('AGC')) {
+        throw new Error('AGC level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('AGC'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get AGC mode timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return normalizeAgcModeCode(Math.round(value));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getAgcMode');
+      }
+    });
+  }
+
+  async setAgcMode(mode: string): Promise<void> {
+    await this.runSerializedTask('setAgcMode', async () => {
+      this.checkConnected();
+      const normalized = normalizeAgcModeName(mode);
+      try {
+        await Promise.race([
+          this.rig!.setLevel('AGC', HAMLIB_AGC_MODE_TO_CODE[normalized]),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set AGC mode timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('AGC mode set', { mode: normalized });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setAgcMode');
+      }
+    });
+  }
+
+  async getSupportedAgcModes(): Promise<string[]> {
+    return this.runSerializedTask('getSupportedAgcModes', async () => {
+      this.checkConnected();
+      try {
+        const levels = this.rig!.getAgcLevels();
+        const modes = levels
+          .map((value) => normalizeAgcModeCode(value))
+          .filter((mode) => mode !== 'none');
+        return Array.from(new Set(modes));
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSupportedAgcModes');
+      }
+    });
+  }
+
+  async getPreampLevel(): Promise<number> {
+    return this.runSerializedTask('getPreampLevel', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('PREAMP')) {
+        throw new Error('PREAMP level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('PREAMP'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get preamp level timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return Math.round(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getPreampLevel');
+      }
+    });
+  }
+
+  async setPreampLevel(value: number): Promise<void> {
+    await this.runSerializedTask('setPreampLevel', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('PREAMP', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set preamp level timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Preamp level set', { value });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setPreampLevel');
+      }
+    });
+  }
+
+  async getSupportedPreampLevels(): Promise<number[]> {
+    return this.runSerializedTask('getSupportedPreampLevels', async () => {
+      this.checkConnected();
+      try {
+        return Array.from(new Set(this.rig!.getPreampValues()
+          .filter((value) => Number.isFinite(value) && value > 0)
+          .map((value) => Math.round(value))))
+          .sort((left, right) => left - right);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSupportedPreampLevels');
+      }
+    });
+  }
+
+  async getAttenuatorLevel(): Promise<number> {
+    return this.runSerializedTask('getAttenuatorLevel', async () => {
+      this.checkConnected();
+      if (!this.supportedLevels.has('ATT')) {
+        throw new Error('ATT level not supported by this radio');
+      }
+      try {
+        const value = (await Promise.race([
+          this.rig!.getLevel('ATT'),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get attenuator level timeout')), 5000)
+          ),
+        ])) as number;
+        this.lastSuccessfulOperation = Date.now();
+        return Math.round(value);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getAttenuatorLevel');
+      }
+    });
+  }
+
+  async setAttenuatorLevel(value: number): Promise<void> {
+    await this.runSerializedTask('setAttenuatorLevel', async () => {
+      this.checkConnected();
+      try {
+        await Promise.race([
+          this.rig!.setLevel('ATT', value),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Set attenuator level timeout')), 5000)
+          ),
+        ]);
+        this.lastSuccessfulOperation = Date.now();
+        logger.debug('Attenuator level set', { value });
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'setAttenuatorLevel');
+      }
+    });
+  }
+
+  async getSupportedAttenuatorLevels(): Promise<number[]> {
+    return this.runSerializedTask('getSupportedAttenuatorLevels', async () => {
+      this.checkConnected();
+      try {
+        return Array.from(new Set(this.rig!.getAttenuatorValues()
+          .filter((value) => Number.isFinite(value) && value > 0)
+          .map((value) => Math.round(value))))
+          .sort((left, right) => left - right);
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getSupportedAttenuatorLevels');
       }
     });
   }

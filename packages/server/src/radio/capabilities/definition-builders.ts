@@ -86,6 +86,22 @@ export function buildDcsCodeOptions(codes: number[]): CapabilityOption[] {
     .map((code) => createOption(code));
 }
 
+export function buildDbValueOptions(values: number[], offLabelI18nKey: string): CapabilityOption[] {
+  const options = uniqueSortedNumbers(values)
+    .filter((value) => value > 0)
+    .map((value) => ({ value, label: `${value} dB` }));
+
+  return [
+    createOption(0, offLabelI18nKey),
+    ...options,
+  ];
+}
+
+export function buildAgcModeOptions(modes: string[]): CapabilityOption[] {
+  return Array.from(new Set(modes.map((mode) => mode.trim().toLowerCase()).filter((mode) => mode.length > 0)))
+    .map((mode) => createOption(mode, `radio:capability.options.agc_mode.${mode}`));
+}
+
 export function buildModeBandwidthOptions(values: Array<string | number>): CapabilityOption[] {
   const numericValues = uniqueSortedNumbers(values.filter((value): value is number => typeof value === 'number'))
     .filter((value) => value > 0)

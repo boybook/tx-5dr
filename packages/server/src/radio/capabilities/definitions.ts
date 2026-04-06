@@ -1,10 +1,13 @@
 import type { CapabilityDefinition } from './types.js';
 import { RadioConnectionType } from '../connections/IRadioConnection.js';
 import {
+  buildAgcModeOptions,
   buildCtcssToneOptions,
+  buildDbValueOptions,
   buildDcsCodeOptions,
   buildModeBandwidthOptions,
   buildTuningStepOptions,
+  createHamlibLevelProbe,
   createBooleanDescriptor,
   createOption,
   createPercentDescriptor,
@@ -143,6 +146,58 @@ function createDefinitions(): CapabilityDefinition[] {
       write: (conn, value) => conn.setMicGain!(value as number),
     },
     {
+      id: 'compressor',
+      descriptor: {
+        ...createBooleanDescriptor(
+          'compressor',
+          'audio',
+          'radio:capability.compressor.label',
+          'radio:capability.compressor.description',
+        ),
+        compoundGroup: 'compressor',
+      },
+      probeSupport: async (conn) => {
+        if (!conn.getCompressorEnabled) return false;
+        await conn.getCompressorEnabled();
+        return true;
+      },
+      read: (conn) => conn.getCompressorEnabled!(),
+      write: (conn, value) => conn.setCompressorEnabled!(Boolean(value)),
+    },
+    {
+      id: 'compressor_level',
+      descriptor: {
+        ...createPercentDescriptor(
+          'compressor_level',
+          'audio',
+          'radio:capability.compressor_level.label',
+          'radio:capability.compressor_level.description',
+        ),
+        compoundGroup: 'compressor',
+      },
+      probeSupport: async (conn) => {
+        if (!conn.getCompressorLevel) return false;
+        return createHamlibLevelProbe('COMP')(conn, () => conn.getCompressorLevel!().then(() => undefined));
+      },
+      read: (conn) => conn.getCompressorLevel!(),
+      write: (conn, value) => conn.setCompressorLevel!(value as number),
+    },
+    {
+      id: 'monitor_gain',
+      descriptor: createPercentDescriptor(
+        'monitor_gain',
+        'audio',
+        'radio:capability.monitor_gain.label',
+        'radio:capability.monitor_gain.description',
+      ),
+      probeSupport: async (conn) => {
+        if (!conn.getMonitorGain) return false;
+        return createHamlibLevelProbe('MONITOR_GAIN')(conn, () => conn.getMonitorGain!().then(() => undefined));
+      },
+      read: (conn) => conn.getMonitorGain!(),
+      write: (conn, value) => conn.setMonitorGain!(value as number),
+    },
+    {
       id: 'nb',
       descriptor: createPercentDescriptor(
         'nb',
@@ -221,6 +276,113 @@ function createDefinitions(): CapabilityDefinition[] {
       },
       read: (conn) => conn.getVOXEnabled!(),
       write: (conn, value) => conn.setVOXEnabled!(Boolean(value)),
+    },
+    {
+      id: 'agc_mode',
+      descriptor: {
+        id: 'agc_mode',
+        category: 'rf',
+        valueType: 'enum',
+        options: buildAgcModeOptions(['off', 'superfast', 'fast', 'slow', 'user', 'medium', 'auto', 'long', 'on']),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 10000,
+        labelI18nKey: 'radio:capability.agc_mode.label',
+        descriptionI18nKey: 'radio:capability.agc_mode.description',
+        display: { mode: 'value', unit: 'state' },
+        hasSurfaceControl: false,
+      },
+      resolveDescriptor: async (conn) => ({
+        id: 'agc_mode',
+        category: 'rf',
+        valueType: 'enum',
+        options: buildAgcModeOptions(conn.getSupportedAgcModes ? await conn.getSupportedAgcModes() : []),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 10000,
+        labelI18nKey: 'radio:capability.agc_mode.label',
+        descriptionI18nKey: 'radio:capability.agc_mode.description',
+        display: { mode: 'value', unit: 'state' },
+        hasSurfaceControl: false,
+      }),
+      probeSupport: async (conn) => {
+        if (!conn.getAgcMode) return false;
+        return createHamlibLevelProbe('AGC')(conn, () => conn.getAgcMode!().then(() => undefined));
+      },
+      read: (conn) => conn.getAgcMode!(),
+      write: (conn, value) => conn.setAgcMode!(String(value)),
+    },
+    {
+      id: 'preamp',
+      descriptor: {
+        id: 'preamp',
+        category: 'rf',
+        valueType: 'enum',
+        options: buildDbValueOptions([], 'radio:capability.options.common.off'),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 10000,
+        labelI18nKey: 'radio:capability.preamp.label',
+        descriptionI18nKey: 'radio:capability.preamp.description',
+        hasSurfaceControl: false,
+      },
+      resolveDescriptor: async (conn) => ({
+        id: 'preamp',
+        category: 'rf',
+        valueType: 'enum',
+        options: buildDbValueOptions(conn.getSupportedPreampLevels ? await conn.getSupportedPreampLevels() : [], 'radio:capability.options.common.off'),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 10000,
+        labelI18nKey: 'radio:capability.preamp.label',
+        descriptionI18nKey: 'radio:capability.preamp.description',
+        hasSurfaceControl: false,
+      }),
+      probeSupport: async (conn) => {
+        if (!conn.getPreampLevel) return false;
+        return createHamlibLevelProbe('PREAMP')(conn, () => conn.getPreampLevel!().then(() => undefined));
+      },
+      read: (conn) => conn.getPreampLevel!(),
+      write: (conn, value) => conn.setPreampLevel!(value as number),
+    },
+    {
+      id: 'attenuator',
+      descriptor: {
+        id: 'attenuator',
+        category: 'rf',
+        valueType: 'enum',
+        options: buildDbValueOptions([], 'radio:capability.options.common.off'),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 10000,
+        labelI18nKey: 'radio:capability.attenuator.label',
+        descriptionI18nKey: 'radio:capability.attenuator.description',
+        hasSurfaceControl: false,
+      },
+      resolveDescriptor: async (conn) => ({
+        id: 'attenuator',
+        category: 'rf',
+        valueType: 'enum',
+        options: buildDbValueOptions(conn.getSupportedAttenuatorLevels ? await conn.getSupportedAttenuatorLevels() : [], 'radio:capability.options.common.off'),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 10000,
+        labelI18nKey: 'radio:capability.attenuator.label',
+        descriptionI18nKey: 'radio:capability.attenuator.description',
+        hasSurfaceControl: false,
+      }),
+      probeSupport: async (conn) => {
+        if (!conn.getAttenuatorLevel) return false;
+        return createHamlibLevelProbe('ATT')(conn, () => conn.getAttenuatorLevel!().then(() => undefined));
+      },
+      read: (conn) => conn.getAttenuatorLevel!(),
+      write: (conn, value) => conn.setAttenuatorLevel!(value as number),
     },
     {
       id: 'mode_bandwidth',

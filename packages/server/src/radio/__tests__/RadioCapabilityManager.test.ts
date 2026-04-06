@@ -130,6 +130,12 @@ describe('RadioCapabilityManager', () => {
       getTuningStep: vi.fn().mockResolvedValue(50),
       getSupportedTuningSteps: vi.fn().mockResolvedValue([10, 50, 100]),
       getPowerState: vi.fn().mockResolvedValue('operate'),
+      getAgcMode: vi.fn().mockResolvedValue('fast'),
+      getSupportedAgcModes: vi.fn().mockResolvedValue(['off', 'fast', 'auto']),
+      getPreampLevel: vi.fn().mockResolvedValue(10),
+      getSupportedPreampLevels: vi.fn().mockResolvedValue([10, 20]),
+      getAttenuatorLevel: vi.fn().mockResolvedValue(6),
+      getSupportedAttenuatorLevels: vi.fn().mockResolvedValue([6, 12]),
     });
 
     let descriptors: CapabilityDescriptor[] = [];
@@ -160,6 +166,51 @@ describe('RadioCapabilityManager', () => {
       id: 'power_state',
       supported: true,
       value: 'operate',
+    });
+
+    expect(getDescriptor(descriptors, 'agc_mode')).toMatchObject({
+      id: 'agc_mode',
+      valueType: 'enum',
+      options: [
+        { value: 'off', labelI18nKey: 'radio:capability.options.agc_mode.off' },
+        { value: 'fast', labelI18nKey: 'radio:capability.options.agc_mode.fast' },
+        { value: 'auto', labelI18nKey: 'radio:capability.options.agc_mode.auto' },
+      ],
+    });
+    expect(getCapability(capabilities, 'agc_mode')).toMatchObject({
+      id: 'agc_mode',
+      supported: true,
+      value: 'fast',
+    });
+
+    expect(getDescriptor(descriptors, 'preamp')).toMatchObject({
+      id: 'preamp',
+      valueType: 'enum',
+      options: [
+        { value: 0, labelI18nKey: 'radio:capability.options.common.off' },
+        { value: 10, label: '10 dB' },
+        { value: 20, label: '20 dB' },
+      ],
+    });
+    expect(getCapability(capabilities, 'preamp')).toMatchObject({
+      id: 'preamp',
+      supported: true,
+      value: 10,
+    });
+
+    expect(getDescriptor(descriptors, 'attenuator')).toMatchObject({
+      id: 'attenuator',
+      valueType: 'enum',
+      options: [
+        { value: 0, labelI18nKey: 'radio:capability.options.common.off' },
+        { value: 6, label: '6 dB' },
+        { value: 12, label: '12 dB' },
+      ],
+    });
+    expect(getCapability(capabilities, 'attenuator')).toMatchObject({
+      id: 'attenuator',
+      supported: true,
+      value: 6,
     });
 
     manager.onDisconnected();
