@@ -46,6 +46,24 @@ random_hex() {
     od -An -N"${bytes}" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
 }
 
+if ! declare -F yaml_single_quote >/dev/null 2>&1; then
+    yaml_single_quote() {
+        local value="${1-}"
+        value=${value//\'/\'\'}
+        printf "'%s'" "$value"
+    }
+fi
+
+if ! declare -F escape_sed_replacement >/dev/null 2>&1; then
+    escape_sed_replacement() {
+        local value="${1-}"
+        value=${value//\\/\\\\}
+        value=${value//&/\\&}
+        value=${value//|/\\|}
+        printf "%s" "$value"
+    }
+fi
+
 LISTEN_PORT="${TX5DR_HTTP_PORT:-8076}"
 WEB_ROOT="/usr/share/tx5dr/web"
 API_HOST="127.0.0.1:${PORT:-4000}"
@@ -156,12 +174,17 @@ EOF
         source "$LIVEKIT_CREDENTIALS_FILE" 2>/dev/null || true
     fi
 
+    livekit_api_key_yaml=""
+    livekit_api_secret_yaml=""
+    livekit_api_key_yaml=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_KEY}")")
+    livekit_api_secret_yaml=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_SECRET}")")
+
     sed -e "s|%%LIVEKIT_SIGNAL_PORT%%|${LIVEKIT_SIGNAL_PORT:-7880}|g" \
         -e "s|%%LIVEKIT_TCP_PORT%%|${LIVEKIT_TCP_PORT:-7881}|g" \
         -e "s|%%LIVEKIT_UDP_PORT_START%%|${LIVEKIT_UDP_PORT_START:-50000}|g" \
         -e "s|%%LIVEKIT_UDP_PORT_END%%|${LIVEKIT_UDP_PORT_END:-50100}|g" \
-        -e "s|%%LIVEKIT_API_KEY%%|${LIVEKIT_API_KEY}|g" \
-        -e "s|%%LIVEKIT_API_SECRET%%|${LIVEKIT_API_SECRET}|g" \
+        -e "s|%%LIVEKIT_API_KEY%%|${livekit_api_key_yaml}|g" \
+        -e "s|%%LIVEKIT_API_SECRET%%|${livekit_api_secret_yaml}|g" \
         "$LIVEKIT_TEMPLATE" > "$LIVEKIT_CONF"
     chmod 640 "$LIVEKIT_CONF"
     chown "$APP_USER:$APP_GROUP" "$LIVEKIT_CONF" 2>/dev/null || true
