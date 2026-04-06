@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { filterDigitalFrequencyOptions, isCoreCapabilityAvailable, shouldShowAutoTunerShortcut } from '../radioControl';
+import {
+  deriveMonitorActivationCtaState,
+  filterDigitalFrequencyOptions,
+  isCoreCapabilityAvailable,
+  shouldShowAutoTunerShortcut,
+} from '../radioControl';
 
 describe('radioControl utils', () => {
   it('keeps digital presets available when current mode is unknown', () => {
@@ -65,5 +70,19 @@ describe('radioControl utils', () => {
     })).toBe(false);
 
     expect(shouldShowAutoTunerShortcut(true, true, undefined)).toBe(false);
+  });
+
+  it('shows monitor activation CTA only before the first playback gesture succeeds', () => {
+    expect(deriveMonitorActivationCtaState(true, true, false, false)).toMatchObject({
+      shouldShowActivationCta: true,
+    });
+
+    expect(deriveMonitorActivationCtaState(true, true, false, true)).toMatchObject({
+      shouldShowActivationCta: false,
+    });
+
+    expect(deriveMonitorActivationCtaState(false, true, false, false)).toMatchObject({
+      shouldShowActivationCta: false,
+    });
   });
 });

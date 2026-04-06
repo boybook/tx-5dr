@@ -20,9 +20,9 @@ import { useAudioMonitorPlayback } from '../../../hooks/useAudioMonitorPlayback'
 import { useVoiceTxDiagnostics } from '../../../hooks/useVoiceTxDiagnostics';
 import { useWSEvent } from '../../../hooks/useWSEvent';
 import { createLogger } from '../../../utils/logger';
-import { detectBrowserAudioRuntime } from '../../../audio/browserAudioRuntime';
 import { TxVolumeGainControl } from './TxVolumeGainControl';
 import {
+  deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
   isCoreCapabilityAvailable,
   shouldShowAutoTunerShortcut,
@@ -341,6 +341,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   // 音频监听 (reusable hook)
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
+  const [hasActivatedMonitorPlayback, setHasActivatedMonitorPlayback] = useState(false);
 
   // OpenWebRX client count (for multi-user confirmation)
   const openwebrxClientCountRef = React.useRef(0);
@@ -389,6 +390,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const currentVoiceTransport = voiceCaptureController?.activeTransport ?? null;
   const effectiveVoiceTransport = currentVoiceTransport ?? voiceCaptureController?.preferredTransport ?? null;
   const nextVoiceTransport = effectiveVoiceTransport === 'ws-compat' ? 'livekit' : 'ws-compat';
+  const monitorActivationCta = React.useMemo(() => deriveMonitorActivationCtaState(
+    radioMode.engineMode === 'voice',
+    connection.state.isConnected,
+    audioMonitor.isPlaying,
+    hasActivatedMonitorPlayback,
+  ), [audioMonitor.isPlaying, connection.state.isConnected, hasActivatedMonitorPlayback, radioMode.engineMode]);
   const voiceTxDiagnostics = useVoiceTxDiagnostics(
     voiceCaptureController,
     radioMode.engineMode === 'voice' && Boolean(voiceCaptureController),
@@ -723,6 +730,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     } else {
       try {
         await audioMonitor.startFromGesture();
+        setHasActivatedMonitorPlayback(true);
       } catch (error) {
         logger.error('Failed to start audio monitor', error);
         presentRealtimeConnectivityFailure(error, {
@@ -758,32 +766,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       setIsSwitchingMonitorTransport(false);
     }
   };
-
-  // Auto-start audio monitoring in voice mode
-  const browserRuntime = React.useMemo(() => detectBrowserAudioRuntime(), []);
-  const voiceAutoMonitorTriggered = React.useRef(false);
-  React.useEffect(() => {
-    if (browserRuntime.family === 'safari-webkit') {
-      return;
-    }
-    if (radioMode.engineMode === 'voice' && !audioMonitor.isPlaying && connection.state.isConnected && !voiceAutoMonitorTriggered.current) {
-      voiceAutoMonitorTriggered.current = true;
-      logger.info('Voice mode detected, auto-starting audio monitor');
-      audioMonitor.start().catch((err) => {
-        logger.error('Voice auto-monitor failed', err);
-        presentRealtimeConnectivityFailure(err, {
-          scope: 'radio',
-          stage: 'connect',
-          onCompatFallbackConfirm: async () => {
-            await audioMonitor.switchTransportFromGesture('ws-compat');
-          },
-        });
-      });
-    }
-    if (radioMode.engineMode !== 'voice') {
-      voiceAutoMonitorTriggered.current = false;
-    }
-  }, [audioMonitor.isPlaying, audioMonitor.start, browserRuntime.family, connection.state.isConnected, radioMode.engineMode]);
 
   // 频率格式验证和转换
   const parseFrequencyInput = (input: string): { frequency: number; error: string } | null => {
@@ -1211,117 +1193,127 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                 </PopoverContent>
               </Popover>
             )}
-            <Popover>
-              <PopoverTrigger>
-                <Button
-                  isIconOnly
-                  variant="light"
-                  size="sm"
-                  className={`min-w-unit-6 min-w-6 w-6 h-6 ${audioMonitor.isPlaying ? 'text-success' : 'text-default-400'}`}
-                  aria-label={t('monitor.audioMonitor')}
-                >
-                  <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="py-2 pt-3 space-y-2">
-                <div className="space-y-2">
-                  {/* 监听音量滑块 */}
-                  <div className="flex flex-col items-center px-2">
-                    <Slider
-                      orientation="vertical"
-                      minValue={-60}
-                      maxValue={20}
-                      step={0.1}
-                      value={[gainToDb(monitorVolume)]}
-                      onChange={handleMonitorVolumeChange}
-                      style={{ height: '120px' }}
-                      aria-label={t('monitor.monitorVolume')}
-                    />
-                    <div className="text-sm text-default-400 text-center font-mono">
-                      {formatDbDisplay(gainToDb(monitorVolume))}
+            {monitorActivationCta.shouldShowActivationCta ? (
+              <Button
+                size="sm"
+                variant="flat"
+                color="primary"
+                className="h-6 min-w-0 px-2 text-xs font-medium"
+                onPress={toggleMonitoring}
+                isDisabled={!connection.state.isConnected}
+                aria-label={t('monitor.activateAudioMonitor')}
+              >
+                <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
+                {t('monitor.activateAudioMonitor')}
+              </Button>
+            ) : (
+              <Popover>
+                <PopoverTrigger>
+                  <Button
+                    isIconOnly
+                    variant="light"
+                    size="sm"
+                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${audioMonitor.isPlaying ? 'text-success' : 'text-default-400'}`}
+                    aria-label={t('monitor.audioMonitor')}
+                  >
+                    <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="py-2 pt-3 space-y-2">
+                  <div className="space-y-2">
+                    {/* 监听音量滑块 */}
+                    <div className="flex flex-col items-center px-2">
+                      <Slider
+                        orientation="vertical"
+                        minValue={-60}
+                        maxValue={20}
+                        step={0.1}
+                        value={[gainToDb(monitorVolume)]}
+                        onChange={handleMonitorVolumeChange}
+                        style={{ height: '120px' }}
+                        aria-label={t('monitor.monitorVolume')}
+                      />
+                      <div className="text-sm text-default-400 text-center font-mono">
+                        {formatDbDisplay(gainToDb(monitorVolume))}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* 状态指示器 */}
-                  {audioMonitor.isPlaying && (
-                    <div className="space-y-1 pt-2 border-t border-divider text-xs">
-                      {audioMonitor.stats && (
-                        <>
-                          {/* 延迟显示 */}
-                          <div className="flex justify-between items-center">
-                            {t('monitor.latency')}
-                            <span className={`font-mono ${
-                              audioMonitor.stats.latencyMs < 50 ? 'text-success' :
-                              audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
-                              'text-danger'
-                            }`}>
-                              {audioMonitor.stats.latencyMs.toFixed(0)}ms
-                            </span>
-                          </div>
-
-                          {/* 缓冲区状态 */}
-                          <div className="space-y-1">
+                    {/* 状态指示器 */}
+                    {audioMonitor.isPlaying && (
+                      <div className="space-y-1 pt-2 border-t border-divider text-xs">
+                        {audioMonitor.stats && (
+                          <>
                             <div className="flex justify-between items-center">
-                              {t('monitor.buffer')}
-                              <span className="font-mono text-default-400">
-                                {audioMonitor.stats.bufferFillPercent.toFixed(0)}%
+                              {t('monitor.latency')}
+                              <span className={`font-mono ${
+                                audioMonitor.stats.latencyMs < 50 ? 'text-success' :
+                                audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
+                                'text-danger'
+                              }`}>
+                                {audioMonitor.stats.latencyMs.toFixed(0)}ms
                               </span>
                             </div>
-                          </div>
 
-                          {/* 音频活动指示 */}
-                          <div className="flex justify-between items-center">
-                            {t('monitor.active')}
-                            <div className={`w-2 h-2 rounded-full ${
-                              audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
-                            }`} />
-                          </div>
-                        </>
-                      )}
+                            <div className="space-y-1">
+                              <div className="flex justify-between items-center">
+                                {t('monitor.buffer')}
+                                <span className="font-mono text-default-400">
+                                  {audioMonitor.stats.bufferFillPercent.toFixed(0)}%
+                                </span>
+                              </div>
+                            </div>
 
-                      {/* 编解码器 */}
-                      <div className="flex justify-between items-center">
-                        {t('monitor.codec')}
-                        <span className="font-mono text-default-400 uppercase">
-                          {audioMonitor.codec}
-                        </span>
+                            <div className="flex justify-between items-center">
+                              {t('monitor.active')}
+                              <div className={`w-2 h-2 rounded-full ${
+                                audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
+                              }`} />
+                            </div>
+                          </>
+                        )}
+
+                        <div className="flex justify-between items-center">
+                          {t('monitor.codec')}
+                          <span className="font-mono text-default-400 uppercase">
+                            {audioMonitor.codec}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between items-center">
+                          {t('monitor.transportMode')}
+                          <span className="font-mono text-default-400">
+                            {getMonitorTransportLabel(audioMonitor.transportKind)}
+                          </span>
+                        </div>
+
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          color={audioMonitor.transportKind === 'ws-compat' ? 'primary' : 'warning'}
+                          className="w-full"
+                          onPress={handleSwitchMonitorTransport}
+                          isLoading={isSwitchingMonitorTransport}
+                          isDisabled={!audioMonitor.transportKind || isSwitchingMonitorTransport}
+                        >
+                          {audioMonitor.transportKind === 'ws-compat'
+                            ? t('monitor.switchToWebrtc')
+                            : t('monitor.switchToWsPcm')}
+                        </Button>
                       </div>
+                    )}
 
-                      <div className="flex justify-between items-center">
-                        {t('monitor.transportMode')}
-                        <span className="font-mono text-default-400">
-                          {getMonitorTransportLabel(audioMonitor.transportKind)}
-                        </span>
-                      </div>
-
-                      <Button
+                    <div className="flex items-center justify-center px-2 w-full pt-2 border-t border-divider">
+                      <Switch
                         size="sm"
-                        variant="flat"
-                        color={audioMonitor.transportKind === 'ws-compat' ? 'primary' : 'warning'}
-                        className="w-full"
-                        onPress={handleSwitchMonitorTransport}
-                        isLoading={isSwitchingMonitorTransport}
-                        isDisabled={!audioMonitor.transportKind || isSwitchingMonitorTransport}
-                      >
-                        {audioMonitor.transportKind === 'ws-compat'
-                          ? t('monitor.switchToWebrtc')
-                          : t('monitor.switchToWsPcm')}
-                      </Button>
+                        isSelected={audioMonitor.isPlaying}
+                        onValueChange={toggleMonitoring}
+                        aria-label={t('monitor.monitorSwitch')}
+                      />
                     </div>
-                  )}
-
-                  {/* 监听开关 */}
-                  <div className="flex items-center justify-center px-2 w-full pt-2 border-t border-divider">
-                    <Switch
-                      size="sm"
-                      isSelected={audioMonitor.isPlaying}
-                      onValueChange={toggleMonitoring}
-                      aria-label={t('monitor.monitorSwitch')}
-                    />
                   </div>
-                </div>
-              </PopoverContent>
-            </Popover>
+                </PopoverContent>
+              </Popover>
+            )}
             {radioMode.engineMode === 'voice' && isOperator && voiceCaptureController && (
               <Popover>
                 <PopoverTrigger>

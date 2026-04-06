@@ -64,6 +64,7 @@
   },
   "monitor": {
     "audioMonitor": "音频监听",
+    "activateAudioMonitor": "开启监听",
     "monitorVolume": "监听音量",
     "latency": "延迟",
     "buffer": "缓冲",

@@ -127,6 +127,29 @@ export interface UseAudioMonitorPlaybackReturn {
   transportKind: RealtimeTransportKind | null;
 }
 
+export function resolveExistingMonitorStart(
+  isPlaying: boolean,
+  transportKind: RealtimeTransportKind | null,
+  isInitializing: boolean,
+  startPromise: Promise<RealtimeTransportKind> | null,
+): RealtimeTransportKind | Promise<RealtimeTransportKind> | null {
+  if (isPlaying) {
+    if (!transportKind) {
+      throw new Error('Realtime playback is already running without an active transport');
+    }
+    return transportKind;
+  }
+
+  if (isInitializing) {
+    if (!startPromise) {
+      throw new Error('Realtime playback is already initializing');
+    }
+    return startPromise;
+  }
+
+  return null;
+}
+
 export function useAudioMonitorPlayback(
   options: UseAudioMonitorPlaybackOptions
 ): UseAudioMonitorPlaybackReturn {
@@ -145,6 +168,7 @@ export function useAudioMonitorPlayback(
   const gainNodeRef = useRef<GainNode | null>(null);
   const compatSocketRef = useRef<WebSocket | null>(null);
   const isInitializingRef = useRef(false);
+  const startPromiseRef = useRef<Promise<RealtimeTransportKind> | null>(null);
   const currentVolumeRef = useRef(1);
   const sourceStatsRef = useRef<RealtimeSourceStats | null>(null);
   const receiverStatsRef = useRef<ReceiverStatsData | null>(null);
@@ -667,15 +691,14 @@ export function useAudioMonitorPlayback(
   }, [recomputeStats, resolvePendingTrackWaiters, updateTransportKind]);
 
   const start = useCallback(async (startOptions?: string | AudioMonitorStartOptions) => {
-    if (isPlayingRef.current) {
-      if (!transportKindRef.current) {
-        throw new Error('Realtime playback is already running without an active transport');
-      }
-      return transportKindRef.current;
-    }
-
-    if (isInitializingRef.current) {
-      throw new Error('Realtime playback is already initializing');
+    const existingStart = resolveExistingMonitorStart(
+      isPlayingRef.current,
+      transportKindRef.current,
+      isInitializingRef.current,
+      startPromiseRef.current,
+    );
+    if (existingStart) {
+      return existingStart;
     }
 
     const normalizedOptions = typeof startOptions === 'string'
@@ -692,7 +715,7 @@ export function useAudioMonitorPlayback(
     intentionalDisconnectRef.current = false;
     activePreviewSessionIdRef.current = effectivePreviewSessionId ?? null;
 
-    try {
+    startPromiseRef.current = (async () => {
       const result = await executeRealtimeSessionFlow({
         scope,
         direction: 'recv',
@@ -712,6 +735,10 @@ export function useAudioMonitorPlayback(
       startStatsPolling();
       updateIsPlaying(true);
       return result.transport;
+    })();
+
+    try {
+      return await startPromiseRef.current;
     } catch (error) {
       intentionalDisconnectRef.current = true;
       cleanup();
@@ -719,6 +746,7 @@ export function useAudioMonitorPlayback(
       throw error;
     } finally {
       isInitializingRef.current = false;
+      startPromiseRef.current = null;
     }
   }, [cleanup, cleanupTransportState, previewSessionId, scope, startCompatPlayback, startLiveKitPlayback, startStatsPolling, updateIsPlaying, updateTransportKind]);
 
