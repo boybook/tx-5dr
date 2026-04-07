@@ -16,6 +16,7 @@ import { ServerStatusPage } from './pages/ServerStatusPage';
 import { LoginPage } from './pages/LoginPage';
 import { OpenWebRXProfileSelectModal } from './components/radio/profile/OpenWebRXProfileSelectModal';
 import { GlobalModalHost } from './components/app/GlobalModalHost';
+import { QSONotificationBridge } from './components/app/QSONotificationBridge';
 import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 
 function AppContent() {
@@ -81,6 +82,7 @@ function AppContent() {
 
       {/* OpenWebRX SDR Profile 手动选择弹窗 */}
       <OpenWebRXProfileSelectModal />
+      <QSONotificationBridge />
     </div>
   );
 }

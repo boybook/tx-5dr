@@ -16,6 +16,7 @@ import { useLanguage, type LanguageMode } from '../../hooks/useLanguage';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotateLeft, faPalette } from '@fortawesome/free-solid-svg-icons';
 import { InteractiveColorPicker } from './InteractiveColorPicker';
+import { QSONotificationSettingsCard } from './QSONotificationSettingsCard';
 import {
   type DisplayNotificationSettings as DisplaySettings,
   HighlightType,
@@ -215,6 +216,8 @@ export const DisplayNotificationSettings = forwardRef<
 
   return (
     <div className="space-y-6">
+      <QSONotificationSettingsCard />
+
       {/* 语言设置 */}
       <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
         <CardBody className="p-4">

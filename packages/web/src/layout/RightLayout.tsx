@@ -12,6 +12,7 @@ import { RadioControl } from '../components/radio/control/RadioControl';
 import { RadioOperatorList } from '../components/radio/operators/RadioOperatorList';
 import { MyRelatedFramesTable } from '../components/radio/digital/MyRelatedFramesTable';
 import { ThemeToggle } from '../components/common/ThemeToggle';
+import { QSONotificationToggleButton } from '../components/common/QSONotificationToggleButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
 import { AutomationSettingsPanel } from '../components/radio/automation/AutomationSettingsPanel';
@@ -167,6 +168,7 @@ export const RightLayout: React.FC = () => {
           </div>
           <div className="flex items-center gap-0">
             <ServerHealthButton />
+            <QSONotificationToggleButton />
             <ThemeToggle variant="dropdown" size="sm" />
             <Button
               onPress={handleOpenSettings}
