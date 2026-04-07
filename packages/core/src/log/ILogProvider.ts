@@ -41,6 +41,16 @@ export interface LogQueryOptions {
   mode?: string;
 
   /**
+   * DXCC 状态筛选
+   */
+  dxccStatus?: 'deleted';
+
+  /**
+   * QSL 流程筛选
+   */
+  qslFlow?: 'two_way_confirmed' | 'not_two_way_confirmed';
+
+  /**
    * 排除的模式列表（用于过滤掉数字模式等）
    */
   excludeModes?: string[];

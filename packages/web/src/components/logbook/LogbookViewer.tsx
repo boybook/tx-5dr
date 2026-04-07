@@ -35,6 +35,7 @@ import { showErrorToast } from '../../utils/errorToast';
 import { SyncConfigModal } from './SyncConfigModal';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
+import RecentQSOGlobeCard from './RecentQSOGlobeCard';
 
 const logger = createLogger('LogbookViewer');
 
@@ -60,6 +61,8 @@ declare global {
   }
 }
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
+
 interface LogbookViewerProps {
   operatorId: string;
   logBookId?: string;
@@ -74,7 +77,11 @@ interface QSOFilters {
   startDate?: string;
   endDate?: string;
   qslStatus?: 'none' | 'confirmed' | 'uploaded';
+  dxccStatus?: 'deleted';
+  qslFlow?: 'two_way_confirmed' | 'not_two_way_confirmed';
 }
+
+type DxccViewMode = 'mixed' | 'band' | 'mode';
 
 function normalizeGridFilterValue(value: string): string {
   return value.toUpperCase().replace(/\s+/g, '').slice(0, 8);
@@ -124,7 +131,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<QSOFilters>({});
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(50);
+  const [itemsPerPage, setItemsPerPage] = useState<number>(50);
   const [totalRecords, setTotalRecords] = useState(0);
   const [actualTotalRecords, setActualTotalRecords] = useState(0);
   const [hasFilters, setHasFilters] = useState(false);
@@ -134,7 +141,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   }>({ column: 'startTime', direction: 'descending' });
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isGridSearchExpanded, setIsGridSearchExpanded] = useState(false);
-  const [isDxccStatsExpanded, setIsDxccStatsExpanded] = useState(false);
+  const [dxccViewMode, setDxccViewMode] = useState<DxccViewMode>('mixed');
 
   // 编辑 Modal 状态
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -169,9 +176,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     const client = new WSClient({ url, heartbeatInterval: 30000 });
 
     const refresh = () => {
-      // 保持当前筛选与分页，重新加载
-      loadQSOs();
-      loadStatistics();
+      refreshLogbookData().catch(() => {});
     };
 
     // 类型断言：logbookChangeNotice 是日志本专用事件
@@ -234,11 +239,16 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
+  const refreshLogbookData = async () => {
+    await loadQSOs();
+    await loadStatistics();
+  };
+
   // 初始加载与筛选/分页变化时加载
   useEffect(() => {
     loadQSOs();
     loadStatistics();
-  }, [effectiveLogBookId, filters, currentPage]);
+  }, [effectiveLogBookId, filters, currentPage, itemsPerPage]);
 
   // 加载呼号的同步配置摘要
   useEffect(() => {
@@ -251,8 +261,36 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 总页数计算 - 基于筛选后的记录数
   const totalPages = useMemo(() => {
     const pages = Math.ceil(totalRecords / itemsPerPage);
-    return pages;
-  }, [totalRecords, itemsPerPage, currentPage]);
+    return pages || 1;
+  }, [totalRecords, itemsPerPage]);
+
+  const handleItemsPerPageChange = (nextPageSize: number) => {
+    if (!PAGE_SIZE_OPTIONS.includes(nextPageSize as typeof PAGE_SIZE_OPTIONS[number]) || nextPageSize === itemsPerPage) {
+      return;
+    }
+
+    setItemsPerPage(nextPageSize);
+    setCurrentPage(1);
+  };
+
+  const dxccBucketItems = useMemo(() => {
+    if (!statistics?.dxcc) {
+      return [];
+    }
+
+    const source = dxccViewMode === 'band' ? statistics.dxcc.byBand : statistics.dxcc.byMode;
+    return [...source]
+      .sort((left, right) => {
+        if (right.worked !== left.worked) {
+          return right.worked - left.worked;
+        }
+        if (right.confirmed !== left.confirmed) {
+          return right.confirmed - left.confirmed;
+        }
+        return left.key.localeCompare(right.key);
+      })
+      .slice(0, 6);
+  }, [dxccViewMode, statistics]);
 
   // 导出功能（增强错误处理）
   const [isExporting, setIsExporting] = useState(false);
@@ -394,8 +432,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       const successMessage = buildImportSuccessMessage(result.data);
       setImportSuccess(successMessage);
 
-      await loadQSOs();
-      await loadStatistics();
+      await refreshLogbookData();
 
       logger.info('Logbook import completed', {
         logBookId: effectiveLogBookId,
@@ -437,8 +474,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       if (result.success) {
         setSyncSuccess(result.message);
         // 同步成功后重新加载QSO数据
-        await loadQSOs();
-        await loadStatistics();
+        await refreshLogbookData();
 
         logger.debug(`WaveLog sync successful: ${operation}`);
       } else {
@@ -477,8 +513,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
       if (result.success) {
         setQrzSyncSuccess(result.message);
-        await loadQSOs();
-        await loadStatistics();
+        await refreshLogbookData();
       } else {
         setQrzSyncError(result.message || t('sync.qrz.syncError'));
       }
@@ -524,8 +559,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           : result.message;
 
         setLotwSyncSuccess(successMessage);
-        await loadQSOs();
-        await loadStatistics();
+        await refreshLogbookData();
         if (operatorCallsign) {
           await refreshLoTWStatus(operatorCallsign);
         }
@@ -718,6 +752,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     setCurrentPage(1);
   };
 
+  const applyDxccPresetFilters = React.useCallback((nextFilters?: QSOFilters) => {
+    setFilters(nextFilters ?? {});
+    setCurrentPage(1);
+  }, []);
+
+  const isAllFiltersCleared = Object.keys(filters).length === 0;
+  const isWorkedFilterActive = isAllFiltersCleared;
+  const isConfirmedFilterActive = filters.qslFlow === 'two_way_confirmed';
+  const isDeletedFilterActive = filters.dxccStatus === 'deleted';
+  const isReviewFilterActive = filters.qslFlow === 'not_two_way_confirmed';
+  const isDxccBandBucketActive = (key: string) => filters.band === key;
+  const isDxccModeBucketActive = (key: string) => filters.mode === key;
+
   // 打开编辑 Modal
   const handleEditClick = (qso: QSORecord) => {
     setEditingQSO(qso);
@@ -750,8 +797,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       await api.updateQSO(effectiveLogBookId, editingQSO.id, editFormData);
 
       // 重新加载数据
-      await loadQSOs();
-      await loadStatistics();
+      await refreshLogbookData();
 
       // 关闭 Modal
       setIsEditModalOpen(false);
@@ -782,8 +828,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       await api.deleteQSO(effectiveLogBookId, deletingQSO.id);
 
       // 重新加载数据
-      await loadQSOs();
-      await loadStatistics();
+      await refreshLogbookData();
 
       // 关闭 Modal
       setIsDeleteModalOpen(false);
@@ -817,8 +862,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     try {
       setIsAddSaving(true);
       await api.createQSO(effectiveLogBookId, payload);
-      await loadQSOs();
-      await loadStatistics();
+      await refreshLogbookData();
       setIsAddModalOpen(false);
       setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
       logger.debug('QSO record created manually');
@@ -1051,27 +1095,780 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   }, [t]);
 
-  // 顶部内容：标题和操作工具
-  const topContent = React.useMemo(() => {
+  const titleSection = React.useMemo(() => (
+    <div className="flex items-center gap-3">
+      <h1 className="text-xl md:text-2xl font-bold text-foreground">
+        {t('title')}
+      </h1>
+      {operatorCallsign && (
+        <div className="flex items-center gap-2">
+          <span className="text-default-500 hidden md:inline">-</span>
+          <div className="bg-primary-50 dark:bg-primary-100/20 text-primary-600 dark:text-primary-400 px-2 md:px-3 py-1 md:py-1.5 rounded-full text-xs md:text-sm font-mono font-medium">
+            {operatorCallsign}
+          </div>
+        </div>
+      )}
+    </div>
+  ), [operatorCallsign, t]);
+
+  const desktopGlobeTitleOverlay = React.useMemo(() => (
+    <div className="max-w-sm text-white">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <p className="text-2xl font-semibold tracking-tight text-white">
+            {t('title')}
+          </p>
+          {operatorCallsign && (
+            <span className="font-mono text-sm text-sky-100/90">
+              {operatorCallsign}
+            </span>
+          )}
+        </div>
+        <p className="text-sm text-slate-200/82">
+          {hasFilters
+            ? t('stats.filtered', { filtered: totalRecords, total: actualTotalRecords })
+            : t('stats.total', { total: actualTotalRecords })}
+        </p>
+        {statistics && (
+          <p className="text-sm text-slate-300/74">
+            {t('stats.uniqueCallsigns', { count: statistics.uniqueCallsigns })}
+          </p>
+        )}
+      </div>
+    </div>
+  ), [actualTotalRecords, hasFilters, operatorCallsign, statistics, t, totalRecords]);
+
+  const desktopDxccOverlay = React.useMemo(() => {
+    if (!statistics?.dxcc) {
+      return null;
+    }
+
+    const viewOptions: Array<{ key: DxccViewMode; label: string }> = [
+      { key: 'mixed', label: t('stats.dxccViewMixed') },
+      { key: 'band', label: t('stats.dxccViewBand') },
+      { key: 'mode', label: t('stats.dxccViewMode') },
+    ];
+
+    const currentWorked = statistics.dxcc.worked.current;
+    const totalWorked = statistics.dxcc.worked.total;
+    const deletedWorked = statistics.dxcc.worked.deleted;
+    const currentConfirmed = statistics.dxcc.confirmed.current;
+    const totalConfirmed = statistics.dxcc.confirmed.total;
+    const deletedConfirmed = statistics.dxcc.confirmed.deleted;
+    const getMetricCardClassName = (active: boolean) => `w-full rounded-2xl border px-3 py-3 text-left transition-colors ${
+      active
+        ? 'border-[rgba(148,163,184,0.12)] bg-[rgba(96,165,250,0.18)] text-sky-100'
+        : 'border-[rgba(148,163,184,0.08)] bg-[rgba(15,23,42,0.18)] hover:border-[rgba(148,163,184,0.14)] hover:bg-[rgba(15,23,42,0.24)]'
+    }`;
+    const getBucketClassName = (active: boolean) => `flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors ${
+      active
+        ? 'border-[rgba(148,163,184,0.12)] bg-[rgba(96,165,250,0.18)] text-sky-100'
+        : 'border-[rgba(148,163,184,0.06)] bg-[rgba(255,255,255,0.02)] hover:border-[rgba(148,163,184,0.12)] hover:bg-[rgba(255,255,255,0.04)]'
+    }`;
+
     return (
-      <div className="flex flex-col gap-4">
-        {/* 标题和操作按钮 */}
-        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl md:text-2xl font-bold text-foreground">
-              {t('title')}
-            </h1>
-            {operatorCallsign && (
-              <div className="flex items-center gap-2">
-                <span className="text-default-500 hidden md:inline">-</span>
-                <div className="bg-primary-50 dark:bg-primary-100/20 text-primary-600 dark:text-primary-400 px-2 md:px-3 py-1 md:py-1.5 rounded-full text-xs md:text-sm font-mono font-medium">
-                  {operatorCallsign}
+      <div className="flex h-auto max-h-full w-full max-w-[280px] min-w-[280px] self-end flex-col overflow-hidden rounded-3xl border border-[rgba(148,163,184,0.12)] bg-[rgba(15,23,42,0.28)] px-4 py-4 text-white backdrop-blur-md">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs uppercase tracking-[0.22em] text-slate-300/70">{t('stats.dxccOverview')}</p>
+          <div className="inline-flex rounded-full border border-[rgba(148,163,184,0.12)] bg-[rgba(15,23,42,0.2)] p-1">
+            {viewOptions.map((option) => {
+              const active = dxccViewMode === option.key;
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setDxccViewMode(option.key)}
+                  className={`rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${
+                    active
+                      ? 'bg-[rgba(96,165,250,0.18)] text-sky-100'
+                      : 'text-slate-300/72 hover:text-white'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="space-y-3">
+            {dxccViewMode === 'mixed' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => applyDxccPresetFilters(undefined)}
+                  className={getMetricCardClassName(isWorkedFilterActive)}
+                >
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-300/70">{t('stats.dxccWorked')}</p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <p className="text-3xl font-semibold text-sky-200">{currentWorked}</p>
+                    {deletedWorked > 0 && (
+                      <Tooltip
+                        content={t('stats.dxccDeletedHelp', { count: deletedWorked })}
+                        placement="top"
+                        delay={150}
+                      >
+                        <p className="cursor-help text-[11px] text-[rgba(203,213,225,0.45)]">
+                          {t('stats.dxccTotalOnly', { total: totalWorked })}
+                        </p>
+                      </Tooltip>
+                    )}
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyDxccPresetFilters({ qslFlow: 'two_way_confirmed' })}
+                  className={getMetricCardClassName(isConfirmedFilterActive)}
+                >
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-slate-300/70">{t('stats.dxccConfirmed')}</p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <p className="text-3xl font-semibold text-emerald-200">{currentConfirmed}</p>
+                    {deletedConfirmed > 0 && (
+                      <Tooltip
+                        content={t('stats.dxccDeletedHelp', { count: deletedConfirmed })}
+                        placement="top"
+                        delay={150}
+                      >
+                        <p className="cursor-help text-[11px] text-[rgba(203,213,225,0.45)]">
+                          {t('stats.dxccTotalOnly', { total: totalConfirmed })}
+                        </p>
+                      </Tooltip>
+                    )}
+                  </div>
+                </button>
+              </>
+            ) : (
+              <div className="rounded-2xl border border-[rgba(148,163,184,0.08)] bg-[rgba(15,23,42,0.18)] px-3 py-3">
+                <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.18em] text-slate-300/62">
+                  <span>{dxccViewMode === 'band' ? t('stats.dxccByBand') : t('stats.dxccByMode')}</span>
+                  <span>{t('stats.dxccTopBuckets')}</span>
+                </div>
+                <div className="space-y-2">
+                  {dxccBucketItems.length > 0 ? (
+                    dxccBucketItems.map((bucket) => (
+                      <button
+                        key={bucket.key}
+                        type="button"
+                        onClick={() => applyDxccPresetFilters(dxccViewMode === 'band' ? { band: bucket.key } : { mode: bucket.key })}
+                        className={getBucketClassName(dxccViewMode === 'band' ? isDxccBandBucketActive(bucket.key) : isDxccModeBucketActive(bucket.key))}
+                      >
+                        <span className="min-w-0 truncate text-sm font-medium text-slate-100">{bucket.key}</span>
+                        <span className="shrink-0 text-[11px] text-slate-300/78">
+                          {t('stats.dxccBucketCompact', { worked: bucket.worked, confirmed: bucket.confirmed })}
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-[rgba(148,163,184,0.06)] bg-[rgba(255,255,255,0.02)] px-3 py-3 text-sm text-slate-300/72">
+                      {t('stats.dxccNoBucketData')}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => applyDxccPresetFilters({ dxccStatus: 'deleted' })}
+                className={getMetricCardClassName(isDeletedFilterActive)}
+              >
+                <p className="text-[11px] uppercase tracking-[0.18em] text-slate-300/70">{t('stats.dxccDeleted')}</p>
+                <p className="mt-2 text-xl font-semibold text-amber-200">{statistics.dxcc.worked.deleted}</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => applyDxccPresetFilters({ qslFlow: 'not_two_way_confirmed' })}
+                className={getMetricCardClassName(isReviewFilterActive)}
+              >
+                <p className="text-[11px] uppercase tracking-[0.18em] text-slate-300/70">{t('stats.dxccReview')}</p>
+                <p className="mt-2 text-xl font-semibold text-fuchsia-200">{statistics.dxcc.reviewCount}</p>
+              </button>
+            </div>
           </div>
+        </div>
+      </div>
+    );
+  }, [applyDxccPresetFilters, dxccBucketItems, dxccViewMode, isConfirmedFilterActive, isDeletedFilterActive, isDxccBandBucketActive, isDxccModeBucketActive, isReviewFilterActive, isWorkedFilterActive, statistics, t]);
 
-          <div className="flex items-center gap-2 overflow-x-visible overflow-y-visible pb-2 md:pb-0">
+  const mobileDxccSummary = React.useMemo(() => {
+    if (!statistics?.dxcc) {
+      return null;
+    }
+
+    const viewOptions: Array<{ key: DxccViewMode; label: string }> = [
+      { key: 'mixed', label: t('stats.dxccViewMixed') },
+      { key: 'band', label: t('stats.dxccViewBand') },
+      { key: 'mode', label: t('stats.dxccViewMode') },
+    ];
+
+    return (
+      <div className="rounded-xl border border-default-200 bg-default-50/60 lg:hidden">
+        <div className="space-y-3 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-default-700">{t('stats.dxccOverview')}</p>
+            <div className="inline-flex rounded-full border border-default-200 bg-white/70 p-1 dark:bg-default-100/10">
+              {viewOptions.map((option) => {
+                const active = dxccViewMode === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setDxccViewMode(option.key)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      active
+                        ? 'bg-primary/12 text-primary'
+                        : 'text-default-500'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {dxccViewMode === 'mixed' ? (
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => applyDxccPresetFilters(undefined)}
+                className={`w-full rounded-xl border px-3 py-3 text-left transition-colors ${isWorkedFilterActive ? 'border-primary/20 bg-primary/12 text-primary' : 'border-default-200 bg-white/70 dark:bg-default-100/10'}`}
+              >
+                <p className="text-xs text-default-500">{t('stats.dxccWorked')}</p>
+                <p className="mt-1 text-lg font-semibold text-primary">{statistics.dxcc.worked.current}</p>
+                <p className="mt-1 text-[11px] text-default-500">
+                  {t('stats.dxccTotalWithDeleted', {
+                    total: statistics.dxcc.worked.total,
+                    deleted: statistics.dxcc.worked.deleted,
+                  })}
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => applyDxccPresetFilters({ qslFlow: 'two_way_confirmed' })}
+                className={`w-full rounded-xl border px-3 py-3 text-left transition-colors ${isConfirmedFilterActive ? 'border-primary/20 bg-primary/12 text-primary' : 'border-default-200 bg-white/70 dark:bg-default-100/10'}`}
+              >
+                <p className="text-xs text-default-500">{t('stats.dxccConfirmed')}</p>
+                <p className="mt-1 text-lg font-semibold text-success">{statistics.dxcc.confirmed.current}</p>
+                <p className="mt-1 text-[11px] text-default-500">
+                  {t('stats.dxccTotalWithDeleted', {
+                    total: statistics.dxcc.confirmed.total,
+                    deleted: statistics.dxcc.confirmed.deleted,
+                  })}
+                </p>
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {dxccBucketItems.length > 0 ? (
+                dxccBucketItems.map((bucket) => (
+                  <button
+                    key={bucket.key}
+                    type="button"
+                    onClick={() => applyDxccPresetFilters(dxccViewMode === 'band' ? { band: bucket.key } : { mode: bucket.key })}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors ${
+                      (dxccViewMode === 'band' ? isDxccBandBucketActive(bucket.key) : isDxccModeBucketActive(bucket.key))
+                        ? 'border-primary/20 bg-primary/12 text-primary'
+                        : 'border-default-200 bg-white/70 dark:bg-default-100/10'
+                    }`}
+                  >
+                    <span className="min-w-0 truncate text-sm font-medium text-default-700">{bucket.key}</span>
+                    <span className="shrink-0 text-[11px] text-default-500">
+                      {t('stats.dxccBucketCompact', { worked: bucket.worked, confirmed: bucket.confirmed })}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 text-sm text-default-500 dark:bg-default-100/10">
+                  {t('stats.dxccNoBucketData')}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => applyDxccPresetFilters({ dxccStatus: 'deleted' })}
+              className={`rounded-xl border px-3 py-3 text-left transition-colors ${isDeletedFilterActive ? 'border-primary/20 bg-primary/12 text-primary' : 'border-default-200 bg-white/70 dark:bg-default-100/10'}`}
+            >
+              <p className="text-xs text-default-500">{t('stats.dxccDeleted')}</p>
+              <p className="text-lg font-semibold text-warning">{statistics.dxcc.worked.deleted}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => applyDxccPresetFilters({ qslFlow: 'not_two_way_confirmed' })}
+              className={`rounded-xl border px-3 py-3 text-left transition-colors ${isReviewFilterActive ? 'border-primary/20 bg-primary/12 text-primary' : 'border-default-200 bg-white/70 dark:bg-default-100/10'}`}
+            >
+              <p className="text-xs text-default-500">{t('stats.dxccReview')}</p>
+              <p className="text-lg font-semibold text-secondary">{statistics.dxcc.reviewCount}</p>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }, [applyDxccPresetFilters, dxccBucketItems, dxccViewMode, isConfirmedFilterActive, isDeletedFilterActive, isDxccBandBucketActive, isDxccModeBucketActive, isReviewFilterActive, isWorkedFilterActive, statistics, t]);
+
+  // 顶部内容：标题和操作工具
+  const topContent = React.useMemo(() => {
+    const searchAndFilterControls = (
+      <>
+        {isSearchExpanded ? (
+          <Input
+            autoFocus
+            isClearable
+            size="sm"
+            className="w-40 md:w-64 transition-all duration-200"
+            placeholder={t('filter.searchPlaceholder')}
+            startContent={<SearchIcon />}
+            value={filters.callsign || ''}
+            onClear={() => handleFilterChange('callsign', undefined)}
+            onValueChange={(value) => handleFilterChange('callsign', value)}
+            onBlur={() => {
+              if (!filters.callsign) {
+                setIsSearchExpanded(false);
+              }
+            }}
+          />
+        ) : (
+          <Button
+            variant="flat"
+            size="sm"
+            startContent={<SearchIcon className="hidden md:inline" />}
+            onPress={() => setIsSearchExpanded(true)}
+            className="transition-all duration-200 min-w-0"
+          >
+            <span className="hidden md:inline">{t('action.search')}</span>
+            <SearchIcon className="md:hidden" />
+          </Button>
+        )}
+
+        {isGridSearchExpanded ? (
+          <Input
+            autoFocus
+            isClearable
+            size="sm"
+            className="w-36 md:w-32 transition-all duration-200"
+            placeholder={t('filter.gridPlaceholder')}
+            startContent={<FontAwesomeIcon icon={faTableCells} className="text-default-400 text-xs" />}
+            value={filters.grid || ''}
+            onClear={() => handleFilterChange('grid', undefined)}
+            onValueChange={(value) => handleFilterChange('grid', normalizeGridFilterValue(value))}
+            onBlur={() => {
+              if (!filters.grid) {
+                setIsGridSearchExpanded(false);
+              }
+            }}
+          />
+        ) : (
+          <Button
+            variant="flat"
+            size="sm"
+            color={filters.grid ? 'primary' : 'default'}
+            startContent={<FontAwesomeIcon icon={faTableCells} className="hidden md:inline text-xs" />}
+            onPress={() => setIsGridSearchExpanded(true)}
+            className="transition-all duration-200 min-w-0"
+          >
+            <span className="hidden md:inline">{t('filter.grid')}</span>
+            <FontAwesomeIcon icon={faTableCells} className="md:hidden text-xs" />
+          </Button>
+        )}
+
+        <Dropdown>
+          <DropdownTrigger>
+            <Button
+              variant="flat"
+              size="sm"
+              endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
+              color={filters.band ? "primary" : "default"}
+              className="min-w-0"
+            >
+              <span className="hidden md:inline">{t('filter.band')}{filters.band ? `: ${filters.band}` : ''}</span>
+              <span className="md:hidden">{filters.band || t('filter.band')}</span>
+            </Button>
+          </DropdownTrigger>
+          <DropdownMenu
+            aria-label={t('filter.bandFilter')}
+            selectedKeys={filters.band ? [filters.band] : []}
+            selectionMode="single"
+            onSelectionChange={(keys) => {
+              const selected = Array.from(keys as Set<string>);
+              handleFilterChange('band', selected[0]);
+            }}
+          >
+            <DropdownItem key="">{t('filter.allBands')}</DropdownItem>
+            <DropdownItem key="160m">160m (1.8MHz)</DropdownItem>
+            <DropdownItem key="80m">80m (3.5MHz)</DropdownItem>
+            <DropdownItem key="60m">60m (5MHz)</DropdownItem>
+            <DropdownItem key="40m">40m (7MHz)</DropdownItem>
+            <DropdownItem key="30m">30m (10MHz)</DropdownItem>
+            <DropdownItem key="20m">20m (14MHz)</DropdownItem>
+            <DropdownItem key="17m">17m (18MHz)</DropdownItem>
+            <DropdownItem key="15m">15m (21MHz)</DropdownItem>
+            <DropdownItem key="12m">12m (24MHz)</DropdownItem>
+            <DropdownItem key="10m">10m (28MHz)</DropdownItem>
+            <DropdownItem key="6m">6m (50MHz)</DropdownItem>
+            <DropdownItem key="4m">4m (70MHz)</DropdownItem>
+            <DropdownItem key="2m">2m (144MHz)</DropdownItem>
+            <DropdownItem key="1.25m">1.25m (222MHz)</DropdownItem>
+            <DropdownItem key="70cm">70cm (430MHz)</DropdownItem>
+            <DropdownItem key="33cm">33cm (902MHz)</DropdownItem>
+            <DropdownItem key="23cm">23cm (1.2GHz)</DropdownItem>
+          </DropdownMenu>
+        </Dropdown>
+
+        <Dropdown>
+          <DropdownTrigger>
+            <Button
+              variant="flat"
+              size="sm"
+              endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
+              color={filters.mode ? "primary" : "default"}
+              className="min-w-0"
+            >
+              <span className="hidden md:inline">{t('filter.mode')}{filters.mode ? `: ${filters.mode}` : ''}</span>
+              <span className="md:hidden">{filters.mode || t('filter.mode')}</span>
+            </Button>
+          </DropdownTrigger>
+          <DropdownMenu
+            aria-label={t('filter.modeFilter')}
+            selectedKeys={filters.mode ? [filters.mode] : []}
+            selectionMode="single"
+            onSelectionChange={(keys) => {
+              const selected = Array.from(keys as Set<string>);
+              handleFilterChange('mode', selected[0]);
+            }}
+          >
+            <DropdownItem key="">{t('filter.allModes')}</DropdownItem>
+            <DropdownItem key="FT8">FT8</DropdownItem>
+            <DropdownItem key="FT4">FT4</DropdownItem>
+          </DropdownMenu>
+        </Dropdown>
+
+        <Dropdown>
+          <DropdownTrigger>
+            <Button
+              variant="flat"
+              size="sm"
+              endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
+              color={filters.dxccStatus ? "primary" : "default"}
+              className="min-w-0"
+            >
+              <span className="hidden md:inline">{filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}</span>
+              <span className="md:hidden">{filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}</span>
+            </Button>
+          </DropdownTrigger>
+          <DropdownMenu
+            aria-label={t('filter.dxccStatusFilter')}
+            selectedKeys={filters.dxccStatus ? [filters.dxccStatus] : []}
+            selectionMode="single"
+            onSelectionChange={(keys) => {
+              const selected = Array.from(keys as Set<string>);
+              const value = selected[0] || undefined;
+              handleFilterChange('dxccStatus', value as QSOFilters['dxccStatus']);
+            }}
+          >
+            <DropdownItem key="">{t('filter.allDxccStatus')}</DropdownItem>
+            <DropdownItem key="deleted">{t('filter.dxccDeleted')}</DropdownItem>
+          </DropdownMenu>
+        </Dropdown>
+
+        <Dropdown>
+          <DropdownTrigger>
+            <Button
+              variant="flat"
+              size="sm"
+              endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
+              color={filters.qslFlow ? "primary" : "default"}
+              className="min-w-0"
+            >
+              <span className="hidden md:inline">
+                {filters.qslFlow === 'two_way_confirmed'
+                  ? t('filter.qslFlowTwoWayConfirmed')
+                  : filters.qslFlow === 'not_two_way_confirmed'
+                    ? t('filter.qslFlowNotTwoWayConfirmed')
+                    : t('filter.qslFlow')}
+              </span>
+              <span className="md:hidden">
+                {filters.qslFlow === 'two_way_confirmed'
+                  ? t('filter.qslFlowTwoWayConfirmed')
+                  : filters.qslFlow === 'not_two_way_confirmed'
+                    ? t('filter.qslFlowNotTwoWayConfirmed')
+                    : t('filter.qslFlow')}
+              </span>
+            </Button>
+          </DropdownTrigger>
+          <DropdownMenu
+            aria-label={t('filter.qslFlowFilter')}
+            selectedKeys={filters.qslFlow ? [filters.qslFlow] : []}
+            selectionMode="single"
+            onSelectionChange={(keys) => {
+              const selected = Array.from(keys as Set<string>);
+              const value = selected[0] || undefined;
+              handleFilterChange('qslFlow', value as QSOFilters['qslFlow']);
+            }}
+          >
+            <DropdownItem key="">{t('filter.allQslFlow')}</DropdownItem>
+            <DropdownItem key="two_way_confirmed">{t('filter.qslFlowTwoWayConfirmed')}</DropdownItem>
+            <DropdownItem key="not_two_way_confirmed">{t('filter.qslFlowNotTwoWayConfirmed')}</DropdownItem>
+          </DropdownMenu>
+        </Dropdown>
+
+        <Dropdown>
+          <DropdownTrigger>
+            <Button
+              variant="flat"
+              size="sm"
+              endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
+              color={filters.qslStatus ? "primary" : "default"}
+              className="min-w-0 hidden md:flex"
+            >
+              {filters.qslStatus === 'confirmed' ? t('qslStatus.confirmed') : filters.qslStatus === 'uploaded' ? t('qslStatus.uploaded') : filters.qslStatus === 'none' ? t('qslStatus.notUploaded') : t('qslStatus.confirmStatus')}
+            </Button>
+          </DropdownTrigger>
+          <DropdownMenu
+            aria-label={t('filter.confirmFilter')}
+            selectedKeys={filters.qslStatus ? [filters.qslStatus] : []}
+            selectionMode="single"
+            onSelectionChange={(keys) => {
+              const selected = Array.from(keys as Set<string>);
+              const value = selected[0] || undefined;
+              handleFilterChange('qslStatus', value as QSOFilters['qslStatus']);
+            }}
+          >
+            <DropdownItem key="">{t('qslStatus.allStatus')}</DropdownItem>
+            <DropdownItem key="confirmed">{t('qslStatus.confirmed')}</DropdownItem>
+            <DropdownItem key="uploaded">{t('qslStatus.uploadedNotConfirmed')}</DropdownItem>
+            <DropdownItem key="none">{t('qslStatus.notUploaded')}</DropdownItem>
+          </DropdownMenu>
+        </Dropdown>
+
+        {Object.keys(filters).length > 0 && (
+          <Button
+            variant="light"
+            color="danger"
+            size="sm"
+            onPress={clearFilters}
+            className="min-w-0 whitespace-nowrap"
+          >
+            <span className="hidden md:inline">{t('action.clearFilter')}</span>
+            <span className="md:hidden">{t('action.clear')}</span>
+          </Button>
+        )}
+      </>
+    );
+
+    const actionControls = (
+      <>
+        {syncSummary.wavelog && (
+          <Dropdown>
+            <DropdownTrigger>
+              <Button
+                color="secondary"
+                variant="bordered"
+                size="sm"
+                isLoading={isSyncing}
+                startContent={!isSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
+                className="min-w-0"
+              >
+                <span className="hidden lg:inline">{t('sync.wavelog.button')}</span>
+                <span className="lg:hidden hidden md:inline">{t('sync.sync')}</span>
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu
+              aria-label={t('sync.wavelog.ariaLabel')}
+              onAction={(key) => handleWaveLogSync(key as 'download' | 'upload' | 'full_sync')}
+            >
+              <DropdownItem
+                key="download"
+                startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
+                description={t('sync.wavelog.downloadDesc')}
+              >
+                {t('sync.wavelog.download')}
+              </DropdownItem>
+              <DropdownItem
+                key="upload"
+                startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
+                description={t('sync.wavelog.uploadDesc')}
+              >
+                {t('sync.wavelog.upload')}
+              </DropdownItem>
+              <DropdownItem
+                key="full_sync"
+                startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
+                description={t('sync.wavelog.fullSyncDesc')}
+              >
+                {t('sync.wavelog.fullSync')}
+              </DropdownItem>
+            </DropdownMenu>
+          </Dropdown>
+        )}
+
+        {syncSummary.qrz && (
+          <Dropdown>
+            <DropdownTrigger>
+              <Button
+                color="warning"
+                variant="bordered"
+                size="sm"
+                isLoading={isQRZSyncing}
+                startContent={!isQRZSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
+                className="min-w-0"
+              >
+                <span className="hidden lg:inline">QRZ.com</span>
+                <span className="lg:hidden hidden md:inline">QRZ</span>
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu
+              aria-label={t('sync.qrz.ariaLabel')}
+              onAction={(key) => handleQRZSync(key as 'download' | 'upload' | 'full_sync')}
+            >
+              <DropdownItem
+                key="download"
+                startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
+                description={t('sync.qrz.downloadDesc')}
+              >
+                {t('sync.qrz.download')}
+              </DropdownItem>
+              <DropdownItem
+                key="upload"
+                startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
+                description={t('sync.qrz.uploadDesc')}
+              >
+                {t('sync.qrz.upload')}
+              </DropdownItem>
+              <DropdownItem
+                key="full_sync"
+                startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
+                description={t('sync.qrz.fullSyncDesc')}
+              >
+                {t('sync.qrz.fullSync')}
+              </DropdownItem>
+            </DropdownMenu>
+          </Dropdown>
+        )}
+
+        {syncSummary.lotw && (
+          <Dropdown>
+            <DropdownTrigger>
+              <Button
+                color="success"
+                variant="bordered"
+                size="sm"
+                isLoading={isLoTWSyncing}
+                startContent={!isLoTWSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
+                className="min-w-0"
+              >
+                <span className="hidden lg:inline">LoTW</span>
+                <span className="lg:hidden hidden md:inline">LoTW</span>
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu
+              aria-label={t('sync.lotw.ariaLabel')}
+              onAction={(key) => handleLoTWAction(key as 'upload' | 'download_confirmations')}
+            >
+              <DropdownItem
+                key="download_confirmations"
+                startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
+                description={t('sync.lotw.downloadConfirmationsDesc')}
+              >
+                {t('sync.lotw.downloadConfirmations')}
+              </DropdownItem>
+              <DropdownItem
+                key="upload"
+                startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
+                description={t('sync.lotw.uploadDesc')}
+              >
+                {t('sync.lotw.upload')}
+              </DropdownItem>
+            </DropdownMenu>
+          </Dropdown>
+        )}
+
+        <Dropdown>
+          <DropdownTrigger>
+            <Button
+              color="primary"
+              variant="bordered"
+              size="sm"
+              isLoading={isExporting}
+              disabled={qsos.length === 0}
+              className="min-w-0"
+              startContent={<FontAwesomeIcon icon={faDownload} className="md:hidden" />}
+            >
+              <span className="hidden md:inline">{t('export.button')}</span>
+            </Button>
+          </DropdownTrigger>
+          <DropdownMenu
+            aria-label={t('export.ariaLabel')}
+            onAction={(key) => handleExport(key as 'adif' | 'csv')}
+          >
+            <DropdownItem key="adif">{t('export.adif')}</DropdownItem>
+            <DropdownItem key="csv">{t('export.csv')}</DropdownItem>
+          </DropdownMenu>
+        </Dropdown>
+
+        <Button
+          color="secondary"
+          variant="bordered"
+          size="sm"
+          isLoading={isImporting}
+          onPress={triggerImportPicker}
+          className="min-w-0"
+          startContent={!isImporting ? <FontAwesomeIcon icon={faUpload} className="md:hidden" /> : undefined}
+        >
+          <span className="hidden md:inline">{t('import.button')}</span>
+        </Button>
+
+        <Button
+          color="primary"
+          variant="flat"
+          size="sm"
+          startContent={<FontAwesomeIcon icon={faPlus} />}
+          onPress={() => {
+            setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
+            setIsAddModalOpen(true);
+          }}
+          className="min-w-0"
+        >
+          <span className="hidden md:inline">{t('addQso.button')}</span>
+        </Button>
+
+        {isElectron() && (
+          <Tooltip content={t('action.openDataDir')}>
+            <Button
+              variant="flat"
+              size="sm"
+              isIconOnly
+              onPress={handleOpenDataDir}
+              className="min-w-0"
+            >
+              <FontAwesomeIcon icon={faFolderOpen} />
+            </Button>
+          </Tooltip>
+        )}
+
+        {operatorCallsign && (
+          <Tooltip content={t('action.configSync')}>
+            <Button
+              variant="flat"
+              size="sm"
+              isIconOnly
+              onPress={() => openSyncConfig('wavelog')}
+              className="min-w-0"
+            >
+              <FontAwesomeIcon icon={faCog} />
+            </Button>
+          </Tooltip>
+        )}
+      </>
+    );
+
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4">
+          <div className="lg:hidden">
+            {titleSection}
+          </div>
+          <div className="flex flex-col gap-2 md:gap-3">
             <input
               ref={importFileInputRef}
               type="file"
@@ -1079,390 +1876,22 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               className="hidden"
               onChange={handleImportFileSelected}
             />
+            <div className="flex flex-wrap items-center gap-2 md:hidden">
+              {searchAndFilterControls}
+            </div>
 
-            {/* 可展开的搜索框 */}
-            {isSearchExpanded ? (
-              <Input
-                autoFocus
-                isClearable
-                size="sm"
-                className="w-40 md:w-64 transition-all duration-200"
-                placeholder={t('filter.searchPlaceholder')}
-                startContent={<SearchIcon />}
-                value={filters.callsign || ''}
-                onClear={() => handleFilterChange('callsign', undefined)}
-                onValueChange={(value) => handleFilterChange('callsign', value)}
-                onBlur={() => {
-                  if (!filters.callsign) {
-                    setIsSearchExpanded(false);
-                  }
-                }}
-              />
-            ) : (
-              <Button
-                variant="flat"
-                size="sm"
-                startContent={<SearchIcon className="hidden md:inline" />}
-                onPress={() => setIsSearchExpanded(true)}
-                className="transition-all duration-200 min-w-0"
-              >
-                <span className="hidden md:inline">{t('action.search')}</span>
-                <SearchIcon className="md:hidden" />
-              </Button>
-            )}
+            <div className="flex flex-wrap items-center gap-2 md:hidden">
+              {actionControls}
+            </div>
 
-            {isGridSearchExpanded ? (
-              <Input
-                autoFocus
-                isClearable
-                size="sm"
-                className="w-36 md:w-32 transition-all duration-200"
-                placeholder={t('filter.gridPlaceholder')}
-                startContent={<FontAwesomeIcon icon={faTableCells} className="text-default-400 text-xs" />}
-                value={filters.grid || ''}
-                onClear={() => handleFilterChange('grid', undefined)}
-                onValueChange={(value) => handleFilterChange('grid', normalizeGridFilterValue(value))}
-                onBlur={() => {
-                  if (!filters.grid) {
-                    setIsGridSearchExpanded(false);
-                  }
-                }}
-              />
-            ) : (
-              <Button
-                variant="flat"
-                size="sm"
-                color={filters.grid ? 'primary' : 'default'}
-                startContent={<FontAwesomeIcon icon={faTableCells} className="hidden md:inline text-xs" />}
-                onPress={() => setIsGridSearchExpanded(true)}
-                className="transition-all duration-200 min-w-0"
-              >
-                <span className="hidden md:inline">{t('filter.grid')}</span>
-                <FontAwesomeIcon icon={faTableCells} className="md:hidden text-xs" />
-              </Button>
-            )}
-
-            {/* 筛选按钮 */}
-            <Dropdown>
-              <DropdownTrigger>
-                <Button
-                  variant="flat"
-                  size="sm"
-                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
-                  color={filters.band ? "primary" : "default"}
-                  className="min-w-0"
-                >
-                  <span className="hidden md:inline">{t('filter.band')}{filters.band ? `: ${filters.band}` : ''}</span>
-                  <span className="md:hidden">{filters.band || t('filter.band')}</span>
-                </Button>
-              </DropdownTrigger>
-              <DropdownMenu
-                aria-label={t('filter.bandFilter')}
-                selectedKeys={filters.band ? [filters.band] : []}
-                selectionMode="single"
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys as Set<string>);
-                  handleFilterChange('band', selected[0]);
-                }}
-              >
-                <DropdownItem key="">{t('filter.allBands')}</DropdownItem>
-                <DropdownItem key="160m">160m (1.8MHz)</DropdownItem>
-                <DropdownItem key="80m">80m (3.5MHz)</DropdownItem>
-                <DropdownItem key="60m">60m (5MHz)</DropdownItem>
-                <DropdownItem key="40m">40m (7MHz)</DropdownItem>
-                <DropdownItem key="30m">30m (10MHz)</DropdownItem>
-                <DropdownItem key="20m">20m (14MHz)</DropdownItem>
-                <DropdownItem key="17m">17m (18MHz)</DropdownItem>
-                <DropdownItem key="15m">15m (21MHz)</DropdownItem>
-                <DropdownItem key="12m">12m (24MHz)</DropdownItem>
-                <DropdownItem key="10m">10m (28MHz)</DropdownItem>
-                <DropdownItem key="6m">6m (50MHz)</DropdownItem>
-                <DropdownItem key="4m">4m (70MHz)</DropdownItem>
-                <DropdownItem key="2m">2m (144MHz)</DropdownItem>
-                <DropdownItem key="1.25m">1.25m (222MHz)</DropdownItem>
-                <DropdownItem key="70cm">70cm (430MHz)</DropdownItem>
-                <DropdownItem key="33cm">33cm (902MHz)</DropdownItem>
-                <DropdownItem key="23cm">23cm (1.2GHz)</DropdownItem>
-              </DropdownMenu>
-            </Dropdown>
-
-            <Dropdown>
-              <DropdownTrigger>
-                <Button
-                  variant="flat"
-                  size="sm"
-                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
-                  color={filters.mode ? "primary" : "default"}
-                  className="min-w-0"
-                >
-                  <span className="hidden md:inline">{t('filter.mode')}{filters.mode ? `: ${filters.mode}` : ''}</span>
-                  <span className="md:hidden">{filters.mode || t('filter.mode')}</span>
-                </Button>
-              </DropdownTrigger>
-              <DropdownMenu
-                aria-label={t('filter.modeFilter')}
-                selectedKeys={filters.mode ? [filters.mode] : []}
-                selectionMode="single"
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys as Set<string>);
-                  handleFilterChange('mode', selected[0]);
-                }}
-              >
-                <DropdownItem key="">{t('filter.allModes')}</DropdownItem>
-                <DropdownItem key="FT8">FT8</DropdownItem>
-                <DropdownItem key="FT4">FT4</DropdownItem>
-              </DropdownMenu>
-            </Dropdown>
-
-            <Dropdown>
-              <DropdownTrigger>
-                <Button
-                  variant="flat"
-                  size="sm"
-                  endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
-                  color={filters.qslStatus ? "primary" : "default"}
-                  className="min-w-0 hidden md:flex"
-                >
-                  {filters.qslStatus === 'confirmed' ? t('qslStatus.confirmed') : filters.qslStatus === 'uploaded' ? t('qslStatus.uploaded') : filters.qslStatus === 'none' ? t('qslStatus.notUploaded') : t('qslStatus.confirmStatus')}
-                </Button>
-              </DropdownTrigger>
-              <DropdownMenu
-                aria-label={t('filter.confirmFilter')}
-                selectedKeys={filters.qslStatus ? [filters.qslStatus] : []}
-                selectionMode="single"
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys as Set<string>);
-                  const value = selected[0] || undefined;
-                  handleFilterChange('qslStatus', value as QSOFilters['qslStatus']);
-                }}
-              >
-                <DropdownItem key="">{t('qslStatus.allStatus')}</DropdownItem>
-                <DropdownItem key="confirmed">{t('qslStatus.confirmed')}</DropdownItem>
-                <DropdownItem key="uploaded">{t('qslStatus.uploadedNotConfirmed')}</DropdownItem>
-                <DropdownItem key="none">{t('qslStatus.notUploaded')}</DropdownItem>
-              </DropdownMenu>
-            </Dropdown>
-
-            {Object.keys(filters).length > 0 && (
-              <Button
-                variant="light"
-                color="danger"
-                size="sm"
-                onPress={clearFilters}
-                className="min-w-0 whitespace-nowrap"
-              >
-                <span className="hidden md:inline">{t('action.clearFilter')}</span>
-                <span className="md:hidden">{t('action.clear')}</span>
-              </Button>
-            )}
-
-            {/* WaveLog同步按钮 - 仅在WaveLog启用时显示 */}
-            {syncSummary.wavelog && (
-              <Dropdown>
-                <DropdownTrigger>
-                  <Button
-                    color="secondary"
-                    variant="bordered"
-                    size="sm"
-                    isLoading={isSyncing}
-                    startContent={!isSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
-                    className="min-w-0"
-                  >
-                    <span className="hidden lg:inline">{t('sync.wavelog.button')}</span>
-                    <span className="lg:hidden hidden md:inline">{t('sync.sync')}</span>
-                  </Button>
-                </DropdownTrigger>
-                <DropdownMenu
-                  aria-label={t('sync.wavelog.ariaLabel')}
-                  onAction={(key) => handleWaveLogSync(key as 'download' | 'upload' | 'full_sync')}
-                >
-                  <DropdownItem
-                    key="download"
-                    startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                    description={t('sync.wavelog.downloadDesc')}
-                  >
-                    {t('sync.wavelog.download')}
-                  </DropdownItem>
-                  <DropdownItem
-                    key="upload"
-                    startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                    description={t('sync.wavelog.uploadDesc')}
-                  >
-                    {t('sync.wavelog.upload')}
-                  </DropdownItem>
-                  <DropdownItem
-                    key="full_sync"
-                    startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
-                    description={t('sync.wavelog.fullSyncDesc')}
-                  >
-                    {t('sync.wavelog.fullSync')}
-                  </DropdownItem>
-                </DropdownMenu>
-              </Dropdown>
-            )}
-
-            {/* QRZ.com同步按钮 - 仅在QRZ启用时显示 */}
-            {syncSummary.qrz && (
-              <Dropdown>
-                <DropdownTrigger>
-                  <Button
-                    color="warning"
-                    variant="bordered"
-                    size="sm"
-                    isLoading={isQRZSyncing}
-                    startContent={!isQRZSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
-                    className="min-w-0"
-                  >
-                    <span className="hidden lg:inline">QRZ.com</span>
-                    <span className="lg:hidden hidden md:inline">QRZ</span>
-                  </Button>
-                </DropdownTrigger>
-                <DropdownMenu
-                  aria-label={t('sync.qrz.ariaLabel')}
-                  onAction={(key) => handleQRZSync(key as 'download' | 'upload' | 'full_sync')}
-                >
-                  <DropdownItem
-                    key="download"
-                    startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                    description={t('sync.qrz.downloadDesc')}
-                  >
-                    {t('sync.qrz.download')}
-                  </DropdownItem>
-                  <DropdownItem
-                    key="upload"
-                    startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                    description={t('sync.qrz.uploadDesc')}
-                  >
-                    {t('sync.qrz.upload')}
-                  </DropdownItem>
-                  <DropdownItem
-                    key="full_sync"
-                    startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
-                    description={t('sync.qrz.fullSyncDesc')}
-                  >
-                    {t('sync.qrz.fullSync')}
-                  </DropdownItem>
-                </DropdownMenu>
-              </Dropdown>
-            )}
-
-            {/* LoTW同步按钮 - 仅在LoTW启用时显示 */}
-            {syncSummary.lotw && (
-              <Dropdown>
-                <DropdownTrigger>
-                  <Button
-                    color="success"
-                    variant="bordered"
-                    size="sm"
-                    isLoading={isLoTWSyncing}
-                    startContent={!isLoTWSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
-                    className="min-w-0"
-                  >
-                    <span className="hidden lg:inline">LoTW</span>
-                    <span className="lg:hidden hidden md:inline">LoTW</span>
-                  </Button>
-                </DropdownTrigger>
-                <DropdownMenu
-                  aria-label={t('sync.lotw.ariaLabel')}
-                  onAction={(key) => handleLoTWAction(key as 'upload' | 'download_confirmations')}
-                >
-                  <DropdownItem
-                    key="download_confirmations"
-                    startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                    description={t('sync.lotw.downloadConfirmationsDesc')}
-                  >
-                    {t('sync.lotw.downloadConfirmations')}
-                  </DropdownItem>
-                  <DropdownItem
-                    key="upload"
-                    startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                    description={t('sync.lotw.uploadDesc')}
-                  >
-                    {t('sync.lotw.upload')}
-                  </DropdownItem>
-                </DropdownMenu>
-              </Dropdown>
-            )}
-
-            <Dropdown>
-              <DropdownTrigger>
-                <Button
-                  color="primary"
-                  variant="bordered"
-                  size="sm"
-                  isLoading={isExporting}
-                  disabled={qsos.length === 0}
-                  className="min-w-0"
-                  startContent={<FontAwesomeIcon icon={faDownload} className="md:hidden" />}
-                >
-                  <span className="hidden md:inline">{t('export.button')}</span>
-                </Button>
-              </DropdownTrigger>
-              <DropdownMenu
-                aria-label={t('export.ariaLabel')}
-                onAction={(key) => handleExport(key as 'adif' | 'csv')}
-              >
-                <DropdownItem key="adif">{t('export.adif')}</DropdownItem>
-                <DropdownItem key="csv">{t('export.csv')}</DropdownItem>
-              </DropdownMenu>
-            </Dropdown>
-
-            <Button
-              color="secondary"
-              variant="bordered"
-              size="sm"
-              isLoading={isImporting}
-              onPress={triggerImportPicker}
-              className="min-w-0"
-              startContent={!isImporting ? <FontAwesomeIcon icon={faUpload} className="md:hidden" /> : undefined}
-            >
-              <span className="hidden md:inline">{t('import.button')}</span>
-            </Button>
-
-            {/* 补录按钮 */}
-            <Button
-              color="primary"
-              variant="flat"
-              size="sm"
-              startContent={<FontAwesomeIcon icon={faPlus} />}
-              onPress={() => {
-                setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
-                setIsAddModalOpen(true);
-              }}
-              className="min-w-0"
-            >
-              <span className="hidden md:inline">{t('addQso.button')}</span>
-            </Button>
-
-            {/* 打开日志文件目录按钮 - 仅Electron */}
-            {isElectron() && (
-              <Tooltip content={t('action.openDataDir')}>
-                <Button
-                  variant="flat"
-                  size="sm"
-                  isIconOnly
-                  onPress={handleOpenDataDir}
-                  className="min-w-0"
-                >
-                  <FontAwesomeIcon icon={faFolderOpen} />
-                </Button>
-              </Tooltip>
-            )}
-
-            {/* 同步配置齿轮按钮 */}
-            {operatorCallsign && (
-              <Tooltip content={t('action.configSync')}>
-                <Button
-                  variant="flat"
-                  size="sm"
-                  isIconOnly
-                  onPress={() => openSyncConfig('wavelog')}
-                  className="min-w-0"
-                >
-                  <FontAwesomeIcon icon={faCog} />
-                </Button>
-              </Tooltip>
-            )}
+            <div className="hidden md:flex md:items-start md:justify-between md:gap-4">
+              <div className="flex flex-wrap items-center gap-2">
+                {searchAndFilterControls}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {actionControls}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1487,115 +1916,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           )}
         </div>
 
-        {statistics?.dxcc && (
-          <div className="rounded-xl border border-default-200 bg-default-50/60">
-            <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
-              <div className="space-y-1">
-                <p className="text-sm font-semibold text-default-700">{t('stats.dxccOverview')}</p>
-                <div className="flex flex-wrap gap-2">
-                  <Chip size="sm" variant="flat" color="primary">
-                    {t('stats.dxccWorked')}: {statistics.dxcc.worked.current}
-                  </Chip>
-                  <Chip size="sm" variant="flat" color="success">
-                    {t('stats.dxccConfirmed')}: {statistics.dxcc.confirmed.current}
-                  </Chip>
-                  <Chip size="sm" variant="flat" color="warning">
-                    {t('stats.dxccDeleted')}: {statistics.dxcc.worked.deleted}
-                  </Chip>
-                  <Chip size="sm" variant="flat" color="secondary">
-                    {t('stats.dxccReview')}: {statistics.dxcc.reviewCount}
-                  </Chip>
-                </div>
-              </div>
-
-              <Button
-                size="sm"
-                variant="light"
-                endContent={(
-                  <FontAwesomeIcon
-                    icon={faChevronDown}
-                    className={`transition-transform ${isDxccStatsExpanded ? 'rotate-180' : ''}`}
-                  />
-                )}
-                onPress={() => setIsDxccStatsExpanded((value) => !value)}
-              >
-                {isDxccStatsExpanded ? t('stats.collapseDxcc') : t('stats.expandDxcc')}
-              </Button>
-            </div>
-
-            {isDxccStatsExpanded && (
-              <div className="grid grid-cols-1 gap-3 border-t border-default-200 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
-                    <p className="text-xs text-default-500">{t('stats.dxccWorked')}</p>
-                    <p className="text-lg font-semibold text-primary">{statistics.dxcc.worked.current}</p>
-                    <p className="text-xs text-default-500">
-                      {t('stats.dxccWorkedCount', {
-                        current: statistics.dxcc.worked.current,
-                        total: statistics.dxcc.worked.total,
-                      })}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
-                    <p className="text-xs text-default-500">{t('stats.dxccConfirmed')}</p>
-                    <p className="text-lg font-semibold text-success">{statistics.dxcc.confirmed.current}</p>
-                    <p className="text-xs text-default-500">
-                      {t('stats.dxccConfirmedCount', {
-                        current: statistics.dxcc.confirmed.current,
-                        total: statistics.dxcc.confirmed.total,
-                      })}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
-                    <p className="text-xs text-default-500">{t('stats.dxccDeleted')}</p>
-                    <p className="text-lg font-semibold text-warning">{statistics.dxcc.worked.deleted}</p>
-                    <p className="text-xs text-default-500">
-                      {t('stats.dxccDeletedCount', { count: statistics.dxcc.worked.deleted })}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
-                    <p className="text-xs text-default-500">{t('stats.dxccReview')}</p>
-                    <p className="text-lg font-semibold text-secondary">{statistics.dxcc.reviewCount}</p>
-                    <p className="text-xs text-default-500">
-                      {t('stats.dxccReviewCount', { count: statistics.dxcc.reviewCount })}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-medium text-default-500">{t('stats.dxccByBand')}</p>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {statistics.dxcc.byBand.length > 0 ? statistics.dxcc.byBand.slice(0, 8).map((bucket) => (
-                      <Chip key={`band-${bucket.key}`} size="sm" variant="flat" color="primary">
-                        {bucket.key} · {t('stats.dxccBucketCount', { worked: bucket.worked, confirmed: bucket.confirmed })}
-                      </Chip>
-                    )) : <span className="text-xs text-default-400">-</span>}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-default-200 bg-white/70 px-3 py-3 dark:bg-default-100/10">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-medium text-default-500">{t('stats.dxccByMode')}</p>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {statistics.dxcc.byMode.length > 0 ? statistics.dxcc.byMode.slice(0, 8).map((bucket) => (
-                      <Chip key={`mode-${bucket.key}`} size="sm" variant="flat" color="secondary">
-                        {bucket.key} · {t('stats.dxccBucketCount', { worked: bucket.worked, confirmed: bucket.confirmed })}
-                      </Chip>
-                    )) : <span className="text-xs text-default-400">-</span>}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        {mobileDxccSummary}
       </div>
     );
   }, [
     t,
-    operatorCallsign,
+    titleSection,
     isSearchExpanded,
     isGridSearchExpanded,
     filters.callsign,
@@ -1616,35 +1942,64 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     syncSummary,
     openSyncConfig,
     handleQRZSync,
-    handleLoTWAction
+    handleLoTWAction,
+    mobileDxccSummary,
   ]);
 
   // 底部内容：分页
   const bottomContent = React.useMemo(() => {
-    // 如果只有一页，不显示分页组件
-    if (totalPages <= 1) {
-      return null;
-    }
-
     return (
       <div className="py-2 px-2 flex flex-col md:flex-row justify-between items-center gap-2">
-        <Pagination
-          isCompact
-          showControls
-          showShadow
-          color="primary"
-          page={currentPage}
-          total={totalPages}
-          onChange={(page) => {
-            setCurrentPage(page);
-          }}
-          classNames={{
-            wrapper: "gap-0 overflow-visible h-8",
-            item: "w-8 h-8 text-xs min-w-8",
-            cursor: "shadow-sm",
-          }}
-        />
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-default-500">{t('pagination.pageSize')}</span>
+          <Dropdown>
+            <DropdownTrigger>
+              <Button
+                size="sm"
+                variant="flat"
+                className="min-w-0 text-xs md:text-sm"
+                endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs" />}
+              >
+                {t('pagination.pageSizeOption', { count: itemsPerPage })}
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu
+              aria-label={t('pagination.pageSize')}
+              selectedKeys={[String(itemsPerPage)]}
+              selectionMode="single"
+              onSelectionChange={(keys) => {
+                const selected = Array.from(keys as Set<string>);
+                const value = Number(selected[0]);
+                handleItemsPerPageChange(value);
+              }}
+            >
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <DropdownItem key={String(option)}>
+                  {t('pagination.pageSizeOption', { count: option })}
+                </DropdownItem>
+              ))}
+            </DropdownMenu>
+          </Dropdown>
+        </div>
+        <div className="flex items-center gap-2">
+          {totalPages > 1 && (
+            <Pagination
+              isCompact
+              showControls
+              showShadow
+              color="primary"
+              page={currentPage}
+              total={totalPages}
+              onChange={(page) => {
+                setCurrentPage(page);
+              }}
+              classNames={{
+                wrapper: "gap-0 overflow-visible h-8",
+                item: "w-8 h-8 text-xs min-w-8",
+                cursor: "shadow-sm",
+              }}
+            />
+          )}
           <Button
             size="sm"
             variant="flat"
@@ -1672,7 +2027,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         </div>
       </div>
     );
-  }, [t, currentPage, totalPages]);
+  }, [t, currentPage, totalPages, itemsPerPage]);
 
   // 计算加载状态的内容
   const loadingState = loading ? "loading" : "idle";
@@ -1691,8 +2046,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               variant="light"
               onPress={() => {
                 setError(null);
-                loadQSOs();
-                loadStatistics();
+                refreshLogbookData().catch(() => {});
               }}
             >
               {t('error.retry')}
@@ -1704,7 +2058,18 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   }
 
   return (
-    <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
+    <div className="w-full">
+      <RecentQSOGlobeCard
+        qsos={qsos}
+        loading={loading}
+        pageSize={itemsPerPage}
+        pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
+        onPageSizeChange={handleItemsPerPageChange}
+        desktopLeftOverlay={desktopGlobeTitleOverlay}
+        desktopRightOverlay={desktopDxccOverlay}
+      />
+
+      <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
       {/* 通知区域 */}
       {syncSuccess && (
         <Alert
@@ -2166,6 +2531,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           }}
         />
       )}
+      </div>
     </div>
   );
 };

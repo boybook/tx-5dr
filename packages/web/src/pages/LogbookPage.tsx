@@ -11,6 +11,13 @@ import { createLogger } from '../utils/logger';
 import { useViewportHeightCssVar } from '../hooks/useViewportHeight';
 
 const logger = createLogger('LogbookPage');
+const LOGBOOK_GLOBE_THEME_COLOR = '#020617';
+const LOGBOOK_LIGHT_THEME_COLOR = '#f5f5f5';
+const LOGBOOK_DARK_THEME_COLOR = '#09090b';
+
+function resolvePageThemeColor(theme: 'light' | 'dark'): string {
+  return theme === 'dark' ? LOGBOOK_DARK_THEME_COLOR : LOGBOOK_LIGHT_THEME_COLOR;
+}
 
 /**
  * 页面内容组件 - 需要RadioProvider包装
@@ -62,9 +69,9 @@ const LogbookContent: React.FC = () => {
   if (loading) {
     return (
       <div className="app-viewport-min-height bg-background flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
-          <p className="mt-4 text-foreground">{t('logbookPage.loading')}</p>
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-default-300/30 border-t-primary" />
+          <p className="text-sm text-default-500">{t('logbookPage.loading')}</p>
         </div>
       </div>
     );
@@ -133,21 +140,21 @@ const LogbookContent: React.FC = () => {
   const inElectron = isElectron();
 
   return (
-    <div className="app-viewport-min-height bg-background flex flex-col">
-      {/* 顶部区域 - Electron模式下显示拖拽条，浏览器模式下只显示按钮 */}
-      <div
-        className={`flex-shrink-0 flex justify-end items-center px-4 ${inElectron ? 'h-8' : 'h-0'}`}
-        style={inElectron ? {
-          WebkitAppRegion: 'drag',
-        } as React.CSSProperties & { WebkitAppRegion: string } : {}}
-      >
-        {/* 主题切换按钮 - 始终显示 */}
+    <div className="app-viewport-min-height relative bg-background flex flex-col">
+      {inElectron && (
         <div
-          className={`flex items-center ${inElectron ? '' : 'absolute top-2 right-4 z-50'}`}
-          style={inElectron ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string } : {}}
-        >
-          <ThemeToggle variant="button" size="sm" />
-        </div>
+          className="pointer-events-none absolute inset-x-0 top-0 z-40 h-8"
+          style={{
+            WebkitAppRegion: 'drag',
+          } as React.CSSProperties & { WebkitAppRegion: string }}
+        />
+      )}
+
+      <div
+        className="absolute right-4 top-2 z-50 flex items-center"
+        style={inElectron ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string } : {}}
+      >
+        <ThemeToggle variant="button" size="sm" />
       </div>
 
       {/* 内容区域 */}
@@ -167,7 +174,7 @@ const LogbookContent: React.FC = () => {
  */
 const ThemedLogbookWrapper: React.FC = () => {
   // 使用主题钩子来确保主题正确应用
-  useTheme();
+  const { theme } = useTheme();
   useViewportHeightCssVar();
 
   useEffect(() => {
@@ -179,6 +186,98 @@ const ThemedLogbookWrapper: React.FC = () => {
       document.body.classList.remove('logbook-page');
     };
   }, []);
+
+  useEffect(() => {
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    const fallbackThemeColor = resolvePageThemeColor(theme);
+    const previousThemeColor = themeColorMeta?.getAttribute('content') ?? null;
+    let observedBanner: HTMLElement | null = null;
+    let intersectionObserver: IntersectionObserver | null = null;
+    let frameId = 0;
+
+    const syncThemeColor = () => {
+      const globeBanner = document.querySelector<HTMLElement>('[data-logbook-globe-banner="true"]');
+      if (!globeBanner) {
+        themeColorMeta?.setAttribute('content', fallbackThemeColor);
+        document.documentElement.classList.remove('logbook-globe-dominant');
+        document.body.classList.remove('logbook-globe-dominant');
+        return;
+      }
+
+      const rect = globeBanner.getBoundingClientRect();
+      const viewportTopThreshold = 72;
+      const isGlobeDominant = rect.bottom > viewportTopThreshold;
+
+      themeColorMeta?.setAttribute(
+        'content',
+        isGlobeDominant ? LOGBOOK_GLOBE_THEME_COLOR : fallbackThemeColor,
+      );
+      document.documentElement.classList.toggle('logbook-globe-dominant', isGlobeDominant);
+      document.body.classList.toggle('logbook-globe-dominant', isGlobeDominant);
+    };
+
+    const ensureBannerObserver = () => {
+      const globeBanner = document.querySelector<HTMLElement>('[data-logbook-globe-banner="true"]');
+      if (globeBanner === observedBanner) {
+        return;
+      }
+
+      intersectionObserver?.disconnect();
+      intersectionObserver = null;
+      observedBanner = globeBanner;
+
+      if (!globeBanner) {
+        return;
+      }
+
+      intersectionObserver = new IntersectionObserver(() => {
+        syncThemeColor();
+      }, {
+        root: null,
+        threshold: [0, 0.01, 0.25, 0.5, 0.75, 1],
+      });
+
+      intersectionObserver.observe(globeBanner);
+    };
+
+    const mutationObserver = new MutationObserver(() => {
+      ensureBannerObserver();
+      syncThemeColor();
+    });
+
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+
+    ensureBannerObserver();
+    syncThemeColor();
+    frameId = window.requestAnimationFrame(() => {
+      ensureBannerObserver();
+      syncThemeColor();
+    });
+    window.addEventListener('resize', syncThemeColor);
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      mutationObserver.disconnect();
+      intersectionObserver?.disconnect();
+      window.removeEventListener('resize', syncThemeColor);
+
+      document.documentElement.classList.remove('logbook-globe-dominant');
+      document.body.classList.remove('logbook-globe-dominant');
+
+      if (themeColorMeta) {
+        if (previousThemeColor == null) {
+          themeColorMeta.removeAttribute('content');
+        } else {
+          themeColorMeta.setAttribute('content', previousThemeColor);
+        }
+      }
+    };
+  }, [theme]);
 
   return (
     <LogbookContent />

@@ -60,8 +60,19 @@ html, body {
 
 html.logbook-page,
 body.logbook-page {
-  overflow-y: auto;
+  height: auto;
+  min-height: 100%;
+  overflow-y: visible;
   overflow-x: hidden;
+}
+
+html.logbook-page.logbook-globe-dominant {
+  background-color: #020617 !important;
+}
+
+body.logbook-page.logbook-globe-dominant,
+body.logbook-page.logbook-globe-dominant.text-foreground.bg-background {
+  background-color: #020617 !important;
 }
 
 /* 为根元素应用默认HeroUI背景 */
@@ -82,6 +93,11 @@ body.text-foreground.bg-background {
   /* 继承背景色 */
   background-color: inherit;
   color: inherit;
+}
+
+html.logbook-page #root {
+  height: auto;
+  min-height: 100%;
 }
 
 .app-viewport-height {

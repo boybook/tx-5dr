@@ -28,6 +28,21 @@ export function isElectron(): boolean {
   return result;
 }
 
+export function isMacOS(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const userAgentDataPlatform = window.navigator.userAgentData?.platform;
+  if (typeof userAgentDataPlatform === 'string') {
+    return userAgentDataPlatform.toLowerCase() === 'macos';
+  }
+
+  const platform = window.navigator.platform?.toLowerCase() || '';
+  const userAgent = window.navigator.userAgent.toLowerCase();
+  return platform.includes('mac') || userAgent.includes('macintosh') || userAgent.includes('mac os x');
+}
+
 /**
  * 获取API基础URL
  * 开发环境：通过Vite代理到localhost:4000
