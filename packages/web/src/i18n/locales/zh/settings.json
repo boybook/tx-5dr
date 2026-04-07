@@ -315,6 +315,30 @@
     "goToRadioProfile": "前往电台配置",
     "saveSettings": "保存设置"
   },
+  "qsoNotifications": {
+    "title": "QSO 系统提醒",
+    "description": "记录 QSO 时，在系统级通知中心弹出提醒。仅在页面不在前台时触发，避免和当前界面提示重复。",
+    "localOnly": "此能力只绑定当前客户端本地，不会写入服务端配置。",
+    "requestPermission": "请求授权",
+    "permissionRequiredTitle": "需要通知授权",
+    "permissionRequiredDescription": "已启用本地偏好，但浏览器或桌面运行时还没有授予通知权限。点击右侧按钮后允许即可生效。",
+    "blockedTitle": "通知已被阻止",
+    "blockedDescription": "你之前在浏览器或系统里禁用了本站点通知。请到站点权限或系统通知设置中重新允许，恢复后会自动生效。",
+    "unsupportedTitle": "当前环境不支持",
+    "unsupportedDescription": "当前浏览器环境不支持系统提醒，或当前访问地址不是安全上下文。浏览器建议使用 HTTPS 或 localhost。",
+    "toggleFailedTitle": "无法启用系统提醒",
+    "toastEnabledTitle": "QSO 系统提醒已启用",
+    "toastEnabledDescription": "后续在后台记录 QSO 时会触发系统提醒。",
+    "permissionPendingTitle": "通知授权未完成",
+    "permissionPendingDescription": "未获得通知授权，当前不会触发系统提醒。",
+    "status": {
+      "active": "已启用",
+      "disabled": "未启用",
+      "needsPermission": "等待授权",
+      "blocked": "已阻止",
+      "unsupported": "不可用"
+    }
+  },
   "automation": {
     "ariaLabel": "自动化设置",
     "noOperator": "请先选择一个操作员",

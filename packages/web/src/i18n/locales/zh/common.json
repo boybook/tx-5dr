@@ -18,6 +18,10 @@
     "openSettings": "打开设置",
     "clearData": "清空数据"
   },
+  "qsoNotifications": {
+    "enable": "启用 QSO 系统提醒",
+    "disable": "关闭 QSO 系统提醒"
+  },
   "role": {
     "viewer": "观察者",
     "operator": "操作员",

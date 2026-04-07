@@ -13,6 +13,7 @@ import { VoiceQSOLogCard } from '../components/voice/VoiceQSOLogCard';
 import { VoiceRecentQSOList } from '../components/voice/VoiceRecentQSOList';
 import { VoicePTTButton } from '../components/voice/VoicePTTButton';
 import { ThemeToggle } from '../components/common/ThemeToggle';
+import { QSONotificationToggleButton } from '../components/common/QSONotificationToggleButton';
 import { ServerHealthButton } from '../components/system/ServerHealthButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faKey, faLock, faRightFromBracket, faUser } from '@fortawesome/free-solid-svg-icons';
@@ -150,6 +151,7 @@ export const VoiceRightLayout: React.FC = () => {
           </div>
           <div className="flex items-center gap-0">
             <ServerHealthButton />
+            <QSONotificationToggleButton />
             <ThemeToggle variant="dropdown" size="sm" />
             <Button
               onPress={handleOpenSettings}

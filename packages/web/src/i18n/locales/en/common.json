@@ -18,6 +18,10 @@
     "openSettings": "Open Settings",
     "clearData": "Clear Data"
   },
+  "qsoNotifications": {
+    "enable": "Enable QSO system notifications",
+    "disable": "Disable QSO system notifications"
+  },
   "role": {
     "viewer": "Viewer",
     "operator": "Operator",

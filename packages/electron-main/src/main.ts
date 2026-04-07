@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session } from 'electron';
 import log from 'electron-log/main';
 import { homedir, hostname as getHostname, networkInterfaces } from 'node:os';
 import net from 'node:net';
@@ -45,6 +45,7 @@ let hasStartupError: boolean = false; // 是否发生启动错误
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
+let notificationPermissionHandlersConfigured = false;
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
@@ -128,6 +129,60 @@ function saveElectronSettings(settings: ElectronSettings): void {
 
 function getDesktopHttpsConfig(): PersistentDesktopHttpsConfig {
   return sanitizeDesktopHttpsConfig(loadElectronSettings().desktopHttps);
+}
+
+function isAllowedNotificationOrigin(rawUrl: string): boolean {
+  if (!rawUrl || rawUrl === 'null') {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+
+    const hostname = parsed.hostname;
+    const isLoopbackHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+    if (!isLoopbackHost) {
+      return false;
+    }
+
+    if (app.isPackaged) {
+      return true;
+    }
+
+    return parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function configureNotificationPermissionHandlers(): void {
+  if (notificationPermissionHandlersConfigured) {
+    return;
+  }
+
+  const defaultSession = session.defaultSession;
+
+  defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+    if (permission !== 'notifications') {
+      return true;
+    }
+
+    return isAllowedNotificationOrigin(requestingOrigin);
+  });
+
+  defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    if (permission !== 'notifications') {
+      callback(false);
+      return;
+    }
+
+    callback(isAllowedNotificationOrigin(details.requestingUrl));
+  });
+
+  notificationPermissionHandlersConfigured = true;
 }
 
 function isDevelopmentRuntime(): boolean {
@@ -959,6 +1014,8 @@ function getWebUrl(): string {
  * 仅创建主窗口（不启动子进程），用于托盘/Dock恢复窗口
  */
 async function createMainWindowOnly(): Promise<BrowserWindow> {
+  configureNotificationPermissionHandlers();
+
   // 检查主窗口是否已存在且有效
   if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
     mainWindowInstance.show();

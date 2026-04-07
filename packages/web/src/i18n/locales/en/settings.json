@@ -315,6 +315,30 @@
     "goToRadioProfile": "Go to Radio Config",
     "saveSettings": "Save Settings"
   },
+  "qsoNotifications": {
+    "title": "QSO System Notifications",
+    "description": "Show a system-level notification when a QSO is logged. Notifications only fire while the page is in the background to avoid duplicating the foreground UI.",
+    "localOnly": "This feature is local to the current client only and is never stored on the server.",
+    "requestPermission": "Request Permission",
+    "permissionRequiredTitle": "Notification permission required",
+    "permissionRequiredDescription": "The local preference is enabled, but the browser or desktop runtime has not granted notification permission yet.",
+    "blockedTitle": "Notifications are blocked",
+    "blockedDescription": "This site was previously blocked in your browser or system settings. Re-allow notifications there and the feature will resume automatically.",
+    "unsupportedTitle": "Not available in this environment",
+    "unsupportedDescription": "System notifications are unavailable because this runtime does not support them or the current origin is not a secure context. Browsers should use HTTPS or localhost.",
+    "toggleFailedTitle": "Unable to enable notifications",
+    "toastEnabledTitle": "QSO system notifications enabled",
+    "toastEnabledDescription": "Future QSO logging events will notify you while the app is in the background.",
+    "permissionPendingTitle": "Notification permission not granted",
+    "permissionPendingDescription": "Permission was not granted, so system notifications remain inactive.",
+    "status": {
+      "active": "Enabled",
+      "disabled": "Disabled",
+      "needsPermission": "Awaiting permission",
+      "blocked": "Blocked",
+      "unsupported": "Unavailable"
+    }
+  },
   "automation": {
     "ariaLabel": "Automation settings",
     "noOperator": "Please select an operator first",
