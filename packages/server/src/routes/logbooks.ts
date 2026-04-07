@@ -9,6 +9,8 @@ import {
   UpdateLogBookRequestSchema,
   ConnectOperatorToLogBookRequestSchema,
   LogBookQSOQueryOptionsSchema,
+  LogBookRecentGlobeQuerySchema,
+  LogBookRecentGlobeResponseSchema,
   LogBookExportOptionsSchema,
   UpdateQSORequestSchema,
   CreateQSORequestSchema,
@@ -18,6 +20,7 @@ import {
   type UpdateLogBookRequest,
   type ConnectOperatorToLogBookRequest,
   type LogBookQSOQueryOptions,
+  type LogBookRecentGlobeQuery,
   type LogBookExportOptions,
   type LogBookImportFormat,
   type UpdateQSORequest,
@@ -26,7 +29,7 @@ import {
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { LogQueryOptions } from "@tx5dr/core";
+import { gridToCoordinates, LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireLogbookAccess } from '../auth/authPlugin.js';
 import { normalizeCallsign } from '../utils/callsign.js';
@@ -72,6 +75,30 @@ function getImportPayloadFromBody(body: unknown): {
 export async function logbookRoutes(fastify: FastifyInstance) {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
   const logManager = digitalRadioEngine.operatorManager.getLogManager();
+
+  const resolveLogBookOrThrow = async (id: string) => {
+    let logBook = logManager.getLogBook(id);
+
+    if (!logBook) {
+      try {
+        logBook = await logManager.getOrCreateLogBookByCallsign(id);
+      } catch (error) {
+        logger.warn(`Failed to create log book for callsign ${id}:`, error);
+      }
+    }
+
+    if (!logBook) {
+      throw new RadioError({
+        code: RadioErrorCode.RESOURCE_UNAVAILABLE,
+        message: `Logbook ${id} does not exist`,
+        userMessage: 'Logbook not found',
+        severity: RadioErrorSeverity.WARNING,
+        suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
+      });
+    }
+
+    return logBook;
+  };
 
   // 日志本归属校验 preHandler（复用于所有带 :id 的路由）
   const logbookAccessCheck = requireLogbookAccess(logManager);
@@ -131,27 +158,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/:id', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
     try {
       const { id } = request.params;
-      let logBook = logManager.getLogBook(id);
-      
-      // 如果直接ID查找失败，尝试按呼号查找或创建
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch (error) {
-          logger.warn(`Failed to create log book for callsign ${id}:`, error);
-        }
-      }
-
-      if (!logBook) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-        });
-      }
+      const logBook = await resolveLogBookOrThrow(id);
 
       // 获取统计信息
       const statistics = await logBook.provider.getStatistics();
@@ -357,35 +364,15 @@ export async function logbookRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params;
       const options = LogBookQSOQueryOptionsSchema.parse(request.query);
-      
-      let logBook = logManager.getLogBook(id);
-      
-      // 如果直接ID查找失败，尝试按呼号查找或创建
-      if (!logBook) {
-        try {
-          logBook = await logManager.getOrCreateLogBookByCallsign(id);
-        } catch (error) {
-          logger.warn(`Failed to create log book for callsign ${id}:`, error);
-        }
-      }
-
-
-      if (!logBook) {
-        // 📊 Day14：资源未找到使用 RadioError
-        throw new RadioError({
-          code: RadioErrorCode.RESOURCE_UNAVAILABLE,
-          message: `Logbook ${id} does not exist`,
-          userMessage: 'Logbook not found',
-          severity: RadioErrorSeverity.WARNING,
-          suggestions: ['Check if logbook ID is correct', 'View available logbooks'],
-        });
-      }
+      const logBook = await resolveLogBookOrThrow(id);
 
       // 转换查询选项格式以匹配LogQueryOptions接口
       const queryOptions: LogQueryOptions = {
         callsign: options.callsign,
         grid: normalizeGridQuery(options.grid),
         mode: options.mode,
+        dxccStatus: options.dxccStatus,
+        qslFlow: options.qslFlow,
         excludeModes: options.excludeModes
           ? options.excludeModes.split(',').map(m => m.trim()).filter(Boolean)
           : undefined,
@@ -488,6 +475,136 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       });
     } catch (error) {
       // 📊 Day14：使用 RadioError，由全局错误处理器统一处理
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  fastify.get<{ Params: { id: string }; Querystring: LogBookRecentGlobeQuery }>('/:id/recent-globe', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const options = LogBookRecentGlobeQuerySchema.parse(request.query);
+      const logBook = await resolveLogBookOrThrow(id);
+      const startedAt = Date.now();
+
+      logger.info('Building recent globe payload', {
+        logBookId: id,
+        operatorId: options.operatorId || null,
+        hours: options.hours,
+        limit: options.limit,
+      });
+
+      const now = Date.now();
+      const windowStart = now - options.hours * 60 * 60 * 1000;
+      const recentQsos = await logBook.provider.queryQSOs({
+        timeRange: { start: windowStart, end: now },
+        orderBy: 'time',
+        orderDirection: 'desc',
+      });
+
+      const stationInfo = ConfigManager.getInstance().getStationInfo();
+      const requestedOperator = options.operatorId
+        ? digitalRadioEngine.operatorManager.getOperator(options.operatorId)
+        : undefined;
+
+      let home: {
+        source: 'operator_grid' | 'station_coordinates' | 'station_grid';
+        grid?: string;
+        latitude: number;
+        longitude: number;
+      } | null = null;
+
+      if (requestedOperator?.config.myGrid) {
+        const coords = gridToCoordinates(requestedOperator.config.myGrid);
+        if (coords) {
+          home = {
+            source: 'operator_grid',
+            grid: requestedOperator.config.myGrid,
+            latitude: coords.lat,
+            longitude: coords.lon,
+          };
+        }
+      }
+
+      if (!home && stationInfo.qth?.latitude != null && stationInfo.qth?.longitude != null) {
+        home = {
+          source: 'station_coordinates',
+          latitude: stationInfo.qth.latitude,
+          longitude: stationInfo.qth.longitude,
+        };
+      }
+
+      if (!home && stationInfo.qth?.grid) {
+        const coords = gridToCoordinates(stationInfo.qth.grid);
+        if (coords) {
+          home = {
+            source: 'station_grid',
+            grid: stationInfo.qth.grid,
+            latitude: coords.lat,
+            longitude: coords.lon,
+          };
+        }
+      }
+
+      const items: Array<{
+        id: string;
+        callsign: string;
+        startTime: number;
+        mode: string;
+        frequency: number;
+        grid: string;
+      }> = [];
+      let droppedInvalidGrid = 0;
+      let limited = false;
+
+      for (const qso of recentQsos) {
+        const normalizedGrid = normalizeGridQuery(qso.grid);
+        if (!normalizedGrid || !gridToCoordinates(normalizedGrid)) {
+          droppedInvalidGrid += 1;
+          continue;
+        }
+
+        items.push({
+          id: qso.id,
+          callsign: qso.callsign,
+          startTime: qso.startTime,
+          mode: qso.mode,
+          frequency: qso.frequency,
+          grid: normalizedGrid,
+        });
+
+        if (items.length >= options.limit) {
+          limited = true;
+          break;
+        }
+      }
+
+      const response = LogBookRecentGlobeResponseSchema.parse({
+        success: true,
+        data: {
+          home,
+          items,
+          meta: {
+            hours: options.hours,
+            totalReturned: items.length,
+            droppedInvalidGrid,
+            limited,
+          },
+        },
+      });
+
+      logger.info('Recent globe payload ready', {
+        logBookId: id,
+        sourceQsoCount: recentQsos.length,
+        returnedCount: items.length,
+        droppedInvalidGrid,
+        limited,
+        hasHome: !!home,
+        elapsedMs: Date.now() - startedAt,
+      });
+
+      return reply.send(response);
+    } catch (error) {
+      logger.error('Failed to build recent globe payload', error);
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });

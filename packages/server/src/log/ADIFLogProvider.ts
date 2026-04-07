@@ -170,6 +170,15 @@ function isQSOConfirmed(qso: QSORecord): boolean {
     || qso.qrzQslReceived === 'Y';
 }
 
+function isQSOTwoWayConfirmed(qso: QSORecord): boolean {
+  const lotwConfirmed = qso.lotwQslSent === 'Y'
+    && (qso.lotwQslReceived === 'Y' || qso.lotwQslReceived === 'V');
+  const qrzConfirmed = qso.qrzQslSent === 'Y'
+    && qso.qrzQslReceived === 'Y';
+
+  return lotwConfirmed || qrzConfirmed;
+}
+
 function enrichQSOWithDXCC(qso: QSORecord): QSORecord {
   if (qso.dxccSource === 'manual_override' && qso.dxccId) {
     return qso;
@@ -1007,6 +1016,19 @@ export class ADIFLogProvider implements ILogProvider {
       // 模式过滤
       if (options.mode) {
         results = results.filter(qso => qso.mode === options.mode);
+      }
+
+      if (options.dxccStatus) {
+        results = results.filter(qso => qso.dxccStatus === options.dxccStatus);
+      }
+
+      if (options.qslFlow) {
+        results = results.filter((qso) => {
+          const twoWayConfirmed = isQSOTwoWayConfirmed(qso);
+          return options.qslFlow === 'two_way_confirmed'
+            ? twoWayConfirmed
+            : !twoWayConfirmed;
+        });
       }
 
       // 排除模式过滤

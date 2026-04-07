@@ -21,6 +21,8 @@ import type {
   CreateLogBookRequest,
   UpdateLogBookRequest,
   LogBookQSOQueryOptions,
+  LogBookRecentGlobeQuery,
+  LogBookRecentGlobeResponse,
   LogBookExportOptions,
   QSORecord,
   UpdateQSORequest,
@@ -1264,6 +1266,35 @@ export const api = {
       throw new Error(`Failed to query QSO records: ${res.status} ${res.statusText}`);
     }
     
+    return await res.json();
+  },
+
+  /**
+   * 获取日志页地球视图所需的最近QSO数据
+   */
+  async getLogBookRecentGlobe(id: string, options?: LogBookRecentGlobeQuery, apiBase?: string): Promise<LogBookRecentGlobeResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const params = new URLSearchParams();
+
+    if (options) {
+      Object.entries(options).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          params.append(key, String(value));
+        }
+      });
+    }
+
+    const url = `${baseUrl}/logbooks/${id}/recent-globe${params.toString() ? '?' + params.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => null);
+      if (errorData) {
+        throw handleApiError(errorData, res.status);
+      }
+      throw new Error(`Failed to query recent logbook globe data: ${res.status} ${res.statusText}`);
+    }
+
     return await res.json();
   },
 

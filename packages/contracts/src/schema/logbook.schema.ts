@@ -110,6 +110,8 @@ export const LogBookQSOQueryOptionsSchema = z.object({
   grid: z.string().optional(),
   band: z.string().optional(),
   mode: z.string().optional(),
+  dxccStatus: z.enum(['deleted']).optional(),
+  qslFlow: z.enum(['two_way_confirmed', 'not_two_way_confirmed']).optional(),
   /** 排除的模式列表，逗号分隔，如 "FT8,FT4" */
   excludeModes: z.string().optional(),
   startDate: z.string().optional(),
@@ -117,6 +119,48 @@ export const LogBookQSOQueryOptionsSchema = z.object({
   qslStatus: z.enum(['confirmed', 'uploaded', 'none']).optional(),
   limit: z.coerce.number().optional().default(100),
   offset: z.coerce.number().optional().default(0),
+});
+
+export const LogBookRecentGlobeQuerySchema = z.object({
+  operatorId: z.string().optional(),
+  hours: z.coerce.number().int().min(1).max(168).optional().default(24),
+  limit: z.coerce.number().int().min(1).max(500).optional().default(300),
+});
+
+export const LogBookRecentGlobeHomeSourceSchema = z.enum([
+  'operator_grid',
+  'station_coordinates',
+  'station_grid',
+]);
+
+export const LogBookRecentGlobeHomeSchema = z.object({
+  source: LogBookRecentGlobeHomeSourceSchema,
+  grid: z.string().optional(),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+});
+
+export const LogBookRecentGlobeItemSchema = z.object({
+  id: z.string(),
+  callsign: z.string(),
+  startTime: z.number(),
+  mode: z.string(),
+  frequency: z.number(),
+  grid: z.string(),
+});
+
+export const LogBookRecentGlobeResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    home: LogBookRecentGlobeHomeSchema.nullable(),
+    items: z.array(LogBookRecentGlobeItemSchema),
+    meta: z.object({
+      hours: z.number().int().min(1),
+      totalReturned: z.number().int().nonnegative(),
+      droppedInvalidGrid: z.number().int().nonnegative(),
+      limited: z.boolean(),
+    }),
+  }),
 });
 
 /**
@@ -226,6 +270,11 @@ export type LogBookListResponse = z.infer<typeof LogBookListResponseSchema>;
 export type LogBookDetailResponse = z.infer<typeof LogBookDetailResponseSchema>;
 export type LogBookActionResponse = z.infer<typeof LogBookActionResponseSchema>;
 export type LogBookQSOQueryOptions = z.infer<typeof LogBookQSOQueryOptionsSchema>;
+export type LogBookRecentGlobeQuery = z.infer<typeof LogBookRecentGlobeQuerySchema>;
+export type LogBookRecentGlobeHomeSource = z.infer<typeof LogBookRecentGlobeHomeSourceSchema>;
+export type LogBookRecentGlobeHome = z.infer<typeof LogBookRecentGlobeHomeSchema>;
+export type LogBookRecentGlobeItem = z.infer<typeof LogBookRecentGlobeItemSchema>;
+export type LogBookRecentGlobeResponse = z.infer<typeof LogBookRecentGlobeResponseSchema>;
 export type LogBookExportOptions = z.infer<typeof LogBookExportOptionsSchema>;
 export type LogBookImportFormat = z.infer<typeof LogBookImportFormatSchema>;
 export type LogBookImportResult = z.infer<typeof LogBookImportResultSchema>;
