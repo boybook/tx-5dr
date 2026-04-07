@@ -1,4 +1,13 @@
-import type { LogBookRecentGlobeResponse, QSORecord, StationInfo } from '@tx5dr/contracts';
+import type {
+  LogBookRecentGlobeResponse,
+  LogBookWorkedGridItem,
+  QSORecord,
+  StationInfo,
+} from '@tx5dr/contracts';
+import {
+  getGridBounds,
+  getTwoCharacterGrid,
+} from '@tx5dr/contracts';
 import { gridToCoordinates } from '@tx5dr/core';
 
 const REMOTE_POINT_COLOR = '#60a5fa';
@@ -53,6 +62,150 @@ export interface RecentQSOGlobeModel {
     droppedInvalidGrid: number;
     limited: boolean;
   };
+}
+
+export interface WorkedGridPolygon {
+  kind: 'worked-grid' | 'grid-base';
+  precision: 2 | 4;
+  grid: string;
+  count: number;
+  geometry: {
+    type: 'Polygon';
+    coordinates: number[][][];
+  };
+}
+
+export interface WorkedGridLabel {
+  grid: string;
+  precision: 2 | 4;
+  count: number;
+  lat: number;
+  lng: number;
+  text: string;
+}
+
+export interface WorkedGridGlobeModel {
+  precision2: {
+    polygons: WorkedGridPolygon[];
+    labels: WorkedGridLabel[];
+  };
+  precision4: {
+    polygons: WorkedGridPolygon[];
+    labels: WorkedGridLabel[];
+  };
+}
+
+const globalGridPolygonCache = new Map<2 | 4, WorkedGridPolygon[]>();
+const maidenheadGridLineCache = new Map<2 | 4, WorkedGridLine[]>();
+
+export interface WorkedGridLine {
+  kind: 'grid-base';
+  precision: 2 | 4;
+  axis: 'lat' | 'lng';
+  value: number;
+  points: Array<[number, number]>;
+}
+
+function createGridPolygon(grid: string, precision: 2 | 4, count: number, kind: WorkedGridPolygon['kind']): WorkedGridPolygon | null {
+  const bounds = getGridBounds(grid);
+  if (!bounds) {
+    return null;
+  }
+
+  return {
+    kind,
+    precision,
+    grid,
+    count,
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[
+        [bounds.lonMin, bounds.latMin],
+        [bounds.lonMax, bounds.latMin],
+        [bounds.lonMax, bounds.latMax],
+        [bounds.lonMin, bounds.latMax],
+        [bounds.lonMin, bounds.latMin],
+      ]],
+    },
+  };
+}
+
+export function getGlobalGridPolygons(precision: 2 | 4): WorkedGridPolygon[] {
+  const cached = globalGridPolygonCache.get(precision);
+  if (cached) {
+    return cached;
+  }
+
+  const polygons: WorkedGridPolygon[] = [];
+
+  for (let lonField = 0; lonField < 18; lonField += 1) {
+    for (let latField = 0; latField < 18; latField += 1) {
+      const twoCharGrid = `${String.fromCharCode(65 + lonField)}${String.fromCharCode(65 + latField)}`;
+
+      if (precision === 2) {
+        const polygon = createGridPolygon(twoCharGrid, 2, 0, 'grid-base');
+        if (polygon) {
+          polygons.push(polygon);
+        }
+        continue;
+      }
+
+      for (let lonSquare = 0; lonSquare < 10; lonSquare += 1) {
+        for (let latSquare = 0; latSquare < 10; latSquare += 1) {
+          const fourCharGrid = `${twoCharGrid}${lonSquare}${latSquare}`;
+          const polygon = createGridPolygon(fourCharGrid, 4, 0, 'grid-base');
+          if (polygon) {
+            polygons.push(polygon);
+          }
+        }
+      }
+    }
+  }
+
+  globalGridPolygonCache.set(precision, polygons);
+  return polygons;
+}
+
+export function getMaidenheadGridLines(precision: 2 | 4): WorkedGridLine[] {
+  const cached = maidenheadGridLineCache.get(precision);
+  if (cached) {
+    return cached;
+  }
+
+  const lngStep = precision === 2 ? 20 : 2;
+  const latStep = precision === 2 ? 10 : 1;
+  const lines: WorkedGridLine[] = [];
+
+  for (let lng = -180; lng <= 180; lng += lngStep) {
+    const points: Array<[number, number]> = [];
+    for (let lat = -90; lat <= 90; lat += latStep) {
+      points.push([lat, lng]);
+    }
+    lines.push({
+      kind: 'grid-base',
+      precision,
+      axis: 'lng',
+      value: lng,
+      points,
+    });
+  }
+
+  for (let lat = -90; lat <= 90; lat += latStep) {
+    const points: Array<[number, number]> = [];
+    for (let lng = -180; lng <= 180; lng += lngStep) {
+      points.push([lat, lng]);
+    }
+    lines.push({
+      kind: 'grid-base',
+      precision,
+      axis: 'lat',
+      value: lat,
+      points,
+    });
+  }
+
+  maidenheadGridLineCache.set(precision, lines);
+  return lines;
 }
 
 function haversineDistanceKm(
@@ -322,6 +475,72 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
       farthestDistanceKm: homePoint && farthestDistanceKm > 0 ? farthestDistanceKm : undefined,
       droppedInvalidGrid,
       limited: false,
+    },
+  };
+}
+
+export function buildWorkedGridGlobeModel(items: LogBookWorkedGridItem[]): WorkedGridGlobeModel {
+  const precision4Polygons: WorkedGridPolygon[] = [];
+  const precision4Labels: WorkedGridLabel[] = [];
+  const precision2Map = new Map<string, number>();
+
+  for (const item of items) {
+    const polygon = createGridPolygon(item.grid, 4, item.count, 'worked-grid');
+    const bounds = getGridBounds(item.grid);
+    if (!polygon || !bounds) {
+      continue;
+    }
+
+    precision4Polygons.push(polygon);
+    precision4Labels.push({
+      grid: item.grid,
+      precision: 4,
+      count: item.count,
+      lat: bounds.centerLat,
+      lng: bounds.centerLon,
+      text: item.grid,
+    });
+
+    const twoCharacterGrid = getTwoCharacterGrid(item.grid);
+    if (twoCharacterGrid) {
+      precision2Map.set(twoCharacterGrid, (precision2Map.get(twoCharacterGrid) || 0) + item.count);
+    }
+  }
+
+  const precision2Polygons: WorkedGridPolygon[] = [];
+  const precision2Labels: WorkedGridLabel[] = [];
+
+  for (const [grid, count] of precision2Map.entries()) {
+    const polygon = createGridPolygon(grid, 2, count, 'worked-grid');
+    const bounds = getGridBounds(grid);
+    if (!polygon || !bounds) {
+      continue;
+    }
+
+    precision2Polygons.push(polygon);
+    precision2Labels.push({
+      grid,
+      precision: 2,
+      count,
+      lat: bounds.centerLat,
+      lng: bounds.centerLon,
+      text: grid,
+    });
+  }
+
+  precision2Polygons.sort((left, right) => right.count - left.count || left.grid.localeCompare(right.grid));
+  precision2Labels.sort((left, right) => right.count - left.count || left.grid.localeCompare(right.grid));
+  precision4Polygons.sort((left, right) => right.count - left.count || left.grid.localeCompare(right.grid));
+  precision4Labels.sort((left, right) => right.count - left.count || left.grid.localeCompare(right.grid));
+
+  return {
+    precision2: {
+      polygons: precision2Polygons,
+      labels: precision2Labels,
+    },
+    precision4: {
+      polygons: precision4Polygons,
+      labels: precision4Labels,
     },
   };
 }

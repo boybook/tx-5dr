@@ -2060,8 +2060,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   return (
     <div className="w-full">
       <RecentQSOGlobeCard
+        logBookId={effectiveLogBookId}
         qsos={qsos}
         loading={loading}
+        bandFilter={filters.band}
         pageSize={itemsPerPage}
         pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
         onPageSizeChange={handleItemsPerPageChange}

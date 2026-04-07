@@ -163,6 +163,26 @@ export const LogBookRecentGlobeResponseSchema = z.object({
   }),
 });
 
+export const LogBookWorkedGridQuerySchema = z.object({
+  band: z.string().optional(),
+});
+
+export const LogBookWorkedGridItemSchema = z.object({
+  grid: z.string().regex(/^[A-R]{2}[0-9]{2}$/),
+  count: z.number().int().positive(),
+});
+
+export const LogBookWorkedGridResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    items: z.array(LogBookWorkedGridItemSchema),
+    meta: z.object({
+      band: z.string().optional(),
+      total: z.number().int().nonnegative(),
+    }),
+  }),
+});
+
 /**
  * 日志本导出选项Schema
  */
@@ -275,6 +295,9 @@ export type LogBookRecentGlobeHomeSource = z.infer<typeof LogBookRecentGlobeHome
 export type LogBookRecentGlobeHome = z.infer<typeof LogBookRecentGlobeHomeSchema>;
 export type LogBookRecentGlobeItem = z.infer<typeof LogBookRecentGlobeItemSchema>;
 export type LogBookRecentGlobeResponse = z.infer<typeof LogBookRecentGlobeResponseSchema>;
+export type LogBookWorkedGridQuery = z.infer<typeof LogBookWorkedGridQuerySchema>;
+export type LogBookWorkedGridItem = z.infer<typeof LogBookWorkedGridItemSchema>;
+export type LogBookWorkedGridResponse = z.infer<typeof LogBookWorkedGridResponseSchema>;
 export type LogBookExportOptions = z.infer<typeof LogBookExportOptionsSchema>;
 export type LogBookImportFormat = z.infer<typeof LogBookImportFormatSchema>;
 export type LogBookImportResult = z.infer<typeof LogBookImportResultSchema>;

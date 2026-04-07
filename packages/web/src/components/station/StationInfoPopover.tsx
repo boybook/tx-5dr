@@ -5,7 +5,7 @@ import { faRadio, faLocationDot, faPencil } from '@fortawesome/free-solid-svg-ic
 import ReactMarkdown from 'react-markdown';
 import { useStationInfo } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
-import { UserRole } from '@tx5dr/contracts';
+import { getGridBounds, UserRole } from '@tx5dr/contracts';
 
 // 使用 Carto @2x 瓦片（512×512px 输出），以 256px CSS 尺寸渲染：
 // - 在 2× Retina 屏上：256 CSS px = 512 物理像素 = 1 张 @2x 瓦片，完全清晰
@@ -51,35 +51,6 @@ function latLonToGridPixel(lat: number, lon: number, cx: number, cy: number) {
   return {
     x: (1 + (tx - cx)) * CSS_TILE,
     y: (1 + (ty - cy)) * CSS_TILE,
-  };
-}
-
-/** 解析 Maidenhead 网格（4 或 6 字符），返回边界和中心坐标 */
-function getGridBounds(grid: string) {
-  const g = grid.toUpperCase();
-  if (g.length < 4) return null;
-  const lonField = g.charCodeAt(0) - 65;
-  const latField = g.charCodeAt(1) - 65;
-  const lonSquare = parseInt(g[2]);
-  const latSquare = parseInt(g[3]);
-  let lonMin = lonField * 20 - 180 + lonSquare * 2;
-  let lonMax = lonMin + 2;
-  let latMin = latField * 10 - 90 + latSquare;
-  let latMax = latMin + 1;
-
-  if (g.length >= 6) {
-    const lonSub = g.charCodeAt(4) - 65; // A=0 .. X=23
-    const latSub = g.charCodeAt(5) - 65;
-    lonMin = lonMin + lonSub * (2 / 24);
-    lonMax = lonMin + (2 / 24);
-    latMin = latMin + latSub * (1 / 24);
-    latMax = latMin + (1 / 24);
-  }
-
-  return {
-    lonMin, lonMax, latMin, latMax,
-    centerLon: (lonMin + lonMax) / 2,
-    centerLat: (latMin + latMax) / 2,
   };
 }
 

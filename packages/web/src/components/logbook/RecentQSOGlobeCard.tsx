@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, SelectItem, Spinner } from '@heroui/react';
-import type { QSORecord, StationInfo } from '@tx5dr/contracts';
+import { getGridBounds, type LogBookWorkedGridItem, type QSORecord, type StationInfo } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
 import Globe, { type GlobeMethods } from 'react-globe.gl';
 import * as THREE from 'three';
@@ -12,9 +12,14 @@ import { createLogger } from '../../utils/logger';
 import { isElectron, isMacOS } from '../../utils/config';
 import { useViewportHeightValue } from '../../hooks/useViewportHeight';
 import {
+  buildWorkedGridGlobeModel,
   buildPagedQSOGlobeModel,
+  getMaidenheadGridLines,
   type GlobeArc,
   type GlobeStationPoint,
+  type WorkedGridLabel,
+  type WorkedGridLine,
+  type WorkedGridPolygon,
 } from '../../utils/logbookGlobe';
 
 const logger = createLogger('RecentQSOGlobeCard');
@@ -28,6 +33,14 @@ const EARTH_BUMP_URL = '/globe/earth-topology.png';
 const INITIAL_POV_ANIMATION_MS = 900;
 const FOCUS_POV_ANIMATION_MS = 1400;
 const DEFAULT_POV_ALTITUDE = 1.0;
+const WORKED_GRID_SWITCH_ALTITUDE = 0.62;
+const WORKED_GRID_LABEL_LIMIT = 120;
+const WORKED_GRID_MIN_VISIBLE_DEGREES = 34;
+const WORKED_GRID_MAX_VISIBLE_DEGREES = 68;
+const POV_SYNC_INTERVAL_MS = 120;
+const POV_SYNC_ALTITUDE_EPSILON = 0.025;
+const POV_SYNC_CENTER_EPSILON_WITH_GRIDS = 1.2;
+const POV_SYNC_CENTER_EPSILON_IDLE = 999;
 
 type GlobeControls = {
   autoRotate: boolean;
@@ -43,14 +56,89 @@ type LandTopology = {
   };
 };
 
+type GlobeGridPath = WorkedGridLine | {
+  kind: 'worked-grid';
+  precision: 2 | 4;
+  grid: string;
+  count: number;
+  points: Array<[number, number]>;
+};
+
+type GlobeGridTile = {
+  grid: string;
+  count: number;
+  precision: 2 | 4;
+  lat: number;
+  lng: number;
+  width: number;
+  height: number;
+};
+
+type GlobePolygonGeometry = {
+  type: string;
+  coordinates: number[];
+};
+
+type GlobePointOfView = {
+  lat?: number;
+  lng?: number;
+  altitude?: number;
+};
+
+function getLandGeometry(polygon: object): GlobePolygonGeometry {
+  return (polygon as Feature<Geometry>).geometry as unknown as GlobePolygonGeometry;
+}
+
+function getGridPathColor(path: object): string {
+  const gridPath = path as GlobeGridPath;
+  if (gridPath.kind === 'worked-grid') {
+    return gridPath.precision === 4
+      ? 'rgba(248, 113, 113, 0.26)'
+      : 'rgba(248, 113, 113, 0.22)';
+  }
+  return gridPath.precision === 4
+    ? 'rgba(248, 113, 113, 0.07)'
+    : 'rgba(248, 113, 113, 0.1)';
+}
+
+function getGridTileAltitude(tile: object): number {
+  return (tile as GlobeGridTile).precision === 4 ? 0.0062 : 0.0054;
+}
+
 interface RecentQSOGlobeCardProps {
+  logBookId: string;
   qsos: QSORecord[];
   loading: boolean;
+  bandFilter?: string;
   pageSize: number;
   pageSizeOptions: number[];
   onPageSizeChange: (pageSize: number) => void;
   desktopLeftOverlay?: React.ReactNode;
   desktopRightOverlay?: React.ReactNode;
+}
+
+function toRadians(value: number): number {
+  return value * Math.PI / 180;
+}
+
+function angularDistanceDegrees(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const lat1Rad = toRadians(lat1);
+  const lat2Rad = toRadians(lat2);
+  const deltaLngRad = toRadians(lng2 - lng1);
+  const cosine = Math.sin(lat1Rad) * Math.sin(lat2Rad)
+    + Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.cos(deltaLngRad);
+  const clampedCosine = Math.min(1, Math.max(-1, cosine));
+  return Math.acos(clampedCosine) * 180 / Math.PI;
+}
+
+function shortestLongitudeDeltaDegrees(left: number, right: number): number {
+  const delta = Math.abs(left - right) % 360;
+  return delta > 180 ? 360 - delta : delta;
 }
 
 function formatUtcTime(timestamp?: number): string {
@@ -69,8 +157,10 @@ function formatUtcTime(timestamp?: number): string {
 }
 
 const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
+  logBookId,
   qsos,
   loading,
+  bandFilter,
   pageSize,
   pageSizeOptions,
   onPageSizeChange,
@@ -81,10 +171,19 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   const [stationInfo, setStationInfo] = useState<StationInfo | null>(null);
   const [globeWidth, setGlobeWidth] = useState(0);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showWorkedGrids, setShowWorkedGrids] = useState(false);
+  const [workedGridItems, setWorkedGridItems] = useState<LogBookWorkedGridItem[]>([]);
+  const [workedGridLoading, setWorkedGridLoading] = useState(false);
+  const [workedGridError, setWorkedGridError] = useState<string | null>(null);
+  const [globeAltitude, setGlobeAltitude] = useState(DEFAULT_POV_ALTITUDE);
+  const [globeCenter, setGlobeCenter] = useState({ lat: 0, lng: 0 });
   const containerRef = useRef<HTMLDivElement | null>(null);
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const hasInitialFocusRef = useRef(false);
   const lastFocusKeyRef = useRef<string | null>(null);
+  const workedGridCacheRef = useRef<Map<string, LogBookWorkedGridItem[]>>(new Map());
+  const lastViewportSyncRef = useRef({ lat: 0, lng: 0, altitude: DEFAULT_POV_ALTITUDE });
+  const lastViewportSyncAtRef = useRef(0);
   const viewportHeight = useViewportHeightValue();
   const globeMaterial = useMemo(() => {
     const material = new THREE.MeshPhongMaterial({
@@ -97,6 +196,18 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     });
     return material;
   }, []);
+  const workedGridTileMaterial2 = useMemo(() => new THREE.MeshBasicMaterial({
+    color: new THREE.Color('rgb(239, 68, 68)'),
+    transparent: true,
+    opacity: 0.12,
+    depthWrite: false,
+  }), []);
+  const workedGridTileMaterial4 = useMemo(() => new THREE.MeshBasicMaterial({
+    color: new THREE.Color('rgb(239, 68, 68)'),
+    transparent: true,
+    opacity: 0.18,
+    depthWrite: false,
+  }), []);
 
   const landPolygons = useMemo(() => {
     const land = feature(landTopology as LandTopology, (landTopology as LandTopology).objects.land);
@@ -106,6 +217,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   }, []);
 
   const globeModel = useMemo(() => buildPagedQSOGlobeModel(qsos, stationInfo), [qsos, stationInfo]);
+  const workedGridModel = useMemo(() => buildWorkedGridGlobeModel(workedGridItems), [workedGridItems]);
   const defaultGlobeHeight = useMemo(() => {
     const effectiveWidth = globeWidth || GLOBE_WIDTH_FALLBACK;
     return Math.max(GLOBE_HEIGHT_MIN, Math.min(GLOBE_HEIGHT_MAX, Math.round(effectiveWidth * 0.33)));
@@ -200,6 +312,67 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   }, [globeModel]);
 
   useEffect(() => {
+    if (!showWorkedGrids) {
+      return;
+    }
+
+    const cacheKey = `${logBookId}:${bandFilter || 'all'}`;
+    const cached = workedGridCacheRef.current.get(cacheKey);
+    if (cached) {
+      setWorkedGridItems(cached);
+      setWorkedGridError(null);
+      setWorkedGridLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadWorkedGrids = async () => {
+      try {
+        setWorkedGridLoading(true);
+        setWorkedGridError(null);
+        setWorkedGridItems([]);
+
+        logger.info('Requesting worked grids for page globe', {
+          logBookId,
+          band: bandFilter || null,
+        });
+
+        const response = await api.getLogBookWorkedGrids(logBookId, bandFilter ? { band: bandFilter } : undefined);
+        if (cancelled) {
+          return;
+        }
+
+        workedGridCacheRef.current.set(cacheKey, response.data.items);
+        setWorkedGridItems(response.data.items);
+        logger.info('Worked grids for page globe loaded', {
+          logBookId,
+          band: bandFilter || null,
+          count: response.data.items.length,
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        logger.warn('Worked grids for page globe request failed', error);
+        setWorkedGridItems([]);
+        setWorkedGridError(t('globe.workedGridLoadFailed'));
+      } finally {
+        if (!cancelled) {
+          setWorkedGridLoading(false);
+        }
+      }
+    };
+
+    loadWorkedGrids().catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bandFilter, logBookId, showWorkedGrids, t]);
+
+  useEffect(() => {
     if (!globeRef.current || !globeModel.homePoint || loading) {
       return;
     }
@@ -231,6 +404,11 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
       lng: globeModel.homePoint.lng,
       altitude: DEFAULT_POV_ALTITUDE,
     }, animationDuration);
+    setGlobeAltitude(DEFAULT_POV_ALTITUDE);
+    setGlobeCenter({
+      lat: globeModel.homePoint.lat,
+      lng: globeModel.homePoint.lng,
+    });
 
     hasInitialFocusRef.current = true;
     lastFocusKeyRef.current = focusKey;
@@ -294,6 +472,175 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
       : globeModel.remotePoints;
   const visibleArcs = loading || !hasRenderableData ? [] : globeModel.arcs;
   const visibleRings = loading || !hasRenderableData ? [] : globeModel.rings;
+  const useFourCharacterWorkedGrid = globeAltitude <= WORKED_GRID_SWITCH_ALTITUDE;
+  const activeWorkedGridPolygons = showWorkedGrids
+    ? (useFourCharacterWorkedGrid ? workedGridModel.precision4.polygons : workedGridModel.precision2.polygons)
+    : [];
+  const maxVisibleAngularDistance = useFourCharacterWorkedGrid
+    ? Math.max(18, Math.min(42, 12 + globeAltitude * 12))
+    : Math.max(
+      WORKED_GRID_MIN_VISIBLE_DEGREES,
+      Math.min(WORKED_GRID_MAX_VISIBLE_DEGREES, 24 + globeAltitude * 26),
+    );
+  const baseGridLatWindow = useFourCharacterWorkedGrid
+    ? Math.max(5, Math.min(18, 3 + globeAltitude * 8))
+    : Math.max(10, Math.min(46, 7 + globeAltitude * 18));
+  const baseGridLngWindow = useFourCharacterWorkedGrid
+    ? Math.max(7, Math.min(26, 5 + globeAltitude * 10))
+    : Math.max(14, Math.min(64, 10 + globeAltitude * 24));
+  const visibleWorkedGridPolygons = useMemo(
+    () => activeWorkedGridPolygons.filter((polygon) => {
+      const bounds = getGridBounds(polygon.grid);
+      if (!bounds) {
+        return false;
+      }
+
+      return angularDistanceDegrees(globeCenter.lat, globeCenter.lng, bounds.centerLat, bounds.centerLon) <= maxVisibleAngularDistance;
+    }),
+    [activeWorkedGridPolygons, globeCenter.lat, globeCenter.lng, maxVisibleAngularDistance],
+  );
+  const activeWorkedGridLabels = useMemo(
+    () => (showWorkedGrids
+      ? (useFourCharacterWorkedGrid
+        ? workedGridModel.precision4.labels
+        : workedGridModel.precision2.labels)
+        .filter((label) => angularDistanceDegrees(globeCenter.lat, globeCenter.lng, label.lat, label.lng) <= maxVisibleAngularDistance)
+        .slice(0, WORKED_GRID_LABEL_LIMIT)
+      : []),
+    [globeCenter.lat, globeCenter.lng, maxVisibleAngularDistance, showWorkedGrids, useFourCharacterWorkedGrid, workedGridModel.precision2.labels, workedGridModel.precision4.labels],
+  );
+  const pathsData = useMemo(() => {
+    if (!showWorkedGrids) {
+      return [];
+    }
+
+    const result: GlobeGridPath[] = [
+      ...getMaidenheadGridLines(useFourCharacterWorkedGrid ? 4 : 2).filter((line) => {
+        if (line.axis === 'lat') {
+          return Math.abs(line.value - globeCenter.lat) <= baseGridLatWindow;
+        }
+        return shortestLongitudeDeltaDegrees(line.value, globeCenter.lng) <= baseGridLngWindow;
+      }),
+    ];
+
+    for (const polygon of visibleWorkedGridPolygons) {
+      const bounds = getGridBounds(polygon.grid);
+      if (!bounds) {
+        continue;
+      }
+
+      result.push({
+        kind: 'worked-grid',
+        precision: polygon.precision,
+        grid: polygon.grid,
+        count: polygon.count,
+        points: [
+          [bounds.latMin, bounds.lonMin],
+          [bounds.latMin, bounds.lonMax],
+          [bounds.latMax, bounds.lonMax],
+          [bounds.latMax, bounds.lonMin],
+          [bounds.latMin, bounds.lonMin],
+        ],
+      });
+    }
+
+    return result;
+  }, [
+    baseGridLatWindow,
+    baseGridLngWindow,
+    globeCenter.lat,
+    globeCenter.lng,
+    showWorkedGrids,
+    useFourCharacterWorkedGrid,
+    visibleWorkedGridPolygons,
+  ]);
+  const tilesData = useMemo(() => {
+    if (!showWorkedGrids) {
+      return [];
+    }
+
+    return visibleWorkedGridPolygons.map((polygon) => {
+      const bounds = getGridBounds(polygon.grid);
+      if (!bounds) {
+        return null;
+      }
+
+      return {
+        grid: polygon.grid,
+        count: polygon.count,
+        precision: polygon.precision,
+        lat: bounds.centerLat,
+        lng: bounds.centerLon,
+        width: bounds.lonMax - bounds.lonMin,
+        height: bounds.latMax - bounds.latMin,
+      };
+    }).filter((tile): tile is GlobeGridTile => !!tile);
+  }, [showWorkedGrids, visibleWorkedGridPolygons]);
+  const workedGridStatusText = !showWorkedGrids
+    ? null
+    : workedGridLoading
+      ? t('globe.workedGridLoading')
+      : workedGridError
+        ? workedGridError
+        : workedGridItems.length === 0
+          ? t('globe.workedGridEmpty')
+        : t('globe.workedGridLoaded', {
+            count: workedGridItems.length,
+            precision: useFourCharacterWorkedGrid ? 4 : 2,
+          });
+
+  const syncViewportState = (pov: GlobePointOfView, force = false) => {
+    const nextLat = pov.lat ?? 0;
+    const nextLng = pov.lng ?? 0;
+    const nextAltitude = pov.altitude ?? lastViewportSyncRef.current.altitude;
+    const previous = lastViewportSyncRef.current;
+
+    if (!force && !showWorkedGrids) {
+      return;
+    }
+
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const centerDelta = angularDistanceDegrees(previous.lat, previous.lng, nextLat, nextLng);
+    const altitudeDelta = Math.abs(previous.altitude - nextAltitude);
+    const precisionChanged = (previous.altitude <= WORKED_GRID_SWITCH_ALTITUDE) !== (nextAltitude <= WORKED_GRID_SWITCH_ALTITUDE);
+    const centerThreshold = showWorkedGrids ? POV_SYNC_CENTER_EPSILON_WITH_GRIDS : POV_SYNC_CENTER_EPSILON_IDLE;
+    const shouldSync = force
+      || precisionChanged
+      || now - lastViewportSyncAtRef.current >= POV_SYNC_INTERVAL_MS
+      || centerDelta >= centerThreshold
+      || altitudeDelta >= POV_SYNC_ALTITUDE_EPSILON;
+
+    if (!shouldSync) {
+      return;
+    }
+
+    lastViewportSyncRef.current = {
+      lat: nextLat,
+      lng: nextLng,
+      altitude: nextAltitude,
+    };
+    lastViewportSyncAtRef.current = now;
+
+    setGlobeCenter((currentValue) => (
+      currentValue.lat === nextLat && currentValue.lng === nextLng
+        ? currentValue
+        : { lat: nextLat, lng: nextLng }
+    ));
+    setGlobeAltitude((currentValue) => (
+      Math.abs(currentValue - nextAltitude) < 0.0001
+        ? currentValue
+        : nextAltitude
+    ));
+  };
+
+  useEffect(() => {
+    if (!showWorkedGrids || !globeRef.current) {
+      return;
+    }
+
+    syncViewportState(globeRef.current.pointOfView(), true);
+  }, [showWorkedGrids]);
+
   const handleExpandedToggle = () => {
     setIsExpanded((currentValue) => {
       const nextValue = !currentValue;
@@ -313,6 +660,17 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
 
     logger.info('Page globe page size changed', { pageSize: nextValue });
     onPageSizeChange(nextValue);
+  };
+  const handleWorkedGridToggle = () => {
+    setShowWorkedGrids((currentValue) => {
+      const nextValue = !currentValue;
+      logger.info('Page globe worked grid visibility changed', {
+        enabled: nextValue,
+        logBookId,
+        band: bandFilter || null,
+      });
+      return nextValue;
+    });
   };
 
   return (
@@ -335,15 +693,38 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         waitForGlobeReady={false}
         animateIn
         globeMaterial={globeMaterial}
-        showGraticules
+        showGraticules={false}
         showAtmosphere
         atmosphereColor="#7dd3fc"
         atmosphereAltitude={0.17}
-        polygonsData={landPolygons}
+        polygonsData={landPolygons as object[]}
+        polygonGeoJsonGeometry={getLandGeometry}
         polygonAltitude={0.0025}
         polygonCapColor={() => 'rgba(226, 232, 240, 0.2)'}
         polygonSideColor={() => 'rgba(51, 65, 85, 0.08)'}
         polygonStrokeColor={() => 'rgba(241, 245, 249, 0.2)'}
+        pathsData={pathsData as object[]}
+        pathPoints="points"
+        pathPointLat={(point) => (point as [number, number])[0]}
+        pathPointLng={(point) => (point as [number, number])[1]}
+        pathColor={getGridPathColor}
+        pathStroke={null}
+        pathPointAlt={0.007}
+        pathResolution={1}
+        pathTransitionDuration={0}
+        tilesData={tilesData as object[]}
+        tileLat="lat"
+        tileLng="lng"
+        tileWidth="width"
+        tileHeight="height"
+        tileAltitude={getGridTileAltitude}
+        tileMaterial={(tile: object) => ((tile as GlobeGridTile).precision === 4 ? workedGridTileMaterial4 : workedGridTileMaterial2)}
+        tileCurvatureResolution={3}
+        tilesTransitionDuration={0}
+        tileLabel={(tile) => {
+          const workedTile = tile as GlobeGridTile;
+          return `${workedTile.grid} · ${t('globe.pointCount', { count: workedTile.count })}`;
+        }}
         pointsData={visiblePoints}
         pointLat="lat"
         pointLng="lng"
@@ -379,6 +760,19 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         ringMaxRadius="maxRadius"
         ringPropagationSpeed="propagationSpeed"
         ringRepeatPeriod="repeatPeriod"
+        labelsData={activeWorkedGridLabels as object[]}
+        labelLat="lat"
+        labelLng="lng"
+        labelText="text"
+        labelColor={() => 'rgba(254,226,226,0.92)'}
+        labelAltitude={0.012}
+        labelSize={(label) => ((label as WorkedGridLabel).precision === 4 ? 0.42 : 0.7)}
+        labelResolution={4}
+        labelIncludeDot={false}
+        labelLabel={(label) => {
+          const workedGridLabel = label as WorkedGridLabel;
+          return `${workedGridLabel.grid} · ${t('globe.pointCount', { count: workedGridLabel.count })}`;
+        }}
         onGlobeReady={() => {
           logger.info('Page globe renderer ready', {
             width: effectiveGlobeWidth,
@@ -392,12 +786,16 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
           controls.autoRotate = true;
           controls.autoRotateSpeed = 0.35;
           controls.update?.();
+
+          const pov = globeRef.current.pointOfView();
+          syncViewportState(pov, true);
         }}
-        onZoom={() => {
+        onZoom={(pov) => {
           const controls = globeRef.current?.controls() as GlobeControls | undefined;
           if (controls) {
             controls.autoRotate = false;
           }
+          syncViewportState(pov);
         }}
       />
 
@@ -478,7 +876,24 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
             ))}
           </Select>
         </div>
+
+        <button
+          type="button"
+          onClick={handleWorkedGridToggle}
+          aria-pressed={showWorkedGrids}
+          className="inline-flex h-10 items-center rounded-full border border-white/10 bg-[rgba(15,23,42,0.52)] px-4 text-sm text-[rgba(226,232,240,0.84)] shadow-[0_10px_30px_rgba(2,6,23,0.28)] backdrop-blur-md transition-all duration-300 hover:border-white/20 hover:bg-[rgba(15,23,42,0.68)]"
+        >
+          {showWorkedGrids ? t('globe.hideWorkedGrids') : t('globe.showWorkedGrids')}
+        </button>
       </div>
+
+      {workedGridStatusText && (
+        <div className="pointer-events-none absolute bottom-16 left-4 z-30 sm:bottom-[4.5rem] sm:left-5 lg:bottom-[5rem] lg:left-6">
+          <div className="rounded-full border border-white/10 bg-[rgba(2,6,23,0.46)] px-3 py-1.5 text-xs text-[rgba(226,232,240,0.7)] backdrop-blur-md">
+            {workedGridStatusText}
+          </div>
+        </div>
+      )}
 
       {hasDesktopOverlay && (
         <div className="pointer-events-none absolute inset-0 z-20 hidden lg:grid lg:grid-cols-[minmax(300px,0.68fr)_minmax(0,1fr)_minmax(280px,0.54fr)] lg:items-stretch">
