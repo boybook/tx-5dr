@@ -23,6 +23,8 @@ import type {
   LogBookQSOQueryOptions,
   LogBookRecentGlobeQuery,
   LogBookRecentGlobeResponse,
+  LogBookWorkedGridQuery,
+  LogBookWorkedGridResponse,
   LogBookExportOptions,
   QSORecord,
   UpdateQSORequest,
@@ -1298,6 +1300,36 @@ export const api = {
     return await res.json();
   },
 
+  async getLogBookWorkedGrids(
+    id: string,
+    options?: LogBookWorkedGridQuery,
+    apiBase?: string,
+  ): Promise<LogBookWorkedGridResponse> {
+    const baseUrl = apiBase || getConfiguredApiBase();
+    const params = new URLSearchParams();
+
+    if (options) {
+      Object.entries(options).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          params.append(key, String(value));
+        }
+      });
+    }
+
+    const url = `${baseUrl}/logbooks/${id}/worked-grids${params.toString() ? '?' + params.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => null);
+      if (errorData) {
+        throw handleApiError(errorData, res.status);
+      }
+      throw new Error(`Failed to query worked logbook grids: ${res.status} ${res.statusText}`);
+    }
+
+    return await res.json();
+  },
+
   /**
    * 导出日志本数据
    */
@@ -1877,6 +1909,7 @@ export const {
   connectOperatorToLogBook,
   disconnectOperatorFromLogBook,
   getLogBookQSOs,
+  getLogBookWorkedGrids,
   exportLogBook,
   importToLogBook,
   importLogBookFile,

@@ -121,6 +121,12 @@
     "exitFullscreen": "Restore Size",
     "displayCount": "Globe Shows",
     "displayCountOption": "{{count}} QSOs",
+    "showWorkedGrids": "Show worked grids",
+    "hideWorkedGrids": "Hide worked grids",
+    "workedGridLoading": "Loading worked grids",
+    "workedGridLoadFailed": "Failed to load worked grids",
+    "workedGridEmpty": "No worked grids are available for the current condition.",
+    "workedGridLoaded": "{{count}} grids highlighted, showing {{precision}}-char precision",
     "homeLabel": "Home station",
     "pointCount": "{{count}} QSOs",
     "summary": {

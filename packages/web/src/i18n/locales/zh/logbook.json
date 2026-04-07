@@ -121,6 +121,12 @@
     "exitFullscreen": "恢复默认",
     "displayCount": "地球展示",
     "displayCountOption": "{{count}} 条 QSO",
+    "showWorkedGrids": "显示通联网格",
+    "hideWorkedGrids": "隐藏通联网格",
+    "workedGridLoading": "正在加载已通联网格",
+    "workedGridLoadFailed": "已通联网格加载失败",
+    "workedGridEmpty": "当前条件下还没有已通联网格",
+    "workedGridLoaded": "已高亮 {{count}} 个网格，当前显示 {{precision}} 位精度",
     "homeLabel": "本台位置",
     "pointCount": "{{count}} 个QSO",
     "summary": {

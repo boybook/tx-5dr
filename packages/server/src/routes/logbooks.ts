@@ -11,9 +11,12 @@ import {
   LogBookQSOQueryOptionsSchema,
   LogBookRecentGlobeQuerySchema,
   LogBookRecentGlobeResponseSchema,
+  LogBookWorkedGridQuerySchema,
+  LogBookWorkedGridResponseSchema,
   LogBookExportOptionsSchema,
   UpdateQSORequestSchema,
   CreateQSORequestSchema,
+  getFourCharacterGrid,
   UserRole,
   type LogBookInfo,
   type CreateLogBookRequest,
@@ -21,6 +24,7 @@ import {
   type ConnectOperatorToLogBookRequest,
   type LogBookQSOQueryOptions,
   type LogBookRecentGlobeQuery,
+  type LogBookWorkedGridQuery,
   type LogBookExportOptions,
   type LogBookImportFormat,
   type UpdateQSORequest,
@@ -37,6 +41,26 @@ import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtil
 
 const logger = createLogger('LogbooksRoute');
 
+const BAND_FREQUENCY_RANGES: Record<string, { min: number; max: number }> = {
+  '160m': { min: 1800000, max: 2000000 },
+  '80m': { min: 3500000, max: 4000000 },
+  '60m': { min: 5000000, max: 5500000 },
+  '40m': { min: 7000000, max: 7300000 },
+  '30m': { min: 10100000, max: 10150000 },
+  '20m': { min: 14000000, max: 14350000 },
+  '17m': { min: 18068000, max: 18168000 },
+  '15m': { min: 21000000, max: 21450000 },
+  '12m': { min: 24890000, max: 24990000 },
+  '10m': { min: 28000000, max: 29700000 },
+  '6m': { min: 50000000, max: 54000000 },
+  '4m': { min: 70000000, max: 71000000 },
+  '2m': { min: 144000000, max: 148000000 },
+  '1.25m': { min: 222000000, max: 225000000 },
+  '70cm': { min: 420000000, max: 450000000 },
+  '33cm': { min: 902000000, max: 928000000 },
+  '23cm': { min: 1240000000, max: 1300000000 },
+};
+
 function normalizeGridQuery(grid?: string): string | undefined {
   if (!grid) {
     return undefined;
@@ -44,6 +68,10 @@ function normalizeGridQuery(grid?: string): string | undefined {
 
   const normalized = grid.trim().toUpperCase();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function getBandFrequencyRange(band?: string): { min: number; max: number } | undefined {
+  return band ? BAND_FREQUENCY_RANGES[band] : undefined;
 }
 
 function getImportPayloadFromBody(body: unknown): {
@@ -385,28 +413,9 @@ export async function logbookRoutes(fastify: FastifyInstance) {
 
       // 处理频段过滤（转换为频率范围）
       if (options.band) {
-        const bandFreqRanges: Record<string, { min: number; max: number }> = {
-          '160m': { min: 1800000, max: 2000000 },
-          '80m': { min: 3500000, max: 4000000 },
-          '60m': { min: 5000000, max: 5500000 },
-          '40m': { min: 7000000, max: 7300000 },
-          '30m': { min: 10100000, max: 10150000 },
-          '20m': { min: 14000000, max: 14350000 },
-          '17m': { min: 18068000, max: 18168000 },
-          '15m': { min: 21000000, max: 21450000 },
-          '12m': { min: 24890000, max: 24990000 },
-          '10m': { min: 28000000, max: 29700000 },
-          '6m': { min: 50000000, max: 54000000 },
-          '4m': { min: 70000000, max: 71000000 },
-          '2m': { min: 144000000, max: 148000000 },
-          '1.25m': { min: 222000000, max: 225000000 },
-          '70cm': { min: 420000000, max: 450000000 },
-          '33cm': { min: 902000000, max: 928000000 },
-          '23cm': { min: 1240000000, max: 1300000000 },
-        };
-
-        if (bandFreqRanges[options.band]) {
-          queryOptions.frequencyRange = bandFreqRanges[options.band];
+        const bandFrequencyRange = getBandFrequencyRange(options.band);
+        if (bandFrequencyRange) {
+          queryOptions.frequencyRange = bandFrequencyRange;
         }
       }
 
@@ -605,6 +614,58 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       return reply.send(response);
     } catch (error) {
       logger.error('Failed to build recent globe payload', error);
+      throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
+    }
+  });
+
+  fastify.get<{ Params: { id: string }; Querystring: LogBookWorkedGridQuery }>('/:id/worked-grids', { preHandler: [logbookAccessCheck] }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const options = LogBookWorkedGridQuerySchema.parse(request.query);
+      const logBook = await resolveLogBookOrThrow(id);
+
+      const queryOptions: LogQueryOptions = {
+        orderBy: 'time',
+        orderDirection: 'desc',
+      };
+
+      const bandFrequencyRange = getBandFrequencyRange(options.band);
+      if (bandFrequencyRange) {
+        queryOptions.frequencyRange = bandFrequencyRange;
+      }
+
+      const qsos = await logBook.provider.queryQSOs(queryOptions);
+      const workedGridMap = new Map<string, number>();
+
+      for (const qso of qsos) {
+        const workedGrid = getFourCharacterGrid(qso.grid);
+        if (!workedGrid) {
+          continue;
+        }
+
+        workedGridMap.set(workedGrid, (workedGridMap.get(workedGrid) || 0) + 1);
+      }
+
+      const items = Array.from(workedGridMap.entries())
+        .map(([grid, count]) => ({ grid, count }))
+        .sort((left, right) => {
+          if (right.count !== left.count) {
+            return right.count - left.count;
+          }
+          return left.grid.localeCompare(right.grid);
+        });
+
+      return reply.send(LogBookWorkedGridResponseSchema.parse({
+        success: true,
+        data: {
+          items,
+          meta: {
+            band: options.band,
+            total: items.length,
+          },
+        },
+      }));
+    } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
   });
