@@ -120,7 +120,7 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 
 ### 用户插件目录
 
-将插件目录放置在应用数据目录下：
+用户插件始终放置在应用数据目录下的 `plugins/` 子目录中：
 
 ```
 {dataDir}/plugins/
@@ -132,11 +132,17 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
     └── README.md        # 可选：说明文档
 ```
 
-> **`dataDir` 位置**：
-> - macOS：`~/Library/Application Support/TX-5DR/`
-> - Windows：`%APPDATA%\TX-5DR\`
-> - Linux：`~/.local/share/TX-5DR/`
-> - Docker：`TX5DR_DATA_DIR` 环境变量
+> **常见目录位置**：
+> - Electron / macOS：`~/Library/Application Support/TX-5DR/plugins`
+> - Electron / Windows：`%LOCALAPPDATA%\TX-5DR\plugins`
+> - Linux（桌面 / 开发环境）：`~/.local/share/TX-5DR/plugins`
+> - Linux server 包：`/var/lib/tx5dr/plugins`
+> - Docker 容器内：`/app/data/plugins`
+>
+> **补充说明**：
+> - Docker 官方 `docker-compose.yml` 默认将宿主机 `./data/plugins` 映射到容器内 `/app/data/plugins`
+> - 若自定义了 `TX5DR_DATA_DIR`，插件目录随之变为 `{TX5DR_DATA_DIR}/plugins`
+> - 在应用内可直接从「设置 → 插件」查看当前运行时实际使用的绝对路径
 
 ### 内置插件目录（开发者参考）
 
@@ -732,8 +738,10 @@ const count = ctx.store.operator.get<number>('qsoCount', 0);
 ```
 
 **存储文件路径**：
-- Global：`{dataDir}/plugins/{name}/global.json`
-- Operator：`{dataDir}/plugins/{name}/operator-{operatorId}.json`
+- Global：`{dataDir}/plugin-data/{name}/global.json`
+- Operator：`{dataDir}/plugin-data/{name}/operator-{operatorId}.json`
+
+这样插件源码目录（`{dataDir}/plugins/{name}`）只用于放置插件入口与资源文件，不会再被运行时状态文件污染。
 
 写操作有 300ms debounce；插件实例卸载或插件子系统关闭时自动 flush。
 
@@ -746,7 +754,7 @@ const count = ctx.store.operator.get<number>('qsoCount', 0);
 适合快速验证想法，无需编译步骤：
 
 ```js
-// data/plugins/snr-guard/plugin.js
+// {pluginDir}/snr-guard/plugin.js
 
 /** @type {import('@tx5dr/plugin-api').PluginDefinition} */
 export default {
@@ -775,7 +783,7 @@ export default {
 };
 ```
 
-放入 `data/plugins/snr-guard/` 后，在前端「设置 → 插件」中启用，无需重编译。
+将其放入当前插件目录下的 `snr-guard/` 子目录后，在前端「设置 → 插件」中重载即可生效，无需重编译。
 
 ### 5.2 TypeScript 完整项目
 
@@ -799,7 +807,7 @@ my-plugin/
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch --outDir ../path/to/TX-5DR/data/plugins/my-plugin"
+    "dev": "tsc --watch --outDir ../path/to/TX-5DR/plugins/my-plugin"
   },
   "devDependencies": {
     "@tx5dr/plugin-api": "^1.0.0",
@@ -807,6 +815,8 @@ my-plugin/
   }
 }
 ```
+
+这里的输出目录应当指向你本机当前 TX-5DR 运行时实际使用的插件目录；在开发环境下，默认也是系统用户数据目录下的 `TX-5DR/plugins`。如需切换基础目录，可通过 `TX5DR_DATA_DIR` 调整。
 
 **tsconfig.json**
 
@@ -1083,7 +1093,7 @@ export default plugin;
 应用启动 / 插件子系统启动（独立于引擎是否成功启动）
   └─ PluginManager.start()
        ├─ 注册所有内置插件（BUILTIN_PLUGINS 数组）
-       ├─ 扫描 data/plugins/ 加载用户插件
+       ├─ 扫描 {dataDir}/plugins/ 加载用户插件
        ├─ 为当前所有操作员调用 initInstancesForOperator()
        └─ 广播插件系统快照
 

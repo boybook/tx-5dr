@@ -96,6 +96,7 @@ import type {
   RealtimeStatsRequest,
   RealtimeStatsResponse,
   RealtimeVoiceTxStatsResponse,
+  PluginRuntimeInfo,
 } from '@tx5dr/contracts';
 
 type RealtimeSettingsApiData = RealtimeSettings & {
@@ -1874,6 +1875,10 @@ export const api = {
     return apiRequest('/plugins', undefined, apiBase);
   },
 
+  async getPluginRuntimeInfo(apiBase?: string): Promise<PluginRuntimeInfo> {
+    return apiRequest('/plugins/runtime-info', undefined, apiBase);
+  },
+
   async enablePlugin(name: string, apiBase?: string): Promise<{ success: boolean }> {
     return apiRequest(`/plugins/${name}/enable`, { method: 'POST' }, apiBase);
   },
@@ -2042,6 +2047,7 @@ export const {
   ,getRealtimeVoiceTxStats
   // 插件系统函数
   ,getPlugins
+  ,getPluginRuntimeInfo
   ,enablePlugin
   ,disablePlugin
   ,reloadPlugin

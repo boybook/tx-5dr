@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
+import { getPluginRuntimeInfo } from '../plugin/runtime-info.js';
 
 const logger = createLogger('PluginRoutes');
 
@@ -12,6 +13,7 @@ const logger = createLogger('PluginRoutes');
  * POST /api/plugins/:name/enable                 — 启用插件
  * POST /api/plugins/:name/disable                — 禁用插件
  * POST /api/plugins/:name/reload                 — 热重载单个插件
+ * GET  /api/plugins/runtime-info                 — 获取插件宿主目录与运行形态
  * GET  /api/plugins/:name/settings               — 获取 global scope 插件设置
  * PUT  /api/plugins/:name/settings               — 更新 global scope 插件设置
  * GET  /api/plugins/:name/operator/:id/settings  — 获取操作员维度插件设置
@@ -67,6 +69,10 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /api/plugins
   fastify.get('/', async (_req, reply) => {
     return reply.send(engine.pluginManager.getSnapshot());
+  });
+
+  fastify.get('/runtime-info', async (_req, reply) => {
+    return reply.send(await getPluginRuntimeInfo());
   });
 
   // POST /api/plugins/:name/enable

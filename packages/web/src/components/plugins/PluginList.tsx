@@ -32,6 +32,7 @@ const logger = createLogger('PluginList');
 interface PluginListProps {
   onSelect?: (plugin: PluginStatus | null) => void;
   onUnsavedChanges?: (hasChanges: boolean) => void;
+  emptyMessage?: string;
 }
 
 export interface PluginListRef {
@@ -39,7 +40,11 @@ export interface PluginListRef {
   save: () => Promise<void>;
 }
 
-export const PluginList = forwardRef<PluginListRef, PluginListProps>(({ onSelect, onUnsavedChanges }, ref) => {
+export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
+  onSelect,
+  onUnsavedChanges,
+  emptyMessage,
+}, ref) => {
   const { t } = useTranslation('settings');
   const [selectedPlugin, setSelectedPlugin] = useState<PluginStatus | null>(null);
   const [saving, setSaving] = useState(false);
@@ -345,7 +350,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({ onSelect
 
       {plugins.length === 0 && (
         <div className="text-sm text-default-400 text-center py-4">
-          {t('plugins.empty', 'No plugins installed. Place plugin folders in data/plugins/')}
+          {emptyMessage ?? t('plugins.empty', 'No plugins installed yet.')}
         </div>
       )}
     </div>

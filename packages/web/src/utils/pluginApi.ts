@@ -32,6 +32,8 @@ async function pluginFetch<T = unknown>(path: string, options?: RequestInit): Pr
 export const pluginApi = {
   getPlugins: () => pluginFetch<import('@tx5dr/contracts').PluginSystemSnapshot>('/plugins'),
 
+  getRuntimeInfo: () => pluginFetch<import('@tx5dr/contracts').PluginRuntimeInfo>('/plugins/runtime-info'),
+
   enablePlugin: (name: string) =>
     pluginFetch(`/plugins/${name}/enable`, { method: 'POST' }),
 

@@ -32,7 +32,7 @@ interface OperatorDecisionState {
  *
  * 职责：
  * - 注册内置插件
- * - 扫描 data/plugins/ 加载用户插件
+ * - 扫描 {dataDir}/plugins/ 加载用户插件
  * - 管理插件生命周期（onLoad/onUnload）
  * - 提供 hook 分发 API
  * - 管理每操作员的策略选择
@@ -122,7 +122,7 @@ export class PluginManager {
       const configEntry = this.pluginsConfig.configs?.[pluginName];
       const enabled = this.resolveInstanceEnabled(pluginName, plugin, configEntry);
 
-      const pluginDataDir = path.join(this.deps.dataDir, 'plugins', pluginName);
+      const pluginStorageDir = path.join(this.deps.dataDir, 'plugin-data', pluginName);
       let ctx!: PluginContext;
 
       const instance: PluginInstance = {
@@ -137,7 +137,7 @@ export class PluginManager {
       ctx = this.contextFactory.create(
         plugin,
         operatorId,
-        pluginDataDir,
+        pluginStorageDir,
         (timerId) => {
           plugin.definition.hooks?.onTimer?.(timerId, ctx);
         },

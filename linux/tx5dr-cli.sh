@@ -60,6 +60,8 @@ cmd_start() {
     local web_url
     web_url=$(get_web_url)
     echo -e "  ${_BOLD}Web UI:${_NC} ${web_url}"
+    echo -e "  ${_BOLD}Plugins:${_NC} ${PLUGIN_DIR}"
+    echo -e "  ${_DIM}Place plugin folders there, then reload plugins from the web UI.${_NC}"
     echo -e "  ${_DIM}$(msg OPEN_URL)${_NC}"
 
     if ! check_ssl; then
@@ -242,6 +244,8 @@ cmd_status() {
         free=$(df -h "${DATA_DIR}" 2>/dev/null | tail -1 | awk '{print $4}')
         echo -e "  Data Dir:   ${DATA_DIR} (${used} used, ${free} free)"
     fi
+    echo -e "  Plugins:    ${PLUGIN_DIR}"
+    echo -e "  ${_DIM}Drop plugin folders there, then reload plugins from the web UI.${_NC}"
 
     echo ""
 }
