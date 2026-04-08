@@ -1,4 +1,9 @@
-import type { OperatorSlots, PluginDefinition, QSORecord } from '@tx5dr/plugin-api';
+import type {
+  OperatorSlots,
+  PluginDefinition,
+  QSORecord,
+  TargetSelectionPriorityMode,
+} from '@tx5dr/plugin-api';
 import type {
   OperatorConfig,
 } from '@tx5dr/contracts';
@@ -45,7 +50,7 @@ function getStandardQSOConfig(ctx: {
     autoResumeCQAfterSuccess: (c.autoResumeCQAfterSuccess as boolean) ?? false,
     replyToWorkedStations: (c.replyToWorkedStations as boolean) ?? false,
     prioritizeNewCalls: true,
-    targetSelectionPriorityMode: ((c.targetSelectionPriorityMode as string) ?? 'dxcc_first') as 'balanced' | 'dxcc_first' | 'new_callsign_first',
+    targetSelectionPriorityMode: ((c.targetSelectionPriorityMode as string) ?? 'dxcc_first') as TargetSelectionPriorityMode,
     maxQSOTimeoutCycles: (c.maxQSOTimeoutCycles as number) ?? 6,
     maxCallAttempts: (c.maxCallAttempts as number) ?? 5,
   };
