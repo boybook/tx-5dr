@@ -1,5 +1,6 @@
 import type { CapabilityDefinition } from './types.js';
 import { RadioConnectionType } from '../connections/IRadioConnection.js';
+import type { RadioModeBandwidth } from '../connections/IRadioConnection.js';
 import {
   buildAgcModeOptions,
   buildCtcssToneOptions,
@@ -425,7 +426,7 @@ function createDefinitions(): CapabilityDefinition[] {
         return bandwidths.length > 0;
       },
       read: (conn) => conn.getModeBandwidth!(),
-      write: (conn, value) => conn.setModeBandwidth!(value as any),
+      write: (conn, value) => conn.setModeBandwidth!(value as RadioModeBandwidth),
     },
     {
       id: 'rit_offset',

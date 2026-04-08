@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import type { ProxyOptions } from 'vite';
 
+// Keep CI/local builds quiet until we intentionally refresh the browserslist DB.
+process.env.BROWSERSLIST_IGNORE_OLD_DATA = 'true';
+
 function createProxyOptions(target: string, options?: { rewrite?: (path: string) => string }): ProxyOptions {
   return {
     target,
@@ -52,7 +55,8 @@ export default defineConfig({
   plugins: [react()],
   base: './', // 使用相对路径，支持 Electron 生产环境
   build: {
-    chunkSizeWarningLimit: 1100,
+    // Multi-entry bundles intentionally carry large route-specific assets for now.
+    chunkSizeWarningLimit: 2300,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),

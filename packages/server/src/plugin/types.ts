@@ -1,0 +1,101 @@
+import type { PluginDefinition, PluginContext, StrategyRuntime } from '@tx5dr/plugin-api';
+import type { PluginStatus, PluginSystemSnapshot, PluginSystemState } from '@tx5dr/contracts';
+
+/**
+ * 已加载的插件（内存中的运行时表示）
+ */
+export interface LoadedPlugin {
+  definition: PluginDefinition;
+  /** 是否为内置插件（不可禁用、不来自文件系统） */
+  isBuiltIn: boolean;
+  /** 插件目录路径（内置插件为 undefined） */
+  dirPath?: string;
+  /** 插件加载的 i18n 资源 */
+  locales?: Record<string, Record<string, string>>;
+}
+
+/**
+ * 插件实例 — 运行期间为每个操作员维护一个
+ */
+export interface PluginInstance {
+  plugin: LoadedPlugin;
+  /** 当前操作员的 PluginContext */
+  ctx: PluginContext;
+  /** strategy 插件的显式运行时 */
+  runtime?: StrategyRuntime;
+  /** 是否已启用（enabled in config） */
+  enabled: boolean;
+  /** 连续错误计数（按 hook 名统计） */
+  errorCounts: Map<string, number>;
+  /** 是否已被自动禁用（由错误追踪触发） */
+  autoDisabled: boolean;
+  /** 最近一次错误信息 */
+  lastError?: string;
+}
+
+export interface PluginSystemRuntimeState {
+  state: PluginSystemState;
+  generation: number;
+  lastError?: string;
+}
+
+/**
+ * PluginManager 所需依赖
+ */
+export interface PluginManagerDeps {
+  eventEmitter: import('eventemitter3').EventEmitter<import('@tx5dr/contracts').DigitalRadioEngineEvents>;
+  getOperators: () => import('@tx5dr/core').RadioOperator[];
+  getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;
+  getOperatorAutomationSnapshot: (id: string) => import('@tx5dr/plugin-api').StrategyRuntimeSnapshot | null;
+  requestOperatorCall: (
+    operatorId: string,
+    callsign: string,
+    lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
+  ) => void;
+  getRadioFrequency: () => Promise<number | null>;
+  setRadioFrequency: (freq: number) => void;
+  getRadioBand: () => string;
+  getRadioConnected: () => boolean;
+  getLatestSlotPack: (operatorId?: string) => import('@tx5dr/contracts').SlotPack | null;
+  hasWorkedCallsign: (operatorId: string, callsign: string) => Promise<boolean>;
+  resetOperatorRuntime: (operatorId: string, reason: string) => void;
+  dataDir: string;
+}
+
+/**
+ * 将 LoadedPlugin + 运行时状态合并为 PluginStatus（用于推送前端）
+ */
+export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance): PluginStatus {
+  return {
+    name: plugin.definition.name,
+    type: plugin.definition.type,
+    version: plugin.definition.version,
+    description: plugin.definition.description,
+    isBuiltIn: plugin.isBuiltIn,
+    loaded: true,
+    enabled: instance?.enabled ?? false,
+    autoDisabled: instance?.autoDisabled ?? false,
+    errorCount: instance
+      ? Array.from(instance.errorCounts.values()).reduce((sum, c) => sum + c, 0)
+      : 0,
+    lastError: instance?.lastError,
+    settings: plugin.definition.settings,
+    quickActions: plugin.definition.quickActions,
+    quickSettings: plugin.definition.quickSettings,
+    panels: plugin.definition.panels,
+    permissions: plugin.definition.permissions,
+    locales: plugin.locales,
+  };
+}
+
+export function toPluginSystemSnapshot(
+  state: PluginSystemRuntimeState,
+  plugins: PluginStatus[],
+): PluginSystemSnapshot {
+  return {
+    state: state.state,
+    generation: state.generation,
+    lastError: state.lastError,
+    plugins,
+  };
+}

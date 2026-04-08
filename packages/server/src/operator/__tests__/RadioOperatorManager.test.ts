@@ -1,10 +1,15 @@
 import EventEmitter from 'eventemitter3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-import type { DigitalRadioEngineEvents, FrameMessage, QSORecord, SlotPack } from '@tx5dr/contracts';
-import { MODES } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, FrameMessage, QSORecord, RadioOperatorConfig, SlotInfo, SlotPack } from '@tx5dr/contracts';
+import { FT8MessageType, MODES } from '@tx5dr/contracts';
 
+import { FT8MessageParser } from '@tx5dr/core';
 import { LogManager } from '../../log/LogManager.js';
+import { PluginManager } from '../../plugin/PluginManager.js';
 import { RadioOperatorManager } from '../RadioOperatorManager.js';
 
 function buildSlotPack(slotId: string, startMs: number, frames: FrameMessage[]): SlotPack {
@@ -14,7 +19,7 @@ function buildSlotPack(slotId: string, startMs: number, frames: FrameMessage[]):
     endMs: startMs + MODES.FT8.slotMs,
     frames,
     stats: {
-      totalDecodes: 1,
+      totalDecodes: frames.length,
       successfulDecodes: frames.some(frame => frame.snr !== -999) ? 1 : 0,
       totalFramesBeforeDedup: frames.length,
       totalFramesAfterDedup: frames.length,
@@ -24,29 +29,51 @@ function buildSlotPack(slotId: string, startMs: number, frames: FrameMessage[]):
   };
 }
 
+function createSlotInfo(startMs: number): SlotInfo {
+  return {
+    id: `slot-${startMs}`,
+    startMs,
+    utcSeconds: Math.floor(startMs / 1000),
+    phaseMs: 0,
+    driftMs: 0,
+    cycleNumber: Math.floor(startMs / MODES.FT8.slotMs) % 2,
+    mode: 'FT8',
+  };
+}
+
 function createManager(options: {
   logBook: { id: string; name: string; provider: any };
   callsign?: string | null;
   activeSlotPacks?: SlotPack[];
   storedRecords?: Array<{ slotPack: SlotPack }>;
+  clockNow?: number;
+  encodeQueue?: { push: ReturnType<typeof vi.fn> };
 }) {
   const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
   const slotPackManager = {
     getActiveSlotPacks: vi.fn(() => options.activeSlotPacks ?? []),
     readStoredRecords: vi.fn(async () => options.storedRecords ?? []),
   };
+  const encodeQueue = options.encodeQueue ?? { push: vi.fn() };
+  const clockSource = {
+    now: vi.fn(() => options.clockNow ?? 0),
+  };
 
   const fakeLogManager = {
     getOperatorLogBook: vi.fn().mockResolvedValue(options.logBook),
     getOperatorCallsign: vi.fn().mockReturnValue(options.callsign ?? null),
+    getOrCreateLogBookByCallsign: vi.fn().mockResolvedValue(options.logBook),
+    registerOperatorCallsign: vi.fn(),
+    disconnectOperatorFromLogBook: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
   };
 
   vi.spyOn(LogManager, 'getInstance').mockReturnValue(fakeLogManager as any);
 
   const manager = new RadioOperatorManager({
     eventEmitter,
-    encodeQueue: {} as any,
-    clockSource: {} as any,
+    encodeQueue: encodeQueue as any,
+    clockSource: clockSource as any,
     getCurrentMode: () => MODES.FT8,
     setRadioFrequency: vi.fn(),
     slotPackManager: slotPackManager as any,
@@ -56,6 +83,8 @@ function createManager(options: {
     manager,
     eventEmitter,
     slotPackManager,
+    clockSource,
+    encodeQueue,
     fakeLogManager,
   };
 }
@@ -256,5 +285,200 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(updatedSpy).not.toHaveBeenCalled();
     expect(addedSpy).toHaveBeenCalledTimes(1);
     expect(provider.addQSO.mock.calls[0]?.[0]?.messages).toEqual(['BG5DRB N0CALL -12']);
+  });
+
+  it('replaces the queued transmission when a late decode advances standard-qso during the current TX slot', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: {
+          addQSO: vi.fn().mockResolvedValue(undefined),
+          updateQSO: vi.fn(),
+          getQSO: vi.fn(),
+          getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+          getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+          hasWorkedCallsign: vi.fn().mockResolvedValue(false),
+        },
+      },
+      callsign: 'BG4IAJ',
+      clockNow: 60_001,
+      encodeQueue,
+    });
+
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-operator-redecide-'));
+    const transmissionLogSpy = vi.fn();
+    eventEmitter.on('transmissionLog' as any, transmissionLogSpy);
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => manager.getAllOperators(),
+      getOperatorById: (id) => manager.getOperatorById(id),
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: () => {},
+      getRadioFrequency: async () => 7_074_000,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    try {
+      manager.setPluginManager(pluginManager);
+      pluginManager.loadConfig({
+        configs: {},
+        operatorStrategies: {},
+        operatorSettings: {},
+      });
+
+      await manager.addOperator({
+        id: 'op1',
+        myCallsign: 'BG4IAJ',
+        myGrid: 'OM96',
+        frequency: 7_074_000,
+        transmitCycles: [0],
+        mode: MODES.FT8,
+      });
+      await pluginManager.start();
+      manager.start();
+
+      const operator = manager.getOperatorById('op1');
+      expect(operator).toBeDefined();
+      operator!.start();
+
+      pluginManager.patchOperatorRuntimeContext('op1', {
+        targetCallsign: 'BG5DRB',
+        targetGrid: 'OM96',
+        reportSent: -6,
+      });
+      pluginManager.setOperatorRuntimeState('op1', 'TX2');
+
+      const initialTransmission = pluginManager.getCurrentTransmission('op1');
+      expect(initialTransmission).toBe('BG5DRB BG4IAJ -06');
+
+      const currentTxSlot = createSlotInfo(60_000);
+      const incompleteRxPack = buildSlotPack('slot-45000', 45_000, []);
+      await (pluginManager as any).handleSlotStart(currentTxSlot, incompleteRxPack);
+
+      const lateDecodePack = buildSlotPack('slot-45000', 45_000, [{
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.ROGER_REPORT,
+          senderCallsign: 'BG5DRB',
+          targetCallsign: 'BG4IAJ',
+          report: -5,
+        }),
+        snr: -4,
+        dt: 0,
+        freq: 1531,
+        confidence: 0.95,
+      }]);
+
+      manager.reDecideOnLateDecodes(lateDecodePack);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(pluginManager.getOperatorRuntimeStatus('op1').currentSlot).toBe('TX4');
+      expect(encodeQueue.push).toHaveBeenCalledTimes(2);
+      expect(encodeQueue.push.mock.calls[0]?.[0]?.message).toBe('BG5DRB BG4IAJ -06');
+      expect(encodeQueue.push.mock.calls[1]?.[0]?.message).toBe('BG5DRB BG4IAJ RR73');
+      expect(transmissionLogSpy).toHaveBeenCalledTimes(2);
+      expect(transmissionLogSpy.mock.calls[0]?.[0]).toMatchObject({
+        operatorId: 'op1',
+        message: 'BG5DRB BG4IAJ -06',
+      });
+      expect(transmissionLogSpy.mock.calls[1]?.[0]).toMatchObject({
+        operatorId: 'op1',
+        message: 'BG5DRB BG4IAJ RR73',
+        replaceExisting: true,
+      });
+    } finally {
+      manager.stop();
+      await pluginManager.shutdown().catch(() => undefined);
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refreshes the logbook callsign binding after the operator callsign changes', async () => {
+    const perCallsignWorked = new Map<string, boolean>([
+      ['BG4IAJ', false],
+      ['BG7XTV', true],
+    ]);
+    const registeredCallsigns = new Map<string, string>();
+    const logBooks = new Map<string, { id: string; name: string; provider: any }>();
+
+    const getOrCreateLogBookByCallsign = vi.fn(async (callsign: string) => {
+      const normalized = callsign.toUpperCase();
+      let logBook = logBooks.get(normalized);
+      if (!logBook) {
+        logBook = {
+          id: `log-${normalized}`,
+          name: normalized,
+          provider: {
+            hasWorkedCallsign: vi.fn(async () => perCallsignWorked.get(normalized) ?? false),
+          },
+        };
+        logBooks.set(normalized, logBook);
+      }
+      return logBook!;
+    });
+
+    const fakeLogManager = {
+      getOperatorLogBook: vi.fn(async (operatorId: string) => {
+        const callsign = registeredCallsigns.get(operatorId);
+        if (!callsign) return null;
+        return getOrCreateLogBookByCallsign(callsign);
+      }),
+      getOperatorCallsign: vi.fn((operatorId: string) => registeredCallsigns.get(operatorId) ?? null),
+      getOrCreateLogBookByCallsign,
+      registerOperatorCallsign: vi.fn((operatorId: string, callsign: string) => {
+        registeredCallsigns.set(operatorId, callsign.toUpperCase());
+      }),
+      disconnectOperatorFromLogBook: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(LogManager, 'getInstance').mockReturnValue(fakeLogManager as any);
+
+    const manager = new RadioOperatorManager({
+      eventEmitter: new EventEmitter<DigitalRadioEngineEvents>(),
+      encodeQueue: { push: vi.fn() } as any,
+      clockSource: { now: vi.fn(() => 0) } as any,
+      getCurrentMode: () => MODES.FT8,
+      setRadioFrequency: vi.fn(),
+      slotPackManager: {
+        getActiveSlotPacks: vi.fn(() => []),
+        readStoredRecords: vi.fn(async () => []),
+      } as any,
+    });
+
+    const initialConfig: RadioOperatorConfig = {
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 7_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    };
+
+    await manager.syncAddOperator(initialConfig);
+    expect(await manager.hasWorkedCallsign('op1', 'BG5DRB')).toBe(false);
+
+    await manager.syncUpdateOperator({
+      ...initialConfig,
+      myCallsign: 'BG7XTV',
+    });
+
+    expect(await manager.hasWorkedCallsign('op1', 'BG5DRB')).toBe(true);
+    expect(fakeLogManager.registerOperatorCallsign).toHaveBeenLastCalledWith('op1', 'BG7XTV');
   });
 });

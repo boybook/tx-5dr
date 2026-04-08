@@ -41,7 +41,9 @@ export type {
   WSOperatorsListMessage,
   WSOperatorStatusUpdateMessage,
   WSSetOperatorContextMessage,
-  WSSetOperatorSlotMessage,
+  WSSetOperatorRuntimeStateMessage,
+  WSSetOperatorRuntimeSlotContentMessage,
+  WSSetOperatorTransmitCyclesMessage,
   // ... 其他websocket相关类型
 } from './schema/websocket.schema.js';
 
@@ -147,3 +149,6 @@ export * from './schema/realtime.schema.js';
 
 // Desktop HTTPS Schema
 export * from './schema/desktop-https.schema.js';
+
+// Plugin Schema
+export * from './schema/plugin.schema.js';

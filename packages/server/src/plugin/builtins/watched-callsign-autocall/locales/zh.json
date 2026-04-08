@@ -1,0 +1,15 @@
+{
+  "pluginName": "守候呼号自动起呼",
+  "pluginDescription": "在纯待机时守候你关心的台站；一旦出现，就自动锁定目标并按下一发射时隙起呼。",
+  "watchOverview": "适用场景",
+  "watchOverviewDesc": "适合盯 DX、朋友台、稀有实体或约定 sked。该功能默认不启用；只要为当前操作者填入守候规则，就会在纯待机状态下监听，并在命中时自动设定目标、对齐下一发射时隙开始呼叫。",
+  "watchList": "守候呼号列表",
+  "watchListDesc": "每行一个规则，按顺序决定优先级。纯文本会按完整呼号精确匹配；只要写入正则语法，就按正则匹配，例如 ^JA 可守候所有 JA 前缀，^BG5DRB$ 可精确匹配单一呼号。以 # 开头的行会作为注释保留，不参与匹配。留空表示当前操作者不启用。",
+  "watchListInvalidRegexFormat": "第 {{line}} 行的正则格式无效，请检查表达式。",
+  "watchListInvalidRegexSyntax": "第 {{line}} 行的正则无法解析，请检查括号、转义或量词写法。",
+  "triggerMode": "触发条件",
+  "triggerModeDesc": "决定守候台出现哪类报文时自动起呼；所有模式都会额外响应“直接对你呼叫”的报文。",
+  "triggerCqOnly": "仅 CQ",
+  "triggerCqOrSignoff": "CQ 或 RR73/73",
+  "triggerAny": "任意出现"
+}

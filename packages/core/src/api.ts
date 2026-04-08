@@ -96,6 +96,7 @@ import type {
   RealtimeStatsRequest,
   RealtimeStatsResponse,
   RealtimeVoiceTxStatsResponse,
+  PluginRuntimeInfo,
 } from '@tx5dr/contracts';
 
 type RealtimeSettingsApiData = RealtimeSettings & {
@@ -1867,6 +1868,65 @@ export const api = {
     const params = new URLSearchParams({ scope });
     return apiRequest<RealtimeVoiceTxStatsResponse>(`/realtime/tx-stats?${params.toString()}`, undefined, apiBase);
   },
+
+  // ===== 插件系统 API =====
+
+  async getPlugins(apiBase?: string): Promise<import('@tx5dr/contracts').PluginSystemSnapshot> {
+    return apiRequest('/plugins', undefined, apiBase);
+  },
+
+  async getPluginRuntimeInfo(apiBase?: string): Promise<PluginRuntimeInfo> {
+    return apiRequest('/plugins/runtime-info', undefined, apiBase);
+  },
+
+  async enablePlugin(name: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/plugins/${name}/enable`, { method: 'POST' }, apiBase);
+  },
+
+  async disablePlugin(name: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/plugins/${name}/disable`, { method: 'POST' }, apiBase);
+  },
+
+  async reloadPlugin(name: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/plugins/${name}/reload`, { method: 'POST' }, apiBase);
+  },
+
+  async rescanPlugins(apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest('/plugins/rescan', { method: 'POST' }, apiBase);
+  },
+
+  async getPluginGlobalSettings(name: string, apiBase?: string): Promise<{ settings: Record<string, unknown> }> {
+    return apiRequest(`/plugins/${name}/settings`, undefined, apiBase);
+  },
+
+  async updatePluginGlobalSettings(name: string, settings: Record<string, unknown>, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/plugins/${name}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify({ settings }),
+    }, apiBase);
+  },
+
+  async getPluginOperatorSettings(pluginName: string, operatorId: string, apiBase?: string): Promise<{ settings: Record<string, unknown> }> {
+    return apiRequest(`/plugins/${pluginName}/operator/${operatorId}/settings`, undefined, apiBase);
+  },
+
+  async updatePluginOperatorSettings(pluginName: string, operatorId: string, settings: Record<string, unknown>, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/plugins/${pluginName}/operator/${operatorId}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify({ settings }),
+    }, apiBase);
+  },
+
+  async setOperatorStrategyPlugin(operatorId: string, pluginName: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/plugins/operators/${operatorId}/strategy`, {
+      method: 'PUT',
+      body: JSON.stringify({ pluginName }),
+    }, apiBase);
+  },
+
+  async reloadPlugins(apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest('/plugins/reload', { method: 'POST' }, apiBase);
+  },
 }
 
 // 为了向后兼容,也导出单独的函数
@@ -1985,4 +2045,17 @@ export const {
   ,getRealtimeSession
   ,getRealtimeStats
   ,getRealtimeVoiceTxStats
+  // 插件系统函数
+  ,getPlugins
+  ,getPluginRuntimeInfo
+  ,enablePlugin
+  ,disablePlugin
+  ,reloadPlugin
+  ,rescanPlugins
+  ,getPluginGlobalSettings
+  ,updatePluginGlobalSettings
+  ,getPluginOperatorSettings
+  ,updatePluginOperatorSettings
+  ,setOperatorStrategyPlugin
+  ,reloadPlugins
 } = api;

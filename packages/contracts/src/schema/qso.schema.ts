@@ -1,12 +1,27 @@
 import { z } from 'zod';
 import { ModeDescriptorSchema } from './mode.schema.js';
 
+/**
+ * Candidate-ranking policy used when choosing which station to answer first.
+ *
+ * - `balanced`: combine multiple heuristics without strongly favoring one.
+ * - `dxcc_first`: prioritize entities that advance DXCC goals.
+ * - `new_callsign_first`: prioritize callsigns not yet worked before.
+ */
 export const TargetSelectionPriorityModeSchema = z.enum([
   'balanced',
   'dxcc_first',
   'new_callsign_first',
 ]);
 
+/**
+ * Current work status of a resolved DXCC entity in local logbook context.
+ *
+ * - `current`: active/current DXCC entity.
+ * - `deleted`: historically valid but deleted DXCC entity.
+ * - `none`: no DXCC entity could be associated.
+ * - `unknown`: resolution has not completed or confidence is insufficient.
+ */
 export const DxccStatusSchema = z.enum([
   'current',
   'deleted',
@@ -57,18 +72,21 @@ export const QSOContextSchema = z.object({
   actualFrequency: z.number().optional(), // 实际通联频率 (基础频率 + 偏移频率)
 });
 
-// QSO命令
-export const QSOCommandSchema = z.object({
-  command: z.string(),
-  args: z.any(),
-});
-
 // QSL 确认状态枚举（参考 ADIF 3.1.4 规范）
 export const QslSentStatusSchema = z.enum(['Y', 'N', 'R', 'Q', 'I']).optional(); // Y=yes, N=no, R=requested, Q=queued, I=invalid
 export const QslReceivedStatusSchema = z.enum(['Y', 'N', 'R', 'I', 'V']).optional(); // Y=yes, V=validated
 export const QslSimpleStatusSchema = z.enum(['Y', 'N']).optional();
 
-// QSO联系记录
+/**
+ * Canonical persisted QSO record used by TX-5DR logbooks and plugin hooks.
+ *
+ * The schema intentionally spans multiple layers of information:
+ * - core contact details such as callsign, grid, frequency and timestamps;
+ * - message-level exchange details such as reports and raw message history;
+ * - DXCC enrichment and review metadata;
+ * - LoTW / QRZ confirmation state;
+ * - station-location metadata used when exporting ADIF-like records.
+ */
 export const QSORecordSchema = z.object({
   id: z.string(),
   callsign: z.string(),        // 对方呼号
@@ -125,11 +143,25 @@ export const StrategiesResultSchema = z.object({
 });
 
 export type OperatorConfig = z.infer<typeof OperatorConfigSchema>;
+
+/**
+ * Candidate-ranking policy used when choosing which station to answer first.
+ */
 export type TargetSelectionPriorityMode = z.infer<typeof TargetSelectionPriorityModeSchema>;
+
+/**
+ * Current work status of a resolved DXCC entity in local logbook context.
+ */
 export type DxccStatus = z.infer<typeof DxccStatusSchema>;
 export type DxccSource = z.infer<typeof DxccSourceSchema>;
 export type DxccConfidence = z.infer<typeof DxccConfidenceSchema>;
 export type QSOContext = z.infer<typeof QSOContextSchema>;
-export type QSOCommand = z.infer<typeof QSOCommandSchema>;
+
+/**
+ * Canonical persisted QSO record used by TX-5DR logbooks and plugin hooks.
+ *
+ * Plugin authors will most commonly encounter this in completion hooks and
+ * logbook queries.
+ */
 export type QSORecord = z.infer<typeof QSORecordSchema>;
 export type StrategiesResult = z.infer<typeof StrategiesResultSchema>; 

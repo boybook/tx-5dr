@@ -1,7 +1,28 @@
-import { QSOContext, FT8MessageType, ParsedFT8Message, QSOCommand, StrategiesResult, FT8MessageCQ, FT8MessageCall, FT8MessageSignalReport, FT8MessageRogerReport, QSORecord, FT8MessageRRR, FT8MessageFoxRR73, FrameMessage, SlotInfo } from '@tx5dr/contracts';
-import { ITransmissionStrategy } from '../ITransmissionStrategy';
-import { FT8MessageParser } from '../../../parser/ft8-message-parser.js';
-import { RadioOperator } from '../../RadioOperator';
+import {
+    QSOContext,
+    FT8MessageType,
+    ParsedFT8Message,
+    FT8MessageCQ,
+    FT8MessageCall,
+    FT8MessageSignalReport,
+    FT8MessageRogerReport,
+    QSORecord,
+    FT8MessageRRR,
+    FT8MessageFoxRR73,
+    FrameMessage,
+    SlotInfo,
+    OperatorSlots,
+    OperatorConfig,
+} from '@tx5dr/contracts';
+import type {
+    StrategyDecision,
+    StrategyDecisionMeta,
+    StrategyRuntime,
+    StrategyRuntimeContext,
+    StrategyRuntimeSnapshot,
+    StrategyRuntimeSlotContentUpdate,
+} from '@tx5dr/plugin-api';
+import { FT8MessageParser } from '@tx5dr/core';
 import { createLogger } from '../../../utils/logger.js';
 
 const logger = createLogger('QSOStrategy');
@@ -24,13 +45,22 @@ interface StateHandleResult {
     changeState?: SlotsIndex;
 }
 
-interface StandardState {
-    handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult>;
-    onTimeout?(strategy: StandardQSOStrategy): StateHandleResult;
-    onEnter?(strategy: StandardQSOStrategy): void;
+export interface StandardQSOPluginOperator {
+    readonly config: OperatorConfig;
+    hasWorkedCallsign(callsign: string): Promise<boolean>;
+    isTargetBeingWorkedByOthers(targetCallsign: string): boolean;
+    recordQSOLog(qsoRecord: QSORecord): void;
+    notifySlotsUpdated?(slots: OperatorSlots): void;
+    notifyStateChanged?(state: string): void;
 }
 
-function getCandidatePriorityTuple(strategy: StandardQSOStrategy, candidate: ParsedFT8Message): [number, number, number] {
+interface StandardState {
+    handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult>;
+    onTimeout?(strategy: StandardQSOPluginRuntime): StateHandleResult;
+    onEnter?(strategy: StandardQSOPluginRuntime): void;
+}
+
+function getCandidatePriorityTuple(strategy: StandardQSOPluginRuntime, candidate: ParsedFT8Message): [number, number, number] {
     const analysis = candidate.logbookAnalysis;
     const isNewDxcc = analysis?.isNewDxccEntity && analysis.dxccStatus !== 'deleted' ? 1 : 0;
     const isNewGrid = analysis?.isNewGrid ? 1 : 0;
@@ -47,7 +77,7 @@ function getCandidatePriorityTuple(strategy: StandardQSOStrategy, candidate: Par
     }
 }
 
-function compareCandidates(strategy: StandardQSOStrategy, left: ParsedFT8Message, right: ParsedFT8Message): number {
+function compareCandidates(strategy: StandardQSOPluginRuntime, left: ParsedFT8Message, right: ParsedFT8Message): number {
     if (strategy.operator.config.targetSelectionPriorityMode === 'balanced') {
         const snrDiff = right.snr - left.snr;
         if (Math.abs(snrDiff) > 3) {
@@ -76,7 +106,7 @@ function compareCandidates(strategy: StandardQSOStrategy, left: ParsedFT8Message
 
 const states: { [key in SlotsIndex]: StandardState } = {
     TX1: {
-        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
+        async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 【修复】优先检查当前目标呼号是否回复了，而不是先检查新呼叫
             // 这样可以确保当前QSO的连续性，避免在对方已回复时错误切换到新呼叫者
             const msgSignalReport = messages
@@ -223,13 +253,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             return {}
         },
-        onEnter(strategy: StandardQSOStrategy) {
+        onEnter(strategy: StandardQSOPluginRuntime) {
             // 每次进入TX1时重置呼叫计数器（新的呼叫开始）
             strategy.callAttempts = 0;
             // 记录QSO开始时间
             strategy.qsoStartTime = Date.now();
         },
-        onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+        onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             // 增加呼叫尝试次数
             strategy.callAttempts++;
 
@@ -255,7 +285,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 }
 
                 logger.debug('TX1 timeout: autoResumeCQAfterFail=false, stopping');
-                return { stop: true };
+                return { changeState: 'TX6', stop: true };
             }
 
             // haven't reached max attempts, continue calling (keep TX1)
@@ -264,7 +294,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
         }
     },
     TX2: {
-        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
+        async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // first wait for standard ROGER_REPORT (R-XX)
             const msgRogerReport = messages
                 .filter((msg) =>
@@ -328,13 +358,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             return {}
         },
-        onEnter(strategy: StandardQSOStrategy) {
+        onEnter(strategy: StandardQSOPluginRuntime) {
             // 如果是直接从回复开始的QSO，记录开始时间
             if (!strategy.qsoStartTime) {
                 strategy.qsoStartTime = Date.now();
             }
         },
-        onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+        onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             logger.debug(`TX2 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
 
             // 清理QSO开始时间
@@ -350,11 +380,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
 
             logger.debug('TX2 timeout: autoResumeCQAfterFail=false, stopping');
-            return { stop: true };
+            return { changeState: 'TX6', stop: true };
         }
     },
     TX3: {
-        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
+        async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 等待对方发送RRR或73
             const msgRRR = messages
                 .filter((msg) =>
@@ -429,7 +459,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
 
             return {}
         },
-        onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+        onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             logger.debug(`TX3 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
 
             // 清理QSO开始时间
@@ -445,11 +475,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
 
             logger.debug('TX3 timeout: autoResumeCQAfterFail=false, stopping');
-            return { stop: true };
+            return { changeState: 'TX6', stop: true };
         }
     },
     TX4: {
-        onEnter(strategy: StandardQSOStrategy) {
+        onEnter(strategy: StandardQSOPluginRuntime) {
             // 记录QSO日志
             // 优先使用actualFrequency（包含音频偏移的精确频率）
             // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
@@ -475,7 +505,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
         },
-        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
+        async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 首先检查是否收到对方的73
             const msg73 = messages
                 .filter((msg) =>
@@ -586,7 +616,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 // 没有新的直接呼叫，转到TX6
                 logger.debug('TX4: no new direct calls, switching to TX6');
                 strategy.clearQSOContext();
-                return { changeState: 'TX6' };
+                if (strategy.operator.config.autoResumeCQAfterSuccess) {
+                    return { changeState: 'TX6' };
+                }
+                return { changeState: 'TX6', stop: true };
             }
 
             // 其次检查是否收到对方的 RRR/RR73
@@ -610,7 +643,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 这样可以确保优先完成当前QSO
             return {};
         },
-        onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+        onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             logger.debug(`TX4 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterFail=${strategy.operator.config.autoResumeCQAfterFail}`);
 
             // 清理QSO开始时间
@@ -626,11 +659,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
 
             logger.debug('TX4 timeout: autoResumeCQAfterFail=false, stopping');
-            return { stop: true };
+            return { changeState: 'TX6', stop: true };
         }
     },
     TX5: {
-        onEnter(strategy: StandardQSOStrategy) {
+        onEnter(strategy: StandardQSOPluginRuntime) {
             // 记录QSO日志
             // 优先使用actualFrequency（包含音频偏移的精确频率）
             // 如果actualFrequency无效（< 1MHz），则使用config.frequency（基础频率）
@@ -656,7 +689,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
             // 清理QSO开始时间
             strategy.qsoStartTime = undefined;
         },
-        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
+        async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             // 【修复】首先检查是否收到对方重发的RRR/RR73
             // 如果对方没收到我们的73，会重新发送RRR，我们应该保持在TX5状态继续发送73
             const msgRRR = messages
@@ -761,13 +794,19 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 }
             }
 
-            // 没有新的直接呼叫，转到TX6（CQ或等待新消息）
-            // 这样确保只发送1次73后就转到TX6
-            strategy.armPost73RetryContext();
+            // 没有新的直接呼叫，按配置决定是否恢复到CQ或停止
+            if (strategy.operator.config.autoResumeCQAfterSuccess) {
+                strategy.armPost73RetryContext();
+            } else {
+                strategy.clearPost73RetryContext('success stop after single 73');
+            }
             strategy.clearQSOContext();
-            return { changeState: 'TX6' };
+            if (strategy.operator.config.autoResumeCQAfterSuccess) {
+                return { changeState: 'TX6' };
+            }
+            return { changeState: 'TX6', stop: true };
         },
-        onTimeout(strategy: StandardQSOStrategy): StateHandleResult {
+        onTimeout(strategy: StandardQSOPluginRuntime): StateHandleResult {
             logger.debug(`TX5 timeout: target=${strategy.context.targetCallsign}, autoResumeCQAfterSuccess=${strategy.operator.config.autoResumeCQAfterSuccess}`);
 
             if (!strategy.tx5TransmissionQueued) {
@@ -776,7 +815,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
 
             // 清理QSO上下文
-            strategy.armPost73RetryContext();
+            if (strategy.operator.config.autoResumeCQAfterSuccess) {
+                strategy.armPost73RetryContext();
+            } else {
+                strategy.clearPost73RetryContext('success timeout stop');
+            }
             strategy.clearQSOContext();
 
             // TX5超时表示QSO已成功（已记录日志），对方没有回复73
@@ -787,11 +830,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             }
 
             logger.debug('TX5 timeout: autoResumeCQAfterSuccess=false, stopping');
-            return { stop: true };
+            return { changeState: 'TX6', stop: true };
         }
     },
     TX6: {
-        async handle(strategy: StandardQSOStrategy, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
+        async handle(strategy: StandardQSOPluginRuntime, messages: ParsedFT8Message[]): Promise<StateHandleResult> {
             const retryContext = strategy.getActivePost73RetryContext();
             if (retryContext) {
                 const retryRRR = messages
@@ -980,8 +1023,8 @@ interface Post73RetryContext {
     expiresAt: number;
 }
 
-export class StandardQSOStrategy implements ITransmissionStrategy {
-    public readonly operator: RadioOperator;
+export class StandardQSOPluginRuntime implements StrategyRuntime {
+    public readonly operator: StandardQSOPluginOperator;
     private state: SlotsIndex = 'TX6';
     private slots: Slots = {
         TX1: '',
@@ -1005,7 +1048,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
     // Fox/Hound 模式：记录 Fox 的哈希码
     public foxHash?: string;
 
-    constructor(operator: RadioOperator) {
+    constructor(operator: StandardQSOPluginOperator) {
         this.operator = operator;
         this._context = {
             config: operator.config
@@ -1045,7 +1088,7 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         }
     }
 
-    async handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategiesResult> {
+    async handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategyDecision> {
         const currentState = states[this.state];
 
         // 过滤掉发送者是我自己的消息
@@ -1189,60 +1232,71 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         this.changeState('TX1');  // 呼叫他
     }
 
-    userCommand?(command: QSOCommand): unknown {
-        switch (command.command) {
-            case 'update_context': {
-                // 更新context
-                this._context = {
-                    ...this._context,
-                    ...command.args
-                }
+    decide(messages: ParsedFT8Message[], meta?: StrategyDecisionMeta): Promise<StrategyDecision> {
+        return this.handleReceivedAndDicideNext(messages, {
+            isReDecision: meta?.isReDecision,
+        });
+    }
 
-                // 只有在targetCallsign或reportSent等影响slots内容的字段变化时才调用updateSlots
-                // 这避免了频率等字段变化时触发不必要的slots更新和operatorStatusUpdate事件
-                const needsSlotUpdate =
-                    command.args.targetCallsign !== undefined ||
-                    command.args.reportSent !== undefined ||
-                    command.args.reportReceived !== undefined;
+    getTransmitText(): string | null {
+        return this.handleTransmitSlot();
+    }
 
-                if (needsSlotUpdate) {
-                    this.updateSlots();
-                }
+    getSnapshot(): StrategyRuntimeSnapshot {
+        return {
+            currentState: this.state,
+            slots: this.getSlots(),
+            context: {
+                targetCallsign: this.context.targetCallsign,
+                targetGrid: this.context.targetGrid,
+                reportSent: this.context.reportSent,
+                reportReceived: this.context.reportReceived,
+                actualFrequency: this.context.actualFrequency,
+            },
+            availableSlots: ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'],
+        };
+    }
 
-                return { success: true };
-            }
-            case 'set_state': {
-                const oldState = this.state;
-                this.state = command.args;
-                this.tx5TransmissionQueued = false;
-                if (command.args !== 'TX6') {
-                    this.clearPost73RetryContext(`manual set_state ${command.args}`);
-                }
-                // 手动设置状态时也通知槽位更新
-                if (oldState !== this.state) {
-                    this.notifyStateChanged();
-                }
-                return { success: true };
-            }
-            case 'set_slot_content': {
-                // 设置指定时隙的内容
-                const { slot, content } = command.args;
-                if (slot && Object.prototype.hasOwnProperty.call(this.slots, slot)) {
-                    this.slots[slot as SlotsIndex] = content || '';
-                    this.notifySlotsUpdated();
-                    return { success: true };
-                }
-                return { error: 'Invalid slot or content' };
-            }
-            case 'get_slots':
-                // 返回当前slots状态
-                return this.getSlots();
-            case 'get_state':
-                // 返回当前状态
-                return this.state;
-            default:
-                return { error: 'Unknown command' };
+    patchContext(patch: Partial<StrategyRuntimeContext>): void {
+        this._context = {
+            ...this._context,
+            ...patch,
+        };
+
+        const needsSlotUpdate =
+            patch.targetCallsign !== undefined ||
+            patch.targetGrid !== undefined ||
+            patch.reportSent !== undefined ||
+            patch.reportReceived !== undefined;
+
+        if (needsSlotUpdate) {
+            this.updateSlots();
         }
+    }
+
+    setState(state: SlotsIndex): void {
+        const oldState = this.state;
+        this.state = state;
+        this.tx5TransmissionQueued = false;
+        if (state !== 'TX6') {
+            this.clearPost73RetryContext(`manual set_state ${state}`);
+        }
+        if (oldState !== this.state) {
+            this.notifyStateChanged();
+        }
+    }
+
+    setSlotContent(update: StrategyRuntimeSlotContentUpdate): void {
+        const { slot, content } = update;
+        if (!Object.prototype.hasOwnProperty.call(this.slots, slot)) {
+            throw new Error(`Invalid slot: ${slot}`);
+        }
+        this.slots[slot as SlotsIndex] = content || '';
+        this.notifySlotsUpdated();
+    }
+
+    reset(reason?: string): void {
+        this.resetRuntime(reason);
     }
     
     /**
@@ -1431,6 +1485,16 @@ export class StandardQSOStrategy implements ITransmissionStrategy {
         this.updateSlots();
 
         logger.debug(`QSO context cleared (previousTarget=${previousTarget}, state=${currentState}, timeoutCycles=${this.timeoutCycles})`);
+    }
+
+    resetRuntime(reason?: string): void {
+        this.timeoutCycles = 0;
+        this.callAttempts = 0;
+        this.qsoStartTime = undefined;
+        this.tx5TransmissionQueued = false;
+        this.clearPost73RetryContext(`runtime reset${reason ? `: ${reason}` : ''}`);
+        this.clearQSOContext();
+        this.changeState('TX6');
     }
 
     /**
