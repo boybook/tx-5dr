@@ -271,7 +271,7 @@ interface PluginDefinition {
   panels?: PluginPanelDescriptor[];
 
   /** 声明需要哪些存储作用域（当前主要作为元数据暴露，不做运行时裁剪） */
-  storage?: { scopes: ('global' | 'operator')[] };
+  storage?: PluginStorageConfig;
 
   /**
    * 策略运行时工厂
@@ -344,6 +344,25 @@ interface KVStore {
   getAll(): Record<string, unknown>;
 }
 ```
+
+#### 常用定义类型
+
+`@tx5dr/plugin-api` 还会统一导出一批插件定义层常用类型，便于在 helper/builder 中复用，而无需直接依赖内部 contracts：
+
+- `PluginSettingType`
+- `PluginSettingScope`
+- `PluginSettingDescriptor`
+- `PluginSettingOption`
+- `PluginStorageScope`
+- `PluginStorageConfig`
+- `TargetSelectionPriorityMode`
+
+此外，插件在处理解码结果和日志本分析时，通常也可以直接从 `@tx5dr/plugin-api` 获取这些运行时类型：
+
+- `LogbookAnalysis`
+- `DxccStatus`
+- `ParsedFT8Message`
+- `QSORecord`
 
 写入操作有 300ms debounce；插件实例卸载或插件子系统关闭时会强制 flush。
 
