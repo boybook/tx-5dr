@@ -18,15 +18,14 @@ const logger = createLogger('AudioDeviceManager');
 export class AudioDeviceManager {
   private static instance: AudioDeviceManager;
   private icomWlanConnectedCallback: (() => boolean) | null = null;
-  private rtAudio: RtAudioInstance;
+  private readonly rtAudioApi: number;
 
   private constructor() {
     // On Windows, explicitly use WASAPI to avoid ASIO exclusive-access conflicts.
     // ASIO only exposes ASIO devices (e.g. "Realtek ASIO"), hiding all WASAPI devices.
     // WASAPI sees all system audio devices and supports shared-mode access.
-    const api = process.platform === 'win32' ? RTAUDIO_API_WINDOWS_WASAPI : RTAUDIO_API_UNSPECIFIED;
-    this.rtAudio = new RtAudio(api);
-    logger.info('Audify (RtAudio) audio system initialized', { api: process.platform === 'win32' ? 'WASAPI' : 'auto' });
+    this.rtAudioApi = process.platform === 'win32' ? RTAUDIO_API_WINDOWS_WASAPI : RTAUDIO_API_UNSPECIFIED;
+    logger.info('Audify (RtAudio) audio enumeration initialized', { api: process.platform === 'win32' ? 'WASAPI' : 'auto' });
   }
 
   static getInstance(): AudioDeviceManager {
@@ -100,13 +99,22 @@ export class AudioDeviceManager {
     };
   }
 
+  private createRtAudioInstance(): RtAudioInstance {
+    return new RtAudio(this.rtAudioApi);
+  }
+
+  private getRtAudioDevices(): any[] {
+    const rtAudio = this.createRtAudioInstance();
+    return rtAudio.getDevices();
+  }
+
   /**
    * 获取所有音频输入设备
    */
   async getInputDevices(): Promise<AudioDevice[]> {
     try {
       logger.debug('Enumerating audio input devices');
-      const devices = this.rtAudio.getDevices();
+      const devices = this.getRtAudioDevices();
       logger.debug(`Audify returned ${devices.length} devices`);
 
       devices.forEach((device: any, index: number) => {
@@ -185,7 +193,7 @@ export class AudioDeviceManager {
   async getOutputDevices(): Promise<AudioDevice[]> {
     try {
       logger.debug('Enumerating audio output devices');
-      const devices = this.rtAudio.getDevices();
+      const devices = this.getRtAudioDevices();
       logger.debug(`Audify returned ${devices.length} devices`);
 
       const outputDevices = devices.filter((device: any, index: number) => {

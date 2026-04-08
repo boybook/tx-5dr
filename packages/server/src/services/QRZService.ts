@@ -9,13 +9,24 @@ import {
 } from '@tx5dr/contracts';
 import {
   convertQSOToADIF,
-  parseADIFContent as parseADIFContentUtil,
+  parseADIFFields,
+  parseADIFRecord,
 } from '../utils/adif-utils.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('QRZService');
 
 const QRZ_API_URL = 'https://logbook.qrz.com/api';
+const QRZ_USER_AGENT = 'TX5DR/1.0';
+const QRZ_REQUEST_TIMEOUT_MS = 15000;
+const QRZ_FETCH_TIMEOUT_MS = 30000;
+const QRZ_FETCH_PAGE_SIZE = 250;
+
+type QRZFetchPage = {
+  count: number;
+  records: QSORecord[];
+  nextAfterLogId: number | null;
+};
 
 /**
  * QRZ.com Logbook API 服务类
@@ -41,21 +52,107 @@ export class QRZService {
    * 响应中也可能包含换行符
    */
   private parseQRZResponse(text: string): Record<string, string> {
-    const result: Record<string, string> = {};
-    // 先去除首尾空白，然后按 & 分隔（忽略换行符）
-    const cleaned = text.replace(/[\r\n]+/g, '&').trim();
-    const pairs = cleaned.split('&').filter(p => p.length > 0);
+    const result = this.parseNameValuePairs(text);
+    const nestedData = result.DATA;
 
-    for (const pair of pairs) {
-      const eqIndex = pair.indexOf('=');
-      if (eqIndex > 0) {
-        const key = pair.substring(0, eqIndex).trim();
-        const value = pair.substring(eqIndex + 1).trim();
-        result[key] = value;
+    if (nestedData?.includes('=')) {
+      const nestedPairs = this.parseNameValuePairs(nestedData);
+      for (const [key, value] of Object.entries(nestedPairs)) {
+        if (!(key in result)) {
+          result[key] = value;
+        }
       }
     }
 
     return result;
+  }
+
+  private parseNameValuePairs(text: string): Record<string, string> {
+    const result: Record<string, string> = {};
+    const cleaned = text.trim();
+    const keyRegex = /(?:^|&)([A-Z_]+)=/g;
+    const matches = Array.from(cleaned.matchAll(keyRegex));
+
+    for (let index = 0; index < matches.length; index += 1) {
+      const match = matches[index];
+      const key = match[1];
+      const valueStart = (match.index ?? 0) + match[0].length;
+      const nextMatch = matches[index + 1];
+      const valueEnd = nextMatch ? (nextMatch.index ?? cleaned.length) : cleaned.length;
+      const value = cleaned.substring(valueStart, valueEnd).trim();
+      result[key] = value;
+    }
+
+    return result;
+  }
+
+  private createRequestBody(params: Record<string, string>): string {
+    return new URLSearchParams(params).toString();
+  }
+
+  private async postToQRZ(params: Record<string, string>, timeoutMs: number): Promise<Response> {
+    return fetch(QRZ_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': QRZ_USER_AGENT,
+      },
+      body: this.createRequestBody(params),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  }
+
+  private buildFetchOption(options?: {
+    startDate?: string;
+    endDate?: string;
+    afterLogId?: number;
+    max?: number;
+  }): string {
+    const parts = [
+      'TYPE:ADIF',
+      `MAX:${options?.max ?? QRZ_FETCH_PAGE_SIZE}`,
+      `AFTERLOGID:${options?.afterLogId ?? 0}`,
+    ];
+
+    if (options?.startDate && options?.endDate) {
+      parts.push(`BETWEEN:${options.startDate}+${options.endDate}`);
+    }
+
+    return parts.join(',');
+  }
+
+  private parseFetchAdifPage(adifData: string): QRZFetchPage {
+    const eohIndex = adifData.search(/<eoh>/i);
+    const body = eohIndex >= 0 ? adifData.substring(eohIndex + 5) : adifData;
+    const recordStrings = body.split(/<eor>/i).filter(record => record.trim().length > 0);
+    const records: QSORecord[] = [];
+    let highestLogId: number | null = null;
+
+    for (const recordStr of recordStrings) {
+      const parsedRecord = parseADIFRecord(recordStr, 'qrz');
+      if (!parsedRecord) {
+        continue;
+      }
+
+      records.push(parsedRecord);
+
+      const fields = parseADIFFields(recordStr);
+      const rawLogId = fields.app_qrzlog_logid;
+      if (!rawLogId) {
+        continue;
+      }
+
+      const parsedLogId = Number.parseInt(rawLogId, 10);
+      if (Number.isFinite(parsedLogId) && (highestLogId === null || parsedLogId > highestLogId)) {
+        highestLogId = parsedLogId;
+      }
+    }
+
+    return {
+      count: records.length,
+      records,
+      nextAfterLogId: highestLogId === null ? null : highestLogId + 1,
+    };
   }
 
   /**
@@ -68,24 +165,15 @@ export class QRZService {
     }
 
     try {
-      const body = new URLSearchParams({
+      const params = {
         KEY: this.config.apiKey,
         ACTION: 'STATUS',
-      });
+      };
 
       let response: Response;
       try {
         logger.debug(`Testing connection to: ${QRZ_API_URL}`);
-
-        response = await fetch(QRZ_API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': 'TX5DR/1.0',
-          },
-          body: body.toString(),
-          signal: AbortSignal.timeout(10000),
-        });
+        response = await this.postToQRZ(params, QRZ_REQUEST_TIMEOUT_MS);
 
         logger.debug(`Connection response status: ${response.status}`);
       } catch (error) {
@@ -153,22 +241,14 @@ export class QRZService {
       adif: adifString,
     });
 
-    const body = new URLSearchParams({
+    const params = {
       KEY: this.config.apiKey,
       ACTION: 'INSERT',
       ADIF: adifString,
-    });
+    };
 
     try {
-      const response = await fetch(QRZ_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'TX5DR/1.0',
-        },
-        body: body.toString(),
-        signal: AbortSignal.timeout(10000),
-      });
+      const response = await this.postToQRZ(params, QRZ_REQUEST_TIMEOUT_MS);
 
       const responseText = await response.text();
       logger.debug(`INSERT response: ${responseText}`);
@@ -245,56 +325,79 @@ export class QRZService {
     endDate?: string;
   }): Promise<QSORecord[]> {
     try {
-      const params: Record<string, string> = {
-        KEY: this.config.apiKey,
-        ACTION: 'FETCH',
-      };
+      logger.debug('Downloading QSO records from QRZ...');
 
-      // 如果提供了日期范围，使用 OPTION=BETWEEN 格式
-      if (options?.startDate && options?.endDate) {
-        params.OPTION = `BETWEEN:${options.startDate} 00:00:00:${options.endDate} 23:59:59`;
-      }
+      const records: QSORecord[] = [];
+      let afterLogId = 0;
 
-      const body = new URLSearchParams(params);
+      while (true) {
+        const params: Record<string, string> = {
+          KEY: this.config.apiKey,
+          ACTION: 'FETCH',
+          OPTION: this.buildFetchOption({
+            startDate: options?.startDate,
+            endDate: options?.endDate,
+            afterLogId,
+            max: QRZ_FETCH_PAGE_SIZE,
+          }),
+        };
 
-      logger.debug('Downloading QSO records...');
+        logger.debug('Fetching QRZ page', {
+          afterLogId,
+          pageSize: QRZ_FETCH_PAGE_SIZE,
+          hasDateRange: Boolean(options?.startDate && options?.endDate),
+        });
 
-      const response = await fetch(QRZ_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'TX5DR/1.0',
-        },
-        body: body.toString(),
-        signal: AbortSignal.timeout(15000),
-      });
+        const response = await this.postToQRZ(params, QRZ_FETCH_TIMEOUT_MS);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
-      }
-
-      const responseText = await response.text();
-      logger.debug(`FETCH response length: ${responseText.length} bytes`);
-
-      const parsed = this.parseQRZResponse(responseText);
-
-      if (parsed.RESULT === 'OK') {
-        const adifData = parsed.DATA || '';
-
-        if (!adifData || adifData.trim().length === 0) {
-          logger.debug('No QSO data returned');
-          return [];
+        if (!response.ok) {
+          throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
         }
 
-        const qsoRecords = parseADIFContentUtil(adifData, 'qrz');
-        logger.info(`Downloaded ${qsoRecords.length} QSO records (COUNT: ${parsed.COUNT || 0})`);
+        const responseText = await response.text();
+        logger.debug(`FETCH response length: ${responseText.length} bytes`);
 
-        return qsoRecords;
-      } else if (parsed.RESULT === 'FAIL' || parsed.RESULT === 'AUTH') {
-        throw new Error(parsed.REASON || 'QRZ API request failed');
-      } else {
-        throw new Error(`Unknown QRZ response: ${responseText}`);
+        const parsed = this.parseQRZResponse(responseText);
+
+        if (parsed.RESULT === 'FAIL' || parsed.RESULT === 'AUTH') {
+          throw new Error(parsed.REASON || 'QRZ API request failed');
+        }
+
+        if (parsed.RESULT !== 'OK') {
+          throw new Error(`Unknown QRZ response: ${responseText}`);
+        }
+
+        const adifData = parsed.ADIF || '';
+        if (!adifData || adifData.trim().length === 0) {
+          logger.debug('No QSO data returned for current page', {
+            afterLogId,
+            totalCount: parsed.COUNT ? Number.parseInt(parsed.COUNT, 10) : undefined,
+          });
+          break;
+        }
+
+        const page = this.parseFetchAdifPage(adifData);
+        records.push(...page.records);
+
+        logger.info('Downloaded QRZ page', {
+          pageCount: page.count,
+          totalCount: parsed.COUNT ? Number.parseInt(parsed.COUNT, 10) : undefined,
+          nextAfterLogId: page.nextAfterLogId,
+        });
+
+        if (page.count < QRZ_FETCH_PAGE_SIZE) {
+          break;
+        }
+
+        if (page.nextAfterLogId === null || page.nextAfterLogId <= afterLogId) {
+          throw new Error('QRZ paging failed: missing or invalid app_qrzlog_logid');
+        }
+
+        afterLogId = page.nextAfterLogId;
       }
+
+      logger.info(`Downloaded ${records.length} QSO records from QRZ`);
+      return records;
     } catch (error) {
       logger.error('Failed to download QSO records:', error);
       throw this.handleNetworkError(error, QRZ_API_URL);
@@ -321,7 +424,12 @@ export class QRZService {
       return error;
     }
 
-    if (error.name === 'AbortError' || error.code === 'ABORT_ERR') {
+    if (
+      error.name === 'AbortError'
+      || error.name === 'TimeoutError'
+      || error.code === 'ABORT_ERR'
+      || error.message?.includes('aborted due to timeout')
+    ) {
       return new Error(`Connection timeout: QRZ server response too slow, check network connection`);
     }
 
