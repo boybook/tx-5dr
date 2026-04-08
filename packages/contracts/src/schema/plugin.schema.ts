@@ -3,58 +3,91 @@ import { z } from 'zod';
 // ===== 核心枚举 =====
 
 /**
- * 插件类型
- * - strategy: 策略插件，每操作员只能激活一个（互斥）
- * - utility: 工具插件，可多个叠加使用
+ * High-level plugin category.
+ *
+ * - `strategy`: owns the operator's automation runtime and is mutually
+ *   exclusive per operator.
+ * - `utility`: composes with other utility plugins to filter, score, monitor or
+ *   augment UI.
  */
 export const PluginTypeSchema = z.enum(['strategy', 'utility']);
+
+/**
+ * High-level plugin category used by manifests and runtime status objects.
+ */
 export type PluginType = z.infer<typeof PluginTypeSchema>;
 
 /**
- * 插件权限声明
- * - network: 允许使用 ctx.fetch() 进行网络请求
+ * Explicit permission declarations requested by a plugin.
+ *
+ * Permissions let the host gate sensitive capabilities behind manifest-level
+ * intent. Plugins should request the smallest possible set.
  */
 export const PluginPermissionSchema = z.enum(['network']);
+
+/**
+ * Explicit permission declarations requested by a plugin.
+ */
 export type PluginPermission = z.infer<typeof PluginPermissionSchema>;
 
 /**
- * 插件面板组件类型
- * - table: 表格展示
- * - key-value: 键值对展示
- * - chart: 图表展示
- * - log: 日志/消息流展示
+ * Built-in frontend renderer kinds supported by declarative plugin panels.
  */
 export const PluginPanelComponentSchema = z.enum(['table', 'key-value', 'chart', 'log']);
+
+/**
+ * Built-in frontend renderer kinds supported by declarative plugin panels.
+ */
 export type PluginPanelComponent = z.infer<typeof PluginPanelComponentSchema>;
 
 // ===== 设置声明 =====
 
 /**
- * 插件设置项的类型
+ * Supported generated-form field types for plugin settings.
+ *
+ * These values control both validation expectations and default frontend
+ * rendering in plugin settings UIs.
  */
 export const PluginSettingTypeSchema = z.enum(['boolean', 'number', 'string', 'string[]', 'info']);
+
+/**
+ * Supported generated-form field types for plugin settings.
+ */
 export type PluginSettingType = z.infer<typeof PluginSettingTypeSchema>;
 
 /**
- * 插件设置项的选项（用于 Select 下拉选择）
+ * Label/value pair used by select-like plugin settings.
  */
 export const PluginSettingOptionSchema = z.object({
   label: z.string(),
   value: z.string(),
 });
+
+/**
+ * Label/value pair used by select-like plugin settings.
+ */
 export type PluginSettingOption = z.infer<typeof PluginSettingOptionSchema>;
 
 /**
- * 插件设置项的作用域
- * - global: 所有操作员共享（如 API key、黑名单），在 PluginSettingsTab 中展示
- * - operator: 每个操作员独立（如自动化行为），在 OperatorSettings 中展示
+ * Persistence and UI scope for a plugin setting.
+ *
+ * - `global`: shared by the whole station and typically edited in plugin
+ *   management views.
+ * - `operator`: isolated per operator and typically edited in operator-specific
+ *   automation settings.
  */
 export const PluginSettingScopeSchema = z.enum(['global', 'operator']);
+
+/**
+ * Persistence and UI scope for a plugin setting.
+ */
 export type PluginSettingScope = z.infer<typeof PluginSettingScopeSchema>;
 
 /**
- * 插件设置描述符
- * 声明一个设置项的类型、默认值、UI 显示信息等
+ * Declarative description of a persisted plugin setting.
+ *
+ * The host uses this schema to generate configuration forms, validate updates
+ * and resolve default values before injecting them into `ctx.config`.
  */
 export const PluginSettingDescriptorSchema = z.object({
   type: PluginSettingTypeSchema,
@@ -67,61 +100,100 @@ export const PluginSettingDescriptorSchema = z.object({
   /** 设置作用域：global（所有操作员共享）或 operator（每操作员独立），默认 global */
   scope: PluginSettingScopeSchema.optional().default('global'),
 });
+
+/**
+ * Declarative description of a persisted plugin setting.
+ *
+ * `default` is the resolved fallback value, `label`/`description` power the UI,
+ * `min` and `max` constrain numeric fields, `options` enumerates valid choices
+ * for select-like inputs, and `scope` controls whether the value is shared or
+ * operator-specific.
+ */
 export type PluginSettingDescriptor = z.infer<typeof PluginSettingDescriptorSchema>;
 
 // ===== 快捷操作 =====
 
 /**
- * 插件快捷操作按钮定义
+ * Declarative quick-action button shown in operator-facing plugin UI.
+ *
+ * Quick actions are intended for one-shot commands and are dispatched through
+ * the plugin user-action channel when clicked.
  */
 export const PluginQuickActionSchema = z.object({
   id: z.string(),
   label: z.string(),
   icon: z.string().optional(),
 });
+
+/**
+ * Declarative quick-action button shown in operator-facing plugin UI.
+ */
 export type PluginQuickAction = z.infer<typeof PluginQuickActionSchema>;
 
 /**
- * 插件快捷设置定义
- * - 直接引用一个 operator-scope setting key，在右上角自动化面板中渲染
+ * Shortcut reference to an operator-scope setting that should be surfaced in a
+ * compact quick-settings panel.
  */
 export const PluginQuickSettingSchema = z.object({
   settingKey: z.string(),
 });
+
+/**
+ * Shortcut reference to an operator-scope setting that should be surfaced in a
+ * compact quick-settings panel.
+ */
 export type PluginQuickSetting = z.infer<typeof PluginQuickSettingSchema>;
 
 // ===== 面板 =====
 
 /**
- * 插件面板描述符
+ * Declarative definition of a plugin-owned panel in the frontend.
+ *
+ * Panels are passive containers rendered by the host. A plugin sends data into
+ * them through `ctx.ui.send(panelId, data)`.
  */
 export const PluginPanelDescriptorSchema = z.object({
   id: z.string(),
   title: z.string(),
   component: PluginPanelComponentSchema,
 });
+
+/**
+ * Declarative definition of a plugin-owned panel in the frontend.
+ */
 export type PluginPanelDescriptor = z.infer<typeof PluginPanelDescriptorSchema>;
 
 // ===== 存储配置 =====
 
 /**
- * 插件存储作用域
+ * Storage scope requested by a plugin.
  */
 export const PluginStorageScopeSchema = z.enum(['global', 'operator']);
+
+/**
+ * Storage scope requested by a plugin.
+ */
 export type PluginStorageScope = z.infer<typeof PluginStorageScopeSchema>;
 
 /**
- * 插件存储配置
+ * Declares which persistent storage scopes the host should provision.
  */
 export const PluginStorageConfigSchema = z.object({
   scopes: z.array(PluginStorageScopeSchema),
 });
+
+/**
+ * Declares which persistent storage scopes the host should provision.
+ */
 export type PluginStorageConfig = z.infer<typeof PluginStorageConfigSchema>;
 
 // ===== 插件清单 =====
 
 /**
- * 插件清单 — 描述插件的元数据和声明
+ * Normalized manifest describing a plugin's static metadata and declarations.
+ *
+ * This is effectively the serializable subset of a plugin definition that the
+ * host can expose to management UI and diagnostics.
  */
 export const PluginManifestSchema = z.object({
   name: z.string(),
@@ -135,12 +207,19 @@ export const PluginManifestSchema = z.object({
   panels: z.array(PluginPanelDescriptorSchema).optional(),
   storage: PluginStorageConfigSchema.optional(),
 });
+
+/**
+ * Normalized manifest describing a plugin's static metadata and declarations.
+ */
 export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 
 // ===== 运行时状态（推送给前端） =====
 
 /**
- * 插件运行时状态
+ * Runtime-facing plugin status snapshot exposed to the frontend.
+ *
+ * This extends the static manifest with host state such as whether the plugin
+ * is loaded, enabled, auto-disabled or currently assigned to operators.
  */
 export const PluginStatusSchema = z.object({
   name: z.string(),
@@ -163,6 +242,10 @@ export const PluginStatusSchema = z.object({
   permissions: z.array(PluginPermissionSchema).optional(),
   locales: z.record(z.string(), z.record(z.string(), z.string())).optional(),
 });
+
+/**
+ * Runtime-facing plugin status snapshot exposed to the frontend.
+ */
 export type PluginStatus = z.infer<typeof PluginStatusSchema>;
 
 export const PluginSystemStateSchema = z.enum(['ready', 'reloading', 'error']);

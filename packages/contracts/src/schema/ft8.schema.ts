@@ -105,7 +105,12 @@ export const FT8TransmitResponseSchema = z.object({
   scheduledCycle: z.number().optional(),
 });
 
-// FT8消息类型常量
+/**
+ * Canonical FT8 message kind identifiers used by the parser.
+ *
+ * These values describe the semantic role of a decoded message after TX-5DR has
+ * normalized the raw free-text payload into structured FT8/QSO stages.
+ */
 export const FT8MessageType = {
   CQ: 'cq',           // CQ呼叫
   CALL: 'call',         // 响应呼叫
@@ -118,7 +123,9 @@ export const FT8MessageType = {
   UNKNOWN: 'unknown',      // 未知消息类型
 } as const;
 
-// FT8消息类型
+/**
+ * Zod schema for {@link FT8MessageType} values.
+ */
 export const FT8MessageTypeSchema = z.enum([
   FT8MessageType.CQ,
   FT8MessageType.CALL,
@@ -131,12 +138,22 @@ export const FT8MessageTypeSchema = z.enum([
   FT8MessageType.UNKNOWN,
 ]);
 
-// FT8消息基础schema
+/**
+ * Base shape shared by every structured FT8 message.
+ *
+ * Use this when code only needs to discriminate on the message `type` without
+ * caring about the rest of the payload.
+ */
 export const FT8MessageBaseSchema = z.object({
   type: FT8MessageTypeSchema,
 });
 
-// FT8消息具体类型schema
+/**
+ * Structured representation of a CQ message.
+ *
+ * This is typically the main entry point for automation plugins that scan the
+ * band for new targets to answer.
+ */
 export const FT8MessageCQSchema = FT8MessageBaseSchema.extend({
   type: z.literal('cq'),
   senderCallsign: z.string(),
@@ -144,6 +161,12 @@ export const FT8MessageCQSchema = FT8MessageBaseSchema.extend({
   grid: z.string().optional(),
 });
 
+/**
+ * Structured representation of a directed call message.
+ *
+ * This covers "A B" style messages where one station calls or answers a
+ * specific target station, optionally including grid information.
+ */
 export const FT8MessageCallSchema = FT8MessageBaseSchema.extend({
   type: z.literal('call'),
   senderCallsign: z.string(),
@@ -151,6 +174,11 @@ export const FT8MessageCallSchema = FT8MessageBaseSchema.extend({
   grid: z.string().optional(),
 });
 
+/**
+ * Structured representation of a signal report message.
+ *
+ * This usually corresponds to the report-exchange phase of a normal FT8 QSO.
+ */
 export const FT8MessageSignalReportSchema = FT8MessageBaseSchema.extend({
   type: z.literal('signal_report'),
   senderCallsign: z.string(),
@@ -158,6 +186,12 @@ export const FT8MessageSignalReportSchema = FT8MessageBaseSchema.extend({
   report: z.number(),
 });
 
+/**
+ * Structured representation of an RR73-style "roger + report" message.
+ *
+ * In standard FT8 flow this acknowledges the received report while also
+ * carrying the sender's report for the other station.
+ */
 export const FT8MessageRogerReportSchema = FT8MessageBaseSchema.extend({
   type: z.literal('roger_report'),
   senderCallsign: z.string(),
@@ -165,18 +199,34 @@ export const FT8MessageRogerReportSchema = FT8MessageBaseSchema.extend({
   report: z.number(),
 });
 
+/**
+ * Structured representation of an `RRR` confirmation message.
+ *
+ * This indicates the sender considers the report exchange complete.
+ */
 export const FT8MessageRRRSchema = FT8MessageBaseSchema.extend({
   type: z.literal('rrr'),
   senderCallsign: z.string(),
   targetCallsign: z.string(),
 });
 
+/**
+ * Structured representation of a final `73` closing message.
+ *
+ * This is typically the terminal stage of a completed FT8 QSO.
+ */
 export const FT8MessageSeventyThreeSchema = FT8MessageBaseSchema.extend({
   type: z.literal('73'),
   senderCallsign: z.string(),
   targetCallsign: z.string(),
 });
 
+/**
+ * Structured representation of a Fox/Hound `RR73` completion message.
+ *
+ * This variant appears in DXpedition workflows where the Fox acknowledges one
+ * completed Hound and may invite the next one in the same frame.
+ */
 export const FT8MessageFoxRR73Schema = FT8MessageBaseSchema.extend({
   type: z.literal('fox_rr73'),
   completedCallsign: z.string(), // 已完成QSO的Hound呼号
@@ -185,15 +235,26 @@ export const FT8MessageFoxRR73Schema = FT8MessageBaseSchema.extend({
   snrForNext: z.number().optional(), // Fox告知下一个Hound的信号强度（如+04→4）
 });
 
+/**
+ * Structured representation of a decoder-recognized message whose free-text
+ * payload is intentionally left uninterpreted.
+ */
 export const FT8MessageCustomSchema = FT8MessageBaseSchema.extend({
   type: z.literal('custom'),
 });
 
+/**
+ * Fallback structured representation for a decoded message that the parser
+ * could not confidently classify.
+ */
 export const FT8MessageUnknownSchema = FT8MessageBaseSchema.extend({
   type: z.literal('unknown'),
 });
 
-// FT8消息联合类型
+/**
+ * Discriminated union of every structured FT8 message variant understood by
+ * TX-5DR.
+ */
 export const FT8MessageSchema = z.discriminatedUnion('type', [
   FT8MessageCQSchema,
   FT8MessageCallSchema,
@@ -206,7 +267,13 @@ export const FT8MessageSchema = z.discriminatedUnion('type', [
   FT8MessageUnknownSchema,
 ]);
 
-// 解析后的FT8消息
+/**
+ * Fully parsed decode entry used by selection, filtering and automation logic.
+ *
+ * This is the main plugin-facing FT8 payload. It combines RF metrics from the
+ * decoder (`snr`, `dt`, `df`), the original unparsed text (`rawMessage`), the
+ * normalized semantic form (`message`) and optional logbook enrichment.
+ */
 export const ParsedFT8MessageSchema = z.object({
   snr: z.number(),
   dt: z.number(),
@@ -226,15 +293,67 @@ export type FT8Spectrum = z.infer<typeof FT8SpectrumSchema>;
 export type FT8SpectrumResponse = z.infer<typeof FT8SpectrumResponseSchema>;
 export type FT8TransmitRequest = z.infer<typeof FT8TransmitRequestSchema>;
 export type FT8TransmitResponse = z.infer<typeof FT8TransmitResponseSchema>;
+
+/**
+ * Base FT8 message type containing only the discriminant field.
+ */
 export type FT8MessageBase = z.infer<typeof FT8MessageBaseSchema>;
+
+/**
+ * Structured CQ message with sender identity and optional grid/flag metadata.
+ */
 export type FT8MessageCQ = z.infer<typeof FT8MessageCQSchema>;
+
+/**
+ * Structured directed-call message between a sender and a target station.
+ */
 export type FT8MessageCall = z.infer<typeof FT8MessageCallSchema>;
+
+/**
+ * Structured signal-report exchange message carrying a numeric report.
+ */
 export type FT8MessageSignalReport = z.infer<typeof FT8MessageSignalReportSchema>;
+
+/**
+ * Structured "roger + report" exchange message.
+ */
 export type FT8MessageRogerReport = z.infer<typeof FT8MessageRogerReportSchema>;
+
+/**
+ * Structured `RRR` completion/acknowledgement message.
+ */
 export type FT8MessageRRR = z.infer<typeof FT8MessageRRRSchema>;
+
+/**
+ * Structured final `73` closing message.
+ */
 export type FT8MessageSeventyThree = z.infer<typeof FT8MessageSeventyThreeSchema>;
+
+/**
+ * Structured Fox/Hound `RR73` completion-and-invite message.
+ */
 export type FT8MessageFoxRR73 = z.infer<typeof FT8MessageFoxRR73Schema>;
+
+/**
+ * Structured custom FT8 message whose payload is intentionally not further
+ * parsed by the core parser.
+ */
 export type FT8MessageCustom = z.infer<typeof FT8MessageCustomSchema>;
+
+/**
+ * Structured fallback FT8 message for unclassified decoder output.
+ */
 export type FT8MessageUnknown = z.infer<typeof FT8MessageUnknownSchema>;
+
+/**
+ * Union of every structured FT8 message variant recognized by TX-5DR.
+ */
 export type FT8Message = z.infer<typeof FT8MessageSchema>;
+
+/**
+ * Primary plugin-facing FT8 decode model.
+ *
+ * Prefer this type when filtering targets, scoring candidates or reacting to
+ * decoded traffic in plugin hooks.
+ */
 export type ParsedFT8Message = z.infer<typeof ParsedFT8MessageSchema>; 
