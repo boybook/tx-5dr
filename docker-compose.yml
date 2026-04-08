@@ -46,9 +46,15 @@ services:
       # PulseAudio 支持（如果需要）
       - /run/user/1000/pulse:/run/user/1000/pulse:ro
       - /var/lib/pulse:/var/lib/pulse:ro
+      # 如需在容器内使用稳定的串口别名，可额外挂载宿主机串口符号链接目录
+      # 注意：仅挂载 /dev/serial/by-id 还不够，通常仍需同时映射对应的 /dev/ttyUSB* 设备
+      # - /dev/serial/by-id:/dev/serial/by-id:ro
     devices:
       # USB设备（支持USB声卡和串口设备）
       - /dev/bus/usb:/dev/bus/usb:rwm
+      # 如果使用 Hamlib 串口/CAT 模式，建议显式映射宿主机创建的 tty 设备
+      # - /dev/ttyUSB0:/dev/ttyUSB0:rwm
+      # - /dev/ttyUSB1:/dev/ttyUSB1:rwm
       # 音频设备
       - /dev/snd:/dev/snd:rwm
     environment:

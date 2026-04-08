@@ -146,11 +146,16 @@ services:
       - "8076:80"
     volumes:
       - ./data/config:/app/data/config
+      - ./data/plugins:/app/data/plugins
       - ./data/logs:/app/data/logs
       - ./data/cache:/app/data/cache
+      - ./data/realtime:/app/data/realtime
       - /dev/snd:/dev/snd:rw
     devices:
       - /dev/bus/usb:/dev/bus/usb:rwm
+      # If you use Hamlib serial/CAT mode, map the concrete host tty devices too.
+      # - /dev/ttyUSB0:/dev/ttyUSB0:rwm
+      # - /dev/ttyUSB1:/dev/ttyUSB1:rwm
     group_add:
       - audio
     environment:
@@ -171,16 +176,37 @@ services:
 ```
 
 ```bash
-docker compose up -d
+mkdir -p data/{config,plugins,logs,cache,realtime}
+
+# Using published images
+docker compose pull
+
+# If you build locally from this repo, rebuild after updating the checkout
+# docker compose build --no-cache
+
+# Generate/verify managed LiveKit credentials first
+docker compose run --rm livekit-init
+
+# Start in phases so failures are easier to isolate
+docker compose up -d livekit
+docker compose logs -f livekit
+
+docker compose up -d tx5dr
+docker compose logs -f tx5dr
+
 # Access: http://localhost:8076
 
 # View admin token
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
+- Before startup, verify the host sees the hardware: `lsusb`, `ls -l /dev/ttyUSB*`, and `aplay -l`. Seeing a USB device on the host does not automatically mean the container can use the tty node.
+- For radio CAT serial mode, `/dev/bus/usb` alone is usually not enough; map the concrete `/dev/ttyUSB0`, `/dev/ttyUSB1`, etc. exposed by the host as well.
 - Browser clients normally connect through the current site's same-origin `/livekit` path. Only configure an advanced override in System Settings when that path does not match your external deployment topology; the value persists to `/app/data/config/config.json`
 - The Docker stack auto-generates managed LiveKit credentials and `livekit.yaml` into `./data/realtime` on first startup, then reuses them on later restarts
+- If you still hit a `supervisord` / `supervisor` configuration parse error after updating the repo, pull a fresh image or rebuild with `docker compose build --no-cache`
 - If your public domain, TLS termination, or path mapping prevents the current site's `/livekit` route from reaching LiveKit signaling directly, set a custom realtime voice entrypoint in the settings page
+- See `docs/docker-deployment.md` for a fuller startup checklist, device-mapping notes, and troubleshooting steps
 
 See [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker) for image details. Docker metadata is also published to the OSS mirror during release workflows.
 
