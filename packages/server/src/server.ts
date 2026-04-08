@@ -146,6 +146,10 @@ export async function createServer() {
   await digitalRadioEngine.initialize();
   fastify.log.info('Digital radio engine initialized');
 
+  fastify.addHook('onClose', async () => {
+    await digitalRadioEngine.pluginManager.shutdown();
+  });
+
   // 初始化按呼号的同步服务注册表（替代旧的全局 WaveLog/QRZ/LoTW 服务）
   const { SyncServiceRegistry } = await import('./services/SyncServiceRegistry.js');
   const syncRegistry = SyncServiceRegistry.getInstance();
@@ -280,8 +284,10 @@ export async function createServer() {
     await scope.register(pskreporterRoutes, { prefix: '/api' });
     await scope.register(systemRoutes, { prefix: '/api/system' });
     await scope.register(openwebrxRoutes, { prefix: '/api/openwebrx' });
+    const { pluginRoutes } = await import('./routes/plugins.js');
+    await scope.register(pluginRoutes, { prefix: '/api/plugins' });
   });
-  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system, openwebrx)');
+  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system, openwebrx, plugins)');
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、语音
   await fastify.register(async (scope) => {

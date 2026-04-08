@@ -57,12 +57,6 @@ export const QSOContextSchema = z.object({
   actualFrequency: z.number().optional(), // 实际通联频率 (基础频率 + 偏移频率)
 });
 
-// QSO命令
-export const QSOCommandSchema = z.object({
-  command: z.string(),
-  args: z.any(),
-});
-
 // QSL 确认状态枚举（参考 ADIF 3.1.4 规范）
 export const QslSentStatusSchema = z.enum(['Y', 'N', 'R', 'Q', 'I']).optional(); // Y=yes, N=no, R=requested, Q=queued, I=invalid
 export const QslReceivedStatusSchema = z.enum(['Y', 'N', 'R', 'I', 'V']).optional(); // Y=yes, V=validated
@@ -130,6 +124,5 @@ export type DxccStatus = z.infer<typeof DxccStatusSchema>;
 export type DxccSource = z.infer<typeof DxccSourceSchema>;
 export type DxccConfidence = z.infer<typeof DxccConfidenceSchema>;
 export type QSOContext = z.infer<typeof QSOContextSchema>;
-export type QSOCommand = z.infer<typeof QSOCommandSchema>;
 export type QSORecord = z.infer<typeof QSORecordSchema>;
 export type StrategiesResult = z.infer<typeof StrategiesResultSchema>; 

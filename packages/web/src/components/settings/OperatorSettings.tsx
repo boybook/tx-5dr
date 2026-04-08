@@ -38,8 +38,10 @@ import {
   getHiddenOperatorIds
 } from '../../utils/operatorPreferences';
 import { createLogger } from '../../utils/logger';
+import { OperatorPluginSettings } from './OperatorPluginSettings';
 
 const logger = createLogger('OperatorSettings');
+type EditableOperatorField = 'myCallsign' | 'myGrid';
 
 export interface OperatorSettingsRef {
   hasUnsavedChanges: () => boolean;
@@ -48,17 +50,6 @@ export interface OperatorSettingsRef {
 
 interface OperatorSettingsProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
-}
-
-type TargetSelectionPriorityMode = 'balanced' | 'dxcc_first' | 'new_callsign_first';
-
-function getTargetSelectionPriorityMode(
-  operator: Partial<Pick<RadioOperatorConfig, 'targetSelectionPriorityMode' | 'prioritizeNewCalls'>>
-): TargetSelectionPriorityMode {
-  if (operator.targetSelectionPriorityMode) {
-    return operator.targetSelectionPriorityMode;
-  }
-  return operator.prioritizeNewCalls === false ? 'balanced' : 'dxcc_first';
 }
 
 export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettingsProps>(
@@ -78,9 +69,10 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const [localEnabledStates, setLocalEnabledStates] = useState<Record<string, boolean>>({});
     const [preferencesHasChanges, setPreferencesHasChanges] = useState(false);
 
-    // 编辑状态 - 记录哪些操作员正在编辑中
-    const [editingOperators, setEditingOperators] = useState<Set<string>>(new Set());
-    const [editFormData, setEditFormData] = useState<Record<string, Partial<RadioOperatorConfig>>>({});
+    // 字段级编辑状态
+    const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
+    const [fieldDrafts, setFieldDrafts] = useState<Record<string, string>>({});
+    const [savingFields, setSavingFields] = useState<Record<string, boolean>>({});
 
     // 新建操作员状态
     const [isCreating, setIsCreating] = useState(false);
@@ -89,33 +81,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       myGrid: defaultOperatorGrid,
       frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
       transmitCycles: [0],
-      maxQSOTimeoutCycles: 10,
-      maxCallAttempts: 3,
-      autoReplyToCQ: false,
-      autoResumeCQAfterFail: false,
-      autoResumeCQAfterSuccess: false,
-      prioritizeNewCalls: true,
-      targetSelectionPriorityMode: 'dxcc_first',
       mode: MODES.FT8,
     });
-
-    const targetPriorityOptions = [
-      {
-        key: 'dxcc_first' as const,
-        label: t('settings.priorityModeDxccFirst'),
-        description: t('settings.priorityModeDxccFirstDesc'),
-      },
-      {
-        key: 'balanced' as const,
-        label: t('settings.priorityModeBalanced'),
-        description: t('settings.priorityModeBalancedDesc'),
-      },
-      {
-        key: 'new_callsign_first' as const,
-        label: t('settings.priorityModeNewCallsignFirst'),
-        description: t('settings.priorityModeNewCallsignFirstDesc'),
-      },
-    ];
 
     // 台站网格加载后（异步），若用户未手动填写则自动同步
     useEffect(() => {
@@ -290,55 +257,77 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       }
     };
 
-    // 开始编辑操作员
-    const startEditing = (operator: RadioOperatorConfig) => {
-      setEditingOperators(prev => new Set([...prev, operator.id]));
-      setEditFormData(prev => ({
+    const getFieldEditKey = (operatorId: string, field: EditableOperatorField) => `${operatorId}:${field}`;
+
+    const startFieldEditing = (operator: RadioOperatorConfig, field: EditableOperatorField) => {
+      const key = getFieldEditKey(operator.id, field);
+      const initialValue = field === 'myGrid'
+        ? operator.myGrid || ''
+        : operator.myCallsign || '';
+
+      setEditingFields(prev => ({ ...prev, [key]: true }));
+      setFieldDrafts(prev => ({ ...prev, [key]: initialValue }));
+      setError('');
+    };
+
+    const cancelFieldEditing = (operatorId: string, field: EditableOperatorField) => {
+      const key = getFieldEditKey(operatorId, field);
+      setEditingFields(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setFieldDrafts(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setSavingFields(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    };
+
+    const updateFieldDraft = (operatorId: string, field: EditableOperatorField, value: string) => {
+      const key = getFieldEditKey(operatorId, field);
+      setFieldDrafts(prev => ({
         ...prev,
-        [operator.id]: { ...operator }
+        [key]: value
       }));
     };
 
-    // 取消编辑
-    const cancelEditing = (operatorId: string) => {
-      setEditingOperators(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(operatorId);
-        return newSet;
-      });
-      setEditFormData(prev => {
-        const newData = { ...prev };
-        delete newData[operatorId];
-        return newData;
-      });
-    };
+    const saveFieldEditing = async (operator: RadioOperatorConfig, field: EditableOperatorField) => {
+      const key = getFieldEditKey(operator.id, field);
+      const rawValue = fieldDrafts[key] ?? '';
+      const normalizedValue = field === 'myGrid' ? sanitizeGridInput(rawValue) : rawValue.trim();
+      const currentValue = field === 'myGrid' ? (operator.myGrid || '') : (operator.myCallsign || '');
 
-    // 保存编辑
-    const saveEditing = async (operatorId: string) => {
+      if (normalizedValue === currentValue) {
+        cancelFieldEditing(operator.id, field);
+        return;
+      }
+
       try {
-        const updates = editFormData[operatorId];
-        if (!updates) return;
+        setSavingFields(prev => ({ ...prev, [key]: true }));
+        setError('');
 
-        await api.updateOperator(operatorId, updates as UpdateRadioOperatorRequest);
+        await api.updateOperator(operator.id, {
+          [field]: normalizedValue
+        } as UpdateRadioOperatorRequest);
         await loadOperators();
-        
-        // 清除编辑状态
-        cancelEditing(operatorId);
+
+        cancelFieldEditing(operator.id, field);
         updateUnsavedChanges(false);
       } catch (err) {
         setError(err instanceof Error ? err.message : t('settings.saveFailed'));
+      } finally {
+        setSavingFields(prev => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       }
-    };
-
-    // 更新编辑表单数据
-    const updateEditFormData = (operatorId: string, field: string, value: string | number | boolean) => {
-      setEditFormData(prev => ({
-        ...prev,
-        [operatorId]: {
-          ...prev[operatorId],
-          [field]: value
-        }
-      }));
     };
 
     // 创建新操作员
@@ -368,14 +357,6 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           myGrid: defaultOperatorGrid,
           frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
           transmitCycles: [0],
-          maxQSOTimeoutCycles: 10,
-          maxCallAttempts: 3,
-          autoReplyToCQ: false,
-          autoResumeCQAfterFail: false,
-          autoResumeCQAfterSuccess: false,
-          replyToWorkedStations: false,
-          prioritizeNewCalls: true,
-          targetSelectionPriorityMode: 'dxcc_first',
           mode: MODES.FT8,
         });
         updateUnsavedChanges(false);
@@ -420,19 +401,91 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const renderDisplayMode = (operator: RadioOperatorConfig) => {
       const syncSummary = syncSummaries[operator.myCallsign] || { wavelog: false, qrz: false, lotw: false };
       const hasSyncConfig = syncSummary.wavelog || syncSummary.qrz || syncSummary.lotw;
+      const renderEditableField = (
+        field: EditableOperatorField,
+        label: string,
+        value: string,
+        options?: {
+          placeholder?: string;
+          description?: string;
+          maxLength?: number;
+        }
+      ) => {
+        const key = getFieldEditKey(operator.id, field);
+        const isEditing = Boolean(editingFields[key]);
+        const isSaving = Boolean(savingFields[key]);
+        const draftValue = fieldDrafts[key] ?? value;
+
+        return (
+          <div className="rounded-lg border border-default-200 bg-default-50/60 px-3 pt-1.5 pb-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-xs text-default-500 uppercase tracking-wide">{label}</span>
+                {isEditing ? (
+                  <div className="mt-2 flex items-start gap-2">
+                    <Input
+                      aria-label={label}
+                      size="sm"
+                      placeholder={options?.placeholder}
+                      value={draftValue}
+                      description={options?.description}
+                      onValueChange={(nextValue) => {
+                        const normalizedValue = field === 'myGrid'
+                          ? sanitizeGridInput(nextValue)
+                          : nextValue;
+                        updateFieldDraft(operator.id, field, normalizedValue);
+                      }}
+                      maxLength={options?.maxLength}
+                    />
+                    <Button
+                      size="sm"
+                      color="primary"
+                      onPress={() => saveFieldEditing(operator, field)}
+                      isLoading={isSaving}
+                    >
+                      {t('common:button.save')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      onPress={() => cancelFieldEditing(operator.id, field)}
+                      isDisabled={isSaving}
+                    >
+                      {t('common:button.cancel')}
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-sm font-medium">{value || t('settings.notSet')}</p>
+                )}
+              </div>
+              {!isEditing && (
+                <Tooltip content={t('common:button.edit')}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    onPress={() => startFieldEditing(operator, field)}
+                  >
+                    <FontAwesomeIcon icon={faEdit} />
+                  </Button>
+                </Tooltip>
+              )}
+            </div>
+          </div>
+        );
+      };
 
       return (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <span className="text-xs text-default-500 uppercase tracking-wide">{t('settings.callsign')}</span>
-              <p className="text-sm font-medium">{operator.myCallsign}</p>
-            </div>
-
-            <div>
-              <span className="text-xs text-default-500 uppercase tracking-wide">{t('settings.grid')}</span>
-              <p className="text-sm font-medium">{operator.myGrid || t('settings.notSet')}</p>
-            </div>
+            {renderEditableField('myCallsign', t('settings.callsign'), operator.myCallsign, {
+              placeholder: t('settings.callsignPlaceholder')
+            })}
+            {renderEditableField('myGrid', t('settings.grid'), operator.myGrid || '', {
+              placeholder: t('settings.gridPlaceholder'),
+              description: t('settings.gridDesc'),
+              maxLength: 8
+            })}
           </div>
 
           {/* 通联日志同步 */}
@@ -461,74 +514,14 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             />
           </div>
 
-          {/* 自动化配置展示 */}
           <Divider />
-          <div className="space-y-3">
-            <h5 className="text-sm font-medium text-default-700">{t('settings.automation')}</h5>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.autoReplyToCQ')}</span>
-                <Chip size="sm" variant="flat" color={operator.autoReplyToCQ ? "success" : "default"}>
-                  {operator.autoReplyToCQ ? t('settings.enabled') : t('settings.disabled')}
-                </Chip>
-              </div>
-
-              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.autoResumeCQAfterFail')}</span>
-                <Chip size="sm" variant="flat" color={operator.autoResumeCQAfterFail ? "success" : "default"}>
-                  {operator.autoResumeCQAfterFail ? t('settings.enabled') : t('settings.disabled')}
-                </Chip>
-              </div>
-
-              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.autoResumeCQAfterSuccess')}</span>
-                <Chip size="sm" variant="flat" color={operator.autoResumeCQAfterSuccess ? "success" : "default"}>
-                  {operator.autoResumeCQAfterSuccess ? t('settings.enabled') : t('settings.disabled')}
-                </Chip>
-              </div>
-
-              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.replyToWorked')}</span>
-                <Chip size="sm" variant="flat" color={operator.replyToWorkedStations ? "success" : "default"}>
-                  {operator.replyToWorkedStations ? t('settings.enabled') : t('settings.disabled')}
-                </Chip>
-              </div>
-
-              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.targetSelectionPriorityMode')}</span>
-                <Chip size="sm" variant="flat" color="secondary">
-                  {targetPriorityOptions.find(
-                    (option) => option.key === getTargetSelectionPriorityMode(operator)
-                  )?.label || t('settings.priorityModeDxccFirst')}
-                </Chip>
-              </div>
-            </div>
-          </div>
-
-          {/* 高级设置展示 */}
-          <Divider />
-          <div className="space-y-3">
-            <h5 className="text-sm font-medium text-default-700">{t('settings.advanced')}</h5>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.maxQSOTimeout')}</span>
-                <span className="text-sm font-medium text-primary">{t('settings.cycles', { count: operator.maxQSOTimeoutCycles })}</span>
-              </div>
-
-              <div className="flex items-center justify-between bg-default-100/50 rounded-lg px-3 py-2">
-                <span className="text-sm">{t('settings.maxCallAttempts')}</span>
-                <span className="text-sm font-medium text-primary">{t('settings.times', { count: operator.maxCallAttempts })}</span>
-              </div>
-            </div>
-          </div>
+          <OperatorPluginSettings operatorId={operator.id} />
         </div>
       );
     };
 
     // 渲染编辑模式的内容
-    const renderEditMode = (formData: Partial<RadioOperatorConfig>, operatorId?: string) => {
-      const isNewOperator = !operatorId;
-      
+    const renderEditMode = (formData: Partial<RadioOperatorConfig>) => {
       return (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -537,11 +530,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               placeholder={t('settings.callsignPlaceholder')}
               value={formData.myCallsign || ''}
               onChange={(e) => {
-                if (isNewOperator) {
-                  setNewOperatorData({ ...newOperatorData, myCallsign: e.target.value });
-                } else {
-                  updateEditFormData(operatorId!, 'myCallsign', e.target.value);
-                }
+                setNewOperatorData({ ...newOperatorData, myCallsign: e.target.value });
               }}
               isRequired
             />
@@ -553,163 +542,25 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               description={t('settings.gridDesc')}
               onValueChange={(value) => {
                 const normalizedGrid = sanitizeGridInput(value);
-                if (isNewOperator) {
-                  setNewOperatorData({ ...newOperatorData, myGrid: normalizedGrid });
-                } else {
-                  updateEditFormData(operatorId!, 'myGrid', normalizedGrid);
-                }
+                setNewOperatorData({ ...newOperatorData, myGrid: normalizedGrid });
               }}
               maxLength={8}
             />
           </div>
 
-          {/* 自动化配置 */}
-          <Divider />
-          <div className="space-y-3">
-            <h5 className="text-sm font-medium text-default-700">{t('settings.automation')}</h5>
-            <div className="grid grid-cols-1 gap-3">
-              <Switch
-                isSelected={formData.autoReplyToCQ || false}
-                onValueChange={(checked) => {
-                  if (isNewOperator) {
-                    setNewOperatorData({ ...newOperatorData, autoReplyToCQ: checked });
-                  } else {
-                    updateEditFormData(operatorId!, 'autoReplyToCQ', checked);
-                  }
-                }}
-                size="sm"
-              >
-                {t('settings.autoReplyToCQ')}
-              </Switch>
-
-              <Switch
-                isSelected={formData.autoResumeCQAfterFail || false}
-                onValueChange={(checked) => {
-                  if (isNewOperator) {
-                    setNewOperatorData({ ...newOperatorData, autoResumeCQAfterFail: checked });
-                  } else {
-                    updateEditFormData(operatorId!, 'autoResumeCQAfterFail', checked);
-                  }
-                }}
-                size="sm"
-              >
-                {t('settings.autoResumeCQAfterFail')}
-              </Switch>
-
-              <Switch
-                isSelected={formData.autoResumeCQAfterSuccess || false}
-                onValueChange={(checked) => {
-                  if (isNewOperator) {
-                    setNewOperatorData({ ...newOperatorData, autoResumeCQAfterSuccess: checked });
-                  } else {
-                    updateEditFormData(operatorId!, 'autoResumeCQAfterSuccess', checked);
-                  }
-                }}
-                size="sm"
-              >
-                {t('settings.autoResumeCQAfterSuccess')}
-              </Switch>
-
-              <Switch
-                isSelected={formData.replyToWorkedStations || false}
-                onValueChange={(checked) => {
-                  if (isNewOperator) {
-                    setNewOperatorData({ ...newOperatorData, replyToWorkedStations: checked });
-                  } else {
-                    updateEditFormData(operatorId!, 'replyToWorkedStations', checked);
-                  }
-                }}
-                size="sm"
-              >
-                {t('settings.replyToWorked')}
-              </Switch>
-
-              <Select
-                label={t('settings.targetSelectionPriorityMode')}
-                description={t('settings.targetSelectionPriorityModeDesc')}
-                selectedKeys={[getTargetSelectionPriorityMode(formData)]}
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys as Set<string>)[0] as TargetSelectionPriorityMode | undefined;
-                  if (!selected) {
-                    return;
-                  }
-
-                  if (isNewOperator) {
-                    setNewOperatorData({
-                      ...newOperatorData,
-                      targetSelectionPriorityMode: selected,
-                      prioritizeNewCalls: selected !== 'balanced',
-                    });
-                  } else {
-                    updateEditFormData(operatorId!, 'targetSelectionPriorityMode', selected);
-                    updateEditFormData(operatorId!, 'prioritizeNewCalls', selected !== 'balanced');
-                  }
-                }}
-              >
-                {targetPriorityOptions.map((option) => (
-                  <SelectItem key={option.key} description={option.description}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
-          </div>
-
-          {/* 高级设置 */}
-          <Divider />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input
-              type="number"
-              label={t('settings.maxQSOTimeout')}
-              description={t('settings.maxQSOTimeoutDesc')}
-              value={formData.maxQSOTimeoutCycles?.toString() || ''}
-              onChange={(e) => {
-                const value = parseInt(e.target.value) || 10;
-                if (isNewOperator) {
-                  setNewOperatorData({ ...newOperatorData, maxQSOTimeoutCycles: value });
-                } else {
-                  updateEditFormData(operatorId!, 'maxQSOTimeoutCycles', value);
-                }
-              }}
-              min={1}
-              max={50}
-              size="sm"
-            />
-
-            <Input
-              type="number"
-              label={t('settings.maxCallAttempts')}
-              description={t('settings.maxCallAttemptsDesc')}
-              value={formData.maxCallAttempts?.toString() || ''}
-              onChange={(e) => {
-                const value = parseInt(e.target.value) || 3;
-                if (isNewOperator) {
-                  setNewOperatorData({ ...newOperatorData, maxCallAttempts: value });
-                } else {
-                  updateEditFormData(operatorId!, 'maxCallAttempts', value);
-                }
-              }}
-              min={1}
-              max={1000}
-              size="sm"
-            />
-          </div>
         </div>
       );
     };
 
     // 渲染操作员卡片
     const renderOperatorCard = (operator: RadioOperatorConfig) => {
-      const isEditing = editingOperators.has(operator.id);
-      const formData = editFormData[operator.id] || operator;
-
       return (
         <Card 
           key={operator.id} 
           className="w-full"
-          shadow={isEditing ? "md" : "none"}
+          shadow="none"
           classNames={{
-            base: isEditing ? "" : "border border-default-200 bg-default-50/50"
+            base: "border border-default-200 bg-default-50/50"
           }}
         >
           <CardHeader className="flex justify-between items-start p-4 pb-2">
@@ -720,56 +571,24 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             </div>
             
             <div className="flex gap-2">
-              {isEditing ? (
-                <ButtonGroup size="sm">
-                  <Button
-                    color="primary"
-                    variant="flat"
-                    onPress={() => saveEditing(operator.id)}
-                    startContent={<FontAwesomeIcon icon={faSave} />}
-                  >
-                    {t('common:button.save')}
-                  </Button>
-                  <Button
-                    variant="flat"
-                    onPress={() => cancelEditing(operator.id)}
-                    startContent={<FontAwesomeIcon icon={faTimes} />}
-                  >
-                    {t('common:button.cancel')}
-                  </Button>
-                </ButtonGroup>
-              ) : (
-                <ButtonGroup size="sm">
-                  <Tooltip content={t('common:button.edit')}>
-                    <Button
-                      variant="flat"
-                      onPress={() => startEditing(operator)}
-                      startContent={<FontAwesomeIcon icon={faEdit} />}
-                    >
-                      {t('common:button.edit')}
-                    </Button>
-                  </Tooltip>
-
-                  <Tooltip content={t('settings.deleteOperator')}>
-                    <Button
-                      variant="flat"
-                      color="danger"
-                      onPress={() => {
-                        setOperatorToDelete(operator);
-                        setDeleteConfirmOpen(true);
-                      }}
-                      startContent={<FontAwesomeIcon icon={faTrash} />}
-                    >
-                      {t('common:button.delete')}
-                    </Button>
-                  </Tooltip>
-                </ButtonGroup>
-              )}
+              <Tooltip content={t('settings.deleteOperator')}>
+                <Button
+                  variant="flat"
+                  color="danger"
+                  onPress={() => {
+                    setOperatorToDelete(operator);
+                    setDeleteConfirmOpen(true);
+                  }}
+                  startContent={<FontAwesomeIcon icon={faTrash} />}
+                >
+                  {t('common:button.delete')}
+                </Button>
+              </Tooltip>
             </div>
           </CardHeader>
           
           <CardBody className='pt-0 p-4 pt-0'>
-            {isEditing ? renderEditMode(formData, operator.id) : renderDisplayMode(operator)}
+            {renderDisplayMode(operator)}
           </CardBody>
         </Card>
       );

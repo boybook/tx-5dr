@@ -1,0 +1,18 @@
+{
+  "pluginName": "标准通联",
+  "pluginDescription": "内置 FT8/FT4 标准通联自动化策略",
+  "strategyOverview": "策略说明",
+  "strategyOverviewDesc": "该策略插件负责标准 FT8/FT4 通联流程，包括自动回复 CQ、选择目标以及控制超时与重试行为。",
+  "autoReplyToCQ": "自动回复CQ",
+  "autoResumeCQAfterFail": "失败后自动恢复CQ",
+  "autoResumeCQAfterSuccess": "成功后自动恢复CQ",
+  "replyToWorkedStations": "回复已通联电台",
+  "targetSelectionPriorityMode": "目标优先级模式",
+  "maxQSOTimeoutCycles": "QSO超时周期数",
+  "maxCallAttempts": "最大呼叫次数",
+  "dxcc_first": "优先新DXCC",
+  "new_callsign_first": "优先新呼号",
+  "balanced": "平衡模式",
+  "startCQ": "发起CQ",
+  "stopTransmitting": "停止发射"
+}

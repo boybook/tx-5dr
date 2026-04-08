@@ -1,0 +1,10 @@
+{
+  "pluginName": "Worked Station Bias",
+  "pluginDescription": "Adjust candidate scores based on whether a station has already been worked.",
+  "biasOverview": "Scoring Notes",
+  "biasOverviewDesc": "This plugin does not filter targets. It boosts new stations and penalizes already-worked callsigns.",
+  "newStationBonus": "New-station bonus",
+  "newStationBonusDesc": "Extra score added for callsigns that have not been worked yet.",
+  "workedStationPenalty": "Worked-station penalty",
+  "workedStationPenaltyDesc": "Score deducted for callsigns that already exist in the logbook."
+}

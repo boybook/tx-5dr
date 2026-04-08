@@ -1,0 +1,18 @@
+{
+  "pluginName": "Standard QSO",
+  "pluginDescription": "Built-in FT8/FT4 standard QSO automation strategy",
+  "strategyOverview": "Strategy Overview",
+  "strategyOverviewDesc": "This strategy plugin drives the standard FT8/FT4 QSO flow, including auto reply, target selection, timeout handling, and retry behavior.",
+  "autoReplyToCQ": "Auto Reply to CQ",
+  "autoResumeCQAfterFail": "Resume CQ after failure",
+  "autoResumeCQAfterSuccess": "Resume CQ after success",
+  "replyToWorkedStations": "Reply to worked stations",
+  "targetSelectionPriorityMode": "Target priority mode",
+  "maxQSOTimeoutCycles": "QSO timeout cycles",
+  "maxCallAttempts": "Max call attempts",
+  "dxcc_first": "DXCC First",
+  "new_callsign_first": "New Callsign First",
+  "balanced": "Balanced",
+  "startCQ": "Start CQ",
+  "stopTransmitting": "Stop Transmitting"
+}

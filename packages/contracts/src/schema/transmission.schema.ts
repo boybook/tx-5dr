@@ -3,16 +3,14 @@ import { FrameMessageSchema, SlotInfoSchema } from './slot-info.schema.js';
 // 导入已存在的类型，避免重复定义
 export { StrategiesResultSchema } from './qso.schema.js';
 export type { StrategiesResult } from './qso.schema.js';
-export { QSOCommandSchema } from './qso.schema.js';
-export type { QSOCommand } from './qso.schema.js';
 export { CycleInfoSchema } from './cycle.schema.js';
 export type { CycleInfo } from './cycle.schema.js';
 
 /**
  * 传输策略相关类型定义
- * 用于 RadioOperator 和 ITransmissionStrategy
+ * 用于操作员运行时状态与插件策略交互
  *
- * 注意：StrategiesResult, QSOCommand, CycleInfo 已在其他 schema 中定义，这里重新导出
+ * 注意：StrategiesResult、CycleInfo 已在其他 schema 中定义，这里重新导出
  */
 
 // ========== 策略状态类型 ==========
@@ -21,7 +19,7 @@ export type { CycleInfo } from './cycle.schema.js';
  * 策略状态信息
  */
 export const StrategyStateSchema = z.object({
-  name: z.string(), // 策略名称（如 StandardQSOStrategy）
+  name: z.string(), // 策略名称（如 standard-qso）
   state: z.string(), // 当前状态（如 TX1, TX2, IDLE 等）
   availableSlots: z.array(z.string()), // 可用的时隙列表
   metadata: z.record(z.any()).optional(), // 状态的额外信息
@@ -97,7 +95,7 @@ export const OperatorTransmitCyclesChangedEventSchema = z.object({
 
 // ========== 导出 TypeScript 类型 ==========
 
-// StrategiesResult, QSOCommand, CycleInfo 已在文件顶部重新导出
+// StrategiesResult、CycleInfo 已在文件顶部重新导出
 
 export type StrategyState = z.infer<typeof StrategyStateSchema>;
 export type CallRequest = z.infer<typeof CallRequestSchema>;

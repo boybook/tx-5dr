@@ -32,8 +32,6 @@ export type { CallsignInfo, FT8LocationInfo } from './callsign/callsign.js';
 
 // 导出操作员相关
 export { RadioOperator } from './operator/RadioOperator.js';
-export { StandardQSOStrategy } from './operator/transmission/strategies/StandardQSOStrategy.js';
-export * from './operator/transmission/ITransmissionStrategy.js';
 
 // 日志系统导出
 export * from './log/index.js';

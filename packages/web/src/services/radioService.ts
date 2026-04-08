@@ -1,5 +1,10 @@
 import { api, WSClient } from '@tx5dr/core';
-import type { SpectrumKind, WSSelectedFrame } from '@tx5dr/contracts';
+import type {
+  OperatorRuntimeSlot,
+  SpectrumKind,
+  WSSelectedFrame,
+  WSSetOperatorContextMessage,
+} from '@tx5dr/contracts';
 import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
 
@@ -174,27 +179,53 @@ export class RadioService {
   /**
    * 设置操作员上下文
    */
-  setOperatorContext(operatorId: string, context: Record<string, unknown>): void {
+  setOperatorContext(
+    operatorId: string,
+    context: WSSetOperatorContextMessage['data']['context'],
+  ): void {
     if (this.isConnected) {
       this.wsClient.send('setOperatorContext', { operatorId, context });
     }
   }
 
   /**
-   * 设置操作员时隙
+   * 设置操作员策略运行时状态
    */
-  setOperatorSlot(operatorId: string, slot: string): void {
+  setOperatorRuntimeState(operatorId: string, state: OperatorRuntimeSlot): void {
     if (this.isConnected) {
-      this.wsClient.send('setOperatorSlot', { operatorId, slot });
+      this.wsClient.send('setOperatorRuntimeState', { operatorId, state });
     }
   }
 
   /**
-   * 发送用户命令到操作员
+   * 设置操作员策略运行时槽位内容
    */
-  sendUserCommand(operatorId: string, command: string, args: Record<string, unknown> | string): void {
+  setOperatorRuntimeSlotContent(operatorId: string, slot: OperatorRuntimeSlot, content: string): void {
     if (this.isConnected) {
-      this.wsClient.send('userCommand', { operatorId, command, args });
+      this.wsClient.send('setOperatorRuntimeSlotContent', { operatorId, slot, content });
+    }
+  }
+
+  /**
+   * 设置操作员发射周期
+   */
+  setOperatorTransmitCycles(operatorId: string, transmitCycles: number[]): void {
+    if (this.isConnected) {
+      this.wsClient.send('setOperatorTransmitCycles', { operatorId, transmitCycles });
+    }
+  }
+
+  /**
+   * 发送插件自定义用户动作
+   */
+  sendPluginUserAction(
+    pluginName: string,
+    actionId: string,
+    operatorId?: string,
+    payload?: unknown,
+  ): void {
+    if (this.isConnected) {
+      this.wsClient.send('pluginUserAction', { pluginName, actionId, operatorId, payload });
     }
   }
   

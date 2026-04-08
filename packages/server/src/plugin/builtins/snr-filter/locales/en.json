@@ -1,0 +1,8 @@
+{
+  "pluginName": "SNR Filter",
+  "pluginDescription": "Built-in utility plugin that filters candidates by minimum SNR",
+  "filterOverview": "Filter Overview",
+  "filterOverviewDesc": "This utility plugin filters candidates by SNR before they reach the main strategy, which helps reduce weak-signal distractions.",
+  "minSNR": "Minimum SNR (dB)",
+  "minSNRDesc": "Candidates below this SNR threshold will be filtered out"
+}

@@ -1,0 +1,10 @@
+{
+  "pluginName": "QSO Session Inspector",
+  "pluginDescription": "Track slot, decode, and QSO lifecycle events to help inspect plugin behavior.",
+  "sessionOverview": "Inspector Notes",
+  "sessionOverviewDesc": "This plugin is read-only. It records and visualizes activity without changing decisions.",
+  "recentEventLimit": "Recent event limit",
+  "recentEventLimitDesc": "How many recent entries should be kept in the event panel.",
+  "sessionStatsPanel": "Session Stats",
+  "sessionEventsPanel": "Recent Events"
+}

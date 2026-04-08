@@ -160,10 +160,8 @@ export class WSEventEmitter extends EventEmitter {
 
 **多监听器机制**：EventEmitter3 内部使用数组存储监听器，`emit()` 时按注册顺序触发，`off()` 时通过函数引用匹配移除。
 
-### 传输策略
-1. 实现 `ITransmissionStrategy` 接口
-2. `strategies/` 目录创建策略类
-3. 注册到 `RadioOperator`
+### 自动化策略
+标准 QSO 自动化已迁移到 server 侧插件系统。新增或修改自动化策略时，应优先在 `packages/server/src/plugin/` 内实现插件运行时，而不是在 core 中扩展旧策略抽象。
 
 ## 开发规范
 - 类型安全事件名称

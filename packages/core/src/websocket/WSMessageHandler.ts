@@ -79,6 +79,12 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.OPENWEBRX_PROFILE_VERIFY_RESULT]: 'openwebrxProfileVerifyResult',
   [WSMessageType.OPENWEBRX_CLIENT_COUNT]: 'openwebrxClientCount',
   [WSMessageType.OPENWEBRX_COOLDOWN_NOTICE]: 'openwebrxCooldownNotice',
+
+  // 插件系统事件
+  [WSMessageType.PLUGIN_LIST]: 'pluginList',
+  [WSMessageType.PLUGIN_STATUS_CHANGED]: 'pluginStatusChanged',
+  [WSMessageType.PLUGIN_DATA]: 'pluginData',
+  [WSMessageType.PLUGIN_LOG]: 'pluginLog',
 };
 
 /**
