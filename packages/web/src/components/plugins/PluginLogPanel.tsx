@@ -26,7 +26,7 @@ export const PluginLogPanel: React.FC<PluginLogPanelProps> = ({ pluginNames }) =
     level: 'all',
   });
 
-  useWSEvent(connection.state.radioService, 'pluginLog' as any, (entry: PluginLogEntry) => {
+  useWSEvent(connection.state.radioService, 'pluginLog', (entry: PluginLogEntry) => {
     setEntries((prev) => appendPluginLogEntry(prev, entry));
   });
 

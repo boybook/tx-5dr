@@ -1,4 +1,5 @@
 import type {
+  DigitalRadioEngineEvents,
   PluginStatus,
   PluginSystemSnapshot,
   PluginsConfig,
@@ -9,6 +10,7 @@ import type {
   StrategyRuntimeContext,
 } from '@tx5dr/contracts';
 import type { PluginContext, StrategyDecisionMeta, StrategyRuntime, StrategyRuntimeSlot, StrategyRuntimeSnapshot } from '@tx5dr/plugin-api';
+import type { EventEmitter } from 'eventemitter3';
 import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
@@ -25,6 +27,12 @@ interface OperatorDecisionState {
   decisionInProgress: boolean;
   lastDecisionTransmission: string | null;
   lastDecisionMessageSet: Set<string> | null;
+}
+
+interface PluginManagerEvents extends DigitalRadioEngineEvents {
+  encodeStart: (slotInfo: SlotInfo) => void;
+  operatorSlotChanged: (data: { operatorId: string; slot: StrategyRuntimeSlot }) => void;
+  operatorSlotContentChanged: (data: { operatorId: string; slot: StrategyRuntimeSlot; content: string }) => void;
 }
 
 /**
@@ -67,6 +75,10 @@ export class PluginManager {
       (operatorId) => this.getStrategyInstance(operatorId),
       (pluginName, reason) => this.handleAutoDisable(pluginName, reason),
     );
+  }
+
+  private get eventEmitter(): EventEmitter<PluginManagerEvents> {
+    return this.deps.eventEmitter as unknown as EventEmitter<PluginManagerEvents>;
   }
 
   /** 允许在 initialize() 阶段设置正确的数据目录 */
@@ -123,8 +135,6 @@ export class PluginManager {
       const enabled = this.resolveInstanceEnabled(pluginName, plugin, configEntry);
 
       const pluginStorageDir = path.join(this.deps.dataDir, 'plugin-data', pluginName);
-      let ctx!: PluginContext;
-
       const instance: PluginInstance = {
         plugin,
         ctx: null as unknown as PluginContext, // 先占位，下面赋值
@@ -134,12 +144,14 @@ export class PluginManager {
         autoDisabled: false,
       };
 
-      ctx = this.contextFactory.create(
+      const ctx = this.contextFactory.create(
         plugin,
         operatorId,
         pluginStorageDir,
         (timerId) => {
-          plugin.definition.hooks?.onTimer?.(timerId, ctx);
+          if (instance.ctx) {
+            plugin.definition.hooks?.onTimer?.(timerId, instance.ctx);
+          }
         },
         () => this.buildMergedSettings(plugin, pluginName, operatorId),
       );
@@ -243,7 +255,7 @@ export class PluginManager {
     if (!runtime) return;
     runtime.setState(state);
     this.invalidateDecisionMessageSet(operatorId);
-    (this.deps.eventEmitter as any).emit('operatorSlotChanged', { operatorId, slot: state });
+    this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
   }
 
   setOperatorRuntimeSlotContent(
@@ -255,7 +267,7 @@ export class PluginManager {
     if (!runtime) return;
     runtime.setSlotContent({ slot, content });
     this.invalidateDecisionMessageSet(operatorId);
-    (this.deps.eventEmitter as any).emit('operatorSlotContentChanged', { operatorId, slot, content });
+    this.eventEmitter.emit('operatorSlotContentChanged', { operatorId, slot, content });
   }
 
   getCurrentTransmission(operatorId: string): string | null {
@@ -851,12 +863,15 @@ export class PluginManager {
         logger.warn(`onUnload error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
       }
     }
-    (instance.ctx.timers as any).clearAll?.();
-    await (instance.ctx.store.global as any).flush?.().catch(() => {});
-    await (instance.ctx.store.operator as any).flush?.().catch(() => {});
+    instance.ctx.timers.clearAll();
+    const globalStore = instance.ctx.store.global as typeof instance.ctx.store.global & { flush?: () => Promise<void> };
+    const operatorStore = instance.ctx.store.operator as typeof instance.ctx.store.operator & { flush?: () => Promise<void> };
+    await globalStore.flush?.().catch(() => {});
+    await operatorStore.flush?.().catch(() => {});
   }
 
   private registerEngineListeners(): void {
+    const eventEmitter = this.eventEmitter;
     const onSlotStart = (slotInfo: SlotInfo, slotPack: SlotPack | null) => {
       void this.handleSlotStart(slotInfo, slotPack);
     };
@@ -864,10 +879,10 @@ export class PluginManager {
       this.handleEncodeStart(slotInfo);
     };
 
-    (this.deps.eventEmitter as any).on('slotStart', onSlotStart);
-    (this.deps.eventEmitter as any).on('encodeStart', onEncodeStart);
-    this.unsubscribeFns.push(() => (this.deps.eventEmitter as any).off('slotStart', onSlotStart));
-    this.unsubscribeFns.push(() => (this.deps.eventEmitter as any).off('encodeStart', onEncodeStart));
+    eventEmitter.on('slotStart', onSlotStart);
+    eventEmitter.on('encodeStart', onEncodeStart);
+    this.unsubscribeFns.push(() => eventEmitter.off('slotStart', onSlotStart));
+    this.unsubscribeFns.push(() => eventEmitter.off('encodeStart', onEncodeStart));
   }
 
   private unregisterEngineListeners(): void {
@@ -949,7 +964,7 @@ export class PluginManager {
       try {
         const transmission = runtime.getTransmitText();
         if (!transmission) continue;
-        (this.deps.eventEmitter as any).emit('requestTransmit', {
+        this.eventEmitter.emit('requestTransmit', {
           operatorId: operator.config.id,
           transmission,
         });

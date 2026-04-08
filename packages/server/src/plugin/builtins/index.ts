@@ -49,7 +49,7 @@ export {
   watchedCallsignAutocallLocales,
 } from './watched-callsign-autocall/index.js';
 
-import { standardQSOStrategyPlugin, standardQSOLocales, BUILTIN_STANDARD_QSO_PLUGIN_NAME } from './standard-qso/index.js';
+import { standardQSOStrategyPlugin, standardQSOLocales } from './standard-qso/index.js';
 import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
 import { callsignPrefixFilterPlugin, callsignPrefixFilterLocales } from './callsign-prefix-filter/index.js';
 import { workedStationBiasPlugin, workedStationBiasLocales } from './worked-station-bias/index.js';

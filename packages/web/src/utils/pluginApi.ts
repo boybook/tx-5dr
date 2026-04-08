@@ -3,9 +3,25 @@
  * 直接使用 fetch 调用插件 REST 端点，不依赖 @tx5dr/core 的 api 对象
  */
 
+import type { PluginStatus } from '@tx5dr/contracts';
+
+type PluginApiWindow = Window & {
+  __TX5DR_API_BASE__?: string;
+};
+
+interface OperatorPluginStateResponse {
+  operatorId: string;
+  currentStrategy: string;
+  strategyState: string;
+  slots: Record<string, string>;
+  context: Record<string, unknown>;
+  operatorSettings: Record<string, Record<string, unknown>>;
+  plugins: PluginStatus[];
+}
+
 function getApiBase(): string {
   // 与 @tx5dr/core 保持一致
-  return (window as any).__TX5DR_API_BASE__ || '/api';
+  return (window as PluginApiWindow).__TX5DR_API_BASE__ || '/api';
 }
 
 function getAuthHeaders(): Record<string, string> {
@@ -52,15 +68,7 @@ export const pluginApi = {
     ),
 
   getOperatorState: (operatorId: string) =>
-    pluginFetch<{
-      operatorId: string;
-      currentStrategy: string;
-      strategyState: string;
-      slots: Record<string, string>;
-      context: Record<string, unknown>;
-      operatorSettings: Record<string, Record<string, unknown>>;
-      plugins: Array<any>;
-    }>(`/plugins/operators/${operatorId}`),
+    pluginFetch<OperatorPluginStateResponse>(`/plugins/operators/${operatorId}`),
 
   updateOperatorSettings: (
     pluginName: string,

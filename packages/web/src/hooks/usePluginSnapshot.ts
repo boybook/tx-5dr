@@ -27,14 +27,14 @@ export function usePluginSnapshot(): PluginSystemSnapshot {
       .catch((err: unknown) => logger.error('Failed to load plugin snapshot', err));
   }, []);
 
-  useWSEvent(connection.state.radioService, 'pluginList' as any, (data: PluginSystemSnapshot) => {
+  useWSEvent(connection.state.radioService, 'pluginList', (data: PluginSystemSnapshot) => {
     data.plugins.forEach((plugin) => registerPluginLocales(plugin.name, plugin.locales));
     setSnapshot((prev) => data.generation >= prev.generation ? data : prev);
   });
 
   useWSEvent(
     connection.state.radioService,
-    'pluginStatusChanged' as any,
+    'pluginStatusChanged',
     (data: { generation: number; plugin: PluginStatus }) => {
       registerPluginLocales(data.plugin.name, data.plugin.locales);
       setSnapshot((prev) => {

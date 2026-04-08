@@ -30,7 +30,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   const connection = useConnection();
   const [data, setData] = React.useState<unknown>(null);
 
-  useWSEvent(connection.state.radioService, 'pluginData' as any, (payload: PluginPanelData) => {
+  useWSEvent(connection.state.radioService, 'pluginData', (payload: PluginPanelData) => {
     if (
       payload.pluginName === pluginName
       && payload.operatorId === operatorId

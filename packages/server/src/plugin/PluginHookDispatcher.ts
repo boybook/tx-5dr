@@ -1,6 +1,6 @@
 import type { ParsedFT8Message } from '@tx5dr/contracts';
 import type { ScoredCandidate, PluginContext } from '@tx5dr/plugin-api';
-import type { LoadedPlugin, PluginInstance } from './types.js';
+import type { PluginInstance } from './types.js';
 import { PluginErrorTracker } from './PluginErrorTracker.js';
 import { createLogger } from '../utils/logger.js';
 

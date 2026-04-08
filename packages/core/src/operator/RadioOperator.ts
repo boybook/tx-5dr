@@ -10,8 +10,18 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RadioOperator');
 
+interface RadioOperatorEvents extends DigitalRadioEngineEvents {
+    operatorTransmitCyclesChanged: (data: { operatorId: string; transmitCycles: number[] }) => void;
+    recordQSO: (data: { operatorId: string; qsoRecord: QSORecord }) => void;
+    checkHasWorkedCallsign: (data: { operatorId: string; callsign: string; requestId: string }) => void;
+    hasWorkedCallsignResponse: (data: { requestId: string; hasWorked: boolean }) => void;
+    operatorSlotsUpdated: (data: { operatorId: string; slots: OperatorSlots }) => void;
+    operatorStateChanged: (data: { operatorId: string; state: string }) => void;
+    operatorStatusChanged: (data: { operatorId: string; isTransmitting: boolean; isStopped: boolean }) => void;
+}
+
 export class RadioOperator {
-    private _eventEmitter: EventEmitter<DigitalRadioEngineEvents>;
+    private _eventEmitter: EventEmitter<RadioOperatorEvents>;
     private _config: OperatorConfig;
     private _stopped = false;
     private _isTransmitting = false;
@@ -39,7 +49,7 @@ export class RadioOperator {
         eventEmitter: EventEmitter<DigitalRadioEngineEvents>,
         checkTargetConflict?: (myCallsign: string, targetCallsign: string, operatorId: string) => boolean
     ) {
-        this._eventEmitter = eventEmitter;
+        this._eventEmitter = eventEmitter as unknown as EventEmitter<RadioOperatorEvents>;
         this._config = {
             ...RadioOperator.DEFAULT_CONFIG,
             ...config,
@@ -70,7 +80,7 @@ export class RadioOperator {
 
     setTransmitCycles(transmitCycles: number | number[]): void {
         this._config.transmitCycles = Array.isArray(transmitCycles) ? transmitCycles : [transmitCycles];
-        this._eventEmitter.emit('operatorTransmitCyclesChanged' as any, {
+        this._eventEmitter.emit('operatorTransmitCyclesChanged', {
             operatorId: this._config.id,
             transmitCycles: this._config.transmitCycles,
         });
@@ -81,7 +91,7 @@ export class RadioOperator {
     }
 
     recordQSOLog(qsoRecord: QSORecord): void {
-        this._eventEmitter.emit('recordQSO' as any, {
+        this._eventEmitter.emit('recordQSO', {
             operatorId: this._config.id,
             qsoRecord,
         });
@@ -93,20 +103,20 @@ export class RadioOperator {
 
             const responseHandler = (data: { requestId: string; hasWorked: boolean }) => {
                 if (data.requestId === requestId) {
-                    this._eventEmitter.off('hasWorkedCallsignResponse' as any, responseHandler);
+                    this._eventEmitter.off('hasWorkedCallsignResponse', responseHandler);
                     resolve(data.hasWorked);
                 }
             };
 
-            this._eventEmitter.on('hasWorkedCallsignResponse' as any, responseHandler);
-            this._eventEmitter.emit('checkHasWorkedCallsign' as any, {
+            this._eventEmitter.on('hasWorkedCallsignResponse', responseHandler);
+            this._eventEmitter.emit('checkHasWorkedCallsign', {
                 operatorId: this._config.id,
                 callsign,
                 requestId,
             });
 
             setTimeout(() => {
-                this._eventEmitter.off('hasWorkedCallsignResponse' as any, responseHandler);
+                this._eventEmitter.off('hasWorkedCallsignResponse', responseHandler);
                 resolve(false);
             }, 1000);
         });
@@ -124,29 +134,29 @@ export class RadioOperator {
     }
 
     notifySlotsUpdated(slots: OperatorSlots): void {
-        this._eventEmitter.emit('operatorSlotsUpdated' as any, {
+        this._eventEmitter.emit('operatorSlotsUpdated', {
             operatorId: this._config.id,
             slots,
         });
     }
 
     addSlotsUpdateListener(callback: (data: { operatorId: string; slots: OperatorSlots }) => void): void {
-        this._eventEmitter.on('operatorSlotsUpdated' as any, callback);
+        this._eventEmitter.on('operatorSlotsUpdated', callback);
     }
 
     addStateChangeListener(callback: (data: { operatorId: string; state: string }) => void): void {
-        this._eventEmitter.on('operatorStateChanged' as any, callback);
+        this._eventEmitter.on('operatorStateChanged', callback);
     }
 
     notifyStateChanged(state: string): void {
-        this._eventEmitter.emit('operatorStateChanged' as any, {
+        this._eventEmitter.emit('operatorStateChanged', {
             operatorId: this._config.id,
             state,
         });
     }
 
     private notifyStatusChanged(): void {
-        this._eventEmitter.emit('operatorStatusChanged' as any, {
+        this._eventEmitter.emit('operatorStatusChanged', {
             operatorId: this._config.id,
             isTransmitting: this._isTransmitting,
             isStopped: this._stopped,
