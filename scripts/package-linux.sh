@@ -90,6 +90,22 @@ if [[ ! -d "$PROJECT_ROOT/packages/web/dist" ]]; then
     exit 1
 fi
 
+# Determine runtime workspace packages required by the server package.
+SERVER_RUNTIME_WORKSPACES=()
+while IFS= read -r pkg; do
+    [[ -n "$pkg" ]] && SERVER_RUNTIME_WORKSPACES+=("$pkg")
+done < <(
+    node -e "
+        const pkg = require('$PROJECT_ROOT/packages/server/package.json');
+        const deps = { ...(pkg.dependencies || {}), ...(pkg.optionalDependencies || {}) };
+        for (const [name, version] of Object.entries(deps)) {
+            if (name.startsWith('@tx5dr/') && typeof version === 'string' && version.startsWith('workspace:')) {
+                console.log(name.slice('@tx5dr/'.length));
+            }
+        }
+    "
+)
+
 # --- Stage files ---
 STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
@@ -110,12 +126,12 @@ case "$ARCH" in
         ;;
 esac
 
-# --- Copy server dist + workspace packages ---
+# --- Copy server dist + runtime workspace packages ---
 mkdir -p "$APP_ROOT/packages/server"
 cp -r "$PROJECT_ROOT/packages/server/dist" "$APP_ROOT/packages/server/"
 cp "$PROJECT_ROOT/packages/server/package.json" "$APP_ROOT/packages/server/"
 
-for pkg in contracts core; do
+for pkg in "${SERVER_RUNTIME_WORKSPACES[@]}"; do
     if [[ -d "$PROJECT_ROOT/packages/$pkg/dist" ]]; then
         mkdir -p "$APP_ROOT/packages/$pkg"
         cp -r "$PROJECT_ROOT/packages/$pkg/dist" "$APP_ROOT/packages/$pkg/"
@@ -139,9 +155,12 @@ for entry in "$PROJECT_ROOT/node_modules"/*; do
     cp -r "$entry" "$APP_ROOT/node_modules/"
 done
 
-# Recreate @tx5dr workspace symlinks pointing to our packages/ directory
+# Recreate @tx5dr workspace symlinks pointing to our packages/ directory.
+# The copied root node_modules/@tx5dr directory contains monorepo symlinks, some
+# of which do not exist in the server package. Replace it with a clean runtime set.
+rm -rf "$APP_ROOT/node_modules/@tx5dr"
 mkdir -p "$APP_ROOT/node_modules/@tx5dr"
-for pkg in contracts core server; do
+for pkg in "${SERVER_RUNTIME_WORKSPACES[@]}" server; do
     if [[ -d "$APP_ROOT/packages/$pkg" ]]; then
         ln -sf "../../packages/$pkg" "$APP_ROOT/node_modules/@tx5dr/$pkg"
     fi
