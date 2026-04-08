@@ -1,17 +1,26 @@
-// @tx5dr/plugin-api — Public development surface for TX-5DR plugins
-//
-// This package provides the stable public API for building TX-5DR plugins.
-// Plugin authors should import from this package instead of reaching into
-// internal monorepo packages such as @tx5dr/contracts.
-//
-// Usage (TypeScript):
-//   import type { PluginDefinition, PluginContext } from '@tx5dr/plugin-api';
-//
-// Usage (JavaScript with JSDoc):
-//   /** @type {import('@tx5dr/plugin-api').PluginDefinition} */
-//   export default { ... };
+/**
+ * Stable public development surface for TX-5DR plugins.
+ *
+ * Plugin authors should import from this package instead of reaching into
+ * internal monorepo packages. The package intentionally combines:
+ * - plugin-specific contracts such as {@link PluginDefinition};
+ * - runtime helper interfaces such as {@link PluginContext};
+ * - a curated subset of shared radio/message types re-exported from
+ *   `@tx5dr/contracts`.
+ *
+ * Typical usage:
+ *
+ * ```ts
+ * import type { PluginDefinition, PluginContext } from '@tx5dr/plugin-api';
+ * ```
+ *
+ * ```js
+ * /** @type {import('@tx5dr/plugin-api').PluginDefinition} *\/
+ * export default { ... };
+ * ```
+ */
 
-// Core interfaces
+/** Core plugin definition and lifecycle interfaces. */
 export type { PluginDefinition } from './definition.js';
 export type { PluginContext } from './context.js';
 export type {
@@ -29,7 +38,7 @@ export type {
   StrategyRuntimeSlotContentUpdate,
 } from './runtime.js';
 
-// Helper interfaces
+/** Host-provided helper interfaces available through {@link PluginContext}. */
 export type {
   KVStore,
   PluginLogger,
@@ -41,7 +50,7 @@ export type {
   UIBridge,
 } from './helpers.js';
 
-// Re-export commonly used types from contracts for convenience
+/** Common radio/message/settings types re-exported for plugin author convenience. */
 export type {
   FT8Message,
   FT8MessageBase,
@@ -80,5 +89,5 @@ export type {
   PluginStatus,
 } from '@tx5dr/contracts';
 
-// Re-export a small set of stable runtime values commonly used by plugins
+/** Stable runtime enum values commonly referenced by plugin implementations. */
 export { FT8MessageType } from '@tx5dr/contracts';
