@@ -146,11 +146,16 @@ services:
       - "8076:80"
     volumes:
       - ./data/config:/app/data/config
+      - ./data/plugins:/app/data/plugins
       - ./data/logs:/app/data/logs
       - ./data/cache:/app/data/cache
+      - ./data/realtime:/app/data/realtime
       - /dev/snd:/dev/snd:rw
     devices:
       - /dev/bus/usb:/dev/bus/usb:rwm
+      # 如果使用 Hamlib 串口/CAT，建议显式映射宿主机的串口设备
+      # - /dev/ttyUSB0:/dev/ttyUSB0:rwm
+      # - /dev/ttyUSB1:/dev/ttyUSB1:rwm
     group_add:
       - audio
     environment:
@@ -171,16 +176,37 @@ services:
 ```
 
 ```bash
-docker compose up -d
+mkdir -p data/{config,plugins,logs,cache,realtime}
+
+# 使用发布镜像
+docker compose pull
+
+# 如果你是从当前仓库本地构建，请在更新代码后强制重建镜像
+# docker compose build --no-cache
+
+# 先生成/校验 LiveKit 凭据与配置
+docker compose run --rm livekit-init
+
+# 分阶段启动，更容易定位问题
+docker compose up -d livekit
+docker compose logs -f livekit
+
+docker compose up -d tx5dr
+docker compose logs -f tx5dr
+
 # 访问：http://localhost:8076
 
 # 查看管理员令牌
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
+- 启动前建议先在宿主机确认：`lsusb`、`ls -l /dev/ttyUSB*`、`aplay -l`；USB 被系统识别不代表容器里已经拿到对应串口节点
+- 如果使用电台 CAT 串口模式，`/dev/bus/usb` 只保证原始 USB 总线可见，通常还需要额外映射 `/dev/ttyUSB0`、`/dev/ttyUSB1` 等具体串口设备
 - 浏览器默认会通过当前站点的同源 `/livekit` 路径接入 signaling。只有在独立域名、额外反代或非标准路径场景下，才需要在系统设置里配置高级覆盖地址，值会写入 `/app/data/config/config.json`
 - Docker 方案会在首次启动时自动把托管的 LiveKit 凭据和 `livekit.yaml` 生成到 `./data/realtime`，后续重启会继续复用
+- 如果更新仓库后仍然出现 `supervisord` / `supervisor` 配置解析错误，请重新拉取或执行 `docker compose build --no-cache`
 - 如果外部域名、TLS 终止或路径映射导致当前站点的 `/livekit` 不能直接到达 LiveKit signaling，才需要在设置页填写对外可达的自定义实时语音入口
+- 更完整的稳健启动流程、设备映射说明和故障排查见 `docs/docker-deployment.md`
 
 详见 [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker)。Docker 元数据也会在发布流程中同步到 OSS 国内镜像。
 

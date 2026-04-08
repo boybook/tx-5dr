@@ -1,280 +1,130 @@
-# TX-5DR - Ham Radio FT8 Digital Mode Application
+# TX-5DR Docker Notes
 
-[![Docker Image Size](https://img.shields.io/docker/image-size/boybook/tx-5dr/latest)](https://hub.docker.com/r/boybook/tx-5dr)
-[![Docker Pulls](https://img.shields.io/docker/pulls/boybook/tx-5dr)](https://hub.docker.com/r/boybook/tx-5dr)
-[![Multi-Architecture](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue)](https://hub.docker.com/r/boybook/tx-5dr)
+This document is the Docker-facing quick reference for TX-5DR. For the fuller Chinese deployment guide, see `docs/docker-deployment.md`.
 
-TX-5DR is a modern, web-based amateur radio application designed for FT8 digital mode communication and automatic station control. Built with Node.js, React, and Electron, it provides a comprehensive solution for digital amateur radio operations.
+## Quick Start
 
-## 🚀 Quick Start
-
-### Run with Docker
+Prefer a phased startup instead of launching the whole stack blindly on first boot.
 
 ```bash
-# Run the web/API container
-docker run -d -p 8076:80 --name tx5dr boybook/tx-5dr:latest
+mkdir -p data/{config,plugins,logs,cache,realtime}
 
-# Run LiveKit sidecar for same-origin browser signaling/media
-docker run -d \
-  -p 7881:7881/tcp \
-  -p 50000-50100:50000-50100/udp \
-  -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
-  --name tx5dr-livekit \
-  livekit/livekit-server:latest \
-  --config /etc/livekit.yaml
+docker compose pull
+# If you build from the local checkout instead of using published images:
+# docker compose build --no-cache
 
-# Access the web interface
-# Open http://localhost:8076 in your browser
+docker compose run --rm livekit-init
+docker compose up -d livekit
+docker compose logs -f livekit
+
+docker compose up -d tx5dr
+docker compose logs -f tx5dr
+
+docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
-### Run with Docker Compose
+Then open `http://localhost:8076`.
+
+## Recommended Compose Notes
+
+- Persist `./data/config`, `./data/plugins`, `./data/logs`, `./data/cache`, and `./data/realtime`
+- Keep `/dev/snd` mapped for ALSA audio access
+- Map `/dev/bus/usb` for raw USB access
+- If CAT control uses host tty devices, also map the concrete tty nodes such as `/dev/ttyUSB0` and `/dev/ttyUSB1`
+- Use `group_add: [audio]` when exposing `/dev/snd`
+
+A typical serial-capable section looks like this:
 
 ```yaml
-version: '3.8'
-
 services:
   tx5dr:
-    image: boybook/tx-5dr:latest
-    container_name: tx5dr
-    restart: unless-stopped
-    depends_on:
-      - livekit
-    ports:
-      - "8076:80"
+    devices:
+      - /dev/bus/usb:/dev/bus/usb:rwm
+      - /dev/ttyUSB0:/dev/ttyUSB0:rwm
+      - /dev/ttyUSB1:/dev/ttyUSB1:rwm
+      - /dev/snd:/dev/snd:rwm
     volumes:
       - ./data/config:/app/data/config
+      - ./data/plugins:/app/data/plugins
       - ./data/logs:/app/data/logs
       - ./data/cache:/app/data/cache
-      # nginx
-      - ./data/logs/nginx:/var/log/nginx
-      # supervisor
-      - ./data/logs/supervisor:/var/log/supervisor
-      # devices
+      - ./data/realtime:/app/data/realtime
       - /dev/snd:/dev/snd:rw
-      - /dev/shm:/dev/shm:rw
-      # PulseAudio
-      - /run/user/1000/pulse:/run/user/1000/pulse:ro
-      - /var/lib/pulse:/var/lib/pulse:ro
-    devices:
-      # USB devices
-      - /dev/bus/usb:/dev/bus/usb:rwm
-      # Audio devices
-      - /dev/snd:/dev/snd:rwm
-    environment:
-      - NODE_ENV=production
-      - PORT=4000
-      - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
-      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
-      - TX5DR_CONFIG_DIR=/app/data/config
-      - TX5DR_DATA_DIR=/app/data
-      - TX5DR_LOGS_DIR=/app/data/logs
-      - TX5DR_CACHE_DIR=/app/data/cache
-      - PULSE_RUNTIME_PATH=/run/user/1000/pulse
-      - PULSE_STATE_PATH=/var/lib/pulse
     group_add:
       - audio
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-      - SYS_NICE
-      - SYS_RESOURCE
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=100m
-
-  livekit:
-    image: livekit/livekit-server:latest
-    container_name: tx5dr-livekit
-    restart: unless-stopped
-    command: --config /var/lib/tx5dr-runtime/livekit.yaml
-    ports:
-      - "7881:7881/tcp"
-      - "50000-50100:50000-50100/udp"
-    volumes:
-      - ./data/realtime:/var/lib/tx5dr-runtime
 ```
 
-## ✨ Features
+## Hardware Checks Before Startup
 
-- **🎵 Audio Processing**: Real-time audio encoding/decoding using WSJT-X library
-- **📡 FT8 Protocol**: Full support for FT8 digital mode communication
-- **🔧 Radio Control**: CAT control for various amateur radio transceivers
-- **🌐 Web Interface**: Modern, responsive web-based user interface
-- **🖥️ Multi-Platform**: Available as web app, Docker container, and Electron desktop app
-- **⚡ Real-time**: WebSocket-based real-time communication
-- **📊 Spectrum Analysis**: Built-in waterfall and spectrum analyzer
-- **📝 Logging**: Integrated logging with ADIF support
-
-## 🏗️ Architecture
-
-- **Frontend**: React + TypeScript + Vite
-- **Backend**: Node.js + Fastify + TypeScript
-- **Audio**: naudiodon2 + WSJT-X library integration
-- **Radio Control**: Hamlib integration
-- **Desktop**: Electron wrapper for native experience
-
-## 📋 System Requirements
-
-### Minimum Requirements
-- **CPU**: 1 GHz dual-core processor
-- **RAM**: 512 MB available memory
-- **Storage**: 2 GB available space
-- **Audio**: USB audio interface or sound card
-
-### Recommended Requirements
-- **CPU**: 2 GHz quad-core processor
-- **RAM**: 2 GB available memory
-- **Storage**: 4 GB available space
-- **Audio**: Dedicated USB audio interface
-
-## 🐳 Supported Architectures
-
-This Docker image supports multiple architectures:
-
-- `linux/amd64` - Intel/AMD 64-bit
-- `linux/arm64` - ARM 64-bit (Apple Silicon, Raspberry Pi 4+)
-
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NODE_ENV` | `production` | Application environment |
-| `PORT` | `4000` | Backend server port |
-| `TX5DR_CONFIG_DIR` | `/app/data/config` | Configuration directory |
-| `TX5DR_DATA_DIR` | `/app/data` | Data directory |
-| `TX5DR_LOGS_DIR` | `/app/data/logs` | Logs directory |
-| `TX5DR_CACHE_DIR` | `/app/data/cache` | Cache directory |
-
-### Volume Mounts
-
-- `/app/data/config` - Application configuration files
-- `/app/data/logs` - Application and system logs
-- `/app/data/cache` - Temporary cache files
-
-### Device Access
-
-For audio device access, you may need to:
+Run these on the host or inside the VM before blaming Docker:
 
 ```bash
-# Add user to audio group (on host)
-sudo usermod -a -G audio $USER
-
-# Run with privileged mode for full hardware access
-docker run --privileged ...
+lsusb
+aplay -l
+arecord -l
+ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true
+ls -l /dev/serial/by-id 2>/dev/null || true
 ```
 
-## 🎯 Usage Examples
+Important note:
 
-### Basic FT8 Operation
+- Seeing the USB device in `lsusb` does not automatically mean the container can use the matching tty node
+- `/dev/bus/usb` alone is usually not enough for Hamlib serial mode
 
-1. **Start the containers**: launch both `tx5dr` and `tx5dr-livekit`
-2. **Access web interface**: Open `http://localhost:8076`
-3. **Expose LiveKit media ports**: browsers will enter signaling through the site's same-origin `/livekit` route, so expose `7881/tcp` plus `50000-50100/udp` for voice media
-4. **Configure audio devices**: Select input/output devices in settings
-5. **Configure radio**: Set up CAT control for your transceiver
-6. **Start operating**: Begin FT8 communication
+## LiveKit Networking
 
-### With External Audio Interface
+Browser clients normally enter signaling through the site's same-origin `/livekit` path, so `7880/tcp` does not need to be exposed publicly in the common case.
+
+If you use the LiveKit primary media path, make sure these are reachable from clients:
+
+- `7881/tcp`
+- `50000-50100/udp`
+
+## Troubleshooting
+
+### Container keeps restarting
 
 ```bash
-docker run -d \
-  -p 8076:80 \
-  --device=/dev/snd \
-  --group-add audio \
-  boybook/tx-5dr:latest
-
-docker run -d \
-  -p 7881:7881/tcp \
-  -p 50000-50100:50000-50100/udp \
-  -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
-  livekit/livekit-server:latest \
-  --config /etc/livekit.yaml
+docker compose logs --tail=200 tx5dr
 ```
 
-### Development Mode
+If you see a `supervisord` / `supervisor` parse error, you are likely running an older image or cached local build. Refresh it with:
 
 ```bash
-docker run -d \
-  -p 8076:80 \
-  -v $(pwd)/config:/app/data/config \
-  -e NODE_ENV=development \
-  boybook/tx-5dr:latest
-
-docker run -d \
-  -p 7881:7881/tcp \
-  -p 50000-50100:50000-50100/udp \
-  -v $(pwd)/docker/livekit.yaml:/etc/livekit.yaml:ro \
-  livekit/livekit-server:latest \
-  --config /etc/livekit.yaml
+docker compose build --no-cache
+# or
+docker compose pull
 ```
 
-## 🔍 Troubleshooting
+### Host sees USB, container does not see tty devices
 
-### Common Issues
+Map the actual tty devices too:
 
-**Audio Device Not Found**
-- Ensure audio devices are properly connected
-- Check device permissions and group membership
-- Try running with `--privileged` flag
+```yaml
+devices:
+  - /dev/bus/usb:/dev/bus/usb:rwm
+  - /dev/ttyUSB0:/dev/ttyUSB0:rwm
+  - /dev/ttyUSB1:/dev/ttyUSB1:rwm
+```
 
-**Radio Control Issues**
-- Verify CAT control settings in your radio
-- Check USB/Serial port permissions
-- Ensure correct baud rate and protocol settings
+Then verify inside the container:
 
-**Web Interface Not Loading**
-- Check if port 8076 is available
-- Verify container is running: `docker ps`
-- Check container logs: `docker logs tx-5dr`
+```bash
+docker compose exec tx5dr sh -lc 'ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true'
+```
 
-### Getting Help
+### Audio devices missing inside the container
 
-- **Documentation**: [GitHub Repository](https://github.com/boybook/tx-5dr)
-- **Issues**: [GitHub Issues](https://github.com/boybook/tx-5dr/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/boybook/tx-5dr/discussions)
+```bash
+docker compose exec tx5dr sh -lc 'ls -l /dev/snd || true'
+docker compose exec tx5dr aplay -l
+```
 
-## 📊 Performance
+If needed, revisit host-side USB passthrough, ALSA visibility, and the compose `group_add` / `devices` settings.
 
-### Optimized Docker Image
+## Related Files
 
-- **Base Image**: `node:22-slim` (minimal Debian)
-- **Multi-stage Build**: Optimized for production deployment
-- **Size**: ~1.4GB (down from 3.4GB original)
-- **Startup Time**: < 10 seconds on modern hardware
-
-### Resource Usage
-
-- **CPU**: Low to moderate usage during operation
-- **Memory**: ~200-500MB depending on activity
-- **Network**: Minimal bandwidth requirements
-- **Storage**: Logs and configuration data only
-
-## 🏷️ Tags
-
-- `latest` - Latest stable release
-- `v1.x.x` - Specific version releases
-- `develop` - Development branch (unstable)
-
-## 🔒 Security
-
-- Runs as non-root user (`www-data`)
-- Minimal attack surface with slim base image
-- Regular security updates
-- No unnecessary services or packages
-
-## 📜 License
-
-This project is licensed under the MIT License - see the [LICENSE](https://github.com/boybook/tx-5dr/blob/main/LICENSE) file for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
----
-
-**Note**: This application is designed for amateur radio operators. Ensure you comply with your local amateur radio regulations and licensing requirements when using this software.
-
-For more information, visit the [TX-5DR GitHub Repository](https://github.com/boybook/tx-5dr). 
+- `docker-compose.yml`
+- `docker/supervisord.conf`
+- `docker/entrypoint.sh`
+- `docs/docker-deployment.md`

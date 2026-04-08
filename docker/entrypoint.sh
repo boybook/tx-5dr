@@ -156,10 +156,16 @@ chown "$HOST_UID:$HOST_GID" /var/run/tx5dr
 if [[ -f "/etc/supervisor/conf.d/supervisord.conf" ]]; then
     # 备份原始配置
     cp /etc/supervisor/conf.d/supervisord.conf /etc/supervisor/conf.d/supervisord.conf.bak
-    
-    # 更新配置文件中的用户设置
-    sed -i "s/user=www-data/user=$APP_USER/g" /etc/supervisor/conf.d/supervisord.conf
-    log "Updated supervisor configuration with user: $APP_USER"
+
+    # 仅替换 tx5dr-server 进程配置中的 user，避免误改 nginx 配置
+    awk -v app_user="$APP_USER" '
+        /^\[program:tx5dr-server\]$/ { in_server=1 }
+        /^\[/ && $0 != "[program:tx5dr-server]" { in_server=0 }
+        in_server && /^user=/ { $0="user=" app_user }
+        { print }
+    ' /etc/supervisor/conf.d/supervisord.conf > /etc/supervisor/conf.d/supervisord.conf.tmp
+    mv /etc/supervisor/conf.d/supervisord.conf.tmp /etc/supervisor/conf.d/supervisord.conf
+    log "Updated supervisor configuration for tx5dr-server user: $APP_USER"
 fi
 
 # nginx 配置保持不变，使用 www-data 用户
