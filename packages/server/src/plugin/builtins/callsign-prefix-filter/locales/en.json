@@ -1,0 +1,12 @@
+{
+  "pluginName": "Callsign Prefix Filter",
+  "pluginDescription": "Filter candidate stations by callsign prefixes or exact matches.",
+  "filterOverview": "Filter Rules",
+  "filterOverviewDesc": "Keep only candidates that match the configured prefix list. Useful for regional targeting or temporary allowlists.",
+  "allowedPrefixes": "Allowed prefixes or callsigns",
+  "allowedPrefixesDesc": "Leave empty to disable filtering. Examples: JA, BG5, or a full callsign.",
+  "matchMode": "Match mode",
+  "matchModeDesc": "Prefix mode matches the beginning of a callsign. Exact mode requires a full exact match.",
+  "prefixMode": "Prefix match",
+  "exactMode": "Exact match"
+}

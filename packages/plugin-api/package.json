@@ -1,0 +1,28 @@
+{
+  "name": "@tx5dr/plugin-api",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint src/**/*.ts",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@tx5dr/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@tx5dr/shared-config": "workspace:*",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}

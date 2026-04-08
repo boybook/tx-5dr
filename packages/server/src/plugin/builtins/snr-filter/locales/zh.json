@@ -1,0 +1,8 @@
+{
+  "pluginName": "信噪比过滤器",
+  "pluginDescription": "按最低信噪比过滤候选消息的内置工具插件",
+  "filterOverview": "过滤规则说明",
+  "filterOverviewDesc": "该工具插件会在候选目标进入主策略前先按信噪比阈值过滤，适合减少弱信号目标带来的干扰。",
+  "minSNR": "最低信噪比 (dB)",
+  "minSNRDesc": "低于此信噪比的候选台站将被过滤"
+}

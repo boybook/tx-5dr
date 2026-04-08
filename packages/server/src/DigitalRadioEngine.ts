@@ -34,6 +34,8 @@ import { ClockCoordinator } from './subsystems/ClockCoordinator.js';
 import { EngineLifecycle } from './subsystems/EngineLifecycle.js';
 import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 import { EngineState } from './state-machines/types.js';
+import { PluginManager } from './plugin/PluginManager.js';
+import { tx5drPaths } from './utils/app-paths.js';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -79,6 +81,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private transmissionPipeline: TransmissionPipeline;
   private clockCoordinator!: ClockCoordinator;  // 在 initialize() 中初始化
   private engineLifecycle!: EngineLifecycle;     // 在构造函数末尾初始化
+  private _pluginManager!: PluginManager;        // 在构造函数末尾初始化
 
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -126,6 +129,37 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         }
       },
       transmissionTracker: this.transmissionTracker
+    });
+
+    // 初始化插件管理器（在操作员管理器之后）
+    // dataDir 异步获取，先用占位符，initialize() 中完成
+    this._pluginManager = new PluginManager({
+      eventEmitter: this,
+      getOperators: () => this._operatorManager.getAllOperators(),
+      getOperatorById: (id) => this._operatorManager.getOperatorById(id),
+      getOperatorAutomationSnapshot: (id) => this._pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: (operatorId, callsign, lastMessage) => {
+        this._pluginManager.requestCall(operatorId, callsign, lastMessage);
+      },
+      getRadioFrequency: async () => {
+        try {
+          const freq = await this.radioManager.getFrequency();
+          return typeof freq === 'number' ? freq : null;
+        } catch { return null; }
+      },
+      setRadioFrequency: (freq) => {
+        try { this.radioManager.setFrequency(freq); } catch (e) { logger.error('Failed to set radio frequency', e); }
+      },
+      getRadioBand: () => ConfigManager.getInstance().getLastSelectedFrequency()?.band ?? '',
+      getRadioConnected: () => this.radioManager.isConnected(),
+      getLatestSlotPack: () => this.slotPackManager.getLatestSlotPack(),
+      hasWorkedCallsign: async (operatorId, callsign) => {
+        return this._operatorManager.hasWorkedCallsign(operatorId, callsign);
+      },
+      resetOperatorRuntime: (operatorId, reason) => {
+        this._operatorManager.resetPluginRuntime(operatorId, reason);
+      },
+      dataDir: '', // 将在 initialize() 中更新
     });
 
     // 初始化频谱调度器
@@ -183,6 +217,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this._operatorManager;
   }
 
+  public get pluginManager(): PluginManager {
+    return this._pluginManager;
+  }
+
   public getSlotPackManager(): SlotPackManager {
     return this.slotPackManager;
   }
@@ -230,6 +268,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     await printAppPaths();
 
+    // 更新插件管理器的数据目录（在 initialize 阶段异步获取）
+    const dataDir = await tx5drPaths.getDataDir();
+    this._pluginManager.setDataDir(dataDir);
+
+    // 加载插件配置
+    const pluginsConfig = ConfigManager.getInstance().getPluginsConfig();
+    this._pluginManager.loadConfig(pluginsConfig);
+
+    // 将 pluginManager 注入到 operatorManager，统一由插件系统接管自动化运行时
+    this._operatorManager.setPluginManager(this._pluginManager);
+
     const radioConfig = ConfigManager.getInstance().getRadioConfig();
     const compensationMs = radioConfig.transmitCompensationMs || 0;
     logger.info(`Transmit compensation config: ${compensationMs}ms`);
@@ -256,6 +305,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     logger.info('Initialization phase: domain-services');
 
     await this.operatorManager.initialize();
+    await this._pluginManager.start();
 
     try {
       const pskreporterService = await initializePSKReporterService();

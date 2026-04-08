@@ -4,7 +4,6 @@
 import EventEmitter from 'eventemitter3';
 import {
   RadioOperator,
-  StandardQSOStrategy,
   ClockSourceSystem,
   FT8MessageParser,
 } from '@tx5dr/core';
@@ -58,6 +57,8 @@ export class RadioOperatorManager {
   private logManager: LogManager;
   private transmissionTracker: any; // TransmissionTracker实例
   private getRadioFrequency?: () => Promise<number | null>;
+  // 插件管理器引用（延迟注入，引擎初始化完成后设置）
+  private _pluginManager?: import('../plugin/PluginManager.js').PluginManager;
 
   // 记录所有事件监听器,用于清理
   private eventListeners: Map<string, (...args: any[]) => void> = new Map();
@@ -258,6 +259,7 @@ export class RadioOperatorManager {
     // 监听操作员发射周期变更事件
     const handleOperatorTransmitCyclesChanged = (data: { operatorId: string; transmitCycles: number[] }) => {
       logger.debug(`Operator ${data.operatorId} transmit cycles changed: [${data.transmitCycles.join(', ')}]`);
+      this._pluginManager?.invalidateDecisionMessageSet(data.operatorId);
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -292,13 +294,10 @@ export class RadioOperatorManager {
     const handleOperatorSlotContentChanged = (data: { operatorId: string; slot: string; content: string }) => {
       logger.debug(`Operator ${data.operatorId} slot content edited: slot=${data.slot}`);
       // 立即检查并触发发射（如果当前正在该槽位发射）
-      const operator = this.operators.get(data.operatorId);
-      if (operator) {
-        const currentSlot = operator.transmissionStrategy?.userCommand?.({ command: 'get_state' } as any);
-        if (currentSlot === data.slot) {
-          logger.debug(`Currently transmitting on slot ${data.slot}, updating content immediately`);
-          this.checkAndTriggerTransmission(data.operatorId);
-        }
+      const currentSlot = this._pluginManager?.getOperatorRuntimeStatus(data.operatorId).currentSlot;
+      if (currentSlot === data.slot) {
+        logger.debug(`Currently transmitting on slot ${data.slot}, updating content immediately`);
+        this.checkAndTriggerTransmission(data.operatorId);
       }
       // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
@@ -358,14 +357,14 @@ export class RadioOperatorManager {
       myGrid: config.myGrid || '',
       frequency: config.frequency,
       transmitCycles: config.transmitCycles,
-      maxQSOTimeoutCycles: config.maxQSOTimeoutCycles,
-      maxCallAttempts: config.maxCallAttempts,
-      autoReplyToCQ: config.autoReplyToCQ,
-      autoResumeCQAfterFail: config.autoResumeCQAfterFail,
-      autoResumeCQAfterSuccess: config.autoResumeCQAfterSuccess,
-      replyToWorkedStations: config.replyToWorkedStations ?? false,
-      prioritizeNewCalls: config.prioritizeNewCalls ?? true,
-      targetSelectionPriorityMode: config.targetSelectionPriorityMode ?? (config.prioritizeNewCalls === false ? 'balanced' : 'dxcc_first'),
+      maxQSOTimeoutCycles: 0,
+      maxCallAttempts: 0,
+      autoReplyToCQ: false,
+      autoResumeCQAfterFail: false,
+      autoResumeCQAfterSuccess: false,
+      replyToWorkedStations: false,
+      prioritizeNewCalls: true,
+      targetSelectionPriorityMode: 'dxcc_first',
       mode: config.mode || MODES.FT8,
     };
   }
@@ -382,26 +381,11 @@ export class RadioOperatorManager {
     const operator = new RadioOperator(
       operatorConfig,
       this.eventEmitter,
-      (op: RadioOperator) => new StandardQSOStrategy(op),
       (myCallsign, targetCallsign, operatorId) =>
         this.isTargetBeingWorkedByOtherOperators(myCallsign, targetCallsign, operatorId)
     );
     
-    // 注册操作员的呼号到日志管理器
-    this.logManager.registerOperatorCallsign(config.id, config.myCallsign);
-    
-    // 立即为该呼号创建日志本
-    try {
-      await this.logManager.getOrCreateLogBookByCallsign(config.myCallsign);
-      logger.info(`Created logbook for operator ${config.id} (callsign: ${config.myCallsign})`);
-    } catch (error) {
-      logger.error(`Failed to create logbook for operator ${config.id} (callsign: ${config.myCallsign}):`, error);
-    }
-    
-    // 如果配置中指定了日志本ID，连接到该日志本（向后兼容）
-    if (config.logBookId) {
-      this.connectOperatorToLogBook(config.id, config.logBookId);
-    }
+    await this.syncOperatorLogbookBinding(config.id, config.myCallsign, config.logBookId);
     
     // 监听操作员的slots更新事件
     operator.addSlotsUpdateListener((data: any) => {
@@ -416,6 +400,9 @@ export class RadioOperatorManager {
     });
 
     this.operators.set(config.id, operator);
+    if (this._pluginManager?.isRunning()) {
+      await this._pluginManager.initInstancesForOperator(config.id);
+    }
     logger.info(`Operator added: ${config.id}`);
     return operator;
   }
@@ -433,6 +420,7 @@ export class RadioOperatorManager {
     this.logManager.disconnectOperatorFromLogBook(operatorId);
     
     this.operators.delete(operatorId);
+    this._pluginManager?.removeInstancesForOperator(operatorId);
     logger.info(`Operator removed: ${operatorId}`);
   }
 
@@ -489,11 +477,34 @@ export class RadioOperatorManager {
     return this.operators.get(id);
   }
 
+  /** getOperatorById — alias for getOperator (used by PluginManager) */
+  getOperatorById(id: string): RadioOperator | undefined {
+    return this.operators.get(id);
+  }
+
+  /** 设置插件管理器（引擎初始化完成后由 DigitalRadioEngine 调用） */
+  setPluginManager(pm: import('../plugin/PluginManager.js').PluginManager): void {
+    this._pluginManager = pm;
+  }
+
   /**
    * 获取所有电台操作员
    */
   getAllOperators(): RadioOperator[] {
     return Array.from(this.operators.values());
+  }
+
+  /**
+   * 查询某操作员是否已与某呼号通联（供 PluginManager 使用）
+   */
+  async hasWorkedCallsign(operatorId: string, callsign: string): Promise<boolean> {
+    try {
+      const logBook = await this.logManager.getOperatorLogBook(operatorId);
+      if (!logBook) return false;
+      return logBook.provider.hasWorkedCallsign(callsign, {});
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -535,47 +546,15 @@ export class RadioOperatorManager {
         };
       }
       
-      // 从策略获取slots信息
-      let slots;
-      let currentSlot = 'TX6';
-      let targetContext = { 
-        targetCall: '', 
-        targetGrid: '', 
-        reportSent: 0,
-        reportReceived: 0
+      const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(id);
+      const currentSlot = runtimeState?.currentSlot ?? 'TX6';
+      const slots = runtimeState?.slots;
+      const targetContext = {
+        targetCall: String(runtimeState?.context?.targetCallsign ?? ''),
+        targetGrid: String(runtimeState?.context?.targetGrid ?? ''),
+        reportSent: Number(runtimeState?.context?.reportSent ?? 0),
+        reportReceived: Number(runtimeState?.context?.reportReceived ?? 0),
       };
-      
-      if (operator.transmissionStrategy) {
-        try {
-          const slotsResult = operator.transmissionStrategy.userCommand?.({
-            command: 'get_slots'
-          } as any);
-          if (slotsResult && typeof slotsResult === 'object') {
-            slots = slotsResult;
-          }
-          
-          const stateResult = operator.transmissionStrategy.userCommand?.({
-            command: 'get_state'
-          } as any);
-          if (stateResult && typeof stateResult === 'string') {
-            currentSlot = stateResult;
-          }
-          
-          const strategy = operator.transmissionStrategy as any;
-          if (strategy.context) {
-            const context = strategy.context;
-            targetContext = {
-              targetCall: context.targetCallsign || '',
-              targetGrid: context.targetGrid || '',
-              reportSent: context.reportSent ?? 0,
-              reportReceived: context.reportReceived ?? 0
-            };
-          }
-        } catch (error) {
-          logger.error(`Failed to get status for operator ${id}:`, error);
-          slots = {};
-        }
-      }
       
       operators.push({
         id,
@@ -591,19 +570,18 @@ export class RadioOperatorManager {
           frequency: operator.config.frequency,
           reportSent: targetContext.reportSent,
           reportReceived: targetContext.reportReceived,
-          // 自动化设置
-          autoReplyToCQ: operator.config.autoReplyToCQ,
-          autoResumeCQAfterFail: operator.config.autoResumeCQAfterFail,
-          autoResumeCQAfterSuccess: operator.config.autoResumeCQAfterSuccess,
-          replyToWorkedStations: operator.config.replyToWorkedStations,
-          prioritizeNewCalls: operator.config.prioritizeNewCalls,
-          targetSelectionPriorityMode: operator.config.targetSelectionPriorityMode,
         },
         strategy: {
-          name: 'StandardQSOStrategy',
+          name: runtimeState?.strategyName ?? 'standard-qso',
           state: currentSlot,
-          availableSlots: ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6']
+          availableSlots: runtimeState?.availableSlots ?? ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6']
         },
+        runtime: runtimeState ? {
+          currentState: currentSlot,
+          slots,
+          context: runtimeState.context as any,
+          availableSlots: runtimeState.availableSlots,
+        } : undefined,
         cycleInfo,
         slots,
         transmitCycles: operator.getTransmitCycles(),
@@ -646,37 +624,28 @@ export class RadioOperatorManager {
       }
     }
 
-    // 更新自动化设置
-    if (context.autoReplyToCQ !== undefined && context.autoReplyToCQ !== operator.config.autoReplyToCQ) {
-      operator.config.autoReplyToCQ = context.autoReplyToCQ;
-      updates.autoReplyToCQ = context.autoReplyToCQ;
-    }
-    if (context.autoResumeCQAfterFail !== undefined && context.autoResumeCQAfterFail !== operator.config.autoResumeCQAfterFail) {
-      operator.config.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
-      updates.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
-    }
-    if (context.autoResumeCQAfterSuccess !== undefined && context.autoResumeCQAfterSuccess !== operator.config.autoResumeCQAfterSuccess) {
-      operator.config.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
-      updates.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
-    }
-    if (context.replyToWorkedStations !== undefined && context.replyToWorkedStations !== operator.config.replyToWorkedStations) {
-      operator.config.replyToWorkedStations = context.replyToWorkedStations;
-      updates.replyToWorkedStations = context.replyToWorkedStations;
-    }
-    if (context.prioritizeNewCalls !== undefined && context.prioritizeNewCalls !== operator.config.prioritizeNewCalls) {
-      operator.config.prioritizeNewCalls = context.prioritizeNewCalls;
-      updates.prioritizeNewCalls = context.prioritizeNewCalls;
-    }
-    if (context.targetSelectionPriorityMode !== undefined && context.targetSelectionPriorityMode !== operator.config.targetSelectionPriorityMode) {
-      operator.config.targetSelectionPriorityMode = context.targetSelectionPriorityMode;
-      updates.targetSelectionPriorityMode = context.targetSelectionPriorityMode;
-    }
-
     // 如果有任何字段发生了变化，保存到配置文件
     if (Object.keys(updates).length > 0) {
       const configManager = ConfigManager.getInstance();
       await configManager.updateOperatorConfig(operatorId, updates);
+      if (updates.myCallsign) {
+        const persistedOperator = configManager.getOperatorConfig(operatorId);
+        await this.syncOperatorLogbookBinding(
+          operatorId,
+          updates.myCallsign,
+          persistedOperator?.logBookId,
+        );
+      }
       logger.debug(`Saved operator ${operatorId} config to file:`, updates);
+    }
+
+    const runtimePatch: Record<string, unknown> = {};
+    if (context.targetCallsign !== undefined) runtimePatch.targetCallsign = context.targetCallsign;
+    if (context.targetGrid !== undefined) runtimePatch.targetGrid = context.targetGrid;
+    if (context.reportSent !== undefined) runtimePatch.reportSent = context.reportSent;
+    if (context.reportReceived !== undefined) runtimePatch.reportReceived = context.reportReceived;
+    if (Object.keys(runtimePatch).length > 0) {
+      this._pluginManager?.patchOperatorRuntimeContext(operatorId, runtimePatch as any);
     }
 
     logger.debug(`Updated operator ${operatorId} context:`, context);
@@ -685,8 +654,7 @@ export class RadioOperatorManager {
 
   /**
    * 仅持久化操作员上下文到配置文件（不更新内存、不触发广播）
-   * 用于 handleUserCommand 中 update_context 的持久化步骤，
-   * 内存更新已由 operator.userCommand 处理。
+   * 用于兼容需要只落盘基本信息的场景。
    */
   async persistOperatorContext(operatorId: string, context: any): Promise<void> {
     const operator = this.operators.get(operatorId);
@@ -709,25 +677,6 @@ export class RadioOperatorManager {
         updates.frequency = clampedFreq;
       }
     }
-    if (context.autoReplyToCQ !== undefined && context.autoReplyToCQ !== operator.config.autoReplyToCQ) {
-      updates.autoReplyToCQ = context.autoReplyToCQ;
-    }
-    if (context.autoResumeCQAfterFail !== undefined && context.autoResumeCQAfterFail !== operator.config.autoResumeCQAfterFail) {
-      updates.autoResumeCQAfterFail = context.autoResumeCQAfterFail;
-    }
-    if (context.autoResumeCQAfterSuccess !== undefined && context.autoResumeCQAfterSuccess !== operator.config.autoResumeCQAfterSuccess) {
-      updates.autoResumeCQAfterSuccess = context.autoResumeCQAfterSuccess;
-    }
-    if (context.replyToWorkedStations !== undefined && context.replyToWorkedStations !== operator.config.replyToWorkedStations) {
-      updates.replyToWorkedStations = context.replyToWorkedStations;
-    }
-    if (context.prioritizeNewCalls !== undefined && context.prioritizeNewCalls !== operator.config.prioritizeNewCalls) {
-      updates.prioritizeNewCalls = context.prioritizeNewCalls;
-    }
-    if (context.targetSelectionPriorityMode !== undefined && context.targetSelectionPriorityMode !== operator.config.targetSelectionPriorityMode) {
-      updates.targetSelectionPriorityMode = context.targetSelectionPriorityMode;
-    }
-
     if (Object.keys(updates).length > 0) {
       const configManager = ConfigManager.getInstance();
       await configManager.updateOperatorConfig(operatorId, updates);
@@ -735,21 +684,40 @@ export class RadioOperatorManager {
     }
   }
 
-  /**
-   * 设置操作员时隙
-   */
-  setOperatorSlot(operatorId: string, slot: string): void {
+  setOperatorRuntimeState(operatorId: string, state: import('@tx5dr/contracts').OperatorRuntimeSlot): void {
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
-    
-    operator.userCommand({
-      type: 'setSlot',
-      slot: slot
-    } as any);
-    
-    logger.debug(`Set operator ${operatorId} slot: ${slot}`);
+
+    this._pluginManager?.setOperatorRuntimeState(operatorId, state);
+    logger.debug(`Set operator ${operatorId} runtime state: ${state}`);
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  setOperatorRuntimeSlotContent(
+    operatorId: string,
+    slot: import('@tx5dr/contracts').OperatorRuntimeSlot,
+    content: string,
+  ): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`operator ${operatorId} not found`);
+    }
+
+    this._pluginManager?.setOperatorRuntimeSlotContent(operatorId, slot, content);
+    logger.debug(`Set operator ${operatorId} runtime slot content: slot=${slot}`);
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  async setOperatorTransmitCycles(operatorId: string, transmitCycles: number[]): Promise<void> {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`operator ${operatorId} not found`);
+    }
+
+    await this.persistTransmitCycles(operatorId, transmitCycles);
+    operator.setTransmitCycles(transmitCycles);
     this.emitOperatorStatusUpdate(operatorId);
   }
 
@@ -894,7 +862,7 @@ export class RadioOperatorManager {
     }
 
     // 生成发射内容
-    const transmission = operator.transmissionStrategy?.handleTransmitSlot();
+    const transmission = this._pluginManager?.getCurrentTransmission(operatorId);
     if (!transmission) {
       logger.debug(`Operator ${operatorId} has no transmission content`);
       // 即使没有发射内容，也需要更新状态
@@ -911,7 +879,7 @@ export class RadioOperatorManager {
       replaceExisting: options?.replaceExisting,
     };
     this.pendingTransmissions.push(request);
-    operator.notifyTransmissionQueued(transmission);
+    this._pluginManager?.notifyTransmissionQueued(operatorId, transmission);
 
     // 由统一的队列消费层处理：构造当前时隙信息并消费队列
     // 这样可以确保：
@@ -962,6 +930,17 @@ export class RadioOperatorManager {
     this.latestEncodeRequestIds.clear();
   }
 
+  resetPluginRuntime(operatorId: string, reason: string): void {
+    this.pendingTransmissions = this.pendingTransmissions.filter(
+      (request) => request.operatorId !== operatorId,
+    );
+    this.latestEncodeRequestIds.delete(operatorId);
+    this.activeTransmissionOperatorIds.delete(operatorId);
+    this.lastEmittedStatusHash.delete(operatorId);
+    logger.info(`Operator plugin runtime reset: operator=${operatorId}, reason=${reason}`);
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
   /**
    * 执行晚到解码重决策
    */
@@ -985,7 +964,7 @@ export class RadioOperatorManager {
       if (!isTransmitCycle) continue;
 
       try {
-        const changed = await operator.reDecideWithUpdatedSlotPack(slotPack);
+        const changed = await this._pluginManager?.reDecideOperator(operatorId, slotPack);
         if (changed) {
           logger.info(`Late decode re-decision triggered re-encode for operator ${operatorId}`);
           this.checkAndTriggerTransmission(operatorId, { replaceExisting: true });
@@ -1038,7 +1017,7 @@ export class RadioOperatorManager {
       }
 
       // 获取操作员的发射内容
-      const transmission = operator.transmissionStrategy?.handleTransmitSlot();
+      const transmission = this._pluginManager?.getCurrentTransmission(operatorId);
       if (!transmission) {
         return;
       }
@@ -1208,14 +1187,39 @@ export class RadioOperatorManager {
 
     const operatorConfig = this.convertToOperatorConfig(config);
     Object.assign(operator.config, operatorConfig);
+    await this.syncOperatorLogbookBinding(config.id, operatorConfig.myCallsign, config.logBookId);
     
     logger.info(`Operator config synced and updated: ${config.id}`);
     this.emitOperatorStatusUpdate(config.id);
   }
 
+  private async syncOperatorLogbookBinding(
+    operatorId: string,
+    callsign: string,
+    logBookId?: string,
+  ): Promise<void> {
+    this.logManager.registerOperatorCallsign(operatorId, callsign);
+
+    try {
+      await this.logManager.getOrCreateLogBookByCallsign(callsign);
+      logger.info(`Created logbook for operator ${operatorId} (callsign: ${callsign})`);
+    } catch (error) {
+      logger.error(`Failed to create logbook for operator ${operatorId} (callsign: ${callsign}):`, error);
+      return;
+    }
+
+    if (logBookId) {
+      try {
+        await this.connectOperatorToLogBook(operatorId, logBookId);
+      } catch (error) {
+        logger.error(`Failed to connect operator ${operatorId} to logbook ${logBookId}:`, error);
+      }
+    }
+  }
+
   /**
    * 将操作员发射周期持久化到配置文件
-   * 当通过 WS 命令 set_transmit_cycles 修改时，需要同步到配置文件，
+   * 当通过 WS 命令 setOperatorTransmitCycles 修改时，需要同步到配置文件，
    * 否则下次 syncUpdateOperator() 会用文件旧值覆盖内存中的新值
    */
   async persistTransmitCycles(operatorId: string, transmitCycles: number[]): Promise<void> {
@@ -1366,18 +1370,6 @@ export class RadioOperatorManager {
   }
 
   /**
-   * 用户命令处理（来自 RadioOperator）
-   * 当操作员的发射周期被更改时触发发射检查
-   */
-  handleOperatorCommand(operatorId: string, command: any): void {
-    if (command.command === 'set_transmit_cycles') {
-      // 操作员的发射周期已更改，立即检查是否需要发射
-      logger.debug(`Operator ${operatorId} transmit cycles changed`);
-      this.checkAndTriggerTransmission(operatorId);
-    }
-  }
-  
-  /**
    * 获取日志管理器
    */
   getLogManager(): LogManager {
@@ -1406,15 +1398,15 @@ export class RadioOperatorManager {
       // 只检查同呼号的操作者
       if (operator.config.myCallsign.toUpperCase() !== normalizedMyCall) continue;
 
-      // 检查该操作者的传输策略上下文
-      const strategy = operator.transmissionStrategy as any;
-      if (!strategy?.context) continue;
+      const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(operatorId);
+      const strategyContext = runtimeState?.context;
+      if (!strategyContext) continue;
 
       // 检查是否正在通联目标呼号
-      const currentTarget = strategy.context.targetCallsign;
+      const currentTarget = String(strategyContext.targetCallsign ?? '');
       if (currentTarget && currentTarget.toUpperCase() === normalizedTarget) {
         // 检查是否在活跃的QSO状态或正在转换状态
-        const currentState = strategy.getCurrentState?.();
+        const currentState = runtimeState?.currentSlot;
         if (currentState) {
           // TX6状态下已设置目标 → 正在转换中 → 视为冲突
           if (currentState === 'TX6' && currentTarget) {

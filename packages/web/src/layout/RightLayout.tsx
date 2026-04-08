@@ -5,7 +5,7 @@ import {
   PopoverContent,
   PopoverTrigger
 } from '@heroui/react';
-import { useOperators } from '../store/radioStore';
+import { useCurrentOperatorId, useOperators } from '../store/radioStore';
 import { useAuth } from '../store/authStore';
 import { AuthLoginForm } from '../components/auth/AuthLoginForm';
 import { RadioControl } from '../components/radio/control/RadioControl';
@@ -28,11 +28,13 @@ export const RightLayout: React.FC = () => {
     admin: t('common:role.admin'),
   };
   const { operators } = useOperators();
+  const { currentOperatorId } = useCurrentOperatorId();
   const { state: authState, logout } = useAuth();
   const [selectedMode, setSelectedMode] = useState<string>('auto5');
   const [loginPopoverOpen, setLoginPopoverOpen] = useState(false);
   const showAuthenticatedIdentity = Boolean(authState.role) && (Boolean(authState.jwt) || !authState.authEnabled);
   const showLoginEntry = authState.authEnabled && !authState.jwt && authState.isPublicViewer;
+  const automationOperatorId = currentOperatorId || operators[0]?.id;
 
   // 判断是否为自动模式
   const isAutoMode = selectedMode.startsWith('auto');
@@ -76,7 +78,7 @@ export const RightLayout: React.FC = () => {
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           <div className="flex items-center gap-1">
             {/* 自动化程序（有操作员时才显示） */}
-            {operators.length > 0 && (
+            {operators.length > 0 && automationOperatorId && (
               <Popover placement="bottom-start">
                 <PopoverTrigger>
                   <Button
@@ -94,7 +96,7 @@ export const RightLayout: React.FC = () => {
                 </PopoverTrigger>
                 <PopoverContent className="px-1">
                   <div>
-                    <AutomationSettingsPanel isOpen={true} onClose={() => {}} />
+                    <AutomationSettingsPanel operatorId={automationOperatorId} />
                   </div>
                 </PopoverContent>
               </Popover>

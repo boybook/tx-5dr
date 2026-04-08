@@ -1,0 +1,10 @@
+{
+  "pluginName": "QSO 会话观察器",
+  "pluginDescription": "记录时隙、解码和 QSO 生命周期事件，便于调试策略行为。",
+  "sessionOverview": "会话观察说明",
+  "sessionOverviewDesc": "该插件只做记录与展示，不会改变任何自动化决策。",
+  "recentEventLimit": "最近事件条数",
+  "recentEventLimitDesc": "日志面板中保留的最近事件数量。",
+  "sessionStatsPanel": "会话统计",
+  "sessionEventsPanel": "最近事件"
+}
