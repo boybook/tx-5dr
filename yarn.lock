@@ -6454,7 +6454,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@tx5dr/plugin-api@workspace:packages/plugin-api":
+"@tx5dr/plugin-api@workspace:*, @tx5dr/plugin-api@workspace:packages/plugin-api":
   version: 0.0.0-use.local
   resolution: "@tx5dr/plugin-api@workspace:packages/plugin-api"
   dependencies:
@@ -6479,6 +6479,7 @@ __metadata:
     "@statelyai/inspect": "npm:^0.4.0"
     "@tx5dr/contracts": "workspace:*"
     "@tx5dr/core": "workspace:*"
+    "@tx5dr/plugin-api": "workspace:*"
     "@tx5dr/shared-config": "workspace:*"
     "@types/bcrypt": "npm:^6.0.0"
     "@types/node": "npm:^20.0.0"
