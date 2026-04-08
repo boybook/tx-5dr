@@ -1,7 +1,7 @@
 import type { EventEmitter } from 'eventemitter3';
 import type { CoreRadioCapabilities, DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
-import { RadioError } from '../utils/errors/RadioError.js';
+import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { FrequencyManager } from '../radio/FrequencyManager.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
@@ -13,6 +13,7 @@ import type { EngineLifecycle } from './EngineLifecycle.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RadioBridge');
+const AUTO_RESTORE_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 30000];
 
 export interface RadioBridgeDeps {
   engineEmitter: EventEmitter<DigitalRadioEngineEvents>;
@@ -49,6 +50,9 @@ export class RadioBridge {
 
   // 记录断开前是否在运行
   private _wasRunningBeforeDisconnect = false;
+  private restoreRetryTimer: NodeJS.Timeout | null = null;
+  private restoreRetryAttempt = 0;
+  private restoreStartInProgress = false;
 
   constructor(private deps: RadioBridgeDeps) {}
 
@@ -256,16 +260,26 @@ export class RadioBridge {
     const engineState = lifecycle.getEngineState();
     if (!lifecycle.getIsRunning() && engineState !== 'starting') {
       logger.info('Radio connected, restoring previous running state');
-      this._wasRunningBeforeDisconnect = false;
       try {
+        this.restoreStartInProgress = true;
         await lifecycle.start();
-      } catch (err) {
-        logger.error('Auto-start failed:', err);
+        this.clearRestoreRetryState();
         this._wasRunningBeforeDisconnect = false;
+      } catch (err) {
+        if (this.shouldRetryAutoRestore(err)) {
+          this.scheduleRestoreRetry(err);
+        } else {
+          logger.error('Auto-start failed:', err);
+          this.clearRestoreRetryState();
+          this._wasRunningBeforeDisconnect = false;
+        }
+      } finally {
+        this.restoreStartInProgress = false;
       }
       return;
     }
 
+    this.clearRestoreRetryState();
     this._wasRunningBeforeDisconnect = false;
   }
 
@@ -275,6 +289,7 @@ export class RadioBridge {
     delayMs?: number,
   ): Promise<void> {
     logger.info(`Radio reconnecting ${attempt}/${maxAttempts}`);
+    this.clearRestoreRetryState();
 
     const { engineEmitter, operatorManager, radioManager } = this.deps;
     const lifecycle = this.deps.getEngineLifecycle();
@@ -308,6 +323,9 @@ export class RadioBridge {
 
   private async handleRadioDisconnected(reason?: string): Promise<void> {
     logger.info(`Radio disconnected: ${reason || 'unknown reason'}`);
+    if (!this.restoreStartInProgress) {
+      this.clearRestoreRetryState();
+    }
 
     const { engineEmitter, operatorManager, radioManager } = this.deps;
     const lifecycle = this.deps.getEngineLifecycle();
@@ -351,7 +369,9 @@ export class RadioBridge {
       coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
     });
 
-    this._wasRunningBeforeDisconnect = false;
+    if (!this.restoreStartInProgress) {
+      this._wasRunningBeforeDisconnect = false;
+    }
   }
 
   private handleRadioError(error: Error): void {
@@ -374,6 +394,90 @@ export class RadioBridge {
       profileId: activeProfile?.id ?? null,
       profileName: activeProfile?.name ?? null,
     });
+  }
+
+  private shouldRetryAutoRestore(error: unknown): boolean {
+    if (!(error instanceof RadioError)) {
+      return false;
+    }
+
+    return (
+      error.code === RadioErrorCode.DEVICE_NOT_FOUND &&
+      error.context?.temporaryUnavailable === true &&
+      error.context?.recoverable === true
+    );
+  }
+
+  private scheduleRestoreRetry(error: unknown): void {
+    if (this.restoreRetryAttempt >= AUTO_RESTORE_RETRY_DELAYS_MS.length) {
+      logger.error('Auto-start retry limit reached after temporary audio device loss', error);
+      this.clearRestoreRetryState();
+      this._wasRunningBeforeDisconnect = false;
+      return;
+    }
+
+    const attempt = this.restoreRetryAttempt + 1;
+    const delayMs = AUTO_RESTORE_RETRY_DELAYS_MS[this.restoreRetryAttempt];
+    this.restoreRetryAttempt = attempt;
+
+    if (this.restoreRetryTimer) {
+      clearTimeout(this.restoreRetryTimer);
+      this.restoreRetryTimer = null;
+    }
+
+    logger.warn('Auto-start failed because the configured audio device is temporarily unavailable; scheduling retry', {
+      attempt,
+      maxAttempts: AUTO_RESTORE_RETRY_DELAYS_MS.length,
+      delayMs,
+    });
+
+    this.restoreRetryTimer = setTimeout(() => {
+      this.restoreRetryTimer = null;
+      void this.retryRestoreRunningState(attempt).catch((retryError) => {
+        logger.error('Auto-start retry failed unexpectedly:', retryError);
+        this.clearRestoreRetryState();
+        this._wasRunningBeforeDisconnect = false;
+      });
+    }, delayMs);
+  }
+
+  private async retryRestoreRunningState(attempt: number): Promise<void> {
+    if (!this._wasRunningBeforeDisconnect) {
+      return;
+    }
+
+    const lifecycle = this.deps.getEngineLifecycle();
+    if (lifecycle.getIsRunning() || lifecycle.getEngineState() === 'starting') {
+      return;
+    }
+
+    logger.info(`Retrying engine restore after temporary audio device loss (${attempt}/${AUTO_RESTORE_RETRY_DELAYS_MS.length})`);
+
+    try {
+      this.restoreStartInProgress = true;
+      await lifecycle.start();
+      this.clearRestoreRetryState();
+      this._wasRunningBeforeDisconnect = false;
+    } catch (error) {
+      if (this.shouldRetryAutoRestore(error)) {
+        this.scheduleRestoreRetry(error);
+        return;
+      }
+
+      logger.error('Auto-start retry failed:', error);
+      this.clearRestoreRetryState();
+      this._wasRunningBeforeDisconnect = false;
+    } finally {
+      this.restoreStartInProgress = false;
+    }
+  }
+
+  private clearRestoreRetryState(): void {
+    if (this.restoreRetryTimer) {
+      clearTimeout(this.restoreRetryTimer);
+      this.restoreRetryTimer = null;
+    }
+    this.restoreRetryAttempt = 0;
   }
 
   private async handleCoreCapabilitiesChanged(coreCapabilities: CoreRadioCapabilities): Promise<void> {

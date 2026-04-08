@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { RadioBridge } from '../RadioBridge.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 
 function createRadioManagerStub() {
   const emitter = new EventEmitter();
@@ -25,6 +26,10 @@ function createRadioManagerStub() {
 }
 
 describe('RadioBridge', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('projects connected state without performing connection-time frequency writes', async () => {
     const radioManager = createRadioManagerStub();
     const engineEmitter = new EventEmitter();
@@ -56,5 +61,56 @@ describe('RadioBridge', () => {
       status: RadioConnectionStatus.CONNECTED,
       tunerCapabilities: { supported: true, hasSwitch: false, hasManualTune: false },
     }));
+  });
+
+  it('retries automatic engine restore when the configured audio device is temporarily unavailable', async () => {
+    vi.useFakeTimers();
+
+    const radioManager = createRadioManagerStub();
+    let startAttempts = 0;
+    const lifecycle = {
+      getIsRunning: vi.fn().mockReturnValue(false),
+      getEngineState: vi.fn().mockReturnValue('idle'),
+      start: vi.fn(async () => {
+        startAttempts += 1;
+        if (startAttempts === 1) {
+          throw new RadioError({
+            code: RadioErrorCode.DEVICE_NOT_FOUND,
+            message: 'Configured audio input device "IC-705" is temporarily unavailable after USB reconnect',
+            userMessage: 'Configured audio input device "IC-705" is temporarily unavailable.',
+            severity: RadioErrorSeverity.ERROR,
+            context: {
+              temporaryUnavailable: true,
+              recoverable: true,
+              direction: 'input',
+              deviceName: 'IC-705',
+            },
+          });
+        }
+      }),
+      sendRadioDisconnected: vi.fn(),
+    };
+
+    const bridge = new RadioBridge({
+      engineEmitter: new EventEmitter() as any,
+      radioManager: radioManager as any,
+      frequencyManager: { findMatchingPreset: vi.fn() } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(false) } as any),
+      getEngineLifecycle: () => lifecycle as any,
+    });
+
+    bridge.wasRunningBeforeDisconnect = true;
+    await (bridge as any).restoreRunningStateIfNeeded();
+
+    expect(startAttempts).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(startAttempts).toBe(2);
+    expect(bridge.wasRunningBeforeDisconnect).toBe(false);
   });
 });
