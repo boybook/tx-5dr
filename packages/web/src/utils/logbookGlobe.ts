@@ -13,6 +13,9 @@ import { gridToCoordinates } from '@tx5dr/core';
 const REMOTE_POINT_COLOR = '#60a5fa';
 const HOME_POINT_COLOR = '#f97316';
 const ARC_BASE_COLOR = '59, 130, 246';
+const HIGHLIGHT_POINT_COLOR = '#f43f5e';
+const HIGHLIGHT_ARC_COLOR = '244, 63, 94';
+const RECENT_QSO_HIGHLIGHT_WINDOW_MS = 10 * 60 * 1000;
 
 export interface GlobeStationPoint {
   lat: number;
@@ -232,6 +235,28 @@ function getArcOpacity(startTime: number, hours: number): number {
   return Number((0.2 + freshness * 0.75).toFixed(3));
 }
 
+function getHighlightArcOpacity(startTime: number): number {
+  const ageMs = Math.max(0, Date.now() - startTime);
+  const freshness = Math.max(0, 1 - ageMs / RECENT_QSO_HIGHLIGHT_WINDOW_MS);
+  return Number((0.72 + freshness * 0.24).toFixed(3));
+}
+
+function isRecentQsoHighlightCandidate(startTime: number, now = Date.now()): boolean {
+  const ageMs = now - startTime;
+  return ageMs >= 0 && ageMs <= RECENT_QSO_HIGHLIGHT_WINDOW_MS;
+}
+
+function buildHighlightedRemoteRing(lat: number, lng: number): GlobeRing {
+  return {
+    lat,
+    lng,
+    color: ['rgba(244, 63, 94, 0.92)', 'rgba(248, 113, 113, 0.42)', 'rgba(248, 113, 113, 0.04)'],
+    maxRadius: 4.4,
+    propagationSpeed: 2.8,
+    repeatPeriod: 1400,
+  };
+}
+
 export function buildRecentQSOGlobeModel(
   payload: LogBookRecentGlobeResponse['data'],
 ): RecentQSOGlobeModel {
@@ -252,12 +277,26 @@ export function buildRecentQSOGlobeModel(
   const arcs: GlobeArc[] = [];
   const rings: GlobeRing[] = [];
   let farthestDistanceKm = 0;
+  const highlightedItem = payload.items.reduce<typeof payload.items[number] | null>((latest, item) => {
+    if (!isRecentQsoHighlightCandidate(item.startTime)) {
+      return latest;
+    }
+
+    if (!latest || item.startTime > latest.startTime) {
+      return item;
+    }
+
+    return latest;
+  }, null);
+  const highlightedGrid = highlightedItem?.grid ?? null;
 
   for (const item of payload.items) {
     const coords = gridToCoordinates(item.grid);
     if (!coords) {
       continue;
     }
+
+    const isHighlightedItem = highlightedItem?.id === item.id;
 
     const existingPoint = pointMap.get(item.grid);
     if (existingPoint) {
@@ -278,6 +317,14 @@ export function buildRecentQSOGlobeModel(
       });
     }
 
+    if (isHighlightedItem) {
+      const highlightedPoint = pointMap.get(item.grid);
+      if (highlightedPoint) {
+        highlightedPoint.color = HIGHLIGHT_POINT_COLOR;
+        highlightedPoint.size = Math.max(highlightedPoint.size, 0.9);
+      }
+    }
+
     if (homePoint) {
       const distanceKm = haversineDistanceKm(homePoint.lat, homePoint.lng, coords.lat, coords.lon);
       farthestDistanceKm = Math.max(farthestDistanceKm, distanceKm);
@@ -286,9 +333,15 @@ export function buildRecentQSOGlobeModel(
         startLng: homePoint.lng,
         endLat: coords.lat,
         endLng: coords.lon,
-        color: `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(item.startTime, payload.meta.hours)})`,
-        altitude: Math.min(0.35, 0.08 + distanceKm / 40000),
-        stroke: distanceKm > 8000 ? 0.75 : 0.5,
+        color: isHighlightedItem
+          ? `rgba(${HIGHLIGHT_ARC_COLOR}, ${getHighlightArcOpacity(item.startTime)})`
+          : `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(item.startTime, payload.meta.hours)})`,
+        altitude: isHighlightedItem
+          ? Math.min(0.4, 0.14 + distanceKm / 32000)
+          : Math.min(0.35, 0.08 + distanceKm / 40000),
+        stroke: isHighlightedItem
+          ? (distanceKm > 8000 ? 1.1 : 0.9)
+          : (distanceKm > 8000 ? 0.75 : 0.5),
         grid: item.grid,
         callsign: item.callsign,
         startTime: item.startTime,
@@ -309,7 +362,15 @@ export function buildRecentQSOGlobeModel(
     });
   }
 
+  if (highlightedGrid) {
+    const highlightedPoint = pointMap.get(highlightedGrid);
+    if (highlightedPoint) {
+      rings.push(buildHighlightedRemoteRing(highlightedPoint.lat, highlightedPoint.lng));
+    }
+  }
+
   Array.from(pointMap.values())
+    .filter((point) => point.grid !== highlightedGrid)
     .sort((a, b) => b.count - a.count)
     .slice(0, 4)
     .forEach((point, index) => {
@@ -386,6 +447,18 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
   const rings: GlobeRing[] = [];
   let farthestDistanceKm = 0;
   let droppedInvalidGrid = 0;
+  const highlightedQso = qsos.reduce<QSORecord | null>((latest, qso) => {
+    if (!qso.grid || !gridToCoordinates(qso.grid) || !isRecentQsoHighlightCandidate(qso.startTime)) {
+      return latest;
+    }
+
+    if (!latest || qso.startTime > latest.startTime) {
+      return qso;
+    }
+
+    return latest;
+  }, null);
+  const highlightedGrid = highlightedQso?.grid ?? null;
 
   for (const qso of qsos) {
     if (!qso.grid) {
@@ -398,6 +471,8 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
       droppedInvalidGrid += 1;
       continue;
     }
+
+    const isHighlightedQso = highlightedQso?.id === qso.id;
 
     const existingPoint = pointMap.get(qso.grid);
     if (existingPoint) {
@@ -418,6 +493,14 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
       });
     }
 
+    if (isHighlightedQso) {
+      const highlightedPoint = pointMap.get(qso.grid);
+      if (highlightedPoint) {
+        highlightedPoint.color = HIGHLIGHT_POINT_COLOR;
+        highlightedPoint.size = Math.max(highlightedPoint.size, 0.9);
+      }
+    }
+
     if (homePoint) {
       const distanceKm = haversineDistanceKm(homePoint.lat, homePoint.lng, coords.lat, coords.lon);
       farthestDistanceKm = Math.max(farthestDistanceKm, distanceKm);
@@ -426,9 +509,15 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
         startLng: homePoint.lng,
         endLat: coords.lat,
         endLng: coords.lon,
-        color: `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(qso.startTime, 24)})`,
-        altitude: Math.min(0.35, 0.08 + distanceKm / 40000),
-        stroke: distanceKm > 8000 ? 0.75 : 0.5,
+        color: isHighlightedQso
+          ? `rgba(${HIGHLIGHT_ARC_COLOR}, ${getHighlightArcOpacity(qso.startTime)})`
+          : `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(qso.startTime, 24)})`,
+        altitude: isHighlightedQso
+          ? Math.min(0.4, 0.14 + distanceKm / 32000)
+          : Math.min(0.35, 0.08 + distanceKm / 40000),
+        stroke: isHighlightedQso
+          ? (distanceKm > 8000 ? 1.1 : 0.9)
+          : (distanceKm > 8000 ? 0.75 : 0.5),
         grid: qso.grid,
         callsign: qso.callsign,
         startTime: qso.startTime,
@@ -449,7 +538,15 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
     });
   }
 
+  if (highlightedGrid) {
+    const highlightedPoint = pointMap.get(highlightedGrid);
+    if (highlightedPoint) {
+      rings.push(buildHighlightedRemoteRing(highlightedPoint.lat, highlightedPoint.lng));
+    }
+  }
+
   Array.from(pointMap.values())
+    .filter((point) => point.grid !== highlightedGrid)
     .sort((a, b) => b.count - a.count)
     .slice(0, 4)
     .forEach((point, index) => {

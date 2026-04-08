@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState } from '../../../store/radioStore';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
@@ -45,6 +45,21 @@ const CURRENT_CUSTOM_FREQUENCY_KEY = '__custom_frequency__';
 
 const clampWidth = (value: number, minWidth: number, maxWidth: number): number => (
   Math.min(maxWidth, Math.max(minWidth, value))
+);
+
+const ToolbarIconTooltip: React.FC<{
+  label: string;
+  children: React.ReactNode;
+}> = ({ label, children }) => (
+  <div className="relative flex items-center group/toolbar-tooltip">
+    {children}
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md bg-content1 px-2 py-1 text-[11px] text-foreground shadow-medium opacity-0 transition-opacity duration-150 group-hover/toolbar-tooltip:opacity-100"
+    >
+      {label}
+    </div>
+  </div>
 );
 
 const useMeasuredSelectWidth = (
@@ -1185,39 +1200,57 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             canOperate={isOperator}
           />
           <div className="flex items-center gap-0">
+            {radioConnection.radioConnected && (
+              <ToolbarIconTooltip label={t('control.openRadioControl')}>
+                <Button
+                  isIconOnly
+                  variant="light"
+                  size="sm"
+                  className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
+                  aria-label={t('control.openRadioControl')}
+                  onPress={() => setIsControlPanelOpen(true)}
+                >
+                  <FontAwesomeIcon icon={faSlidersH} className="text-xs" />
+                </Button>
+              </ToolbarIconTooltip>
+            )}
             {isAdmin && (
-              <Button
-                isIconOnly
-                variant="light"
-                size="sm"
-                className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
-                aria-label={t('control.radioSettings')}
-                onPress={onOpenRadioSettings}
-              >
-                <FontAwesomeIcon icon={faCog} className="text-xs" />
-              </Button>
+              <ToolbarIconTooltip label={t('control.radioSettings')}>
+                <Button
+                  isIconOnly
+                  variant="light"
+                  size="sm"
+                  className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
+                  aria-label={t('control.radioSettings')}
+                  onPress={onOpenRadioSettings}
+                >
+                  <FontAwesomeIcon icon={faCog} className="text-xs" />
+                </Button>
+              </ToolbarIconTooltip>
             )}
             {isOperator && (
-              <Popover>
-                <PopoverTrigger>
-                  <Button
-                    isIconOnly
-                    variant="light"
-                    size="sm"
-                    className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
-                    aria-label={t('control.txVolumeGain')}
-                >
-                  <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
-                </Button>
-                </PopoverTrigger>
-                <PopoverContent className="py-2 pt-3 space-y-1">
-                  <TxVolumeGainControl
-                    orientation="vertical"
-                    sliderStyle={{ height: '120px' }}
-                    ariaLabel={t('control.volumeControl')}
-                  />
-                </PopoverContent>
-              </Popover>
+              <ToolbarIconTooltip label={t('control.txVolumeGain')}>
+                <Popover>
+                  <PopoverTrigger>
+                    <Button
+                      isIconOnly
+                      variant="light"
+                      size="sm"
+                      className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
+                      aria-label={t('control.txVolumeGain')}
+                    >
+                      <FontAwesomeIcon icon={faVolumeUp} className="text-xs" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="py-2 pt-3 space-y-1">
+                    <TxVolumeGainControl
+                      orientation="vertical"
+                      sliderStyle={{ height: '120px' }}
+                      ariaLabel={t('control.volumeControl')}
+                    />
+                  </PopoverContent>
+                </Popover>
+              </ToolbarIconTooltip>
             )}
             {monitorActivationCta.shouldShowActivationCta ? (
               <Button
@@ -1233,137 +1266,138 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                 {t('monitor.activateAudioMonitor')}
               </Button>
             ) : (
-              <Popover>
-                <PopoverTrigger>
-                  <Button
-                    isIconOnly
-                    variant="light"
-                    size="sm"
-                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${audioMonitor.isPlaying ? 'text-success' : 'text-default-400'}`}
-                    aria-label={t('monitor.audioMonitor')}
-                  >
-                    <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="py-2 pt-3 space-y-2">
-                  <div className="space-y-2">
-                    {/* 监听音量滑块 */}
-                    <div className="flex flex-col items-center px-2">
-                      <Slider
-                        orientation="vertical"
-                        minValue={-60}
-                        maxValue={20}
-                        step={0.1}
-                        value={[gainToDb(monitorVolume)]}
-                        onChange={handleMonitorVolumeChange}
-                        style={{ height: '120px' }}
-                        aria-label={t('monitor.monitorVolume')}
-                      />
-                      <div className="text-sm text-default-400 text-center font-mono">
-                        {formatDbDisplay(gainToDb(monitorVolume))}
+              <ToolbarIconTooltip label={t('monitor.audioMonitor')}>
+                <Popover>
+                  <PopoverTrigger>
+                    <Button
+                      isIconOnly
+                      variant="light"
+                      size="sm"
+                      className={`min-w-unit-6 min-w-6 w-6 h-6 ${audioMonitor.isPlaying ? 'text-success' : 'text-default-400'}`}
+                      aria-label={t('monitor.audioMonitor')}
+                    >
+                      <FontAwesomeIcon icon={faHeadphones} className="text-xs" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="py-2 pt-3 space-y-2">
+                    <div className="space-y-2">
+                      {/* 监听音量滑块 */}
+                      <div className="flex flex-col items-center px-2">
+                        <Slider
+                          orientation="vertical"
+                          minValue={-60}
+                          maxValue={20}
+                          step={0.1}
+                          value={[gainToDb(monitorVolume)]}
+                          onChange={handleMonitorVolumeChange}
+                          style={{ height: '120px' }}
+                          aria-label={t('monitor.monitorVolume')}
+                        />
+                        <div className="text-sm text-default-400 text-center font-mono">
+                          {formatDbDisplay(gainToDb(monitorVolume))}
+                        </div>
                       </div>
-                    </div>
 
-                    {/* 状态指示器 */}
-                    {audioMonitor.isPlaying && (
-                      <div className="space-y-1 pt-2 border-t border-divider text-xs">
-                        {audioMonitor.stats && (
-                          <>
-                            <div className="flex justify-between items-center">
-                              {t('monitor.latency')}
-                              <span className={`font-mono ${
-                                audioMonitor.stats.latencyMs < 50 ? 'text-success' :
-                                audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
-                                'text-danger'
-                              }`}>
-                                {audioMonitor.stats.latencyMs.toFixed(0)}ms
-                              </span>
-                            </div>
+                      {/* 状态指示器 */}
+                      {audioMonitor.isPlaying && (
+                        <div className="space-y-1 pt-2 border-t border-divider text-xs">
+                          {audioMonitor.stats && (
+                            <>
+                              <div className="flex justify-between items-center">
+                                {t('monitor.latency')}
+                                <span className={`font-mono ${
+                                  audioMonitor.stats.latencyMs < 50 ? 'text-success' :
+                                  audioMonitor.stats.latencyMs < 100 ? 'text-warning' :
+                                  'text-danger'
+                                }`}>
+                                  {audioMonitor.stats.latencyMs.toFixed(0)}ms
+                                </span>
+                              </div>
 
-                            <div className="space-y-1">
                               <div className="flex justify-between items-center">
                                 {t('monitor.buffer')}
                                 <span className="font-mono text-default-400">
                                   {audioMonitor.stats.bufferFillPercent.toFixed(0)}%
                                 </span>
                               </div>
-                            </div>
 
-                            <div className="flex justify-between items-center">
-                              {t('monitor.active')}
-                              <div className={`w-2 h-2 rounded-full ${
-                                audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
-                              }`} />
-                            </div>
-                          </>
-                        )}
+                              <div className="flex justify-between items-center">
+                                {t('monitor.active')}
+                                <div className={`w-2 h-2 rounded-full ${
+                                  audioMonitor.stats.isActive ? 'bg-success animate-pulse' : 'bg-default-300'
+                                }`} />
+                              </div>
+                            </>
+                          )}
 
-                        <div className="flex justify-between items-center">
-                          {t('monitor.codec')}
-                          <span className="font-mono text-default-400 uppercase">
-                            {audioMonitor.codec}
-                          </span>
+                          <div className="flex justify-between items-center">
+                            {t('monitor.codec')}
+                            <span className="font-mono text-default-400 uppercase">
+                              {audioMonitor.codec}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            {t('monitor.transportMode')}
+                            <span className="font-mono text-default-400">
+                              {getMonitorTransportLabel(audioMonitor.transportKind)}
+                            </span>
+                          </div>
+
+                          <Button
+                            size="sm"
+                            variant="flat"
+                            color={audioMonitor.transportKind === 'ws-compat' ? 'primary' : 'warning'}
+                            className="w-full"
+                            onPress={handleSwitchMonitorTransport}
+                            isLoading={isSwitchingMonitorTransport}
+                            isDisabled={!audioMonitor.transportKind || isSwitchingMonitorTransport}
+                          >
+                            {audioMonitor.transportKind === 'ws-compat'
+                              ? t('monitor.switchToWebrtc')
+                              : t('monitor.switchToWsPcm')}
+                          </Button>
                         </div>
+                      )}
 
-                        <div className="flex justify-between items-center">
-                          {t('monitor.transportMode')}
-                          <span className="font-mono text-default-400">
-                            {getMonitorTransportLabel(audioMonitor.transportKind)}
-                          </span>
-                        </div>
-
-                        <Button
+                      <div className="flex items-center justify-center px-2 w-full pt-2 border-t border-divider">
+                        <Switch
                           size="sm"
-                          variant="flat"
-                          color={audioMonitor.transportKind === 'ws-compat' ? 'primary' : 'warning'}
-                          className="w-full"
-                          onPress={handleSwitchMonitorTransport}
-                          isLoading={isSwitchingMonitorTransport}
-                          isDisabled={!audioMonitor.transportKind || isSwitchingMonitorTransport}
-                        >
-                          {audioMonitor.transportKind === 'ws-compat'
-                            ? t('monitor.switchToWebrtc')
-                            : t('monitor.switchToWsPcm')}
-                        </Button>
+                          isSelected={audioMonitor.isPlaying}
+                          onValueChange={toggleMonitoring}
+                          aria-label={t('monitor.monitorSwitch')}
+                        />
                       </div>
-                    )}
-
-                    <div className="flex items-center justify-center px-2 w-full pt-2 border-t border-divider">
-                      <Switch
-                        size="sm"
-                        isSelected={audioMonitor.isPlaying}
-                        onValueChange={toggleMonitoring}
-                        aria-label={t('monitor.monitorSwitch')}
-                      />
                     </div>
-                  </div>
-                </PopoverContent>
-              </Popover>
+                  </PopoverContent>
+                </Popover>
+              </ToolbarIconTooltip>
             )}
             {radioMode.engineMode === 'voice' && isOperator && voiceCaptureController && (
-              <Popover>
-                <PopoverTrigger>
-                  <Button
-                    isIconOnly
-                    variant="light"
-                    size="sm"
-                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${
-                      voiceCaptureController.isPTTActive
-                        ? 'text-danger'
-                        : currentVoiceTransport
-                        ? 'text-success'
-                        : 'text-default-400'
-                    }`}
-                    aria-label={t('voiceTx.audioUplink')}
-                  >
-                    <FontAwesomeIcon icon={faMicrophone} className="text-xs" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="py-2 pt-3 space-y-2">
-                  <div className="space-y-2 text-xs">
-                    <div className="font-medium text-sm text-default-700">
-                      {t('voiceTx.audioUplink')}
-                    </div>
+              <ToolbarIconTooltip label={t('voiceTx.audioUplink')}>
+                <Popover>
+                  <PopoverTrigger>
+                    <Button
+                      isIconOnly
+                      variant="light"
+                      size="sm"
+                      className={`min-w-unit-6 min-w-6 w-6 h-6 ${
+                        voiceCaptureController.isPTTActive
+                          ? 'text-danger'
+                          : currentVoiceTransport
+                          ? 'text-success'
+                          : 'text-default-400'
+                      }`}
+                      aria-label={t('voiceTx.audioUplink')}
+                    >
+                      <FontAwesomeIcon icon={faMicrophone} className="text-xs" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="py-2 pt-3 space-y-2">
+                    <div className="space-y-2 text-xs">
+                      <div className="font-medium text-sm text-default-700">
+                        {t('voiceTx.audioUplink')}
+                      </div>
 
                     <div className="flex justify-between items-center gap-3">
                       <span className="text-default-500">{t('voiceTx.status')}</span>
@@ -1552,39 +1586,42 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                         : t('monitor.switchToWsPcm')}
                     </Button>
 
-                    {voiceCaptureController.isPTTActive && (
-                      <div className="text-[11px] text-warning text-center">
-                        {t('voiceTx.switchDisabledDuringTx')}
-                      </div>
-                    )}
-                  </div>
-                </PopoverContent>
-              </Popover>
+                      {voiceCaptureController.isPTTActive && (
+                        <div className="text-[11px] text-warning text-center">
+                          {t('voiceTx.switchDisabledDuringTx')}
+                        </div>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </ToolbarIconTooltip>
             )}
             {/* 天调控制：仅在已连接、具备权限且电台支持自动天调时显示入口 */}
             {showTunerShortcut && (
-              <Popover>
-                <PopoverTrigger>
-                  <Button
-                    isIconOnly
-                    variant="light"
-                    size="sm"
-                    className={`min-w-unit-6 min-w-6 w-6 h-6 ${
-                      tunerIsTuning
-                        ? 'text-success animate-pulse'
-                        : tunerEnabled
-                        ? 'text-success'
-                        : 'text-default-400'
-                    }`}
-                    aria-label={t('tuner.control')}
-                  >
-                    <FontAwesomeIcon icon={faSlidersH} className="text-xs" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent>
-                  <TunerCapabilitySurface />
-                </PopoverContent>
-              </Popover>
+              <ToolbarIconTooltip label={t('tuner.control')}>
+                <Popover>
+                  <PopoverTrigger>
+                    <Button
+                      isIconOnly
+                      variant="light"
+                      size="sm"
+                      className={`min-w-unit-6 min-w-6 w-6 h-6 ${
+                        tunerIsTuning
+                          ? 'text-success animate-pulse'
+                          : tunerEnabled
+                          ? 'text-success'
+                          : 'text-default-400'
+                      }`}
+                      aria-label={t('tuner.control')}
+                    >
+                      <FontAwesomeIcon icon={faSatelliteDish} className="text-xs" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent>
+                    <TunerCapabilitySurface />
+                  </PopoverContent>
+                </Popover>
+              </ToolbarIconTooltip>
             )}
           </div>
         </div>
