@@ -1,8 +1,6 @@
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import type { OperatorSlots, PluginDefinition, QSORecord } from '@tx5dr/plugin-api';
 import type {
   OperatorConfig,
-  QSORecord,
-  OperatorSlots,
 } from '@tx5dr/contracts';
 import {
   StandardQSOPluginRuntime,
@@ -15,6 +13,7 @@ import enLocale from './locales/en.json' with { type: 'json' };
  * 内置标准 QSO 策略插件
  *
  * 插件目录内直接持有标准 QSO 运行时实现，不再依赖 core 中的策略抽象。
+ * 该内建实现仍会使用部分 contracts 内部类型，不作为外部插件作者的导入示例。
  *
  * 配置来源：所有自动化设置（autoReplyToCQ 等）来自 ctx.config（operator-scope
  * plugin settings），不再依赖 RadioOperatorConfig。

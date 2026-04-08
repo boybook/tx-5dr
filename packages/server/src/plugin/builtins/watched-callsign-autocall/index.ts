@@ -1,6 +1,11 @@
-import type { FrameMessage, ParsedFT8Message, SlotInfo } from '@tx5dr/contracts';
-import { FT8MessageType } from '@tx5dr/contracts';
-import type { PluginContext, PluginDefinition } from '@tx5dr/plugin-api';
+import {
+  FT8MessageType,
+  type FrameMessage,
+  type ParsedFT8Message,
+  type PluginContext,
+  type PluginDefinition,
+  type SlotInfo,
+} from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
