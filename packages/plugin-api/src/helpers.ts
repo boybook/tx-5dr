@@ -1,6 +1,5 @@
 import type { ParsedFT8Message, SlotInfo, SlotPack, QSORecord, FrameMessage, OperatorSlots, ModeDescriptor } from '@tx5dr/contracts';
 import type { StrategyRuntimeSnapshot } from './runtime.js';
-import type { PluginSettingDescriptor, PluginQuickAction, PluginPanelDescriptor, PluginPermission, PluginType, PluginSettingScope } from '@tx5dr/contracts';
 
 // ===== KV Storage =====
 

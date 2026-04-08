@@ -3,8 +3,6 @@ import { useTranslation } from 'react-i18next';
 import {
   Button,
   Input,
-  Select,
-  SelectItem,
   Switch,
   Card,
   CardBody,

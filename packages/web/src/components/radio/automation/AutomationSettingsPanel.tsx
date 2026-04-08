@@ -317,24 +317,25 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                 const label = resolvePluginLabel(descriptor.label, plugin.name);
 
                 if (descriptor.type === 'boolean') {
+                  const isEnabled = currentValue === true;
                   return (
                     <Button
                       key={fieldId}
                       size="sm"
                       variant="light"
                       className={`h-8 w-full min-w-0 justify-between rounded-md border border-default-200/70 px-2.5 ${
-                        Boolean(currentValue) ? 'bg-primary-50 text-primary-700' : 'bg-content1 text-default-700'
+                        isEnabled ? 'bg-primary-50 text-primary-700' : 'bg-content1 text-default-700'
                       }`}
                       isDisabled={savingSettingKey === fieldId}
                       isLoading={savingSettingKey === fieldId}
                       onPress={() => {
-                        void handleBooleanToggle(plugin, entry.settingKey, !Boolean(currentValue));
+                        void handleBooleanToggle(plugin, entry.settingKey, !isEnabled);
                       }}
                     >
                       <span className="min-w-0 text-xs">{label}</span>
                       <FontAwesomeIcon
                         icon={faCheck}
-                        className={Boolean(currentValue) ? 'text-primary-600' : 'opacity-0'}
+                        className={isEnabled ? 'text-primary-600' : 'opacity-0'}
                       />
                     </Button>
                   );

@@ -17,6 +17,7 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from '@heroui/react';
+import type { ChipProps } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPuzzlePiece, faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
 import type { PluginStatus } from '@tx5dr/contracts';
@@ -47,7 +48,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
 }, ref) => {
   const { t } = useTranslation('settings');
   const [selectedPlugin, setSelectedPlugin] = useState<PluginStatus | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [_saving, setSaving] = useState(false);
   const pluginSnapshot = usePluginSnapshot();
   const plugins = pluginSnapshot.plugins;
   const [enabledDrafts, setEnabledDrafts] = useState<Record<string, boolean>>({});
@@ -422,7 +423,7 @@ const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onT
   const pluginTitle = resolvePluginName(plugin.name, plugin.name);
   const pluginDescription = resolvePluginDescription(plugin.name, plugin.description);
 
-  const statusColor = plugin.autoDisabled
+  const statusColor: ChipProps['color'] = plugin.autoDisabled
     ? 'danger'
     : (plugin.type === 'strategy'
       ? (plugin.assignedOperatorIds?.length ?? 0) > 0
@@ -467,7 +468,7 @@ const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onT
             <Chip
               size="sm"
               variant="dot"
-              color={statusColor as any}
+              color={statusColor}
               className="text-xs"
             >
               {statusLabel}

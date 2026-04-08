@@ -1,6 +1,5 @@
 import type { PluginContext } from '@tx5dr/plugin-api';
-import type { EventEmitter } from 'eventemitter3';
-import type { DigitalRadioEngineEvents, PluginLogEntry, ModeDescriptor } from '@tx5dr/contracts';
+import type { PluginLogEntry, ModeDescriptor } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { ConfigManager } from '../config/config-manager.js';

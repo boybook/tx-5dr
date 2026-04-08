@@ -19,7 +19,6 @@ import {
   type GlobeStationPoint,
   type WorkedGridLabel,
   type WorkedGridLine,
-  type WorkedGridPolygon,
 } from '../../utils/logbookGlobe';
 
 const logger = createLogger('RecentQSOGlobeCard');

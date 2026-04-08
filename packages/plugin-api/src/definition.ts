@@ -18,7 +18,7 @@ import type { StrategyRuntime } from './runtime.js';
  * @example
  * ```js
  * // Single JS file with JSDoc (low barrier):
- * /** @type {import('@tx5dr/plugin-api').PluginDefinition} *​/
+ * /** @type {import('@tx5dr/plugin-api').PluginDefinition} *\/
  * export default {
  *   name: 'my-plugin',
  *   version: '1.0.0',
