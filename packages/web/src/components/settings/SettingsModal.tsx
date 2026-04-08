@@ -24,6 +24,11 @@ import { StationInfoSettings, type StationInfoSettingsRef } from './StationInfoS
 import { OpenWebRXSettings } from './OpenWebRXSettings';
 import { useHasMinRole, useCan } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
+import type { PluginSettingsTabRef } from '../plugins/PluginSettingsTab';
+
+const PluginSettingsTab = React.lazy(() =>
+  import('../plugins/PluginSettingsTab').then(m => ({ default: m.PluginSettingsTab }))
+);
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -33,7 +38,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx';
+export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins';
 
 export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
   const { t } = useTranslation('settings');
@@ -59,6 +64,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const systemSettingsRef = useRef<SystemSettingsRef | null>(null);
   const frequencyPresetSettingsRef = useRef<FrequencyPresetSettingsRef | null>(null);
   const stationInfoSettingsRef = useRef<StationInfoSettingsRef | null>(null);
+  const pluginSettingsRef = useRef<PluginSettingsTabRef | null>(null);
 
   // 当弹窗打开时，重置到初始标签页
   useEffect(() => {
@@ -100,6 +106,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return frequencyPresetSettingsRef.current?.hasUnsavedChanges() || false;
       case 'station_info':
         return stationInfoSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'plugins':
+        return pluginSettingsRef.current?.hasUnsavedChanges() || false;
       default:
         return false;
     }
@@ -159,6 +167,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         case 'station_info':
           if (stationInfoSettingsRef.current) {
             await stationInfoSettingsRef.current.save();
+          }
+          break;
+        case 'plugins':
+          if (pluginSettingsRef.current) {
+            await pluginSettingsRef.current.save();
           }
           break;
         default:
@@ -240,6 +253,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           return '📡';
         case 'openwebrx':
           return '📻';
+        case 'plugins':
+          return '🔌';
         default:
           return '⚙️';
       }
@@ -263,6 +278,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return `📡 ${t('tab.stationInfo')}`;
       case 'openwebrx':
         return `📻 ${t('openwebrx.tabTitle')}`;
+      case 'plugins':
+        return `🔌 ${t('plugins.tabTitle', 'Plugins')}`;
       default:
         return t('modal.defaultTab');
     }
@@ -328,6 +345,13 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return <StationInfoSettings ref={stationInfoSettingsRef} onUnsavedChanges={setHasUnsavedChanges} />;
       case 'openwebrx':
         return <OpenWebRXSettings />;
+      case 'plugins':
+        return <React.Suspense fallback={<div className="text-sm text-default-400 p-4">Loading...</div>}>
+          <PluginSettingsTab
+            ref={pluginSettingsRef}
+            onUnsavedChanges={setHasUnsavedChanges}
+          />
+        </React.Suspense>;
       default:
         return null;
     }
@@ -425,6 +449,12 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                     <Tab
                       key="openwebrx"
                       title={getTabTitle('openwebrx', isMobile)}
+                    />
+                  )}
+                  {isAdmin && (
+                    <Tab
+                      key="plugins"
+                      title={getTabTitle('plugins', isMobile)}
                     />
                   )}
                 </Tabs>

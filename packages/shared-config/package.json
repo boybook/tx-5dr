@@ -9,7 +9,7 @@
     "./prettier": "./prettier.config.js"
   },
   "scripts": {
-    "build": "echo 'No build needed for shared-config'",
+    "build": "node -e \"require('node:fs').mkdirSync('dist',{recursive:true});require('node:fs').writeFileSync('dist/.keep','');console.log('No build needed for shared-config')\"",
     "dev": "echo 'No dev needed for shared-config'",
     "lint": "echo 'No lint needed for shared-config'",
     "test": "echo 'No test needed for shared-config'"

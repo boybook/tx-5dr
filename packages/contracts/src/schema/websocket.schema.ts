@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { FT8DecodeSchema } from './ft8.schema.js';
 import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
+import {
+  PluginDataPayloadSchema,
+  PluginLogEntrySchema,
+  PluginSystemSnapshotSchema,
+  PluginStatusSchema,
+  PluginUserActionPayloadSchema,
+} from './plugin.schema.js';
+import type { PluginStatus, PluginDataPayload, PluginLogEntry, PluginUserActionPayload, PluginSystemSnapshot } from './plugin.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema, TargetSelectionPriorityModeSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
@@ -44,8 +52,9 @@ export enum WSMessageType {
   OPERATORS_LIST = 'operatorsList',
   OPERATOR_STATUS_UPDATE = 'operatorStatusUpdate',
   SET_OPERATOR_CONTEXT = 'setOperatorContext',
-  SET_OPERATOR_SLOT = 'setOperatorSlot',
-  USER_COMMAND = 'userCommand',
+  SET_OPERATOR_RUNTIME_STATE = 'setOperatorRuntimeState',
+  SET_OPERATOR_RUNTIME_SLOT_CONTENT = 'setOperatorRuntimeSlotContent',
+  SET_OPERATOR_TRANSMIT_CYCLES = 'setOperatorTransmitCycles',
   START_OPERATOR = 'startOperator',
   STOP_OPERATOR = 'stopOperator',
   OPERATOR_REQUEST_CALL = 'operatorRequestCall',
@@ -129,6 +138,13 @@ export enum WSMessageType {
   PROCESS_SNAPSHOT = 'processSnapshot',
   PROCESS_SNAPSHOT_HISTORY = 'processSnapshotHistory',
 
+  // ===== 插件系统 =====
+  PLUGIN_LIST = 'pluginList',
+  PLUGIN_STATUS_CHANGED = 'pluginStatusChanged',
+  PLUGIN_DATA = 'pluginData',
+  PLUGIN_LOG = 'pluginLog',
+  PLUGIN_USER_ACTION = 'pluginUserAction',
+
   // ===== OpenWebRX SDR =====
   OPENWEBRX_LISTEN_STATUS = 'openwebrxListenStatus',
   OPENWEBRX_PROFILE_SELECT_REQUEST = 'openwebrxProfileSelectRequest',
@@ -206,6 +222,33 @@ export const PTTStatusSchema = z.object({
   isTransmitting: z.boolean(),
   operatorIds: z.array(z.string()),
 });
+
+export const OperatorRuntimeSlotSchema = z.enum(['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6']);
+export type OperatorRuntimeSlot = z.infer<typeof OperatorRuntimeSlotSchema>;
+
+export const StrategyRuntimeContextSchema = z.object({
+  targetCallsign: z.string().optional(),
+  targetGrid: z.string().optional(),
+  reportSent: z.number().optional(),
+  reportReceived: z.number().optional(),
+  actualFrequency: z.number().optional(),
+});
+export type StrategyRuntimeContext = z.infer<typeof StrategyRuntimeContextSchema>;
+
+export const StrategyRuntimeSnapshotSchema = z.object({
+  currentState: z.string(),
+  slots: z.object({
+    TX1: z.string().optional(),
+    TX2: z.string().optional(),
+    TX3: z.string().optional(),
+    TX4: z.string().optional(),
+    TX5: z.string().optional(),
+    TX6: z.string().optional(),
+  }).optional(),
+  context: StrategyRuntimeContextSchema.optional(),
+  availableSlots: z.array(z.string()).optional(),
+});
+export type StrategyRuntimeSnapshot = z.infer<typeof StrategyRuntimeSnapshotSchema>;
 
 export const LevelMeterDisplayStyleSchema = z.enum([
   's-meter-dbm',
@@ -427,19 +470,13 @@ export const OperatorStatusSchema = z.object({
     frequency: z.number().optional(),
     reportSent: z.number().optional(), // 改为number类型
     reportReceived: z.number().optional(), // 改为number类型
-    // 自动化设置
-    autoReplyToCQ: z.boolean().optional(),
-    autoResumeCQAfterFail: z.boolean().optional(),
-    autoResumeCQAfterSuccess: z.boolean().optional(),
-    replyToWorkedStations: z.boolean().optional(),
-    prioritizeNewCalls: z.boolean().optional(),
-    targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.optional(),
   }),
   strategy: z.object({
     name: z.string(),
     state: z.string(),
     availableSlots: z.array(z.string()),
   }),
+  runtime: StrategyRuntimeSnapshotSchema.optional(),
   cycleInfo: z.object({
     currentCycle: z.number(),
     isTransmitCycle: z.boolean(),
@@ -493,44 +530,48 @@ export const WSSetOperatorContextMessageSchema = WSBaseMessageSchema.extend({
   data: z.object({
     operatorId: z.string(),
     context: z.object({
-      myCall: z.string(),
-      myGrid: z.string(),
-      targetCall: z.string(),
+      myCall: z.string().optional(),
+      myGrid: z.string().optional(),
+      targetCallsign: z.string().optional(),
       targetGrid: z.string().optional(),
       frequency: z.number().optional(),
       reportSent: z.number().optional(),
       reportReceived: z.number().optional(),
-      // 自动化设置
-      autoReplyToCQ: z.boolean().optional(),
-      autoResumeCQAfterFail: z.boolean().optional(),
-      autoResumeCQAfterSuccess: z.boolean().optional(),
-      replyToWorkedStations: z.boolean().optional(),
-      prioritizeNewCalls: z.boolean().optional(),
-      targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.optional(),
     }),
   }),
 });
 
 /**
- * 设置操作员时隙消息
+ * 设置操作员运行时状态消息
  */
-export const WSSetOperatorSlotMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.SET_OPERATOR_SLOT),
+export const WSSetOperatorRuntimeStateMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_OPERATOR_RUNTIME_STATE),
   data: z.object({
     operatorId: z.string(),
-    slot: z.string(),
+    state: OperatorRuntimeSlotSchema,
   }),
 });
 
 /**
- * 用户命令消息
+ * 设置操作员运行时槽位内容消息
  */
-export const WSUserCommandMessageSchema = WSBaseMessageSchema.extend({
-  type: z.literal(WSMessageType.USER_COMMAND),
+export const WSSetOperatorRuntimeSlotContentMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT),
   data: z.object({
     operatorId: z.string(),
-    command: z.string(),
-    args: z.any(),
+    slot: OperatorRuntimeSlotSchema,
+    content: z.string(),
+  }),
+});
+
+/**
+ * 设置操作员发射周期消息
+ */
+export const WSSetOperatorTransmitCyclesMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES),
+  data: z.object({
+    operatorId: z.string(),
+    transmitCycles: z.array(z.number().min(0).max(1)),
   }),
 });
 
@@ -616,8 +657,9 @@ export type WSGetOperatorsMessage = z.infer<typeof WSGetOperatorsMessageSchema>;
 export type WSOperatorsListMessage = z.infer<typeof WSOperatorsListMessageSchema>;
 export type WSOperatorStatusUpdateMessage = z.infer<typeof WSOperatorStatusUpdateMessageSchema>;
 export type WSSetOperatorContextMessage = z.infer<typeof WSSetOperatorContextMessageSchema>;
-export type WSSetOperatorSlotMessage = z.infer<typeof WSSetOperatorSlotMessageSchema>;
-export type WSUserCommandMessage = z.infer<typeof WSUserCommandMessageSchema>;
+export type WSSetOperatorRuntimeStateMessage = z.infer<typeof WSSetOperatorRuntimeStateMessageSchema>;
+export type WSSetOperatorRuntimeSlotContentMessage = z.infer<typeof WSSetOperatorRuntimeSlotContentMessageSchema>;
+export type WSSetOperatorTransmitCyclesMessage = z.infer<typeof WSSetOperatorTransmitCyclesMessageSchema>;
 export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
 export type WSStopOperatorMessage = z.infer<typeof WSStopOperatorMessageSchema>;
 export type WSSelectedFrame = z.infer<typeof WSSelectedFrameSchema>;
@@ -990,6 +1032,39 @@ export const WSAuthExpiredMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSAuthExpiredMessage = z.infer<typeof WSAuthExpiredMessageSchema>;
 
+export const WSPluginListMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_LIST),
+  data: PluginSystemSnapshotSchema,
+});
+export type WSPluginListMessage = z.infer<typeof WSPluginListMessageSchema>;
+
+export const WSPluginStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_STATUS_CHANGED),
+  data: z.object({
+    generation: z.number().int().nonnegative(),
+    plugin: PluginStatusSchema,
+  }),
+});
+export type WSPluginStatusChangedMessage = z.infer<typeof WSPluginStatusChangedMessageSchema>;
+
+export const WSPluginDataMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_DATA),
+  data: PluginDataPayloadSchema,
+});
+export type WSPluginDataMessage = z.infer<typeof WSPluginDataMessageSchema>;
+
+export const WSPluginLogMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_LOG),
+  data: PluginLogEntrySchema,
+});
+export type WSPluginLogMessage = z.infer<typeof WSPluginLogMessageSchema>;
+
+export const WSPluginUserActionMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_USER_ACTION),
+  data: PluginUserActionPayloadSchema,
+});
+export type WSPluginUserActionMessage = z.infer<typeof WSPluginUserActionMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -1022,8 +1097,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSOperatorsListMessageSchema,
   WSOperatorStatusUpdateMessageSchema,
   WSSetOperatorContextMessageSchema,
-  WSSetOperatorSlotMessageSchema,
-  WSUserCommandMessageSchema,
+  WSSetOperatorRuntimeStateMessageSchema,
+  WSSetOperatorRuntimeSlotContentMessageSchema,
+  WSSetOperatorTransmitCyclesMessageSchema,
   WSStartOperatorMessageSchema,
   WSStopOperatorMessageSchema,
   WSOperatorRequestCallMessageSchema,
@@ -1071,6 +1147,13 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSAuthPublicViewerMessageSchema,
   WSAuthResultMessageSchema,
   WSAuthExpiredMessageSchema,
+
+  // 插件系统消息
+  WSPluginListMessageSchema,
+  WSPluginStatusChangedMessageSchema,
+  WSPluginDataMessageSchema,
+  WSPluginLogMessageSchema,
+  WSPluginUserActionMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -1222,4 +1305,10 @@ export interface DigitalRadioEngineEvents {
   openwebrxClientCount: (data: { count: number }) => void;
   openwebrxCooldownNotice: (data: { waitMs: number }) => void;
   realtimeConnectivityIssue: (data: import('./realtime.schema.js').RealtimeConnectivityIssue) => void;
+
+  // 插件系统事件
+  pluginList: (data: PluginSystemSnapshot) => void;
+  pluginStatusChanged: (data: { generation: number; plugin: PluginStatus }) => void;
+  pluginData: (data: PluginDataPayload) => void;
+  pluginLog: (data: PluginLogEntry) => void;
 }

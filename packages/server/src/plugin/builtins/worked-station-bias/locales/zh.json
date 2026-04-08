@@ -1,0 +1,10 @@
+{
+  "pluginName": "已通联偏置",
+  "pluginDescription": "根据是否曾经通联过，对候选目标的优先级打分进行加减权。",
+  "biasOverview": "评分说明",
+  "biasOverviewDesc": "该插件不会过滤任何目标，只会给新台站加分，并对已通联台站减分。",
+  "newStationBonus": "新台站加分",
+  "newStationBonusDesc": "未通联过的呼号会额外增加的分值。",
+  "workedStationPenalty": "已通联减分",
+  "workedStationPenaltyDesc": "已通联过的呼号会被扣减的分值。"
+}

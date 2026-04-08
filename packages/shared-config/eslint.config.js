@@ -12,6 +12,7 @@ export default [
       parserOptions: {
         ecmaVersion: 2021,
         sourceType: 'module',
+        warnOnUnsupportedTypeScriptVersion: false,
       },
       globals: {
         ...globals.browser,
@@ -23,6 +24,7 @@ export default [
       '@typescript-eslint': tseslint,
     },
     rules: {
+      'no-undef': 'off',
       '@typescript-eslint/no-unused-vars': 'error',
       '@typescript-eslint/no-explicit-any': 'warn',
       'prefer-const': 'error',

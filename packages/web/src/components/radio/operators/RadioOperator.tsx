@@ -3,12 +3,13 @@ import { Select, SelectItem, Input, Button, Switch, Selection, Tooltip, Popover,
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faWandMagicSparkles, faRepeat, faBook, faRotateLeft } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../../../store/radioStore';
-import type { OperatorStatus } from '@tx5dr/contracts';
+import type { OperatorRuntimeSlot, OperatorStatus, WSSetOperatorContextMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { openLogbookWindow } from '../../../utils/windowManager';
 import { addToast } from '@heroui/toast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
+import { OperatorPluginPanels } from '../../plugins/OperatorPluginPanels';
 
 const logger = createLogger('RadioOperator');
 
@@ -219,25 +220,34 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     };
   }, []);
 
-  // 发送用户命令
-  const sendUserCommand = (command: string, args: Record<string, unknown> | string) => {
-    if (connection.state.radioService) {
-      connection.state.radioService.sendUserCommand(operatorStatus.id, command, args);
-    }
-  };
+  const setOperatorContext = React.useCallback((context: WSSetOperatorContextMessage['data']['context']) => {
+    connection.state.radioService?.setOperatorContext(operatorStatus.id, context);
+  }, [connection.state.radioService, operatorStatus.id]);
+
+  const setOperatorRuntimeState = React.useCallback((state: OperatorRuntimeSlot) => {
+    connection.state.radioService?.setOperatorRuntimeState(operatorStatus.id, state);
+  }, [connection.state.radioService, operatorStatus.id]);
+
+  const setOperatorRuntimeSlotContent = React.useCallback((slot: OperatorRuntimeSlot, content: string) => {
+    connection.state.radioService?.setOperatorRuntimeSlotContent(operatorStatus.id, slot, content);
+  }, [connection.state.radioService, operatorStatus.id]);
+
+  const setOperatorTransmitCycles = React.useCallback((transmitCycles: number[]) => {
+    connection.state.radioService?.setOperatorTransmitCycles(operatorStatus.id, transmitCycles);
+  }, [connection.state.radioService, operatorStatus.id]);
 
   // 发送 localContext 到服务端
   const doSendContext = React.useCallback((ctx: typeof localContext) => {
-    sendUserCommand('update_context', {
+    setOperatorContext({
       myCall: ctx.myCall,
       myGrid: ctx.myGrid,
       targetCallsign: ctx.targetCall,
       targetGrid: ctx.targetGrid,
       frequency: ctx.frequency,
       reportSent: ctx.reportSent,
-      reportReceived: null,
+      reportReceived: ctx.reportReceived,
     });
-  }, [sendUserCommand]);
+  }, [setOperatorContext]);
 
   // 处理上下文更新（用户每次击键）
   const handleContextUpdate = (field: string, value: string | number) => {
@@ -319,13 +329,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   }, []);
 
   // 处理时隙内容变化
-  const handleSlotContentChange = (slot: string, content: string) => {
-    sendUserCommand('set_slot_content', { slot, content });
+  const handleSlotContentChange = (slot: OperatorRuntimeSlot, content: string) => {
+    setOperatorRuntimeSlotContent(slot, content);
   };
 
   // 处理快速状态切换
-  const handleQuickStateChange = (slot: string) => {
-    sendUserCommand('set_state', slot);
+  const handleQuickStateChange = (slot: OperatorRuntimeSlot) => {
+    setOperatorRuntimeState(slot);
   };
 
   // 获取当前发射周期设置
@@ -369,7 +379,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         transmitCycles = [0];
     }
     
-    sendUserCommand('set_transmit_cycles', { transmitCycles });
+    setOperatorTransmitCycles(transmitCycles);
   };
 
   // 获取当前发射内容
@@ -703,7 +713,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 setLocalTransmitCycles(newTransmitCycles);
                 
                 // 发送到服务端
-                sendUserCommand('set_transmit_cycles', { transmitCycles: newTransmitCycles });
+                setOperatorTransmitCycles(newTransmitCycles);
               }}
             >
               <div className="flex items-center gap-1">
@@ -760,13 +770,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             <Select
               selectedKeys={[operatorStatus.currentSlot || 'TX6']}
               onSelectionChange={(keys) => {
-                const slot = Array.from(keys)[0] as string;
-                if (slot && connection.state.radioService) {
-                  connection.state.radioService.sendUserCommand(
-                    operatorStatus.id,
-                    'set_state',
-                    slot
-                  );
+                const slot = Array.from(keys)[0] as OperatorRuntimeSlot | undefined;
+                if (slot) {
+                  setOperatorRuntimeState(slot);
                 }
               }}
               size="sm"
@@ -791,10 +797,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               }}
             >
               {operatorStatus.strategy.availableSlots.map((slot) => {
+                const runtimeSlot = slot as OperatorRuntimeSlot;
                 const slotContent = operatorStatus.slots?.[slot as keyof typeof operatorStatus.slots];
                 const displayText = slotContent ? `${slot}: ${slotContent}` : slot;
                 return (
-                  <SelectItem key={slot}>
+                  <SelectItem key={runtimeSlot}>
                     {displayText}
                   </SelectItem>
                 );
@@ -809,26 +816,16 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                   variant="light"
                   isIconOnly
                   onPress={() => {
-                    if (connection.state.radioService) {
-                      // 第1步：清理通联上下文
-                      connection.state.radioService.sendUserCommand(
-                        operatorStatus.id,
-                        'update_context',
-                        {
-                          targetCallsign: '',     // 清除目标呼号
-                          targetGrid: '',          // 清除目标网格
-                          reportSent: 0,           // 重置发送报告
-                          reportReceived: 0,       // 重置接收报告
-                        }
-                      );
+                    // 第1步：清理通联上下文
+                    setOperatorContext({
+                      targetCallsign: '',
+                      targetGrid: '',
+                      reportSent: 0,
+                      reportReceived: 0,
+                    });
 
-                      // 第2步：切换到 TX6 槽位
-                      connection.state.radioService.sendUserCommand(
-                        operatorStatus.id,
-                        'set_state',
-                        'TX6'
-                      );
-                    }
+                    // 第2步：切换到 TX6 槽位
+                    setOperatorRuntimeState('TX6');
                   }}
                   className="h-auto p-2 min-w-0 w-auto"
                   aria-label={t('operator.resetToCQ')}
@@ -991,11 +988,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           {operatorStatus.slots && (
             <div className="space-y-2 py-1 bg-content2 overflow-hidden rounded-lg">
               <div className="grid grid-cols-1 gap-0 text-xs">
-                {Object.entries(operatorStatus.slots).map(([slot, content]) => (
+                {Object.entries(operatorStatus.slots).map(([slot, content]) => {
+                  const runtimeSlot = slot as OperatorRuntimeSlot;
+                  return (
                   <div 
-                    key={slot} 
+                    key={runtimeSlot} 
                     className={`p-2 py-1 transition-colors duration-200 ${
-                      operatorStatus.currentSlot === slot 
+                      operatorStatus.currentSlot === runtimeSlot 
                         ? 'bg-primary-50 border-primary-200' 
                         : 'bg-content2 border-divider'
                     }`}
@@ -1004,10 +1003,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     }}
                   >
                     <div className="flex px-1 items-center gap-2">
-                      <span className="text-sm font-medium text-default-600 min-w-[30px]">{slot}:</span>
+                      <span className="text-sm font-medium text-default-600 min-w-[30px]">{runtimeSlot}:</span>
                       <Input
                         value={content || ''}
-                        onChange={(e) => handleSlotContentChange(slot, e.target.value)}
+                        onChange={(e) => handleSlotContentChange(runtimeSlot, e.target.value)}
                         size="sm"
                         variant="bordered"
                         className="flex-1 text-sm"
@@ -1017,31 +1016,34 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                         }}
                         placeholder={t('operator.emptySlot')}
                         isDisabled={!connection.state.isConnected}
-                        aria-label={t('operator.slotContent', { slot })}
+                        aria-label={t('operator.slotContent', { slot: runtimeSlot })}
                       />
                       <Button
                         size="sm"
-                        color={operatorStatus.currentSlot === slot ? "primary" : "default"}
-                        variant={operatorStatus.currentSlot === slot ? "solid" : "bordered"}
+                        color={operatorStatus.currentSlot === runtimeSlot ? "primary" : "default"}
+                        variant={operatorStatus.currentSlot === runtimeSlot ? "solid" : "bordered"}
                         isIconOnly
-                        onClick={() => handleQuickStateChange(slot)}
+                        onClick={() => handleQuickStateChange(runtimeSlot)}
                         className="h-7 w-7 min-w-7 transition-all duration-200"
                         style={{
                           transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
                         }}
                         isDisabled={!connection.state.isConnected}
-                        title={t('operator.switchToSlot', { slot })}
-                        aria-label={t('operator.switchToSlot', { slot })}
+                        title={t('operator.switchToSlot', { slot: runtimeSlot })}
+                        aria-label={t('operator.switchToSlot', { slot: runtimeSlot })}
                       >
-                        {operatorStatus.currentSlot === slot ? "●" : "○"}
+                        {operatorStatus.currentSlot === runtimeSlot ? "●" : "○"}
                       </Button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
         </div>
+
+        {isSelected && <OperatorPluginPanels operatorId={operatorStatus.id} />}
         </div>
       </div>
     </div>

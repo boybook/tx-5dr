@@ -367,11 +367,13 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.INVOKE_SPECTRUM_CONTROL]: (data: unknown, id: string) => this.handleInvokeSpectrumControl(id, data),
       [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data) => this.handleSetOperatorContext(data),
-      [WSMessageType.SET_OPERATOR_SLOT]: (data) => this.handleSetOperatorSlot(data),
-      [WSMessageType.USER_COMMAND]: (data) => this.handleUserCommand(data),
+      [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: (data) => this.handleSetOperatorRuntimeState(data),
+      [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: (data) => this.handleSetOperatorRuntimeSlotContent(data),
+      [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: (data) => this.handleSetOperatorTransmitCycles(data),
       [WSMessageType.START_OPERATOR]: (data) => this.handleStartOperator(data),
       [WSMessageType.STOP_OPERATOR]: (data) => this.handleStopOperator(data),
       [WSMessageType.OPERATOR_REQUEST_CALL]: (data) => this.handleOperatorRequestCall(data),
+      [WSMessageType.PLUGIN_USER_ACTION]: (data) => this.handlePluginUserAction(data),
       [WSMessageType.PING]: (_data, id) => { this.sendToConnection(id, WSMessageType.PONG); },
       [WSMessageType.SET_VOLUME_GAIN]: (data) => this.handleSetVolumeGain(data),
       [WSMessageType.SET_VOLUME_GAIN_DB]: (data) => this.handleSetVolumeGainDb(data),
@@ -642,10 +644,12 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.START_OPERATOR]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.STOP_OPERATOR]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.SET_OPERATOR_CONTEXT]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.SET_OPERATOR_SLOT]: { action: 'manage', subject: 'Operator' },
-    [WSMessageType.USER_COMMAND]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: { action: 'manage', subject: 'Operator' },
+    [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.OPERATOR_REQUEST_CALL]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.PLUGIN_USER_ACTION]: { action: 'manage', subject: 'Operator' },
   };
 
   // Commands that need operatorId-level data for CASL condition checks
@@ -653,10 +657,12 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.START_OPERATOR,
     WSMessageType.STOP_OPERATOR,
     WSMessageType.SET_OPERATOR_CONTEXT,
-    WSMessageType.SET_OPERATOR_SLOT,
-    WSMessageType.USER_COMMAND,
+    WSMessageType.SET_OPERATOR_RUNTIME_STATE,
+    WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT,
+    WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES,
     WSMessageType.OPERATOR_REQUEST_CALL,
     WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION,
+    WSMessageType.PLUGIN_USER_ACTION,
   ]);
 
   /**
@@ -896,50 +902,54 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
-   * 处理设置操作员时隙命令
+   * 处理设置操作员策略运行时状态命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleSetOperatorSlot(data: any): Promise<void> {
+  private async handleSetOperatorRuntimeState(data: any): Promise<void> {
     try {
-      const { operatorId, slot } = data;
-      this.digitalRadioEngine.operatorManager.setOperatorSlot(operatorId, slot);
+      const { operatorId, state } = data;
+      this.digitalRadioEngine.operatorManager.setOperatorRuntimeState(operatorId, state);
     } catch (error) {
-      this.handleCommandError(error, 'setOperatorSlot');
+      this.handleCommandError(error, 'setOperatorRuntimeState');
     }
   }
 
   /**
-   * 处理用户命令
+   * 处理设置操作员策略运行时槽位内容命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleUserCommand(data: any): Promise<void> {
+  private async handleSetOperatorRuntimeSlotContent(data: any): Promise<void> {
     try {
-      const { operatorId, command, args } = data;
-      const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
-      if (!operator) {
-        throw new Error(`Operator ${operatorId} does not exist`);
-      }
-
-      // 如果是set_transmit_cycles命令，持久化到配置文件
-      // 否则下次通过 API 更新配置时会用文件旧值覆盖内存中的新值
-      if (command === 'set_transmit_cycles' && args?.transmitCycles !== undefined) {
-        await this.digitalRadioEngine.operatorManager.persistTransmitCycles(operatorId, args.transmitCycles);
-        logger.debug('set_transmit_cycles command persisted to config file');
-      }
-
-      // 先执行 userCommand 更新内存状态（config + strategy.context + slots），
-      // 这会通过事件链触发一次 emitOperatorStatusUpdate（携带完整一致的数据）
-      operator.userCommand({ command, args });
-      logger.debug(`user command executed: operator=${operatorId}, command=${command}`, args);
-
-      // update_context 命令：仅持久化到配置文件（内存已由 userCommand 更新）
-      // 不再调用 updateOperatorContext，避免在 strategy.context 更新前产生额外广播
-      if (command === 'update_context') {
-        await this.digitalRadioEngine.operatorManager.persistOperatorContext(operatorId, args);
-        logger.debug('update_context persisted to config file');
-      }
+      const { operatorId, slot, content } = data;
+      this.digitalRadioEngine.operatorManager.setOperatorRuntimeSlotContent(operatorId, slot, content);
     } catch (error) {
-      this.handleCommandError(error, 'userCommand');
+      this.handleCommandError(error, 'setOperatorRuntimeSlotContent');
+    }
+  }
+
+  /**
+   * 处理设置操作员发射周期命令
+   */
+  private async handleSetOperatorTransmitCycles(data: any): Promise<void> {
+    try {
+      const { operatorId, transmitCycles } = data;
+      await this.digitalRadioEngine.operatorManager.setOperatorTransmitCycles(operatorId, transmitCycles);
+    } catch (error) {
+      this.handleCommandError(error, 'setOperatorTransmitCycles');
+    }
+  }
+
+  private async handlePluginUserAction(data: any): Promise<void> {
+    try {
+      const { pluginName, actionId, operatorId, payload } = data ?? {};
+      this.digitalRadioEngine.pluginManager.handlePluginUserAction(
+        pluginName,
+        actionId,
+        operatorId,
+        payload,
+      );
+    } catch (error) {
+      this.handleCommandError(error, 'pluginUserAction');
     }
   }
 
@@ -1003,9 +1013,8 @@ export class WSServer extends WSMessageHandler {
             } as SlotInfo,
           }
         : this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign, operatorId);
-      operator.requestCall(callsign, lastMessage);
-      // 调用manager中的start，来启用中途发射
-      this.digitalRadioEngine.operatorManager.startOperator(operatorId);
+      this.digitalRadioEngine.pluginManager.requestCall(operatorId, callsign, lastMessage);
+      this.digitalRadioEngine.operatorManager.emitOperatorStatusUpdate(operatorId);
     } catch (error) {
       this.handleCommandError(error, 'operatorRequestCall');
     }
@@ -1829,6 +1838,20 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.OPENWEBRX_LISTEN_STATUS, status);
     });
 
+    // ===== 插件系统事件 =====
+    this.digitalRadioEngine.on('pluginList' as any, (data: any) => {
+      this.broadcast(WSMessageType.PLUGIN_LIST, data);
+    });
+    this.digitalRadioEngine.on('pluginStatusChanged' as any, (data: any) => {
+      this.broadcast(WSMessageType.PLUGIN_STATUS_CHANGED, data);
+    });
+    this.digitalRadioEngine.on('pluginData' as any, (data: any) => {
+      this.broadcast(WSMessageType.PLUGIN_DATA, data);
+    });
+    this.digitalRadioEngine.on('pluginLog' as any, (data: any) => {
+      this.broadcast(WSMessageType.PLUGIN_LOG, data);
+    });
+
     // Forward profile select requests from engine to clients
     this.digitalRadioEngine.on('openwebrxProfileSelectRequest' as any, (data: any) => {
       logger.info('OpenWebRX profile select required, broadcasting to clients', {
@@ -1924,6 +1947,13 @@ export class WSServer extends WSMessageHandler {
         }
       } catch (error) {
         logger.error('failed to send slot pack data', error);
+      }
+
+      // 2.5 发送插件系统快照
+      try {
+        connection.send(WSMessageType.PLUGIN_LIST, this.digitalRadioEngine.pluginManager.getSnapshot());
+      } catch (error) {
+        logger.error('failed to send plugin snapshot', error);
       }
 
       // 3. 发送握手完成消息

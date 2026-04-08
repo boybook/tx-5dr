@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { ModeDescriptorSchema } from './mode.schema.js';
-import { TargetSelectionPriorityModeSchema } from './qso.schema.js';
 
 // 操作员配置 Schema (重命名以避免冲突)
 export const RadioOperatorConfigSchema = z.object({
@@ -10,14 +9,6 @@ export const RadioOperatorConfigSchema = z.object({
   myGrid: z.string().min(4, '网格坐标至少4位').max(8, '网格坐标不能超过8位').optional(),
   frequency: z.number().min(0).max(1000000000, '频率必须在0-1GHz之间').default(1000), // 音频偏移频率（Hz），默认1000Hz，创建时自动分配不重复值
   transmitCycles: z.array(z.number().min(0).max(1)).default([0]), // 0=偶数周期，1=奇数周期
-  maxQSOTimeoutCycles: z.number().min(1).max(50).default(10),
-  maxCallAttempts: z.number().min(1).max(1000).default(3),
-  autoReplyToCQ: z.boolean().default(false),
-  autoResumeCQAfterFail: z.boolean().default(false),
-  autoResumeCQAfterSuccess: z.boolean().default(false),
-  replyToWorkedStations: z.boolean().default(false), // 是否回复已通联过的电台
-  prioritizeNewCalls: z.boolean().default(true), // 是否优先选择新呼号
-  targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.default('dxcc_first'),
   mode: ModeDescriptorSchema.optional(),
   logBookId: z.string().optional(), // 连接的日志本ID，如果未指定则使用默认日志本
 });
@@ -69,18 +60,31 @@ export const RadioOperatorStatusResponseSchema = z.object({
       frequency: z.number().optional(),
       reportSent: z.number().optional(),
       reportReceived: z.number().optional(),
-      autoReplyToCQ: z.boolean().optional(),
-      autoResumeCQAfterFail: z.boolean().optional(),
-      autoResumeCQAfterSuccess: z.boolean().optional(),
-      replyToWorkedStations: z.boolean().optional(),
-      prioritizeNewCalls: z.boolean().optional(),
-      targetSelectionPriorityMode: TargetSelectionPriorityModeSchema.optional(),
     }),
     strategy: z.object({
       name: z.string(),
       state: z.string(),
       availableSlots: z.array(z.string()),
     }),
+    runtime: z.object({
+      currentState: z.string(),
+      slots: z.object({
+        TX1: z.string().optional(),
+        TX2: z.string().optional(),
+        TX3: z.string().optional(),
+        TX4: z.string().optional(),
+        TX5: z.string().optional(),
+        TX6: z.string().optional(),
+      }).optional(),
+      context: z.object({
+        targetCallsign: z.string().optional(),
+        targetGrid: z.string().optional(),
+        reportSent: z.number().optional(),
+        reportReceived: z.number().optional(),
+        actualFrequency: z.number().optional(),
+      }).optional(),
+      availableSlots: z.array(z.string()).optional(),
+    }).optional(),
     cycleInfo: z.object({
       currentCycle: z.number(),
       isTransmitCycle: z.boolean(),

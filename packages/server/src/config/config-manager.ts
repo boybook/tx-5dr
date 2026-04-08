@@ -3,13 +3,24 @@
 
 import { promises as fs } from 'fs';
 import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary, DEFAULT_DECODE_WINDOW_SETTINGS, type RealtimeTransportPolicy } from '@tx5dr/contracts';
-import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig } from '@tx5dr/contracts';
+import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio/hamlibConfigUtils.js';
 
 const logger = createLogger('ConfigManager');
+
+const LEGACY_STANDARD_QSO_SETTING_KEYS = [
+  'maxQSOTimeoutCycles',
+  'maxCallAttempts',
+  'autoReplyToCQ',
+  'autoResumeCQAfterFail',
+  'autoResumeCQAfterSuccess',
+  'replyToWorkedStations',
+  'prioritizeNewCalls',
+  'targetSelectionPriorityMode',
+] as const;
 
 // 应用配置接口
 export interface AppConfig {
@@ -80,6 +91,8 @@ export interface AppConfig {
   stationInfo?: StationInfo;
   /** OpenWebRX SDR station configurations */
   openwebrxStations?: OpenWebRXStationConfig[];
+  /** Plugin system configuration */
+  plugins?: PluginsConfig;
 }
 
 // 音频处理配置接口
@@ -255,6 +268,11 @@ export class ConfigManager {
       logger.info('Sync config migration complete');
     }
 
+    if (this.migrateLegacyStandardQSOSettings(parsedConfig)) {
+      logger.info('Legacy standard-qso operator settings migrated to plugin config');
+      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+    }
+
     // 合并默认配置和加载的配置
     this.config = this.mergeConfig(DEFAULT_CONFIG, parsedConfig);
   }
@@ -274,22 +292,8 @@ export class ConfigManager {
     const result = { ...defaultConfig };
 
     for (const key in userConfig) {
-      // 特殊处理 operators 数组：为每个操作员对象补全默认值
       if (key === 'operators' && Array.isArray(userConfig[key])) {
-        result[key] = userConfig[key].map((operator: any) => {
-          // 为每个操作员对象补全所有字段的默认值
-          return {
-            maxQSOTimeoutCycles: 10,
-            maxCallAttempts: 3,
-            autoReplyToCQ: false,
-            autoResumeCQAfterFail: false,
-            autoResumeCQAfterSuccess: false,
-            replyToWorkedStations: false,
-            prioritizeNewCalls: true,
-            targetSelectionPriorityMode: 'dxcc_first',
-            ...operator,  // 用户配置覆盖默认值
-          };
-        });
+        result[key] = userConfig[key].map((operator: any) => ({ ...operator }));
       // 特殊处理 callsignSyncConfigs：直接使用用户配置（不深度合并）
       } else if (key === 'callsignSyncConfigs' && typeof userConfig[key] === 'object') {
         result[key] = userConfig[key];
@@ -304,6 +308,48 @@ export class ConfigManager {
     }
 
     return result;
+  }
+
+  private migrateLegacyStandardQSOSettings(parsedConfig: any): boolean {
+    if (!Array.isArray(parsedConfig.operators) || parsedConfig.operators.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+    parsedConfig.plugins ??= {};
+    parsedConfig.plugins.configs ??= {};
+    parsedConfig.plugins.operatorStrategies ??= {};
+    parsedConfig.plugins.operatorSettings ??= {};
+
+    for (const operator of parsedConfig.operators) {
+      if (!operator || typeof operator !== 'object' || typeof operator.id !== 'string') {
+        continue;
+      }
+
+      const migratedSettings: Record<string, unknown> = {};
+      for (const key of LEGACY_STANDARD_QSO_SETTING_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(operator, key)) {
+          migratedSettings[key] = operator[key];
+          delete operator[key];
+          changed = true;
+        }
+      }
+
+      if (!parsedConfig.plugins.operatorStrategies[operator.id]) {
+        parsedConfig.plugins.operatorStrategies[operator.id] = 'standard-qso';
+        changed = true;
+      }
+
+      if (Object.keys(migratedSettings).length > 0) {
+        parsedConfig.plugins.operatorSettings[operator.id] ??= {};
+        parsedConfig.plugins.operatorSettings[operator.id]['standard-qso'] = {
+          ...(parsedConfig.plugins.operatorSettings[operator.id]['standard-qso'] ?? {}),
+          ...migratedSettings,
+        };
+      }
+    }
+
+    return changed;
   }
 
   // ===== Profile 迁移 =====
@@ -1170,5 +1216,60 @@ export class ConfigManager {
     this.config.openwebrxStations = stations.filter(s => s.id !== id);
     await this.saveConfig();
     logger.info('OpenWebRX station removed', { id });
+  }
+
+  // ===== 插件配置 =====
+
+  getPluginsConfig(): PluginsConfig {
+    return this.config.plugins ?? { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+  }
+
+  async setPluginConfig(name: string, entry: { enabled: boolean; settings: Record<string, unknown> }): Promise<void> {
+    if (!this.config.plugins) {
+      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+    }
+    this.config.plugins.configs = { ...(this.config.plugins.configs ?? {}), [name]: entry };
+    await this.saveConfig();
+  }
+
+  getOperatorStrategy(operatorId: string): string {
+    return this.config.plugins?.operatorStrategies?.[operatorId] ?? 'standard-qso';
+  }
+
+  async setOperatorStrategy(operatorId: string, pluginName: string): Promise<void> {
+    if (!this.config.plugins) {
+      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+    }
+    this.config.plugins.operatorStrategies = {
+      ...this.config.plugins.operatorStrategies,
+      [operatorId]: pluginName,
+    };
+    await this.saveConfig();
+    logger.info('Operator strategy updated', { operatorId, pluginName });
+  }
+
+  /** 获取某操作员某插件的 operator-scope 设置 */
+  getOperatorPluginSettings(operatorId: string, pluginName: string): Record<string, unknown> {
+    return this.config.plugins?.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+  }
+
+  /** 保存某操作员某插件的 operator-scope 设置 */
+  async setOperatorPluginSettings(
+    operatorId: string,
+    pluginName: string,
+    settings: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.config.plugins) {
+      this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {} };
+    }
+    if (!this.config.plugins.operatorSettings) {
+      this.config.plugins.operatorSettings = {};
+    }
+    if (!this.config.plugins.operatorSettings[operatorId]) {
+      this.config.plugins.operatorSettings[operatorId] = {};
+    }
+    this.config.plugins.operatorSettings[operatorId][pluginName] = settings;
+    await this.saveConfig();
+    logger.info('Operator plugin settings updated', { operatorId, pluginName });
   }
 }

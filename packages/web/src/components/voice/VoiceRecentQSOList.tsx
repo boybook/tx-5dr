@@ -3,7 +3,7 @@ import { useConnection, useOperators, useCurrentOperatorId } from '../../store/r
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { api } from '@tx5dr/core';
-import type { QSORecord } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
 
 const logger = createLogger('VoiceRecentQSOList');
 
@@ -66,8 +66,7 @@ export const VoiceRecentQSOList: React.FC<VoiceRecentQSOListProps> = ({
 
     const wsClient = radioService.wsClientInstance;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleQSORecordAdded = (data: any) => {
+    const handleQSORecordAdded: DigitalRadioEngineEvents['qsoRecordAdded'] = (data) => {
       const qsoRecord = data?.qsoRecord as QSORecord | undefined;
       if (!qsoRecord) return;
       // Only show voice-mode QSOs (exclude digital modes)
@@ -79,7 +78,7 @@ export const VoiceRecentQSOList: React.FC<VoiceRecentQSOListProps> = ({
       });
     };
 
-    const handleQSORecordUpdated = (data: any) => {
+    const handleQSORecordUpdated: DigitalRadioEngineEvents['qsoRecordUpdated'] = (data) => {
       const qsoRecord = data?.qsoRecord as QSORecord | undefined;
       if (!qsoRecord) return;
       if (DIGITAL_MODES.split(',').includes((qsoRecord.mode || '').toUpperCase())) return;
@@ -95,16 +94,12 @@ export const VoiceRecentQSOList: React.FC<VoiceRecentQSOListProps> = ({
       });
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wsClient.onWSEvent('qsoRecordAdded' as any, handleQSORecordAdded);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wsClient.onWSEvent('qsoRecordUpdated' as any, handleQSORecordUpdated);
+    wsClient.onWSEvent('qsoRecordAdded', handleQSORecordAdded);
+    wsClient.onWSEvent('qsoRecordUpdated', handleQSORecordUpdated);
 
     return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      wsClient.offWSEvent('qsoRecordAdded' as any, handleQSORecordAdded);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      wsClient.offWSEvent('qsoRecordUpdated' as any, handleQSORecordUpdated);
+      wsClient.offWSEvent('qsoRecordAdded', handleQSORecordAdded);
+      wsClient.offWSEvent('qsoRecordUpdated', handleQSORecordUpdated);
     };
   }, [connection.state.radioService]);
 

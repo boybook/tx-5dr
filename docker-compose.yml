@@ -31,6 +31,8 @@ services:
     volumes:
       # 应用配置和数据目录
       - ./data/config:/app/data/config
+      # 用户插件目录（宿主机侧直接管理）
+      - ./data/plugins:/app/data/plugins
       - ./data/logs:/app/data/logs
       - ./data/cache:/app/data/cache
       - ./data/realtime:/app/data/realtime

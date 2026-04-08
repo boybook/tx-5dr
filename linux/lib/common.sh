@@ -320,6 +320,7 @@ load_config() {
     LIVEKIT_CONFIG_FILE="${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
     CONFIG_DIR="${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}"
     DATA_DIR="${TX5DR_DATA_DIR:-/var/lib/tx5dr}"
+    PLUGIN_DIR="${DATA_DIR%/}/plugins"
     TX5DR_GITHUB_REPO="${TX5DR_GITHUB_REPO:-boybook/tx-5dr}"
     TX5DR_DOWNLOAD_BASE_URL="${TX5DR_DOWNLOAD_BASE_URL:-$default_download_base_url}"
     TX5DR_DOWNLOAD_SOURCE="${TX5DR_DOWNLOAD_SOURCE:-auto}"

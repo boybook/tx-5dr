@@ -1208,7 +1208,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     return true;
   }
 
-  private async resolveVoiceState(currentRadioFrequency: number | null): Promise<VoiceState> {
+  private async resolveVoiceState(_currentRadioFrequency: number | null): Promise<VoiceState> {
     if (!this.engine.getRadioManager().isConnected()) {
       this.cachedVoiceState = EMPTY_VOICE_STATE;
       return this.toVoiceState(this.cachedVoiceState);
