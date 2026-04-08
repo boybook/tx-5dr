@@ -20,12 +20,12 @@ export class PluginContextFactory {
   create(
     plugin: LoadedPlugin,
     operatorId: string,
-    pluginDataDir: string,
+    pluginStorageDir: string,
     onTimer: (timerId: string) => void,
     getPluginSettings: () => Record<string, unknown>,
   ): PluginContext {
-    const globalStorage = new PluginStorageProvider(`${pluginDataDir}/global.json`);
-    const operatorStorage = new PluginStorageProvider(`${pluginDataDir}/operator-${operatorId}.json`);
+    const globalStorage = new PluginStorageProvider(`${pluginStorageDir}/global.json`);
+    const operatorStorage = new PluginStorageProvider(`${pluginStorageDir}/operator-${operatorId}.json`);
 
     // 初始化存储（异步，忽略错误由 init 内部处理）
     globalStorage.init().catch(err => logger.warn('Failed to init global storage', { error: err }));

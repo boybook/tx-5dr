@@ -176,6 +176,29 @@ export const PluginSystemSnapshotSchema = z.object({
 });
 export type PluginSystemSnapshot = z.infer<typeof PluginSystemSnapshotSchema>;
 
+// ===== 插件宿主运行时信息 =====
+
+export const PluginDistributionSchema = z.enum([
+  'electron',
+  'docker',
+  'linux-service',
+  'generic-server',
+  'web-dev',
+]);
+export type PluginDistribution = z.infer<typeof PluginDistributionSchema>;
+
+export const PluginRuntimeInfoSchema = z.object({
+  pluginDir: z.string(),
+  pluginDataDir: z.string(),
+  dataDir: z.string(),
+  configDir: z.string(),
+  logsDir: z.string(),
+  cacheDir: z.string(),
+  distribution: PluginDistributionSchema,
+  hostPluginDirHint: z.string().optional(),
+});
+export type PluginRuntimeInfo = z.infer<typeof PluginRuntimeInfoSchema>;
+
 // ===== 持久化配置（存入 config.json） =====
 
 /**
