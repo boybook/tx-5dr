@@ -1,7 +1,8 @@
-// @tx5dr/plugin-api — Type definitions for TX-5DR plugin development
+// @tx5dr/plugin-api — Public development surface for TX-5DR plugins
 //
-// This package provides TypeScript types for building TX-5DR plugins.
-// It has no runtime code — only type definitions for IDE autocompletion.
+// This package provides the stable public API for building TX-5DR plugins.
+// Plugin authors should import from this package instead of reaching into
+// internal monorepo packages such as @tx5dr/contracts.
 //
 // Usage (TypeScript):
 //   import type { PluginDefinition, PluginContext } from '@tx5dr/plugin-api';
@@ -42,11 +43,24 @@ export type {
 
 // Re-export commonly used types from contracts for convenience
 export type {
+  FT8Message,
+  FT8MessageBase,
+  FT8MessageCQ,
+  FT8MessageCall,
+  FT8MessageSignalReport,
+  FT8MessageRogerReport,
+  FT8MessageRRR,
+  FT8MessageSeventyThree,
+  FT8MessageFoxRR73,
+  FT8MessageCustom,
+  FT8MessageUnknown,
   ParsedFT8Message,
   SlotInfo,
   SlotPack,
   QSORecord,
   FrameMessage,
+  ModeDescriptor,
+  OperatorSlots,
   PluginType,
   PluginPermission,
   PluginSettingDescriptor,
@@ -58,3 +72,6 @@ export type {
   PluginManifest,
   PluginStatus,
 } from '@tx5dr/contracts';
+
+// Re-export a small set of stable runtime values commonly used by plugins
+export { FT8MessageType } from '@tx5dr/contracts';

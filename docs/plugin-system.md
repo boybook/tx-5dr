@@ -56,7 +56,7 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 | **高上限** | 完整 TypeScript 项目，可实现任意复杂的通联策略 |
 | **高自由** | 策略插件可完全替换内置 QSO 决策逻辑 |
 | **清晰直观** | 声明式 settings/quickActions/panels，UI 自动生成 |
-| **IDE 友好** | `@tx5dr/plugin-api` 类型包提供完整自动补全 |
+| **IDE 友好** | `@tx5dr/plugin-api` 提供统一的公共开发接口与自动补全 |
 
 ### 什么时候需要插件？
 
@@ -226,6 +226,10 @@ settings: {
 ## 4. 完整 API 参考
 
 > **获取类型支持**：`npm install --save-dev @tx5dr/plugin-api`
+>
+> 对于独立插件项目，`@tx5dr/plugin-api` 是推荐的唯一公共开发入口。
+> 请优先从这里导入插件定义、上下文、消息类型与常用枚举，而不要直接依赖 `@tx5dr/contracts`。
+> `@tx5dr/contracts` 仍可被 TX-5DR monorepo 内部使用，但不作为外部插件的稳定公共接口。
 
 ### 4.1 PluginDefinition
 
@@ -803,8 +807,7 @@ my-plugin/
 **src/index.ts**
 
 ```typescript
-import type { PluginDefinition, PluginContext } from '@tx5dr/plugin-api';
-import type { ParsedFT8Message } from '@tx5dr/contracts';
+import type { PluginDefinition, PluginContext, ParsedFT8Message } from '@tx5dr/plugin-api';
 
 const plugin: PluginDefinition = {
   name: 'my-plugin',
@@ -861,8 +864,7 @@ yarn dev
 策略插件需要实现 `createStrategyRuntime(ctx)`，直接返回一个显式运行时对象，完整控制 QSO 流程：
 
 ```typescript
-import type { PluginDefinition, StrategyRuntime } from '@tx5dr/plugin-api';
-import type { ParsedFT8Message } from '@tx5dr/contracts';
+import type { PluginDefinition, StrategyRuntime, ParsedFT8Message } from '@tx5dr/plugin-api';
 
 const plugin: PluginDefinition = {
   name: 'simple-strategy',
