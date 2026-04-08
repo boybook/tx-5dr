@@ -40,6 +40,8 @@ import { normalizeCallsign } from '../utils/callsign.js';
 import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtils.js';
 
 const logger = createLogger('LogbooksRoute');
+const LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB = 100;
+const LOGBOOK_IMPORT_FILE_SIZE_LIMIT_BYTES = LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB * 1024 * 1024;
 
 const BAND_FREQUENCY_RANGES: Record<string, { min: number; max: number }> = {
   '160m': { min: 1800000, max: 2000000 },
@@ -94,6 +96,26 @@ function getImportPayloadFromBody(body: unknown): {
     content,
     format: 'adif',
   };
+}
+
+function isMultipartFileTooLargeError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: string }).code === 'FST_REQ_FILE_TOO_LARGE';
+}
+
+function createImportFileTooLargeError(): RadioError {
+  return new RadioError({
+    code: RadioErrorCode.INVALID_OPERATION,
+    message: `Import file exceeds ${LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB}MB limit`,
+    userMessage: `The selected import file is too large (max ${LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB}MB)`,
+    severity: RadioErrorSeverity.WARNING,
+    suggestions: [
+      `Keep the import file under ${LOGBOOK_IMPORT_FILE_SIZE_LIMIT_MB}MB and try again`,
+      'Split the ADI/ADIF file by date range and import it in multiple batches',
+    ],
+  });
 }
 
 /**
@@ -773,29 +795,42 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       let format: LogBookImportFormat;
 
       if (request.isMultipart()) {
-        const file = await request.file();
-        if (!file) {
-          throw new RadioError({
-            code: RadioErrorCode.INVALID_OPERATION,
-            message: 'Missing import file',
-            userMessage: 'Please select an import file',
-            severity: RadioErrorSeverity.WARNING,
-            suggestions: ['Choose an ADI, ADIF, or CSV file and try again'],
+        try {
+          const file = await request.file({
+            limits: {
+              fileSize: LOGBOOK_IMPORT_FILE_SIZE_LIMIT_BYTES,
+              files: 1,
+            },
           });
-        }
 
-        const buffer = await file.toBuffer();
-        content = normalizeImportText(buffer.toString('utf-8'));
-        if (!content) {
-          throw new RadioError({
-            code: RadioErrorCode.INVALID_OPERATION,
-            message: 'Import file is empty',
-            userMessage: 'The selected import file is empty',
-            severity: RadioErrorSeverity.WARNING,
-            suggestions: ['Choose a non-empty ADI, ADIF, or CSV file'],
-          });
+          if (!file) {
+            throw new RadioError({
+              code: RadioErrorCode.INVALID_OPERATION,
+              message: 'Missing import file',
+              userMessage: 'Please select an import file',
+              severity: RadioErrorSeverity.WARNING,
+              suggestions: ['Choose an ADI, ADIF, or CSV file and try again'],
+            });
+          }
+
+          const buffer = await file.toBuffer();
+          content = normalizeImportText(buffer.toString('utf-8'));
+          if (!content) {
+            throw new RadioError({
+              code: RadioErrorCode.INVALID_OPERATION,
+              message: 'Import file is empty',
+              userMessage: 'The selected import file is empty',
+              severity: RadioErrorSeverity.WARNING,
+              suggestions: ['Choose a non-empty ADI, ADIF, or CSV file'],
+            });
+          }
+          format = detectLogImportFormat(content, file.filename);
+        } catch (error) {
+          if (isMultipartFileTooLargeError(error)) {
+            throw createImportFileTooLargeError();
+          }
+          throw error;
         }
-        format = detectLogImportFormat(content, file.filename);
       } else {
         const payload = getImportPayloadFromBody(request.body);
         content = payload.content;
