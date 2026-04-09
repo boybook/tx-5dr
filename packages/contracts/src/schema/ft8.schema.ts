@@ -157,6 +157,8 @@ export const FT8MessageBaseSchema = z.object({
 export const FT8MessageCQSchema = FT8MessageBaseSchema.extend({
   type: z.literal('cq'),
   senderCallsign: z.string(),
+  // Reuses the legacy field name for compatibility. The value can be a
+  // directed-CQ modifier such as DX/EU/JA or a callback token such as 290.
   flag: z.string().optional(),
   grid: z.string().optional(),
 });
@@ -300,7 +302,7 @@ export type FT8TransmitResponse = z.infer<typeof FT8TransmitResponseSchema>;
 export type FT8MessageBase = z.infer<typeof FT8MessageBaseSchema>;
 
 /**
- * Structured CQ message with sender identity and optional grid/flag metadata.
+ * Structured CQ message with sender identity and optional grid/modifier metadata.
  */
 export type FT8MessageCQ = z.infer<typeof FT8MessageCQSchema>;
 

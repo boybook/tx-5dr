@@ -193,6 +193,38 @@ export interface IdleTransmitFrequencyOptions {
 }
 
 /**
+ * Reason codes returned by the host when evaluating whether a decoded target
+ * should be eligible for automatic CQ-style replies.
+ */
+export type AutoTargetEligibilityReason =
+  | 'non_cq_message'
+  | 'plain_cq'
+  | 'missing_callsign_identity'
+  | 'missing_target_identity'
+  | 'unsupported_activity_token'
+  | 'unsupported_callback_token'
+  | 'continent_match'
+  | 'continent_mismatch'
+  | 'dx_match'
+  | 'dx_same_continent'
+  | 'entity_match'
+  | 'entity_mismatch'
+  | 'unknown_modifier';
+
+/**
+ * Structured result returned by the host for automatic-target eligibility
+ * checks.
+ */
+export interface AutoTargetEligibilityDecision {
+  /** Whether the host would currently allow automation to react to the target. */
+  eligible: boolean;
+  /** Machine-friendly explanation of the decision. */
+  reason: AutoTargetEligibilityReason;
+  /** Directed CQ modifier/token extracted from the message, when present. */
+  modifier?: string;
+}
+
+/**
  * Read-only access to the current decode environment.
  */
 export interface BandAccess {
@@ -215,6 +247,15 @@ export interface BandAccess {
    * idle window is found.
    */
   findIdleTransmitFrequency(options?: IdleTransmitFrequencyOptions): number | null;
+
+  /**
+   * Evaluates whether the given decoded message is eligible for automatic
+   * target selection under the host's built-in CQ modifier rules.
+   *
+   * This lets third-party plugins reuse the same directed-CQ policy that the
+   * host applies to standard autocall and auto-reply flows.
+   */
+  evaluateAutoTargetEligibility(message: ParsedFT8Message): AutoTargetEligibilityDecision;
 }
 
 /**

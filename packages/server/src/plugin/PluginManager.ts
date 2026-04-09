@@ -23,6 +23,7 @@ import type { EventEmitter } from 'eventemitter3';
 import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
+import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
 import {
   BUILTIN_PLUGINS,
@@ -359,9 +360,10 @@ export class PluginManager {
     }
 
     const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
+    const automaticTargetMessages = this.filterAutomaticTargetMessages(operatorId, parsedMessages);
     const filtered = await this.dispatcher.dispatchFilterCandidates(
       operatorId,
-      parsedMessages,
+      automaticTargetMessages,
       (instance) => this.getCtxForInstance(instance),
     );
     const scored = await this.dispatcher.dispatchScoreCandidates(
@@ -950,10 +952,11 @@ export class PluginManager {
       const session = this.getOrCreateDecisionState(operator.config.id);
       session.lastDecisionTransmission = null;
       session.lastDecisionMessageSet = null;
+      const automaticTargetMessages = this.filterAutomaticTargetMessages(operator.config.id, parsedMessages);
 
       const filtered = await this.dispatcher.dispatchFilterCandidates(
         operator.config.id,
-        parsedMessages,
+        automaticTargetMessages,
         (instance) => this.getCtxForInstance(instance),
       );
       const scored = await this.dispatcher.dispatchScoreCandidates(
@@ -1093,6 +1096,81 @@ export class PluginManager {
     ));
   }
 
+  private findProposalSourceMessage(
+    proposal: AutoCallProposalResult['proposal'],
+    messages: ParsedFT8Message[],
+  ): ParsedFT8Message | undefined {
+    const exactMatch = this.findMatchedParsedMessage(proposal.lastMessage, messages);
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const proposalCallsign = proposal.callsign.trim().toUpperCase();
+    return messages.find((message) => getParsedMessageSenderCallsign(message.message) === proposalCallsign);
+  }
+
+  private filterAutomaticTargetMessages(
+    operatorId: string,
+    messages: ParsedFT8Message[],
+  ): ParsedFT8Message[] {
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator) {
+      return messages;
+    }
+
+    return messages.filter((message) => {
+      const decision = evaluateAutomaticTargetEligibility(operator.config.myCallsign, message);
+      if (decision.eligible) {
+        return true;
+      }
+
+      logger.debug('Automatic target message filtered by CQ modifier eligibility', {
+        operatorId,
+        callsign: getParsedMessageSenderCallsign(message.message),
+        modifier: decision.modifier,
+        reason: decision.reason,
+        rawMessage: message.rawMessage,
+      });
+      return false;
+    });
+  }
+
+  private isAutoCallProposalEligible(
+    operatorId: string,
+    entry: AutoCallProposalResult,
+    messages: ParsedFT8Message[],
+  ): boolean {
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator) {
+      return false;
+    }
+
+    const sourceMessage = this.findProposalSourceMessage(entry.proposal, messages);
+    if (!sourceMessage) {
+      logger.debug('Auto call proposal could not be validated against a source message, keeping proposal for compatibility', {
+        operatorId,
+        pluginName: entry.pluginName,
+        callsign: entry.proposal.callsign,
+      });
+      return true;
+    }
+
+    const decision = evaluateAutomaticTargetEligibility(operator.config.myCallsign, sourceMessage);
+    if (decision.eligible) {
+      return true;
+    }
+
+    logger.info('Auto call proposal rejected by CQ modifier eligibility', {
+      operatorId,
+      pluginName: entry.pluginName,
+      callsign: entry.proposal.callsign,
+      modifier: decision.modifier,
+      reason: decision.reason,
+      rawMessage: sourceMessage.rawMessage,
+    });
+    return false;
+  }
+
   private buildSourceSlotInfoFromParsedMessage(
     operatorId: string,
     parsedMessage: ParsedFT8Message,
@@ -1220,6 +1298,7 @@ export class PluginManager {
     }
 
     const ranked = proposals
+      .filter((entry) => this.isAutoCallProposalEligible(operatorId, entry, messages))
       .map((entry) => this.normalizeAutoCallProposal(operatorId, slotInfo, messages, entry))
       .map((entry) => ({
         ...entry,
