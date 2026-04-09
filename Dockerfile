@@ -114,6 +114,7 @@ RUN apt-get update && apt-get install -y \
     libxi6 \
     libxext6 \
     libhamlib4 \
+    udev \
     nginx \
     supervisor \
     gosu \
