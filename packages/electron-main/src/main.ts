@@ -42,6 +42,7 @@ let selectedServerPort: number | null = null;
 // 启动错误跟踪
 let errorType: string = ''; // 错误类型，空字符串表示无错误
 let hasStartupError: boolean = false; // 是否发生启动错误
+let crashedProcessName: string = ''; // 崩溃的子进程名
 let mainWindowInstance: BrowserWindow | null = null; // 主窗口实例
 let trayInstance: Tray | null = null; // 系统托盘实例（Windows/Linux）
 let isQuitting: boolean = false; // 主动退出标志，防止子进程被杀时弹崩溃错误
@@ -701,14 +702,33 @@ function createChildEnv(extraEnv: Record<string, string> = {}) {
   } as NodeJS.ProcessEnv;
 }
 
+function buildLogPathsHint(name: string): string {
+  const logPath = log.transports.file.getFile().path;
+  const logsDir = path.dirname(logPath);
+  const serverLogPath = path.join(logsDir, 'tx5dr-server.log');
+  if (name === 'server') {
+    return `Log files:\n  - ${serverLogPath}\n  - ${logPath}`;
+  }
+  return `Log files:\n  - ${logPath}\n  - ${serverLogPath}`;
+}
+
 function wireChildProcess(name: string, child: import('node:child_process').ChildProcess) {
+  const MAX_STDERR_LINES = 20;
+  const recentStderr: string[] = [];
+
   child.stdout?.on('data', (data: Buffer) => {
     const lines = data.toString().trimEnd();
     if (lines) logger.debug(`[child:${name}] ${lines}`);
   });
   child.stderr?.on('data', (data: Buffer) => {
     const lines = data.toString().trimEnd();
-    if (lines) logger.error(`[child:${name}] ${lines}`);
+    if (lines) {
+      logger.error(`[child:${name}] ${lines}`);
+      for (const line of lines.split('\n')) {
+        recentStderr.push(line);
+        if (recentStderr.length > MAX_STDERR_LINES) recentStderr.shift();
+      }
+    }
   });
 
   child.on('exit', (code, signal) => {
@@ -720,20 +740,27 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
       if (!errorType) {
         errorType = 'CRASH';
       }
+      if (!crashedProcessName) {
+        crashedProcessName = name;
+      }
       hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
       const reason = signal ? `killed by signal ${signal}` : `abnormal exit (code: ${code})`;
+      const stderrHint = recentStderr.length > 0
+        ? `\n\nRecent stderr:\n${recentStderr.join('\n')}`
+        : '';
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `${name} process ${reason}\n\nLog file: ${logPath}`);
+        `${name} process ${reason}\n\n${buildLogPathsHint(name)}${stderrHint}`);
     }
   });
 
   child.on('error', (err) => {
     logger.error(`[child:${name}] failed to start: ${err.message}`);
+    if (!crashedProcessName) {
+      crashedProcessName = name;
+    }
     hasStartupError = true;
-    const logPath = log.transports.file.getFile().path;
     dialog.showErrorBox('TX-5DR - Startup Failed',
-      `${name} process failed to start: ${err.message}\n\nLog file: ${logPath}`);
+      `${name} process failed to start: ${err.message}\n\n${buildLogPathsHint(name)}`);
   });
 }
 
@@ -1551,8 +1578,8 @@ async function createWindow() {
     if (!serverOk) {
       logger.error('backend server startup timeout');
       errorType = 'TIMEOUT';
+      crashedProcessName = crashedProcessName || 'server';
       hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
       dialog.showErrorBox('TX-5DR - Startup Failed',
         `Backend server startup timeout\n\n` +
         `Backend port: ${serverPort}\n` +
@@ -1560,7 +1587,7 @@ async function createWindow() {
         `${livekitPort ? `LiveKit signaling port: ${livekitPort}\n` : ''}` +
         `${livekitTcpPort ? `LiveKit ICE/TCP port: ${livekitTcpPort}\n` : ''}` +
         `${livekitConfigPath ? `Config file: ${livekitConfigPath}\n` : ''}` +
-        `Log file: ${logPath}\n\n` +
+        `${buildLogPathsHint('server')}\n\n` +
         'Please inspect the backend and LiveKit logs to confirm the realtime voice service is reachable.');
       return;
     }
@@ -1578,10 +1605,10 @@ async function createWindow() {
       }
       logger.error('web service startup timeout');
       errorType = 'TIMEOUT';
+      crashedProcessName = crashedProcessName || 'client-tools';
       hasStartupError = true;
-      const logPath = log.transports.file.getFile().path;
       dialog.showErrorBox('TX-5DR - Startup Failed',
-        `Web service startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}Log file: ${logPath}`);
+        `Web service startup timeout\n\n${error instanceof Error ? `${error.message}\n\n` : ''}${buildLogPathsHint('client-tools')}`);
       return;
     }
     logger.info('web service ready');
@@ -1589,10 +1616,10 @@ async function createWindow() {
 
   // 最后检查：如果子进程已经崩溃
   if (hasStartupError) {
-    logger.error('startup error detected');
-    const logPath = log.transports.file.getFile().path;
+    logger.error('startup error detected', { errorType, crashedProcessName });
+    const processHint = crashedProcessName ? ` [${crashedProcessName}]` : '';
     dialog.showErrorBox('TX-5DR - Startup Failed',
-      `Error detected during startup (${errorType})\n\nLog file: ${logPath}`);
+      `Error detected during startup (${errorType}${processHint})\n\n${buildLogPathsHint(crashedProcessName || 'server')}`);
     return;
   }
 
