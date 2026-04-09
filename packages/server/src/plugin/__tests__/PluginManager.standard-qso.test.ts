@@ -648,6 +648,87 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('does not auto-reply to a directed CQ whose modifier excludes my station identity', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      autoReplyToCQ: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'CQ EU K1ABC FN31',
+        snr: -5,
+        freq: 1200,
+      }]),
+    );
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG4IAJ OM96');
+
+    await pluginManager.shutdown();
+  });
+
+  it('auto-replies to a directed CQ when my station identity matches the modifier', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      autoReplyToCQ: true,
+    });
+
+    await (pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'CQ AS JA1AAA PM95',
+        snr: -5,
+        freq: 1200,
+      }]),
+    );
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX1');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('JA1AAA');
+
+    await pluginManager.shutdown();
+  });
+
+  it('treats CQ DX as intercontinental-only for automatic replies', async () => {
+    const sameContinent = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      autoReplyToCQ: true,
+    });
+
+    await (sameContinent.pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'CQ DX JA1AAA PM95',
+        snr: -5,
+        freq: 1200,
+      }]),
+    );
+
+    expect(sameContinent.pluginManager.getOperatorRuntimeStatus(sameContinent.operator.config.id).currentSlot).toBe('TX6');
+    expect(getCurrentTransmission(sameContinent.pluginManager, sameContinent.operator.config.id)).toBe('CQ BG4IAJ OM96');
+
+    const intercontinental = await createRuntimeHarness({
+      myCallsign: 'BG4IAJ',
+      autoReplyToCQ: true,
+    });
+
+    await (intercontinental.pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), [{
+        message: 'CQ DX K1ABC FN31',
+        snr: -5,
+        freq: 1200,
+      }]),
+    );
+
+    expect(intercontinental.pluginManager.getOperatorRuntimeStatus(intercontinental.operator.config.id).currentSlot).toBe('TX1');
+    expect(intercontinental.pluginManager.getOperatorRuntimeStatus(intercontinental.operator.config.id).context?.targetCallsign).toBe('K1ABC');
+
+    await sameContinent.pluginManager.shutdown();
+    await intercontinental.pluginManager.shutdown();
+  });
+
   it('filters candidates with snr-filter using the configured threshold', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       pluginConfigs: {
@@ -1223,6 +1304,48 @@ describe('PluginManager standard-qso late re-decision', () => {
     );
     expect(reloadedFiltered).toHaveLength(2);
     expect(pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === 'dynamic-filter')?.version).toBe('1.1.0');
+
+    await pluginManager.shutdown();
+  });
+
+  it('exposes automatic target eligibility checks through the public plugin context', async () => {
+    const { dataDir, operator, pluginManager } = await createRuntimeHarness({
+      pluginConfigs: {
+        'eligibility-filter': {
+          enabled: true,
+          settings: {},
+        },
+      },
+    });
+
+    await writeUserPlugin(dataDir, 'eligibility-filter', `
+      export default {
+        name: 'eligibility-filter',
+        version: '1.0.0',
+        type: 'utility',
+        hooks: {
+          onFilterCandidates(candidates, ctx) {
+            return candidates.filter((candidate) => {
+              const decision = ctx.band.evaluateAutoTargetEligibility(candidate);
+              return decision.eligible || decision.reason === 'continent_match';
+            });
+          },
+        },
+      };
+    `);
+
+    await pluginManager.rescanPlugins();
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ EU K1ABC FN31', -5, 1200),
+        createParsedMessage('CQ AS JA1AAA PM95', -6, 1400),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['JA1AAA']);
 
     await pluginManager.shutdown();
   });

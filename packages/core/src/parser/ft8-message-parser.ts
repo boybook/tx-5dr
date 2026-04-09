@@ -235,22 +235,33 @@ export class FT8MessageParser {
 
   /**
    * 解析CQ消息
-   * 格式: CQ [FLAG] CALLSIGN [GRID]
-   * 说明: FLAG 常见为 DX/NA/EU/AS/AF/OC/SA/JA/TEST/POTA 等，仅由字母组成
+   * 格式: CQ [MODIFIER] CALLSIGN [GRID]
+   * 说明:
+   * - MODIFIER 可能是定向 CQ 修饰词（DX/NA/EU/AS/AF/OC/SA/JA/BG 等）
+   * - 也可能是 WSJT-X 的回呼令牌（如 290）
+   * - 当前 schema 仍复用 `flag` 字段承载该 token
    */
   private static parseCQMessage(parts: string[], _rawMessage: string): FT8Message {
     let callsignIndex = 1;
     let flag: string | undefined;
 
-    // 连续吸收 CQ 后面出现的字母标记（不含数字，长度1-5），直到遇到有效呼号为止
-    // 例如：CQ NA BI1ABC PM95、CQ EU BI1ABC、CQ TEST BG5DRB PL09
-    const isLettersOnlyFlag = (token: string) => /^[A-Z]{1,5}$/.test(token);
+    const candidateModifier = parts[1];
+    const candidateCallsign = parts[2];
+    const isModifierToken = (token: string) => /^[A-Z0-9]{1,5}$/.test(token);
 
-    // 逐个检查可能的FLAG，但在遇到有效呼号时停止
-    while (parts.length > callsignIndex && isLettersOnlyFlag(parts[callsignIndex]) && !this.isValidCallsign(parts[callsignIndex])) {
-      // 仅保留第一个标记作为 flag（协议字段目前只有一个）
-      if (!flag) flag = parts[callsignIndex];
-      callsignIndex += 1;
+    // 支持 CQ 后单个修饰词/回呼令牌：
+    // - CQ EU BG2LNA PN42
+    // - CQ JA JA1ABC PM95
+    // - CQ 290 K1ABC FN42
+    if (
+      candidateModifier
+      && candidateCallsign
+      && isModifierToken(candidateModifier)
+      && !this.isValidCallsign(candidateModifier)
+      && this.isValidCallsign(candidateCallsign)
+    ) {
+      flag = candidateModifier;
+      callsignIndex = 2;
     }
 
     if (parts.length <= callsignIndex) {

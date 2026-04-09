@@ -6,6 +6,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { PluginStorageProvider } from './PluginStorageProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
+import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
 
 const logger = createLogger('PluginContextFactory');
@@ -36,7 +37,7 @@ export class PluginContextFactory {
     const operatorControl = this.createOperatorControl(operatorId);
     const radioControl = this.createRadioControl();
     const logbookAccess = this.createLogbookAccess(operatorId);
-    const bandAccess = this.createBandAccess();
+    const bandAccess = this.createBandAccess(operatorId);
 
     const ctx: PluginContext = {
       get config() {
@@ -179,7 +180,7 @@ export class PluginContextFactory {
     };
   }
 
-  private createBandAccess() {
+  private createBandAccess(operatorId: string) {
     const deps = this.deps;
     return {
       getActiveCallers() {
@@ -214,6 +215,10 @@ export class PluginContextFactory {
           options?.guardHz,
         );
         return typeof result === 'number' && Number.isFinite(result) ? result : null;
+      },
+      evaluateAutoTargetEligibility(message: import('@tx5dr/contracts').ParsedFT8Message) {
+        const operatorCallsign = deps.getOperatorById(operatorId)?.config.myCallsign ?? '';
+        return evaluateAutomaticTargetEligibility(operatorCallsign, message);
       },
     };
   }

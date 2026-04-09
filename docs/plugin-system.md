@@ -449,6 +449,25 @@ interface LogbookAccess {
 interface BandAccess {
   getActiveCallers(): ParsedFT8Message[];  // 当前时隙的 CQ 台列表
   getLatestSlotPack(): SlotPack | null;   // 最新解码包
+  findIdleTransmitFrequency(options?: IdleTransmitFrequencyOptions): number | null;
+  evaluateAutoTargetEligibility(message: ParsedFT8Message): {
+    eligible: boolean;
+    reason:
+      | 'non_cq_message'
+      | 'plain_cq'
+      | 'missing_callsign_identity'
+      | 'missing_target_identity'
+      | 'unsupported_activity_token'
+      | 'unsupported_callback_token'
+      | 'continent_match'
+      | 'continent_mismatch'
+      | 'dx_match'
+      | 'dx_same_continent'
+      | 'entity_match'
+      | 'entity_mismatch'
+      | 'unknown_modifier';
+    modifier?: string;
+  };
 }
 ```
 
@@ -622,8 +641,56 @@ Fire-and-forget，不阻塞主流程，错误只记录不影响其他插件。
 - **只用于 utility 插件**：策略插件继续通过 `StrategyRuntime` 决定流程；proposal hook 主要用于“守候型”“发现型”“机会型”自动起呼工具插件
 - **未命中就返回空**：当前时隙不满足条件时返回 `null` / `undefined`；不要返回空字符串或无效对象
 - **尽量附带 `lastMessage`**：这样 Host 可以在同优先级下按命中的消息顺序稳定排序，也能更好保留触发时隙上下文
+- **`lastMessage.slotInfo` 必须表达“触发消息所属时隙”**：不要把它当成“当前 hook 被调用时的时隙”。自动起呼最终会根据这条消息所在的 RX 时隙来推导下一个 TX 周期，若时隙写错，就可能出现同一时隙误发
 - **插件内部仍负责业务过滤**：例如 trigger mode、是否被其他操作员占用、是否忽略 deleted DXCC、是否满足自己的黑白名单规则
 - **最终是否真的起呼以 Host 为准**：Host 只会在“纯待机”状态接受 proposal——即当前未发射、策略处于待机槽位，且没有已锁定目标
+- **Host 会再做一次统一的“自动目标资格过滤”**：即使插件自己命中了某条 CQ，只要这条 CQ 的 directed token（如 `EU` / `DX` / `JA` / `290` / `POTA`）判定为“不应自动回复”，proposal 仍会被 Host 拒绝
+
+#### 自动起呼时隙语义
+
+自动起呼最容易踩坑的点，不是优先级，而是**时隙语义**：
+
+- `onAutoCallCandidate(slotInfo, messages, ctx)` 中的 `slotInfo` 表示当前这次 Host 广播对应的时隙上下文
+- 但 `messages` 里的每条解码，才真正代表“哪一个 RX 时隙收到的消息”
+- 对于自动起呼来说，后续实际选择哪个 TX 周期，应以**命中的那条消息所属时隙**为准，而不是简单以当前 hook 参数里的 `slotInfo` 为准
+
+推荐规则：
+
+- 如果你能准确拿到触发消息的来源时隙，就把它写进 `lastMessage.slotInfo`
+- 如果你返回的只是当前命中的 `ParsedFT8Message`，Host 也会尽量按消息自身的 `timestamp/slotId` 去恢复正确来源时隙
+- 无论插件内部如何实现，都应保证“收到对方某一时隙的 CQ，自己应在下一相反时隙回复”，而不是在同一时隙直接发射
+
+#### 统一的自动目标资格过滤
+
+从当前版本开始，**自动回复 CQ** 与 **自动起呼 proposal** 共享同一套宿主级资格判定逻辑。它的目标不是“解析所有 CQ 花样”，而是：
+
+- 能明确判断时，自动化按规则放行
+- 不能明确判断时，自动化默认保守拒绝，避免误呼叫
+
+当前规则如下：
+
+- **普通 CQ**：`CQ CALL GRID` 正常允许
+- **大洲定向 CQ**：`CQ EU` / `CQ AS` / `CQ NA` / `CQ SA` / `CQ AF` / `CQ OC` / `CQ AN`
+  - 宿主会根据**自己的呼号**推导自己所属的 continent / DXCC 归属
+  - 只有当自己身份命中对应大洲时，才允许自动回复
+- **`CQ DX`**：
+  - 按 HF 常见操作语义处理为“**本洲之外**”才允许自动回复
+  - 如果宿主无法可靠解析自己或对方的归属，则保守拒绝
+- **前缀 / 实体型定向 CQ**：例如 `CQ JA` / `CQ BG` / `CQ BY`
+  - 宿主会尝试把 token 解释为 DXCC 前缀/实体
+  - 只有当该 token 与自己的 DXCC 归属一致时，才允许自动回复
+- **数字回呼 token**：例如 `CQ 290 K1ABC FN42`
+  - 当前自动化不支持，统一拒绝
+- **活动 / 身份 / 竞赛 token**：例如 `CQ POTA` / `CQ SOTA` / `CQ WWFF` / `CQ QRP` / `CQ TEST`
+  - 当前统一按保守策略拒绝
+- **未知或歧义 token**：
+  - 当前统一拒绝，而不是猜测语义
+
+兼容性约束：
+
+- 这套过滤只影响**自动化**，不影响用户手动点呼
+- 非 CQ 的直接对我呼叫、报告交换、`RRR` / `73` 等消息，不走 CQ directed token 过滤
+- `FT8MessageCQ.flag` 这个字段名为了兼容仍然保留，但语义应理解为“**CQ modifier / directed token**”，不再只是狭义的区域 flag
 
 #### Autocall Execution Hook（自动起呼执行策略）
 
@@ -664,6 +731,29 @@ ctx.band.findIdleTransmitFrequency({
 - 这个 API 暴露在 `plugin-api` 层，而不是要求插件自行实现频谱占用分析
 - 当前底层直接复用了系统内部已有的空闲频率选择逻辑（`SlotPackManager.findBestTransmitFrequency(...)`）
 - 当宿主暂时无法计算，或当前时隙没有合适空闲窗口时，会返回 `null`
+
+#### 自动目标资格 API
+
+如果第三方插件也想复用宿主内置的 directed CQ / modifier 判定，而不是自己手写一套规则，可直接使用：
+
+```typescript
+const decision = ctx.band.evaluateAutoTargetEligibility(candidate);
+
+if (!decision.eligible) {
+  ctx.log.debug('Target rejected by host eligibility rules', {
+    reason: decision.reason,
+    modifier: decision.modifier,
+    message: candidate.rawMessage,
+  });
+}
+```
+
+- 这个接口返回的就是 Host 当前对“这条消息是否允许自动化响应”的最终判断
+- 最常见用法：
+  - 在 `onFilterCandidates(...)` 中直接过滤不合格目标
+  - 在 `onAutoCallCandidate(...)` 中先检查，再决定是否提议自动起呼
+  - 在自定义面板或日志中展示“为什么这条 CQ 没有被自动跟进”
+- 它与 Host 内部用于 `standard-qso` 自动回复 CQ、proposal 型自动起呼仲裁前校验的是同一套规则
 
 #### Autocall Priority 约定
 
@@ -1090,6 +1180,12 @@ export default plugin;
 | `maxQSOTimeoutCycles` | number | 6 | QSO 超时的最大周期数 |
 | `maxCallAttempts` | number | 5 | TX1 状态最大呼叫次数 |
 
+补充说明：
+
+- `autoReplyToCQ` 不再是“看到任何 CQ 就回复”
+- 宿主会先基于自己的呼号归属（continent / DXCC / 前缀实体）和 CQ modifier 语义，判断这条 CQ 是否属于“允许自动回复的目标”
+- 因此 `CQ EU ...` / `CQ DX ...` / `CQ JA ...` / `CQ 290 ...` / `CQ POTA ...` 这类消息，都会先过统一资格过滤，再进入 `standard-qso` 的正常目标选择流程
+
 #### QuickActions
 
 以下开关出现在右上角自动化下拉面板中（均为 toggle 类型）：
@@ -1172,6 +1268,7 @@ export default plugin;
 - `watchList` 纯文本默认按完整呼号精确匹配；只要写入正则语法，就按正则规则匹配，例如 `^JA` 可实现前缀守候
 - `watchList` 允许保留以 `#` 开头的注释行，便于维护大名单
 - 所有触发模式都会额外包含“直接对我呼叫”的情况
+- 当触发源是 CQ 时，命中后仍要通过宿主统一的自动目标资格过滤；例如 `CQ EU ...`、`CQ DX ...`、`CQ POTA ...` 不会因为进入 watch list 就被无条件自动呼叫
 
 #### Settings（均为 operator scope）
 
@@ -1193,6 +1290,7 @@ export default plugin;
 - 依赖 Host 在插件运行时为 `ParsedFT8Message.logbookAnalysis` 注入当前 operator 视角的日志本分析结果
 - `watchNewDxcc` 会忽略 `dxccStatus='deleted'` 的实体
 - 与其他自动起呼插件通过 `autocallPriority` 做确定性仲裁，而不是靠广播 Hook 的竞态先后
+- 当触发源是 CQ 时，同样受宿主统一的 directed CQ / modifier 过滤约束；“新 DXCC”并不会绕过 `CQ EU` / `CQ DX` / `CQ POTA` 这类资格判断
 
 #### Settings（均为 operator scope）
 

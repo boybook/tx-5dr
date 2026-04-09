@@ -51,6 +51,8 @@ export type {
   LogbookAccess,
   BandAccess,
   IdleTransmitFrequencyOptions,
+  AutoTargetEligibilityReason,
+  AutoTargetEligibilityDecision,
   UIBridge,
 } from './helpers.js';
 

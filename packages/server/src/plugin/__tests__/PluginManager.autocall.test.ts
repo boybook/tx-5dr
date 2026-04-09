@@ -282,6 +282,108 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     expect(operator.isTransmitting).toBe(true);
   });
 
+  it('rejects watched autocall proposals when a directed CQ modifier excludes my station identity', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['K1ABC'],
+          triggerMode: 'cq',
+          autocallPriority: 100,
+        },
+      },
+    });
+
+    const slotInfo = createSlotInfo(75_000);
+    const slotPack = createSlotPack(slotInfo, [
+      { message: 'CQ EU K1ABC FN31', freq: 1100 },
+    ]);
+
+    eventEmitter.emit('slotStart', slotInfo, slotPack);
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+  });
+
+  it('treats CQ DX as intercontinental-only for watched autocall proposals', async () => {
+    const sameContinent = await createHarness({
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['JA1AAA'],
+          triggerMode: 'cq',
+          autocallPriority: 100,
+        },
+      },
+    });
+
+    const sameSlot = createSlotInfo(75_000);
+    sameContinent.eventEmitter.emit('slotStart', sameSlot, createSlotPack(sameSlot, [
+      { message: 'CQ DX JA1AAA PM95', freq: 1100 },
+    ]));
+    await flushAsyncWork();
+
+    expect(sameContinent.operator.isTransmitting).toBe(false);
+    expect(sameContinent.pluginManager.getOperatorRuntimeStatus(sameContinent.operator.config.id).context?.targetCallsign).toBeUndefined();
+
+    const intercontinental = await createHarness({
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['K1ABC'],
+          triggerMode: 'cq',
+          autocallPriority: 100,
+        },
+      },
+    });
+
+    const dxSlot = createSlotInfo(90_000);
+    intercontinental.eventEmitter.emit('slotStart', dxSlot, createSlotPack(dxSlot, [
+      { message: 'CQ DX K1ABC FN31', freq: 1100 },
+    ]));
+    await flushAsyncWork();
+
+    expect(intercontinental.operator.isTransmitting).toBe(true);
+    expect(intercontinental.pluginManager.getOperatorRuntimeStatus(intercontinental.operator.config.id).context?.targetCallsign).toBe('K1ABC');
+  });
+
+  it('conservatively rejects watched novelty autocall on unsupported activity modifiers', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'watched-novelty-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-novelty-autocall': {
+          watchNewDxcc: true,
+          triggerMode: 'cq',
+          autocallPriority: 80,
+        },
+      },
+      analyzeCallsign: async (callsign) => ({
+        callsign,
+        isNewDxccEntity: true,
+        dxccStatus: 'current',
+        dxccEntity: 'Fresh DX',
+      }),
+    });
+
+    const slotInfo = createSlotInfo(105_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ POTA DX2CCC OJ11' },
+    ]));
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+  });
+
   it('uses the matched decode slot to choose the reply cycle for autocall proposals', async () => {
     const { eventEmitter, operator, pluginManager } = await createHarness({
       pluginConfigs: {
