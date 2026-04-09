@@ -80,6 +80,14 @@ export interface PluginManagerDeps {
  * 将 LoadedPlugin + 运行时状态合并为 PluginStatus（用于推送前端）
  */
 export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance): PluginStatus {
+  const capabilities: PluginStatus['capabilities'] = [];
+  if (plugin.definition.hooks?.onAutoCallCandidate) {
+    capabilities.push('auto_call_candidate');
+  }
+  if (plugin.definition.hooks?.onConfigureAutoCallExecution) {
+    capabilities.push('auto_call_execution');
+  }
+
   return {
     name: plugin.definition.name,
     type: plugin.definition.type,
@@ -98,6 +106,7 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
     quickSettings: plugin.definition.quickSettings,
     panels: plugin.definition.panels,
     permissions: plugin.definition.permissions,
+    capabilities: capabilities.length > 0 ? capabilities : undefined,
     locales: plugin.locales,
   };
 }

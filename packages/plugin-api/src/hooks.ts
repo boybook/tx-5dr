@@ -86,6 +86,14 @@ export interface AutoCallExecutionRequest {
   callsign: string;
   /** Slot that is currently being processed when the autocall starts. */
   slotInfo: SlotInfo;
+  /**
+   * Source receive slot that produced the accepted proposal.
+   *
+   * Execution-stage plugins should prefer this slot when they need to inspect
+   * the decode environment that triggered the autocall, such as picking a
+   * quieter transmit offset from the previous RX slot.
+   */
+  sourceSlotInfo?: SlotInfo;
   /** Optional triggering frame context preserved from the proposal stage. */
   lastMessage?: LastMessageInfo;
 }

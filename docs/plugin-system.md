@@ -31,7 +31,7 @@
    - 6.5 [qso-session-inspector（广播 Hook + 面板示例）](#65-qso-session-inspector广播-hook--面板示例)
    - 6.6 [watched-callsign-autocall（待机守候自动起呼）](#66-watched-callsign-autocall待机守候自动起呼)
    - 6.7 [watched-novelty-autocall（守候新类型自动起呼）](#67-watched-novelty-autocall守候新类型自动起呼)
-   - 6.8 [autocall-controls（自动起呼通用设置）](#68-autocall-controls自动起呼通用设置)
+   - 6.8 [autocall-idle-frequency（自动起呼自动择频）](#68-autocall-idle-frequency自动起呼自动择频)
    - 6.9 [heartbeat-demo（timer + button quickAction 示例）](#69-heartbeat-demotimer--button-quickaction-示例)
 7. [插件系统架构](#7-插件系统架构)
    - 7.1 [生命周期](#71-生命周期)
@@ -186,7 +186,7 @@ packages/server/src/plugin/builtins/
 │   └── locales/
 │       ├── zh.json
 │       └── en.json
-├── autocall-controls/
+├── autocall-idle-frequency/
 │   ├── index.ts
 │   └── locales/
 │       ├── zh.json
@@ -702,6 +702,7 @@ Fire-and-forget，不阻塞主流程，错误只记录不影响其他插件。
     sourcePluginName: string;
     callsign: string;
     slotInfo: SlotInfo;
+    sourceSlotInfo?: SlotInfo;
     lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
   };
   plan: {
@@ -713,7 +714,8 @@ Fire-and-forget，不阻塞主流程，错误只记录不影响其他插件。
 - 这一步发生在仲裁之后、真正 `requestCall(...)` 之前
 - 适合放“命中后怎么执行”的共享策略，而不是“是否命中目标”的发现逻辑
 - 多个插件会按 utility pipeline 顺序依次修改 `plan`，因此比在 Host 中硬编码读取某个插件配置更透明，也更便于组合
-- 当前内置的 `autocall-controls` 就使用这个 hook 来决定是否先切到更空闲的发射音频频率
+- `request.slotInfo` 表示“当前准备开始自动起呼的发射时隙”，`request.sourceSlotInfo` 表示“触发该 proposal 的来源接收时隙”
+- 当前内置的 `autocall-idle-frequency` 就使用这个 hook，基于 `request.sourceSlotInfo` 来决定是否先切到更空闲的发射音频频率
 
 #### 空闲频率选择 API
 
@@ -721,7 +723,7 @@ Fire-and-forget，不阻塞主流程，错误只记录不影响其他插件。
 
 ```typescript
 ctx.band.findIdleTransmitFrequency({
-  slotId: request.slotInfo.id,
+  slotId: request.sourceSlotInfo?.id,
   minHz: 300,
   maxHz: 3000,
   guardHz: 100,
@@ -731,6 +733,7 @@ ctx.band.findIdleTransmitFrequency({
 - 这个 API 暴露在 `plugin-api` 层，而不是要求插件自行实现频谱占用分析
 - 当前底层直接复用了系统内部已有的空闲频率选择逻辑（`SlotPackManager.findBestTransmitFrequency(...)`）
 - 当宿主暂时无法计算，或当前时隙没有合适空闲窗口时，会返回 `null`
+- 对自动起呼场景，通常应分析“来源接收时隙”而不是“当前发射时隙”，否则很可能拿不到实际触发 proposal 的解码环境
 
 #### 自动目标资格 API
 
@@ -1303,15 +1306,17 @@ export default plugin;
 | `triggerMode` | string | `'cq'` | 触发条件：`cq` / `cq-or-signoff` / `any` |
 | `autocallPriority` | number | `80` | 自动起呼优先级；默认低于守候呼号插件 |
 
-### 6.8 autocall-controls（自动起呼通用设置）
+### 6.8 autocall-idle-frequency（自动起呼自动择频）
 
-**位置**：`packages/server/src/plugin/builtins/autocall-controls/`
+**位置**：`packages/server/src/plugin/builtins/autocall-idle-frequency/`
 
-这是一个“共享行为配置”插件：它不负责发现目标，也不直接参与 proposal 仲裁，而是通过 `onConfigureAutoCallExecution(...)` 统一控制 **任意自动起呼 proposal 被 Host 接受之后，该怎么执行**。
+这是一个“自动起呼执行层”插件：它不负责发现目标，也不直接参与 proposal 仲裁，而是通过 `onConfigureAutoCallExecution(...)` 只做一件事：**在自动起呼真正开始前，为当前 operator 自动挑选更空闲的发射音频频率**。
 
-当前内置的第一项共享策略是：
+当前实现要点：
 
-- `autoSelectIdleFrequency`：在自动起呼真正开始前，调用 `ctx.band.findIdleTransmitFrequency(...)` 复用宿主已有的空闲频率选择能力，自动为当前操作员挑选更空闲的发射音频频率
+- 仅当 `autoSelectIdleFrequency=true` 时生效
+- 使用 `request.sourceSlotInfo` 对应的**来源接收时隙**调用 `ctx.band.findIdleTransmitFrequency(...)`
+- 如果 proposal 没有来源时隙，或宿主在该来源时隙中找不到合适空隙，则明确跳过，不做隐式兜底
 
 这样做的好处是：
 
@@ -1323,8 +1328,7 @@ export default plugin;
 
 | Key | 类型 | 默认值 | 说明 |
 |-----|------|--------|------|
-| `autocallControlsOverview` | info | `''` | 场景说明：集中放置所有自动起呼共享执行策略 |
-| `autoSelectIdleFrequency` | boolean | `false` | 自动起呼命中后，先为当前操作员挑选当前时隙内更空闲的发射音频频率，再开始起呼 |
+| `autoSelectIdleFrequency` | boolean | `false` | 自动起呼命中后，先基于触发该 proposal 的接收时隙，为当前 operator 挑选更空闲的发射音频频率，再开始起呼 |
 
 ### 6.9 heartbeat-demo（timer + button quickAction 示例）
 
@@ -1618,7 +1622,7 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
 | callsign-prefix-filter 示例 | `packages/server/src/plugin/builtins/callsign-prefix-filter/index.ts` |
 | worked-station-bias 示例 | `packages/server/src/plugin/builtins/worked-station-bias/index.ts` |
 | qso-session-inspector 示例 | `packages/server/src/plugin/builtins/qso-session-inspector/index.ts` |
-| autocall-controls 示例 | `packages/server/src/plugin/builtins/autocall-controls/index.ts` |
+| autocall-idle-frequency 示例 | `packages/server/src/plugin/builtins/autocall-idle-frequency/index.ts` |
 | watched-callsign-autocall 示例 | `packages/server/src/plugin/builtins/watched-callsign-autocall/index.ts` |
 | watched-novelty-autocall 示例 | `packages/server/src/plugin/builtins/watched-novelty-autocall/index.ts` |
 | heartbeat-demo 示例 | `packages/server/src/plugin/builtins/heartbeat-demo/index.ts` |
