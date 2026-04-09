@@ -1,0 +1,8 @@
+{
+  "pluginName": "Shared Autocall Controls",
+  "pluginDescription": "Configure how accepted automatic-call proposals are executed across all autocall plugins.",
+  "autocallControlsOverview": "Use Cases",
+  "autocallControlsOverviewDesc": "These settings apply to every automatic-call proposal plugin instead of belonging to a single watcher. Use them to centrally control whether accepted autocalls should first move to a quieter transmit audio frequency.",
+  "autoSelectIdleFrequency": "Auto-select idle frequency",
+  "autoSelectIdleFrequencyDesc": "When any automatic-call proposal is accepted, first look for a quieter transmit audio frequency in the current slot, then start the automatic call."
+}

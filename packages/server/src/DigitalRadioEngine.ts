@@ -162,6 +162,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getRadioBand: () => ConfigManager.getInstance().getLastSelectedFrequency()?.band ?? '',
       getRadioConnected: () => this.radioManager.isConnected(),
       getLatestSlotPack: () => this.slotPackManager.getLatestSlotPack(),
+      findBestTransmitFrequency: (slotId, minFreq, maxFreq, guardBandwidth) => (
+        this.slotPackManager.findBestTransmitFrequency(slotId, minFreq, maxFreq, guardBandwidth)
+      ),
+      setOperatorAudioFrequency: async (operatorId, frequency) => {
+        await this._operatorManager.updateOperatorContext(operatorId, { frequency });
+      },
       hasWorkedCallsign: async (operatorId, callsign) => {
         return this._operatorManager.hasWorkedCallsign(operatorId, callsign);
       },

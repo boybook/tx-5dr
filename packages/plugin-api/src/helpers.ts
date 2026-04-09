@@ -179,6 +179,20 @@ export interface LogbookAccess {
 }
 
 /**
+ * Optional constraints used when asking the host for a quieter transmit offset.
+ */
+export interface IdleTransmitFrequencyOptions {
+  /** Slot identifier to analyze. Defaults to the latest available slot when omitted. */
+  slotId?: string;
+  /** Inclusive lower bound in Hz within the passband. */
+  minHz?: number;
+  /** Inclusive upper bound in Hz within the passband. */
+  maxHz?: number;
+  /** Guard bandwidth in Hz to keep around occupied frequencies. */
+  guardHz?: number;
+}
+
+/**
  * Read-only access to the current decode environment.
  */
 export interface BandAccess {
@@ -192,6 +206,15 @@ export interface BandAccess {
    * processed yet.
    */
   getLatestSlotPack(): SlotPack | null;
+
+  /**
+   * Asks the host to recommend a quieter transmit audio offset for the current
+   * decode environment.
+   *
+   * Returns `null` when the host cannot evaluate the slot or when no suitable
+   * idle window is found.
+   */
+  findIdleTransmitFrequency(options?: IdleTransmitFrequencyOptions): number | null;
 }
 
 /**

@@ -26,6 +26,8 @@ export type { PluginContext } from './context.js';
 export type {
   PluginHooks,
   AutoCallProposal,
+  AutoCallExecutionRequest,
+  AutoCallExecutionPlan,
   ScoredCandidate,
   StrategyDecision,
   StrategyDecisionMeta,
@@ -48,6 +50,7 @@ export type {
   RadioControl,
   LogbookAccess,
   BandAccess,
+  IdleTransmitFrequencyOptions,
   UIBridge,
 } from './helpers.js';
 

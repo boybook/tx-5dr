@@ -192,6 +192,29 @@ export class PluginContextFactory {
       getLatestSlotPack() {
         return deps.getLatestSlotPack();
       },
+      findIdleTransmitFrequency(options?: {
+        slotId?: string;
+        minHz?: number;
+        maxHz?: number;
+        guardHz?: number;
+      }) {
+        if (!deps.findBestTransmitFrequency) {
+          return null;
+        }
+
+        const slotId = options?.slotId ?? deps.getLatestSlotPack()?.slotId;
+        if (!slotId) {
+          return null;
+        }
+
+        const result = deps.findBestTransmitFrequency(
+          slotId,
+          options?.minHz,
+          options?.maxHz,
+          options?.guardHz,
+        );
+        return typeof result === 'number' && Number.isFinite(result) ? result : null;
+      },
     };
   }
 }

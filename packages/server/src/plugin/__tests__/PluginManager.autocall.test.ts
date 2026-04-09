@@ -61,9 +61,11 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
   async function createHarness(options?: {
     startOperator?: boolean;
     autoReplyToCQ?: boolean;
+    operatorFrequency?: number;
     pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
     analyzeCallsign?: (callsign: string, grid?: string) => LogbookAnalysis | null | Promise<LogbookAnalysis | null>;
+    findBestTransmitFrequency?: (slotId: string) => number | undefined;
   }) {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
@@ -78,7 +80,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       mode: MODES.FT8,
       myCallsign: 'BG4IAJ',
       myGrid: 'OM96',
-      frequency: 7074000,
+      frequency: options?.operatorFrequency ?? 1000,
       transmitCycles: [0],
       maxQSOTimeoutCycles: 6,
       maxCallAttempts: 5,
@@ -107,6 +109,12 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       getRadioBand: () => '40m',
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
+      findBestTransmitFrequency: options?.findBestTransmitFrequency,
+      setOperatorAudioFrequency: async (operatorId, frequency) => {
+        if (operatorId === operator.config.id) {
+          operator.config.frequency = frequency;
+        }
+      },
       hasWorkedCallsign: async () => false,
       analyzeCallsignForOperator: options?.analyzeCallsign
         ? async (_operatorId, callsign, grid) => options.analyzeCallsign?.(callsign, grid) ?? null
@@ -240,6 +248,66 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     await flushAsyncWork();
     expect(deleted.operator.isTransmitting).toBe(false);
     expect(deleted.pluginManager.getOperatorRuntimeStatus(deleted.operator.config.id).context?.targetCallsign).toBeUndefined();
+  });
+
+  it('can auto-select an idle transmit frequency before accepting an autocall proposal', async () => {
+    const { eventEmitter, operator } = await createHarness({
+      operatorFrequency: 1000,
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'autocall-controls': {
+          autoSelectIdleFrequency: true,
+        },
+        'watched-callsign-autocall': {
+          watchList: ['JA1AAA'],
+          triggerMode: 'cq',
+          autocallPriority: 100,
+        },
+      },
+      findBestTransmitFrequency: () => 1825,
+    });
+
+    const slotInfo = createSlotInfo(75_000);
+    const slotPack = createSlotPack(slotInfo, [
+      { message: 'CQ JA1AAA PM95', freq: 1100 },
+      { message: 'CQ DX1BBB OO01', freq: 1500 },
+    ]);
+
+    eventEmitter.emit('slotStart', slotInfo, slotPack);
+    await flushAsyncWork();
+
+    expect(operator.config.frequency).toBe(1825);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('uses the matched decode slot to choose the reply cycle for autocall proposals', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'watched-callsign-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-callsign-autocall': {
+          watchList: ['JA1AAA'],
+          triggerMode: 'cq',
+          autocallPriority: 100,
+        },
+      },
+    });
+
+    const decodeSlot = createSlotInfo(60_000);
+    const currentSlot = createSlotInfo(75_000);
+    const previousSlotPack = createSlotPack(decodeSlot, [
+      { message: 'CQ JA1AAA PM95', freq: 1100 },
+    ]);
+
+    eventEmitter.emit('slotStart', currentSlot, previousSlotPack);
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(true);
+    expect(operator.getTransmitCycles()).toEqual([decodeSlot.cycleNumber === 0 ? 1 : 0]);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('JA1AAA');
   });
 
   it('enriches parsed messages with operator-specific logbook analysis before standard-qso selects a target', async () => {

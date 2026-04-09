@@ -10,13 +10,24 @@ import type {
   FrameMessage,
   StrategyRuntimeContext,
 } from '@tx5dr/contracts';
-import type { PluginContext, StrategyDecisionMeta, StrategyRuntime, StrategyRuntimeSlot, StrategyRuntimeSnapshot } from '@tx5dr/plugin-api';
+import type {
+  AutoCallExecutionPlan,
+  AutoCallExecutionRequest,
+  PluginContext,
+  StrategyDecisionMeta,
+  StrategyRuntime,
+  StrategyRuntimeSlot,
+  StrategyRuntimeSnapshot,
+} from '@tx5dr/plugin-api';
 import type { EventEmitter } from 'eventemitter3';
 import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
-import { BUILTIN_PLUGINS, BUILTIN_STANDARD_QSO_PLUGIN_NAME } from './builtins/index.js';
+import {
+  BUILTIN_PLUGINS,
+  BUILTIN_STANDARD_QSO_PLUGIN_NAME,
+} from './builtins/index.js';
 import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
 import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRuntimeState } from './types.js';
 import { createLogger } from '../utils/logger.js';
@@ -932,7 +943,7 @@ export class PluginManager {
         parsedMessages,
         (instance) => this.getCtxForInstance(instance),
       );
-      this.applyAutoCallProposal(operator.config.id, slotInfo, parsedMessages, autoCallProposals);
+      await this.applyAutoCallProposal(operator.config.id, slotInfo, parsedMessages, autoCallProposals);
 
       if (!operator.isTransmitting) continue;
 
@@ -1065,13 +1076,77 @@ export class PluginManager {
     return automation.currentState === 'TX6' && targetCallsign.length === 0;
   }
 
+  private findMatchedParsedMessage(
+    lastMessage: { message: FrameMessage; slotInfo: SlotInfo } | undefined,
+    messages: ParsedFT8Message[],
+  ): ParsedFT8Message | undefined {
+    if (!lastMessage) {
+      return undefined;
+    }
+
+    return messages.find((message) => (
+      message.rawMessage === lastMessage.message.message
+      && message.df === lastMessage.message.freq
+      && message.dt === lastMessage.message.dt
+    )) ?? messages.find((message) => (
+      message.rawMessage === lastMessage.message.message
+    ));
+  }
+
+  private buildSourceSlotInfoFromParsedMessage(
+    operatorId: string,
+    parsedMessage: ParsedFT8Message,
+    fallbackSlotInfo: SlotInfo,
+  ): SlotInfo {
+    const operatorMode = this.deps.getOperatorById(operatorId)?.config.mode;
+    if (!operatorMode) {
+      return fallbackSlotInfo;
+    }
+
+    const startMs = parsedMessage.timestamp;
+    const utcSeconds = Math.floor(startMs / 1000);
+    const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, operatorMode.slotMs);
+
+    return {
+      id: parsedMessage.slotId,
+      startMs,
+      utcSeconds,
+      phaseMs: 0,
+      driftMs: 0,
+      cycleNumber,
+      mode: operatorMode.name,
+    };
+  }
+
+  private normalizeAutoCallProposal(
+    operatorId: string,
+    currentSlotInfo: SlotInfo,
+    messages: ParsedFT8Message[],
+    entry: AutoCallProposalResult,
+  ): AutoCallProposalResult {
+    const matchedMessage = this.findMatchedParsedMessage(entry.proposal.lastMessage, messages);
+    if (!matchedMessage || !entry.proposal.lastMessage) {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      proposal: {
+        ...entry.proposal,
+        lastMessage: {
+          ...entry.proposal.lastMessage,
+          slotInfo: this.buildSourceSlotInfoFromParsedMessage(operatorId, matchedMessage, currentSlotInfo),
+        },
+      },
+    };
+  }
+
   private resolveProposalMessageOrder(
     proposal: AutoCallProposalResult['proposal'],
-    slotInfo: SlotInfo,
     messages: ParsedFT8Message[],
   ): number {
     const lastMessage = proposal.lastMessage;
-    if (!lastMessage || lastMessage.slotInfo.id !== slotInfo.id) {
+    if (!lastMessage) {
       return Number.MAX_SAFE_INTEGER;
     }
 
@@ -1090,21 +1165,66 @@ export class PluginManager {
     return rawIndex >= 0 ? rawIndex : Number.MAX_SAFE_INTEGER;
   }
 
-  private applyAutoCallProposal(
+  private async resolveAutoCallExecutionPlan(
+    operatorId: string,
+    request: AutoCallExecutionRequest,
+  ): Promise<AutoCallExecutionPlan> {
+    return this.dispatcher.dispatchAutoCallExecutionPlan(
+      operatorId,
+      request,
+      {},
+      (instance) => this.getCtxForInstance(instance),
+    );
+  }
+
+  private async applyAutoCallExecutionPlan(
+    operatorId: string,
+    request: AutoCallExecutionRequest,
+    plan: AutoCallExecutionPlan,
+  ): Promise<void> {
+    if (!this.deps.setOperatorAudioFrequency) {
+      return;
+    }
+
+    const requestedFrequency = plan.audioFrequency;
+    if (typeof requestedFrequency !== 'number' || !Number.isFinite(requestedFrequency)) {
+      return;
+    }
+
+    const operator = this.deps.getOperatorById(operatorId);
+    if (operator && operator.config.frequency === requestedFrequency) {
+      return;
+    }
+
+    try {
+      await this.deps.setOperatorAudioFrequency(operatorId, requestedFrequency);
+      logger.info('Auto call execution plan applied audio frequency', {
+        operatorId,
+        slotId: request.slotInfo.id,
+        callsign: request.callsign,
+        frequency: requestedFrequency,
+      });
+    } catch (error) {
+      logger.warn(`Failed to apply auto call execution plan for operator ${operatorId}`, error);
+    }
+  }
+
+  private async applyAutoCallProposal(
     operatorId: string,
     slotInfo: SlotInfo,
     messages: ParsedFT8Message[],
     proposals: AutoCallProposalResult[],
-  ): void {
+  ): Promise<void> {
     if (proposals.length === 0 || !this.isOperatorPureStandby(operatorId)) {
       return;
     }
 
     const ranked = proposals
+      .map((entry) => this.normalizeAutoCallProposal(operatorId, slotInfo, messages, entry))
       .map((entry) => ({
         ...entry,
         priority: typeof entry.proposal.priority === 'number' ? entry.proposal.priority : 0,
-        messageOrder: this.resolveProposalMessageOrder(entry.proposal, slotInfo, messages),
+        messageOrder: this.resolveProposalMessageOrder(entry.proposal, messages),
       }))
       .sort((left, right) => {
         if (left.priority !== right.priority) {
@@ -1136,7 +1256,16 @@ export class PluginManager {
       callsign: winner.proposal.callsign,
       priority: winner.priority,
     });
-    this.requestCall(operatorId, winner.proposal.callsign, winner.proposal.lastMessage);
+
+    const request: AutoCallExecutionRequest = {
+      sourcePluginName: winner.pluginName,
+      callsign: winner.proposal.callsign,
+      slotInfo,
+      lastMessage: winner.proposal.lastMessage,
+    };
+    const executionPlan = await this.resolveAutoCallExecutionPlan(operatorId, request);
+    await this.applyAutoCallExecutionPlan(operatorId, request, executionPlan);
+    this.requestCall(operatorId, request.callsign, request.lastMessage);
   }
 
   private getOrCreateDecisionState(operatorId: string): OperatorDecisionState {
