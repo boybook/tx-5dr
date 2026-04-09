@@ -329,6 +329,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       getRadioBand: () => '40m',
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
       hasWorkedCallsign: async () => false,
       resetOperatorRuntime: () => {},
       dataDir,

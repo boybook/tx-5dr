@@ -168,6 +168,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       setOperatorAudioFrequency: async (operatorId, frequency) => {
         await this._operatorManager.updateOperatorContext(operatorId, { frequency });
       },
+      interruptOperatorTransmission: async (operatorId) => {
+        await this.removeOperatorFromTransmission(operatorId);
+      },
       hasWorkedCallsign: async (operatorId, callsign) => {
         return this._operatorManager.hasWorkedCallsign(operatorId, callsign);
       },

@@ -597,6 +597,13 @@ interface OperatorControl {
 > - T+780ms：`encodeStart` → `runtime.getTransmitText()`（获取发射文本）
 > - T+1180ms：`transmitStart`（PTT 激活，音频播放）
 
+`StrategyDecision.stop` 的统一宿主语义如下：
+
+- **普通决策**：`{ stop: true }` 表示停止该 operator 的自动化运行，后续不再继续排队发射
+- **晚到解码重决策**（`meta.isReDecision === true`）：除停止自动化外，Host 还会立即中断该 operator 当前已经在播放/PTT 中的发射贡献
+- **不要把“停止逻辑状态”和“停止当前实际发射”拆成私有黑盒约定**：第三方 strategy 只需返回 `stop: true`，Host 会按 `meta.isReDecision` 统一执行
+- **适用场景**：例如当前 TX 周期中晚到收到对方 `73`，strategy 可以直接返回 `stop: true`，Host 会立刻停掉本 operator 的实际发射，而不是拖到本周期结束
+
 > 注意：运行时的核心控制命令走系统的强类型接口（如 `setOperatorRuntimeState`、`setOperatorRuntimeSlotContent`、`setOperatorTransmitCycles`），而不是走 `pluginUserAction` 这类泛型插件消息。
 
 #### Broadcast Hooks（所有活跃插件并发接收）

@@ -383,7 +383,7 @@ export class PluginManager {
     }
 
     if (decisionStop) {
-      operator.stop();
+      await this.applyStrategyStop(operatorId, { interruptActiveTransmission: true });
       return false;
     }
 
@@ -980,7 +980,7 @@ export class PluginManager {
       session.lastDecisionTransmission = this.readCurrentTransmission(operator.config.id);
 
       if (decision?.stop) {
-        operator.stop();
+        await this.applyStrategyStop(operator.config.id);
       }
     }
   }
@@ -1394,6 +1394,29 @@ export class PluginManager {
 
     const result = runtime.decide(messages, meta);
     return result instanceof Promise ? await result : result;
+  }
+
+  private async applyStrategyStop(
+    operatorId: string,
+    options?: { interruptActiveTransmission?: boolean },
+  ): Promise<void> {
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator) {
+      return;
+    }
+
+    operator.stop();
+
+    if (!options?.interruptActiveTransmission) {
+      return;
+    }
+
+    try {
+      await this.deps.interruptOperatorTransmission(operatorId);
+    } catch (error) {
+      logger.error(`Failed to interrupt active transmission after strategy stop: operator=${operatorId}`, error);
+      throw error;
+    }
   }
 
   private readCurrentTransmission(operatorId: string): string | null {

@@ -28,6 +28,12 @@ export interface ScoredCandidate extends ParsedFT8Message {
 export interface StrategyDecision {
   /**
    * Requests that the host stop transmitting and leave the active QSO flow.
+   *
+   * During a late re-decision (`meta.isReDecision === true`), the host treats
+   * this as an immediate abort request for the operator's in-flight
+   * transmission. In other words, `stop: true` means both:
+   * - stop the operator's automation/runtime state; and
+   * - interrupt the operator's current audio/PTT contribution right away.
    */
   stop?: boolean;
 }
