@@ -1,8 +1,0 @@
-{
-  "pluginName": "自动起呼通用设置",
-  "pluginDescription": "统一控制所有自动起呼 proposal 被宿主接受后的执行方式。",
-  "autocallControlsOverview": "适用场景",
-  "autocallControlsOverviewDesc": "这里放的是所有自动起呼插件共用的执行策略，而不是某个具体守候插件自己的规则。适合集中控制自动起呼命中后是否要自动挑选更空闲的发射音频频率。",
-  "autoSelectIdleFrequency": "自动选择空闲频率",
-  "autoSelectIdleFrequencyDesc": "当任意自动起呼插件命中并被宿主接受时，先在当前时隙内寻找更空闲的发射音频频率，再开始自动起呼。"
-}

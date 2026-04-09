@@ -1340,6 +1340,7 @@ export class PluginManager {
       sourcePluginName: winner.pluginName,
       callsign: winner.proposal.callsign,
       slotInfo,
+      sourceSlotInfo: winner.proposal.lastMessage?.slotInfo,
       lastMessage: winner.proposal.lastMessage,
     };
     const executionPlan = await this.resolveAutoCallExecutionPlan(operatorId, request);

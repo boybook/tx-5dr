@@ -187,8 +187,9 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       },
     });
 
-    const slotInfo = createSlotInfo(15_000);
-    const slotPack = createSlotPack(slotInfo, [
+    const sourceSlotInfo = createSlotInfo(15_000);
+    const slotInfo = createSlotInfo(30_000);
+    const slotPack = createSlotPack(sourceSlotInfo, [
       { message: 'CQ DX1BBB OO01' },
       { message: 'CQ JA1AAA PM95' },
     ]);
@@ -251,13 +252,14 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
   });
 
   it('can auto-select an idle transmit frequency before accepting an autocall proposal', async () => {
+    const observedSlotIds: string[] = [];
     const { eventEmitter, operator } = await createHarness({
       operatorFrequency: 1000,
       pluginConfigs: {
         'watched-callsign-autocall': { enabled: true, settings: {} },
       },
       operatorPluginSettings: {
-        'autocall-controls': {
+        'autocall-idle-frequency': {
           autoSelectIdleFrequency: true,
         },
         'watched-callsign-autocall': {
@@ -266,11 +268,15 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           autocallPriority: 100,
         },
       },
-      findBestTransmitFrequency: () => 1825,
+      findBestTransmitFrequency: (slotId) => {
+        observedSlotIds.push(slotId);
+        return 1825;
+      },
     });
 
-    const slotInfo = createSlotInfo(75_000);
-    const slotPack = createSlotPack(slotInfo, [
+    const sourceSlotInfo = createSlotInfo(75_000);
+    const slotInfo = createSlotInfo(90_000);
+    const slotPack = createSlotPack(sourceSlotInfo, [
       { message: 'CQ JA1AAA PM95', freq: 1100 },
       { message: 'CQ DX1BBB OO01', freq: 1500 },
     ]);
@@ -278,6 +284,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     eventEmitter.emit('slotStart', slotInfo, slotPack);
     await flushAsyncWork();
 
+    expect(observedSlotIds).toEqual([sourceSlotInfo.id]);
     expect(operator.config.frequency).toBe(1825);
     expect(operator.isTransmitting).toBe(true);
   });

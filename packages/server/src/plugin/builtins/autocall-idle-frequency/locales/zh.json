@@ -1,0 +1,6 @@
+{
+  "pluginName": "自动起呼自动择频",
+  "pluginDescription": "在自动起呼真正开始前，为当前操作员挑选更空闲的发射音频频率。",
+  "autoSelectIdleFrequency": "自动选择空闲频率",
+  "autoSelectIdleFrequencyDesc": "当任意自动起呼 proposal 被宿主接受后，先基于触发该 proposal 的接收时隙，寻找更空闲的发射音频频率，再开始自动起呼。"
+}

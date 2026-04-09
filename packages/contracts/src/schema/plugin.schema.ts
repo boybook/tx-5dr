@@ -144,6 +144,24 @@ export const PluginQuickSettingSchema = z.object({
  */
 export type PluginQuickSetting = z.infer<typeof PluginQuickSettingSchema>;
 
+// ===== 能力标签 =====
+
+/**
+ * Host-derived capability tags exposed to the frontend.
+ *
+ * These tags are computed from the plugin definition so the UI can reason
+ * about plugin roles without hard-coding specific plugin names.
+ */
+export const PluginCapabilitySchema = z.enum([
+  'auto_call_candidate',
+  'auto_call_execution',
+]);
+
+/**
+ * Host-derived capability tags exposed to the frontend.
+ */
+export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
+
 // ===== 面板 =====
 
 /**
@@ -240,6 +258,7 @@ export const PluginStatusSchema = z.object({
   quickSettings: z.array(PluginQuickSettingSchema).optional(),
   panels: z.array(PluginPanelDescriptorSchema).optional(),
   permissions: z.array(PluginPermissionSchema).optional(),
+  capabilities: z.array(PluginCapabilitySchema).optional(),
   locales: z.record(z.string(), z.record(z.string(), z.string())).optional(),
 });
 

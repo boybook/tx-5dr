@@ -1,0 +1,6 @@
+{
+  "pluginName": "Autocall Idle Frequency",
+  "pluginDescription": "Pick a quieter transmit audio frequency before an accepted autocall starts.",
+  "autoSelectIdleFrequency": "Auto-select idle frequency",
+  "autoSelectIdleFrequencyDesc": "When any automatic-call proposal is accepted, first inspect the source receive slot and move to a quieter transmit audio frequency before starting the automatic call."
+}

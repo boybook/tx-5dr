@@ -86,6 +86,7 @@ export type {
   PluginSettingScope,
   PluginQuickAction,
   PluginQuickSetting,
+  PluginCapability,
   PluginPanelDescriptor,
   PluginPanelComponent,
   PluginSettingOption,

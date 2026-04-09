@@ -14,10 +14,10 @@
  */
 
 export {
-  autocallControlsPlugin,
-  autocallControlsLocales,
-  BUILTIN_AUTOCALL_CONTROLS_PLUGIN_NAME,
-} from './autocall-controls/index.js';
+  autocallIdleFrequencyPlugin,
+  autocallIdleFrequencyLocales,
+  BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
+} from './autocall-idle-frequency/index.js';
 
 export {
   standardQSOStrategyPlugin,
@@ -61,9 +61,9 @@ export {
 } from './watched-novelty-autocall/index.js';
 
 import {
-  autocallControlsPlugin,
-  autocallControlsLocales,
-} from './autocall-controls/index.js';
+  autocallIdleFrequencyPlugin,
+  autocallIdleFrequencyLocales,
+} from './autocall-idle-frequency/index.js';
 import { standardQSOStrategyPlugin, standardQSOLocales } from './standard-qso/index.js';
 import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
 import { callsignPrefixFilterPlugin, callsignPrefixFilterLocales } from './callsign-prefix-filter/index.js';
@@ -85,11 +85,6 @@ export interface BuiltinPluginEntry {
  * 所有内置插件列表，供 PluginManager 统一注册
  */
 export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
-  {
-    definition: autocallControlsPlugin,
-    locales: autocallControlsLocales,
-    enabledByDefault: true,
-  },
   {
     definition: standardQSOStrategyPlugin,
     locales: standardQSOLocales,
@@ -129,5 +124,10 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     definition: watchedNoveltyAutocallPlugin,
     locales: watchedNoveltyAutocallLocales,
     enabledByDefault: false,
+  },
+  {
+    definition: autocallIdleFrequencyPlugin,
+    locales: autocallIdleFrequencyLocales,
+    enabledByDefault: true,
   },
 ];

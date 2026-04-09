@@ -7,7 +7,7 @@ import type {
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
-export const BUILTIN_AUTOCALL_CONTROLS_PLUGIN_NAME = 'autocall-controls';
+export const BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME = 'autocall-idle-frequency';
 const AUTOCALL_IDLE_FREQUENCY_MIN_HZ = 300;
 const AUTOCALL_IDLE_FREQUENCY_MAX_HZ = 3000;
 const AUTOCALL_IDLE_FREQUENCY_GUARD_HZ = 100;
@@ -25,16 +25,25 @@ function configureIdleFrequency(
     return plan;
   }
 
+  const sourceSlotId = request.sourceSlotInfo?.id;
+  if (!sourceSlotId) {
+    ctx.log.debug('Autocall idle frequency skipped because the accepted proposal has no source slot', {
+      callsign: request.callsign,
+      sourcePluginName: request.sourcePluginName,
+    });
+    return plan;
+  }
+
   const recommendedFrequency = ctx.band.findIdleTransmitFrequency({
-    slotId: request.slotInfo.id,
+    slotId: sourceSlotId,
     minHz: AUTOCALL_IDLE_FREQUENCY_MIN_HZ,
     maxHz: AUTOCALL_IDLE_FREQUENCY_MAX_HZ,
     guardHz: AUTOCALL_IDLE_FREQUENCY_GUARD_HZ,
   });
   if (typeof recommendedFrequency !== 'number' || !Number.isFinite(recommendedFrequency)) {
-    ctx.log.debug('Autocall controls skipped idle frequency selection because no suitable frequency was found', {
+    ctx.log.debug('Autocall idle frequency skipped because no suitable frequency was found', {
       callsign: request.callsign,
-      slotId: request.slotInfo.id,
+      sourceSlotId,
     });
     return plan;
   }
@@ -43,9 +52,9 @@ function configureIdleFrequency(
     return plan;
   }
 
-  ctx.log.debug('Autocall controls selected idle frequency for accepted proposal', {
+  ctx.log.debug('Autocall idle frequency selected transmit frequency for accepted proposal', {
     callsign: request.callsign,
-    slotId: request.slotInfo.id,
+    sourceSlotId,
     sourcePluginName: request.sourcePluginName,
     frequency: recommendedFrequency,
   });
@@ -56,20 +65,13 @@ function configureIdleFrequency(
   };
 }
 
-export const autocallControlsPlugin: PluginDefinition = {
-  name: BUILTIN_AUTOCALL_CONTROLS_PLUGIN_NAME,
+export const autocallIdleFrequencyPlugin: PluginDefinition = {
+  name: BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
-  description: 'Shared controls for how automatic-call proposals are executed',
+  description: 'Automatically pick a quieter transmit audio frequency before an accepted autocall starts',
 
   settings: {
-    autocallControlsOverview: {
-      type: 'info',
-      default: '',
-      label: 'autocallControlsOverview',
-      description: 'autocallControlsOverviewDesc',
-      scope: 'operator',
-    },
     autoSelectIdleFrequency: {
       type: 'boolean',
       default: false,
@@ -90,7 +92,7 @@ export const autocallControlsPlugin: PluginDefinition = {
   },
 };
 
-export const autocallControlsLocales: Record<string, Record<string, string>> = {
+export const autocallIdleFrequencyLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
 };

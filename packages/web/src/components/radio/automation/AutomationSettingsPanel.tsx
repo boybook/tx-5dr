@@ -57,6 +57,22 @@ function hasOperatorQuickSetting(
   return Boolean(descriptor && descriptor.scope === 'operator' && descriptor.type !== 'info');
 }
 
+function getQuickGroupRank(plugin: PluginStatus): number {
+  if (plugin.type === 'strategy') {
+    return 0;
+  }
+
+  if (plugin.capabilities?.includes('auto_call_candidate')) {
+    return 1;
+  }
+
+  if (plugin.capabilities?.includes('auto_call_execution')) {
+    return 2;
+  }
+
+  return 3;
+}
+
 function useDelayedBusyKey(busyKey: string | null, delayMs = 500): string | null {
   const [visibleBusyKey, setVisibleBusyKey] = React.useState<string | null>(null);
 
@@ -143,21 +159,30 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
 
   const activeGroups = React.useMemo<PluginQuickGroup[]>(() => {
     return pluginSnapshot.plugins
+      .map((plugin, index) => ({ plugin, index }))
       .filter((plugin) => {
-        const settings = (plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin, entry));
-        const actions = plugin.quickActions ?? [];
+        const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
+        const actions = plugin.plugin.quickActions ?? [];
         if (settings.length === 0 && actions.length === 0) {
           return false;
         }
-        if (plugin.type === 'strategy') {
-          return plugin.assignedOperatorIds?.includes(operatorId) ?? false;
+        if (plugin.plugin.type === 'strategy') {
+          return plugin.plugin.assignedOperatorIds?.includes(operatorId) ?? false;
         }
-        return plugin.enabled;
+        return plugin.plugin.enabled;
+      })
+      .sort((left, right) => {
+        const rankDiff = getQuickGroupRank(left.plugin) - getQuickGroupRank(right.plugin);
+        if (rankDiff !== 0) {
+          return rankDiff;
+        }
+
+        return left.index - right.index;
       })
       .map((plugin) => ({
-        plugin,
-        settings: (plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin, entry)),
-        actions: plugin.quickActions ?? [],
+        plugin: plugin.plugin,
+        settings: (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry)),
+        actions: plugin.plugin.quickActions ?? [],
       }));
   }, [operatorId, pluginSnapshot.plugins]);
 
