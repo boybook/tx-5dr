@@ -58,6 +58,13 @@ export interface PluginManagerDeps {
   getRadioConnected: () => boolean;
   getLatestSlotPack: (operatorId?: string) => import('@tx5dr/contracts').SlotPack | null;
   hasWorkedCallsign: (operatorId: string, callsign: string) => Promise<boolean>;
+  hasWorkedDXCC?: (operatorId: string, dxccEntity: string) => Promise<boolean>;
+  hasWorkedGrid?: (operatorId: string, grid: string) => Promise<boolean>;
+  analyzeCallsignForOperator?: (
+    operatorId: string,
+    callsign: string,
+    grid?: string,
+  ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
   resetOperatorRuntime: (operatorId: string, reason: string) => void;
   dataDir: string;
 }

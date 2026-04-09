@@ -60,6 +60,23 @@ export interface LastMessageInfo {
 }
 
 /**
+ * Declarative automatic-call request proposed by a utility plugin.
+ *
+ * Utility plugins should prefer returning this shape from
+ * {@link PluginHooks.onAutoCallCandidate} instead of directly invoking
+ * `ctx.operator.call(...)` inside broadcast hooks. This lets the host arbitrate
+ * between multiple simultaneous auto-call plugins in a deterministic way.
+ */
+export interface AutoCallProposal {
+  /** Target callsign that should be called next. */
+  callsign: string;
+  /** Optional arbitration priority; higher values win. */
+  priority?: number;
+  /** Optional triggering frame context used to preserve slot alignment. */
+  lastMessage?: LastMessageInfo;
+}
+
+/**
  * Hook collection implemented by a plugin.
  *
  * Hooks fall into three broad categories:
@@ -71,6 +88,19 @@ export interface LastMessageInfo {
  * decode pipeline, so expensive work should be throttled, cached or deferred.
  */
 export interface PluginHooks {
+  /**
+   * Proposes an automatic call target while the operator is idle.
+   *
+   * The host collects proposals from all active utility plugins, resolves
+   * conflicts deterministically, and then triggers at most one host-managed
+   * `requestCall(...)` action for the winning proposal.
+   */
+  onAutoCallCandidate?(
+    slotInfo: SlotInfo,
+    messages: ParsedFT8Message[],
+    ctx: PluginContext,
+  ): AutoCallProposal | null | undefined | Promise<AutoCallProposal | null | undefined>;
+
   /**
    * Filters candidate target messages before the scoring phase.
    *

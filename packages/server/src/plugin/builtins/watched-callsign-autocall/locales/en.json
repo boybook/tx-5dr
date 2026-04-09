@@ -11,5 +11,7 @@
   "triggerModeDesc": "Choose which kinds of appearances should trigger autocall. All modes also include messages addressed directly to your callsign.",
   "triggerCqOnly": "CQ only",
   "triggerCqOrSignoff": "CQ or RR73/73",
-  "triggerAny": "Any appearance"
+  "triggerAny": "Any appearance",
+  "autocallPriority": "Autocall Priority",
+  "autocallPriorityDesc": "Higher values win when multiple automatic-call plugins match in the same slot."
 }

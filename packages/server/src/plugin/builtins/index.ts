@@ -49,6 +49,11 @@ export {
   watchedCallsignAutocallLocales,
 } from './watched-callsign-autocall/index.js';
 
+export {
+  watchedNoveltyAutocallPlugin,
+  watchedNoveltyAutocallLocales,
+} from './watched-novelty-autocall/index.js';
+
 import { standardQSOStrategyPlugin, standardQSOLocales } from './standard-qso/index.js';
 import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
 import { callsignPrefixFilterPlugin, callsignPrefixFilterLocales } from './callsign-prefix-filter/index.js';
@@ -56,6 +61,7 @@ import { workedStationBiasPlugin, workedStationBiasLocales } from './worked-stat
 import { qsoSessionInspectorPlugin, qsoSessionInspectorLocales } from './qso-session-inspector/index.js';
 import { heartbeatDemoPlugin, heartbeatDemoLocales } from './heartbeat-demo/index.js';
 import { watchedCallsignAutocallPlugin, watchedCallsignAutocallLocales } from './watched-callsign-autocall/index.js';
+import { watchedNoveltyAutocallPlugin, watchedNoveltyAutocallLocales } from './watched-novelty-autocall/index.js';
 import type { PluginDefinition } from '@tx5dr/plugin-api';
 
 export interface BuiltinPluginEntry {
@@ -102,6 +108,11 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
   {
     definition: watchedCallsignAutocallPlugin,
     locales: watchedCallsignAutocallLocales,
+    enabledByDefault: false,
+  },
+  {
+    definition: watchedNoveltyAutocallPlugin,
+    locales: watchedNoveltyAutocallLocales,
     enabledByDefault: false,
   },
 ];

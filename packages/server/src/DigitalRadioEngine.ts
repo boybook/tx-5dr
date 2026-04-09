@@ -1,9 +1,18 @@
 import {
   SlotClock,
   SlotScheduler,
-  ClockSourceSystem
+  ClockSourceSystem,
+  getBandFromFrequency,
 } from '@tx5dr/core';
-import { MODES, type ModeDescriptor, type SlotPack, type DigitalRadioEngineEvents, type EngineMode, resolveWindowTiming } from '@tx5dr/contracts';
+import {
+  MODES,
+  type LogbookAnalysis,
+  type ModeDescriptor,
+  type SlotPack,
+  type DigitalRadioEngineEvents,
+  type EngineMode,
+  resolveWindowTiming,
+} from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import { AudioStreamManager } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
@@ -155,6 +164,77 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getLatestSlotPack: () => this.slotPackManager.getLatestSlotPack(),
       hasWorkedCallsign: async (operatorId, callsign) => {
         return this._operatorManager.hasWorkedCallsign(operatorId, callsign);
+      },
+      hasWorkedDXCC: async (operatorId, dxccEntity) => {
+        try {
+          const logBook = await this._operatorManager.getLogManager().getOperatorLogBook(operatorId);
+          if (!logBook) {
+            return false;
+          }
+
+          const normalized = dxccEntity.trim().toUpperCase();
+          if (!normalized) {
+            return false;
+          }
+
+          const records = await logBook.provider.queryQSOs({ operatorId });
+          return records.some((record) => (record.dxccEntity || '').trim().toUpperCase() === normalized);
+        } catch {
+          return false;
+        }
+      },
+      hasWorkedGrid: async (operatorId, grid) => {
+        try {
+          const logBook = await this._operatorManager.getLogManager().getOperatorLogBook(operatorId);
+          if (!logBook) {
+            return false;
+          }
+
+          const normalized = grid.trim().toUpperCase();
+          if (!normalized) {
+            return false;
+          }
+
+          const records = await logBook.provider.queryQSOs({
+            operatorId,
+            grid: normalized,
+            limit: 1,
+          });
+          return records.length > 0;
+        } catch {
+          return false;
+        }
+      },
+      analyzeCallsignForOperator: async (operatorId, callsign, grid) => {
+        try {
+          const logBook = await this._operatorManager.getLogManager().getOperatorLogBook(operatorId);
+          if (!logBook) {
+            return null;
+          }
+
+          const operatorFrequency = this._operatorManager.getOperatorById(operatorId)?.config.frequency;
+          const band = operatorFrequency && operatorFrequency > 1_000_000
+            ? getBandFromFrequency(operatorFrequency)
+            : (ConfigManager.getInstance().getLastSelectedFrequency()?.band ?? 'Unknown');
+          const analysis = await logBook.provider.analyzeCallsign(callsign, grid, { band });
+
+          const mapped: LogbookAnalysis = {
+            isNewCallsign: analysis.isNewCallsign,
+            isNewDxccEntity: analysis.isNewDxccEntity,
+            isNewBandDxccEntity: analysis.isNewBandDxccEntity,
+            isConfirmedDxcc: analysis.isConfirmedDxcc,
+            isNewGrid: analysis.isNewGrid,
+            callsign,
+            grid,
+            prefix: analysis.prefix,
+            dxccId: analysis.dxccId,
+            dxccEntity: analysis.dxccEntity,
+            dxccStatus: analysis.dxccStatus,
+          };
+          return mapped;
+        } catch {
+          return null;
+        }
       },
       resetOperatorRuntime: (operatorId, reason) => {
         this._operatorManager.resetPluginRuntime(operatorId, reason);

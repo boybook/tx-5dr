@@ -30,7 +30,8 @@
    - 6.4 [worked-station-bias（评分示例）](#64-worked-station-bias评分示例)
    - 6.5 [qso-session-inspector（广播 Hook + 面板示例）](#65-qso-session-inspector广播-hook--面板示例)
    - 6.6 [watched-callsign-autocall（待机守候自动起呼）](#66-watched-callsign-autocall待机守候自动起呼)
-   - 6.7 [heartbeat-demo（timer + button quickAction 示例）](#67-heartbeat-demotimer--button-quickaction-示例)
+   - 6.7 [watched-novelty-autocall（守候新类型自动起呼）](#67-watched-novelty-autocall守候新类型自动起呼)
+   - 6.8 [heartbeat-demo（timer + button quickAction 示例）](#68-heartbeat-demotimer--button-quickaction-示例)
 7. [插件系统架构](#7-插件系统架构)
    - 7.1 [生命周期](#71-生命周期)
    - 7.2 [Hook 分发机制](#72-hook-分发机制)
@@ -181,7 +182,12 @@ packages/server/src/plugin/builtins/
 │   └── locales/
 │       ├── zh.json
 │       └── en.json
-└── watched-callsign-autocall/
+├── watched-callsign-autocall/
+│   ├── index.ts
+│   └── locales/
+│       ├── zh.json
+│       └── en.json
+└── watched-novelty-autocall/
     ├── index.ts
     └── locales/
         ├── zh.json
@@ -564,6 +570,23 @@ Fire-and-forget，不阻塞主流程，错误只记录不影响其他插件。
 | `onConfigChange` | 插件设置变更时 | 热更新内部状态 |
 
 `onUserAction` 只用于**插件自定义交互**。系统内部的操作员状态切换、槽位编辑、发射周期切换等核心控制，不再通过这个入口传递。
+
+#### Autocall Proposal Hook（自动起呼提议）
+
+对于“守候型” utility 插件，推荐实现 `onAutoCallCandidate(slotInfo, messages, ctx)`，返回：
+
+```typescript
+{
+  callsign: string;
+  priority?: number;
+  lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
+}
+```
+
+- Host 会收集所有活跃 utility 插件的提议，而不是允许它们在广播 Hook 中直接抢占 `ctx.operator.call(...)`
+- 仲裁顺序为：`priority` 高者优先 → 命中消息在当前时隙中的顺序 → 插件名稳定排序
+- 仲裁完成后，Host 最多只会执行一次统一的 `requestCall(...)`
+- 旧插件仍可继续在 `onSlotStart` / `onDecode` 中直接 `call()`，但新的内置自动起呼插件都应优先改用 proposal hook，以获得可组合、可预测的兼容行为
 
 ### 4.5 设置系统
 
@@ -1068,8 +1091,32 @@ export default plugin;
 | `watchOverview` | info | `''` | 场景说明：适合守候 DX、朋友台、稀有实体或 sked |
 | `watchList` | string[] | `[]` | 守候规则列表，按顺序决定优先级；纯文本为精确匹配，正则语法可直接使用，`#` 开头行为注释 |
 | `triggerMode` | string | `'cq'` | 触发条件：`cq` / `cq-or-signoff` / `any` |
+| `autocallPriority` | number | `100` | 自动起呼优先级；多个自动起呼插件同槽命中时，值越大越优先 |
 
-### 6.7 heartbeat-demo（timer + button quickAction 示例）
+### 6.7 watched-novelty-autocall（守候新类型自动起呼）
+
+**位置**：`packages/server/src/plugin/builtins/watched-novelty-autocall/`
+
+该插件展示如何基于 operator 自己的日志本分析结果，在纯待机时自动守候“新类型”目标：
+
+- 只要启用了任一守候项（新 DXCC / 新网格 / 新呼号），命中任意一个已启用类型就会提议自动起呼
+- 仅在操作者处于纯待机（未发射、策略处于待机且没有锁定目标）时生效
+- 依赖 Host 在插件运行时为 `ParsedFT8Message.logbookAnalysis` 注入当前 operator 视角的日志本分析结果
+- `watchNewDxcc` 会忽略 `dxccStatus='deleted'` 的实体
+- 与其他自动起呼插件通过 `autocallPriority` 做确定性仲裁，而不是靠广播 Hook 的竞态先后
+
+#### Settings（均为 operator scope）
+
+| Key | 类型 | 默认值 | 说明 |
+|-----|------|--------|------|
+| `noveltyOverview` | info | `''` | 场景说明：适合在待机时追逐新的实体、网格或呼号 |
+| `watchNewDxcc` | boolean | `false` | 命中新 DXCC 时提议自动起呼 |
+| `watchNewGrid` | boolean | `false` | 命中新网格时提议自动起呼 |
+| `watchNewCallsign` | boolean | `false` | 命中新呼号时提议自动起呼 |
+| `triggerMode` | string | `'cq'` | 触发条件：`cq` / `cq-or-signoff` / `any` |
+| `autocallPriority` | number | `80` | 自动起呼优先级；默认低于守候呼号插件 |
+
+### 6.8 heartbeat-demo（timer + button quickAction 示例）
 
 **位置**：`packages/server/src/plugin/builtins/heartbeat-demo/`
 
@@ -1194,6 +1241,7 @@ Pipeline 额外安全网
 |------|---------|
 | 两个工具插件同时定义 `onFilterCandidates` | Pipeline 链式执行，A 的输出是 B 的输入 |
 | 两个工具插件同时定义 `onQSOComplete` | 并发 fire-and-forget，互不干扰 |
+| 两个自动起呼工具插件同时定义 `onAutoCallCandidate` | Host 统一收集提议后仲裁：优先级高者胜，再按命中顺序和插件名稳定排序 |
 | 两个策略插件（理论上不可能）| 每个操作员只能选择一个策略，UI 层为单选 |
 | 工具插件过滤器把候选清空 | 安全网保留上一步结果，跳过该插件 |
 
@@ -1361,6 +1409,7 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
 | worked-station-bias 示例 | `packages/server/src/plugin/builtins/worked-station-bias/index.ts` |
 | qso-session-inspector 示例 | `packages/server/src/plugin/builtins/qso-session-inspector/index.ts` |
 | watched-callsign-autocall 示例 | `packages/server/src/plugin/builtins/watched-callsign-autocall/index.ts` |
+| watched-novelty-autocall 示例 | `packages/server/src/plugin/builtins/watched-novelty-autocall/index.ts` |
 | heartbeat-demo 示例 | `packages/server/src/plugin/builtins/heartbeat-demo/index.ts` |
 | REST API 路由 | `packages/server/src/routes/plugins.ts` |
 | 前端插件组件 | `packages/web/src/components/plugins/` |

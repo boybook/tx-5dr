@@ -40,12 +40,42 @@ interface PluginQuickGroup {
   settings: PluginQuickSetting[];
 }
 
+const QUICK_ACTION_SPINNER = (
+  <Spinner
+    size="sm"
+    variant="simple"
+    color="current"
+    classNames={{ base: 'shrink-0' }}
+  />
+);
+
 function hasOperatorQuickSetting(
   plugin: PluginStatus,
   quickSetting: PluginQuickSetting,
 ): boolean {
   const descriptor = plugin.settings?.[quickSetting.settingKey];
   return Boolean(descriptor && descriptor.scope === 'operator' && descriptor.type !== 'info');
+}
+
+function useDelayedBusyKey(busyKey: string | null, delayMs = 500): string | null {
+  const [visibleBusyKey, setVisibleBusyKey] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!busyKey) {
+      setVisibleBusyKey(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setVisibleBusyKey(busyKey);
+    }, delayMs);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [busyKey, delayMs]);
+
+  return visibleBusyKey === busyKey ? visibleBusyKey : null;
 }
 
 export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ operatorId }) => {
@@ -58,13 +88,43 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   const [savedSettingsMap, setSavedSettingsMap] = React.useState<Record<string, Record<string, unknown>>>({});
   const [savingSettingKey, setSavingSettingKey] = React.useState<string | null>(null);
   const [runningButtonKey, setRunningButtonKey] = React.useState<string | null>(null);
+  const visibleSavingSettingKey = useDelayedBusyKey(savingSettingKey);
+  const visibleRunningButtonKey = useDelayedBusyKey(runningButtonKey);
+
+  const operatorSettingsSchemaSignature = React.useMemo(() => (
+    pluginSnapshot.plugins
+      .map((plugin) => {
+        const settingsSignature = Object.entries(plugin.settings ?? {})
+          .filter(([, descriptor]) => descriptor.scope === 'operator' && descriptor.type !== 'info')
+          .map(([key, descriptor]) => [
+            key,
+            descriptor.type,
+            JSON.stringify(descriptor.default ?? null),
+            JSON.stringify(descriptor.options ?? []),
+          ].join(':'))
+          .sort()
+          .join('|');
+        const quickSettingsSignature = (plugin.quickSettings ?? [])
+          .map((entry) => entry.settingKey)
+          .sort()
+          .join('|');
+        return [plugin.name, settingsSignature, quickSettingsSignature].join('::');
+      })
+      .sort()
+      .join('||')
+  ), [pluginSnapshot.plugins]);
+
+  const schemaPlugins = React.useMemo(
+    () => pluginSnapshot.plugins,
+    [operatorSettingsSchemaSignature],
+  );
 
   const buildSettingsWithDefaults = React.useCallback((
     remoteMap: Record<string, Record<string, unknown>>,
   ): Record<string, Record<string, unknown>> => {
     const nextMap: Record<string, Record<string, unknown>> = {};
 
-    for (const plugin of pluginSnapshot.plugins) {
+    for (const plugin of schemaPlugins) {
       const current = remoteMap[plugin.name] ?? {};
       const nextSettings: Record<string, unknown> = {};
       for (const [key, descriptor] of Object.entries(plugin.settings ?? {})) {
@@ -79,7 +139,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
     }
 
     return nextMap;
-  }, [pluginSnapshot.plugins]);
+  }, [schemaPlugins]);
 
   const activeGroups = React.useMemo<PluginQuickGroup[]>(() => {
     return pluginSnapshot.plugins
@@ -132,7 +192,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
     return () => {
       cancelled = true;
     };
-  }, [buildSettingsWithDefaults, operatorId, pluginSnapshot.generation, t]);
+  }, [buildSettingsWithDefaults, operatorId, t]);
 
   const getEffectiveValue = React.useCallback((
     plugin: PluginStatus,
@@ -327,7 +387,9 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                         isEnabled ? 'bg-primary-50 text-primary-700' : 'bg-content1 text-default-700'
                       }`}
                       isDisabled={savingSettingKey === fieldId}
-                      isLoading={savingSettingKey === fieldId}
+                      isLoading={visibleSavingSettingKey === fieldId}
+                      spinner={QUICK_ACTION_SPINNER}
+                      spinnerPlacement="end"
                       onPress={() => {
                         void handleBooleanToggle(plugin, entry.settingKey, !isEnabled);
                       }}
@@ -398,7 +460,9 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                             variant="flat"
                             className="h-6 min-w-0 rounded-md px-2 text-[11px]"
                             isDisabled={Boolean(validationIssue) || savingSettingKey === fieldId}
-                            isLoading={savingSettingKey === fieldId}
+                            isLoading={visibleSavingSettingKey === fieldId}
+                            spinner={QUICK_ACTION_SPINNER}
+                            spinnerPlacement="end"
                             onPress={() => void handleSaveDraftSetting(plugin, entry.settingKey)}
                           >
                             {t('common:button.save')}
@@ -438,7 +502,9 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                           variant="flat"
                           className="h-6 min-w-0 rounded-md px-2 text-[11px]"
                           isDisabled={Boolean(validationIssue) || savingSettingKey === fieldId}
-                          isLoading={savingSettingKey === fieldId}
+                          isLoading={visibleSavingSettingKey === fieldId}
+                          spinner={QUICK_ACTION_SPINNER}
+                          spinnerPlacement="end"
                           onPress={() => void handleSaveDraftSetting(plugin, entry.settingKey)}
                         >
                           {t('common:button.save')}
@@ -474,7 +540,9 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                     size="sm"
                     variant="flat"
                     className="h-8 w-full min-w-0 justify-start rounded-md px-2.5 text-xs"
-                    isLoading={runningButtonKey === actionKey}
+                    isLoading={visibleRunningButtonKey === actionKey}
+                    spinner={QUICK_ACTION_SPINNER}
+                    spinnerPlacement="end"
                     onPress={() => void handleButtonAction(plugin, action)}
                   >
                     {resolvePluginLabel(action.label, plugin.name)}

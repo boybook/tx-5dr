@@ -1,5 +1,6 @@
 import type {
   DigitalRadioEngineEvents,
+  LogbookAnalysis,
   PluginStatus,
   PluginSystemSnapshot,
   PluginsConfig,
@@ -13,6 +14,7 @@ import type { PluginContext, StrategyDecisionMeta, StrategyRuntime, StrategyRunt
 import type { EventEmitter } from 'eventemitter3';
 import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
+import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
 import { BUILTIN_PLUGINS, BUILTIN_STANDARD_QSO_PLUGIN_NAME } from './builtins/index.js';
 import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
@@ -33,6 +35,18 @@ interface PluginManagerEvents extends DigitalRadioEngineEvents {
   encodeStart: (slotInfo: SlotInfo) => void;
   operatorSlotChanged: (data: { operatorId: string; slot: StrategyRuntimeSlot }) => void;
   operatorSlotContentChanged: (data: { operatorId: string; slot: StrategyRuntimeSlot; content: string }) => void;
+}
+
+function getParsedMessageSenderCallsign(message: ParsedFT8Message['message']): string | undefined {
+  return 'senderCallsign' in message && typeof message.senderCallsign === 'string'
+    ? message.senderCallsign.toUpperCase()
+    : undefined;
+}
+
+function getParsedMessageGrid(message: ParsedFT8Message['message']): string | undefined {
+  return 'grid' in message && typeof message.grid === 'string' && message.grid.trim().length > 0
+    ? message.grid.trim().toUpperCase()
+    : undefined;
 }
 
 /**
@@ -333,7 +347,7 @@ export class PluginManager {
       }
     }
 
-    const parsedMessages = this.parseSlotPackMessages(slotPack, operatorId);
+    const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
     const filtered = await this.dispatcher.dispatchFilterCandidates(
       operatorId,
       parsedMessages,
@@ -894,7 +908,9 @@ export class PluginManager {
 
   private async handleSlotStart(slotInfo: SlotInfo, slotPack: SlotPack | null): Promise<void> {
     for (const operator of this.deps.getOperators()) {
-      const parsedMessages = slotPack ? this.parseSlotPackMessages(slotPack, operator.config.id) : [];
+      const parsedMessages = slotPack
+        ? await this.parseSlotPackMessages(slotPack, operator.config.id)
+        : [];
 
       await this.dispatcher.dispatchBroadcast(
         operator.config.id,
@@ -909,6 +925,14 @@ export class PluginManager {
         (hook, ctx) => (hook as (messages: ParsedFT8Message[], ctx: PluginContext) => void)(parsedMessages, ctx),
         (instance) => this.getCtxForInstance(instance),
       );
+
+      const autoCallProposals = await this.dispatcher.dispatchAutoCallCandidates(
+        operator.config.id,
+        slotInfo,
+        parsedMessages,
+        (instance) => this.getCtxForInstance(instance),
+      );
+      this.applyAutoCallProposal(operator.config.id, slotInfo, parsedMessages, autoCallProposals);
 
       if (!operator.isTransmitting) continue;
 
@@ -975,18 +999,144 @@ export class PluginManager {
     }
   }
 
-  private parseSlotPackMessages(slotPack: SlotPack, operatorId: string): ParsedFT8Message[] {
+  private async parseSlotPackMessages(slotPack: SlotPack, operatorId: string): Promise<ParsedFT8Message[]> {
     const LOCAL_OPERATOR_SIMULATED_SNR = 10;
-    return slotPack.frames.map((frame) => ({
-      message: FT8MessageParser.parseMessage(frame.message),
-      snr: frame.snr === -999 && frame.operatorId === operatorId ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
-      dt: frame.dt,
-      df: frame.freq,
-      rawMessage: frame.message,
-      slotId: slotPack.slotId,
-      timestamp: slotPack.startMs,
-      logbookAnalysis: frame.logbookAnalysis,
+    return Promise.all(slotPack.frames.map(async (frame) => {
+      const parsedMessage: ParsedFT8Message = {
+        message: FT8MessageParser.parseMessage(frame.message),
+        snr: frame.snr === -999 && frame.operatorId === operatorId ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
+        dt: frame.dt,
+        df: frame.freq,
+        rawMessage: frame.message,
+        slotId: slotPack.slotId,
+        timestamp: slotPack.startMs,
+        logbookAnalysis: frame.logbookAnalysis,
+      };
+
+      if (frame.snr === -999) {
+        return parsedMessage;
+      }
+
+      const analysis = await this.analyzeMessageForOperator(parsedMessage, operatorId);
+      return {
+        ...parsedMessage,
+        logbookAnalysis: analysis ?? parsedMessage.logbookAnalysis,
+      };
     }));
+  }
+
+  private async analyzeMessageForOperator(
+    parsedMessage: ParsedFT8Message,
+    operatorId: string,
+  ): Promise<LogbookAnalysis | undefined> {
+    if (!this.deps.analyzeCallsignForOperator) {
+      return parsedMessage.logbookAnalysis;
+    }
+
+    const callsign = getParsedMessageSenderCallsign(parsedMessage.message);
+    if (!callsign) {
+      return parsedMessage.logbookAnalysis;
+    }
+
+    const grid = getParsedMessageGrid(parsedMessage.message);
+    try {
+      return await this.deps.analyzeCallsignForOperator(operatorId, callsign, grid)
+        ?? parsedMessage.logbookAnalysis;
+    } catch (error) {
+      logger.warn(`Failed to analyze parsed message for operator ${operatorId}`, error);
+      return parsedMessage.logbookAnalysis;
+    }
+  }
+
+  private isOperatorPureStandby(operatorId: string): boolean {
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator || operator.isTransmitting) {
+      return false;
+    }
+
+    const automation = this.deps.getOperatorAutomationSnapshot(operatorId);
+    if (!automation) {
+      return true;
+    }
+
+    const targetCallsign = typeof automation.context?.targetCallsign === 'string'
+      ? automation.context.targetCallsign.trim()
+      : '';
+    return automation.currentState === 'TX6' && targetCallsign.length === 0;
+  }
+
+  private resolveProposalMessageOrder(
+    proposal: AutoCallProposalResult['proposal'],
+    slotInfo: SlotInfo,
+    messages: ParsedFT8Message[],
+  ): number {
+    const lastMessage = proposal.lastMessage;
+    if (!lastMessage || lastMessage.slotInfo.id !== slotInfo.id) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    const exactIndex = messages.findIndex((message) => (
+      message.rawMessage === lastMessage.message.message
+      && message.df === lastMessage.message.freq
+      && message.dt === lastMessage.message.dt
+    ));
+    if (exactIndex >= 0) {
+      return exactIndex;
+    }
+
+    const rawIndex = messages.findIndex((message) => (
+      message.rawMessage === lastMessage.message.message
+    ));
+    return rawIndex >= 0 ? rawIndex : Number.MAX_SAFE_INTEGER;
+  }
+
+  private applyAutoCallProposal(
+    operatorId: string,
+    slotInfo: SlotInfo,
+    messages: ParsedFT8Message[],
+    proposals: AutoCallProposalResult[],
+  ): void {
+    if (proposals.length === 0 || !this.isOperatorPureStandby(operatorId)) {
+      return;
+    }
+
+    const ranked = proposals
+      .map((entry) => ({
+        ...entry,
+        priority: typeof entry.proposal.priority === 'number' ? entry.proposal.priority : 0,
+        messageOrder: this.resolveProposalMessageOrder(entry.proposal, slotInfo, messages),
+      }))
+      .sort((left, right) => {
+        if (left.priority !== right.priority) {
+          return right.priority - left.priority;
+        }
+        if (left.messageOrder !== right.messageOrder) {
+          return left.messageOrder - right.messageOrder;
+        }
+        return left.pluginName.localeCompare(right.pluginName);
+      });
+
+    const winner = ranked[0];
+    if (!winner) {
+      return;
+    }
+
+    if (ranked.length > 1) {
+      logger.info('Auto call proposals arbitrated', {
+        operatorId,
+        selectedPlugin: winner.pluginName,
+        selectedCallsign: winner.proposal.callsign,
+        candidateCount: ranked.length,
+      });
+    }
+
+    logger.info('Auto call proposal accepted', {
+      operatorId,
+      pluginName: winner.pluginName,
+      callsign: winner.proposal.callsign,
+      priority: winner.priority,
+    });
+    this.requestCall(operatorId, winner.proposal.callsign, winner.proposal.lastMessage);
   }
 
   private getOrCreateDecisionState(operatorId: string): OperatorDecisionState {
