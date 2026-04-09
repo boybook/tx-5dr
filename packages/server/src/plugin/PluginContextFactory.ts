@@ -164,13 +164,17 @@ export class PluginContextFactory {
       async hasWorked(callsign: string) {
         return deps.hasWorkedCallsign(operatorId, callsign);
       },
-      async hasWorkedDXCC(_dxccEntity: string) {
-        // TODO: implement DXCC lookup via LogManager
-        return false;
+      async hasWorkedDXCC(dxccEntity: string) {
+        if (!deps.hasWorkedDXCC) {
+          return false;
+        }
+        return deps.hasWorkedDXCC(operatorId, dxccEntity);
       },
-      async hasWorkedGrid(_grid: string) {
-        // TODO: implement grid lookup via LogManager
-        return false;
+      async hasWorkedGrid(grid: string) {
+        if (!deps.hasWorkedGrid) {
+          return false;
+        }
+        return deps.hasWorkedGrid(operatorId, grid);
       },
     };
   }

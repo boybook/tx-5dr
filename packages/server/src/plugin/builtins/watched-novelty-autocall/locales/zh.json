@@ -1,0 +1,19 @@
+{
+  "pluginName": "守候新类型自动起呼",
+  "pluginDescription": "在纯待机时自动守候当前操作员日志本里还未完成的新 DXCC、新网格或新呼号。",
+  "noveltyOverview": "适用场景",
+  "noveltyOverviewDesc": "适合在保持纯待机的同时追逐新的实体、网格或台站。下面可同时启用多个“新类型”；只要任一已启用类型命中，插件就会提议在下一发射时隙自动起呼。",
+  "watchNewDxcc": "守候新 DXCC",
+  "watchNewDxccDesc": "当解码到的台站属于当前操作员日志本尚未做过的 DXCC 实体时触发。已删除实体不会触发。",
+  "watchNewGrid": "守候新网格",
+  "watchNewGridDesc": "当解码到的台站带有当前操作员日志本尚未做过的网格时触发。",
+  "watchNewCallsign": "守候新呼号",
+  "watchNewCallsignDesc": "当解码到的台站呼号在当前操作员日志本中尚未做过时触发。",
+  "triggerMode": "触发条件",
+  "triggerModeDesc": "决定哪些报文类型会进入守候判断。所有模式都会额外包含“直接对你呼叫”的报文，然后再检查是否命中新类型。",
+  "triggerCqOnly": "仅 CQ",
+  "triggerCqOrSignoff": "CQ 或 RR73/73",
+  "triggerAny": "任意出现",
+  "autocallPriority": "自动起呼优先级",
+  "autocallPriorityDesc": "多个自动起呼插件在同一时隙同时命中时，优先级高者胜出。"
+}

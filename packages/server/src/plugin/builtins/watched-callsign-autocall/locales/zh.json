@@ -11,5 +11,7 @@
   "triggerModeDesc": "决定守候台出现哪类报文时自动起呼；所有模式都会额外响应“直接对你呼叫”的报文。",
   "triggerCqOnly": "仅 CQ",
   "triggerCqOrSignoff": "CQ 或 RR73/73",
-  "triggerAny": "任意出现"
+  "triggerAny": "任意出现",
+  "autocallPriority": "自动起呼优先级",
+  "autocallPriorityDesc": "多个自动起呼插件在同一时隙同时命中时，优先级高者胜出。"
 }

@@ -25,6 +25,7 @@ export type { PluginDefinition } from './definition.js';
 export type { PluginContext } from './context.js';
 export type {
   PluginHooks,
+  AutoCallProposal,
   ScoredCandidate,
   StrategyDecision,
   StrategyDecisionMeta,

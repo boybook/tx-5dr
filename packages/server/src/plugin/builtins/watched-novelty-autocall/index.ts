@@ -1,8 +1,8 @@
 import {
-  type AutoCallProposal,
   FT8MessageType,
-  type FrameMessage,
+  type AutoCallProposal,
   type LastMessageInfo,
+  type FrameMessage,
   type ParsedFT8Message,
   type PluginContext,
   type PluginDefinition,
@@ -11,32 +11,7 @@ import {
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
-type LegacyMatchMode = 'exact' | 'prefix';
 type TriggerMode = 'cq' | 'cq-or-signoff' | 'any';
-type WatchRule = {
-  raw: string;
-  type: 'exact' | 'prefix' | 'regex';
-  matches: (callsign: string) => boolean;
-};
-const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
-
-function normalizeWatchList(rawValue: unknown): string[] {
-  if (!Array.isArray(rawValue)) {
-    return [];
-  }
-
-  return rawValue
-    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-    .filter((entry) => Boolean(entry) && !entry.startsWith('#'));
-}
-
-function escapeRegex(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function getLegacyMatchMode(ctx: PluginContext): LegacyMatchMode {
-  return ctx.config.matchMode === 'prefix' ? 'prefix' : 'exact';
-}
 
 function getTriggerMode(ctx: PluginContext): TriggerMode {
   const value = ctx.config.triggerMode;
@@ -49,7 +24,7 @@ function getTriggerMode(ctx: PluginContext): TriggerMode {
 function getAutocallPriority(ctx: PluginContext): number {
   return typeof ctx.config.autocallPriority === 'number'
     ? ctx.config.autocallPriority
-    : 100;
+    : 80;
 }
 
 function getSenderCallsign(message: ParsedFT8Message['message']): string {
@@ -64,49 +39,6 @@ function getTargetCallsign(message: ParsedFT8Message['message']): string {
     return message.targetCallsign.toUpperCase();
   }
   return '';
-}
-
-function buildWatchRules(ctx: PluginContext): WatchRule[] {
-  const legacyMatchMode = getLegacyMatchMode(ctx);
-  const rules: WatchRule[] = [];
-
-  for (const rawEntry of normalizeWatchList(ctx.config.watchList)) {
-    if (REGEX_META_CHARS.test(rawEntry)) {
-      try {
-        const regex = new RegExp(rawEntry, 'i');
-        rules.push({
-          raw: rawEntry,
-          type: 'regex',
-          matches: (callsign) => regex.test(callsign),
-        });
-      } catch (error) {
-        ctx.log.warn('Watched callsign regex is invalid and will be ignored', {
-          entry: rawEntry,
-          error,
-        });
-      }
-      continue;
-    }
-
-    const normalizedEntry = rawEntry.toUpperCase();
-    if (legacyMatchMode === 'prefix') {
-      rules.push({
-        raw: rawEntry,
-        type: 'prefix',
-        matches: (callsign) => callsign.startsWith(normalizedEntry),
-      });
-      continue;
-    }
-
-    const exactRegex = new RegExp(`^${escapeRegex(rawEntry)}$`, 'i');
-    rules.push({
-      raw: rawEntry,
-      type: 'exact',
-      matches: (callsign) => exactRegex.test(callsign),
-    });
-  }
-
-  return rules;
 }
 
 function isPureStandby(ctx: PluginContext): boolean {
@@ -162,52 +94,86 @@ function toFrameMessage(parsedMessage: ParsedFT8Message): FrameMessage {
   };
 }
 
+function getMatchedNoveltyKinds(parsedMessage: ParsedFT8Message, ctx: PluginContext): string[] {
+  const analysis = parsedMessage.logbookAnalysis;
+  if (!analysis) {
+    return [];
+  }
+
+  const matchedKinds: string[] = [];
+  if (ctx.config.watchNewDxcc === true && analysis.isNewDxccEntity && analysis.dxccStatus !== 'deleted') {
+    matchedKinds.push('newDxcc');
+  }
+  if (ctx.config.watchNewGrid === true && analysis.isNewGrid) {
+    matchedKinds.push('newGrid');
+  }
+  if (ctx.config.watchNewCallsign === true && analysis.isNewCallsign) {
+    matchedKinds.push('newCallsign');
+  }
+  return matchedKinds;
+}
+
 function findMatchedTarget(
   messages: ParsedFT8Message[],
   ctx: PluginContext,
-): { callsign: string; message: ParsedFT8Message; rule: WatchRule } | null {
-  const watchRules = buildWatchRules(ctx);
-  if (watchRules.length === 0) {
+): { callsign: string; message: ParsedFT8Message; matchedKinds: string[] } | null {
+  if (ctx.config.watchNewDxcc !== true && ctx.config.watchNewGrid !== true && ctx.config.watchNewCallsign !== true) {
     return null;
   }
 
   const triggerMode = getTriggerMode(ctx);
+  for (const parsedMessage of messages) {
+    const callsign = getSenderCallsign(parsedMessage.message);
+    if (!callsign || !shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
+      continue;
+    }
 
-  for (const watchRule of watchRules) {
-    for (const parsedMessage of messages) {
-      const senderCallsign = getSenderCallsign(parsedMessage.message);
-      if (!senderCallsign || !watchRule.matches(senderCallsign)) {
-        continue;
-      }
-      if (!shouldTriggerMessage(parsedMessage, ctx, triggerMode)) {
-        continue;
-      }
-      return { callsign: senderCallsign, message: parsedMessage, rule: watchRule };
+    const matchedKinds = getMatchedNoveltyKinds(parsedMessage, ctx);
+    if (matchedKinds.length > 0) {
+      return {
+        callsign,
+        message: parsedMessage,
+        matchedKinds,
+      };
     }
   }
 
   return null;
 }
 
-export const watchedCallsignAutocallPlugin: PluginDefinition = {
-  name: 'watched-callsign-autocall',
+export const watchedNoveltyAutocallPlugin: PluginDefinition = {
+  name: 'watched-novelty-autocall',
   version: '1.0.0',
   type: 'utility',
-  description: 'Automatically start calling watched callsigns when they appear while the operator is idle',
+  description: 'Automatically call newly needed DXCC, grids, or callsigns while the operator is idle',
 
   settings: {
-    watchOverview: {
+    noveltyOverview: {
       type: 'info',
       default: '',
-      label: 'watchOverview',
-      description: 'watchOverviewDesc',
+      label: 'noveltyOverview',
+      description: 'noveltyOverviewDesc',
       scope: 'operator',
     },
-    watchList: {
-      type: 'string[]',
-      default: [],
-      label: 'watchList',
-      description: 'watchListDesc',
+    watchNewDxcc: {
+      type: 'boolean',
+      default: false,
+      label: 'watchNewDxcc',
+      description: 'watchNewDxccDesc',
+      scope: 'operator',
+    },
+    watchNewGrid: {
+      type: 'boolean',
+      default: false,
+      label: 'watchNewGrid',
+      description: 'watchNewGridDesc',
+      scope: 'operator',
+    },
+    watchNewCallsign: {
+      type: 'boolean',
+      default: false,
+      label: 'watchNewCallsign',
+      description: 'watchNewCallsignDesc',
       scope: 'operator',
     },
     triggerMode: {
@@ -224,7 +190,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
     },
     autocallPriority: {
       type: 'number',
-      default: 100,
+      default: 80,
       label: 'autocallPriority',
       description: 'autocallPriorityDesc',
       scope: 'operator',
@@ -234,8 +200,10 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
   },
 
   quickSettings: [
+    { settingKey: 'watchNewDxcc' },
+    { settingKey: 'watchNewGrid' },
+    { settingKey: 'watchNewCallsign' },
     { settingKey: 'triggerMode' },
-    { settingKey: 'watchList' },
   ],
 
   hooks: {
@@ -250,7 +218,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
       }
 
       if (ctx.operator.isTargetBeingWorkedByOthers(matched.callsign)) {
-        ctx.log.debug('Watched callsign skipped because another operator is already working it', {
+        ctx.log.debug('Novelty autocall skipped because another operator is already working it', {
           callsign: matched.callsign,
         });
         return null;
@@ -261,10 +229,9 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
         slotInfo,
       };
 
-      ctx.log.debug('Watched callsign proposed for automatic call', {
+      ctx.log.debug('Novelty autocall proposed target', {
         callsign: matched.callsign,
-        matchedBy: matched.rule.type,
-        watchEntry: matched.rule.raw,
+        matchedKinds: matched.matchedKinds,
         triggerMode: getTriggerMode(ctx),
         priority: getAutocallPriority(ctx),
       });
@@ -278,7 +245,7 @@ export const watchedCallsignAutocallPlugin: PluginDefinition = {
   },
 };
 
-export const watchedCallsignAutocallLocales: Record<string, Record<string, string>> = {
+export const watchedNoveltyAutocallLocales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
 };

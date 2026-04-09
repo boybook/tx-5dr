@@ -94,8 +94,8 @@ export const RightLayout: React.FC = () => {
                     </div>
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="px-1">
-                  <div>
+                <PopoverContent className="overflow-hidden p-0">
+                  <div className="max-h-[min(72vh,calc(100vh-5rem))] overflow-y-auto overscroll-contain px-1 py-1">
                     <AutomationSettingsPanel operatorId={automationOperatorId} />
                   </div>
                 </PopoverContent>

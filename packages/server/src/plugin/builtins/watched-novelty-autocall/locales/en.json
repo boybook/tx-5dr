@@ -1,0 +1,19 @@
+{
+  "pluginName": "Watched Novelty Autocall",
+  "pluginDescription": "Automatically call newly needed DXCC, grids, or callsigns while the operator is fully idle.",
+  "noveltyOverview": "Best For",
+  "noveltyOverviewDesc": "Use this to keep hunting fresh multipliers while staying in pure standby. Enable one or more novelty switches below; if any enabled type matches, the plugin proposes an automatic call for the next slot.",
+  "watchNewDxcc": "Watch New DXCC",
+  "watchNewDxccDesc": "Trigger when a decoded station belongs to a DXCC entity not yet worked in this operator's logbook. Deleted DXCC entities are ignored.",
+  "watchNewGrid": "Watch New Grid",
+  "watchNewGridDesc": "Trigger when a decoded station carries a grid square that has not yet been worked in this operator's logbook.",
+  "watchNewCallsign": "Watch New Callsign",
+  "watchNewCallsignDesc": "Trigger when the decoded station callsign has not yet been worked in this operator's logbook.",
+  "triggerMode": "Trigger Mode",
+  "triggerModeDesc": "Choose which kinds of appearances should be considered. All modes still include messages addressed directly to your callsign before the novelty check is applied.",
+  "triggerCqOnly": "CQ only",
+  "triggerCqOrSignoff": "CQ or RR73/73",
+  "triggerAny": "Any appearance",
+  "autocallPriority": "Autocall Priority",
+  "autocallPriorityDesc": "Higher values win when multiple automatic-call plugins match in the same slot."
+}
