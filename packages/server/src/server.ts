@@ -34,6 +34,10 @@ import { LiveKitBridgeManager } from './realtime/LiveKitBridgeManager.js';
 import { RealtimeTransportManager } from './realtime/RealtimeTransportManager.js';
 import { getLiveKitCredentialRuntimeStatus } from './realtime/LiveKitCredentialState.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from './utils/errors/RadioError.js';
+import { createLogger } from './utils/logger.js';
+import { ConsoleLogger } from './utils/console-logger.js';
+
+const bootLogger = createLogger('ServerBoot');
 
 /**
  * 📊 Day14：将 RadioErrorCode 映射到 HTTP 状态码
@@ -99,6 +103,7 @@ function getHttpStatusCode(code: RadioErrorCode): number {
 }
 
 export async function createServer() {
+  bootLogger.info('createServer starting');
   const fastify = Fastify({
     logger: {
       level: 'info',
@@ -142,9 +147,12 @@ export async function createServer() {
   fastify.log.info('Auth plugin registered');
 
   // 初始化数字无线电引擎
+  bootLogger.info('initializing digital radio engine...');
+  ConsoleLogger.getInstance().flushSync();
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
   await digitalRadioEngine.initialize();
-  fastify.log.info('Digital radio engine initialized');
+  bootLogger.info('digital radio engine initialized');
+  ConsoleLogger.getInstance().flushSync();
 
   fastify.addHook('onClose', async () => {
     await digitalRadioEngine.pluginManager.shutdown();
@@ -161,9 +169,11 @@ export async function createServer() {
   processMonitor.start();
 
   // 初始化 LiveKit bridge（统一音频数据面）
+  bootLogger.info('starting LiveKit bridge...');
   const liveKitBridgeManager = new LiveKitBridgeManager(digitalRadioEngine);
   await liveKitBridgeManager.start();
   const realtimeTransportManager = RealtimeTransportManager.initialize(digitalRadioEngine, liveKitBridgeManager);
+  bootLogger.info('LiveKit bridge started');
 
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, processMonitor);
@@ -271,6 +281,8 @@ export async function createServer() {
   });
 
   // ===== 路由注册（带权限保护） =====
+  bootLogger.info('registering routes...');
+  ConsoleLogger.getInstance().flushSync();
 
   // Admin 路由：音频、Profile、设置、存储、第三方服务
   await fastify.register(async (scope) => {

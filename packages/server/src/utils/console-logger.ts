@@ -143,6 +143,21 @@ export class ConsoleLogger {
     this.writeLogEntry(level, category, message);
   }
 
+  /**
+   * Synchronously flush all queued log entries to disk.
+   * Use at critical boot milestones to ensure logs survive a subsequent crash.
+   */
+  flushSync(): void {
+    if (this.logQueue.length === 0) return;
+    const entries = this.logQueue.splice(0);
+    try {
+      const fsSync = require('fs');
+      fsSync.appendFileSync(this.logFilePath, entries.join('\n') + '\n', 'utf-8');
+    } catch (error) {
+      this.originalConsole.error('[FileLogger] flushSync failed:', error);
+    }
+  }
+
   getLogFilePath(): string { return this.logFilePath; }
 
   async getLogFileSize(): Promise<number> {
