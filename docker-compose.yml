@@ -52,11 +52,15 @@ services:
     devices:
       # USB设备（支持USB声卡和串口设备）
       - /dev/bus/usb:/dev/bus/usb:rwm
-      # 如果使用 Hamlib 串口/CAT 模式，建议显式映射宿主机创建的 tty 设备
-      # - /dev/ttyUSB0:/dev/ttyUSB0:rwm
-      # - /dev/ttyUSB1:/dev/ttyUSB1:rwm
       # 音频设备
       - /dev/snd:/dev/snd:rwm
+      # 串口设备：Hamlib CAT 控制必须显式映射宿主机 tty 设备节点
+      # 仅有 /dev/bus/usb 不够，需要同时映射对应的 tty 节点
+      # 请根据实际设备取消注释并修改：
+      # - /dev/ttyUSB0:/dev/ttyUSB0:rwm    # CP2102/CH340 等 USB-Serial
+      # - /dev/ttyUSB1:/dev/ttyUSB1:rwm
+      # - /dev/ttyACM0:/dev/ttyACM0:rwm    # ICOM IC-705 等 USB CDC ACM
+      # - /dev/ttyACM1:/dev/ttyACM1:rwm
     environment:
       - NODE_ENV=production
       - PORT=4000
@@ -71,9 +75,10 @@ services:
       # 音频环境变量
       - PULSE_RUNTIME_PATH=/run/user/1000/pulse
       - PULSE_STATE_PATH=/var/lib/pulse
-    # 音频设备访问
+    # 音频(audio)和串口(dialout)设备访问
     group_add:
       - audio
+      - dialout
     cap_add:
       - CHOWN
       - SETUID

@@ -132,7 +132,7 @@ else
 fi
 
 # 将应用用户添加到必要的组
-usermod -a -G audio,pulse-access "$APP_USER" 2>/dev/null || true
+usermod -a -G audio,dialout,pulse-access "$APP_USER" 2>/dev/null || true
 
 # 设置目录权限
 log "Setting directory permissions..."
