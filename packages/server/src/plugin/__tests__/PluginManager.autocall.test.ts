@@ -115,6 +115,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
           operator.config.frequency = frequency;
         }
       },
+      interruptOperatorTransmission: async () => {},
       hasWorkedCallsign: async () => false,
       analyzeCallsignForOperator: options?.analyzeCallsign
         ? async (_operatorId, callsign, grid) => options.analyzeCallsign?.(callsign, grid) ?? null

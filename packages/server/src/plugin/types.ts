@@ -64,6 +64,7 @@ export interface PluginManagerDeps {
     guardBandwidth?: number,
   ) => number | undefined;
   setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
+  interruptOperatorTransmission: (operatorId: string) => Promise<void>;
   hasWorkedCallsign: (operatorId: string, callsign: string) => Promise<boolean>;
   hasWorkedDXCC?: (operatorId: string, dxccEntity: string) => Promise<boolean>;
   hasWorkedGrid?: (operatorId: string, grid: string) => Promise<boolean>;

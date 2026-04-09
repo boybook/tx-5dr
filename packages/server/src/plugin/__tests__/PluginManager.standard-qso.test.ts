@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -102,6 +102,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     hasWorkedCallsign?: boolean | ((callsign: string) => boolean | Promise<boolean>);
     pluginConfigs?: Record<string, { enabled: boolean; settings: Record<string, unknown> }>;
     operatorPluginSettings?: Record<string, Record<string, unknown>>;
+    interruptOperatorTransmission?: (operatorId: string) => Promise<void>;
   }) {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string; callsign: string }) => {
@@ -135,6 +136,8 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-test-'));
     tempDirs.push(dataDir);
+    const interruptOperatorTransmission = options?.interruptOperatorTransmission
+      ?? (async () => undefined);
 
     let pluginManager!: PluginManager;
     pluginManager = new PluginManager({
@@ -150,6 +153,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       getRadioBand: () => '40m',
       getRadioConnected: () => true,
       getLatestSlotPack: () => null,
+      interruptOperatorTransmission,
       hasWorkedCallsign: async (_operatorId, callsign) => {
         if (typeof options?.hasWorkedCallsign === 'function') {
           return options.hasWorkedCallsign(callsign);
@@ -194,7 +198,13 @@ describe('PluginManager standard-qso late re-decision', () => {
       });
     }
 
-    return { dataDir, eventEmitter, operator, pluginManager };
+    return {
+      dataDir,
+      eventEmitter,
+      interruptOperatorTransmission,
+      operator,
+      pluginManager,
+    };
   }
 
   function patchRuntimeContext(
@@ -555,6 +565,74 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
     expect(operator.isTransmitting).toBe(false);
+
+    await pluginManager.shutdown();
+  });
+
+  it('immediately interrupts the active transmission when a late re-decision stops the operator', async () => {
+    const interruptOperatorTransmission = vi.fn(async () => undefined);
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: false,
+      interruptOperatorTransmission,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+
+    const currentTxSlot = createSlotInfo(60_000);
+    await (pluginManager as any).handleSlotStart(
+      currentTxSlot,
+      createSlotPack(createSlotInfo(45_000), []),
+    );
+
+    const stopped = await pluginManager.reDecideOperator(
+      operator.config.id,
+      createSlotPack(createSlotInfo(45_000), [{
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.SEVENTY_THREE,
+          senderCallsign: 'BG5DRB',
+          targetCallsign: 'BG7XTV',
+        }),
+        snr: 5,
+        freq: 1502,
+      }]),
+    );
+
+    expect(stopped).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+    expect(interruptOperatorTransmission).toHaveBeenCalledTimes(1);
+    expect(interruptOperatorTransmission).toHaveBeenCalledWith(operator.config.id);
+
+    await pluginManager.shutdown();
+  });
+
+  it('does not interrupt the active transmission on a normal slot-start stop decision', async () => {
+    const interruptOperatorTransmission = vi.fn(async () => undefined);
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: false,
+      interruptOperatorTransmission,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.SEVENTY_THREE,
+        senderCallsign: 'BG5DRB',
+        targetCallsign: 'BG7XTV',
+      }),
+      snr: 5,
+      freq: 1502,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(operator.isTransmitting).toBe(false);
+    expect(interruptOperatorTransmission).not.toHaveBeenCalled();
 
     await pluginManager.shutdown();
   });
