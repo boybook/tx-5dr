@@ -77,6 +77,34 @@ export interface AutoCallProposal {
 }
 
 /**
+ * Immutable metadata about the automatic-call proposal that won arbitration.
+ */
+export interface AutoCallExecutionRequest {
+  /** Plugin name that produced the winning proposal. */
+  sourcePluginName: string;
+  /** Target callsign chosen by the arbitration step. */
+  callsign: string;
+  /** Slot that is currently being processed when the autocall starts. */
+  slotInfo: SlotInfo;
+  /** Optional triggering frame context preserved from the proposal stage. */
+  lastMessage?: LastMessageInfo;
+}
+
+/**
+ * Host-managed execution plan for an accepted automatic-call proposal.
+ *
+ * Utility plugins may refine this plan in
+ * {@link PluginHooks.onConfigureAutoCallExecution}. The host then applies the
+ * merged plan before calling the active strategy runtime.
+ */
+export interface AutoCallExecutionPlan {
+  /**
+   * Optional transmit audio offset to apply before starting the automatic call.
+   */
+  audioFrequency?: number;
+}
+
+/**
  * Hook collection implemented by a plugin.
  *
  * Hooks fall into three broad categories:
@@ -100,6 +128,20 @@ export interface PluginHooks {
     messages: ParsedFT8Message[],
     ctx: PluginContext,
   ): AutoCallProposal | null | undefined | Promise<AutoCallProposal | null | undefined>;
+
+  /**
+   * Refines how an accepted automatic-call proposal should be executed.
+   *
+   * The host runs this as a utility-plugin pipeline after proposal
+   * arbitration. Each plugin receives the current execution plan and may return
+   * an updated copy. This is the preferred place to centralize execution
+   * policies such as pre-call frequency selection.
+   */
+  onConfigureAutoCallExecution?(
+    request: AutoCallExecutionRequest,
+    plan: AutoCallExecutionPlan,
+    ctx: PluginContext,
+  ): AutoCallExecutionPlan | null | undefined | Promise<AutoCallExecutionPlan | null | undefined>;
 
   /**
    * Filters candidate target messages before the scoring phase.

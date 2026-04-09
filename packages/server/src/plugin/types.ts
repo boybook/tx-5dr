@@ -57,6 +57,13 @@ export interface PluginManagerDeps {
   getRadioBand: () => string;
   getRadioConnected: () => boolean;
   getLatestSlotPack: (operatorId?: string) => import('@tx5dr/contracts').SlotPack | null;
+  findBestTransmitFrequency?: (
+    slotId: string,
+    minFreq?: number,
+    maxFreq?: number,
+    guardBandwidth?: number,
+  ) => number | undefined;
+  setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
   hasWorkedCallsign: (operatorId: string, callsign: string) => Promise<boolean>;
   hasWorkedDXCC?: (operatorId: string, dxccEntity: string) => Promise<boolean>;
   hasWorkedGrid?: (operatorId: string, grid: string) => Promise<boolean>;

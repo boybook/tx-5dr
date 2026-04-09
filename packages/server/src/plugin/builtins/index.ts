@@ -14,6 +14,12 @@
  */
 
 export {
+  autocallControlsPlugin,
+  autocallControlsLocales,
+  BUILTIN_AUTOCALL_CONTROLS_PLUGIN_NAME,
+} from './autocall-controls/index.js';
+
+export {
   standardQSOStrategyPlugin,
   standardQSOLocales,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
@@ -54,6 +60,10 @@ export {
   watchedNoveltyAutocallLocales,
 } from './watched-novelty-autocall/index.js';
 
+import {
+  autocallControlsPlugin,
+  autocallControlsLocales,
+} from './autocall-controls/index.js';
 import { standardQSOStrategyPlugin, standardQSOLocales } from './standard-qso/index.js';
 import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
 import { callsignPrefixFilterPlugin, callsignPrefixFilterLocales } from './callsign-prefix-filter/index.js';
@@ -75,6 +85,11 @@ export interface BuiltinPluginEntry {
  * 所有内置插件列表，供 PluginManager 统一注册
  */
 export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
+  {
+    definition: autocallControlsPlugin,
+    locales: autocallControlsLocales,
+    enabledByDefault: true,
+  },
   {
     definition: standardQSOStrategyPlugin,
     locales: standardQSOLocales,

@@ -31,7 +31,8 @@
    - 6.5 [qso-session-inspector（广播 Hook + 面板示例）](#65-qso-session-inspector广播-hook--面板示例)
    - 6.6 [watched-callsign-autocall（待机守候自动起呼）](#66-watched-callsign-autocall待机守候自动起呼)
    - 6.7 [watched-novelty-autocall（守候新类型自动起呼）](#67-watched-novelty-autocall守候新类型自动起呼)
-   - 6.8 [heartbeat-demo（timer + button quickAction 示例）](#68-heartbeat-demotimer--button-quickaction-示例)
+   - 6.8 [autocall-controls（自动起呼通用设置）](#68-autocall-controls自动起呼通用设置)
+   - 6.9 [heartbeat-demo（timer + button quickAction 示例）](#69-heartbeat-demotimer--button-quickaction-示例)
 7. [插件系统架构](#7-插件系统架构)
    - 7.1 [生命周期](#71-生命周期)
    - 7.2 [Hook 分发机制](#72-hook-分发机制)
@@ -67,6 +68,14 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 - **竞赛模式**：完全替换 QSO 流程以适配特定竞赛规则
 - **数据展示**：实时统计并在面板中展示通联数据
 - **外部集成**：查询 DX Cluster、上传日志到外部服务
+
+### 建议阅读顺序
+
+本文件偏向“完整技术说明”和“宿主实现约束”。如果你是第一次编写 TX-5DR 插件，推荐按下面顺序阅读：
+
+1. 先阅读官方站点中的插件 API 教程（从最小 utility 插件开始）
+2. 再回到本文件核对完整接口、内置插件说明与宿主仲裁规则
+3. 最后结合 `packages/server/src/plugin/builtins/` 中的真实实现查看细节
 
 ---
 
@@ -173,6 +182,11 @@ packages/server/src/plugin/builtins/
 │       ├── zh.json
 │       └── en.json
 ├── qso-session-inspector/
+│   ├── index.ts
+│   └── locales/
+│       ├── zh.json
+│       └── en.json
+├── autocall-controls/
 │   ├── index.ts
 │   └── locales/
 │       ├── zh.json
@@ -531,6 +545,18 @@ interface OperatorControl {
 
 `ScoredCandidate` 是 `ParsedFT8Message` 的扩展，附加 `score: number` 字段。通常由工具插件做前置过滤和评分；活跃策略插件如果也声明了这些 hook，同样会参与这条链路。
 
+#### Score Hook 使用规范
+
+对于“偏好排序型” utility 插件，推荐实现 `onScoreCandidates(candidates, ctx)`，通过修改 `candidate.score` 参与 Host 的候选排序，而不是直接发起呼叫或私自跳过整条决策链：
+
+- **排序型插件只调分，不直接控制发射**：例如“已通联偏置”“新实体加分”“低信噪比减分”
+- **建议保留候选集合结构**：返回与输入一一对应的候选对象，仅调整 `score`
+- **加减分可叠加**：多个评分插件会按链式顺序依次累计分值，因此更适合表达“偏好”而不是“强制”
+- **硬过滤应使用 `onFilterCandidates`**：如果你的规则是“绝不考虑某类候选”，应走过滤 hook，而不是给一个极端分数伪装成过滤
+- **最终目标选择仍由 Host/活跃策略决定**：评分插件影响排序，但不替代策略运行时
+
+内置 `worked-station-bias` 就是标准示例：它通过 `ctx.logbook.hasWorked(callsign)` 查询是否已通联，再对候选施加 bonus / penalty，而不直接调用任何起呼控制。
+
 #### Strategy Runtime（仅活跃策略插件）
 
 每个操作员只有一个活跃策略插件。策略插件不再通过黑盒字符串命令参与内部控制，而是必须显式创建 `StrategyRuntime`：
@@ -587,6 +613,68 @@ Fire-and-forget，不阻塞主流程，错误只记录不影响其他插件。
 - 仲裁顺序为：`priority` 高者优先 → 命中消息在当前时隙中的顺序 → 插件名稳定排序
 - 仲裁完成后，Host 最多只会执行一次统一的 `requestCall(...)`
 - 旧插件仍可继续在 `onSlotStart` / `onDecode` 中直接 `call()`，但新的内置自动起呼插件都应优先改用 proposal hook，以获得可组合、可预测的兼容行为
+
+#### Autocall Proposal 使用规范
+
+推荐把 `onAutoCallCandidate(...)` 视为“提议接口”，而不是“立即执行接口”：
+
+- **只提议，不抢执行**：新自动起呼插件应返回 proposal，由 Host 统一仲裁；不要在同一个触发路径里再直接调用 `ctx.operator.call(...)`
+- **只用于 utility 插件**：策略插件继续通过 `StrategyRuntime` 决定流程；proposal hook 主要用于“守候型”“发现型”“机会型”自动起呼工具插件
+- **未命中就返回空**：当前时隙不满足条件时返回 `null` / `undefined`；不要返回空字符串或无效对象
+- **尽量附带 `lastMessage`**：这样 Host 可以在同优先级下按命中的消息顺序稳定排序，也能更好保留触发时隙上下文
+- **插件内部仍负责业务过滤**：例如 trigger mode、是否被其他操作员占用、是否忽略 deleted DXCC、是否满足自己的黑白名单规则
+- **最终是否真的起呼以 Host 为准**：Host 只会在“纯待机”状态接受 proposal——即当前未发射、策略处于待机槽位，且没有已锁定目标
+
+#### Autocall Execution Hook（自动起呼执行策略）
+
+当某个 proposal 胜出后，Host 会继续串行调用 `onConfigureAutoCallExecution(request, plan, ctx)`：
+
+```typescript
+{
+  request: {
+    sourcePluginName: string;
+    callsign: string;
+    slotInfo: SlotInfo;
+    lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
+  };
+  plan: {
+    audioFrequency?: number;
+  };
+}
+```
+
+- 这一步发生在仲裁之后、真正 `requestCall(...)` 之前
+- 适合放“命中后怎么执行”的共享策略，而不是“是否命中目标”的发现逻辑
+- 多个插件会按 utility pipeline 顺序依次修改 `plan`，因此比在 Host 中硬编码读取某个插件配置更透明，也更便于组合
+- 当前内置的 `autocall-controls` 就使用这个 hook 来决定是否先切到更空闲的发射音频频率
+
+#### 空闲频率选择 API
+
+如果插件需要复用系统内已有的“自动选择空闲发射音频频率”能力，可直接使用：
+
+```typescript
+ctx.band.findIdleTransmitFrequency({
+  slotId: request.slotInfo.id,
+  minHz: 300,
+  maxHz: 3000,
+  guardHz: 100,
+});
+```
+
+- 这个 API 暴露在 `plugin-api` 层，而不是要求插件自行实现频谱占用分析
+- 当前底层直接复用了系统内部已有的空闲频率选择逻辑（`SlotPackManager.findBestTransmitFrequency(...)`）
+- 当宿主暂时无法计算，或当前时隙没有合适空闲窗口时，会返回 `null`
+
+#### Autocall Priority 约定
+
+`priority` 建议表达“插件意图强弱”，而不是复用为插件内部规则排序：
+
+- `100+`：强指令型守候，例如显式 watch list、sked、朋友台、指定 DX
+- `60~99`：高价值机会型守候，例如新 DXCC / 新网格 / 新呼号
+- `1~59`：弱偏好型自动起呼，例如轻量机会捕捉或普通偏好补充
+- `0`：未显式配置优先级时的默认层级
+
+推荐把优先级暴露为 **operator scope** 设置，以便不同操作员独立调整；但是否放进 quick settings 由插件 UI 自行决定。
 
 ### 4.5 设置系统
 
@@ -1051,6 +1139,7 @@ export default plugin;
 
 - 对未通联过的呼号加分
 - 对已通联过的呼号减分
+- 通过标准评分 hook 影响 Host 的候选排序，而不是直接调用任何起呼控制
 
 它适合和 `snr-filter`、`callsign-prefix-filter` 同时启用，用于验证 filter → score 的组合链路。
 
@@ -1116,7 +1205,30 @@ export default plugin;
 | `triggerMode` | string | `'cq'` | 触发条件：`cq` / `cq-or-signoff` / `any` |
 | `autocallPriority` | number | `80` | 自动起呼优先级；默认低于守候呼号插件 |
 
-### 6.8 heartbeat-demo（timer + button quickAction 示例）
+### 6.8 autocall-controls（自动起呼通用设置）
+
+**位置**：`packages/server/src/plugin/builtins/autocall-controls/`
+
+这是一个“共享行为配置”插件：它不负责发现目标，也不直接参与 proposal 仲裁，而是通过 `onConfigureAutoCallExecution(...)` 统一控制 **任意自动起呼 proposal 被 Host 接受之后，该怎么执行**。
+
+当前内置的第一项共享策略是：
+
+- `autoSelectIdleFrequency`：在自动起呼真正开始前，调用 `ctx.band.findIdleTransmitFrequency(...)` 复用宿主已有的空闲频率选择能力，自动为当前操作员挑选更空闲的发射音频频率
+
+这样做的好处是：
+
+- 不需要在 `watched-callsign-autocall` 和 `watched-novelty-autocall` 里各放一个重复开关
+- 后续如果增加更多 proposal 型自动起呼插件，也能自动复用这套行为
+- “谁负责发现目标”和“命中后如何执行”被清晰拆成两层，兼容性更好
+
+#### Settings（均为 operator scope）
+
+| Key | 类型 | 默认值 | 说明 |
+|-----|------|--------|------|
+| `autocallControlsOverview` | info | `''` | 场景说明：集中放置所有自动起呼共享执行策略 |
+| `autoSelectIdleFrequency` | boolean | `false` | 自动起呼命中后，先为当前操作员挑选当前时隙内更空闲的发射音频频率，再开始起呼 |
+
+### 6.9 heartbeat-demo（timer + button quickAction 示例）
 
 **位置**：`packages/server/src/plugin/builtins/heartbeat-demo/`
 
@@ -1408,6 +1520,7 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
 | callsign-prefix-filter 示例 | `packages/server/src/plugin/builtins/callsign-prefix-filter/index.ts` |
 | worked-station-bias 示例 | `packages/server/src/plugin/builtins/worked-station-bias/index.ts` |
 | qso-session-inspector 示例 | `packages/server/src/plugin/builtins/qso-session-inspector/index.ts` |
+| autocall-controls 示例 | `packages/server/src/plugin/builtins/autocall-controls/index.ts` |
 | watched-callsign-autocall 示例 | `packages/server/src/plugin/builtins/watched-callsign-autocall/index.ts` |
 | watched-novelty-autocall 示例 | `packages/server/src/plugin/builtins/watched-novelty-autocall/index.ts` |
 | heartbeat-demo 示例 | `packages/server/src/plugin/builtins/heartbeat-demo/index.ts` |

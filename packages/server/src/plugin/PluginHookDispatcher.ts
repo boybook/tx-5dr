@@ -1,5 +1,11 @@
 import type { ParsedFT8Message } from '@tx5dr/contracts';
-import type { AutoCallProposal, ScoredCandidate, PluginContext } from '@tx5dr/plugin-api';
+import type {
+  AutoCallExecutionPlan,
+  AutoCallExecutionRequest,
+  AutoCallProposal,
+  PluginContext,
+  ScoredCandidate,
+} from '@tx5dr/plugin-api';
 import type { PluginInstance } from './types.js';
 import { PluginErrorTracker } from './PluginErrorTracker.js';
 import { createLogger } from '../utils/logger.js';
@@ -94,6 +100,52 @@ export class PluginHookDispatcher {
     }
 
     return proposals;
+  }
+
+  async dispatchAutoCallExecutionPlan(
+    operatorId: string,
+    request: AutoCallExecutionRequest,
+    initialPlan: AutoCallExecutionPlan,
+    getCtx: (instance: PluginInstance) => PluginContext,
+  ): Promise<AutoCallExecutionPlan> {
+    let plan = initialPlan;
+
+    for (const instance of this.getActiveInstances(operatorId)) {
+      if (instance.plugin.definition.type !== 'utility') {
+        continue;
+      }
+
+      const hook = instance.plugin.definition.hooks?.onConfigureAutoCallExecution;
+      if (!hook || this.errorTracker.isDisabled(instance)) {
+        continue;
+      }
+
+      try {
+        const ctx = getCtx(instance);
+        const output = await withTimeout(
+          Promise.resolve(hook(request, plan, ctx)),
+          HOOK_TIMEOUT_MS,
+        );
+
+        if (output == null) {
+          this.errorTracker.resetErrors(instance, 'onConfigureAutoCallExecution');
+          continue;
+        }
+
+        if (typeof output !== 'object' || Array.isArray(output)) {
+          logger.warn(`Plugin ${instance.plugin.definition.name} onConfigureAutoCallExecution returned an invalid plan, keeping previous execution plan`);
+          this.errorTracker.resetErrors(instance, 'onConfigureAutoCallExecution');
+          continue;
+        }
+
+        plan = output;
+        this.errorTracker.resetErrors(instance, 'onConfigureAutoCallExecution');
+      } catch (err) {
+        this.errorTracker.recordError(instance, 'onConfigureAutoCallExecution', err);
+      }
+    }
+
+    return plan;
   }
 
   async dispatchFilterCandidates(
