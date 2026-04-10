@@ -104,26 +104,27 @@ sudo bash /usr/share/tx5dr/install.sh
 | `tx5dr logs` | Follow server logs (`--nginx` for nginx) |
 | `tx5dr livekit-creds status` | Show managed LiveKit credential status |
 | `tx5dr livekit-creds rotate` | Rotate managed LiveKit credentials and config |
+| `tx5dr enable-livekit` | Install and enable LiveKit (optional, can be added later) |
+| `tx5dr disable-livekit` | Disable LiveKit, switch to ws-compat mode |
 
 ### Service Layout
 
 Linux Server is not a single standalone process. The installer sets up and wires together:
 
 - `tx5dr`: the backend application and Web API
-- `livekit-server`: the bundled realtime audio and signaling service
+- `livekit-server` *(optional)*: the bundled realtime audio and signaling service
 - `nginx`: the public reverse proxy and HTTPS entrypoint
 
-`install.sh` and the `tx5dr` CLI handle installation, configuration, diagnostics, and coordinated restarts across these components.
+`install.sh` and the `tx5dr` CLI handle installation, configuration, diagnostics, and coordinated restarts across these components. During installation, you can choose whether to install LiveKit. Without it, voice features run over WebSocket audio (ws-compat) — you can always add LiveKit later via `sudo tx5dr enable-livekit`.
 
 ### System Requirements
 
 - **Debian 12+** (recommended) or **Ubuntu 22.04+**
 - **Node.js 20+** (auto-installed by `install.sh`)
 - **nginx** (auto-installed)
-- **LiveKit service**: Linux packages bundle `livekit-server` at `/usr/share/tx5dr/bin/livekit-server`
+- **LiveKit** *(optional)*: Linux packages bundle `livekit-server` at `/usr/share/tx5dr/bin/livekit-server`. Without LiveKit, voice uses WebSocket audio (ws-compat) — all features remain fully functional
 - For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)
-- For public voice / OpenWebRX preview deployments, browsers should normally enter signaling through the site's same-origin `/livekit` path, so `7880/tcp` does not need to be exposed publicly by default
-- If you enable the LiveKit primary path, you still need to expose `7881/tcp` and `50000-50100/udp` for media transport
+- If LiveKit is enabled, browsers enter signaling through the site's same-origin `/livekit` path (`7880/tcp` does not need public exposure). You still need to expose `7881/tcp` and `50000-50100/udp` for media transport
 - If you use a dedicated domain, an extra reverse proxy layer, or a non-standard path, set a custom realtime voice entrypoint in System Settings. The value is persisted in `/var/lib/tx5dr/config/config.json`
 - Download source override: set `TX5DR_DOWNLOAD_SOURCE=github|oss|auto` in `/etc/tx5dr/config.env` if you need to force a specific source
 
@@ -136,13 +137,18 @@ Image: `boybook/tx-5dr:latest` ([Docker Hub](https://hub.docker.com/r/boybook/tx
 ```bash
 mkdir -p data/{config,plugins,logs,cache,realtime}
 docker compose pull
-docker compose run --rm livekit-init
-docker compose up -d livekit && docker compose up -d tx5dr
+docker compose up -d
 # Access: http://localhost:8076
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
-The repository root `docker-compose.yml` is the baseline configuration. For the full deployment guide — including device mapping, serial port setup, audio configuration, and troubleshooting — see **[docker/README.md](docker/README.md)**.
+This starts TX-5DR in standalone mode with WebSocket audio (ws-compat, ~50–100 ms latency). To enable LiveKit for lower-latency voice (~20–50 ms via WebRTC):
+
+```bash
+docker compose --profile livekit -f docker-compose.yml -f docker-compose.livekit.yml up -d
+```
+
+For the full deployment guide — including device mapping, serial port setup, audio configuration, and troubleshooting — see **[docker/README.md](docker/README.md)**.
 
 Image release details: [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker).
 
