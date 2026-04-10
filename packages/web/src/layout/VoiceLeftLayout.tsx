@@ -10,7 +10,7 @@ import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { useRadioState, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
-import { isElectron } from '../utils/config';
+import { isElectron, isMacOS } from '../utils/config';
 
 /**
  * VoiceLeftLayout
@@ -30,6 +30,9 @@ export const VoiceLeftLayout: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
+  const stationInfoOffsetClassName = isElectron() && isMacOS()
+    ? 'pl-16'
+    : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
 
   // Update current time
   useEffect(() => {
@@ -83,7 +86,7 @@ export const VoiceLeftLayout: React.FC = () => {
             </div>
           )}
           <div
-            className={isElectron() ? 'pl-16' : (isMobile && hasStationContent ? 'pl-0' : 'pl-2')}
+            className={stationInfoOffsetClassName}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
           >
             <StationInfoPopover />
