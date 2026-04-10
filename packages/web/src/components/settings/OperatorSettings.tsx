@@ -200,7 +200,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
         const newEnabled = newStates[operator.id] ?? currentEnabled;
         return currentEnabled !== newEnabled;
       });
-      
+
       setPreferencesHasChanges(hasAnyChanges);
       onUnsavedChanges?.(hasChanges || hasAnyChanges);
     };

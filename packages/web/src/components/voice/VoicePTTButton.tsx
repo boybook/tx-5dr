@@ -3,20 +3,53 @@ import { useConnection, usePTTState } from '../../store/radioStore';
 import { useAuth, useHasMinRole } from '../../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
-import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader } from '@heroui/react';
+import {
+  Button,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+} from '@heroui/react';
 import { createLogger } from '../../utils/logger';
 import type { VoiceCaptureController } from '../../hooks/useVoiceCaptureController';
+import {
+  type VoicePttShortcutPreset,
+  VOICE_PTT_SHORTCUT_PRESETS,
+  VOICE_PTT_SHORTCUT_CHANGED_EVENT,
+  getVoicePttShortcutPreset,
+  matchesVoicePttShortcut,
+  normalizeVoicePttShortcutPreset,
+  saveVoicePttShortcutPreset,
+} from '../../utils/voicePttShortcutPreferences';
 import { VoicePttPressTracker } from './voicePttPressTracker';
 
 const logger = createLogger('VoicePTTButton');
 
 type PTTState = 'idle' | 'requesting' | 'transmitting' | 'locked-by-other';
 
+function ShortcutChevronIcon({ open }: { open: boolean }): React.ReactElement {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className={`h-3 w-3 text-white transition-transform ${open ? 'rotate-180' : ''}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
 /**
  * Voice PTT Button Component
  *
  * Rectangular red card-style PTT button for voice mode.
- * Supports mouse, touch, and keyboard (Space) interactions.
+ * Supports mouse, touch, and a configurable keyboard shortcut.
  * Manages WakeLock and vibration feedback for mobile.
  */
 interface VoicePTTButtonProps {
@@ -80,9 +113,13 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const [inputLevel, setInputLevel] = useState(0);
   const [httpsRequiredModalOpen, setHttpsRequiredModalOpen] = useState(false);
   const [httpsWarningBypassEnabled, setHttpsWarningBypassEnabled] = useState(loadHttpsWarningBypass);
+  const [shortcutPreset, setShortcutPreset] = useState<VoicePttShortcutPreset>(getVoicePttShortcutPreset);
+  const [shortcutMenuOpen, setShortcutMenuOpen] = useState(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const isPttDownRef = useRef(false);
+  const keyboardPressActiveRef = useRef(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const shortcutMenuRef = useRef<HTMLDivElement>(null);
   const voiceCaptureControllerRef = useRef(voiceCaptureController);
   const pressTrackerRef = useRef(new VoicePttPressTracker());
 
@@ -91,6 +128,21 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   useEffect(() => {
     voiceCaptureControllerRef.current = voiceCaptureController;
   }, [voiceCaptureController]);
+
+  useEffect(() => {
+    const handleShortcutChange = (event: Event) => {
+      const nextPreset = normalizeVoicePttShortcutPreset(
+        (event as CustomEvent<VoicePttShortcutPreset>).detail
+      );
+      setShortcutPreset(nextPreset);
+      setShortcutMenuOpen(false);
+    };
+
+    window.addEventListener(VOICE_PTT_SHORTCUT_CHANGED_EVENT, handleShortcutChange);
+    return () => {
+      window.removeEventListener(VOICE_PTT_SHORTCUT_CHANGED_EVENT, handleShortcutChange);
+    };
+  }, []);
 
   const shouldBlockForHttpsWarning = useCallback(() => {
     if (httpsWarningBypassEnabled) {
@@ -258,35 +310,59 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     logger.debug('PTT released');
   }, [radioService, releaseWakeLock, voiceCaptureController]);
 
-  // Keyboard handler (Space key)
+  const suppressShortcutEvent = useCallback((event: KeyboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  // Keyboard handler (configurable global shortcut)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.repeat) return;
+      if (!matchesVoicePttShortcut(e.code, shortcutPreset)) return;
+      suppressShortcutEvent(e);
+      if (e.repeat || keyboardPressActiveRef.current) return;
 
-      e.preventDefault();
-      handlePTTDown();
+      keyboardPressActiveRef.current = true;
+      void handlePTTDown();
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (!matchesVoicePttShortcut(e.code, shortcutPreset)) return;
+      suppressShortcutEvent(e);
+      if (!keyboardPressActiveRef.current) return;
 
-      e.preventDefault();
+      keyboardPressActiveRef.current = false;
       handlePTTUp();
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    const handleForceRelease = () => {
+      if (!isPttDownRef.current) {
+        keyboardPressActiveRef.current = false;
+        return;
+      }
+
+      keyboardPressActiveRef.current = false;
+      handlePTTUp();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        handleForceRelease();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keyup', handleKeyUp, { capture: true });
+    window.addEventListener('blur', handleForceRelease);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleKeyUp, { capture: true });
+      window.removeEventListener('blur', handleForceRelease);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [handlePTTDown, handlePTTUp]);
+  }, [handlePTTDown, handlePTTUp, shortcutPreset, suppressShortcutEvent]);
 
   // Suppress all long-press browser behaviors on the PTT button.
   // React synthetic events are insufficient on Android WebView/WebKit —
@@ -322,12 +398,28 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
       if (shouldRelease) {
         radioService?.releaseVoicePTT();
       }
+      keyboardPressActiveRef.current = false;
       isPttDownRef.current = false;
       pressTrackerRef.current.reset();
       voiceCaptureControllerRef.current.setPTTActive(false);
       releaseWakeLock();
     };
   }, [radioService, releaseWakeLock]);
+
+  const getShortcutOptionLabel = useCallback((preset: VoicePttShortcutPreset): string => {
+    switch (preset) {
+      case 'Space':
+        return t('ptt.shortcutNameSpace');
+      case 'Backquote':
+        return t('ptt.shortcutNameBackquote');
+      case 'Home':
+        return t('ptt.shortcutNameHome');
+      default:
+        return preset;
+    }
+  }, [t]);
+
+  const shortcutLabel = getShortcutOptionLabel(shortcutPreset);
 
   // Button appearance based on state
   const getButtonStyle = (): { bgClass: string; label: string; subLabel?: string } => {
@@ -354,7 +446,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
         return {
           bgClass: 'bg-danger-500 shadow-lg shadow-danger-500/40 hover:bg-danger-600 active:bg-danger-700',
           label: t('ptt.idle'),
-          subLabel: t('ptt.spaceHint'),
+          subLabel: t('ptt.shortcutHint', { shortcut: shortcutLabel }),
         };
     }
   };
@@ -402,45 +494,131 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     setHttpsRequiredModalOpen(false);
   }, []);
 
+  useEffect(() => {
+    if (!shortcutMenuOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (target && shortcutMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setShortcutMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShortcutMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [shortcutMenuOpen]);
+
   return (
     <>
-      <div className="flex h-20 w-full items-stretch gap-1.5 md:h-full md:w-[7.75rem] md:self-stretch">
-        <button
-          ref={buttonRef}
-          type="button"
-          className={`
-            h-full flex-1 rounded-lg px-2 flex flex-col items-center justify-center
-            transition-all duration-150 select-none touch-none
-            text-white font-bold whitespace-nowrap
-            [-webkit-touch-callout:none] [-webkit-user-select:none]
-            ${bgClass}
-            ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
-          `}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            handlePTTDown();
-          }}
-          onMouseUp={handlePTTUp}
-          onMouseLeave={() => {
-            if (isPttDownRef.current) handlePTTUp();
-          }}
-          onTouchStart={(e) => {
-            e.preventDefault();
-            handlePTTDown();
-          }}
-          onTouchEnd={(e) => {
-            e.preventDefault();
-            handlePTTUp();
-          }}
-          onTouchCancel={handlePTTUp}
-          disabled={isDisabled}
-          aria-label={t('ptt.title')}
-        >
-          <span className="text-xl leading-tight">{label}</span>
-          {subLabel && (
-            <span className="text-xs font-normal opacity-80 mt-1">{subLabel}</span>
-          )}
-        </button>
+      <div className="flex h-20 w-full items-stretch gap-1.5 md:h-full md:w-[9rem] md:self-stretch">
+        <div className="relative flex-1">
+          <button
+            ref={buttonRef}
+            type="button"
+            className={`
+              h-full w-full rounded-lg px-2 flex flex-col items-center justify-center
+              transition-all duration-150 select-none touch-none
+              text-white font-bold whitespace-nowrap
+              [-webkit-touch-callout:none] [-webkit-user-select:none]
+              ${bgClass}
+              ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
+            `}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              handlePTTDown();
+            }}
+            onMouseUp={handlePTTUp}
+            onMouseLeave={() => {
+              if (isPttDownRef.current) handlePTTUp();
+            }}
+            onTouchStart={(e) => {
+              e.preventDefault();
+              handlePTTDown();
+            }}
+            onTouchEnd={(e) => {
+              e.preventDefault();
+              handlePTTUp();
+            }}
+            onTouchCancel={handlePTTUp}
+            disabled={isDisabled}
+            aria-label={t('ptt.title')}
+          >
+            <span className="text-xl leading-tight">{label}</span>
+            {subLabel && (
+              <span className="mt-1 text-xs font-normal opacity-80">
+                {pttState === 'idle' ? (
+                  <>
+                    <span className="md:hidden">{t('ptt.shortcutHintMobile')}</span>
+                    <span className="hidden md:inline">{subLabel}</span>
+                  </>
+                ) : subLabel}
+              </span>
+            )}
+          </button>
+          <div
+            ref={shortcutMenuRef}
+            className="absolute right-1.5 top-1 z-10 hidden md:block"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label={t('ptt.shortcutSelectAria')}
+              className="flex h-5 items-center justify-end gap-0.5 bg-transparent px-0 py-0 text-[10px] font-medium uppercase tracking-wide text-white outline-none transition-opacity hover:opacity-100"
+              onClick={() => {
+                setShortcutMenuOpen((open) => !open);
+              }}
+            >
+              <span className="whitespace-nowrap text-white">
+                {getShortcutOptionLabel(shortcutPreset)}
+              </span>
+              <ShortcutChevronIcon open={shortcutMenuOpen} />
+            </button>
+            {shortcutMenuOpen && (
+              <div className="absolute bottom-full right-0 mb-1.5 min-w-[4.5rem] rounded-md border border-white/15 bg-black/80 p-1 shadow-lg backdrop-blur-sm">
+                {VOICE_PTT_SHORTCUT_PRESETS.map((preset) => {
+                  const selected = preset === shortcutPreset;
+
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-[11px] font-medium text-white transition-colors ${
+                        selected ? 'bg-white/15' : 'hover:bg-white/10'
+                      }`}
+                      onClick={() => {
+                        setShortcutPreset(preset);
+                        saveVoicePttShortcutPreset(preset);
+                        setShortcutMenuOpen(false);
+                      }}
+                    >
+                      <span>{getShortcutOptionLabel(preset)}</span>
+                      {selected ? <span className="text-[10px] text-white/70">✓</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
 
         <div
           className={`
