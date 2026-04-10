@@ -131,8 +131,10 @@ else
     log "Using existing user: $APP_USER (UID: $HOST_UID, GID: $HOST_GID)"
 fi
 
-# 将应用用户添加到必要的组
-usermod -a -G audio,dialout,pulse-access "$APP_USER" 2>/dev/null || true
+# 将应用用户添加到必要的组（逐个添加，避免某个组不存在导致整条命令失败）
+for grp in audio dialout pulse-access; do
+    getent group "$grp" > /dev/null 2>&1 && usermod -a -G "$grp" "$APP_USER" 2>/dev/null || true
+done
 
 # 设置目录权限
 log "Setting directory permissions..."
