@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldShowLevelDbmDetail } from '../RadioMetersDisplay';
+import { shouldAutoOpenAlcWarning, shouldShowLevelDbmDetail } from '../RadioMetersDisplay';
 
 describe('RadioMetersDisplay', () => {
   it('shows dBm detail for s-meter-dbm readings when the container is wide enough', () => {
@@ -34,5 +34,33 @@ describe('RadioMetersDisplay', () => {
       formatted: '-24 dB@S9',
       displayStyle: 'db-over-s9',
     })).toBe(false);
+  });
+
+  it('disables the ALC over-limit prompt when explicitly turned off', () => {
+    expect(shouldAutoOpenAlcWarning(
+      true,
+      true,
+      {
+        raw: 1,
+        percent: 100,
+        alert: true,
+      },
+      false,
+      false,
+    )).toBe(false);
+  });
+
+  it('enables the ALC over-limit prompt for active over-limit TX readings', () => {
+    expect(shouldAutoOpenAlcWarning(
+      true,
+      true,
+      {
+        raw: 1,
+        percent: 100,
+        alert: true,
+      },
+      false,
+      true,
+    )).toBe(true);
   });
 });

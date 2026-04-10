@@ -121,6 +121,7 @@ export const VoiceLeftLayout: React.FC = () => {
               meterData={radio.state.meterData || { swr: null, alc: null, level: null, power: null }}
               isPttActive={radio.state.pttStatus.isTransmitting}
               meterCapabilities={radio.state.meterCapabilities}
+              enableAlcOverLimitPrompt={false}
             />
           </div>
         )}
