@@ -24,6 +24,7 @@ import {
 import { EngineState, type EngineInput } from '../state-machines/types.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { ClockCoordinator } from './ClockCoordinator.js';
+import type { AudioVolumeController } from './AudioVolumeController.js';
 import { RadioError } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -46,6 +47,7 @@ export interface EngineLifecycleDeps {
   };
   getCurrentMode: () => ModeDescriptor;
   getVoiceSessionManager: () => VoiceSessionManager | null;
+  getAudioVolumeController: () => AudioVolumeController;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getStatus: () => any;
 }
@@ -341,13 +343,7 @@ export class EngineLifecycle {
         start: async () => {
           await audioStreamManager.startOutput();
           logger.debug('Audio output stream started');
-          const lastVolumeGain = configManager.getLastVolumeGain();
-          if (lastVolumeGain) {
-            logger.debug(`Restoring last volume gain: ${lastVolumeGain.gainDb.toFixed(1)}dB`);
-            audioStreamManager.setVolumeGainDb(lastVolumeGain.gainDb);
-          } else {
-            logger.debug('Using default volume gain: 0.0dB');
-          }
+          this.deps.getAudioVolumeController().restoreGainForCurrentSlot();
         },
         stop: async () => {
           await audioStreamManager.stopOutput();

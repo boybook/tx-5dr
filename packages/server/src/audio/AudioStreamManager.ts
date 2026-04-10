@@ -83,8 +83,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private sampleRate: number;
   private bufferSize: number;
   private channels: number = 1;
-  private volumeGain: number = 1.0; // 默认音量为1.0（100%），对应0dB
-  private volumeGainDb: number = 0.0; // 以dB为单位的增益值
+  private volumeGain: number = Math.pow(10, -10 / 20); // 默认 -10dB
+  private volumeGainDb: number = -10; // 以dB为单位的增益值
   private currentAudioData: Float32Array | null = null; // 当前正在播放的音频数据
   private currentSampleRate: number; // 当前音频的采样率
 

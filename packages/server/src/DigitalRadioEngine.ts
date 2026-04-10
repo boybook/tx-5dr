@@ -262,7 +262,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // ─── 初始化子系统 ────────────────────────────────
 
-    this.audioVolumeController = new AudioVolumeController(this, this.audioStreamManager);
+    this.audioVolumeController = new AudioVolumeController(
+      this,
+      this.audioStreamManager,
+      () => this.engineMode,
+    );
+    this.audioVolumeController.setupEventListeners();
 
     this.transmissionPipeline = new TransmissionPipeline({
       engineEmitter: this,
@@ -449,6 +454,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
       getCurrentMode: () => this.currentMode,
       getVoiceSessionManager: () => this.voiceSessionManager,
+      getAudioVolumeController: () => this.audioVolumeController,
       getStatus: () => this.getStatus(),
     });
     this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
