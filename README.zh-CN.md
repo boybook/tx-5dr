@@ -144,7 +144,7 @@ docker exec tx5dr cat /app/data/config/.admin-token
 
 仓库根目录的 `docker-compose.yml` 是基线配置。完整部署指南（设备映射、串口配置、音频配置、故障排查）请参阅 **[docker/README.md](docker/README.md)**。
 
-进阶话题（VM 直通、CI/CD、手动构建）见 [docs/docker-deployment.md](docs/docker-deployment.md)。镜像发布详情：[GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker)。
+镜像发布详情：[GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker)。
 
 ---
 

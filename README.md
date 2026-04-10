@@ -144,7 +144,7 @@ docker exec tx5dr cat /app/data/config/.admin-token
 
 The repository root `docker-compose.yml` is the baseline configuration. For the full deployment guide — including device mapping, serial port setup, audio configuration, and troubleshooting — see **[docker/README.md](docker/README.md)**.
 
-For advanced topics (VM passthrough, CI/CD, manual builds), see [docs/docker-deployment.md](docs/docker-deployment.md). Image release details: [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker).
+Image release details: [GitHub nightly-docker](https://github.com/boybook/tx-5dr/releases/tag/nightly-docker).
 
 ---
 
