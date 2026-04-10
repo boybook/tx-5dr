@@ -4,6 +4,7 @@ import { UserRole } from '@tx5dr/contracts';
 const mockGetRealtimeTransportPolicy = vi.fn<[], 'auto' | 'force-compat'>();
 const mockGetLiveKitPublicUrl = vi.fn<[], string | null>();
 const mockLiveKitEnabled = vi.fn<[], boolean>();
+const mockLiveKitRuntimeAvailable = vi.fn<[], boolean>();
 const mockGetConnectivityHints = vi.fn();
 const mockIssueClientToken = vi.fn();
 const mockFinalizeToken = vi.fn();
@@ -21,6 +22,7 @@ vi.mock('../../config/config-manager.js', () => ({
 vi.mock('../LiveKitConfig.js', () => ({
   LiveKitConfig: {
     isEnabled: () => mockLiveKitEnabled(),
+    isRuntimeAvailable: () => mockLiveKitRuntimeAvailable(),
     getConnectivityHints: () => mockGetConnectivityHints(),
   },
 }));
@@ -49,6 +51,7 @@ describe('RealtimeTransportManager', () => {
     mockGetRealtimeTransportPolicy.mockReturnValue('auto');
     mockGetLiveKitPublicUrl.mockReturnValue(null);
     mockLiveKitEnabled.mockReturnValue(true);
+    mockLiveKitRuntimeAvailable.mockReturnValue(true);
     mockGetConnectivityHints.mockReturnValue({
       signalingUrl: 'ws://livekit.example.test:7880',
       signalingPort: 7880,

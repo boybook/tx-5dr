@@ -44,6 +44,7 @@ type RealtimeTransportSelectionReason =
   | 'server-policy'
   | 'bridge-unhealthy'
   | 'livekit-disabled'
+  | 'runtime-unavailable'
   | 'default-livekit';
 
 export interface IssueRealtimeSessionParams {
@@ -116,8 +117,11 @@ export class RealtimeTransportManager {
     if (preferredOffer) {
       offers.push(preferredOffer);
     }
+    // Only include a secondary LiveKit offer if runtime is actually available
     if (secondaryOffer && secondaryOffer.transport !== preferredTransport && !params.transportOverride) {
-      offers.push(secondaryOffer);
+      if (secondaryOffer.transport !== 'livekit' || LiveKitConfig.isRuntimeAvailable()) {
+        offers.push(secondaryOffer);
+      }
     }
 
     if (offers.length === 0) {
@@ -329,6 +333,16 @@ export class RealtimeTransportManager {
       };
     }
 
+    // Runtime availability check: covers both send and recv directions
+    if (!LiveKitConfig.isRuntimeAvailable()) {
+      return {
+        transport: 'ws-compat',
+        forcedCompatibilityMode: false,
+        policy,
+        reason: 'runtime-unavailable',
+      };
+    }
+
     if (transportOverride === 'livekit') {
       return {
         transport: 'livekit',
@@ -362,7 +376,7 @@ export class RealtimeTransportManager {
     params: IssueRealtimeSessionParams,
     hints: RealtimeConnectivityHints,
   ): Promise<RealtimeTransportOffer | null> {
-    if (!LiveKitConfig.isEnabled()) {
+    if (!LiveKitConfig.isEnabled() || !LiveKitConfig.isRuntimeAvailable()) {
       return null;
     }
 

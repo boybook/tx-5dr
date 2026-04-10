@@ -38,6 +38,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       transportPolicy,
       runtime: {
         liveKitEnabled: LiveKitConfig.isEnabled(),
+        liveKitRuntimeAvailable: LiveKitConfig.isRuntimeAvailable(),
+        runtimeUnavailableReason: LiveKitConfig.getRuntimeUnavailableReason(),
         connectivityHints,
         radioReceiveTransport: transportManager.getPreferredTransport('radio', 'recv'),
         radioBridgeHealthy: health.healthy,

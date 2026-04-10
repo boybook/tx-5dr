@@ -111,6 +111,7 @@ export const RealtimeSessionResponseSchema = z.object({
     'server-policy',
     'bridge-unhealthy',
     'livekit-disabled',
+    'runtime-unavailable',
     'default-livekit',
   ]),
   forcedCompatibilityMode: z.boolean(),

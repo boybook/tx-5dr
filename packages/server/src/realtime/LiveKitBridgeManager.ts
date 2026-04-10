@@ -21,6 +21,7 @@ const LIVEKIT_AUDIO_CHANNELS = 1;
 const LIVEKIT_AUDIO_QUEUE_MS = 60;
 const LIVEKIT_AUDIO_MAX_QUEUED_MS = 90;
 const LIVEKIT_NO_AUDIO_WARNING_MS = 5000;
+const LIVEKIT_RECOVERY_PROBE_INTERVAL_MS = 30_000;
 
 function float32ToInt16(samples: Float32Array): Int16Array {
   const out = new Int16Array(samples.length);
@@ -60,6 +61,8 @@ export class LiveKitBridgeManager {
   private previewState: PublishedAudioState | null = null;
   private remoteTrackReaders = new Map<string, ReadableStreamDefaultReader<AudioFrame>>();
   private isStarted = false;
+  private recoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private recoveryInProgress = false;
   private readonly scopeHealth = new Map<RealtimeScope, ScopeHealthState>([
     ['radio', { healthy: true, updatedAt: Date.now(), issueCode: null }],
     ['openwebrx-preview', { healthy: true, updatedAt: Date.now(), issueCode: null }],
@@ -74,6 +77,7 @@ export class LiveKitBridgeManager {
     if (!LiveKitConfig.isEnabled()) {
       this.markScopeUnhealthy('radio', 'SIGNALING_UNREACHABLE');
       this.markScopeUnhealthy('openwebrx-preview', 'SIGNALING_UNREACHABLE');
+      LiveKitConfig.setRuntimeAvailable(false, 'disabled-by-config');
       logger.info('LiveKit bridge manager disabled by configuration');
       return;
     }
@@ -82,8 +86,11 @@ export class LiveKitBridgeManager {
       await this.ensureRadioRoom();
       this.bindRadioAudioMonitor();
       this.markScopeHealthy('radio');
+      LiveKitConfig.setRuntimeAvailable(true);
     } catch (error) {
       this.reportBridgeIssue('radio', 'runtime', 'SIGNALING_UNREACHABLE', 'Server bridge could not connect to LiveKit for radio audio', error);
+      LiveKitConfig.setRuntimeAvailable(false, 'signaling-unreachable');
+      this.startRecoveryProbe();
     }
 
     this.engine.on('profileChanged' as never, () => {
@@ -96,12 +103,16 @@ export class LiveKitBridgeManager {
       void this.handleOpenWebRXStatus(status);
     });
 
-    logger.info('LiveKit bridge manager started');
+    logger.info('LiveKit bridge manager started', {
+      runtimeAvailable: LiveKitConfig.isRuntimeAvailable(),
+    });
   }
 
   async stop(): Promise<void> {
     if (!this.isStarted) return;
     this.isStarted = false;
+
+    this.stopRecoveryProbe();
 
     await this.disconnectPublishedState(this.previewState);
     this.previewState = null;
@@ -300,6 +311,12 @@ export class LiveKitBridgeManager {
       issueCode: code,
     });
 
+    // If the radio scope is unhealthy due to signaling, mark runtime unavailable and start recovery
+    if (scope === 'radio' && code === 'SIGNALING_UNREACHABLE') {
+      LiveKitConfig.setRuntimeAvailable(false, 'signaling-unreachable');
+      this.startRecoveryProbe();
+    }
+
     const hints = LiveKitConfig.getConnectivityHints();
     const issue: RealtimeConnectivityIssue = {
       code,
@@ -347,6 +364,50 @@ export class LiveKitBridgeManager {
       updatedAt: Date.now(),
       issueCode: null,
     };
+  }
+
+  private startRecoveryProbe(): void {
+    if (this.recoveryTimer) return;
+    if (!LiveKitConfig.isEnabled()) return;
+
+    logger.info('Starting LiveKit recovery probe', { intervalMs: LIVEKIT_RECOVERY_PROBE_INTERVAL_MS });
+    this.recoveryTimer = setInterval(() => {
+      void this.attemptRecovery();
+    }, LIVEKIT_RECOVERY_PROBE_INTERVAL_MS);
+  }
+
+  private stopRecoveryProbe(): void {
+    if (this.recoveryTimer) {
+      clearInterval(this.recoveryTimer);
+      this.recoveryTimer = null;
+    }
+  }
+
+  private async attemptRecovery(): Promise<void> {
+    if (this.recoveryInProgress) return;
+    if (!this.isStarted || !LiveKitConfig.isEnabled()) {
+      this.stopRecoveryProbe();
+      return;
+    }
+    if (LiveKitConfig.isRuntimeAvailable()) {
+      this.stopRecoveryProbe();
+      return;
+    }
+
+    this.recoveryInProgress = true;
+    logger.debug('Attempting LiveKit recovery probe');
+    try {
+      await this.ensureRadioRoom(true);
+      this.bindRadioAudioMonitor();
+      this.markScopeHealthy('radio');
+      LiveKitConfig.setRuntimeAvailable(true);
+      this.stopRecoveryProbe();
+      logger.info('LiveKit recovered, runtime now available');
+    } catch (error) {
+      logger.debug('LiveKit recovery probe failed, will retry', { error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.recoveryInProgress = false;
+    }
   }
 
   private async createPublishedState(

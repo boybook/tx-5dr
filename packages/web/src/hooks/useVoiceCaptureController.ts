@@ -121,13 +121,6 @@ export function useVoiceCaptureController(
         presentRealtimeConnectivityFailure(error, {
           scope: 'radio',
           stage: 'publish',
-          ...(preferredTransportRef.current !== 'ws-compat'
-            ? {
-                onCompatFallbackConfirm: async () => {
-                  await switchTransportFromGesture('ws-compat');
-                },
-              }
-            : {}),
         });
       },
     });

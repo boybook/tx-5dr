@@ -19,8 +19,6 @@ import {
 } from './voiceTxDiagnostics';
 
 const logger = createLogger('VoiceCapture');
-const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
-const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
 const COMPAT_CAPTURE_CONNECT_TIMEOUT_MS = 5000;
 const LIVEKIT_SENDER_STATS_INTERVAL_MS = 1000;
 
@@ -151,7 +149,7 @@ export class VoiceCapture {
           direction: 'send',
           transportOverride: options?.transportOverride,
           connectStage: 'connect',
-          startLiveKit: (offer, startOptions) => this.startLiveKitCapture(offer, startOptions),
+          startLiveKit: (offer) => this.startLiveKitCapture(offer),
           startCompat: (offer) => this.startCompatCapture(offer),
           cleanupFailedAttempt: () => {
             this.cleanupTransportOnly();
@@ -210,7 +208,6 @@ export class VoiceCapture {
 
   private async startLiveKitCapture(
     offer: RealtimeTransportOffer,
-    options?: { fastFallback?: boolean },
   ): Promise<void> {
     const mediaStream = await requestInteractiveMicrophone(AUDIO_CONSTRAINTS, this.mediaStream);
     const audioContext = await ensureInteractiveAudioContext(this.audioContext);
@@ -229,9 +226,6 @@ export class VoiceCapture {
     });
     await room.connect(offer.url, offer.token, {
       autoSubscribe: false,
-      maxRetries: options?.fastFallback ? 0 : undefined,
-      websocketTimeout: options?.fastFallback ? LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS : undefined,
-      peerConnectionTimeout: options?.fastFallback ? LIVEKIT_FAST_PEER_TIMEOUT_MS : undefined,
     });
 
     const localTrack = new LocalAudioTrack(

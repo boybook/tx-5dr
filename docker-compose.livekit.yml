@@ -1,0 +1,14 @@
+# LiveKit overlay — use with: docker compose --profile livekit -f docker-compose.yml -f docker-compose.livekit.yml up
+version: '3.8'
+
+services:
+  tx5dr:
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+      livekit:
+        condition: service_started
+    environment:
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml

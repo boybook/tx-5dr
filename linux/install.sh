@@ -28,11 +28,14 @@ source "$LIB_DIR/checks.sh"
 
 MODE="install"
 DEB_FILE=""
+INSTALL_LIVEKIT=""
 for arg in "$@"; do
     case "$arg" in
-        --check-only) MODE="check" ;;
-        --docker)     MODE="docker" ;;
-        *.deb|*.rpm)  DEB_FILE="$arg" ;;
+        --check-only)    MODE="check" ;;
+        --docker)        MODE="docker" ;;
+        --no-livekit)    INSTALL_LIVEKIT="false" ;;
+        --with-livekit)  INSTALL_LIVEKIT="true" ;;
+        *.deb|*.rpm)     DEB_FILE="$arg" ;;
     esac
 done
 
@@ -186,8 +189,29 @@ if [[ "$MODE" != "docker" ]] && command -v getenforce &>/dev/null && [[ "$(geten
     fi
 fi
 
-# LiveKit server binary (native only)
+# LiveKit server binary (native only, optional)
 if [[ "$MODE" != "docker" ]]; then
+    # Determine whether to install LiveKit
+    if [[ -z "$INSTALL_LIVEKIT" && "$MODE" == "install" ]]; then
+        # Interactive prompt (skip in check-only mode)
+        echo ""
+        echo -e "  ${_BOLD}Install LiveKit realtime voice service?${_NC}"
+        echo "  Recommended for lower-latency voice transport."
+        echo "  Not required — you can always install later via: sudo tx5dr enable-livekit"
+        echo -n "  [Y/n]: "
+        read -r livekit_answer </dev/tty 2>/dev/null || livekit_answer="y"
+        case "${livekit_answer,,}" in
+            n|no) INSTALL_LIVEKIT="false" ;;
+            *)    INSTALL_LIVEKIT="true" ;;
+        esac
+    fi
+    [[ -z "$INSTALL_LIVEKIT" ]] && INSTALL_LIVEKIT="true"
+
+    if [[ "$INSTALL_LIVEKIT" != "true" ]]; then
+        log_info "LiveKit skipped (ws-compat mode). Install later: sudo tx5dr enable-livekit"
+    fi
+
+  if [[ "$INSTALL_LIVEKIT" == "true" ]]; then
     if check_livekit_binary; then
         log_ok "livekit-server ($(get_livekit_binary_path))"
     elif [[ "$MODE" == "check" ]]; then
@@ -247,6 +271,7 @@ if [[ "$MODE" != "docker" ]]; then
         log_warn "LiveKit bridge URL port mismatch: ${LIVEKIT_URL}"
         log_warn "Update LIVEKIT_URL to target signaling port ${LIVEKIT_SIGNAL_PORT} if you changed the port."
     fi
+  fi  # INSTALL_LIVEKIT == true
 fi
 
 # Check-only mode: done
@@ -309,17 +334,13 @@ else
     systemctl start tx5dr
 fi
 
-echo -n "  "
-if wait_for_port "${LIVEKIT_SIGNAL_PORT:-7880}" 15; then
-    log_ok "$(msg PORT_READY "${LIVEKIT_SIGNAL_PORT:-7880}") (livekit)"
-else
-    log_fail "$(msg PORT_FAIL "${LIVEKIT_SIGNAL_PORT:-7880}" "15")"
-    echo ""
-    log_error "$(msg START_FAIL)"
-    journalctl -u tx5dr-livekit -n 10 --no-pager 2>/dev/null | sed 's/^/    /'
-    echo ""
-    log_info "$(msg RUN_DOCTOR)"
-    exit 1
+if [[ "${INSTALL_LIVEKIT:-true}" == "true" ]] && check_livekit_binary 2>/dev/null; then
+    echo -n "  "
+    if wait_for_port "${LIVEKIT_SIGNAL_PORT:-7880}" 15; then
+        log_ok "$(msg PORT_READY "${LIVEKIT_SIGNAL_PORT:-7880}") (livekit)"
+    else
+        log_warn "$(msg PORT_FAIL "${LIVEKIT_SIGNAL_PORT:-7880}" "15") (livekit — ws-compat fallback active)"
+    fi
 fi
 
 echo -n "  "

@@ -151,8 +151,14 @@ if [[ -f "$NGINX_TEMPLATE" ]]; then
     fi
 fi
 
-# ── LiveKit config ──────────────────────────────────────────────────────────
-if [[ -f "$LIVEKIT_TEMPLATE" ]]; then
+# ── LiveKit config (conditional: only if binary is installed) ─────────────
+_livekit_binary_present=false
+if [[ "$SHARED_LIB_READY" == "1" ]] && [[ -x "$(get_livekit_binary_path 2>/dev/null)" ]]; then
+    _livekit_binary_present=true
+elif [[ -x "/usr/share/tx5dr/bin/livekit-server" ]]; then
+    _livekit_binary_present=true
+fi
+if [[ "$_livekit_binary_present" == "true" ]] && [[ -f "$LIVEKIT_TEMPLATE" ]]; then
     if [[ -z "${LIVEKIT_API_KEY:-}" || -z "${LIVEKIT_API_SECRET:-}" ]] && [[ ! -f "$LIVEKIT_CREDENTIALS_FILE" ]]; then
         mkdir -p "$(dirname "$LIVEKIT_CREDENTIALS_FILE")"
         _now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -213,7 +219,9 @@ fi
 
 # ── Enable systemd service ──────────────────────────────────────────────────
 systemctl daemon-reload 2>/dev/null || true
-systemctl enable tx5dr-livekit 2>/dev/null || true
+if [[ "$_livekit_binary_present" == "true" ]]; then
+    systemctl enable tx5dr-livekit 2>/dev/null || true
+fi
 systemctl enable tx5dr 2>/dev/null || true
 
 if systemctl is-active --quiet tx5dr 2>/dev/null; then
