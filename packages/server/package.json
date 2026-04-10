@@ -16,6 +16,7 @@
     "clinic:flame": "yarn build && clinic flame -- node dist/index.js",
     "clinic:bubble": "yarn build && clinic bubbleprof -- node dist/index.js",
     "clinic:heap": "yarn build && clinic heapprofiler -- node dist/index.js",
+    "dev:check-native": "tsx src/scripts/check-native-modules.ts",
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run"
