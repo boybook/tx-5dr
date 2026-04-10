@@ -1,6 +1,4 @@
 # LiveKit overlay — use with: docker compose --profile livekit -f docker-compose.yml -f docker-compose.livekit.yml up
-version: '3.8'
-
 services:
   tx5dr:
     depends_on:

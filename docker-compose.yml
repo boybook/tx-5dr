@@ -1,9 +1,7 @@
-version: '3.8'
-
 services:
   livekit-init:
     profiles: ["livekit"]
-    build: .
+    image: boybook/tx-5dr:latest
     container_name: tx5dr-livekit-init
     restart: "no"
     entrypoint: ["/bin/bash", "/init-livekit.sh"]
@@ -19,7 +17,7 @@ services:
       - ./data/realtime:/app/data/realtime
 
   tx5dr:
-    build: .
+    image: boybook/tx-5dr:latest
     container_name: tx5dr
     restart: unless-stopped
     ports:
