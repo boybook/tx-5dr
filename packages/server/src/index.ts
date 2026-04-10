@@ -109,30 +109,6 @@ async function start() {
     logger.info('log file path', { path: consoleLogger.getLogFilePath() });
     consoleLogger.flushSync();
 
-    // 验证 native modules（帮助诊断 Windows 等平台上的二进制崩溃）
-    logger.info('verifying native modules...');
-
-    try {
-      const audify = await import('audify');
-      const { RtAudio } = audify.default;
-      const rt = new RtAudio();
-      const apiName = rt.getApi();
-      const devices = rt.getDevices();
-      logger.info('audify (RtAudio) loaded', { api: apiName, deviceCount: devices.length });
-    } catch (err) {
-      logger.error('audify (RtAudio) load failed', err);
-    }
-
-    try {
-      const sp = await import('serialport');
-      logger.info('serialport loaded', { available: Boolean(sp.default?.SerialPort) });
-    } catch (err) {
-      logger.error('serialport load failed', err);
-    }
-
-    logger.info('native module verification complete');
-    consoleLogger.flushSync();
-
     const server = await createServer();
     logger.info('createServer completed');
     consoleLogger.flushSync();

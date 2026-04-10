@@ -782,6 +782,116 @@ function runChild(name: string, entryAbs: string, extraEnv: Record<string, strin
   return child;
 }
 
+interface NativeModuleCheckResult {
+  /** All modules loaded successfully and script exited cleanly */
+  success: boolean;
+  /** Per-module results collected before the process exited */
+  modules: Array<{ name: string; ok: boolean; error?: string }>;
+  /** Module that was being loaded when the process crashed (null if no crash) */
+  crashedModule: string | null;
+  /** Process exit code */
+  exitCode: number | null;
+  /** Signal that killed the process */
+  signal: string | null;
+  /** True if the check was aborted due to timeout */
+  timeout: boolean;
+}
+
+/**
+ * Run the native module diagnostic script in an isolated child process.
+ * Returns a structured result even if the child crashes or times out.
+ */
+function runNativeModuleCheck(
+  serverEntry: string,
+): Promise<NativeModuleCheckResult> {
+  const CHECK_TIMEOUT_MS = 30_000;
+  const scriptPath = path.join(path.dirname(serverEntry), 'scripts', 'check-native-modules.js');
+
+  if (!fs.existsSync(scriptPath)) {
+    logger.warn(`native module check script not found: ${scriptPath}, skipping`);
+    return Promise.resolve({
+      success: true, modules: [], crashedModule: null,
+      exitCode: null, signal: null, timeout: false,
+    });
+  }
+
+  return new Promise((resolve) => {
+    const NODE = nodePath();
+    const child = spawn(NODE, [scriptPath], {
+      cwd: path.dirname(serverEntry),
+      env: createChildEnv({}),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const modules: NativeModuleCheckResult['modules'] = [];
+    let lastChecking: string | null = null;
+    let settled = false;
+    let stdoutBuf = '';
+
+    const finish = (result: NativeModuleCheckResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    child.stdout!.on('data', (data: Buffer) => {
+      stdoutBuf += data.toString();
+      const lines = stdoutBuf.split('\n');
+      // Keep the last (possibly incomplete) chunk for next data event
+      stdoutBuf = lines.pop()!;
+      for (const line of lines) {
+        if (line.startsWith('CHECKING:')) {
+          lastChecking = line.slice('CHECKING:'.length);
+        } else if (line.startsWith('OK:')) {
+          modules.push({ name: line.slice('OK:'.length), ok: true });
+          lastChecking = null;
+        } else if (line.startsWith('FAIL:')) {
+          const rest = line.slice('FAIL:'.length);
+          const idx = rest.indexOf(':');
+          const name = idx >= 0 ? rest.slice(0, idx) : rest;
+          const error = idx >= 0 ? rest.slice(idx + 1) : '';
+          modules.push({ name, ok: false, error });
+          lastChecking = null;
+        }
+        // DONE and ERROR lines are informational; exit event handles completion
+      }
+    });
+
+    child.stderr!.on('data', (data: Buffer) => {
+      logger.debug(`[native-check] ${data.toString().trimEnd()}`);
+    });
+
+    child.on('exit', (code, signal) => {
+      finish({
+        success: code === 0,
+        modules,
+        crashedModule: code !== 0 ? lastChecking : null,
+        exitCode: code,
+        signal: signal as string | null,
+        timeout: false,
+      });
+    });
+
+    child.on('error', (err) => {
+      logger.error(`native module check process error: ${err.message}`);
+      finish({
+        success: false, modules, crashedModule: lastChecking,
+        exitCode: null, signal: null, timeout: false,
+      });
+    });
+
+    const timer = setTimeout(() => {
+      logger.warn('native module check timed out, killing');
+      child.kill('SIGKILL');
+      finish({
+        success: false, modules, crashedModule: lastChecking,
+        exitCode: null, signal: null, timeout: true,
+      });
+    }, CHECK_TIMEOUT_MS);
+  });
+}
+
 function runBinaryChild(
   name: string,
   binaryPath: string,
@@ -1556,6 +1666,24 @@ async function createWindow() {
       } else {
         logger.info('livekit service ready');
       }
+    }
+
+    // Pre-flight: check native modules in an isolated child process
+    logger.info('running native module check...');
+    const nativeCheck = await runNativeModuleCheck(serverEntry);
+    for (const mod of nativeCheck.modules) {
+      if (mod.ok) {
+        logger.info(`native module ok: ${mod.name}`);
+      } else {
+        logger.error(`native module failed: ${mod.name} — ${mod.error}`);
+      }
+    }
+    if (nativeCheck.crashedModule) {
+      logger.error(`native module crashed the check process: ${nativeCheck.crashedModule} (exit=${nativeCheck.exitCode}, signal=${nativeCheck.signal})`);
+    } else if (nativeCheck.timeout) {
+      logger.warn('native module check timed out');
+    } else if (nativeCheck.success) {
+      logger.info('all native modules ok');
     }
 
     serverProcess = runChild('server', serverEntry, {
