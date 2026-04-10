@@ -19,10 +19,7 @@ interface ExecuteRealtimeSessionFlowOptions {
   previewSessionId?: string;
   transportOverride?: RealtimeTransportKind;
   connectStage: 'connect' | 'publish' | 'subscribe';
-  startLiveKit: (
-    offer: RealtimeTransportOffer,
-    options?: { fastFallback?: boolean },
-  ) => Promise<void>;
+  startLiveKit: (offer: RealtimeTransportOffer) => Promise<void>;
   startCompat: (offer: RealtimeTransportOffer) => Promise<void>;
   cleanupFailedAttempt: () => Promise<void> | void;
 }
@@ -38,7 +35,6 @@ export async function executeRealtimeSessionFlow(
   let errorStage: 'token' | 'connect' | 'publish' | 'subscribe' = 'token';
   let connectivityHints: RealtimeConnectivityHints | undefined;
   let selectedTransport: RealtimeTransportKind | null = null;
-  let compatFallbackAvailable = false;
   let effectiveTransportPolicy: 'auto' | 'force-compat' | undefined;
   let selectionReason: string | undefined;
 
@@ -62,14 +58,10 @@ export async function executeRealtimeSessionFlow(
     }
 
     selectedTransport = offer.transport;
-    compatFallbackAvailable = offer.transport === 'livekit'
-      && session.offers.some((candidate) => candidate.transport === 'ws-compat');
 
     errorStage = options.connectStage;
     if (offer.transport === 'livekit') {
-      await options.startLiveKit(offer, {
-        fastFallback: compatFallbackAvailable,
-      });
+      await options.startLiveKit(offer);
     } else {
       await options.startCompat(offer);
     }
@@ -86,7 +78,6 @@ export async function executeRealtimeSessionFlow(
         transport: selectedTransport,
         effectiveTransportPolicy,
         selectionReason,
-        compatFallbackAvailable,
         error,
       });
       try {
@@ -109,11 +100,9 @@ export async function executeRealtimeSessionFlow(
     if (!realtimeError.issue.context) {
       realtimeError.issue.context = {};
     }
-    realtimeError.issue.context.compatFallbackAttempted = String(options.transportOverride === 'ws-compat');
     if (selectedTransport) {
       realtimeError.issue.context.selectedTransport = selectedTransport;
     }
-    realtimeError.issue.context.compatFallbackAvailable = String(compatFallbackAvailable);
     if (options.transportOverride) {
       realtimeError.issue.context.transportOverride = options.transportOverride;
     }

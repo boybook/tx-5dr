@@ -241,11 +241,6 @@ export function OpenWebRXSettings() {
       presentRealtimeConnectivityFailure(error, {
         scope: 'openwebrx-preview',
         stage: 'connect',
-        onCompatFallbackConfirm: async () => {
-          await audioPlayback.switchTransportFromGesture('ws-compat', {
-            previewSessionId,
-          });
-        },
       });
     } finally {
       setIsStartingListen(false);

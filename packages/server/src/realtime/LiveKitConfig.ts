@@ -32,12 +32,43 @@ interface LiveKitRequestContext {
 }
 
 export class LiveKitConfig {
+  private static runtimeAvailable = false;
+  private static runtimeUnavailableReason: string | null = null;
+
   static isEnabled(): boolean {
     return process.env.LIVEKIT_DISABLED !== '1' && Boolean(getLiveKitCredentialValues());
   }
 
   static isExplicitlyDisabled(): boolean {
     return process.env.LIVEKIT_DISABLED === '1';
+  }
+
+  /**
+   * Set the runtime availability of the LiveKit server.
+   * Called by LiveKitBridgeManager after connection attempt.
+   */
+  static setRuntimeAvailable(available: boolean, reason?: string): void {
+    const changed = this.runtimeAvailable !== available;
+    this.runtimeAvailable = available;
+    this.runtimeUnavailableReason = available ? null : (reason ?? null);
+    if (changed) {
+      logger.info('LiveKit runtime availability changed', { available, reason: reason ?? null });
+    }
+  }
+
+  /**
+   * Single source of truth: is LiveKit usable right now?
+   * Combines static config check (credentials + env) with runtime connectivity.
+   */
+  static isRuntimeAvailable(): boolean {
+    return this.isEnabled() && this.runtimeAvailable;
+  }
+
+  static getRuntimeUnavailableReason(): string | null {
+    if (!this.isEnabled()) {
+      return this.isExplicitlyDisabled() ? 'disabled-by-env' : 'credentials-missing';
+    }
+    return this.runtimeUnavailableReason;
   }
 
   private static getSignalingPort(wsUrl: string): string {

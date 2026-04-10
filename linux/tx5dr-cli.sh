@@ -145,9 +145,13 @@ cmd_status() {
     fi
     echo -e "  Server:     ${srv_status} ${_DIM}${srv_detail}${_NC}"
 
-    local livekit_status
-    livekit_status=$(get_systemd_state tx5dr-livekit)
-    echo -e "  LiveKit:    ${livekit_status}"
+    if check_livekit_binary 2>/dev/null; then
+        local livekit_status
+        livekit_status=$(get_systemd_state tx5dr-livekit)
+        echo -e "  LiveKit:    ${livekit_status}"
+    else
+        echo -e "  LiveKit:    ${_YELLOW}not installed${_NC} ${_DIM}(ws-compat mode, run: sudo tx5dr enable-livekit)${_NC}"
+    fi
 
     # Nginx
     local ngx_status
@@ -159,16 +163,18 @@ cmd_status() {
     is_port_open "${API_PORT}" && be_status="open"
     echo -e "  Backend:    port ${API_PORT} ${be_status}"
 
-    local livekit_port_status="closed"
-    is_port_open "${LIVEKIT_SIGNAL_PORT}" && livekit_port_status="open"
-    echo -e "  Signaling:  internal port ${LIVEKIT_SIGNAL_PORT} ${livekit_port_status}"
-    echo -e "  Browser RT: same-origin ${_DIM}/livekit${_NC}"
+    if check_livekit_binary 2>/dev/null; then
+        local livekit_port_status="closed"
+        is_port_open "${LIVEKIT_SIGNAL_PORT}" && livekit_port_status="open"
+        echo -e "  Signaling:  internal port ${LIVEKIT_SIGNAL_PORT} ${livekit_port_status}"
+        echo -e "  Browser RT: same-origin ${_DIM}/livekit${_NC}"
 
-    local livekit_tcp_status="closed"
-    check_livekit_tcp_port && livekit_tcp_status="open"
-    echo -e "  RTC TCP:    port ${LIVEKIT_TCP_PORT} ${livekit_tcp_status}"
+        local livekit_tcp_status="closed"
+        check_livekit_tcp_port && livekit_tcp_status="open"
+        echo -e "  RTC TCP:    port ${LIVEKIT_TCP_PORT} ${livekit_tcp_status}"
 
-    echo -e "  RTC UDP:    ${LIVEKIT_UDP_PORT_START}-${LIVEKIT_UDP_PORT_END} ${_DIM}$(describe_livekit_udp_binding)${_NC}"
+        echo -e "  RTC UDP:    ${LIVEKIT_UDP_PORT_START}-${LIVEKIT_UDP_PORT_END} ${_DIM}$(describe_livekit_udp_binding)${_NC}"
+    fi
 
     local http_status="closed"
     is_port_open "${HTTP_PORT}" && http_status="open"
@@ -190,10 +196,10 @@ cmd_status() {
     command -v node &>/dev/null && node_ver=$(node --version 2>/dev/null)
     echo -e "  Node.js:    ${node_ver}"
 
-    if check_livekit_binary; then
+    if check_livekit_binary 2>/dev/null; then
         echo -e "  LK Binary:  $(get_livekit_binary_path)"
     else
-        echo -e "  LK Binary:  ${_RED}missing${_NC}"
+        echo -e "  LK Binary:  ${_DIM}not installed${_NC}"
     fi
 
     local lk_config_path
@@ -587,7 +593,9 @@ cmd_help() {
     echo "  token    Show admin token (--reset to regenerate)"
     echo "  update   Download and install latest nightly build"
     echo "  doctor   Run full environment diagnostics (--fix to auto-repair)"
-    echo "  livekit-creds  Show or rotate managed LiveKit credentials"
+    echo "  livekit-creds     Show or rotate managed LiveKit credentials"
+    echo "  enable-livekit    Install and enable LiveKit (optional)"
+    echo "  disable-livekit   Disable LiveKit (switch to ws-compat mode)"
     echo "  enable   Enable auto-start on boot"
     echo "  disable  Disable auto-start on boot"
     echo "  version  Show version"
@@ -622,6 +630,58 @@ case "${1:-help}" in
         else
             echo "TX-5DR (version unknown)"
         fi
+        ;;
+    enable-livekit)
+        require_root
+        load_config
+        log_info "Installing and enabling LiveKit..."
+        if ! check_livekit_binary 2>/dev/null; then
+            if fix_livekit_binary; then
+                log_ok "LiveKit binary installed"
+            else
+                log_error "Failed to install LiveKit binary"
+                exit 1
+            fi
+        else
+            log_ok "LiveKit binary already present"
+        fi
+        if ! (check_livekit_credentials_exists 2>/dev/null && check_livekit_credentials_loaded 2>/dev/null); then
+            if fix_livekit_credentials; then
+                log_ok "LiveKit credentials generated"
+            else
+                log_error "Failed to generate LiveKit credentials"
+                exit 1
+            fi
+        else
+            log_ok "LiveKit credentials already present"
+        fi
+        if ! check_livekit_config 2>/dev/null; then
+            if fix_livekit_config; then
+                log_ok "LiveKit config generated"
+            else
+                log_error "Failed to generate LiveKit config"
+                exit 1
+            fi
+        else
+            log_ok "LiveKit config already present"
+        fi
+        systemctl daemon-reload
+        systemctl enable --now tx5dr-livekit 2>/dev/null || true
+        systemctl restart tx5dr 2>/dev/null || true
+        echo ""
+        if wait_for_port "${LIVEKIT_SIGNAL_PORT:-7880}" 10 2>/dev/null; then
+            log_ok "LiveKit enabled and running on port ${LIVEKIT_SIGNAL_PORT:-7880}"
+        else
+            log_warn "LiveKit service started but port ${LIVEKIT_SIGNAL_PORT:-7880} not yet ready"
+        fi
+        log_ok "TX-5DR restarted with LiveKit support"
+        ;;
+    disable-livekit)
+        require_root
+        log_info "Disabling LiveKit..."
+        systemctl disable --now tx5dr-livekit 2>/dev/null || true
+        systemctl restart tx5dr 2>/dev/null || true
+        log_ok "LiveKit disabled. TX-5DR will use ws-compat mode."
         ;;
     help|--help|-h|*)
         cmd_help

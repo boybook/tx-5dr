@@ -175,12 +175,13 @@ function configureNotificationPermissionHandlers(): void {
   });
 
   defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    if (permission !== 'notifications') {
-      callback(false);
+    if (permission === 'notifications') {
+      callback(isAllowedNotificationOrigin(details.requestingUrl));
       return;
     }
 
-    callback(isAllowedNotificationOrigin(details.requestingUrl));
+    // Auto-grant media (getUserMedia) and other permissions in the desktop app
+    callback(true);
   });
 
   notificationPermissionHandlersConfigured = true;
@@ -1654,43 +1655,74 @@ async function createWindow() {
 
       livekitProcess = runBinaryChild('livekit', livekitBinary, ['--config', livekitConfigPath]);
 
-      const livekitOk = await waitForHttp(`http://127.0.0.1:${livekitPort}`, 15000, 200);
-      if (!livekitOk) {
-        logger.warn('livekit startup timeout, falling back to ws compatibility mode');
-        if (livekitProcess) {
-          await killProcess(livekitProcess, 'livekit');
-          livekitProcess = null;
+      // Non-blocking: monitor LiveKit readiness in background.
+      // Server's LiveKitBridgeManager will auto-detect availability via recovery probe.
+      void waitForHttp(`http://127.0.0.1:${livekitPort}`, 15000, 200).then(async (livekitOk) => {
+        if (!livekitOk) {
+          logger.warn('livekit startup timeout, server will operate in ws-compat mode and auto-recover when livekit becomes available');
+          if (livekitProcess) {
+            await killProcess(livekitProcess, 'livekit');
+            livekitProcess = null;
+          }
+        } else {
+          logger.info('livekit service ready');
         }
-        livekitCredentialPath = null;
-        livekitConfigPath = null;
-      } else {
-        logger.info('livekit service ready');
-      }
+      }).catch((error) => {
+        logger.warn('livekit readiness check failed', error);
+      });
     }
 
     // Pre-flight: check native modules in an isolated child process
-    logger.info('running native module check...');
+    logger.warn('running native module check...');
     const nativeCheck = await runNativeModuleCheck(serverEntry);
     for (const mod of nativeCheck.modules) {
       if (mod.ok) {
-        logger.info(`native module ok: ${mod.name}`);
+        logger.warn(`native module ok: ${mod.name}`);
       } else {
         logger.error(`native module failed: ${mod.name} — ${mod.error}`);
       }
     }
-    if (nativeCheck.crashedModule) {
-      logger.error(`native module crashed the check process: ${nativeCheck.crashedModule} (exit=${nativeCheck.exitCode}, signal=${nativeCheck.signal})`);
-    } else if (nativeCheck.timeout) {
-      logger.warn('native module check timed out');
-    } else if (nativeCheck.success) {
-      logger.info('all native modules ok');
-    }
+    if (!nativeCheck.success) {
+      const okModules = nativeCheck.modules.filter(m => m.ok).map(m => m.name);
+      const failedModules = nativeCheck.modules.filter(m => !m.ok);
 
+      let detail: string;
+      if (nativeCheck.crashedModule) {
+        logger.error(`native module crashed the check process: ${nativeCheck.crashedModule} (exit=${nativeCheck.exitCode}, signal=${nativeCheck.signal})`);
+        detail = `The following module crashed during loading:\n  ${nativeCheck.crashedModule}`;
+      } else if (nativeCheck.timeout) {
+        logger.error('native module check timed out');
+        detail = 'The native module check process timed out (30s).';
+      } else {
+        detail = 'The following modules failed to load:\n' +
+          failedModules.map(m => `  ${m.name}: ${m.error}`).join('\n');
+      }
+
+      const okHint = okModules.length > 0
+        ? `\nSuccessfully loaded: ${okModules.join(', ')}`
+        : '';
+      const failHint = failedModules.length > 0
+        ? `\nFailed to load: ${failedModules.map(m => m.name).join(', ')}`
+        : '';
+
+      hasStartupError = true;
+      errorType = 'NATIVE_MODULE';
+      dialog.showErrorBox('TX-5DR - Startup Failed',
+        `Native module compatibility check failed.\n${detail}${okHint}${failHint}\n\n` +
+        'This usually means the native binary is incompatible with the current system.\n\n' +
+        buildLogPathsHint('server'));
+      return;
+    }
+    logger.warn('all native modules ok');
+
+    // Start server immediately — do not wait for LiveKit to become ready.
+    // Server's LiveKitBridgeManager handles LiveKit availability detection
+    // and recovery probing, falling back to ws-compat when unavailable.
     serverProcess = runChild('server', serverEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
-      LIVEKIT_DISABLED: livekitProcess ? '0' : '1',
-      ...(livekitProcess && livekitPort && livekitTcpPort && livekitCredentialPath && livekitConfigPath
+      LIVEKIT_DISABLED: livekitEnabled ? '0' : '1',
+      ...(livekitEnabled && livekitPort && livekitTcpPort && livekitCredentialPath && livekitConfigPath
         ? {
             LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`,
             LIVEKIT_CREDENTIALS_FILE: livekitCredentialPath,

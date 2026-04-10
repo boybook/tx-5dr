@@ -23,9 +23,6 @@ import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
 const AUDIO_TRACK_WAIT_TIMEOUT_MS = 5000;
-const LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS = 1500;
-const LIVEKIT_FAST_PEER_TIMEOUT_MS = 2000;
-const LIVEKIT_FAST_TRACK_TIMEOUT_MS = 1500;
 const TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS = 1200;
 
 type InboundRtpStatsLike = {
@@ -503,7 +500,6 @@ export function useAudioMonitorPlayback(
 
   const startLiveKitPlayback = useCallback(async (
     offer: RealtimeTransportOffer,
-    options?: { fastFallback?: boolean },
   ) => {
     const audioContext = await ensureInteractiveAudioContext(audioContextRef.current);
     audioContextRef.current = audioContext;
@@ -559,9 +555,6 @@ export function useAudioMonitorPlayback(
     try {
       await room.connect(offer.url, offer.token, {
         autoSubscribe: true,
-        maxRetries: options?.fastFallback ? 0 : undefined,
-        websocketTimeout: options?.fastFallback ? LIVEKIT_FAST_WEBSOCKET_TIMEOUT_MS : undefined,
-        peerConnectionTimeout: options?.fastFallback ? LIVEKIT_FAST_PEER_TIMEOUT_MS : undefined,
       });
 
       if (!room.canPlaybackAudio) {
@@ -569,7 +562,7 @@ export function useAudioMonitorPlayback(
       }
 
       attachExistingBridgeTracks(room);
-      await waitForPlaybackPath(options?.fastFallback ? LIVEKIT_FAST_TRACK_TIMEOUT_MS : AUDIO_TRACK_WAIT_TIMEOUT_MS);
+      await waitForPlaybackPath(AUDIO_TRACK_WAIT_TIMEOUT_MS);
       roomRef.current = room;
       updateTransportKind('livekit');
       resolvePendingTrackWaiters();

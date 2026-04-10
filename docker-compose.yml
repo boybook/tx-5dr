@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   livekit-init:
+    profiles: ["livekit"]
     build: .
     container_name: tx5dr-livekit-init
     restart: "no"
@@ -21,11 +22,6 @@ services:
     build: .
     container_name: tx5dr
     restart: unless-stopped
-    depends_on:
-      livekit-init:
-        condition: service_completed_successfully
-      livekit:
-        condition: service_started
     ports:
       - "8076:80"
     volumes:
@@ -64,9 +60,6 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
-      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
       # TX-5DR应用路径配置
       - TX5DR_CONFIG_DIR=/app/data/config
       - TX5DR_DATA_DIR=/app/data
@@ -90,6 +83,7 @@ services:
       - /tmp:rw,noexec,nosuid,size=100m
 
   livekit:
+    profiles: ["livekit"]
     image: livekit/livekit-server:latest
     container_name: tx5dr-livekit
     restart: unless-stopped

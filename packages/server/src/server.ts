@@ -173,7 +173,13 @@ export async function createServer() {
   const liveKitBridgeManager = new LiveKitBridgeManager(digitalRadioEngine);
   await liveKitBridgeManager.start();
   const realtimeTransportManager = RealtimeTransportManager.initialize(digitalRadioEngine, liveKitBridgeManager);
-  bootLogger.info('LiveKit bridge started');
+  if (LiveKitConfig.isRuntimeAvailable()) {
+    bootLogger.info('LiveKit bridge started, runtime available');
+  } else {
+    bootLogger.info('LiveKit bridge started in degraded mode, ws-compat active', {
+      reason: LiveKitConfig.getRuntimeUnavailableReason(),
+    });
+  }
 
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, processMonitor);

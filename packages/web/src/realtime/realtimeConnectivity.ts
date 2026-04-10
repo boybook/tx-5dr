@@ -12,12 +12,6 @@ import { detectBrowserAudioRuntime } from '../audio/browserAudioRuntime';
 type RealtimeErrorStage = RealtimeConnectivityIssue['stage'];
 const REALTIME_TOAST_DEDUPE_WINDOW_MS = 4000;
 const realtimeToastHistory = new Map<string, number>();
-export const OPEN_REALTIME_COMPAT_FALLBACK_MODAL_EVENT = 'openRealtimeCompatFallbackModal';
-
-export interface RealtimeCompatFallbackModalDetail {
-  issue: RealtimeConnectivityIssue;
-  onConfirm?: () => Promise<void>;
-}
 
 export interface BuildRealtimeConnectivityIssueOptions {
   scope: RealtimeScope;
@@ -42,6 +36,11 @@ function getScopeLabel(scope: RealtimeScope): string {
 }
 
 function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof DOMException) {
+    // DOMException.name contains the error type (e.g. "NotAllowedError")
+    // while message may be empty or generic
+    return error.message ? `${error.name}: ${error.message}` : error.name;
+  }
   if (error instanceof Error && error.message) {
     return error.message;
   }
@@ -340,22 +339,14 @@ export function toRealtimeConnectivityError(
 
 export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIssue): void {
   const scopeLabel = getScopeLabel(issue.scope);
-  const compatFallbackAttempted = issue.context?.compatFallbackAttempted === 'true';
   const descriptionLines = [issue.userMessage];
 
-  if (compatFallbackAttempted) {
-    descriptionLines.push(i18n.t('radio:realtime.compatFallbackFailed'));
-    if (isBrowserRuntimeIssue(issue)) {
-      descriptionLines.push(i18n.t('radio:realtime.compatFallbackBrowserRuntimeHint', {
-        browser: issue.context?.browserRuntimeLabel || i18n.t('radio:realtime.genericBrowserRuntimeLabel'),
-      }));
-    }
-  } else if (isNetworkStyleRealtimeIssue(issue.code) && !isBrowserRuntimeIssue(issue)) {
+  if (isNetworkStyleRealtimeIssue(issue.code) && !isBrowserRuntimeIssue(issue)) {
     descriptionLines.push(i18n.t('radio:realtime.compactNetworkHint'));
   }
 
   showCompactRealtimeToast({
-    dedupeKey: `realtime-issue:${issue.scope}:${issue.stage}:${issue.code}:${compatFallbackAttempted ? 'compat' : 'plain'}`,
+    dedupeKey: `realtime-issue:${issue.scope}:${issue.stage}:${issue.code}`,
     title: i18n.t('radio:realtime.connectionFailedTitle', { scope: scopeLabel }),
     description: descriptionLines.join('\n'),
     color: 'danger',
@@ -363,37 +354,15 @@ export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIs
   });
 }
 
-export function shouldOfferRealtimeCompatFallback(issue: RealtimeConnectivityIssue): boolean {
-  return issue.context?.selectedTransport === 'livekit'
-    && issue.context?.compatFallbackAvailable === 'true'
-    && issue.context?.compatFallbackAttempted !== 'true';
-}
-
-export function openRealtimeCompatFallbackModal(detail: RealtimeCompatFallbackModalDetail): void {
-  window.dispatchEvent(new CustomEvent<RealtimeCompatFallbackModalDetail>(
-    OPEN_REALTIME_COMPAT_FALLBACK_MODAL_EVENT,
-    { detail },
-  ));
-}
-
 export function presentRealtimeConnectivityFailure(
   error: unknown,
-  options: BuildRealtimeConnectivityIssueOptions & {
-    onCompatFallbackConfirm?: () => Promise<void>;
-  },
+  options: BuildRealtimeConnectivityIssueOptions,
 ): RealtimeConnectivityIssue {
   const issue = error instanceof RealtimeConnectivityError
     ? error.issue
     : buildRealtimeConnectivityIssue(error, options);
 
-  if (options.onCompatFallbackConfirm && shouldOfferRealtimeCompatFallback(issue)) {
-    openRealtimeCompatFallbackModal({
-      issue,
-      onConfirm: options.onCompatFallbackConfirm,
-    });
-  } else {
-    showRealtimeConnectivityIssueToast(issue);
-  }
+  showRealtimeConnectivityIssueToast(issue);
 
   return issue;
 }

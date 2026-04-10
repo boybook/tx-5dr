@@ -752,9 +752,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         presentRealtimeConnectivityFailure(error, {
           scope: 'radio',
           stage: 'connect',
-          onCompatFallbackConfirm: async () => {
-            await audioMonitor.switchTransportFromGesture('ws-compat');
-          },
         });
       }
     }
@@ -774,9 +771,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       presentRealtimeConnectivityFailure(error, {
         scope: 'radio',
         stage: 'connect',
-        onCompatFallbackConfirm: async () => {
-          await audioMonitor.switchTransportFromGesture('ws-compat');
-        },
       });
     } finally {
       setIsSwitchingMonitorTransport(false);
