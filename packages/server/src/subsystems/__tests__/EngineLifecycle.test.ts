@@ -30,6 +30,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
     },
     getCurrentMode: () => ({ name: currentModeName } as any),
     getVoiceSessionManager: () => voiceSessionManager as any,
+    getAudioVolumeController: () => ({ restoreGainForCurrentSlot: vi.fn() } as any),
     getStatus: () => ({}),
   });
 

@@ -53,11 +53,13 @@ export interface AppConfig {
     band: string;
     description?: string;
   } | null;
-  // 最后设置的音量增益
+  // 最后设置的音量增益（旧版全局值，保留用于迁移）
   lastVolumeGain: {
     gain: number; // 线性增益值
     gainDb: number; // dB增益值
   } | null;
+  /** 按模式+频段存储的音量增益 (key: "digital_20m", "voice_40m" 等) */
+  volumeGainMap?: Record<string, { gain: number; gainDb: number }> | null;
   server: {
     port: number;
     host: string;
@@ -273,6 +275,22 @@ export class ConfigManager {
       await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
     }
 
+    // 迁移全局 lastVolumeGain → 按模式+频段的 volumeGainMap
+    if (parsedConfig.lastVolumeGain && !parsedConfig.volumeGainMap) {
+      logger.info('Migrating global volume gain to per-band/mode volumeGainMap...');
+      const oldGain = parsedConfig.lastVolumeGain;
+      const map: Record<string, { gain: number; gainDb: number }> = {};
+      const bands = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '2m', '70cm', 'Unknown'];
+      for (const band of bands) {
+        map[`digital_${band}`] = { gain: oldGain.gain, gainDb: oldGain.gainDb };
+        map[`voice_${band}`] = { gain: oldGain.gain, gainDb: oldGain.gainDb };
+      }
+      parsedConfig.volumeGainMap = map;
+      parsedConfig.lastVolumeGain = null;
+      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
+      logger.info('Volume gain migration complete');
+    }
+
     // 合并默认配置和加载的配置
     this.config = this.mergeConfig(DEFAULT_CONFIG, parsedConfig);
   }
@@ -294,6 +312,9 @@ export class ConfigManager {
     for (const key in userConfig) {
       if (key === 'operators' && Array.isArray(userConfig[key])) {
         result[key] = userConfig[key].map((operator: any) => ({ ...operator }));
+      // 特殊处理 volumeGainMap：直接使用用户配置（不深度合并）
+      } else if (key === 'volumeGainMap' && typeof userConfig[key] === 'object') {
+        result[key] = userConfig[key];
       // 特殊处理 callsignSyncConfigs：直接使用用户配置（不深度合并）
       } else if (key === 'callsignSyncConfigs' && typeof userConfig[key] === 'object') {
         result[key] = userConfig[key];
@@ -912,6 +933,29 @@ export class ConfigManager {
   async clearLastVolumeGain(): Promise<void> {
     this.config.lastVolumeGain = null;
     await this.saveConfig();
+  }
+
+  /**
+   * 获取指定模式+频段的音量增益
+   */
+  getVolumeGainForSlot(modeCategory: string, band: string): { gain: number; gainDb: number } | null {
+    const key = `${modeCategory}_${band}`;
+    const map = this.config.volumeGainMap;
+    if (!map || !map[key]) return null;
+    return { ...map[key] };
+  }
+
+  /**
+   * 更新指定模式+频段的音量增益
+   */
+  async updateVolumeGainForSlot(modeCategory: string, band: string, gain: number, gainDb: number): Promise<void> {
+    const key = `${modeCategory}_${band}`;
+    if (!this.config.volumeGainMap) {
+      this.config.volumeGainMap = {};
+    }
+    this.config.volumeGainMap[key] = { gain, gainDb };
+    await this.saveConfig();
+    logger.debug(`Volume gain saved for ${key}: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
   }
 
   /**

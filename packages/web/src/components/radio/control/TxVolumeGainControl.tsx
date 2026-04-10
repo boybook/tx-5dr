@@ -60,7 +60,7 @@ export const TxVolumeGainControl: React.FC<TxVolumeGainControlProps> = ({
   const { t } = useTranslation('radio');
   const connection = useConnection();
   const canControl = useCan('execute', 'RadioControl');
-  const [volumeGain, setVolumeGain] = React.useState(1.0);
+  const [volumeGain, setVolumeGain] = React.useState(Math.pow(10, -10 / 20));
 
   const handleVolumeChange = React.useCallback((value: number | number[]) => {
     const dbValue = Array.isArray(value) ? value[0] : value;
