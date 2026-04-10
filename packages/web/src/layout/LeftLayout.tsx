@@ -11,7 +11,7 @@ import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { useSlotPacks, useRadioState, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
-import { isElectron } from '../utils/config';
+import { isElectron, isMacOS } from '../utils/config';
 import { useTranslation } from 'react-i18next';
 
 export const LeftLayout: React.FC = () => {
@@ -27,6 +27,9 @@ export const LeftLayout: React.FC = () => {
   const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
   const [clientCount, setClientCount] = useState(0);
   const [isSpectrumPopedOut, setIsSpectrumPopedOut] = useState(false);
+  const stationInfoOffsetClassName = isElectron() && isMacOS()
+    ? 'pl-16'
+    : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
 
   // 监听频谱独立窗口关闭，恢复主窗口内的频谱显示
   // 注意：SpectrumDisplay 弹出后会被卸载，只有 LeftLayout 始终存活，因此监听必须在此处
@@ -122,7 +125,7 @@ export const LeftLayout: React.FC = () => {
             </div>
           )}
           <div
-            className={isElectron() ? 'pl-16' : (isMobile && hasStationContent ? 'pl-0' : 'pl-2')}
+            className={stationInfoOffsetClassName}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
           >
             <StationInfoPopover />
