@@ -18,10 +18,25 @@ export function shouldShowLevelDbmDetail(
   return level.displayStyle === 's-meter-dbm' && width >= LEVEL_DBM_MIN_CARD_WIDTH;
 }
 
+export function shouldAutoOpenAlcWarning(
+  showAlc: boolean,
+  isPttActive: boolean,
+  alc: MeterData['alc'] | null,
+  isTimeout: boolean,
+  enableAlcOverLimitPrompt: boolean
+): boolean {
+  if (!enableAlcOverLimitPrompt || !showAlc || !isPttActive || !alc || isTimeout) {
+    return false;
+  }
+
+  return alc.percent >= 100;
+}
+
 interface RadioMetersDisplayProps {
   meterData: MeterData;
   isPttActive: boolean;
   meterCapabilities: MeterCapabilities | null;
+  enableAlcOverLimitPrompt?: boolean;
   className?: string;
 }
 
@@ -118,6 +133,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   meterData,
   isPttActive,
   meterCapabilities,
+  enableAlcOverLimitPrompt = true,
   className = ''
 }) => {
   const { t } = useTranslation('radio');
@@ -156,14 +172,16 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   const showLevelPower = meterCapabilities === null || meterCapabilities.strength || meterCapabilities.power;
   const showSwr = meterCapabilities === null || meterCapabilities.swr;
   const showAlc = meterCapabilities === null || meterCapabilities.alc;
-  const isAlcOverLimit = showAlc
-    && isPttActive
-    && buffered.alc.value !== null
-    && !buffered.alc.isTimeout
-    && buffered.alc.value.percent >= 100;
+  const isAlcOverLimit = shouldAutoOpenAlcWarning(
+    showAlc,
+    isPttActive,
+    buffered.alc.value,
+    buffered.alc.isTimeout,
+    enableAlcOverLimitPrompt
+  );
 
   React.useEffect(() => {
-    if (!showAlc) {
+    if (!showAlc || !enableAlcOverLimitPrompt) {
       setIsAlcPopoverOpen(false);
       setHasAlcPopoverInteraction(false);
       return;
@@ -177,7 +195,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     if (!hasAlcPopoverInteraction) {
       setIsAlcPopoverOpen(false);
     }
-  }, [hasAlcPopoverInteraction, isAlcOverLimit, showAlc]);
+  }, [enableAlcOverLimitPrompt, hasAlcPopoverInteraction, isAlcOverLimit, showAlc]);
 
   const handleAlcPopoverOpenChange = React.useCallback((open: boolean) => {
     if (!open) {
@@ -270,53 +288,61 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
         )}
 
         {/* ALC 自动电平控制表 */}
-        {showAlc && (
-          <Popover
-            isOpen={isAlcPopoverOpen}
-            onOpenChange={handleAlcPopoverOpenChange}
-            placement="top"
-            offset={12}
-          >
-            <PopoverTrigger>
-              <div className="flex-1 min-w-0">
-                <div className={`rounded-md transition-colors ${isAlcOverLimit ? 'bg-danger-100/80 dark:bg-danger-500/10' : ''}`}>
-                  <Meter
-                    label="ALC"
-                    value={buffered.alc.value?.percent ?? null}
-                    unit="%"
-                    alert={buffered.alc.value?.alert}
-                    isTimeout={buffered.alc.isTimeout || !isPttActive}
-                  />
-                </div>
-              </div>
-            </PopoverTrigger>
-            <PopoverContent className="w-80 max-w-[calc(100vw-2rem)] p-0">
-              <div className="space-y-3 p-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold text-danger">
-                    {t('alcWarning.title')}
-                  </div>
-                  <div className="text-xs leading-relaxed text-default-600 dark:text-default-300">
-                    {t('alcWarning.description')}
-                  </div>
-                </div>
-                <TxVolumeGainControl
-                  orientation="horizontal"
-                  onInteracted={() => {
-                    setHasAlcPopoverInteraction(true);
-                    setIsAlcPopoverOpen(true);
-                  }}
-                  ariaLabel={t('alcWarning.gainControl')}
-                  className="w-full"
-                  sliderClassName="w-full"
+        {showAlc && (() => {
+          const alcMeter = (
+            <div className="flex-1 min-w-0">
+              <div className={`rounded-md transition-colors ${isAlcOverLimit ? 'bg-danger-100/80 dark:bg-danger-500/10' : ''}`}>
+                <Meter
+                  label="ALC"
+                  value={buffered.alc.value?.percent ?? null}
+                  unit="%"
+                  alert={buffered.alc.value?.alert}
+                  isTimeout={buffered.alc.isTimeout || !isPttActive}
                 />
-                <div className="text-[11px] text-default-400">
-                  {t('alcWarning.dismissHint')}
-                </div>
               </div>
-            </PopoverContent>
-          </Popover>
-        )}
+            </div>
+          );
+
+          if (!enableAlcOverLimitPrompt) {
+            return alcMeter;
+          }
+
+          return (
+            <Popover
+              isOpen={isAlcPopoverOpen}
+              onOpenChange={handleAlcPopoverOpenChange}
+              placement="top"
+              offset={12}
+            >
+              <PopoverTrigger>{alcMeter}</PopoverTrigger>
+              <PopoverContent className="w-80 max-w-[calc(100vw-2rem)] p-0">
+                <div className="space-y-3 p-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold text-danger">
+                      {t('alcWarning.title')}
+                    </div>
+                    <div className="text-xs leading-relaxed text-default-600 dark:text-default-300">
+                      {t('alcWarning.description')}
+                    </div>
+                  </div>
+                  <TxVolumeGainControl
+                    orientation="horizontal"
+                    onInteracted={() => {
+                      setHasAlcPopoverInteraction(true);
+                      setIsAlcPopoverOpen(true);
+                    }}
+                    ariaLabel={t('alcWarning.gainControl')}
+                    className="w-full"
+                    sliderClassName="w-full"
+                  />
+                  <div className="text-[11px] text-default-400">
+                    {t('alcWarning.dismissHint')}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          );
+        })()}
       </div>
     </div>
   );
