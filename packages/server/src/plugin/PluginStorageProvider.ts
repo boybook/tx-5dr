@@ -1,7 +1,7 @@
-import type { KVStore } from '@tx5dr/plugin-api';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '../utils/logger.js';
+import type { FlushableKVStore } from './types.js';
 
 const logger = createLogger('PluginStorage');
 
@@ -9,7 +9,7 @@ const logger = createLogger('PluginStorage');
  * JSON 文件 KV 存储
  * 写入有 300ms debounce，防止频繁 I/O
  */
-export class PluginStorageProvider implements KVStore {
+export class PluginStorageProvider implements FlushableKVStore {
   private data: Record<string, unknown> = {};
   private filePath: string;
   private saveTimer: NodeJS.Timeout | null = null;

@@ -197,7 +197,7 @@ export class RadioOperatorManager {
         logger.error(`Failed to record QSO:`, error);
       }
     };
-    this.eventEmitter.on('recordQSO' as any, handleRecordQSO);
+    this.eventEmitter.on('recordQSO', handleRecordQSO);
     this.eventListeners.set('recordQSO', handleRecordQSO);
 
     // 监听检查是否已通联事件
@@ -240,20 +240,20 @@ export class RadioOperatorManager {
         }
 
         // 发送响应
-        this.eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        this.eventEmitter.emit('hasWorkedCallsignResponse', {
           requestId: data.requestId,
           hasWorked
         });
       } catch (error) {
         logger.error(`Failed to check callsign:`, error);
         // 发送错误响应
-        this.eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        this.eventEmitter.emit('hasWorkedCallsignResponse', {
           requestId: data.requestId,
           hasWorked: false
         });
       }
     };
-    this.eventEmitter.on('checkHasWorkedCallsign' as any, handleCheckHasWorkedCallsign);
+    this.eventEmitter.on('checkHasWorkedCallsign', handleCheckHasWorkedCallsign);
     this.eventListeners.set('checkHasWorkedCallsign', handleCheckHasWorkedCallsign);
 
     // 监听操作员发射周期变更事件
@@ -265,7 +265,7 @@ export class RadioOperatorManager {
       // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
     };
-    this.eventEmitter.on('operatorTransmitCyclesChanged' as any, handleOperatorTransmitCyclesChanged);
+    this.eventEmitter.on('operatorTransmitCyclesChanged', handleOperatorTransmitCyclesChanged);
     this.eventListeners.set('operatorTransmitCyclesChanged', handleOperatorTransmitCyclesChanged);
 
     // 监听操作员切换发射槽位事件
@@ -276,7 +276,7 @@ export class RadioOperatorManager {
       // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
     };
-    this.eventEmitter.on('operatorSlotChanged' as any, handleOperatorSlotChanged);
+    this.eventEmitter.on('operatorSlotChanged', handleOperatorSlotChanged);
     this.eventListeners.set('operatorSlotChanged', handleOperatorSlotChanged);
 
     // 监听操作员频率变更事件 — 仅当该操作员正在实际 PTT 发射时触发重编码
@@ -287,7 +287,7 @@ export class RadioOperatorManager {
       }
       this.emitOperatorStatusUpdate(data.operatorId);
     };
-    this.eventEmitter.on('operatorFrequencyChanged' as any, handleOperatorFrequencyChanged);
+    this.eventEmitter.on('operatorFrequencyChanged', handleOperatorFrequencyChanged);
     this.eventListeners.set('operatorFrequencyChanged', handleOperatorFrequencyChanged);
 
     // 监听操作员发射内容变更事件
@@ -302,7 +302,7 @@ export class RadioOperatorManager {
       // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
     };
-    this.eventEmitter.on('operatorSlotContentChanged' as any, handleOperatorSlotContentChanged);
+    this.eventEmitter.on('operatorSlotContentChanged', handleOperatorSlotContentChanged);
     this.eventListeners.set('operatorSlotContentChanged', handleOperatorSlotContentChanged);
 
     // 注册内存泄漏检测 (仅在开发环境启用)

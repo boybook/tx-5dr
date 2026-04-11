@@ -1,5 +1,13 @@
-import type { PluginDefinition, PluginContext, StrategyRuntime } from '@tx5dr/plugin-api';
+import type { PluginDefinition, PluginContext, StrategyRuntime, KVStore } from '@tx5dr/plugin-api';
 import type { PluginStatus, PluginSystemSnapshot, PluginSystemState } from '@tx5dr/contracts';
+
+/**
+ * 内部 KVStore 扩展，暴露 flush() 供宿主生命周期管理使用。
+ * 不导出到 plugin-api 公共接口。
+ */
+export interface FlushableKVStore extends KVStore {
+  flush(): Promise<void>;
+}
 
 /**
  * 已加载的插件（内存中的运行时表示）
@@ -37,6 +45,41 @@ export interface PluginSystemRuntimeState {
   state: PluginSystemState;
   generation: number;
   lastError?: string;
+}
+
+/**
+ * 操作员决策状态 — 由 DecisionOrchestrator 管理
+ */
+export interface OperatorDecisionState {
+  decisionInProgress: boolean;
+  lastDecisionTransmission: string | null;
+  lastDecisionMessageSet: Set<string> | null;
+}
+
+/**
+ * DecisionOrchestrator 所需依赖
+ */
+export interface DecisionOrchestratorDeps {
+  getOperators: () => import('@tx5dr/core').RadioOperator[];
+  getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;
+  getOperatorAutomationSnapshot: (id: string) => import('@tx5dr/plugin-api').StrategyRuntimeSnapshot | null;
+  interruptOperatorTransmission: (operatorId: string) => Promise<void>;
+  analyzeCallsignForOperator?: (
+    operatorId: string,
+    callsign: string,
+    grid?: string,
+  ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
+  setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
+  getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
+  getCtxForInstance: (instance: PluginInstance) => PluginContext;
+  dispatcher: import('./PluginHookDispatcher.js').PluginHookDispatcher;
+  eventEmitter: import('eventemitter3').EventEmitter<import('@tx5dr/contracts').DigitalRadioEngineEvents>;
+  requestCall: (
+    operatorId: string,
+    callsign: string,
+    lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
+  ) => void;
+  notifyTransmissionQueued: (operatorId: string, transmission: string) => void;
 }
 
 /**

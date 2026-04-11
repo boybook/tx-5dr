@@ -71,8 +71,7 @@ export class PluginContextFactory {
         data,
         timestamp: Date.now(),
       };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (this.deps.eventEmitter as any).emit('pluginLog', entry);
+      this.deps.eventEmitter.emit('pluginLog', entry);
       // 也写到系统日志
       const sysLogger = createLogger(`Plugin:${pluginName}`);
       sysLogger[level](message, typeof data === 'object' && data ? data as Record<string, unknown> : { data });

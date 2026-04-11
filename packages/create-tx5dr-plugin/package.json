@@ -1,0 +1,30 @@
+{
+  "name": "create-tx5dr-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scaffold a new TX-5DR plugin project",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/boybook/tx-5dr.git",
+    "directory": "packages/create-tx5dr-plugin"
+  },
+  "keywords": [
+    "tx5dr",
+    "plugin",
+    "scaffold",
+    "create",
+    "ham-radio"
+  ],
+  "bin": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

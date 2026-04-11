@@ -1,0 +1,88 @@
+name: Publish npm packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.2.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run (do not actually publish)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Enable Corepack (Yarn 4)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Update package versions
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "Setting version to $VERSION"
+          cd packages/plugin-api && npm version "$VERSION" --no-git-tag-version && cd ../..
+          cd packages/create-tx5dr-plugin && npm version "$VERSION" --no-git-tag-version && cd ../..
+
+      - name: Build packages
+        run: |
+          yarn workspace @tx5dr/contracts build
+          yarn workspace @tx5dr/plugin-api build
+          yarn workspace create-tx5dr-plugin build
+
+      - name: Run tests
+        run: |
+          yarn workspace @tx5dr/plugin-api test
+
+      - name: Publish @tx5dr/plugin-api
+        run: |
+          cd packages/plugin-api
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npm pack --dry-run
+            echo "DRY RUN: would publish @tx5dr/plugin-api@${{ inputs.version }}"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish create-tx5dr-plugin
+        run: |
+          cd packages/create-tx5dr-plugin
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npm pack --dry-run
+            echo "DRY RUN: would publish create-tx5dr-plugin@${{ inputs.version }}"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create git tag
+        if: inputs.dry_run == false
+        run: |
+          VERSION="${{ inputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "plugin-api-v${VERSION}"
+          git push origin "plugin-api-v${VERSION}"
