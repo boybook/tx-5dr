@@ -55,21 +55,27 @@ export class RadioService {
       await this.connect();
       logger.info('Auto-connect succeeded');
     } catch (error) {
-      logger.warn('Auto-connect failed, will retry via reconnect mechanism:', error);
-      // 不抛出错误，让WebSocket的自动重连机制处理
+      logger.warn('Auto-connect failed, WSClient reconnect will retry', error);
+      // wsClient.connect() 内部已调用 scheduleReconnect()
     }
   }
 
   /**
    * 连接到服务器
+   * @param options.requireHello 为 true 时 REST 健康检查失败会抛异常（用于手动重连诊断）
    */
-  async connect(): Promise<void> {
-    // 首先测试REST API连接
+  async connect(options?: { requireHello?: boolean }): Promise<void> {
     const apiBase = getApiBaseUrl();
-    await api.getHello(apiBase);
-    logger.info('REST API connected');
+    try {
+      await api.getHello(apiBase);
+      logger.info('REST API connected');
+    } catch (error) {
+      if (options?.requireHello) {
+        throw error;
+      }
+      logger.warn('REST API health check failed, proceeding with WebSocket connection', error);
+    }
 
-    // 然后建立WebSocket连接
     await this.wsClient.connect();
   }
 

@@ -291,6 +291,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       operatorManager: this._operatorManager,
       getTransmissionPipeline: () => this.transmissionPipeline,
       getEngineLifecycle: () => this.engineLifecycle,
+      getEngineMode: () => this.engineMode,
     });
     this.radioBridge.setupListeners();
 

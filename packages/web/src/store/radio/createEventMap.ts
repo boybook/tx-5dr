@@ -3,7 +3,7 @@ import { addToast } from '@heroui/toast';
 import type {
   CoreCapabilityDiagnostics,
   CoreRadioCapabilities,
-  EngineMode,
+
   LogBookStatistics,
   MeterCapabilities,
   MeterData,
@@ -173,12 +173,7 @@ export function createRadioEventMap({
     },
     systemStatus: (data: unknown) => {
       const status = data as SystemStatus;
-      const previousEngineMode = radioStateRef.current.engineMode;
-      const nextEngineMode = (status as SystemStatus & { engineMode?: EngineMode }).engineMode ?? previousEngineMode;
       radioDispatch({ type: 'systemStatus', payload: status });
-      if (nextEngineMode !== previousEngineMode) {
-        spectrumNegotiation.applyModeDrivenSpectrumNegotiation();
-      }
     },
     spectrumCapabilities: (data: unknown) => {
       spectrumNegotiation.applySpectrumSelection(data as SpectrumCapabilities);

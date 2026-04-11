@@ -16,6 +16,7 @@ import type {
   SystemStatus
 } from '@tx5dr/contracts';
 import { WSMessageHandler } from '@tx5dr/core';
+import { getBandFromFrequency } from '@tx5dr/core';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import type { ProcessMonitor } from '../services/ProcessMonitor.js';
 import { globalEventBus } from '../utils/EventBus.js';
@@ -23,6 +24,7 @@ import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { AuthManager } from '../auth/AuthManager.js';
 import { buildAbility, emptyAbility, canWithData, type AppAbility } from '../auth/ability.js';
+import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
@@ -1105,6 +1107,12 @@ export class WSServer extends WSMessageHandler {
     // 2. 发送当前模式信息
     connection.send(WSMessageType.MODE_CHANGED, status.currentMode);
 
+    // 2.1 发送当前频率信息，避免客户端在首次进入时错过服务端启动阶段的切频广播
+    const initialFrequencyState = this.buildInitialFrequencyState(status);
+    if (initialFrequencyState) {
+      connection.send(WSMessageType.FREQUENCY_CHANGED, initialFrequencyState);
+    }
+
     // 3. 发送当前音量增益
     try {
       const volumeGain = this.digitalRadioEngine.getVolumeGain();
@@ -1220,6 +1228,59 @@ export class WSServer extends WSMessageHandler {
     activeConnections.forEach(connection => {
       connection.send(type, data, id);
     });
+  }
+
+  private buildInitialFrequencyState(status: SystemStatus): {
+    frequency: number;
+    mode: string;
+    band: string;
+    description: string;
+    radioMode?: string;
+    radioConnected: boolean;
+    source: 'program' | 'radio';
+  } | null {
+    const radioManager = this.digitalRadioEngine.getRadioManager();
+    const configManager = ConfigManager.getInstance();
+    const engineMode = this.digitalRadioEngine.getEngineMode();
+    const savedFrequency = engineMode === 'voice'
+      ? configManager.getLastVoiceFrequency()
+      : configManager.getLastSelectedFrequency();
+    const knownFrequency = radioManager.getKnownFrequency();
+    const frequency = knownFrequency ?? savedFrequency?.frequency ?? null;
+
+    if (typeof frequency !== 'number' || !Number.isFinite(frequency) || frequency <= 0) {
+      return null;
+    }
+
+    const mode = engineMode === 'voice'
+      ? 'VOICE'
+      : (savedFrequency?.frequency === frequency && 'mode' in (savedFrequency ?? {})
+          ? (savedFrequency as { mode?: string }).mode || status.currentMode.name
+          : status.currentMode.name);
+    const band = savedFrequency?.frequency === frequency
+      ? (savedFrequency.band || this.resolveBandLabel(frequency))
+      : this.resolveBandLabel(frequency);
+    const description = savedFrequency?.frequency === frequency
+      ? (savedFrequency.description || `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`)
+      : `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+
+    return {
+      frequency,
+      mode,
+      band,
+      description,
+      radioMode: savedFrequency?.radioMode,
+      radioConnected: radioManager.isConnected(),
+      source: radioManager.isConnected() ? 'radio' : 'program',
+    };
+  }
+
+  private resolveBandLabel(frequency: number): string {
+    try {
+      return getBandFromFrequency(frequency);
+    } catch {
+      return 'Unknown';
+    }
   }
 
   /**
@@ -1986,13 +2047,23 @@ export class WSServer extends WSMessageHandler {
       }
 
       try {
-        const spectrumCapabilities = await this.spectrumCoordinator.getCapabilities();
+        const spectrumCapabilities = await Promise.race([
+          this.spectrumCoordinator.getCapabilities(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('spectrum capabilities timeout')), 3000)),
+        ]);
         connection.send(WSMessageType.SPECTRUM_CAPABILITIES, spectrumCapabilities);
       } catch (error) {
-        logger.warn('failed to send spectrum capabilities', error);
+        logger.warn('failed to send spectrum capabilities during handshake', error);
       }
 
-      await this.sendSpectrumSessionStateToConnection(connection);
+      try {
+        await Promise.race([
+          this.sendSpectrumSessionStateToConnection(connection),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('spectrum session state timeout')), 3000)),
+        ]);
+      } catch (error) {
+        logger.warn('failed to send spectrum session state during handshake', error);
+      }
 
       logger.info(`connection ${connectionId} handshake complete`, { clientInstanceId });
 

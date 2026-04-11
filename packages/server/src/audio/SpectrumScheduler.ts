@@ -125,7 +125,6 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
     this.isRunning = false;
     this.pausedDueToPTT = false; // 重置暂停状态
-    this.subscriptionActive = false;
 
     if (this.analysisTimer) {
       clearInterval(this.analysisTimer);

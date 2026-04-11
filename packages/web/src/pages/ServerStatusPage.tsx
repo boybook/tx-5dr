@@ -26,7 +26,7 @@ export function ServerStatusPage({ isConnecting, connectError, radioService }: S
     setIsRetrying(true);
     setRetryError(false);
     try {
-      await radioService.connect();
+      await radioService.connect({ requireHello: true });
     } catch {
       setRetryError(true);
     } finally {

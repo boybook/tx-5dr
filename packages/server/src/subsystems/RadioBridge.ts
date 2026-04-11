@@ -1,6 +1,7 @@
 import type { EventEmitter } from 'eventemitter3';
-import type { CoreRadioCapabilities, DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import type { CoreRadioCapabilities, DigitalRadioEngineEvents, EngineMode, PresetFrequency } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
+import { getBandFromFrequency } from '@tx5dr/core';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { FrequencyManager } from '../radio/FrequencyManager.js';
@@ -23,6 +24,7 @@ export interface RadioBridgeDeps {
   operatorManager: RadioOperatorManager;
   getTransmissionPipeline: () => TransmissionPipeline;
   getEngineLifecycle: () => EngineLifecycle;
+  getEngineMode: () => EngineMode;
 }
 
 /**
@@ -154,43 +156,8 @@ export class RadioBridge {
       logger.debug(`Radio frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
 
       try {
-        const matchResult = frequencyManager.findMatchingPreset(frequency, 500);
-
-        let frequencyInfo: {
-          frequency: number;
-          mode: string;
-          band: string;
-          radioMode?: string;
-          description: string;
-        };
-
-        if (matchResult.preset) {
-          logger.debug(`Matched preset frequency: ${matchResult.preset.description}`);
-          frequencyInfo = {
-            frequency: matchResult.preset.frequency,
-            mode: matchResult.preset.mode,
-            band: matchResult.preset.band,
-            radioMode: matchResult.preset.radioMode,
-            description: matchResult.preset.description || `${(matchResult.preset.frequency / 1000000).toFixed(3)} MHz`
-          };
-        } else {
-          logger.debug('No preset matched, using custom frequency');
-          frequencyInfo = {
-            frequency: frequency,
-            mode: 'FT8',
-            band: 'Custom',
-            description: `Custom ${(frequency / 1000000).toFixed(3)} MHz`
-          };
-        }
-
-        const configManager = ConfigManager.getInstance();
-        configManager.updateLastSelectedFrequency({
-          frequency: frequencyInfo.frequency,
-          mode: frequencyInfo.mode,
-          radioMode: frequencyInfo.radioMode,
-          band: frequencyInfo.band,
-          description: frequencyInfo.description
-        });
+        const frequencyInfo = this.resolveFrequencyInfo(frequency, frequencyManager);
+        await this.persistFrequencyInfo(frequencyInfo);
 
         slotPackManager.clearInMemory();
         logger.debug('Cleared historical decode data');
@@ -249,6 +216,104 @@ export class RadioBridge {
     });
 
     await this.restoreRunningStateIfNeeded();
+  }
+
+  private resolveFrequencyInfo(
+    frequency: number,
+    frequencyManager: FrequencyManager,
+  ): {
+    frequency: number;
+    mode: string;
+    band: string;
+    radioMode?: string;
+    description: string;
+  } {
+    const engineMode = this.deps.getEngineMode();
+    const preset = this.findPresetForEngineMode(frequencyManager.getPresets(), frequency, engineMode);
+
+    if (preset) {
+      logger.debug(`Matched ${engineMode} preset frequency: ${preset.description}`);
+      return {
+        frequency: preset.frequency,
+        mode: preset.mode,
+        band: preset.band,
+        radioMode: preset.radioMode,
+        description: preset.description || `${(preset.frequency / 1000000).toFixed(3)} MHz`,
+      };
+    }
+
+    logger.debug(`No ${engineMode} preset matched, using custom frequency`);
+    const band = this.resolveBandLabel(frequency);
+    const isVoiceMode = engineMode === 'voice';
+    const lastVoiceFrequency = isVoiceMode ? ConfigManager.getInstance().getLastVoiceFrequency() : null;
+
+    return {
+      frequency,
+      mode: isVoiceMode ? 'VOICE' : 'FT8',
+      band,
+      radioMode: isVoiceMode ? lastVoiceFrequency?.radioMode : undefined,
+      description: `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
+    };
+  }
+
+  private findPresetForEngineMode(
+    presets: PresetFrequency[],
+    frequency: number,
+    engineMode: EngineMode,
+    tolerance: number = 500,
+  ): PresetFrequency | null {
+    const targetMode = engineMode === 'voice' ? 'VOICE' : null;
+    let closestPreset: PresetFrequency | null = null;
+    let smallestDiff = Infinity;
+
+    for (const preset of presets) {
+      if (targetMode ? preset.mode !== targetMode : preset.mode === 'VOICE') {
+        continue;
+      }
+
+      const diff = Math.abs(preset.frequency - frequency);
+      if (diff <= tolerance && diff < smallestDiff) {
+        closestPreset = preset;
+        smallestDiff = diff;
+      }
+    }
+
+    return closestPreset;
+  }
+
+  private resolveBandLabel(frequency: number): string {
+    try {
+      return getBandFromFrequency(frequency);
+    } catch {
+      return 'Unknown';
+    }
+  }
+
+  private async persistFrequencyInfo(frequencyInfo: {
+    frequency: number;
+    mode: string;
+    band: string;
+    radioMode?: string;
+    description: string;
+  }): Promise<void> {
+    const configManager = ConfigManager.getInstance();
+    if (frequencyInfo.mode === 'VOICE') {
+      await configManager.updateLastVoiceFrequency({
+        frequency: frequencyInfo.frequency,
+        radioMode: frequencyInfo.radioMode,
+        band: frequencyInfo.band,
+        description: frequencyInfo.description,
+      });
+      return;
+    }
+
+    await configManager.updateLastSelectedFrequency({
+      frequency: frequencyInfo.frequency,
+      mode: frequencyInfo.mode,
+      radioMode: frequencyInfo.radioMode,
+      band: frequencyInfo.band,
+      description: frequencyInfo.description,
+    });
   }
 
   private async restoreRunningStateIfNeeded(): Promise<void> {
