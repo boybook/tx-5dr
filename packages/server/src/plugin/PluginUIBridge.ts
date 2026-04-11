@@ -18,8 +18,7 @@ export class PluginUIBridge implements UIBridge {
 
   send(panelId: string, data: unknown): void {
     logger.debug(`Plugin UI data: plugin=${this.pluginName}, panel=${panelId}`);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (this.eventEmitter as any).emit('pluginData', {
+    this.eventEmitter.emit('pluginData', {
       pluginName: this.pluginName,
       operatorId: this.operatorId,
       panelId,

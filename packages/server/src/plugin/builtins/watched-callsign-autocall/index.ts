@@ -1,18 +1,24 @@
 import {
   type AutoCallProposal,
-  FT8MessageType,
-  type FrameMessage,
   type LastMessageInfo,
   type ParsedFT8Message,
   type PluginContext,
   type PluginDefinition,
   type SlotInfo,
 } from '@tx5dr/plugin-api';
+import {
+  type TriggerMode,
+  getSenderCallsign,
+  getTriggerMode,
+  getAutocallPriority as getAutocallPriorityBase,
+  isPureStandby,
+  shouldTriggerMessage,
+  toFrameMessage,
+} from '../_shared/autocall-utils.js';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
 type LegacyMatchMode = 'exact' | 'prefix';
-type TriggerMode = 'cq' | 'cq-or-signoff' | 'any';
 type WatchRule = {
   raw: string;
   type: 'exact' | 'prefix' | 'regex';
@@ -38,32 +44,8 @@ function getLegacyMatchMode(ctx: PluginContext): LegacyMatchMode {
   return ctx.config.matchMode === 'prefix' ? 'prefix' : 'exact';
 }
 
-function getTriggerMode(ctx: PluginContext): TriggerMode {
-  const value = ctx.config.triggerMode;
-  if (value === 'any' || value === 'cq-or-signoff') {
-    return value;
-  }
-  return 'cq';
-}
-
 function getAutocallPriority(ctx: PluginContext): number {
-  return typeof ctx.config.autocallPriority === 'number'
-    ? ctx.config.autocallPriority
-    : 100;
-}
-
-function getSenderCallsign(message: ParsedFT8Message['message']): string {
-  if ('senderCallsign' in message && typeof message.senderCallsign === 'string') {
-    return message.senderCallsign.toUpperCase();
-  }
-  return '';
-}
-
-function getTargetCallsign(message: ParsedFT8Message['message']): string {
-  if ('targetCallsign' in message && typeof message.targetCallsign === 'string') {
-    return message.targetCallsign.toUpperCase();
-  }
-  return '';
+  return getAutocallPriorityBase(ctx, 100);
 }
 
 function buildWatchRules(ctx: PluginContext): WatchRule[] {
@@ -107,59 +89,6 @@ function buildWatchRules(ctx: PluginContext): WatchRule[] {
   }
 
   return rules;
-}
-
-function isPureStandby(ctx: PluginContext): boolean {
-  if (ctx.operator.isTransmitting) {
-    return false;
-  }
-
-  const automation = ctx.operator.automation;
-  if (!automation) {
-    return true;
-  }
-
-  const targetCallsign = typeof automation.context?.targetCallsign === 'string'
-    ? automation.context.targetCallsign.trim()
-    : '';
-  return automation.currentState === 'TX6' && targetCallsign.length === 0;
-}
-
-function shouldTriggerMessage(
-  parsedMessage: ParsedFT8Message,
-  ctx: PluginContext,
-  triggerMode: TriggerMode,
-): boolean {
-  const message = parsedMessage.message;
-  const myCallsign = ctx.operator.callsign.toUpperCase();
-  if (getTargetCallsign(message) === myCallsign) {
-    return true;
-  }
-
-  if (message.type === FT8MessageType.CQ) {
-    return true;
-  }
-
-  if (triggerMode === 'any') {
-    return true;
-  }
-
-  if (triggerMode === 'cq-or-signoff') {
-    return message.type === FT8MessageType.RRR || message.type === FT8MessageType.SEVENTY_THREE;
-  }
-
-  return false;
-}
-
-function toFrameMessage(parsedMessage: ParsedFT8Message): FrameMessage {
-  return {
-    snr: parsedMessage.snr,
-    freq: parsedMessage.df,
-    dt: parsedMessage.dt,
-    message: parsedMessage.rawMessage,
-    confidence: 1,
-    logbookAnalysis: parsedMessage.logbookAnalysis,
-  };
 }
 
 function findMatchedTarget(

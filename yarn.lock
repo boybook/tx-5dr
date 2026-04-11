@@ -9298,6 +9298,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"create-tx5dr-plugin@workspace:packages/create-tx5dr-plugin":
+  version: 0.0.0-use.local
+  resolution: "create-tx5dr-plugin@workspace:packages/create-tx5dr-plugin"
+  dependencies:
+    typescript: "npm:^5.0.0"
+  bin:
+    create-tx5dr-plugin: ./dist/index.js
+  languageName: unknown
+  linkType: soft
+
 "cross-argv@npm:^1.0.0":
   version: 1.0.0
   resolution: "cross-argv@npm:1.0.0"

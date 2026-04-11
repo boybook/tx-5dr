@@ -97,4 +97,4 @@ export type {
 } from '@tx5dr/contracts';
 
 /** Stable runtime enum values commonly referenced by plugin implementations. */
-export { FT8MessageType } from '@tx5dr/contracts';
+export { FT8MessageType } from './ft8-message-type.js';

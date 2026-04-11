@@ -93,8 +93,7 @@ export class ClockCoordinator {
           if (!this.decodeTimingWarningEmitted) {
             this.decodeTimingWarningEmitted = true;
             logger.warn(`no decode results for previous slot (startMs=${prevSlotStartMs}) by decision time`);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            engineEmitter.emit('timingWarning' as any, {
+            engineEmitter.emit('timingWarning', {
               title: 'Decode timing warning',
               text: `No decode results received for previous slot by decision time. Decoding may be lagging behind.`
             });
@@ -105,8 +104,7 @@ export class ClockCoordinator {
       }
       this.hasSeenFirstSlot = true;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      engineEmitter.emit('encodeStart' as any, slotInfo);
+      engineEmitter.emit('encodeStart', slotInfo);
 
       getTransmissionPipeline().onEncodeStart(slotInfo);
     });
@@ -117,8 +115,7 @@ export class ClockCoordinator {
 
       getTransmissionPipeline().onTransmitStart(slotInfo);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      engineEmitter.emit('transmitStart' as any, slotInfo);
+      engineEmitter.emit('transmitStart', slotInfo);
     });
 
     this.lm.listen(slotClock, 'subWindow', (slotInfo: SlotInfo, windowIdx: number) => {

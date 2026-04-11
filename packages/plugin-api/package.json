@@ -2,6 +2,23 @@
   "name": "@tx5dr/plugin-api",
   "version": "1.0.0",
   "type": "module",
+  "description": "Public plugin API for TX-5DR digital radio engine",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/boybook/tx-5dr.git",
+    "directory": "packages/plugin-api"
+  },
+  "keywords": [
+    "tx5dr",
+    "plugin",
+    "ham-radio",
+    "ft8",
+    "digital-radio"
+  ],
+  "files": [
+    "dist"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -9,6 +26,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./testing": {
+      "import": "./dist/testing/index.js",
+      "require": "./dist/testing/index.js",
+      "types": "./dist/testing/index.d.ts"
     }
   },
   "scripts": {
@@ -17,10 +39,8 @@
     "lint": "eslint src/**/*.ts",
     "test": "vitest run --passWithNoTests"
   },
-  "dependencies": {
-    "@tx5dr/contracts": "workspace:*"
-  },
   "devDependencies": {
+    "@tx5dr/contracts": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

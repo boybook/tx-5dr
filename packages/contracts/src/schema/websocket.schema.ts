@@ -1311,4 +1311,16 @@ export interface DigitalRadioEngineEvents {
   pluginStatusChanged: (data: { generation: number; plugin: PluginStatus }) => void;
   pluginData: (data: PluginDataPayload) => void;
   pluginLog: (data: PluginLogEntry) => void;
+
+  // 内部子系统间通信事件（不通过 WebSocket 广播，用于 engine emitter 内部编排）
+  encodeStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;
+  transmitStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;
+  timingWarning: (data: { title: string; text: string }) => void;
+  operatorSlotChanged: (data: { operatorId: string; slot: string }) => void;
+  operatorSlotContentChanged: (data: { operatorId: string; slot: string; content: string }) => void;
+  operatorFrequencyChanged: (data: { operatorId: string; frequency: number }) => void;
+  operatorTransmitCyclesChanged: (data: { operatorId: string; transmitCycles: number[] }) => void;
+  recordQSO: (data: { operatorId: string; qsoRecord: z.infer<typeof QSORecordSchema> }) => void;
+  checkHasWorkedCallsign: (data: { operatorId: string; callsign: string; requestId: string }) => void;
+  hasWorkedCallsignResponse: (data: { requestId: string; hasWorked: boolean }) => void;
 }

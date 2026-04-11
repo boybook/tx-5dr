@@ -4,6 +4,7 @@ import type {
   AutoCallExecutionRequest,
   AutoCallProposal,
   PluginContext,
+  PluginHooks,
   ScoredCandidate,
 } from '@tx5dr/plugin-api';
 import type { PluginInstance } from './types.js';
@@ -13,6 +14,9 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('PluginHookDispatcher');
 
 const HOOK_TIMEOUT_MS = 200;
+
+/** Extracts the non-undefined hook function type for a given hook name. */
+type HookFn<K extends keyof PluginHooks> = NonNullable<PluginHooks[K]>;
 
 function withTimeout<T>(promise: Promise<T> | T, ms: number): Promise<T> {
   if (!(promise instanceof Promise)) return Promise.resolve(promise);
@@ -207,17 +211,16 @@ export class PluginHookDispatcher {
 
   // ===== Exclusive hook: strategy plugin only =====
 
-  async dispatchExclusive<R>(
+  async dispatchExclusive<K extends keyof PluginHooks, R>(
     operatorId: string,
-    hookName: keyof import('@tx5dr/plugin-api').PluginHooks,
-    executor: (hook: (...args: unknown[]) => unknown, ctx: PluginContext) => Promise<R>,
+    hookName: K,
+    executor: (hook: HookFn<K>, ctx: PluginContext) => Promise<R>,
     getCtx: (instance: PluginInstance) => PluginContext,
   ): Promise<R | null> {
     const instance = this.getStrategyInstance(operatorId);
     if (!instance || this.errorTracker.isDisabled(instance)) return null;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const hook = (instance.plugin.definition.hooks as any)?.[hookName];
+    const hook = instance.plugin.definition.hooks?.[hookName] as HookFn<K> | undefined;
     if (!hook) return null;
 
     try {
@@ -233,18 +236,17 @@ export class PluginHookDispatcher {
 
   // ===== Broadcast hook: all plugins =====
 
-  async dispatchBroadcast(
+  async dispatchBroadcast<K extends keyof PluginHooks>(
     operatorId: string,
-    hookName: keyof import('@tx5dr/plugin-api').PluginHooks,
-    executor: (hook: (...args: unknown[]) => unknown, ctx: PluginContext) => void | Promise<void>,
+    hookName: K,
+    executor: (hook: HookFn<K>, ctx: PluginContext) => void | Promise<void>,
     getCtx: (instance: PluginInstance) => PluginContext,
   ): Promise<void> {
     const instances = this.getActiveInstances(operatorId);
     await Promise.allSettled(
       instances.map(async instance => {
         if (this.errorTracker.isDisabled(instance)) return;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const hook = (instance.plugin.definition.hooks as any)?.[hookName];
+        const hook = instance.plugin.definition.hooks?.[hookName] as HookFn<K> | undefined;
         if (!hook) return;
         try {
           const ctx = getCtx(instance);

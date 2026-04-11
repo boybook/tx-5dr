@@ -1,20 +1,15 @@
 import type {
   DigitalRadioEngineEvents,
-  LogbookAnalysis,
   PluginStatus,
   PluginSystemSnapshot,
   PluginsConfig,
-  ParsedFT8Message,
   SlotInfo,
   SlotPack,
   FrameMessage,
   StrategyRuntimeContext,
 } from '@tx5dr/contracts';
 import type {
-  AutoCallExecutionPlan,
-  AutoCallExecutionRequest,
   PluginContext,
-  StrategyDecisionMeta,
   StrategyRuntime,
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
@@ -22,44 +17,18 @@ import type {
 import type { EventEmitter } from 'eventemitter3';
 import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
-import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
-import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
+import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
 import {
   BUILTIN_PLUGINS,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
 } from './builtins/index.js';
 import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
-import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRuntimeState } from './types.js';
+import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRuntimeState, FlushableKVStore } from './types.js';
 import { createLogger } from '../utils/logger.js';
 import path from 'path';
-import { FT8MessageParser, CycleUtils } from '@tx5dr/core';
 
 const logger = createLogger('PluginManager');
-
-interface OperatorDecisionState {
-  decisionInProgress: boolean;
-  lastDecisionTransmission: string | null;
-  lastDecisionMessageSet: Set<string> | null;
-}
-
-interface PluginManagerEvents extends DigitalRadioEngineEvents {
-  encodeStart: (slotInfo: SlotInfo) => void;
-  operatorSlotChanged: (data: { operatorId: string; slot: StrategyRuntimeSlot }) => void;
-  operatorSlotContentChanged: (data: { operatorId: string; slot: StrategyRuntimeSlot; content: string }) => void;
-}
-
-function getParsedMessageSenderCallsign(message: ParsedFT8Message['message']): string | undefined {
-  return 'senderCallsign' in message && typeof message.senderCallsign === 'string'
-    ? message.senderCallsign.toUpperCase()
-    : undefined;
-}
-
-function getParsedMessageGrid(message: ParsedFT8Message['message']): string | undefined {
-  return 'grid' in message && typeof message.grid === 'string' && message.grid.trim().length > 0
-    ? message.grid.trim().toUpperCase()
-    : undefined;
-}
 
 /**
  * 插件管理器 — 中央编排器
@@ -77,11 +46,11 @@ export class PluginManager {
   // operatorId → Map<pluginName, PluginInstance>
   private instances = new Map<string, Map<string, PluginInstance>>();
   private dispatcher!: PluginHookDispatcher;
+  private orchestrator!: DecisionOrchestrator;
   private contextFactory: PluginContextFactory;
   private loader = new PluginLoader();
   private running = false;
   private unsubscribeFns: Array<() => void> = [];
-  private decisionStates = new Map<string, OperatorDecisionState>();
   private systemState: PluginSystemRuntimeState = {
     state: 'ready',
     generation: 0,
@@ -101,10 +70,24 @@ export class PluginManager {
       (operatorId) => this.getStrategyInstance(operatorId),
       (pluginName, reason) => this.handleAutoDisable(pluginName, reason),
     );
+    this.orchestrator = new DecisionOrchestrator({
+      getOperators: deps.getOperators,
+      getOperatorById: deps.getOperatorById,
+      getOperatorAutomationSnapshot: deps.getOperatorAutomationSnapshot,
+      interruptOperatorTransmission: deps.interruptOperatorTransmission,
+      analyzeCallsignForOperator: deps.analyzeCallsignForOperator,
+      setOperatorAudioFrequency: deps.setOperatorAudioFrequency,
+      getStrategyRuntime: (operatorId) => this.getStrategyRuntime(operatorId),
+      getCtxForInstance: (instance) => this.getCtxForInstance(instance),
+      dispatcher: this.dispatcher,
+      eventEmitter: deps.eventEmitter,
+      requestCall: (operatorId, callsign, lastMessage) => this.requestCall(operatorId, callsign, lastMessage),
+      notifyTransmissionQueued: (operatorId, transmission) => this.notifyTransmissionQueued(operatorId, transmission),
+    });
   }
 
-  private get eventEmitter(): EventEmitter<PluginManagerEvents> {
-    return this.deps.eventEmitter as unknown as EventEmitter<PluginManagerEvents>;
+  private get eventEmitter(): EventEmitter<DigitalRadioEngineEvents> {
+    return this.deps.eventEmitter;
   }
 
   /** 允许在 initialize() 阶段设置正确的数据目录 */
@@ -147,7 +130,7 @@ export class PluginManager {
   // ===== 操作员实例管理 =====
 
   async initInstancesForOperator(operatorId: string): Promise<void> {
-    this.getOrCreateDecisionState(operatorId);
+    this.orchestrator.initDecisionState(operatorId);
 
     if (!this.instances.has(operatorId)) {
       this.instances.set(operatorId, new Map());
@@ -205,7 +188,7 @@ export class PluginManager {
       void this.deactivateInstance(operatorId, instance);
     }
     this.instances.delete(operatorId);
-    this.decisionStates.delete(operatorId);
+    this.orchestrator.removeDecisionState(operatorId);
   }
 
   // ===== Hook 分发 =====
@@ -280,7 +263,7 @@ export class PluginManager {
     const runtime = this.getStrategyRuntime(operatorId);
     if (!runtime) return;
     runtime.setState(state);
-    this.invalidateDecisionMessageSet(operatorId);
+    this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
   }
 
@@ -292,12 +275,12 @@ export class PluginManager {
     const runtime = this.getStrategyRuntime(operatorId);
     if (!runtime) return;
     runtime.setSlotContent({ slot, content });
-    this.invalidateDecisionMessageSet(operatorId);
+    this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotContentChanged', { operatorId, slot, content });
   }
 
   getCurrentTransmission(operatorId: string): string | null {
-    return this.readCurrentTransmission(operatorId);
+    return this.orchestrator.readCurrentTransmission(operatorId);
   }
 
   handlePluginUserAction(
@@ -327,7 +310,7 @@ export class PluginManager {
     const runtime = this.getStrategyRuntime(operatorId);
     if (!operator || !runtime) return;
 
-    this.invalidateDecisionMessageSet(operatorId);
+    this.orchestrator.invalidateDecisionMessageSet(operatorId);
     operator.start();
     if (lastMessage) {
       operator.setTransmitCycles((lastMessage.slotInfo.cycleNumber + 1) % 2);
@@ -341,64 +324,7 @@ export class PluginManager {
   }
 
   async reDecideOperator(operatorId: string, slotPack: SlotPack): Promise<boolean> {
-    const operator = this.deps.getOperatorById(operatorId);
-    if (!operator || !operator.isTransmitting) {
-      return false;
-    }
-
-    const session = this.getOrCreateDecisionState(operatorId);
-    if (session.decisionInProgress) {
-      return false;
-    }
-
-    const newMessageSet = this.buildDecisionMessageSet(slotPack, operatorId);
-    if (session.lastDecisionMessageSet) {
-      const hasNewMessage = Array.from(newMessageSet).some((message) => !session.lastDecisionMessageSet?.has(message));
-      if (!hasNewMessage) {
-        return false;
-      }
-    }
-
-    const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
-    const automaticTargetMessages = this.filterAutomaticTargetMessages(operatorId, parsedMessages);
-    const filtered = await this.dispatcher.dispatchFilterCandidates(
-      operatorId,
-      automaticTargetMessages,
-      (instance) => this.getCtxForInstance(instance),
-    );
-    const scored = await this.dispatcher.dispatchScoreCandidates(
-      operatorId,
-      filtered.map((message) => ({ ...message, score: 0 })),
-      (instance) => this.getCtxForInstance(instance),
-    );
-    scored.sort((a, b) => b.score - a.score);
-
-    let decisionStop = false;
-    session.decisionInProgress = true;
-    try {
-      const decision = await this.invokeStrategyDecision(operatorId, scored, { isReDecision: true });
-      decisionStop = decision?.stop ?? false;
-    } finally {
-      session.decisionInProgress = false;
-    }
-
-    if (decisionStop) {
-      await this.applyStrategyStop(operatorId, { interruptActiveTransmission: true });
-      return false;
-    }
-
-    session.lastDecisionMessageSet = newMessageSet;
-    const newTransmission = this.readCurrentTransmission(operatorId);
-    if (newTransmission !== session.lastDecisionTransmission) {
-      logger.info(`Late decode re-decision changed transmission: operator=${operatorId}`, {
-        previousTransmission: session.lastDecisionTransmission,
-        nextTransmission: newTransmission,
-      });
-      session.lastDecisionTransmission = newTransmission;
-      return true;
-    }
-
-    return false;
+    return this.orchestrator.reDecideOperator(operatorId, slotPack);
   }
 
   // ===== 策略管理 =====
@@ -774,7 +700,7 @@ export class PluginManager {
 
     this.instances.clear();
     this.loadedPlugins.clear();
-    this.decisionStates.clear();
+    this.orchestrator.clearAllDecisionStates();
   }
 
   private async performReload(reason: string, action: () => Promise<void>): Promise<void> {
@@ -830,7 +756,7 @@ export class PluginManager {
         logger.warn(`Failed to reset strategy runtime: operator=${operatorId}`, err);
       }
     }
-    this.clearDecisionState(operatorId);
+    this.orchestrator.clearDecisionState(operatorId);
     this.deps.resetOperatorRuntime(operatorId, reason);
   }
 
@@ -847,8 +773,7 @@ export class PluginManager {
 
   private broadcastPluginList(): void {
     const snapshot = this.getSnapshot();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (this.deps.eventEmitter as any).emit('pluginList', snapshot);
+    this.deps.eventEmitter.emit('pluginList', snapshot);
   }
 
   private broadcastStatusChanged(pluginName: string): void {
@@ -864,8 +789,7 @@ export class PluginManager {
         ? this.getAssignedOperatorIds(pluginName)
         : undefined,
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (this.deps.eventEmitter as any).emit('pluginStatusChanged', {
+    this.deps.eventEmitter.emit('pluginStatusChanged', {
       generation: this.systemState.generation,
       plugin: status,
     });
@@ -891,25 +815,36 @@ export class PluginManager {
       }
     }
     instance.ctx.timers.clearAll();
-    const globalStore = instance.ctx.store.global as typeof instance.ctx.store.global & { flush?: () => Promise<void> };
-    const operatorStore = instance.ctx.store.operator as typeof instance.ctx.store.operator & { flush?: () => Promise<void> };
-    await globalStore.flush?.().catch(() => {});
-    await operatorStore.flush?.().catch(() => {});
+    // PluginContextFactory 总是创建 PluginStorageProvider 实例（实现 FlushableKVStore）
+    const globalStore = instance.ctx.store.global as FlushableKVStore;
+    const operatorStore = instance.ctx.store.operator as FlushableKVStore;
+    await globalStore.flush().catch(() => {});
+    await operatorStore.flush().catch(() => {});
   }
 
   private registerEngineListeners(): void {
     const eventEmitter = this.eventEmitter;
     const onSlotStart = (slotInfo: SlotInfo, slotPack: SlotPack | null) => {
-      void this.handleSlotStart(slotInfo, slotPack);
+      void this.orchestrator.handleSlotStart(slotInfo, slotPack);
     };
     const onEncodeStart = (slotInfo: SlotInfo) => {
-      this.handleEncodeStart(slotInfo);
+      this.orchestrator.handleEncodeStart(slotInfo);
     };
 
     eventEmitter.on('slotStart', onSlotStart);
     eventEmitter.on('encodeStart', onEncodeStart);
     this.unsubscribeFns.push(() => eventEmitter.off('slotStart', onSlotStart));
     this.unsubscribeFns.push(() => eventEmitter.off('encodeStart', onEncodeStart));
+  }
+
+  /** @internal Exposed for integration tests that call via `(pm as any).handleSlotStart(...)` */
+  private handleSlotStart(slotInfo: SlotInfo, slotPack: SlotPack | null): Promise<void> {
+    return this.orchestrator.handleSlotStart(slotInfo, slotPack);
+  }
+
+  /** @internal Exposed for integration tests that call via `(pm as any).handleEncodeStart(...)` */
+  private handleEncodeStart(slotInfo: SlotInfo): void {
+    this.orchestrator.handleEncodeStart(slotInfo);
   }
 
   private unregisterEngineListeners(): void {
@@ -919,517 +854,7 @@ export class PluginManager {
     this.unsubscribeFns = [];
   }
 
-  private async handleSlotStart(slotInfo: SlotInfo, slotPack: SlotPack | null): Promise<void> {
-    for (const operator of this.deps.getOperators()) {
-      const parsedMessages = slotPack
-        ? await this.parseSlotPackMessages(slotPack, operator.config.id)
-        : [];
-
-      await this.dispatcher.dispatchBroadcast(
-        operator.config.id,
-        'onSlotStart',
-        (hook, ctx) => (hook as (slotInfo: SlotInfo, messages: ParsedFT8Message[], ctx: PluginContext) => void)(slotInfo, parsedMessages, ctx),
-        (instance) => this.getCtxForInstance(instance),
-      );
-
-      await this.dispatcher.dispatchBroadcast(
-        operator.config.id,
-        'onDecode',
-        (hook, ctx) => (hook as (messages: ParsedFT8Message[], ctx: PluginContext) => void)(parsedMessages, ctx),
-        (instance) => this.getCtxForInstance(instance),
-      );
-
-      const autoCallProposals = await this.dispatcher.dispatchAutoCallCandidates(
-        operator.config.id,
-        slotInfo,
-        parsedMessages,
-        (instance) => this.getCtxForInstance(instance),
-      );
-      await this.applyAutoCallProposal(operator.config.id, slotInfo, parsedMessages, autoCallProposals);
-
-      if (!operator.isTransmitting) continue;
-
-      const session = this.getOrCreateDecisionState(operator.config.id);
-      session.lastDecisionTransmission = null;
-      session.lastDecisionMessageSet = null;
-      const automaticTargetMessages = this.filterAutomaticTargetMessages(operator.config.id, parsedMessages);
-
-      const filtered = await this.dispatcher.dispatchFilterCandidates(
-        operator.config.id,
-        automaticTargetMessages,
-        (instance) => this.getCtxForInstance(instance),
-      );
-      const scored = await this.dispatcher.dispatchScoreCandidates(
-        operator.config.id,
-        filtered.map((message) => ({ ...message, score: 0 })),
-        (instance) => this.getCtxForInstance(instance),
-      );
-      scored.sort((a, b) => b.score - a.score);
-
-      let decision;
-      session.decisionInProgress = true;
-      try {
-        decision = await this.invokeStrategyDecision(operator.config.id, scored, { isReDecision: false });
-      } finally {
-        session.decisionInProgress = false;
-      }
-
-      if (slotPack) {
-        session.lastDecisionMessageSet = this.buildDecisionMessageSet(slotPack, operator.config.id);
-      }
-      session.lastDecisionTransmission = this.readCurrentTransmission(operator.config.id);
-
-      if (decision?.stop) {
-        await this.applyStrategyStop(operator.config.id);
-      }
-    }
-  }
-
-  private handleEncodeStart(slotInfo: SlotInfo): void {
-    for (const operator of this.deps.getOperators()) {
-      if (!operator.isTransmitting) continue;
-
-      const isTransmitSlot = CycleUtils.isOperatorTransmitCycle(
-        operator.getTransmitCycles(),
-        slotInfo.utcSeconds,
-        operator.config.mode.slotMs,
-      );
-      if (!isTransmitSlot) continue;
-
-      const runtime = this.getStrategyRuntime(operator.config.id);
-      if (!runtime) continue;
-
-      try {
-        const transmission = runtime.getTransmitText();
-        if (!transmission) continue;
-        this.eventEmitter.emit('requestTransmit', {
-          operatorId: operator.config.id,
-          transmission,
-        });
-        this.notifyTransmissionQueued(operator.config.id, transmission);
-      } catch (err) {
-        logger.error(`strategy runtime getTransmitText error: operator=${operator.config.id}`, err);
-      }
-    }
-  }
-
-  private async parseSlotPackMessages(slotPack: SlotPack, operatorId: string): Promise<ParsedFT8Message[]> {
-    const LOCAL_OPERATOR_SIMULATED_SNR = 10;
-    return Promise.all(slotPack.frames.map(async (frame) => {
-      const parsedMessage: ParsedFT8Message = {
-        message: FT8MessageParser.parseMessage(frame.message),
-        snr: frame.snr === -999 && frame.operatorId === operatorId ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
-        dt: frame.dt,
-        df: frame.freq,
-        rawMessage: frame.message,
-        slotId: slotPack.slotId,
-        timestamp: slotPack.startMs,
-        logbookAnalysis: frame.logbookAnalysis,
-      };
-
-      if (frame.snr === -999) {
-        return parsedMessage;
-      }
-
-      const analysis = await this.analyzeMessageForOperator(parsedMessage, operatorId);
-      return {
-        ...parsedMessage,
-        logbookAnalysis: analysis ?? parsedMessage.logbookAnalysis,
-      };
-    }));
-  }
-
-  private async analyzeMessageForOperator(
-    parsedMessage: ParsedFT8Message,
-    operatorId: string,
-  ): Promise<LogbookAnalysis | undefined> {
-    if (!this.deps.analyzeCallsignForOperator) {
-      return parsedMessage.logbookAnalysis;
-    }
-
-    const callsign = getParsedMessageSenderCallsign(parsedMessage.message);
-    if (!callsign) {
-      return parsedMessage.logbookAnalysis;
-    }
-
-    const grid = getParsedMessageGrid(parsedMessage.message);
-    try {
-      return await this.deps.analyzeCallsignForOperator(operatorId, callsign, grid)
-        ?? parsedMessage.logbookAnalysis;
-    } catch (error) {
-      logger.warn(`Failed to analyze parsed message for operator ${operatorId}`, error);
-      return parsedMessage.logbookAnalysis;
-    }
-  }
-
-  private isOperatorPureStandby(operatorId: string): boolean {
-    const operator = this.deps.getOperatorById(operatorId);
-    if (!operator || operator.isTransmitting) {
-      return false;
-    }
-
-    const automation = this.deps.getOperatorAutomationSnapshot(operatorId);
-    if (!automation) {
-      return true;
-    }
-
-    const targetCallsign = typeof automation.context?.targetCallsign === 'string'
-      ? automation.context.targetCallsign.trim()
-      : '';
-    return automation.currentState === 'TX6' && targetCallsign.length === 0;
-  }
-
-  private findMatchedParsedMessage(
-    lastMessage: { message: FrameMessage; slotInfo: SlotInfo } | undefined,
-    messages: ParsedFT8Message[],
-  ): ParsedFT8Message | undefined {
-    if (!lastMessage) {
-      return undefined;
-    }
-
-    return messages.find((message) => (
-      message.rawMessage === lastMessage.message.message
-      && message.df === lastMessage.message.freq
-      && message.dt === lastMessage.message.dt
-    )) ?? messages.find((message) => (
-      message.rawMessage === lastMessage.message.message
-    ));
-  }
-
-  private findProposalSourceMessage(
-    proposal: AutoCallProposalResult['proposal'],
-    messages: ParsedFT8Message[],
-  ): ParsedFT8Message | undefined {
-    const exactMatch = this.findMatchedParsedMessage(proposal.lastMessage, messages);
-    if (exactMatch) {
-      return exactMatch;
-    }
-
-    const proposalCallsign = proposal.callsign.trim().toUpperCase();
-    return messages.find((message) => getParsedMessageSenderCallsign(message.message) === proposalCallsign);
-  }
-
-  private filterAutomaticTargetMessages(
-    operatorId: string,
-    messages: ParsedFT8Message[],
-  ): ParsedFT8Message[] {
-    const operator = this.deps.getOperatorById(operatorId);
-    if (!operator) {
-      return messages;
-    }
-
-    return messages.filter((message) => {
-      const decision = evaluateAutomaticTargetEligibility(operator.config.myCallsign, message);
-      if (decision.eligible) {
-        return true;
-      }
-
-      logger.debug('Automatic target message filtered by CQ modifier eligibility', {
-        operatorId,
-        callsign: getParsedMessageSenderCallsign(message.message),
-        modifier: decision.modifier,
-        reason: decision.reason,
-        rawMessage: message.rawMessage,
-      });
-      return false;
-    });
-  }
-
-  private isAutoCallProposalEligible(
-    operatorId: string,
-    entry: AutoCallProposalResult,
-    messages: ParsedFT8Message[],
-  ): boolean {
-    const operator = this.deps.getOperatorById(operatorId);
-    if (!operator) {
-      return false;
-    }
-
-    const sourceMessage = this.findProposalSourceMessage(entry.proposal, messages);
-    if (!sourceMessage) {
-      logger.debug('Auto call proposal could not be validated against a source message, keeping proposal for compatibility', {
-        operatorId,
-        pluginName: entry.pluginName,
-        callsign: entry.proposal.callsign,
-      });
-      return true;
-    }
-
-    const decision = evaluateAutomaticTargetEligibility(operator.config.myCallsign, sourceMessage);
-    if (decision.eligible) {
-      return true;
-    }
-
-    logger.info('Auto call proposal rejected by CQ modifier eligibility', {
-      operatorId,
-      pluginName: entry.pluginName,
-      callsign: entry.proposal.callsign,
-      modifier: decision.modifier,
-      reason: decision.reason,
-      rawMessage: sourceMessage.rawMessage,
-    });
-    return false;
-  }
-
-  private buildSourceSlotInfoFromParsedMessage(
-    operatorId: string,
-    parsedMessage: ParsedFT8Message,
-    fallbackSlotInfo: SlotInfo,
-  ): SlotInfo {
-    const operatorMode = this.deps.getOperatorById(operatorId)?.config.mode;
-    if (!operatorMode) {
-      return fallbackSlotInfo;
-    }
-
-    const startMs = parsedMessage.timestamp;
-    const utcSeconds = Math.floor(startMs / 1000);
-    const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, operatorMode.slotMs);
-
-    return {
-      id: parsedMessage.slotId,
-      startMs,
-      utcSeconds,
-      phaseMs: 0,
-      driftMs: 0,
-      cycleNumber,
-      mode: operatorMode.name,
-    };
-  }
-
-  private normalizeAutoCallProposal(
-    operatorId: string,
-    currentSlotInfo: SlotInfo,
-    messages: ParsedFT8Message[],
-    entry: AutoCallProposalResult,
-  ): AutoCallProposalResult {
-    const matchedMessage = this.findMatchedParsedMessage(entry.proposal.lastMessage, messages);
-    if (!matchedMessage || !entry.proposal.lastMessage) {
-      return entry;
-    }
-
-    return {
-      ...entry,
-      proposal: {
-        ...entry.proposal,
-        lastMessage: {
-          ...entry.proposal.lastMessage,
-          slotInfo: this.buildSourceSlotInfoFromParsedMessage(operatorId, matchedMessage, currentSlotInfo),
-        },
-      },
-    };
-  }
-
-  private resolveProposalMessageOrder(
-    proposal: AutoCallProposalResult['proposal'],
-    messages: ParsedFT8Message[],
-  ): number {
-    const lastMessage = proposal.lastMessage;
-    if (!lastMessage) {
-      return Number.MAX_SAFE_INTEGER;
-    }
-
-    const exactIndex = messages.findIndex((message) => (
-      message.rawMessage === lastMessage.message.message
-      && message.df === lastMessage.message.freq
-      && message.dt === lastMessage.message.dt
-    ));
-    if (exactIndex >= 0) {
-      return exactIndex;
-    }
-
-    const rawIndex = messages.findIndex((message) => (
-      message.rawMessage === lastMessage.message.message
-    ));
-    return rawIndex >= 0 ? rawIndex : Number.MAX_SAFE_INTEGER;
-  }
-
-  private async resolveAutoCallExecutionPlan(
-    operatorId: string,
-    request: AutoCallExecutionRequest,
-  ): Promise<AutoCallExecutionPlan> {
-    return this.dispatcher.dispatchAutoCallExecutionPlan(
-      operatorId,
-      request,
-      {},
-      (instance) => this.getCtxForInstance(instance),
-    );
-  }
-
-  private async applyAutoCallExecutionPlan(
-    operatorId: string,
-    request: AutoCallExecutionRequest,
-    plan: AutoCallExecutionPlan,
-  ): Promise<void> {
-    if (!this.deps.setOperatorAudioFrequency) {
-      return;
-    }
-
-    const requestedFrequency = plan.audioFrequency;
-    if (typeof requestedFrequency !== 'number' || !Number.isFinite(requestedFrequency)) {
-      return;
-    }
-
-    const operator = this.deps.getOperatorById(operatorId);
-    if (operator && operator.config.frequency === requestedFrequency) {
-      return;
-    }
-
-    try {
-      await this.deps.setOperatorAudioFrequency(operatorId, requestedFrequency);
-      logger.info('Auto call execution plan applied audio frequency', {
-        operatorId,
-        slotId: request.slotInfo.id,
-        callsign: request.callsign,
-        frequency: requestedFrequency,
-      });
-    } catch (error) {
-      logger.warn(`Failed to apply auto call execution plan for operator ${operatorId}`, error);
-    }
-  }
-
-  private async applyAutoCallProposal(
-    operatorId: string,
-    slotInfo: SlotInfo,
-    messages: ParsedFT8Message[],
-    proposals: AutoCallProposalResult[],
-  ): Promise<void> {
-    if (proposals.length === 0 || !this.isOperatorPureStandby(operatorId)) {
-      return;
-    }
-
-    const ranked = proposals
-      .filter((entry) => this.isAutoCallProposalEligible(operatorId, entry, messages))
-      .map((entry) => this.normalizeAutoCallProposal(operatorId, slotInfo, messages, entry))
-      .map((entry) => ({
-        ...entry,
-        priority: typeof entry.proposal.priority === 'number' ? entry.proposal.priority : 0,
-        messageOrder: this.resolveProposalMessageOrder(entry.proposal, messages),
-      }))
-      .sort((left, right) => {
-        if (left.priority !== right.priority) {
-          return right.priority - left.priority;
-        }
-        if (left.messageOrder !== right.messageOrder) {
-          return left.messageOrder - right.messageOrder;
-        }
-        return left.pluginName.localeCompare(right.pluginName);
-      });
-
-    const winner = ranked[0];
-    if (!winner) {
-      return;
-    }
-
-    if (ranked.length > 1) {
-      logger.info('Auto call proposals arbitrated', {
-        operatorId,
-        selectedPlugin: winner.pluginName,
-        selectedCallsign: winner.proposal.callsign,
-        candidateCount: ranked.length,
-      });
-    }
-
-    logger.info('Auto call proposal accepted', {
-      operatorId,
-      pluginName: winner.pluginName,
-      callsign: winner.proposal.callsign,
-      priority: winner.priority,
-    });
-
-    const request: AutoCallExecutionRequest = {
-      sourcePluginName: winner.pluginName,
-      callsign: winner.proposal.callsign,
-      slotInfo,
-      sourceSlotInfo: winner.proposal.lastMessage?.slotInfo,
-      lastMessage: winner.proposal.lastMessage,
-    };
-    const executionPlan = await this.resolveAutoCallExecutionPlan(operatorId, request);
-    await this.applyAutoCallExecutionPlan(operatorId, request, executionPlan);
-    this.requestCall(operatorId, request.callsign, request.lastMessage);
-  }
-
-  private getOrCreateDecisionState(operatorId: string): OperatorDecisionState {
-    let state = this.decisionStates.get(operatorId);
-    if (!state) {
-      state = {
-        decisionInProgress: false,
-        lastDecisionTransmission: null,
-        lastDecisionMessageSet: null,
-      };
-      this.decisionStates.set(operatorId, state);
-    }
-    return state;
-  }
-
-  private clearDecisionState(operatorId: string): void {
-    this.decisionStates.set(operatorId, {
-      decisionInProgress: false,
-      lastDecisionTransmission: null,
-      lastDecisionMessageSet: null,
-    });
-  }
-
   invalidateDecisionMessageSet(operatorId: string): void {
-    const state = this.getOrCreateDecisionState(operatorId);
-    state.lastDecisionMessageSet = null;
-  }
-
-  private buildDecisionMessageSet(slotPack: SlotPack, operatorId: string): Set<string> {
-    return new Set(
-      slotPack.frames
-        .filter((frame) => !(frame.snr === -999 && frame.operatorId === operatorId))
-        .map((frame) => frame.message),
-    );
-  }
-
-  private async invokeStrategyDecision(
-    operatorId: string,
-    messages: ParsedFT8Message[],
-    meta: StrategyDecisionMeta,
-  ): Promise<{ stop?: boolean } | null> {
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (!runtime) {
-      return null;
-    }
-
-    const result = runtime.decide(messages, meta);
-    return result instanceof Promise ? await result : result;
-  }
-
-  private async applyStrategyStop(
-    operatorId: string,
-    options?: { interruptActiveTransmission?: boolean },
-  ): Promise<void> {
-    const operator = this.deps.getOperatorById(operatorId);
-    if (!operator) {
-      return;
-    }
-
-    operator.stop();
-
-    if (!options?.interruptActiveTransmission) {
-      return;
-    }
-
-    try {
-      await this.deps.interruptOperatorTransmission(operatorId);
-    } catch (error) {
-      logger.error(`Failed to interrupt active transmission after strategy stop: operator=${operatorId}`, error);
-      throw error;
-    }
-  }
-
-  private readCurrentTransmission(operatorId: string): string | null {
-    const runtime = this.getStrategyRuntime(operatorId);
-    if (!runtime) {
-      return null;
-    }
-
-    try {
-      return runtime.getTransmitText() ?? null;
-    } catch (err) {
-      logger.error(`Failed to read current transmission: operator=${operatorId}`, err);
-      return null;
-    }
+    this.orchestrator.invalidateDecisionMessageSet(operatorId);
   }
 }
