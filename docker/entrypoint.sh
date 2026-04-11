@@ -239,8 +239,20 @@ else
     log "Using existing SSL certificate: $SSL_DIR"
 fi
 
-# Patch nginx config with HTTPS server block if certificate exists and HTTPS block is missing
+# ── Nginx: conditionally remove LiveKit proxy ─────────────────────────────
 NGINX_CONF="/etc/nginx/conf.d/tx5dr.conf"
+if [[ -f "$NGINX_CONF" ]] && [[ -z "${LIVEKIT_URL:-}" ]]; then
+    log "LiveKit not configured, removing /livekit/ proxy from nginx config"
+    awk '
+        /# LiveKit signaling proxy/ { skip = 1 }
+        skip && /^    \}/ { skip = 0; next }
+        !skip { print }
+    ' "$NGINX_CONF" > "${NGINX_CONF}.tmp" && mv "${NGINX_CONF}.tmp" "$NGINX_CONF"
+else
+    log "LiveKit configured: ${LIVEKIT_URL:-}"
+fi
+
+# Patch nginx config with HTTPS server block if certificate exists and HTTPS block is missing
 if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]] && [[ -f "$NGINX_CONF" ]]; then
     if ! grep -q 'ssl_certificate[[:space:]]*/app/data/ssl/server\.crt' "$NGINX_CONF" 2>/dev/null; then
         log "Adding HTTPS server block to nginx config..."
