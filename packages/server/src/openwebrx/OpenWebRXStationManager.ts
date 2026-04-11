@@ -104,10 +104,7 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
         ),
       ]);
 
-      // Wait a moment for profiles to arrive
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const profiles = client.getProfiles();
+      const profiles = await client.waitForProfiles(3000);
       client.disconnect();
 
       logger.info('Connection test succeeded', { version, profileCount: profiles.length });
@@ -186,9 +183,8 @@ export class OpenWebRXStationManager extends EventEmitter<OpenWebRXStationManage
       status.serverVersion = version;
       this.emitStatus();
 
-      // Wait for profiles
-      await new Promise(resolve => setTimeout(resolve, 500));
-      status.profiles = client.getProfiles().map(p => ({ id: p.id, name: p.name }));
+      const receivedProfiles = await client.waitForProfiles(3000);
+      status.profiles = receivedProfiles.map(p => ({ id: p.id, name: p.name }));
       this.emitStatus();
 
       // Select profile (user-initiated, bypass cooldown)

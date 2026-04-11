@@ -234,7 +234,10 @@ export function OpenWebRXSettings() {
       });
       previewSessionId = result.status.previewSessionId;
       setListenStatus(result.status);
-      await audioPlayback.start(result.status.previewSessionId);
+      await audioPlayback.start({
+        previewSessionId: result.status.previewSessionId,
+        transportOverride: 'ws-compat',
+      });
     } catch (error) {
       logger.error('Failed to start listen', error);
       audioPlayback.stop();

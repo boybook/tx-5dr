@@ -306,6 +306,16 @@ export class RealtimeTransportManager {
     const policy = ConfigManager.getInstance().getRealtimeTransportPolicy();
     const liveKitEnabled = LiveKitConfig.isEnabled();
 
+    // OpenWebRX preview always uses ws-compat — no LiveKit bridge for this scope
+    if (scope === 'openwebrx-preview') {
+      return {
+        transport: 'ws-compat',
+        forcedCompatibilityMode: true,
+        policy,
+        reason: 'server-policy',
+      };
+    }
+
     if (transportOverride === 'ws-compat') {
       return {
         transport: 'ws-compat',

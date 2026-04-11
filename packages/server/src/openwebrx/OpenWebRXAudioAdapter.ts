@@ -105,15 +105,13 @@ export class OpenWebRXAudioAdapter extends EventEmitter<OpenWebRXAudioAdapterEve
     const version = await this.client.connect();
     this._isConnected = true;
 
-    // Wait for server to send profiles and initial config.
-    // Without this, getProfiles() returns [] and setTargetFrequency() fails.
-    await new Promise(resolve => setTimeout(resolve, 500));
+    const profiles = await this.client.waitForProfiles(3000);
 
     this.emit('connected');
     logger.info('Connected to OpenWebRX server', {
       version,
       station: this.stationConfig.name,
-      profiles: this.client.getProfiles().length,
+      profiles: profiles.length,
     });
     return version;
   }
