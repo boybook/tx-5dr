@@ -19,6 +19,7 @@ import {
   closeAudioContext,
 } from '../audio/audioRuntime';
 import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
+import { showRealtimeTransportFallbackToast } from '../realtime/realtimeConnectivity';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
@@ -717,13 +718,19 @@ export function useAudioMonitorPlayback(
         connectStage: 'connect',
         startLiveKit: startLiveKitPlayback,
         startCompat: startCompatPlayback,
-        cleanupFailedAttempt: async () => {
-          cleanupTransportState({ preserveSessionContext: true });
+        cleanupFailedAttempt: async (cleanupOptions) => {
+          cleanupTransportState({
+            preserveSessionContext: true,
+            preserveAudioContext: cleanupOptions?.isFallback ?? false,
+          });
           if (intentionalDisconnectRef.current) {
             throw new Error('Realtime playback intentionally interrupted');
           }
         },
       });
+      if (result.fallbackUsed) {
+        showRealtimeTransportFallbackToast(scope);
+      }
       updateTransportKind(result.transport);
       startStatsPolling();
       updateIsPlaying(true);

@@ -155,7 +155,9 @@
     "suggestionCheckRtcTcpPort": "If UDP is blocked, at least make sure the LiveKit ICE/TCP port {{port}} is open.",
     "suggestionCheckUdpRange": "For best realtime performance, confirm the UDP range {{range}} is reachable.",
     "suggestionCheckDirectUrl": "Test whether this realtime voice endpoint is reachable directly from the client: {{url}}",
-    "suggestionCheckGenericPorts": "Check that the LiveKit signaling, ICE/TCP, and UDP ports are open."
+    "suggestionCheckGenericPorts": "Check that the LiveKit signaling, ICE/TCP, and UDP ports are open.",
+    "transportFallbackTitle": "{{scope}} transport switched",
+    "transportFallbackDescription": "LiveKit connection failed. Automatically fell back to WebSocket compatibility mode."
   },
   "tuner": {
     "control": "Tuner control",

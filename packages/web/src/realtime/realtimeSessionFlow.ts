@@ -13,6 +13,11 @@ import {
 
 const logger = createLogger('realtimeSessionFlow');
 
+interface CleanupFailedAttemptOptions {
+  /** true when cleaning up before a fallback attempt (preserve AudioContext, etc.) */
+  isFallback?: boolean;
+}
+
 interface ExecuteRealtimeSessionFlowOptions {
   scope: RealtimeScope;
   direction: RealtimeSessionDirection;
@@ -21,12 +26,25 @@ interface ExecuteRealtimeSessionFlowOptions {
   connectStage: 'connect' | 'publish' | 'subscribe';
   startLiveKit: (offer: RealtimeTransportOffer) => Promise<void>;
   startCompat: (offer: RealtimeTransportOffer) => Promise<void>;
-  cleanupFailedAttempt: () => Promise<void> | void;
+  cleanupFailedAttempt: (options?: CleanupFailedAttemptOptions) => Promise<void> | void;
 }
 
 export interface ExecuteRealtimeSessionFlowResult {
   connectivityHints?: RealtimeConnectivityHints;
   transport: RealtimeTransportKind;
+  /** true if primary transport failed and a fallback transport was used */
+  fallbackUsed?: boolean;
+}
+
+async function startOffer(
+  offer: RealtimeTransportOffer,
+  options: ExecuteRealtimeSessionFlowOptions,
+): Promise<void> {
+  if (offer.transport === 'livekit') {
+    await options.startLiveKit(offer);
+  } else {
+    await options.startCompat(offer);
+  }
 }
 
 export async function executeRealtimeSessionFlow(
@@ -52,24 +70,62 @@ export async function executeRealtimeSessionFlow(
     effectiveTransportPolicy = session.effectiveTransportPolicy;
     selectionReason = session.selectionReason;
 
-    const offer = session.offers[0];
-    if (!offer) {
+    const primaryOffer = session.offers[0];
+    if (!primaryOffer) {
       throw new Error('No realtime transport offer is available');
     }
 
-    selectedTransport = offer.transport;
-
+    const fallbackOffer = session.offers[1] ?? null;
+    selectedTransport = primaryOffer.transport;
     errorStage = options.connectStage;
-    if (offer.transport === 'livekit') {
-      await options.startLiveKit(offer);
-    } else {
-      await options.startCompat(offer);
-    }
 
-    return {
-      connectivityHints,
-      transport: offer.transport,
-    };
+    try {
+      await startOffer(primaryOffer, options);
+      return {
+        connectivityHints,
+        transport: primaryOffer.transport,
+      };
+    } catch (primaryError) {
+      // No fallback available — re-throw immediately
+      if (!fallbackOffer) {
+        throw primaryError;
+      }
+
+      // Cleanup primary attempt, preserving AudioContext for fallback
+      logger.warn('Primary transport failed, falling back', {
+        scope: options.scope,
+        direction: options.direction,
+        primary: primaryOffer.transport,
+        fallback: fallbackOffer.transport,
+        primaryError,
+      });
+      try {
+        await options.cleanupFailedAttempt({ isFallback: true });
+      } catch (cleanupError) {
+        logger.warn('Cleanup before fallback also failed', { cleanupError });
+      }
+
+      // Try fallback offer
+      selectedTransport = fallbackOffer.transport;
+      try {
+        await startOffer(fallbackOffer, options);
+        return {
+          connectivityHints,
+          transport: fallbackOffer.transport,
+          fallbackUsed: true,
+        };
+      } catch (fallbackError) {
+        // Both transports failed — throw the fallback error (more relevant to user)
+        logger.error('Fallback transport also failed', {
+          scope: options.scope,
+          direction: options.direction,
+          primary: primaryOffer.transport,
+          fallback: fallbackOffer.transport,
+          fallbackError,
+        });
+        throw fallbackError;
+      }
+    }
   } catch (error) {
     if (selectedTransport) {
       logger.warn('Realtime transport start failed', {
@@ -81,7 +137,7 @@ export async function executeRealtimeSessionFlow(
         error,
       });
       try {
-        await options.cleanupFailedAttempt();
+        await options.cleanupFailedAttempt({ isFallback: false });
       } catch (cleanupError) {
         logger.warn('Realtime transport cleanup after failure also failed', {
           scope: options.scope,
