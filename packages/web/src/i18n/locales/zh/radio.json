@@ -155,7 +155,9 @@
     "suggestionCheckRtcTcpPort": "若 UDP 不通，至少确认 LiveKit ICE/TCP 端口 {{port}} 已开放。",
     "suggestionCheckUdpRange": "若希望获得最佳实时效果，请确认 UDP 端口范围 {{range}} 可通。",
     "suggestionCheckDirectUrl": "可直接在当前机器测试实时语音地址是否可达：{{url}}",
-    "suggestionCheckGenericPorts": "请检查 LiveKit 的 signaling、ICE/TCP 和 UDP 端口是否已开放。"
+    "suggestionCheckGenericPorts": "请检查 LiveKit 的 signaling、ICE/TCP 和 UDP 端口是否已开放。",
+    "transportFallbackTitle": "{{scope}} 已切换传输模式",
+    "transportFallbackDescription": "LiveKit 连接失败，已自动回退至 WebSocket 兼容模式。"
   },
   "tuner": {
     "control": "天调控制",

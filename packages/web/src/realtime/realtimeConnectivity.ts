@@ -354,6 +354,17 @@ export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIs
   });
 }
 
+export function showRealtimeTransportFallbackToast(scope: RealtimeScope): void {
+  const scopeLabel = getScopeLabel(scope);
+  showCompactRealtimeToast({
+    dedupeKey: `realtime-fallback:${scope}`,
+    title: i18n.t('radio:realtime.transportFallbackTitle', { scope: scopeLabel }),
+    description: i18n.t('radio:realtime.transportFallbackDescription'),
+    color: 'warning',
+    timeout: 6000,
+  });
+}
+
 export function presentRealtimeConnectivityFailure(
   error: unknown,
   options: BuildRealtimeConnectivityIssueOptions,

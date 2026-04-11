@@ -13,6 +13,7 @@ import {
   stopMediaStream,
 } from './audioRuntime';
 import { executeRealtimeSessionFlow } from '../realtime/realtimeSessionFlow';
+import { showRealtimeTransportFallbackToast } from '../realtime/realtimeConnectivity';
 import {
   VoiceTxLocalStatsCollector,
   type VoiceTxLocalDiagnostics,
@@ -152,9 +153,14 @@ export class VoiceCapture {
           startLiveKit: (offer) => this.startLiveKitCapture(offer),
           startCompat: (offer) => this.startCompatCapture(offer),
           cleanupFailedAttempt: () => {
+            // cleanupTransportOnly already preserves AudioContext and MediaStream,
+            // so the isFallback flag is not needed here.
             this.cleanupTransportOnly();
           },
         });
+        if (result.fallbackUsed) {
+          showRealtimeTransportFallbackToast('radio');
+        }
         this.transportKind = result.transport;
         this.setState('capturing');
       } catch (error) {
