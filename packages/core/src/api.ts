@@ -444,9 +444,11 @@ export const api = {
    */
   async getHello(apiBase?: string): Promise<HelloResponse> {
     const baseUrl = apiBase || getConfiguredApiBase();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
-      const res = await fetch(`${baseUrl}/hello`);
+      const res = await fetch(`${baseUrl}/hello`, { signal: controller.signal });
 
       if (!res.ok) {
         // 尝试解析新的增强错误格式
@@ -525,6 +527,20 @@ export const api = {
 
       return (await res.json()) as HelloResponse;
     } catch (error) {
+      // 超时错误（AbortController 触发）
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new ApiError(
+          'Health check timed out',
+          'Server is not responding',
+          0,
+          {
+            code: 'TIMEOUT',
+            suggestions: ['Server may be busy or unreachable'],
+            severity: 'error'
+          }
+        );
+      }
+
       // 网络错误（fetch 失败）
       if (error instanceof TypeError && error.message.includes('fetch')) {
         throw new ApiError(
@@ -554,6 +570,8 @@ export const api = {
           severity: 'error'
         }
       );
+    } finally {
+      clearTimeout(timeoutId);
     }
   },
 

@@ -109,6 +109,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
 
     const initialConnectTimer = setTimeout(() => {
       if (!connectionStateRef.current.wasEverConnected) {
+        logger.warn('Initial connection timeout after 10s, WSClient background reconnect continues');
         connectionDispatch({ type: 'connectFailed' });
       }
     }, 10000);

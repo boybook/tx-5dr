@@ -528,6 +528,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return { connectionHealthy: context.isHealthy };
   }
 
+  getKnownFrequency(): number | null {
+    return this.lastKnownFrequency;
+  }
+
   /**
    * 获取当前连接会话的核心能力摘要。
    * 仅在明确判定 unsupported 时返回 false；unknown 与 supported 都返回 true。
@@ -1361,6 +1365,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     if (restoredFrequency !== null) {
       this.updateKnownFrequency(restoredFrequency);
+      this.emit('radioFrequencyChanged', restoredFrequency);
       return;
     }
 

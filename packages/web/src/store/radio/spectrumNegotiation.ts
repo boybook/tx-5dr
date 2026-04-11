@@ -107,6 +107,7 @@ export function createSpectrumNegotiator({
       && profileId !== null
       && (currentModeName === 'FT8' || currentModeName === 'FT4');
 
+    capabilitiesRef.current = capabilities;
     radioDispatch({ type: 'setSpectrumCapabilities', payload: capabilities });
     radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
     radioDispatch({ type: 'setSubscribedSpectrumKind', payload: effectiveKind });
@@ -131,15 +132,24 @@ export function createSpectrumNegotiator({
   };
 
   const applyModeDrivenSpectrumNegotiation = () => {
-    spectrumAutoPriorityPendingRef.current = true;
     pendingDefaultOpenWebRXDetailProfileRef.current = null;
     radioDispatch({ type: 'setSelectedSpectrumKind', payload: null });
     radioDispatch({ type: 'setSubscribedSpectrumKind', payload: null });
 
+    // Provisional selection using current (potentially stale) capabilities
+    // to avoid a "waiting for spectrum data" flash during mode switch.
     const currentCapabilities = capabilitiesRef.current;
     if (currentCapabilities && shouldAcceptSpectrumProfile(currentCapabilities.profileId)) {
-      applySpectrumSelection(currentCapabilities);
+      const effectiveKind = pickSpectrumKindByPriority(currentCapabilities);
+      radioDispatch({ type: 'setSpectrumCapabilities', payload: currentCapabilities });
+      radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
+      radioDispatch({ type: 'setSubscribedSpectrumKind', payload: effectiveKind });
+      radioService.subscribeSpectrum(effectiveKind);
     }
+
+    // Auto-priority stays ON — the definitive selection happens when
+    // fresh spectrumCapabilities arrive from the server after mode switch.
+    spectrumAutoPriorityPendingRef.current = true;
   };
 
   const onSpectrumSessionStateChanged = (sessionState: SpectrumSessionState) => {

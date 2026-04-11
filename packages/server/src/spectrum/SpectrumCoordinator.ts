@@ -120,6 +120,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
   async setConnectionSubscription(connectionId: string, kind: SpectrumKind | null): Promise<void> {
     const previousKind = this.subscriptions.get(connectionId) ?? null;
     if (previousKind === kind) {
+      this.updateAudioSubscriptionState();
       return;
     }
 
@@ -214,6 +215,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
   }
 
   private async refreshSourceBindings(): Promise<void> {
+    this.updateAudioSubscriptionState();
     await this.updateRadioSubscriptionState();
     this.updateOpenWebRXSpectrumState();
   }

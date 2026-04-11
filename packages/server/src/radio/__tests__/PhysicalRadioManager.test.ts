@@ -428,6 +428,9 @@ describe('PhysicalRadioManager', () => {
     manager.on('connected', () => {
       order.push('connected');
     });
+    manager.on('radioFrequencyChanged', (frequency) => {
+      order.push(`frequency:${frequency}`);
+    });
 
     await manager.applyConfig({
       type: 'network',
@@ -439,6 +442,7 @@ describe('PhysicalRadioManager', () => {
       'tuner',
       'restore',
       'capability',
+      'frequency:14074000',
       'background',
       'monitor',
       'connected',
