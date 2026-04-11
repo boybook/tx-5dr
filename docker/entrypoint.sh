@@ -210,7 +210,7 @@ if [[ ! -f "$SSL_CERT" ]] || [[ ! -f "$SSL_KEY" ]]; then
         -addext "subjectAltName=${san}" \
         -addext "basicConstraints=CA:FALSE" \
         -addext "keyUsage=digitalSignature,keyEncipherment" \
-        -addext "extKeyUsage=serverAuth" \
+        -addext "extendedKeyUsage=serverAuth" \
         2>/dev/null
 
     if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
