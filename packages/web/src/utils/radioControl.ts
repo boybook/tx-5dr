@@ -27,6 +27,13 @@ export function shouldShowAutoTunerShortcut(
     && tunerSwitchCapability?.supported === true;
 }
 
+export function shouldShowRadioControlEntry(
+  radioConnected: boolean,
+  canControlRadio: boolean,
+): boolean {
+  return radioConnected && canControlRadio;
+}
+
 export function filterDigitalFrequencyOptions<T extends FrequencyOptionLike>(
   availableFrequencies: T[],
   currentModeName: string | null | undefined,

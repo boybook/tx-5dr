@@ -118,6 +118,8 @@ RUN apt-get update && apt-get install -y \
     nginx \
     supervisor \
     gosu \
+    openssl \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && apt-get autoremove -y
@@ -160,6 +162,7 @@ RUN chown -R www-data:www-data /app/data && \
 
 # 暴露端口
 EXPOSE 80
+EXPOSE 443
 
 # 设置entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

@@ -26,6 +26,7 @@ import {
   filterDigitalFrequencyOptions,
   isCoreCapabilityAvailable,
   shouldShowAutoTunerShortcut,
+  shouldShowRadioControlEntry,
 } from '../../../utils/radioControl';
 import type { VoiceCaptureController } from '../../../hooks/useVoiceCaptureController';
 import {
@@ -329,6 +330,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const canStartStopEngine = useCan('execute', 'Engine');
   const canControlRadio = useCan('execute', 'RadioControl');
   const canWriteFrequency = isCoreCapabilityAvailable(radioConnection.coreCapabilities, 'writeFrequency');
+  const canOpenRadioControl = shouldShowRadioControlEntry(
+    radioConnection.radioConnected,
+    canControlRadio,
+  );
   // RadioControlPanel 弹窗状态
   const [isControlPanelOpen, setIsControlPanelOpen] = useState(false);
 
@@ -377,6 +382,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [customFrequencyError, setCustomFrequencyError] = useState('');
   const [isSettingCustomFrequency, setIsSettingCustomFrequency] = useState(false);
   const [customFrequencyOption, setCustomFrequencyOption] = useState<FrequencyOption | null>(null); // 保存自定义频率选项
+
+  useEffect(() => {
+    if (!canOpenRadioControl && isControlPanelOpen) {
+      setIsControlPanelOpen(false);
+    }
+  }, [canOpenRadioControl, isControlPanelOpen]);
 
   const getMonitorTransportLabel = React.useCallback((transport: RealtimeTransportKind | null | undefined): string => {
     if (transport === 'ws-compat') {
@@ -1194,7 +1205,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             canOperate={isOperator}
           />
           <div className="flex items-center gap-0">
-            {radioConnection.radioConnected && (
+            {canOpenRadioControl && (
               <ToolbarIconTooltip label={t('control.openRadioControl')}>
                 <Button
                   isIconOnly
@@ -1652,7 +1663,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
         onClose={() => setIsErrorHistoryOpen(false)}
       />
       <RadioControlPanel
-        isOpen={isControlPanelOpen}
+        isOpen={isControlPanelOpen && canOpenRadioControl}
         onClose={() => setIsControlPanelOpen(false)}
       />
 
