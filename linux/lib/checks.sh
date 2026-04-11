@@ -770,7 +770,7 @@ generate_self_signed_cert() {
         -addext "subjectAltName=${san}" \
         -addext "basicConstraints=CA:FALSE" \
         -addext "keyUsage=digitalSignature,keyEncipherment" \
-        -addext "extKeyUsage=serverAuth" \
+        -addext "extendedKeyUsage=serverAuth" \
         2>/dev/null || return 1
 
     # Set permissions (nginx master reads key as root)
