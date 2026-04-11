@@ -2,7 +2,7 @@
 // ConfigManager - 配置合并和动态类型需要使用any
 
 import { promises as fs } from 'fs';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, WaveLogConfig, PSKReporterConfig, QRZConfig, LoTWConfig, CallsignSyncConfig, SyncSummary, DEFAULT_DECODE_WINDOW_SETTINGS, type RealtimeTransportPolicy } from '@tx5dr/contracts';
+import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, PSKReporterConfig, DEFAULT_DECODE_WINDOW_SETTINGS, type RealtimeTransportPolicy } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
@@ -65,11 +65,6 @@ export interface AppConfig {
     host: string;
   };
   operators: RadioOperatorConfig[];
-  // 按呼号绑定的同步配置（替代旧的全局 wavelog/qrz/lotw）
-  callsignSyncConfigs: Record<string, CallsignSyncConfig>;
-  wavelog: WaveLogConfig;
-  qrz: QRZConfig;
-  lotw: LoTWConfig;
   pskreporter: PSKReporterConfig;
   /** Override log level. Unset = use LOG_LEVEL env var (default: warn in production, info in development). */
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
@@ -129,36 +124,6 @@ const DEFAULT_CONFIG: AppConfig = {
   operators: [
     // 从空操作员列表开始，等待用户创建
   ],
-  callsignSyncConfigs: {},
-  wavelog: {
-    url: '',
-    apiKey: '',
-    stationId: '',
-    radioName: 'TX5DR',
-    autoUploadQSO: true,
-  },
-  qrz: {
-    apiKey: '',
-    autoUploadQSO: false,
-  },
-  lotw: {
-    username: '',
-    password: '',
-    certificates: [],
-    uploadLocation: {
-      name: 'Default Station Location',
-      callsign: '',
-      gridSquare: '',
-      cqZone: '',
-      ituZone: '',
-      iota: '',
-      state: '',
-      county: '',
-      certificateIds: [],
-    },
-    stationLocations: [],
-    autoUploadQSO: false,
-  },
   pskreporter: {
     enabled: false,
     receiverCallsign: '',
@@ -262,14 +227,6 @@ export class ConfigManager {
       logger.info('Profile migration complete');
     }
 
-    // 迁移全局同步配置到按呼号的 callsignSyncConfigs
-    if (this.needsSyncConfigMigration(parsedConfig)) {
-      logger.info('Detected global sync config, migrating to per-callsign sync config...');
-      this.migrateSyncConfigs(parsedConfig);
-      await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
-      logger.info('Sync config migration complete');
-    }
-
     if (this.migrateLegacyStandardQSOSettings(parsedConfig)) {
       logger.info('Legacy standard-qso operator settings migrated to plugin config');
       await fs.writeFile(this.configPath, JSON.stringify(parsedConfig, null, 2), 'utf-8');
@@ -314,9 +271,6 @@ export class ConfigManager {
         result[key] = userConfig[key].map((operator: any) => ({ ...operator }));
       // 特殊处理 volumeGainMap：直接使用用户配置（不深度合并）
       } else if (key === 'volumeGainMap' && typeof userConfig[key] === 'object') {
-        result[key] = userConfig[key];
-      // 特殊处理 callsignSyncConfigs：直接使用用户配置（不深度合并）
-      } else if (key === 'callsignSyncConfigs' && typeof userConfig[key] === 'object') {
         result[key] = userConfig[key];
       // 特殊处理 profiles 数组：直接使用用户配置
       } else if (key === 'profiles' && Array.isArray(userConfig[key])) {
@@ -815,52 +769,6 @@ export class ConfigManager {
   }
 
   /**
-   * 获取QRZ配置
-   */
-  getQRZConfig(): QRZConfig {
-    return { ...this.config.qrz };
-  }
-
-  /**
-   * 更新QRZ配置
-   */
-  async updateQRZConfig(qrzConfig: Partial<QRZConfig>): Promise<void> {
-    this.config.qrz = { ...this.config.qrz, ...qrzConfig };
-    await this.saveConfig();
-  }
-
-  /**
-   * 重置QRZ配置为默认值
-   */
-  async resetQRZConfig(): Promise<void> {
-    this.config.qrz = { ...DEFAULT_CONFIG.qrz };
-    await this.saveConfig();
-  }
-
-  /**
-   * 获取LoTW配置
-   */
-  getLoTWConfig(): LoTWConfig {
-    return { ...this.config.lotw };
-  }
-
-  /**
-   * 更新LoTW配置
-   */
-  async updateLoTWConfig(lotwConfig: Partial<LoTWConfig>): Promise<void> {
-    this.config.lotw = { ...this.config.lotw, ...lotwConfig };
-    await this.saveConfig();
-  }
-
-  /**
-   * 重置LoTW配置为默认值
-   */
-  async resetLoTWConfig(): Promise<void> {
-    this.config.lotw = { ...DEFAULT_CONFIG.lotw };
-    await this.saveConfig();
-  }
-
-  /**
    * 获取最后选择的频率
    */
   getLastSelectedFrequency(): AppConfig['lastSelectedFrequency'] {
@@ -1005,123 +913,6 @@ export class ConfigManager {
       }
     }
     return best;
-  }
-
-  /**
-   * 检测是否需要从全局同步配置迁移到按呼号配置
-   */
-  private needsSyncConfigMigration(parsedConfig: any): boolean {
-    // 已有 callsignSyncConfigs → 不需要迁移
-    if (parsedConfig.callsignSyncConfigs && Object.keys(parsedConfig.callsignSyncConfigs).length > 0) {
-      return false;
-    }
-    // 有全局同步配置且至少一个启用了 → 需要迁移
-    const hasWavelog = parsedConfig.wavelog?.url && parsedConfig.wavelog?.apiKey;
-    const hasQrz = parsedConfig.qrz?.apiKey;
-    const hasLotw = parsedConfig.lotw?.username || (parsedConfig.lotw?.certificates?.length ?? 0) > 0;
-    return !!(hasWavelog || hasQrz || hasLotw);
-  }
-
-  /**
-   * 将全局同步配置迁移到按呼号配置
-   */
-  private migrateSyncConfigs(parsedConfig: any): void {
-    const callsignSyncConfigs: Record<string, any> = {};
-
-    // 收集所有操作员的唯一基础呼号
-    const callsigns = new Set<string>();
-    if (Array.isArray(parsedConfig.operators)) {
-      for (const op of parsedConfig.operators) {
-        if (op.myCallsign) {
-          callsigns.add(this.normalizeCallsign(op.myCallsign));
-        }
-      }
-    }
-
-    // 如果没有操作员，不迁移
-    if (callsigns.size === 0) return;
-
-    // 将全局配置复制到每个呼号
-    for (const callsign of callsigns) {
-      const config: any = { callsign };
-      if (parsedConfig.wavelog) {
-        config.wavelog = { ...parsedConfig.wavelog };
-      }
-      if (parsedConfig.qrz) {
-        config.qrz = { ...parsedConfig.qrz };
-      }
-      if (parsedConfig.lotw) {
-        config.lotw = {
-          ...parsedConfig.lotw,
-          uploadLocation: {
-            callsign,
-            gridSquare: '',
-            cqZone: '',
-            ituZone: '',
-            iota: '',
-            state: '',
-            county: '',
-          },
-          certificates: [],
-        };
-      }
-      callsignSyncConfigs[callsign] = config;
-    }
-
-    parsedConfig.callsignSyncConfigs = callsignSyncConfigs;
-
-    // 清除旧的全局同步配置
-    delete parsedConfig.wavelog;
-    delete parsedConfig.qrz;
-    delete parsedConfig.lotw;
-
-    logger.info(`Sync config migrated for ${callsigns.size} callsign(s): ${[...callsigns].join(', ')}`);
-  }
-
-  /**
-   * 获取指定呼号的同步配置
-   */
-  getCallsignSyncConfig(callsign: string): CallsignSyncConfig | null {
-    const key = this.normalizeCallsign(callsign);
-    return this.config.callsignSyncConfigs[key] || null;
-  }
-
-  /**
-   * 更新指定呼号的同步配置
-   */
-  async updateCallsignSyncConfig(callsign: string, updates: Partial<CallsignSyncConfig>): Promise<void> {
-    const key = this.normalizeCallsign(callsign);
-    const existing = this.config.callsignSyncConfigs[key] || { callsign: key };
-    this.config.callsignSyncConfigs[key] = { ...existing, ...updates, callsign: key };
-    await this.saveConfig();
-  }
-
-  /**
-   * 删除指定呼号的同步配置
-   */
-  async deleteCallsignSyncConfig(callsign: string): Promise<void> {
-    const key = this.normalizeCallsign(callsign);
-    delete this.config.callsignSyncConfigs[key];
-    await this.saveConfig();
-  }
-
-  /**
-   * 获取所有呼号的同步配置
-   */
-  getAllCallsignSyncConfigs(): Record<string, CallsignSyncConfig> {
-    return { ...this.config.callsignSyncConfigs };
-  }
-
-  /**
-   * 获取指定呼号的同步摘要（哪些服务已启用）
-   */
-  getCallsignSyncSummary(callsign: string): SyncSummary {
-    const config = this.getCallsignSyncConfig(callsign);
-    return {
-      wavelog: !!(config?.wavelog?.url && config?.wavelog?.apiKey),
-      qrz: !!(config?.qrz?.apiKey),
-      lotw: !!(config?.lotw?.username || (config?.lotw?.certificates?.length ?? 0) > 0),
-    };
   }
 
   // ===== 解码窗口设置 =====

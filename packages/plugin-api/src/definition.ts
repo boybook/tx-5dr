@@ -5,6 +5,7 @@ import type {
   PluginPanelDescriptor,
   PluginPermission,
   PluginType,
+  PluginUIPageDescriptor,
 } from '@tx5dr/contracts';
 import type { PluginContext } from './context.js';
 import type { PluginHooks } from './hooks.js';
@@ -161,6 +162,26 @@ export interface PluginDefinition {
    * available via {@link PluginContext.store}.
    */
   storage?: { scopes: ('global' | 'operator')[] };
+
+  /**
+   * Declares custom UI pages served from the plugin's static file directory.
+   *
+   * Pages are rendered inside an iframe by the host's `PluginIframeHost`
+   * component. The host automatically injects CSS design tokens and a
+   * communication bridge SDK. Plugins can use any web technology inside the
+   * iframe.
+   *
+   * Pages are declarative — they only define _what_ exists, not _where_ it is
+   * rendered. The rendering location is decided by consumers (e.g. a logbook
+   * sync host renders the page in a settings modal tab, while a future
+   * dashboard host may render it in a side panel).
+   */
+  ui?: {
+    /** Static file directory relative to the plugin root (default: 'ui'). */
+    dir?: string;
+    /** Registered custom UI pages. */
+    pages?: PluginUIPageDescriptor[];
+  };
 
   /**
    * Creates the strategy runtime for a `strategy` plugin.

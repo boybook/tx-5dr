@@ -7,7 +7,9 @@ import type {
   LogbookAccess,
   BandAccess,
   UIBridge,
+  PluginFileStore,
 } from './helpers.js';
+import type { LogbookSyncRegistrar } from './sync.js';
 
 /**
  * Runtime services exposed to a plugin instance.
@@ -87,9 +89,28 @@ export interface PluginContext {
   readonly band: BandAccess;
 
   /**
-   * Bridge for pushing structured data into declarative plugin panels.
+   * Bridge for pushing structured data into declarative plugin panels and
+   * for communicating with custom iframe UI pages.
    */
   readonly ui: UIBridge;
+
+  /**
+   * Persistent binary file storage sandboxed to the plugin.
+   *
+   * Files are stored under `{dataDir}/plugins/{pluginName}/files/`. Use this
+   * for binary assets such as certificates, images or cached data. For
+   * structured JSON data, prefer {@link PluginContext.store} instead.
+   */
+  readonly files: PluginFileStore;
+
+  /**
+   * Logbook sync registration entry point.
+   *
+   * Utility plugins that implement logbook synchronization call
+   * `ctx.logbookSync.register(provider)` during `onLoad` to register their
+   * sync provider. The host manages the provider lifecycle and UI integration.
+   */
+  readonly logbookSync: LogbookSyncRegistrar;
 
   /**
    * Permission-gated HTTP client.

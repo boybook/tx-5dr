@@ -9,7 +9,7 @@
     "./DigitalRadioEngine": "./dist/DigitalRadioEngine.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').cpSync('src/plugin/builtins', 'dist/plugin/builtins', { recursive: true, filter: (src) => !src.endsWith('.ts') })\"",
     "dev": "NODE_ENV=development tsx watch --watch-path=src src/index.ts",
     "dev:prof": "NODE_ENV=development tsx --prof src/index.ts",
     "clinic:doctor": "yarn build && clinic doctor -- node dist/index.js",

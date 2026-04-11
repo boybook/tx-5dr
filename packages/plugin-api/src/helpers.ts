@@ -167,15 +167,71 @@ export interface RadioControl {
 }
 
 /**
- * Read-only helpers backed by the station logbook.
+ * Filter criteria for querying QSO records from the logbook.
+ *
+ * This type is defined in the plugin-api layer so plugins have no compile-time
+ * dependency on core internals. The host translates it to the storage layer's
+ * native query format.
+ */
+export interface QSOQueryFilter {
+  /** Match a specific callsign (exact match). */
+  callsign?: string;
+  /** Restrict to a time window (epoch ms). */
+  timeRange?: { start: number; end: number };
+  /** Restrict to a frequency window (Hz). */
+  frequencyRange?: { min: number; max: number };
+  /** Mode filter (e.g. 'FT8'). */
+  mode?: string;
+  /**
+   * QSL confirmation status filter.
+   * - `'confirmed'`: at least one platform confirmed
+   * - `'uploaded'`: at least one platform uploaded but not confirmed
+   * - `'none'`: not uploaded to any platform
+   */
+  qslStatus?: 'confirmed' | 'uploaded' | 'none';
+  /** Maximum number of records to return. */
+  limit?: number;
+  /** Number of records to skip (for pagination). */
+  offset?: number;
+  /** Sort direction. Defaults to descending (newest first). */
+  orderDirection?: 'asc' | 'desc';
+}
+
+/**
+ * Full logbook access for plugins.
+ *
+ * Extends the original read-only helpers with query, write and notification
+ * capabilities so that sync providers can self-orchestrate their entire flow
+ * without host-side special handling.
  */
 export interface LogbookAccess {
+  // === Read-only helpers (original) ===
+
   /** Checks whether the callsign has already been worked. */
   hasWorked(callsign: string): Promise<boolean>;
   /** Checks whether the DXCC entity has already been worked. */
   hasWorkedDXCC(dxccEntity: string): Promise<boolean>;
   /** Checks whether the Maidenhead grid has already been worked. */
   hasWorkedGrid(grid: string): Promise<boolean>;
+
+  // === Query ===
+
+  /** Queries QSO records matching the given filter. */
+  queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
+  /** Counts QSO records matching the given filter. */
+  countQSOs(filter?: QSOQueryFilter): Promise<number>;
+
+  // === Write ===
+
+  /** Adds a new QSO record. Deduplication is the caller's responsibility. */
+  addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<void>;
+  /** Updates partial fields of an existing QSO record (e.g. QSL status). */
+  updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>): Promise<void>;
+
+  // === Notification ===
+
+  /** Notifies the frontend to refresh logbook data (call after batch writes). */
+  notifyUpdated(): void;
 }
 
 /**
@@ -266,4 +322,59 @@ export interface UIBridge {
    * Publishes new panel data for the given declarative panel id.
    */
   send(panelId: string, data: unknown): void;
+
+  /**
+   * Registers a handler for custom messages sent from iframe UI pages via the
+   * `bridge.invoke()` SDK method. The host routes incoming invoke requests to
+   * the handler and sends the return value back to the iframe.
+   *
+   * Only one handler can be registered per plugin instance. Calling this method
+   * again replaces the previous handler.
+   */
+  registerPageHandler(handler: PluginUIHandler): void;
+
+  /**
+   * Pushes a custom message to an iframe UI page. The page receives it via the
+   * `bridge.onPush()` SDK method.
+   */
+  pushToPage(pageId: string, action: string, data?: unknown): void;
+}
+
+/**
+ * Handler for custom messages sent from iframe UI pages.
+ *
+ * Plugins register a handler via `ctx.ui.registerPageHandler()` to receive
+ * arbitrary invoke requests from their iframe-based UIs. The host acts as a
+ * transparent router — it does not inspect or interpret the action or data.
+ */
+export interface PluginUIHandler {
+  /**
+   * Called when the iframe sends an invoke request via `bridge.invoke(action, data)`.
+   *
+   * @param pageId - The page that sent the message.
+   * @param action - Developer-defined action identifier.
+   * @param data - Arbitrary payload from the iframe.
+   * @returns The response value sent back to the iframe.
+   */
+  onMessage(pageId: string, action: string, data: unknown): Promise<unknown>;
+}
+
+/**
+ * Persistent binary file storage for plugins.
+ *
+ * Files are stored in a sandboxed directory under the plugin's data path. Path
+ * traversal outside the sandbox is rejected by the host.
+ */
+export interface PluginFileStore {
+  /** Writes (or overwrites) a file at the given path. */
+  write(path: string, data: Buffer): Promise<void>;
+
+  /** Reads a file. Returns `null` when the path does not exist. */
+  read(path: string): Promise<Buffer | null>;
+
+  /** Deletes a file. Returns `true` if the file existed and was removed. */
+  delete(path: string): Promise<boolean>;
+
+  /** Lists file paths under the given prefix (or all files when omitted). */
+  list(prefix?: string): Promise<string[]>;
 }

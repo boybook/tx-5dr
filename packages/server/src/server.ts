@@ -158,12 +158,6 @@ export async function createServer() {
     await digitalRadioEngine.pluginManager.shutdown();
   });
 
-  // 初始化按呼号的同步服务注册表（替代旧的全局 WaveLog/QRZ/LoTW 服务）
-  const { SyncServiceRegistry } = await import('./services/SyncServiceRegistry.js');
-  const syncRegistry = SyncServiceRegistry.getInstance();
-  syncRegistry.initializeAll();
-  fastify.log.info('Sync service registry initialized');
-
   // 初始化进程监控（独立于引擎，始终运行）
   const processMonitor = ProcessMonitor.getInstance();
   processMonitor.start();
@@ -325,14 +319,6 @@ export async function createServer() {
     await scope.register(logbookRoutes, { prefix: '/api/logbooks' });
   });
   fastify.log.info('Operator+ routes registered (logbooks)');
-
-  // Operator+ 同步路由：按呼号的同步配置（细粒度权限由 requireCallsignAccess 控制）
-  await fastify.register(async (scope) => {
-    await scope.register(withRole(UserRole.OPERATOR));
-    const { syncRoutes } = await import('./routes/sync.js');
-    await scope.register(syncRoutes, { prefix: '/api/sync' });
-  });
-  fastify.log.info('Operator+ routes registered (sync)');
 
   // 公开路由：认证
   await fastify.register(authRoutes, { prefix: '/api/auth' });

@@ -1,9 +1,12 @@
-import type { PluginContext } from '@tx5dr/plugin-api';
+import path from 'path';
+import type { PluginContext, QSOQueryFilter } from '@tx5dr/plugin-api';
 import type { PluginLogEntry, ModeDescriptor } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { LogManager } from '../log/LogManager.js';
 import { PluginStorageProvider } from './PluginStorageProvider.js';
+import { PluginFileStoreProvider } from './PluginFileStoreProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
@@ -38,6 +41,9 @@ export class PluginContextFactory {
     const radioControl = this.createRadioControl();
     const logbookAccess = this.createLogbookAccess(operatorId);
     const bandAccess = this.createBandAccess(operatorId);
+    const fileStore = new PluginFileStoreProvider(
+      path.join(pluginStorageDir, 'files'),
+    );
 
     const ctx: PluginContext = {
       get config() {
@@ -54,6 +60,12 @@ export class PluginContextFactory {
       logbook: logbookAccess,
       band: bandAccess,
       ui: uiBridge,
+      files: fileStore,
+      logbookSync: {
+        register: (provider) => {
+          this.deps.registerLogbookSyncProvider?.(plugin.definition.name, provider);
+        },
+      },
       fetch: plugin.definition.permissions?.includes('network')
         ? (url, init) => globalThis.fetch(url, init)
         : undefined,
@@ -160,7 +172,17 @@ export class PluginContextFactory {
 
   private createLogbookAccess(operatorId: string) {
     const deps = this.deps;
+
+    /** Resolve the operator's callsign and its logbook instance. */
+    const getLogBook = async () => {
+      const callsign = deps.getOperatorById(operatorId)?.config.myCallsign;
+      if (!callsign) return null;
+      return LogManager.getInstance().getOrCreateLogBookByCallsign(callsign);
+    };
+
     return {
+      // === Original read-only helpers ===
+
       async hasWorked(callsign: string) {
         return deps.hasWorkedCallsign(operatorId, callsign);
       },
@@ -175,6 +197,57 @@ export class PluginContextFactory {
           return false;
         }
         return deps.hasWorkedGrid(operatorId, grid);
+      },
+
+      // === Query ===
+
+      async queryQSOs(filter: QSOQueryFilter) {
+        const logBook = await getLogBook();
+        if (!logBook) return [];
+        return logBook.provider.queryQSOs({
+          callsign: filter.callsign,
+          timeRange: filter.timeRange,
+          frequencyRange: filter.frequencyRange,
+          mode: filter.mode,
+          qslStatus: filter.qslStatus,
+          limit: filter.limit,
+          offset: filter.offset,
+          orderDirection: filter.orderDirection,
+        });
+      },
+
+      async countQSOs(filter?: QSOQueryFilter) {
+        const logBook = await getLogBook();
+        if (!logBook) return 0;
+        const records = await logBook.provider.queryQSOs({
+          callsign: filter?.callsign,
+          timeRange: filter?.timeRange,
+          frequencyRange: filter?.frequencyRange,
+          mode: filter?.mode,
+          qslStatus: filter?.qslStatus,
+        });
+        return records.length;
+      },
+
+      // === Write ===
+
+      async addQSO(record: import('@tx5dr/contracts').QSORecord) {
+        const logBook = await getLogBook();
+        if (!logBook) return;
+        await logBook.provider.addQSO(record, operatorId);
+      },
+
+      async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
+        const logBook = await getLogBook();
+        if (!logBook) return;
+        await logBook.provider.updateQSO(qsoId, updates);
+      },
+
+      // === Notification ===
+
+      notifyUpdated() {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        deps.eventEmitter.emit('logbookUpdated' as any, { operatorId });
       },
     };
   }

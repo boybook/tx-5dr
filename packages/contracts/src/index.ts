@@ -93,9 +93,6 @@ export * from './schema/websocket.schema.js';
 export * from './schema/logbook.schema.js';
 export * from './schema/radio.schema.js';
 
-// WaveLog Schema
-export * from './schema/wavelog.schema.js';
-
 // API Response Schema
 export * from './schema/api-response.schema.js';
 
@@ -107,15 +104,6 @@ export * from './schema/pskreporter.schema.js';
 
 // Radio Profile Schema
 export * from './schema/radio-profile.schema.js';
-
-// QRZ.com Schema
-export * from './schema/qrz.schema.js';
-
-// LoTW Schema
-export * from './schema/lotw.schema.js';
-
-// Callsign Sync Schema
-export * from './schema/callsign-sync.schema.js';
 
 // Ability Schema (must be before auth.schema which imports from it)
 export * from './schema/ability.js';

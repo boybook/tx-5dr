@@ -1,0 +1,142 @@
+import { fileURLToPath } from 'url';
+import path from 'path';
+import type { PluginDefinition } from '@tx5dr/plugin-api';
+import zhLocale from './locales/zh.json' with { type: 'json' };
+import enLocale from './locales/en.json' with { type: 'json' };
+import { LoTWSyncProvider } from './provider.js';
+
+export const BUILTIN_LOTW_SYNC_PLUGIN_NAME = 'lotw-sync';
+
+/** Plugin directory path (works in both tsx dev and tsc dist). */
+export const lotwSyncDirPath = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * LoTW Sync — built-in utility plugin
+ *
+ * Registers a LogbookSyncProvider for ARRL Logbook of The World, exposing:
+ * - Per-callsign configuration (username, password, upload location, auto-upload)
+ * - Certificate management (.p12 import, list, delete)
+ * - QSO upload via TQ8 format with RSA-SHA1 signing
+ * - QSO confirmation download via ADIF
+ * - iframe settings page for configuration
+ *
+ * Configuration is stored in the plugin's global KVStore keyed by callsign.
+ * Certificate files are stored as JSON via ctx.files under certificates/.
+ */
+export const lotwSyncPlugin: PluginDefinition = {
+  name: BUILTIN_LOTW_SYNC_PLUGIN_NAME,
+  version: '1.0.0',
+  type: 'utility',
+  description: 'Sync QSO records with ARRL Logbook of The World',
+
+  permissions: ['network'],
+
+  ui: {
+    dir: 'ui',
+    pages: [
+      {
+        id: 'settings',
+        title: 'LoTW Settings',
+        entry: 'settings.html',
+      },
+      {
+        id: 'download-wizard',
+        title: 'LoTW Download',
+        entry: 'download-wizard.html',
+      },
+    ],
+  },
+
+  async onLoad(ctx) {
+    const provider = new LoTWSyncProvider(ctx);
+    ctx.logbookSync.register(provider);
+
+    // Register UI page handler for iframe communication
+    ctx.ui.registerPageHandler({
+      async onMessage(_pageId: string, action: string, data: unknown) {
+        const d = data as Record<string, unknown>;
+        switch (action) {
+          case 'getConfig': {
+            const cs = d.callsign as string;
+            return provider.getConfig(cs);
+          }
+          case 'saveConfig': {
+            const cs = d.callsign as string;
+            const config = d.config as {
+              username: string;
+              password: string;
+              uploadLocation: {
+                callsign: string;
+                dxccId?: number;
+                gridSquare: string;
+                cqZone: string;
+                ituZone: string;
+                iota?: string;
+                state?: string;
+                county?: string;
+              };
+              autoUploadQSO: boolean;
+            };
+            provider.setConfig(cs, config);
+            return { success: true };
+          }
+          case 'testConnection': {
+            const cs = d.callsign as string;
+            return provider.testConnection(cs);
+          }
+          case 'importCertificate': {
+            // Certificate data arrives as base64-encoded string from the iframe
+            const base64Data = d.data as string;
+            if (!base64Data) {
+              throw new Error('No certificate data provided');
+            }
+            const buffer = Buffer.from(base64Data, 'base64');
+            const summary = await provider.importCertificate(buffer);
+            return { success: true, certificate: summary };
+          }
+          case 'deleteCertificate': {
+            const certId = d.id as string;
+            if (!certId) throw new Error('Certificate ID is required');
+            const deleted = await provider.deleteCertificate(certId);
+            return { success: deleted, deletedId: certId };
+          }
+          case 'getCertificates': {
+            const certificates = await provider.getCertificates();
+            return { certificates };
+          }
+          case 'getUploadPreflight': {
+            const cs = d.callsign as string;
+            return provider.getUploadPreflight(cs);
+          }
+          case 'getLastDownloadTime': {
+            const cs = d.callsign as string;
+            const config = provider.getConfig(cs);
+            return { lastDownloadTime: config?.lastDownloadTime ?? null };
+          }
+          case 'performDownload': {
+            const cs = d.callsign as string;
+            const since = d.since as number | undefined;
+            try {
+              const result = await provider.download(cs, since ? { since } : undefined);
+              return result;
+            } catch (err) {
+              return {
+                downloaded: 0, matched: 0, updated: 0,
+                error: err instanceof Error ? err.message : 'Download failed',
+              };
+            }
+          }
+          default:
+            throw new Error(`Unknown action: ${action}`);
+        }
+      },
+    });
+
+    ctx.log.info('LoTW sync provider registered');
+  },
+};
+
+export const lotwSyncLocales: Record<string, Record<string, string>> = {
+  zh: zhLocale,
+  en: enLocale,
+};

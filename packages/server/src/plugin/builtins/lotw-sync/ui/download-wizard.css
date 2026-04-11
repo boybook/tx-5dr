@@ -1,0 +1,85 @@
+/* LoTW Download Wizard — uses TX-5DR design tokens */
+.container { padding: var(--tx5dr-spacing-lg) var(--tx5dr-spacing-xl); }
+.description {
+  font-size: var(--tx5dr-font-size-md);
+  color: var(--tx5dr-text-secondary);
+  margin-bottom: var(--tx5dr-spacing-md);
+}
+.form-group { margin-bottom: var(--tx5dr-spacing-md); }
+.form-group label {
+  display: block;
+  font-size: var(--tx5dr-font-size-sm);
+  color: var(--tx5dr-text-secondary);
+  margin-bottom: var(--tx5dr-spacing-xs);
+}
+.form-group input[type="date"] {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--tx5dr-bg-content);
+  color: var(--tx5dr-text);
+  border: 1px solid var(--tx5dr-border);
+  border-radius: var(--tx5dr-radius-sm);
+  font-family: var(--tx5dr-font);
+  font-size: var(--tx5dr-font-size-md);
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+  color-scheme: dark;
+}
+.form-group input[type="date"]:focus {
+  border-color: var(--tx5dr-primary);
+  box-shadow: 0 0 0 2px var(--tx5dr-focus-ring);
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--tx5dr-spacing-md);
+  margin-top: var(--tx5dr-spacing-xl);
+  margin-bottom: var(--tx5dr-spacing-md);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--tx5dr-radius-sm);
+  font-family: var(--tx5dr-font);
+  font-size: var(--tx5dr-font-size-md);
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--tx5dr-primary); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--tx5dr-primary-hover); }
+.status {
+  font-size: var(--tx5dr-font-size-sm);
+  color: var(--tx5dr-text-secondary);
+}
+.status.success { color: var(--tx5dr-success); }
+.status.error { color: var(--tx5dr-danger); }
+.result-box {
+  padding: var(--tx5dr-spacing-md);
+  background: var(--tx5dr-bg-content);
+  border: 1px solid var(--tx5dr-border);
+  border-radius: var(--tx5dr-radius-sm);
+}
+.result-title {
+  font-size: var(--tx5dr-font-size-md);
+  font-weight: 600;
+  margin-bottom: var(--tx5dr-spacing-sm);
+}
+.result-content {
+  font-size: var(--tx5dr-font-size-sm);
+  color: var(--tx5dr-text-secondary);
+  line-height: 1.6;
+}
+.result-content .stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.result-content .stat-value {
+  color: var(--tx5dr-text);
+  font-weight: 500;
+}

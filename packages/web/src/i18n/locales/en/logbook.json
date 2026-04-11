@@ -151,6 +151,29 @@
     "lastPageShort": "Last"
   },
   "sync": {
+    "sync": "Sync",
+    "provider": {
+      "ariaLabel": "{{name}} sync operations",
+      "download": "Download",
+      "downloadDesc": "Download QSO records from {{name}}",
+      "upload": "Upload",
+      "uploadDesc": "Upload local QSO records to {{name}}",
+      "fullSync": "Full Sync",
+      "fullSyncDesc": "Download then upload, bidirectional full sync",
+      "settings": "Settings",
+      "settingsDesc": "Configure {{name}} sync service",
+      "notConfigured": "Not configured",
+      "syncSuccess": "{{name}} sync successful",
+      "syncError": "{{name}} sync failed",
+      "resultUploaded": "{{count}} uploaded",
+      "resultDownloaded": "{{count}} downloaded",
+      "resultStored": "{{count}} stored",
+      "resultMatched": "{{count}} matched",
+      "resultUpdated": "{{count}} updated",
+      "resultSkipped": "{{count}} skipped",
+      "resultFailed": "{{count}} failed",
+      "resultSeparator": ", "
+    },
     "wavelog": {
       "button": "WaveLog Sync",
       "ariaLabel": "WaveLog sync operations",
