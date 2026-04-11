@@ -41,8 +41,8 @@ jobs:
         run: |
           VERSION="${{ inputs.version }}"
           echo "Setting version to $VERSION"
-          cd packages/plugin-api && npm version "$VERSION" --no-git-tag-version && cd ../..
-          cd packages/create-tx5dr-plugin && npm version "$VERSION" --no-git-tag-version && cd ../..
+          (cd packages/plugin-api && npm version "$VERSION" --no-git-tag-version --allow-same-version)
+          (cd packages/create-tx5dr-plugin && npm version "$VERSION" --no-git-tag-version --allow-same-version)
 
       - name: Build packages
         run: |
