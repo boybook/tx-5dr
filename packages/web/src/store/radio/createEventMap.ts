@@ -328,11 +328,14 @@ export function createRadioEventMap({
       };
     })(),
     frequencyChanged: (data: unknown) => {
-      const freqData = data as { frequency?: number };
+      const freqData = data as { frequency?: number; radioMode?: string };
       radioDispatch({
         type: 'setCurrentRadioFrequency',
         payload: typeof freqData.frequency === 'number' && freqData.frequency > 0 ? freqData.frequency : null,
       });
+      if (typeof freqData.radioMode === 'string' && freqData.radioMode.trim()) {
+        radioDispatch({ type: 'voiceRadioModeChanged', payload: freqData.radioMode });
+      }
       logger.debug('Frequency changed, clearing local slot history', { frequency: freqData.frequency });
       slotPacksDispatch({ type: 'CLEAR_DATA' });
     },

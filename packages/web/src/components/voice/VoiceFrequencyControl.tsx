@@ -310,6 +310,12 @@ export const VoiceFrequencyControl: React.FC = () => {
 
   // Sync current frequency from radio state
   useEffect(() => {
+    if (typeof radio.state.currentRadioFrequency === 'number' && radio.state.currentRadioFrequency > 0) {
+      setCurrentFrequency(radio.state.currentRadioFrequency);
+    }
+  }, [radio.state.currentRadioFrequency]);
+
+  useEffect(() => {
     if (radio.state.currentRadioMode) {
       setCurrentRadioMode(radio.state.currentRadioMode);
     }
@@ -532,6 +538,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         mode: 'VOICE',
         band: 'Custom',
         description: `${(frequencyHz / 1000000).toFixed(3)} MHz`,
+        radioMode: currentRadioModeRef.current,
       });
 
       if (response.success) {
