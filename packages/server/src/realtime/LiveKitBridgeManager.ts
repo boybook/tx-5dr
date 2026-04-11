@@ -1,16 +1,14 @@
 import { AudioFrame, AudioSource, AudioStream, LocalAudioTrack, RemoteAudioTrack, Room, RoomEvent, TrackKind, TrackPublishOptions, TrackSource } from '@livekit/rtc-node';
 import type { AudioMonitorService } from '../audio/AudioMonitorService.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import type {
-  OpenWebRXListenStatus,
   RealtimeConnectivityErrorCode,
   RealtimeConnectivityIssue,
   RealtimeScope,
 } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
-import { buildOpenWebRXPreviewRoomName, buildRadioRoomName } from './room-names.js';
+import { buildRadioRoomName } from './room-names.js';
 import { LiveKitAuthService } from './LiveKitAuthService.js';
 import { LiveKitConfig } from './LiveKitConfig.js';
 import type { VoiceTxFrameMeta } from '../voice/VoiceTxDiagnostics.js';
@@ -56,16 +54,13 @@ interface ScopeHealthState {
 
 export class LiveKitBridgeManager {
   private readonly authService = new LiveKitAuthService();
-  private readonly stationManager = OpenWebRXStationManager.getInstance();
   private radioState: PublishedAudioState | null = null;
-  private previewState: PublishedAudioState | null = null;
   private remoteTrackReaders = new Map<string, ReadableStreamDefaultReader<AudioFrame>>();
   private isStarted = false;
   private recoveryTimer: ReturnType<typeof setInterval> | null = null;
   private recoveryInProgress = false;
   private readonly scopeHealth = new Map<RealtimeScope, ScopeHealthState>([
     ['radio', { healthy: true, updatedAt: Date.now(), issueCode: null }],
-    ['openwebrx-preview', { healthy: true, updatedAt: Date.now(), issueCode: null }],
   ]);
 
   constructor(private readonly engine: DigitalRadioEngine) {}
@@ -76,7 +71,6 @@ export class LiveKitBridgeManager {
 
     if (!LiveKitConfig.isEnabled()) {
       this.markScopeUnhealthy('radio', 'SIGNALING_UNREACHABLE');
-      this.markScopeUnhealthy('openwebrx-preview', 'SIGNALING_UNREACHABLE');
       LiveKitConfig.setRuntimeAvailable(false, 'disabled-by-config');
       logger.info('LiveKit bridge manager disabled by configuration');
       return;
@@ -99,9 +93,6 @@ export class LiveKitBridgeManager {
     this.engine.on('systemStatus' as never, () => {
       this.bindRadioAudioMonitor();
     });
-    this.stationManager.on('listenStatusChanged', (status) => {
-      void this.handleOpenWebRXStatus(status);
-    });
 
     logger.info('LiveKit bridge manager started', {
       runtimeAvailable: LiveKitConfig.isRuntimeAvailable(),
@@ -113,9 +104,6 @@ export class LiveKitBridgeManager {
     this.isStarted = false;
 
     this.stopRecoveryProbe();
-
-    await this.disconnectPublishedState(this.previewState);
-    this.previewState = null;
 
     await this.disconnectPublishedState(this.radioState);
     this.radioState = null;
@@ -142,33 +130,6 @@ export class LiveKitBridgeManager {
     }
   }
 
-  private async handleOpenWebRXStatus(status: OpenWebRXListenStatus): Promise<void> {
-    if (!status.isListening || !status.previewSessionId) {
-      await this.disconnectPublishedState(this.previewState);
-      this.previewState = null;
-      this.markScopeHealthy('openwebrx-preview');
-      return;
-    }
-
-    const roomName = buildOpenWebRXPreviewRoomName(status.previewSessionId);
-    try {
-      if (this.previewState?.roomName !== roomName) {
-        await this.disconnectPublishedState(this.previewState);
-        this.previewState = await this.createPublishedState(roomName, 'openwebrx-preview', status.previewSessionId);
-      }
-
-      const audioMonitorService = this.stationManager.getAudioMonitorService();
-      this.previewState.cleanupMonitor?.();
-      this.previewState.cleanupMonitor = this.bindPublishedAudioSource(this.previewState.audioSource, audioMonitorService, {
-        roomName: this.previewState.roomName,
-        scope: 'openwebrx-preview',
-      });
-      this.markScopeHealthy('openwebrx-preview');
-    } catch (error) {
-      this.reportBridgeIssue('openwebrx-preview', 'runtime', 'SIGNALING_UNREACHABLE', 'Server bridge could not start OpenWebRX realtime preview', error);
-    }
-  }
-
   private async ensureRadioRoom(forceReconnect = false): Promise<void> {
     const activeProfileId = ConfigManager.getInstance().getActiveProfileId();
     const roomName = buildRadioRoomName(activeProfileId);
@@ -178,7 +139,7 @@ export class LiveKitBridgeManager {
     }
 
     await this.disconnectPublishedState(this.radioState);
-    this.radioState = await this.createPublishedState(roomName, 'radio');
+    this.radioState = await this.createPublishedState(roomName);
   }
 
   private bindRadioAudioMonitor(): void {
@@ -195,7 +156,7 @@ export class LiveKitBridgeManager {
   private bindPublishedAudioSource(
     audioSource: AudioSource,
     audioMonitorService: AudioMonitorService | null,
-    context: { roomName: string; scope: 'radio' | 'openwebrx-preview' },
+    context: { roomName: string; scope: 'radio' },
   ): (() => void) | null {
     if (!audioMonitorService) {
       return null;
@@ -412,21 +373,15 @@ export class LiveKitBridgeManager {
 
   private async createPublishedState(
     roomName: string,
-    scope: 'radio' | 'openwebrx-preview',
-    previewSessionId?: string,
   ): Promise<PublishedAudioState> {
     const room = new Room();
     const token = await this.authService.issueBridgeToken({
       roomName,
-      scope,
-      participantName: scope === 'radio' ? 'TX-5DR Radio Bridge' : 'TX-5DR OpenWebRX Bridge',
-      previewSessionId,
+      scope: 'radio',
+      participantName: 'TX-5DR Radio Bridge',
     });
 
     room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      if (scope !== 'radio') {
-        return;
-      }
       if (track.kind !== TrackKind.KIND_AUDIO) {
         return;
       }
@@ -458,14 +413,14 @@ export class LiveKitBridgeManager {
       LIVEKIT_AUDIO_CHANNELS,
       LIVEKIT_AUDIO_QUEUE_MS,
     );
-    const track = LocalAudioTrack.createAudioTrack(scope === 'radio' ? 'radio-rx' : 'openwebrx-preview', audioSource);
+    const track = LocalAudioTrack.createAudioTrack('radio-rx', audioSource);
     const publishOptions = new TrackPublishOptions();
     publishOptions.source = TrackSource.SOURCE_MICROPHONE;
     await room.localParticipant!.publishTrack(track, publishOptions);
 
     logger.info('LiveKit bridge connected', {
       roomName,
-      scope,
+      scope: 'radio',
       audioSampleRate: LIVEKIT_AUDIO_SAMPLE_RATE,
       queueTargetMs: LIVEKIT_AUDIO_QUEUE_MS,
       queueMaxMs: LIVEKIT_AUDIO_MAX_QUEUED_MS,

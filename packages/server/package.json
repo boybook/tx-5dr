@@ -28,7 +28,7 @@
     "@fastify/multipart": "^9.4.0",
     "@fastify/websocket": "^11.1.0",
     "@livekit/rtc-node": "^0.13.24",
-    "@openwebrx-js/api": "0.1.6",
+    "@openwebrx-js/api": "0.1.7",
     "@tx5dr/contracts": "workspace:*",
     "@tx5dr/core": "workspace:*",
     "@tx5dr/plugin-api": "workspace:*",
