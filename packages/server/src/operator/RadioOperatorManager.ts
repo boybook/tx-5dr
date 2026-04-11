@@ -23,7 +23,6 @@ import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
-import { SyncServiceRegistry } from '../services/SyncServiceRegistry.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -169,7 +168,7 @@ export class RadioOperatorManager {
           // 自动上传到同步服务（WaveLog/QRZ/LoTW）仅在新增时触发，避免外部重复记录
           const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
           if (operatorCallsign) {
-            await this.handleAutoSync(persistedQSO, operatorCallsign, data.operatorId);
+            await this.handleAutoSync(persistedQSO, operatorCallsign);
           }
         }
 
@@ -1654,89 +1653,15 @@ export class RadioOperatorManager {
   /**
    * 触发自动同步（公开包装，供路由层调用）
    */
-  public async triggerAutoSync(qsoRecord: QSORecord, callsign: string, operatorId: string): Promise<void> {
-    return this.handleAutoSync(qsoRecord, callsign, operatorId);
+  public async triggerAutoSync(qsoRecord: QSORecord, callsign: string, _operatorId: string): Promise<void> {
+    return this.handleAutoSync(qsoRecord, callsign);
   }
 
   /**
-   * 自动上传 QSO 到已启用的同步服务（WaveLog / QRZ / LoTW）
+   * 自动上传 QSO 到已启用的同步服务（全部通过插件系统 LogbookSyncHost）
    */
-  private async handleAutoSync(qsoRecord: QSORecord, callsign: string, operatorId: string): Promise<void> {
-    const registry = SyncServiceRegistry.getInstance();
-    const configManager = ConfigManager.getInstance();
-    const syncConfig = configManager.getCallsignSyncConfig(callsign);
-
-    // WaveLog 自动上传
-    const waveLogService = registry.getWaveLogService(callsign);
-    if (waveLogService && syncConfig?.wavelog?.autoUploadQSO) {
-      try {
-        logger.info(`[WaveLog] Auto-uploading QSO: ${qsoRecord.callsign} (callsign: ${callsign})`);
-        const result = await waveLogService.uploadQSO(qsoRecord, false);
-        if (result.status === 'duplicate') {
-          logger.info(`[WaveLog] QSO already exists in WaveLog: ${qsoRecord.callsign} - ${result.message}`);
-          this.eventEmitter.emit('waveLogUploadSuccess' as any, { operatorId, qsoRecord, message: result.message });
-        } else if (result.success) {
-          logger.info(`[WaveLog] QSO upload successful: ${qsoRecord.callsign}`);
-          this.eventEmitter.emit('waveLogUploadSuccess' as any, { operatorId, qsoRecord, message: result.message });
-        } else {
-          logger.warn(`[WaveLog] QSO upload failed: ${qsoRecord.callsign} - ${result.message}`);
-          this.eventEmitter.emit('waveLogUploadFailed' as any, { operatorId, qsoRecord, message: result.message });
-        }
-      } catch (error) {
-        logger.error(`[WaveLog] QSO auto-upload error: ${qsoRecord.callsign}`, error);
-        this.eventEmitter.emit('waveLogUploadError' as any, {
-          operatorId, qsoRecord, error: error instanceof Error ? error.message : 'unknown error'
-        });
-      }
-    }
-
-    // QRZ 自动上传
-    const qrzService = registry.getQRZService(callsign);
-    if (qrzService && syncConfig?.qrz?.autoUploadQSO) {
-      try {
-        logger.info(`[QRZ] Auto-uploading QSO: ${qsoRecord.callsign} (callsign: ${callsign})`);
-        const result = await qrzService.uploadQSO(qsoRecord);
-        if (result.success) {
-          logger.info(`[QRZ] QSO upload successful: ${qsoRecord.callsign}`);
-        } else {
-          logger.warn(`[QRZ] QSO upload failed: ${qsoRecord.callsign} - ${result.message}`);
-        }
-      } catch (error) {
-        logger.error(`[QRZ] QSO auto-upload error: ${qsoRecord.callsign}`, error);
-      }
-    }
-
-    // LoTW 自动上传
-    const lotwService = registry.getLoTWService(callsign);
-    if (lotwService && syncConfig?.lotw?.autoUploadQSO) {
-      try {
-        logger.info(`[LoTW] Auto-uploading QSO: ${qsoRecord.callsign} (callsign: ${callsign})`);
-        const result = await lotwService.uploadQSOs([qsoRecord], callsign);
-        if (result.success && result.uploadedCount > 0) {
-          const existingSyncConfig = configManager.getCallsignSyncConfig(callsign);
-          if (existingSyncConfig?.lotw) {
-            await configManager.updateCallsignSyncConfig(callsign, {
-              lotw: {
-                ...existingSyncConfig.lotw,
-                lastUploadTime: Date.now(),
-              },
-            });
-          }
-          const logBook = await this.logManager.getOperatorLogBook(operatorId);
-          if (logBook) {
-            const now = Date.now();
-            await logBook.provider.updateQSO(qsoRecord.id, {
-              lotwQslSent: 'Y',
-              lotwQslSentDate: qsoRecord.lotwQslSentDate || now,
-            });
-          }
-          logger.info(`[LoTW] QSO upload successful: ${qsoRecord.callsign}`);
-        } else {
-          logger.warn(`[LoTW] QSO upload failed: ${qsoRecord.callsign} - ${result.message}`);
-        }
-      } catch (error) {
-        logger.error(`[LoTW] QSO auto-upload error: ${qsoRecord.callsign}`, error);
-      }
-    }
+  private async handleAutoSync(qsoRecord: QSORecord, callsign: string): Promise<void> {
+    // All sync providers are plugin-based — delegate to LogbookSyncHost
+    this._pluginManager?.logbookSyncHost.onQSOComplete(callsign);
   }
-} 
+}

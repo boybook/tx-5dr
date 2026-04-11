@@ -16,7 +16,7 @@ export interface LoadedPlugin {
   definition: PluginDefinition;
   /** 是否为内置插件（不可禁用、不来自文件系统） */
   isBuiltIn: boolean;
-  /** 插件目录路径（内置插件为 undefined） */
+  /** 插件目录路径（内置插件若有 UI 文件也需提供） */
   dirPath?: string;
   /** 插件加载的 i18n 资源 */
   locales?: Record<string, Record<string, string>>;
@@ -118,6 +118,11 @@ export interface PluginManagerDeps {
   ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
   resetOperatorRuntime: (operatorId: string, reason: string) => void;
   dataDir: string;
+  /** Optional callback for logbook sync provider registration. */
+  registerLogbookSyncProvider?: (
+    pluginName: string,
+    provider: import('@tx5dr/plugin-api').LogbookSyncProvider,
+  ) => void;
 }
 
 /**
@@ -151,6 +156,10 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
     panels: plugin.definition.panels,
     permissions: plugin.definition.permissions,
     capabilities: capabilities.length > 0 ? capabilities : undefined,
+    ui: plugin.definition.ui ? {
+      dir: plugin.definition.ui.dir ?? 'ui',
+      pages: plugin.definition.ui.pages ?? [],
+    } : undefined,
     locales: plugin.locales,
   };
 }

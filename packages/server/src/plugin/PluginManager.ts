@@ -19,6 +19,7 @@ import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
+import { LogbookSyncHost } from './LogbookSyncHost.js';
 import {
   BUILTIN_PLUGINS,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
@@ -51,6 +52,8 @@ export class PluginManager {
   private loader = new PluginLoader();
   private running = false;
   private unsubscribeFns: Array<() => void> = [];
+  private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
+
   private systemState: PluginSystemRuntimeState = {
     state: 'ready',
     generation: 0,
@@ -64,6 +67,12 @@ export class PluginManager {
   };
 
   constructor(private deps: PluginManagerDeps) {
+    this._logbookSyncHost = new LogbookSyncHost();
+    // Wire the logbook sync registration callback so plugins can register
+    // providers via ctx.logbookSync.register().
+    deps.registerLogbookSyncProvider = (pluginName, provider) => {
+      this._logbookSyncHost.register(pluginName, provider);
+    };
     this.contextFactory = new PluginContextFactory(deps);
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
@@ -426,6 +435,45 @@ export class PluginManager {
     return this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
   }
 
+  /**
+   * Returns the loaded plugin metadata for the given name, or `undefined` if
+   * the plugin is not loaded. Exposed for route handlers that need access to
+   * the plugin's filesystem directory (e.g. serving static UI files).
+   */
+  getLoadedPlugin(pluginName: string): LoadedPlugin | undefined {
+    return this.loadedPlugins.get(pluginName);
+  }
+
+  /** Host-side manager for logbook sync providers registered by plugins. */
+  get logbookSyncHost(): LogbookSyncHost {
+    return this._logbookSyncHost;
+  }
+
+  /**
+   * Invokes a custom page handler registered by the given plugin. The host
+   * routes iframe `bridge.invoke()` calls through this method.
+   *
+   * Returns the handler's response, or throws if no handler is registered.
+   * Uses any available operator instance — the page handler is per-plugin,
+   * not per-operator.
+   */
+  async invokePluginPageHandler(
+    pluginName: string,
+    pageId: string,
+    action: string,
+    data: unknown,
+  ): Promise<unknown> {
+    for (const operatorInstances of this.instances.values()) {
+      const instance = operatorInstances.get(pluginName);
+      if (!instance) continue;
+      const bridge = instance.ctx.ui as import('./PluginUIBridge.js').PluginUIBridge;
+      if (bridge.hasPageHandler()) {
+        return bridge.handlePageInvoke(pageId, action, data);
+      }
+    }
+    throw new Error(`No page handler registered for plugin: ${pluginName}`);
+  }
+
   /** 更新 operator scope 插件设置，并通知相关实例 */
   setOperatorPluginSettings(
     operatorId: string,
@@ -667,6 +715,7 @@ export class PluginManager {
         definition: builtin.definition,
         isBuiltIn: true,
         locales: builtin.locales,
+        dirPath: builtin.dirPath,
       });
     }
 

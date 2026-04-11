@@ -18,6 +18,7 @@ import type {
   LogbookAccess,
   BandAccess,
   UIBridge,
+  PluginFileStore,
 } from '../helpers.js';
 import type { PluginContext } from '../context.js';
 // Type-only imports from contracts (devDependency — erased at compile time)
@@ -180,6 +181,11 @@ export function createMockLogbookAccess(
     hasWorked: async () => false,
     hasWorkedDXCC: async () => false,
     hasWorkedGrid: async () => false,
+    queryQSOs: async () => [],
+    countQSOs: async () => 0,
+    addQSO: async () => {},
+    updateQSO: async () => {},
+    notifyUpdated: () => {},
     ...overrides,
   };
 }
@@ -208,6 +214,27 @@ export function createMockUIBridge(): MockUIBridge {
       const existing = sentData.get(panelId) ?? [];
       existing.push(data);
       sentData.set(panelId, existing);
+    },
+    registerPageHandler(): void {
+      // no-op in mock
+    },
+    pushToPage(): void {
+      // no-op in mock
+    },
+  };
+}
+
+// ===== Factory: PluginFileStore =====
+
+export function createMockFileStore(): PluginFileStore {
+  const storage = new Map<string, Buffer>();
+  return {
+    async write(p: string, data: Buffer) { storage.set(p, data); },
+    async read(p: string) { return storage.get(p) ?? null; },
+    async delete(p: string) { return storage.delete(p); },
+    async list(prefix?: string) {
+      const keys = Array.from(storage.keys());
+      return prefix ? keys.filter(k => k.startsWith(prefix)) : keys;
     },
   };
 }
@@ -264,6 +291,9 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
   const logbook = createMockLogbookAccess(opts.logbook);
   const band = createMockBandAccess(opts.band);
 
+  const files = createMockFileStore();
+  const logbookSync = { register() { /* no-op in mock */ } };
+
   return {
     config: opts.config ?? {},
     store: { global: globalStore, operator: operatorStore },
@@ -274,6 +304,8 @@ export function createMockContext(options?: MockPluginContextOptions): MockPlugi
     logbook,
     band,
     ui,
+    files,
+    logbookSync,
   };
 }
 

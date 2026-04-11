@@ -181,6 +181,47 @@ export const PluginPanelDescriptorSchema = z.object({
  */
 export type PluginPanelDescriptor = z.infer<typeof PluginPanelDescriptorSchema>;
 
+// ===== 自定义 UI 页面 =====
+
+/**
+ * Declarative descriptor for a custom UI page served from a plugin's static
+ * file directory and rendered inside an iframe by the host.
+ *
+ * Pages are registered in `PluginDefinition.ui.pages` and can be consumed by
+ * any host component via `<PluginIframeHost pluginName={...} pageId={...} />`.
+ */
+export const PluginUIPageDescriptorSchema = z.object({
+  /** Unique page identifier within the plugin (e.g. 'settings', 'dashboard'). */
+  id: z.string(),
+  /** Display title (i18n key or literal text). */
+  title: z.string(),
+  /** Entry HTML file path relative to the UI directory (e.g. 'settings.html'). */
+  entry: z.string(),
+  /** Optional icon identifier. */
+  icon: z.string().optional(),
+});
+
+/**
+ * Declarative descriptor for a custom UI page served from a plugin's static
+ * file directory.
+ */
+export type PluginUIPageDescriptor = z.infer<typeof PluginUIPageDescriptorSchema>;
+
+/**
+ * Declares that a plugin provides custom UI pages hosted in an iframe.
+ */
+export const PluginUIConfigSchema = z.object({
+  /** Static file directory relative to the plugin root (default: 'ui'). */
+  dir: z.string().optional().default('ui'),
+  /** Registered custom UI pages. */
+  pages: z.array(PluginUIPageDescriptorSchema).optional().default([]),
+});
+
+/**
+ * Declares that a plugin provides custom UI pages hosted in an iframe.
+ */
+export type PluginUIConfig = z.infer<typeof PluginUIConfigSchema>;
+
 // ===== 存储配置 =====
 
 /**
@@ -224,6 +265,7 @@ export const PluginManifestSchema = z.object({
   quickSettings: z.array(PluginQuickSettingSchema).optional(),
   panels: z.array(PluginPanelDescriptorSchema).optional(),
   storage: PluginStorageConfigSchema.optional(),
+  ui: PluginUIConfigSchema.optional(),
 });
 
 /**
@@ -259,6 +301,7 @@ export const PluginStatusSchema = z.object({
   panels: z.array(PluginPanelDescriptorSchema).optional(),
   permissions: z.array(PluginPermissionSchema).optional(),
   capabilities: z.array(PluginCapabilitySchema).optional(),
+  ui: PluginUIConfigSchema.optional(),
   locales: z.record(z.string(), z.record(z.string(), z.string())).optional(),
 });
 
