@@ -145,7 +145,7 @@ docker exec tx5dr cat /app/data/config/.admin-token
 以上命令以独立模式启动，使用 WebSocket 音频传输（ws-compat，延迟约 50–100 ms）。如需更低延迟的 LiveKit/WebRTC 语音（延迟约 20–50 ms）：
 
 ```bash
-docker compose --profile livekit -f docker-compose.yml -f docker-compose.livekit.yml up -d
+docker compose -f docker-compose.livekit.yml up -d
 ```
 
 完整部署指南（设备映射、串口配置、音频配置、故障排查）请参阅 **[docker/README.md](docker/README.md)**。

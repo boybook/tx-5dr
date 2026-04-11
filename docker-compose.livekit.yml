@@ -1,12 +1,109 @@
-# LiveKit overlay — use with: docker compose --profile livekit -f docker-compose.yml -f docker-compose.livekit.yml up
+# TX-5DR + LiveKit 模式
+# 使用 WebRTC 低延迟语音传输（20-50ms），需要额外端口
+# 启动：docker compose -f docker-compose.livekit.yml up -d
+#
+# 首次运行时 livekit-init 自动生成凭据，后续重启自动复用
+# 如不需要低延迟语音，使用 docker-compose.yml（独立模式）即可
+
 services:
+  livekit-init:
+    image: boybook/tx-5dr:latest
+    container_name: tx5dr-livekit-init
+    restart: "no"
+    entrypoint: ["/bin/bash", "/init-livekit.sh"]
+    environment:
+      - LIVEKIT_RUNTIME_DIR=/app/data/realtime
+      - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
+      - LIVEKIT_SIGNAL_PORT=7880
+      - LIVEKIT_TCP_PORT=7881
+      - LIVEKIT_UDP_PORT_START=50000
+      - LIVEKIT_UDP_PORT_END=50100
+    volumes:
+      - ./data/realtime:/app/data/realtime
+
   tx5dr:
+    image: boybook/tx-5dr:latest
+    container_name: tx5dr
+    restart: unless-stopped
     depends_on:
       livekit-init:
         condition: service_completed_successfully
       livekit:
         condition: service_started
+    ports:
+      - "8076:80"
+      - "8443:443"   # HTTPS（自签名证书，可替换 ./data/ssl/ 中的证书）
+    volumes:
+      # 应用配置和数据目录
+      - ./data/config:/app/data/config
+      # SSL 证书目录（自动生成自签名证书，可替换为自定义证书）
+      - ./data/ssl:/app/data/ssl
+      # 用户插件目录（宿主机侧直接管理）
+      - ./data/plugins:/app/data/plugins
+      - ./data/logs:/app/data/logs
+      - ./data/cache:/app/data/cache
+      - ./data/realtime:/app/data/realtime
+      # nginx日志
+      - ./data/logs/nginx:/var/log/nginx
+      # supervisor日志
+      - ./data/logs/supervisor:/var/log/supervisor
+      # 音频设备映射
+      - /dev/snd:/dev/snd:rw
+      - /dev/shm:/dev/shm:rw
+      # PulseAudio 支持（如果需要）
+      - /run/user/1000/pulse:/run/user/1000/pulse:ro
+      - /var/lib/pulse:/var/lib/pulse:ro
+      # 如需在容器内使用稳定的串口别名，可额外挂载宿主机串口符号链接目录
+      # - /dev/serial/by-id:/dev/serial/by-id:ro
+    devices:
+      # USB设备（支持USB声卡和串口设备）
+      - /dev/bus/usb:/dev/bus/usb:rwm
+      # 音频设备
+      - /dev/snd:/dev/snd:rwm
+      # 串口设备：请根据实际设备取消注释并修改
+      # - /dev/ttyUSB0:/dev/ttyUSB0:rwm    # CP2102/CH340 等 USB-Serial
+      # - /dev/ttyUSB1:/dev/ttyUSB1:rwm
+      # - /dev/ttyACM0:/dev/ttyACM0:rwm    # ICOM IC-705 等 USB CDC ACM
+      # - /dev/ttyACM1:/dev/ttyACM1:rwm
     environment:
+      - NODE_ENV=production
+      - PORT=4000
       - LIVEKIT_URL=ws://livekit:7880
       - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
       - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
+      # TX-5DR应用路径配置
+      - TX5DR_CONFIG_DIR=/app/data/config
+      - TX5DR_DATA_DIR=/app/data
+      - TX5DR_LOGS_DIR=/app/data/logs
+      - TX5DR_CACHE_DIR=/app/data/cache
+      # 音频环境变量
+      - PULSE_RUNTIME_PATH=/run/user/1000/pulse
+      - PULSE_STATE_PATH=/var/lib/pulse
+    # 音频(audio)和串口(dialout)设备访问
+    group_add:
+      - audio
+      - dialout
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - SYS_NICE
+      - SYS_RESOURCE
+    # 共享主机音频子系统
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: tx5dr-livekit
+    restart: unless-stopped
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    command: --config /var/lib/tx5dr-runtime/livekit.yaml
+    ports:
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./data/realtime:/var/lib/tx5dr-runtime
