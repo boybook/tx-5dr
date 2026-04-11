@@ -8,42 +8,39 @@ Full documentation / 完整文档: **[tx5dr.com/guide/docker](https://tx5dr.com/
 
 ## English
 
-### Quick Start
+### Quick Start (Standalone)
 
 Image: `boybook/tx-5dr:latest` ([Docker Hub](https://hub.docker.com/r/boybook/tx-5dr))
 
 ```bash
-mkdir -p data/{config,plugins,logs,cache,realtime}
+mkdir -p data/{config,plugins,logs,cache,realtime,ssl}
 docker compose pull
 docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
-Open `http://<host>:8076` and log in with the admin token.
+Open `http://<host>:8076` (or `https://<host>:8443`) and log in with the admin token.
 
-> This starts TX-5DR in **standalone mode** using WebSocket audio (ws-compat). All features work — FT8 decoding, radio control, voice transmit and monitoring are fully functional. For lower-latency voice via LiveKit/WebRTC, see [Adding LiveKit](#adding-livekit-optional) below.
+All features work in standalone mode — FT8, radio control, voice transmit and monitoring.
 
-#### Adding LiveKit (optional)
+#### Adding LiveKit (optional, lower-latency voice)
 
-LiveKit provides lower-latency voice transport over WebRTC (typically 20–50 ms vs 50–100 ms for ws-compat). To enable it alongside the main application:
+Use the separate LiveKit compose file instead:
 
 ```bash
-docker compose --profile livekit -f docker-compose.yml -f docker-compose.livekit.yml up -d
+docker compose -f docker-compose.livekit.yml up -d
 ```
 
-On first run, `livekit-init` will auto-generate credentials into `./data/realtime/`. The main application detects LiveKit availability at startup and switches automatically.
+### Two Compose Files
 
-### Services
-
-| Service | Profile | Purpose |
-|---------|---------|---------|
-| `tx5dr` | *(always)* | Main application (nginx + tx5dr-server via supervisor) |
-| `livekit-init` | `livekit` | One-shot: generates LiveKit credentials into `./data/realtime/` |
-| `livekit` | `livekit` | LiveKit signaling + media server |
+| File | Mode | Command |
+|------|------|---------|
+| `docker-compose.yml` | Standalone (WebSocket audio) | `docker compose up -d` |
+| `docker-compose.livekit.yml` | LiveKit (WebRTC, lower latency) | `docker compose -f docker-compose.livekit.yml up -d` |
 
 ### Key Configuration
 
-**Device mapping** — edit `docker-compose.yml` `devices:` to match your hardware:
+**Device mapping** — edit the compose file `devices:` to match your hardware:
 
 ```yaml
 devices:
@@ -70,48 +67,45 @@ group_add:
 | Audio shows only "Default" | Add `audio` to `group_add`, recreate container |
 | Host has USB, container has no tty | Map `/dev/ttyUSB*` or `/dev/ttyACM*` in `devices` |
 
-For detailed setup, device mapping, and LiveKit networking, see **[tx5dr.com/guide/docker](https://tx5dr.com/guide/docker)**.
+For detailed setup, see **[tx5dr.com/guide/docker](https://tx5dr.com/guide/docker)**.
 
 ---
 
 ## 中文
 
-### 快速开始
+### 快速开始（独立模式）
 
 镜像：`boybook/tx-5dr:latest`（[Docker Hub](https://hub.docker.com/r/boybook/tx-5dr)）
 
 ```bash
-mkdir -p data/{config,plugins,logs,cache,realtime}
+mkdir -p data/{config,plugins,logs,cache,realtime,ssl}
 docker compose pull
 docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
 ```
 
-浏览器访问 `http://<host>:8076`，使用管理员令牌登录。
+浏览器访问 `http://<host>:8076`（或 `https://<host>:8443`），使用管理员令牌登录。
 
-> 以上命令以**独立模式**启动 TX-5DR，使用 WebSocket 音频传输（ws-compat）。所有功能均可正常使用 — FT8 解码、电台控制、语音发射与监听完全可用。如需更低延迟的 LiveKit/WebRTC 语音，请参阅下方 [启用 LiveKit](#启用-livekit可选)。
+独立模式下所有功能完全可用——FT8 解码、电台控制、语音发射与监听。
 
-#### 启用 LiveKit（可选）
+#### 启用 LiveKit（可选，更低延迟语音）
 
-LiveKit 通过 WebRTC 提供更低延迟的语音传输（通常 20–50 ms，ws-compat 为 50–100 ms）。如需在主应用旁启用：
+使用单独的 LiveKit compose 文件：
 
 ```bash
-docker compose --profile livekit -f docker-compose.yml -f docker-compose.livekit.yml up -d
+docker compose -f docker-compose.livekit.yml up -d
 ```
 
-首次运行时，`livekit-init` 会自动生成凭据到 `./data/realtime/`。主应用启动时会自动检测 LiveKit 可用性并切换。
+### 两个 Compose 文件
 
-### 服务说明
-
-| 服务 | Profile | 作用 |
-|------|---------|------|
-| `tx5dr` | *（始终启动）* | 主应用（nginx + tx5dr-server，supervisor 管理） |
-| `livekit-init` | `livekit` | 一次性运行：生成 LiveKit 凭据到 `./data/realtime/` |
-| `livekit` | `livekit` | LiveKit 信令 + 媒体服务器 |
+| 文件 | 模式 | 命令 |
+|------|------|------|
+| `docker-compose.yml` | 独立模式（WebSocket 音频） | `docker compose up -d` |
+| `docker-compose.livekit.yml` | LiveKit 模式（WebRTC，更低延迟） | `docker compose -f docker-compose.livekit.yml up -d` |
 
 ### 关键配置
 
-**设备映射** — 编辑 `docker-compose.yml` 的 `devices:` 匹配你的硬件：
+**设备映射** — 编辑 compose 文件的 `devices:` 匹配你的硬件：
 
 ```yaml
 devices:
@@ -138,4 +132,4 @@ group_add:
 | 音频只显示 "Default" | `group_add` 中添加 `audio`，重建容器 |
 | 宿主机有 USB 容器无 tty | 在 `devices` 中映射 `/dev/ttyUSB*` 或 `/dev/ttyACM*` |
 
-详细配置、设备映射和 LiveKit 网络说明，请参阅 **[tx5dr.com/guide/docker](https://tx5dr.com/guide/docker)**。
+详细配置请参阅 **[tx5dr.com/guide/docker](https://tx5dr.com/guide/docker)**。
