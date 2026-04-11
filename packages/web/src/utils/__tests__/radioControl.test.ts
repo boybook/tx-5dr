@@ -4,6 +4,7 @@ import {
   filterDigitalFrequencyOptions,
   isCoreCapabilityAvailable,
   shouldShowAutoTunerShortcut,
+  shouldShowRadioControlEntry,
 } from '../radioControl';
 
 describe('radioControl utils', () => {
@@ -80,6 +81,12 @@ describe('radioControl utils', () => {
     })).toBe(false);
 
     expect(shouldShowAutoTunerShortcut(true, true, undefined)).toBe(false);
+  });
+
+  it('shows radio control entry only when connected and permitted', () => {
+    expect(shouldShowRadioControlEntry(true, true)).toBe(true);
+    expect(shouldShowRadioControlEntry(true, false)).toBe(false);
+    expect(shouldShowRadioControlEntry(false, true)).toBe(false);
   });
 
   it('shows monitor activation CTA only before the first playback gesture succeeds', () => {

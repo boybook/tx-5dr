@@ -292,6 +292,40 @@ check_ssl() {
     return 1
 }
 
+# ── SSL certificate checks ──────────────────────────────────────────────────
+
+# Check if managed SSL certificate files exist
+check_ssl_cert_files() {
+    local ssl_dir="${SSL_DIR:-/etc/tx5dr/ssl}"
+    [[ -f "$ssl_dir/server.crt" ]] && [[ -f "$ssl_dir/server.key" ]]
+}
+
+# Check if certificate is valid (not expired and not expiring within 30 days)
+check_ssl_cert_validity() {
+    local cert="${SSL_DIR:-/etc/tx5dr/ssl}/server.crt"
+    [[ -f "$cert" ]] || return 1
+    openssl x509 -checkend 2592000 -noout -in "$cert" 2>/dev/null
+}
+
+# Check if certificate is self-signed (vs user-provided)
+check_ssl_cert_is_self_signed() {
+    local info_file="${SSL_DIR:-/etc/tx5dr/ssl}/cert-info.env"
+    [[ -f "$info_file" ]] || return 1
+    grep -q "TX5DR_SSL_MODE=self-signed" "$info_file" 2>/dev/null
+}
+
+# Check if the nginx tx5dr config has an HTTPS server block pointing to our cert
+check_nginx_ssl_block() {
+    local conf
+    conf=$(get_tx5dr_nginx_conf_path)
+    [[ -f "$conf" ]] || return 1
+    local content
+    content=$(read_file_maybe_sudo "$conf" 2>/dev/null || true)
+    [[ -n "$content" ]] || return 1
+    printf "%s\n" "$content" | grep -q 'ssl_certificate[[:space:]]*/etc/tx5dr/ssl/server\.crt' || return 1
+    printf "%s\n" "$content" | grep -q 'ssl_certificate_key[[:space:]]*/etc/tx5dr/ssl/server\.key' || return 1
+}
+
 check_disk_space() {
     local dir="${DATA_DIR:-/var/lib/tx5dr}"
     [[ ! -d "$dir" ]] && dir="/"
@@ -690,6 +724,201 @@ fix_selinux_nginx() {
     check_selinux_nginx "$http_port"
 }
 
+# ── SSL certificate generation and nginx patching ───────────────────────────
+
+# Collect all non-loopback IPv4 addresses
+get_all_local_ips() {
+    ip -4 addr show scope global 2>/dev/null | \
+        awk '/inet / {split($2,a,"/"); print a[1]}' | \
+        sort -u
+}
+
+# Generate self-signed certificate using openssl
+generate_self_signed_cert() {
+    local ssl_dir="${SSL_DIR:-/etc/tx5dr/ssl}"
+    local cert_file="$ssl_dir/server.crt"
+    local key_file="$ssl_dir/server.key"
+    local info_file="$ssl_dir/cert-info.env"
+
+    # Don't overwrite if user has their own cert
+    if [[ -f "$info_file" ]] && ! grep -q "TX5DR_SSL_MODE=self-signed" "$info_file" 2>/dev/null; then
+        return 0
+    fi
+
+    command -v openssl &>/dev/null || return 1
+
+    mkdir -p "$ssl_dir"
+
+    local hostname
+    hostname=$(hostname 2>/dev/null || echo "localhost")
+
+    # Build SAN string
+    local san="DNS:localhost"
+    [[ "$hostname" != "localhost" ]] && san="${san},DNS:${hostname}"
+    san="${san},IP:127.0.0.1"
+
+    local ip
+    while IFS= read -r ip; do
+        [[ -n "$ip" && "$ip" != "127.0.0.1" ]] && san="${san},IP:${ip}"
+    done < <(get_all_local_ips)
+
+    # Generate key + cert
+    openssl genrsa -out "$key_file" 2048 2>/dev/null || return 1
+    openssl req -new -x509 -key "$key_file" -out "$cert_file" \
+        -days 365 -sha256 \
+        -subj "/CN=${hostname}/O=TX-5DR" \
+        -addext "subjectAltName=${san}" \
+        -addext "basicConstraints=CA:FALSE" \
+        -addext "keyUsage=digitalSignature,keyEncipherment" \
+        -addext "extKeyUsage=serverAuth" \
+        2>/dev/null || return 1
+
+    # Set permissions (nginx master reads key as root)
+    chmod 644 "$cert_file"
+    chmod 640 "$key_file"
+
+    # Write metadata
+    local now expires fingerprint
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    expires=$(openssl x509 -enddate -noout -in "$cert_file" 2>/dev/null | cut -d= -f2 || true)
+    fingerprint=$(openssl x509 -fingerprint -sha256 -noout -in "$cert_file" 2>/dev/null | cut -d= -f2 || true)
+
+    cat > "$info_file" <<CERTEOF
+# Managed by TX-5DR. Replace server.crt and server.key with your own certificate.
+# After replacing, update TX5DR_SSL_MODE to "custom" and reload nginx:
+#   sudo systemctl reload nginx
+TX5DR_SSL_MODE=self-signed
+TX5DR_SSL_CREATED_AT=${now}
+TX5DR_SSL_EXPIRES=${expires}
+TX5DR_SSL_FINGERPRINT_SHA256=${fingerprint}
+TX5DR_SSL_HOSTNAME=${hostname}
+TX5DR_SSL_SAN=${san}
+CERTEOF
+    chmod 644 "$info_file"
+    return 0
+}
+
+# Regenerate self-signed cert (only if it is self-signed)
+renew_self_signed_cert() {
+    local info_file="${SSL_DIR:-/etc/tx5dr/ssl}/cert-info.env"
+    if [[ -f "$info_file" ]] && ! grep -q "TX5DR_SSL_MODE=self-signed" "$info_file" 2>/dev/null; then
+        return 0
+    fi
+    generate_self_signed_cert
+}
+
+# Patch nginx config to add HTTPS server block
+# Uses awk to extract location blocks from the HTTP server and duplicate them in an HTTPS server block
+fix_nginx_ssl_config() {
+    local conf
+    conf=$(get_tx5dr_nginx_conf_path)
+    [[ -f "$conf" ]] || return 1
+
+    local ssl_cert="${SSL_DIR:-/etc/tx5dr/ssl}/server.crt"
+    local ssl_key="${SSL_DIR:-/etc/tx5dr/ssl}/server.key"
+    [[ -f "$ssl_cert" ]] && [[ -f "$ssl_key" ]] || return 1
+
+    # Already has SSL block?
+    if check_nginx_ssl_block; then
+        return 0
+    fi
+
+    local https_port="${HTTPS_PORT:-8443}"
+
+    # Backup before patching
+    cp "$conf" "${conf}.bak.ssl" 2>/dev/null || true
+
+    # Use awk to extract the content inside the first server { } block,
+    # then append a new HTTPS server block with the same locations
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    awk -v https_port="$https_port" -v ssl_cert="$ssl_cert" -v ssl_key="$ssl_key" '
+        BEGIN {
+            in_server = 0
+            depth = 0
+            lines_count = 0
+        }
+
+        # Track server block
+        {
+            line = $0
+
+            if (!in_server && line ~ /^server[[:space:]]*\{/ ) {
+                in_server = 1
+                depth = 1
+                next
+            }
+
+            if (in_server) {
+                # Count braces
+                n = length(line)
+                for (i = 1; i <= n; i++) {
+                    c = substr(line, i, 1)
+                    if (c == "{") depth++
+                    if (c == "}") depth--
+                }
+
+                if (depth <= 0) {
+                    # End of server block, skip closing brace
+                    in_server = 0
+                    next
+                }
+
+                # Skip listen and server_name directives (we replace them)
+                if (line ~ /^[[:space:]]*listen[[:space:]]/) next
+                if (line ~ /^[[:space:]]*server_name[[:space:]]/) next
+
+                # Collect location blocks and other directives
+                lines_count++
+                server_lines[lines_count] = line
+            }
+        }
+
+        END {
+            # Write the HTTPS server block
+            print ""
+            print "# TX-5DR HTTPS (auto-generated self-signed certificate)"
+            print "# Replace " ssl_cert " and " ssl_key " with your own certificate,"
+            print "# then reload nginx: sudo systemctl reload nginx"
+            print "server {"
+            print "    listen " https_port " ssl;"
+            print "    listen [::]:" https_port " ssl;"
+            print "    server_name _;"
+            print ""
+            print "    ssl_certificate " ssl_cert ";"
+            print "    ssl_certificate_key " ssl_key ";"
+            print ""
+            print "    ssl_protocols TLSv1.2 TLSv1.3;"
+            print "    ssl_ciphers HIGH:!aNULL:!MD5;"
+            print "    ssl_prefer_server_ciphers on;"
+            print "    ssl_session_cache shared:SSL:10m;"
+            print "    ssl_session_timeout 10m;"
+            print ""
+            for (i = 1; i <= lines_count; i++) {
+                print server_lines[i]
+            }
+            print "}"
+        }
+    ' "$conf" > "$tmp_file"
+
+    # Append the HTTPS block to the existing config
+    cat "$tmp_file" >> "$conf"
+    rm -f "$tmp_file"
+
+    if check_nginx_config; then
+        systemctl reload nginx 2>/dev/null || true
+        return 0
+    else
+        # Rollback on failure
+        if [[ -f "${conf}.bak.ssl" ]]; then
+            cp "${conf}.bak.ssl" "$conf"
+            systemctl reload nginx 2>/dev/null || true
+        fi
+        return 1
+    fi
+}
+
 # ── Composite: run all doctor checks ─────────────────────────────────────────
 
 run_doctor() {
@@ -913,12 +1142,50 @@ run_doctor() {
         issues=$((issues + 1))
     fi
 
-    # SSL (warning only, not counted as issue)
+    # SSL certificate files
+    if check_ssl_cert_files; then
+        if check_ssl_cert_is_self_signed; then
+            check_line "$(msg CHECK_SSL_CERT)" "ok" "self-signed (${SSL_DIR:-/etc/tx5dr/ssl}/)"
+        else
+            check_line "$(msg CHECK_SSL_CERT)" "ok" "custom (${SSL_DIR:-/etc/tx5dr/ssl}/)"
+        fi
+    else
+        check_line "$(msg CHECK_SSL_CERT)" "fail" "$(msg SSL_CERT_MISSING)"
+        echo -e "      ${_DIM}$(msg FIX_SSL)${_NC}"
+        issues=$((issues + 1))
+    fi
+
+    # SSL certificate validity (only if files exist)
+    if check_ssl_cert_files; then
+        if check_ssl_cert_validity; then
+            local expiry
+            expiry=$(openssl x509 -enddate -noout -in "${SSL_DIR:-/etc/tx5dr/ssl}/server.crt" 2>/dev/null | cut -d= -f2 || true)
+            check_line "$(msg CHECK_SSL_VALIDITY)" "ok" "expires: ${expiry}"
+        else
+            check_line "$(msg CHECK_SSL_VALIDITY)" "fail" "$(msg SSL_EXPIRED)"
+            echo -e "      ${_DIM}$(msg FIX_SSL)${_NC}"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    # nginx HTTPS block
+    if check_ssl_cert_files; then
+        if check_nginx_ssl_block; then
+            check_line "$(msg CHECK_SSL_NGINX)" "ok" "present (port ${HTTPS_PORT:-8443})"
+        else
+            check_line "$(msg CHECK_SSL_NGINX)" "fail" "$(msg SSL_NGINX_MISSING)"
+            echo -e "      ${_DIM}$(msg FIX_SSL_NGINX)${_NC}"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    # Overall SSL status
     if check_ssl; then
         check_line "$(msg CHECK_SSL)" "ok" "$(printf "$(msg SSL_OK)" "$SSL_PORT")"
     else
         check_line "$(msg CHECK_SSL)" "fail" "$(msg SSL_NOT_CONFIGURED)"
-        echo -e "      ${_DIM}$(msg SSL_HINT)${_NC}"
+        echo -e "      ${_DIM}$(msg FIX_SSL)${_NC}"
+        issues=$((issues + 1))
     fi
 
     if [[ $livekit_diag_needed -eq 1 ]]; then

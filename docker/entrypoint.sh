@@ -180,6 +180,135 @@ fi
 touch /var/log/supervisor/supervisord.log
 chown "$HOST_UID:$HOST_GID" /var/log/supervisor/supervisord.log
 
+# ── SSL certificate (self-signed) ───────────────────────────────────────────
+SSL_DIR="/app/data/ssl"
+SSL_CERT="$SSL_DIR/server.crt"
+SSL_KEY="$SSL_DIR/server.key"
+SSL_INFO="$SSL_DIR/cert-info.env"
+
+mkdir -p "$SSL_DIR"
+
+if [[ ! -f "$SSL_CERT" ]] || [[ ! -f "$SSL_KEY" ]]; then
+    log "Generating self-signed SSL certificate..."
+
+    local_hostname=$(hostname 2>/dev/null || echo "localhost")
+
+    # Build SAN string
+    san="DNS:localhost"
+    [[ "$local_hostname" != "localhost" ]] && san="${san},DNS:${local_hostname}"
+    san="${san},IP:127.0.0.1"
+
+    # Add all LAN IPs
+    for ip in $(ip -4 addr show scope global 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]}' | sort -u); do
+        [[ -n "$ip" && "$ip" != "127.0.0.1" ]] && san="${san},IP:${ip}"
+    done
+
+    openssl genrsa -out "$SSL_KEY" 2048 2>/dev/null && \
+    openssl req -new -x509 -key "$SSL_KEY" -out "$SSL_CERT" \
+        -days 365 -sha256 \
+        -subj "/CN=${local_hostname}/O=TX-5DR" \
+        -addext "subjectAltName=${san}" \
+        -addext "basicConstraints=CA:FALSE" \
+        -addext "keyUsage=digitalSignature,keyEncipherment" \
+        -addext "extKeyUsage=serverAuth" \
+        2>/dev/null
+
+    if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
+        chmod 644 "$SSL_CERT"
+        chmod 640 "$SSL_KEY"
+        # Write metadata
+        now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        expires=$(openssl x509 -enddate -noout -in "$SSL_CERT" 2>/dev/null | cut -d= -f2 || true)
+        fingerprint=$(openssl x509 -fingerprint -sha256 -noout -in "$SSL_CERT" 2>/dev/null | cut -d= -f2 || true)
+        cat > "$SSL_INFO" <<CERTEOF
+# Managed by TX-5DR. Replace server.crt and server.key with your own certificate.
+# After replacing, update TX5DR_SSL_MODE to "custom" and restart the container.
+TX5DR_SSL_MODE=self-signed
+TX5DR_SSL_CREATED_AT=${now}
+TX5DR_SSL_EXPIRES=${expires}
+TX5DR_SSL_FINGERPRINT_SHA256=${fingerprint}
+TX5DR_SSL_HOSTNAME=${local_hostname}
+TX5DR_SSL_SAN=${san}
+CERTEOF
+        chmod 644 "$SSL_INFO"
+        log "Self-signed SSL certificate generated: $SSL_DIR"
+    else
+        warn "Failed to generate self-signed SSL certificate"
+    fi
+else
+    log "Using existing SSL certificate: $SSL_DIR"
+fi
+
+# Patch nginx config with HTTPS server block if certificate exists and HTTPS block is missing
+NGINX_CONF="/etc/nginx/conf.d/tx5dr.conf"
+if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]] && [[ -f "$NGINX_CONF" ]]; then
+    if ! grep -q 'ssl_certificate[[:space:]]*/app/data/ssl/server\.crt' "$NGINX_CONF" 2>/dev/null; then
+        log "Adding HTTPS server block to nginx config..."
+
+        # Extract location blocks from existing server block using awk
+        awk -v ssl_cert="$SSL_CERT" -v ssl_key="$SSL_KEY" '
+            BEGIN {
+                in_server = 0
+                depth = 0
+                lines_count = 0
+            }
+            {
+                line = $0
+                if (!in_server && line ~ /^server[[:space:]]*\{/ ) {
+                    in_server = 1
+                    depth = 1
+                    next
+                }
+                if (in_server) {
+                    n = length(line)
+                    for (i = 1; i <= n; i++) {
+                        c = substr(line, i, 1)
+                        if (c == "{") depth++
+                        if (c == "}") depth--
+                    }
+                    if (depth <= 0) {
+                        in_server = 0
+                        next
+                    }
+                    if (line ~ /^[[:space:]]*listen[[:space:]]/) next
+                    if (line ~ /^[[:space:]]*server_name[[:space:]]/) next
+                    lines_count++
+                    server_lines[lines_count] = line
+                }
+            }
+            END {
+                print ""
+                print "# TX-5DR HTTPS (auto-generated self-signed certificate)"
+                print "server {"
+                print "    listen 443 ssl;"
+                print "    listen [::]:443 ssl;"
+                print "    server_name _;"
+                print ""
+                print "    ssl_certificate " ssl_cert ";"
+                print "    ssl_certificate_key " ssl_key ";"
+                print ""
+                print "    ssl_protocols TLSv1.2 TLSv1.3;"
+                print "    ssl_ciphers HIGH:!aNULL:!MD5;"
+                print "    ssl_prefer_server_ciphers on;"
+                print "    ssl_session_cache shared:SSL:10m;"
+                print "    ssl_session_timeout 10m;"
+                print ""
+                for (i = 1; i <= lines_count; i++) {
+                    print server_lines[i]
+                }
+                print "}"
+            }
+        ' "$NGINX_CONF" >> "$NGINX_CONF"
+
+        log "HTTPS server block added to nginx config (port 443, host: 8443)"
+    fi
+fi
+
+# Set SSL directory permissions to match host user
+if [[ -d "$SSL_DIR" ]]; then
+    chown -R "$HOST_UID:$HOST_GID" "$SSL_DIR"
+fi
+
 # 如果传入了命令参数，执行相应命令
 if [[ $# -gt 0 ]]; then
     log "Executing command: $*"

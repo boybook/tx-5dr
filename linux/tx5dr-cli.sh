@@ -55,6 +55,14 @@ cmd_start() {
     # Wait a moment for server to write token file
     sleep 1
 
+    # Check HTTPS port if SSL is configured
+    if check_ssl; then
+        echo -n "  "
+        if is_port_open "${HTTPS_PORT:-8443}"; then
+            log_ok "$(msg PORT_READY "${HTTPS_PORT:-8443}") (HTTPS)"
+        fi
+    fi
+
     echo ""
     log_info "$(msg START_OK)"
     local web_url
@@ -68,6 +76,9 @@ cmd_start() {
         echo ""
         log_warn "$(msg SSL_NOT_CONFIGURED)"
         echo -e "  ${_DIM}$(msg SSL_HINT)${_NC}"
+    elif check_ssl_cert_is_self_signed 2>/dev/null; then
+        echo ""
+        echo -e "  ${_DIM}$(msg SSL_BROWSER_WARNING)${_NC}"
     fi
     echo ""
 }
@@ -186,9 +197,13 @@ cmd_status() {
     if check_ssl; then
         local ssl_status="closed"
         is_port_open "${SSL_PORT}" && ssl_status="open"
-        echo -e "  HTTPS:      port ${SSL_PORT} ${ssl_status} → https://${ip:-localhost}:${SSL_PORT}"
+        local ssl_mode_label=""
+        if check_ssl_cert_is_self_signed 2>/dev/null; then
+            ssl_mode_label=" ${_DIM}(self-signed)${_NC}"
+        fi
+        echo -e "  HTTPS:      port ${SSL_PORT} ${ssl_status} → https://${ip:-localhost}:${SSL_PORT}${ssl_mode_label}"
     else
-        echo -e "  HTTPS:      ${_YELLOW}not configured${_NC} ${_DIM}(voice features require SSL)${_NC}"
+        echo -e "  HTTPS:      ${_YELLOW}not configured${_NC} ${_DIM}(run: sudo tx5dr doctor --fix)${_NC}"
     fi
 
     # Node.js
@@ -448,6 +463,35 @@ cmd_doctor_fix_internal() {
         fix_tx5dr_user_groups || true
     fi
 
+    # SSL certificate
+    if ! check_ssl_cert_files; then
+        log_info "$(msg SSL_GENERATING)"
+        if generate_self_signed_cert; then
+            log_ok "$(msg SSL_GENERATED)"
+        fi
+    elif check_ssl_cert_is_self_signed && ! check_ssl_cert_validity; then
+        log_info "$(msg SSL_GENERATING)"
+        if renew_self_signed_cert; then
+            log_ok "$(msg SSL_RENEWED)"
+        fi
+    fi
+
+    # nginx HTTPS block
+    if check_ssl_cert_files && check_nginx_installed && ! check_nginx_ssl_block; then
+        log_info "$(msg SSL_PATCHING_NGINX)"
+        if fix_nginx_ssl_config; then
+            log_ok "$(printf "$(msg SSL_NGINX_PATCHED)" "${HTTPS_PORT:-8443}")"
+        fi
+    fi
+
+    # SELinux for HTTPS port
+    if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+        local https_port="${HTTPS_PORT:-8443}"
+        if ! check_selinux_nginx "$https_port"; then
+            fix_selinux_nginx "$https_port" || true
+        fi
+    fi
+
     if [[ $changed_livekit -eq 1 ]]; then
         systemctl daemon-reload 2>/dev/null || true
         systemctl restart tx5dr-livekit 2>/dev/null || true
@@ -564,6 +608,115 @@ cmd_livekit_creds_rotate_internal() {
     log_info "Credential file: $(get_livekit_credentials_path)"
 }
 
+cmd_ssl_help() {
+    echo "Usage: tx5dr ssl [status|renew]"
+    echo ""
+    echo "  status   Show SSL certificate status (default)"
+    echo "  renew    Regenerate self-signed certificate (365 days)"
+    echo ""
+    echo "To use your own certificate:"
+    echo "  1. Replace /etc/tx5dr/ssl/server.crt and server.key"
+    echo "  2. Update TX5DR_SSL_MODE=custom in /etc/tx5dr/ssl/cert-info.env"
+    echo "  3. Run: sudo systemctl reload nginx"
+}
+
+cmd_ssl_status() {
+    load_config
+    echo ""
+    echo -e "${_BOLD}SSL Certificate Status${_NC}"
+    echo "─────────────────────────────────────"
+
+    local ssl_dir="${SSL_DIR:-/etc/tx5dr/ssl}"
+    if [[ ! -f "$ssl_dir/server.crt" ]] || [[ ! -f "$ssl_dir/server.key" ]]; then
+        echo -e "  Status:     ${_RED}not configured${_NC}"
+        echo -e "  ${_DIM}Run: sudo tx5dr doctor --fix${_NC}"
+        echo ""
+        return
+    fi
+
+    local mode="unknown"
+    [[ -f "$ssl_dir/cert-info.env" ]] && mode=$(grep "TX5DR_SSL_MODE=" "$ssl_dir/cert-info.env" 2>/dev/null | cut -d= -f2 || true)
+    echo -e "  Mode:       ${mode}"
+    echo -e "  Cert:       $ssl_dir/server.crt"
+    echo -e "  Key:        $ssl_dir/server.key"
+
+    # Certificate details
+    local subject valid_from valid_to fingerprint san_display
+    subject=$(openssl x509 -subject -noout -in "$ssl_dir/server.crt" 2>/dev/null | sed 's/^subject=//' || true)
+    valid_from=$(openssl x509 -startdate -noout -in "$ssl_dir/server.crt" 2>/dev/null | cut -d= -f2 || true)
+    valid_to=$(openssl x509 -enddate -noout -in "$ssl_dir/server.crt" 2>/dev/null | cut -d= -f2 || true)
+    fingerprint=$(openssl x509 -fingerprint -sha256 -noout -in "$ssl_dir/server.crt" 2>/dev/null | cut -d= -f2 || true)
+    san_display=$(openssl x509 -ext subjectAltName -noout -in "$ssl_dir/server.crt" 2>/dev/null | tail -1 | sed 's/^[[:space:]]*//' || true)
+
+    echo -e "  Subject:    ${subject}"
+    echo -e "  Valid:      ${valid_from} → ${valid_to}"
+    [[ -n "$fingerprint" ]] && echo -e "  SHA-256:    ${fingerprint}"
+    [[ -n "$san_display" ]] && echo -e "  SAN:        ${san_display}"
+
+    if check_ssl_cert_validity; then
+        echo -e "  Validity:   ${_GREEN}valid${_NC}"
+    else
+        echo -e "  Validity:   ${_RED}expired or expiring soon${_NC}"
+    fi
+
+    if check_nginx_ssl_block; then
+        echo -e "  nginx:      ${_GREEN}HTTPS block present (port ${HTTPS_PORT:-8443})${_NC}"
+    else
+        echo -e "  nginx:      ${_YELLOW}HTTPS block missing${_NC}"
+    fi
+
+    echo ""
+    if [[ "$mode" == "self-signed" ]]; then
+        echo -e "  ${_DIM}$(msg SSL_BROWSER_WARNING)${_NC}"
+        echo ""
+        echo -e "  ${_DIM}$(msg SSL_REPLACE_HINT)${_NC}"
+    fi
+    echo ""
+}
+
+cmd_ssl_renew_internal() {
+    require_root
+    load_config
+
+    if ! check_ssl_cert_is_self_signed && check_ssl_cert_files; then
+        log_error "Cannot renew: certificate is not self-signed (mode is custom)."
+        log_info "Replace /etc/tx5dr/ssl/server.crt and server.key manually."
+        return 1
+    fi
+
+    log_info "$(msg SSL_GENERATING)"
+    if generate_self_signed_cert; then
+        log_ok "$(msg SSL_RENEWED)"
+        systemctl reload nginx 2>/dev/null || true
+    else
+        log_error "Failed to generate certificate."
+        return 1
+    fi
+}
+
+cmd_ssl() {
+    local action="${1:-status}"
+    case "$action" in
+        status)
+            cmd_ssl_status
+            ;;
+        renew)
+            if [[ $EUID -ne 0 ]]; then
+                exec sudo "$0" __ssl_renew
+            fi
+            "$0" __ssl_renew
+            ;;
+        --help|-h|help)
+            cmd_ssl_help
+            ;;
+        *)
+            log_error "Unknown ssl action: $action"
+            cmd_ssl_help
+            return 1
+            ;;
+    esac
+}
+
 cmd_logs() {
     case "${1:-}" in
         --nginx)
@@ -593,6 +746,7 @@ cmd_help() {
     echo "  token    Show admin token (--reset to regenerate)"
     echo "  update   Download and install latest nightly build"
     echo "  doctor   Run full environment diagnostics (--fix to auto-repair)"
+    echo "  ssl      Show SSL certificate status (renew to regenerate)"
     echo "  livekit-creds     Show or rotate managed LiveKit credentials"
     echo "  enable-livekit    Install and enable LiveKit (optional)"
     echo "  disable-livekit   Disable LiveKit (switch to ws-compat mode)"
@@ -612,9 +766,11 @@ case "${1:-help}" in
     token)   cmd_token "${2:-}" ;;
     update)  cmd_update ;;
     doctor)  cmd_doctor "${2:-}" ;;
+    ssl)     cmd_ssl "${2:-}" ;;
     livekit-creds) cmd_livekit_creds "${2:-}" ;;
     logs)    cmd_logs "${2:-}" ;;
     __doctor_fix) cmd_doctor_fix_internal ;;
+    __ssl_renew) cmd_ssl_renew_internal ;;
     __rotate_livekit_creds) cmd_livekit_creds_rotate_internal ;;
     enable)
         sudo systemctl enable tx5dr

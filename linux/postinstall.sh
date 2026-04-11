@@ -151,6 +151,38 @@ if [[ -f "$NGINX_TEMPLATE" ]]; then
     fi
 fi
 
+# ── SSL certificate (self-signed, for HTTPS on port 8443) ──────────────────
+HTTPS_PORT="${TX5DR_HTTPS_PORT:-8443}"
+
+if [[ "$SHARED_LIB_READY" == "1" ]]; then
+    SSL_DIR="${TX5DR_SSL_DIR:-/etc/tx5dr/ssl}"
+    SSL_CERT="$SSL_DIR/server.crt"
+    SSL_KEY="$SSL_DIR/server.key"
+
+    if [[ ! -f "$SSL_CERT" ]] || [[ ! -f "$SSL_KEY" ]]; then
+        if generate_self_signed_cert; then
+            _msg "Generated self-signed SSL certificate: $SSL_DIR" \
+                 "已生成自签名 SSL 证书: $SSL_DIR"
+        else
+            _msg "WARNING: failed to generate self-signed SSL certificate." \
+                 "警告: 自签名 SSL 证书生成失败。"
+        fi
+    fi
+
+    # Patch nginx config with HTTPS server block if not already present
+    if [[ -f "$NGINX_CONF" ]] && [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
+        if ! check_nginx_ssl_block 2>/dev/null; then
+            if fix_nginx_ssl_config; then
+                _msg "Added HTTPS server block to nginx config (port $HTTPS_PORT)" \
+                     "已在 nginx 配置中添加 HTTPS 服务块（端口 $HTTPS_PORT）"
+            else
+                _msg "WARNING: failed to add HTTPS server block to nginx config." \
+                     "警告: 向 nginx 配置添加 HTTPS 服务块失败。"
+            fi
+        fi
+    fi
+fi
+
 # ── LiveKit config (conditional: only if binary is installed) ─────────────
 _livekit_binary_present=false
 if [[ "$SHARED_LIB_READY" == "1" ]] && [[ -x "$(get_livekit_binary_path 2>/dev/null)" ]]; then
@@ -204,12 +236,14 @@ if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enfor
     if ! command -v semanage &>/dev/null; then
         dnf install -y policycoreutils-python-utils >/dev/null 2>&1 || true
     fi
-    # Allow nginx to bind to the configured port
+    # Allow nginx to bind to the configured ports
     if command -v semanage &>/dev/null; then
-        if ! semanage port -l 2>/dev/null | grep -w http_port_t | grep -qw "$LISTEN_PORT"; then
-            semanage port -a -t http_port_t -p tcp "$LISTEN_PORT" 2>/dev/null || \
-            semanage port -m -t http_port_t -p tcp "$LISTEN_PORT" 2>/dev/null || true
-        fi
+        for _port in "$LISTEN_PORT" "$HTTPS_PORT"; do
+            if ! semanage port -l 2>/dev/null | grep -w http_port_t | grep -qw "$_port"; then
+                semanage port -a -t http_port_t -p tcp "$_port" 2>/dev/null || \
+                semanage port -m -t http_port_t -p tcp "$_port" 2>/dev/null || true
+            fi
+        done
     fi
     # Allow nginx to proxy to backend
     setsebool -P httpd_can_network_connect 1 2>/dev/null || true
@@ -276,3 +310,15 @@ else
 fi
 _msg "Web UI will be available at http://localhost:${LISTEN_PORT}" \
      "Web UI 地址: http://localhost:${LISTEN_PORT}"
+SSL_DIR="${TX5DR_SSL_DIR:-/etc/tx5dr/ssl}"
+if [[ -f "$SSL_DIR/server.crt" ]] && [[ -f "$SSL_DIR/server.key" ]]; then
+    _msg "HTTPS (self-signed): https://localhost:${HTTPS_PORT}" \
+         "HTTPS（自签名）: https://localhost:${HTTPS_PORT}"
+    echo ""
+    _msg "Note: Your browser will show a security warning for the self-signed certificate." \
+         "注意: 浏览器会对自签名证书显示安全警告，这是正常的。"
+    _msg "      Click 'Advanced' → 'Proceed' to continue." \
+         "      点击「高级」→「继续前往」即可。"
+    _msg "      To use your own certificate, see: tx5dr ssl --help" \
+         "      使用自己的证书: tx5dr ssl --help"
+fi
