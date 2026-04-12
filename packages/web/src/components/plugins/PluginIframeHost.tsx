@@ -5,6 +5,7 @@ import { ConnectionContext } from '../../store/radio/contexts';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { createLogger } from '../../utils/logger';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
+import { PluginIframeRequestGate } from './PluginIframeRequestGate';
 
 const logger = createLogger('PluginIframeHost');
 
@@ -37,6 +38,24 @@ interface PluginPagePushPayload {
   data?: unknown;
 }
 
+type DeferredIframeRequest =
+  | {
+    kind: 'invoke';
+    requestId: string;
+    action: string;
+    data: unknown;
+  }
+  | {
+    kind: 'store';
+    requestId: string;
+    payload: Record<string, unknown>;
+  }
+  | {
+    kind: 'file';
+    requestId: string;
+    payload: Record<string, unknown>;
+  };
+
 export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   pluginName,
   pageId,
@@ -51,7 +70,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   const connection = useContext(ConnectionContext);
   const radioService = connection?.state.radioService ?? null;
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const lockedPageSessionIdRef = useRef<string | null>(null);
+  const requestGateRef = useRef(new PluginIframeRequestGate<DeferredIframeRequest>());
   const [height, setHeight] = useState(minHeight);
   const [loading, setLoading] = useState(true);
   const [pageSessionId, setPageSessionId] = useState<string | null>(null);
@@ -79,35 +98,20 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
     iframeRef.current?.contentWindow?.postMessage(msg, '*');
   }, []);
 
-  const setLockedPageSessionId = useCallback((nextPageSessionId: string | null) => {
-    lockedPageSessionIdRef.current = nextPageSessionId;
-    setPageSessionId(nextPageSessionId);
-  }, []);
-
-  const requireLockedPageSessionId = useCallback((requestId: string): string | null => {
-    const lockedPageSessionId = lockedPageSessionIdRef.current;
-    if (!lockedPageSessionId) {
-      postToIframe({
-        type: 'tx5dr:response',
-        requestId,
-        error: 'Page session is not ready',
-      });
-      return null;
-    }
-    return lockedPageSessionId;
+  const respondToIframeError = useCallback((requestId: string, error: string) => {
+    postToIframe({
+      type: 'tx5dr:response',
+      requestId,
+      error,
+    });
   }, [postToIframe]);
 
-  // Handle invoke requests by forwarding to the server
-  const handleInvoke = useCallback(async (
+  const forwardInvokeRequest = useCallback(async (
     action: string,
     data: unknown,
     requestId: string,
+    lockedPageSessionId: string,
   ) => {
-    const lockedPageSessionId = requireLockedPageSessionId(requestId);
-    if (!lockedPageSessionId) {
-      return;
-    }
-
     try {
       const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-invoke`, {
         method: 'POST',
@@ -127,18 +131,13 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
       const message = err instanceof Error ? err.message : 'Unknown error';
       postToIframe({ type: 'tx5dr:response', requestId, error: message });
     }
-  }, [pluginName, pageId, postToIframe, requireLockedPageSessionId]);
+  }, [pluginName, pageId, postToIframe]);
 
-  // Handle store operations by forwarding to the server
-  const handleStoreRequest = useCallback(async (
+  const forwardStoreRequest = useCallback(async (
     payload: Record<string, unknown>,
     requestId: string,
+    lockedPageSessionId: string,
   ) => {
-    const lockedPageSessionId = requireLockedPageSessionId(requestId);
-    if (!lockedPageSessionId) {
-      return;
-    }
-
     try {
       const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-store`, {
         method: 'POST',
@@ -166,17 +165,13 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
       const message = err instanceof Error ? err.message : 'Unknown error';
       postToIframe({ type: 'tx5dr:response', requestId, error: message });
     }
-  }, [pluginName, pageId, postToIframe, requireLockedPageSessionId]);
+  }, [pluginName, pageId, postToIframe]);
 
-  const handleFileRequest = useCallback(async (
+  const forwardFileRequest = useCallback(async (
     payload: Record<string, unknown>,
     requestId: string,
+    lockedPageSessionId: string,
   ) => {
-    const lockedPageSessionId = requireLockedPageSessionId(requestId);
-    if (!lockedPageSessionId) {
-      return;
-    }
-
     try {
       const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-files`, {
         method: 'POST',
@@ -205,7 +200,69 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
       const message = err instanceof Error ? err.message : 'Unknown error';
       postToIframe({ type: 'tx5dr:response', requestId, error: message });
     }
-  }, [pluginName, pageId, postToIframe, requireLockedPageSessionId]);
+  }, [pluginName, pageId, postToIframe]);
+
+  const dispatchDeferredRequest = useCallback((
+    request: DeferredIframeRequest,
+    lockedPageSessionId: string,
+  ) => {
+    switch (request.kind) {
+      case 'invoke':
+        void forwardInvokeRequest(request.action, request.data, request.requestId, lockedPageSessionId);
+        break;
+      case 'store':
+        void forwardStoreRequest(request.payload, request.requestId, lockedPageSessionId);
+        break;
+      case 'file':
+        void forwardFileRequest(request.payload, request.requestId, lockedPageSessionId);
+        break;
+    }
+  }, [forwardFileRequest, forwardInvokeRequest, forwardStoreRequest]);
+
+  const setLockedPageSessionId = useCallback((nextPageSessionId: string | null) => {
+    if (!nextPageSessionId) {
+      requestGateRef.current.unlock();
+      setPageSessionId(null);
+      return;
+    }
+
+    const pendingRequests = requestGateRef.current.lock(nextPageSessionId);
+    setPageSessionId(nextPageSessionId);
+    for (const request of pendingRequests) {
+      dispatchDeferredRequest(request, nextPageSessionId);
+    }
+  }, [dispatchDeferredRequest]);
+
+  const handleInvoke = useCallback((
+    action: string,
+    data: unknown,
+    requestId: string,
+  ) => {
+    requestGateRef.current.dispatchOrQueue(
+      { kind: 'invoke', action, data, requestId },
+      dispatchDeferredRequest,
+    );
+  }, [dispatchDeferredRequest]);
+
+  const handleStoreRequest = useCallback((
+    payload: Record<string, unknown>,
+    requestId: string,
+  ) => {
+    requestGateRef.current.dispatchOrQueue(
+      { kind: 'store', payload, requestId },
+      dispatchDeferredRequest,
+    );
+  }, [dispatchDeferredRequest]);
+
+  const handleFileRequest = useCallback((
+    payload: Record<string, unknown>,
+    requestId: string,
+  ) => {
+    requestGateRef.current.dispatchOrQueue(
+      { kind: 'file', payload, requestId },
+      dispatchDeferredRequest,
+    );
+  }, [dispatchDeferredRequest]);
 
   // Listen for postMessage from the iframe
   useEffect(() => {
@@ -263,6 +320,12 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
     const nextPageSessionId = typeof iframeWindow?.__TX5DR_PAGE_SESSION_ID__ === 'string'
       ? iframeWindow.__TX5DR_PAGE_SESSION_ID__
       : null;
+    if (!nextPageSessionId) {
+      const pendingRequests = requestGateRef.current.dropPending();
+      for (const request of pendingRequests) {
+        respondToIframeError(request.requestId, 'Page session is not ready');
+      }
+    }
     setLockedPageSessionId(nextPageSessionId);
     postToIframe({
       type: 'tx5dr:init',
@@ -270,7 +333,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
       theme: getTheme(),
       locale: i18n.language,
     });
-  }, [postToIframe, params, getTheme, i18n.language, setLockedPageSessionId]);
+  }, [postToIframe, params, getTheme, i18n.language, respondToIframeError, setLockedPageSessionId]);
 
   // Observe theme changes on <html> element and forward to iframe
   useEffect(() => {
@@ -289,6 +352,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
 
   useEffect(() => {
     setLoading(true);
+    requestGateRef.current.dropPending();
     setLockedPageSessionId(null);
   }, [iframeSrc, setLockedPageSessionId]);
 

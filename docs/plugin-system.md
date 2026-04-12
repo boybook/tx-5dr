@@ -594,8 +594,28 @@ interface UIBridge {
   registerPageHandler(handler: PluginUIHandler): void;
 
   /**
+   * 主动推送消息到指定页面 session
+   * 当插件已知 pageSessionId 时，优先使用这个接口
+   */
+  pushToSession(pageSessionId: string, action: string, data?: unknown): void;
+
+  /**
+   * 列出当前插件实例、当前 pageId 下的活跃 session
+   * 适合后台任务/同步完成后批量通知所有打开中的页面
+   */
+  listActivePageSessions(pageId: string): Array<{
+    sessionId: string;
+    pageId: string;
+    resource?: {
+      kind: 'callsign' | 'operator';
+      value: string;
+    };
+  }>;
+
+  /**
    * 主动推送消息到 iframe 页面
    * 页面通过 bridge.onPush(action, callback) 接收
+   * 仅当当前插件实例下该 pageId 恰好只有一个活跃 session 时可用
    */
   pushToPage(pageId: string, action: string, data?: unknown): void;
 }
@@ -612,9 +632,21 @@ interface PluginUIHandler {
         role: 'viewer' | 'operator' | 'admin';
         operatorIds: string[];
       };
+      instanceTarget:
+        | { kind: 'global' }
+        | { kind: 'operator'; operatorId: string };
       resource?: {
         kind: 'callsign' | 'operator';
         value: string;
+      };
+      page: {
+        sessionId: string;
+        pageId: string;
+        resource?: {
+          kind: 'callsign' | 'operator';
+          value: string;
+        };
+        push(action: string, data?: unknown): void;
       };
     },
   ): Promise<unknown>;
@@ -622,7 +654,13 @@ interface PluginUIHandler {
 ```
 
 `panelId` 必须与 `PluginDefinition.panels[].id` 匹配。数据通过 `pluginData` 事件推送到前端对应面板。
-`requestContext` 由宿主基于页面 session 注入；插件不应再信任 iframe 自报的 `callsign` / `operatorId` 做鉴权。
+`requestContext` 由宿主基于页面 session 注入；插件不应再信任 iframe 自报的 `callsign` / `operatorId` / `pageSessionId` 做鉴权。
+其中：
+
+- `requestContext.instanceTarget` 表示本次页面请求最终命中的插件实例（global 或某个 operator 实例）
+- `requestContext.page.push()` 是对当前 session 的便捷封装，等价于 `ctx.ui.pushToSession(requestContext.page.sessionId, ...)`
+- `ctx.ui.pushToSession()` 只允许推送到当前插件实例真实拥有的 session；未知 session 或跨实例 session 会直接报错
+- `ctx.ui.pushToPage()` 现在只是兼容辅助接口：若同一插件实例下该 `pageId` 同时打开了多个页面，会抛出 `explicit_page_session_required`
 
 ### 4.3 OperatorControl
 
@@ -1242,6 +1280,27 @@ tx5dr.onPush('dataUpdated', function(data) {
 });
 ```
 
+当插件需要更精确地控制推送目标时，推荐改用 session 级 API：
+
+```javascript
+ctx.ui.registerPageHandler({
+  async onMessage(pageId, action, data, requestContext) {
+    if (action === 'save') {
+      await saveSomething(data);
+
+      // 只回推当前发起请求的这个页面 session
+      requestContext.page.push('saved', { ok: true });
+      return { ok: true };
+    }
+  },
+});
+
+// 后台任务/定时器：批量通知当前实例下所有打开中的页面
+for (const session of ctx.ui.listActivePageSessions('dashboard')) {
+  ctx.ui.pushToSession(session.sessionId, 'refresh', { reason: 'timer' });
+}
+```
+
 #### CSS Design Tokens
 
 宿主自动注入 CSS 变量，iframe 页面无需引入额外样式文件即可适配明暗主题：
@@ -1290,9 +1349,13 @@ observer.observe(document.body);
 
 - `GET /api/plugins/:name/ui/*`：返回静态页面，并自动注入 Bridge SDK
 - `POST /api/plugins/:name/ui-invoke`：将 `tx5dr.invoke()` 转发给插件页处理器
+- `POST /api/plugins/:name/ui-store`：处理 `tx5dr.store*()` 请求
+- `POST /api/plugins/:name/ui-files`：处理 `tx5dr.file*()` 请求
+- `POST /api/plugins/:name/ui-session/heartbeat`：刷新页面 session TTL
 
 其中 iframe 静态页支持通过 query token 鉴权（`auth_token`，兼容 `token`）；`ui-invoke` 走常规 Bearer Token。
 宿主在页面加载时创建并锁定 `pageSessionId`；后续 invoke / store / file / heartbeat 都由宿主持有该 session，iframe 自报的 session 不作为可信输入。
+这几个路由都属于宿主固定桥接层，插件页面应通过 Bridge SDK 调用，不应自行手写 fetch 并伪造 session。
 
 ### 4.10 文件存储
 
@@ -1323,6 +1386,13 @@ iframe 页面里的 `tx5dr.file*` 与运行时 `ctx.files` 指向同一物理文
 
 在 iframe 页面中可通过 Bridge SDK 的 `tx5dr.fileUpload()` / `tx5dr.fileRead()` 等方法间接访问。
 `tx5dr.store*` 则是独立的 page-scoped KV，作用域同样为 `instanceTarget + bound resource + pageId`，不会自动映射到运行时的 `ctx.store`。
+
+可将两者理解为：
+
+- `ctx.store.*` / `ctx.files`：插件运行时能力，由插件实例直接使用
+- `tx5dr.store*` / `tx5dr.file*`：iframe 页面能力，由宿主按页面 session 收口后的受限访问
+
+两套能力共享同一个插件数据目录，但 iframe 页面侧的作用域更窄，始终以 `instanceTarget + bound resource + pageId` 为边界。
 
 ### 4.11 日志同步 Provider
 
@@ -2064,6 +2134,9 @@ Pipeline 额外安全网
 | `GET` | `/api/plugins/_bridge/bridge.js` | Bridge SDK 脚本 |
 | `GET` | `/api/plugins/_bridge/tokens.css` | CSS Design Tokens 样式表 |
 | `POST` | `/api/plugins/:name/ui-invoke` | iframe invoke 请求转发 |
+| `POST` | `/api/plugins/:name/ui-store` | iframe `tx5dr.store*()` 桥接接口（宿主按 session 校验并收口作用域） |
+| `POST` | `/api/plugins/:name/ui-files` | iframe `tx5dr.file*()` 桥接接口（宿主按 session 校验并收口作用域） |
+| `POST` | `/api/plugins/:name/ui-session/heartbeat` | 刷新页面 session 存活时间（宿主内部使用） |
 | `GET` | `/api/plugins/sync-providers` | 获取日志同步 Provider 列表 |
 | `GET` | `/api/plugins/sync-providers/configured?callsign=...` | 获取指定呼号的 Provider 配置状态 |
 | `POST` | `/api/plugins/sync-providers/:providerId/test-connection` | 测试同步连接 |
@@ -2084,6 +2157,12 @@ Pipeline 额外安全网
 - 资源级校验：看 `ui.pages[].resourceBinding`
 
 因此“能否访问插件页面/同步能力”不再只由统一 `/api/plugins` 前缀角色控制，而是由宿主按路由和资源粒度判定。
+
+补充约束：
+
+- `ui-store` / `ui-files` / `ui-session/heartbeat` 都不是插件自定义业务路由，而是宿主固定桥接能力
+- 宿主会先校验 `pageId + pageSessionId + accessScope + resourceBinding`，再把请求收口到当前页面 session 的真实实例范围
+- 因此 iframe 页面即使主动篡改 `callsign`、`operatorId` 或伪造其他 session，也无法越过宿主切换到别的插件实例/页面作用域
 
 ### WebSocket 事件
 
