@@ -16,11 +16,11 @@ import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from
 import type { LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
 import {
   type MeterDecodeStrategy,
-  genericHamlibStrengthToLevelMeterReading,
-  hamlibStrengthToLevelMeterReading,
   resolveHamlibMeterDecodeStrategy,
-  yaesuRawstrToLevelMeterReading,
 } from './meterUtils.js';
+import type { RigMetadata, MeterReadContext } from './meter/types.js';
+import { HamlibMeterReader } from './meter/HamlibMeterReader.js';
+import { resolveMeterProfile, defaultHamlibProfile } from './meter/profiles/index.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
@@ -47,11 +47,7 @@ import {
 
 const logger = createLogger('HamlibConnection');
 
-type RigMetadata = {
-  rigModel: number;
-  mfgName: string;
-  modelName: string;
-};
+// RigMetadata is imported from meter/types.ts
 
 let rigMetadataCachePromise: Promise<Map<number, RigMetadata>> | null = null;
 
@@ -112,9 +108,6 @@ function normalizeModeName(mode: string): string {
   return mode.trim().toUpperCase();
 }
 
-function clampPercent(value: number): number {
-  return Math.min(100, Math.max(0, value));
-}
 
 function normalizePowerStateCode(code: number): string {
   switch (code) {
@@ -249,6 +242,11 @@ export class HamlibConnection
    * 当前连接的 Hamlib rig 元数据（仅 serial 模式可用）。
    */
   private meterRigMetadata: RigMetadata | null = null;
+
+  /**
+   * Meter reader instance — delegates to the matched MeterProfile.
+   */
+  private meterReader: HamlibMeterReader | null = null;
 
   /**
    * 首次诊断样本日志只输出一次，避免持续双读电平表。
@@ -498,6 +496,7 @@ export class HamlibConnection
     this.supportedLevels.clear();
     this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({ supportedLevels: [] });
     this.meterRigMetadata = null;
+    this.meterReader = null;
     this.hasLoggedMeterStrategySample = false;
     this.supportedModes.clear();
     this.supportedFunctions.clear();
@@ -1082,6 +1081,7 @@ export class HamlibConnection
     if (!config) {
       this.meterRigMetadata = null;
       this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({ supportedLevels: this.supportedLevels });
+      this.meterReader = new HamlibMeterReader(defaultHamlibProfile, defaultHamlibProfile);
       return;
     }
 
@@ -1091,16 +1091,33 @@ export class HamlibConnection
       this.meterRigMetadata = null;
     }
 
+    // Infer manufacturer from RAWSTR support for network mode where metadata is unavailable.
+    const inferredManufacturer = this.meterRigMetadata?.mfgName ?? null;
+    const effectiveManufacturer = inferredManufacturer
+      ?? (this.supportedLevels.has('RAWSTR') ? 'YAESU' : null);
+
     this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({
-      manufacturer: this.meterRigMetadata?.mfgName ?? null,
+      manufacturer: effectiveManufacturer,
       supportedLevels: this.supportedLevels,
     });
     this.hasLoggedMeterStrategySample = false;
 
+    // Resolve meter profile and create reader.
+    const profileMatchCtx = {
+      manufacturer: effectiveManufacturer,
+      modelName: this.meterRigMetadata?.modelName ?? null,
+      rigModel: this.meterRigMetadata?.rigModel ?? null,
+      supportedLevels: this.supportedLevels as ReadonlySet<string>,
+      connectionType: this.currentConfig?.type === 'serial' ? 'serial' as const : 'network' as const,
+    };
+    const profile = resolveMeterProfile(profileMatchCtx);
+    this.meterReader = new HamlibMeterReader(profile, defaultHamlibProfile);
+
     logger.info('Meter decode strategy selected', {
       strategy: this.meterDecodeStrategy.label,
       sourceLevel: this.meterDecodeStrategy.sourceLevel,
-      manufacturer: this.meterRigMetadata?.mfgName ?? null,
+      meterProfile: profile.name,
+      manufacturer: effectiveManufacturer,
       modelName: this.meterRigMetadata?.modelName ?? null,
       rigModel: this.meterRigMetadata?.rigModel ?? null,
     });
@@ -2577,6 +2594,7 @@ export class HamlibConnection
       this.supportedLevels.clear();
       this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({ supportedLevels: [] });
       this.meterRigMetadata = null;
+      this.meterReader = null;
       this.hasLoggedMeterStrategySample = false;
       this.supportedModes.clear();
       this.supportedFunctions.clear();
@@ -2620,18 +2638,18 @@ export class HamlibConnection
   }
 
   /**
-   * 轮询数值表数据
+   * 轮询数值表数据 — 委托给 HamlibMeterReader。
    */
   private async pollMeters(): Promise<void> {
     try {
       const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
         this.ensureSession(activeSessionId);
-        if (!this.rig) {
+        if (!this.rig || !this.meterReader) {
           return;
         }
 
-        // 如果没有任何支持的 level，使用当前 VFO 读频做健康检查
-        const levelMeterSource = this.getSelectedLevelMeterSource();
+        // If no meters are supported at all, use a frequency read as health check.
+        const levelMeterSource = this.meterDecodeStrategy.sourceLevel;
         const hasAnyLevel = levelMeterSource !== null || this.supportedLevels.has('SWR')
           || this.supportedLevels.has('ALC')
           || this.supportedLevels.has('RFPOWER_METER')
@@ -2647,37 +2665,38 @@ export class HamlibConnection
           return;
         }
 
-        const strength = levelMeterSource !== null
-          ? await this.readMeterLevel(levelMeterSource)
-          : null;
-        const swr = this.supportedLevels.has('SWR')
-          ? await this.readMeterLevel('SWR')
-          : null;
-        const alc = this.supportedLevels.has('ALC')
-          ? await this.readMeterLevel('ALC')
-          : null;
-        const power = this.supportedLevels.has('RFPOWER_METER')
-          ? await this.readMeterLevel('RFPOWER_METER')
-          : null;
-        const powerWatts = this.supportedLevels.has('RFPOWER_METER_WATTS')
-          ? await this.readMeterLevel('RFPOWER_METER_WATTS')
-          : null;
+        // Build the read context and delegate to the meter reader.
+        const ctx: MeterReadContext = {
+          getLevel: async (level: string) => {
+            try {
+              return await this.rig!.getLevel(level as any);
+            } catch {
+              return null;
+            }
+          },
+          sendRaw: (data: Buffer, replyMaxLen: number, terminator?: Buffer) =>
+            this.rig!.sendRaw(data, replyMaxLen, terminator),
+          currentFrequencyHz: this.currentFrequencyHz,
+          supportedLevels: this.supportedLevels,
+          rigMetadata: this.meterRigMetadata,
+          txPowerMaxWatts: this.resolveCurrentTxPowerMaxWatts(),
+          levelDecodeStrategy: this.meterDecodeStrategy,
+        };
 
-        if (strength === null && swr === null && alc === null && power === null && powerWatts === null) {
+        const meterData = await this.meterReader.readAll(ctx);
+
+        if (meterData.level === null && meterData.swr === null
+          && meterData.alc === null && meterData.power === null) {
           return;
         }
 
-        const level = strength !== null ? this.convertLevelReading(strength) : null;
-        if (strength !== null && level !== null) {
-          await this.maybeLogMeterStrategySample(strength, level);
+        // Diagnostic: log first Yaesu RAWSTR sample for cross-referencing.
+        if (meterData.level !== null && levelMeterSource !== null) {
+          const rawValue = await ctx.getLevel(levelMeterSource);
+          if (rawValue !== null) {
+            await this.maybeLogMeterStrategySample(rawValue, meterData.level);
+          }
         }
-
-        const meterData: MeterData = {
-          level,
-          swr: swr !== null ? this.convertSWR(swr) : null,
-          alc: alc !== null ? this.convertALC(alc) : null,
-          power: (power !== null || powerWatts !== null) ? this.convertPower(power, powerWatts) : null,
-        };
 
         this.lastSuccessfulOperation = Date.now();
         this.emit('meterData', meterData);
@@ -2692,27 +2711,6 @@ export class HamlibConnection
     }
   }
 
-  private async readMeterLevel(level: string): Promise<number | null> {
-    try {
-      return await this.rig!.getLevel(level as any);
-    } catch (error) {
-      logger.debug(`Meter level read failed for ${level}: ${this.getErrorMessage(error)}`);
-      return null;
-    }
-  }
-
-  private convertLevelReading(rawValue: number): LevelMeterReading {
-    switch (this.meterDecodeStrategy.name) {
-      case 'icom':
-        return hamlibStrengthToLevelMeterReading(rawValue, this.currentFrequencyHz);
-      case 'yaesu':
-        return yaesuRawstrToLevelMeterReading(rawValue, this.currentFrequencyHz);
-      case 'generic':
-      default:
-        return genericHamlibStrengthToLevelMeterReading(rawValue, this.currentFrequencyHz);
-    }
-  }
-
   private async maybeLogMeterStrategySample(primaryValue: number, level: LevelMeterReading): Promise<void> {
     if (this.hasLoggedMeterStrategySample || this.meterDecodeStrategy.name !== 'yaesu') {
       return;
@@ -2720,17 +2718,23 @@ export class HamlibConnection
 
     this.hasLoggedMeterStrategySample = true;
 
-    if (!this.supportedLevels.has('STRENGTH')) {
+    if (!this.supportedLevels.has('STRENGTH') || !this.rig) {
       return;
     }
 
-    const fallbackStrength = await this.readMeterLevel('STRENGTH');
+    let fallbackStrength: number | null = null;
+    try {
+      fallbackStrength = await this.rig.getLevel('STRENGTH' as any);
+    } catch {
+      return;
+    }
     if (fallbackStrength === null) {
       return;
     }
 
     logger.info('Yaesu meter sample captured', {
       strategy: this.meterDecodeStrategy.label,
+      meterProfile: this.meterReader?.getProfileName() ?? null,
       manufacturer: this.meterRigMetadata?.mfgName ?? null,
       modelName: this.meterRigMetadata?.modelName ?? null,
       rigModel: this.meterRigMetadata?.rigModel ?? null,
@@ -2738,75 +2742,6 @@ export class HamlibConnection
       strength: fallbackStrength,
       formatted: level.formatted,
     });
-  }
-
-  /**
-   * 将 Hamlib SWR 转换为 SWR 数据
-   * @param swrValue - Hamlib 返回的 SWR 值（1.0-10.0）
-   */
-  private convertSWR(swrValue: number): { raw: number; swr: number; alert: boolean } {
-    // raw: 模拟 0-255 范围（SWR 10 对应 255）
-    const raw = Math.round(Math.min(swrValue / 10, 1) * 255);
-
-    // alert: SWR > 2.0 视为异常
-    const alert = swrValue > 2.0;
-
-    return { raw, swr: swrValue, alert };
-  }
-
-  /**
-   * 将 Hamlib ALC 转换为 ALC 数据
-   * @param alcValue - Hamlib 返回的 ALC 值（0.0-1.0）
-   */
-  private convertALC(alcValue: number): { raw: number; percent: number; alert: boolean } {
-    // raw: 0.0-1.0 映射到 0-255
-    const raw = Math.round(alcValue * 255);
-
-    // percent: 0.0-1.0 映射到 0-100
-    const percent = alcValue * 100;
-
-    // alert: ALC at maximum (>= 100%) indicates true overload (clipped)
-    const alert = alcValue >= 1.0;
-
-    return { raw, percent, alert };
-  }
-
-  /**
-   * 将 Hamlib RFPOWER_METER / RFPOWER_METER_WATTS 转换为 Power 数据
-   * @param meterValue - RFPOWER_METER 返回值（标准 0.0-1.0 百分比，部分电台可能返回瓦数）
-   * @param meterWattsValue - RFPOWER_METER_WATTS 返回值（绝对瓦数，仅部分电台支持）
-   */
-  private convertPower(
-    meterValue: number | null,
-    meterWattsValue: number | null
-  ): { raw: number; percent: number; watts: number | null; maxWatts: number | null } {
-    const maxWatts = this.resolveCurrentTxPowerMaxWatts();
-
-    // 优先使用 RFPOWER_METER_WATTS（绝对瓦数，可信）
-    if (meterWattsValue !== null) {
-      const percent = maxWatts && maxWatts > 0
-        ? clampPercent((meterWattsValue / maxWatts) * 100)
-        : (meterValue !== null && meterValue <= 1.0 ? clampPercent(meterValue * 100) : 0);
-      const raw = Math.round(percent * 2.55);
-      return { raw, percent, watts: meterWattsValue, maxWatts };
-    }
-
-    // 仅有 RFPOWER_METER
-    if (meterValue !== null) {
-      if (meterValue > 1.0) {
-        // 异常：RFPOWER_METER 返回了瓦数而非百分比（如 IC-705 Hamlib 后端）
-        const percent = maxWatts && maxWatts > 0
-          ? clampPercent((meterValue / maxWatts) * 100)
-          : 0;
-        const raw = Math.round(percent * 2.55);
-        return { raw, percent, watts: meterValue, maxWatts };
-      }
-      const percent = clampPercent(meterValue * 100);
-      const raw = Math.round(meterValue * 255);
-      return { raw, percent, watts: null, maxWatts };
-    }
-
-    return { raw: 0, percent: 0, watts: null, maxWatts };
   }
 
   /**
