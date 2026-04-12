@@ -238,6 +238,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   readonly id = 'lotw';
   readonly displayName = 'LoTW';
   readonly color = 'success' as const;
+  readonly accessScope = 'operator' as const;
   readonly settingsPageId = 'settings';
   readonly actions: SyncAction[] = [
     { id: 'download', label: 'Download', icon: 'download', pageId: 'download-wizard' },
@@ -482,12 +483,11 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     if (!config) {
       return { uploaded: 0, skipped: 0, failed: 0, errors: ['LoTW not configured'] };
     }
+    const logbook = this.ctx.logbook.forCallsign(callsign);
 
-    // Query all QSOs and filter out already-uploaded ones
-    const since = config.lastUploadTime ?? (Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const allQsos = await this.ctx.logbook.queryQSOs({
-      timeRange: { start: since, end: Date.now() },
-    });
+    // Global sync plugins must scan the whole logbook so historical unsent
+    // records are not silently skipped after a fresh migration/reset.
+    const allQsos = await logbook.queryQSOs({});
     const pendingQsos = allQsos.filter(q => q.lotwQslSent !== 'Y');
 
     if (pendingQsos.length === 0) {
@@ -524,7 +524,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     // Mark uploaded QSOs with LoTW QSL sent status
     for (const qsoId of uploadedQsoIds) {
       try {
-        await this.ctx.logbook.updateQSO(qsoId, {
+        await logbook.updateQSO(qsoId, {
           lotwQslSent: 'Y',
           lotwQslSentDate: Date.now(),
         });
@@ -539,7 +539,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     // Update lastUploadTime
     if (uploaded > 0) {
       this.setConfig(callsign, { ...config, lastUploadTime: Date.now() });
-      this.ctx.logbook.notifyUpdated();
+      await logbook.notifyUpdated();
     }
 
     return {
@@ -555,6 +555,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     if (!config?.username || !config?.password) {
       return { downloaded: 0, matched: 0, updated: 0, errors: ['LoTW credentials not configured'] };
     }
+    const logbook = this.ctx.logbook.forCallsign(callsign);
 
     try {
       const sinceDate = options?.since
@@ -594,7 +595,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       for (const remote of remoteRecords) {
         try {
           // Fuzzy match: same callsign, time within 2 minutes
-          const candidates = await this.ctx.logbook.queryQSOs({
+          const candidates = await logbook.queryQSOs({
             callsign: remote.callsign,
             timeRange: {
               start: remote.startTime - TIME_TOLERANCE_MS,
@@ -611,14 +612,14 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
           if (localMatch) {
             // Update QSL confirmation status
-            await this.ctx.logbook.updateQSO(localMatch.id, {
+            await logbook.updateQSO(localMatch.id, {
               lotwQslReceived: 'Y',
               lotwQslReceivedDate: remote.lotwQslReceivedDate ?? Date.now(),
             });
             matched++;
           } else {
             // Import as new record
-            await this.ctx.logbook.addQSO(remote);
+            await logbook.addQSO(remote);
             imported++;
           }
         } catch (err) {
@@ -632,7 +633,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       // Update lastDownloadTime and notify
       if (matched > 0 || imported > 0) {
         this.setConfig(callsign, { ...config, lastDownloadTime: Date.now() });
-        this.ctx.logbook.notifyUpdated();
+        await logbook.notifyUpdated();
       }
 
       return {

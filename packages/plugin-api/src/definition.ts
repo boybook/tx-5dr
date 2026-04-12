@@ -5,6 +5,7 @@ import type {
   PluginPanelDescriptor,
   PluginPermission,
   PluginType,
+  PluginInstanceScope,
   PluginUIPageDescriptor,
 } from '@tx5dr/contracts';
 import type { PluginContext } from './context.js';
@@ -102,6 +103,14 @@ export interface PluginDefinition {
    *   do not own the core automation state machine.
    */
   type: PluginType;
+
+  /**
+   * Controls whether the host creates one instance per operator or a single
+   * shared instance for the whole station.
+   *
+   * Defaults to `operator` when omitted.
+   */
+  instanceScope?: PluginInstanceScope;
 
   /**
    * Human-readable summary shown in plugin management UIs.

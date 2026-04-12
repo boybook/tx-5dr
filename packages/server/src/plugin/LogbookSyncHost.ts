@@ -18,6 +18,7 @@ export interface LogbookSyncProviderInfo {
   icon?: string;
   color?: string;
   settingsPageId: string;
+  accessScope?: 'admin' | 'operator';
   actions?: SyncAction[];
 }
 
@@ -66,17 +67,35 @@ export class LogbookSyncHost {
     }
   }
 
-  /** Returns info about all registered providers for the frontend. */
-  getProviders(): LogbookSyncProviderInfo[] {
-    return Array.from(this.providers.values()).map(({ pluginName, provider }) => ({
+  private toProviderInfo(entry: RegisteredProvider): LogbookSyncProviderInfo {
+    const { pluginName, provider } = entry;
+    return {
       id: provider.id,
       pluginName,
       displayName: provider.displayName,
       icon: provider.icon,
       color: provider.color,
       settingsPageId: provider.settingsPageId,
+      accessScope: provider.accessScope ?? 'admin',
       actions: provider.actions,
-    }));
+    };
+  }
+
+  /** Returns info about all registered providers for the frontend. */
+  getProviders(accessScope?: 'admin' | 'operator'): LogbookSyncProviderInfo[] {
+    return Array.from(this.providers.values())
+      .map((entry) => this.toProviderInfo(entry))
+      .filter((provider) => {
+        if (accessScope !== 'operator') {
+          return true;
+        }
+        return provider.accessScope === 'operator';
+      });
+  }
+
+  getProviderInfo(providerId: string): LogbookSyncProviderInfo | null {
+    const entry = this.providers.get(providerId);
+    return entry ? this.toProviderInfo(entry) : null;
   }
 
   /** Tests the connection for a specific provider and callsign. */

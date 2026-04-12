@@ -4,6 +4,7 @@ import type { PluginDefinition } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import { WaveLogSyncProvider } from './provider.js';
+import { migrateLegacySyncConfig } from '../_shared/legacy-sync-migration.js';
 
 export const BUILTIN_WAVELOG_SYNC_PLUGIN_NAME = 'wavelog-sync';
 
@@ -24,6 +25,7 @@ export const wavelogSyncPlugin: PluginDefinition = {
   name: BUILTIN_WAVELOG_SYNC_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
+  instanceScope: 'global',
   description: 'Sync QSO records with a WaveLog server',
 
   permissions: ['network'],
@@ -35,11 +37,28 @@ export const wavelogSyncPlugin: PluginDefinition = {
         id: 'settings',
         title: 'WaveLog Settings',
         entry: 'settings.html',
+        accessScope: 'operator',
+        resourceBinding: 'callsign',
       },
     ],
   },
 
   async onLoad(ctx) {
+    await migrateLegacySyncConfig({
+      ctx,
+      pluginName: BUILTIN_WAVELOG_SYNC_PLUGIN_NAME,
+      providerKey: 'wavelog',
+      shouldMigrate: (legacyConfig) => !!legacyConfig.url || !!legacyConfig.apiKey || !!legacyConfig.stationId,
+      mapLegacyConfig: (_callsign, legacyConfig) => ({
+        url: typeof legacyConfig.url === 'string' ? legacyConfig.url : '',
+        apiKey: typeof legacyConfig.apiKey === 'string' ? legacyConfig.apiKey : '',
+        stationId: typeof legacyConfig.stationId === 'string' ? legacyConfig.stationId : '',
+        radioName: typeof legacyConfig.radioName === 'string' ? legacyConfig.radioName : 'TX5DR',
+        autoUploadQSO: Boolean(legacyConfig.autoUploadQSO),
+        lastSyncTime: typeof legacyConfig.lastSyncTime === 'number' ? legacyConfig.lastSyncTime : undefined,
+      }),
+    });
+
     const provider = new WaveLogSyncProvider(ctx);
     ctx.logbookSync.register(provider);
 

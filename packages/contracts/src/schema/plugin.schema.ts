@@ -18,6 +18,19 @@ export const PluginTypeSchema = z.enum(['strategy', 'utility']);
 export type PluginType = z.infer<typeof PluginTypeSchema>;
 
 /**
+ * Runtime instance scope for a plugin.
+ *
+ * - `operator`: the host creates one instance per operator.
+ * - `global`: the host creates a single shared instance for the whole station.
+ */
+export const PluginInstanceScopeSchema = z.enum(['operator', 'global']);
+
+/**
+ * Runtime instance scope for a plugin.
+ */
+export type PluginInstanceScope = z.infer<typeof PluginInstanceScopeSchema>;
+
+/**
  * Explicit permission declarations requested by a plugin.
  *
  * Permissions let the host gate sensitive capabilities behind manifest-level
@@ -217,6 +230,10 @@ export const PluginUIPageDescriptorSchema = z.object({
   entry: z.string(),
   /** Optional icon identifier. */
   icon: z.string().optional(),
+  /** Who may access this page through the host iframe bridge. Defaults to admin. */
+  accessScope: z.enum(['admin', 'operator']).optional().default('admin'),
+  /** Optional resource binding enforced by the host for iframe invoke requests. */
+  resourceBinding: z.enum(['none', 'callsign', 'operator']).optional().default('none'),
 });
 
 /**
@@ -276,6 +293,7 @@ export const PluginManifestSchema = z.object({
   name: z.string(),
   version: z.string(),
   type: PluginTypeSchema,
+  instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
   description: z.string().optional(),
   permissions: z.array(PluginPermissionSchema).optional(),
   settings: z.record(z.string(), PluginSettingDescriptorSchema).optional(),
@@ -302,6 +320,7 @@ export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 export const PluginStatusSchema = z.object({
   name: z.string(),
   type: PluginTypeSchema,
+  instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
   version: z.string(),
   description: z.string().optional(),
   isBuiltIn: z.boolean(),

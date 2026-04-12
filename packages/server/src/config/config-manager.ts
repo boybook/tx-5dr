@@ -561,6 +561,17 @@ export class ConfigManager {
   }
 
   /**
+   * Internal migration helper used by plugin-layer compatibility routines.
+   *
+   * Accepts a fully materialized config object, including unknown legacy keys,
+   * and persists it as the new in-memory/source-of-truth config.
+   */
+  async replaceConfigForMigration(config: AppConfig & Record<string, unknown>): Promise<void> {
+    this.config = config as AppConfig;
+    await this.saveConfig();
+  }
+
+  /**
    * 获取音频配置（从 activeProfile 派生）
    */
   getAudioConfig(): AudioDeviceSettings {

@@ -27,6 +27,7 @@ export interface LoadedPlugin {
  */
 export interface PluginInstance {
   plugin: LoadedPlugin;
+  scope: { kind: 'operator'; operatorId: string } | { kind: 'global' };
   /** 当前操作员的 PluginContext */
   ctx: PluginContext;
   /** strategy 插件的显式运行时 */
@@ -140,6 +141,7 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
   return {
     name: plugin.definition.name,
     type: plugin.definition.type,
+    instanceScope: plugin.definition.instanceScope ?? 'operator',
     version: plugin.definition.version,
     description: plugin.definition.description,
     isBuiltIn: plugin.isBuiltIn,

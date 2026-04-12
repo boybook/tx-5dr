@@ -114,6 +114,26 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 - 对于策略插件，运行时对象也会按操作员维度创建
 - 但真正参与自动化决策和发射流程的，始终只有当前选中的那一个活跃策略
 
+### 实例作用域
+
+除了 `type` 之外，utility 插件还可以声明实例作用域：
+
+- **`instanceScope: 'operator'`**（默认）：为每个操作员分别创建一个实例
+- **`instanceScope: 'global'`**：整个应用只创建一个共享实例
+
+`global` 实例的设计目标，是承载“全局资源 + 按呼号分发”的插件，例如日志同步 Provider。此类插件通常需要：
+
+- 共享一份证书、登录态或远端客户端
+- 面向多个操作员/多个呼号工作
+- 通过 `ctx.logbook.forCallsign(callsign)` 显式访问目标日志本
+
+`global` 实例当前只支持 `utility` 插件，并受到以下约束：
+
+- 不能声明 operator-scope `settings`
+- 不能声明 `quickSettings`
+- 不能声明 operator 面板 `panels`
+- 不能实现依赖单个操作员运行时语义的 hooks（如 `onDecode`、`onQSOComplete`、`onAutoCallCandidate` 等）
+
 ### 设置作用域
 
 - **`global` scope**：所有操作员共享，在"插件设置"全局面板中显示（如 API Key、黑名单）
@@ -324,6 +344,13 @@ interface PluginDefinition {
   /** 插件类型：策略（互斥）或工具（叠加） */
   type: 'strategy' | 'utility';
 
+  /**
+   * 插件实例作用域
+   * - 'operator'：每个操作员一个实例（默认）
+   * - 'global'：整个应用共享一个实例（仅 utility 支持）
+   */
+  instanceScope?: 'operator' | 'global';
+
   /** 可选：人类可读的描述 */
   description?: string;
 
@@ -357,7 +384,7 @@ interface PluginDefinition {
    */
   createStrategyRuntime?(ctx: PluginContext): StrategyRuntime;
 
-  /** 插件实例加载时调用（插件子系统启动、重载或为操作员创建实例时） */
+  /** 插件实例加载时调用（插件子系统启动、重载或创建对应 scope 实例时） */
   onLoad?(ctx: PluginContext): void | Promise<void>;
 
   /** 插件实例卸载时调用（插件重载、移除操作员或插件子系统关闭时），定时器自动清理 */
@@ -380,7 +407,7 @@ interface PluginContext {
   /** 持久化 KV 存储 */
   readonly store: {
     readonly global: KVStore;    // 所有操作员共享
-    readonly operator: KVStore;  // 当前操作员独占
+    readonly operator: KVStore;  // 当前实例独占；global 实例时为独立 instance store
   };
 
   /** 日志接口（输出到系统日志 + 前端日志面板） */
@@ -1084,12 +1111,36 @@ const plugin: PluginDefinition = {
   ui: {
     dir: 'ui',  // 静态资源目录（相对于插件根目录）
     pages: [
-      { id: 'settings', title: 'Settings', entry: 'settings.html' },
-      { id: 'dashboard', title: 'Dashboard', entry: 'dashboard.html' },
+      {
+        id: 'settings',
+        title: 'Settings',
+        entry: 'settings.html',
+        accessScope: 'operator',
+        resourceBinding: 'callsign',
+      },
+      {
+        id: 'dashboard',
+        title: 'Dashboard',
+        entry: 'dashboard.html',
+        accessScope: 'admin',
+        resourceBinding: 'none',
+      },
     ],
   },
 };
 ```
+
+页面描述符新增两个关键字段：
+
+- `accessScope: 'admin' | 'operator'`
+  - `admin`：仅管理员可访问
+  - `operator`：操作员也可访问
+- `resourceBinding: 'none' | 'callsign' | 'operator'`
+  - `none`：只校验角色
+  - `callsign`：宿主要求请求里携带 `callsign`，并校验该 token 是否有对应呼号访问权
+  - `operator`：宿主要求请求里携带 `operatorId`，并校验是否有对应操作员访问权
+
+这两个字段由宿主固定路由解释，插件**不能自行注册 HTTP 路由**。
 
 用户插件的目录结构：
 
@@ -1216,6 +1267,15 @@ observer.observe(document.body);
 | 生命周期 | 跟随操作员卡片展开/折叠 | 跟随弹窗打开/关闭 |
 | 典型场景 | 实时数据展示、快捷控制 | 配置表单、向导流程 |
 
+#### 固定宿主路由
+
+插件 UI 统一通过宿主固定路由暴露：
+
+- `GET /api/plugins/:name/ui/*`：返回静态页面，并自动注入 Bridge SDK
+- `POST /api/plugins/:name/ui-invoke`：将 `tx5dr.invoke()` 转发给插件页处理器
+
+其中 iframe 静态页支持通过 query token 鉴权（`auth_token`，兼容 `token`）；`ui-invoke` 走常规 Bearer Token。
+
 ### 4.10 文件存储
 
 插件可以通过 `ctx.files` 持久化二进制文件（如证书、导入数据等），文件存储在插件的数据目录下。
@@ -1233,7 +1293,7 @@ interface PluginFileStore {
 }
 ```
 
-**存储路径**：`{dataDir}/plugins/{pluginName}/files/`
+**存储路径**：`{dataDir}/plugin-data/{pluginName}/files/`
 
 **安全约束**：所有路径参数相对于插件文件根目录解析，禁止目录穿越（`..`、绝对路径等会被拒绝）。
 
@@ -1261,6 +1321,8 @@ interface LogbookSyncProvider {
   readonly color?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
   /** 设置页面 ID（引用 ui.pages 中的条目） */
   readonly settingsPageId: string;
+  /** 运行期访问范围 */
+  readonly accessScope?: 'admin' | 'operator';
   /** 自定义操作菜单（替换默认的上传/下载/全量同步三项） */
   readonly actions?: SyncAction[];
 
@@ -1288,6 +1350,22 @@ onLoad(ctx) {
 },
 ```
 
+建议所有日志同步插件都声明为：
+
+- `type: 'utility'`
+- `instanceScope: 'global'`
+
+原因是日志同步天然按“呼号/日志本”工作，而不是按“操作员实例”工作。插件内部应使用：
+
+```typescript
+const logbook = ctx.logbook.forCallsign(callsign);
+await logbook.queryQSOs(...);
+await logbook.updateQSO(...);
+await logbook.notifyUpdated();
+```
+
+也就是说，旧版“每操作员实例各自持有一个同步插件”的方式，已经不再是推荐模型。
+
 #### SyncAction 自定义操作
 
 ```typescript
@@ -1309,11 +1387,19 @@ interface SyncAction {
 #### 数据流
 
 Provider 拥有 `ctx.logbook` 的完整访问权限，自行负责：
-- **查询**：`ctx.logbook.queryQSOs(filter)` 获取需要上传的记录
-- **写入**：`ctx.logbook.addQSO(record)` / `ctx.logbook.updateQSO(id, updates)` 写入下载的记录
-- **通知**：`ctx.logbook.notifyUpdated()` 批量写入完成后刷新前端
+- **查询**：`ctx.logbook.forCallsign(callsign).queryQSOs(filter)` 获取需要上传的记录
+- **写入**：`ctx.logbook.forCallsign(callsign).addQSO(record)` / `updateQSO(id, updates)` 写入下载的记录
+- **通知**：`ctx.logbook.forCallsign(callsign).notifyUpdated()` 批量写入完成后刷新前端
 
 宿主在 QSO 完成时自动检查所有 provider 的 `isAutoUploadEnabled()` 并调用 `upload()`。
+
+`notifyUpdated()` 当前会透传完整 `logbookUpdated` payload，包括：
+
+- `logBookId`
+- `statistics`
+- `operatorId?`
+
+其中 `operatorId` 会优先使用该日志本当前关联的操作员；如果在 operator-scope 上下文中调用，则会回落到当前操作员。
 
 #### 结果类型
 
@@ -1958,11 +2044,26 @@ Pipeline 额外安全网
 | `GET` | `/api/plugins/_bridge/bridge.js` | Bridge SDK 脚本 |
 | `GET` | `/api/plugins/_bridge/tokens.css` | CSS Design Tokens 样式表 |
 | `POST` | `/api/plugins/:name/ui-invoke` | iframe invoke 请求转发 |
-| `GET` | `/api/plugins/sync/providers` | 获取日志同步 Provider 列表 |
-| `POST` | `/api/plugins/sync/providers/:id/test` | 测试同步连接 |
-| `POST` | `/api/plugins/sync/providers/:id/upload` | 触发日志上传 |
-| `POST` | `/api/plugins/sync/providers/:id/download` | 触发日志下载 |
-| `GET` | `/api/plugins/sync/configured-status` | 获取 Provider 配置状态 |
+| `GET` | `/api/plugins/sync-providers` | 获取日志同步 Provider 列表 |
+| `GET` | `/api/plugins/sync-providers/configured?callsign=...` | 获取指定呼号的 Provider 配置状态 |
+| `POST` | `/api/plugins/sync-providers/:providerId/test-connection` | 测试同步连接 |
+| `POST` | `/api/plugins/sync-providers/:providerId/upload` | 触发日志上传 |
+| `POST` | `/api/plugins/sync-providers/:providerId/download` | 触发日志下载 |
+
+#### 运行期权限模型
+
+插件宿主路由分为两类：
+
+- **管理类接口**：启用/禁用/重载/修改全局设置等，要求 `admin`
+- **运行期能力接口**：日志同步、operator 页面 iframe、`ui-invoke` 等，可允许 `operator`
+
+是否允许 operator 访问，取决于插件自身声明：
+
+- 日志同步 Provider：看 `provider.accessScope`
+- iframe 页面：看 `ui.pages[].accessScope`
+- 资源级校验：看 `ui.pages[].resourceBinding`
+
+因此“能否访问插件页面/同步能力”不再只由统一 `/api/plugins` 前缀角色控制，而是由宿主按路由和资源粒度判定。
 
 ### WebSocket 事件
 

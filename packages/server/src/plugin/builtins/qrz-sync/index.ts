@@ -4,6 +4,7 @@ import type { PluginDefinition } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import { QRZSyncProvider } from './provider.js';
+import { migrateLegacySyncConfig } from '../_shared/legacy-sync-migration.js';
 
 export const BUILTIN_QRZ_SYNC_PLUGIN_NAME = 'qrz-sync';
 
@@ -24,6 +25,7 @@ export const qrzSyncPlugin: PluginDefinition = {
   name: BUILTIN_QRZ_SYNC_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
+  instanceScope: 'global',
   description: 'Sync QSO records with QRZ.com Logbook',
 
   permissions: ['network'],
@@ -35,11 +37,25 @@ export const qrzSyncPlugin: PluginDefinition = {
         id: 'settings',
         title: 'QRZ.com Settings',
         entry: 'settings.html',
+        accessScope: 'operator',
+        resourceBinding: 'callsign',
       },
     ],
   },
 
   async onLoad(ctx) {
+    await migrateLegacySyncConfig({
+      ctx,
+      pluginName: BUILTIN_QRZ_SYNC_PLUGIN_NAME,
+      providerKey: 'qrz',
+      shouldMigrate: (legacyConfig) => !!legacyConfig.apiKey,
+      mapLegacyConfig: (_callsign, legacyConfig) => ({
+        apiKey: typeof legacyConfig.apiKey === 'string' ? legacyConfig.apiKey : '',
+        autoUploadQSO: Boolean(legacyConfig.autoUploadQSO),
+        lastSyncTime: typeof legacyConfig.lastSyncTime === 'number' ? legacyConfig.lastSyncTime : undefined,
+      }),
+    });
+
     const provider = new QRZSyncProvider(ctx);
     ctx.logbookSync.register(provider);
 

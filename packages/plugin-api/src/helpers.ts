@@ -198,6 +198,33 @@ export interface QSOQueryFilter {
 }
 
 /**
+ * Callsign-bound view over a single logbook.
+ *
+ * The host resolves the concrete logbook lazily on each operation, which keeps
+ * the handle valid even if the underlying logbook is created or reloaded later.
+ */
+export interface CallsignLogbookAccess {
+  /** Normalized callsign that scopes this accessor. */
+  readonly callsign: string;
+
+  /** Returns the resolved logbook id, or null when no logbook exists yet. */
+  getLogBookId(): Promise<string | null>;
+
+  /** Queries QSO records matching the given filter. */
+  queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
+  /** Counts QSO records matching the given filter. */
+  countQSOs(filter?: QSOQueryFilter): Promise<number>;
+  /** Adds a new QSO record to this callsign's logbook. */
+  addQSO(record: import('@tx5dr/contracts').QSORecord): Promise<void>;
+  /** Updates partial fields of an existing QSO record. */
+  updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>): Promise<void>;
+  /** Returns current statistics for this callsign's logbook. */
+  getStatistics(): Promise<import('@tx5dr/contracts').LogBookStatistics | null>;
+  /** Notifies the frontend that this callsign's logbook changed. */
+  notifyUpdated(operatorId?: string): Promise<void>;
+}
+
+/**
  * Full logbook access for plugins.
  *
  * Extends the original read-only helpers with query, write and notification
@@ -221,6 +248,9 @@ export interface LogbookAccess {
   /** Counts QSO records matching the given filter. */
   countQSOs(filter?: QSOQueryFilter): Promise<number>;
 
+  /** Returns a callsign-bound accessor suitable for global plugin instances. */
+  forCallsign(callsign: string): CallsignLogbookAccess;
+
   // === Write ===
 
   /** Adds a new QSO record. Deduplication is the caller's responsibility. */
@@ -231,7 +261,7 @@ export interface LogbookAccess {
   // === Notification ===
 
   /** Notifies the frontend to refresh logbook data (call after batch writes). */
-  notifyUpdated(): void;
+  notifyUpdated(): Promise<void>;
 }
 
 /**

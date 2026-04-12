@@ -256,7 +256,7 @@
 
   // ===== Certificate management =====
   function loadCertificates() {
-    bridge.invoke('getCertificates', {}).then(function(result) {
+    bridge.invoke('getCertificates', { callsign: callsign }).then(function(result) {
       certificates = (result && result.certificates) || [];
       renderCertificates();
     }).catch(function() {
@@ -311,7 +311,7 @@
     var certId = e.currentTarget.getAttribute('data-id');
     if (!confirm(t('certDeleteConfirm'))) return;
 
-    bridge.invoke('deleteCertificate', { id: certId }).then(function() {
+    bridge.invoke('deleteCertificate', { callsign: callsign, id: certId }).then(function() {
       loadCertificates();
     }).catch(function(err) {
       console.error('Delete failed:', err);
@@ -344,7 +344,7 @@
       }
       var base64 = btoa(binary);
 
-      bridge.invoke('importCertificate', { data: base64 }).then(function(result) {
+      bridge.invoke('importCertificate', { callsign: callsign, data: base64 }).then(function(result) {
         uploadCertBtn.disabled = false;
         document.getElementById('uploadCertText').textContent = t('uploadCertBtn');
         document.getElementById('uploadCertSpinner').classList.add('hidden');

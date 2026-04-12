@@ -98,7 +98,7 @@
     testBtn.querySelector('.spinner').classList.remove('hidden');
     testResult.className = 'chip hidden';
 
-    bridge.invoke('testConnection', { apiKey: apiKey }).then(function(result) {
+    bridge.invoke('testConnection', { callsign: callsign, apiKey: apiKey }).then(function(result) {
       testBtn.disabled = false;
       testBtn.querySelector('.btn-text').textContent = t('testBtn');
       testBtn.querySelector('.spinner').classList.add('hidden');

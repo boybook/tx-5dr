@@ -296,10 +296,8 @@ export async function createServer() {
     await scope.register(pskreporterRoutes, { prefix: '/api' });
     await scope.register(systemRoutes, { prefix: '/api/system' });
     await scope.register(openwebrxRoutes, { prefix: '/api/openwebrx' });
-    const { pluginRoutes } = await import('./routes/plugins.js');
-    await scope.register(pluginRoutes, { prefix: '/api/plugins' });
   });
-  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system, openwebrx, plugins)');
+  fastify.log.info('Admin routes registered (audio, profiles, settings, storage, pskreporter, system, openwebrx)');
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、语音
   await fastify.register(async (scope) => {
@@ -319,6 +317,10 @@ export async function createServer() {
     await scope.register(logbookRoutes, { prefix: '/api/logbooks' });
   });
   fastify.log.info('Operator+ routes registered (logbooks)');
+
+  const { pluginRoutes } = await import('./routes/plugins.js');
+  await fastify.register(pluginRoutes, { prefix: '/api/plugins' });
+  fastify.log.info('Plugin routes registered');
 
   // 公开路由：认证
   await fastify.register(authRoutes, { prefix: '/api/auth' });

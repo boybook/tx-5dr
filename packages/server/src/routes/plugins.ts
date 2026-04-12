@@ -1,12 +1,197 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { promises as fs } from 'fs';
 import path from 'path';
+import type { JWTPayload, PluginUIPageDescriptor } from '@tx5dr/contracts';
+import { UserRole } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { AuthManager } from '../auth/AuthManager.js';
 import { createLogger } from '../utils/logger.js';
 import { getPluginRuntimeInfo } from '../plugin/runtime-info.js';
+import { normalizeCallsign } from '../utils/callsign.js';
 
 const logger = createLogger('PluginRoutes');
+
+const UNAUTHORIZED_RESPONSE = {
+  success: false,
+  error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
+} as const;
+
+const FORBIDDEN_RESPONSE = {
+  success: false,
+  error: { code: 'FORBIDDEN', message: 'Permission denied', userMessage: 'You do not have permission for this operation' },
+} as const;
+
+type RuntimeAuthUser = NonNullable<FastifyRequest['authUser']>;
+
+function getQueryToken(request: FastifyRequest): string | null {
+  const query = request.query as Record<string, unknown>;
+  const authToken = query.auth_token;
+  if (typeof authToken === 'string' && authToken.trim()) {
+    return authToken.trim();
+  }
+  const fallbackToken = query.token;
+  return typeof fallbackToken === 'string' && fallbackToken.trim() ? fallbackToken.trim() : null;
+}
+
+async function resolveRuntimeAuthUser(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  allowQueryToken = false,
+): Promise<RuntimeAuthUser | null> {
+  if (request.authUser) {
+    return request.authUser;
+  }
+
+  if (!allowQueryToken) {
+    return null;
+  }
+
+  const authManager = AuthManager.getInstance();
+  if (!authManager.isAuthEnabled()) {
+    return request.authUser;
+  }
+
+  const token = getQueryToken(request);
+  if (!token) {
+    return null;
+  }
+
+  let decoded: JWTPayload;
+  try {
+    decoded = fastify.jwt.verify<JWTPayload>(token);
+  } catch {
+    return null;
+  }
+
+  if (!authManager.isTokenStillValid(decoded.tokenId)) {
+    return null;
+  }
+
+  const current = authManager.getTokenCurrentPermissions(decoded.tokenId);
+  if (!current) {
+    return null;
+  }
+
+  return {
+    ...decoded,
+    role: current.role,
+    operatorIds: current.operatorIds,
+    permissionGrants: current.permissionGrants,
+  };
+}
+
+async function requireMinimumRole(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  minRole: UserRole,
+  allowQueryToken = false,
+): Promise<RuntimeAuthUser | null> {
+  const user = await resolveRuntimeAuthUser(fastify, request, allowQueryToken);
+  if (!user) {
+    await reply.code(401).send(UNAUTHORIZED_RESPONSE);
+    return null;
+  }
+  if (!AuthManager.hasMinRole(user.role, minRole)) {
+    await reply.code(403).send(FORBIDDEN_RESPONSE);
+    return null;
+  }
+  return user;
+}
+
+function userHasCallsignAccess(user: RuntimeAuthUser, callsign: string): boolean {
+  if (user.role === UserRole.ADMIN) {
+    return true;
+  }
+
+  const target = normalizeCallsign(callsign);
+  const operators = ConfigManager.getInstance().getOperatorsConfig();
+  const allowedCallsigns = new Set(
+    operators
+      .filter((operator) => user.operatorIds.includes(operator.id))
+      .map((operator) => normalizeCallsign(operator.myCallsign)),
+  );
+  return allowedCallsigns.has(target);
+}
+
+function userHasOperatorAccess(user: RuntimeAuthUser, operatorId: string): boolean {
+  return user.role === UserRole.ADMIN || user.operatorIds.includes(operatorId);
+}
+
+async function requireCallsignBindingAccess(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  callsign: string,
+  allowQueryToken = false,
+): Promise<RuntimeAuthUser | null> {
+  const user = await requireMinimumRole(fastify, request, reply, UserRole.OPERATOR, allowQueryToken);
+  if (!user) {
+    return null;
+  }
+  if (!userHasCallsignAccess(user, callsign)) {
+    await reply.code(403).send({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'No permission to access this callsign' },
+    });
+    return null;
+  }
+  return user;
+}
+
+async function requireOperatorBindingAccess(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  operatorId: string,
+  allowQueryToken = false,
+): Promise<RuntimeAuthUser | null> {
+  const user = await requireMinimumRole(fastify, request, reply, UserRole.OPERATOR, allowQueryToken);
+  if (!user) {
+    return null;
+  }
+  if (!userHasOperatorAccess(user, operatorId)) {
+    await reply.code(403).send({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'No operator access', userMessage: 'You do not have access to this operator' },
+    });
+    return null;
+  }
+  return user;
+}
+
+function getPluginPageDescriptor(
+  engine: DigitalRadioEngine,
+  pluginName: string,
+  pageId: string,
+): PluginUIPageDescriptor | null {
+  const loaded = engine.pluginManager.getLoadedPlugin(pluginName);
+  return loaded?.definition.ui?.pages?.find((page) => page.id === pageId) ?? null;
+}
+
+function getPageBindingValue(
+  page: PluginUIPageDescriptor,
+  requestData: unknown,
+): { type: 'callsign' | 'operator'; value: string } | null {
+  if (page.resourceBinding === 'none') {
+    return null;
+  }
+
+  const data = requestData && typeof requestData === 'object'
+    ? requestData as Record<string, unknown>
+    : {};
+
+  if (page.resourceBinding === 'callsign' && typeof data.callsign === 'string' && data.callsign.trim()) {
+    return { type: 'callsign', value: data.callsign.trim() };
+  }
+
+  if (page.resourceBinding === 'operator' && typeof data.operatorId === 'string' && data.operatorId.trim()) {
+    return { type: 'operator', value: data.operatorId.trim() };
+  }
+
+  return null;
+}
 
 /**
  * 插件管理 REST API
@@ -26,9 +211,10 @@ const logger = createLogger('PluginRoutes');
  */
 export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   const engine = DigitalRadioEngine.getInstance();
+  const configManager = ConfigManager.getInstance();
 
   const getResolvedGlobalSettings = (name: string): Record<string, unknown> => {
-    const config = ConfigManager.getInstance().getPluginsConfig();
+    const config = configManager.getPluginsConfig();
     const storedGlobalSettings = config.configs?.[name]?.settings ?? {};
     const plugin = engine.pluginManager.getSnapshot().plugins.find((entry) => entry.name === name);
     if (!plugin?.settings) {
@@ -68,17 +254,25 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     return resolved;
   };
 
-  // GET /api/plugins
-  fastify.get('/', async (_req, reply) => {
+  fastify.get('/', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
     return reply.send(engine.pluginManager.getSnapshot());
   });
 
-  fastify.get('/runtime-info', async (_req, reply) => {
+  fastify.get('/runtime-info', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
     return reply.send(await getPluginRuntimeInfo());
   });
 
-  // POST /api/plugins/:name/enable
   fastify.post<{ Params: { name: string } }>('/:name/enable', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
+
     const { name } = req.params;
     const plugin = engine.pluginManager.getSnapshot().plugins.find((entry) => entry.name === name);
     if (!plugin) {
@@ -87,9 +281,9 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     if (plugin.type !== 'utility') {
       return reply.status(400).send({ error: 'strategy plugin cannot be enabled or disabled' });
     }
-    const existing = ConfigManager.getInstance().getPluginsConfig().configs?.[name] ?? { enabled: false, settings: {} };
+    const existing = configManager.getPluginsConfig().configs?.[name] ?? { enabled: false, settings: {} };
     engine.pluginManager.setPluginEnabled(name, true);
-    await ConfigManager.getInstance().setPluginConfig(name, {
+    await configManager.setPluginConfig(name, {
       enabled: true,
       settings: existing.settings ?? {},
     });
@@ -97,8 +291,11 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send({ success: true });
   });
 
-  // POST /api/plugins/:name/disable
   fastify.post<{ Params: { name: string } }>('/:name/disable', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
+
     const { name } = req.params;
     const plugin = engine.pluginManager.getSnapshot().plugins.find((entry) => entry.name === name);
     if (!plugin) {
@@ -108,44 +305,49 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'strategy plugin cannot be enabled or disabled' });
     }
     engine.pluginManager.setPluginEnabled(name, false);
-    const existing = ConfigManager.getInstance().getPluginsConfig().configs?.[name] ?? { enabled: false, settings: {} };
-    await ConfigManager.getInstance().setPluginConfig(name, { ...existing, enabled: false });
+    const existing = configManager.getPluginsConfig().configs?.[name] ?? { enabled: false, settings: {} };
+    await configManager.setPluginConfig(name, { ...existing, enabled: false });
     logger.info(`Plugin disabled: ${name}`);
     return reply.send({ success: true });
   });
 
-  // GET /api/plugins/:name/settings — global scope
-  fastify.get<{ Params: { name: string } }>(
-    '/:name/settings',
-    async (req, reply) => {
-      const { name } = req.params;
-      const settings = getResolvedGlobalSettings(name);
-      return reply.send({ settings });
-    },
-  );
+  fastify.get<{ Params: { name: string } }>('/:name/settings', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
 
-  // PUT /api/plugins/:name/settings — global scope
+    const { name } = req.params;
+    const settings = getResolvedGlobalSettings(name);
+    return reply.send({ settings });
+  });
+
   fastify.put<{ Params: { name: string }; Body: { settings: Record<string, unknown> } }>(
     '/:name/settings',
     async (req, reply) => {
+      if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+        return;
+      }
+
       const { name } = req.params;
       const { settings } = req.body ?? {};
       if (!settings || typeof settings !== 'object') {
         return reply.status(400).send({ error: 'settings must be an object' });
       }
       engine.pluginManager.setPluginSettings(name, settings);
-      const existing = ConfigManager.getInstance().getPluginsConfig().configs?.[name] ?? { enabled: false, settings: {} };
-      await ConfigManager.getInstance().setPluginConfig(name, { ...existing, settings });
+      const existing = configManager.getPluginsConfig().configs?.[name] ?? { enabled: false, settings: {} };
+      await configManager.setPluginConfig(name, { ...existing, settings });
       logger.info(`Plugin global settings updated: ${name}`);
       return reply.send({ success: true });
     },
   );
 
-  // GET /api/plugins/:name/operator/:operatorId/settings — operator scope
   fastify.get<{ Params: { name: string; operatorId: string } }>(
     '/:name/operator/:operatorId/settings',
     async (req, reply) => {
       const { name, operatorId } = req.params;
+      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+        return;
+      }
       const settings = engine.pluginManager.getOperatorPluginSettings(operatorId, name);
       return reply.send({ settings });
     },
@@ -155,9 +357,13 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     '/operators/:operatorId',
     async (req, reply) => {
       const { operatorId } = req.params;
+      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+        return;
+      }
+
       const pluginSnapshot = engine.pluginManager.getSnapshot();
       const runtimeState = engine.pluginManager.getOperatorRuntimeStatus(operatorId);
-      const operatorSettings = ConfigManager.getInstance().getPluginsConfig().operatorSettings?.[operatorId] ?? {};
+      const operatorSettings = configManager.getPluginsConfig().operatorSettings?.[operatorId] ?? {};
 
       return reply.send({
         operatorId,
@@ -175,7 +381,6 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     },
   );
 
-  // PUT /api/plugins/:name/operator/:operatorId/settings — operator scope
   fastify.put<{
     Params: { name: string; operatorId: string };
     Body: { settings: Record<string, unknown> };
@@ -183,48 +388,63 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     '/:name/operator/:operatorId/settings',
     async (req, reply) => {
       const { name, operatorId } = req.params;
+      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+        return;
+      }
+
       const { settings } = req.body ?? {};
       if (!settings || typeof settings !== 'object') {
         return reply.status(400).send({ error: 'settings must be an object' });
       }
       engine.pluginManager.setOperatorPluginSettings(operatorId, name, settings);
-      await ConfigManager.getInstance().setOperatorPluginSettings(operatorId, name, settings);
+      await configManager.setOperatorPluginSettings(operatorId, name, settings);
       logger.info(`Plugin operator settings updated: plugin=${name}, operator=${operatorId}`);
       return reply.send({ success: true });
     },
   );
 
-  // POST /api/plugins/reload
-  fastify.post('/reload', async (_req, reply) => {
+  fastify.post('/reload', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
     await engine.pluginManager.reloadPlugins();
     logger.info('All plugins reloaded');
     return reply.send({ success: true });
   });
 
   fastify.post<{ Params: { name: string } }>('/:name/reload', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
     const { name } = req.params;
     await engine.pluginManager.reloadPlugin(name);
     logger.info(`Plugin reloaded: ${name}`);
     return reply.send({ success: true });
   });
 
-  fastify.post('/rescan', async (_req, reply) => {
+  fastify.post('/rescan', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+      return;
+    }
     await engine.pluginManager.rescanPlugins();
     logger.info('Plugins rescanned');
     return reply.send({ success: true });
   });
 
-  // PUT /api/plugins/operators/:id/strategy
   fastify.put<{ Params: { id: string }; Body: { pluginName: string } }>(
     '/operators/:id/strategy',
     async (req, reply) => {
+      if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+        return;
+      }
+
       const { id } = req.params;
       const { pluginName } = req.body ?? {};
       if (!pluginName) {
         return reply.status(400).send({ error: 'pluginName is required' });
       }
       engine.pluginManager.setOperatorStrategy(id, pluginName);
-      await ConfigManager.getInstance().setOperatorStrategy(id, pluginName);
+      await configManager.setOperatorStrategy(id, pluginName);
       logger.info(`Operator strategy set: operator=${id}, plugin=${pluginName}`);
       return reply.send({ success: true });
     },
@@ -236,22 +456,34 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ===== Logbook sync provider endpoints =====
 
-  // GET /api/plugins/sync-providers
-  fastify.get('/sync-providers', async (_req, reply) => {
-    return reply.send(engine.pluginManager.logbookSyncHost.getProviders());
+  fastify.get('/sync-providers', async (req, reply) => {
+    const user = await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR);
+    if (!user) {
+      return;
+    }
+    const scope = user.role === UserRole.ADMIN ? 'admin' : 'operator';
+    return reply.send(engine.pluginManager.logbookSyncHost.getProviders(scope));
   });
 
-  // GET /api/plugins/sync-providers/configured?callsign=XX
   fastify.get<{ Querystring: { callsign?: string } }>('/sync-providers/configured', async (req, reply) => {
     const callsign = (req.query as Record<string, string>).callsign ?? '';
     if (!callsign) {
       return reply.status(400).send({ error: 'callsign query parameter is required' });
     }
-    const providers = engine.pluginManager.logbookSyncHost.getConfiguredStatus(callsign);
+    const user = await requireCallsignBindingAccess(fastify, req, reply, callsign);
+    if (!user) {
+      return;
+    }
+    const visibleProviders = engine.pluginManager.logbookSyncHost.getProviders(
+      user.role === UserRole.ADMIN ? 'admin' : 'operator',
+    );
+    const configured = engine.pluginManager.logbookSyncHost.getConfiguredStatus(callsign);
+    const providers = Object.fromEntries(
+      visibleProviders.map((provider) => [provider.id, configured[provider.id] ?? false]),
+    );
     return reply.send({ providers });
   });
 
-  // POST /api/plugins/sync-providers/:providerId/test-connection
   fastify.post<{
     Params: { providerId: string };
     Body: { callsign: string };
@@ -261,11 +493,19 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     if (!callsign) {
       return reply.status(400).send({ error: 'callsign is required' });
     }
+    const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
+    if (!provider) {
+      return reply.status(404).send({ error: 'provider not found' });
+    }
+    if (!(provider.accessScope === 'operator'
+      ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
+      : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN))) {
+      return;
+    }
     const result = await engine.pluginManager.logbookSyncHost.testConnection(providerId, callsign);
     return reply.send(result);
   });
 
-  // POST /api/plugins/sync-providers/:providerId/upload
   fastify.post<{
     Params: { providerId: string };
     Body: { callsign: string };
@@ -274,6 +514,15 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     const { callsign } = req.body ?? {};
     if (!callsign) {
       return reply.status(400).send({ error: 'callsign is required' });
+    }
+    const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
+    if (!provider) {
+      return reply.status(404).send({ error: 'provider not found' });
+    }
+    if (!(provider.accessScope === 'operator'
+      ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
+      : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN))) {
+      return;
     }
 
     try {
@@ -286,7 +535,6 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     }
   });
 
-  // POST /api/plugins/sync-providers/:providerId/download
   fastify.post<{
     Params: { providerId: string };
     Body: { callsign: string; since?: number };
@@ -295,6 +543,15 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     const { callsign, since } = req.body ?? {};
     if (!callsign) {
       return reply.status(400).send({ error: 'callsign is required' });
+    }
+    const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
+    if (!provider) {
+      return reply.status(404).send({ error: 'provider not found' });
+    }
+    if (!(provider.accessScope === 'operator'
+      ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
+      : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN))) {
+      return;
     }
 
     try {
@@ -439,7 +696,7 @@ const BRIDGE_SDK = `/* TX-5DR Plugin Bridge SDK */
     }
     if (msg.type === 'tx5dr:push') {
       var cbs = pushListeners[msg.action];
-      if (cbs) cbs.forEach(function(cb) { try { cb(msg.data); } catch(err) { console.error(err); } });
+      if (cbs) cbs.forEach(function(cb) { try { cb(msg.data); } catch(err) { setTimeout(function() { throw err; }, 0); } });
       return;
     }
     if (msg.type === 'tx5dr:response' && msg.requestId && pending[msg.requestId]) {
@@ -544,6 +801,37 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
         return reply.status(404).send({ error: 'Plugin has no static file directory' });
       }
 
+      const declaredPage = loaded.definition.ui?.pages?.find((page) => page.entry === filePath) ?? null;
+      const isHtmlFile = path.extname(filePath).toLowerCase() === '.html';
+      if (isHtmlFile && !declaredPage) {
+        return reply.status(404).send({ error: 'Plugin page not found' });
+      }
+      if (declaredPage) {
+        if (!(declaredPage.accessScope === 'operator'
+          ? await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR, true)
+          : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN, true))) {
+          return;
+        }
+
+        const binding = getPageBindingValue(declaredPage, req.query);
+        if (declaredPage.resourceBinding === 'callsign') {
+          if (!binding) {
+            return reply.status(400).send({ error: 'callsign query parameter is required' });
+          }
+          if (!await requireCallsignBindingAccess(fastify, req, reply, binding.value, true)) {
+            return;
+          }
+        }
+        if (declaredPage.resourceBinding === 'operator') {
+          if (!binding) {
+            return reply.status(400).send({ error: 'operatorId query parameter is required' });
+          }
+          if (!await requireOperatorBindingAccess(fastify, req, reply, binding.value, true)) {
+            return;
+          }
+        }
+      }
+
       const uiDir = loaded.definition.ui?.dir ?? 'ui';
       const root = path.resolve(loaded.dirPath, uiDir);
       const resolved = resolveSafePath(root, filePath);
@@ -582,6 +870,35 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
 
       if (!pageId || !action) {
         return reply.status(400).send({ error: 'pageId and action are required' });
+      }
+
+      const page = getPluginPageDescriptor(engine, name, pageId);
+      if (!page) {
+        return reply.status(404).send({ error: 'Plugin page not found' });
+      }
+
+      if (!(page.accessScope === 'operator'
+        ? await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR)
+        : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN))) {
+        return;
+      }
+
+      const binding = getPageBindingValue(page, data);
+      if (page.resourceBinding === 'callsign') {
+        if (!binding) {
+          return reply.status(400).send({ error: 'callsign is required in invoke payload' });
+        }
+        if (!await requireCallsignBindingAccess(fastify, req, reply, binding.value)) {
+          return;
+        }
+      }
+      if (page.resourceBinding === 'operator') {
+        if (!binding) {
+          return reply.status(400).send({ error: 'operatorId is required in invoke payload' });
+        }
+        if (!await requireOperatorBindingAccess(fastify, req, reply, binding.value)) {
+          return;
+        }
       }
 
       try {
