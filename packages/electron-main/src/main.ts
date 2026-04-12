@@ -85,6 +85,8 @@ interface LiveKitCredentialFileData {
 
 interface WindowsVCRuntimeStatus {
   installed: boolean;
+  versionOk: boolean;
+  version: string | null;
   source: 'registry' | 'filesystem' | 'missing';
   detail: string;
 }
@@ -93,12 +95,13 @@ const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   closeBehavior: 'ask',
   desktopHttps: DEFAULT_DESKTOP_HTTPS_CONFIG,
 };
-const VC_REDIST_X64_URL = 'https://aka.ms/vc14/vc_redist.x64.exe';
+const VC_REDIST_X64_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 const VC_REDIST_REGISTRY_KEYS = [
   'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
   'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64',
 ] as const;
 const VC_REDIST_REQUIRED_DLLS = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'] as const;
+const VC_REDIST_MIN_VERSION = { major: 14, minor: 30 } as const; // VS 2022 = 14.3x series
 
 function getElectronSettingsPath(): string {
   return path.join(getAppConfigDir(), ELECTRON_SETTINGS_FILE);
@@ -503,17 +506,35 @@ function queryWindowsRegistryValue(key: string, valueName: string): string | nul
   return match?.[1]?.trim() || null;
 }
 
+function parseVCRuntimeVersion(versionStr: string): { major: number; minor: number } | null {
+  const match = versionStr.match(/^v?(\d+)\.(\d+)/);
+  if (!match) return null;
+  return { major: parseInt(match[1], 10), minor: parseInt(match[2], 10) };
+}
+
+function isVCRuntimeVersionSufficient(versionStr: string): boolean {
+  const parsed = parseVCRuntimeVersion(versionStr);
+  if (!parsed) return false;
+  if (parsed.major !== VC_REDIST_MIN_VERSION.major) {
+    return parsed.major > VC_REDIST_MIN_VERSION.major;
+  }
+  return parsed.minor >= VC_REDIST_MIN_VERSION.minor;
+}
+
 function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
   if (process.platform !== 'win32') {
-    return { installed: true, source: 'registry', detail: 'not-applicable' };
+    return { installed: true, versionOk: true, version: null, source: 'registry', detail: 'not-applicable' };
   }
 
   for (const key of VC_REDIST_REGISTRY_KEYS) {
     const installed = queryWindowsRegistryValue(key, 'Installed');
     if (installed === '0x1' || installed === '1') {
       const version = queryWindowsRegistryValue(key, 'Version') || 'unknown';
+      const versionOk = version !== 'unknown' && isVCRuntimeVersionSufficient(version);
       return {
         installed: true,
+        versionOk,
+        version,
         source: 'registry',
         detail: `${key} (Version=${version})`,
       };
@@ -526,6 +547,8 @@ function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
   if (missingDlls.length === 0) {
     return {
       installed: true,
+      versionOk: true,
+      version: null,
       source: 'filesystem',
       detail: system32,
     };
@@ -533,6 +556,8 @@ function detectWindowsVCRuntime(): WindowsVCRuntimeStatus {
 
   return {
     installed: false,
+    versionOk: false,
+    version: null,
     source: 'missing',
     detail: `missing DLLs: ${missingDlls.join(', ')}`,
   };
@@ -544,19 +569,30 @@ async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
   }
 
   const runtimeStatus = detectWindowsVCRuntime();
-  if (runtimeStatus.installed) {
+
+  if (runtimeStatus.installed && runtimeStatus.versionOk) {
     logger.info(`windows VC runtime detected via ${runtimeStatus.source}: ${runtimeStatus.detail}`);
     return true;
   }
 
-  logger.error(`windows VC runtime check failed: ${runtimeStatus.detail}`);
   const msgs = getMessages(app.getLocale());
+  const isOutdated = runtimeStatus.installed && !runtimeStatus.versionOk;
+
+  if (isOutdated) {
+    logger.warn(
+      `windows VC runtime version too old: ${runtimeStatus.version} (require >= ${VC_REDIST_MIN_VERSION.major}.${VC_REDIST_MIN_VERSION.minor})`,
+    );
+  } else {
+    logger.error(`windows VC runtime check failed: ${runtimeStatus.detail}`);
+  }
+
+  const dialogMsgs = isOutdated ? msgs.vcRuntimeOutdated : msgs.vcRuntimeMissing;
   const response = await dialog.showMessageBox({
-    type: 'error',
-    title: msgs.vcRuntimeMissing.title,
-    message: msgs.vcRuntimeMissing.message,
-    detail: `${msgs.vcRuntimeMissing.detail}\n${VC_REDIST_X64_URL}`,
-    buttons: msgs.vcRuntimeMissing.buttons,
+    type: isOutdated ? 'warning' : 'error',
+    title: dialogMsgs.title,
+    message: dialogMsgs.message,
+    detail: `${dialogMsgs.detail}\n${VC_REDIST_X64_URL}`,
+    buttons: dialogMsgs.buttons,
     defaultId: 0,
     cancelId: 1,
     noLink: true,
@@ -568,6 +604,8 @@ async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
     } catch (error) {
       logger.error('failed to open VC runtime download link', error);
     }
+    app.quit();
+    return false;
   }
 
   return true;
@@ -1819,7 +1857,8 @@ const startApp = async () => {
   Object.assign(console, log.functions);
   log.errorHandler.startCatching();
 
-  await ensureWindowsVCRuntimeInstalled();
+  const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
+  if (!vcRuntimeOk) return;
 
   // 阻止 macOS App Nap 挂起进程（不阻止屏保，仅保证进程调度持续）
   powerSaveBlocker.start('prevent-app-suspension');
