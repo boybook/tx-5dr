@@ -14,7 +14,11 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
 
   const activePluginsWithPanels = React.useMemo(
     () => pluginSnapshot.plugins.filter((plugin) => {
-      if (!plugin.panels?.length) {
+      // Only include panels destined for the operator card (no slot or slot === 'operator')
+      const operatorPanels = (plugin.panels ?? []).filter(
+        (panel) => !panel.slot || panel.slot === 'operator',
+      );
+      if (operatorPanels.length === 0) {
         return false;
       }
       if (plugin.type === 'strategy') {
@@ -34,25 +38,31 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
       <div className="text-[11px] uppercase tracking-[0.18em] text-default-400">
         {t('plugins.livePanels', 'Live Panels')}
       </div>
-      {activePluginsWithPanels.map((plugin) => (
-        <section key={plugin.name} className="space-y-2">
-          <div className="text-xs font-medium text-default-600">
-            {resolvePluginName(plugin.name, plugin.name)}
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
-            {(plugin.panels ?? []).map((panel) => (
-              <PluginPanelRenderer
-                key={`${plugin.name}:${panel.id}`}
-                pluginName={plugin.name}
-                operatorId={operatorId}
-                panelId={panel.id}
-                title={resolvePluginLabel(panel.title, plugin.name)}
-                component={panel.component}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
+      {activePluginsWithPanels.map((plugin) => {
+        const operatorPanels = (plugin.panels ?? []).filter(
+          (panel) => !panel.slot || panel.slot === 'operator',
+        );
+        return (
+          <section key={plugin.name} className="space-y-2">
+            <div className="text-xs font-medium text-default-600">
+              {resolvePluginName(plugin.name, plugin.name)}
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {operatorPanels.map((panel) => (
+                <PluginPanelRenderer
+                  key={`${plugin.name}:${panel.id}`}
+                  pluginName={plugin.name}
+                  operatorId={operatorId}
+                  panelId={panel.id}
+                  title={resolvePluginLabel(panel.title, plugin.name)}
+                  component={panel.component}
+                  pageId={panel.pageId}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 };

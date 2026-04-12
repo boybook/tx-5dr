@@ -51,6 +51,12 @@ export {
 } from './heartbeat-demo/index.js';
 
 export {
+  iframePanelDemoPlugin,
+  iframePanelDemoLocales,
+  BUILTIN_IFRAME_PANEL_DEMO_PLUGIN_NAME,
+} from './iframe-panel-demo/index.js';
+
+export {
   watchedCallsignAutocallPlugin,
   watchedCallsignAutocallLocales,
 } from './watched-callsign-autocall/index.js';
@@ -88,6 +94,7 @@ import { callsignPrefixFilterPlugin, callsignPrefixFilterLocales } from './calls
 import { workedStationBiasPlugin, workedStationBiasLocales } from './worked-station-bias/index.js';
 import { qsoSessionInspectorPlugin, qsoSessionInspectorLocales } from './qso-session-inspector/index.js';
 import { heartbeatDemoPlugin, heartbeatDemoLocales } from './heartbeat-demo/index.js';
+import { iframePanelDemoPlugin, iframePanelDemoLocales, iframePanelDemoDirPath } from './iframe-panel-demo/index.js';
 import { watchedCallsignAutocallPlugin, watchedCallsignAutocallLocales } from './watched-callsign-autocall/index.js';
 import { watchedNoveltyAutocallPlugin, watchedNoveltyAutocallLocales } from './watched-novelty-autocall/index.js';
 import { wavelogSyncPlugin, wavelogSyncLocales, wavelogSyncDirPath } from './wavelog-sync/index.js';
@@ -137,6 +144,12 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     definition: heartbeatDemoPlugin,
     locales: heartbeatDemoLocales,
     enabledByDefault: false,
+  },
+  {
+    definition: iframePanelDemoPlugin,
+    locales: iframePanelDemoLocales,
+    enabledByDefault: false,
+    dirPath: iframePanelDemoDirPath,
   },
   {
     definition: watchedCallsignAutocallPlugin,

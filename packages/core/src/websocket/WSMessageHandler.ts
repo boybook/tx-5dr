@@ -85,6 +85,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.PLUGIN_STATUS_CHANGED]: 'pluginStatusChanged',
   [WSMessageType.PLUGIN_DATA]: 'pluginData',
   [WSMessageType.PLUGIN_LOG]: 'pluginLog',
+  [WSMessageType.PLUGIN_PAGE_PUSH]: 'pluginPagePush',
 };
 
 /**

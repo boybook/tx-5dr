@@ -33,7 +33,7 @@ export type PluginPermission = z.infer<typeof PluginPermissionSchema>;
 /**
  * Built-in frontend renderer kinds supported by declarative plugin panels.
  */
-export const PluginPanelComponentSchema = z.enum(['table', 'key-value', 'chart', 'log']);
+export const PluginPanelComponentSchema = z.enum(['table', 'key-value', 'chart', 'log', 'iframe']);
 
 /**
  * Built-in frontend renderer kinds supported by declarative plugin panels.
@@ -165,15 +165,33 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
 // ===== 面板 =====
 
 /**
+ * Rendering slot that determines where a panel appears in the UI.
+ *
+ * - `operator`: shown in the expanded operator card's live-panel area (default).
+ * - `automation`: shown inside the top-right automation quick-action popover.
+ */
+export const PluginPanelSlotSchema = z.enum(['operator', 'automation']);
+
+/**
+ * Rendering slot that determines where a panel appears in the UI.
+ */
+export type PluginPanelSlot = z.infer<typeof PluginPanelSlotSchema>;
+
+/**
  * Declarative definition of a plugin-owned panel in the frontend.
  *
  * Panels are passive containers rendered by the host. A plugin sends data into
- * them through `ctx.ui.send(panelId, data)`.
+ * them through `ctx.ui.send(panelId, data)`. When `component` is `'iframe'`,
+ * the panel renders a custom UI page inside a sandboxed iframe instead.
  */
 export const PluginPanelDescriptorSchema = z.object({
   id: z.string(),
   title: z.string(),
   component: PluginPanelComponentSchema,
+  /** Required when `component` is `'iframe'`. References a page id from `ui.pages`. */
+  pageId: z.string().optional(),
+  /** Where the panel renders. Defaults to `'operator'` (operator card live-panel area). */
+  slot: PluginPanelSlotSchema.optional(),
 });
 
 /**

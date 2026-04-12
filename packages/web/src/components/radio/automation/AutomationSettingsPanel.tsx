@@ -11,6 +11,7 @@ import {
 import { useConnection } from '../../../store/radioStore';
 import { api } from '@tx5dr/core';
 import type {
+  PluginPanelDescriptor,
   PluginQuickAction,
   PluginQuickSetting,
   PluginSettingDescriptor,
@@ -27,6 +28,7 @@ import {
 } from '../../../utils/pluginSettings';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck } from '@fortawesome/free-solid-svg-icons';
+import { PluginPanelRenderer } from '../../plugins/PluginPanelRenderer';
 
 const logger = createLogger('AutomationSettingsPanel');
 
@@ -38,6 +40,7 @@ interface PluginQuickGroup {
   plugin: PluginStatus;
   actions: PluginQuickAction[];
   settings: PluginQuickSetting[];
+  panels: PluginPanelDescriptor[];
 }
 
 const QUICK_ACTION_SPINNER = (
@@ -163,7 +166,8 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       .filter((plugin) => {
         const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
         const actions = plugin.plugin.quickActions ?? [];
-        if (settings.length === 0 && actions.length === 0) {
+        const panels = (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation');
+        if (settings.length === 0 && actions.length === 0 && panels.length === 0) {
           return false;
         }
         if (plugin.plugin.type === 'strategy') {
@@ -183,6 +187,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         plugin: plugin.plugin,
         settings: (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry)),
         actions: plugin.plugin.quickActions ?? [],
+        panels: (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation'),
       }));
   }, [operatorId, pluginSnapshot.plugins]);
 
@@ -366,7 +371,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         </div>
       )}
 
-      {activeGroups.map(({ plugin, settings, actions }) => (
+      {activeGroups.map(({ plugin, settings, actions, panels }) => (
         <section key={plugin.name} className="space-y-1.5">
           <div className="px-1 text-[10px] uppercase tracking-[0.12em] text-default-400">
             {resolvePluginName(plugin.name, plugin.name)}
@@ -552,6 +557,23 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {panels.length > 0 && (
+            <div className="space-y-1.5">
+              {panels.map((panel) => (
+                <PluginPanelRenderer
+                  key={`${plugin.name}:${panel.id}`}
+                  pluginName={plugin.name}
+                  operatorId={operatorId}
+                  panelId={panel.id}
+                  title={resolvePluginLabel(panel.title, plugin.name)}
+                  component={panel.component}
+                  pageId={panel.pageId}
+                  variant="inline"
+                />
+              ))}
             </div>
           )}
 
