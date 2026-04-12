@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
@@ -51,22 +51,16 @@ function createOperator(id: string, callsign: string): RadioOperator {
   }, eventEmitter);
 }
 
-async function flushAsyncWork(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-describe('PluginManager global instance scope', () => {
-  it('creates a global utility plugin only once and unregisters its sync provider on disable', async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-global-'));
+describe('PluginManager page handler routing', () => {
+  it('routes invoke requests to the exact operator-scoped plugin instance', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-page-routing-'));
     tempDirs.push(dataDir);
 
-    await writeUserPlugin(dataDir, 'global-sync-test', `
+    await writeUserPlugin(dataDir, 'page-routing-test', `
       export default {
-        name: 'global-sync-test',
+        name: 'page-routing-test',
         version: '1.0.0',
         type: 'utility',
-        instanceScope: 'global',
         ui: {
           pages: [
             {
@@ -74,24 +68,18 @@ describe('PluginManager global instance scope', () => {
               title: 'Settings',
               entry: 'settings.html',
               accessScope: 'operator',
-              resourceBinding: 'callsign',
+              resourceBinding: 'none',
             },
           ],
         },
-        onLoad: async (ctx) => {
-          const existing = await ctx.files.read('load-count.txt');
-          const nextCount = existing ? Number(existing.toString('utf8')) + 1 : 1;
-          await ctx.files.write('load-count.txt', Buffer.from(String(nextCount), 'utf8'));
-          ctx.logbookSync.register({
-            id: 'global-sync-test-provider',
-            displayName: 'Global Sync Test',
-            settingsPageId: 'settings',
-            accessScope: 'operator',
-            testConnection: async () => ({ success: true, message: 'ok' }),
-            upload: async () => ({ uploaded: 0, skipped: 0, failed: 0 }),
-            download: async () => ({ downloaded: 0, matched: 0, updated: 0 }),
-            isConfigured: () => true,
-            isAutoUploadEnabled: () => false,
+        onLoad(ctx) {
+          ctx.ui.registerPageHandler({
+            async onMessage(_pageId, action) {
+              if (action !== 'whoami') {
+                throw new Error('unexpected action');
+              }
+              return { operatorId: ctx.operator.id };
+            },
           });
         },
       };
@@ -132,48 +120,39 @@ describe('PluginManager global instance scope', () => {
 
     pluginManager.loadConfig({
       configs: {
-        'global-sync-test': { enabled: true, settings: {} },
+        'page-routing-test': { enabled: true, settings: {} },
       },
       operatorStrategies: Object.fromEntries(
         operators.map((operator) => [operator.config.id, 'standard-qso']),
       ),
-      operatorSettings: Object.fromEntries(
-        operators.map((operator) => [
-          operator.config.id,
-          {
-            'standard-qso': {
-              autoReplyToCQ: false,
-              autoResumeCQAfterFail: false,
-              autoResumeCQAfterSuccess: false,
-              replyToWorkedStations: false,
-              targetSelectionPriorityMode: 'dxcc_first',
-              maxQSOTimeoutCycles: 6,
-              maxCallAttempts: 5,
-            },
-          },
-        ]),
-      ),
+      operatorSettings: {},
     });
 
     await pluginManager.start();
 
-    const loadCountFile = join(
-      dataDir,
-      'plugin-data',
-      'global-sync-test',
-      'files',
-      'load-count.txt',
+    const invoke = (operatorId: string) => pluginManager.invokePluginPageHandler(
+      'page-routing-test',
+      'settings',
+      'whoami',
+      null,
+      {
+        pageSessionId: `session-${operatorId}`,
+        user: {
+          tokenId: 'token-1',
+          role: 'operator',
+          operatorIds: [operatorId],
+        },
+        instanceTarget: { kind: 'operator', operatorId },
+        page: {
+          sessionId: `session-${operatorId}`,
+          pageId: 'settings',
+          push() {},
+        },
+      },
     );
-    expect(await readFile(loadCountFile, 'utf8')).toBe('1');
 
-    const registeredProviders = pluginManager.logbookSyncHost.getProviders('operator');
-    expect(registeredProviders.some((provider) => provider.id === 'global-sync-test-provider')).toBe(true);
-
-    pluginManager.setPluginEnabled('global-sync-test', false);
-    await flushAsyncWork();
-
-    const remainingProviders = pluginManager.logbookSyncHost.getProviders('operator');
-    expect(remainingProviders.some((provider) => provider.id === 'global-sync-test-provider')).toBe(false);
+    await expect(invoke('operator-1')).resolves.toEqual({ operatorId: 'operator-1' });
+    await expect(invoke('operator-2')).resolves.toEqual({ operatorId: 'operator-2' });
 
     await pluginManager.shutdown();
   });

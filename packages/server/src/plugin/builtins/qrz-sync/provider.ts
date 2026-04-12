@@ -114,14 +114,15 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
-    // Query recent QSOs from logbook
-    const since = config.lastSyncTime ?? (Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const qsos = await logbook.queryQSOs({
-      timeRange: { start: since, end: Date.now() },
-    });
+    // Upload is driven by per-QSO sent flag to avoid time-window data loss.
+    const allQsos = await logbook.queryQSOs({});
+    const qsos = allQsos.filter((qso) => qso.qrzQslSent !== 'Y');
+
+    if (qsos.length === 0) {
+      return { uploaded: 0, skipped: 0, failed: 0 };
+    }
 
     let uploaded = 0;
-    let skipped = 0;
     let failed = 0;
     const errors: string[] = [];
 
@@ -145,14 +146,14 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       }
     }
 
-    // Update lastSyncTime on success
     if (uploaded > 0) {
       this.setConfig(callsign, { ...config, lastSyncTime: Date.now() });
+      await logbook.notifyUpdated();
     }
 
     return {
       uploaded,
-      skipped,
+      skipped: 0,
       failed,
       errors: errors.length > 0 ? errors : undefined,
     };

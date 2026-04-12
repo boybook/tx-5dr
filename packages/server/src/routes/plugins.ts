@@ -1,7 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { JWTPayload, PluginUIPageDescriptor } from '@tx5dr/contracts';
+import type { PluginUIInstanceTarget } from '@tx5dr/plugin-api';
+import type {
+  JWTPayload,
+  PermissionGrant,
+  PluginUIPageDescriptor,
+} from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
@@ -9,6 +14,17 @@ import { AuthManager } from '../auth/AuthManager.js';
 import { createLogger } from '../utils/logger.js';
 import { getPluginRuntimeInfo } from '../plugin/runtime-info.js';
 import { normalizeCallsign } from '../utils/callsign.js';
+import {
+  type PluginPageSession,
+} from '../plugin/PluginPageSessionStore.js';
+import { ScopedPluginFileStoreProvider } from '../plugin/ScopedPluginFileStoreProvider.js';
+import { PluginStorageProvider } from '../plugin/PluginStorageProvider.js';
+import { PluginFileStoreProvider } from '../plugin/PluginFileStoreProvider.js';
+import {
+  type PluginPageBoundResource,
+  getPluginPageScopePath,
+  getPluginPageStorePath,
+} from '../plugin/page-scope.js';
 
 const logger = createLogger('PluginRoutes');
 
@@ -173,7 +189,7 @@ function getPluginPageDescriptor(
 function getPageBindingValue(
   page: PluginUIPageDescriptor,
   requestData: unknown,
-): { type: 'callsign' | 'operator'; value: string } | null {
+): PluginPageBoundResource | null {
   if (page.resourceBinding === 'none') {
     return null;
   }
@@ -183,14 +199,77 @@ function getPageBindingValue(
     : {};
 
   if (page.resourceBinding === 'callsign' && typeof data.callsign === 'string' && data.callsign.trim()) {
-    return { type: 'callsign', value: data.callsign.trim() };
+    return { kind: 'callsign', value: data.callsign.trim() };
   }
 
   if (page.resourceBinding === 'operator' && typeof data.operatorId === 'string' && data.operatorId.trim()) {
-    return { type: 'operator', value: data.operatorId.trim() };
+    return { kind: 'operator', value: data.operatorId.trim() };
   }
 
   return null;
+}
+
+function getPluginInstanceTarget(
+  engine: DigitalRadioEngine,
+  pluginName: string,
+  requestData: unknown,
+): PluginUIInstanceTarget | null {
+  const loaded = engine.pluginManager.getLoadedPlugin(pluginName);
+  const instanceScope = loaded?.definition.instanceScope ?? 'operator';
+  if (instanceScope === 'global') {
+    return { kind: 'global' };
+  }
+
+  const data = requestData && typeof requestData === 'object'
+    ? requestData as Record<string, unknown>
+    : {};
+  if (typeof data.operatorId === 'string' && data.operatorId.trim()) {
+    return { kind: 'operator', operatorId: data.operatorId.trim() };
+  }
+
+  return null;
+}
+
+function toPluginRequestRole(role: UserRole): 'viewer' | 'operator' | 'admin' {
+  return role;
+}
+
+function toPluginRequestUser(user: RuntimeAuthUser): {
+  tokenId: string;
+  role: 'viewer' | 'operator' | 'admin';
+  operatorIds: string[];
+  permissionGrants?: PermissionGrant[];
+} {
+  return {
+    tokenId: user.tokenId,
+    role: toPluginRequestRole(user.role),
+    operatorIds: user.operatorIds,
+    permissionGrants: user.permissionGrants,
+  };
+}
+
+function getPageMinimumRole(page: PluginUIPageDescriptor): UserRole {
+  return page.accessScope === 'operator' ? UserRole.OPERATOR : UserRole.ADMIN;
+}
+
+async function requirePageAccess(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  page: PluginUIPageDescriptor,
+  allowQueryToken = false,
+): Promise<RuntimeAuthUser | null> {
+  return requireMinimumRole(
+    fastify,
+    request,
+    reply,
+    getPageMinimumRole(page),
+    allowQueryToken,
+  );
+}
+
+function createSessionBootstrapScript(sessionId: string): string {
+  return `<script>window.__TX5DR_PAGE_SESSION_ID__=${JSON.stringify(sessionId)};</script>`;
 }
 
 /**
@@ -509,6 +588,35 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post<{
     Params: { providerId: string };
     Body: { callsign: string };
+  }>('/sync-providers/:providerId/upload-preflight', async (req, reply) => {
+    const { providerId } = req.params;
+    const { callsign } = req.body ?? {};
+    if (!callsign) {
+      return reply.status(400).send({ error: 'callsign is required' });
+    }
+    const provider = engine.pluginManager.logbookSyncHost.getProviderInfo(providerId);
+    if (!provider) {
+      return reply.status(404).send({ error: 'provider not found' });
+    }
+    if (!(provider.accessScope === 'operator'
+      ? await requireCallsignBindingAccess(fastify, req, reply, callsign)
+      : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN))) {
+      return;
+    }
+
+    try {
+      const result = await engine.pluginManager.logbookSyncHost.getUploadPreflight(providerId, callsign);
+      return reply.send(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload preflight failed';
+      logger.error(`Sync upload preflight failed: provider=${providerId}`, err);
+      return reply.status(500).send({ error: message });
+    }
+  });
+
+  fastify.post<{
+    Params: { providerId: string };
+    Body: { callsign: string };
   }>('/sync-providers/:providerId/upload', async (req, reply) => {
     const { providerId } = req.params;
     const { callsign } = req.body ?? {};
@@ -641,7 +749,14 @@ const BRIDGE_SDK = `/* TX-5DR Plugin Bridge SDK */
   var pushListeners = {};
   var themeListeners = [];
   var nextId = 1;
-  var state = { params: {}, theme: 'dark', locale: 'en' };
+  var state = {
+    params: {},
+    theme: 'dark',
+    locale: 'en',
+    pageSessionId: typeof window.__TX5DR_PAGE_SESSION_ID__ === 'string'
+      ? window.__TX5DR_PAGE_SESSION_ID__
+      : ''
+  };
 
   // === Theme-aware CSS variable tokens ===
   var THEME_TOKENS = {
@@ -711,24 +826,57 @@ const BRIDGE_SDK = `/* TX-5DR Plugin Bridge SDK */
     return new Promise(function(resolve, reject) {
       var id = 'r' + (nextId++);
       pending[id] = { resolve: resolve, reject: reject };
-      var msg = Object.assign({ type: type, requestId: id }, payload);
+      var msg = Object.assign({
+        type: type,
+        requestId: id,
+        pageSessionId: state.pageSessionId
+      }, payload);
       window.parent.postMessage(msg, '*');
     });
+  }
+
+  function base64FromArrayBuffer(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var chunkSize = 0x8000;
+    var binary = '';
+    for (var i = 0; i < bytes.length; i += chunkSize) {
+      var chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, Array.prototype.slice.call(chunk));
+    }
+    return btoa(binary);
+  }
+
+  function arrayBufferFromBase64(base64) {
+    var binary = atob(base64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
   }
 
   window.tx5dr = {
     get params() { return state.params; },
     get theme() { return state.theme; },
     get locale() { return state.locale; },
+    get pageSessionId() { return state.pageSessionId; },
     storeGet: function(key, def) { return request('tx5dr:store:get', { key: key }).then(function(v) { return v != null ? v : def; }); },
     storeSet: function(key, value) { return request('tx5dr:store:set', { key: key, value: value }); },
     storeDelete: function(key) { return request('tx5dr:store:delete', { key: key }); },
     fileUpload: function(p, file) {
       return file.arrayBuffer().then(function(buf) {
-        return request('tx5dr:file:upload', { path: p, data: buf });
+        return request('tx5dr:file:upload', {
+          path: p,
+          data: base64FromArrayBuffer(buf)
+        });
       });
     },
-    fileRead: function(p) { return request('tx5dr:file:read', { path: p }).then(function(v) { return v ? new Blob([v]) : null; }); },
+    fileRead: function(p) {
+      return request('tx5dr:file:read', { path: p }).then(function(v) {
+        if (!v) return null;
+        return new Blob([arrayBufferFromBase64(v)]);
+      });
+    },
     fileDelete: function(p) { return request('tx5dr:file:delete', { path: p }); },
     fileList: function(prefix) { return request('tx5dr:file:list', { prefix: prefix || '' }); },
     requestClose: function() { window.parent.postMessage({ type: 'tx5dr:request-close' }, '*'); },
@@ -762,17 +910,186 @@ function resolveSafePath(root: string, relative: string): string | null {
 const TOKEN_LINK = '<link rel="stylesheet" href="/api/plugins/_bridge/tokens.css">';
 const BRIDGE_SCRIPT = '<script src="/api/plugins/_bridge/bridge.js"></' + 'script>';
 
-function injectIntoHTML(html: string): string {
+function injectIntoHTML(html: string, bootstrapScript?: string): string {
+  const injection = [TOKEN_LINK, bootstrapScript, BRIDGE_SCRIPT]
+    .filter((value): value is string => Boolean(value))
+    .join('\n');
   const headClose = html.indexOf('</head>');
   if (headClose !== -1) {
-    return html.slice(0, headClose) + TOKEN_LINK + '\n' + BRIDGE_SCRIPT + '\n' + html.slice(headClose);
+    return html.slice(0, headClose) + injection + '\n' + html.slice(headClose);
   }
-  return TOKEN_LINK + '\n' + BRIDGE_SCRIPT + '\n' + html;
+  return injection + '\n' + html;
+}
+
+function getSessionPayloadResource(data: unknown): PluginPageBoundResource | null {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const record = data as Record<string, unknown>;
+  if (typeof record.callsign === 'string' && record.callsign.trim()) {
+    return { kind: 'callsign', value: record.callsign.trim() };
+  }
+  if (typeof record.operatorId === 'string' && record.operatorId.trim()) {
+    return { kind: 'operator', value: record.operatorId.trim() };
+  }
+  return null;
+}
+
+function getPayloadResourceForPage(
+  engine: DigitalRadioEngine,
+  pluginName: string,
+  pageId: string,
+  data: unknown,
+): PluginPageBoundResource | null {
+  const page = getPluginPageDescriptor(engine, pluginName, pageId);
+  return page ? getPageBindingValue(page, data) : null;
+}
+
+function sessionResourceMatches(
+  sessionResource: PluginPageBoundResource | undefined,
+  payloadResource: PluginPageBoundResource | null,
+): boolean {
+  if (!payloadResource) {
+    return true;
+  }
+  if (!sessionResource) {
+    return false;
+  }
+  if (sessionResource.kind !== payloadResource.kind) {
+    return false;
+  }
+  if (sessionResource.kind === 'callsign') {
+    return normalizeCallsign(sessionResource.value) === normalizeCallsign(payloadResource.value);
+  }
+  return sessionResource.value === payloadResource.value;
+}
+
+async function resolveValidatedPageSession(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  engine: DigitalRadioEngine,
+  pluginName: string,
+  pageId: string,
+  pageSessionId: string,
+  payloadResource?: PluginPageBoundResource | null,
+): Promise<{
+  page: PluginUIPageDescriptor;
+  session: PluginPageSession;
+  user: RuntimeAuthUser;
+  requestContext: {
+    pageSessionId: string;
+    user: ReturnType<typeof toPluginRequestUser>;
+    resource?: PluginPageBoundResource;
+    instanceTarget: PluginPageSession['instanceTarget'];
+    page: {
+      sessionId: string;
+      pageId: string;
+      resource?: PluginPageBoundResource;
+      push(action: string, data?: unknown): void;
+    };
+  };
+} | null> {
+  const page = getPluginPageDescriptor(engine, pluginName, pageId);
+  if (!page) {
+    await reply.status(404).send({ error: 'Plugin page not found' });
+    return null;
+  }
+
+  const user = await requirePageAccess(fastify, request, reply, page);
+  if (!user) {
+    return null;
+  }
+
+  const session = engine.pluginManager.getPluginPageSession(pageSessionId);
+  if (!session || session.pluginName !== pluginName || session.pageId !== pageId) {
+    await reply.status(401).send({ error: 'Page session is invalid or expired' });
+    return null;
+  }
+
+  if (session.accessScope !== (page.accessScope ?? 'admin')) {
+    await reply.status(403).send({ error: 'Page session scope mismatch' });
+    return null;
+  }
+
+  if (session.instanceTarget.kind === 'operator' && !userHasOperatorAccess(user, session.instanceTarget.operatorId)) {
+    await reply.status(403).send({
+      error: 'No operator access for page instance',
+      userMessage: 'You do not have access to this operator',
+    });
+    return null;
+  }
+
+  if (session.resource?.kind === 'callsign' && !userHasCallsignAccess(user, session.resource.value)) {
+    await reply.status(403).send({ error: 'No permission to access this callsign' });
+    return null;
+  }
+
+  if (session.resource?.kind === 'operator' && !userHasOperatorAccess(user, session.resource.value)) {
+    await reply.status(403).send({ error: 'No operator access', userMessage: 'You do not have access to this operator' });
+    return null;
+  }
+
+  if (!sessionResourceMatches(session.resource, payloadResource ?? null)) {
+    await reply.status(403).send({ error: 'Payload resource does not match page session binding' });
+    return null;
+  }
+
+  const activeSession = engine.pluginManager.touchPluginPageSession(pageSessionId) ?? session;
+
+  return {
+    page,
+    session: activeSession,
+    user,
+    requestContext: {
+      pageSessionId: activeSession.sessionId,
+      user: toPluginRequestUser(user),
+      resource: activeSession.resource,
+      instanceTarget: activeSession.instanceTarget,
+      page: {
+        sessionId: activeSession.sessionId,
+        pageId: activeSession.pageId,
+        resource: activeSession.resource,
+        push(action: string, data?: unknown) {
+          engine.pluginManager.pushPluginPageSession(
+            pluginName,
+            activeSession.pageId,
+            activeSession.sessionId,
+            action,
+            data,
+          );
+        },
+      },
+    },
+  };
 }
 
 // ===== Route registration =====
 
 function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEngine): void {
+  const pageStoreProviders = new Map<string, Promise<PluginStorageProvider>>();
+
+  const getPageStoreProvider = async (storePath: string): Promise<PluginStorageProvider> => {
+    const existing = pageStoreProviders.get(storePath);
+    if (existing) {
+      return existing;
+    }
+
+    const pending = (async () => {
+      const provider = new PluginStorageProvider(storePath);
+      await provider.init();
+      return provider;
+    })();
+    pageStoreProviders.set(storePath, pending);
+
+    try {
+      return await pending;
+    } catch (err) {
+      pageStoreProviders.delete(storePath);
+      throw err;
+    }
+  };
 
   // GET /api/plugins/_bridge/tokens.css
   fastify.get('/_bridge/tokens.css', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -806,11 +1123,29 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
       if (isHtmlFile && !declaredPage) {
         return reply.status(404).send({ error: 'Plugin page not found' });
       }
+
+      let bootstrapScript: string | undefined;
       if (declaredPage) {
-        if (!(declaredPage.accessScope === 'operator'
-          ? await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR, true)
-          : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN, true))) {
+        const user = await requirePageAccess(fastify, req, reply, declaredPage, true);
+        if (!user) {
           return;
+        }
+
+        const instanceTarget = getPluginInstanceTarget(engine, name, req.query);
+        const loadedInstanceScope = loaded.definition.instanceScope ?? 'operator';
+        if (loadedInstanceScope === 'operator') {
+          if (!instanceTarget || instanceTarget.kind !== 'operator') {
+            return reply.status(400).send({ error: 'operatorId query parameter is required' });
+          }
+          if (!await requireOperatorBindingAccess(
+            fastify,
+            req,
+            reply,
+            instanceTarget.operatorId,
+            true,
+          )) {
+            return;
+          }
         }
 
         const binding = getPageBindingValue(declaredPage, req.query);
@@ -830,6 +1165,23 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
             return;
           }
         }
+
+        const session = engine.pluginManager.createPluginPageSession({
+          pluginName: name,
+          pageId: declaredPage.id,
+          accessScope: declaredPage.accessScope ?? 'admin',
+          instanceTarget: instanceTarget ?? { kind: 'global' },
+          resource: binding ?? undefined,
+        });
+        logger.debug('Plugin page session created', {
+          pluginName: name,
+          pageId: declaredPage.id,
+          sessionId: session.sessionId,
+          userRole: user.role,
+          instanceTarget: session.instanceTarget,
+          resource: binding,
+        });
+        bootstrapScript = createSessionBootstrapScript(session.sessionId);
       }
 
       const uiDir = loaded.definition.ui?.dir ?? 'ui';
@@ -845,7 +1197,7 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
 
         // Auto-inject tokens.css and bridge.js into HTML files
         if (mime.startsWith('text/html')) {
-          return reply.type(mime).send(injectIntoHTML(content.toString('utf-8')));
+          return reply.type(mime).send(injectIntoHTML(content.toString('utf-8'), bootstrapScript));
         }
 
         return reply.type(mime).send(content);
@@ -861,54 +1213,206 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
   // POST /api/plugins/:name/ui-invoke — route iframe invoke to plugin handler
   fastify.post<{
     Params: { name: string };
-    Body: { pageId: string; action: string; data?: unknown };
+    Body: { pageId: string; pageSessionId: string; action: string; data?: unknown };
   }>(
     '/:name/ui-invoke',
     async (req, reply) => {
       const { name } = req.params;
-      const { pageId, action, data } = req.body ?? {};
+      const { pageId, pageSessionId, action, data } = req.body ?? {};
 
-      if (!pageId || !action) {
-        return reply.status(400).send({ error: 'pageId and action are required' });
+      if (!pageId || !pageSessionId || !action) {
+        return reply.status(400).send({ error: 'pageId, pageSessionId and action are required' });
       }
 
-      const page = getPluginPageDescriptor(engine, name, pageId);
-      if (!page) {
-        return reply.status(404).send({ error: 'Plugin page not found' });
-      }
-
-      if (!(page.accessScope === 'operator'
-        ? await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR)
-        : await requireMinimumRole(fastify, req, reply, UserRole.ADMIN))) {
+      const pageContext = await resolveValidatedPageSession(
+        fastify,
+        req,
+        reply,
+        engine,
+        name,
+        pageId,
+        pageSessionId,
+        getPayloadResourceForPage(engine, name, pageId, data),
+      );
+      if (!pageContext) {
         return;
       }
 
-      const binding = getPageBindingValue(page, data);
-      if (page.resourceBinding === 'callsign') {
-        if (!binding) {
-          return reply.status(400).send({ error: 'callsign is required in invoke payload' });
-        }
-        if (!await requireCallsignBindingAccess(fastify, req, reply, binding.value)) {
-          return;
-        }
-      }
-      if (page.resourceBinding === 'operator') {
-        if (!binding) {
-          return reply.status(400).send({ error: 'operatorId is required in invoke payload' });
-        }
-        if (!await requireOperatorBindingAccess(fastify, req, reply, binding.value)) {
-          return;
-        }
-      }
-
       try {
-        const result = await engine.pluginManager.invokePluginPageHandler(name, pageId, action, data);
+        const result = await engine.pluginManager.invokePluginPageHandler(
+          name,
+          pageId,
+          action,
+          data,
+          pageContext.requestContext,
+        );
         return reply.send({ result });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         logger.warn(`Plugin UI invoke failed: plugin=${name}, action=${action}`, { error: message });
         return reply.status(500).send({ error: message });
       }
+    },
+  );
+
+  fastify.post<{
+    Params: { name: string };
+    Body: { pageId: string; pageSessionId: string };
+  }>(
+    '/:name/ui-session/heartbeat',
+    async (req, reply) => {
+      const { name } = req.params;
+      const { pageId, pageSessionId } = req.body ?? {};
+
+      if (!pageId || !pageSessionId) {
+        return reply.status(400).send({ error: 'pageId and pageSessionId are required' });
+      }
+
+      const pageContext = await resolveValidatedPageSession(
+        fastify,
+        req,
+        reply,
+        engine,
+        name,
+        pageId,
+        pageSessionId,
+      );
+      if (!pageContext) {
+        return;
+      }
+
+      return reply.send({ result: true });
+    },
+  );
+
+  fastify.post<{
+    Params: { name: string };
+    Body: {
+      pageId: string;
+      pageSessionId: string;
+      type?: string;
+      key: string;
+      value?: unknown;
+      callsign?: string;
+      operatorId?: string;
+    };
+  }>(
+    '/:name/ui-store',
+    async (req, reply) => {
+      const { name } = req.params;
+      const { pageId, pageSessionId, key, type } = req.body ?? {};
+      if (!pageId || !pageSessionId || !key || !type) {
+        return reply.status(400).send({ error: 'pageId, pageSessionId, type and key are required' });
+      }
+
+      const sessionContext = await resolveValidatedPageSession(
+        fastify,
+        req,
+        reply,
+        engine,
+        name,
+        pageId,
+        pageSessionId,
+        getSessionPayloadResource(req.body),
+      );
+      if (!sessionContext) {
+        return;
+      }
+
+      const storePath = path.join(
+        engine.pluginManager.getPluginStorageDir(name),
+        getPluginPageStorePath(pageId, sessionContext.session.resource),
+      );
+      const store = await getPageStoreProvider(storePath);
+
+      if (type === 'tx5dr:store:get') {
+        return reply.send({ result: store.get(key, null) });
+      }
+      if (type === 'tx5dr:store:set') {
+        store.set(key, req.body?.value);
+        await store.flush();
+        return reply.send({ result: true });
+      }
+      if (type === 'tx5dr:store:delete') {
+        store.delete(key);
+        await store.flush();
+        return reply.send({ result: true });
+      }
+
+      return reply.status(400).send({ error: 'Unsupported ui-store operation' });
+    },
+  );
+
+  fastify.post<{
+    Params: { name: string };
+    Body: {
+      pageId: string;
+      pageSessionId: string;
+      path?: string;
+      prefix?: string;
+      data?: string;
+      callsign?: string;
+      operatorId?: string;
+      type?: string;
+    };
+  }>(
+    '/:name/ui-files',
+    async (req, reply) => {
+      const { name } = req.params;
+      const { pageId, pageSessionId, path: filePath, prefix, data, type } = req.body ?? {};
+      if (!pageId || !pageSessionId || !type) {
+        return reply.status(400).send({ error: 'pageId, pageSessionId and type are required' });
+      }
+
+      const sessionContext = await resolveValidatedPageSession(
+        fastify,
+        req,
+        reply,
+        engine,
+        name,
+        pageId,
+        pageSessionId,
+        getSessionPayloadResource(req.body),
+      );
+      if (!sessionContext) {
+        return;
+      }
+
+      const fileRoot = path.join(engine.pluginManager.getPluginStorageDir(name), 'files');
+      const backingStore = new PluginFileStoreProvider(fileRoot);
+      const scopedStore = new ScopedPluginFileStoreProvider(
+        backingStore,
+        getPluginPageScopePath(sessionContext.session.resource),
+      );
+
+      if (type === 'tx5dr:file:upload') {
+        if (!filePath || typeof data !== 'string') {
+          return reply.status(400).send({ error: 'path and data are required for upload' });
+        }
+        await scopedStore.write(filePath, Buffer.from(data, 'base64'));
+        return reply.send({ result: filePath });
+      }
+
+      if (type === 'tx5dr:file:read') {
+        if (!filePath) {
+          return reply.status(400).send({ error: 'path is required for read' });
+        }
+        const content = await scopedStore.read(filePath);
+        return reply.send({ result: content ? content.toString('base64') : null });
+      }
+
+      if (type === 'tx5dr:file:delete') {
+        if (!filePath) {
+          return reply.status(400).send({ error: 'path is required for delete' });
+        }
+        return reply.send({ result: await scopedStore.delete(filePath) });
+      }
+
+      if (type === 'tx5dr:file:list') {
+        return reply.send({ result: await scopedStore.list(prefix) });
+      }
+
+      return reply.status(400).send({ error: 'Unsupported ui-files operation' });
     },
   );
 }

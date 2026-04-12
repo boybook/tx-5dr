@@ -172,6 +172,7 @@
       "resultUpdated": "{{count}} updated",
       "resultSkipped": "{{count}} skipped",
       "resultFailed": "{{count}} failed",
+      "preflightSummary": "{{pending}} pending, {{uploadable}} uploadable, {{blocked}} blocked",
       "resultSeparator": ", "
     },
     "wavelog": {

@@ -1,6 +1,15 @@
 import path from 'path';
-import type { PluginContext, QSOQueryFilter } from '@tx5dr/plugin-api';
-import type { LogBookStatistics, PluginLogEntry, ModeDescriptor } from '@tx5dr/contracts';
+import type {
+  LogbookSyncProvider,
+  PluginContext,
+  QSOQueryFilter,
+} from '@tx5dr/plugin-api';
+import type {
+  LogBookStatistics,
+  PluginLogEntry,
+  ModeDescriptor,
+  PluginUIPageDescriptor,
+} from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { ConfigManager } from '../config/config-manager.js';
@@ -20,27 +29,30 @@ const logger = createLogger('PluginContextFactory');
 export class PluginContextFactory {
   constructor(private deps: PluginManagerDeps) {}
 
-  create(
+  async create(
     plugin: LoadedPlugin,
     operatorId: string | undefined,
     instanceScope: 'operator' | 'global',
     pluginStorageDir: string,
     onTimer: (timerId: string) => void,
     getPluginSettings: () => Record<string, unknown>,
-  ): PluginContext {
+  ): Promise<PluginContext> {
     const globalStorage = new PluginStorageProvider(`${pluginStorageDir}/global.json`);
     const operatorStorageName = operatorId ? `operator-${operatorId}.json` : 'instance-global.json';
     const operatorStorage = new PluginStorageProvider(`${pluginStorageDir}/${operatorStorageName}`);
 
-    // 初始化存储（异步，忽略错误由 init 内部处理）
-    globalStorage.init().catch(err => logger.warn('Failed to init global storage', { error: err }));
-    operatorStorage.init().catch(err => logger.warn('Failed to init operator storage', { error: err }));
+    await globalStorage.init();
+    await operatorStorage.init();
 
     const timerManager = new PluginTimerManager(plugin.definition.name, onTimer);
     const uiBridge = new PluginUIBridge(
       plugin.definition.name,
-      operatorId ?? '__global__',
+      instanceScope === 'global'
+        ? { kind: 'global' as const }
+        : { kind: 'operator' as const, operatorId: operatorId ?? '__missing__' },
       this.deps.eventEmitter,
+      (pluginName, instanceTarget, pageId) =>
+        this.deps.listPluginPageSessions?.(pluginName, instanceTarget, pageId) ?? [],
     );
     const pluginLogger = this.createLogger(plugin.definition.name);
     const operatorControl = this.createOperatorControl(operatorId, instanceScope);
@@ -69,6 +81,7 @@ export class PluginContextFactory {
       files: fileStore,
       logbookSync: {
         register: (provider) => {
+          this.validateLogbookSyncProvider(plugin, provider);
           this.deps.registerLogbookSyncProvider?.(plugin.definition.name, provider);
         },
       },
@@ -78,6 +91,46 @@ export class PluginContextFactory {
     };
 
     return ctx;
+  }
+
+  private validateLogbookSyncProvider(
+    plugin: LoadedPlugin,
+    provider: LogbookSyncProvider,
+  ): void {
+    if (plugin.definition.type !== 'utility') {
+      throw new Error(`Logbook sync provider must come from a utility plugin: ${plugin.definition.name}`);
+    }
+    if ((plugin.definition.instanceScope ?? 'operator') !== 'global') {
+      throw new Error(`Logbook sync provider must come from a global plugin: ${plugin.definition.name}`);
+    }
+
+    const pages = plugin.definition.ui?.pages ?? [];
+    const settingsPage = pages.find((page) => page.id === provider.settingsPageId);
+    if (!provider.settingsPageId || !settingsPage) {
+      throw new Error(
+        `Sync provider settingsPageId must reference an existing page: ${plugin.definition.name}/${provider.id}`,
+      );
+    }
+
+    this.validateSyncSettingsPage(plugin.definition.name, provider, settingsPage);
+  }
+
+  private validateSyncSettingsPage(
+    pluginName: string,
+    provider: LogbookSyncProvider,
+    settingsPage: PluginUIPageDescriptor,
+  ): void {
+    if ((settingsPage.resourceBinding ?? 'none') !== 'callsign') {
+      throw new Error(
+        `Sync provider settings page must bind callsign: ${pluginName}/${provider.settingsPageId}`,
+      );
+    }
+
+    if (provider.accessScope === 'operator' && (settingsPage.accessScope ?? 'admin') !== 'operator') {
+      throw new Error(
+        `Operator sync provider settings page must be operator-scoped: ${pluginName}/${provider.settingsPageId}`,
+      );
+    }
   }
 
   private createLogger(pluginName: string) {

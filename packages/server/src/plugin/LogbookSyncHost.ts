@@ -1,4 +1,12 @@
-import type { LogbookSyncProvider, SyncAction, SyncTestResult, SyncUploadResult, SyncDownloadResult, SyncDownloadOptions } from '@tx5dr/plugin-api';
+import type {
+  LogbookSyncProvider,
+  SyncAction,
+  SyncTestResult,
+  SyncUploadResult,
+  SyncUploadPreflightResult,
+  SyncDownloadResult,
+  SyncDownloadOptions,
+} from '@tx5dr/plugin-api';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('LogbookSyncHost');
@@ -121,6 +129,17 @@ export class LogbookSyncHost {
       return { uploaded: 0, skipped: 0, failed: 0, errors: [`Provider not found: ${providerId}`] };
     }
     return entry.provider.upload(callsign);
+  }
+
+  async getUploadPreflight(
+    providerId: string,
+    callsign: string,
+  ): Promise<SyncUploadPreflightResult | null> {
+    const entry = this.providers.get(providerId);
+    if (!entry?.provider.getUploadPreflight) {
+      return null;
+    }
+    return entry.provider.getUploadPreflight(callsign);
   }
 
   /**

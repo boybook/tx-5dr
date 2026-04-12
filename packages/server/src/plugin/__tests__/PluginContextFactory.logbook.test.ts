@@ -106,7 +106,7 @@ describe('PluginContextFactory logbook access', () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-'));
     tempDirs.push(storageDir);
 
-    const ctx = factory.create(
+    const ctx = await factory.create(
       createPlugin(),
       'operator-1',
       'operator',
@@ -177,7 +177,7 @@ describe('PluginContextFactory logbook access', () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-global-'));
     tempDirs.push(storageDir);
 
-    const ctx = factory.create(
+    const ctx = await factory.create(
       createPlugin(),
       undefined,
       'global',

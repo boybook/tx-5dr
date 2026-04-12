@@ -67,6 +67,14 @@ export interface LogbookSyncProvider {
   upload(callsign: string): Promise<SyncUploadResult>;
 
   /**
+   * Optional host-visible upload readiness check.
+   *
+   * When implemented, the host may call this before upload/full-sync actions
+   * to surface blocked QSOs or missing configuration without starting upload.
+   */
+  getUploadPreflight?(callsign: string): Promise<SyncUploadPreflightResult>;
+
+  /**
    * Downloads QSO confirmations/records from the external service.
    *
    * The provider writes downloaded records or QSL updates directly into the
@@ -130,6 +138,21 @@ export interface SyncUploadResult {
   skipped: number;
   failed: number;
   errors?: string[];
+}
+
+export interface SyncPreflightIssue {
+  code: string;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+}
+
+export interface SyncUploadPreflightResult {
+  ready: boolean;
+  pendingCount: number;
+  uploadableCount: number;
+  blockedCount: number;
+  issues?: SyncPreflightIssue[];
+  guidance?: string[];
 }
 
 export interface SyncDownloadResult {

@@ -10,6 +10,8 @@ import type {
 } from '@tx5dr/contracts';
 import type {
   PluginContext,
+  PluginUIRequestContext,
+  PluginUIInstanceTarget,
   StrategyRuntime,
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
@@ -20,6 +22,7 @@ import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
 import { LogbookSyncHost } from './LogbookSyncHost.js';
+import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSessionStore.js';
 import {
   BUILTIN_PLUGINS,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
@@ -55,6 +58,7 @@ export class PluginManager {
   private running = false;
   private unsubscribeFns: Array<() => void> = [];
   private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
+  private readonly pageSessions = new PluginPageSessionStore();
 
   private systemState: PluginSystemRuntimeState = {
     state: 'ready',
@@ -75,6 +79,8 @@ export class PluginManager {
     deps.registerLogbookSyncProvider = (pluginName, provider) => {
       this._logbookSyncHost.register(pluginName, provider);
     };
+    deps.listPluginPageSessions = (pluginName, instanceTarget, pageId) =>
+      this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
     this.contextFactory = new PluginContextFactory(deps);
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
@@ -168,7 +174,7 @@ export class PluginManager {
         autoDisabled: false,
       };
 
-      const ctx = this.contextFactory.create(
+      const ctx = await this.contextFactory.create(
         plugin,
         operatorId,
         'operator',
@@ -215,7 +221,7 @@ export class PluginManager {
         autoDisabled: false,
       };
 
-      const ctx = this.contextFactory.create(
+      const ctx = await this.contextFactory.create(
         plugin,
         undefined,
         'global',
@@ -507,6 +513,60 @@ export class PluginManager {
     return this.loadedPlugins.get(pluginName);
   }
 
+  getPluginStorageDir(pluginName: string): string {
+    return path.join(this.deps.dataDir, 'plugin-data', pluginName);
+  }
+
+  createPluginPageSession(
+    input: Omit<PluginPageSession, 'sessionId' | 'createdAt' | 'expiresAt'>,
+  ): PluginPageSession {
+    return this.pageSessions.create(input);
+  }
+
+  getPluginPageSession(sessionId: string): PluginPageSession | null {
+    return this.pageSessions.get(sessionId);
+  }
+
+  touchPluginPageSession(sessionId: string): PluginPageSession | null {
+    return this.pageSessions.touch(sessionId);
+  }
+
+  deletePluginPageSession(sessionId: string): void {
+    this.pageSessions.delete(sessionId);
+  }
+
+  listPluginPageSessions(
+    pluginName: string,
+    instanceTarget: PluginUIInstanceTarget,
+    pageId?: string,
+  ): PluginPageSession[] {
+    return this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
+  }
+
+  pushPluginPageSession(
+    pluginName: string,
+    pageId: string,
+    pageSessionId: string,
+    action: string,
+    data?: unknown,
+  ): void {
+    const session = this.pageSessions.get(pageSessionId);
+    if (!session) {
+      throw new Error(`Page session not found: ${pageSessionId}`);
+    }
+    if (session.pluginName !== pluginName || session.pageId !== pageId) {
+      throw new Error(`Page session does not belong to ${pluginName}/${pageId}: ${pageSessionId}`);
+    }
+
+    this.eventEmitter.emit('pluginPagePush', {
+      pluginName,
+      pageId,
+      pageSessionId,
+      action,
+      data,
+    });
+  }
+
   /** Host-side manager for logbook sync providers registered by plugins. */
   get logbookSyncHost(): LogbookSyncHost {
     return this._logbookSyncHost;
@@ -516,31 +576,29 @@ export class PluginManager {
    * Invokes a custom page handler registered by the given plugin. The host
    * routes iframe `bridge.invoke()` calls through this method.
    *
-   * Returns the handler's response, or throws if no handler is registered.
-   * Uses any available operator instance — the page handler is per-plugin,
-   * not per-operator.
+   * Returns the handler's response, or throws if no handler is registered for
+   * the exact plugin instance targeted by the page session.
    */
   async invokePluginPageHandler(
     pluginName: string,
     pageId: string,
     action: string,
     data: unknown,
+    requestContext: PluginUIRequestContext,
   ): Promise<unknown> {
-    const globalInstance = this.globalInstances.get(pluginName);
-    if (globalInstance) {
-      const globalBridge = globalInstance.ctx.ui as import('./PluginUIBridge.js').PluginUIBridge;
-      if (globalBridge.hasPageHandler()) {
-        return globalBridge.handlePageInvoke(pageId, action, data);
-      }
+    const instance = requestContext.instanceTarget.kind === 'global'
+      ? this.globalInstances.get(pluginName)
+      : this.instances.get(requestContext.instanceTarget.operatorId)?.get(pluginName);
+
+    if (!instance) {
+      throw new Error(`Plugin instance not found: ${pluginName}`);
     }
-    for (const operatorInstances of this.instances.values()) {
-      const instance = operatorInstances.get(pluginName);
-      if (!instance) continue;
-      const bridge = instance.ctx.ui as import('./PluginUIBridge.js').PluginUIBridge;
-      if (bridge.hasPageHandler()) {
-        return bridge.handlePageInvoke(pageId, action, data);
-      }
+
+    const bridge = instance.ctx.ui as import('./PluginUIBridge.js').PluginUIBridge;
+    if (bridge.hasPageHandler()) {
+      return bridge.handlePageInvoke(pageId, action, data, requestContext);
     }
+
     throw new Error(`No page handler registered for plugin: ${pluginName}`);
   }
 

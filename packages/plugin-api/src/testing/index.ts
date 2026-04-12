@@ -227,10 +227,24 @@ export function createMockUIBridge(): MockUIBridge {
       existing.push(data);
       sentData.set(panelId, existing);
     },
-    registerPageHandler(): void {
+    registerPageHandler(_handler: Parameters<UIBridge['registerPageHandler']>[0]): void {
       // no-op in mock
     },
-    pushToPage(): void {
+    pushToSession(
+      _pageSessionId: string,
+      _action: string,
+      _data?: unknown,
+    ): void {
+      // no-op in mock
+    },
+    listActivePageSessions(_pageId: string): ReturnType<UIBridge['listActivePageSessions']> {
+      return [];
+    },
+    pushToPage(
+      _pageId: string,
+      _action: string,
+      _data?: unknown,
+    ): void {
       // no-op in mock
     },
   };
