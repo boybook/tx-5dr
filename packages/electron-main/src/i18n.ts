@@ -16,6 +16,12 @@ export interface ElectronMessages {
     detail: string;
     buttons: [string, string];
   };
+  vcRuntimeOutdated: {
+    title: string;
+    message: string;
+    detail: string;
+    buttons: [string, string];
+  };
   httpsSelfSigned: {
     title: string;
     detail: string;
@@ -41,6 +47,12 @@ const ZH: ElectronMessages = {
     detail: '建议先安装 Microsoft Visual C++ Redistributable (x64)。你也可以继续尝试启动。下载链接如下：',
     buttons: ['打开下载链接', '继续启动'],
   },
+  vcRuntimeOutdated: {
+    title: 'TX-5DR - 运行库版本过旧',
+    message: '检测到当前系统安装的 Microsoft Visual C++ 运行库版本过旧，TX-5DR 需要 2022 或更新版本。',
+    detail: '建议下载安装最新的 Microsoft Visual C++ Redistributable (x64)。你也可以继续尝试启动。下载链接如下：',
+    buttons: ['打开下载链接', '继续启动'],
+  },
   httpsSelfSigned: {
     title: '浏览器可能提示证书不安全',
     detail: '当前浏览器入口使用自签名证书。首次访问时，浏览器可能会提示连接不安全；如果这是你自己的设备，请手动放行后继续访问。',
@@ -64,6 +76,12 @@ const EN: ElectronMessages = {
     title: 'TX-5DR - Missing Runtime',
     message: 'Microsoft Visual C++ Redistributable may be missing, and TX-5DR may fail during startup.',
     detail: 'Installing Microsoft Visual C++ Redistributable (x64) is recommended. You can also continue startup anyway. Download link:',
+    buttons: ['Open Download Link', 'Continue Startup'],
+  },
+  vcRuntimeOutdated: {
+    title: 'TX-5DR - Outdated Runtime',
+    message: 'The installed Microsoft Visual C++ Redistributable is too old. TX-5DR requires the 2022 version or newer.',
+    detail: 'Please download and install the latest Microsoft Visual C++ Redistributable (x64). You can also continue startup anyway. Download link:',
     buttons: ['Open Download Link', 'Continue Startup'],
   },
   httpsSelfSigned: {
