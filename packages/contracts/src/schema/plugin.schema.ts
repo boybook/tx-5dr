@@ -18,6 +18,19 @@ export const PluginTypeSchema = z.enum(['strategy', 'utility']);
 export type PluginType = z.infer<typeof PluginTypeSchema>;
 
 /**
+ * Runtime instance scope for a plugin.
+ *
+ * - `operator`: the host creates one instance per operator.
+ * - `global`: the host creates a single shared instance for the whole station.
+ */
+export const PluginInstanceScopeSchema = z.enum(['operator', 'global']);
+
+/**
+ * Runtime instance scope for a plugin.
+ */
+export type PluginInstanceScope = z.infer<typeof PluginInstanceScopeSchema>;
+
+/**
  * Explicit permission declarations requested by a plugin.
  *
  * Permissions let the host gate sensitive capabilities behind manifest-level
@@ -33,7 +46,7 @@ export type PluginPermission = z.infer<typeof PluginPermissionSchema>;
 /**
  * Built-in frontend renderer kinds supported by declarative plugin panels.
  */
-export const PluginPanelComponentSchema = z.enum(['table', 'key-value', 'chart', 'log']);
+export const PluginPanelComponentSchema = z.enum(['table', 'key-value', 'chart', 'log', 'iframe']);
 
 /**
  * Built-in frontend renderer kinds supported by declarative plugin panels.
@@ -165,21 +178,100 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
 // ===== 面板 =====
 
 /**
+ * Rendering slot that determines where a panel appears in the UI.
+ *
+ * - `operator`: shown in the expanded operator card's live-panel area (default).
+ * - `automation`: shown inside the top-right automation quick-action popover.
+ */
+export const PluginPanelSlotSchema = z.enum(['operator', 'automation']);
+
+/**
+ * Rendering slot that determines where a panel appears in the UI.
+ */
+export type PluginPanelSlot = z.infer<typeof PluginPanelSlotSchema>;
+
+/**
+ * Preferred width hint for plugin-owned panels.
+ *
+ * Hosts may interpret this hint differently per slot. Today the operator-card
+ * host treats `full` as "span the full row on desktop", while automation
+ * popover hosts may choose to ignore it.
+ */
+export const PluginPanelWidthSchema = z.enum(['half', 'full']);
+
+/**
+ * Preferred width hint for plugin-owned panels.
+ */
+export type PluginPanelWidth = z.infer<typeof PluginPanelWidthSchema>;
+
+/**
  * Declarative definition of a plugin-owned panel in the frontend.
  *
  * Panels are passive containers rendered by the host. A plugin sends data into
- * them through `ctx.ui.send(panelId, data)`.
+ * them through `ctx.ui.send(panelId, data)`. When `component` is `'iframe'`,
+ * the panel renders a custom UI page inside a sandboxed iframe instead.
  */
 export const PluginPanelDescriptorSchema = z.object({
   id: z.string(),
   title: z.string(),
   component: PluginPanelComponentSchema,
+  /** Required when `component` is `'iframe'`. References a page id from `ui.pages`. */
+  pageId: z.string().optional(),
+  /** Where the panel renders. Defaults to `'operator'` (operator card live-panel area). */
+  slot: PluginPanelSlotSchema.optional(),
+  /** Preferred width hint. Defaults to `'half'`. */
+  width: PluginPanelWidthSchema.optional(),
 });
 
 /**
  * Declarative definition of a plugin-owned panel in the frontend.
  */
 export type PluginPanelDescriptor = z.infer<typeof PluginPanelDescriptorSchema>;
+
+// ===== 自定义 UI 页面 =====
+
+/**
+ * Declarative descriptor for a custom UI page served from a plugin's static
+ * file directory and rendered inside an iframe by the host.
+ *
+ * Pages are registered in `PluginDefinition.ui.pages` and can be consumed by
+ * any host component via `<PluginIframeHost pluginName={...} pageId={...} />`.
+ */
+export const PluginUIPageDescriptorSchema = z.object({
+  /** Unique page identifier within the plugin (e.g. 'settings', 'dashboard'). */
+  id: z.string(),
+  /** Display title (i18n key or literal text). */
+  title: z.string(),
+  /** Entry HTML file path relative to the UI directory (e.g. 'settings.html'). */
+  entry: z.string(),
+  /** Optional icon identifier. */
+  icon: z.string().optional(),
+  /** Who may access this page through the host iframe bridge. Defaults to admin. */
+  accessScope: z.enum(['admin', 'operator']).optional().default('admin'),
+  /** Optional resource binding enforced by the host for iframe invoke requests. */
+  resourceBinding: z.enum(['none', 'callsign', 'operator']).optional().default('none'),
+});
+
+/**
+ * Declarative descriptor for a custom UI page served from a plugin's static
+ * file directory.
+ */
+export type PluginUIPageDescriptor = z.infer<typeof PluginUIPageDescriptorSchema>;
+
+/**
+ * Declares that a plugin provides custom UI pages hosted in an iframe.
+ */
+export const PluginUIConfigSchema = z.object({
+  /** Static file directory relative to the plugin root (default: 'ui'). */
+  dir: z.string().optional().default('ui'),
+  /** Registered custom UI pages. */
+  pages: z.array(PluginUIPageDescriptorSchema).optional().default([]),
+});
+
+/**
+ * Declares that a plugin provides custom UI pages hosted in an iframe.
+ */
+export type PluginUIConfig = z.infer<typeof PluginUIConfigSchema>;
 
 // ===== 存储配置 =====
 
@@ -217,6 +309,7 @@ export const PluginManifestSchema = z.object({
   name: z.string(),
   version: z.string(),
   type: PluginTypeSchema,
+  instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
   description: z.string().optional(),
   permissions: z.array(PluginPermissionSchema).optional(),
   settings: z.record(z.string(), PluginSettingDescriptorSchema).optional(),
@@ -224,6 +317,7 @@ export const PluginManifestSchema = z.object({
   quickSettings: z.array(PluginQuickSettingSchema).optional(),
   panels: z.array(PluginPanelDescriptorSchema).optional(),
   storage: PluginStorageConfigSchema.optional(),
+  ui: PluginUIConfigSchema.optional(),
 });
 
 /**
@@ -242,6 +336,7 @@ export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 export const PluginStatusSchema = z.object({
   name: z.string(),
   type: PluginTypeSchema,
+  instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
   version: z.string(),
   description: z.string().optional(),
   isBuiltIn: z.boolean(),
@@ -259,6 +354,7 @@ export const PluginStatusSchema = z.object({
   panels: z.array(PluginPanelDescriptorSchema).optional(),
   permissions: z.array(PluginPermissionSchema).optional(),
   capabilities: z.array(PluginCapabilitySchema).optional(),
+  ui: PluginUIConfigSchema.optional(),
   locales: z.record(z.string(), z.record(z.string(), z.string())).optional(),
 });
 

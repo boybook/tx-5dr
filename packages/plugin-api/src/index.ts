@@ -49,11 +49,21 @@ export type {
   OperatorControl,
   RadioControl,
   LogbookAccess,
+  CallsignLogbookAccess,
+  QSOQueryFilter,
   BandAccess,
   IdleTransmitFrequencyOptions,
   AutoTargetEligibilityReason,
   AutoTargetEligibilityDecision,
   UIBridge,
+  PluginUIHandler,
+  PluginUIRequestContext,
+  PluginUIRequestUser,
+  PluginUIBoundResource,
+  PluginUIInstanceTarget,
+  PluginUIPageSessionInfo,
+  PluginUIPageContext,
+  PluginFileStore,
 } from './helpers.js';
 
 /** Common radio/message/settings types re-exported for plugin author convenience. */
@@ -80,6 +90,7 @@ export type {
   DxccStatus,
   TargetSelectionPriorityMode,
   PluginType,
+  PluginInstanceScope,
   PluginPermission,
   PluginSettingType,
   PluginSettingDescriptor,
@@ -89,12 +100,28 @@ export type {
   PluginCapability,
   PluginPanelDescriptor,
   PluginPanelComponent,
+  PluginPanelWidth,
   PluginSettingOption,
   PluginStorageScope,
   PluginStorageConfig,
   PluginManifest,
   PluginStatus,
+  PluginUIPageDescriptor,
+  PluginUIConfig,
 } from '@tx5dr/contracts';
+
+/** Logbook sync provider interfaces. */
+export type {
+  LogbookSyncProvider,
+  LogbookSyncRegistrar,
+  SyncAction,
+  SyncTestResult,
+  SyncUploadResult,
+  SyncPreflightIssue,
+  SyncUploadPreflightResult,
+  SyncDownloadResult,
+  SyncDownloadOptions,
+} from './sync.js';
 
 /** Stable runtime enum values commonly referenced by plugin implementations. */
 export { FT8MessageType } from './ft8-message-type.js';

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Account Section -->
+    <div class="section-title" id="accountTitle">LoTW Account</div>
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input type="text" id="username" placeholder="LoTW username">
+    </div>
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="LoTW password">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="testBtn">
+        <span class="spinner hidden"></span>
+        <span class="btn-text">Verify</span>
+      </button>
+      <span class="chip hidden" id="testResult"></span>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- Certificates Section -->
+    <div class="section-title" id="certTitle">Certificates</div>
+    <div class="cert-hint" id="certHint">Upload your .p12 certificate file exported from TQSL (without password protection).</div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="uploadCertBtn">
+        <span class="spinner hidden" id="uploadCertSpinner"></span>
+        <span class="btn-text" id="uploadCertText">Upload .p12 Certificate</span>
+      </button>
+      <span class="chip hidden" id="certUploadResult"></span>
+    </div>
+    <input type="file" id="certFileInput" accept=".p12,.pfx" style="display:none">
+    <div id="certList" class="cert-list"></div>
+
+    <hr class="section-divider">
+
+    <!-- Upload Location Section -->
+    <div class="section-title" id="locationTitle">Upload Location</div>
+    <div class="form-row">
+      <div class="form-group form-half">
+        <label for="locCallsign">Callsign</label>
+        <input type="text" id="locCallsign" placeholder="W1ABC">
+      </div>
+      <div class="form-group form-half">
+        <label for="locDxcc">DXCC Entity ID</label>
+        <input type="number" id="locDxcc" placeholder="291" min="1">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group form-half">
+        <label for="locGrid">Grid Square</label>
+        <input type="text" id="locGrid" placeholder="FN31" maxlength="6">
+      </div>
+      <div class="form-group form-half">
+        <label for="locIota">IOTA</label>
+        <input type="text" id="locIota" placeholder="NA-001">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group form-half">
+        <label for="locCqZone">CQ Zone</label>
+        <input type="text" id="locCqZone" placeholder="5">
+      </div>
+      <div class="form-group form-half">
+        <label for="locItuZone">ITU Zone</label>
+        <input type="text" id="locItuZone" placeholder="8">
+      </div>
+    </div>
+    <div class="form-row" id="stateRow">
+      <div class="form-group form-half">
+        <label for="locState" id="stateLabel">State</label>
+        <input type="text" id="locState" placeholder="">
+      </div>
+      <div class="form-group form-half" id="countyGroup">
+        <label for="locCounty" id="countyLabel">County</label>
+        <input type="text" id="locCounty" placeholder="">
+      </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <!-- Sync Options Section -->
+    <div class="section-title" id="syncTitle">Sync Options</div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label" id="autoUploadLabel">Auto-upload after QSO</div>
+        <div class="toggle-desc" id="autoUploadDesc">Automatically sign and upload QSO records to LoTW when a contact is completed</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="autoUpload">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="btn-row" style="margin-top: var(--tx5dr-spacing-sm)">
+      <button class="btn btn-secondary" id="preflightBtn">
+        <span class="spinner hidden" id="preflightSpinner"></span>
+        <span class="btn-text" id="preflightText">Check Readiness</span>
+      </button>
+    </div>
+    <div id="preflightResult" class="preflight-result hidden"></div>
+
+    <hr class="section-divider">
+
+    <!-- Save -->
+    <div class="btn-row">
+      <button class="btn btn-primary" id="saveBtn">
+        <span class="btn-text">Save</span>
+      </button>
+      <span class="chip hidden" id="saveResult"></span>
+    </div>
+
+    <div class="status-row hidden" id="lastSync"></div>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

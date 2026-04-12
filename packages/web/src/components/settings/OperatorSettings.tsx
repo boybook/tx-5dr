@@ -37,6 +37,7 @@ import {
 } from '../../utils/operatorPreferences';
 import { createLogger } from '../../utils/logger';
 import { OperatorPluginSettings } from './OperatorPluginSettings';
+import { getAuthHeaders } from '../../utils/authHeaders';
 
 const logger = createLogger('OperatorSettings');
 type EditableOperatorField = 'myCallsign' | 'myGrid';
@@ -93,11 +94,17 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [operatorToDelete, setOperatorToDelete] = useState<RadioOperatorConfig | null>(null);
 
-    // 同步配置状态
-    const [syncSummaries, setSyncSummaries] = useState<Record<string, { wavelog: boolean; qrz: boolean; lotw: boolean }>>({});
+    // 同步配置
+    const [syncProviderNames, setSyncProviderNames] = useState<string[]>([]);
     const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
     const [syncModalCallsign, setSyncModalCallsign] = useState('');
-    const [syncModalInitialTab, setSyncModalInitialTab] = useState<'wavelog' | 'qrz' | 'lotw'>('wavelog');
+
+    useEffect(() => {
+      fetch('/api/plugins/sync-providers', { headers: getAuthHeaders() })
+        .then(r => r.json())
+        .then((data: { displayName: string }[]) => setSyncProviderNames(data.map(p => p.displayName)))
+        .catch(() => {});
+    }, []);
 
     // 暴露给父组件的方法
     useImperativeHandle(ref, () => ({
@@ -137,44 +144,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       }
     }, [loading, operators.length, isCreating]);
 
-    // 加载操作员同步配置摘要
-    useEffect(() => {
-      const loadSyncSummaries = async () => {
-        const summaries: Record<string, { wavelog: boolean; qrz: boolean; lotw: boolean }> = {};
-        for (const operator of operators) {
-          try {
-            const res = await api.getCallsignSyncSummary(operator.myCallsign) as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
-            if (res.success && res.summary) {
-              summaries[operator.myCallsign] = res.summary;
-            }
-          } catch {
-            // 忽略加载失败
-          }
-        }
-        setSyncSummaries(summaries);
-      };
-      if (operators.length > 0) {
-        loadSyncSummaries();
-      }
-    }, [operators]);
-
-    // 打开同步配置弹窗
-    const openSyncModal = (callsign: string, tab: 'wavelog' | 'qrz' | 'lotw') => {
+    const openSyncModal = (callsign: string) => {
       setSyncModalCallsign(callsign);
-      setSyncModalInitialTab(tab);
       setIsSyncModalOpen(true);
-    };
-
-    // 刷新某个呼号的同步摘要
-    const refreshSyncSummary = async (callsign: string) => {
-      try {
-        const res = await api.getCallsignSyncSummary(callsign) as { success?: boolean; summary?: { wavelog: boolean; qrz: boolean; lotw: boolean } };
-        if (res.success && res.summary) {
-          setSyncSummaries(prev => ({ ...prev, [callsign]: res.summary! }));
-        }
-      } catch {
-        // 忽略刷新失败
-      }
     };
 
     // 初始化操作员偏好设置
@@ -380,25 +352,8 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       }
     };
 
-    // SyncServiceCard 内联组件
-    const SyncServiceCard = ({ name, enabled, onConfigure }: { name: string; enabled: boolean; onConfigure: () => void }) => (
-      <div className={`border rounded-lg p-2 flex-1 min-w-[100px] ${enabled ? 'border-success' : 'border-default-200'}`}>
-        <p className="text-xs font-medium">{name}</p>
-        <div className="flex items-center justify-between mt-1">
-          <Chip size="sm" color={enabled ? 'success' : 'default'} variant="flat">
-            {enabled ? t('settings.configured') : t('settings.notConfigured')}
-          </Chip>
-          <Button size="sm" variant="light" onPress={onConfigure}>
-            {enabled ? t('settings.modify') : t('settings.configure')}
-          </Button>
-        </div>
-      </div>
-    );
-
     // 渲染展示模式的内容
     const renderDisplayMode = (operator: RadioOperatorConfig) => {
-      const syncSummary = syncSummaries[operator.myCallsign] || { wavelog: false, qrz: false, lotw: false };
-      const hasSyncConfig = syncSummary.wavelog || syncSummary.qrz || syncSummary.lotw;
       const renderEditableField = (
         field: EditableOperatorField,
         label: string,
@@ -487,30 +442,27 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           </div>
 
           {/* 通联日志同步 */}
-          <Divider className="my-3" />
-          <p className="text-sm font-medium mb-2">{t('settings.logSync')}</p>
-          {!hasSyncConfig && (
-            <p className="text-xs text-default-400 mb-2">
-              {t('settings.logSyncDesc')}
-            </p>
+          {syncProviderNames.length > 0 && (
+            <>
+              <Divider className="my-3" />
+              <div
+                className="rounded-lg border border-default-200 bg-default-50/60 px-3 py-2.5 flex items-center justify-between cursor-pointer hover:bg-default-100/80 transition-colors"
+                onClick={() => openSyncModal(operator.myCallsign)}
+              >
+                <div>
+                  <p className="text-sm font-medium">{t('settings.logSync')}</p>
+                  <p className="text-xs text-default-400 mt-0.5">{syncProviderNames.join(' / ')}</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="light"
+                  onPress={() => openSyncModal(operator.myCallsign)}
+                >
+                  {t('settings.configure')}
+                </Button>
+              </div>
+            </>
           )}
-          <div className="flex gap-2 flex-wrap">
-            <SyncServiceCard
-              name="WaveLog"
-              enabled={syncSummary.wavelog}
-              onConfigure={() => openSyncModal(operator.myCallsign, 'wavelog')}
-            />
-            <SyncServiceCard
-              name="QRZ.com"
-              enabled={syncSummary.qrz}
-              onConfigure={() => openSyncModal(operator.myCallsign, 'qrz')}
-            />
-            <SyncServiceCard
-              name="LoTW"
-              enabled={syncSummary.lotw}
-              onConfigure={() => openSyncModal(operator.myCallsign, 'lotw')}
-            />
-          </div>
 
           <Divider />
           <OperatorPluginSettings operatorId={operator.id} />
@@ -930,8 +882,6 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           isOpen={isSyncModalOpen}
           onClose={() => setIsSyncModalOpen(false)}
           callsign={syncModalCallsign}
-          initialTab={syncModalInitialTab}
-          onSaved={() => refreshSyncSummary(syncModalCallsign)}
         />
       </div>
     );

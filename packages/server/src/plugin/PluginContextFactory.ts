@@ -1,9 +1,21 @@
-import type { PluginContext } from '@tx5dr/plugin-api';
-import type { PluginLogEntry, ModeDescriptor } from '@tx5dr/contracts';
+import path from 'path';
+import type {
+  LogbookSyncProvider,
+  PluginContext,
+  QSOQueryFilter,
+} from '@tx5dr/plugin-api';
+import type {
+  LogBookStatistics,
+  PluginLogEntry,
+  ModeDescriptor,
+  PluginUIPageDescriptor,
+} from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { LogManager } from '../log/LogManager.js';
 import { PluginStorageProvider } from './PluginStorageProvider.js';
+import { PluginFileStoreProvider } from './PluginFileStoreProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
@@ -12,32 +24,44 @@ import type { LoadedPlugin, PluginManagerDeps } from './types.js';
 const logger = createLogger('PluginContextFactory');
 
 /**
- * 为每个插件×操作员创建 PluginContext 实例
+ * 为插件实例创建 PluginContext。
  */
 export class PluginContextFactory {
   constructor(private deps: PluginManagerDeps) {}
 
-  create(
+  async create(
     plugin: LoadedPlugin,
-    operatorId: string,
+    operatorId: string | undefined,
+    instanceScope: 'operator' | 'global',
     pluginStorageDir: string,
     onTimer: (timerId: string) => void,
     getPluginSettings: () => Record<string, unknown>,
-  ): PluginContext {
+  ): Promise<PluginContext> {
     const globalStorage = new PluginStorageProvider(`${pluginStorageDir}/global.json`);
-    const operatorStorage = new PluginStorageProvider(`${pluginStorageDir}/operator-${operatorId}.json`);
+    const operatorStorageName = operatorId ? `operator-${operatorId}.json` : 'instance-global.json';
+    const operatorStorage = new PluginStorageProvider(`${pluginStorageDir}/${operatorStorageName}`);
 
-    // 初始化存储（异步，忽略错误由 init 内部处理）
-    globalStorage.init().catch(err => logger.warn('Failed to init global storage', { error: err }));
-    operatorStorage.init().catch(err => logger.warn('Failed to init operator storage', { error: err }));
+    await globalStorage.init();
+    await operatorStorage.init();
 
     const timerManager = new PluginTimerManager(plugin.definition.name, onTimer);
-    const uiBridge = new PluginUIBridge(plugin.definition.name, operatorId, this.deps.eventEmitter);
+    const uiBridge = new PluginUIBridge(
+      plugin.definition.name,
+      instanceScope === 'global'
+        ? { kind: 'global' as const }
+        : { kind: 'operator' as const, operatorId: operatorId ?? '__missing__' },
+      this.deps.eventEmitter,
+      (pluginName, instanceTarget, pageId) =>
+        this.deps.listPluginPageSessions?.(pluginName, instanceTarget, pageId) ?? [],
+    );
     const pluginLogger = this.createLogger(plugin.definition.name);
-    const operatorControl = this.createOperatorControl(operatorId);
+    const operatorControl = this.createOperatorControl(operatorId, instanceScope);
     const radioControl = this.createRadioControl();
-    const logbookAccess = this.createLogbookAccess(operatorId);
+    const logbookAccess = this.createLogbookAccess(operatorId, instanceScope);
     const bandAccess = this.createBandAccess(operatorId);
+    const fileStore = new PluginFileStoreProvider(
+      path.join(pluginStorageDir, 'files'),
+    );
 
     const ctx: PluginContext = {
       get config() {
@@ -54,12 +78,59 @@ export class PluginContextFactory {
       logbook: logbookAccess,
       band: bandAccess,
       ui: uiBridge,
+      files: fileStore,
+      logbookSync: {
+        register: (provider) => {
+          this.validateLogbookSyncProvider(plugin, provider);
+          this.deps.registerLogbookSyncProvider?.(plugin.definition.name, provider);
+        },
+      },
       fetch: plugin.definition.permissions?.includes('network')
         ? (url, init) => globalThis.fetch(url, init)
         : undefined,
     };
 
     return ctx;
+  }
+
+  private validateLogbookSyncProvider(
+    plugin: LoadedPlugin,
+    provider: LogbookSyncProvider,
+  ): void {
+    if (plugin.definition.type !== 'utility') {
+      throw new Error(`Logbook sync provider must come from a utility plugin: ${plugin.definition.name}`);
+    }
+    if ((plugin.definition.instanceScope ?? 'operator') !== 'global') {
+      throw new Error(`Logbook sync provider must come from a global plugin: ${plugin.definition.name}`);
+    }
+
+    const pages = plugin.definition.ui?.pages ?? [];
+    const settingsPage = pages.find((page) => page.id === provider.settingsPageId);
+    if (!provider.settingsPageId || !settingsPage) {
+      throw new Error(
+        `Sync provider settingsPageId must reference an existing page: ${plugin.definition.name}/${provider.id}`,
+      );
+    }
+
+    this.validateSyncSettingsPage(plugin.definition.name, provider, settingsPage);
+  }
+
+  private validateSyncSettingsPage(
+    pluginName: string,
+    provider: LogbookSyncProvider,
+    settingsPage: PluginUIPageDescriptor,
+  ): void {
+    if ((settingsPage.resourceBinding ?? 'none') !== 'callsign') {
+      throw new Error(
+        `Sync provider settings page must bind callsign: ${pluginName}/${provider.settingsPageId}`,
+      );
+    }
+
+    if (provider.accessScope === 'operator' && (settingsPage.accessScope ?? 'admin') !== 'operator') {
+      throw new Error(
+        `Operator sync provider settings page must be operator-scoped: ${pluginName}/${provider.settingsPageId}`,
+      );
+    }
   }
 
   private createLogger(pluginName: string) {
@@ -85,8 +156,33 @@ export class PluginContextFactory {
     };
   }
 
-  private createOperatorControl(operatorId: string) {
+  private createOperatorControl(
+    operatorId: string | undefined,
+    instanceScope: 'operator' | 'global',
+  ) {
     const deps = this.deps;
+    if (instanceScope === 'global' || !operatorId) {
+      return {
+        get id() { return '__global__'; },
+        get isTransmitting() { return false; },
+        get callsign() { return ''; },
+        get grid() { return ''; },
+        get frequency() { return 0; },
+        get mode(): ModeDescriptor { return MODES.FT8; },
+        get transmitCycles() { return []; },
+        get automation() { return null; },
+        startTransmitting() {},
+        stopTransmitting() {},
+        call(_callsign: string, _lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo }) {},
+        setTransmitCycles(_cycles: number | number[]) {},
+        async hasWorkedCallsign(_callsign: string) { return false; },
+        isTargetBeingWorkedByOthers(_targetCallsign: string) { return false; },
+        recordQSO(_record: import('@tx5dr/contracts').QSORecord) {},
+        notifySlotsUpdated(_slots: import('@tx5dr/contracts').OperatorSlots) {},
+        notifyStateChanged(_state: string) {},
+      };
+    }
+
     return {
       get id() { return operatorId; },
       get isTransmitting() {
@@ -158,28 +254,179 @@ export class PluginContextFactory {
     };
   }
 
-  private createLogbookAccess(operatorId: string) {
+  private createLogbookAccess(
+    operatorId: string | undefined,
+    instanceScope: 'operator' | 'global',
+  ) {
     const deps = this.deps;
+    const logManager = LogManager.getInstance();
+
+    const createCallsignAccess = (callsign: string) => {
+      const normalizedCallsign = callsign.trim().toUpperCase();
+
+      const getExistingLogBook = () => {
+        const logBookId = logManager.resolveLogBookId(normalizedCallsign);
+        return logBookId ? logManager.getLogBook(logBookId) : null;
+      };
+
+      const getOrCreateLogBook = async () => {
+        if (!normalizedCallsign) {
+          return null;
+        }
+        return logManager.getOrCreateLogBookByCallsign(normalizedCallsign);
+      };
+
+      const buildQuery = (filter?: QSOQueryFilter) => ({
+        callsign: filter?.callsign,
+        timeRange: filter?.timeRange,
+        frequencyRange: filter?.frequencyRange,
+        mode: filter?.mode,
+        qslStatus: filter?.qslStatus,
+        limit: filter?.limit,
+        offset: filter?.offset,
+        orderDirection: filter?.orderDirection,
+      });
+
+      const toLogBookStatistics = async (logBook: Awaited<ReturnType<typeof getOrCreateLogBook>>): Promise<LogBookStatistics | null> => {
+        if (!logBook) {
+          return null;
+        }
+
+        const rawStatistics = await logBook.provider.getStatistics();
+        const connectedOperators = logManager.getOperatorIdsForLogBook(logBook.id);
+        return {
+          totalQSOs: rawStatistics.totalQSOs || 0,
+          totalOperators: connectedOperators.length,
+          uniqueCallsigns: rawStatistics.uniqueCallsigns || 0,
+          lastQSO: rawStatistics.lastQSOTime ? new Date(rawStatistics.lastQSOTime).toISOString() : undefined,
+          firstQSO: rawStatistics.firstQSOTime ? new Date(rawStatistics.firstQSOTime).toISOString() : undefined,
+          dxcc: rawStatistics.dxcc,
+        };
+      };
+
+      return {
+        get callsign() {
+          return normalizedCallsign;
+        },
+        async getLogBookId() {
+          return getExistingLogBook()?.id ?? null;
+        },
+        async queryQSOs(filter: QSOQueryFilter) {
+          const logBook = await getOrCreateLogBook();
+          if (!logBook) return [];
+          return logBook.provider.queryQSOs(buildQuery(filter));
+        },
+        async countQSOs(filter?: QSOQueryFilter) {
+          const logBook = await getOrCreateLogBook();
+          if (!logBook) return 0;
+          const records = await logBook.provider.queryQSOs(buildQuery(filter));
+          return records.length;
+        },
+        async addQSO(record: import('@tx5dr/contracts').QSORecord) {
+          const logBook = await getOrCreateLogBook();
+          if (!logBook) return;
+          await logBook.provider.addQSO(record, operatorId);
+        },
+        async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
+          const logBook = await getOrCreateLogBook();
+          if (!logBook) return;
+          await logBook.provider.updateQSO(qsoId, updates);
+        },
+        async getStatistics() {
+          const logBook = await getOrCreateLogBook();
+          return toLogBookStatistics(logBook);
+        },
+        async notifyUpdated(explicitOperatorId?: string) {
+          const logBook = await getOrCreateLogBook();
+          if (!logBook) return;
+          const statistics = await toLogBookStatistics(logBook);
+          if (!statistics) return;
+          const associatedOperatorId = explicitOperatorId
+            ?? logManager.getOperatorIdsForLogBook(logBook.id)[0]
+            ?? operatorId;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          deps.eventEmitter.emit('logbookUpdated' as any, {
+            logBookId: logBook.id,
+            statistics,
+            operatorId: associatedOperatorId,
+          });
+        },
+      };
+    };
+
+    const getBoundCallsign = () => {
+      if (instanceScope !== 'operator' || !operatorId) {
+        return null;
+      }
+      const callsign = deps.getOperatorById(operatorId)?.config.myCallsign;
+      return callsign?.trim() ? callsign : null;
+    };
+
     return {
+      // === Original read-only helpers ===
+
       async hasWorked(callsign: string) {
+        if (!operatorId) {
+          return false;
+        }
         return deps.hasWorkedCallsign(operatorId, callsign);
       },
       async hasWorkedDXCC(dxccEntity: string) {
-        if (!deps.hasWorkedDXCC) {
+        if (!deps.hasWorkedDXCC || !operatorId) {
           return false;
         }
         return deps.hasWorkedDXCC(operatorId, dxccEntity);
       },
       async hasWorkedGrid(grid: string) {
-        if (!deps.hasWorkedGrid) {
+        if (!deps.hasWorkedGrid || !operatorId) {
           return false;
         }
         return deps.hasWorkedGrid(operatorId, grid);
       },
+
+      // === Query ===
+
+      async queryQSOs(filter: QSOQueryFilter) {
+        const callsign = getBoundCallsign();
+        if (!callsign) return [];
+        return createCallsignAccess(callsign).queryQSOs(filter);
+      },
+
+      async countQSOs(filter?: QSOQueryFilter) {
+        const callsign = getBoundCallsign();
+        if (!callsign) return 0;
+        return createCallsignAccess(callsign).countQSOs(filter);
+      },
+
+      forCallsign(callsign: string) {
+        return createCallsignAccess(callsign);
+      },
+
+      // === Write ===
+
+      async addQSO(record: import('@tx5dr/contracts').QSORecord) {
+        const callsign = getBoundCallsign();
+        if (!callsign) return;
+        await createCallsignAccess(callsign).addQSO(record);
+      },
+
+      async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
+        const callsign = getBoundCallsign();
+        if (!callsign) return;
+        await createCallsignAccess(callsign).updateQSO(qsoId, updates);
+      },
+
+      // === Notification ===
+
+      async notifyUpdated() {
+        const callsign = getBoundCallsign();
+        if (!callsign) return;
+        await createCallsignAccess(callsign).notifyUpdated(operatorId);
+      },
     };
   }
 
-  private createBandAccess(operatorId: string) {
+  private createBandAccess(operatorId: string | undefined) {
     const deps = this.deps;
     return {
       getActiveCallers() {
@@ -216,7 +463,9 @@ export class PluginContextFactory {
         return typeof result === 'number' && Number.isFinite(result) ? result : null;
       },
       evaluateAutoTargetEligibility(message: import('@tx5dr/contracts').ParsedFT8Message) {
-        const operatorCallsign = deps.getOperatorById(operatorId)?.config.myCallsign ?? '';
+        const operatorCallsign = operatorId
+          ? deps.getOperatorById(operatorId)?.config.myCallsign ?? ''
+          : '';
         return evaluateAutomaticTargetEligibility(operatorCallsign, message);
       },
     };

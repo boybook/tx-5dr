@@ -151,6 +151,30 @@
     "lastPageShort": "尾页"
   },
   "sync": {
+    "sync": "同步",
+    "provider": {
+      "ariaLabel": "{{name}}同步操作",
+      "download": "下载同步",
+      "downloadDesc": "从{{name}}下载QSO记录",
+      "upload": "上传同步",
+      "uploadDesc": "上传本地QSO记录到{{name}}",
+      "fullSync": "双向同步",
+      "fullSyncDesc": "先下载再上传，双向完整同步",
+      "settings": "设置",
+      "settingsDesc": "配置{{name}}同步服务",
+      "notConfigured": "未配置",
+      "syncSuccess": "{{name}}同步成功",
+      "syncError": "{{name}}同步失败",
+      "resultUploaded": "上传 {{count}} 条",
+      "resultDownloaded": "下载 {{count}} 条",
+      "resultStored": "新增 {{count}} 条",
+      "resultMatched": "匹配 {{count}} 条",
+      "resultUpdated": "更新 {{count}} 条",
+      "resultSkipped": "跳过 {{count}} 条",
+      "resultFailed": "失败 {{count}} 条",
+      "preflightSummary": "待上传 {{pending}} 条，可上传 {{uploadable}} 条，阻塞 {{blocked}} 条",
+      "resultSeparator": "，"
+    },
     "wavelog": {
       "button": "WaveLog同步",
       "ariaLabel": "WaveLog同步操作",

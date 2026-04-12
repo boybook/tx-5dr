@@ -7,7 +7,9 @@ import type {
   LogbookAccess,
   BandAccess,
   UIBridge,
+  PluginFileStore,
 } from './helpers.js';
+import type { LogbookSyncRegistrar } from './sync.js';
 
 /**
  * Runtime services exposed to a plugin instance.
@@ -77,7 +79,13 @@ export interface PluginContext {
   readonly radio: RadioControl;
 
   /**
-   * Read-only access to logbook-derived history.
+   * Full logbook access — read-only queries, record writes and UI notifications.
+   *
+   * Provides the original read-only helpers (`hasWorked`, `hasWorkedDXCC`,
+   * `hasWorkedGrid`) plus advanced query (`queryQSOs`, `countQSOs`), write
+   * (`addQSO`, `updateQSO`) and notification (`notifyUpdated`) capabilities.
+   * Sync providers and other data-oriented plugins use the write methods to
+   * self-orchestrate their flow without host-side special handling.
    */
   readonly logbook: LogbookAccess;
 
@@ -87,9 +95,28 @@ export interface PluginContext {
   readonly band: BandAccess;
 
   /**
-   * Bridge for pushing structured data into declarative plugin panels.
+   * Bridge for pushing structured data into declarative plugin panels and
+   * for communicating with custom iframe UI pages.
    */
   readonly ui: UIBridge;
+
+  /**
+   * Persistent binary file storage sandboxed to the plugin.
+   *
+   * Files are stored in the plugin data directory under a host-managed sandbox.
+   * Use this for binary assets such as certificates, images or cached data.
+   * For structured JSON data, prefer {@link PluginContext.store} instead.
+   */
+  readonly files: PluginFileStore;
+
+  /**
+   * Logbook sync registration entry point.
+   *
+   * Utility plugins that implement logbook synchronization call
+   * `ctx.logbookSync.register(provider)` during `onLoad` to register their
+   * sync provider. The host manages the provider lifecycle and UI integration.
+   */
+  readonly logbookSync: LogbookSyncRegistrar;
 
   /**
    * Permission-gated HTTP client.

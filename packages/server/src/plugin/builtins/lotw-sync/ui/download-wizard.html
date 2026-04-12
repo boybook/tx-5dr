@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="download-wizard.css">
+</head>
+<body>
+  <div class="container">
+    <p class="description" id="descText">Select the date range for downloading LoTW confirmations.</p>
+
+    <div class="form-group">
+      <label for="sinceDate" id="sinceDateLabel">Download confirmations since</label>
+      <input type="date" id="sinceDate">
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="downloadBtn">
+        <span id="downloadBtnText">Download</span>
+      </button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <div class="result-box" id="resultBox" style="display: none;">
+      <div class="result-title" id="resultTitle">Results</div>
+      <div class="result-content" id="resultContent"></div>
+    </div>
+  </div>
+  <script src="download-wizard.js"></script>
+</body>
+</html>

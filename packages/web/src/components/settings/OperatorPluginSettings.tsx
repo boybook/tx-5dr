@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faChevronRight } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import { PluginSettingField } from './PluginSettingField';
 import { createLogger } from '../../utils/logger';
@@ -118,21 +120,34 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
     }
   }, [operatorId, relevantPlugins, settingsMap]);
 
+  const [expanded, setExpanded] = useState(true);
+
   if (!hasStrategyChoice && relevantPlugins.length === 0) return null;
 
   return (
     <div className="space-y-3">
-      <div className="pt-1">
-        <div className="text-xs text-default-400 uppercase tracking-wider mb-2">
+      <div
+        className="pt-1 flex items-center gap-2 cursor-pointer select-none"
+        onClick={() => setExpanded(prev => !prev)}
+      >
+        <FontAwesomeIcon
+          icon={faChevronRight}
+          className={`text-default-400 text-xs transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+        />
+        <span className="text-xs text-default-400 uppercase tracking-wider">
           {t('plugins.operatorSettings', 'Plugin Settings')}
-        </div>
+        </span>
       </div>
-      <PluginStrategySelector
-        operatorId={operatorId}
-        currentStrategy={currentStrategy}
-        onStrategyChange={setCurrentStrategy}
-      />
-      {relevantPlugins.map(plugin => {
+      {expanded && (
+        <>
+          <PluginStrategySelector
+            operatorId={operatorId}
+            currentStrategy={currentStrategy}
+            onStrategyChange={setCurrentStrategy}
+          />
+        </>
+      )}
+      {expanded && relevantPlugins.map(plugin => {
         const operatorEntries = Object.entries(plugin.settings ?? {}).filter(
           ([, d]) => d.scope === 'operator'
         );

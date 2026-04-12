@@ -27,15 +27,17 @@ import QSOFormModal from './QSOFormModal';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronDown, faSync, faDownload, faUpload, faExternalLinkAlt, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
-import type { QSORecord, LogBookStatistics, WaveLogSyncResponse, QRZSyncResponse, LoTWSyncResponse, LoTWUploadPreflightResponse, LoTWSyncStatus, CreateQSORequest, LogBookImportResult } from '@tx5dr/contracts';
+import type { QSORecord, LogBookStatistics, CreateQSORequest, LogBookImportResult } from '@tx5dr/contracts';
 import { api, WSClient, ApiError } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { isElectron } from '../../utils/config';
 import { showErrorToast } from '../../utils/errorToast';
 import { SyncConfigModal } from './SyncConfigModal';
+import { PluginIframeHost } from '../plugins/PluginIframeHost';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import RecentQSOGlobeCard from './RecentQSOGlobeCard';
+import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 
 const logger = createLogger('LogbookViewer');
 
@@ -87,44 +89,9 @@ function normalizeGridFilterValue(value: string): string {
   return value.toUpperCase().replace(/\s+/g, '').slice(0, 8);
 }
 
-function formatDateInputValue(timestamp?: number): string {
-  if (typeof timestamp !== 'number' || Number.isNaN(timestamp)) {
-    return '';
-  }
-
-  return new Date(timestamp).toISOString().slice(0, 10);
-}
-
-function getDateDaysAgo(days: number): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - days);
-  return date.toISOString().slice(0, 10);
-}
-
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
-  const getLoTWIssueMessage = (issue: { code: string; message: string }) => {
-    const key = `lotwSettings.issue.${issue.code}`;
-    const translated = t(key);
-    return translated === key ? issue.message : translated;
-  };
-  const getLoTWGuidanceMessage = (guidanceKey: string) => {
-    const key = `lotwSettings.guidance.${guidanceKey}`;
-    const translated = t(key);
-    return translated === key ? guidanceKey : translated;
-  };
-  const translateLoTWServerMessage = (message?: string | null, fallback?: string) => {
-    if (!message) {
-      return fallback || t('sync.lotw.syncError');
-    }
-    const key = `lotwSettings.serverError.${message}`;
-    const translated = t(key);
-    return translated === key ? (fallback || message) : translated;
-  };
-  const getLoTWApiErrorMessage = (error: ApiError) => {
-    return translateLoTWServerMessage(error.message, error.userMessage);
-  };
   const [qsos, setQsos] = useState<QSORecord[]>([]);
   const [statistics, setStatistics] = useState<LogBookStatistics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -171,7 +138,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   useEffect(() => {
     // 仅按 operatorId 订阅，避免 logBookId 不一致导致过滤失败
     // 浏览器 WebSocket 不支持自定义请求头，通过 token 参数传递 JWT
-    const wsJwt = localStorage.getItem('tx5dr_jwt') || undefined;
+    const wsJwt = getStoredJwt() || undefined;
     const url = getLogbookWebSocketUrl({ operatorId, token: wsJwt });
     const client = new WSClient({ url, heartbeatInterval: 30000 });
 
@@ -250,11 +217,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     loadStatistics();
   }, [effectiveLogBookId, filters, currentPage, itemsPerPage]);
 
-  // 加载呼号的同步配置摘要
+  // 加载呼号的同步配置���要
   useEffect(() => {
     if (operatorCallsign) {
-      refreshSyncSummary(operatorCallsign).catch(() => {});
-      refreshLoTWStatus(operatorCallsign).catch(() => {});
+      refreshSyncProviders(operatorCallsign).catch(() => {});
     }
   }, [operatorCallsign]);
 
@@ -300,57 +266,68 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
 
-  // WaveLog同步功能
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [syncSuccess, setSyncSuccess] = useState<string | null>(null);
+  // Plugin-based sync providers (dynamic)
+  interface SyncAction {
+    id: string;
+    label: string;
+    description?: string;
+    icon?: 'download' | 'upload' | 'sync';
+    pageId?: string;
+    operation?: 'upload' | 'download' | 'full_sync';
+  }
+  interface SyncProviderInfo {
+    id: string;
+    pluginName: string;
+    displayName: string;
+    color?: string;
+    settingsPageId: string;
+    actions?: SyncAction[];
+  }
+  interface SyncPreflightIssue {
+    code: string;
+    severity: 'info' | 'warning' | 'error';
+    message: string;
+  }
+  interface SyncUploadPreflightResult {
+    ready: boolean;
+    pendingCount: number;
+    uploadableCount: number;
+    blockedCount: number;
+    issues?: SyncPreflightIssue[];
+    guidance?: string[];
+  }
+  const [syncProviders, setSyncProviders] = useState<SyncProviderInfo[]>([]);
+  const [syncConfigured, setSyncConfigured] = useState<Record<string, boolean>>({});
+  const [syncingProviders, setSyncingProviders] = useState<Record<string, boolean>>({});
+  const [syncMessages, setSyncMessages] = useState<Record<string, { type: 'success' | 'error'; text: string }>>({});
 
-  // QRZ同步状态
-  const [isQRZSyncing, setIsQRZSyncing] = useState(false);
-  const [qrzSyncError, setQrzSyncError] = useState<string | null>(null);
-  const [qrzSyncSuccess, setQrzSyncSuccess] = useState<string | null>(null);
-
-  // LoTW同步状态
-  const [isLoTWSyncing, setIsLoTWSyncing] = useState(false);
-  const [lotwSyncError, setLotwSyncError] = useState<string | null>(null);
-  const [lotwSyncSuccess, setLotwSyncSuccess] = useState<string | null>(null);
-  const [isLoTWDownloadModalOpen, setIsLoTWDownloadModalOpen] = useState(false);
-  const [isLoTWUploadModalOpen, setIsLoTWUploadModalOpen] = useState(false);
-  const [isCheckingLoTWUpload, setIsCheckingLoTWUpload] = useState(false);
-  const [lotwUploadPreflight, setLotwUploadPreflight] = useState<LoTWUploadPreflightResponse | null>(null);
-  const [lotwSyncSinceDate, setLotwSyncSinceDate] = useState('');
-  const [lotwLastDownloadTime, setLotwLastDownloadTime] = useState<number | undefined>(undefined);
-
-  // 平台启用状态（旧的，保留兼容）
-  const [_isQRZEnabled, setIsQRZEnabled] = useState(false);
-  const [_isLoTWEnabled, setIsLoTWEnabled] = useState(false);
-
-  // 同步配置摘要（按呼号）
-  const [syncSummary, setSyncSummary] = useState<{ wavelog: boolean; qrz: boolean; lotw: boolean }>({ wavelog: false, qrz: false, lotw: false });
+  // 同步配置
   const [isSyncConfigOpen, setIsSyncConfigOpen] = useState(false);
-  const [syncConfigInitialTab, setSyncConfigInitialTab] = useState<'wavelog' | 'qrz' | 'lotw'>('wavelog');
+  const [syncConfigInitialTab, setSyncConfigInitialTab] = useState<string>('wavelog');
 
-  const refreshSyncSummary = async (callsign: string) => {
-    const res = await api.getCallsignSyncSummary(callsign) as {
-      success?: boolean;
-      summary?: { wavelog: boolean; qrz: boolean; lotw: boolean };
-    };
+  // Sync action iframe modal (for actions with pageId)
+  const [actionModal, setActionModal] = useState<{
+    pluginName: string;
+    pageId: string;
+    title: string;
+  } | null>(null);
 
-    if (res.success && res.summary) {
-      setSyncSummary(res.summary);
-      setIsQRZEnabled(res.summary.qrz);
-      setIsLoTWEnabled(res.summary.lotw);
+  const refreshSyncProviders = async (callsign: string) => {
+    try {
+      const [providers, configuredRes] = await Promise.all([
+        fetch('/api/plugins/sync-providers', { headers: getAuthHeaders() }).then(r => r.json()) as Promise<SyncProviderInfo[]>,
+        fetch(`/api/plugins/sync-providers/configured?callsign=${encodeURIComponent(callsign)}`, {
+          headers: getAuthHeaders(),
+        }).then(r => r.json()) as Promise<{ providers: Record<string, boolean> }>,
+      ]);
+      setSyncProviders(providers);
+      setSyncConfigured(configuredRes.providers ?? {});
+    } catch (err) {
+      logger.warn('Failed to load sync providers', err);
     }
   };
 
-  const refreshLoTWStatus = async (callsign: string) => {
-    const status = await api.getLoTWSyncStatus(callsign) as LoTWSyncStatus;
-    setLotwLastDownloadTime(status.lastDownloadTime);
-  };
-
-  const getDefaultLoTWSinceDate = () => formatDateInputValue(lotwLastDownloadTime) || getDateDaysAgo(30);
-
-  const openSyncConfig = (tab: 'wavelog' | 'qrz' | 'lotw' = 'wavelog') => {
+  const openSyncConfig = (tab: string = 'wavelog') => {
     setSyncConfigInitialTab(tab);
     setIsSyncConfigOpen(true);
   };
@@ -459,210 +436,127 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     }
   };
 
-  // WaveLog同步功能
-  const handleWaveLogSync = async (operation: 'download' | 'upload' | 'full_sync') => {
-    if (isSyncing) return;
+  // Plugin-based sync provider handler (generic for all providers)
+  const handleProviderSync = async (providerId: string, operation: 'download' | 'upload' | 'full_sync') => {
+    if (syncingProviders[providerId]) return;
+    const provider = syncProviders.find(p => p.id === providerId);
+    const name = provider?.displayName ?? providerId;
+
+    setSyncingProviders(prev => ({ ...prev, [providerId]: true }));
+    setSyncMessages(prev => { const next = { ...prev }; delete next[providerId]; return next; });
+
+    // Format upload result: "uploaded 3, skipped 1, failed 0"
+    const fmtUpload = (res: Record<string, unknown>): string => {
+      const parts: string[] = [];
+      if (res.uploaded) parts.push(t('sync.provider.resultUploaded', { count: res.uploaded }));
+      if (res.skipped) parts.push(t('sync.provider.resultSkipped', { count: res.skipped }));
+      if (res.failed) parts.push(t('sync.provider.resultFailed', { count: res.failed }));
+      if (parts.length === 0) parts.push(t('sync.provider.resultUploaded', { count: 0 }));
+      return parts.join(t('sync.provider.resultSeparator'));
+    };
+
+    // Format download result: "downloaded 5, matched 3, updated 2"
+    const fmtDownload = (res: Record<string, unknown>): string => {
+      const parts: string[] = [];
+      if (res.downloaded) parts.push(t('sync.provider.resultDownloaded', { count: res.downloaded }));
+      if (res.matched) parts.push(t('sync.provider.resultMatched', { count: res.matched }));
+      if (res.updated) parts.push(t('sync.provider.resultUpdated', { count: res.updated }));
+      if (parts.length === 0) parts.push(t('sync.provider.resultDownloaded', { count: 0 }));
+      return parts.join(t('sync.provider.resultSeparator'));
+    };
+
+    const fmtErrors = (errors?: string[]): string => {
+      if (!errors || errors.length === 0) return '';
+      return '\n' + errors.join('\n');
+    };
+
+    const fmtPreflight = (result: SyncUploadPreflightResult): string => {
+      const lines = [
+        t('sync.provider.preflightSummary', {
+          pending: result.pendingCount,
+          uploadable: result.uploadableCount,
+          blocked: result.blockedCount,
+        }),
+      ];
+      if (result.issues?.length) {
+        lines.push(...result.issues.map((issue) => issue.message));
+      }
+      return lines.join('\n');
+    };
 
     try {
-      setIsSyncing(true);
-      setSyncError(null);
-      setSyncSuccess(null);
+      const callsign = operatorCallsign || '';
+      const base = `/api/plugins/sync-providers/${encodeURIComponent(providerId)}`;
 
-      // 调用WaveLog同步API
-      const result = await api.syncWaveLog(operatorCallsign || '', operation) as WaveLogSyncResponse;
-
-      if (result.success) {
-        setSyncSuccess(result.message);
-        // 同步成功后重新加载QSO数据
-        await refreshLogbookData();
-
-        logger.debug(`WaveLog sync successful: ${operation}`);
-      } else {
-        setSyncError(result.message || t('error.syncFailed'));
-      }
-
-    } catch (error) {
-      logger.error('WaveLog sync failed:', error);
-      if (error instanceof ApiError) {
-        setSyncError(error.userMessage);
-        showErrorToast({
-          userMessage: error.userMessage,
-          suggestions: error.suggestions,
-          severity: error.severity,
-          code: error.code
+      const doPost = async <T,>(endpoint: string, body: unknown): Promise<T> => {
+        const response = await fetch(`${base}/${endpoint}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(body),
         });
-      } else {
-        const errorMessage = error instanceof Error ? error.message : t('sync.wavelog.syncError');
-        setSyncError(errorMessage);
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  // QRZ.com同步功能
-  const handleQRZSync = async (operation: 'download' | 'upload' | 'full_sync') => {
-    if (isQRZSyncing) return;
-
-    try {
-      setIsQRZSyncing(true);
-      setQrzSyncError(null);
-      setQrzSyncSuccess(null);
-
-      const result = await api.syncQRZ(operatorCallsign || '', operation) as QRZSyncResponse;
-
-      if (result.success) {
-        setQrzSyncSuccess(result.message);
-        await refreshLogbookData();
-      } else {
-        setQrzSyncError(result.message || t('sync.qrz.syncError'));
-      }
-    } catch (error) {
-      logger.error('QRZ sync failed:', error);
-      if (error instanceof ApiError) {
-        setQrzSyncError(error.userMessage);
-        showErrorToast({
-          userMessage: error.userMessage,
-          suggestions: error.suggestions,
-          severity: error.severity,
-          code: error.code
-        });
-      } else {
-        setQrzSyncError(error instanceof Error ? error.message : t('sync.qrz.syncError'));
-      }
-    } finally {
-      setIsQRZSyncing(false);
-    }
-  };
-
-  // LoTW同步功能
-  const handleLoTWSync = async (
-    operation: 'upload' | 'download_confirmations',
-    since?: string
-  ) => {
-    if (isLoTWSyncing) return;
-
-    try {
-      setIsLoTWSyncing(true);
-      setLotwSyncError(null);
-      setLotwSyncSuccess(null);
-
-      const result = await api.syncLoTW(operatorCallsign || '', operation, since) as LoTWSyncResponse;
-
-      if (result.success) {
-        const successMessage = operation === 'download_confirmations'
-          ? t('sync.lotw.downloadResult', {
-            downloaded: result.downloadedCount ?? 0,
-            updated: result.updatedCount ?? 0,
-            imported: result.importedCount ?? 0,
-          })
-          : result.message;
-
-        setLotwSyncSuccess(successMessage);
-        await refreshLogbookData();
-        if (operatorCallsign) {
-          await refreshLoTWStatus(operatorCallsign);
+        const json = await response.json().catch(() => null) as T | { error?: string } | null;
+        if (!response.ok) {
+          const message = json && typeof json === 'object' && 'error' in json && typeof json.error === 'string'
+            ? json.error
+            : t('sync.provider.syncError', { name });
+          throw new Error(message);
         }
+        return json as T;
+      };
+
+      if (operation !== 'download') {
+        const preflight = await doPost<SyncUploadPreflightResult | null>('upload-preflight', { callsign });
+        if (preflight && !preflight.ready) {
+          setSyncMessages(prev => ({
+            ...prev,
+            [providerId]: { type: 'error', text: fmtPreflight(preflight) },
+          }));
+          return;
+        }
+      }
+
+      if (operation === 'full_sync') {
+        const dlRes = await doPost<Record<string, unknown>>('download', { callsign });
+        const ulRes = await doPost<Record<string, unknown>>('upload', { callsign });
+        const hasFailure = (dlRes.errors as string[] | undefined)?.length || (ulRes.errors as string[] | undefined)?.length || (ulRes.failed as number) > 0;
+        const summary = `↓ ${fmtDownload(dlRes)}  ↑ ${fmtUpload(ulRes)}` + fmtErrors([...(dlRes.errors as string[] ?? []), ...(ulRes.errors as string[] ?? [])]);
+        setSyncMessages(prev => ({
+          ...prev,
+          [providerId]: { type: hasFailure ? 'error' : 'success', text: summary },
+        }));
+        await refreshLogbookData();
+      } else if (operation === 'download') {
+        const res = await doPost<Record<string, unknown>>('download', { callsign });
+        const text = fmtDownload(res) + fmtErrors(res.errors as string[] | undefined);
+        setSyncMessages(prev => ({ ...prev, [providerId]: { type: (res.errors as string[])?.length ? 'error' : 'success', text } }));
+        await refreshLogbookData();
       } else {
-        const errorMessage = translateLoTWServerMessage(result.errorCode || result.message, result.message || t('sync.lotw.syncError'));
-        setLotwSyncError(errorMessage);
-        showErrorToast({
-          userMessage: errorMessage,
-          severity: 'warning',
-        });
+        const res = await doPost<Record<string, unknown>>('upload', { callsign });
+        const hasFailure = (res.failed as number) > 0 || (res.errors as string[] | undefined)?.length;
+        const text = fmtUpload(res) + fmtErrors(res.errors as string[] | undefined);
+        setSyncMessages(prev => ({ ...prev, [providerId]: { type: hasFailure ? 'error' : 'success', text } }));
+        await refreshLogbookData();
       }
     } catch (error) {
-      logger.error('LoTW sync failed:', error);
-      if (error instanceof ApiError) {
-        const errorMessage = getLoTWApiErrorMessage(error);
-        setLotwSyncError(errorMessage);
-        showErrorToast({
-          userMessage: errorMessage,
-          suggestions: error.suggestions,
-          severity: error.severity,
-          code: error.code
-        });
-      } else {
-        setLotwSyncError(error instanceof Error ? error.message : t('sync.lotw.syncError'));
-      }
+      logger.error(`Sync failed: provider=${providerId}`, error);
+      const msg = error instanceof Error ? error.message : t('sync.provider.syncError', { name });
+      setSyncMessages(prev => ({ ...prev, [providerId]: { type: 'error', text: msg } }));
     } finally {
-      setIsLoTWSyncing(false);
-    }
-  };
-
-  const openLoTWDownloadModal = () => {
-    setLotwSyncSinceDate(getDefaultLoTWSinceDate());
-    setIsLoTWDownloadModalOpen(true);
-  };
-
-  const closeLoTWDownloadModal = () => {
-    if (isLoTWSyncing) return;
-    setIsLoTWDownloadModalOpen(false);
-  };
-
-  const handleLoTWDownloadConfirm = async () => {
-    if (!lotwSyncSinceDate) {
-      setLotwSyncError(t('sync.lotw.selectDateRequired'));
-      return;
-    }
-
-    setIsLoTWDownloadModalOpen(false);
-    await handleLoTWSync('download_confirmations', lotwSyncSinceDate);
-  };
-
-  const openLoTWUploadModal = async () => {
-    if (!operatorCallsign || isCheckingLoTWUpload) return;
-
-    setIsLoTWUploadModalOpen(true);
-    setLotwUploadPreflight(null);
-    setIsCheckingLoTWUpload(true);
-    setLotwSyncError(null);
-
-    try {
-      const result = await api.getLoTWUploadPreflight(operatorCallsign);
-      setLotwUploadPreflight(result);
-    } catch (error) {
-      logger.error('LoTW upload preflight failed:', error);
-      if (error instanceof ApiError) {
-        const errorMessage = getLoTWApiErrorMessage(error);
-        setLotwSyncError(errorMessage);
-        showErrorToast({
-          userMessage: errorMessage,
-          suggestions: error.suggestions,
-          severity: error.severity,
-          code: error.code,
+      setSyncingProviders(prev => ({ ...prev, [providerId]: false }));
+      setTimeout(() => {
+        setSyncMessages(prev => {
+          if (prev[providerId]?.type === 'success') {
+            const next = { ...prev }; delete next[providerId]; return next;
+          }
+          return prev;
         });
-      } else {
-        setLotwSyncError(error instanceof Error ? error.message : t('sync.lotw.syncError'));
-      }
-      setIsLoTWUploadModalOpen(false);
-    } finally {
-      setIsCheckingLoTWUpload(false);
+      }, 8000);
     }
   };
 
-  const closeLoTWUploadModal = () => {
-    if (isLoTWSyncing || isCheckingLoTWUpload) return;
-    setIsLoTWUploadModalOpen(false);
-  };
-
-  const handleLoTWUploadConfirm = async () => {
-    if (!lotwUploadPreflight?.ready || lotwUploadPreflight.uploadableCount === 0) {
-      return;
-    }
-
-    setIsLoTWUploadModalOpen(false);
-    await handleLoTWSync('upload');
-  };
-
-  const handleLoTWAction = (operation: 'upload' | 'download_confirmations') => {
-    if (operation === 'download_confirmations') {
-      openLoTWDownloadModal();
-      return;
-    }
-
-    void openLoTWUploadModal();
-  };
 
   // 打开日志文件目录（仅Electron）
   const handleOpenDataDir = async () => {
@@ -677,48 +571,6 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   };
 
   // 自动清除成功/错误消息
-  useEffect(() => {
-    if (syncSuccess) {
-      const timer = setTimeout(() => setSyncSuccess(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [syncSuccess]);
-
-  useEffect(() => {
-    if (syncError) {
-      const timer = setTimeout(() => setSyncError(null), 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [syncError]);
-
-  useEffect(() => {
-    if (qrzSyncSuccess) {
-      const timer = setTimeout(() => setQrzSyncSuccess(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [qrzSyncSuccess]);
-
-  useEffect(() => {
-    if (qrzSyncError) {
-      const timer = setTimeout(() => setQrzSyncError(null), 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [qrzSyncError]);
-
-  useEffect(() => {
-    if (lotwSyncSuccess) {
-      const timer = setTimeout(() => setLotwSyncSuccess(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [lotwSyncSuccess]);
-
-  useEffect(() => {
-    if (lotwSyncError) {
-      const timer = setTimeout(() => setLotwSyncError(null), 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [lotwSyncError]);
-
   useEffect(() => {
     if (importSuccess) {
       const timer = setTimeout(() => setImportSuccess(null), 7000);
@@ -1658,130 +1510,102 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
     const actionControls = (
       <>
-        {syncSummary.wavelog && (
-          <Dropdown>
-            <DropdownTrigger>
-              <Button
-                color="secondary"
-                variant="bordered"
-                size="sm"
-                isLoading={isSyncing}
-                startContent={!isSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
-                className="min-w-0"
-              >
-                <span className="hidden lg:inline">{t('sync.wavelog.button')}</span>
-                <span className="lg:hidden hidden md:inline">{t('sync.sync')}</span>
-              </Button>
-            </DropdownTrigger>
-            <DropdownMenu
-              aria-label={t('sync.wavelog.ariaLabel')}
-              onAction={(key) => handleWaveLogSync(key as 'download' | 'upload' | 'full_sync')}
-            >
-              <DropdownItem
-                key="download"
-                startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                description={t('sync.wavelog.downloadDesc')}
-              >
-                {t('sync.wavelog.download')}
-              </DropdownItem>
-              <DropdownItem
-                key="upload"
-                startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                description={t('sync.wavelog.uploadDesc')}
-              >
-                {t('sync.wavelog.upload')}
-              </DropdownItem>
-              <DropdownItem
-                key="full_sync"
-                startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
-                description={t('sync.wavelog.fullSyncDesc')}
-              >
-                {t('sync.wavelog.fullSync')}
-              </DropdownItem>
-            </DropdownMenu>
-          </Dropdown>
-        )}
+        {/* Plugin-based sync provider buttons (dynamic) */}
+        {syncProviders.map((provider) => {
+          const isConfigured = syncConfigured[provider.id] ?? false;
+          const isBusy = syncingProviders[provider.id] ?? false;
+          const name = provider.displayName;
 
-        {syncSummary.qrz && (
-          <Dropdown>
-            <DropdownTrigger>
-              <Button
-                color="warning"
-                variant="bordered"
-                size="sm"
-                isLoading={isQRZSyncing}
-                startContent={!isQRZSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
-                className="min-w-0"
-              >
-                <span className="hidden lg:inline">QRZ.com</span>
-                <span className="lg:hidden hidden md:inline">QRZ</span>
-              </Button>
-            </DropdownTrigger>
-            <DropdownMenu
-              aria-label={t('sync.qrz.ariaLabel')}
-              onAction={(key) => handleQRZSync(key as 'download' | 'upload' | 'full_sync')}
-            >
-              <DropdownItem
-                key="download"
-                startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                description={t('sync.qrz.downloadDesc')}
-              >
-                {t('sync.qrz.download')}
-              </DropdownItem>
-              <DropdownItem
-                key="upload"
-                startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                description={t('sync.qrz.uploadDesc')}
-              >
-                {t('sync.qrz.upload')}
-              </DropdownItem>
-              <DropdownItem
-                key="full_sync"
-                startContent={<FontAwesomeIcon icon={faSync} className="text-warning" />}
-                description={t('sync.qrz.fullSyncDesc')}
-              >
-                {t('sync.qrz.fullSync')}
-              </DropdownItem>
-            </DropdownMenu>
-          </Dropdown>
-        )}
+          // Resolve action icon
+          const actionIcon = (icon?: string) => {
+            if (icon === 'download') return faDownload;
+            if (icon === 'upload') return faUpload;
+            return faSync;
+          };
 
-        {syncSummary.lotw && (
-          <Dropdown>
-            <DropdownTrigger>
-              <Button
-                color="success"
-                variant="bordered"
-                size="sm"
-                isLoading={isLoTWSyncing}
-                startContent={!isLoTWSyncing ? <FontAwesomeIcon icon={faSync} /> : undefined}
-                className="min-w-0"
+          // i18n for well-known action ids; external plugins fall back to raw label
+          const ACTION_I18N: Record<string, { label: string; desc: string }> = {
+            download: { label: t('sync.provider.download'), desc: t('sync.provider.downloadDesc', { name }) },
+            upload: { label: t('sync.provider.upload'), desc: t('sync.provider.uploadDesc', { name }) },
+            full_sync: { label: t('sync.provider.fullSync'), desc: t('sync.provider.fullSyncDesc') },
+          };
+          const resolveLabel = (a: SyncAction) => ACTION_I18N[a.id]?.label ?? a.label;
+          const resolveDesc = (a: SyncAction) => ACTION_I18N[a.id]?.desc ?? a.description;
+
+          // Use provider-defined actions or default set
+          const defaultActions: SyncAction[] = [
+            { id: 'download', label: 'Download', icon: 'download', operation: 'download' },
+            { id: 'upload', label: 'Upload', icon: 'upload', operation: 'upload' },
+            { id: 'full_sync', label: 'Full Sync', icon: 'sync', operation: 'full_sync' },
+          ];
+          const providerActions = provider.actions ?? defaultActions;
+
+          return (
+            <Dropdown key={provider.id}>
+              <DropdownTrigger>
+                <Button
+                  color={(provider.color ?? 'default') as 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger'}
+                  variant="bordered"
+                  size="sm"
+                  isLoading={isBusy}
+                  startContent={!isBusy ? <FontAwesomeIcon icon={faSync} /> : undefined}
+                  className="min-w-0"
+                >
+                  <span className="hidden lg:inline">{name}</span>
+                  <span className="lg:hidden hidden md:inline">{t('sync.sync')}</span>
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu
+                aria-label={t('sync.provider.ariaLabel', { name })}
+                onAction={(key) => {
+                  if (key === 'settings') {
+                    openSyncConfig(provider.id);
+                  } else {
+                    const action = providerActions.find(a => a.id === String(key));
+                    if (action?.pageId) {
+                      // Open iframe modal for this action
+                      setActionModal({
+                        pluginName: provider.pluginName,
+                        pageId: action.pageId,
+                        title: `${name} — ${resolveLabel(action)}`,
+                      });
+                    } else if (action?.operation) {
+                      void handleProviderSync(provider.id, action.operation);
+                    }
+                  }
+                }}
               >
-                <span className="hidden lg:inline">LoTW</span>
-                <span className="lg:hidden hidden md:inline">LoTW</span>
-              </Button>
-            </DropdownTrigger>
-            <DropdownMenu
-              aria-label={t('sync.lotw.ariaLabel')}
-              onAction={(key) => handleLoTWAction(key as 'upload' | 'download_confirmations')}
-            >
-              <DropdownItem
-                key="download_confirmations"
-                startContent={<FontAwesomeIcon icon={faDownload} className="text-primary" />}
-                description={t('sync.lotw.downloadConfirmationsDesc')}
-              >
-                {t('sync.lotw.downloadConfirmations')}
-              </DropdownItem>
-              <DropdownItem
-                key="upload"
-                startContent={<FontAwesomeIcon icon={faUpload} className="text-secondary" />}
-                description={t('sync.lotw.uploadDesc')}
-              >
-                {t('sync.lotw.upload')}
-              </DropdownItem>
-            </DropdownMenu>
-          </Dropdown>
-        )}
+                {isConfigured ? [
+                  ...providerActions.map((action) => (
+                    <DropdownItem
+                      key={action.id}
+                      startContent={<FontAwesomeIcon icon={actionIcon(action.icon)} className={action.icon === 'download' ? 'text-primary' : action.icon === 'upload' ? 'text-secondary' : 'text-warning'} />}
+                      description={resolveDesc(action)}
+                    >
+                      {resolveLabel(action)}
+                    </DropdownItem>
+                  )),
+                  <DropdownItem
+                    key="settings"
+                    startContent={<FontAwesomeIcon icon={faCog} className="text-default-400" />}
+                    description={t('sync.provider.settingsDesc', { name })}
+                  >
+                    {t('sync.provider.settings')}
+                  </DropdownItem>,
+                ] : [
+                  <DropdownItem
+                    key="settings"
+                    startContent={<FontAwesomeIcon icon={faCog} />}
+                    description={t('sync.provider.notConfigured')}
+                  >
+                    {t('sync.provider.settings')}
+                  </DropdownItem>,
+                ]}
+              </DropdownMenu>
+            </Dropdown>
+          );
+        })}
+
 
         <Dropdown>
           <DropdownTrigger>
@@ -1937,12 +1761,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     handleFilterChange,
     clearFilters,
     handleExport,
-    isQRZSyncing,
-    isLoTWSyncing,
-    syncSummary,
     openSyncConfig,
-    handleQRZSync,
-    handleLoTWAction,
     mobileDxccSummary,
   ]);
 
@@ -2073,77 +1892,26 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
       <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
       {/* 通知区域 */}
-      {syncSuccess && (
-        <Alert
-          color="success"
-          variant="flat"
-          className="w-full mb-4"
-          title={t('sync.wavelog.successTitle')}
-          description={syncSuccess}
-          isClosable
-          onClose={() => setSyncSuccess(null)}
-        />
-      )}
+      {/* Plugin-based sync provider messages */}
+      {Object.entries(syncMessages).map(([providerId, msg]) => {
+        const providerName = syncProviders.find(p => p.id === providerId)?.displayName ?? providerId;
+        const title = msg.type === 'success'
+          ? t('sync.provider.syncSuccess', { name: providerName })
+          : t('sync.provider.syncError', { name: providerName });
+        return (
+          <Alert
+            key={providerId}
+            color={msg.type === 'success' ? 'success' : 'danger'}
+            variant="flat"
+            className="w-full mb-4"
+            title={title}
+            description={msg.text}
+            isClosable
+            onClose={() => setSyncMessages(prev => { const next = { ...prev }; delete next[providerId]; return next; })}
+          />
+        );
+      })}
 
-      {syncError && (
-        <Alert
-          color="danger"
-          variant="flat"
-          className="w-full mb-4"
-          title={t('sync.wavelog.errorTitle')}
-          description={syncError}
-          isClosable
-          onClose={() => setSyncError(null)}
-        />
-      )}
-
-      {qrzSyncSuccess && (
-        <Alert
-          color="success"
-          variant="flat"
-          className="w-full mb-4"
-          title={t('sync.qrz.successTitle')}
-          description={qrzSyncSuccess}
-          isClosable
-          onClose={() => setQrzSyncSuccess(null)}
-        />
-      )}
-
-      {qrzSyncError && (
-        <Alert
-          color="danger"
-          variant="flat"
-          className="w-full mb-4"
-          title={t('sync.qrz.errorTitle')}
-          description={qrzSyncError}
-          isClosable
-          onClose={() => setQrzSyncError(null)}
-        />
-      )}
-
-      {lotwSyncSuccess && (
-        <Alert
-          color="success"
-          variant="flat"
-          className="w-full mb-4"
-          title={t('sync.lotw.successTitle')}
-          description={lotwSyncSuccess}
-          isClosable
-          onClose={() => setLotwSyncSuccess(null)}
-        />
-      )}
-
-      {lotwSyncError && (
-        <Alert
-          color="danger"
-          variant="flat"
-          className="w-full mb-4"
-          title={t('sync.lotw.errorTitle')}
-          description={lotwSyncError}
-          isClosable
-          onClose={() => setLotwSyncError(null)}
-        />
-      )}
 
       {exportError && (
         <Alert
@@ -2368,157 +2136,6 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         </ModalContent>
       </Modal>
 
-      <Modal
-        isOpen={isLoTWDownloadModalOpen}
-        onClose={closeLoTWDownloadModal}
-        size="sm"
-      >
-        <ModalContent>
-          <ModalHeader>{t('sync.lotw.dateModalTitle')}</ModalHeader>
-          <ModalBody className="gap-3">
-            <p className="text-sm text-default-600">
-              {t('sync.lotw.dateModalDesc')}
-            </p>
-            <Input
-              type="date"
-              label={t('sync.lotw.sinceDateLabel')}
-              value={lotwSyncSinceDate}
-              max={new Date().toISOString().slice(0, 10)}
-              onChange={(event) => setLotwSyncSinceDate(event.target.value)}
-              description={lotwLastDownloadTime
-                ? t('sync.lotw.lastDownloadHint', {
-                  time: new Date(lotwLastDownloadTime).toLocaleString(undefined, { timeZone: 'UTC' }),
-                })
-                : t('sync.lotw.noLastDownloadHint')}
-            />
-          </ModalBody>
-          <ModalFooter>
-            <Button
-              variant="flat"
-              onPress={closeLoTWDownloadModal}
-              isDisabled={isLoTWSyncing}
-            >
-              {t('common:button.cancel')}
-            </Button>
-            <Button
-              color="success"
-              onPress={handleLoTWDownloadConfirm}
-              isLoading={isLoTWSyncing}
-              isDisabled={!lotwSyncSinceDate}
-            >
-              {t('sync.lotw.confirmDownload')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
-
-      <Modal
-        isOpen={isLoTWUploadModalOpen}
-        onClose={closeLoTWUploadModal}
-        size="lg"
-      >
-        <ModalContent>
-          <ModalHeader>{t('sync.lotw.uploadModalTitle')}</ModalHeader>
-          <ModalBody className="gap-3">
-            <p className="text-sm text-default-600">
-              {t('sync.lotw.uploadModalDesc')}
-            </p>
-
-            {isCheckingLoTWUpload && (
-              <div className="flex items-center gap-2 py-4">
-                <Spinner size="sm" />
-                <span className="text-sm text-default-600">{t('sync.lotw.uploadChecking')}</span>
-              </div>
-            )}
-
-            {!isCheckingLoTWUpload && lotwUploadPreflight && (
-              <>
-                <Alert color={lotwUploadPreflight.ready ? 'success' : 'warning'} variant="flat">
-                  <div className="space-y-2">
-                    <p className="font-medium">
-                      {lotwUploadPreflight.ready
-                        ? t('sync.lotw.uploadReadySummary')
-                        : t('sync.lotw.uploadNeedsConfigSummary')}
-                    </p>
-                    <div className="text-xs space-y-1">
-                      <p>{t('sync.lotw.uploadPendingCount', { count: lotwUploadPreflight.pendingCount })}</p>
-                      <p>{t('sync.lotw.uploadReadyCount', { count: lotwUploadPreflight.uploadableCount })}</p>
-                      <p>{t('sync.lotw.uploadBlockedCount', { count: lotwUploadPreflight.blockedCount })}</p>
-                    </div>
-                  </div>
-                </Alert>
-
-                {lotwUploadPreflight.issues.length > 0 && (
-                  <Alert color={lotwUploadPreflight.ready ? 'primary' : 'warning'} variant="flat">
-                    <div className="space-y-2 text-sm">
-                      <p className="font-medium">{t('sync.lotw.uploadChecklist')}</p>
-                      <ul className="space-y-1 text-xs">
-                        {lotwUploadPreflight.issues.map((issue) => (
-                          <li key={`${issue.code}-${issue.message}`}>• {getLoTWIssueMessage(issue)}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </Alert>
-                )}
-
-                {lotwUploadPreflight.selectedCertificates.length > 0 && (
-                  <div className="rounded-lg bg-default-100 px-3 py-3">
-                    <p className="text-sm font-medium mb-2">{t('sync.lotw.uploadCertificatesTitle')}</p>
-                    <ul className="space-y-1 text-xs text-default-600">
-                      {lotwUploadPreflight.selectedCertificates.map((item) => (
-                        <li key={item.id}>• {t('sync.lotw.uploadCertificateItem', { callsign: item.callsign, from: new Date(item.qsoStartDate).toLocaleDateString(), to: new Date(item.qsoEndDate).toLocaleDateString() })}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {lotwUploadPreflight.guidance.length > 0 && (
-                  <div className="rounded-lg bg-default-100 px-3 py-3">
-                    <p className="text-sm font-medium mb-2">{t('sync.lotw.uploadGuidanceTitle')}</p>
-                      <ul className="space-y-1 text-xs text-default-600">
-                        {lotwUploadPreflight.guidance.map((item) => (
-                          <li key={item}>• {getLoTWGuidanceMessage(item)}</li>
-                        ))}
-                      </ul>
-                    </div>
-                )}
-              </>
-            )}
-          </ModalBody>
-          <ModalFooter>
-            <Button
-              variant="flat"
-              onPress={closeLoTWUploadModal}
-              isDisabled={isLoTWSyncing || isCheckingLoTWUpload}
-            >
-              {t('common:button.cancel')}
-            </Button>
-            <Button
-              variant="flat"
-              color="primary"
-              onPress={() => {
-                setIsLoTWUploadModalOpen(false);
-                openSyncConfig('lotw');
-              }}
-              isDisabled={isCheckingLoTWUpload}
-            >
-              {t('sync.lotw.openLotwSettings')}
-            </Button>
-            <Button
-              color="success"
-              onPress={handleLoTWUploadConfirm}
-              isLoading={isLoTWSyncing}
-              isDisabled={
-                isCheckingLoTWUpload
-                || !lotwUploadPreflight?.ready
-                || (lotwUploadPreflight?.uploadableCount ?? 0) === 0
-              }
-            >
-              {t('sync.lotw.confirmUpload')}
-            </Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
 
       {/* 同步配置弹窗 */}
       {operatorCallsign && (
@@ -2528,11 +2145,35 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           callsign={operatorCallsign}
           initialTab={syncConfigInitialTab}
           onSaved={() => {
-            refreshSyncSummary(operatorCallsign).catch(() => {});
-            refreshLoTWStatus(operatorCallsign).catch(() => {});
+            refreshSyncProviders(operatorCallsign).catch(() => {});
           }}
         />
       )}
+
+      {/* Sync action iframe modal (for pageId-based actions) */}
+      <Modal
+        isOpen={!!actionModal}
+        onClose={() => {
+          setActionModal(null);
+          // Refresh logbook data in case the action modified records
+          refreshLogbookData();
+        }}
+        size="lg"
+      >
+        <ModalContent className="overflow-hidden">
+          <ModalHeader>{actionModal?.title}</ModalHeader>
+          <ModalBody className="p-0">
+            {actionModal && (
+              <PluginIframeHost
+                pluginName={actionModal.pluginName}
+                pageId={actionModal.pageId}
+                params={{ callsign: operatorCallsign || '' }}
+                minHeight={0}
+              />
+            )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
       </div>
     </div>
   );
