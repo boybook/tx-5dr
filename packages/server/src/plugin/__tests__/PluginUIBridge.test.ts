@@ -65,4 +65,26 @@ describe('PluginUIBridge', () => {
 
     expect(() => bridge.pushToPage('settings', 'updated')).toThrow('explicit_page_session_required');
   });
+
+  it('rejects pushToSession when the target session is not owned by the current instance', () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const bridge = new PluginUIBridge(
+      'demo',
+      { kind: 'operator', operatorId: 'operator-1' },
+      eventEmitter,
+      () => ([
+        {
+          sessionId: 'session-1',
+          pluginName: 'demo',
+          pageId: 'settings',
+          accessScope: 'operator',
+          instanceTarget: { kind: 'operator', operatorId: 'operator-1' },
+          createdAt: 0,
+          expiresAt: Date.now() + 1_000,
+        },
+      ]),
+    );
+
+    expect(() => bridge.pushToSession('session-2', 'updated')).toThrow('page_session_not_found');
+  });
 });

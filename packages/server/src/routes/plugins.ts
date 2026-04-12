@@ -22,6 +22,7 @@ import { PluginStorageProvider } from '../plugin/PluginStorageProvider.js';
 import { PluginFileStoreProvider } from '../plugin/PluginFileStoreProvider.js';
 import {
   type PluginPageBoundResource,
+  getPluginPageFileScopePath,
   getPluginPageScopePath,
   getPluginPageStorePath,
 } from '../plugin/page-scope.js';
@@ -1321,7 +1322,10 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
 
       const storePath = path.join(
         engine.pluginManager.getPluginStorageDir(name),
-        getPluginPageStorePath(pageId, sessionContext.session.resource),
+        getPluginPageStorePath(pageId, {
+          instanceTarget: sessionContext.session.instanceTarget,
+          resource: sessionContext.session.resource,
+        }),
       );
       const store = await getPageStoreProvider(storePath);
 
@@ -1382,7 +1386,10 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
       const backingStore = new PluginFileStoreProvider(fileRoot);
       const scopedStore = new ScopedPluginFileStoreProvider(
         backingStore,
-        getPluginPageScopePath(sessionContext.session.resource),
+        getPluginPageFileScopePath(pageId, {
+          instanceTarget: sessionContext.session.instanceTarget,
+          resource: sessionContext.session.resource,
+        }),
       );
 
       if (type === 'tx5dr:file:upload') {

@@ -1204,13 +1204,13 @@ panels: [
 | `tx5dr.resize(height)` | 报告内容高度，宿主据此调整 iframe 尺寸 |
 | `tx5dr.onThemeChange(callback)` | 监听主题切换 |
 | `tx5dr.requestClose()` | 请求关闭当前页面（由父组件处理） |
-| `tx5dr.storeGet(key, default)` | 读取页面私有 KV（page-scoped，返回 Promise） |
+| `tx5dr.storeGet(key, default)` | 读取页面私有 KV（按实例目标 + 绑定资源 + pageId 共享，返回 Promise） |
 | `tx5dr.storeSet(key, value)` | 写入页面私有 KV |
 | `tx5dr.storeDelete(key)` | 删除页面私有 KV |
-| `tx5dr.fileUpload(path, file)` | 上传文件到当前页面绑定 scope |
-| `tx5dr.fileRead(path)` | 从当前页面绑定 scope 读取文件（返回 Blob 或 null） |
-| `tx5dr.fileDelete(path)` | 删除当前页面绑定 scope 下的文件 |
-| `tx5dr.fileList(prefix?)` | 列出当前页面绑定 scope 下的文件路径 |
+| `tx5dr.fileUpload(path, file)` | 上传文件到当前页面 scope（按实例目标 + 绑定资源 + pageId 收口） |
+| `tx5dr.fileRead(path)` | 从当前页面 scope 读取文件（返回 Blob 或 null） |
+| `tx5dr.fileDelete(path)` | 删除当前页面 scope 下的文件 |
+| `tx5dr.fileList(prefix?)` | 列出当前页面 scope 下的文件路径 |
 
 #### invoke / onPush 通信模型
 
@@ -1292,6 +1292,7 @@ observer.observe(document.body);
 - `POST /api/plugins/:name/ui-invoke`：将 `tx5dr.invoke()` 转发给插件页处理器
 
 其中 iframe 静态页支持通过 query token 鉴权（`auth_token`，兼容 `token`）；`ui-invoke` 走常规 Bearer Token。
+宿主在页面加载时创建并锁定 `pageSessionId`；后续 invoke / store / file / heartbeat 都由宿主持有该 session，iframe 自报的 session 不作为可信输入。
 
 ### 4.10 文件存储
 
@@ -1313,7 +1314,7 @@ interface PluginFileStore {
 **存储路径**：`{dataDir}/plugin-data/{pluginName}/files/`
 
 **安全约束**：所有路径参数相对于插件文件根目录解析，禁止目录穿越（`..`、绝对路径等会被拒绝）。
-iframe 页面里的 `tx5dr.file*` 与运行时 `ctx.files` 指向同一物理文件根目录，但宿主会按页面 session 自动收口到 `global/`、`operators/{id}/` 或 `callsigns/{CALLSIGN}/` scope。
+iframe 页面里的 `tx5dr.file*` 与运行时 `ctx.files` 指向同一物理文件根目录，但宿主会按 `instanceTarget + bound resource + pageId` 自动收口到独立 scope。
 
 **典型用途**：
 - LoTW 证书文件（`.p12`）
@@ -1321,7 +1322,7 @@ iframe 页面里的 `tx5dr.file*` 与运行时 `ctx.files` 指向同一物理文
 - 缓存的外部资源
 
 在 iframe 页面中可通过 Bridge SDK 的 `tx5dr.fileUpload()` / `tx5dr.fileRead()` 等方法间接访问。
-`tx5dr.store*` 则是独立的 page-scoped KV，不会自动映射到运行时的 `ctx.store`。
+`tx5dr.store*` 则是独立的 page-scoped KV，作用域同样为 `instanceTarget + bound resource + pageId`，不会自动映射到运行时的 `ctx.store`。
 
 ### 4.11 日志同步 Provider
 

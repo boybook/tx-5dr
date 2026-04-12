@@ -56,13 +56,10 @@ export class PluginUIBridge implements UIBridge {
   pushToSession(pageSessionId: string, action: string, data?: unknown): void {
     const session = this.listSessions(this.pluginName, this.instanceTarget)
       .find((entry) => entry.sessionId === pageSessionId);
-    this.eventEmitter.emit('pluginPagePush', {
-      pluginName: this.pluginName,
-      pageId: session?.pageId ?? '',
-      pageSessionId,
-      action,
-      data,
-    });
+    if (!session) {
+      throw new Error('page_session_not_found');
+    }
+    this.emitToSession(session, action, data);
   }
 
   listActivePageSessions(pageId: string): PluginUIPageSessionInfo[] {
@@ -77,15 +74,23 @@ export class PluginUIBridge implements UIBridge {
   pushToPage(pageId: string, action: string, data?: unknown): void {
     const sessions = this.listSessions(this.pluginName, this.instanceTarget, pageId);
     if (sessions.length === 0) {
-      throw new Error(`page_session_not_found:${pageId}`);
+      throw new Error('page_session_not_found');
     }
     if (sessions.length > 1) {
       throw new Error('explicit_page_session_required');
     }
+    this.emitToSession(sessions[0], action, data);
+  }
+
+  private emitToSession(
+    session: Pick<PluginPageSession, 'sessionId' | 'pageId'>,
+    action: string,
+    data?: unknown,
+  ): void {
     this.eventEmitter.emit('pluginPagePush', {
       pluginName: this.pluginName,
-      pageId,
-      pageSessionId: sessions[0].sessionId,
+      pageId: session.pageId,
+      pageSessionId: session.sessionId,
       action,
       data,
     });
