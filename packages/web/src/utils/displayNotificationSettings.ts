@@ -61,6 +61,19 @@ export enum HighlightType {
   NEW_CALLSIGN = 'newCallsign',
 }
 
+export interface HighlightAnalysis {
+  isNewGrid?: boolean;
+  isNewDxccEntity?: boolean;
+  isNewPrefix?: boolean;
+  isNewCallsign?: boolean;
+}
+
+export const HIGHLIGHT_TYPES_BY_PRIORITY: HighlightType[] = [
+  HighlightType.NEW_PREFIX,
+  HighlightType.NEW_GRID,
+  HighlightType.NEW_CALLSIGN,
+];
+
 // 高亮类型显示名称工厂函数（支持 i18n）
 export function getHighlightTypeLabels(t: (key: string) => string): Record<HighlightType, string> {
   return {
@@ -161,13 +174,40 @@ export function isValidColor(color: string): boolean {
  */
 export function getHighlightPriority(type: HighlightType): number {
   switch (type) {
-    case HighlightType.NEW_GRID:
-      return 1;
     case HighlightType.NEW_PREFIX:
+      return 1;
+    case HighlightType.NEW_GRID:
       return 2;
     case HighlightType.NEW_CALLSIGN:
       return 3;
     default:
       return 999;
   }
-} 
+}
+
+export function getOrderedHighlightTypes(): HighlightType[] {
+  return [...HIGHLIGHT_TYPES_BY_PRIORITY];
+}
+
+export function resolveHighestPriorityHighlight(
+  analysis: HighlightAnalysis,
+  settings: DisplayNotificationSettings,
+): HighlightType | null {
+  if (!settings.enabled) {
+    return null;
+  }
+
+  if ((analysis.isNewDxccEntity || analysis.isNewPrefix) && settings.highlights.newPrefix.enabled) {
+    return HighlightType.NEW_PREFIX;
+  }
+
+  if (analysis.isNewGrid && settings.highlights.newGrid.enabled) {
+    return HighlightType.NEW_GRID;
+  }
+
+  if (analysis.isNewCallsign && settings.highlights.newCallsign.enabled) {
+    return HighlightType.NEW_CALLSIGN;
+  }
+
+  return null;
+}
