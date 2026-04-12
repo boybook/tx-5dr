@@ -190,21 +190,16 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   }, [postToIframe, getTheme]);
 
   // Forward plugin push messages from WebSocket to iframe.
-  // The 'pluginPagePush' event is emitted by the server when a plugin calls
-  // ctx.ui.pushToPage(). The cast is needed because the event is not yet
-  // registered in DigitalRadioEngineEvents — it will be added when the full
-  // WebSocket event pipeline is wired up.
   // radioService may be null when rendered outside RadioProvider (e.g. LogbookPage).
   useWSEvent(
     radioService,
-    'pluginPagePush' as 'pluginData',
-    (payload: unknown) => {
-      const msg = payload as PluginPagePushPayload;
-      if (msg.pluginName === pluginName && msg.pageId === pageId) {
+    'pluginPagePush',
+    (payload: PluginPagePushPayload) => {
+      if (payload.pluginName === pluginName && payload.pageId === pageId) {
         postToIframe({
           type: 'tx5dr:push',
-          action: msg.action,
-          data: msg.data,
+          action: payload.action,
+          data: payload.data,
         });
       }
     },

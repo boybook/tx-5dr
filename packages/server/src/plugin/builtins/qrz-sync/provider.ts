@@ -295,6 +295,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     const records: QSORecord[] = [];
     let afterLogId = 0;
 
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const option = this.buildFetchOption({ afterLogId, max: QRZ_FETCH_PAGE_SIZE });
       const params: Record<string, string> = {

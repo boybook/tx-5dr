@@ -37,12 +37,12 @@ export class PluginUIBridge implements UIBridge {
   }
 
   pushToPage(pageId: string, action: string, data?: unknown): void {
-    this.eventEmitter.emit('pluginPagePush' as keyof DigitalRadioEngineEvents, {
+    this.eventEmitter.emit('pluginPagePush', {
       pluginName: this.pluginName,
       pageId,
       action,
       data,
-    } as never);
+    });
   }
 
   /**
