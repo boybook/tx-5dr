@@ -11,6 +11,7 @@ import {
 import { useConnection } from '../../../store/radioStore';
 import { api } from '@tx5dr/core';
 import type {
+  PluginPanelDescriptor,
   PluginQuickAction,
   PluginQuickSetting,
   PluginSettingDescriptor,
@@ -27,6 +28,7 @@ import {
 } from '../../../utils/pluginSettings';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck } from '@fortawesome/free-solid-svg-icons';
+import { PluginPanelRenderer } from '../../plugins/PluginPanelRenderer';
 
 const logger = createLogger('AutomationSettingsPanel');
 
@@ -38,6 +40,7 @@ interface PluginQuickGroup {
   plugin: PluginStatus;
   actions: PluginQuickAction[];
   settings: PluginQuickSetting[];
+  panels: PluginPanelDescriptor[];
 }
 
 const QUICK_ACTION_SPINNER = (
@@ -92,6 +95,34 @@ function useDelayedBusyKey(busyKey: string | null, delayMs = 500): string | null
   }, [busyKey, delayMs]);
 
   return visibleBusyKey === busyKey ? visibleBusyKey : null;
+}
+
+const QUICK_PANEL_SKELETON_GROUPS = [
+  { bars: ['w-24', 'w-full', 'w-5/6'] },
+  { bars: ['w-20', 'w-4/5', 'w-full'] },
+  { bars: ['w-28', 'w-3/4'] },
+];
+
+function AutomationSettingsPanelSkeleton(): React.JSX.Element {
+  return (
+    <div className="w-[260px] space-y-2.5 p-1">
+      {QUICK_PANEL_SKELETON_GROUPS.map((group, index) => (
+        <section key={index} className="space-y-1.5">
+          <div className="h-2.5 w-16 animate-pulse rounded-full bg-default-200/80" />
+          <div className="rounded-xl border border-default-200/70 bg-content1 px-2.5 py-2.5">
+            <div className="space-y-2">
+              {group.bars.map((widthClass, barIndex) => (
+                <div
+                  key={barIndex}
+                  className={`h-8 animate-pulse rounded-lg bg-default-100/90 ${widthClass}`}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+      ))}
+    </div>
+  );
 }
 
 export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = ({ operatorId }) => {
@@ -163,7 +194,8 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       .filter((plugin) => {
         const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
         const actions = plugin.plugin.quickActions ?? [];
-        if (settings.length === 0 && actions.length === 0) {
+        const panels = (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation');
+        if (settings.length === 0 && actions.length === 0 && panels.length === 0) {
           return false;
         }
         if (plugin.plugin.type === 'strategy') {
@@ -183,6 +215,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         plugin: plugin.plugin,
         settings: (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry)),
         actions: plugin.plugin.quickActions ?? [],
+        panels: (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation'),
       }));
   }, [operatorId, pluginSnapshot.plugins]);
 
@@ -343,11 +376,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   }, [connection.state.radioService, operatorId, t]);
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-3">
-        <Spinner size="sm" />
-      </div>
-    );
+    return <AutomationSettingsPanelSkeleton />;
   }
 
   if (activeGroups.length === 0) {
@@ -366,7 +395,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         </div>
       )}
 
-      {activeGroups.map(({ plugin, settings, actions }) => (
+      {activeGroups.map(({ plugin, settings, actions, panels }) => (
         <section key={plugin.name} className="space-y-1.5">
           <div className="px-1 text-[10px] uppercase tracking-[0.12em] text-default-400">
             {resolvePluginName(plugin.name, plugin.name)}
@@ -552,6 +581,23 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {panels.length > 0 && (
+            <div className="space-y-1.5">
+              {panels.map((panel) => (
+                <PluginPanelRenderer
+                  key={`${plugin.name}:${panel.id}`}
+                  pluginName={plugin.name}
+                  operatorId={operatorId}
+                  panelId={panel.id}
+                  title={resolvePluginLabel(panel.title, plugin.name)}
+                  component={panel.component}
+                  pageId={panel.pageId}
+                  variant="inline"
+                />
+              ))}
             </div>
           )}
 

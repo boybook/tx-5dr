@@ -144,6 +144,7 @@ export enum WSMessageType {
   PLUGIN_DATA = 'pluginData',
   PLUGIN_LOG = 'pluginLog',
   PLUGIN_USER_ACTION = 'pluginUserAction',
+  PLUGIN_PAGE_PUSH = 'pluginPagePush',
 
   // ===== OpenWebRX SDR =====
   OPENWEBRX_LISTEN_STATUS = 'openwebrxListenStatus',
@@ -1311,6 +1312,13 @@ export interface DigitalRadioEngineEvents {
   pluginStatusChanged: (data: { generation: number; plugin: PluginStatus }) => void;
   pluginData: (data: PluginDataPayload) => void;
   pluginLog: (data: PluginLogEntry) => void;
+  pluginPagePush: (data: {
+    pluginName: string;
+    pageId: string;
+    pageSessionId: string;
+    action: string;
+    data?: unknown;
+  }) => void;
 
   // 内部子系统间通信事件（不通过 WebSocket 广播，用于 engine emitter 内部编排）
   encodeStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;

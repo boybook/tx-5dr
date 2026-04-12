@@ -4,6 +4,7 @@
  */
 
 import type { PluginStatus } from '@tx5dr/contracts';
+import { getAuthHeaders } from './authHeaders';
 
 type PluginApiWindow = Window & {
   __TX5DR_API_BASE__?: string;
@@ -24,19 +25,13 @@ function getApiBase(): string {
   return (window as PluginApiWindow).__TX5DR_API_BASE__ || '/api';
 }
 
-function getAuthHeaders(): Record<string, string> {
-  const jwt = localStorage.getItem('jwt_token');
-  return jwt ? { Authorization: `Bearer ${jwt}` } : {};
-}
-
 async function pluginFetch<T = unknown>(path: string, options?: RequestInit): Promise<T> {
   const url = `${getApiBase()}${path}`;
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...getAuthHeaders(),
-      ...(options?.headers ?? {}),
+      ...getAuthHeaders(options?.headers),
     },
   });
   if (!res.ok) {

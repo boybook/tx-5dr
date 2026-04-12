@@ -10,6 +10,8 @@ import type {
 } from '@tx5dr/contracts';
 import type {
   PluginContext,
+  PluginUIRequestContext,
+  PluginUIInstanceTarget,
   StrategyRuntime,
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
@@ -19,6 +21,8 @@ import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
+import { LogbookSyncHost } from './LogbookSyncHost.js';
+import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSessionStore.js';
 import {
   BUILTIN_PLUGINS,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
@@ -29,6 +33,7 @@ import { createLogger } from '../utils/logger.js';
 import path from 'path';
 
 const logger = createLogger('PluginManager');
+const GLOBAL_PLUGIN_SCOPE_ID = '__global__';
 
 /**
  * 插件管理器 — 中央编排器
@@ -45,12 +50,16 @@ export class PluginManager {
   private loadedPlugins = new Map<string, LoadedPlugin>();
   // operatorId → Map<pluginName, PluginInstance>
   private instances = new Map<string, Map<string, PluginInstance>>();
+  private globalInstances = new Map<string, PluginInstance>();
   private dispatcher!: PluginHookDispatcher;
   private orchestrator!: DecisionOrchestrator;
   private contextFactory: PluginContextFactory;
   private loader = new PluginLoader();
   private running = false;
   private unsubscribeFns: Array<() => void> = [];
+  private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
+  private readonly pageSessions = new PluginPageSessionStore();
+
   private systemState: PluginSystemRuntimeState = {
     state: 'ready',
     generation: 0,
@@ -64,6 +73,14 @@ export class PluginManager {
   };
 
   constructor(private deps: PluginManagerDeps) {
+    this._logbookSyncHost = new LogbookSyncHost();
+    // Wire the logbook sync registration callback so plugins can register
+    // providers via ctx.logbookSync.register().
+    deps.registerLogbookSyncProvider = (pluginName, provider) => {
+      this._logbookSyncHost.register(pluginName, provider);
+    };
+    deps.listPluginPageSessions = (pluginName, instanceTarget, pageId) =>
+      this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
     this.contextFactory = new PluginContextFactory(deps);
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
@@ -138,6 +155,9 @@ export class PluginManager {
     const operatorInstances = this.instances.get(operatorId)!;
 
     for (const [pluginName, plugin] of this.loadedPlugins) {
+      if ((plugin.definition.instanceScope ?? 'operator') === 'global') {
+        continue;
+      }
       if (operatorInstances.has(pluginName)) continue;
 
       const configEntry = this.pluginsConfig.configs?.[pluginName];
@@ -146,6 +166,7 @@ export class PluginManager {
       const pluginStorageDir = path.join(this.deps.dataDir, 'plugin-data', pluginName);
       const instance: PluginInstance = {
         plugin,
+        scope: { kind: 'operator', operatorId },
         ctx: null as unknown as PluginContext, // 先占位，下面赋值
         runtime: undefined,
         enabled,
@@ -153,9 +174,10 @@ export class PluginManager {
         autoDisabled: false,
       };
 
-      const ctx = this.contextFactory.create(
+      const ctx = await this.contextFactory.create(
         plugin,
         operatorId,
+        'operator',
         pluginStorageDir,
         (timerId) => {
           if (instance.ctx) {
@@ -173,6 +195,49 @@ export class PluginManager {
       // 调用 onLoad（仅 enabled 的插件）
       if (enabled) {
         await this.activateInstance(operatorId, instance);
+      }
+    }
+  }
+
+  private async initGlobalInstances(): Promise<void> {
+    for (const [pluginName, plugin] of this.loadedPlugins) {
+      if ((plugin.definition.instanceScope ?? 'operator') !== 'global') {
+        continue;
+      }
+      if (this.globalInstances.has(pluginName)) {
+        continue;
+      }
+
+      const configEntry = this.pluginsConfig.configs?.[pluginName];
+      const enabled = this.resolveInstanceEnabled(pluginName, plugin, configEntry);
+      const pluginStorageDir = path.join(this.deps.dataDir, 'plugin-data', pluginName);
+      const instance: PluginInstance = {
+        plugin,
+        scope: { kind: 'global' },
+        ctx: null as unknown as PluginContext,
+        runtime: undefined,
+        enabled,
+        errorCounts: new Map(),
+        autoDisabled: false,
+      };
+
+      const ctx = await this.contextFactory.create(
+        plugin,
+        undefined,
+        'global',
+        pluginStorageDir,
+        (timerId) => {
+          if (instance.ctx) {
+            plugin.definition.hooks?.onTimer?.(timerId, instance.ctx);
+          }
+        },
+        () => this.buildMergedSettings(plugin, pluginName, GLOBAL_PLUGIN_SCOPE_ID),
+      );
+      instance.ctx = ctx;
+      this.globalInstances.set(pluginName, instance);
+
+      if (enabled) {
+        await this.activateInstance(GLOBAL_PLUGIN_SCOPE_ID, instance);
       }
     }
   }
@@ -391,14 +456,23 @@ export class PluginManager {
     if (!this.pluginsConfig.configs) this.pluginsConfig.configs = {};
     const existing = this.pluginsConfig.configs[name] ?? { enabled: false, settings: {} };
     this.pluginsConfig.configs[name] = { ...existing, enabled };
+    const globalInstance = this.globalInstances.get(name);
+    if (globalInstance) {
+      globalInstance.enabled = enabled;
+      if (enabled) {
+        void this.activateInstance(GLOBAL_PLUGIN_SCOPE_ID, globalInstance);
+      } else {
+        void this.deactivateInstance(GLOBAL_PLUGIN_SCOPE_ID, globalInstance);
+      }
+    }
     for (const operatorInstances of this.instances.values()) {
       const instance = operatorInstances.get(name);
       if (!instance) continue;
       instance.enabled = enabled;
       if (enabled) {
-        void this.activateInstance(instance.ctx.operator.id, instance);
+        void this.activateInstance(instance.scope.kind === 'operator' ? instance.scope.operatorId : GLOBAL_PLUGIN_SCOPE_ID, instance);
       } else {
-        void this.deactivateInstance(instance.ctx.operator.id, instance);
+        void this.deactivateInstance(instance.scope.kind === 'operator' ? instance.scope.operatorId : GLOBAL_PLUGIN_SCOPE_ID, instance);
       }
     }
     this.bumpGeneration();
@@ -410,6 +484,10 @@ export class PluginManager {
     if (!this.pluginsConfig.configs) this.pluginsConfig.configs = {};
     const existing = this.pluginsConfig.configs[name] ?? { enabled: false, settings: {} };
     this.pluginsConfig.configs[name] = { ...existing, settings };
+    const globalInstance = this.globalInstances.get(name);
+    if (globalInstance?.enabled) {
+      globalInstance.plugin.definition.hooks?.onConfigChange?.(settings, globalInstance.ctx);
+    }
     // 通知所有操作员实例配置变更（仅 global scope 键）
     for (const operatorInstances of this.instances.values()) {
       const instance = operatorInstances.get(name);
@@ -424,6 +502,104 @@ export class PluginManager {
   /** 获取操作员维度的插件设置 */
   getOperatorPluginSettings(operatorId: string, pluginName: string): Record<string, unknown> {
     return this.pluginsConfig.operatorSettings?.[operatorId]?.[pluginName] ?? {};
+  }
+
+  /**
+   * Returns the loaded plugin metadata for the given name, or `undefined` if
+   * the plugin is not loaded. Exposed for route handlers that need access to
+   * the plugin's filesystem directory (e.g. serving static UI files).
+   */
+  getLoadedPlugin(pluginName: string): LoadedPlugin | undefined {
+    return this.loadedPlugins.get(pluginName);
+  }
+
+  getPluginStorageDir(pluginName: string): string {
+    return path.join(this.deps.dataDir, 'plugin-data', pluginName);
+  }
+
+  createPluginPageSession(
+    input: Omit<PluginPageSession, 'sessionId' | 'createdAt' | 'expiresAt'>,
+  ): PluginPageSession {
+    return this.pageSessions.create(input);
+  }
+
+  getPluginPageSession(sessionId: string): PluginPageSession | null {
+    return this.pageSessions.get(sessionId);
+  }
+
+  touchPluginPageSession(sessionId: string): PluginPageSession | null {
+    return this.pageSessions.touch(sessionId);
+  }
+
+  deletePluginPageSession(sessionId: string): void {
+    this.pageSessions.delete(sessionId);
+  }
+
+  listPluginPageSessions(
+    pluginName: string,
+    instanceTarget: PluginUIInstanceTarget,
+    pageId?: string,
+  ): PluginPageSession[] {
+    return this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
+  }
+
+  pushPluginPageSession(
+    pluginName: string,
+    pageId: string,
+    pageSessionId: string,
+    action: string,
+    data?: unknown,
+  ): void {
+    const session = this.pageSessions.get(pageSessionId);
+    if (!session) {
+      throw new Error(`Page session not found: ${pageSessionId}`);
+    }
+    if (session.pluginName !== pluginName || session.pageId !== pageId) {
+      throw new Error(`Page session does not belong to ${pluginName}/${pageId}: ${pageSessionId}`);
+    }
+
+    this.eventEmitter.emit('pluginPagePush', {
+      pluginName,
+      pageId,
+      pageSessionId,
+      action,
+      data,
+    });
+  }
+
+  /** Host-side manager for logbook sync providers registered by plugins. */
+  get logbookSyncHost(): LogbookSyncHost {
+    return this._logbookSyncHost;
+  }
+
+  /**
+   * Invokes a custom page handler registered by the given plugin. The host
+   * routes iframe `bridge.invoke()` calls through this method.
+   *
+   * Returns the handler's response, or throws if no handler is registered for
+   * the exact plugin instance targeted by the page session.
+   */
+  async invokePluginPageHandler(
+    pluginName: string,
+    pageId: string,
+    action: string,
+    data: unknown,
+    requestContext: PluginUIRequestContext,
+  ): Promise<unknown> {
+    const instance = requestContext.instanceTarget.kind === 'global'
+      ? this.globalInstances.get(pluginName)
+      : this.instances.get(requestContext.instanceTarget.operatorId)?.get(pluginName);
+
+    if (!instance) {
+      throw new Error(`Plugin instance not found: ${pluginName}`);
+    }
+
+    const bridge = instance.ctx.ui as import('./PluginUIBridge.js').PluginUIBridge;
+    if (bridge.hasPageHandler()) {
+      return bridge.handlePageInvoke(pageId, action, data, requestContext);
+    }
+
+    throw new Error(`No page handler registered for plugin: ${pluginName}`);
   }
 
   /** 更新 operator scope 插件设置，并通知相关实例 */
@@ -483,7 +659,7 @@ export class PluginManager {
   getPluginStatuses(): PluginStatus[] {
     const result: PluginStatus[] = [];
     for (const [name, plugin] of this.loadedPlugins) {
-      const representativeInstance = this.instances.values().next().value?.get(name);
+      const representativeInstance = this.getRepresentativeInstance(name);
       const assignedOperatorIds = plugin.definition.type === 'strategy'
         ? this.getAssignedOperatorIds(name)
         : [];
@@ -553,8 +729,11 @@ export class PluginManager {
 
   private getActiveInstances(operatorId: string): PluginInstance[] {
     const operatorInstances = this.instances.get(operatorId);
-    if (!operatorInstances) return [];
-    return Array.from(operatorInstances.values()).filter(
+    const scopedInstances = operatorInstances ? Array.from(operatorInstances.values()) : [];
+    const globalInstances = Array.from(this.globalInstances.values()).filter(
+      (instance) => instance.enabled && !instance.autoDisabled,
+    );
+    return [...globalInstances, ...scopedInstances].filter(
       (instance) => instance.plugin.definition.type === 'strategy'
         ? instance === this.getStrategyInstance(operatorId)
         : instance.enabled && !instance.autoDisabled,
@@ -580,7 +759,28 @@ export class PluginManager {
     return this.getStrategyInstance(operatorId)?.runtime;
   }
 
+  private getRepresentativeInstance(pluginName: string): PluginInstance | undefined {
+    const globalInstance = this.globalInstances.get(pluginName);
+    if (globalInstance) {
+      return globalInstance;
+    }
+
+    for (const operatorInstances of this.instances.values()) {
+      const instance = operatorInstances.get(pluginName);
+      if (instance) {
+        return instance;
+      }
+    }
+
+    return undefined;
+  }
+
   private resolvePluginActionTarget(pluginName: string, operatorId?: string): PluginInstance | undefined {
+    const globalInstance = this.globalInstances.get(pluginName);
+    if (globalInstance) {
+      return globalInstance;
+    }
+
     if (operatorId) {
       return this.instances.get(operatorId)?.get(pluginName);
     }
@@ -667,6 +867,7 @@ export class PluginManager {
         definition: builtin.definition,
         isBuiltIn: true,
         locales: builtin.locales,
+        dirPath: builtin.dirPath,
       });
     }
 
@@ -683,6 +884,7 @@ export class PluginManager {
     this.loadedPlugins = discoveredPlugins;
     logger.info(`Plugins discovered: ${Array.from(this.loadedPlugins.keys()).join(', ')}`);
 
+    await this.initGlobalInstances();
     for (const operator of this.deps.getOperators()) {
       await this.initInstancesForOperator(operator.config.id);
     }
@@ -697,8 +899,15 @@ export class PluginManager {
         });
       }
     }
+    for (const [pluginName, instance] of this.globalInstances) {
+      if (!instance.enabled) continue;
+      await this.deactivateInstance(GLOBAL_PLUGIN_SCOPE_ID, instance).catch((err) => {
+        logger.warn(`Failed to deactivate global plugin instance: plugin=${pluginName}`, err);
+      });
+    }
 
     this.instances.clear();
+    this.globalInstances.clear();
     this.loadedPlugins.clear();
     this.orchestrator.clearAllDecisionStates();
   }
@@ -779,11 +988,11 @@ export class PluginManager {
   private broadcastStatusChanged(pluginName: string): void {
     const plugin = this.loadedPlugins.get(pluginName);
     if (!plugin) return;
-    const firstInstance = this.instances.values().next().value?.get(pluginName);
+    const representativeInstance = this.getRepresentativeInstance(pluginName);
     const status = {
-      ...toPluginStatus(plugin, firstInstance),
+      ...toPluginStatus(plugin, representativeInstance),
       enabled: plugin.definition.type === 'utility'
-        ? (firstInstance?.enabled ?? this.resolveUtilityEnabled(pluginName, plugin))
+        ? (representativeInstance?.enabled ?? this.resolveUtilityEnabled(pluginName, plugin))
         : this.getAssignedOperatorIds(pluginName).length > 0,
       assignedOperatorIds: plugin.definition.type === 'strategy'
         ? this.getAssignedOperatorIds(pluginName)
@@ -799,6 +1008,7 @@ export class PluginManager {
     const hook = instance.plugin.definition.onLoad;
     if (!hook) return;
     try {
+      this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
       await hook(instance.ctx);
     } catch (err) {
       logger.error(`onLoad error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
@@ -814,6 +1024,7 @@ export class PluginManager {
         logger.warn(`onUnload error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
       }
     }
+    this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
     instance.ctx.timers.clearAll();
     // PluginContextFactory 总是创建 PluginStorageProvider 实例（实现 FlushableKVStore）
     const globalStore = instance.ctx.store.global as FlushableKVStore;

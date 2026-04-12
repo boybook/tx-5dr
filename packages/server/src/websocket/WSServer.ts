@@ -515,7 +515,7 @@ export class WSServer extends WSMessageHandler {
     });
 
     // 监听日志本更新事件
-    this.digitalRadioEngine.on('logbookUpdated' as any, (data: { logBookId: string; statistics: any }) => {
+    this.digitalRadioEngine.on('logbookUpdated' as any, (data: { logBookId: string; statistics: any; operatorId?: string }) => {
       this.broadcastLogbookUpdated(data);
     });
 
@@ -1911,6 +1911,9 @@ export class WSServer extends WSMessageHandler {
     });
     this.digitalRadioEngine.on('pluginLog' as any, (data: any) => {
       this.broadcast(WSMessageType.PLUGIN_LOG, data);
+    });
+    this.digitalRadioEngine.on('pluginPagePush', (data) => {
+      this.broadcast(WSMessageType.PLUGIN_PAGE_PUSH, data);
     });
 
     // Forward profile select requests from engine to clients

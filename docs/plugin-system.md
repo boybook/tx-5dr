@@ -19,6 +19,9 @@
    - 4.6 [QuickActions](#46-quickactions)
    - 4.7 [Panels](#47-panels)
    - 4.8 [持久化存储](#48-持久化存储)
+   - 4.9 [自定义 UI（iframe 页面与面板）](#49-自定义-uiiframe-页面与面板)
+   - 4.10 [文件存储](#410-文件存储)
+   - 4.11 [日志同步 Provider](#411-日志同步-provider)
 5. [编写你的第一个插件](#5-编写你的第一个插件)
    - 5.1 [最简工具插件（JS）](#51-最简工具插件js)
    - 5.2 [TypeScript 完整项目](#52-typescript-完整项目)
@@ -33,6 +36,10 @@
    - 6.7 [watched-novelty-autocall（守候新类型自动起呼）](#67-watched-novelty-autocall守候新类型自动起呼)
    - 6.8 [autocall-idle-frequency（自动起呼自动择频）](#68-autocall-idle-frequency自动起呼自动择频)
    - 6.9 [heartbeat-demo（timer + button quickAction 示例）](#69-heartbeat-demotimer--button-quickaction-示例)
+   - 6.10 [lotw-sync（LoTW 日志同步）](#610-lotw-syncLotW-日志同步)
+   - 6.11 [qrz-sync（QRZ 日志同步）](#611-qrz-syncQRZ-日志同步)
+   - 6.12 [wavelog-sync（WaveLog 日志同步）](#612-wavelog-syncWaveLog-日志同步)
+   - 6.13 [iframe-panel-demo（iframe 面板示例）](#613-iframe-panel-demoiframe-面板示例)
 7. [插件系统架构](#7-插件系统架构)
    - 7.1 [生命周期](#71-生命周期)
    - 7.2 [Hook 分发机制](#72-hook-分发机制)
@@ -106,6 +113,26 @@ TX-5DR 的插件系统允许开发者通过编写单个 JavaScript（或 TypeScr
 - `PluginManager` 会为每个操作员创建一套插件实例
 - 对于策略插件，运行时对象也会按操作员维度创建
 - 但真正参与自动化决策和发射流程的，始终只有当前选中的那一个活跃策略
+
+### 实例作用域
+
+除了 `type` 之外，utility 插件还可以声明实例作用域：
+
+- **`instanceScope: 'operator'`**（默认）：为每个操作员分别创建一个实例
+- **`instanceScope: 'global'`**：整个应用只创建一个共享实例
+
+`global` 实例的设计目标，是承载“全局资源 + 按呼号分发”的插件，例如日志同步 Provider。此类插件通常需要：
+
+- 共享一份证书、登录态或远端客户端
+- 面向多个操作员/多个呼号工作
+- 通过 `ctx.logbook.forCallsign(callsign)` 显式访问目标日志本
+
+`global` 实例当前只支持 `utility` 插件，并受到以下约束：
+
+- 不能声明 operator-scope `settings`
+- 不能声明 `quickSettings`
+- 不能声明 operator 面板 `panels`
+- 不能实现依赖单个操作员运行时语义的 hooks（如 `onDecode`、`onQSOComplete`、`onAutoCallCandidate` 等）
 
 ### 设置作用域
 
@@ -201,11 +228,56 @@ packages/server/src/plugin/builtins/
 │   └── locales/
 │       ├── zh.json
 │       └── en.json
-└── watched-novelty-autocall/
+├── watched-novelty-autocall/
+│   ├── index.ts
+│   └── locales/
+│       ├── zh.json
+│       └── en.json
+├── lotw-sync/
+│   ├── index.ts
+│   ├── provider.ts      # LoTWSyncProvider 实现
+│   ├── locales/
+│   │   ├── zh.json
+│   │   └── en.json
+│   └── ui/              # iframe 页面静态资源
+│       ├── settings.html
+│       ├── settings.css
+│       ├── settings.js
+│       ├── download-wizard.html
+│       ├── download-wizard.css
+│       └── download-wizard.js
+├── qrz-sync/
+│   ├── index.ts
+│   ├── provider.ts
+│   ├── locales/
+│   │   ├── zh.json
+│   │   └── en.json
+│   └── ui/
+│       ├── settings.html
+│       ├── settings.css
+│       └── settings.js
+├── wavelog-sync/
+│   ├── index.ts
+│   ├── provider.ts
+│   ├── locales/
+│   │   ├── zh.json
+│   │   └── en.json
+│   └── ui/
+│       ├── settings.html
+│       ├── settings.css
+│       └── settings.js
+└── iframe-panel-demo/
     ├── index.ts
-    └── locales/
-        ├── zh.json
-        └── en.json
+    ├── locales/
+    │   ├── zh.json
+    │   └── en.json
+    └── ui/
+        ├── live-monitor.html
+        ├── live-monitor.css
+        ├── live-monitor.js
+        ├── quick-controls.html
+        ├── quick-controls.css
+        └── quick-controls.js
 ```
 
 内置插件的翻译通过 `import ... with { type: 'json' }` 编译进 bundle，无运行时 I/O。
@@ -272,6 +344,13 @@ interface PluginDefinition {
   /** 插件类型：策略（互斥）或工具（叠加） */
   type: 'strategy' | 'utility';
 
+  /**
+   * 插件实例作用域
+   * - 'operator'：每个操作员一个实例（默认）
+   * - 'global'：整个应用共享一个实例（仅 utility 支持）
+   */
+  instanceScope?: 'operator' | 'global';
+
   /** 可选：人类可读的描述 */
   description?: string;
 
@@ -305,7 +384,7 @@ interface PluginDefinition {
    */
   createStrategyRuntime?(ctx: PluginContext): StrategyRuntime;
 
-  /** 插件实例加载时调用（插件子系统启动、重载或为操作员创建实例时） */
+  /** 插件实例加载时调用（插件子系统启动、重载或创建对应 scope 实例时） */
   onLoad?(ctx: PluginContext): void | Promise<void>;
 
   /** 插件实例卸载时调用（插件重载、移除操作员或插件子系统关闭时），定时器自动清理 */
@@ -328,7 +407,7 @@ interface PluginContext {
   /** 持久化 KV 存储 */
   readonly store: {
     readonly global: KVStore;    // 所有操作员共享
-    readonly operator: KVStore;  // 当前操作员独占
+    readonly operator: KVStore;  // 当前实例独占；global 实例时为独立 instance store
   };
 
   /** 日志接口（输出到系统日志 + 前端日志面板） */
@@ -343,14 +422,20 @@ interface PluginContext {
   /** 物理电台控制 */
   readonly radio: RadioControl;
 
-  /** 日志本查询 */
+  /** 日志本访问（查询/写入/通知） */
   readonly logbook: LogbookAccess;
 
   /** 波段/解码数据访问 */
   readonly band: BandAccess;
 
-  /** 向前端面板推送数据 */
+  /** 向前端面板推送数据 + 自定义 iframe 页面通信 */
   readonly ui: UIBridge;
+
+  /** 二进制文件持久化存储（见 4.10 节） */
+  readonly files: PluginFileStore;
+
+  /** 日志同步 Provider 注册入口（见 4.11 节） */
+  readonly logbookSync: LogbookSyncRegistrar;
 
   /**
    * 受控 HTTP fetch
@@ -435,13 +520,36 @@ interface RadioControl {
 
 ```typescript
 interface LogbookAccess {
+  // === 只读查询（原有） ===
   hasWorked(callsign: string): Promise<boolean>;
   hasWorkedDXCC(dxccEntity: string): Promise<boolean>;
   hasWorkedGrid(grid: string): Promise<boolean>;
+
+  // === 高级查询 ===
+  queryQSOs(filter: QSOQueryFilter): Promise<QSORecord[]>;
+  countQSOs(filter?: QSOQueryFilter): Promise<number>;
+
+  // === 写入 ===
+  addQSO(record: QSORecord): Promise<void>;
+  updateQSO(qsoId: string, updates: Partial<QSORecord>): Promise<void>;
+
+  // === 通知 ===
+  notifyUpdated(): void;
 }
 ```
 
-> 当前实现说明：`hasWorked()` 已可用；`hasWorkedDXCC()` 与 `hasWorkedGrid()` 仍作为预留接口返回占位结果，尚未接入真实日志本查询。
+```typescript
+interface QSOQueryFilter {
+  callsign?: string;
+  timeRange?: { start: number; end: number };
+  frequencyRange?: { min: number; max: number };
+  mode?: string;
+  qslStatus?: 'confirmed' | 'uploaded' | 'none';
+  limit?: number;
+  offset?: number;
+  orderDirection?: 'asc' | 'desc';
+}
+```
 
 #### BandAccess
 
@@ -475,11 +583,84 @@ interface BandAccess {
 
 ```typescript
 interface UIBridge {
+  /** 推送结构化面板数据（panelId 必须与 panels[].id 匹配） */
   send(panelId: string, data: unknown): void;
+
+  /**
+   * 注册 iframe 页面消息处理器
+   * iframe 通过 bridge.invoke(action, data) 发送请求，宿主路由到此处理器
+   * 每个插件实例只能注册一个处理器
+   */
+  registerPageHandler(handler: PluginUIHandler): void;
+
+  /**
+   * 主动推送消息到指定页面 session
+   * 当插件已知 pageSessionId 时，优先使用这个接口
+   */
+  pushToSession(pageSessionId: string, action: string, data?: unknown): void;
+
+  /**
+   * 列出当前插件实例、当前 pageId 下的活跃 session
+   * 适合后台任务/同步完成后批量通知所有打开中的页面
+   */
+  listActivePageSessions(pageId: string): Array<{
+    sessionId: string;
+    pageId: string;
+    resource?: {
+      kind: 'callsign' | 'operator';
+      value: string;
+    };
+  }>;
+
+  /**
+   * 主动推送消息到 iframe 页面
+   * 页面通过 bridge.onPush(action, callback) 接收
+   * 仅当当前插件实例下该 pageId 恰好只有一个活跃 session 时可用
+   */
+  pushToPage(pageId: string, action: string, data?: unknown): void;
+}
+
+interface PluginUIHandler {
+  onMessage(
+    pageId: string,
+    action: string,
+    data: unknown,
+    requestContext: {
+      pageSessionId: string;
+      user: {
+        tokenId: string;
+        role: 'viewer' | 'operator' | 'admin';
+        operatorIds: string[];
+      };
+      instanceTarget:
+        | { kind: 'global' }
+        | { kind: 'operator'; operatorId: string };
+      resource?: {
+        kind: 'callsign' | 'operator';
+        value: string;
+      };
+      page: {
+        sessionId: string;
+        pageId: string;
+        resource?: {
+          kind: 'callsign' | 'operator';
+          value: string;
+        };
+        push(action: string, data?: unknown): void;
+      };
+    },
+  ): Promise<unknown>;
 }
 ```
 
 `panelId` 必须与 `PluginDefinition.panels[].id` 匹配。数据通过 `pluginData` 事件推送到前端对应面板。
+`requestContext` 由宿主基于页面 session 注入；插件不应再信任 iframe 自报的 `callsign` / `operatorId` / `pageSessionId` 做鉴权。
+其中：
+
+- `requestContext.instanceTarget` 表示本次页面请求最终命中的插件实例（global 或某个 operator 实例）
+- `requestContext.page.push()` 是对当前 session 的便捷封装，等价于 `ctx.ui.pushToSession(requestContext.page.sessionId, ...)`
+- `ctx.ui.pushToSession()` 只允许推送到当前插件实例真实拥有的 session；未知 session 或跨实例 session 会直接报错
+- `ctx.ui.pushToPage()` 现在只是兼容辅助接口：若同一插件实例下该 `pageId` 同时打开了多个页面，会抛出 `explicit_page_session_required`
 
 ### 4.3 OperatorControl
 
@@ -914,7 +1095,13 @@ interface PluginQuickAction {
 interface PluginPanelDescriptor {
   id: string;
   title: string;  // i18n key 或直接文本
-  component: 'table' | 'key-value' | 'chart' | 'log';
+  component: 'table' | 'key-value' | 'chart' | 'log' | 'iframe';
+  /** 仅 component='iframe' 时需要，引用 ui.pages 中的页面 id */
+  pageId?: string;
+  /** 面板渲染位置。默认 'operator'（操作员卡片）*/
+  slot?: 'operator' | 'automation';
+  /** 面板宽度偏好。默认 'half'；operator host 可将 'full' 解释为整行 */
+  width?: 'half' | 'full';
 }
 ```
 
@@ -926,6 +1113,19 @@ interface PluginPanelDescriptor {
 | `table` | `Array<Record<string, unknown>>` |
 | `log` | `string[]` |
 | `chart` | 自定义（当前以 JSON 格式原样显示） |
+| `iframe` | 无需 `ctx.ui.send()` 推送数据，iframe 通过 Bridge SDK 与服务端直接通信 |
+
+> **渲染位置（`slot`）**：
+> - `'operator'`（默认）：面板出现在操作员卡片下方的展开区域
+> - `'automation'`：面板出现在右上角自动化 Popover 中
+> - 未指定 `slot` 等同于 `'operator'`
+> - 结构化面板和 iframe 面板均可使用任意 slot
+
+> **宽度偏好（`width`）**：
+> - `'half'`（默认）：按宿主默认紧凑布局渲染
+> - `'full'`：表达“这个面板更重要，优先占据更宽区域”
+> - 当前操作员卡片 host 会把 `width: 'full'` 解释为桌面端跨两列整行显示
+> - `automation` 等其他 host 可以按自己的布局策略忽略该提示，因此 `width` 是宿主可解释的声明式 hint，而不是绝对布局命令
 
 #### 数据推送
 
@@ -955,6 +1155,383 @@ const count = ctx.store.operator.get<number>('qsoCount', 0);
 这样插件源码目录（`{dataDir}/plugins/{name}`）只用于放置插件入口与资源文件，不会再被运行时状态文件污染。
 
 写操作有 300ms debounce；插件实例卸载或插件子系统关闭时自动 flush。
+
+### 4.9 自定义 UI（iframe 页面与面板）
+
+插件可以通过 iframe 托管自定义 HTML 页面，提供完全自由的前端交互能力。这些页面可以：
+
+- 作为 **iframe 面板** 嵌入操作员卡片或自动化 Popover（通过 `panels` 中的 `component: 'iframe'`）
+- 作为 **独立页面** 用于设置、向导等场景（如日志同步的配置页面）
+
+#### 声明页面
+
+在 `PluginDefinition` 中声明自定义页面：
+
+```typescript
+const plugin: PluginDefinition = {
+  name: 'my-plugin',
+  // ...
+  ui: {
+    dir: 'ui',  // 静态资源目录（相对于插件根目录）
+    pages: [
+      {
+        id: 'settings',
+        title: 'Settings',
+        entry: 'settings.html',
+        accessScope: 'operator',
+        resourceBinding: 'callsign',
+      },
+      {
+        id: 'dashboard',
+        title: 'Dashboard',
+        entry: 'dashboard.html',
+        accessScope: 'admin',
+        resourceBinding: 'none',
+      },
+    ],
+  },
+};
+```
+
+页面描述符新增两个关键字段：
+
+- `accessScope: 'admin' | 'operator'`
+  - `admin`：仅管理员可访问
+  - `operator`：操作员也可访问
+- `resourceBinding: 'none' | 'callsign' | 'operator'`
+  - `none`：只校验角色
+  - `callsign`：宿主要求请求里携带 `callsign`，并校验该 token 是否有对应呼号访问权
+  - `operator`：宿主要求请求里携带 `operatorId`，并校验是否有对应操作员访问权
+
+这两个字段由宿主固定路由解释，插件**不能自行注册 HTTP 路由**。
+
+用户插件的目录结构：
+
+```
+my-plugin/
+├── plugin.js
+├── locales/
+│   ├── zh.json
+│   └── en.json
+└── ui/
+    ├── settings.html
+    ├── settings.css
+    ├── settings.js
+    ├── dashboard.html
+    ├── dashboard.css
+    └── dashboard.js
+```
+
+#### 将 iframe 面板嵌入 UI
+
+通过在 `panels` 中声明 `component: 'iframe'` 并引用 `pageId`：
+
+```typescript
+panels: [
+  // 操作员卡片中的 iframe 面板
+  { id: 'live-view', title: 'liveView', component: 'iframe', pageId: 'dashboard' },
+  // 自动化 Popover 中的 iframe 面板
+  { id: 'controls', title: 'controls', component: 'iframe', pageId: 'settings', slot: 'automation' },
+],
+```
+
+#### Bridge SDK
+
+宿主会自动在每个 iframe 页面中注入 Bridge SDK，通过 `window.tx5dr` 访问。主要 API：
+
+| 方法/属性 | 说明 |
+|-----------|------|
+| `tx5dr.params` | 初始化时传入的参数对象（只读） |
+| `tx5dr.theme` | 当前主题：`'dark'` 或 `'light'` |
+| `tx5dr.locale` | 当前语言：如 `'zh'` 或 `'en'` |
+| `tx5dr.invoke(action, data)` | 发送请求到服务端（返回 Promise） |
+| `tx5dr.onPush(action, callback)` | 监听服务端主动推送 |
+| `tx5dr.offPush(action, callback)` | 取消推送监听 |
+| `tx5dr.resize(height)` | 报告内容高度，宿主据此调整 iframe 尺寸 |
+| `tx5dr.onThemeChange(callback)` | 监听主题切换 |
+| `tx5dr.requestClose()` | 请求关闭当前页面（由父组件处理） |
+| `tx5dr.storeGet(key, default)` | 读取页面私有 KV（按实例目标 + 绑定资源 + pageId 共享，返回 Promise） |
+| `tx5dr.storeSet(key, value)` | 写入页面私有 KV |
+| `tx5dr.storeDelete(key)` | 删除页面私有 KV |
+| `tx5dr.fileUpload(path, file)` | 上传文件到当前页面 scope（按实例目标 + 绑定资源 + pageId 收口） |
+| `tx5dr.fileRead(path)` | 从当前页面 scope 读取文件（返回 Blob 或 null） |
+| `tx5dr.fileDelete(path)` | 删除当前页面 scope 下的文件 |
+| `tx5dr.fileList(prefix?)` | 列出当前页面 scope 下的文件路径 |
+
+#### invoke / onPush 通信模型
+
+**iframe → 服务端**（请求/响应）：
+
+```javascript
+// iframe 端
+var result = await tx5dr.invoke('getState', { key: 'counter' });
+
+// 服务端（onLoad 中注册）
+ctx.ui.registerPageHandler({
+  async onMessage(pageId, action, data) {
+    if (action === 'getState') {
+      return { counter: ctx.store.operator.get('counter', 0) };
+    }
+  },
+});
+```
+
+**服务端 → iframe**（主动推送）：
+
+```javascript
+// 服务端（任意 hook 或定时器中）
+ctx.ui.pushToPage('dashboard', 'dataUpdated', { value: 42 });
+
+// iframe 端
+tx5dr.onPush('dataUpdated', function(data) {
+  document.getElementById('value').textContent = data.value;
+});
+```
+
+当插件需要更精确地控制推送目标时，推荐改用 session 级 API：
+
+```javascript
+ctx.ui.registerPageHandler({
+  async onMessage(pageId, action, data, requestContext) {
+    if (action === 'save') {
+      await saveSomething(data);
+
+      // 只回推当前发起请求的这个页面 session
+      requestContext.page.push('saved', { ok: true });
+      return { ok: true };
+    }
+  },
+});
+
+// 后台任务/定时器：批量通知当前实例下所有打开中的页面
+for (const session of ctx.ui.listActivePageSessions('dashboard')) {
+  ctx.ui.pushToSession(session.sessionId, 'refresh', { reason: 'timer' });
+}
+```
+
+#### CSS Design Tokens
+
+宿主自动注入 CSS 变量，iframe 页面无需引入额外样式文件即可适配明暗主题：
+
+| 变量 | 说明 |
+|------|------|
+| `--tx5dr-bg` | 页面背景色 |
+| `--tx5dr-bg-content` | 内容区域背景色 |
+| `--tx5dr-bg-hover` | 悬停背景色 |
+| `--tx5dr-text` | 主文字颜色 |
+| `--tx5dr-text-secondary` | 次要文字颜色 |
+| `--tx5dr-primary` | 主题色 |
+| `--tx5dr-success` / `--tx5dr-warning` / `--tx5dr-danger` | 状态色 |
+| `--tx5dr-border` | 边框颜色 |
+| `--tx5dr-radius-sm` / `-md` / `-lg` | 圆角 |
+| `--tx5dr-spacing-xs` / `-sm` / `-md` / `-lg` / `-xl` | 间距 |
+| `--tx5dr-font` / `--tx5dr-font-mono` | 字体 |
+| `--tx5dr-font-size-sm` / `-md` / `-lg` | 字号 |
+
+当宿主切换主题时，Design Tokens 自动更新，同时触发 `tx5dr.onThemeChange()` 回调。
+
+#### 高度自适应
+
+iframe 面板默认不占据固定高度。推荐使用 `ResizeObserver` 监听内容变化并报告高度：
+
+```javascript
+var observer = new ResizeObserver(function() {
+  tx5dr.resize(document.body.scrollHeight);
+});
+observer.observe(document.body);
+```
+
+#### iframe 面板 vs 独立 Pages
+
+| 特性 | iframe 面板（panels） | 独立 Pages |
+|------|---------------------|-----------|
+| 声明方式 | `panels[].component='iframe'` + `pageId` | 仅 `ui.pages[]` |
+| 渲染位置 | 操作员卡片 / 自动化 Popover | 弹窗、设置模态框 |
+| 传入参数 | `{ operatorId }` 自动传入 | 由调用方传入（如 `{ callsign }`） |
+| 生命周期 | 跟随操作员卡片展开/折叠 | 跟随弹窗打开/关闭 |
+| 典型场景 | 实时数据展示、快捷控制 | 配置表单、向导流程 |
+
+#### 固定宿主路由
+
+插件 UI 统一通过宿主固定路由暴露：
+
+- `GET /api/plugins/:name/ui/*`：返回静态页面，并自动注入 Bridge SDK
+- `POST /api/plugins/:name/ui-invoke`：将 `tx5dr.invoke()` 转发给插件页处理器
+- `POST /api/plugins/:name/ui-store`：处理 `tx5dr.store*()` 请求
+- `POST /api/plugins/:name/ui-files`：处理 `tx5dr.file*()` 请求
+- `POST /api/plugins/:name/ui-session/heartbeat`：刷新页面 session TTL
+
+其中 iframe 静态页支持通过 query token 鉴权（`auth_token`，兼容 `token`）；`ui-invoke` 走常规 Bearer Token。
+宿主在页面加载时创建并锁定 `pageSessionId`；后续 invoke / store / file / heartbeat 都由宿主持有该 session，iframe 自报的 session 不作为可信输入。
+这几个路由都属于宿主固定桥接层，插件页面应通过 Bridge SDK 调用，不应自行手写 fetch 并伪造 session。
+
+### 4.10 文件存储
+
+插件可以通过 `ctx.files` 持久化二进制文件（如证书、导入数据等），文件存储在插件的数据目录下。
+
+```typescript
+interface PluginFileStore {
+  /** 写入（或覆盖）文件 */
+  write(path: string, data: Buffer): Promise<void>;
+  /** 读取文件，不存在返回 null */
+  read(path: string): Promise<Buffer | null>;
+  /** 删除文件，返回是否成功 */
+  delete(path: string): Promise<boolean>;
+  /** 列出文件路径 */
+  list(prefix?: string): Promise<string[]>;
+}
+```
+
+**存储路径**：`{dataDir}/plugin-data/{pluginName}/files/`
+
+**安全约束**：所有路径参数相对于插件文件根目录解析，禁止目录穿越（`..`、绝对路径等会被拒绝）。
+iframe 页面里的 `tx5dr.file*` 与运行时 `ctx.files` 指向同一物理文件根目录，但宿主会按 `instanceTarget + bound resource + pageId` 自动收口到独立 scope。
+
+**典型用途**：
+- LoTW 证书文件（`.p12`）
+- 临时导入/导出数据
+- 缓存的外部资源
+
+在 iframe 页面中可通过 Bridge SDK 的 `tx5dr.fileUpload()` / `tx5dr.fileRead()` 等方法间接访问。
+`tx5dr.store*` 则是独立的 page-scoped KV，作用域同样为 `instanceTarget + bound resource + pageId`，不会自动映射到运行时的 `ctx.store`。
+
+可将两者理解为：
+
+- `ctx.store.*` / `ctx.files`：插件运行时能力，由插件实例直接使用
+- `tx5dr.store*` / `tx5dr.file*`：iframe 页面能力，由宿主按页面 session 收口后的受限访问
+
+两套能力共享同一个插件数据目录，但 iframe 页面侧的作用域更窄，始终以 `instanceTarget + bound resource + pageId` 为边界。
+
+### 4.11 日志同步 Provider
+
+工具插件可以通过 `ctx.logbookSync.register()` 注册日志同步 Provider，将外部日志服务（如 LoTW、QRZ.com、WaveLog）接入系统的统一同步框架。
+
+#### LogbookSyncProvider 接口
+
+```typescript
+interface LogbookSyncProvider {
+  /** 服务唯一标识（如 'lotw'、'qrz'、'wavelog'） */
+  readonly id: string;
+  /** 显示名称（i18n key 或文本） */
+  readonly displayName: string;
+  /** 可选图标和颜色 */
+  readonly icon?: string;
+  readonly color?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
+  /** 设置页面 ID（引用 ui.pages 中的条目） */
+  readonly settingsPageId: string;
+  /** 运行期访问范围 */
+  readonly accessScope?: 'admin' | 'operator';
+  /** 自定义操作菜单（替换默认的上传/下载/全量同步三项） */
+  readonly actions?: SyncAction[];
+
+  testConnection(callsign: string): Promise<SyncTestResult>;
+  upload(callsign: string): Promise<SyncUploadResult>;
+  download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult>;
+  isConfigured(callsign: string): boolean;
+  isAutoUploadEnabled(callsign: string): boolean;
+}
+```
+
+#### 注册流程
+
+```typescript
+onLoad(ctx) {
+  const provider = new MyProvider(ctx);
+  ctx.logbookSync.register(provider);
+
+  // 同时注册 iframe 设置页面的消息处理器
+  ctx.ui.registerPageHandler({
+    async onMessage(pageId, action, data) {
+      // 处理设置页面的 invoke 请求
+    },
+  });
+},
+```
+
+建议所有日志同步插件都声明为：
+
+- `type: 'utility'`
+- `instanceScope: 'global'`
+
+原因是日志同步天然按“呼号/日志本”工作，而不是按“操作员实例”工作。插件内部应使用：
+
+```typescript
+const logbook = ctx.logbook.forCallsign(callsign);
+await logbook.queryQSOs(...);
+await logbook.updateQSO(...);
+await logbook.notifyUpdated();
+```
+
+也就是说，旧版“每操作员实例各自持有一个同步插件”的方式，已经不再是推荐模型。
+
+#### SyncAction 自定义操作
+
+```typescript
+interface SyncAction {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: 'download' | 'upload' | 'sync';
+  /** 直接执行对应的 provider 方法 */
+  operation?: 'upload' | 'download' | 'full_sync';
+  /** 或者打开一个 iframe 页面让用户输入后再执行 */
+  pageId?: string;
+}
+```
+
+- `operation` 和 `pageId` 二选一
+- `pageId` 模式适合需要用户输入的场景（如选择下载时间范围）
+
+#### 数据流
+
+Provider 拥有 `ctx.logbook` 的完整访问权限，自行负责：
+- **查询**：`ctx.logbook.forCallsign(callsign).queryQSOs(filter)` 获取需要上传的记录
+- **写入**：`ctx.logbook.forCallsign(callsign).addQSO(record)` / `updateQSO(id, updates)` 写入下载的记录
+- **通知**：`ctx.logbook.forCallsign(callsign).notifyUpdated()` 批量写入完成后刷新前端
+
+宿主在 QSO 完成时自动检查所有 provider 的 `isAutoUploadEnabled()` 并调用 `upload()`。
+
+`notifyUpdated()` 当前会透传完整 `logbookUpdated` payload，包括：
+
+- `logBookId`
+- `statistics`
+- `operatorId?`
+
+其中 `operatorId` 会优先使用该日志本当前关联的操作员；如果在 operator-scope 上下文中调用，则会回落到当前操作员。
+
+#### 结果类型
+
+```typescript
+interface SyncTestResult {
+  success: boolean;
+  message?: string;
+  details?: unknown;
+}
+
+interface SyncUploadResult {
+  uploaded: number;
+  skipped: number;
+  failed: number;
+  errors?: string[];
+}
+
+interface SyncDownloadResult {
+  downloaded: number;
+  matched: number;
+  updated: number;
+  errors?: string[];
+}
+```
+
+#### REST API 端点
+
+| Method | Path | 说明 |
+|--------|------|------|
+| `GET` | `/api/plugins/sync/providers` | 获取所有已注册的同步 provider 信息 |
+| `POST` | `/api/plugins/sync/providers/:id/test` | 测试连接 |
+| `POST` | `/api/plugins/sync/providers/:id/upload` | 上传 |
+| `POST` | `/api/plugins/sync/providers/:id/download` | 下载 |
+| `GET` | `/api/plugins/sync/configured-status` | 获取各 provider 的配置状态 |
 
 ---
 
@@ -1349,7 +1926,82 @@ export default plugin;
 - `ctx.store.global`
 - `quickActions[type='button']`
 
-它会周期性推送一个心跳状态面板，并提供一个“重置心跳计数”的按钮动作。
+它会周期性推送一个心跳状态面板，并提供一个”重置心跳计数”的按钮动作。
+
+### 6.10 lotw-sync（LoTW 日志同步）
+
+**位置**：`packages/server/src/plugin/builtins/lotw-sync/`
+
+ARRL Logbook of The World 日志同步插件。展示了完整的日志同步 Provider 实现，包括证书管理和复杂的上传/下载流程。
+
+#### 功能
+- .p12 证书导入、管理和删除（通过 `ctx.files` 持久化）
+- TQ8 格式上传（RSA-SHA1 签名）
+- ADIF 格式确认下载
+- 按呼号独立配置
+- 自动上传支持
+
+#### UI 页面
+- `settings`：证书管理 + API 配置
+- `download-wizard`：下载时间范围选择向导
+
+#### 自定义 SyncAction
+使用 `pageId` 模式让用户在下载前选择时间范围，而非直接执行下载。
+
+### 6.11 qrz-sync（QRZ 日志同步）
+
+**位置**：`packages/server/src/plugin/builtins/qrz-sync/`
+
+QRZ.com 日志同步插件。是最简单的日志同步 Provider 实现，适合作为入门参考。
+
+#### 功能
+- API Key 配置
+- QSO 上传/下载
+- 按呼号独立配置
+- 自动上传支持
+
+#### UI 页面
+- `settings`：API Key 配置 + 连接测试
+
+### 6.12 wavelog-sync（WaveLog 日志同步）
+
+**位置**：`packages/server/src/plugin/builtins/wavelog-sync/`
+
+WaveLog 自托管日志服务同步插件。展示了需要多步配置（服务器地址 → 获取站台列表 → 选择站台）的 Provider 实现。
+
+#### 功能
+- WaveLog 实例连接配置
+- 站台列表动态获取和选择
+- QSO 上传/下载
+- 自动上传支持
+
+#### UI 页面
+- `settings`：服务器 URL + API Key + 站台选择
+
+### 6.13 iframe-panel-demo（iframe 面板示例）
+
+**位置**：`packages/server/src/plugin/builtins/iframe-panel-demo/`
+
+展示 iframe 面板在操作员卡片和自动化 Popover 两个位置的自定义 UI 能力。**默认未启用**。
+
+#### Panels
+
+| ID | 组件 | slot | width | 说明 |
+|----|------|------|-------|------|
+| `live-monitor` | iframe | operator | `full` | 实时信号强度、计数器、日志 |
+| `quick-controls` | iframe | automation | `half` | 交互按钮、输入框 |
+| `stats-kv` | key-value | automation | `half` | 结构化统计数据 |
+
+#### 展示的核心能力
+
+| 能力 | 机制 |
+|------|------|
+| 服务端实时推送 | `ctx.ui.pushToPage()` → `tx5dr.onPush()` |
+| 前端交互调用 | `tx5dr.invoke()` → `registerPageHandler` |
+| 跨页面同步 | quick-controls invoke → 服务端处理 → pushToPage 到 live-monitor |
+| 结构化面板对比 | `ctx.ui.send()` 推送 key-value 数据 |
+| 主题自适应 | CSS Design Tokens |
+| 高度自适应 | ResizeObserver + `tx5dr.resize()` |
 
 ---
 
@@ -1486,6 +2138,39 @@ Pipeline 额外安全网
 | `POST` | `/api/plugins/reload` | 重载全部插件定义与实例，不重启引擎 |
 | `POST` | `/api/plugins/:name/reload` | 重载单个插件 |
 | `POST` | `/api/plugins/rescan` | 重新扫描插件目录并应用新增/删除/变更 |
+| `GET` | `/api/plugins/:name/ui/:page.html` | 获取插件 iframe 页面（自动注入 Bridge SDK） |
+| `GET` | `/api/plugins/_bridge/bridge.js` | Bridge SDK 脚本 |
+| `GET` | `/api/plugins/_bridge/tokens.css` | CSS Design Tokens 样式表 |
+| `POST` | `/api/plugins/:name/ui-invoke` | iframe invoke 请求转发 |
+| `POST` | `/api/plugins/:name/ui-store` | iframe `tx5dr.store*()` 桥接接口（宿主按 session 校验并收口作用域） |
+| `POST` | `/api/plugins/:name/ui-files` | iframe `tx5dr.file*()` 桥接接口（宿主按 session 校验并收口作用域） |
+| `POST` | `/api/plugins/:name/ui-session/heartbeat` | 刷新页面 session 存活时间（宿主内部使用） |
+| `GET` | `/api/plugins/sync-providers` | 获取日志同步 Provider 列表 |
+| `GET` | `/api/plugins/sync-providers/configured?callsign=...` | 获取指定呼号的 Provider 配置状态 |
+| `POST` | `/api/plugins/sync-providers/:providerId/test-connection` | 测试同步连接 |
+| `POST` | `/api/plugins/sync-providers/:providerId/upload` | 触发日志上传 |
+| `POST` | `/api/plugins/sync-providers/:providerId/download` | 触发日志下载 |
+
+#### 运行期权限模型
+
+插件宿主路由分为两类：
+
+- **管理类接口**：启用/禁用/重载/修改全局设置等，要求 `admin`
+- **运行期能力接口**：日志同步、operator 页面 iframe、`ui-invoke` 等，可允许 `operator`
+
+是否允许 operator 访问，取决于插件自身声明：
+
+- 日志同步 Provider：看 `provider.accessScope`
+- iframe 页面：看 `ui.pages[].accessScope`
+- 资源级校验：看 `ui.pages[].resourceBinding`
+
+因此“能否访问插件页面/同步能力”不再只由统一 `/api/plugins` 前缀角色控制，而是由宿主按路由和资源粒度判定。
+
+补充约束：
+
+- `ui-store` / `ui-files` / `ui-session/heartbeat` 都不是插件自定义业务路由，而是宿主固定桥接能力
+- 宿主会先校验 `pageId + pageSessionId + accessScope + resourceBinding`，再把请求收口到当前页面 session 的真实实例范围
+- 因此 iframe 页面即使主动篡改 `callsign`、`operatorId` 或伪造其他 session，也无法越过宿主切换到别的插件实例/页面作用域
 
 ### WebSocket 事件
 
@@ -1495,6 +2180,7 @@ Pipeline 额外安全网
 | `pluginStatusChanged` | Server → Client | 单个插件状态变更，载荷包含 `generation` 与最新 `plugin` |
 | `pluginData` | Server → Client | 插件通过 `ctx.ui.send()` 推送的面板数据，载荷包含 `pluginName + operatorId + panelId + data` |
 | `pluginLog` | Server → Client | 插件 `ctx.log.*` 的日志条目（前端显示于 Settings → Plugins 的日志面板） |
+| `pluginPagePush` | Server → Client | 插件通过 `ctx.ui.pushToPage()` 推送到 iframe 页面的消息 |
 | `pluginUserAction` | Client → Server | 插件自定义用户动作（触发 `hooks.onUserAction`） |
 
 > 补充：操作员 runtime 的核心控制命令不是插件专用事件，它们走系统级 WebSocket 命令：
@@ -1529,6 +2215,10 @@ interface PluginStatus {
   quickActions?: PluginQuickAction[];
   panels?: PluginPanelDescriptor[];
   permissions?: string[];
+  ui?: {
+    dir?: string;
+    pages?: Array<{ id: string; title: string; entry: string }>;
+  };
   locales?: Record<string, Record<string, string>>;  // 插件自带翻译
 }
 ```
@@ -1546,7 +2236,8 @@ interface PluginStatus {
 | 设置 → 操作员配置 | **每操作员**：策略插件选择器 + 当前相关插件的 operator-scope 设置 |
 | 主界面右上角“自动化”入口 | 当前选中操作员的 QuickActions 镜像入口 |
 | 操作员面板右上角 | 当前操作员所有活跃插件注册的 QuickActions（策略插件 + 已启用 utility 插件，立即生效） |
-| 操作员卡片下方 | 当前操作员相关插件声明的 Panels（按 `operatorId` 隔离的实时数据展示） |
+| 操作员卡片下方 | 当前操作员相关插件声明的 Panels（按 `operatorId` 隔离的实时数据展示；桌面端默认双列，`width: 'full'` 可跨整行） |
+| 日志本 → 同步设置 | 日志同步 Provider 的设置页面（iframe），支持多 provider 并排配置 |
 
 ### 翻译动态注册
 
@@ -1641,7 +2332,17 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
 | 插件快照同步 Hook | `packages/web/src/hooks/usePluginSnapshot.ts` |
 | 前端插件辅助 API | `packages/web/src/utils/pluginApi.ts` |
 | 前端 API 方法 | `packages/core/src/api.ts`（`getPlugins`、`updatePluginOperatorSettings` 等） |
+| 日志同步 Host | `packages/server/src/plugin/LogbookSyncHost.ts` |
+| 文件存储 Provider | `packages/server/src/plugin/PluginFileStoreProvider.ts` |
+| UI 桥接 | `packages/server/src/plugin/PluginUIBridge.ts` |
+| UI 路由 + Bridge SDK | `packages/server/src/routes/plugins.ts` |
+| lotw-sync 实现 | `packages/server/src/plugin/builtins/lotw-sync/` |
+| qrz-sync 实现 | `packages/server/src/plugin/builtins/qrz-sync/` |
+| wavelog-sync 实现 | `packages/server/src/plugin/builtins/wavelog-sync/` |
+| iframe-panel-demo 示例 | `packages/server/src/plugin/builtins/iframe-panel-demo/` |
+| iframe 宿主组件 | `packages/web/src/components/plugins/PluginIframeHost.tsx` |
+| 面板渲染器 | `packages/web/src/components/plugins/PluginPanelRenderer.tsx` |
 
 ---
 
-*文档生成于 2026-04，对应插件系统 v1.0 初始版本。*
+*文档更新于 2026-04，对应插件系统 v1.1（新增自定义 UI、文件存储、日志同步 Provider）。*

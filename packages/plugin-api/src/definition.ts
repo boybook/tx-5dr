@@ -5,6 +5,8 @@ import type {
   PluginPanelDescriptor,
   PluginPermission,
   PluginType,
+  PluginInstanceScope,
+  PluginUIPageDescriptor,
 } from '@tx5dr/contracts';
 import type { PluginContext } from './context.js';
 import type { PluginHooks } from './hooks.js';
@@ -103,6 +105,14 @@ export interface PluginDefinition {
   type: PluginType;
 
   /**
+   * Controls whether the host creates one instance per operator or a single
+   * shared instance for the whole station.
+   *
+   * Defaults to `operator` when omitted.
+   */
+  instanceScope?: PluginInstanceScope;
+
+  /**
    * Human-readable summary shown in plugin management UIs.
    *
    * Keep this short and product-oriented so operators can quickly understand the
@@ -148,8 +158,14 @@ export interface PluginDefinition {
   /**
    * Panel descriptors used to render plugin-owned UI sections.
    *
-   * Panels are declarative containers. Plugins push live data into them through
-   * {@link PluginContext.ui} rather than rendering custom frontend code.
+   * Structured panels (`key-value`, `table`, `log`, `chart`) receive live data
+   * through {@link PluginContext.ui.send}. Iframe panels (`component: 'iframe'`)
+   * render a custom HTML page and communicate via `invoke` / `onPush`.
+   *
+   * Each panel has a `slot` that controls where it renders: `'operator'` (the
+   * default, shown in the operator card) or `'automation'` (shown in the
+   * top-right automation popover). Panels may also declare a preferred
+   * `width`, such as `'full'`, so hosts can promote more important live panels.
    */
   panels?: PluginPanelDescriptor[];
 
@@ -161,6 +177,26 @@ export interface PluginDefinition {
    * available via {@link PluginContext.store}.
    */
   storage?: { scopes: ('global' | 'operator')[] };
+
+  /**
+   * Declares custom UI pages served from the plugin's static file directory.
+   *
+   * Pages are rendered inside an iframe by the host's `PluginIframeHost`
+   * component. The host automatically injects CSS design tokens and a
+   * communication bridge SDK. Plugins can use any web technology inside the
+   * iframe.
+   *
+   * Pages are declarative — they only define _what_ exists, not _where_ it is
+   * rendered. The rendering location is decided by consumers (e.g. a logbook
+   * sync host renders the page in a settings modal tab, while a future
+   * dashboard host may render it in a side panel).
+   */
+  ui?: {
+    /** Static file directory relative to the plugin root (default: 'ui'). */
+    dir?: string;
+    /** Registered custom UI pages. */
+    pages?: PluginUIPageDescriptor[];
+  };
 
   /**
    * Creates the strategy runtime for a `strategy` plugin.

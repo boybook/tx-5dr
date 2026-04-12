@@ -51,6 +51,12 @@ export {
 } from './heartbeat-demo/index.js';
 
 export {
+  iframePanelDemoPlugin,
+  iframePanelDemoLocales,
+  BUILTIN_IFRAME_PANEL_DEMO_PLUGIN_NAME,
+} from './iframe-panel-demo/index.js';
+
+export {
   watchedCallsignAutocallPlugin,
   watchedCallsignAutocallLocales,
 } from './watched-callsign-autocall/index.js';
@@ -59,6 +65,24 @@ export {
   watchedNoveltyAutocallPlugin,
   watchedNoveltyAutocallLocales,
 } from './watched-novelty-autocall/index.js';
+
+export {
+  wavelogSyncPlugin,
+  wavelogSyncLocales,
+  BUILTIN_WAVELOG_SYNC_PLUGIN_NAME,
+} from './wavelog-sync/index.js';
+
+export {
+  qrzSyncPlugin,
+  qrzSyncLocales,
+  BUILTIN_QRZ_SYNC_PLUGIN_NAME,
+} from './qrz-sync/index.js';
+
+export {
+  lotwSyncPlugin,
+  lotwSyncLocales,
+  BUILTIN_LOTW_SYNC_PLUGIN_NAME,
+} from './lotw-sync/index.js';
 
 import {
   autocallIdleFrequencyPlugin,
@@ -70,8 +94,12 @@ import { callsignPrefixFilterPlugin, callsignPrefixFilterLocales } from './calls
 import { workedStationBiasPlugin, workedStationBiasLocales } from './worked-station-bias/index.js';
 import { qsoSessionInspectorPlugin, qsoSessionInspectorLocales } from './qso-session-inspector/index.js';
 import { heartbeatDemoPlugin, heartbeatDemoLocales } from './heartbeat-demo/index.js';
+import { iframePanelDemoPlugin, iframePanelDemoLocales, iframePanelDemoDirPath } from './iframe-panel-demo/index.js';
 import { watchedCallsignAutocallPlugin, watchedCallsignAutocallLocales } from './watched-callsign-autocall/index.js';
 import { watchedNoveltyAutocallPlugin, watchedNoveltyAutocallLocales } from './watched-novelty-autocall/index.js';
+import { wavelogSyncPlugin, wavelogSyncLocales, wavelogSyncDirPath } from './wavelog-sync/index.js';
+import { qrzSyncPlugin, qrzSyncLocales, qrzSyncDirPath } from './qrz-sync/index.js';
+import { lotwSyncPlugin, lotwSyncLocales, lotwSyncDirPath } from './lotw-sync/index.js';
 import type { PluginDefinition } from '@tx5dr/plugin-api';
 
 export interface BuiltinPluginEntry {
@@ -79,6 +107,8 @@ export interface BuiltinPluginEntry {
   locales: Record<string, Record<string, string>>;
   /** standard-qso 始终启用；其他内置插件默认禁用，用户可手动启用 */
   enabledByDefault: boolean;
+  /** 插件目录路径（含 UI 静态文件的内置插件需提供，通过 import.meta.url 计算） */
+  dirPath?: string;
 }
 
 /**
@@ -116,6 +146,12 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     enabledByDefault: false,
   },
   {
+    definition: iframePanelDemoPlugin,
+    locales: iframePanelDemoLocales,
+    enabledByDefault: false,
+    dirPath: iframePanelDemoDirPath,
+  },
+  {
     definition: watchedCallsignAutocallPlugin,
     locales: watchedCallsignAutocallLocales,
     enabledByDefault: false,
@@ -129,5 +165,23 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     definition: autocallIdleFrequencyPlugin,
     locales: autocallIdleFrequencyLocales,
     enabledByDefault: true,
+  },
+  {
+    definition: wavelogSyncPlugin,
+    locales: wavelogSyncLocales,
+    enabledByDefault: true,
+    dirPath: wavelogSyncDirPath,
+  },
+  {
+    definition: qrzSyncPlugin,
+    locales: qrzSyncLocales,
+    enabledByDefault: true,
+    dirPath: qrzSyncDirPath,
+  },
+  {
+    definition: lotwSyncPlugin,
+    locales: lotwSyncLocales,
+    enabledByDefault: true,
+    dirPath: lotwSyncDirPath,
   },
 ];
