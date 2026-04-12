@@ -118,7 +118,7 @@ export const yaesuNewcatProfile: MeterProfile = {
     const isYaesu = ctx.manufacturer?.toUpperCase() === 'YAESU';
     const hasRawstr = ctx.supportedLevels.has('RAWSTR');
     const isSerial = ctx.connectionType === 'serial';
-    return (isYaesu || hasRawstr) && isSerial;
+    return isYaesu && hasRawstr && isSerial;
   },
 
   async readAlc(ctx: MeterReadContext): Promise<MeterData['alc']> {
