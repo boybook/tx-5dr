@@ -1100,6 +1100,8 @@ interface PluginPanelDescriptor {
   pageId?: string;
   /** 面板渲染位置。默认 'operator'（操作员卡片）*/
   slot?: 'operator' | 'automation';
+  /** 面板宽度偏好。默认 'half'；operator host 可将 'full' 解释为整行 */
+  width?: 'half' | 'full';
 }
 ```
 
@@ -1118,6 +1120,12 @@ interface PluginPanelDescriptor {
 > - `'automation'`：面板出现在右上角自动化 Popover 中
 > - 未指定 `slot` 等同于 `'operator'`
 > - 结构化面板和 iframe 面板均可使用任意 slot
+
+> **宽度偏好（`width`）**：
+> - `'half'`（默认）：按宿主默认紧凑布局渲染
+> - `'full'`：表达“这个面板更重要，优先占据更宽区域”
+> - 当前操作员卡片 host 会把 `width: 'full'` 解释为桌面端跨两列整行显示
+> - `automation` 等其他 host 可以按自己的布局策略忽略该提示，因此 `width` 是宿主可解释的声明式 hint，而不是绝对布局命令
 
 #### 数据推送
 
@@ -1978,11 +1986,11 @@ WaveLog 自托管日志服务同步插件。展示了需要多步配置（服务
 
 #### Panels
 
-| ID | 组件 | slot | 说明 |
-|----|------|------|------|
-| `live-monitor` | iframe | operator | 实时信号强度、计数器、日志 |
-| `quick-controls` | iframe | automation | 交互按钮、输入框 |
-| `stats-kv` | key-value | automation | 结构化统计数据 |
+| ID | 组件 | slot | width | 说明 |
+|----|------|------|-------|------|
+| `live-monitor` | iframe | operator | `full` | 实时信号强度、计数器、日志 |
+| `quick-controls` | iframe | automation | `half` | 交互按钮、输入框 |
+| `stats-kv` | key-value | automation | `half` | 结构化统计数据 |
 
 #### 展示的核心能力
 
@@ -2228,7 +2236,7 @@ interface PluginStatus {
 | 设置 → 操作员配置 | **每操作员**：策略插件选择器 + 当前相关插件的 operator-scope 设置 |
 | 主界面右上角“自动化”入口 | 当前选中操作员的 QuickActions 镜像入口 |
 | 操作员面板右上角 | 当前操作员所有活跃插件注册的 QuickActions（策略插件 + 已启用 utility 插件，立即生效） |
-| 操作员卡片下方 | 当前操作员相关插件声明的 Panels（按 `operatorId` 隔离的实时数据展示） |
+| 操作员卡片下方 | 当前操作员相关插件声明的 Panels（按 `operatorId` 隔离的实时数据展示；桌面端默认双列，`width: 'full'` 可跨整行） |
 | 日志本 → 同步设置 | 日志同步 Provider 的设置页面（iframe），支持多 provider 并排配置 |
 
 ### 翻译动态注册
