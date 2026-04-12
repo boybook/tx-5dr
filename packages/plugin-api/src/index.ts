@@ -100,6 +100,7 @@ export type {
   PluginCapability,
   PluginPanelDescriptor,
   PluginPanelComponent,
+  PluginPanelWidth,
   PluginSettingOption,
   PluginStorageScope,
   PluginStorageConfig,

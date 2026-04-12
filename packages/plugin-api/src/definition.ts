@@ -164,7 +164,8 @@ export interface PluginDefinition {
    *
    * Each panel has a `slot` that controls where it renders: `'operator'` (the
    * default, shown in the operator card) or `'automation'` (shown in the
-   * top-right automation popover).
+   * top-right automation popover). Panels may also declare a preferred
+   * `width`, such as `'full'`, so hosts can promote more important live panels.
    */
   panels?: PluginPanelDescriptor[];
 

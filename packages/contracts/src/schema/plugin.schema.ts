@@ -191,6 +191,20 @@ export const PluginPanelSlotSchema = z.enum(['operator', 'automation']);
 export type PluginPanelSlot = z.infer<typeof PluginPanelSlotSchema>;
 
 /**
+ * Preferred width hint for plugin-owned panels.
+ *
+ * Hosts may interpret this hint differently per slot. Today the operator-card
+ * host treats `full` as "span the full row on desktop", while automation
+ * popover hosts may choose to ignore it.
+ */
+export const PluginPanelWidthSchema = z.enum(['half', 'full']);
+
+/**
+ * Preferred width hint for plugin-owned panels.
+ */
+export type PluginPanelWidth = z.infer<typeof PluginPanelWidthSchema>;
+
+/**
  * Declarative definition of a plugin-owned panel in the frontend.
  *
  * Panels are passive containers rendered by the host. A plugin sends data into
@@ -205,6 +219,8 @@ export const PluginPanelDescriptorSchema = z.object({
   pageId: z.string().optional(),
   /** Where the panel renders. Defaults to `'operator'` (operator card live-panel area). */
   slot: PluginPanelSlotSchema.optional(),
+  /** Preferred width hint. Defaults to `'half'`. */
+  width: PluginPanelWidthSchema.optional(),
 });
 
 /**
