@@ -1,5 +1,4 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
 import { PluginPanelRenderer } from './PluginPanelRenderer';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
 import { resolvePluginLabel, resolvePluginName } from '../../utils/pluginLocales';
@@ -9,7 +8,6 @@ interface OperatorPluginPanelsProps {
 }
 
 export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ operatorId }) => {
-  const { t } = useTranslation('settings');
   const pluginSnapshot = usePluginSnapshot();
 
   const activePluginsWithPanels = React.useMemo(
@@ -35,9 +33,6 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
 
   return (
     <div className="space-y-3">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-default-400">
-        {t('plugins.livePanels', 'Live Panels')}
-      </div>
       {activePluginsWithPanels.map((plugin) => {
         const operatorPanels = (plugin.panels ?? []).filter(
           (panel) => !panel.slot || panel.slot === 'operator',
