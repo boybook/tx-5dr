@@ -23,6 +23,7 @@ import {
   getHighlightTypeLabels,
   getHighlightTypeDescriptions,
   PRESET_COLORS,
+  getOrderedHighlightTypes,
   getDisplayNotificationSettings,
   saveDisplayNotificationSettings,
   resetDisplayNotificationSettings,
@@ -47,6 +48,7 @@ export const DisplayNotificationSettings = forwardRef<
   const { languageMode, setLanguageMode } = useLanguage();
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
   const highlightTypeDescriptions = useMemo(() => getHighlightTypeDescriptions(t), [t]);
+  const orderedHighlightTypes = useMemo(() => getOrderedHighlightTypes(), []);
   const [settings, setSettings] = useState<DisplaySettings>(getDisplayNotificationSettings());
   const [originalSettings, setOriginalSettings] = useState<DisplaySettings>(settings);
   const [_isSaving, setIsSaving] = useState(false);
@@ -275,7 +277,7 @@ export const DisplayNotificationSettings = forwardRef<
       <div>
         <h4 className="font-semibold text-default-900 mb-4">{t('settings:display.highlightTypeConfig')}</h4>
         <div className="space-y-4">
-          {Object.values(HighlightType).map(type => renderHighlightCard(type))}
+          {orderedHighlightTypes.map(type => renderHighlightCard(type))}
         </div>
       </div>
 
@@ -287,7 +289,7 @@ export const DisplayNotificationSettings = forwardRef<
           <CardBody className="p-4">
             <h4 className="font-semibold text-default-900 mb-4">{t('settings:display.preview')}</h4>
             <div className="space-y-2">
-              {Object.values(HighlightType).map(type => {
+              {orderedHighlightTypes.map(type => {
                 const config = settings.highlights[type];
                 if (!config.enabled) return null;
                 

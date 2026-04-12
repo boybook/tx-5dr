@@ -3,6 +3,8 @@ import {
   type DisplayNotificationSettings,
   HighlightType,
   getDisplayNotificationSettings,
+  type HighlightAnalysis,
+  resolveHighestPriorityHighlight,
 } from '../utils/displayNotificationSettings';
 
 /**
@@ -40,26 +42,8 @@ export function useDisplayNotificationSettings() {
   };
 
   // 获取最高优先级的高亮类型
-  const getHighestPriorityHighlight = (analysis: {
-    isNewGrid?: boolean;
-    isNewDxccEntity?: boolean;
-    isNewPrefix?: boolean;
-    isNewCallsign?: boolean;
-  }): HighlightType | null => {
-    if (!settings.enabled) return null;
-
-    // 按优先级顺序检查：新网格 > 新 DXCC > 新呼号
-    if (analysis.isNewGrid && settings.highlights.newGrid.enabled) {
-      return HighlightType.NEW_GRID;
-    }
-    if ((analysis.isNewDxccEntity || analysis.isNewPrefix) && settings.highlights.newPrefix.enabled) {
-      return HighlightType.NEW_PREFIX;
-    }
-    if (analysis.isNewCallsign && settings.highlights.newCallsign.enabled) {
-      return HighlightType.NEW_CALLSIGN;
-    }
-
-    return null;
+  const getHighestPriorityHighlight = (analysis: HighlightAnalysis): HighlightType | null => {
+    return resolveHighestPriorityHighlight(analysis, settings);
   };
 
   return {
