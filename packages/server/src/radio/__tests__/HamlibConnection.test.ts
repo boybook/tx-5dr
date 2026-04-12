@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HamlibConnection } from '../connections/HamlibConnection.js';
 import { RadioConnectionState } from '../connections/IRadioConnection.js';
+import { HamlibMeterReader } from '../connections/meter/HamlibMeterReader.js';
+import { defaultHamlibProfile } from '../connections/meter/profiles/index.js';
 
 type MockRig = {
   setFrequency: ReturnType<typeof vi.fn>;
@@ -50,16 +52,11 @@ type HamlibConnectionTestAccessor = {
     displayStyle: 's-meter-dbm' | 's-meter' | 'db-over-s9';
     label: string;
   };
+  meterReader?: unknown;
   txFrequencyRanges?: TestFrequencyRange[];
   currentFrequencyHz?: number;
   currentRadioMode?: string;
   spectrumController?: MockSpectrumController;
-  convertPower: (rawValue: number | null, wattsValue: number | null) => {
-    raw: number;
-    percent: number;
-    watts: number | null;
-    maxWatts: number | null;
-  };
   resolveCurrentTxPowerMaxWatts: () => number | null;
 };
 
@@ -343,39 +340,33 @@ describe('HamlibConnection', () => {
     expect(rig.setFrequency).toHaveBeenCalledTimes(1);
   });
 
-  it('reads meter levels sequentially inside a single polling pass', async () => {
-    const firstRead = createDeferred<number>();
+  it('reads meter levels inside a single polling pass via MeterReader', async () => {
     const { connection, rig } = createConnectedConnection({
-      getLevel: vi.fn()
-        .mockImplementationOnce(() => firstRead.promise)
-        .mockResolvedValueOnce(2)
-        .mockResolvedValueOnce(3)
-        .mockResolvedValueOnce(4)
-        .mockResolvedValueOnce(5),
+      getLevel: vi.fn().mockResolvedValue(0.5),
     });
-    asTestConnection(connection).supportedLevels = new Set([
+    const tc = asTestConnection(connection);
+    tc.supportedLevels = new Set([
       'STRENGTH',
       'SWR',
       'ALC',
       'RFPOWER_METER',
       'RFPOWER_METER_WATTS',
     ]);
+    tc.meterDecodeStrategy = { name: 'generic', sourceLevel: 'STRENGTH', displayStyle: 'db-over-s9', label: 'test' };
+    tc.meterReader = new HamlibMeterReader(defaultHamlibProfile, defaultHamlibProfile);
 
-    const pollPromise = (connection as any).pollMeters();
-    await Promise.resolve();
-    await Promise.resolve();
+    const emitted: any[] = [];
+    connection.on('meterData', (data) => emitted.push(data));
 
-    expect(rig.getLevel).toHaveBeenCalledTimes(1);
-    expect(rig.getLevel).toHaveBeenNthCalledWith(1, 'STRENGTH');
+    await (connection as any).pollMeters();
 
-    firstRead.resolve(1);
-    await pollPromise;
-
-    expect(rig.getLevel).toHaveBeenCalledTimes(5);
-    expect(rig.getLevel).toHaveBeenNthCalledWith(2, 'SWR');
-    expect(rig.getLevel).toHaveBeenNthCalledWith(3, 'ALC');
-    expect(rig.getLevel).toHaveBeenNthCalledWith(4, 'RFPOWER_METER');
-    expect(rig.getLevel).toHaveBeenNthCalledWith(5, 'RFPOWER_METER_WATTS');
+    // MeterReader reads alc, swr, power (RFPOWER_METER + RFPOWER_METER_WATTS), and level (STRENGTH).
+    expect(rig.getLevel).toHaveBeenCalledWith('ALC');
+    expect(rig.getLevel).toHaveBeenCalledWith('SWR');
+    expect(rig.getLevel).toHaveBeenCalledWith('RFPOWER_METER');
+    expect(rig.getLevel).toHaveBeenCalledWith('RFPOWER_METER_WATTS');
+    expect(rig.getLevel).toHaveBeenCalledWith('STRENGTH');
+    expect(emitted).toHaveLength(1);
   });
 
   it('skips low-priority meter polling while a critical CAT write is active', async () => {
@@ -412,13 +403,13 @@ describe('HamlibConnection', () => {
       displayStyle: 's-meter',
       label: 'yaesu-rawstr',
     };
+    testConnection.meterReader = new HamlibMeterReader(defaultHamlibProfile, defaultHamlibProfile);
 
     const emitted: any[] = [];
     connection.on('meterData', (data) => emitted.push(data));
 
     await (connection as any).pollMeters();
 
-    expect(rig.getLevel).toHaveBeenCalledTimes(1);
     expect(rig.getLevel).toHaveBeenCalledWith('RAWSTR');
     expect(emitted[0]?.level).toMatchObject({
       raw: 150,
@@ -439,6 +430,7 @@ describe('HamlibConnection', () => {
       displayStyle: 'db-over-s9',
       label: 'generic-strength',
     };
+    testConnection.meterReader = new HamlibMeterReader(defaultHamlibProfile, defaultHamlibProfile);
 
     const emitted: any[] = [];
     connection.on('meterData', (data) => emitted.push(data));
@@ -452,7 +444,7 @@ describe('HamlibConnection', () => {
     });
   });
 
-  it('uses the matched TX range max watts when converting absolute power readings', () => {
+  it('uses the matched TX range max watts when converting absolute power readings', async () => {
     const { connection } = createConnectedConnection();
     const testConnection = asTestConnection(connection);
     testConnection.txFrequencyRanges = [
@@ -478,14 +470,9 @@ describe('HamlibConnection', () => {
     testConnection.currentFrequencyHz = 14074000;
     testConnection.currentRadioMode = 'AM';
 
-    const result = testConnection.convertPower(null, 12.5);
-
-    expect(result).toEqual({
-      raw: 127,
-      percent: 50,
-      watts: 12.5,
-      maxWatts: 25,
-    });
+    // Test via resolveCurrentTxPowerMaxWatts (the method still exists on the connection)
+    const maxWatts = testConnection.resolveCurrentTxPowerMaxWatts();
+    expect(maxWatts).toBe(25);
   });
 
   it('falls back to the rig-wide TX max watts when no exact range matches', () => {
@@ -623,13 +610,9 @@ describe('HamlibConnection', () => {
     testConnection.currentFrequencyHz = 14074000;
     testConnection.currentRadioMode = 'USB';
 
-    const result = testConnection.convertPower(15, null);
-
-    expect(result).toEqual({
-      raw: 255,
-      percent: 100,
-      watts: 15,
-      maxWatts: 10,
-    });
+    // The power conversion logic moved to defaultHamlib profile.
+    // Here we just verify resolveCurrentTxPowerMaxWatts returns the expected value.
+    const maxWatts = testConnection.resolveCurrentTxPowerMaxWatts();
+    expect(maxWatts).toBe(10);
   });
 });

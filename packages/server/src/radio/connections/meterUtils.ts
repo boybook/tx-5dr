@@ -56,7 +56,7 @@ function formatRelativeDbOffset(dbOffset: number): string {
   return `${sign} dB@S9`;
 }
 
-function formatSValue(dbOffset: number): string {
+export function formatSValue(dbOffset: number): string {
   if (dbOffset > 0) {
     return `S9+${Math.round(dbOffset)}dB`;
   }
@@ -65,7 +65,7 @@ function formatSValue(dbOffset: number): string {
   return `S${sUnits}`;
 }
 
-function buildLevelMeterReading(
+export function buildLevelMeterReading(
   raw: number,
   dbOffset: number,
   frequencyHz: number,
