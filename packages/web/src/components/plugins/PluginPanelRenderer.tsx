@@ -54,7 +54,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
           pluginName={pluginName}
           pageId={pageId}
           params={{ operatorId }}
-          minHeight={0}
+          minHeight={64}
         />
       );
     }
