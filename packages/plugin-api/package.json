@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/plugin-api",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "type": "module",
   "description": "Public plugin API for TX-5DR digital radio engine",
   "license": "MIT",
@@ -17,7 +17,9 @@
     "digital-radio"
   ],
   "files": [
-    "dist"
+    "dist",
+    "src/bridge.d.ts",
+    "tokens.css"
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -31,6 +33,9 @@
       "import": "./dist/testing/index.js",
       "require": "./dist/testing/index.js",
       "types": "./dist/testing/index.d.ts"
+    },
+    "./bridge": {
+      "types": "./src/bridge.d.ts"
     }
   },
   "scripts": {
