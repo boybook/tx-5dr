@@ -283,6 +283,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     settingsPageId: string;
     actions?: SyncAction[];
   }
+  interface SyncPreflightIssue {
+    code: string;
+    severity: 'info' | 'warning' | 'error';
+    message: string;
+  }
+  interface SyncUploadPreflightResult {
+    ready: boolean;
+    pendingCount: number;
+    uploadableCount: number;
+    blockedCount: number;
+    issues?: SyncPreflightIssue[];
+    guidance?: string[];
+  }
   const [syncProviders, setSyncProviders] = useState<SyncProviderInfo[]>([]);
   const [syncConfigured, setSyncConfigured] = useState<Record<string, boolean>>({});
   const [syncingProviders, setSyncingProviders] = useState<Record<string, boolean>>({});
@@ -457,55 +470,75 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       return '\n' + errors.join('\n');
     };
 
+    const fmtPreflight = (result: SyncUploadPreflightResult): string => {
+      const lines = [
+        t('sync.provider.preflightSummary', {
+          pending: result.pendingCount,
+          uploadable: result.uploadableCount,
+          blocked: result.blockedCount,
+        }),
+      ];
+      if (result.issues?.length) {
+        lines.push(...result.issues.map((issue) => issue.message));
+      }
+      return lines.join('\n');
+    };
+
     try {
       const callsign = operatorCallsign || '';
       const base = `/api/plugins/sync-providers/${encodeURIComponent(providerId)}`;
 
-      const doPost = (endpoint: string, body: unknown) =>
-        fetch(`${base}/${endpoint}`, {
+      const doPost = async <T,>(endpoint: string, body: unknown): Promise<T> => {
+        const response = await fetch(`${base}/${endpoint}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             ...getAuthHeaders(),
           },
           body: JSON.stringify(body),
-        }).then(r => r.json()) as Promise<Record<string, unknown>>;
+        });
+        const json = await response.json().catch(() => null) as T | { error?: string } | null;
+        if (!response.ok) {
+          const message = json && typeof json === 'object' && 'error' in json && typeof json.error === 'string'
+            ? json.error
+            : t('sync.provider.syncError', { name });
+          throw new Error(message);
+        }
+        return json as T;
+      };
 
-      if (operation === 'full_sync') {
-        const dlRes = await doPost('download', { callsign });
-        const ulRes = await doPost('upload', { callsign });
-
-        if (dlRes.error || ulRes.error) {
-          const errText = [dlRes.error, ulRes.error].filter(Boolean).join('; ');
-          setSyncMessages(prev => ({ ...prev, [providerId]: { type: 'error', text: String(errText) } }));
-        } else {
-          const hasFailure = (dlRes.errors as string[] | undefined)?.length || (ulRes.errors as string[] | undefined)?.length || (ulRes.failed as number) > 0;
-          const summary = `↓ ${fmtDownload(dlRes)}  ↑ ${fmtUpload(ulRes)}` + fmtErrors([...(dlRes.errors as string[] ?? []), ...(ulRes.errors as string[] ?? [])]);
+      if (operation !== 'download') {
+        const preflight = await doPost<SyncUploadPreflightResult | null>('upload-preflight', { callsign });
+        if (preflight && !preflight.ready) {
           setSyncMessages(prev => ({
             ...prev,
-            [providerId]: { type: hasFailure ? 'error' : 'success', text: summary },
+            [providerId]: { type: 'error', text: fmtPreflight(preflight) },
           }));
-          await refreshLogbookData();
+          return;
         }
+      }
+
+      if (operation === 'full_sync') {
+        const dlRes = await doPost<Record<string, unknown>>('download', { callsign });
+        const ulRes = await doPost<Record<string, unknown>>('upload', { callsign });
+        const hasFailure = (dlRes.errors as string[] | undefined)?.length || (ulRes.errors as string[] | undefined)?.length || (ulRes.failed as number) > 0;
+        const summary = `↓ ${fmtDownload(dlRes)}  ↑ ${fmtUpload(ulRes)}` + fmtErrors([...(dlRes.errors as string[] ?? []), ...(ulRes.errors as string[] ?? [])]);
+        setSyncMessages(prev => ({
+          ...prev,
+          [providerId]: { type: hasFailure ? 'error' : 'success', text: summary },
+        }));
+        await refreshLogbookData();
       } else if (operation === 'download') {
-        const res = await doPost('download', { callsign });
-        if (res.error) {
-          setSyncMessages(prev => ({ ...prev, [providerId]: { type: 'error', text: String(res.error) } }));
-        } else {
-          const text = fmtDownload(res) + fmtErrors(res.errors as string[] | undefined);
-          setSyncMessages(prev => ({ ...prev, [providerId]: { type: (res.errors as string[])?.length ? 'error' : 'success', text } }));
-          await refreshLogbookData();
-        }
+        const res = await doPost<Record<string, unknown>>('download', { callsign });
+        const text = fmtDownload(res) + fmtErrors(res.errors as string[] | undefined);
+        setSyncMessages(prev => ({ ...prev, [providerId]: { type: (res.errors as string[])?.length ? 'error' : 'success', text } }));
+        await refreshLogbookData();
       } else {
-        const res = await doPost('upload', { callsign });
-        if (res.error) {
-          setSyncMessages(prev => ({ ...prev, [providerId]: { type: 'error', text: String(res.error) } }));
-        } else {
-          const hasFailure = (res.failed as number) > 0 || (res.errors as string[] | undefined)?.length;
-          const text = fmtUpload(res) + fmtErrors(res.errors as string[] | undefined);
-          setSyncMessages(prev => ({ ...prev, [providerId]: { type: hasFailure ? 'error' : 'success', text } }));
-          await refreshLogbookData();
-        }
+        const res = await doPost<Record<string, unknown>>('upload', { callsign });
+        const hasFailure = (res.failed as number) > 0 || (res.errors as string[] | undefined)?.length;
+        const text = fmtUpload(res) + fmtErrors(res.errors as string[] | undefined);
+        setSyncMessages(prev => ({ ...prev, [providerId]: { type: hasFailure ? 'error' : 'success', text } }));
+        await refreshLogbookData();
       }
     } catch (error) {
       logger.error(`Sync failed: provider=${providerId}`, error);

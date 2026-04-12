@@ -102,8 +102,8 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
-    // Query recent QSOs from logbook (last 7 days by default)
-    const since = config.lastSyncTime ?? (Date.now() - 7 * 24 * 60 * 60 * 1000);
+    // Keep cursor-based upload, but never advance cursor on partial failures.
+    const since = typeof config.lastSyncTime === 'number' ? config.lastSyncTime : 0;
     const qsos = await logbook.queryQSOs({
       timeRange: { start: since, end: Date.now() },
     });
@@ -130,8 +130,8 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
       }
     }
 
-    // Update lastSyncTime on success
-    if (uploaded > 0) {
+    // Advance cursor only when the whole batch has no failed records.
+    if (failed === 0 && (uploaded > 0 || skipped > 0)) {
       this.setConfig(callsign, { ...config, lastSyncTime: Date.now() });
     }
 

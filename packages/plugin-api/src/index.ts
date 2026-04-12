@@ -57,6 +57,12 @@ export type {
   AutoTargetEligibilityDecision,
   UIBridge,
   PluginUIHandler,
+  PluginUIRequestContext,
+  PluginUIRequestUser,
+  PluginUIBoundResource,
+  PluginUIInstanceTarget,
+  PluginUIPageSessionInfo,
+  PluginUIPageContext,
   PluginFileStore,
 } from './helpers.js';
 
@@ -110,6 +116,8 @@ export type {
   SyncAction,
   SyncTestResult,
   SyncUploadResult,
+  SyncPreflightIssue,
+  SyncUploadPreflightResult,
   SyncDownloadResult,
   SyncDownloadOptions,
 } from './sync.js';

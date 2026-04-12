@@ -18,6 +18,20 @@ function publishStats(ctx: PluginContext): void {
   });
 }
 
+function pushToLiveMonitor(
+  ctx: PluginContext,
+  action: string,
+  data?: unknown,
+  excludeSessionId?: string,
+): void {
+  for (const session of ctx.ui.listActivePageSessions('live-monitor')) {
+    if (session.sessionId === excludeSessionId) {
+      continue;
+    }
+    ctx.ui.pushToSession(session.sessionId, action, data);
+  }
+}
+
 export const iframePanelDemoPlugin: PluginDefinition = {
   name: BUILTIN_IFRAME_PANEL_DEMO_PLUGIN_NAME,
   version: '1.0.0',
@@ -73,7 +87,7 @@ export const iframePanelDemoPlugin: PluginDefinition = {
 
   onLoad(ctx) {
     ctx.ui.registerPageHandler({
-      async onMessage(_pageId: string, action: string, data: unknown) {
+      async onMessage(_pageId: string, action: string, data: unknown, requestContext) {
         const d = data as Record<string, unknown>;
         switch (action) {
           case 'getState':
@@ -84,21 +98,24 @@ export const iframePanelDemoPlugin: PluginDefinition = {
           case 'increment': {
             const next = ctx.store.operator.get<number>('counter', 0) + 1;
             ctx.store.operator.set('counter', next);
-            ctx.ui.pushToPage('live-monitor', 'counterUpdated', { counter: next });
+            requestContext.page.push('counterUpdated', { counter: next });
+            pushToLiveMonitor(ctx, 'counterUpdated', { counter: next }, requestContext.page.sessionId);
             publishStats(ctx);
             return { counter: next };
           }
           case 'setLabel': {
             const label = d.label as string;
             ctx.store.operator.set('label', label);
-            ctx.ui.pushToPage('live-monitor', 'labelUpdated', { label });
+            requestContext.page.push('labelUpdated', { label });
+            pushToLiveMonitor(ctx, 'labelUpdated', { label }, requestContext.page.sessionId);
             publishStats(ctx);
             return { success: true };
           }
           case 'reset': {
             ctx.store.operator.set('counter', 0);
             ctx.store.operator.set('label', 'Demo');
-            ctx.ui.pushToPage('live-monitor', 'stateReset', { counter: 0, label: 'Demo' });
+            requestContext.page.push('stateReset', { counter: 0, label: 'Demo' });
+            pushToLiveMonitor(ctx, 'stateReset', { counter: 0, label: 'Demo' }, requestContext.page.sessionId);
             publishStats(ctx);
             return { counter: 0, label: 'Demo' };
           }
@@ -119,11 +136,12 @@ export const iframePanelDemoPlugin: PluginDefinition = {
   hooks: {
     onTimer(timerId, ctx) {
       if (timerId !== TIMER_ID) return;
-      ctx.ui.pushToPage('live-monitor', 'tick', {
+      const payload = {
         timestamp: Date.now(),
         signalStrength: -50 + Math.random() * 40,
         counter: ctx.store.operator.get<number>('counter', 0),
-      });
+      };
+      pushToLiveMonitor(ctx, 'tick', payload);
     },
   },
 };

@@ -10,11 +10,13 @@ import type {
   SyncAction,
   SyncTestResult,
   SyncUploadResult,
+  SyncUploadPreflightResult,
   SyncDownloadResult,
   SyncDownloadOptions,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
+import { getPluginPageScopePath } from '../../page-scope.js';
 
 // ===== Types (plugin-internal, formerly in contracts/lotw.schema.ts) =====
 
@@ -39,7 +41,7 @@ interface LoTWUploadIssue {
   message: string;
 }
 
-interface LoTWUploadPreflightResponse {
+interface LoTWUploadPreflightResponse extends SyncUploadPreflightResult {
   ready: boolean;
   pendingCount: number;
   uploadableCount: number;
@@ -103,6 +105,12 @@ export interface LoTWPluginConfig {
   autoUploadQSO: boolean;
   lastUploadTime?: number;
   lastDownloadTime?: number;
+}
+
+export interface LoTWCertificateImportResult {
+  certificate: LoTWCertificateSummary;
+  duplicate: boolean;
+  configUpdated: boolean;
 }
 
 /**
@@ -263,13 +271,73 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     this.ctx.store.global.set(this.configKey(callsign), config);
   }
 
+  private getCertificateDir(callsign: string): string {
+    return `${getPluginPageScopePath({ kind: 'callsign', value: callsign })}/certificates`;
+  }
+
+  private getCertificateFilePath(callsign: string, certId: string): string {
+    return `${this.getCertificateDir(callsign)}/${certId}.json`;
+  }
+
+  private getDefaultConfig(callsign: string): LoTWPluginConfig {
+    const normalized = normalizeCallsign(callsign);
+    return {
+      username: '',
+      password: '',
+      uploadLocation: {
+        callsign: normalized,
+        dxccId: undefined,
+        gridSquare: '',
+        cqZone: '',
+        ituZone: '',
+      },
+      autoUploadQSO: false,
+    };
+  }
+
+  private getEffectiveConfig(callsign: string, override?: LoTWPluginConfig | null): LoTWPluginConfig {
+    return override ?? this.getConfig(callsign) ?? this.getDefaultConfig(callsign);
+  }
+
+  private applyCertificateDefaults(
+    callsign: string,
+    certificate: LoTWCertificateSummary,
+  ): boolean {
+    const normalizedCallsign = normalizeCallsign(callsign);
+    const current = this.getConfig(normalizedCallsign);
+    const base = current ?? this.getDefaultConfig(normalizedCallsign);
+    const nextLocation = {
+      ...base.uploadLocation,
+    };
+
+    let changed = false;
+    if (!nextLocation.callsign?.trim()) {
+      nextLocation.callsign = certificate.callsign;
+      changed = true;
+    }
+    if (!nextLocation.dxccId && certificate.dxccId) {
+      nextLocation.dxccId = certificate.dxccId;
+      changed = true;
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    this.setConfig(normalizedCallsign, {
+      ...base,
+      uploadLocation: nextLocation,
+    });
+    return true;
+  }
+
   // ========== Certificate management ==========
 
   /**
    * Import a .p12 certificate from a raw buffer.
    * Parses PKCS#12, extracts callsign/DXCC/dates, and stores as JSON via ctx.files.
    */
-  async importCertificate(fileBuffer: Buffer): Promise<LoTWCertificateSummary> {
+  async importCertificate(callsign: string, fileBuffer: Buffer): Promise<LoTWCertificateImportResult> {
     let p12: forge.pkcs12.Pkcs12Pfx;
 
     try {
@@ -305,19 +373,19 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       (cert.extensions || []).map((ext: any) => [ext.id, normalizeForgeValue(ext.value)]),
     );
 
-    const callsign = this.extractCallsign(subjectAttrs, x509.subject);
+    const certificateCallsign = this.extractCallsign(subjectAttrs, x509.subject);
     const dxccId = Number.parseInt(extMap.get(LOTW_DXCC_OID) || '', 10);
     const qsoStartDate = extMap.get(LOTW_QSO_START_OID) || '';
     const qsoEndDate = extMap.get(LOTW_QSO_END_OID) || '';
 
-    if (!callsign || !Number.isFinite(dxccId) || !qsoStartDate || !qsoEndDate) {
+    if (!certificateCallsign || !Number.isFinite(dxccId) || !qsoStartDate || !qsoEndDate) {
       throw new Error('certificate_invalid');
     }
 
     const id = randomUUID();
     const stored: StoredCertificateFile = {
       id,
-      callsign,
+      callsign: certificateCallsign,
       dxccId,
       serial: x509.serialNumber || 'unknown',
       validFrom: toMillis(x509.validFrom),
@@ -330,18 +398,44 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     };
 
     // Store as JSON via plugin file store
-    const filePath = `certificates/${id}.json`;
+    const normalizedCallsign = normalizeCallsign(callsign);
+    if (normalizedCallsign !== stored.callsign) {
+      throw new Error('certificate_callsign_mismatch');
+    }
+
+    const existingCertificates = await this.getCertificates(normalizedCallsign);
+    const duplicate = existingCertificates.find((item) => item.fingerprint === stored.fingerprint);
+    if (duplicate) {
+      const configUpdated = this.applyCertificateDefaults(normalizedCallsign, duplicate);
+      this.ctx.log.info('Certificate import skipped due to duplicate fingerprint', {
+        callsign: certificateCallsign,
+        existingId: duplicate.id,
+      });
+      return {
+        certificate: duplicate,
+        duplicate: true,
+        configUpdated,
+      };
+    }
+
+    const filePath = this.getCertificateFilePath(normalizedCallsign, id);
     await this.ctx.files.write(filePath, Buffer.from(JSON.stringify(stored, null, 2), 'utf-8'));
 
     const status = inferStatus(stored.validFrom, stored.validTo);
-    this.ctx.log.info('Certificate imported', { id, callsign, dxccId, status });
+    const summary = this.toSummary({ ...stored, status });
+    const configUpdated = this.applyCertificateDefaults(normalizedCallsign, summary);
+    this.ctx.log.info('Certificate imported', { id, callsign: certificateCallsign, dxccId, status, configUpdated });
 
-    return this.toSummary({ ...stored, status });
+    return {
+      certificate: summary,
+      duplicate: false,
+      configUpdated,
+    };
   }
 
   /** List all stored certificates. */
-  async getCertificates(): Promise<LoTWCertificateSummary[]> {
-    const files = await this.ctx.files.list('certificates');
+  async getCertificates(callsign: string): Promise<LoTWCertificateSummary[]> {
+    const files = await this.ctx.files.list(this.getCertificateDir(callsign));
     const summaries: LoTWCertificateSummary[] = [];
 
     for (const filePath of files) {
@@ -358,8 +452,8 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   }
 
   /** Delete a certificate by ID. */
-  async deleteCertificate(certId: string): Promise<boolean> {
-    const filePath = `certificates/${certId}.json`;
+  async deleteCertificate(callsign: string, certId: string): Promise<boolean> {
+    const filePath = this.getCertificateFilePath(callsign, certId);
     const deleted = await this.ctx.files.delete(filePath);
     if (deleted) {
       this.ctx.log.info('Certificate deleted', { id: certId });
@@ -374,8 +468,8 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     return { ...parsed, status: inferStatus(parsed.validFrom, parsed.validTo) };
   }
 
-  private async readCertificateById(certId: string): Promise<StoredCertificate> {
-    return this.readCertificateFile(`certificates/${certId}.json`);
+  private async readCertificateById(callsign: string, certId: string): Promise<StoredCertificate> {
+    return this.readCertificateFile(this.getCertificateFilePath(callsign, certId));
   }
 
   private toSummary(cert: StoredCertificate): LoTWCertificateSummary {
@@ -441,8 +535,8 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     return !!(loc?.callsign && loc.dxccId && loc.gridSquare && loc.cqZone && loc.ituZone);
   }
 
-  async testConnection(callsign: string): Promise<SyncTestResult> {
-    const config = this.getConfig(callsign);
+  async testConnection(callsign: string, overrideConfig?: LoTWPluginConfig | null): Promise<SyncTestResult> {
+    const config = this.getEffectiveConfig(callsign, overrideConfig);
     if (!config?.username || !config?.password) {
       return { success: false, message: 'Username and password are required' };
     }
@@ -650,81 +744,51 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
   // ========== Upload Preflight ==========
 
-  async getUploadPreflight(callsign: string): Promise<LoTWUploadPreflightResponse> {
-    const config = this.getConfig(callsign);
-    const certificates = await this.getCertificates();
-    const location = config?.uploadLocation;
+  async getUploadPreflight(
+    callsign: string,
+    overrideConfig?: LoTWPluginConfig | null,
+  ): Promise<LoTWUploadPreflightResponse> {
+    const config = this.getEffectiveConfig(callsign, overrideConfig);
+    const certificates = await this.getCertificates(callsign);
+    const validCerts = certificates.filter((item) => item.status === 'valid');
+    const logbook = this.ctx.logbook.forCallsign(callsign);
+    const allQsos = await logbook.queryQSOs({});
+    const pendingQsos = allQsos.filter((qso) => qso.lotwQslSent !== 'Y');
+    const preparation = await this.prepareUpload(config, pendingQsos, callsign);
+    const issues: LoTWUploadIssue[] = [...preparation.issues];
 
-    const issues: LoTWUploadIssue[] = [];
-    const guidance: string[] = [];
-
-    // Check credentials
-    if (!config?.username || !config?.password) {
-      issues.push({ code: 'credentials_missing', severity: 'info', message: 'LoTW login credentials not configured (needed for download only)' });
-    }
-
-    // Check certificates
-    if (certificates.length === 0) {
-      issues.push({ code: 'no_certificates', severity: 'error', message: 'No LoTW certificates uploaded' });
-      guidance.push('export_unprotected_p12');
-    }
-
-    const validCerts = certificates.filter((c) => c.status === 'valid');
-    if (certificates.length > 0 && validCerts.length === 0) {
-      issues.push({ code: 'no_valid_certificate', severity: 'error', message: 'No valid (non-expired) certificates found' });
+    if (!config.username || !config.password) {
+      issues.push({
+        code: 'credentials_missing',
+        severity: 'info',
+        message: 'LoTW login credentials not configured (needed for download only)',
+      });
     }
 
-    // Check location
-    if (!location?.callsign) {
-      issues.push({ code: 'location_callsign_missing', severity: 'error', message: 'Upload station callsign not configured' });
-    }
-    if (!location?.dxccId) {
-      issues.push({ code: 'location_dxcc_missing', severity: 'error', message: 'Upload DXCC entity not configured' });
-    }
-    if (!location?.gridSquare) {
-      issues.push({ code: 'location_grid_missing', severity: 'error', message: 'Upload grid square not configured' });
-    }
-    if (!location?.cqZone) {
-      issues.push({ code: 'location_cq_missing', severity: 'error', message: 'Upload CQ zone not configured' });
-    }
-    if (!location?.ituZone) {
-      issues.push({ code: 'location_itu_missing', severity: 'error', message: 'Upload ITU zone not configured' });
-    }
-
-    if (location?.dxccId) {
-      const rule = getLoTWLocationRule(location.dxccId);
-      if (rule.requiresState && !location.state) {
-        issues.push({ code: 'location_state_missing', severity: 'error', message: rule.stateLabel + ' is required for this DXCC entity' });
-      }
-      if (rule.requiresCounty && !location.county) {
-        issues.push({ code: 'location_county_missing', severity: 'error', message: (rule.countyLabel || 'County') + ' is required for this DXCC entity' });
-      }
-    }
-
-    if (!location?.callsign || !location?.dxccId || !location?.gridSquare || !location?.cqZone || !location?.ituZone) {
-      guidance.push('configure_station_location');
-    }
-
-    const hasBlockingIssue = issues.some((i) => i.severity === 'error');
+    const selectedCertificates = preparation.matchedCertificates.length > 0
+      ? preparation.matchedCertificates
+      : (pendingQsos.length === 0 ? validCerts : []);
+    const location = this.resolveUploadLocation(config, callsign);
+    const hasBlockingIssue = issues.some((issue) => issue.severity === 'error');
 
     return {
       ready: !hasBlockingIssue,
-      pendingCount: 0,
-      uploadableCount: 0,
-      blockedCount: 0,
-      matchedCertificateIds: validCerts.map((c) => c.id),
-      selectedCertificates: validCerts,
-      locationSummary: location ? {
-        callsign: location.callsign || '',
+      pendingCount: pendingQsos.length,
+      uploadableCount: preparation.uploadableCount,
+      blockedCount: preparation.blockedCount,
+      matchedCertificateIds: selectedCertificates.map((item) => item.id),
+      selectedCertificates,
+      locationSummary: {
+        callsign: location.callsign,
         dxccId: location.dxccId,
-        gridSquare: location.gridSquare || '',
-        cqZone: location.cqZone || '',
-        ituZone: location.ituZone || '',
-        state: location.state || '',
-        county: location.county || '',
-      } : undefined,
+        gridSquare: location.gridSquare,
+        cqZone: location.cqZone,
+        ituZone: location.ituZone,
+        state: location.state,
+        county: location.county,
+      },
       issues: dedupeIssues(issues),
-      guidance: Array.from(new Set(guidance)),
+      guidance: Array.from(new Set(preparation.guidance)),
     };
   }
 
@@ -740,7 +804,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     const location = this.resolveUploadLocation(config, fallbackCallsign);
     const rule = getLoTWLocationRule(location.dxccId ?? null);
 
-    const certificates = await this.getCertificates();
+    const certificates = await this.getCertificates(fallbackCallsign);
 
     if (certificates.length === 0) {
       issues.push({ code: 'certificate_missing', severity: 'error', message: 'No LoTW certificate has been uploaded yet' });
@@ -802,7 +866,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       let stored = certificateCache.get(summary.id);
       if (!stored) {
         try {
-          stored = await this.readCertificateById(summary.id);
+          stored = await this.readCertificateById(summary.callsign, summary.id);
           certificateCache.set(summary.id, stored);
         } catch {
           blockedCount += 1;

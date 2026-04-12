@@ -333,18 +333,13 @@
     document.getElementById('uploadCertSpinner').classList.remove('hidden');
     certUploadResult.className = 'chip hidden';
 
-    var reader = new FileReader();
-    reader.onload = function(ev) {
-      var arrayBuffer = ev.target.result;
-      // Convert ArrayBuffer to base64 for JSON transport
-      var bytes = new Uint8Array(arrayBuffer);
-      var binary = '';
-      for (var i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      var base64 = btoa(binary);
-
-      bridge.invoke('importCertificate', { callsign: callsign, data: base64 }).then(function(result) {
+    var uploadPath = 'certificates/uploads/' + Date.now() + '-' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    bridge.fileUpload(uploadPath, file).then(function(savedPath) {
+      return bridge.invoke('importCertificate', {
+        callsign: callsign,
+        path: savedPath || uploadPath,
+      });
+    }).then(function(result) {
         uploadCertBtn.disabled = false;
         document.getElementById('uploadCertText').textContent = t('uploadCertBtn');
         document.getElementById('uploadCertSpinner').classList.add('hidden');
@@ -366,6 +361,8 @@
         var msg = (err && err.message) || '';
         if (msg.includes('password_protected')) {
           certUploadResult.textContent = t('certPasswordProtected');
+        } else if (msg.includes('callsign_mismatch')) {
+          certUploadResult.textContent = t('certUploadFailed') + ': ' + callsign;
         } else if (msg.includes('invalid')) {
           certUploadResult.textContent = t('certInvalid');
         } else {
@@ -374,28 +371,20 @@
         certUploadResult.className = 'chip chip-danger';
         setTimeout(function() { certUploadResult.className = 'chip hidden'; }, 5000);
       });
-    };
-    reader.onerror = function() {
-      uploadCertBtn.disabled = false;
-      document.getElementById('uploadCertText').textContent = t('uploadCertBtn');
-      document.getElementById('uploadCertSpinner').classList.add('hidden');
-      certUploadResult.textContent = t('certUploadFailed');
-      certUploadResult.className = 'chip chip-danger';
-    };
-    reader.readAsArrayBuffer(file);
+    
   });
 
   // ===== Test connection =====
   testBtn.addEventListener('click', function() {
-    // Save current credentials temporarily so testConnection can read them
     var tmpConfig = buildConfig();
-    bridge.invoke('saveConfig', { callsign: callsign, config: tmpConfig }).then(function() {
-      testBtn.disabled = true;
-      testBtn.querySelector('.btn-text').textContent = t('verifying');
-      testBtn.querySelector('.spinner').classList.remove('hidden');
-      testResult.className = 'chip hidden';
+    testBtn.disabled = true;
+    testBtn.querySelector('.btn-text').textContent = t('verifying');
+    testBtn.querySelector('.spinner').classList.remove('hidden');
+    testResult.className = 'chip hidden';
 
-      return bridge.invoke('testConnection', { callsign: callsign });
+    bridge.invoke('testConnectionDraft', {
+      callsign: callsign,
+      config: tmpConfig,
     }).then(function(result) {
       testBtn.disabled = false;
       testBtn.querySelector('.btn-text').textContent = t('verifyBtn');
@@ -429,10 +418,10 @@
     document.getElementById('preflightSpinner').classList.remove('hidden');
     preflightResultEl.classList.add('hidden');
 
-    // Save first so preflight reads latest config
     var tmpConfig = buildConfig();
-    bridge.invoke('saveConfig', { callsign: callsign, config: tmpConfig }).then(function() {
-      return bridge.invoke('getUploadPreflight', { callsign: callsign });
+    bridge.invoke('getUploadPreflightDraft', {
+      callsign: callsign,
+      config: tmpConfig,
     }).then(function(result) {
       preflightBtn.disabled = false;
       document.getElementById('preflightText').textContent = t('checkReadiness');

@@ -172,6 +172,7 @@
       "resultUpdated": "更新 {{count}} 条",
       "resultSkipped": "跳过 {{count}} 条",
       "resultFailed": "失败 {{count}} 条",
+      "preflightSummary": "待上传 {{pending}} 条，可上传 {{uploadable}} 条，阻塞 {{blocked}} 条",
       "resultSeparator": "，"
     },
     "wavelog": {

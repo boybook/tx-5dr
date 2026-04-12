@@ -1,4 +1,10 @@
-import type { PluginDefinition, PluginContext, StrategyRuntime, KVStore } from '@tx5dr/plugin-api';
+import type {
+  PluginDefinition,
+  PluginContext,
+  StrategyRuntime,
+  KVStore,
+  PluginUIInstanceTarget,
+} from '@tx5dr/plugin-api';
 import type { PluginStatus, PluginSystemSnapshot, PluginSystemState } from '@tx5dr/contracts';
 
 /**
@@ -124,6 +130,11 @@ export interface PluginManagerDeps {
     pluginName: string,
     provider: import('@tx5dr/plugin-api').LogbookSyncProvider,
   ) => void;
+  listPluginPageSessions?: (
+    pluginName: string,
+    instanceTarget: PluginUIInstanceTarget,
+    pageId?: string,
+  ) => import('./PluginPageSessionStore.js').PluginPageSession[];
 }
 
 /**

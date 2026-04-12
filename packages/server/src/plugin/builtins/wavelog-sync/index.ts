@@ -1,15 +1,29 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
-import type { PluginDefinition } from '@tx5dr/plugin-api';
+import type { PluginDefinition, PluginUIRequestContext } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import { WaveLogSyncProvider } from './provider.js';
 import { migrateLegacySyncConfig } from '../_shared/legacy-sync-migration.js';
+import { normalizeCallsign } from '../../../utils/callsign.js';
 
 export const BUILTIN_WAVELOG_SYNC_PLUGIN_NAME = 'wavelog-sync';
 
 /** Plugin directory path (works in both tsx dev and tsc dist). */
 export const wavelogSyncDirPath = path.dirname(fileURLToPath(import.meta.url));
+
+function requireBoundCallsign(
+  requestContext: PluginUIRequestContext,
+  data: Record<string, unknown>,
+): string {
+  if (requestContext.resource?.kind === 'callsign' && requestContext.resource.value.trim()) {
+    return normalizeCallsign(requestContext.resource.value);
+  }
+  if (typeof data.callsign === 'string' && data.callsign.trim()) {
+    return normalizeCallsign(data.callsign);
+  }
+  throw new Error('Callsign binding is required');
+}
 
 /**
  * WaveLog Sync — built-in utility plugin
@@ -64,15 +78,15 @@ export const wavelogSyncPlugin: PluginDefinition = {
 
     // Register UI page handler for iframe communication
     ctx.ui.registerPageHandler({
-      async onMessage(_pageId: string, action: string, data: unknown) {
+      async onMessage(_pageId: string, action: string, data: unknown, requestContext) {
         const d = data as Record<string, unknown>;
         switch (action) {
           case 'getConfig': {
-            const cs = d.callsign as string;
+            const cs = requireBoundCallsign(requestContext, d);
             return provider.getConfig(cs);
           }
           case 'saveConfig': {
-            const cs = d.callsign as string;
+            const cs = requireBoundCallsign(requestContext, d);
             const config = d.config as {
               url: string;
               apiKey: string;

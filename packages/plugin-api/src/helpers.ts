@@ -6,6 +6,7 @@ import type {
   FrameMessage,
   OperatorSlots,
   ModeDescriptor,
+  PermissionGrant,
 } from '@tx5dr/contracts';
 import type { StrategyRuntimeSnapshot } from './runtime.js';
 
@@ -364,8 +365,28 @@ export interface UIBridge {
   registerPageHandler(handler: PluginUIHandler): void;
 
   /**
-   * Pushes a custom message to an iframe UI page. The page receives it via the
-   * `bridge.onPush()` SDK method.
+   * Pushes a custom message to the specific page session.
+   *
+   * Prefer this API whenever the plugin already knows the target session id
+   * (for example from {@link PluginUIRequestContext.pageSessionId} or
+   * `requestContext.page.sessionId`).
+   */
+  pushToSession(pageSessionId: string, action: string, data?: unknown): void;
+
+  /**
+   * Lists active page sessions for the current plugin instance and page id.
+   *
+   * This is useful for background timers or sync completions that need to
+   * notify every open page tied to the same runtime instance.
+   */
+  listActivePageSessions(pageId: string): PluginUIPageSessionInfo[];
+
+  /**
+   * Pushes a custom message to an iframe UI page by page id.
+   *
+   * This compatibility helper only succeeds when exactly one active session of
+   * the current plugin instance matches the page id. If multiple sessions are
+   * open, the host throws `explicit_page_session_required`.
    */
   pushToPage(pageId: string, action: string, data?: unknown): void;
 }
@@ -384,9 +405,50 @@ export interface PluginUIHandler {
    * @param pageId - The page that sent the message.
    * @param action - Developer-defined action identifier.
    * @param data - Arbitrary payload from the iframe.
+   * @param requestContext - Host-authenticated page context, including any
+   * bound resource for this page session.
    * @returns The response value sent back to the iframe.
    */
-  onMessage(pageId: string, action: string, data: unknown): Promise<unknown>;
+  onMessage(
+    pageId: string,
+    action: string,
+    data: unknown,
+    requestContext: PluginUIRequestContext,
+  ): Promise<unknown>;
+}
+
+export interface PluginUIRequestUser {
+  readonly tokenId: string;
+  readonly role: 'viewer' | 'operator' | 'admin';
+  readonly operatorIds: string[];
+  readonly permissionGrants?: PermissionGrant[];
+}
+
+export interface PluginUIBoundResource {
+  readonly kind: 'callsign' | 'operator';
+  readonly value: string;
+}
+
+export type PluginUIInstanceTarget =
+  | { readonly kind: 'global' }
+  | { readonly kind: 'operator'; readonly operatorId: string };
+
+export interface PluginUIPageSessionInfo {
+  readonly sessionId: string;
+  readonly pageId: string;
+  readonly resource?: PluginUIBoundResource;
+}
+
+export interface PluginUIPageContext extends PluginUIPageSessionInfo {
+  push(action: string, data?: unknown): void;
+}
+
+export interface PluginUIRequestContext {
+  readonly pageSessionId: string;
+  readonly user: PluginUIRequestUser;
+  readonly resource?: PluginUIBoundResource;
+  readonly instanceTarget: PluginUIInstanceTarget;
+  readonly page: PluginUIPageContext;
 }
 
 /**

@@ -32,6 +32,7 @@ interface PluginIframeHostProps {
 interface PluginPagePushPayload {
   pluginName: string;
   pageId: string;
+  pageSessionId: string;
   action: string;
   data?: unknown;
 }
@@ -52,6 +53,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(minHeight);
   const [loading, setLoading] = useState(true);
+  const [pageSessionId, setPageSessionId] = useState<string | null>(null);
 
   // Resolve the current effective theme from the DOM
   const getTheme = useCallback((): 'dark' | 'light' => {
@@ -80,6 +82,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   const handleInvoke = useCallback(async (
     action: string,
     data: unknown,
+    nextPageSessionId: string,
     requestId: string,
   ) => {
     try {
@@ -89,7 +92,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
           'Content-Type': 'application/json',
           ...getAuthHeaders(),
         },
-        body: JSON.stringify({ pageId, action, data }),
+        body: JSON.stringify({ pageId, pageSessionId: nextPageSessionId, action, data }),
       });
       const json = await response.json() as { result?: unknown; error?: string };
       if (!response.ok) {
@@ -104,23 +107,50 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   }, [pluginName, pageId, postToIframe]);
 
   // Handle store operations by forwarding to the server
-  const handleStoreOp = useCallback(async (
-    type: string,
+  const handleStoreRequest = useCallback(async (
     payload: Record<string, unknown>,
     requestId: string,
   ) => {
     try {
-      const action = type.replace('tx5dr:store:', 'store_');
-      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-invoke`, {
+      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-store`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...getAuthHeaders(),
         },
-        body: JSON.stringify({ pageId, action, data: payload }),
+        body: JSON.stringify({ pageId, ...payload }),
       });
       const json = await response.json() as { result?: unknown; error?: string };
-      postToIframe({ type: 'tx5dr:response', requestId, result: json.result });
+      if (!response.ok) {
+        postToIframe({ type: 'tx5dr:response', requestId, error: json.error ?? 'Request failed' });
+      } else {
+        postToIframe({ type: 'tx5dr:response', requestId, result: json.result });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      postToIframe({ type: 'tx5dr:response', requestId, error: message });
+    }
+  }, [pluginName, pageId, postToIframe]);
+
+  const handleFileRequest = useCallback(async (
+    payload: Record<string, unknown>,
+    requestId: string,
+  ) => {
+    try {
+      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-files`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({ pageId, ...payload }),
+      });
+      const json = await response.json() as { result?: unknown; error?: string };
+      if (!response.ok) {
+        postToIframe({ type: 'tx5dr:response', requestId, error: json.error ?? 'Request failed' });
+      } else {
+        postToIframe({ type: 'tx5dr:response', requestId, result: json.result });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       postToIframe({ type: 'tx5dr:response', requestId, error: message });
@@ -136,20 +166,23 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
 
       switch (msg.type) {
         case 'tx5dr:invoke':
-          void handleInvoke(msg.action, msg.data, msg.requestId);
+          if (typeof msg.pageSessionId === 'string' && msg.pageSessionId) {
+            setPageSessionId(msg.pageSessionId);
+          }
+          void handleInvoke(msg.action, msg.data, msg.pageSessionId, msg.requestId);
           break;
 
         case 'tx5dr:store:get':
         case 'tx5dr:store:set':
         case 'tx5dr:store:delete':
-          void handleStoreOp(msg.type, msg, msg.requestId);
+          void handleStoreRequest(msg, msg.requestId);
           break;
 
         case 'tx5dr:file:upload':
         case 'tx5dr:file:read':
         case 'tx5dr:file:delete':
         case 'tx5dr:file:list':
-          void handleStoreOp(msg.type, msg, msg.requestId);
+          void handleFileRequest(msg, msg.requestId);
           break;
 
         case 'tx5dr:resize':
@@ -172,11 +205,18 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [handleInvoke, handleStoreOp, minHeight]);
+  }, [handleFileRequest, handleInvoke, handleStoreRequest, minHeight]);
 
   // Send init message when iframe loads
   const handleIframeLoad = useCallback(() => {
     setLoading(false);
+    const iframeWindow = iframeRef.current?.contentWindow as (Window & {
+      __TX5DR_PAGE_SESSION_ID__?: string;
+    }) | null;
+    const nextPageSessionId = typeof iframeWindow?.__TX5DR_PAGE_SESSION_ID__ === 'string'
+      ? iframeWindow.__TX5DR_PAGE_SESSION_ID__
+      : null;
+    setPageSessionId(nextPageSessionId);
     postToIframe({
       type: 'tx5dr:init',
       params: params ?? {},
@@ -200,13 +240,68 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
     return () => observer.disconnect();
   }, [postToIframe, getTheme]);
 
+  useEffect(() => {
+    setLoading(true);
+    setPageSessionId(null);
+  }, [iframeSrc]);
+
+  useEffect(() => {
+    if (!pageSessionId) {
+      return;
+    }
+
+    let cancelled = false;
+    const sendHeartbeat = async () => {
+      try {
+        const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-session/heartbeat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify({ pageId, pageSessionId }),
+        });
+        if (!response.ok && !cancelled) {
+          logger.warn('Plugin page heartbeat failed', {
+            pluginName,
+            pageId,
+            pageSessionId,
+            status: response.status,
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          logger.warn('Plugin page heartbeat request failed', {
+            pluginName,
+            pageId,
+            pageSessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    };
+
+    void sendHeartbeat();
+    const timer = window.setInterval(() => {
+      void sendHeartbeat();
+    }, 5 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pageSessionId, pluginName, pageId]);
+
   // Forward plugin push messages from WebSocket to iframe.
   // radioService may be null when rendered outside RadioProvider (e.g. LogbookPage).
   useWSEvent(
     radioService,
     'pluginPagePush',
     (payload: PluginPagePushPayload) => {
-      if (payload.pluginName === pluginName && payload.pageId === pageId) {
+      if (
+        payload.pluginName === pluginName
+        && payload.pageSessionId === pageSessionId
+      ) {
         postToIframe({
           type: 'tx5dr:push',
           action: payload.action,
