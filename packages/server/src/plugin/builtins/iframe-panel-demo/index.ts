@@ -45,6 +45,7 @@ export const iframePanelDemoPlugin: PluginDefinition = {
       title: 'liveMonitorPanel',
       component: 'iframe',
       pageId: 'live-monitor',
+      width: 'full',
     },
     // Automation popover: interactive iframe panel
     {

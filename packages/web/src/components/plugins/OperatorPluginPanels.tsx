@@ -2,9 +2,14 @@ import React from 'react';
 import { PluginPanelRenderer } from './PluginPanelRenderer';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
 import { resolvePluginLabel, resolvePluginName } from '../../utils/pluginLocales';
+import type { PluginPanelDescriptor } from '@tx5dr/contracts';
 
 interface OperatorPluginPanelsProps {
   operatorId: string;
+}
+
+export function getOperatorPanelContainerClass(panel: PluginPanelDescriptor): string {
+  return panel.width === 'full' ? 'md:col-span-2' : '';
 }
 
 export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ operatorId }) => {
@@ -44,15 +49,19 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
             </div>
             <div className="grid gap-2 md:grid-cols-2">
               {operatorPanels.map((panel) => (
-                <PluginPanelRenderer
+                <div
                   key={`${plugin.name}:${panel.id}`}
-                  pluginName={plugin.name}
-                  operatorId={operatorId}
-                  panelId={panel.id}
-                  title={resolvePluginLabel(panel.title, plugin.name)}
-                  component={panel.component}
-                  pageId={panel.pageId}
-                />
+                  className={getOperatorPanelContainerClass(panel)}
+                >
+                  <PluginPanelRenderer
+                    pluginName={plugin.name}
+                    operatorId={operatorId}
+                    panelId={panel.id}
+                    title={resolvePluginLabel(panel.title, plugin.name)}
+                    component={panel.component}
+                    pageId={panel.pageId}
+                  />
+                </div>
               ))}
             </div>
           </section>
