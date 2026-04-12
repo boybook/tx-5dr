@@ -425,8 +425,18 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   return (
     <div className={className} style={{ position: 'relative', minHeight }}>
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <Spinner size="sm" />
+        <div className="absolute inset-0 overflow-hidden rounded-[14px] border border-default-200/60 bg-content1/85">
+          <div className="flex h-full min-h-[inherit] flex-col justify-between p-3">
+            <div className="flex items-center gap-2 text-default-500">
+              <Spinner size="sm" />
+              <div className="h-2.5 w-24 animate-pulse rounded-full bg-default-200/80" />
+            </div>
+            <div className="space-y-2">
+              <div className="h-3 w-2/3 animate-pulse rounded-full bg-default-200/70" />
+              <div className="h-8 w-full animate-pulse rounded-xl bg-default-100/90" />
+              <div className="h-3 w-1/2 animate-pulse rounded-full bg-default-200/70" />
+            </div>
+          </div>
         </div>
       )}
       <iframe
