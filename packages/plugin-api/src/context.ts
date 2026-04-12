@@ -79,7 +79,13 @@ export interface PluginContext {
   readonly radio: RadioControl;
 
   /**
-   * Read-only access to logbook-derived history.
+   * Full logbook access — read-only queries, record writes and UI notifications.
+   *
+   * Provides the original read-only helpers (`hasWorked`, `hasWorkedDXCC`,
+   * `hasWorkedGrid`) plus advanced query (`queryQSOs`, `countQSOs`), write
+   * (`addQSO`, `updateQSO`) and notification (`notifyUpdated`) capabilities.
+   * Sync providers and other data-oriented plugins use the write methods to
+   * self-orchestrate their flow without host-side special handling.
    */
   readonly logbook: LogbookAccess;
 

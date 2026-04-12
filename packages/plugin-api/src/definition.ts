@@ -149,8 +149,13 @@ export interface PluginDefinition {
   /**
    * Panel descriptors used to render plugin-owned UI sections.
    *
-   * Panels are declarative containers. Plugins push live data into them through
-   * {@link PluginContext.ui} rather than rendering custom frontend code.
+   * Structured panels (`key-value`, `table`, `log`, `chart`) receive live data
+   * through {@link PluginContext.ui.send}. Iframe panels (`component: 'iframe'`)
+   * render a custom HTML page and communicate via `invoke` / `onPush`.
+   *
+   * Each panel has a `slot` that controls where it renders: `'operator'` (the
+   * default, shown in the operator card) or `'automation'` (shown in the
+   * top-right automation popover).
    */
   panels?: PluginPanelDescriptor[];
 
