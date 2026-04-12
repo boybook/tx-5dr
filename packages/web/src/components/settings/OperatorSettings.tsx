@@ -37,6 +37,7 @@ import {
 } from '../../utils/operatorPreferences';
 import { createLogger } from '../../utils/logger';
 import { OperatorPluginSettings } from './OperatorPluginSettings';
+import { getAuthHeaders } from '../../utils/authHeaders';
 
 const logger = createLogger('OperatorSettings');
 type EditableOperatorField = 'myCallsign' | 'myGrid';
@@ -99,7 +100,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const [syncModalCallsign, setSyncModalCallsign] = useState('');
 
     useEffect(() => {
-      fetch('/api/plugins/sync-providers')
+      fetch('/api/plugins/sync-providers', { headers: getAuthHeaders() })
         .then(r => r.json())
         .then((data: { displayName: string }[]) => setSyncProviderNames(data.map(p => p.displayName)))
         .catch(() => {});

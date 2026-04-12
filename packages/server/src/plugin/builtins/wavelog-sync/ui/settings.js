@@ -104,7 +104,7 @@
       }
 
       if (config.url && config.apiKey) {
-        bridge.invoke('getStations', { url: config.url, apiKey: config.apiKey }).then(function(result) {
+        bridge.invoke('getStations', { callsign: callsign, url: config.url, apiKey: config.apiKey }).then(function(result) {
           if (result && result.stations) {
             stations = result.stations;
             populateStations(config.stationId);
@@ -160,7 +160,7 @@
     testBtn.querySelector('.spinner').classList.remove('hidden');
     testResult.className = 'chip hidden';
 
-    bridge.invoke('testConnection', { url: url, apiKey: apiKey }).then(function(result) {
+    bridge.invoke('testConnection', { callsign: callsign, url: url, apiKey: apiKey }).then(function(result) {
       testBtn.disabled = false;
       testBtn.querySelector('.btn-text').textContent = t('testBtn');
       testBtn.querySelector('.spinner').classList.add('hidden');

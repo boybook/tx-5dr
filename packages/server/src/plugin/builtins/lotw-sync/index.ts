@@ -4,6 +4,7 @@ import type { PluginDefinition } from '@tx5dr/plugin-api';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import { LoTWSyncProvider } from './provider.js';
+import { migrateLegacyLotwCertificates, migrateLegacySyncConfig } from '../_shared/legacy-sync-migration.js';
 
 export const BUILTIN_LOTW_SYNC_PLUGIN_NAME = 'lotw-sync';
 
@@ -27,6 +28,7 @@ export const lotwSyncPlugin: PluginDefinition = {
   name: BUILTIN_LOTW_SYNC_PLUGIN_NAME,
   version: '1.0.0',
   type: 'utility',
+  instanceScope: 'global',
   description: 'Sync QSO records with ARRL Logbook of The World',
 
   permissions: ['network'],
@@ -38,16 +40,56 @@ export const lotwSyncPlugin: PluginDefinition = {
         id: 'settings',
         title: 'LoTW Settings',
         entry: 'settings.html',
+        accessScope: 'operator',
+        resourceBinding: 'callsign',
       },
       {
         id: 'download-wizard',
         title: 'LoTW Download',
         entry: 'download-wizard.html',
+        accessScope: 'operator',
+        resourceBinding: 'callsign',
       },
     ],
   },
 
   async onLoad(ctx) {
+    await migrateLegacyLotwCertificates(ctx);
+    await migrateLegacySyncConfig({
+      ctx,
+      pluginName: BUILTIN_LOTW_SYNC_PLUGIN_NAME,
+      providerKey: 'lotw',
+      shouldMigrate: (legacyConfig) =>
+        !!legacyConfig.username
+        || !!legacyConfig.password
+        || !!legacyConfig.uploadLocation
+        || Boolean(Array.isArray(legacyConfig.certificates) && legacyConfig.certificates.length > 0),
+      mapLegacyConfig: (callsign, legacyConfig) => {
+        const uploadLocation = typeof legacyConfig.uploadLocation === 'object' && legacyConfig.uploadLocation
+          ? legacyConfig.uploadLocation as Record<string, unknown>
+          : {};
+        return {
+          username: typeof legacyConfig.username === 'string' ? legacyConfig.username : '',
+          password: typeof legacyConfig.password === 'string' ? legacyConfig.password : '',
+          uploadLocation: {
+            callsign: typeof uploadLocation.callsign === 'string' && uploadLocation.callsign
+              ? uploadLocation.callsign
+              : callsign,
+            dxccId: typeof uploadLocation.dxccId === 'number' ? uploadLocation.dxccId : undefined,
+            gridSquare: typeof uploadLocation.gridSquare === 'string' ? uploadLocation.gridSquare : '',
+            cqZone: typeof uploadLocation.cqZone === 'string' ? uploadLocation.cqZone : '',
+            ituZone: typeof uploadLocation.ituZone === 'string' ? uploadLocation.ituZone : '',
+            iota: typeof uploadLocation.iota === 'string' ? uploadLocation.iota : undefined,
+            state: typeof uploadLocation.state === 'string' ? uploadLocation.state : undefined,
+            county: typeof uploadLocation.county === 'string' ? uploadLocation.county : undefined,
+          },
+          autoUploadQSO: Boolean(legacyConfig.autoUploadQSO),
+          lastUploadTime: typeof legacyConfig.lastUploadTime === 'number' ? legacyConfig.lastUploadTime : undefined,
+          lastDownloadTime: typeof legacyConfig.lastDownloadTime === 'number' ? legacyConfig.lastDownloadTime : undefined,
+        };
+      },
+    });
+
     const provider = new LoTWSyncProvider(ctx);
     ctx.logbookSync.register(provider);
 

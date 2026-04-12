@@ -177,15 +177,27 @@ export function createMockRadioControl(
 export function createMockLogbookAccess(
   overrides?: Partial<LogbookAccess>,
 ): LogbookAccess {
+  const callsignAccess = {
+    callsign: 'N0CALL',
+    getLogBookId: async () => 'logbook-N0CALL',
+    queryQSOs: async () => [],
+    countQSOs: async () => 0,
+    addQSO: async () => {},
+    updateQSO: async () => {},
+    getStatistics: async () => null,
+    notifyUpdated: async () => {},
+  };
+
   return {
     hasWorked: async () => false,
     hasWorkedDXCC: async () => false,
     hasWorkedGrid: async () => false,
     queryQSOs: async () => [],
     countQSOs: async () => 0,
+    forCallsign: () => callsignAccess,
     addQSO: async () => {},
     updateQSO: async () => {},
-    notifyUpdated: () => {},
+    notifyUpdated: async () => {},
     ...overrides,
   };
 }

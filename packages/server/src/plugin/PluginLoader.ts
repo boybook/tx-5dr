@@ -13,6 +13,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     name: def.name,
     version: def.version,
     type: def.type,
+    instanceScope: def.instanceScope,
     description: def.description,
     permissions: def.permissions,
     settings: def.settings,
@@ -20,6 +21,7 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     quickSettings: def.quickSettings,
     panels: def.panels,
     storage: def.storage,
+    ui: def.ui,
   });
 
   if (manifest.type === 'strategy' && typeof def.createStrategyRuntime !== 'function') {
@@ -39,6 +41,40 @@ export function validatePluginDefinition(def: PluginDefinition): void {
     }
     if (setting.type === 'info') {
       throw new Error(`Quick setting "${quickSetting.settingKey}" must not bind to an info setting`);
+    }
+  }
+
+  if (manifest.instanceScope === 'global') {
+    if (manifest.type === 'strategy') {
+      throw new Error('Global plugin instances are only supported for utility plugins');
+    }
+    for (const [key, setting] of Object.entries(manifest.settings ?? {})) {
+      if (setting.scope === 'operator') {
+        throw new Error(`Global plugin setting "${key}" must not use operator scope`);
+      }
+    }
+    if ((manifest.quickSettings?.length ?? 0) > 0) {
+      throw new Error('Global plugin instances must not declare quick settings');
+    }
+    if ((manifest.panels?.length ?? 0) > 0) {
+      throw new Error('Global plugin instances must not declare operator-facing panels');
+    }
+
+    const hooks = def.hooks;
+    const unsupportedGlobalHooks: Array<keyof NonNullable<PluginDefinition['hooks']>> = [
+      'onAutoCallCandidate',
+      'onConfigureAutoCallExecution',
+      'onFilterCandidates',
+      'onScoreCandidates',
+      'onSlotStart',
+      'onDecode',
+      'onQSOStart',
+      'onQSOComplete',
+      'onQSOFail',
+    ];
+    const activeUnsupportedGlobalHook = unsupportedGlobalHooks.find((hookName) => typeof hooks?.[hookName] === 'function');
+    if (activeUnsupportedGlobalHook) {
+      throw new Error(`Global plugin instances must not implement hook "${activeUnsupportedGlobalHook}"`);
     }
   }
 }

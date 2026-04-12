@@ -4,6 +4,7 @@ import { Spinner } from '@heroui/react';
 import { ConnectionContext } from '../../store/radio/contexts';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { createLogger } from '../../utils/logger';
+import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 
 const logger = createLogger('PluginIframeHost');
 
@@ -63,6 +64,10 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
     const query = new URLSearchParams(params);
     query.set('_locale', i18n.language);
     query.set('_theme', getTheme());
+    const jwt = getStoredJwt();
+    if (jwt) {
+      query.set('auth_token', jwt);
+    }
     return `/api/plugins/${encodeURIComponent(pluginName)}/ui/${encodeURIComponent(pageId)}.html?${query.toString()}`;
   }, [pluginName, pageId, params, i18n.language, getTheme]);
 
@@ -80,7 +85,10 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
     try {
       const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-invoke`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify({ pageId, action, data }),
       });
       const json = await response.json() as { result?: unknown; error?: string };
@@ -105,7 +113,10 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
       const action = type.replace('tx5dr:store:', 'store_');
       const response = await fetch(`/api/plugins/${encodeURIComponent(pluginName)}/ui-invoke`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify({ pageId, action, data: payload }),
       });
       const json = await response.json() as { result?: unknown; error?: string };

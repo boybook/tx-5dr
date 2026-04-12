@@ -46,6 +46,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
   readonly id = 'qrz';
   readonly displayName = 'QRZ.com';
   readonly color = 'warning' as const;
+  readonly accessScope = 'operator' as const;
   readonly settingsPageId = 'settings';
   readonly actions: SyncAction[] = [
     { id: 'download', label: 'Download', icon: 'download', operation: 'download' },
@@ -111,10 +112,11 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     if (!config?.apiKey) {
       return { uploaded: 0, skipped: 0, failed: 0, errors: ['QRZ not configured'] };
     }
+    const logbook = this.ctx.logbook.forCallsign(callsign);
 
     // Query recent QSOs from logbook
     const since = config.lastSyncTime ?? (Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const qsos = await this.ctx.logbook.queryQSOs({
+    const qsos = await logbook.queryQSOs({
       timeRange: { start: since, end: Date.now() },
     });
 
@@ -129,7 +131,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
         if (result.status === 'created' || result.status === 'replaced') {
           uploaded++;
           // Update QSL sent status
-          await this.ctx.logbook.updateQSO(qso.id, {
+          await logbook.updateQSO(qso.id, {
             qrzQslSent: 'Y',
             qrzQslSentDate: Date.now(),
           });
@@ -161,6 +163,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     if (!config?.apiKey) {
       return { downloaded: 0, matched: 0, updated: 0, errors: ['QRZ not configured'] };
     }
+    const logbook = this.ctx.logbook.forCallsign(callsign);
 
     try {
       const records = await this.downloadQSOs(config.apiKey);
@@ -170,7 +173,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       for (const remoteQSO of records) {
         try {
           // Check for existing QSO with same callsign and time
-          const existing = await this.ctx.logbook.queryQSOs({
+          const existing = await logbook.queryQSOs({
             callsign: remoteQSO.callsign,
             timeRange: {
               start: remoteQSO.startTime,
@@ -181,13 +184,13 @@ export class QRZSyncProvider implements LogbookSyncProvider {
 
           if (existing.length > 0) {
             // Update QSL received status on matched QSO
-            await this.ctx.logbook.updateQSO(existing[0].id, {
+            await logbook.updateQSO(existing[0].id, {
               qrzQslReceived: 'Y',
               qrzQslReceivedDate: Date.now(),
             });
             matched++;
           } else {
-            await this.ctx.logbook.addQSO(remoteQSO);
+            await logbook.addQSO(remoteQSO);
             stored++;
           }
         } catch (err) {
@@ -199,7 +202,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       }
 
       if (stored > 0 || matched > 0) {
-        this.ctx.logbook.notifyUpdated();
+        await logbook.notifyUpdated();
       }
 
       return {

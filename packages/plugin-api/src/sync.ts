@@ -35,6 +35,9 @@ export interface LogbookSyncProvider {
   /** Optional button color hint for the frontend (HeroUI color name). */
   readonly color?: 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
 
+  /** Which audience may access this provider through host runtime routes. */
+  readonly accessScope?: 'admin' | 'operator';
+
   /**
    * ID of the settings page declared in `PluginDefinition.ui.pages`.
    * The host renders this page inside `<PluginIframeHost>` in the sync

@@ -52,8 +52,20 @@ export const iframePanelDemoPlugin: PluginDefinition = {
   ui: {
     dir: 'ui',
     pages: [
-      { id: 'live-monitor', title: 'Live Monitor', entry: 'live-monitor.html' },
-      { id: 'quick-controls', title: 'Quick Controls', entry: 'quick-controls.html' },
+      {
+        id: 'live-monitor',
+        title: 'Live Monitor',
+        entry: 'live-monitor.html',
+        accessScope: 'admin',
+        resourceBinding: 'none',
+      },
+      {
+        id: 'quick-controls',
+        title: 'Quick Controls',
+        entry: 'quick-controls.html',
+        accessScope: 'admin',
+        resourceBinding: 'none',
+      },
     ],
   },
 

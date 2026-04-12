@@ -37,6 +37,7 @@ import { PluginIframeHost } from '../plugins/PluginIframeHost';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import RecentQSOGlobeCard from './RecentQSOGlobeCard';
+import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 
 const logger = createLogger('LogbookViewer');
 
@@ -137,7 +138,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   useEffect(() => {
     // 仅按 operatorId 订阅，避免 logBookId 不一致导致过滤失败
     // 浏览器 WebSocket 不支持自定义请求头，通过 token 参数传递 JWT
-    const wsJwt = localStorage.getItem('tx5dr_jwt') || undefined;
+    const wsJwt = getStoredJwt() || undefined;
     const url = getLogbookWebSocketUrl({ operatorId, token: wsJwt });
     const client = new WSClient({ url, heartbeatInterval: 30000 });
 
@@ -301,8 +302,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const refreshSyncProviders = async (callsign: string) => {
     try {
       const [providers, configuredRes] = await Promise.all([
-        fetch('/api/plugins/sync-providers').then(r => r.json()) as Promise<SyncProviderInfo[]>,
-        fetch(`/api/plugins/sync-providers/configured?callsign=${encodeURIComponent(callsign)}`).then(r => r.json()) as Promise<{ providers: Record<string, boolean> }>,
+        fetch('/api/plugins/sync-providers', { headers: getAuthHeaders() }).then(r => r.json()) as Promise<SyncProviderInfo[]>,
+        fetch(`/api/plugins/sync-providers/configured?callsign=${encodeURIComponent(callsign)}`, {
+          headers: getAuthHeaders(),
+        }).then(r => r.json()) as Promise<{ providers: Record<string, boolean> }>,
       ]);
       setSyncProviders(providers);
       setSyncConfigured(configuredRes.providers ?? {});
@@ -461,7 +464,10 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       const doPost = (endpoint: string, body: unknown) =>
         fetch(`${base}/${endpoint}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
           body: JSON.stringify(body),
         }).then(r => r.json()) as Promise<Record<string, unknown>>;
 

@@ -8,6 +8,7 @@ import {
 } from '@heroui/react';
 import { PluginIframeHost } from '../plugins/PluginIframeHost';
 import { useTranslation } from 'react-i18next';
+import { getAuthHeaders } from '../../utils/authHeaders';
 
 interface SyncProviderInfo {
   id: string;
@@ -28,7 +29,7 @@ export function LogbookSyncSettings({ callsign, initialTab }: LogbookSyncSetting
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/plugins/sync-providers')
+    fetch('/api/plugins/sync-providers', { headers: getAuthHeaders() })
       .then(r => r.json())
       .then((data: SyncProviderInfo[]) => {
         setProviders(data);

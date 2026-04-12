@@ -37,6 +37,7 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
   readonly id = 'wavelog';
   readonly displayName = 'WaveLog';
   readonly color = 'secondary' as const;
+  readonly accessScope = 'operator' as const;
   readonly settingsPageId = 'settings';
   readonly actions: SyncAction[] = [
     { id: 'download', label: 'Download', icon: 'download', operation: 'download' },
@@ -99,10 +100,11 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     if (!config?.url || !config?.apiKey || !config?.stationId) {
       return { uploaded: 0, skipped: 0, failed: 0, errors: ['WaveLog not configured'] };
     }
+    const logbook = this.ctx.logbook.forCallsign(callsign);
 
     // Query recent QSOs from logbook (last 7 days by default)
     const since = config.lastSyncTime ?? (Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const qsos = await this.ctx.logbook.queryQSOs({
+    const qsos = await logbook.queryQSOs({
       timeRange: { start: since, end: Date.now() },
     });
 
@@ -146,6 +148,7 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     if (!config?.url || !config?.apiKey || !config?.stationId) {
       return { downloaded: 0, matched: 0, updated: 0, errors: ['WaveLog not configured'] };
     }
+    const logbook = this.ctx.logbook.forCallsign(callsign);
 
     try {
       const records = await this.downloadQSOs(config);
@@ -155,7 +158,7 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
       for (const remoteQSO of records) {
         try {
           // Check for existing QSO with same callsign and time
-          const existing = await this.ctx.logbook.queryQSOs({
+          const existing = await logbook.queryQSOs({
             callsign: remoteQSO.callsign,
             timeRange: {
               start: remoteQSO.startTime,
@@ -167,7 +170,7 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
           if (existing.length > 0) {
             skipped++;
           } else {
-            await this.ctx.logbook.addQSO(remoteQSO);
+            await logbook.addQSO(remoteQSO);
             stored++;
           }
         } catch (err) {
@@ -180,7 +183,7 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
       }
 
       if (stored > 0) {
-        this.ctx.logbook.notifyUpdated();
+        await logbook.notifyUpdated();
       }
 
       return {
