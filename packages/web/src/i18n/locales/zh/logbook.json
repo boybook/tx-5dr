@@ -315,7 +315,7 @@
     "uploaded": "已上传",
     "confirmed": "已确认",
     "editWarning": "修改 QSO 记录可能会影响统计数据的准确性，请谨慎操作。",
-    "remarks": "备注"
+    "comment": "备注"
   },
   "addQso": {
     "button": "添加",

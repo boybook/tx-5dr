@@ -100,7 +100,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     vi.restoreAllMocks();
   });
 
-  it('merges repeated FT8 auto logs and backfills grid/messages from persisted slot history', async () => {
+  it('merges repeated FT8 auto logs and backfills grid/message history from persisted slot history', async () => {
     const base = Date.parse('2026-04-05T12:00:00.000Z');
     const provider = {
       addQSO: vi.fn(),
@@ -119,7 +119,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       endTime: base + MODES.FT8.slotMs * 2,
       reportSent: '-10',
       reportReceived: '-08',
-      messages: ['BG5DRB N0CALL -10'],
+      messageHistory: ['BG5DRB N0CALL -10'],
       myCallsign: 'BG5DRB',
       myGrid: 'PM01AA',
     };
@@ -196,7 +196,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         endTime: base + MODES.FT8.slotMs * 3,
         reportSent: '-10',
         reportReceived: '-08',
-        messages: [],
+        messageHistory: [],
         myCallsign: 'BG5DRB',
         myGrid: 'PM01AA',
       },
@@ -208,7 +208,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     const [updatedId, updates] = provider.updateQSO.mock.calls[0] as [string, Partial<QSORecord>];
     expect(updatedId).toBe('existing-1');
     expect(updates.grid).toBe('FN42');
-    expect(updates.messages).toEqual([
+    expect(updates.messageHistory).toEqual([
       'CQ N0CALL FN42',
       'BG5DRB N0CALL -10',
       'N0CALL BG5DRB R-08',
@@ -235,7 +235,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         endTime: base - 10 * 60 * 1000,
         reportSent: '-12',
         reportReceived: '-09',
-        messages: ['old message'],
+        messageHistory: ['old message'],
       }),
       getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 2 }),
     };
@@ -274,7 +274,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         endTime: base + MODES.FT8.slotMs,
         reportSent: '-12',
         reportReceived: '-09',
-        messages: [],
+        messageHistory: [],
         myCallsign: 'BG5DRB',
         myGrid: 'PM01AA',
       },
@@ -284,7 +284,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(provider.addQSO).toHaveBeenCalledTimes(1);
     expect(updatedSpy).not.toHaveBeenCalled();
     expect(addedSpy).toHaveBeenCalledTimes(1);
-    expect(provider.addQSO.mock.calls[0]?.[0]?.messages).toEqual(['BG5DRB N0CALL -12']);
+    expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual(['BG5DRB N0CALL -12']);
   });
 
   it('replaces the queued transmission when a late decode advances standard-qso during the current TX slot', async () => {

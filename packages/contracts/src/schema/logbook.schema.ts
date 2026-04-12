@@ -223,7 +223,8 @@ export const UpdateQSORequestSchema = z.object({
   endTime: z.number().optional(),
   reportSent: z.string().optional(),
   reportReceived: z.string().optional(),
-  messages: z.array(z.string()).optional(),
+  messageHistory: z.array(z.string()).optional(),
+  comment: z.string().optional(),
   myGrid: z.string().optional(),
   myCallsign: z.string().optional(),
   // QSL 确认状态
@@ -235,7 +236,7 @@ export const UpdateQSORequestSchema = z.object({
   qrzQslReceived: z.enum(['Y', 'N']).optional(),
   qrzQslSentDate: z.number().optional(),
   qrzQslReceivedDate: z.number().optional(),
-  remarks: z.string().optional(),
+  notes: z.string().optional(),
 });
 
 /**
@@ -252,8 +253,9 @@ export const CreateQSORequestSchema = z.object({
   qth: z.string().optional(),
   reportSent: z.string().optional(),
   reportReceived: z.string().optional(),
-  messages: z.array(z.string()).optional().default([]),
-  remarks: z.string().optional(),
+  messageHistory: z.array(z.string()).optional().default([]),
+  comment: z.string().optional(),
+  notes: z.string().optional(),
 });
 export type CreateQSORequest = z.infer<typeof CreateQSORequestSchema>;
 
@@ -274,7 +276,9 @@ export const QSOActionResponseSchema = z.object({
     endTime: z.number().optional(),
     reportSent: z.string().optional(),
     reportReceived: z.string().optional(),
-    messages: z.array(z.string()),
+    messageHistory: z.array(z.string()),
+    comment: z.string().optional(),
+    notes: z.string().optional(),
   }).optional(),
 });
 

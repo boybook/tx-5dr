@@ -6,6 +6,7 @@
 import { QSORecord } from '@tx5dr/contracts';
 import { getBandFromFrequency, resolveDXCCEntity, DXCC_RESOLVER_VERSION } from '@tx5dr/core';
 import { createLogger } from './logger.js';
+import { parseLegacyComment, resolveQsoComment } from '../log/qsoTextFields.js';
 
 const logger = createLogger('ADIFUtils');
 
@@ -222,15 +223,15 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   if (qso.stationLocationId) {
     adifFields.push(`<app_tx5dr_station_location_id:${qso.stationLocationId.length}>${qso.stationLocationId}`);
   }
-  if (qso.messages?.length) {
-    const comment = qso.messages.join(' | ');
+  const comment = resolveQsoComment(qso);
+  if (comment) {
     adifFields.push(`<comment:${comment.length}>${comment}`);
   }
   if (qso.qth) {
     adifFields.push(`<qth:${qso.qth.length}>${qso.qth}`);
   }
-  if (qso.remarks) {
-    adifFields.push(`<notes:${qso.remarks.length}>${qso.remarks}`);
+  if (qso.notes) {
+    adifFields.push(`<notes:${qso.notes.length}>${qso.notes}`);
   }
 
   // 结束标记
@@ -260,7 +261,7 @@ export function parseADIFFields(recordStr: string): Record<string, string> {
 /**
  * 解析单条 ADIF 记录为 QSORecord
  * @param recordStr 单条 ADIF 记录字符串
- * @param source 数据来源标识（用于生成 ID 和 messages）
+ * @param source 数据来源标识（用于生成 ID 和 messageHistory）
  */
 export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSORecord | null {
   const fields = parseADIFFields(recordStr);
@@ -280,6 +281,8 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
     const startTime = parseADIFDateTime(qsoDate, timeOn);
     const endTime = parseADIFDateTime(fields.qso_date_off || qsoDate, timeOff);
 
+    const { comment, messageHistory } = parseLegacyComment(fields.comment);
+
     const record: QSORecord = {
       id: `${source}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       callsign: fields.call.toUpperCase(),
@@ -294,8 +297,9 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       myCallsign: fields.station_callsign || fields.operator || undefined,
       myGrid: fields.my_gridsquare || '',
       qth: fields.qth || undefined,
-      remarks: fields.notes || fields.note || undefined,
-      messages: fields.comment ? [fields.comment] : []
+      comment,
+      notes: fields.notes || fields.note || undefined,
+      messageHistory,
     };
 
     if (fields.dxcc) {

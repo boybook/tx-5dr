@@ -21,6 +21,7 @@ import {
 import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
+import { buildCommentFromMessageHistory } from '../log/qsoTextFields.js';
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
@@ -1435,7 +1436,7 @@ export class RadioOperatorManager {
     const dailySlotPacks = await this.collectRelevantSlotPacks(dayStartMs, historyEndMs);
 
     const grid = qsoRecord.grid || this.findHistoricalGrid(dailySlotPacks, targetCallsign, historyEndMs);
-    const messages = this.rebuildQSOMessageHistory(historySlotPacks, {
+    const messageHistory = this.rebuildQSOMessageHistory(historySlotPacks, {
       operatorId,
       myCallsign,
       targetCallsign,
@@ -1448,7 +1449,8 @@ export class RadioOperatorManager {
       callsign: targetCallsign,
       myCallsign: myCallsign || qsoRecord.myCallsign,
       grid,
-      messages,
+      messageHistory,
+      comment: qsoRecord.comment ?? buildCommentFromMessageHistory(messageHistory),
     };
   }
 
@@ -1623,7 +1625,8 @@ export class RadioOperatorManager {
       grid: incoming.grid || existing.grid,
       reportSent: incoming.reportSent || existing.reportSent,
       reportReceived: incoming.reportReceived || existing.reportReceived,
-      messages: incoming.messages.length > 0 ? incoming.messages : existing.messages,
+      messageHistory: incoming.messageHistory.length > 0 ? incoming.messageHistory : existing.messageHistory,
+      comment: incoming.comment || existing.comment || buildCommentFromMessageHistory(incoming.messageHistory.length > 0 ? incoming.messageHistory : existing.messageHistory),
       lotwQslSent: existing.lotwQslSent,
       lotwQslReceived: existing.lotwQslReceived,
       lotwQslSentDate: existing.lotwQslSentDate,

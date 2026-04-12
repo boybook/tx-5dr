@@ -30,7 +30,7 @@ interface QSOFormData {
   rstReceived: string;
   qth: string;
   grid: string;
-  notes: string;
+  comment: string;
 }
 
 const initialFormData: QSOFormData = {
@@ -39,7 +39,7 @@ const initialFormData: QSOFormData = {
   rstReceived: '59',
   qth: '',
   grid: '',
-  notes: '',
+  comment: '',
 };
 
 interface VoiceQSOLogCardProps {
@@ -124,7 +124,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
       rstReceived: editingQSO.reportReceived ?? '59',
       qth: editingQSO.qth ?? '',
       grid: editingQSO.grid ?? '',
-      notes: editingQSO.remarks ?? '',
+      comment: editingQSO.comment ?? editingQSO.notes ?? '',
     });
     setStartTime(editingQSO.startTime);
     setEndTime(editingQSO.endTime ?? null);
@@ -160,7 +160,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
           reportReceived: formData.rstReceived || '59',
           qth: formData.qth || undefined,
           grid: formData.grid || undefined,
-          remarks: formData.notes || undefined,
+          comment: formData.comment || undefined,
         });
         addToast({
           title: t('qso.logSuccess'),
@@ -179,10 +179,10 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
           endTime: endTime || Date.now(),
           reportSent: formData.rstSent || '59',
           reportReceived: formData.rstReceived || '59',
-          messages: [],
+          messageHistory: [],
           qth: formData.qth || undefined,
           grid: formData.grid || undefined,
-          remarks: formData.notes || undefined,
+          comment: formData.comment || undefined,
         };
 
         await api.createQSO(myCallsign, body);
@@ -367,10 +367,10 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
 
         {/* Notes */}
         <Textarea
-          label={t('qso.notes')}
-          placeholder={t('qso.notesPlaceholder')}
-          value={formData.notes}
-          onValueChange={(v) => updateField('notes', v)}
+          label={t('qso.comment')}
+          placeholder={t('qso.commentPlaceholder')}
+          value={formData.comment}
+          onValueChange={(v) => updateField('comment', v)}
           variant="flat"
           size="sm"
           minRows={1}

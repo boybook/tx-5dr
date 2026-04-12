@@ -236,9 +236,9 @@ const QSOFormModal: React.FC<QSOFormModalProps> = ({
 
             {/* 备注（全行） */}
             <Textarea
-              label={t('editQso.remarks')}
-              value={formData.remarks || ''}
-              onChange={e => onChange({ ...formData, remarks: e.target.value || undefined })}
+              label={t('editQso.comment')}
+              value={formData.comment || ''}
+              onChange={e => onChange({ ...formData, comment: e.target.value || undefined })}
               minRows={2}
             />
 
