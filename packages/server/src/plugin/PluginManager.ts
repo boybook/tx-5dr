@@ -18,6 +18,7 @@ import type {
 } from '@tx5dr/plugin-api';
 import type { EventEmitter } from 'eventemitter3';
 import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
+import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
@@ -55,6 +56,7 @@ export class PluginManager {
   private orchestrator!: DecisionOrchestrator;
   private contextFactory: PluginContextFactory;
   private loader = new PluginLoader();
+  private devWatcher: PluginDevWatcher | null = null;
   private running = false;
   private unsubscribeFns: Array<() => void> = [];
   private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
@@ -126,6 +128,19 @@ export class PluginManager {
     this.broadcastPluginList();
 
     logger.info(`Plugin manager started (${this.loadedPlugins.size} plugins)`);
+
+    // Start dev watcher in non-production environments
+    if (process.env.NODE_ENV !== 'production') {
+      const pluginDir = path.join(this.deps.dataDir, 'plugins');
+      this.devWatcher = new PluginDevWatcher(pluginDir, async (pluginName) => {
+        if (this.loadedPlugins.has(pluginName)) {
+          await this.reloadPlugin(pluginName);
+        } else {
+          await this.rescanPlugins();
+        }
+      });
+      void this.devWatcher.start();
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -134,6 +149,8 @@ export class PluginManager {
     }
 
     logger.info('Stopping plugin manager');
+    this.devWatcher?.stop();
+    this.devWatcher = null;
     await this.teardownAllInstances();
     this.unregisterEngineListeners();
     this.running = false;

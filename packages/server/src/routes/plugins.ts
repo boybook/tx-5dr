@@ -742,6 +742,9 @@ html, body {
 }
 
 // ===== Bridge SDK =====
+// Type definitions for the public surface (`window.tx5dr`) are maintained in:
+//   packages/plugin-api/src/bridge.d.ts
+// Keep that file in sync when modifying the IIFE below.
 
 const BRIDGE_SDK = `/* TX-5DR Plugin Bridge SDK */
 (function() {

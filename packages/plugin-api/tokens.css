@@ -1,0 +1,60 @@
+/*
+ * TX-5DR Plugin Design Tokens (Reference File)
+ *
+ * This file is a REFERENCE COPY of the CSS custom properties injected by
+ * the TX-5DR host into every plugin iframe page. Its purpose is to enable
+ * IDE autocomplete when authoring plugin CSS — the actual runtime values
+ * are injected by the host and may differ from these defaults.
+ *
+ * Usage:
+ *   Copy this file into your plugin project root (or ui/ directory).
+ *   VS Code's CSS Language Service will pick up the custom property names
+ *   and offer autocomplete when you type `var(--tx5dr-`.
+ *
+ * DO NOT import or link this file in your HTML — the host already injects
+ * the tokens via <link rel="stylesheet" href="/api/plugins/_bridge/tokens.css">.
+ *
+ * The values below correspond to the "dark" theme. Light-theme overrides
+ * are applied automatically at runtime by the host when the user switches
+ * themes.
+ */
+:root {
+  /* ── Background ── */
+  --tx5dr-bg: #18181b;
+  --tx5dr-bg-content: #27272a;
+  --tx5dr-bg-hover: #3f3f46;
+
+  /* ── Text ── */
+  --tx5dr-text: #fafafa;
+  --tx5dr-text-secondary: #a1a1aa;
+
+  /* ── Semantic colors ── */
+  --tx5dr-primary: #006FEE;
+  --tx5dr-primary-hover: #005bc4;
+  --tx5dr-success: #17c964;
+  --tx5dr-warning: #f5a524;
+  --tx5dr-danger: #f31260;
+
+  /* ── Border ── */
+  --tx5dr-border: #3f3f46;
+  --tx5dr-focus-ring: rgba(0, 111, 238, 0.4);
+
+  /* ── Border radius ── */
+  --tx5dr-radius-sm: 8px;
+  --tx5dr-radius-md: 12px;
+  --tx5dr-radius-lg: 16px;
+
+  /* ── Spacing ── */
+  --tx5dr-spacing-xs: 4px;
+  --tx5dr-spacing-sm: 8px;
+  --tx5dr-spacing-md: 12px;
+  --tx5dr-spacing-lg: 16px;
+  --tx5dr-spacing-xl: 24px;
+
+  /* ── Typography ── */
+  --tx5dr-font: 'Inter', system-ui, -apple-system, sans-serif;
+  --tx5dr-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --tx5dr-font-size-sm: 13px;
+  --tx5dr-font-size-md: 14px;
+  --tx5dr-font-size-lg: 16px;
+}
