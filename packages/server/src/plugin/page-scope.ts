@@ -1,4 +1,5 @@
 import path from 'path';
+import type { PluginUIInstanceTarget } from '@tx5dr/plugin-api';
 import { normalizeCallsign } from '../utils/callsign.js';
 
 export interface PluginPageBoundResource {
@@ -8,6 +9,13 @@ export interface PluginPageBoundResource {
 
 function toSafeSegment(value: string): string {
   return encodeURIComponent(value.trim());
+}
+
+function getInstanceScopeSegments(instanceTarget: PluginUIInstanceTarget): string[] {
+  if (instanceTarget.kind === 'global') {
+    return ['global'];
+  }
+  return ['operators', toSafeSegment(instanceTarget.operatorId)];
 }
 
 export function getPluginPageScopeSegments(
@@ -32,12 +40,35 @@ export function getPluginPageScopePath(
 
 export function getPluginPageStorePath(
   pageId: string,
-  resource?: PluginPageBoundResource | null,
+  scope: {
+    instanceTarget: PluginUIInstanceTarget;
+    resource?: PluginPageBoundResource | null;
+  },
 ): string {
   return path.join(
     'page-resources',
-    ...getPluginPageScopeSegments(resource),
+    'instances',
+    ...getInstanceScopeSegments(scope.instanceTarget),
+    'resources',
+    ...getPluginPageScopeSegments(scope.resource),
     toSafeSegment(pageId),
     'store.json',
+  );
+}
+
+export function getPluginPageFileScopePath(
+  pageId: string,
+  scope: {
+    instanceTarget: PluginUIInstanceTarget;
+    resource?: PluginPageBoundResource | null;
+  },
+): string {
+  return path.posix.join(
+    'page-resources',
+    'instances',
+    ...getInstanceScopeSegments(scope.instanceTarget),
+    'resources',
+    ...getPluginPageScopeSegments(scope.resource),
+    toSafeSegment(pageId),
   );
 }
