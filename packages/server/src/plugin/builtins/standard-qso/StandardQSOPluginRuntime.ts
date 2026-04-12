@@ -497,7 +497,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 endTime: Date.now(),
                 reportSent: strategy.context.reportSent?.toString(),
                 reportReceived: strategy.context.reportReceived?.toString(),
-                messages: [],
+                messageHistory: [],
+                comment: undefined,
                 myCallsign: strategy.context.config.myCallsign,
                 myGrid: strategy.context.config.myGrid
             };
@@ -681,7 +682,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 endTime: Date.now(),
                 reportSent: strategy.context.reportSent?.toString(),
                 reportReceived: strategy.context.reportReceived?.toString(),
-                messages: [],
+                messageHistory: [],
+                comment: undefined,
                 myCallsign: strategy.context.config.myCallsign,
                 myGrid: strategy.context.config.myGrid
             };

@@ -98,7 +98,8 @@ export const QSORecordSchema = z.object({
   endTime: z.number().optional(), // 结束时间
   reportSent: z.string().optional(),     // 发送的信号报告
   reportReceived: z.string().optional(), // 接收的信号报告
-  messages: z.array(z.string()), // 消息历史
+  messageHistory: z.array(z.string()), // 内部消息历史（FT8 等数字模式）
+  comment: z.string().optional(), // 标准 ADIF COMMENT 字段
   myCallsign: z.string().optional(), // 我的呼号（操作员呼号）
   myGrid: z.string().optional(), // 我的网格定位（操作员网格）
   qth: z.string().optional(), // 对方 QTH（地点，语音通联常用）
@@ -133,8 +134,8 @@ export const QSORecordSchema = z.object({
   qrzQslSentDate: z.number().optional(),
   qrzQslReceivedDate: z.number().optional(),
 
-  // 备注（对应 ADIF NOTES 字段）
-  remarks: z.string().optional(),
+  // 附注（对应 ADIF NOTES 字段）
+  notes: z.string().optional(),
 });
 
 // 策略执行结果

@@ -932,6 +932,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         ...body,
         myCallsign,
         myGrid,
+        messageHistory: body.messageHistory ?? [],
       };
 
       await logBook.provider.addQSO(record);

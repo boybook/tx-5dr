@@ -89,6 +89,10 @@ function normalizeGridFilterValue(value: string): string {
   return value.toUpperCase().replace(/\s+/g, '').slice(0, 8);
 }
 
+function resolveEditableComment(qso: Pick<QSORecord, 'comment' | 'notes' | 'messageHistory'>): string {
+  return qso.comment ?? qso.notes ?? qso.messageHistory.join(' | ');
+}
+
 const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, operatorCallsign }) => {
   const { t } = useTranslation('logbook');
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -126,7 +130,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [addFormData, setAddFormData] = useState<Partial<QSORecord>>({
     callsign: '',
     mode: 'FT8',
-    messages: [],
+    messageHistory: [],
   });
   const [isAddSaving, setIsAddSaving] = useState(false);
 
@@ -631,7 +635,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       endTime: qso.endTime,
       reportSent: qso.reportSent,
       reportReceived: qso.reportReceived,
-      messages: qso.messages,
+      messageHistory: qso.messageHistory,
+      comment: resolveEditableComment(qso),
+      notes: qso.notes,
       lotwQslSent: qso.lotwQslSent,
       lotwQslReceived: qso.lotwQslReceived,
       qrzQslSent: qso.qrzQslSent,
@@ -708,7 +714,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       grid: addFormData.grid,
       reportSent: addFormData.reportSent,
       reportReceived: addFormData.reportReceived,
-      messages: addFormData.messages ?? [],
+      messageHistory: addFormData.messageHistory ?? [],
+      comment: addFormData.comment,
+      notes: addFormData.notes,
     };
 
     try {
@@ -716,7 +724,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       await api.createQSO(effectiveLogBookId, payload);
       await refreshLogbookData();
       setIsAddModalOpen(false);
-      setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
+      setAddFormData({ callsign: '', mode: 'FT8', messageHistory: [] });
       logger.debug('QSO record created manually');
     } catch (error) {
       logger.error('Failed to create QSO record:', error);
@@ -1648,7 +1656,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           size="sm"
           startContent={<FontAwesomeIcon icon={faPlus} />}
           onPress={() => {
-            setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
+            setAddFormData({ callsign: '', mode: 'FT8', messageHistory: [] });
             setIsAddModalOpen(true);
           }}
           className="min-w-0"
@@ -2070,7 +2078,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         isOpen={isAddModalOpen}
         onClose={() => {
           setIsAddModalOpen(false);
-          setAddFormData({ callsign: '', mode: 'FT8', messages: [] });
+          setAddFormData({ callsign: '', mode: 'FT8', messageHistory: [] });
         }}
         title={t('addQso.title')}
         formData={addFormData}

@@ -28,6 +28,12 @@ import {
   buildImportedQsoFingerprint,
   parseTx5drCsvContent,
 } from './logImportUtils.js';
+import {
+  buildCommentFromMessageHistory,
+  normalizeMessageHistory,
+  parseLegacyComment,
+  resolveQsoComment,
+} from './qsoTextFields.js';
 
 const logger = createLogger('ADIFLogProvider');
 
@@ -224,7 +230,8 @@ const IMPORT_MERGE_FIELDS: Array<keyof QSORecord> = [
   'myGrid',
   'myCallsign',
   'qth',
-  'remarks',
+  'comment',
+  'notes',
   'reportSent',
   'reportReceived',
   'submode',
@@ -620,6 +627,8 @@ export class ADIFLogProvider implements ILogProvider {
       && !fields.my_cnty
       && !fields.my_iota;
     
+    const { comment, messageHistory } = parseLegacyComment(fields.comment);
+
     const record: QSORecord = {
       id,
       callsign,
@@ -633,9 +642,10 @@ export class ADIFLogProvider implements ILogProvider {
       endTime,
       reportSent: fields.rst_sent,
       reportReceived: fields.rst_rcvd,
-      messages: fields.comment ? [fields.comment] : [],
+      messageHistory,
+      comment,
       qth: fields.qth ?? undefined,
-      remarks: fields.notes ?? fields.note ?? undefined,
+      notes: fields.notes ?? fields.note ?? undefined,
     };
 
     if (fields.dxcc) {
@@ -808,8 +818,8 @@ export class ADIFLogProvider implements ILogProvider {
       adifRecord += `<RST_RCVD:${qso.reportReceived.length}>${qso.reportReceived}`;
     }
     
-    if (qso.messages && qso.messages.length > 0) {
-      const comment = qso.messages.join(' | ');
+    const comment = resolveQsoComment(qso);
+    if (comment) {
       adifRecord += `<COMMENT:${comment.length}>${comment}`;
     }
 
@@ -817,8 +827,8 @@ export class ADIFLogProvider implements ILogProvider {
       adifRecord += `<QTH:${qso.qth.length}>${qso.qth}`;
     }
 
-    if (qso.remarks) {
-      adifRecord += `<NOTES:${qso.remarks.length}>${qso.remarks}`;
+    if (qso.notes) {
+      adifRecord += `<NOTES:${qso.notes.length}>${qso.notes}`;
     }
 
     const effectiveMyGrid = overrideMyGrid ?? qso.myGrid;
@@ -926,7 +936,11 @@ export class ADIFLogProvider implements ILogProvider {
   
   async addQSO(record: QSORecord, operatorId?: string): Promise<void> {
     this.ensureInitialized();
-    record = enrichQSOWithDXCC(record);
+    record = enrichQSOWithDXCC({
+      ...record,
+      messageHistory: normalizeMessageHistory(record.messageHistory),
+      comment: record.comment ?? buildCommentFromMessageHistory(record.messageHistory),
+    });
     
     // 生成唯一ID
     if (!record.id || this.qsoCache.has(record.id)) {
@@ -948,7 +962,13 @@ export class ADIFLogProvider implements ILogProvider {
       throw new Error(`QSO with id ${id} not found`);
     }
     
-    const updated = { ...existing, ...updates, id };
+    const updated = {
+      ...existing,
+      ...updates,
+      id,
+      messageHistory: normalizeMessageHistory(updates.messageHistory ?? existing.messageHistory),
+      comment: updates.comment ?? existing.comment ?? buildCommentFromMessageHistory(updates.messageHistory ?? existing.messageHistory),
+    };
     this.qsoCache.set(id, enrichQSOWithDXCC(updated));
     // 简化处理：更新后重建索引（更新频率低，成本可接受）
     this.rebuildIndexes();
@@ -1365,7 +1385,7 @@ export class ADIFLogProvider implements ILogProvider {
         this.escapeCsvField(qso.reportReceived || ''),
         this.escapeCsvField(qso.myCallsign || ''),
         this.escapeCsvField(qso.myGrid || ''),
-        this.escapeCsvField(qso.messages?.join(' | ') || '')
+        this.escapeCsvField(resolveQsoComment(qso) || '')
       ];
       
       csvContent += row.join(',') + '\n';
@@ -1416,8 +1436,18 @@ export class ADIFLogProvider implements ILogProvider {
       }
     }
 
-    if ((merged.messages?.length || 0) === 0 && (incoming.messages?.length || 0) > 0) {
-      merged.messages = [...incoming.messages];
+    if ((merged.messageHistory?.length || 0) === 0 && (incoming.messageHistory?.length || 0) > 0) {
+      merged.messageHistory = [...incoming.messageHistory];
+      changed = true;
+    }
+
+    const nextComment = merged.comment ?? buildCommentFromMessageHistory(merged.messageHistory);
+    const incomingComment = incoming.comment ?? buildCommentFromMessageHistory(incoming.messageHistory);
+    if (isMissingValue(nextComment) && !isMissingValue(incomingComment)) {
+      merged.comment = incomingComment;
+      changed = true;
+    } else if (isMissingValue(merged.comment) && !isMissingValue(nextComment)) {
+      merged.comment = nextComment;
       changed = true;
     }
 

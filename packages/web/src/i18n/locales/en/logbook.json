@@ -315,7 +315,7 @@
     "uploaded": "Uploaded",
     "confirmed": "Confirmed",
     "editWarning": "Modifying QSO records may affect the accuracy of statistics. Please proceed with caution.",
-    "remarks": "Remarks"
+    "comment": "Comment"
   },
   "addQso": {
     "button": "Add QSO",

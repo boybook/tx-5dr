@@ -1,4 +1,5 @@
 import type { LogBookImportFormat, QSORecord } from '@tx5dr/contracts';
+import { parseLegacyComment } from './qsoTextFields.js';
 
 export interface ParsedTx5drCsvImport {
   records: QSORecord[];
@@ -126,6 +127,7 @@ function parseTx5drCsvRow(row: Record<string, string>): QSORecord {
   }
 
   const comments = row['Comments']?.trim() || '';
+  const { comment, messageHistory } = parseLegacyComment(comments);
   return {
     id: `${callsign}_${startTime}_csv`,
     callsign,
@@ -135,7 +137,8 @@ function parseTx5drCsvRow(row: Record<string, string>): QSORecord {
     startTime,
     reportSent: cleanOptional(row['Report Sent']),
     reportReceived: cleanOptional(row['Report Received']),
-    messages: comments ? comments.split(' | ').map((part) => part.trim()).filter(Boolean) : [],
+    messageHistory,
+    comment,
     myCallsign: cleanOptional(row['My Callsign']),
     myGrid: cleanOptional(row['My Grid']),
   };

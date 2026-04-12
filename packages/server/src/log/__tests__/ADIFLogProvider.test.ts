@@ -74,13 +74,13 @@ describe('ADIFLogProvider import', () => {
     expect(result.imported).toBe(1);
     expect(result.skipped).toBe(0);
     expect(qsos).toHaveLength(1);
-    expect(qsos[0].messages).toEqual(['CQ TEST', 'RR73']);
+    expect(qsos[0].messageHistory).toEqual(['CQ TEST', 'RR73']);
     expect(qsos[0].myCallsign).toBe('BG2XYZ');
 
     await provider.close();
   });
 
-  it('exports standard ADIF fields for my location, notes, operator, and FT4 submode', async () => {
+  it('exports standard ADIF COMMENT/NOTES fields for my location, operator, and FT4 submode', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
 
@@ -92,13 +92,13 @@ describe('ADIFLogProvider import', () => {
       submode: 'FT4',
       startTime: Date.parse('2026-01-01T23:59:55Z'),
       endTime: Date.parse('2026-01-02T00:00:10Z'),
-      messages: ['CQ TEST'],
+      messageHistory: ['CQ TEST'],
       myCallsign: 'BG2XYZ',
       myGrid: 'PM00AA',
       myState: 'CA',
       myCounty: 'LA',
       myIota: 'AS-007',
-      remarks: 'Manual note',
+      notes: 'Manual note',
     }, 'op1');
 
     const exported = await provider.exportADIF();
@@ -109,6 +109,7 @@ describe('ADIFLogProvider import', () => {
     expect(exported).toContain('<MY_STATE:2>CA');
     expect(exported).toContain('<MY_CNTY:2>LA');
     expect(exported).toContain('<MY_IOTA:6>AS-007');
+    expect(exported).toContain('<COMMENT:7>CQ TEST');
     expect(exported).toContain('<NOTES:11>Manual note');
     expect(exported).toContain('<OPERATOR:6>BG2XYZ');
     expect(exported).not.toContain('<NOTE:11>Manual note');
@@ -134,7 +135,7 @@ describe('ADIFLogProvider import', () => {
     expect(qsos[0].myState).toBe('CA');
     expect(qsos[0].myCounty).toBe('LA');
     expect(qsos[0].myIota).toBe('AS-007');
-    expect(qsos[0].remarks).toBe('Manual note');
+    expect(qsos[0].notes).toBe('Manual note');
     expect(qsos[0].endTime).toBe(Date.parse('2026-01-02T00:00:10Z'));
 
     await provider.close();
@@ -155,7 +156,7 @@ describe('ADIFLogProvider import', () => {
     expect(qsos[0].myState).toBe('CA');
     expect(qsos[0].myCounty).toBe('LA');
     expect(qsos[0].myIota).toBe('AS-007');
-    expect(qsos[0].remarks).toBe('Manual note');
+    expect(qsos[0].notes).toBe('Manual note');
 
     await provider.close();
   });
@@ -171,7 +172,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const analysis = await provider.analyzeCallsign('BG9ZZ', 'PM01', { operatorId: 'op1', band: '20m' });
@@ -192,7 +193,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const sameBand = await provider.analyzeCallsign('BG9ZZ', 'PM01BB', { operatorId: 'op1', band: '20m' });
@@ -215,7 +216,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const analysis = await provider.analyzeCallsign('BG9ZZ', 'OI67', { operatorId: 'op1', band: '20m' });
@@ -236,7 +237,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     await provider.addQSO({
@@ -246,7 +247,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:15:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const statistics = await provider.getStatistics();
@@ -270,7 +271,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const after = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op1', band: '20m' });
@@ -290,7 +291,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     await provider.addQSO({
@@ -300,7 +301,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:15:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     await provider.addQSO({
@@ -309,7 +310,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:30:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const fourCharMatches = await provider.queryQSOs({ grid: 'PM01' });
@@ -334,7 +335,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
       qrzQslSent: 'Y',
     }, 'op1');
 
@@ -345,7 +346,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT4',
       startTime: Date.parse('2026-01-01T12:15:00Z'),
-      messages: [],
+      messageHistory: [],
       qrzQslSent: 'Y',
     }, 'op1');
 
@@ -356,7 +357,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 7074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:30:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const matches = await provider.queryQSOs({
@@ -385,7 +386,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const analysis = await provider.analyzeCallsign('BG9ZZ', 'PM01AA', { operatorId: 'op1', band: 'Unknown' });
@@ -405,7 +406,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
     const analysis = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op2', band: '20m' });
@@ -429,10 +430,10 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
     }, 'op1');
 
-    await provider.updateQSO('1710000000001', { remarks: 'rebuilt' });
+    await provider.updateQSO('1710000000001', { notes: 'rebuilt' });
 
     const analysis = await provider.analyzeCallsign('BG2AA', 'PM01AA', { operatorId: 'op2', band: '20m' });
 
@@ -454,7 +455,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: [],
+      messageHistory: [],
       myCallsign: 'BG5DRB',
     }, 'op1');
 
@@ -487,7 +488,7 @@ describe('ADIFLogProvider import', () => {
       frequency: 14074000,
       mode: 'FT8',
       startTime: Date.parse('2026-01-01T12:00:00Z'),
-      messages: ['BG5DRB BG2AA RR73'],
+      messageHistory: ['BG5DRB BG2AA RR73'],
     }, 'op1');
 
     const analysis = await provider.analyzeCallsign('BG9ZZ', undefined, { operatorId: 'op2', band: '20m' });
