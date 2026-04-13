@@ -388,7 +388,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     if (!containerRef.current) return;
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setIsNarrow(entry.contentRect.width < 600);
+        setIsNarrow(entry.contentRect.width < 560);
       }
     });
     resizeObserver.observe(containerRef.current);
@@ -424,7 +424,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   // ─── 列宽 ──────────────────────────────
   const gridCols = isNarrow
     ? 'grid-cols-[42px_36px_52px_1fr_80px]'
-    : 'grid-cols-[60px_48px_48px_80px_1fr_150px]';
+    : 'grid-cols-[56px_40px_40px_64px_1fr_140px]';
 
   if (groups.length === 0) {
     return null;

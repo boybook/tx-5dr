@@ -907,6 +907,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   /**
+   * Refresh all capability values on demand (triggered by frontend button).
+   */
+  async refreshCapabilities(): Promise<void> {
+    await this.capabilityManager.refreshAll();
+  }
+
+  /**
    * 写入能力值（由 WSServer 命令处理器和 REST 接口调用）
    */
   async writeCapability(

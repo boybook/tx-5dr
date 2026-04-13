@@ -384,6 +384,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
       [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id) => this.handleWriteRadioCapability(id, data),
+      [WSMessageType.REFRESH_RADIO_CAPABILITIES]: () => this.handleRefreshRadioCapabilities(),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
       [WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION]: (data) => this.handleRemoveOperatorFromTransmission(data),
       [WSMessageType.AUTH_TOKEN]: (data, id) => this.handleAuthToken(id, data),
@@ -636,6 +637,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.RADIO_STOP_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { action: 'execute', subject: 'RadioControl' },
+    [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.INVOKE_SPECTRUM_CONTROL]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: { action: 'execute', subject: 'RadioFrequency' },
     // Operator-level commands (use Operator subject with conditions)
@@ -1857,6 +1859,20 @@ export class WSServer extends WSMessageHandler {
       this.sendToConnection(connectionId, WSMessageType.ERROR, {
         message: `Failed to write capability: ${(error as Error).message}`,
       });
+    }
+  }
+
+  /**
+   * 处理刷新所有电台能力值命令
+   * 权限: execute:RadioControl（由 COMMAND_ABILITIES 映射）
+   */
+  private async handleRefreshRadioCapabilities(): Promise<void> {
+    try {
+      logger.info('refreshRadioCapabilities command');
+      const radioManager = this.digitalRadioEngine.getRadioManager();
+      await radioManager.refreshCapabilities();
+    } catch (error) {
+      logger.error('refreshRadioCapabilities failed', error);
     }
   }
 

@@ -66,8 +66,6 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       logger.warn('Initial capability read encountered an unexpected error', error);
     }
 
-    this.startPolling();
-
     logger.info('Capability probe complete', {
       supported: Array.from(this.supportedCapabilities),
     });
@@ -83,6 +81,18 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.valueCache.clear();
     this.descriptorCache.clear();
     this.emit('capabilityList', { descriptors: [], capabilities: [] });
+  }
+
+  async refreshAll(): Promise<void> {
+    if (!this.connection) return;
+    logger.info('Refreshing all capability values');
+    for (const definition of CAPABILITY_DEFINITIONS) {
+      if (!this.supportedCapabilities.has(definition.id)) continue;
+      const descriptor = this.descriptorCache.get(definition.id);
+      if (!descriptor?.readable || !definition.read) continue;
+      await this.pollCapabilityOnce(definition.id);
+    }
+    this.emit('capabilityList', this.getCapabilitySnapshot());
   }
 
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {

@@ -346,6 +346,7 @@
       "notConnected": "电台未连接",
       "noRadioMode": "当前为无电台模式，不支持电台控制",
       "notSupported": "当前电台不支持此功能",
+      "refresh": "刷新电台参数",
       "antenna": "天馈",
       "rf": "射频",
       "audio": "音频",

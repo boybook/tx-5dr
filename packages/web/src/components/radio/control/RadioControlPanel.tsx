@@ -7,11 +7,15 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Button,
   Modal,
   ModalContent,
   ModalHeader,
   ModalBody,
+  Tooltip,
 } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import {
   CAPABILITY_CATEGORY_ORDER,
@@ -20,7 +24,7 @@ import {
   groupCapabilityDescriptors,
   splitCapabilitySectionsForColumns,
 } from '../../../radio-capability/capability-descriptors';
-import { getPanelComponent, useCapabilityWriter } from '../../../radio-capability/CapabilityRegistry';
+import { getPanelComponent, useCapabilityWriter, useCapabilityRefresher } from '../../../radio-capability/CapabilityRegistry';
 import {
   useCapabilityDescriptors,
   useCapabilityStates,
@@ -129,6 +133,7 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
   const { activeProfile } = useProfiles();
   const capabilityDescriptors = useCapabilityDescriptors();
   const onWrite = useCapabilityWriter();
+  const { refresh: refreshCapabilities, isRefreshing } = useCapabilityRefresher();
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -181,7 +186,20 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
     <Modal isOpen={isOpen} onClose={onClose} size={isMobile ? 'sm' : '3xl'} scrollBehavior="inside">
       <ModalContent>
         <ModalHeader className="flex flex-col gap-0.5">
-          <span className="text-base">{t('radio:capability.panel.title')}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-base">{t('radio:capability.panel.title')}</span>
+            <Tooltip content={t('radio:capability.panel.refresh')}>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                onPress={refreshCapabilities}
+                isLoading={isRefreshing}
+                isDisabled={!radioState.radioConnected || isRefreshing}
+                startContent={isRefreshing ? undefined : <FontAwesomeIcon icon={faRotateRight} className="text-xs" />}
+              />
+            </Tooltip>
+          </div>
           <span className="text-xs text-default-400 font-normal">{radioName}</span>
         </ModalHeader>
         <ModalBody className="pb-6">

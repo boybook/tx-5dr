@@ -111,6 +111,8 @@ export enum WSMessageType {
   RADIO_CAPABILITY_CHANGED = 'radioCapabilityChanged',
   /** 客户端写入能力值（client → server） */
   WRITE_RADIO_CAPABILITY = 'writeRadioCapability',
+  /** 客户端请求刷新所有能力值（client → server） */
+  REFRESH_RADIO_CAPABILITIES = 'refreshRadioCapabilities',
 
   // ===== 电台重连控制 =====
   RADIO_STOP_RECONNECT = 'radioStopReconnect',

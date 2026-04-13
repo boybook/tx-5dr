@@ -6,6 +6,7 @@ const logger = createLogger('AudioMonitorService');
 const MONITOR_STREAM_SAMPLE_RATE = 16000;
 const MONITOR_FRAME_MS = 20;
 const HIGH_LATENCY_WARN_MS = 120;
+const HIGH_LATENCY_LOG_THROTTLE_MS = 5000;
 
 /**
  * 音频监听统计信息
@@ -57,6 +58,7 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   // 统计信息
   private droppedSamplesCount = 0;
   private isRunning = false;
+  private lastHighLatencyLogAt = 0;
   private sequenceNumber = 0;
   private latestStats: AudioMonitorStats | null = null;
 
@@ -178,15 +180,19 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       this.latestStats = stats;
 
       if (stats.latencyMs >= HIGH_LATENCY_WARN_MS) {
-        logger.warn('Audio monitor source latency is high', {
-          sourceLatencyMs: Number(stats.latencyMs.toFixed(1)),
-          bufferFillPercent: Number(stats.bufferFillPercent.toFixed(1)),
-          providerAvailableMs: Number(this.audioProvider.getAvailableMs().toFixed(1)),
-          outputQueuedMs: Number(((this.outputBuffer.length / this.TARGET_SAMPLE_RATE) * 1000).toFixed(1)),
-          emittedFrames,
-          sourceSamples: sourceAudioData.length,
-          outputSamples: processedAudio.length,
-        });
+        const now = Date.now();
+        if (now - this.lastHighLatencyLogAt >= HIGH_LATENCY_LOG_THROTTLE_MS) {
+          this.lastHighLatencyLogAt = now;
+          logger.warn('Audio monitor source latency is high', {
+            sourceLatencyMs: Number(stats.latencyMs.toFixed(1)),
+            bufferFillPercent: Number(stats.bufferFillPercent.toFixed(1)),
+            providerAvailableMs: Number(this.audioProvider.getAvailableMs().toFixed(1)),
+            outputQueuedMs: Number(((this.outputBuffer.length / this.TARGET_SAMPLE_RATE) * 1000).toFixed(1)),
+            emittedFrames,
+            sourceSamples: sourceAudioData.length,
+            outputSamples: processedAudio.length,
+          });
+        }
       }
 
       this.emit('stats', stats);
