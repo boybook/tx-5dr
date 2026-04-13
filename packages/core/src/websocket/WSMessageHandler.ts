@@ -80,6 +80,9 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.OPENWEBRX_CLIENT_COUNT]: 'openwebrxClientCount',
   [WSMessageType.OPENWEBRX_COOLDOWN_NOTICE]: 'openwebrxCooldownNotice',
 
+  // 连接管理事件
+  [WSMessageType.CONNECTION_REPLACED]: 'connectionReplaced',
+
   // 插件系统事件
   [WSMessageType.PLUGIN_LIST]: 'pluginList',
   [WSMessageType.PLUGIN_STATUS_CHANGED]: 'pluginStatusChanged',
