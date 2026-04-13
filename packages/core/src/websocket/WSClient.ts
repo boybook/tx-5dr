@@ -25,6 +25,7 @@ export class WSClient extends WSMessageHandler {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private manualDisconnect = false;
+  private wasReplaced = false;
   private connectPromise: Promise<void> | null = null;
 
   private static readonly RECONNECT_BASE_DELAY_MS = 1000;
@@ -37,6 +38,12 @@ export class WSClient extends WSMessageHandler {
       url: config.url,
       heartbeatInterval: config.heartbeatInterval ?? 30000,
     };
+
+    // Listen for server-side connection replacement notification
+    this.onWSEvent('connectionReplaced' as any, () => {
+      logger.info('Received connectionReplaced from server, marking for no-reconnect');
+      this.wasReplaced = true;
+    });
   }
 
   /**
@@ -73,6 +80,7 @@ export class WSClient extends WSMessageHandler {
           this.isConnecting = false;
           this.connectPromise = null;
           this.reconnectAttempt = 0;
+          this.wasReplaced = false;
           this.startHeartbeat();
           this.emitWSEvent('connected');
           resolve();
@@ -96,7 +104,11 @@ export class WSClient extends WSMessageHandler {
             reject(new Error(`WebSocket closed before open: code=${event.code}`));
           }
 
-          if (this.manualDisconnect) {
+          if (this.manualDisconnect || this.wasReplaced || event.code === 4001) {
+            if (this.wasReplaced || event.code === 4001) {
+              logger.info('Connection replaced by newer connection, will not reconnect');
+            }
+            this.wasReplaced = false;
             this.emitWSEvent('disconnected');
             return;
           }

@@ -377,3 +377,27 @@ export class RadioService {
   }
 
 }
+
+// Module-level singleton: survives HMR re-mounts so duplicate connections are never created.
+let _singleton: RadioService | null = null;
+
+/**
+ * Get or create the singleton RadioService instance.
+ * Persists across Vite HMR and React Strict Mode re-mounts.
+ */
+export function getOrCreateRadioService(): RadioService {
+  if (!_singleton) {
+    _singleton = new RadioService();
+  }
+  return _singleton;
+}
+
+/**
+ * Destroy the singleton (only for full app teardown, not HMR).
+ */
+export function destroyRadioService(): void {
+  if (_singleton) {
+    _singleton.disconnect();
+    _singleton = null;
+  }
+}

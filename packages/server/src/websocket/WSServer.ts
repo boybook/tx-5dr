@@ -42,7 +42,7 @@ interface WebSocketInstance {
   on(event: string, listener: (...args: unknown[]) => void): void;
   off(event: string, listener: (...args: unknown[]) => void): void;
   send(data: string): void;
-  close(): void;
+  close(code?: number, reason?: string): void;
   readyState: number;
 }
 
@@ -110,7 +110,7 @@ export class WSConnection extends WSMessageHandler {
   /**
    * 关闭连接
    */
-  close(): void {
+  close(code?: number, reason?: string): void {
     // 移除所有WebSocket事件监听器 (修复内存泄漏)
     logger.debug(`removing ${this.wsListeners.size} WebSocket listeners for connection ${this.id}`);
     for (const [eventName, handler] of this.wsListeners.entries()) {
@@ -119,7 +119,7 @@ export class WSConnection extends WSMessageHandler {
     this.wsListeners.clear();
 
     // 关闭WebSocket连接
-    this.ws.close();
+    this.ws.close(code, reason);
   }
 
   /**
@@ -1164,7 +1164,7 @@ export class WSServer extends WSMessageHandler {
   /**
    * 移除客户端连接
    */
-  removeConnection(id: string, options: { closeSocket?: boolean } = {}): void {
+  removeConnection(id: string, options: { closeSocket?: boolean; closeCode?: number; closeReason?: string } = {}): void {
     const connection = this.connections.get(id);
     if (connection) {
       const clientInstanceId = connection.getClientInstanceId();
@@ -1184,7 +1184,7 @@ export class WSServer extends WSMessageHandler {
 
       if (options.closeSocket) {
         try {
-          connection.close();
+          connection.close(options.closeCode, options.closeReason);
         } catch (error) {
           logger.warn('failed to close replaced websocket connection', {
             id,
@@ -1980,7 +1980,18 @@ export class WSServer extends WSMessageHandler {
           previousConnectionId: existingConnectionId,
           nextConnectionId: connectionId,
         });
-        this.removeConnection(existingConnectionId, { closeSocket: true });
+        // Notify the old connection before closing so the client knows not to reconnect
+        const existingConnection = this.connections.get(existingConnectionId);
+        if (existingConnection) {
+          try {
+            existingConnection.send(WSMessageType.CONNECTION_REPLACED, {
+              reason: 'replaced_by_new_connection',
+            });
+          } catch {
+            // Best effort — the connection may already be broken
+          }
+        }
+        this.removeConnection(existingConnectionId, { closeSocket: true, closeCode: 4001, closeReason: 'replaced' });
       }
       this.clientInstanceConnections.set(clientInstanceId, connectionId);
 

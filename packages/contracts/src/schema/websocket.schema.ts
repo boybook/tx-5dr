@@ -26,6 +26,8 @@ export enum WSMessageType {
   PING = 'ping',
   PONG = 'pong',
   ERROR = 'error',
+  /** 服务端通知客户端：此连接已被同一 clientInstance 的新连接替换，客户端不应重连 */
+  CONNECTION_REPLACED = 'connectionReplaced',
   
   // ===== 引擎控制 =====
   START_ENGINE = 'startEngine',

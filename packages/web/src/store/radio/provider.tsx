@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { SpectrumCapabilities } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
 import { getWebSocketClientInstanceId } from '../../utils/wsClientInstance';
-import { RadioService } from '../../services/radioService';
+import { type RadioService, getOrCreateRadioService } from '../../services/radioService';
 import { useAuth } from '../authStore';
 import {
   CapabilityDescriptorsContext,
@@ -69,7 +69,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const clientInstanceId = getWebSocketClientInstanceId();
-    const radioService = new RadioService();
+    const radioService = getOrCreateRadioService();
     radioServiceRef.current = radioService;
 
     const spectrumNegotiation = createSpectrumNegotiator({
@@ -125,10 +125,9 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
         });
       }
 
-      if (radioServiceRef.current) {
-        radioServiceRef.current.disconnect();
-        radioServiceRef.current = null;
-      }
+      // Don't disconnect the singleton — it will be reused by the next mount
+      // (HMR / React Strict Mode). The connection stays alive across re-mounts.
+      radioServiceRef.current = null;
     };
   }, []);
 
