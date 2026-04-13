@@ -474,7 +474,7 @@ module.exports = {
       // ====== 清理其他 packages 的非必要文件 ======
       try {
         console.log('🧹 正在清理其他 packages 的源码...');
-        const packagesToClean = ['electron-main', 'electron-preload', 'server', 'core', 'contracts'];
+        const packagesToClean = ['electron-main', 'electron-preload', 'server', 'core', 'contracts', 'builtin-plugins', 'plugin-api'];
         for (const pkg of packagesToClean) {
           cleanDirKeep(join(appRoot, 'packages', pkg), ['dist', 'package.json', 'assets']);
         }

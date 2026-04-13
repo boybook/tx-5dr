@@ -9,7 +9,7 @@
     "./DigitalRadioEngine": "./dist/DigitalRadioEngine.js"
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').cpSync('src/plugin/builtins', 'dist/plugin/builtins', { recursive: true, filter: (src) => !src.endsWith('.ts') })\"",
+    "build": "tsc",
     "dev": "NODE_ENV=development tsx watch --watch-path=src src/index.ts",
     "dev:prof": "NODE_ENV=development tsx --prof src/index.ts",
     "clinic:doctor": "yarn build && clinic doctor -- node dist/index.js",
@@ -29,6 +29,7 @@
     "@fastify/websocket": "^11.1.0",
     "@livekit/rtc-node": "^0.13.24",
     "@openwebrx-js/api": "0.1.7",
+    "@tx5dr/builtin-plugins": "workspace:*",
     "@tx5dr/contracts": "workspace:*",
     "@tx5dr/core": "workspace:*",
     "@tx5dr/plugin-api": "workspace:*",

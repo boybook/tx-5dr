@@ -38,6 +38,15 @@ export interface KVStore {
    * Returns a shallow snapshot of all stored entries in this scope.
    */
   getAll(): Record<string, unknown>;
+
+  /**
+   * Flushes pending writes to persistent storage.
+   *
+   * In normal operation the host flushes automatically. Call this explicitly
+   * only when you need to guarantee that recently written data survives a
+   * crash or restart (e.g. during a migration sequence).
+   */
+  flush(): Promise<void>;
 }
 
 /**

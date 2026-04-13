@@ -125,3 +125,33 @@ export type {
 
 /** Stable runtime enum values commonly referenced by plugin implementations. */
 export { FT8MessageType } from './ft8-message-type.js';
+
+/** Utility functions for plugin authors. */
+export { normalizeCallsign } from './utils/callsign.js';
+
+/** ADIF (Amateur Data Interchange Format) utilities. */
+export {
+  parseADIFContent,
+  parseADIFRecord,
+  parseADIFFields,
+  convertQSOToADIF,
+  generateADIFFile,
+  formatADIFDate,
+  formatADIFTime,
+  parseADIFDateTime,
+} from './utils/adif.js';
+
+/** Plugin page scope path utilities. */
+export {
+  getPluginPageScopePath,
+  getPluginPageScopeSegments,
+} from './utils/page-scope.js';
+export type { PluginPageBoundResource } from './utils/page-scope.js';
+
+/** QSO text field utilities. */
+export {
+  parseLegacyComment,
+  resolveQsoComment,
+  buildCommentFromMessageHistory,
+  normalizeMessageHistory,
+} from './utils/qso-text-fields.js';

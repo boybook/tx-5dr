@@ -1,11 +1,15 @@
 import path from 'path';
 import type { PluginUIInstanceTarget } from '@tx5dr/plugin-api';
-import { normalizeCallsign } from '../utils/callsign.js';
 
-export interface PluginPageBoundResource {
-  kind: 'callsign' | 'operator';
-  value: string;
-}
+// Re-export from plugin-api for backward compatibility
+export {
+  getPluginPageScopePath,
+  getPluginPageScopeSegments,
+} from '@tx5dr/plugin-api';
+export type { PluginPageBoundResource } from '@tx5dr/plugin-api';
+
+import { getPluginPageScopeSegments } from '@tx5dr/plugin-api';
+import type { PluginPageBoundResource } from '@tx5dr/plugin-api';
 
 function toSafeSegment(value: string): string {
   return encodeURIComponent(value.trim());
@@ -16,26 +20,6 @@ function getInstanceScopeSegments(instanceTarget: PluginUIInstanceTarget): strin
     return ['global'];
   }
   return ['operators', toSafeSegment(instanceTarget.operatorId)];
-}
-
-export function getPluginPageScopeSegments(
-  resource?: PluginPageBoundResource | null,
-): string[] {
-  if (!resource) {
-    return ['global'];
-  }
-
-  if (resource.kind === 'callsign') {
-    return ['callsigns', toSafeSegment(normalizeCallsign(resource.value))];
-  }
-
-  return ['operators', toSafeSegment(resource.value)];
-}
-
-export function getPluginPageScopePath(
-  resource?: PluginPageBoundResource | null,
-): string {
-  return path.posix.join(...getPluginPageScopeSegments(resource));
 }
 
 export function getPluginPageStorePath(
