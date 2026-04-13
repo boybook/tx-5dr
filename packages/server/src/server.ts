@@ -105,6 +105,7 @@ function getHttpStatusCode(code: RadioErrorCode): number {
 export async function createServer() {
   bootLogger.info('createServer starting');
   const fastify = Fastify({
+    trustProxy: true,
     logger: {
       level: 'info',
       // 减少健康检查请求的日志噪音

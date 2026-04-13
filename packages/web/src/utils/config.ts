@@ -97,6 +97,22 @@ export function getLogbookWebSocketUrl(params: { operatorId?: string; logBookId?
 }
 
 /**
+ * Normalize a server-provided WebSocket URL to match the current page protocol.
+ * When the page is loaded over HTTPS, upgrade ws:// to wss://.
+ * When the page is loaded over HTTP, downgrade wss:// to ws://.
+ */
+export function normalizeWsUrl(serverUrl: string): string {
+  const isPageSecure = window.location.protocol === 'https:';
+  if (isPageSecure && serverUrl.startsWith('ws://')) {
+    return 'wss://' + serverUrl.slice(5);
+  }
+  if (!isPageSecure && serverUrl.startsWith('wss://')) {
+    return 'ws://' + serverUrl.slice(6);
+  }
+  return serverUrl;
+}
+
+/**
  * 获取当前环境
  */
 export function getEnvironment(): 'development' | 'production' {

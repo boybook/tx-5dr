@@ -2,6 +2,7 @@ import { encodeWsCompatAudioFrame } from '@tx5dr/core';
 import type { RealtimeTransportOffer, RealtimeTransportKind } from '@tx5dr/contracts';
 import { Room, RoomEvent, Track, LocalAudioTrack } from 'livekit-client';
 import { createLogger } from '../utils/logger';
+import { normalizeWsUrl } from '../utils/config';
 import {
   createCompatCaptureBackend,
   type CompatCaptureBackend,
@@ -274,7 +275,7 @@ export class VoiceCapture {
     const captureBackend = await createCompatCaptureBackend(audioContext);
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`${offer.url}?token=${encodeURIComponent(offer.token)}`);
+      const ws = new WebSocket(`${normalizeWsUrl(offer.url)}?token=${encodeURIComponent(offer.token)}`);
       ws.binaryType = 'arraybuffer';
       let resolved = false;
       const timer = window.setTimeout(() => {
