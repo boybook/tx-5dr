@@ -105,22 +105,20 @@ export class SlotScheduler {
     try {
       const mode = this.slotClock.getMode();
       
-      // 固定解码窗口长度（FT8: 15秒，FT4: 7.5秒）
-      const decodeWindowMs = mode.slotMs;
-      
       // 计算窗口的时间偏移（基于时隙结束时间）
       const windowOffsetMs = mode.windowTiming[windowIdx] || 0;
-      logger.debug(`Window offset: window=${windowIdx}, offset=${windowOffsetMs >= 0 ? '+' : ''}${windowOffsetMs}ms (relative to slot end)`);
-      
-      // 计算解码窗口的起始时间（基于时隙结束时间 + 偏移）
-      // 允许负偏移，可以获取时隙结束前或其他周期的音频数据
-      const windowStartMs = slotInfo.startMs + windowOffsetMs;
-      
-      // 从音频缓冲区提供者获取固定长度的解码窗口数据
-      // 支持负偏移，可以获取前一个周期的音频数据
+
+      // 音频始终从时隙起点截取（与 WSJT-X 一致）
+      // 截取长度 = slotMs + offset，每轮解码随触发时间推移获得更多音频数据
+      // 例：FT8 offset=-3200 → 截取 11.8s，offset=-1500 → 截取 13.5s，offset=0 → 截取 15.0s
+      const windowStartMs = slotInfo.startMs;
+      const windowDurationMs = mode.slotMs + windowOffsetMs;
+      logger.debug(`Window capture: window=${windowIdx}, start=slotStart, duration=${windowDurationMs}ms (offset=${windowOffsetMs >= 0 ? '+' : ''}${windowOffsetMs}ms)`);
+
+      // 从音频缓冲区提供者获取解码窗口数据
       const pcmBuffer = await this.audioBufferProvider.getBuffer(
         windowStartMs,
-        decodeWindowMs
+        windowDurationMs
       );
       
       // 获取音频缓冲区提供者的实际采样率
@@ -137,7 +135,7 @@ export class SlotScheduler {
       };
       
       const offsetSign = windowOffsetMs >= 0 ? '+' : '';
-      logger.debug(`Decode request: slot=${slotInfo.id}, window=${windowIdx}, offset=${offsetSign}${windowOffsetMs}ms, duration=${decodeWindowMs}ms, pcm=${(pcmBuffer.byteLength/1024).toFixed(1)}KB, sampleRate=${actualSampleRate}Hz`);
+      logger.debug(`Decode request: slot=${slotInfo.id}, window=${windowIdx}, offset=${offsetSign}${windowOffsetMs}ms, duration=${windowDurationMs}ms, pcm=${(pcmBuffer.byteLength/1024).toFixed(1)}KB, sampleRate=${actualSampleRate}Hz`);
       
       // 推送到解码队列
       await this.decodeQueue.push(decodeRequest);

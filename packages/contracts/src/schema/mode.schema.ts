@@ -41,9 +41,9 @@ export const MODES = {
     name: 'FT8',
     slotMs: 15000,
     toleranceMs: 100,
-    windowTiming: [-1500, -500, 0],
-    transmitTiming: 500,  // WSJT-X 标准：信号在时隙边界后 ~0.5s 开始，留 ~1.86s 给解码
-    encodeAdvance: 500    // 编码在时隙开始时立即触发 (500-500=0ms delay)
+    windowTiming: [-3200, -1500, -300], // WSJT-X 标准：11.8s / 13.5s / 14.7s 三轮解码
+    transmitTiming: 500,  // WSJT-X 标准：信号在时隙边界后 ~0.5s 开始
+    encodeAdvance: 0      // 编码在 transmitStart 时触发，留出 500ms 给策略决策
   } as ModeDescriptor,
   FT4: {
     name: 'FT4',
@@ -51,7 +51,7 @@ export const MODES = {
     toleranceMs: 50,
     windowTiming: [0],
     transmitTiming: 550, // (7500 - 6400) / 2 = 550ms
-    encodeAdvance: 500   // 提前500ms开始编码准备
+    encodeAdvance: 0     // 编码在 transmitStart 时触发，留出 550ms 给策略决策
   } as ModeDescriptor,
   VOICE: {
     name: 'VOICE',
@@ -76,12 +76,15 @@ export const DecodeWindowPreset = {
 
 /**
  * FT8 解码窗口预设映射
+ * 偏移量基于时隙结束时间（T+15000ms），即 offset = 实际触发时间 - 15000
+ * FT8 信号：T+500ms 开始，T+13140ms 结束（12.64s）
+ * WSJT-X 标准三轮：T+11.8s(-3200) / T+13.5s(-1500) / T+14.7s(-300)
  */
 export const FT8_WINDOW_PRESETS: Record<string, number[]> = {
-  maximum: [-2000, -1500, -1000, -500, 0],  // 信号结束于 slotEnd-1860ms，首次解码在信号结束后 ~140ms
-  balanced: [-1500, -500, 0],                 // 首次解码在信号结束后 ~360ms
-  lightweight: [-1000, 0],
-  minimum: [0],
+  maximum: [-3200, -1500, -800, -300, -150],  // 5 轮
+  balanced: [-3200, -1500, -300],               // 3 轮：WSJT-X 标准时序
+  lightweight: [-3200, -300],                    // 2 轮：首尾两轮
+  minimum: [-300],                               // 1 轮：信号结束后最终解码
 };
 
 /**
@@ -98,11 +101,11 @@ export const FT4_WINDOW_PRESETS: Record<string, number[]> = {
 export const DecodeWindowSettingsSchema = z.object({
   ft8: z.object({
     preset: z.enum(['maximum', 'balanced', 'lightweight', 'minimum', 'custom']).default('balanced'),
-    customWindowTiming: z.array(z.number().int().min(-2000).max(1000)).optional(),
+    customWindowTiming: z.array(z.number().int().min(-5000).max(1000)).optional(),
   }).optional(),
   ft4: z.object({
     preset: z.enum(['maximum', 'balanced', 'custom']).default('balanced'),
-    customWindowTiming: z.array(z.number().int().min(-2000).max(1000)).optional(),
+    customWindowTiming: z.array(z.number().int().min(-5000).max(1000)).optional(),
   }).optional(),
 });
 

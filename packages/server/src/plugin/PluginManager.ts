@@ -104,6 +104,7 @@ export class PluginManager {
       eventEmitter: deps.eventEmitter,
       requestCall: (operatorId, callsign, lastMessage) => this.requestCall(operatorId, callsign, lastMessage),
       notifyTransmissionQueued: (operatorId, transmission) => this.notifyTransmissionQueued(operatorId, transmission),
+      triggerReEncode: deps.triggerReEncode,
     });
   }
 
