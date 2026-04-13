@@ -44,6 +44,9 @@
     "lint": "eslint src/**/*.ts",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@tx5dr/core": "workspace:*"
+  },
   "devDependencies": {
     "@tx5dr/contracts": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",

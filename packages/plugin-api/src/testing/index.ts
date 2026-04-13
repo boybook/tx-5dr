@@ -80,6 +80,9 @@ export function createMockKVStore(initial?: Record<string, unknown>): MockKVStor
     getAll(): Record<string, unknown> {
       return Object.fromEntries(data);
     },
+    async flush(): Promise<void> {
+      // no-op in mock
+    },
   };
 }
 

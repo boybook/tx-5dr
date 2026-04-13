@@ -27,7 +27,8 @@ import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSess
 import {
   BUILTIN_PLUGINS,
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
-} from './builtins/index.js';
+} from '@tx5dr/builtin-plugins';
+import { BUILTIN_MIGRATIONS } from './builtin-migrations/index.js';
 import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
 import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRuntimeState, FlushableKVStore } from './types.js';
 import { createLogger } from '../utils/logger.js';
@@ -1026,6 +1027,13 @@ export class PluginManager {
     if (!hook) return;
     try {
       this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
+      // Run legacy migration for built-in plugins before onLoad
+      if (instance.plugin.isBuiltIn) {
+        const migrationFn = BUILTIN_MIGRATIONS[instance.plugin.definition.name];
+        if (migrationFn) {
+          await migrationFn(instance.ctx);
+        }
+      }
       await hook(instance.ctx);
     } catch (err) {
       logger.error(`onLoad error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
