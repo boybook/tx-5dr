@@ -76,6 +76,7 @@ export interface DecisionOrchestratorDeps {
     callsign: string,
     grid?: string,
   ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
+  resolveGrid?: (callsign: string) => string | undefined;
   setOperatorAudioFrequency?: (operatorId: string, frequency: number) => Promise<void>;
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
   getCtxForInstance: (instance: PluginInstance) => PluginContext;
@@ -123,6 +124,7 @@ export interface PluginManagerDeps {
     callsign: string,
     grid?: string,
   ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
+  resolveGrid?: (callsign: string) => string | undefined;
   resetOperatorRuntime: (operatorId: string, reason: string) => void;
   dataDir: string;
   /** Optional callback for logbook sync provider registration. */

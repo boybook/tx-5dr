@@ -1,6 +1,6 @@
 import type { EventEmitter } from 'eventemitter3';
 import type { DigitalRadioEngineEvents, ModeDescriptor, SlotInfo, SlotPack } from '@tx5dr/contracts';
-import type { SlotClock } from '@tx5dr/core';
+import { FT8MessageParser, type SlotClock } from '@tx5dr/core';
 import type { WSJTXDecodeWorkQueue } from '../decode/WSJTXDecodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { SpectrumScheduler } from '../audio/SpectrumScheduler.js';
@@ -10,6 +10,7 @@ import type { PSKReporterService } from '../services/PSKReporterService.js';
 import { ListenerManager } from './ListenerManager.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { RadioBridge } from './RadioBridge.js';
+import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('ClockCoordinator');
@@ -21,6 +22,7 @@ export interface ClockCoordinatorDeps {
   slotPackManager: SlotPackManager;
   spectrumScheduler: SpectrumScheduler;
   operatorManager: RadioOperatorManager;
+  callsignTracker: CallsignContextTracker;
   getTransmissionPipeline: () => TransmissionPipeline;
   getRadioBridge: () => RadioBridge;
   getCurrentMode: () => ModeDescriptor;
@@ -140,6 +142,12 @@ export class ClockCoordinator {
 
     this.lm.listen(slotPackManager, 'slotPackUpdated', async (slotPack: { slotId: string; startMs: number; frames: Array<{ snr: number; dt: number; freq: number; message: string }>; stats: { totalDecodes: number } }) => {
       logger.debug(`slot pack updated: ${slotPack.slotId} frames=${slotPack.frames.length} decodes=${slotPack.stats.totalDecodes}`);
+
+      // Update callsign context tracker from decoded frames (before downstream consumers)
+      this.deps.callsignTracker.updateFromSlotPack(
+        slotPack as unknown as SlotPack,
+        FT8MessageParser.parseMessage.bind(FT8MessageParser),
+      );
 
       // PSKReporter 上报
       if (this.pskreporterService) {

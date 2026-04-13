@@ -96,6 +96,7 @@ export class PluginManager {
       getOperatorAutomationSnapshot: deps.getOperatorAutomationSnapshot,
       interruptOperatorTransmission: deps.interruptOperatorTransmission,
       analyzeCallsignForOperator: deps.analyzeCallsignForOperator,
+      resolveGrid: deps.resolveGrid,
       setOperatorAudioFrequency: deps.setOperatorAudioFrequency,
       getStrategyRuntime: (operatorId) => this.getStrategyRuntime(operatorId),
       getCtxForInstance: (instance) => this.getCtxForInstance(instance),

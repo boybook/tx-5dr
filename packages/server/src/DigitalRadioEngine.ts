@@ -45,6 +45,7 @@ import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 import { EngineState } from './state-machines/types.js';
 import { PluginManager } from './plugin/PluginManager.js';
 import { tx5drPaths } from './utils/app-paths.js';
+import { CallsignContextTracker } from './slot/CallsignContextTracker.js';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -91,6 +92,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private clockCoordinator!: ClockCoordinator;  // 在 initialize() 中初始化
   private engineLifecycle!: EngineLifecycle;     // 在构造函数末尾初始化
   private _pluginManager!: PluginManager;        // 在构造函数末尾初始化
+  private _callsignTracker: CallsignContextTracker;
 
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -113,6 +115,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.frequencyManager = new FrequencyManager(ConfigManager.getInstance().getCustomFrequencyPresets());
     this.transmissionTracker = new TransmissionTracker();
     this.resourceManager = new ResourceManager();
+    this._callsignTracker = new CallsignContextTracker();
 
     // 注册内存泄漏检测
     MemoryLeakDetector.getInstance().register('DigitalRadioEngine', this);
@@ -245,6 +248,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           return null;
         }
       },
+      resolveGrid: (callsign: string) => this._callsignTracker.getGrid(callsign),
       resetOperatorRuntime: (operatorId, reason) => {
         this._operatorManager.resetPluginRuntime(operatorId, reason);
       },
@@ -314,6 +318,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public get pluginManager(): PluginManager {
     return this._pluginManager;
+  }
+
+  public get callsignTracker(): CallsignContextTracker {
+    return this._callsignTracker;
   }
 
   public getSlotPackManager(): SlotPackManager {
@@ -425,6 +433,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       slotPackManager: this.slotPackManager,
       spectrumScheduler: this.spectrumScheduler,
       operatorManager: this._operatorManager,
+      callsignTracker: this._callsignTracker,
       getTransmissionPipeline: () => this.transmissionPipeline,
       getRadioBridge: () => this.radioBridge,
       getCurrentMode: () => this.currentMode,
