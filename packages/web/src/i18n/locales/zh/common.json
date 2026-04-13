@@ -119,6 +119,15 @@
     "message": "信息",
     "location": "位置"
   },
+  "callsignPopover": {
+    "grid": "网格",
+    "distance": "距离",
+    "signal": "信号强度",
+    "avg": "平均",
+    "last": "最新",
+    "seenTimes": "出现 {{count}} 次",
+    "noGrid": "未知网格"
+  },
   "myFrames": {
     "noRecords": "暂无相关通联记录",
     "hint": "与我有关的消息将在这里显示"

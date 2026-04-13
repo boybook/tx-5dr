@@ -119,6 +119,15 @@
     "message": "Message",
     "location": "Location"
   },
+  "callsignPopover": {
+    "grid": "Grid",
+    "distance": "Distance",
+    "signal": "Signal",
+    "avg": "Avg",
+    "last": "Last",
+    "seenTimes": "Seen {{count}} times",
+    "noGrid": "Unknown grid"
+  },
   "myFrames": {
     "noRecords": "No related QSO records",
     "hint": "Messages related to me will appear here"
