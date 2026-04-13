@@ -281,7 +281,8 @@ export class DecisionOrchestrator {
       return parsedMessage.logbookAnalysis;
     }
 
-    const grid = getParsedMessageGrid(parsedMessage.message);
+    const grid = getParsedMessageGrid(parsedMessage.message)
+      ?? this.deps.resolveGrid?.(callsign);
     try {
       return await this.deps.analyzeCallsignForOperator(operatorId, callsign, grid)
         ?? parsedMessage.logbookAnalysis;

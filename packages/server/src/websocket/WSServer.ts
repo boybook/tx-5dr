@@ -1517,6 +1517,11 @@ export class WSServer extends WSMessageHandler {
       return null;
     }
 
+    // If grid is missing from this message, look up from callsign context tracker
+    if (!grid) {
+      grid = this.digitalRadioEngine.callsignTracker.getGrid(callsign);
+    }
+
     // 计算当前系统频段（用于按频段判断"是否新呼号"）
     let band: string = 'Unknown';
     try {
