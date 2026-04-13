@@ -42,6 +42,10 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     this.runtime.onDisconnected();
   }
 
+  setPTTActive(active: boolean): void {
+    this.runtime.setPTTActive(active);
+  }
+
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {
     await this.runtime.writeCapability(id, value, action);
   }
