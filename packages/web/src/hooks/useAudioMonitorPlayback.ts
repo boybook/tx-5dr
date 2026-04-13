@@ -9,6 +9,7 @@ import type {
   RealtimeTransportOffer,
 } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
+import { normalizeWsUrl } from '../utils/config';
 import {
   createCompatPlaybackBackend,
   type CompatPlaybackBackend,
@@ -600,7 +601,7 @@ export function useAudioMonitorPlayback(
     gainNodeRef.current = gainNode;
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`${offer.url}?token=${encodeURIComponent(offer.token)}`);
+      const ws = new WebSocket(`${normalizeWsUrl(offer.url)}?token=${encodeURIComponent(offer.token)}`);
       ws.binaryType = 'arraybuffer';
       compatSocketRef.current = ws;
       let settled = false;
