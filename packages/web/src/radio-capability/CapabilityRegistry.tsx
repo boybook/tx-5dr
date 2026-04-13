@@ -81,3 +81,35 @@ export function useCapabilityWriter(): (id: string, value?: boolean | number | s
     [connection.state.radioService],
   );
 }
+
+/**
+ * 返回能力刷新回调和 loading 状态。
+ * 发送 REFRESH_RADIO_CAPABILITIES 命令后进入 loading，
+ * 收到 radioCapabilityList 事件（refreshAll 完成信号）时结束 loading。
+ */
+export function useCapabilityRefresher(): { refresh: () => void; isRefreshing: boolean } {
+  const connection = useConnection();
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
+
+  React.useEffect(() => {
+    const wsClient = connection.state.radioService?.wsClientInstance;
+    if (!wsClient || !isRefreshing) return;
+
+    const handleComplete = () => {
+      setIsRefreshing(false);
+    };
+    wsClient.onWSEvent('radioCapabilityList', handleComplete);
+    return () => {
+      wsClient.offWSEvent('radioCapabilityList', handleComplete);
+    };
+  }, [connection.state.radioService, isRefreshing]);
+
+  const refresh = React.useCallback(() => {
+    const wsClient = connection.state.radioService?.wsClientInstance;
+    if (!wsClient || isRefreshing) return;
+    setIsRefreshing(true);
+    wsClient.send(WSMessageType.REFRESH_RADIO_CAPABILITIES, {});
+  }, [connection.state.radioService, isRefreshing]);
+
+  return { refresh, isRefreshing };
+}

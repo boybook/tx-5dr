@@ -46,6 +46,10 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     this.runtime.setPTTActive(active);
   }
 
+  async refreshAll(): Promise<void> {
+    await this.runtime.refreshAll();
+  }
+
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {
     await this.runtime.writeCapability(id, value, action);
   }
