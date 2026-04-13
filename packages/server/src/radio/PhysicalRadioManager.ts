@@ -277,6 +277,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private capabilityManager: RadioCapabilityManager = new RadioCapabilityManager();
 
+  /** PTT state: pause frequency monitoring and capability polling during TX */
+  private _isPTTActive = false;
+
   /**
    * 当前连接会话的核心能力状态缓存。
    * 一旦明确判定为 unsupported，当前会话内不再重复访问底层连接。
@@ -760,6 +763,16 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       );
       this.handleConnectionError(error as Error);
     }
+  }
+
+  /**
+   * Notify subsystems about PTT state for I/O scheduling.
+   * Pauses capability polling and frequency monitoring during TX.
+   */
+  setPTTActive(active: boolean): void {
+    this._isPTTActive = active;
+    this.capabilityManager.setPTTActive(active);
+    logger.debug('PTT state updated for I/O scheduling', { active });
   }
 
   /**
@@ -1754,6 +1767,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   private async checkFrequencyChange(): Promise<void> {
     if (!this.connection || !this.isConnected()) {
+      return;
+    }
+
+    if (this._isPTTActive) {
       return;
     }
 

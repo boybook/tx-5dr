@@ -19,6 +19,32 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   private readonly descriptorCache = new Map<string, CapabilityDescriptor>();
   private readonly pollingTimers = new Map<string, ReturnType<typeof setInterval>>();
 
+  // PTT state: pause capability polling during TX to reduce USB serial bus load
+  private _isPTTActive = false;
+  private _isPTTCooldown = false;
+  private _pttCooldownTimer: ReturnType<typeof setTimeout> | null = null;
+
+  setPTTActive(active: boolean): void {
+    if (active) {
+      this._isPTTActive = true;
+      if (this._pttCooldownTimer) {
+        clearTimeout(this._pttCooldownTimer);
+        this._pttCooldownTimer = null;
+      }
+      this._isPTTCooldown = false;
+      logger.debug('Capability polling paused (PTT active)');
+    } else {
+      this._isPTTActive = false;
+      this._isPTTCooldown = true;
+      this._pttCooldownTimer = setTimeout(() => {
+        this._isPTTCooldown = false;
+        this._pttCooldownTimer = null;
+        logger.debug('Capability polling cooldown ended');
+      }, 2000);
+      logger.debug('Capability polling cooldown started (PTT released)');
+    }
+  }
+
   async onConnected(connection: IRadioConnection): Promise<void> {
     this.connection = connection;
     this.stopAllPolling();
@@ -51,6 +77,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
   onDisconnected(): void {
     this.stopAllPolling();
+    this.clearPTTState();
     this.connection = null;
     this.supportedCapabilities.clear();
     this.valueCache.clear();
@@ -260,10 +287,24 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       logger.debug(`Stopped polling for ${id}`);
     }
     this.pollingTimers.clear();
+    this.clearPTTState();
+  }
+
+  private clearPTTState(): void {
+    this._isPTTActive = false;
+    this._isPTTCooldown = false;
+    if (this._pttCooldownTimer) {
+      clearTimeout(this._pttCooldownTimer);
+      this._pttCooldownTimer = null;
+    }
   }
 
   private async pollCapabilityOnce(id: string): Promise<void> {
     if (!this.connection) return;
+
+    if (this._isPTTActive || this._isPTTCooldown) {
+      return;
+    }
 
     if (this.connection.isCriticalOperationActive?.()) {
       logger.debug(`Skipping capability poll while critical radio operation is active: ${id}`);

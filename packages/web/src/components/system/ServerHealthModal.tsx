@@ -385,6 +385,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / MB).toFixed(0)} MB`;
 }
 
+function safeFixed(value: number | null | undefined, digits: number): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  return value.toFixed(digits);
+}
+
 // ─── Time range selector ─────────────────────────────────────────────────────
 
 type TimeRange = 5 | 15 | 30;
@@ -433,19 +438,19 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
     [displaySnapshots]
   );
   const memValues = useMemo(
-    () => displaySnapshots.map(s => s.memory.heapUsed / MB),
+    () => displaySnapshots.map(s => (s.memory.heapUsed ?? 0) / MB),
     [displaySnapshots]
   );
   const rssValues = useMemo(
-    () => displaySnapshots.map(s => s.memory.rss / MB),
+    () => displaySnapshots.map(s => (s.memory.rss ?? 0) / MB),
     [displaySnapshots]
   );
   const cpuValues = useMemo(
-    () => displaySnapshots.map(s => s.cpu.total),
+    () => displaySnapshots.map(s => s.cpu.total ?? 0),
     [displaySnapshots]
   );
   const elValues = useMemo(
-    () => displaySnapshots.map(s => s.eventLoop.p99),
+    () => displaySnapshots.map(s => s.eventLoop.p99 ?? 0),
     [displaySnapshots]
   );
   const unsupportedCoreCapabilities = useMemo(
@@ -544,7 +549,7 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                 <MetricCard
                   title={t('serverHealth.cpu')}
                   primaryLabel={t('serverHealth.total')}
-                  primaryValue={`${latest.cpu.total.toFixed(1)}%`}
+                  primaryValue={`${safeFixed(latest.cpu.total, 1)}%`}
                   sparkValues={cpuValues.length > 0 ? cpuValues : [0]}
                   sparkWarn={70}
                   sparkCritical={90}
@@ -553,13 +558,13 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   rows={[
                     {
                       label: t('serverHealth.user'),
-                      value: `${latest.cpu.user.toFixed(1)}%`,
-                      barPercent: latest.cpu.user,
+                      value: `${safeFixed(latest.cpu.user, 1)}%`,
+                      barPercent: latest.cpu.user ?? 0,
                     },
                     {
                       label: t('serverHealth.system'),
-                      value: `${latest.cpu.system.toFixed(1)}%`,
-                      barPercent: latest.cpu.system,
+                      value: `${safeFixed(latest.cpu.system, 1)}%`,
+                      barPercent: latest.cpu.system ?? 0,
                     },
                   ]}
                 />
@@ -572,16 +577,16 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   <div>
                     <div className="text-xs text-default-400">{t('serverHealth.p99')}</div>
                     <div className="text-2xl font-mono font-semibold text-foreground leading-tight">
-                      {latest.eventLoop.p99.toFixed(1)} ms
+                      {safeFixed(latest.eventLoop.p99, 1)} ms
                     </div>
                   </div>
                   <div>
                     <div className="text-xs text-default-400">{t('serverHealth.p50')}</div>
-                    <div className="text-lg font-mono text-default-600">{latest.eventLoop.p50.toFixed(1)} ms</div>
+                    <div className="text-lg font-mono text-default-600">{safeFixed(latest.eventLoop.p50, 1)} ms</div>
                   </div>
                   <div>
                     <div className="text-xs text-default-400">{t('serverHealth.mean')}</div>
-                    <div className="text-lg font-mono text-default-600">{latest.eventLoop.mean.toFixed(1)} ms</div>
+                    <div className="text-lg font-mono text-default-600">{safeFixed(latest.eventLoop.mean, 1)} ms</div>
                   </div>
                 </div>
                 <Sparkline

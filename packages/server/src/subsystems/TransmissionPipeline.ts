@@ -246,6 +246,7 @@ export class TransmissionPipeline {
         this._isPTTActive = true;
 
         this.deps.spectrumScheduler.setPTTActive(true);
+        this.deps.radioManager.setPTTActive(true);
 
         this.deps.engineEmitter.emit('pttStatusChanged', {
           isTransmitting: true,
@@ -276,6 +277,7 @@ export class TransmissionPipeline {
         this._isPTTActive = false;
 
         this.deps.spectrumScheduler.setPTTActive(false);
+        this.deps.radioManager.setPTTActive(false);
 
         this.deps.engineEmitter.emit('pttStatusChanged', {
           isTransmitting: false,
@@ -289,11 +291,13 @@ export class TransmissionPipeline {
         logger.error(`PTT stop failed: ${error}`);
         this._isPTTActive = false;
         this.deps.spectrumScheduler.setPTTActive(false);
+        this.deps.radioManager.setPTTActive(false);
         this.deps.operatorManager.updateActiveTransmissionOperators([]);
       }
     } else {
       this._isPTTActive = false;
       this.deps.spectrumScheduler.setPTTActive(false);
+      this.deps.radioManager.setPTTActive(false);
       this.deps.operatorManager.updateActiveTransmissionOperators([]);
       logger.debug('radio not connected, PTT state set to stopped');
     }
