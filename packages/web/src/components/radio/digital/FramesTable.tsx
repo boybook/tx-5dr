@@ -388,7 +388,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     if (!containerRef.current) return;
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setIsNarrow(entry.contentRect.width < 560);
+        setIsNarrow(entry.contentRect.width < 550);
       }
     });
     resizeObserver.observe(containerRef.current);
