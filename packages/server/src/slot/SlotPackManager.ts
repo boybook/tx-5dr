@@ -25,7 +25,9 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private currentMode: ModeDescriptor = MODES.FT8;
   private persistence: SlotPackPersistence;
   private persistenceEnabled: boolean = true;
-  
+  /** 上一次 clearInMemory() 的时间戳，用于过滤过时的解码结果 */
+  private lastClearTimestamp = 0;
+
   constructor() {
     super();
     this.persistence = new SlotPackPersistence();
@@ -39,6 +41,19 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     logger.info('Cleared in-memory slot cache (listeners retained)');
     this.slotPacks.clear();
     this.lastSlotPack = null;
+    this.lastClearTimestamp = Date.now();
+  }
+
+  /**
+   * 判断 slotId 对应的时隙是否早于最近一次 clearInMemory()
+   * 用于丢弃频率切换后仍在队列中完成的旧频率解码结果
+   */
+  private isStaleSlot(slotId: string, fallbackTimestamp: number): boolean {
+    if (this.lastClearTimestamp === 0) return false;
+    const parts = slotId.split('-');
+    const timePart = parts[parts.length - 1];
+    const startMs = (timePart && !isNaN(parseInt(timePart))) ? parseInt(timePart) : fallbackTimestamp;
+    return startMs < this.lastClearTimestamp;
   }
 
   /**
@@ -47,6 +62,11 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    */
   addTransmissionFrame(slotId: string, operatorId: string, message: string, frequency: number, timestamp: number, replaceExisting?: boolean): void {
     try {
+      if (this.isStaleSlot(slotId, timestamp)) {
+        logger.debug(`Discarding stale transmission frame after frequency change: slot=${slotId}`);
+        return;
+      }
+
       // 获取或创建时隙包
       let slotPack = this.slotPacks.get(slotId);
       if (!slotPack) {
@@ -130,6 +150,10 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 处理解码结果，更新对应的 SlotPack
    */
   processDecodeResult(result: DecodeResult): SlotPack {
+    if (this.isStaleSlot(result.slotId, result.timestamp)) {
+      logger.debug(`Discarding stale decode result after frequency change: slot=${result.slotId}`);
+      return this.createSlotPack(result.slotId, result.timestamp);
+    }
 
     const { slotId } = result;
     
