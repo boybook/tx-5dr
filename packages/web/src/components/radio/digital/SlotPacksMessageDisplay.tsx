@@ -170,6 +170,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       targetCallsign={getTargetCallsign()}
       onRowDoubleClick={handleRowDoubleClick}
       onMessageHover={onMessageHover}
+      enableCallsignPopover
       scrollToBottomTrigger={scrollToBottomTrigger}
     />
   );
