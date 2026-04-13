@@ -77,6 +77,7 @@ export class DecisionOrchestrator {
       const session = this.getOrCreateDecisionState(operator.config.id);
       session.lastDecisionTransmission = null;
       session.lastDecisionMessageSet = null;
+      session.preDecisionEncodedTransmission = undefined;
       const automaticTargetMessages = this.filterAutomaticTargetMessages(operator.config.id, parsedMessages);
 
       const filtered = await this.deps.dispatcher.dispatchFilterCandidates(
@@ -104,6 +105,20 @@ export class DecisionOrchestrator {
       }
       session.lastDecisionTransmission = this.readCurrentTransmission(operator.config.id);
 
+      // 竞态检测：如果 handleEncodeStart 在决策完成前已排队了发射内容，
+      // 且决策结果与之不同，触发替换编码以纠正过时的发射
+      if (session.preDecisionEncodedTransmission !== undefined
+          && session.lastDecisionTransmission !== null
+          && session.lastDecisionTransmission !== session.preDecisionEncodedTransmission) {
+        logger.info('Stale encode corrected after decision', {
+          operatorId: operator.config.id,
+          stale: session.preDecisionEncodedTransmission,
+          correct: session.lastDecisionTransmission,
+        });
+        this.deps.triggerReEncode?.(operator.config.id);
+      }
+      session.preDecisionEncodedTransmission = undefined;
+
       if (decision?.stop) {
         await this.applyStrategyStop(operator.config.id);
       }
@@ -127,6 +142,11 @@ export class DecisionOrchestrator {
       try {
         const transmission = runtime.getTransmitText();
         if (!transmission) continue;
+
+        // 记录即将编码的内容，供 handleSlotStart 检测竞态
+        const session = this.getOrCreateDecisionState(operator.config.id);
+        session.preDecisionEncodedTransmission = transmission;
+
         this.deps.eventEmitter.emit('requestTransmit', {
           operatorId: operator.config.id,
           transmission,

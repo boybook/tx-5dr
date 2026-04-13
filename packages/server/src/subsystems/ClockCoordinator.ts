@@ -66,6 +66,10 @@ export class ClockCoordinator {
     this.lm.listen(slotClock, 'slotStart', async (slotInfo: SlotInfo) => {
       logger.debug(`slot start id=${slotInfo.id} start=${new Date(slotInfo.startMs).toISOString()} phase=${slotInfo.phaseMs}ms drift=${slotInfo.driftMs}ms`);
 
+      // 在 await 让出控制权之前同步捕获 SlotPack，防止 encodeStart
+      // 处理器在 await 间隙通过 addTransmissionFrame 覆盖 lastSlotPack
+      const latestSlotPack = slotPackManager.getLatestSlotPack();
+
       // 确保PTT在新时隙开始时被停止
       await getTransmissionPipeline().forceStopPTT();
 
@@ -75,7 +79,7 @@ export class ClockCoordinator {
       // 时隙边界清理：取消重决策 debounce + 清空编码请求ID映射
       operatorManager.onSlotBoundary();
 
-      engineEmitter.emit('slotStart', slotInfo, slotPackManager.getLatestSlotPack());
+      engineEmitter.emit('slotStart', slotInfo, latestSlotPack);
 
       // 广播所有操作员的状态更新
       operatorManager.broadcastAllOperatorStatusUpdates();

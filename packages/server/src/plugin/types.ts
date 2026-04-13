@@ -61,6 +61,8 @@ export interface OperatorDecisionState {
   decisionInProgress: boolean;
   lastDecisionTransmission: string | null;
   lastDecisionMessageSet: Set<string> | null;
+  /** handleEncodeStart 已排队的发射文本（用于检测 slotStart/encodeStart 竞态） */
+  preDecisionEncodedTransmission?: string;
 }
 
 /**
@@ -88,6 +90,8 @@ export interface DecisionOrchestratorDeps {
     lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
   ) => void;
   notifyTransmissionQueued: (operatorId: string, transmission: string) => void;
+  /** 触发操作员重新编码（用于 slotStart/encodeStart 竞态修正） */
+  triggerReEncode?: (operatorId: string) => void;
 }
 
 /**
@@ -126,6 +130,8 @@ export interface PluginManagerDeps {
   ) => Promise<import('@tx5dr/contracts').LogbookAnalysis | null>;
   resolveGrid?: (callsign: string) => string | undefined;
   resetOperatorRuntime: (operatorId: string, reason: string) => void;
+  /** 触发操作员替换编码（DecisionOrchestrator 竞态修正用） */
+  triggerReEncode?: (operatorId: string) => void;
   dataDir: string;
   /** Optional callback for logbook sync provider registration. */
   registerLogbookSyncProvider?: (

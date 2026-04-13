@@ -252,6 +252,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       resetOperatorRuntime: (operatorId, reason) => {
         this._operatorManager.resetPluginRuntime(operatorId, reason);
       },
+      triggerReEncode: (operatorId) => {
+        this._operatorManager.triggerPostDecisionReEncode(operatorId);
+      },
       dataDir: '', // 将在 initialize() 中更新
     });
 

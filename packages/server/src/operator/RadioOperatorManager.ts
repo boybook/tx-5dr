@@ -930,6 +930,15 @@ export class RadioOperatorManager {
     this.latestEncodeRequestIds.clear();
   }
 
+  /**
+   * 当 DecisionOrchestrator 检测到 slotStart/encodeStart 竞态导致的过时编码时调用。
+   * 使用 replaceExisting=true 替换当前时隙中已排队的编码。
+   */
+  triggerPostDecisionReEncode(operatorId: string): void {
+    logger.info(`Post-decision re-encode triggered: operator=${operatorId}`);
+    this.checkAndTriggerTransmission(operatorId, { replaceExisting: true });
+  }
+
   resetPluginRuntime(operatorId: string, reason: string): void {
     this.pendingTransmissions = this.pendingTransmissions.filter(
       (request) => request.operatorId !== operatorId,
