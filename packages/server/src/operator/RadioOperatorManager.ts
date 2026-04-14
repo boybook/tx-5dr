@@ -24,6 +24,7 @@ import { LogManager } from '../log/LogManager.js';
 import { buildCommentFromMessageHistory } from '../log/qsoTextFields.js';
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
+import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -39,6 +40,7 @@ export interface RadioOperatorManagerOptions {
   transmissionTracker?: any; // TransmissionTracker实例
   // 获取物理电台当前基频（Hz）；若无法获取，返回null
   getRadioFrequency?: () => Promise<number | null>;
+  callsignTracker?: CallsignContextTracker;
 }
 
 /**
@@ -57,6 +59,7 @@ export class RadioOperatorManager {
   private logManager: LogManager;
   private transmissionTracker: any; // TransmissionTracker实例
   private getRadioFrequency?: () => Promise<number | null>;
+  private callsignTracker?: CallsignContextTracker;
   // 插件管理器引用（延迟注入，引擎初始化完成后设置）
   private _pluginManager?: import('../plugin/PluginManager.js').PluginManager;
 
@@ -85,6 +88,7 @@ export class RadioOperatorManager {
     this.logManager = LogManager.getInstance();
     this.transmissionTracker = options.transmissionTracker;
     this.getRadioFrequency = options.getRadioFrequency;
+    this.callsignTracker = options.callsignTracker;
 
     // 监听发射请求
     const handleRequestTransmit = (request: TransmitRequest) => {
@@ -1441,10 +1445,28 @@ export class RadioOperatorManager {
     const historyStartMs = Math.max(0, qsoRecord.startTime - slotMs);
     const historyEndMs = qsoRecord.endTime ?? qsoRecord.startTime;
     const historySlotPacks = await this.collectRelevantSlotPacks(historyStartMs, historyEndMs);
-    const dayStartMs = Date.parse(new Date(historyEndMs).toISOString().split('T')[0] + 'T00:00:00.000Z');
-    const dailySlotPacks = await this.collectRelevantSlotPacks(dayStartMs, historyEndMs);
 
-    const grid = qsoRecord.grid || this.findHistoricalGrid(dailySlotPacks, targetCallsign, historyEndMs);
+    const grid = qsoRecord.grid
+      || this.callsignTracker?.getGrid(targetCallsign);
+
+    // Recover signal reports from CallsignContextTracker if missing
+    let reportSent = qsoRecord.reportSent;
+    let reportReceived = qsoRecord.reportReceived;
+    if (this.callsignTracker && myCallsign) {
+      if (!reportSent) {
+        const sent = this.callsignTracker.getReport(myCallsign, targetCallsign);
+        if (sent !== undefined) {
+          reportSent = sent.toString();
+        }
+      }
+      if (!reportReceived) {
+        const received = this.callsignTracker.getReport(targetCallsign, myCallsign);
+        if (received !== undefined) {
+          reportReceived = received.toString();
+        }
+      }
+    }
+
     const messageHistory = this.rebuildQSOMessageHistory(historySlotPacks, {
       operatorId,
       myCallsign,
@@ -1458,6 +1480,8 @@ export class RadioOperatorManager {
       callsign: targetCallsign,
       myCallsign: myCallsign || qsoRecord.myCallsign,
       grid,
+      reportSent: reportSent || qsoRecord.reportSent,
+      reportReceived: reportReceived || qsoRecord.reportReceived,
       messageHistory,
       comment: qsoRecord.comment ?? buildCommentFromMessageHistory(messageHistory),
     };
@@ -1504,33 +1528,6 @@ export class RadioOperatorManager {
     });
   }
 
-  private findHistoricalGrid(slotPacks: SlotPack[], targetCallsign: string, endMs: number): string | undefined {
-    const sorted = [...slotPacks]
-      .filter(slotPack => slotPack.startMs <= endMs)
-      .sort((left, right) => right.startMs - left.startMs);
-
-    for (const slotPack of sorted) {
-      for (const frame of slotPack.frames) {
-        if (frame.snr === -999) {
-          continue;
-        }
-
-        try {
-          const parsed = FT8MessageParser.parseMessage(frame.message);
-          if (parsed.type === 'cq' && parsed.senderCallsign?.toUpperCase() === targetCallsign && parsed.grid) {
-            return parsed.grid;
-          }
-          if (parsed.type === 'call' && parsed.senderCallsign?.toUpperCase() === targetCallsign && parsed.grid) {
-            return parsed.grid;
-          }
-        } catch (error) {
-          logger.warn(`Failed to parse frame while resolving grid: "${frame.message}"`, error);
-        }
-      }
-    }
-
-    return undefined;
-  }
 
   private rebuildQSOMessageHistory(
     slotPacks: SlotPack[],

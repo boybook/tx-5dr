@@ -9,7 +9,7 @@ import { getHighlightTypeLabels, HighlightType } from '../../../utils/displayNot
 import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
-import { CallsignInfoPopover, type CallsignTrackingData } from './CallsignInfoPopover';
+import { CallsignInfoPopover } from './CallsignInfoPopover';
 import { BOTTOM_TOLERANCE_PX, getBottomGroupSignature } from './framesTableAutoScroll';
 
 export interface FrameDisplayMessage {
@@ -118,7 +118,6 @@ interface MessageRowProps {
   highlightTypeLabels: Record<string, string>;
   getHighestPriorityHighlight: (analysis: NonNullable<FrameDisplayMessage['logbookAnalysis']>) => HighlightType | null;
   getHighlightColor: (type: HighlightType) => string;
-  getCallsignData: (callsign: string) => CallsignTrackingData | undefined;
   onDoubleClick?: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -127,7 +126,7 @@ interface MessageRowProps {
 const MessageRow = React.memo<MessageRowProps>(({
   message, group, gridCols, isNarrow, myCallsigns, targetCallsign,
   showLogbookAnalysisVisuals, enableCallsignPopover, isZh, highlightTypeLabels,
-  getHighestPriorityHighlight, getHighlightColor, getCallsignData,
+  getHighestPriorityHighlight, getHighlightColor,
   onDoubleClick, onMouseEnter, onMouseLeave,
 }) => {
   const hasMyCallsign = message.db !== 'TX' && containsMyCallsign(message.message, myCallsigns);
@@ -190,14 +189,19 @@ const MessageRow = React.memo<MessageRowProps>(({
       return (
         <CallsignInfoPopover
           callsign={message.logbookAnalysis.callsign}
-          getCallsignData={getCallsignData}
+          logbookAnalysis={message.logbookAnalysis}
+          country={message.country}
+          countryZh={message.countryZh}
+          countryEn={message.countryEn}
+          countryCode={message.countryCode}
+          flag={message.flag}
         >
           {inner}
         </CallsignInfoPopover>
       );
     }
     return inner;
-  }, [isZh, isNarrow, message.countryZh, message.countryEn, message.country, message.flag, message.countryCode, message.logbookAnalysis?.callsign, enableCallsignPopover, getCallsignData]);
+  }, [isZh, isNarrow, message.countryZh, message.countryEn, message.country, message.flag, message.countryCode, message.logbookAnalysis, enableCallsignPopover]);
 
   // Chip for logbook analysis
   const chipNode = useMemo(() => {
@@ -307,37 +311,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const { getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
   const bottomGroupSignature = useMemo(() => getBottomGroupSignature(groups), [groups]);
 
-  // ─── Callsign tracking data (for popover) ────
-  const callsignDataRef = useRef(new Map<string, CallsignTrackingData>());
-  useMemo(() => {
-    const map = new Map<string, CallsignTrackingData>();
-    for (const group of groups) {
-      for (const msg of group.messages) {
-        const cs = msg.logbookAnalysis?.callsign?.toUpperCase();
-        if (!cs || msg.db === 'TX') continue;
-        let entry = map.get(cs);
-        if (!entry) {
-          entry = { snrHistory: [] };
-          map.set(cs, entry);
-        }
-        if (typeof msg.db === 'number') {
-          entry.snrHistory.push({ utc: msg.utc, snr: msg.db, slotStartMs: group.startMs });
-        }
-        if (msg.logbookAnalysis?.grid) entry.grid = msg.logbookAnalysis.grid;
-        if (msg.logbookAnalysis?.dxccEntity) entry.dxccEntity = msg.logbookAnalysis.dxccEntity;
-        if (msg.country) entry.country = msg.country;
-        if (msg.countryZh) entry.countryZh = msg.countryZh;
-        if (msg.countryEn) entry.countryEn = msg.countryEn;
-        if (msg.countryCode) entry.countryCode = msg.countryCode;
-        if (msg.flag) entry.flag = msg.flag;
-      }
-    }
-    callsignDataRef.current = map;
-  }, [groups]);
-  const getCallsignData = useCallback(
-    (cs: string) => callsignDataRef.current.get(cs.toUpperCase()),
-    [],
-  );
+
 
   // ─── 组级别虚拟化 ────────────────────────
   const virtualizer = useVirtualizer({
@@ -569,7 +543,6 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                         highlightTypeLabels={highlightTypeLabels}
                         getHighestPriorityHighlight={getHighestPriorityHighlight}
                         getHighlightColor={getHighlightColor}
-                        getCallsignData={getCallsignData}
                         onDoubleClick={onRowDoubleClick ? () => onRowDoubleClick(message, group) : undefined}
                         onMouseEnter={message.db !== 'TX' ? () => handleMessageEnter(message.freq) : undefined}
                         onMouseLeave={message.db !== 'TX' ? handleMessageLeave : undefined}

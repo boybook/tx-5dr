@@ -1623,6 +1623,20 @@ export const api = {
     }, apiBase);
   },
 
+  // ===== 呼号追踪 =====
+
+  async getCallsignTracking(callsign: string, apiBase?: string): Promise<{
+    success: boolean;
+    data: {
+      grid?: string;
+      gridSource?: 'cq' | 'call';
+      snrHistory: { snr: number; timestamp: number }[];
+      lastSeenMs: number;
+    } | null;
+  }> {
+    return apiRequest(`/callsigns/${encodeURIComponent(callsign)}/tracking`, undefined, apiBase);
+  },
+
   // ===== OpenWebRX SDR 站点管理 =====
 
   async getOpenWebRXStations(apiBase?: string): Promise<{ stations: OpenWebRXStationConfig[] }> {
