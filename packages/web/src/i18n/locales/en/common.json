@@ -121,6 +121,18 @@
   },
   "callsignPopover": {
     "grid": "Grid",
+    "subdivision": "Subdivision",
+    "estimated": "(low confidence)",
+    "subdivisions": {
+      "AK": "Alaska",
+      "AS": "American Samoa",
+      "CA": "California",
+      "GU": "Guam",
+      "HI": "Hawaii",
+      "MP": "Northern Mariana Islands",
+      "PR": "Puerto Rico",
+      "VI": "U.S. Virgin Islands"
+    },
     "distance": "Distance",
     "signal": "Signal",
     "avg": "Avg",

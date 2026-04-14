@@ -7216,8 +7216,8 @@
       "name": "Japan",
       "notes": "",
       "outgoingQslService": true,
-      "prefix": "JA,JB,JC,JD,JE,JF,JG,JH,JI,JJ,JK,JL,JM,JN,JO,JP,JQ,JR,JS,7J,7K,7L,7M,7N,8N",
-      "prefixRegex": "^(J[A-S]|7[J-N]|8N)[A-Z0-9/]*$",
+      "prefix": "JA,JB,JC,JD,JE,JF,JG,JH,JI,JJ,JK,JL,JM,JN,JO,JP,JQ,JR,JS,7J,7K,7L,7M,7N,8J,8N",
+      "prefixRegex": "^(J[A-S]|7[J-N]|8[JN])[A-Z0-9/]*$",
       "thirdPartyTraffic": false,
       "validEnd": "",
       "validStart": ""

@@ -23,6 +23,8 @@ export interface FrameDisplayMessage {
   countryEn?: string;
   countryCode?: string;
   flag?: string;
+  state?: string;
+  stateConfidence?: 'high' | 'low';
   logbookAnalysis?: {
     isNewCallsign?: boolean;
     isNewDxccEntity?: boolean;
@@ -33,6 +35,8 @@ export interface FrameDisplayMessage {
     callsign?: string;
     grid?: string;
     prefix?: string;
+    state?: string;
+    stateConfidence?: 'high' | 'low';
     dxccEntity?: string;
     dxccId?: number;
     dxccStatus?: 'current' | 'deleted' | 'unknown' | 'none';
@@ -180,8 +184,10 @@ const MessageRow = React.memo<MessageRowProps>(({
     if (!displayName) return null;
     const text = isNarrow ? (displayName.split('·')[1] || displayName) : displayName;
     const inner = (
-      <div className="flex items-center justify-end gap-1">
-        <span className="text-xs">{text}</span>
+      <div className="flex min-w-0 items-center justify-end gap-1">
+        <span className="min-w-0 truncate whitespace-nowrap text-xs" title={displayName}>
+          {text}
+        </span>
         <FlagDisplay flag={message.flag} countryCode={message.countryCode} />
       </div>
     );
@@ -195,13 +201,15 @@ const MessageRow = React.memo<MessageRowProps>(({
           countryEn={message.countryEn}
           countryCode={message.countryCode}
           flag={message.flag}
+          state={message.state}
+          stateConfidence={message.stateConfidence}
         >
           {inner}
         </CallsignInfoPopover>
       );
     }
     return inner;
-  }, [isZh, isNarrow, message.countryZh, message.countryEn, message.country, message.flag, message.countryCode, message.logbookAnalysis, enableCallsignPopover]);
+  }, [isZh, isNarrow, message.countryZh, message.countryEn, message.country, message.flag, message.countryCode, message.logbookAnalysis, message.state, message.stateConfidence, enableCallsignPopover]);
 
   // Chip for logbook analysis
   const chipNode = useMemo(() => {

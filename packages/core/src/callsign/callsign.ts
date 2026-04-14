@@ -433,7 +433,7 @@ export interface DXCCResolutionResult {
   needsReview: boolean;
 }
 
-export const DXCC_RESOLVER_VERSION = '2026.04.02';
+export const DXCC_RESOLVER_VERSION = '2026.04.14';
 
 // 前缀Trie结构（字符图）
 interface PrefixTrieNode {
@@ -453,6 +453,8 @@ export interface CallsignInfo {
   countryCode?: string;
   flag?: string;
   prefix?: string;
+  state?: string;
+  stateConfidence?: 'high' | 'low';
   entityCode?: number;
   continent?: string[];
   cqZone?: number;
@@ -479,24 +481,52 @@ function isEntityActiveAt(entity: DXCCEntity, timestamp: number): boolean {
 
 function createCandidateCallsigns(callsign: string): string[] {
   const upper = callsign.toUpperCase().trim();
-  const candidates = new Set<string>([upper]);
   if (!upper.includes('/')) {
-    return Array.from(candidates);
+    return [upper];
   }
 
+  const seen = new Set<string>();
+  const candidates: Array<{ value: string; index: number }> = [];
+  const pushCandidate = (value: string) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    candidates.push({ value, index: candidates.length });
+  };
+
   const segments = upper.split('/').map((segment) => segment.trim()).filter(Boolean);
+  pushCandidate(upper);
   for (const segment of segments) {
-    candidates.add(segment);
+    pushCandidate(segment);
   }
 
   const longest = segments
     .filter((segment) => /[A-Z]/.test(segment) && /\d/.test(segment))
     .sort((left, right) => right.length - left.length)[0];
   if (longest) {
-    candidates.add(longest);
+    pushCandidate(longest);
   }
 
-  return Array.from(candidates);
+  candidates.sort((left, right) => {
+    const leftPrefixLength = dxccIndex.getLongestPrefix(left.value)?.length ?? 0;
+    const rightPrefixLength = dxccIndex.getLongestPrefix(right.value)?.length ?? 0;
+    if (leftPrefixLength !== rightPrefixLength) {
+      return rightPrefixLength - leftPrefixLength;
+    }
+
+    const leftRegexLike = left.value.includes('/') ? 1 : 0;
+    const rightRegexLike = right.value.includes('/') ? 1 : 0;
+    if (leftRegexLike !== rightRegexLike) {
+      return rightRegexLike - leftRegexLike;
+    }
+
+    if (left.value.length !== right.value.length) {
+      return left.value.length - right.value.length;
+    }
+
+    return left.index - right.index;
+  });
+
+  return candidates.map((candidate) => candidate.value);
 }
 
 export interface FT8LocationInfo {
@@ -505,6 +535,8 @@ export interface FT8LocationInfo {
   countryEn?: string;
   countryCode?: string;
   flag?: string;
+  state?: string;
+  stateConfidence?: 'high' | 'low';
   callsign?: string;
   grid?: string;
 }
@@ -691,45 +723,85 @@ class ChinaCallsignParser {
   }
 }
 
-// 日本呼号解析器（按区号推断地区名）
-class JapanCallsignParser {
-  // 日本常见业余前缀范围：JA-JS, 7J-7N, 8N（与DXCC前缀对齐）
-  private static readonly JAPAN_PREFIX_REGEX = /^(J[A-S]|7[J-N]|8N)/;
+interface JapanCallsignInfo {
+  country: string;
+  countryZh: string;
+  countryEn: string;
+  countryCode: string;
+  matchedPrefix: string;
+}
 
-  // 区号到地区（中文）映射
+interface USStateInfo {
+  state: string;
+  confidence: 'high' | 'low';
+}
+
+// 日本呼号解析器（在当前 DXCC 为 Japan 时补充 call area）
+class JapanCallsignParser {
+  private static readonly STANDARD_AREA_REGEX = /^(J[A-S]|7J|8[JN])([0-9])/;
+  private static readonly KANTO_SPECIAL_REGEX = /^(7[K-N])([1-4])/;
+
   private static readonly AREA_MAP: Record<string, string> = {
-    '0': '信越',        // JA0（长野、新潟等）
-    '1': '关东',        // JA1（东京、神奈川、千叶、埼玉等）
-    '2': '东海',        // JA2（爱知、静冈、岐阜、三重）
-    '3': '关西',        // JA3（大阪、京都、兵库、奈良、滋贺、和歌山）
-    '4': '中国地方',    // JA4（广岛、冈山、山口、岛根、鸟取）
-    '5': '四国',        // JA5（香川、德岛、爱媛、高知）
-    '6': '九州/冲绳',   // JA6（九州各县，历史上含冲绳 JR6/JS6）
-    '7': '东北',        // JA7（青森、岩手、秋田、山形、宫城、福岛）
-    '8': '北海道',      // JA8（北海道）
-    '9': '北陆'         // JA9（富山、石川、福井）
+    '0': '信越',
+    '1': '关东',
+    '2': '东海',
+    '3': '关西',
+    '4': '中国地方',
+    '5': '四国',
+    '6': '九州/冲绳',
+    '7': '东北',
+    '8': '北海道',
+    '9': '北陆'
   };
 
-  // 区号到地区（英文）映射
   private static readonly AREA_MAP_EN: Record<string, string> = {
     '0': 'Kōshinetsu', '1': 'Kantō',    '2': 'Tōkai',
     '3': 'Kansai',      '4': 'Chūgoku', '5': 'Shikoku',
     '6': 'Kyūshū',      '7': 'Tōhoku',  '8': 'Hokkaido', '9': 'Hokuriku'
   };
 
-  public static parseJapanCallsign(callsign: string): { country: string; countryZh: string; countryEn: string; countryCode: string } | null {
+  private static extractPortableArea(callsign: string): string | null {
+    const segments = callsign.split('/').map((segment) => segment.trim()).filter(Boolean);
+    for (let i = segments.length - 1; i >= 1; i--) {
+      if (/^[0-9]$/.test(segments[i])) {
+        return segments[i];
+      }
+    }
+    return null;
+  }
+
+  private static extractAssignedArea(baseCallsign: string): { area: string; matchedPrefix: string } | null {
+    if (/^JD1/.test(baseCallsign)) {
+      return null;
+    }
+
+    const kantoPortableSeries = baseCallsign.match(this.KANTO_SPECIAL_REGEX);
+    if (kantoPortableSeries) {
+      return {
+        area: '1',
+        matchedPrefix: kantoPortableSeries[1]
+      };
+    }
+
+    const standardSeries = baseCallsign.match(this.STANDARD_AREA_REGEX);
+    if (!standardSeries) {
+      return null;
+    }
+
+    return {
+      matchedPrefix: standardSeries[1],
+      area: standardSeries[2]
+    };
+  }
+
+  public static parseJapanCallsign(callsign: string): JapanCallsignInfo | null {
     if (!callsign) return null;
-    const upper = callsign.toUpperCase();
+    const upper = callsign.toUpperCase().trim();
+    const baseCallsign = extractBaseCallsign(upper);
+    const assignedArea = this.extractAssignedArea(baseCallsign);
+    if (!assignedArea) return null;
 
-    // 仅处理日本通用前缀
-    // 排除 JD1（小笠原/南鸟岛等独立 DXCC 实体）
-    if (/^JD1/.test(upper)) return null;
-    if (!this.JAPAN_PREFIX_REGEX.test(upper)) return null;
-
-    // 提取区号：取呼号中出现的第一个数字字符
-    const m = upper.match(/\d/);
-    if (!m) return null;
-    const area = m[0];
+    const area = this.extractPortableArea(upper) || assignedArea.area;
     const region = this.AREA_MAP[area];
     if (!region) return null;
 
@@ -738,7 +810,8 @@ class JapanCallsignParser {
       country: 'Japan',
       countryZh: `日本·${region}`,
       countryEn: `Japan·${regionEn}`,
-      countryCode: 'JP'
+      countryCode: 'JP',
+      matchedPrefix: assignedArea.matchedPrefix
     };
   }
 }
@@ -836,6 +909,68 @@ class RussiaCallsignParser {
       };
     }
   }
+}
+
+const US_ENTITY_STATE_MAP: Record<string, USStateInfo> = {
+  'Alaska': { state: 'AK', confidence: 'high' },
+  'American Samoa': { state: 'AS', confidence: 'high' },
+  'Guam': { state: 'GU', confidence: 'high' },
+  'Hawaii': { state: 'HI', confidence: 'high' },
+  'Mariana Islands': { state: 'MP', confidence: 'high' },
+  'Puerto Rico': { state: 'PR', confidence: 'high' },
+  'US Virgin Islands': { state: 'VI', confidence: 'high' },
+};
+
+const US_SUBDIVISION_EN_MAP: Record<string, string> = {
+  'AK': 'Alaska',
+  'AS': 'American Samoa',
+  'CA': 'California',
+  'GU': 'Guam',
+  'HI': 'Hawaii',
+  'MP': 'Northern Mariana Islands',
+  'PR': 'Puerto Rico',
+  'VI': 'U.S. Virgin Islands',
+};
+
+const US_SUBDIVISION_ZH_MAP: Record<string, string> = {
+  'AK': '阿拉斯加',
+  'AS': '美属萨摩亚',
+  'CA': '加州',
+  'GU': '关岛',
+  'HI': '夏威夷',
+  'MP': '北马里亚纳群岛',
+  'PR': '波多黎各',
+  'VI': '美属维尔京群岛',
+};
+
+function resolveUSStateInfo(callsign: string, entity: DXCCEntity | null): USStateInfo | null {
+  if (!entity) {
+    return null;
+  }
+
+  const mappedEntity = US_ENTITY_STATE_MAP[entity.name];
+  if (mappedEntity) {
+    return mappedEntity;
+  }
+
+  if (entity.name !== 'United States of America' || entity.countryCode !== 'US') {
+    return null;
+  }
+
+  const upper = callsign.toUpperCase().trim();
+  const segments = upper.split('/').map((segment) => segment.trim()).filter(Boolean);
+  const portableArea = segments.find((segment) => /^[0-9]$/.test(segment));
+  if (portableArea === '6') {
+    return { state: 'CA', confidence: 'low' };
+  }
+
+  const baseCallsign = extractBaseCallsign(upper);
+  const districtMatch = baseCallsign.match(/\d/);
+  if (districtMatch?.[0] === '6') {
+    return { state: 'CA', confidence: 'low' };
+  }
+
+  return null;
 }
 
 // DXCC 数据索引
@@ -1013,10 +1148,8 @@ class DXCCIndex {
    * 如果节点包含多个实体（数组），返回优先级最高的（数组第一个元素）
    */
   private longestTrieMatch(callsign: string): { prefix: string | null; entities: DXCCEntity[] } {
-    // 仅做一次清洗：转大写+去除 '/...'
     const upper = callsign.toUpperCase();
-    const slashIdx = upper.indexOf('/');
-    const clean = slashIdx === -1 ? upper : upper.slice(0, slashIdx);
+    const clean = upper.trim();
 
     let node = this.prefixTrie;
     let lastPrefix: string | null = null;
@@ -1082,30 +1215,6 @@ class DXCCIndex {
           ituZone: 44,
         },
         matchedPrefix: upperCallsign.substring(0, 2),
-        confidence: 'heuristic',
-        needsReview: false,
-      };
-      this.entityLRU.set(cacheKey, result);
-      return result;
-    }
-
-    // 尝试日本呼号解析（附带地区信息）
-    const japanInfo = JapanCallsignParser.parseJapanCallsign(upperCallsign);
-    if (japanInfo) {
-      const result: DXCCResolutionResult = {
-        entity: {
-          name: japanInfo.country,
-          countryZh: japanInfo.countryZh,
-          countryEn: japanInfo.countryEn,
-          countryCode: japanInfo.countryCode,
-          flag: '🇯🇵',
-          prefix: upperCallsign.match(/^[A-Z]+/)?.[0],
-          entityCode: 339, // 日本 DXCC 实体代码
-          continent: ['AS'],
-          cqZone: 25,
-          ituZone: 45,
-        },
-        matchedPrefix: upperCallsign.match(/^[A-Z]+/)?.[0],
         confidence: 'heuristic',
         needsReview: false,
       };
@@ -1215,15 +1324,26 @@ export function getCallsignInfo(callsign: string, timestamp: number = Date.now()
   const resolution = dxccIndex.resolveCallsign(callsign, timestamp);
   const entity = resolution.entity;
   if (!entity) return undefined;
+  const japanInfo = entity.entityCode === 339 && !entity.deleted
+    ? JapanCallsignParser.parseJapanCallsign(callsign)
+    : null;
+  const usStateInfo = resolveUSStateInfo(callsign, entity);
+  const usSubdivisionZh = usStateInfo?.state ? US_SUBDIVISION_ZH_MAP[usStateInfo.state] : undefined;
+  const usSubdivisionEn = usStateInfo?.state ? US_SUBDIVISION_EN_MAP[usStateInfo.state] : undefined;
+  const prefix = japanInfo?.matchedPrefix || resolution.matchedPrefix || extractCallsignPrefix(callsign);
 
   return {
     callsign,
     country: entity.name,
-    countryZh: entity.countryZh,
-    countryEn: entity.countryEn ?? entity.name,
+    countryZh: japanInfo?.countryZh
+      ?? (entity.name === 'United States of America' && usSubdivisionZh ? `美国·${usSubdivisionZh}` : entity.countryZh),
+    countryEn: japanInfo?.countryEn
+      ?? (entity.name === 'United States of America' && usSubdivisionEn ? `United States·${usSubdivisionEn}` : entity.countryEn ?? entity.name),
     countryCode: entity.countryCode,
     flag: entity.flag,
-    prefix: callsign.match(/^[A-Z]+/)?.[0],
+    prefix,
+    state: usStateInfo?.state,
+    stateConfidence: usStateInfo?.confidence,
     entityCode: entity.entityCode,
     continent: entity.continent,
     cqZone: entity.cqZone,
@@ -1454,7 +1574,9 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
     countryZh: callsignInfo.countryZh,
     countryEn: callsignInfo.countryEn,
     countryCode: callsignInfo.countryCode,
-    flag: callsignInfo.flag
+    flag: callsignInfo.flag,
+    state: callsignInfo.state,
+    stateConfidence: callsignInfo.stateConfidence,
   };
 }
 

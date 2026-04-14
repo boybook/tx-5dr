@@ -1555,6 +1555,8 @@ export class WSServer extends WSMessageHandler {
     let hasSuccessfulAnalysis = false;
     const canAnalyzeGridByBand = !!grid && !!band && band !== 'Unknown';
     let prefix: string | undefined;
+    let state: string | undefined;
+    let stateConfidence: 'high' | 'low' | undefined;
     let dxccId: number | undefined;
     let dxccEntity: string | undefined;
     let dxccStatus: 'current' | 'deleted' | 'none' | 'unknown' | undefined;
@@ -1587,6 +1589,12 @@ export class WSServer extends WSMessageHandler {
           if (analysis.prefix) {
             prefix = analysis.prefix;
           }
+          if (analysis.state) {
+            state = analysis.state;
+          }
+          if (analysis.stateConfidence) {
+            stateConfidence = analysis.stateConfidence;
+          }
           if (analysis.dxccId) {
             dxccId = analysis.dxccId;
           }
@@ -1612,6 +1620,8 @@ export class WSServer extends WSMessageHandler {
       callsign,
       grid,
       prefix,
+      state,
+      stateConfidence,
       dxccId,
       dxccEntity,
       dxccStatus,
