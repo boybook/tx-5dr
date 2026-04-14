@@ -143,7 +143,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           return null;
         }
       },
-      transmissionTracker: this.transmissionTracker
+      transmissionTracker: this.transmissionTracker,
+      callsignTracker: this._callsignTracker,
     });
 
     // 初始化插件管理器（在操作员管理器之后）

@@ -1,27 +1,30 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
-import { Popover, PopoverTrigger, PopoverContent, Divider } from '@heroui/react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { Popover, PopoverTrigger, PopoverContent, Divider, Spinner } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import { calculateGridDistance } from '@tx5dr/core';
+import { api, calculateGridDistance } from '@tx5dr/core';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { useStationInfo } from '../../../store/radioStore';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export interface CallsignTrackingData {
-  snrHistory: { utc: string; snr: number; slotStartMs: number }[];
-  grid?: string;
+interface CallsignInfoPopoverProps {
+  callsign: string;
+  /** LogbookAnalysis from the triggering row (provides grid/dxcc info) */
+  logbookAnalysis?: { grid?: string; dxccEntity?: string };
+  /** Country display fields from the triggering row */
   country?: string;
   countryZh?: string;
   countryEn?: string;
   countryCode?: string;
   flag?: string;
-  dxccEntity?: string;
+  children: React.ReactNode;
 }
 
-interface CallsignInfoPopoverProps {
-  callsign: string;
-  getCallsignData: (callsign: string) => CallsignTrackingData | undefined;
-  children: React.ReactNode;
+interface TrackingData {
+  grid?: string;
+  gridSource?: 'cq' | 'call';
+  snrHistory: { snr: number; timestamp: number }[];
+  lastSeenMs: number;
 }
 
 // ─── SNR Sparkline ──────────────────────────────────────────────────────────
@@ -176,29 +179,45 @@ function SnrSparkline({ values, timestamps }: { values: number[]; timestamps: st
 
 // ─── Popover Content ────────────────────────────────────────────────────────
 
-function PopoverBody({ callsign, data }: { callsign: string; data: CallsignTrackingData }) {
+function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, countryEn, countryCode, flag }: {
+  callsign: string;
+  tracking: TrackingData;
+  logbookAnalysis?: { grid?: string; dxccEntity?: string };
+  country?: string;
+  countryZh?: string;
+  countryEn?: string;
+  countryCode?: string;
+  flag?: string;
+}) {
   const { t, i18n } = useTranslation('common');
   const isZh = i18n.language === 'zh';
   const stationInfo = useStationInfo();
   const myGrid = stationInfo?.qth?.grid;
 
+  const grid = tracking.grid || logbookAnalysis?.grid;
+
   const distance = useMemo(() => {
-    if (!myGrid || !data.grid) return null;
-    const d = calculateGridDistance(myGrid, data.grid);
+    if (!myGrid || !grid) return null;
+    const d = calculateGridDistance(myGrid, grid);
     if (d === null) return null;
     return Math.round(d);
-  }, [myGrid, data.grid]);
+  }, [myGrid, grid]);
 
   const countryName = isZh
-    ? (data.countryZh || data.countryEn || data.country)
-    : (data.countryEn || data.country);
+    ? (countryZh || countryEn || country)
+    : (countryEn || country);
 
-  const snrValues = data.snrHistory.map(h => h.snr);
-  const snrTimestamps = data.snrHistory.map(h => h.utc.slice(0, 5));
+  const snrValues = tracking.snrHistory.map(h => h.snr);
+  const snrTimestamps = tracking.snrHistory.map(h => {
+    const d = new Date(h.timestamp);
+    return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
+  });
   const avgSnr = snrValues.length > 0
     ? Math.round(snrValues.reduce((a, b) => a + b, 0) / snrValues.length)
     : null;
   const lastSnr = snrValues.length > 0 ? snrValues[snrValues.length - 1] : null;
+
+  const dxccEntity = logbookAnalysis?.dxccEntity;
 
   return (
     <div className="p-2.5 w-[264px]">
@@ -207,7 +226,7 @@ function PopoverBody({ callsign, data }: { callsign: string; data: CallsignTrack
         <span className="font-mono font-semibold text-sm">{callsign}</span>
         {countryName && (
           <span className="flex items-center gap-1 text-xs text-default-500">
-            <FlagDisplay flag={data.flag} countryCode={data.countryCode} />
+            <FlagDisplay flag={flag} countryCode={countryCode} />
             {countryName}
           </span>
         )}
@@ -216,8 +235,8 @@ function PopoverBody({ callsign, data }: { callsign: string; data: CallsignTrack
       {/* Grid + DXCC + Distance */}
       <div className="flex items-center justify-between mt-1.5 text-xs text-default-500">
         <span>
-          {t('callsignPopover.grid')}: {data.grid || t('callsignPopover.noGrid')}
-          {data.dxccEntity && <span className="ml-1.5 text-default-400">· {data.dxccEntity}</span>}
+          {t('callsignPopover.grid')}: {grid || t('callsignPopover.noGrid')}
+          {dxccEntity && <span className="ml-1.5 text-default-400">{dxccEntity}</span>}
         </span>
         {distance !== null && (
           <span className="text-default-400">
@@ -254,7 +273,7 @@ function PopoverBody({ callsign, data }: { callsign: string; data: CallsignTrack
 
       {/* Footer: Seen count */}
       <div className="text-[10px] text-default-400 mt-1.5 text-right">
-        {t('callsignPopover.seenTimes', { count: data.snrHistory.length })}
+        {t('callsignPopover.seenTimes', { count: tracking.snrHistory.length })}
       </div>
     </div>
   );
@@ -264,12 +283,20 @@ function PopoverBody({ callsign, data }: { callsign: string; data: CallsignTrack
 
 export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
   callsign,
-  getCallsignData,
+  logbookAnalysis,
+  country,
+  countryZh,
+  countryEn,
+  countryCode,
+  flag,
   children,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [tracking, setTracking] = useState<TrackingData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const fetchedCallsignRef = useRef<string | null>(null);
 
   const handleMouseEnter = useCallback(() => {
     if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
@@ -281,7 +308,33 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
     closeTimerRef.current = setTimeout(() => setIsOpen(false), 150);
   }, []);
 
-  const data = isOpen ? getCallsignData(callsign) : undefined;
+  // Fetch tracking data when popover opens
+  useEffect(() => {
+    if (!isOpen || fetchedCallsignRef.current === callsign) return;
+
+    let cancelled = false;
+    setLoading(true);
+    fetchedCallsignRef.current = callsign;
+
+    api.getCallsignTracking(callsign)
+      .then(res => {
+        if (!cancelled) {
+          setTracking(res.data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [isOpen, callsign]);
+
+  // Reset when callsign changes
+  useEffect(() => {
+    fetchedCallsignRef.current = null;
+    setTracking(null);
+  }, [callsign]);
 
   return (
     <Popover
@@ -304,8 +357,21 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        {data ? (
-          <PopoverBody callsign={callsign} data={data} />
+        {loading ? (
+          <div className="p-3 flex items-center justify-center">
+            <Spinner size="sm" />
+          </div>
+        ) : tracking ? (
+          <PopoverBody
+            callsign={callsign}
+            tracking={tracking}
+            logbookAnalysis={logbookAnalysis}
+            country={country}
+            countryZh={countryZh}
+            countryEn={countryEn}
+            countryCode={countryCode}
+            flag={flag}
+          />
         ) : (
           <div className="p-2 text-xs text-default-400">{callsign}</div>
         )}

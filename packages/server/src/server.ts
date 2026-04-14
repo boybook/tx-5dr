@@ -27,6 +27,7 @@ import { ProcessMonitor } from './services/ProcessMonitor.js';
 import { LogbookWSServer } from './websocket/LogbookWSServer.js';
 import { voiceRoutes } from './routes/voice.js';
 import { stationRoutes } from './routes/station.js';
+import { callsignRoutes } from './routes/callsigns.js';
 import { openwebrxRoutes } from './routes/openwebrx.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { LiveKitConfig } from './realtime/LiveKitConfig.js';
@@ -308,8 +309,9 @@ export async function createServer() {
     await scope.register(modeRoutes, { prefix: '/api/mode' });
     await scope.register(slotpackRoutes, { prefix: '/api/slotpack' });
     await scope.register(voiceRoutes, { prefix: '/api/voice' });
+    await scope.register(callsignRoutes, { prefix: '/api/callsigns' });
   });
-  fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack, voice)');
+  fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack, voice, callsigns)');
 
   // Operator+ 路由：日志本（细粒度权限由路由内部 preHandler 控制）
   await fastify.register(async (scope) => {
