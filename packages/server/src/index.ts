@@ -127,11 +127,15 @@ async function start() {
     await server.listen({ port: PORT, host: '0.0.0.0' });
     logger.info(`TX-5DR server running on http://localhost:${PORT}`);
 
-    // 启动时钟系统
+    // 启动引擎（仅在有激活的 Profile 时）
     const clockManager = DigitalRadioEngine.getInstance();
-    logger.info('starting clock system');
-
-    await clockManager.start();
+    const hasActiveProfile = ConfigManager.getInstance().getActiveProfileId() !== null;
+    if (hasActiveProfile) {
+      logger.info('starting engine');
+      await clockManager.start();
+    } else {
+      logger.info('no active profile, engine startup deferred until profile is configured');
+    }
     logger.info('server startup complete');
 
     // 启动日志管理定时任务
