@@ -63,6 +63,8 @@ import type {
   UpdateSelfLoginCredentialRequest,
   UpdateAuthConfigRequest,
   NetworkInfo,
+  ClockStatusDetail,
+  SetClockOffsetRequest,
   PresetFrequency,
   StationInfo,
   StationInfoResponse,
@@ -1583,6 +1585,29 @@ export const api = {
 
   async getNetworkInfo(apiBase?: string): Promise<NetworkInfo> {
     return apiRequest<NetworkInfo>('/system/network-info', undefined, apiBase);
+  },
+
+  async getClockStatus(apiBase?: string): Promise<ClockStatusDetail> {
+    return apiRequest<ClockStatusDetail>('/system/clock', undefined, apiBase);
+  },
+
+  async setClockOffset(data: SetClockOffsetRequest, apiBase?: string): Promise<ClockStatusDetail> {
+    return apiRequest<ClockStatusDetail>(
+      '/system/clock/offset',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+      apiBase
+    );
+  },
+
+  async measureClockOffset(apiBase?: string): Promise<ClockStatusDetail> {
+    return apiRequest<ClockStatusDetail>(
+      '/system/clock/measure',
+      { method: 'POST' },
+      apiBase
+    );
   },
 
   // ========== 电台站基础信息 ==========

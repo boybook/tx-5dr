@@ -25,6 +25,7 @@ import type {
   HamlibConfig,
   RadioInfo,
   ReconnectProgress,
+  ClockStatusSummary,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -174,6 +175,9 @@ export function createRadioEventMap({
     systemStatus: (data: unknown) => {
       const status = data as SystemStatus;
       radioDispatch({ type: 'systemStatus', payload: status });
+    },
+    clockStatusChanged: (data: unknown) => {
+      radioDispatch({ type: 'clockStatusChanged', payload: data as ClockStatusSummary });
     },
     spectrumCapabilities: (data: unknown) => {
       spectrumNegotiation.applySpectrumSelection(data as SpectrumCapabilities);

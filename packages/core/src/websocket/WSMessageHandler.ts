@@ -19,6 +19,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.DECODE_ERROR]: 'decodeError',
   [WSMessageType.SYSTEM_STATUS]: 'systemStatus',
   [WSMessageType.CLIENT_COUNT_CHANGED]: 'clientCountChanged',
+  [WSMessageType.CLOCK_STATUS_CHANGED]: 'clockStatusChanged',
 
   // 操作员相关事件
   [WSMessageType.OPERATORS_LIST]: 'operatorsList',

@@ -13,4 +13,11 @@ export default [
   {
     ignores: ['dist/**', 'node_modules/**'],
   },
+  {
+    files: ['src/**/*.d.ts'],
+    rules: {
+      'no-var': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
 ];

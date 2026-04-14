@@ -25,6 +25,7 @@ import type {
   CapabilityList,
   CoreRadioCapabilities,
   CoreCapabilityDiagnostics,
+  ClockStatusSummary,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -83,6 +84,7 @@ export interface RadioState {
   spectrumCapabilities: SpectrumCapabilities | null;
   selectedSpectrumKind: SpectrumKind | null;
   subscribedSpectrumKind: SpectrumKind | null;
+  clockStatus: ClockStatusSummary | null;
 }
 
 export interface ErrorEventData {
@@ -151,7 +153,8 @@ export type RadioAction =
   | { type: 'updateCapabilityState'; payload: CapabilityState }
   | { type: 'setSpectrumCapabilities'; payload: SpectrumCapabilities | null }
   | { type: 'setSelectedSpectrumKind'; payload: SpectrumKind | null }
-  | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null };
+  | { type: 'setSubscribedSpectrumKind'; payload: SpectrumKind | null }
+  | { type: 'clockStatusChanged'; payload: ClockStatusSummary };
 
 export interface SlotPacksState {
   slotPacks: SlotPack[];

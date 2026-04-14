@@ -7,7 +7,6 @@ import {
   type SlotInfo,
 } from '@tx5dr/plugin-api';
 import {
-  type TriggerMode,
   getSenderCallsign,
   getTriggerMode,
   getAutocallPriority as getAutocallPriorityBase,
