@@ -20,7 +20,8 @@ services:
       - LIVEKIT_UDP_PORT_START=50000
       - LIVEKIT_UDP_PORT_END=50100
     volumes:
-      - ./data/realtime:/app/data/realtime
+      # 持久化整个应用数据根目录，初始化阶段生成的凭据与运行时数据统一保留
+      - ./data:/app/data
 
   tx5dr:
     image: boybook/tx-5dr:latest
@@ -35,15 +36,8 @@ services:
       - "8076:80"
       - "8443:443"   # HTTPS（自签名证书，可替换 ./data/ssl/ 中的证书）
     volumes:
-      # 应用配置和数据目录
-      - ./data/config:/app/data/config
-      # SSL 证书目录（自动生成自签名证书，可替换为自定义证书）
-      - ./data/ssl:/app/data/ssl
-      # 用户插件目录（宿主机侧直接管理）
-      - ./data/plugins:/app/data/plugins
-      - ./data/logs:/app/data/logs
-      - ./data/cache:/app/data/cache
-      - ./data/realtime:/app/data/realtime
+      # 持久化整个应用数据根目录，避免镜像更新后丢失日志本等运行时数据
+      - ./data:/app/data
       # nginx日志
       - ./data/logs/nginx:/var/log/nginx
       # supervisor日志
