@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
-import { parseFT8LocationInfo } from '@tx5dr/core';
+import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { useSplitLayoutActions } from '../../common/SplitLayout';
 import { useTranslation } from 'react-i18next';
+import { useCallsignFilterRules } from '../../../hooks/useCallsignFilterRules';
 
 interface SlotPacksMessageDisplayProps {
   className?: string;
@@ -21,6 +22,11 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const {currentOperatorId} = useCurrentOperatorId();
   const splitLayoutActions = useSplitLayoutActions();
   const [scrollToBottomTrigger, setScrollToBottomTrigger] = useState(0);
+  const callsignFilter = useCallsignFilterRules(currentOperatorId ?? undefined);
+  const displayFilterRules = useMemo(
+    () => callsignFilter.filterScope === 'auto-reply-and-display' ? callsignFilter.rules : [],
+    [callsignFilter.rules, callsignFilter.filterScope],
+  );
 
   // 切换回"解码" tab 时触发滚动到底部
   useEffect(() => {
@@ -58,6 +64,16 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         // 跳过自己发射的TX信号
         if (frame.snr === -999) {
           return;
+        }
+
+        // Apply display filter when enabled
+        if (displayFilterRules.length > 0) {
+          const sender = frame.logbookAnalysis?.callsign
+            ?? FT8MessageParser.parseMessage(frame.message)?.senderCallsign
+            ?? '';
+          if (sender && !evaluateCallsignFilter(sender, displayFilterRules)) {
+            return;
+          }
         }
 
         const slotStartTime = new Date(slotPack.startMs);
@@ -120,7 +136,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       .sort((a, b) => a.startMs - b.startMs);
 
     setFrameGroups(groups);
-  }, [slotPacks.state.slotPacks, radio.state.currentMode]);
+  }, [slotPacks.state.slotPacks, radio.state.currentMode, displayFilterRules]);
 
   const buildSelectedFrame = (message: FrameDisplayMessage, group: FrameGroup): WSSelectedFrame | undefined => {
     if (typeof message.db !== 'number' || typeof message.dt !== 'number') {

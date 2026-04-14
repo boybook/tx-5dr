@@ -1,4 +1,5 @@
 import type { PluginSettingDescriptor, PluginStatus } from '@tx5dr/contracts';
+import { validateFilterRuleLine } from '@tx5dr/core';
 
 export interface PluginSettingValidationIssue {
   key: string;
@@ -64,6 +65,10 @@ function normalizeByPluginSetting(
     return normalizeWatchedCallsignWatchListValue(value);
   }
 
+  if (pluginName === 'callsign-filter' && fieldKey === 'filterRules') {
+    return normalizeWatchedCallsignWatchListValue(value);
+  }
+
   return normalizeStringArrayValue(value);
 }
 
@@ -121,29 +126,37 @@ export function getPluginSettingValidationIssue(
   descriptor: PluginSettingDescriptor,
   value: unknown,
 ): PluginSettingValidationIssue | null {
-  if (
-    pluginName !== 'watched-callsign-autocall'
-    || fieldKey !== 'watchList'
-    || descriptor.type !== 'string[]'
-  ) {
+  if (descriptor.type !== 'string[]') {
     return null;
   }
 
-  const entries = normalizeWatchedCallsignWatchListValue(value);
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    if (!entry || isWatchListComment(entry) || !looksLikeRegexRule(entry)) {
-      continue;
-    }
+  if (pluginName === 'watched-callsign-autocall' && fieldKey === 'watchList') {
+    const entries = normalizeWatchedCallsignWatchListValue(value);
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      if (!entry || isWatchListComment(entry) || !looksLikeRegexRule(entry)) {
+        continue;
+      }
 
-    try {
-      new RegExp(entry, 'i');
-    } catch {
-      return {
-        key: 'watchListInvalidRegexSyntax',
-        params: { line: index + 1 },
-      };
+      try {
+        new RegExp(entry, 'i');
+      } catch {
+        return {
+          key: 'watchListInvalidRegexSyntax',
+          params: { line: index + 1 },
+        };
+      }
     }
+    return null;
+  }
+
+  if (pluginName === 'callsign-filter' && fieldKey === 'filterRules') {
+    const entries = normalizeWatchedCallsignWatchListValue(value);
+    for (let index = 0; index < entries.length; index += 1) {
+      const issue = validateFilterRuleLine(entries[index], index + 1);
+      if (issue) return issue;
+    }
+    return null;
   }
 
   return null;

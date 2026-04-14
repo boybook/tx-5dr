@@ -29,9 +29,9 @@ import {
 import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
 
 import {
-  callsignPrefixFilterPlugin,
-  callsignPrefixFilterLocales,
-} from './callsign-prefix-filter/index.js';
+  callsignFilterPlugin,
+  callsignFilterLocales,
+} from './callsign-filter/index.js';
 
 import {
   workedStationBiasPlugin,
@@ -125,8 +125,8 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     enabledByDefault: false,
   },
   {
-    definition: callsignPrefixFilterPlugin,
-    locales: callsignPrefixFilterLocales,
+    definition: callsignFilterPlugin,
+    locales: callsignFilterLocales,
     enabledByDefault: false,
   },
   {

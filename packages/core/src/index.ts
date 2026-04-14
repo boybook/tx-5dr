@@ -33,5 +33,8 @@ export type { CallsignInfo, FT8LocationInfo } from './callsign/callsign.js';
 // 导出操作员相关
 export { RadioOperator } from './operator/RadioOperator.js';
 
+// 呼号过滤规则（共享逻辑）
+export * from './callsign-filter/callsign-filter-rules.js';
+
 // 日志系统导出
 export * from './log/index.js';
