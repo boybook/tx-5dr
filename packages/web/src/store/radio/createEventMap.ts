@@ -309,9 +309,14 @@ export function createRadioEventMap({
       if (hiddenIds.length > 0) {
         const allIds = operatorsData.operators.map((op) => op.id);
         const hiddenSet = new Set(hiddenIds);
-        const enabledIds = allIds.filter((id) => !hiddenSet.has(id));
-        logger.debug('Syncing enabled operators after receiving list:', enabledIds);
-        radioService.setClientEnabledOperators(enabledIds);
+        // Only sync if the received list actually contains operators that should be hidden.
+        // This prevents infinite loops: server responds to setClientEnabledOperators with
+        // a filtered operatorsList, and if no hidden operators remain, we stop re-sending.
+        if (allIds.some((id) => hiddenSet.has(id))) {
+          const enabledIds = allIds.filter((id) => !hiddenSet.has(id));
+          logger.debug('Syncing enabled operators after receiving list:', enabledIds);
+          radioService.setClientEnabledOperators(enabledIds);
+        }
       }
     },
     operatorStatusUpdate: (() => {
