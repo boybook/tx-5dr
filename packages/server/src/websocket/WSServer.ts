@@ -3,6 +3,7 @@
 
 import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
+  ClockStatusSummary,
   DecodeErrorInfo,
   FrameMessage,
   JWTPayload,
@@ -469,6 +470,10 @@ export class WSServer extends WSMessageHandler {
       this.broadcastSystemStatus(status);
     });
 
+    this.digitalRadioEngine.getNtpCalibrationService().on('statusChanged', (status) => {
+      this.broadcastClockStatusChanged(status);
+    });
+
     // 监听发射日志事件
     this.digitalRadioEngine.on('transmissionLog' as any, (data) => {
       logger.debug('transmission log received, broadcasting to clients', data);
@@ -807,6 +812,7 @@ export class WSServer extends WSMessageHandler {
   private async handleGetStatus(): Promise<void> {
     const currentStatus = this.digitalRadioEngine.getStatus();
     this.broadcastSystemStatus(currentStatus);
+    this.broadcastClockStatusChanged(this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus());
   }
 
   private async handleSubscribeSpectrum(connectionId: string, data: unknown): Promise<void> {
@@ -1105,6 +1111,10 @@ export class WSServer extends WSMessageHandler {
     // 1. 发送当前系统状态
     const status = this.digitalRadioEngine.getStatus();
     connection.send(WSMessageType.SYSTEM_STATUS, status);
+    connection.send(
+      WSMessageType.CLOCK_STATUS_CHANGED,
+      this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus(),
+    );
 
     // 2. 发送当前模式信息
     connection.send(WSMessageType.MODE_CHANGED, status.currentMode);
@@ -1648,6 +1658,13 @@ export class WSServer extends WSMessageHandler {
    */
   broadcastSystemStatus(status: SystemStatus): void {
     this.broadcast(WSMessageType.SYSTEM_STATUS, status);
+  }
+
+  /**
+   * 广播时钟状态摘要事件
+   */
+  broadcastClockStatusChanged(status: ClockStatusSummary): void {
+    this.broadcast(WSMessageType.CLOCK_STATUS_CHANGED, status);
   }
 
   /**

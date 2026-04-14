@@ -7,6 +7,7 @@ import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { SlotPacksMessageDisplay } from '../components/radio/digital/SlotPacksMessageDisplay';
 import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
+import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { useSlotPacks, useRadioState, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
@@ -22,7 +23,6 @@ export const LeftLayout: React.FC = () => {
   const connection = useConnection();
   const stationInfo = useStationInfo();
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
-  const [currentTime, setCurrentTime] = useState(new Date());
   const [isMobile, setIsMobile] = useState(false);
   const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
   const [clientCount, setClientCount] = useState(0);
@@ -43,15 +43,6 @@ export const LeftLayout: React.FC = () => {
       (window as any).electronAPI.window.offSpectrumWindowClosed(handleClosed);
     };
   }, [isSpectrumPopedOut]);
-
-  // 更新当前时间
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
 
   // 监听屏幕宽度变化
   useEffect(() => {
@@ -91,11 +82,6 @@ export const LeftLayout: React.FC = () => {
   // 清空数据
   const handleClearData = () => {
     slotPacks.dispatch({ type: 'CLEAR_DATA' });
-  };
-
-  // 格式化UTC时间
-  const formatUTCTime = (date: Date) => {
-    return date.toISOString().slice(11, 19); // HH:MM:SS格式
   };
 
   return (
@@ -146,12 +132,8 @@ export const LeftLayout: React.FC = () => {
           {isAdmin && (
             <RemoteAccessPopover clientCount={clientCount} />
           )}
-          {/* UTC时间显示 */}
-          <div className="bg-content1 dark:bg-content2 rounded-md px-3 py-1">
-            <div className="text-xs font-mono text-default-500">
-              UTC {formatUTCTime(currentTime)}
-            </div>
-          </div>
+          {/* UTC时间显示 + 时钟校准 */}
+          <ClockDisplay />
         </div>
       </div>
 

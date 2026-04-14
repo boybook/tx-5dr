@@ -46,6 +46,7 @@ import { EngineState } from './state-machines/types.js';
 import { PluginManager } from './plugin/PluginManager.js';
 import { tx5drPaths } from './utils/app-paths.js';
 import { CallsignContextTracker } from './slot/CallsignContextTracker.js';
+import { NtpCalibrationService } from './services/NtpCalibrationService.js';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -93,6 +94,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private engineLifecycle!: EngineLifecycle;     // 在构造函数末尾初始化
   private _pluginManager!: PluginManager;        // 在构造函数末尾初始化
   private _callsignTracker: CallsignContextTracker;
+  private ntpCalibrationService: NtpCalibrationService;
 
   // 频谱分析配置常量
   private static readonly SPECTRUM_CONFIG = {
@@ -106,6 +108,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private constructor() {
     super();
     this.clockSource = new ClockSourceSystem();
+    this.ntpCalibrationService = new NtpCalibrationService(this.clockSource);
     this.audioStreamManager = new AudioStreamManager();
     this.realDecodeQueue = new WSJTXDecodeWorkQueue(1);
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
@@ -355,6 +358,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.voiceSessionManager;
   }
 
+  public getNtpCalibrationService(): NtpCalibrationService {
+    return this.ntpCalibrationService;
+  }
+
   // ─── 初始化 ──────────────────────────────────────
 
   async initialize(): Promise<void> {
@@ -373,6 +380,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     logger.info('Initialization phase: runtime');
 
     await printAppPaths();
+
+    // Start NTP calibration (non-blocking, does not delay engine startup)
+    await this.ntpCalibrationService.start();
 
     // 更新插件管理器的数据目录（在 initialize 阶段异步获取）
     const dataDir = await tx5drPaths.getDataDir();
@@ -536,6 +546,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   async destroy(): Promise<void> {
     logger.info('Destroying...');
     await this.stop();
+
+    // Stop NTP calibration
+    this.ntpCalibrationService.stop();
 
     // 清理 RadioBridge 监听器
     this.radioBridge.teardownListeners();

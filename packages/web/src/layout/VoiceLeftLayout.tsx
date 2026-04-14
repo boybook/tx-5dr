@@ -6,6 +6,7 @@ import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
 import { VoiceFrequencyControl } from '../components/voice/VoiceFrequencyControl';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
+import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { useRadioState, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
@@ -27,18 +28,11 @@ export const VoiceLeftLayout: React.FC = () => {
   const connection = useConnection();
   const stationInfo = useStationInfo();
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
-  const [currentTime, setCurrentTime] = useState(new Date());
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
   const stationInfoOffsetClassName = isElectron() && isMacOS()
     ? 'pl-16'
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
-
-  // Update current time
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Mobile detection
   useEffect(() => {
@@ -58,8 +52,6 @@ export const VoiceLeftLayout: React.FC = () => {
     wsClient.onWSEvent('clientCountChanged', handleClientCount);
     return () => { wsClient.offWSEvent('clientCountChanged', handleClientCount); };
   }, [connection.state.radioService]);
-
-  const formatUTCTime = (date: Date) => date.toISOString().slice(11, 19);
 
   return (
     <div className="h-full flex flex-col">
@@ -94,11 +86,7 @@ export const VoiceLeftLayout: React.FC = () => {
         </div>
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           {isAdmin && <RemoteAccessPopover clientCount={clientCount} />}
-          <div className="bg-content1 dark:bg-content2 rounded-md px-3 py-1">
-            <div className="text-xs font-mono text-default-500">
-              UTC {formatUTCTime(currentTime)}
-            </div>
-          </div>
+          <ClockDisplay />
         </div>
       </div>
 

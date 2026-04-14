@@ -6,10 +6,11 @@ import type { ClockSource } from './ClockSource.js';
  */
 export class ClockSourceSystem implements ClockSource {
   public readonly name = 'system';
-  
+
   private readonly startTime: number;
   private readonly startHrtime: bigint;
-  
+  private calibrationOffsetMs: number = 0;
+
   constructor() {
     this.startTime = Date.now();
     // 在 Node.js 环境中使用 process.hrtime.bigint()
@@ -18,6 +19,14 @@ export class ClockSourceSystem implements ClockSource {
       ? process.hrtime.bigint()
       : BigInt(Math.floor(performance.now() * 1_000_000));
   }
+
+  setCalibrationOffsetMs(offsetMs: number): void {
+    this.calibrationOffsetMs = offsetMs;
+  }
+
+  getCalibrationOffsetMs(): number {
+    return this.calibrationOffsetMs;
+  }
   
   now(): number {
     if (typeof process !== 'undefined' && process.hrtime?.bigint) {
@@ -25,11 +34,11 @@ export class ClockSourceSystem implements ClockSource {
       const hrNow = process.hrtime.bigint();
       const elapsedNs = hrNow - this.startHrtime;
       const elapsedMs = Number(elapsedNs) / 1_000_000;
-      return this.startTime + elapsedMs;
+      return this.startTime + elapsedMs + this.calibrationOffsetMs;
     } else {
       // 浏览器环境：使用 performance.now()
       const perfNow = performance.now();
-      return this.startTime + perfNow;
+      return this.startTime + perfNow + this.calibrationOffsetMs;
     }
   }
   

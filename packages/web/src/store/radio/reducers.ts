@@ -94,6 +94,7 @@ export const initialRadioState: RadioState = {
   spectrumCapabilities: null,
   selectedSpectrumKind: null,
   subscribedSpectrumKind: null,
+  clockStatus: null,
 };
 
 export function radioReducer(state: RadioState, action: RadioAction): RadioState {
@@ -236,6 +237,12 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
       return {
         ...state,
         subscribedSpectrumKind: action.payload,
+      };
+
+    case 'clockStatusChanged':
+      return {
+        ...state,
+        clockStatus: action.payload,
       };
 
     case 'pttStatusChanged':

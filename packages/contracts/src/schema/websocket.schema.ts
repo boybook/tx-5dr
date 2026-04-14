@@ -19,6 +19,7 @@ import type { VoicePTTLock } from './voice.schema.js';
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
 import type { RealtimeSettingsResponseData } from './realtime.schema.js';
+import { ClockStatusSummarySchema } from './system.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -48,6 +49,7 @@ export enum WSMessageType {
   DECODE_ERROR = 'decodeError',
   SYSTEM_STATUS = 'systemStatus',
   CLIENT_COUNT_CHANGED = 'clientCountChanged',
+  CLOCK_STATUS_CHANGED = 'clockStatusChanged',
   
   // ===== 电台操作员管理 =====
   GET_OPERATORS = 'getOperators',
@@ -413,6 +415,11 @@ export const WSClientCountChangedMessageSchema = WSBaseMessageSchema.extend({
     count: z.number(),
     timestamp: z.number(),
   }),
+});
+
+export const WSClockStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.CLOCK_STATUS_CHANGED),
+  data: ClockStatusSummarySchema,
 });
 
 export const WSErrorMessageSchema = WSBaseMessageSchema.extend({
@@ -1087,6 +1094,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSDecodeErrorMessageSchema,
   WSSystemStatusMessageSchema,
   WSClientCountChangedMessageSchema,
+  WSClockStatusChangedMessageSchema,
   WSErrorMessageSchema,
   WSLogbookChangeNoticeMessageSchema,
   WSTransmissionLogMessageSchema,
@@ -1180,6 +1188,7 @@ export type WSInvokeSpectrumControlMessage = z.infer<typeof WSInvokeSpectrumCont
 export type WSDecodeErrorMessage = z.infer<typeof WSDecodeErrorMessageSchema>;
 export type WSSystemStatusMessage = z.infer<typeof WSSystemStatusMessageSchema>;
 export type WSClientCountChangedMessage = z.infer<typeof WSClientCountChangedMessageSchema>;
+export type WSClockStatusChangedMessage = z.infer<typeof WSClockStatusChangedMessageSchema>;
 export type WSErrorMessage = z.infer<typeof WSErrorMessageSchema>;
 
 export type WSStartEngineMessage = z.infer<typeof WSStartEngineMessageSchema>;
@@ -1249,6 +1258,7 @@ export interface DigitalRadioEngineEvents {
   decodeError: (errorInfo: DecodeErrorInfo) => void;
   systemStatus: (status: SystemStatus) => void;
   clientCountChanged: (data: { count: number; timestamp: number }) => void;
+  clockStatusChanged: (data: import('./system.schema.js').ClockStatusSummary) => void;
 
   // 连接事件
   connected: () => void;
