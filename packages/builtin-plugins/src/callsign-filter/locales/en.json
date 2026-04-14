@@ -1,0 +1,13 @@
+{
+  "pluginName": "Callsign Filter",
+  "pluginDescription": "Filter candidate stations by callsign rules with whitelist, blacklist, and regex support.",
+  "filterOverview": "Filter Rules Guide",
+  "filterOverviewDesc": "One rule per line, evaluated in order — the last matching rule wins. Plain text matches the full callsign exactly; regex syntax (e.g. ^JA) triggers regex matching. Prefix a rule with ! to exclude. The first rule's type sets the default: an include rule defaults to blocking all (whitelist mode); an exclude rule defaults to allowing all (blacklist mode). Lines starting with # are comments.",
+  "filterRules": "Filter rules",
+  "filterRulesDesc": "One rule per line. Examples: ^JA (allow JA prefix), !^BV (exclude BV prefix), BG5DRB (exact match). Leave empty to disable filtering.",
+  "filterRulesInvalidRegexSyntax": "Line {{line}} has invalid regex syntax — please check the expression.",
+  "filterScope": "Filter scope",
+  "filterScopeDesc": "Choose where the filter rules take effect.",
+  "scopeAutoReply": "Auto-reply only",
+  "scopeAutoReplyAndDisplay": "Auto-reply + message panel"
+}

@@ -1,0 +1,13 @@
+{
+  "pluginName": "呼号过滤",
+  "pluginDescription": "按呼号规则过滤候选台站，支持白名单、黑名单和正则表达式。",
+  "filterOverview": "过滤规则说明",
+  "filterOverviewDesc": "每行一个规则，按顺序评估，最后匹配的规则决定结果。纯文本按完整呼号精确匹配；写入正则语法按正则匹配（如 ^JA 匹配所有 JA 前缀）。以 ! 开头表示排除。第一条规则的类型决定默认行为：首条为包含规则时默认阻止所有（白名单模式）；首条为排除规则时默认放行所有（黑名单模式）。# 开头为注释。",
+  "filterRules": "过滤规则",
+  "filterRulesDesc": "每行一个规则。示例：^JA（允许JA前缀）、!^BV（排除BV前缀）、BG5DRB（精确匹配）。留空表示不过滤。",
+  "filterRulesInvalidRegexSyntax": "第 {{line}} 行的正则无法解析，请检查语法。",
+  "filterScope": "过滤范围",
+  "filterScopeDesc": "选择过滤规则的生效范围。",
+  "scopeAutoReply": "仅自动回复",
+  "scopeAutoReplyAndDisplay": "自动回复 + 消息面板"
+}
