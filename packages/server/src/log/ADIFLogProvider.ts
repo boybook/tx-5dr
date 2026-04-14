@@ -15,6 +15,7 @@ import {
   extractPrefix,
   getCQZone,
   getITUZone,
+  getCallsignInfo,
   resolveDXCCEntity,
   DXCC_RESOLVER_VERSION,
 } from '@tx5dr/core';
@@ -1152,6 +1153,7 @@ export class ADIFLogProvider implements ILogProvider {
 
     const prefix = extractPrefix(upper);
     const resolution = resolveDXCCEntity(upper, Date.now());
+    const callsignInfo = getCallsignInfo(upper);
     const dxccEntity = resolution.entity;
     const cqZone = dxccEntity?.cqZone ?? getCQZone(upper);
     const ituZone = dxccEntity?.ituZone ?? getITUZone(upper);
@@ -1197,6 +1199,8 @@ export class ADIFLogProvider implements ILogProvider {
       dxccEntity: dxccEntity?.name,
       dxccId,
       dxccStatus,
+      state: callsignInfo?.state,
+      stateConfidence: callsignInfo?.stateConfidence,
       dxccNeedsReview: resolution.needsReview,
     };
   }

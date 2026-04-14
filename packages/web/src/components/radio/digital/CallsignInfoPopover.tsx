@@ -10,13 +10,15 @@ import { useStationInfo } from '../../../store/radioStore';
 interface CallsignInfoPopoverProps {
   callsign: string;
   /** LogbookAnalysis from the triggering row (provides grid/dxcc info) */
-  logbookAnalysis?: { grid?: string; dxccEntity?: string };
+  logbookAnalysis?: { grid?: string; dxccEntity?: string; state?: string; stateConfidence?: 'high' | 'low' };
   /** Country display fields from the triggering row */
   country?: string;
   countryZh?: string;
   countryEn?: string;
   countryCode?: string;
   flag?: string;
+  state?: string;
+  stateConfidence?: 'high' | 'low';
   children: React.ReactNode;
 }
 
@@ -179,15 +181,17 @@ function SnrSparkline({ values, timestamps }: { values: number[]; timestamps: st
 
 // ─── Popover Content ────────────────────────────────────────────────────────
 
-function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, countryEn, countryCode, flag }: {
+function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, countryEn, countryCode, flag, state, stateConfidence }: {
   callsign: string;
   tracking: TrackingData;
-  logbookAnalysis?: { grid?: string; dxccEntity?: string };
+  logbookAnalysis?: { grid?: string; dxccEntity?: string; state?: string; stateConfidence?: 'high' | 'low' };
   country?: string;
   countryZh?: string;
   countryEn?: string;
   countryCode?: string;
   flag?: string;
+  state?: string;
+  stateConfidence?: 'high' | 'low';
 }) {
   const { t, i18n } = useTranslation('common');
   const isZh = i18n.language === 'zh';
@@ -218,6 +222,14 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
   const lastSnr = snrValues.length > 0 ? snrValues[snrValues.length - 1] : null;
 
   const dxccEntity = logbookAnalysis?.dxccEntity;
+  const subdivision = state || logbookAnalysis?.state;
+  const subdivisionConfidence = stateConfidence || logbookAnalysis?.stateConfidence;
+  const subdivisionLabel = subdivision
+    ? t(`callsignPopover.subdivisions.${subdivision}`, { defaultValue: subdivision })
+    : null;
+  const subdivisionText = subdivision
+    ? `${subdivisionLabel}${subdivisionLabel !== subdivision ? ` (${subdivision})` : ''}${subdivisionConfidence === 'low' ? ` ${t('callsignPopover.estimated')}` : ''}`
+    : null;
 
   return (
     <div className="p-2.5 w-[264px]">
@@ -244,6 +256,11 @@ function PopoverBody({ callsign, tracking, logbookAnalysis, country, countryZh, 
           </span>
         )}
       </div>
+      {subdivisionText && (
+        <div className="mt-1 text-xs text-default-400">
+          {t('callsignPopover.subdivision')}: {subdivisionText}
+        </div>
+      )}
 
       {/* SNR Chart */}
       {snrValues.length >= 2 && (
@@ -289,6 +306,8 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
   countryEn,
   countryCode,
   flag,
+  state,
+  stateConfidence,
   children,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -371,6 +390,8 @@ export const CallsignInfoPopover: React.FC<CallsignInfoPopoverProps> = ({
             countryEn={countryEn}
             countryCode={countryCode}
             flag={flag}
+            state={state}
+            stateConfidence={stateConfidence}
           />
         ) : (
           <div className="p-2 text-xs text-default-400">{callsign}</div>

@@ -6,6 +6,9 @@ test('日本呼号基础国家解析', () => {
   const a = getCallsignInfo('JF1TPR');
   const b = getCallsignInfo('JH6QIL');
   const c = getCallsignInfo('7K4GDC');
+  const d = getCallsignInfo('8J1ABC');
+  const e = getCallsignInfo('8N3ABC');
+  const f = getCallsignInfo('JA1ABC/6');
 
   assert.ok(a, 'JF1TPR 应能解析');
   assert.equal(a?.country, 'Japan');
@@ -15,7 +18,16 @@ test('日本呼号基础国家解析', () => {
   assert.equal(b?.countryZh, '日本·九州/冲绳');
   assert.ok(c, '7K4GDC 应能解析');
   assert.equal(c?.country, 'Japan');
-  assert.equal(c?.countryZh, '日本·东北'); // 7K4中的4是区号,对应东北地区
+  assert.equal(c?.countryZh, '日本·关东');
+  assert.equal(c?.prefix, '7K');
+  assert.ok(d, '8J1ABC 应能解析');
+  assert.equal(d?.countryZh, '日本·关东');
+  assert.equal(d?.prefix, '8J');
+  assert.ok(e, '8N3ABC 应能解析');
+  assert.equal(e?.countryZh, '日本·关西');
+  assert.equal(e?.prefix, '8N');
+  assert.ok(f, 'JA1ABC/6 应能解析');
+  assert.equal(f?.countryZh, '日本·九州/冲绳');
 });
 
 test('韩国呼号基础国家解析(数字开头)', () => {
@@ -30,6 +42,77 @@ test('韩国呼号基础国家解析(数字开头)', () => {
   assert.equal(b?.country, 'South Korea');
   assert.ok(c, 'HL1VAU 应能解析');
   assert.equal(c?.country, 'South Korea');
+});
+
+test('美国特殊实体与州/属地识别', () => {
+  const guam = getCallsignInfo('KH2AA');
+  const hawaii = getCallsignInfo('KH6VV');
+  const hawaiiAlt = getCallsignInfo('AH6ZZ');
+  const alaska = getCallsignInfo('KL7AA');
+  const puertoRico = getCallsignInfo('KP4AA');
+  const usVirginIslands = getCallsignInfo('KP2AA');
+  const california = getCallsignInfo('W6ABC');
+  const californiaAlt = getCallsignInfo('N6YYZ');
+
+  assert.equal(guam?.country, 'Guam');
+  assert.equal(guam?.state, 'GU');
+  assert.equal(guam?.stateConfidence, 'high');
+
+  assert.equal(hawaii?.country, 'Hawaii');
+  assert.equal(hawaii?.state, 'HI');
+  assert.equal(hawaii?.stateConfidence, 'high');
+
+  assert.equal(hawaiiAlt?.country, 'Hawaii');
+  assert.equal(hawaiiAlt?.state, 'HI');
+  assert.equal(hawaiiAlt?.stateConfidence, 'high');
+
+  assert.equal(alaska?.country, 'Alaska');
+  assert.equal(alaska?.state, 'AK');
+  assert.equal(alaska?.stateConfidence, 'high');
+
+  assert.equal(puertoRico?.country, 'Puerto Rico');
+  assert.equal(puertoRico?.state, 'PR');
+  assert.equal(puertoRico?.stateConfidence, 'high');
+
+  assert.equal(usVirginIslands?.country, 'US Virgin Islands');
+  assert.equal(usVirginIslands?.state, 'VI');
+  assert.equal(usVirginIslands?.stateConfidence, 'high');
+
+  assert.equal(california?.country, 'United States of America');
+  assert.equal(california?.countryZh, '美国·加州');
+  assert.equal(california?.countryEn, 'United States·California');
+  assert.equal(california?.state, 'CA');
+  assert.equal(california?.stateConfidence, 'low');
+
+  assert.equal(californiaAlt?.country, 'United States of America');
+  assert.equal(californiaAlt?.countryZh, '美国·加州');
+  assert.equal(californiaAlt?.countryEn, 'United States·California');
+  assert.equal(californiaAlt?.state, 'CA');
+  assert.equal(californiaAlt?.stateConfidence, 'low');
+});
+
+test('slash 位置指示应优先匹配美国特殊实体', () => {
+  const w1awHawaii = getCallsignInfo('W1AW/KH6');
+  const kh6Portable = getCallsignInfo('KH6/W1AW');
+  const w1awGuam = getCallsignInfo('W1AW/KH2');
+  const portableCalifornia = getCallsignInfo('W1AW/6');
+
+  assert.equal(w1awHawaii?.country, 'Hawaii');
+  assert.equal(w1awHawaii?.state, 'HI');
+  assert.equal(w1awHawaii?.stateConfidence, 'high');
+  assert.equal(w1awHawaii?.prefix, 'KH6');
+
+  assert.equal(kh6Portable?.country, 'Hawaii');
+  assert.equal(kh6Portable?.state, 'HI');
+  assert.equal(kh6Portable?.prefix, 'KH6');
+
+  assert.equal(w1awGuam?.country, 'Guam');
+  assert.equal(w1awGuam?.state, 'GU');
+  assert.equal(w1awGuam?.prefix, 'KH2');
+
+  assert.equal(portableCalifornia?.country, 'United States of America');
+  assert.equal(portableCalifornia?.state, 'CA');
+  assert.equal(portableCalifornia?.stateConfidence, 'low');
 });
 
 test('俄罗斯呼号区分 - 欧洲部分', () => {
@@ -96,6 +179,15 @@ test('FT8 CQ 带区域标记的消息解析', () => {
   assert.ok(info.country, '应能解析出国家');
   assert.equal(info.country, 'China');
   assert.equal(info.countryZh, '中国·北京');
+});
+
+test('FT8消息解析 - 美国 slash 位置指示', () => {
+  const message = 'CQ W1AW/KH6 BL11';
+  const info = parseFT8LocationInfo(message);
+
+  assert.equal(info.country, 'Hawaii');
+  assert.equal(info.state, 'HI');
+  assert.equal(info.stateConfidence, 'high');
 });
 
 test('前缀冲突优先级 - LU前缀应优先匹配阿根廷', () => {
@@ -181,6 +273,8 @@ test('DXCC 解析应根据通联日期选择历史实体', () => {
   const germany = getCallsignInfo('DA1ABC', Date.UTC(1980, 0, 1));
   const czechoslovakia = getCallsignInfo('OK1ABC', Date.UTC(1992, 5, 1));
   const czechRepublic = getCallsignInfo('OK1ABC', Date.UTC(1994, 5, 1));
+  const ryukyu = getCallsignInfo('JR6AAA', Date.UTC(1970, 0, 1));
+  const okinotorishima = getCallsignInfo('7J1AAA', Date.UTC(1978, 0, 1));
 
   assert.equal(westGermany?.country, 'West Germany');
   assert.equal(westGermany?.entityCode, 81);
@@ -197,14 +291,22 @@ test('DXCC 解析应根据通联日期选择历史实体', () => {
   assert.equal(czechRepublic?.country, 'Czech Republic');
   assert.equal(czechRepublic?.entityCode, 503);
   assert.equal(czechRepublic?.dxccStatus, 'current');
+
+  assert.equal(ryukyu?.country, 'Ryukyu Islands');
+  assert.equal(ryukyu?.entityCode, 193);
+  assert.equal(ryukyu?.dxccStatus, 'deleted');
+
+  assert.equal(okinotorishima?.country, 'Okinotorishima');
+  assert.equal(okinotorishima?.entityCode, 194);
+  assert.equal(okinotorishima?.dxccStatus, 'deleted');
 });
 
-test('DXCC 解析缓存不应丢失启发式置信度', () => {
+test('DXCC 解析缓存不应丢失前缀置信度', () => {
   const ts = Date.UTC(2026, 3, 2);
   const first = resolveDXCCEntity('JF1TPR', ts);
   const second = resolveDXCCEntity('JF1TPR', ts);
 
-  assert.equal(first.confidence, 'heuristic');
-  assert.equal(second.confidence, 'heuristic');
+  assert.equal(first.confidence, 'prefix');
+  assert.equal(second.confidence, 'prefix');
   assert.equal(second.entity?.entityCode, 339);
 });

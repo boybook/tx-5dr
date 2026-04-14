@@ -243,6 +243,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
             callsign,
             grid,
             prefix: analysis.prefix,
+            state: analysis.state,
+            stateConfidence: analysis.stateConfidence,
             dxccId: analysis.dxccId,
             dxccEntity: analysis.dxccEntity,
             dxccStatus: analysis.dxccStatus,

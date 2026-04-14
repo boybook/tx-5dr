@@ -214,6 +214,16 @@ export interface CallsignAnalysis {
   dxccStatus?: DxccStatus;
 
   /**
+   * 美国 subdivision code（州/属地），仅在可解析时提供
+   */
+  state?: string;
+
+  /**
+   * subdivision 置信度
+   */
+  stateConfidence?: 'high' | 'low';
+
+  /**
    * 是否需要人工复核
    */
   dxccNeedsReview?: boolean;

@@ -121,6 +121,18 @@
   },
   "callsignPopover": {
     "grid": "网格",
+    "subdivision": "州/属地",
+    "estimated": "（低置信度）",
+    "subdivisions": {
+      "AK": "阿拉斯加",
+      "AS": "美属萨摩亚",
+      "CA": "加利福尼亚州",
+      "GU": "关岛",
+      "HI": "夏威夷",
+      "MP": "北马里亚纳群岛",
+      "PR": "波多黎各",
+      "VI": "美属维尔京群岛"
+    },
     "distance": "距离",
     "signal": "信号强度",
     "avg": "平均",

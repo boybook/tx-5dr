@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DxccStatusSchema } from './qso.schema.js';
+import { DxccStatusSchema, SubdivisionConfidenceSchema } from './qso.schema.js';
 
 /**
  * 时隙周期（偶数奇数）
@@ -47,6 +47,10 @@ export const LogbookAnalysisSchema = z.object({
   grid: z.string().optional(),
   /** 解析出的前缀（如果有） */
   prefix: z.string().optional(),
+  /** 美国 subdivision code（州/属地），仅在可解析时提供 */
+  state: z.string().optional(),
+  /** subdivision 置信度 */
+  stateConfidence: SubdivisionConfidenceSchema.optional(),
   /** DXCC 实体编号 */
   dxccId: z.number().int().positive().optional(),
   /** DXCC 实体名 */

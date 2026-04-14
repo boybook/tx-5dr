@@ -44,6 +44,11 @@ export const DxccConfidenceSchema = z.enum([
   'unknown',
 ]);
 
+export const SubdivisionConfidenceSchema = z.enum([
+  'high',
+  'low',
+]);
+
 // 操作配置
 export const OperatorConfigSchema = z.object({
   id: z.string(),
