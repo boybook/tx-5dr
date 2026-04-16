@@ -127,8 +127,8 @@ MSG_EN_FIX_NGINX_REALTIME_PROXY="Repair nginx realtime proxy routes: sudo tx5dr 
 MSG_ZH_FIX_NGINX_REALTIME_PROXY="修复 nginx 的实时语音代理路由: sudo tx5dr doctor --fix"
 MSG_EN_FIX_LIVEKIT_BINARY="Reinstall the tx5dr package, or install manually: curl -sSL https://get.livekit.io | bash"
 MSG_ZH_FIX_LIVEKIT_BINARY="重新安装 tx5dr 软件包，或手动安装: curl -sSL https://get.livekit.io | bash"
-MSG_EN_FIX_LIVEKIT_CONFIG="Regenerate config: sudo rm -f /etc/tx5dr/livekit.yaml && sudo /usr/share/tx5dr/postinstall.sh"
-MSG_ZH_FIX_LIVEKIT_CONFIG="重新生成配置: sudo rm -f /etc/tx5dr/livekit.yaml && sudo /usr/share/tx5dr/postinstall.sh"
+MSG_EN_FIX_LIVEKIT_CONFIG="Regenerate config: sudo rm -f /var/lib/tx5dr/realtime/livekit.resolved.yaml && sudo /usr/share/tx5dr/postinstall.sh"
+MSG_ZH_FIX_LIVEKIT_CONFIG="重新生成配置: sudo rm -f /var/lib/tx5dr/realtime/livekit.resolved.yaml && sudo /usr/share/tx5dr/postinstall.sh"
 MSG_EN_FIX_LIVEKIT_CREDENTIALS="Regenerate credentials: sudo tx5dr livekit-creds rotate"
 MSG_ZH_FIX_LIVEKIT_CREDENTIALS="重新生成凭据: sudo tx5dr livekit-creds rotate"
 
@@ -360,7 +360,7 @@ load_config() {
     LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-}"
     LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-}"
     LIVEKIT_URL="${LIVEKIT_URL:-ws://127.0.0.1:${LIVEKIT_SIGNAL_PORT}}"
-    LIVEKIT_CONFIG_FILE="${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
+    LIVEKIT_CONFIG_FILE="${LIVEKIT_CONFIG_FILE:-/var/lib/tx5dr/realtime/livekit.resolved.yaml}"
     CONFIG_DIR="${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}"
     DATA_DIR="${TX5DR_DATA_DIR:-/var/lib/tx5dr}"
     PLUGIN_DIR="${DATA_DIR%/}/plugins"
@@ -554,7 +554,7 @@ get_livekit_binary_path() {
 }
 
 get_livekit_config_path() {
-    printf "%s" "${LIVEKIT_CONFIG_FILE:-/etc/tx5dr/livekit.yaml}"
+    printf "%s" "${LIVEKIT_CONFIG_FILE:-/var/lib/tx5dr/realtime/livekit.resolved.yaml}"
 }
 
 get_livekit_credentials_path() {

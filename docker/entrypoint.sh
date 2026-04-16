@@ -32,7 +32,7 @@ fi
 log "Starting TX-5DR Docker container initialization..."
 
 export LIVEKIT_CREDENTIALS_FILE="${LIVEKIT_CREDENTIALS_FILE:-/app/data/realtime/livekit-credentials.env}"
-export LIVEKIT_CONFIG_PATH="${LIVEKIT_CONFIG_PATH:-/app/data/realtime/livekit.yaml}"
+export LIVEKIT_CONFIG_PATH="${LIVEKIT_CONFIG_PATH:-/app/data/realtime/livekit.resolved.yaml}"
 if [[ -f "$LIVEKIT_CREDENTIALS_FILE" ]]; then
     log "Using LiveKit managed credential file: $LIVEKIT_CREDENTIALS_FILE"
 fi

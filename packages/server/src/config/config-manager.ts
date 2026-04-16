@@ -2,7 +2,15 @@
 // ConfigManager - 配置合并和动态类型需要使用any
 
 import { promises as fs } from 'fs';
-import { AudioDeviceSettings, RadioOperatorConfig, HamlibConfig, PSKReporterConfig, DEFAULT_DECODE_WINDOW_SETTINGS, type RealtimeTransportPolicy } from '@tx5dr/contracts';
+import {
+  AudioDeviceSettings,
+  RadioOperatorConfig,
+  HamlibConfig,
+  PSKReporterConfig,
+  DEFAULT_DECODE_WINDOW_SETTINGS,
+  type LiveKitNetworkMode,
+  type RealtimeTransportPolicy,
+} from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
@@ -84,6 +92,10 @@ export interface AppConfig {
   livekitPublicUrl?: string | null;
   /** Realtime transport strategy preference. */
   realtimeTransportPolicy?: RealtimeTransportPolicy;
+  /** LiveKit network topology mode. */
+  livekitNetworkMode?: LiveKitNetworkMode;
+  /** Manual LiveKit media announcement IP when auto detection is unsuitable. */
+  livekitNodeIp?: string | null;
   /** Station basic information visible to all connected users */
   stationInfo?: StationInfo;
   /** OpenWebRX SDR station configurations */
@@ -138,6 +150,8 @@ const DEFAULT_CONFIG: AppConfig = {
       consecutiveFailures: 0,
     },
   },
+  livekitNetworkMode: 'lan',
+  livekitNodeIp: null,
 };
 
 // 默认音频配置（无 Profile 时的兜底值）
@@ -958,6 +972,24 @@ export class ConfigManager {
 
   async updateRealtimeTransportPolicy(policy: RealtimeTransportPolicy): Promise<void> {
     this.config.realtimeTransportPolicy = policy;
+    await this.saveConfig();
+  }
+
+  getLiveKitNetworkMode(): LiveKitNetworkMode {
+    return this.config.livekitNetworkMode ?? 'lan';
+  }
+
+  async updateLiveKitNetworkMode(mode: LiveKitNetworkMode): Promise<void> {
+    this.config.livekitNetworkMode = mode;
+    await this.saveConfig();
+  }
+
+  getLiveKitNodeIp(): string | null {
+    return this.config.livekitNodeIp?.trim() || null;
+  }
+
+  async updateLiveKitNodeIp(nodeIp: string | null): Promise<void> {
+    this.config.livekitNodeIp = nodeIp?.trim() || null;
     await this.saveConfig();
   }
 

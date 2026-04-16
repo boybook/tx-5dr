@@ -21,9 +21,7 @@ import type {
   PSKReporterStatus,
   AuthStatus,
   NetworkInfo,
-  RealtimeConnectivityHints,
-  RealtimeConnectivityErrorCode,
-  RealtimeCredentialStatus,
+  LiveKitNetworkMode,
   RealtimeSettingsResponseData,
   RealtimeTransportKind,
   RealtimeTransportPolicy,
@@ -68,14 +66,7 @@ interface DesktopUpdateState {
   errorMessage: string | null;
 }
 
-type RealtimeRuntimeView = {
-  liveKitEnabled: boolean;
-  connectivityHints: RealtimeConnectivityHints;
-  radioReceiveTransport: RealtimeTransportKind;
-  radioBridgeHealthy: boolean;
-  radioBridgeIssueCode: RealtimeConnectivityErrorCode | null;
-  credentialStatus: RealtimeCredentialStatus;
-};
+type RealtimeRuntimeView = NonNullable<RealtimeSettingsResponseData['runtime']>;
 
 const SETTINGS_CARD_CLASS_NAMES = {
   base: 'border border-divider bg-content1',
@@ -291,6 +282,10 @@ export const SystemSettings = forwardRef<
   const [originalLiveKitPublicUrl, setOriginalLiveKitPublicUrl] = useState('');
   const [realtimeTransportPolicy, setRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
   const [originalRealtimeTransportPolicy, setOriginalRealtimeTransportPolicy] = useState<RealtimeTransportPolicy>('auto');
+  const [liveKitNetworkMode, setLiveKitNetworkMode] = useState<LiveKitNetworkMode>('lan');
+  const [originalLiveKitNetworkMode, setOriginalLiveKitNetworkMode] = useState<LiveKitNetworkMode>('lan');
+  const [liveKitNodeIp, setLiveKitNodeIp] = useState('');
+  const [originalLiveKitNodeIp, setOriginalLiveKitNodeIp] = useState('');
   const [realtimeRuntime, setRealtimeRuntime] = useState<RealtimeRuntimeView | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
 
@@ -603,23 +598,35 @@ export const SystemSettings = forwardRef<
   ) => {
     const nextPublicUrl = data.publicWsUrl ?? '';
     const nextPolicy = data.transportPolicy ?? 'auto';
+    const nextNetworkMode = data.networkMode ?? 'lan';
+    const nextNodeIp = data.nodeIp ?? '';
     const preserveDraft = options?.preserveDraft === true;
     const hasLocalDraft = liveKitPublicUrl !== originalLiveKitPublicUrl
-      || realtimeTransportPolicy !== originalRealtimeTransportPolicy;
+      || realtimeTransportPolicy !== originalRealtimeTransportPolicy
+      || liveKitNetworkMode !== originalLiveKitNetworkMode
+      || liveKitNodeIp !== originalLiveKitNodeIp;
 
     if (!preserveDraft || !hasLocalDraft) {
       setLiveKitPublicUrl(nextPublicUrl);
       setRealtimeTransportPolicy(nextPolicy);
+      setLiveKitNetworkMode(nextNetworkMode);
+      setLiveKitNodeIp(nextNodeIp);
     }
 
     setOriginalLiveKitPublicUrl(nextPublicUrl);
     setOriginalRealtimeTransportPolicy(nextPolicy);
+    setOriginalLiveKitNetworkMode(nextNetworkMode);
+    setOriginalLiveKitNodeIp(nextNodeIp);
     setRealtimeRuntime(data.runtime ?? null);
   }, [
     liveKitPublicUrl,
     originalLiveKitPublicUrl,
     realtimeTransportPolicy,
     originalRealtimeTransportPolicy,
+    liveKitNetworkMode,
+    originalLiveKitNetworkMode,
+    liveKitNodeIp,
+    originalLiveKitNodeIp,
   ]);
 
   const loadRealtimeSettings = useCallback(async () => {
@@ -696,6 +703,8 @@ export const SystemSettings = forwardRef<
       hasDecodeWindowChanges() ||
       liveKitPublicUrl !== originalLiveKitPublicUrl ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
+      liveKitNetworkMode !== originalLiveKitNetworkMode ||
+      liveKitNodeIp !== originalLiveKitNodeIp ||
       (isElectron && closeBehavior !== originalCloseBehavior) ||
       (isElectron && (
         desktopHttpsEnabled !== originalDesktopHttpsEnabled ||
@@ -770,11 +779,19 @@ export const SystemSettings = forwardRef<
         setOriginalDecodeWindowState({ ...decodeWindowState });
       }
 
-      if (liveKitPublicUrl !== originalLiveKitPublicUrl || realtimeTransportPolicy !== originalRealtimeTransportPolicy) {
+      if (
+        liveKitPublicUrl !== originalLiveKitPublicUrl
+        || realtimeTransportPolicy !== originalRealtimeTransportPolicy
+        || liveKitNetworkMode !== originalLiveKitNetworkMode
+        || liveKitNodeIp !== originalLiveKitNodeIp
+      ) {
         const normalizedPublicUrl = liveKitPublicUrl.trim();
+        const normalizedNodeIp = liveKitNodeIp.trim();
         const realtimeResult = await api.updateRealtimeSettings({
           publicWsUrl: normalizedPublicUrl || null,
           transportPolicy: realtimeTransportPolicy,
+          networkMode: liveKitNetworkMode,
+          nodeIp: normalizedNodeIp || null,
         });
         applyRealtimeSettingsSnapshot(realtimeResult.data);
       }
@@ -835,12 +852,16 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, liveKitNetworkMode, originalLiveKitNetworkMode, liveKitNodeIp, originalLiveKitNodeIp, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const runtimeIssueLabel = getRealtimeIssueLabel(realtimeRuntime?.radioBridgeIssueCode ?? null, t);
   const runtimeCredential = realtimeRuntime?.credentialStatus ?? null;
   const realtimeUrlOverrideActive = runtimeHints?.publicUrlOverrideActive ?? false;
+  const liveKitApplyHint = isElectron
+    ? t('system.liveKitNetworkModeApplyHintElectron')
+    : t('system.liveKitNetworkModeApplyHintServer');
+  const manualNodeIpVisible = liveKitNetworkMode === 'internet-manual';
   const desktopHttpsCertificateMeta = desktopHttpsStatus?.certificateMeta ?? null;
   const desktopHttpsBrowserUrl = desktopHttpsStatus?.browserAccessUrl ?? null;
   const desktopUpdateSourceLabel = desktopUpdateStatus?.metadataSource
@@ -1228,7 +1249,68 @@ export const SystemSettings = forwardRef<
                   : t('system.realtimeTransportPolicyAutoHint')}
               </p>
             </div>
+
+            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+              <div>
+                <p className={SETTINGS_MUTED_CLASS}>03</p>
+                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.liveKitNetworkModeTitle')}</h5>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.liveKitNetworkModeDesc')}</p>
+              </div>
+              <Select
+                selectedKeys={[liveKitNetworkMode]}
+                onSelectionChange={(keys) => {
+                  const value = Array.from(keys)[0] as LiveKitNetworkMode | undefined;
+                  if (value) {
+                    setLiveKitNetworkMode(value);
+                  }
+                }}
+                isDisabled={isSaving}
+                size="sm"
+                variant="bordered"
+              >
+                <SelectItem key="lan">{t('system.liveKitNetworkModeLan')}</SelectItem>
+                <SelectItem key="internet-auto">{t('system.liveKitNetworkModeInternetAuto')}</SelectItem>
+                <SelectItem key="internet-manual">{t('system.liveKitNetworkModeInternetManual')}</SelectItem>
+              </Select>
+              <p className={SETTINGS_MUTED_CLASS}>
+                {liveKitNetworkMode === 'internet-manual'
+                  ? t('system.liveKitNetworkModeInternetManualHint')
+                  : liveKitNetworkMode === 'internet-auto'
+                    ? t('system.liveKitNetworkModeInternetAutoHint')
+                    : t('system.liveKitNetworkModeLanHint')}
+              </p>
+            </div>
+
+            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+              <div>
+                <p className={SETTINGS_MUTED_CLASS}>04</p>
+                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.liveKitNodeIpTitle')}</h5>
+                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.liveKitNodeIpDesc')}</p>
+              </div>
+              <Input
+                value={liveKitNodeIp}
+                onValueChange={setLiveKitNodeIp}
+                placeholder={t('system.liveKitNodeIpPlaceholder')}
+                isDisabled={isSaving || !manualNodeIpVisible}
+                size="sm"
+                variant="bordered"
+              />
+              <p className={SETTINGS_MUTED_CLASS}>
+                {manualNodeIpVisible
+                  ? t('system.liveKitNodeIpManualHint')
+                  : t('system.liveKitNodeIpAutoHint')}
+              </p>
+            </div>
           </div>
+
+          <Alert color="warning" variant="flat" className="text-xs">
+            <p>{t('system.realtimeFrpHintTitle')}</p>
+            <p className="mt-1">{t('system.realtimeFrpHintDesc')}</p>
+          </Alert>
+
+          <Alert color="default" variant="flat" className="text-xs">
+            {liveKitApplyHint}
+          </Alert>
 
           <details className="pt-3 border-t border-divider group">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1">

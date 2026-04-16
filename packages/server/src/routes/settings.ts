@@ -4,6 +4,7 @@ import {
   DEFAULT_DECODE_WINDOW_SETTINGS,
   FT4_WINDOW_PRESETS,
   FT8_WINDOW_PRESETS,
+  RealtimeSettingsResponseDataSchema,
   resolveWindowTiming,
   CustomFrequencyPresetsSchema,
   RealtimeSettingsSchema,
@@ -18,6 +19,11 @@ import { getLiveKitCredentialRuntimeStatus } from '../realtime/LiveKitCredential
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { WSServer } from '../websocket/WSServer.js';
 import { WSMessageType } from '@tx5dr/contracts';
+import {
+  normalizeManagedLiveKitSettings,
+  validateManagedLiveKitSettings,
+  writeManagedLiveKitRuntimeConfig,
+} from '../realtime/LiveKitRuntimeConfig.js';
 
 /**
  * 设置管理API路由
@@ -30,23 +36,25 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   const buildRealtimeSettingsData = (request: FastifyRequest) => {
     const publicWsUrl = configManager.getLiveKitPublicUrl();
     const transportPolicy = configManager.getRealtimeTransportPolicy();
+    const networkMode = configManager.getLiveKitNetworkMode();
+    const nodeIp = configManager.getLiveKitNodeIp();
     const connectivityHints = LiveKitConfig.getConnectivityHints(request);
     const health = transportManager.getScopeHealth('radio');
 
-    return {
+    return RealtimeSettingsResponseDataSchema.parse({
       publicWsUrl,
       transportPolicy,
+      networkMode,
+      nodeIp,
       runtime: {
         liveKitEnabled: LiveKitConfig.isEnabled(),
-        liveKitRuntimeAvailable: LiveKitConfig.isRuntimeAvailable(),
-        runtimeUnavailableReason: LiveKitConfig.getRuntimeUnavailableReason(),
         connectivityHints,
         radioReceiveTransport: transportManager.getPreferredTransport('radio', 'recv'),
         radioBridgeHealthy: health.healthy,
         radioBridgeIssueCode: health.issueCode,
         credentialStatus: getLiveKitCredentialRuntimeStatus(),
       },
-    };
+    });
   };
 
   // 获取 FT8 配置
@@ -159,8 +167,17 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     try {
       const body = RealtimeSettingsSchema.parse(request.body);
       const publicWsUrl = body.publicWsUrl?.trim() || null;
+      const managedSettings = normalizeManagedLiveKitSettings({
+        networkMode: body.networkMode ?? configManager.getLiveKitNetworkMode(),
+        nodeIp: body.nodeIp ?? configManager.getLiveKitNodeIp(),
+      });
+      validateManagedLiveKitSettings(managedSettings);
+
       await configManager.updateLiveKitPublicUrl(publicWsUrl);
       await configManager.updateRealtimeTransportPolicy(body.transportPolicy ?? 'auto');
+      await configManager.updateLiveKitNetworkMode(managedSettings.networkMode);
+      await configManager.updateLiveKitNodeIp(managedSettings.nodeIp);
+      await writeManagedLiveKitRuntimeConfig({ settings: managedSettings });
 
       const data = buildRealtimeSettingsData(request);
       WSServer.getInstance()?.broadcast(WSMessageType.REALTIME_SETTINGS_CHANGED, data);
@@ -171,6 +188,13 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         data,
       });
     } catch (error) {
+      if (error instanceof Error && error.message.includes('nodeIp')) {
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_CONFIG,
+          message: error.message,
+          userMessage: 'Manual LiveKit media mode requires a valid public IPv4 address',
+        });
+      }
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
   });

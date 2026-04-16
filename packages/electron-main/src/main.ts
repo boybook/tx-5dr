@@ -948,19 +948,58 @@ function runBinaryChild(
 }
 
 function buildLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: string, apiSecret: string): string {
+  const runtimeSettings = readManagedLiveKitSettings();
   return [
     `port: ${signalingPort}`,
     'rtc:',
     `  tcp_port: ${tcpPort}`,
     '  port_range_start: 50000',
     '  port_range_end: 50100',
-    '  use_external_ip: false',
+    ...(runtimeSettings.networkMode === 'internet-auto'
+      ? ['  use_external_ip: true']
+      : [
+          '  use_external_ip: false',
+          ...(runtimeSettings.networkMode === 'internet-manual' && runtimeSettings.nodeIp
+            ? [`  node_ip: ${runtimeSettings.nodeIp}`]
+            : []),
+        ]),
     'keys:',
     `  ${apiKey}: ${apiSecret}`,
     'logging:',
     '  level: info',
     '',
   ].join('\n');
+}
+
+function readManagedLiveKitSettings(): { networkMode: 'lan' | 'internet-auto' | 'internet-manual'; nodeIp: string | null } {
+  const configPath = path.join(getAppConfigDir(), 'config.json');
+
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const parsed = JSON.parse(content) as {
+      livekitNetworkMode?: string | null;
+      livekitNodeIp?: string | null;
+    };
+    const networkMode = parsed.livekitNetworkMode === 'internet-auto' || parsed.livekitNetworkMode === 'internet-manual'
+      ? parsed.livekitNetworkMode
+      : 'lan';
+    const nodeIp = parsed.livekitNodeIp?.trim() || null;
+
+    if (networkMode === 'internet-manual' && nodeIp && net.isIP(nodeIp) === 4) {
+      return { networkMode, nodeIp };
+    }
+    if (networkMode === 'internet-manual') {
+      logger.warn('invalid manual LiveKit node IP in desktop config, falling back to lan mode', { nodeIp });
+      return { networkMode: 'lan', nodeIp: null };
+    }
+
+    return { networkMode, nodeIp };
+  } catch (error) {
+    logger.debug('failed to read desktop LiveKit runtime settings, using defaults', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { networkMode: 'lan', nodeIp: null };
+  }
 }
 
 function getLiveKitCredentialPath(): string {
@@ -1041,7 +1080,7 @@ function ensureLiveKitCredentials(): { path: string; data: LiveKitCredentialFile
 function ensureLiveKitConfig(signalingPort: number, tcpPort: number, apiKey: string, apiSecret: string): string {
   const configDir = getAppConfigDir();
   fs.mkdirSync(configDir, { recursive: true });
-  const configPath = path.join(configDir, 'livekit.yaml');
+  const configPath = path.join(configDir, 'livekit.resolved.yaml');
   fs.writeFileSync(configPath, buildLiveKitConfig(signalingPort, tcpPort, apiKey, apiSecret), 'utf-8');
   return configPath;
 }

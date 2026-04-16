@@ -644,26 +644,22 @@ fix_livekit_credentials() {
 }
 
 fix_livekit_config() {
-    local template="/usr/share/tx5dr/livekit.yaml.template"
+    local render_cli="/usr/share/tx5dr/packages/server/dist/realtime/livekit-config-cli.js"
     local target
     target=$(get_livekit_config_path)
 
-    [[ -f "$template" ]] || return 1
+    [[ -f "$render_cli" ]] || return 1
     check_livekit_credentials_loaded || return 1
     mkdir -p "$(dirname "$target")"
 
-    local quoted_api_key
-    local quoted_api_secret
-    quoted_api_key=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_KEY}")")
-    quoted_api_secret=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_SECRET}")")
-
-    sed -e "s|__LIVEKIT_SIGNAL_PORT__|${LIVEKIT_SIGNAL_PORT}|g" \
-        -e "s|__LIVEKIT_TCP_PORT__|${LIVEKIT_TCP_PORT}|g" \
-        -e "s|__LIVEKIT_UDP_PORT_START__|${LIVEKIT_UDP_PORT_START}|g" \
-        -e "s|__LIVEKIT_UDP_PORT_END__|${LIVEKIT_UDP_PORT_END}|g" \
-        -e "s|__LIVEKIT_API_KEY__|${quoted_api_key}|g" \
-        -e "s|__LIVEKIT_API_SECRET__|${quoted_api_secret}|g" \
-        "$template" > "$target"
+    node "$render_cli" \
+        --app-config "${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}/config.json" \
+        --credential-file "$(get_livekit_credentials_path)" \
+        --output "$target" \
+        --signal-port "${LIVEKIT_SIGNAL_PORT}" \
+        --tcp-port "${LIVEKIT_TCP_PORT}" \
+        --udp-start "${LIVEKIT_UDP_PORT_START}" \
+        --udp-end "${LIVEKIT_UDP_PORT_END}"
 
     chmod 640 "$target"
     if id tx5dr &>/dev/null; then

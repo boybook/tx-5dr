@@ -31,7 +31,7 @@ describe('LiveKitCredentialState', () => {
 
   it('uses managed linux credential path for packaged deployments even if env file omitted the credential variable', async () => {
     process.env.TX5DR_CONFIG_DIR = '/var/lib/tx5dr/config';
-    process.env.LIVEKIT_CONFIG_FILE = '/etc/tx5dr/livekit.yaml';
+    process.env.LIVEKIT_CONFIG_FILE = '/var/lib/tx5dr/realtime/livekit.resolved.yaml';
 
     const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((target) => {
       return target === '/etc/tx5dr/livekit-credentials.env';

@@ -73,10 +73,8 @@ import type {
   OpenWebRXListenStatus,
   OpenWebRXListenStart,
   OpenWebRXListenTune,
-  RealtimeConnectivityErrorCode,
-  RealtimeConnectivityHints,
   RealtimeSettings,
-  RealtimeTransportKind,
+  RealtimeSettingsResponseData,
   RealtimeSessionRequest,
   RealtimeSessionResponse,
   RealtimeStatsRequest,
@@ -84,24 +82,6 @@ import type {
   RealtimeVoiceTxStatsResponse,
   PluginRuntimeInfo,
 } from '@tx5dr/contracts';
-
-type RealtimeSettingsApiData = RealtimeSettings & {
-  runtime?: {
-    liveKitEnabled: boolean;
-    connectivityHints: RealtimeConnectivityHints;
-    radioReceiveTransport: RealtimeTransportKind;
-    radioBridgeHealthy: boolean;
-    radioBridgeIssueCode: RealtimeConnectivityErrorCode | null;
-    credentialStatus: {
-      initialized: boolean;
-      source: 'managed-file' | 'environment-override' | 'missing';
-      filePath: string | null;
-      apiKeyPreview: string | null;
-      createdAt: string | null;
-      rotatedAt: string | null;
-    };
-  };
-};
 
 // ========== 错误处理 ==========
 
@@ -994,7 +974,7 @@ export const api = {
 
   async getRealtimeSettings(apiBase?: string): Promise<{
     success: boolean;
-    data: RealtimeSettingsApiData;
+    data: RealtimeSettingsResponseData;
   }> {
     return apiRequest('/settings/realtime', undefined, apiBase);
   },
@@ -1005,7 +985,7 @@ export const api = {
   ): Promise<{
     success: boolean;
     message: string;
-    data: RealtimeSettingsApiData;
+    data: RealtimeSettingsResponseData;
   }> {
     return apiRequest(
       '/settings/realtime',

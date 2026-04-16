@@ -4,7 +4,7 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('LiveKitCredentialState');
 const MANAGED_LINUX_LIVEKIT_CREDENTIAL_PATH = '/etc/tx5dr/livekit-credentials.env';
-const MANAGED_LINUX_LIVEKIT_CONFIG_PATH = '/etc/tx5dr/livekit.yaml';
+const MANAGED_LINUX_LIVEKIT_CONFIG_PATH = '/var/lib/tx5dr/realtime/livekit.resolved.yaml';
 const MANAGED_LINUX_TX5DR_CONFIG_DIR = '/var/lib/tx5dr/config';
 
 export type LiveKitCredentialSource = 'managed-file' | 'environment-override' | 'missing';

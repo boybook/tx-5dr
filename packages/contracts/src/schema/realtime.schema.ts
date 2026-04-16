@@ -101,6 +101,9 @@ export type RealtimeTransportOffer = z.infer<typeof RealtimeTransportOfferSchema
 export const RealtimeTransportPolicySchema = z.enum(['auto', 'force-compat']);
 export type RealtimeTransportPolicy = z.infer<typeof RealtimeTransportPolicySchema>;
 
+export const LiveKitNetworkModeSchema = z.enum(['lan', 'internet-auto', 'internet-manual']);
+export type LiveKitNetworkMode = z.infer<typeof LiveKitNetworkModeSchema>;
+
 export const RealtimeSessionResponseSchema = z.object({
   scope: RealtimeScopeSchema,
   direction: RealtimeSessionDirectionSchema,
@@ -124,6 +127,8 @@ export type RealtimeSessionResponse = z.infer<typeof RealtimeSessionResponseSche
 export const RealtimeSettingsSchema = z.object({
   publicWsUrl: z.string().url().nullable().optional(),
   transportPolicy: RealtimeTransportPolicySchema.optional(),
+  networkMode: LiveKitNetworkModeSchema.optional(),
+  nodeIp: z.string().nullable().optional(),
 });
 
 export type RealtimeSettings = z.infer<typeof RealtimeSettingsSchema>;
