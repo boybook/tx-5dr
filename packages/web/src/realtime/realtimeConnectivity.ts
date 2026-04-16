@@ -342,7 +342,7 @@ export function showRealtimeConnectivityIssueToast(issue: RealtimeConnectivityIs
   const descriptionLines = [issue.userMessage];
 
   if (isNetworkStyleRealtimeIssue(issue.code) && !isBrowserRuntimeIssue(issue)) {
-    descriptionLines.push(i18n.t('radio:realtime.compactNetworkHint'));
+    descriptionLines.push(issue.suggestions[0] || i18n.t('radio:realtime.compactNetworkHint'));
   }
 
   showCompactRealtimeToast({

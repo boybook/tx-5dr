@@ -125,7 +125,8 @@ Linux Server is not a single standalone process. The installer sets up and wires
 - **LiveKit** *(optional)*: Linux packages bundle `livekit-server` at `/usr/share/tx5dr/bin/livekit-server`. Without LiveKit, voice uses WebSocket audio (ws-compat) — all features remain fully functional
 - For voice features: **HTTPS** (configure SSL in `/etc/nginx/conf.d/tx5dr.conf`)
 - If LiveKit is enabled, browsers enter signaling through the site's same-origin `/livekit` path (`7880/tcp` does not need public exposure). You still need to expose `7881/tcp` and `50000-50100/udp` for media transport
-- If you use a dedicated domain, an extra reverse proxy layer, or a non-standard path, set a custom realtime voice entrypoint in System Settings. The value is persisted in `/var/lib/tx5dr/config/config.json`
+- If you use a dedicated domain, an extra reverse proxy layer, or a non-standard path, configure the custom browser-facing entrypoint in "System Settings > Realtime Audio"; the same page also exposes the shared LAN / Internet Auto / Internet Manual LiveKit media modes
+- Linux Server and Docker now generate a managed `livekit.resolved.yaml` from that shared configuration. Do not hand-edit the generated runtime YAML
 - Download source override: set `TX5DR_DOWNLOAD_SOURCE=github|oss|auto` in `/etc/tx5dr/config.env` if you need to force a specific source
 
 ---

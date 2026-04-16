@@ -22,8 +22,9 @@ NGINX_TEMPLATE="/usr/share/tx5dr/nginx-site.conf"
 NGINX_CONF="/etc/nginx/conf.d/tx5dr.conf"
 CONFIG_ENV="/etc/tx5dr/config.env"
 LIVEKIT_TEMPLATE="/usr/share/tx5dr/livekit.yaml.template"
-LIVEKIT_CONF="/etc/tx5dr/livekit.yaml"
+LIVEKIT_CONF="/var/lib/tx5dr/realtime/livekit.resolved.yaml"
 LIVEKIT_CREDENTIALS_FILE="/etc/tx5dr/livekit-credentials.env"
+LIVEKIT_RENDER_CLI="/usr/share/tx5dr/packages/server/dist/realtime/livekit-config-cli.js"
 LIB_DIR="/usr/share/tx5dr/lib"
 SHARED_LIB_READY=0
 
@@ -212,22 +213,23 @@ EOF
         source "$LIVEKIT_CREDENTIALS_FILE" 2>/dev/null || true
     fi
 
-    livekit_api_key_yaml=""
-    livekit_api_secret_yaml=""
-    livekit_api_key_yaml=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_KEY}")")
-    livekit_api_secret_yaml=$(escape_sed_replacement "$(yaml_single_quote "${LIVEKIT_API_SECRET}")")
-
-    sed -e "s|__LIVEKIT_SIGNAL_PORT__|${LIVEKIT_SIGNAL_PORT:-7880}|g" \
-        -e "s|__LIVEKIT_TCP_PORT__|${LIVEKIT_TCP_PORT:-7881}|g" \
-        -e "s|__LIVEKIT_UDP_PORT_START__|${LIVEKIT_UDP_PORT_START:-50000}|g" \
-        -e "s|__LIVEKIT_UDP_PORT_END__|${LIVEKIT_UDP_PORT_END:-50100}|g" \
-        -e "s|__LIVEKIT_API_KEY__|${livekit_api_key_yaml}|g" \
-        -e "s|__LIVEKIT_API_SECRET__|${livekit_api_secret_yaml}|g" \
-        "$LIVEKIT_TEMPLATE" > "$LIVEKIT_CONF"
-    chmod 640 "$LIVEKIT_CONF"
-    chown "$APP_USER:$APP_GROUP" "$LIVEKIT_CONF" 2>/dev/null || true
-    _msg "Generated LiveKit config: $LIVEKIT_CONF" \
-         "已生成 LiveKit 配置: $LIVEKIT_CONF"
+    if [[ ! -f "$LIVEKIT_RENDER_CLI" ]]; then
+        _msg "WARNING: missing LiveKit render CLI: $LIVEKIT_RENDER_CLI" \
+             "警告: 缺少 LiveKit 渲染工具: $LIVEKIT_RENDER_CLI"
+    else
+        node "$LIVEKIT_RENDER_CLI" \
+            --app-config "${TX5DR_CONFIG_DIR:-/var/lib/tx5dr/config}/config.json" \
+            --credential-file "$LIVEKIT_CREDENTIALS_FILE" \
+            --output "$LIVEKIT_CONF" \
+            --signal-port "${LIVEKIT_SIGNAL_PORT:-7880}" \
+            --tcp-port "${LIVEKIT_TCP_PORT:-7881}" \
+            --udp-start "${LIVEKIT_UDP_PORT_START:-50000}" \
+            --udp-end "${LIVEKIT_UDP_PORT_END:-50100}"
+        chmod 640 "$LIVEKIT_CONF"
+        chown "$APP_USER:$APP_GROUP" "$LIVEKIT_CONF" 2>/dev/null || true
+        _msg "Generated LiveKit config: $LIVEKIT_CONF" \
+             "已生成 LiveKit 配置: $LIVEKIT_CONF"
+    fi
 fi
 
 # ── SELinux (RHEL/Fedora only) ───────────────────────────────────────────────

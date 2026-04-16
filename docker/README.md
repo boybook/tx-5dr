@@ -13,7 +13,7 @@ Full documentation / 完整文档: **[tx5dr.com/guide/docker](https://tx5dr.com/
 Image: `boybook/tx-5dr:latest` ([Docker Hub](https://hub.docker.com/r/boybook/tx-5dr))
 
 ```bash
-mkdir -p data/{config,plugins,logs,cache,realtime,ssl}
+mkdir -p data
 docker compose pull
 docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
@@ -30,6 +30,8 @@ Use the separate LiveKit compose file instead:
 ```bash
 docker compose -f docker-compose.livekit.yml up -d
 ```
+
+Configure the LiveKit topology from the app's "System Settings > Realtime Audio" page. The container now persists the whole `./data` root and generates a managed `livekit.resolved.yaml`; do not hand-edit the generated YAML.
 
 ### Two Compose Files
 
@@ -78,7 +80,7 @@ For detailed setup, see **[tx5dr.com/guide/docker](https://tx5dr.com/guide/docke
 镜像：`boybook/tx-5dr:latest`（[Docker Hub](https://hub.docker.com/r/boybook/tx-5dr)）
 
 ```bash
-mkdir -p data/{config,plugins,logs,cache,realtime,ssl}
+mkdir -p data
 docker compose pull
 docker compose up -d
 docker exec tx5dr cat /app/data/config/.admin-token
@@ -95,6 +97,8 @@ docker exec tx5dr cat /app/data/config/.admin-token
 ```bash
 docker compose -f docker-compose.livekit.yml up -d
 ```
+
+LiveKit 的网络拓扑现在统一从应用内“系统设置 > 实时音频”配置。容器会持久化整个 `./data` 根目录，并生成托管的 `livekit.resolved.yaml`；不要再手工修改生成后的 YAML。
 
 ### 两个 Compose 文件
 

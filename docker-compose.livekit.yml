@@ -2,7 +2,7 @@
 # 使用 WebRTC 低延迟语音传输（20-50ms），需要额外端口
 # 启动：docker compose -f docker-compose.livekit.yml up -d
 #
-# 首次运行时 livekit-init 自动生成凭据，后续重启自动复用
+# 首次运行时 livekit-init 自动生成凭据与运行配置，后续重启自动复用
 # 如不需要低延迟语音，使用 docker-compose.yml（独立模式）即可
 
 services:
@@ -14,7 +14,7 @@ services:
     environment:
       - LIVEKIT_RUNTIME_DIR=/app/data/realtime
       - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
-      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.resolved.yaml
       - LIVEKIT_SIGNAL_PORT=7880
       - LIVEKIT_TCP_PORT=7881
       - LIVEKIT_UDP_PORT_START=50000
@@ -65,7 +65,7 @@ services:
       - PORT=4000
       - LIVEKIT_URL=ws://livekit:7880
       - LIVEKIT_CREDENTIALS_FILE=/app/data/realtime/livekit-credentials.env
-      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.yaml
+      - LIVEKIT_CONFIG_PATH=/app/data/realtime/livekit.resolved.yaml
       # TX-5DR应用路径配置
       - TX5DR_CONFIG_DIR=/app/data/config
       - TX5DR_DATA_DIR=/app/data
@@ -95,7 +95,7 @@ services:
     depends_on:
       livekit-init:
         condition: service_completed_successfully
-    command: --config /var/lib/tx5dr-runtime/livekit.yaml
+    command: --config /var/lib/tx5dr-runtime/livekit.resolved.yaml
     ports:
       - "7881:7881/tcp"
       - "50000-50100:50000-50100/udp"
