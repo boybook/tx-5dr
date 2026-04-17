@@ -1,6 +1,7 @@
 {
   "$schema": "https://turborepo.org/schema.json",
   "globalPassThroughEnv": [
+    "GLIBC_TUNABLES",
     "LIVEKIT_URL",
     "LIVEKIT_DISABLED",
     "LIVEKIT_CREDENTIALS_FILE",
