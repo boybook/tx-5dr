@@ -170,14 +170,6 @@ function randomHex(bytes) {
   return require('crypto').randomBytes(bytes).toString('hex');
 }
 
-function ensureLiveKitBinary() {
-  const binaryPath = findLiveKitBinary();
-  if (!binaryPath) {
-    throw new Error(getInstallHint());
-  }
-  return binaryPath;
-}
-
 function buildLiveKitConfig(credentials) {
   return [
     `port: ${LIVEKIT_SIGNAL_PORT}`,
@@ -273,6 +265,12 @@ function terminate(child, signal = 'SIGTERM') {
 }
 
 async function startLiveKit() {
+  if (process.env.LIVEKIT_DISABLED === '1') {
+    console.log('[dev-runtime] LIVEKIT_DISABLED=1 set; skipping LiveKit and running in ws-compat mode');
+    livekitRuntime = { mode: 'disabled', reason: 'disabled-by-env', credentialPath: null, configPath: null };
+    return;
+  }
+
   const ready = await waitForHttp(`http://127.0.0.1:${LIVEKIT_SIGNAL_PORT}`, 500, 100);
   if (ready) {
     console.log(`[dev-runtime] Reusing existing LiveKit on http://127.0.0.1:${LIVEKIT_SIGNAL_PORT}`);
@@ -306,7 +304,13 @@ async function startLiveKit() {
     return;
   }
 
-  const binaryPath = ensureLiveKitBinary();
+  const binaryPath = findLiveKitBinary();
+  if (!binaryPath) {
+    console.warn(`[dev-runtime] ${getInstallHint()}`);
+    console.warn('[dev-runtime] Continuing in ws-compat mode. Set LIVEKIT_BINARY_PATH or install livekit-server to enable WebRTC audio.');
+    livekitRuntime = { mode: 'disabled', reason: 'binary-not-found', credentialPath: null, configPath: null };
+    return;
+  }
   ensureLiveKitConfig();
 
   console.log(`[dev-runtime] Starting LiveKit: ${binaryPath}`);
@@ -325,7 +329,15 @@ async function startLiveKit() {
 
   const livekitOk = await waitForHttp(`http://127.0.0.1:${LIVEKIT_SIGNAL_PORT}`, 15000, 200);
   if (!livekitOk) {
-    throw new Error('LiveKit did not become ready in time');
+    console.warn('[dev-runtime] LiveKit did not become ready in time; falling back to ws-compat mode (check if port 7880 is in use or the config is valid)');
+    const orphan = livekitChild;
+    livekitChild = null;
+    if (orphan) {
+      orphan.removeAllListeners('exit');
+      terminate(orphan, 'SIGTERM');
+    }
+    livekitRuntime = { mode: 'disabled', reason: 'startup-timeout', credentialPath: null, configPath: null };
+    return;
   }
   livekitRuntime = {
     mode: 'managed',
