@@ -17,6 +17,7 @@ import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.s
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
+import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
 import type { RealtimeSettingsResponseData } from './realtime.schema.js';
 import { ClockStatusSummarySchema } from './system.schema.js';
@@ -121,6 +122,10 @@ export enum WSMessageType {
   // ===== 电台重连控制 =====
   RADIO_STOP_RECONNECT = 'radioStopReconnect',
 
+  // ===== 电台电源管理 =====
+  /** 电源操作进度事件（server → client） */
+  RADIO_POWER_STATE = 'radioPowerState',
+
   // ===== Profile 管理 =====
   PROFILE_CHANGED = 'profileChanged',
   PROFILE_LIST_UPDATED = 'profileListUpdated',
@@ -180,7 +185,7 @@ export const SystemStatusSchema = z.object({
   /** 当前电台调制模式（语音模式下使用，如 USB/LSB/FM/AM） */
   currentRadioMode: z.string().optional(),
   /** 引擎状态机当前状态 */
-  engineState: z.enum(['idle', 'starting', 'running', 'stopping']).optional(),
+  engineState: z.enum(['idle', 'waking', 'starting', 'running', 'stopping']).optional(),
   /** 引擎状态机上下文的精简投影 */
   engineContext: z.object({
     error: z.string().optional(),
@@ -867,6 +872,16 @@ export const WSRadioStopReconnectMessageSchema = WSBaseMessageSchema.extend({
 export type WSRadioStopReconnectMessage = z.infer<typeof WSRadioStopReconnectMessageSchema>;
 
 /**
+ * 电源操作进度事件（服务端→客户端）
+ */
+export const WSRadioPowerStateMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RADIO_POWER_STATE),
+  data: RadioPowerStateEventSchema,
+});
+
+export type WSRadioPowerStateMessage = z.infer<typeof WSRadioPowerStateMessageSchema>;
+
+/**
  * 频率变化消息（服务端到客户端）
  */
 export const WSFrequencyChangedMessageSchema = WSBaseMessageSchema.extend({
@@ -1139,6 +1154,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSRadioManualReconnectMessageSchema,
   WSRadioStopReconnectMessageSchema,
   WSRadioDisconnectedDuringTransmissionMessageSchema,
+  WSRadioPowerStateMessageSchema,
 
   // 频率管理消息
   WSFrequencyChangedMessageSchema,
@@ -1295,6 +1311,7 @@ export interface DigitalRadioEngineEvents {
   radioStatusChanged: (data: z.infer<typeof WSRadioStatusChangedMessageSchema>['data']) => void;
   radioError: (data: z.infer<typeof RadioErrorEventDataSchema>) => void;
   radioDisconnectedDuringTransmission: (data: z.infer<typeof WSRadioDisconnectedDuringTransmissionMessageSchema>['data']) => void;
+  radioPowerState: (data: import('./radio-power.schema.js').RadioPowerStateEvent) => void;
 
   // Profile 管理事件
   profileChanged: (data: z.infer<typeof ProfileChangedEventSchema>) => void;

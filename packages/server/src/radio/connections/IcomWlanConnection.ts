@@ -199,8 +199,17 @@ export class IcomWlanConnection
 
   /**
    * 连接到电台
+   *
+   * Note: ICOM WLAN 的 control link 是独立于 audio 的，IcomControl 只建立
+   * CI-V/UDP 控制通道。因此 `mode: 'control-only'` 与 `'full'` 的差异仅体现在：
+   *   - control-only 态不触发 'connected' 事件，避免上层误判；
+   *   - control-only 态仅允许电源类操作（由 checkConnected 放行策略决定）。
    */
-  async connect(config: RadioConnectionConfig): Promise<void> {
+  async connect(
+    config: RadioConnectionConfig,
+    options?: { mode?: 'full' | 'control-only' }
+  ): Promise<void> {
+    const mode = options?.mode ?? 'full';
     // 状态检查
     if (this.state === RadioConnectionState.CONNECTING) {
       throw RadioError.invalidState(
@@ -210,8 +219,12 @@ export class IcomWlanConnection
       );
     }
 
-    // 如果已连接，先断开
-    if (this.state === RadioConnectionState.CONNECTED && this.rig) {
+    // 如果已连接或在控制链路态，先断开
+    if (
+      (this.state === RadioConnectionState.CONNECTED ||
+        this.state === RadioConnectionState.CONTROL_ONLY) &&
+      this.rig
+    ) {
       await this.disconnect('reconnecting');
     }
 
@@ -294,11 +307,14 @@ export class IcomWlanConnection
       ]);
 
       // 连接成功
-      this.setState(RadioConnectionState.CONNECTED);
-      logger.info('ICOM radio connected successfully');
-
-      // 触发连接成功事件
-      this.emit('connected');
+      if (mode === 'control-only') {
+        this.setState(RadioConnectionState.CONTROL_ONLY);
+        logger.info('ICOM control-only link established');
+      } else {
+        this.setState(RadioConnectionState.CONNECTED);
+        logger.info('ICOM radio connected successfully');
+        this.emit('connected');
+      }
 
     } catch (error) {
       // 连接失败，清理资源
@@ -988,8 +1004,8 @@ export class IcomWlanConnection
   /**
    * 检查是否已连接
    */
-  private checkConnected(): void {
-    if (!this.rig || this.state !== RadioConnectionState.CONNECTED) {
+  private checkConnected(allow: 'connected' | 'power' = 'connected'): void {
+    if (!this.rig) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
         message: `Radio not connected, current state: ${this.state}`,
@@ -997,6 +1013,90 @@ export class IcomWlanConnection
         suggestions: ['Connect to radio first'],
       });
     }
+    if (this.state === RadioConnectionState.CONNECTED) return;
+    if (allow === 'power' && this.state === RadioConnectionState.CONTROL_ONLY) return;
+    throw new RadioError({
+      code: RadioErrorCode.INVALID_STATE,
+      message: `Radio not connected, current state: ${this.state}`,
+      userMessage: 'Radio not connected',
+      suggestions: ['Connect to radio first'],
+    });
+  }
+
+  /**
+   * 将 control-only 链路升级为完整连接。
+   * ICOM WLAN 的 control link 本身即是所需通道；升级只需更新状态 + emit 事件。
+   */
+  async promoteToFull(): Promise<void> {
+    if (this.state !== RadioConnectionState.CONTROL_ONLY || !this.rig) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_STATE,
+        message: `promoteToFull called in invalid state: ${this.state}`,
+        userMessage: 'Radio control link not established',
+        suggestions: ['Open a control-only connection first'],
+      });
+    }
+    // 允许电台充分启动
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    this.setState(RadioConnectionState.CONNECTED);
+    logger.info('ICOM WLAN connection promoted to full');
+    this.emit('connected');
+  }
+
+  /**
+   * Readiness 探针：检查 IcomControl 是否已完成 login 握手
+   */
+  async probeResponding(_timeoutMs = 3000): Promise<boolean> {
+    if (
+      !this.rig ||
+      (this.state !== RadioConnectionState.CONTROL_ONLY &&
+        this.state !== RadioConnectionState.CONNECTED)
+    ) {
+      return false;
+    }
+    try {
+      const phase = this.rig.getConnectionPhase();
+      return String(phase).toUpperCase() === 'CONNECTED';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 发送电源状态（CI-V 0x18）
+   * - off: 0x18 0x00
+   * - on:  0x18 0x01
+   */
+  async setPowerState(state: string): Promise<void> {
+    await this.runSerializedTask('setPowerState', async () => {
+      this.checkConnected('power');
+      const normalized = state.trim().toLowerCase();
+      const subcodeMap: Record<string, number> = {
+        off: 0x00,
+        on: 0x01,
+        standby: 0x00, // ICOM WLAN has no dedicated standby; treat as off
+        operate: 0x01,
+      };
+      const subcode = subcodeMap[normalized];
+      if (subcode === undefined) {
+        throw new Error(`Unsupported power state: ${state}`);
+      }
+      try {
+        const data = Buffer.from([0x18, subcode]);
+        this.rig!.sendCiv(data);
+        logger.debug(`ICOM WLAN power state sent: ${normalized}`);
+      } catch (error) {
+        throw this.convertError(error, 'setPowerState');
+      }
+    });
+  }
+
+  /**
+   * Read power state is not natively surfaced by icom-wlan-node. Return 'unknown'.
+   */
+  async getPowerState(): Promise<string> {
+    this.checkConnected('power');
+    return 'unknown';
   }
 
   /**

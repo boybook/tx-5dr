@@ -229,7 +229,6 @@ export const CAPABILITY_IDS = [
   'rit_offset',
   'xit_offset',
   'tuning_step',
-  'power_state',
   'repeater_shift',
   'repeater_offset',
   'ctcss_tone',

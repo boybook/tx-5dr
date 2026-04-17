@@ -15,7 +15,8 @@
     "stop": "停止",
     "reconnect": "重连",
     "notConnected": "未连接",
-    "connect": "连接"
+    "connect": "连接",
+    "wakeAndConnect": "发送开机指令并连接"
   },
   "control": {
     "frequency": "频率",
@@ -172,6 +173,57 @@
     "tuningStarted": "天调已启动",
     "startFailed": "启动手动调谐失败",
     "toggleFailed": "切换天调状态失败"
+  },
+  "power": {
+    "on": {
+      "label": "开机",
+      "description": "发送开机指令，电台响应后自动启动引擎。",
+      "confirm": "确定开机吗？"
+    },
+    "off": {
+      "label": "关机",
+      "description": "先停止引擎，再发送关机指令并断开连接。",
+      "confirm": "确定关机吗？引擎会先停止。"
+    },
+    "standby": {
+      "label": "待机",
+      "description": "让电台进入低功耗待机。CAT 连接会断开，引擎会停止。",
+      "confirm": "进入待机？引擎会停止，需重新开机恢复。"
+    },
+    "operate": {
+      "label": "工作",
+      "description": "让电台从待机恢复到正常工作状态。"
+    },
+    "dropdownLabel": "电源状态",
+    "compatibilityNote": "不同电台对电源指令的响应不同，请选择与你的电台匹配的指令。",
+    "confirmTitle": "确认电源操作",
+    "supportedBadge": "支持远程电源控制",
+    "unsupported": {
+      "modelUnsupported": "当前电台型号不支持远程电源控制。",
+      "networkMode": "网络模式（rigctld）无法远程唤醒电台。",
+      "noneMode": "此 Profile 未配置电台。"
+    },
+    "state": {
+      "off": "已关机",
+      "waking": "正在开机…",
+      "awake": "已开机",
+      "enteringStandby": "正在进入待机…",
+      "shuttingDown": "正在关机…",
+      "failed": "失败"
+    },
+    "progress": {
+      "sendingCommand": "发送指令中…",
+      "waitingReady": "等待电台响应…",
+      "waitingStandbyDisconnect": "等待电台断开 CAT 连接…",
+      "startingEngine": "启动引擎中…",
+      "stoppingEngine": "停止引擎中…",
+      "disconnecting": "断开连接中…"
+    },
+    "error": {
+      "timeout": "电源操作超时",
+      "notSupported": "此电台不支持远程电源控制",
+      "concurrentOperation": "已有电源操作在执行中"
+    }
   },
   "error": {
     "unknown": "发生未知错误",
@@ -437,10 +489,6 @@
       "label": "步进",
       "description": "设置旋钮或上下调谐时使用的步进值。较小步进适合精细调谐，较大步进适合快速跨频段移动。"
     },
-    "power_state": {
-      "label": "电源状态",
-      "description": "读取或切换电台电源工作状态。不同机型可能支持关机、待机、上电或工作等状态。"
-    },
     "repeater_shift": {
       "label": "中继方向",
       "description": "设置中继台收发频移方向，可选无频移、负频移或正频移。通常与中继偏移量配合使用。"
@@ -471,13 +519,6 @@
         "auto": "自动",
         "long": "长延时",
         "on": "开启"
-      },
-      "power_state": {
-        "off": "关机",
-        "on": "开机",
-        "standby": "待机",
-        "operate": "工作",
-        "unknown": "未知"
       },
       "repeater_shift": {
         "none": "无频移",

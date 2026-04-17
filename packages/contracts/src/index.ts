@@ -132,6 +132,10 @@ export * from './schema/openwebrx.schema.js';
 // Radio Capability Schema
 export * from './schema/radio-capability.schema.js';
 
+// Radio Power Schema
+export * from './schema/radio-power.schema.js';
+export * from './schema/radio-power-support.js';
+
 // Realtime Schema
 export * from './schema/realtime.schema.js';
 

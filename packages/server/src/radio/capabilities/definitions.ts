@@ -548,36 +548,9 @@ function createDefinitions(): CapabilityDefinition[] {
       read: (conn) => conn.getTuningStep!(),
       write: (conn, value) => conn.setTuningStep!(value as number),
     },
-    {
-      id: 'power_state',
-      descriptor: {
-        id: 'power_state',
-        category: 'system',
-        valueType: 'enum',
-        options: [
-          createOption('off', 'radio:capability.options.power_state.off'),
-          createOption('on', 'radio:capability.options.power_state.on'),
-          createOption('standby', 'radio:capability.options.power_state.standby'),
-          createOption('operate', 'radio:capability.options.power_state.operate'),
-          createOption('unknown', 'radio:capability.options.power_state.unknown'),
-        ],
-        readable: true,
-        writable: true,
-        updateMode: 'polling',
-        pollIntervalMs: 10000,
-        labelI18nKey: 'radio:capability.power_state.label',
-        descriptionI18nKey: 'radio:capability.power_state.description',
-        display: { mode: 'value', unit: 'state' },
-        hasSurfaceControl: false,
-      },
-      probeSupport: async (conn) => {
-        if (!conn.getPowerState) return false;
-        await conn.getPowerState();
-        return true;
-      },
-      read: (conn) => conn.getPowerState!(),
-      write: (conn, value) => conn.setPowerState!(String(value)),
-    },
+    // power_state has been moved out of the capability system; the
+    // RadioPowerController owns power transitions because they affect
+    // connection reachability and cannot be modeled as a simple write.
     {
       id: 'repeater_shift',
       descriptor: {

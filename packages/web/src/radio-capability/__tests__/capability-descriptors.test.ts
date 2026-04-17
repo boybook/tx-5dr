@@ -47,7 +47,6 @@ describe('capability descriptor layout helpers', () => {
       createDescriptor('dcs_code', 'operation'),
       createDescriptor('lock_mode', 'system'),
       createDescriptor('mute', 'system'),
-      createDescriptor('power_state', 'system'),
     ]);
 
     const sections = getVisibleCapabilitySections(grouped);

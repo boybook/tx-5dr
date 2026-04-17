@@ -97,30 +97,11 @@ function useDelayedBusyKey(busyKey: string | null, delayMs = 500): string | null
   return visibleBusyKey === busyKey ? visibleBusyKey : null;
 }
 
-const QUICK_PANEL_SKELETON_GROUPS = [
-  { bars: ['w-24', 'w-full', 'w-5/6'] },
-  { bars: ['w-20', 'w-4/5', 'w-full'] },
-  { bars: ['w-28', 'w-3/4'] },
-];
-
 function AutomationSettingsPanelSkeleton(): React.JSX.Element {
   return (
-    <div className="w-[260px] space-y-2.5 p-1">
-      {QUICK_PANEL_SKELETON_GROUPS.map((group, index) => (
-        <section key={index} className="space-y-1.5">
-          <div className="h-2.5 w-16 animate-pulse rounded-full bg-default-200/80" />
-          <div className="rounded-xl border border-default-200/70 bg-content1 px-2.5 py-2.5">
-            <div className="space-y-2">
-              {group.bars.map((widthClass, barIndex) => (
-                <div
-                  key={barIndex}
-                  className={`h-8 animate-pulse rounded-lg bg-default-100/90 ${widthClass}`}
-                />
-              ))}
-            </div>
-          </div>
-        </section>
-      ))}
+    <div className="w-[260px] space-y-1.5 p-1">
+      <div className="h-2 w-16 animate-pulse rounded-full bg-default-200/80" />
+      <div className="h-8 w-full animate-pulse rounded-md bg-default-100/90" />
     </div>
   );
 }

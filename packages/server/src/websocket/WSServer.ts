@@ -548,6 +548,12 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.RADIO_ERROR, data);
     });
 
+    // 监听电源操作进度事件
+    this.digitalRadioEngine.on('radioPowerState', (data) => {
+      logger.debug('radio power state event received', data);
+      this.broadcast(WSMessageType.RADIO_POWER_STATE, data);
+    });
+
     // 监听电台发射中断开连接事件
     this.digitalRadioEngine.on('radioDisconnectedDuringTransmission', (data) => {
       logger.debug('radio disconnected during transmission event received', data);

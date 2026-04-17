@@ -38,6 +38,7 @@ import {
   type IRadioConnection,
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
+  type RadioConnectOptions,
   type MeterData,
   type RadioModeInfo,
   type RadioModeReadBandwidth,
@@ -340,8 +341,14 @@ export class HamlibConnection
 
   /**
    * 连接到电台
+   *
+   * 支持两种模式：
+   * - `full`（默认）：完整连接，包含通信验证和能力探测
+   * - `control-only`：仅建立底层链路，跳过通信验证；用于电台关机时发送
+   *   powerstat(ON) 的场景。之后可通过 `promoteToFull()` 升级为完整连接。
    */
-  async connect(config: RadioConnectionConfig): Promise<void> {
+  async connect(config: RadioConnectionConfig, options?: RadioConnectOptions): Promise<void> {
+    const mode = options?.mode ?? 'full';
     // 状态检查
     if (this.state === RadioConnectionState.CONNECTING) {
       throw RadioError.invalidState(
@@ -351,8 +358,12 @@ export class HamlibConnection
       );
     }
 
-    // 如果已连接，先断开
-    if (this.state === RadioConnectionState.CONNECTED && this.rig) {
+    // 如果已连接或处于控制链路态，先断开
+    if (
+      (this.state === RadioConnectionState.CONNECTED ||
+        this.state === RadioConnectionState.CONTROL_ONLY) &&
+      this.rig
+    ) {
       await this.disconnect('reconnecting');
     }
 
@@ -440,39 +451,21 @@ export class HamlibConnection
         ),
       ]);
 
+      if (mode === 'control-only') {
+        // control-only 模式：底层链路已打开，跳过通信验证和能力探测
+        // 仅允许电源类操作（由 checkConnectionAllows 控制）
+        this.setState(RadioConnectionState.CONTROL_ONLY);
+        logger.info('Hamlib control-only link established (verification skipped)');
+        return;
+      }
+
       // 等待电台初始化完成后再验证通信
       const POST_OPEN_DELAY = 100;
       logger.debug(`Waiting ${POST_OPEN_DELAY}ms for radio initialization...`);
       await new Promise((resolve) => setTimeout(resolve, POST_OPEN_DELAY));
 
-      // 验证与电台的实际通信（状态仍为 CONNECTING）
-      await this.verifyRadioCommunication();
-
-      // 通信验证成功，才转为 CONNECTED
-      this.setState(RadioConnectionState.CONNECTED);
-      this.lastSuccessfulOperation = Date.now();
-      logger.info('Hamlib radio connected successfully');
-
-      // 检测数值表能力
-      try {
-        const levels = this.rig!.getSupportedLevels();
-        this.supportedLevels = new Set(levels);
-        logger.info('Supported meter levels detected', { levels: Array.from(this.supportedLevels) });
-      } catch (error) {
-        logger.warn('Failed to detect supported levels, assuming all supported', error);
-        this.supportedLevels = new Set(['STRENGTH', 'SWR', 'ALC', 'RFPOWER_METER']);
-      }
-
-      await this.initializeMeterDecodeStrategy();
-
-      await this.detectSupportedModes();
-      this.detectSupportedFunctions();
-      this.detectSupportedParms();
-      this.detectTxFrequencyRanges();
-      await this.initializeRigStateSnapshot();
-
-      // 触发连接成功事件
-      this.emit('connected');
+      // 执行通信验证 + 能力探测 + 连接完成事件
+      await this.bootstrapAfterOpen();
     } catch (error) {
       // 连接失败，清理资源
       await this.cleanup();
@@ -481,6 +474,95 @@ export class HamlibConnection
       // 转换错误
       throw this.convertError(error, 'connect');
     }
+  }
+
+  /**
+   * 将 control-only 连接升级为完整连接。
+   *
+   * 执行通信验证 + 能力探测 + bootstrap，不重新打开底层链路。
+   * 仅在当前状态为 CONTROL_ONLY 时可调用。
+   */
+  async promoteToFull(): Promise<void> {
+    if (this.state !== RadioConnectionState.CONTROL_ONLY || !this.rig) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_STATE,
+        message: `promoteToFull called in invalid state: ${this.state}`,
+        userMessage: 'Radio control link not established',
+        suggestions: ['Open a control-only connection first'],
+      });
+    }
+
+    try {
+      // Short settle delay — radio may have just powered on
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await this.bootstrapAfterOpen();
+    } catch (error) {
+      // Bootstrap failure: disconnect and surface the error
+      await this.cleanup();
+      this.setState(RadioConnectionState.DISCONNECTED);
+      throw this.convertError(error, 'promoteToFull');
+    }
+  }
+
+  /**
+   * Readiness 探针（绕过 checkConnected，允许 CONTROL_ONLY 状态）
+   */
+  async probeResponding(timeoutMs = 3000): Promise<boolean> {
+    if (
+      !this.rig ||
+      (this.state !== RadioConnectionState.CONTROL_ONLY &&
+        this.state !== RadioConnectionState.CONNECTED)
+    ) {
+      return false;
+    }
+    try {
+      await Promise.race([
+        this.rig.getFrequency(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('probe timeout')), timeoutMs)
+        ),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 连接建立后的通信验证 + 能力探测 + connected 事件。
+   *
+   * 被 connect(mode='full') 和 promoteToFull() 复用。
+   * 进入时状态可以是 CONNECTING 或 CONTROL_ONLY；退出时是 CONNECTED。
+   */
+  private async bootstrapAfterOpen(): Promise<void> {
+    // 验证与电台的实际通信
+    await this.verifyRadioCommunication();
+
+    // 通信验证成功，才转为 CONNECTED
+    this.setState(RadioConnectionState.CONNECTED);
+    this.lastSuccessfulOperation = Date.now();
+    logger.info('Hamlib radio connected successfully');
+
+    // 检测数值表能力
+    try {
+      const levels = this.rig!.getSupportedLevels();
+      this.supportedLevels = new Set(levels);
+      logger.info('Supported meter levels detected', { levels: Array.from(this.supportedLevels) });
+    } catch (error) {
+      logger.warn('Failed to detect supported levels, assuming all supported', error);
+      this.supportedLevels = new Set(['STRENGTH', 'SWR', 'ALC', 'RFPOWER_METER']);
+    }
+
+    await this.initializeMeterDecodeStrategy();
+
+    await this.detectSupportedModes();
+    this.detectSupportedFunctions();
+    this.detectSupportedParms();
+    this.detectTxFrequencyRanges();
+    await this.initializeRigStateSnapshot();
+
+    // 触发连接成功事件
+    this.emit('connected');
   }
 
   /**
@@ -1978,7 +2060,7 @@ export class HamlibConnection
 
   async getPowerState(): Promise<string> {
     return this.runSerializedTask('getPowerState', async () => {
-      this.checkConnected();
+      this.checkConnected('power');
       try {
         const value = (await Promise.race([
           this.rig!.getPowerstat(),
@@ -1996,7 +2078,7 @@ export class HamlibConnection
 
   async setPowerState(state: string): Promise<void> {
     await this.runSerializedTask('setPowerState', async () => {
-      this.checkConnected();
+      this.checkConnected('power');
       const normalized = state.trim().toLowerCase();
       const codeMap: Record<string, number> = {
         off: 0,
@@ -2010,11 +2092,17 @@ export class HamlibConnection
         throw new Error(`Unsupported power state: ${state}`);
       }
 
+      // Power-on on many radios (especially ICOM via CI-V) requires Hamlib
+      // to send a ~175-byte wake preamble *and* wait for the radio's first
+      // CI-V ACK, which can take much longer than a simple read. Give it up
+      // to 20s before declaring it timed out.
+      const timeoutMs = normalized === 'on' ? 20_000 : 8_000;
+
       try {
         await Promise.race([
           this.rig!.setPowerstat(code),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Set power state timeout')), 5000)
+            setTimeout(() => reject(new Error('Set power state timeout')), timeoutMs)
           ),
         ]);
         this.lastSuccessfulOperation = Date.now();
@@ -2340,10 +2428,14 @@ export class HamlibConnection
   }
 
   /**
-   * 检查是否已连接
+   * 检查是否已连接。
+   *
+   * @param allow - 允许的连接形态：
+   *   - 'connected'（默认）：仅 CONNECTED 放行
+   *   - 'power'：CONNECTED 或 CONTROL_ONLY 都放行（用于电源操作）
    */
-  private checkConnected(): void {
-    if (!this.rig || this.state !== RadioConnectionState.CONNECTED) {
+  private checkConnected(allow: 'connected' | 'power' = 'connected'): void {
+    if (!this.rig) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
         message: `Radio not connected, current state: ${this.state}`,
@@ -2351,6 +2443,18 @@ export class HamlibConnection
         suggestions: ['Connect to radio first'],
       });
     }
+    if (this.state === RadioConnectionState.CONNECTED) {
+      return;
+    }
+    if (allow === 'power' && this.state === RadioConnectionState.CONTROL_ONLY) {
+      return;
+    }
+    throw new RadioError({
+      code: RadioErrorCode.INVALID_STATE,
+      message: `Radio not connected, current state: ${this.state}`,
+      userMessage: 'Radio not connected',
+      suggestions: ['Connect to radio first'],
+    });
   }
 
   private ensureSession(sessionId: number): void {

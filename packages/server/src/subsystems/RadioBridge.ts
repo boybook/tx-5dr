@@ -395,6 +395,34 @@ export class RadioBridge {
     const { engineEmitter, operatorManager, radioManager } = this.deps;
     const lifecycle = this.deps.getEngineLifecycle();
 
+    // 用户主动进入 standby/off 导致的断线：跳过自动重连/恢复，走 forced stop 路径
+    const intentional = radioManager.consumeIntentionalDisconnect();
+    if (intentional.active) {
+      logger.info(`Intentional disconnect (${intentional.reason || 'no reason'}), skipping reconnect`);
+      operatorManager.stopAllOperators();
+      const pipeline = this.deps.getTransmissionPipeline();
+      if (pipeline.getIsPTTActive()) {
+        await pipeline.forceStopPTT();
+      }
+      if (lifecycle.getIsRunning()) {
+        lifecycle.sendRadioDisconnected(intentional.reason || 'power state change');
+      }
+      this._wasRunningBeforeDisconnect = false;
+      engineEmitter.emit('radioStatusChanged', {
+        connected: false,
+        status: RadioConnectionStatus.DISCONNECTED,
+        radioInfo: null,
+        radioConfig: radioManager.getConfig(),
+        reason: intentional.reason,
+        message: 'Radio entered standby / powered off by user',
+        recommendation: '',
+        connectionHealth: radioManager.getConnectionHealth(),
+        coreCapabilities: radioManager.getCoreCapabilities(),
+        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
+      });
+      return;
+    }
+
     if (lifecycle.getIsRunning() && !this._wasRunningBeforeDisconnect) {
       this._wasRunningBeforeDisconnect = true;
       logger.info('Recording running state before disconnect');

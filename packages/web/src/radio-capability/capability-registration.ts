@@ -39,7 +39,7 @@ registerCapabilityComponent('mode_bandwidth', EnumCapabilityPanel);
 registerCapabilityComponent('rit_offset', NumberLevelCapabilityPanel);
 registerCapabilityComponent('xit_offset', NumberLevelCapabilityPanel);
 registerCapabilityComponent('tuning_step', EnumCapabilityPanel);
-registerCapabilityComponent('power_state', EnumCapabilityPanel);
+// power_state has moved out of the capability system; PowerControlButton handles it
 registerCapabilityComponent('repeater_shift', EnumCapabilityPanel);
 registerCapabilityComponent('repeater_offset', NumberLevelCapabilityPanel);
 registerCapabilityComponent('ctcss_tone', EnumCapabilityPanel);
