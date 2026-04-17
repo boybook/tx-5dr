@@ -25,7 +25,7 @@ import { EngineState, type EngineInput } from '../state-machines/types.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { ClockCoordinator } from './ClockCoordinator.js';
 import type { AudioVolumeController } from './AudioVolumeController.js';
-import { RadioError } from '../utils/errors/RadioError.js';
+import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('EngineLifecycle');
@@ -511,6 +511,10 @@ export class EngineLifecycle {
         logger.info('Executing stop operation');
         await this.doStop();
       },
+      onWake: async () => {
+        logger.info('Executing wake operation');
+        await this.doWake();
+      },
       onError: (error) => {
         logger.error('State machine error:', error);
         // Broadcast engine error to frontend via radioError channel
@@ -572,6 +576,34 @@ export class EngineLifecycle {
 
     logger.info('Delegating to state machine: START');
     this.engineStateMachineActor.send({ type: 'START' });
+  }
+
+  /**
+   * 触发唤醒流程：状态机进入 WAKING，完成后自动过渡到 STARTING → RUNNING。
+   *
+   * 由 RadioPowerController.powerOn 调用。
+   */
+  async wake(): Promise<void> {
+    if (!this.engineStateMachineActor) {
+      throw new Error('Engine state machine not initialized');
+    }
+    if (isEngineState(this.engineStateMachineActor, EngineState.RUNNING)) {
+      logger.info('Engine already running, wake request ignored');
+      return;
+    }
+    if (!isEngineState(this.engineStateMachineActor, EngineState.IDLE)) {
+      throw new Error(`Cannot wake from current state: ${this.engineStateMachineActor.getSnapshot().value}`);
+    }
+    logger.info('Delegating to state machine: POWER_ON');
+    this.engineStateMachineActor.send({ type: 'POWER_ON' });
+  }
+
+  async wakeAndWaitForRunning(timeoutMs = 45000): Promise<void> {
+    await this.wake();
+    if (!this.engineStateMachineActor) {
+      throw new Error('Engine state machine not initialized');
+    }
+    await waitForEngineState(this.engineStateMachineActor, EngineState.RUNNING, timeoutMs);
   }
 
   /**
@@ -710,6 +742,26 @@ export class EngineLifecycle {
       this.deps.subsystems.clockCoordinator.teardown();
       throw error;
     }
+  }
+
+  /**
+   * 执行唤醒流程：让 PhysicalRadioManager 建立 control link 并发送 powerstat(ON)。
+   *
+   * 唤醒成功后状态机自动进入 STARTING → doStart，此时 onConnect 短路
+   * （因为连接已经 CONNECTED），后续资源（音频/时隙）正常启动。
+   */
+  private async doWake(): Promise<void> {
+    const profile = ConfigManager.getInstance().getActiveProfile();
+    if (!profile) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: 'No active profile for wake operation',
+        userMessage: 'No active profile',
+        suggestions: ['Activate a profile first'],
+      });
+    }
+    logger.info(`Wake flow for profile ${profile.id}`);
+    await this.deps.radioManager.wakeAndConnect(profile.radio);
   }
 
   private async doStop(): Promise<void> {

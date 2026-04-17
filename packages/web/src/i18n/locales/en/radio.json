@@ -15,7 +15,8 @@
     "stop": "Stop",
     "reconnect": "Reconnect",
     "notConnected": "Not connected",
-    "connect": "Connect"
+    "connect": "Connect",
+    "wakeAndConnect": "Power on and connect"
   },
   "control": {
     "frequency": "Frequency",
@@ -179,6 +180,57 @@
     "deviceNotFound": "Device not found",
     "details": "Details",
     "networkError": "Network error or server unavailable"
+  },
+  "power": {
+    "on": {
+      "label": "Power On",
+      "description": "Send power-on command and start the engine once the radio responds.",
+      "confirm": "Power on the radio?"
+    },
+    "off": {
+      "label": "Power Off",
+      "description": "Stop the engine, send power-off command, then disconnect.",
+      "confirm": "Power off the radio? The engine will stop first."
+    },
+    "standby": {
+      "label": "Standby",
+      "description": "Put the radio into low-power standby. The CAT link will drop and the engine will stop.",
+      "confirm": "Enter standby? The engine will stop and you will need to power on again."
+    },
+    "operate": {
+      "label": "Operate",
+      "description": "Return the radio from standby to full operation."
+    },
+    "dropdownLabel": "Power state",
+    "compatibilityNote": "Different radios respond to these commands differently. Use the command that matches your radio.",
+    "confirmTitle": "Confirm power action",
+    "supportedBadge": "Power control available",
+    "unsupported": {
+      "modelUnsupported": "This radio model does not support remote power control.",
+      "networkMode": "Network mode (rigctld) cannot wake the radio.",
+      "noneMode": "No radio configured for this profile."
+    },
+    "state": {
+      "off": "Off",
+      "waking": "Powering on…",
+      "awake": "On",
+      "enteringStandby": "Entering standby…",
+      "shuttingDown": "Powering off…",
+      "failed": "Failed"
+    },
+    "progress": {
+      "sendingCommand": "Sending command…",
+      "waitingReady": "Waiting for radio to respond…",
+      "waitingStandbyDisconnect": "Waiting for radio to drop CAT link…",
+      "startingEngine": "Starting engine…",
+      "stoppingEngine": "Stopping engine…",
+      "disconnecting": "Disconnecting…"
+    },
+    "error": {
+      "timeout": "Power operation timed out",
+      "notSupported": "This radio does not support remote power control",
+      "concurrentOperation": "Another power operation is already in progress"
+    }
   },
   "operator": {
     "viewLog": "View Log",
@@ -437,10 +489,6 @@
       "label": "Tuning Step",
       "description": "Sets the step size used by tuning controls. Smaller steps help with precise tuning, while larger steps make it easier to move quickly across a band."
     },
-    "power_state": {
-      "label": "Power State",
-      "description": "Reads or changes the radio power operating state. Supported states vary by model and may include off, standby, on, or operate."
-    },
     "repeater_shift": {
       "label": "Repeater Shift",
       "description": "Sets the repeater duplex direction: no offset, minus offset, or plus offset. Usually used together with the repeater offset value."
@@ -471,13 +519,6 @@
         "auto": "Auto",
         "long": "Long",
         "on": "On"
-      },
-      "power_state": {
-        "off": "Off",
-        "on": "On",
-        "standby": "Standby",
-        "operate": "Operate",
-        "unknown": "Unknown"
       },
       "repeater_shift": {
         "none": "None",

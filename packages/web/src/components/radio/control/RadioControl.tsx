@@ -1,8 +1,8 @@
 import * as React from 'react';
-import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert} from "@heroui/react";
+import {Select, SelectItem, Switch, Button, ButtonGroup, Slider, Popover, PopoverTrigger, PopoverContent, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish, faPowerOff } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState } from '../../../store/radioStore';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
@@ -106,6 +106,82 @@ interface FrequencyOption {
 export const SelectorIcon = (_props: React.SVGProps<SVGSVGElement>) => {
   return (
     <FontAwesomeIcon icon={faChevronDown} className="text-default-400" />
+  );
+};
+
+/**
+ * 连接入口：默认只有"连接"主按钮；若当前 Profile 支持唤醒，
+ * 右侧附加一个橙色的电源图标按钮（icon-only），hover 时展示功能文案。
+ * 视觉主次分明，不让用户在两个文字按钮间纠结。
+ */
+const ConnectWithWakeButton: React.FC<{ onConnect: () => void }> = ({ onConnect }) => {
+  const { t } = useTranslation('radio');
+  const { activeProfileId } = useProfiles();
+  const canPower = useCan('execute', 'RadioPower');
+  const [support, setSupport] = React.useState<import('@tx5dr/contracts').RadioPowerSupportInfo | null>(null);
+  const [waking, setWaking] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!activeProfileId || !canPower) {
+      setSupport(null);
+      return;
+    }
+    let cancelled = false;
+    api.getRadioPowerSupport(activeProfileId)
+      .then((info) => { if (!cancelled) setSupport(info); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeProfileId, canPower]);
+
+  const canWake = !!support?.canPowerOn && !!activeProfileId;
+
+  const handleWake = async () => {
+    if (!activeProfileId || waking) return;
+    setWaking(true);
+    try {
+      await api.setRadioPower({ profileId: activeProfileId, state: 'on', autoEngine: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addToast({ title: t('power.error.timeout'), description: message, color: 'danger', timeout: 5000 });
+    } finally {
+      setWaking(false);
+    }
+  };
+
+  return (
+    <span
+      className="flex items-center gap-1"
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {canWake && (
+        <ToolbarIconTooltip label={t('status.wakeAndConnect')}>
+          <Button
+            size="sm"
+            isIconOnly
+            color="warning"
+            variant="flat"
+            onPress={handleWake}
+            isLoading={waking}
+            isDisabled={waking}
+            className="h-6 min-w-6 w-6 px-0 text-xs"
+            aria-label={t('status.wakeAndConnect')}
+          >
+            <FontAwesomeIcon icon={faPowerOff} className="text-xs" />
+          </Button>
+        </ToolbarIconTooltip>
+      )}
+      <Button
+        size="sm"
+        color="primary"
+        variant="flat"
+        onPress={onConnect}
+        isDisabled={waking}
+        className="h-6 px-2 text-xs"
+      >
+        {t('status.connect')}
+      </Button>
+    </span>
   );
 };
 
@@ -272,17 +348,9 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: Radi
             <FontAwesomeIcon icon={faRadio} className="text-default-400 text-xs" />
             <span className="text-sm text-default-500">{label} {t('status.notConnected')}</span>
             {canOperate && radioConnection.radioConfig?.type && radioConnection.radioConfig.type !== 'none' && !radioConnection.isDecoding && (
-              <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
-                <Button
-                  size="sm"
-                  color="primary"
-                  variant="flat"
-                  onPress={() => connection.radioService?.startDecoding()}
-                  className="h-6 px-2 text-xs"
-                >
-                  {t('status.connect')}
-                </Button>
-              </span>
+              <ConnectWithWakeButton
+                onConnect={() => connection.radioService?.startDecoding()}
+              />
             )}
           </div>
         );

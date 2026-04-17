@@ -48,6 +48,16 @@ export enum RadioConnectionState {
   CONNECTING = 'connecting',
 
   /**
+   * 仅建立了底层控制链路（串口已打开 / UDP 握手完成），
+   * 但未执行通信验证和能力探测。仅允许电源类白名单操作。
+   *
+   * 用于电台关机时发送 powerstat(ON) 的场景 —
+   * verifyRadioCommunication 在电台未通电时必然超时，
+   * 因此需要一个"未验证通信"的中间态。
+   */
+  CONTROL_ONLY = 'control_only',
+
+  /**
    * 已连接
    */
   CONNECTED = 'connected',
@@ -56,6 +66,17 @@ export enum RadioConnectionState {
    * 错误状态
    */
   ERROR = 'error',
+}
+
+/**
+ * 连接模式
+ * - full: 常规连接，包含通信验证、能力探测、bootstrap
+ * - control-only: 仅打开底层链路，用于电源操作（电台可能关机）
+ */
+export type RadioConnectMode = 'full' | 'control-only';
+
+export interface RadioConnectOptions {
+  mode?: RadioConnectMode;
 }
 
 /**
@@ -200,9 +221,27 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * 连接到电台
    *
    * @param config - 连接配置
+   * @param options - 连接选项（可选）。传 `{ mode: 'control-only' }` 仅建立底层控制链路，
+   *                  跳过通信验证和能力探测；默认 `full`。
    * @throws {RadioError} 连接失败时抛出统一的 RadioError
    */
-  connect(config: RadioConnectionConfig): Promise<void>;
+  connect(config: RadioConnectionConfig, options?: RadioConnectOptions): Promise<void>;
+
+  /**
+   * 将 control-only 连接升级为完整连接。
+   * 执行通信验证、能力探测、bootstrap，不重新打开底层链路。
+   *
+   * 仅在当前状态为 CONTROL_ONLY 时有效；其他状态下抛 RadioError。
+   */
+  promoteToFull?(): Promise<void>;
+
+  /**
+   * Readiness 探针：用于电源唤醒后判断电台是否已能响应。
+   *
+   * 需要在 CONTROL_ONLY / CONNECTED 状态均可执行。返回 true 表示电台已响应，
+   * false 表示暂未响应（不抛错，供 PowerController 轮询）。
+   */
+  probeResponding?(timeoutMs?: number): Promise<boolean>;
 
   /**
    * 断开电台连接

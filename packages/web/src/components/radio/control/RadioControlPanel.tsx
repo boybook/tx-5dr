@@ -32,6 +32,7 @@ import {
   useProfiles,
 } from '../../../store/radioStore';
 import type { CapabilityCategory, CapabilityDescriptor } from '@tx5dr/contracts';
+import { PowerControlButton } from '../profile/PowerControlButton';
 
 interface RadioControlPanelProps {
   isOpen: boolean;
@@ -188,17 +189,22 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
         <ModalHeader className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2">
             <span className="text-base">{t('radio:capability.panel.title')}</span>
-            <Tooltip content={t('radio:capability.panel.refresh')}>
-              <Button
-                isIconOnly
-                size="sm"
-                variant="light"
-                onPress={refreshCapabilities}
-                isLoading={isRefreshing}
-                isDisabled={!radioState.radioConnected || isRefreshing}
-                startContent={isRefreshing ? undefined : <FontAwesomeIcon icon={faRotateRight} className="text-xs" />}
-              />
-            </Tooltip>
+            <div className="flex items-center">
+              {activeProfile && (
+                <PowerControlButton profileId={activeProfile.id} compact />
+              )}
+              <Tooltip content={t('radio:capability.panel.refresh')}>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  onPress={refreshCapabilities}
+                  isLoading={isRefreshing}
+                  isDisabled={!radioState.radioConnected || isRefreshing}
+                  startContent={isRefreshing ? undefined : <FontAwesomeIcon icon={faRotateRight} className="text-xs" />}
+                />
+              </Tooltip>
+            </div>
           </div>
           <span className="text-xs text-default-400 font-normal">{radioName}</span>
         </ModalHeader>

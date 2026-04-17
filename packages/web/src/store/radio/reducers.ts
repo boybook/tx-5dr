@@ -210,13 +210,21 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         tunerCapabilities: action.payload.radioConnected
           ? (action.payload.tunerCapabilities ?? state.tunerCapabilities)
           : null,
-        // 断开时清空能力描述符和状态（重连后由 radioCapabilityList 事件重新填充）
-        capabilityDescriptors: action.payload.radioConnected
-          ? state.capabilityDescriptors
-          : new Map<string, CapabilityDescriptor>(),
-        capabilityStates: action.payload.radioConnected
-          ? state.capabilityStates
-          : new Map<string, CapabilityState>(),
+        // 仅在真正的终结断开态清空能力（DISCONNECTED / CONNECTION_LOST / NOT_CONFIGURED）。
+        // CONNECTING / RECONNECTING 是中间态，此时 radioConnected 虽为 false 但能力列表应保留，
+        // 否则 wake flow 中的 capabilityList 事件会被紧随其后的 connecting 事件清空。
+        capabilityDescriptors:
+          action.payload.status === RadioConnectionStatus.DISCONNECTED ||
+          action.payload.status === RadioConnectionStatus.CONNECTION_LOST ||
+          action.payload.status === RadioConnectionStatus.NOT_CONFIGURED
+            ? new Map<string, CapabilityDescriptor>()
+            : state.capabilityDescriptors,
+        capabilityStates:
+          action.payload.status === RadioConnectionStatus.DISCONNECTED ||
+          action.payload.status === RadioConnectionStatus.CONNECTION_LOST ||
+          action.payload.status === RadioConnectionStatus.NOT_CONFIGURED
+            ? new Map<string, CapabilityState>()
+            : state.capabilityStates,
         currentRadioFrequency: action.payload.radioConnected ? state.currentRadioFrequency : null,
         spectrumSessionState: action.payload.radioConnected ? state.spectrumSessionState : null,
       };

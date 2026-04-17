@@ -16,6 +16,12 @@ import type { HamlibConfig } from '@tx5dr/contracts';
  */
 export enum EngineState {
   IDLE = 'idle',
+  /**
+   * 唤醒中（电台关机状态下尝试开机）
+   * 仅启动 radio 资源的 control-only 链路，发送 powerstat(ON)，
+   * 等待 readiness 探针通过后无缝迁移到 STARTING（promote 完整连接 + 启动音频/时隙）
+   */
+  WAKING = 'waking',
   STARTING = 'starting',
   RUNNING = 'running',
   STOPPING = 'stopping',
@@ -62,7 +68,10 @@ export type EngineEvent =
   | { type: 'FORCE_STOP'; reason?: string }
   | { type: 'STOP_SUCCESS' }
   | { type: 'STOP_FAILURE'; error: RadioError | Error }
-  | { type: 'RADIO_DISCONNECTED'; reason?: string };
+  | { type: 'RADIO_DISCONNECTED'; reason?: string }
+  | { type: 'POWER_ON' }
+  | { type: 'POWER_READY' }
+  | { type: 'POWER_FAILED'; error: RadioError | Error };
 
 /**
  * 引擎状态机输入
@@ -70,6 +79,8 @@ export type EngineEvent =
 export interface EngineInput {
   /**
    * 回调函数：资源启动
+   * 注意：从 WAKING → STARTING 的路径下，第一个 radio 资源会改用 promoteControlLink，
+   * 但这是 onStart 内部决策，不需要状态机感知
    */
   onStart: () => Promise<void>;
 
@@ -77,6 +88,12 @@ export interface EngineInput {
    * 回调函数：资源停止
    */
   onStop: () => Promise<void>;
+
+  /**
+   * 回调函数：唤醒电台（仅建立 control-only 链路 + 发送 powerstat(ON) + 等待 readiness）
+   * 成功返回时电台已响应；后续会原地推进到 STARTING 完成完整启动
+   */
+  onWake?: () => Promise<void>;
 
   /**
    * 回调函数：错误处理

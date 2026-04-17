@@ -24,6 +24,7 @@ import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { useProfiles, useRadioConnectionState } from '../../../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
+import { PowerControlButton } from './PowerControlButton';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -283,6 +284,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                               </p>
                             </div>
                             <div className="flex items-center gap-1 flex-shrink-0">
+                              <PowerControlButton profileId={profile.id} compact onPowerOnSuccess={onClose} />
                               <Button
                                 size="sm"
                                 variant="light"
@@ -382,6 +384,11 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             initialConfig={editRadioConfig}
             onChange={setEditRadioConfig}
           />
+
+          {/* 电源控制（仅编辑现有 Profile 时显示） */}
+          {mode === 'edit' && editingProfileId && (
+            <PowerControlButton profileId={editingProfileId} onPowerOnSuccess={onClose} />
+          )}
 
           <Divider />
 

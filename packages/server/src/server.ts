@@ -19,6 +19,7 @@ import { slotpackRoutes } from './routes/slotpack.js';
 import { modeRoutes } from './routes/mode.js';
 import { operatorRoutes } from './routes/operators.js';
 import { radioRoutes } from './routes/radio.js';
+import { powerRoutes } from './routes/power.js';
 import { settingsRoutes } from './routes/settings.js';
 import { profileRoutes } from './routes/profiles.js';
 import { systemRoutes } from './routes/system.js';
@@ -306,6 +307,7 @@ export async function createServer() {
     await scope.register(withRole(UserRole.VIEWER));
     await scope.register(operatorRoutes, { prefix: '/api/operators' });
     await scope.register(radioRoutes, { prefix: '/api/radio' });
+    await scope.register(powerRoutes, { prefix: '/api/radio/power' });
     await scope.register(modeRoutes, { prefix: '/api/mode' });
     await scope.register(slotpackRoutes, { prefix: '/api/slotpack' });
     await scope.register(voiceRoutes, { prefix: '/api/voice' });

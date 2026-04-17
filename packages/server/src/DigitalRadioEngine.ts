@@ -341,6 +341,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.radioManager;
   }
 
+  public getEngineLifecycle(): EngineLifecycle {
+    return this.engineLifecycle;
+  }
+
   public getAudioMonitorService(): AudioMonitorService | null {
     return this.engineLifecycle.getAudioMonitorService();
   }

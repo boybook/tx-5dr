@@ -1561,6 +1561,33 @@ export const api = {
     );
   },
 
+  // ========== Radio Power ==========
+
+  async setRadioPower(
+    data: import('@tx5dr/contracts').RadioPowerRequest,
+    apiBase?: string
+  ): Promise<import('@tx5dr/contracts').RadioPowerResponse> {
+    return apiRequest<import('@tx5dr/contracts').RadioPowerResponse>(
+      '/radio/power',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+      apiBase
+    );
+  },
+
+  async getRadioPowerSupport(
+    profileId: string,
+    apiBase?: string
+  ): Promise<import('@tx5dr/contracts').RadioPowerSupportInfo> {
+    return apiRequest<import('@tx5dr/contracts').RadioPowerSupportInfo>(
+      `/radio/power/support?profileId=${encodeURIComponent(profileId)}`,
+      undefined,
+      apiBase
+    );
+  },
+
   // ========== 系统信息 ==========
 
   async getNetworkInfo(apiBase?: string): Promise<NetworkInfo> {
