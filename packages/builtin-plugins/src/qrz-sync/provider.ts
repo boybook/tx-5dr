@@ -1,7 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // QRZSyncProvider — HTTP response handling requires any
 
-import type { PluginContext, LogbookSyncProvider, SyncAction, SyncTestResult, SyncUploadResult, SyncDownloadResult, SyncDownloadOptions } from '@tx5dr/plugin-api';
+import type {
+  PluginContext,
+  LogbookSyncProvider,
+  SyncAction,
+  SyncTestResult,
+  SyncUploadResult,
+  SyncDownloadResult,
+  SyncDownloadOptions,
+  SyncUploadOptions,
+} from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { convertQSOToADIF, parseADIFFields, parseADIFRecord } from '@tx5dr/plugin-api';
 
@@ -107,16 +116,16 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     }
   }
 
-  async upload(callsign: string): Promise<SyncUploadResult> {
+  async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     if (!config?.apiKey) {
       return { uploaded: 0, skipped: 0, failed: 0, errors: ['QRZ not configured'] };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
-    // Upload is driven by per-QSO sent flag to avoid time-window data loss.
-    const allQsos = await logbook.queryQSOs({});
-    const qsos = allQsos.filter((qso) => qso.qrzQslSent !== 'Y');
+    const qsos = options?.records
+      ? options.records.filter((qso) => qso.qrzQslSent !== 'Y')
+      : await this.queryPendingQsos(logbook);
 
     if (qsos.length === 0) {
       return { uploaded: 0, skipped: 0, failed: 0 };
@@ -157,6 +166,14 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       failed,
       errors: errors.length > 0 ? errors : undefined,
     };
+  }
+
+  private async queryPendingQsos(
+    logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+  ): Promise<QSORecord[]> {
+    // Manual upload scans the logbook so historical unsent records are still covered.
+    const allQsos = await logbook.queryQSOs({});
+    return allQsos.filter((qso) => qso.qrzQslSent !== 'Y');
   }
 
   async download(callsign: string, _options?: SyncDownloadOptions): Promise<SyncDownloadResult> {

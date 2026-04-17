@@ -13,6 +13,7 @@ import type {
   SyncUploadPreflightResult,
   SyncDownloadResult,
   SyncDownloadOptions,
+  SyncUploadOptions,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
@@ -572,17 +573,16 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     }
   }
 
-  async upload(callsign: string): Promise<SyncUploadResult> {
+  async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     if (!config) {
       return { uploaded: 0, skipped: 0, failed: 0, errors: ['LoTW not configured'] };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
-    // Global sync plugins must scan the whole logbook so historical unsent
-    // records are not silently skipped after a fresh migration/reset.
-    const allQsos = await logbook.queryQSOs({});
-    const pendingQsos = allQsos.filter(q => q.lotwQslSent !== 'Y');
+    const pendingQsos = options?.records
+      ? options.records.filter((qso) => qso.lotwQslSent !== 'Y')
+      : await this.queryPendingQsos(logbook);
 
     if (pendingQsos.length === 0) {
       return { uploaded: 0, skipped: 0, failed: 0 };
@@ -642,6 +642,14 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       failed: errors.length > 0 ? pendingQsos.length - uploaded - preparation.blockedCount : 0,
       errors: errors.length > 0 ? errors : undefined,
     };
+  }
+
+  private async queryPendingQsos(
+    logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+  ): Promise<QSORecord[]> {
+    // Manual upload scans the whole logbook so historical unsent records stay recoverable.
+    const allQsos = await logbook.queryQSOs({});
+    return allQsos.filter((qso) => qso.lotwQslSent !== 'Y');
   }
 
   async download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
