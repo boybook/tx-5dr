@@ -7,6 +7,7 @@ import type {
   SyncDownloadResult,
   SyncDownloadOptions,
 } from '@tx5dr/plugin-api';
+import type { QSORecord } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('LogbookSyncHost');
@@ -41,8 +42,14 @@ export interface LogbookSyncProviderInfo {
  */
 export class LogbookSyncHost {
   private providers = new Map<string, RegisteredProvider>();
-  /** Tracks in-progress upload promises per (providerId, callsign) to prevent concurrent uploads. */
+  /** Tracks the currently running upload promise per (providerId, callsign). */
   private activeUploads = new Map<string, Promise<SyncUploadResult>>();
+  /** Serializes all upload work per (providerId, callsign). */
+  private uploadQueueTails = new Map<string, Promise<void>>();
+  /** Coalesces auto-uploaded QSOs while another upload is already queued/running. */
+  private pendingAutoRecords = new Map<string, Map<string, QSORecord>>();
+  /** Marks keys that already have an auto-drain job queued or running. */
+  private scheduledAutoDrains = new Set<string>();
 
   private static uploadKey(providerId: string, callsign: string): string {
     return `${providerId}\0${callsign}`;
@@ -80,6 +87,9 @@ export class LogbookSyncHost {
         for (const key of this.activeUploads.keys()) {
           if (key.startsWith(`${id}\0`)) {
             this.activeUploads.delete(key);
+            this.uploadQueueTails.delete(key);
+            this.pendingAutoRecords.delete(key);
+            this.scheduledAutoDrains.delete(key);
           }
         }
         logger.info('Logbook sync provider unregistered', { id, pluginName });
@@ -130,9 +140,8 @@ export class LogbookSyncHost {
   /**
    * Triggers an upload for a specific provider and callsign.
    *
-   * If an upload is already in progress for the same (provider, callsign),
-   * waits for it to finish then runs a fresh upload to ensure the caller
-   * receives an up-to-date result.
+   * Upload work is serialized per (provider, callsign) so manual actions do
+   * not overlap with any queued auto-upload batch for the same logbook.
    */
   async upload(
     providerId: string,
@@ -144,14 +153,7 @@ export class LogbookSyncHost {
     }
 
     const key = LogbookSyncHost.uploadKey(providerId, callsign);
-    const existing = this.activeUploads.get(key);
-    if (existing) {
-      // Wait for the in-progress upload to finish, then run our own so the
-      // caller gets a result that reflects the current logbook state.
-      await existing.catch(() => {});
-    }
-
-    return this.runUpload(key, entry.provider, callsign);
+    return this.enqueueUpload(key, () => entry.provider.upload(callsign, { trigger: 'manual' }));
   }
 
   async getUploadPreflight(
@@ -186,14 +188,11 @@ export class LogbookSyncHost {
    * Called when a QSO is completed. Checks each registered provider's
    * auto-upload setting and triggers upload if enabled.
    *
-   * If an upload for the same (provider, callsign) is already running, the
-   * new trigger is silently skipped — the un-uploaded QSO will be picked up
-   * by the next upload because providers use idempotent per-QSO flags or
-   * time cursors that are only advanced on success.
-   *
-   * Runs asynchronously and does not block the caller.
+   * Auto-upload batches only the newly completed QSOs. If another upload is
+   * already queued/running for the same (provider, callsign), new QSOs are
+   * buffered and drained in the next serialized auto batch.
    */
-  onQSOComplete(callsign: string): void {
+  onQSOComplete(callsign: string, qsoRecord: QSORecord): void {
     for (const [id, { provider, pluginName }] of this.providers) {
       try {
         if (!provider.isAutoUploadEnabled(callsign)) {
@@ -201,23 +200,10 @@ export class LogbookSyncHost {
         }
 
         const key = LogbookSyncHost.uploadKey(id, callsign);
-        if (this.activeUploads.has(key)) {
-          logger.debug('Auto-upload skipped, upload already in progress', {
-            providerId: id,
-            pluginName,
-            callsign,
-          });
-          continue;
-        }
-
-        this.runUpload(key, provider, callsign).catch((err) => {
-          logger.warn('Auto-upload failed', {
-            providerId: id,
-            pluginName,
-            callsign,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
+        const queuedRecords = this.pendingAutoRecords.get(key) ?? new Map<string, QSORecord>();
+        queuedRecords.set(qsoRecord.id, qsoRecord);
+        this.pendingAutoRecords.set(key, queuedRecords);
+        this.scheduleAutoDrain(key, provider, callsign, pluginName);
       } catch (err) {
         logger.warn('Auto-upload check failed', {
           providerId: id,
@@ -229,26 +215,77 @@ export class LogbookSyncHost {
   }
 
   /**
-   * Executes a provider upload while holding the active-upload lock for the
-   * given key. The lock is always released in `finally` so subsequent calls
-   * can proceed even if the upload throws.
+   * Queues upload work behind any existing upload for the same key while still
+   * exposing the active promise for callers/tests.
    */
-  private async runUpload(
+  private enqueueUpload(
+    key: string,
+    task: () => Promise<SyncUploadResult>,
+  ): Promise<SyncUploadResult> {
+    const previous = this.uploadQueueTails.get(key) ?? Promise.resolve();
+    const run = previous
+      .catch(() => {})
+      .then(async () => {
+        const promise = task();
+        this.activeUploads.set(key, promise);
+        try {
+          return await promise;
+        } finally {
+          if (this.activeUploads.get(key) === promise) {
+            this.activeUploads.delete(key);
+          }
+        }
+      });
+
+    const tail = run.then(() => undefined, () => undefined);
+    this.uploadQueueTails.set(key, tail);
+    void tail.finally(() => {
+      if (this.uploadQueueTails.get(key) === tail) {
+        this.uploadQueueTails.delete(key);
+      }
+    });
+
+    return run;
+  }
+
+  private scheduleAutoDrain(
     key: string,
     provider: LogbookSyncProvider,
     callsign: string,
-  ): Promise<SyncUploadResult> {
-    const promise = provider.upload(callsign);
-    this.activeUploads.set(key, promise);
-    try {
-      return await promise;
-    } finally {
-      // Only delete if the map still points to *our* promise (another call
-      // may have replaced it between await-resume and this cleanup).
-      if (this.activeUploads.get(key) === promise) {
-        this.activeUploads.delete(key);
-      }
+    pluginName: string,
+  ): void {
+    if (this.scheduledAutoDrains.has(key)) {
+      return;
     }
+
+    this.scheduledAutoDrains.add(key);
+    void this.enqueueUpload(key, async () => {
+      const queuedRecords = this.pendingAutoRecords.get(key);
+      if (!queuedRecords || queuedRecords.size === 0) {
+        return { uploaded: 0, skipped: 0, failed: 0 };
+      }
+
+      this.pendingAutoRecords.delete(key);
+      return provider.upload(callsign, {
+        trigger: 'auto',
+        records: Array.from(queuedRecords.values()),
+      });
+    }).catch((err) => {
+      logger.warn('Auto-upload failed', {
+        providerId: provider.id,
+        pluginName,
+        callsign,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }).finally(() => {
+      this.scheduledAutoDrains.delete(key);
+      const remainingRecords = this.pendingAutoRecords.get(key);
+      if (remainingRecords && remainingRecords.size > 0) {
+        this.scheduleAutoDrain(key, provider, callsign, pluginName);
+      } else {
+        this.pendingAutoRecords.delete(key);
+      }
+    });
   }
 
   /** Checks if a specific provider is configured for the given callsign. */

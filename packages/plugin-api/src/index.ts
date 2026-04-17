@@ -116,6 +116,7 @@ export type {
   LogbookSyncRegistrar,
   SyncAction,
   SyncTestResult,
+  SyncUploadOptions,
   SyncUploadResult,
   SyncPreflightIssue,
   SyncUploadPreflightResult,

@@ -60,11 +60,15 @@ export interface LogbookSyncProvider {
   /**
    * Uploads QSO records to the external service.
    *
-   * The provider queries the logbook via `ctx.logbook.queryQSOs()` internally
-   * to determine which records to upload. It is also responsible for updating
-   * QSL status fields (e.g. `lotwQslSent`) via `ctx.logbook.updateQSO()`.
+   * Manual uploads typically query the logbook via `ctx.logbook.queryQSOs()`
+   * internally to determine which records to upload. Auto-upload may pass a
+   * narrow `options.records` batch so providers can upload only the freshly
+   * completed QSOs without re-scanning the entire logbook.
+   *
+   * Providers remain responsible for updating any per-QSO sync fields
+   * (e.g. `lotwQslSent`) via `ctx.logbook.updateQSO()`.
    */
-  upload(callsign: string): Promise<SyncUploadResult>;
+  upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult>;
 
   /**
    * Optional host-visible upload readiness check.
@@ -138,6 +142,18 @@ export interface SyncUploadResult {
   skipped: number;
   failed: number;
   errors?: string[];
+}
+
+export interface SyncUploadOptions {
+  /** Distinguishes manual uploads from auto-upload triggered by QSO completion. */
+  trigger?: 'manual' | 'auto';
+  /**
+   * Optional explicit QSO batch supplied by the host.
+   *
+   * When present, providers should prefer this list over performing another
+   * logbook scan so auto-upload can stay scoped to the just-completed QSOs.
+   */
+  records?: import('@tx5dr/contracts').QSORecord[];
 }
 
 export interface SyncPreflightIssue {

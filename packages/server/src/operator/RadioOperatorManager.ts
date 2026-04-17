@@ -1671,6 +1671,6 @@ export class RadioOperatorManager {
    */
   private async handleAutoSync(qsoRecord: QSORecord, callsign: string): Promise<void> {
     // All sync providers are plugin-based — delegate to LogbookSyncHost
-    this._pluginManager?.logbookSyncHost.onQSOComplete(callsign);
+    this._pluginManager?.logbookSyncHost.onQSOComplete(callsign, qsoRecord);
   }
 }

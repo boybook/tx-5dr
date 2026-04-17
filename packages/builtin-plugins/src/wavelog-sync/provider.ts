@@ -1,7 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WaveLogSyncProvider — HTTP response handling requires any
 
-import type { PluginContext, LogbookSyncProvider, SyncAction, SyncTestResult, SyncUploadResult, SyncDownloadResult, SyncDownloadOptions } from '@tx5dr/plugin-api';
+import type {
+  PluginContext,
+  LogbookSyncProvider,
+  SyncAction,
+  SyncTestResult,
+  SyncUploadResult,
+  SyncDownloadResult,
+  SyncDownloadOptions,
+  SyncUploadOptions,
+} from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { convertQSOToADIF, parseADIFContent } from '@tx5dr/plugin-api';
 
@@ -95,18 +104,16 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
     }
   }
 
-  async upload(callsign: string): Promise<SyncUploadResult> {
+  async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     if (!config?.url || !config?.apiKey || !config?.stationId) {
       return { uploaded: 0, skipped: 0, failed: 0, errors: ['WaveLog not configured'] };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
 
-    // Keep cursor-based upload, but never advance cursor on partial failures.
-    const since = typeof config.lastSyncTime === 'number' ? config.lastSyncTime : 0;
-    const qsos = await logbook.queryQSOs({
-      timeRange: { start: since, end: Date.now() },
-    });
+    const qsos = options?.records
+      ? options.records
+      : await this.queryPendingQsos(logbook, config.lastSyncTime);
 
     let uploaded = 0;
     let skipped = 0;
@@ -141,6 +148,17 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
       failed,
       errors: errors.length > 0 ? errors : undefined,
     };
+  }
+
+  private async queryPendingQsos(
+    logbook: ReturnType<PluginContext['logbook']['forCallsign']>,
+    lastSyncTime?: number,
+  ): Promise<QSORecord[]> {
+    // Manual upload keeps the existing cursor-based history scan.
+    const since = typeof lastSyncTime === 'number' ? lastSyncTime : 0;
+    return logbook.queryQSOs({
+      timeRange: { start: since, end: Date.now() },
+    });
   }
 
   async download(callsign: string, _options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
