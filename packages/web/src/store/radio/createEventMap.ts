@@ -199,12 +199,19 @@ export function createRadioEventMap({
       const {
         message,
         userMessage,
+        userMessageKey,
+        userMessageParams,
         suggestions = [],
         severity = 'error',
         code,
         timestamp: _timestamp,
         context,
       } = errorData;
+      // 优先使用后端提供的 i18n 翻译键本地化 userMessage
+      const localizedUserMessage =
+        userMessageKey && i18n.exists(userMessageKey)
+          ? i18n.t(userMessageKey, userMessageParams ?? {})
+          : (userMessage ?? message);
 
       let action: { label: string; handler: () => void } | undefined;
 
@@ -269,7 +276,7 @@ export function createRadioEventMap({
       }
 
       showErrorToast({
-        userMessage: userMessage || message || i18n.t('errors:code.UNKNOWN_ERROR.userMessage'),
+        userMessage: localizedUserMessage || message || i18n.t('errors:code.UNKNOWN_ERROR.userMessage'),
         suggestions,
         severity,
         code,
@@ -453,6 +460,8 @@ export function createRadioEventMap({
         id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         message: errorData.message,
         userMessage: errorData.userMessage || errorData.message,
+        userMessageKey: errorData.userMessageKey,
+        userMessageParams: errorData.userMessageParams,
         suggestions: errorData.suggestions || [],
         severity: (errorData.severity as RadioErrorRecord['severity']) || 'error',
         code: errorData.code,

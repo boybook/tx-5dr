@@ -16,6 +16,7 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPowerOff, faMoon, faPlay, faSpinner } from '@fortawesome/free-solid-svg-icons';
 import { addToast } from '@heroui/toast';
+import { localizeError } from '../../../utils/errorToast';
 import { api } from '@tx5dr/core';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type { RadioPowerStateEvent, RadioPowerSupportInfo, RadioPowerTarget } from '@tx5dr/contracts';
@@ -100,8 +101,12 @@ export function PowerControlButton({ profileId, compact, onPowerOnSuccess }: Pow
       try {
         await api.setRadioPower({ profileId, state, autoEngine: true });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addToast({ title: t('power.error.timeout'), description: message, color: 'danger', timeout: 5000 });
+        addToast({
+          title: t('power.error.failed'),
+          description: localizeError(error),
+          color: 'danger',
+          timeout: 5000,
+        });
         setPending(false);
         activeRequest.current = false;
         lastTargetRef.current = null;

@@ -8,8 +8,27 @@
 
 import { addToast } from '@heroui/toast';
 import { Button } from '@heroui/react';
+import { ApiError } from '@tx5dr/core';
 import i18n from '../i18n/index';
 import { createLogger } from './logger';
+
+/**
+ * 提取 error 对象的本地化用户消息：
+ * - ApiError 带 userMessageKey 且 i18n 中存在 → 用 t() 翻译
+ * - ApiError 否则 → userMessage
+ * - 普通 Error → error.message
+ * - 其他 → String(error)
+ */
+export function localizeError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.userMessageKey && i18n.exists(error.userMessageKey)) {
+      return i18n.t(error.userMessageKey, error.userMessageParams ?? {});
+    }
+    return error.userMessage;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
 
 const logger = createLogger('ErrorToast');
 
@@ -99,7 +118,9 @@ export function showErrorToast(options: ErrorToastOptions): void {
   let description = userMessage;
 
   if (suggestions.length > 0) {
-    const suggestionText = suggestions.map(s => `• ${s}`).join('\n');
+    const suggestionText = suggestions
+      .map((s) => `• ${i18n.exists(s) ? i18n.t(s) : s}`)
+      .join('\n');
     description += '\n\n' + i18n.t('toast:suggestion.label') + '\n' + suggestionText;
   }
 

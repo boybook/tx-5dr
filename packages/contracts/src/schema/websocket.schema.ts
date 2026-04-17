@@ -431,7 +431,15 @@ export const WSErrorMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.ERROR),
   data: z.object({
     message: z.string(),
+    userMessage: z.string().optional(),
+    /** 前端 i18n 翻译键（优先用于 Toast 副标题本地化） */
+    userMessageKey: z.string().optional(),
+    userMessageParams: z.record(z.union([z.string(), z.number()])).optional(),
     code: z.string().optional(),
+    severity: z.enum(['info', 'warning', 'error', 'critical']).optional(),
+    suggestions: z.array(z.string()).optional(),
+    timestamp: z.union([z.string(), z.number()]).optional(),
+    context: z.record(z.unknown()).optional(),
     details: z.any().optional(),
   }),
 });
@@ -799,10 +807,14 @@ export type WSRadioStatusChangedMessage = z.infer<typeof WSRadioStatusChangedMes
  * 包含完整的错误信息、解决建议、Profile 关联等
  */
 export const RadioErrorEventDataSchema = z.object({
-  /** 技术错误消息 */
+  /** 技术错误消息（精简摘要；完整原始内容在 context.rawHamlibTrace） */
   message: z.string(),
-  /** 用户友好的错误消息 */
+  /** 用户友好的错误消息（兜底英文文案） */
   userMessage: z.string(),
+  /** 前端 i18n 翻译键，格式如 'radio:error.xxx'；存在时前端优先使用 t() */
+  userMessageKey: z.string().optional(),
+  /** i18n 参数（与 userMessageKey 配合） */
+  userMessageParams: z.record(z.union([z.string(), z.number()])).optional(),
   /** 解决建议列表 */
   suggestions: z.array(z.string()).default([]),
   /** 错误代码（RadioErrorCode） */

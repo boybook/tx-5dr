@@ -524,9 +524,12 @@ export class EngineLifecycle {
           this.deps.engineEmitter.emit('radioError', {
             message: radioError.message,
             userMessage: radioError.userMessage,
+            userMessageKey: radioError.userMessageKey,
+            userMessageParams: radioError.userMessageParams,
             code: radioError.code,
             severity: radioError.severity,
             suggestions: radioError.suggestions,
+            context: radioError.context,
             timestamp: new Date().toISOString(),
             profileId: activeProfile?.id ?? null,
             profileName: activeProfile?.name ?? null,
@@ -603,7 +606,18 @@ export class EngineLifecycle {
     if (!this.engineStateMachineActor) {
       throw new Error('Engine state machine not initialized');
     }
-    await waitForEngineState(this.engineStateMachineActor, EngineState.RUNNING, timeoutMs);
+    // 等状态机收敛到 RUNNING（成功）或 IDLE（wake/start 失败回退）；
+    // 看到 IDLE 表示失败，抛出其 context.error 让上层 REST 路径立刻返回错误。
+    const terminalState = await waitForEngineStates(
+      this.engineStateMachineActor,
+      [EngineState.RUNNING, EngineState.IDLE],
+      timeoutMs,
+    );
+    if (terminalState === EngineState.IDLE) {
+      const ctx = getEngineContext(this.engineStateMachineActor);
+      const err = ctx.error instanceof Error ? ctx.error : new Error('Wake flow failed');
+      throw err;
+    }
   }
 
   /**

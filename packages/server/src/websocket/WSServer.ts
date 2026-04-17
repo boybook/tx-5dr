@@ -753,11 +753,13 @@ export class WSServer extends WSMessageHandler {
     this.broadcast(WSMessageType.ERROR, {
       message: radioError.message,
       userMessage: radioError.userMessage,
+      userMessageKey: radioError.userMessageKey,
+      userMessageParams: radioError.userMessageParams,
       code: radioError.code,
       severity: radioError.severity,
       suggestions: radioError.suggestions,
       timestamp: radioError.timestamp,
-      context: { command: commandName }
+      context: { ...(radioError.context ?? {}), command: commandName }
     });
 
     // 错误后广播系统状态，确保前端状态同步

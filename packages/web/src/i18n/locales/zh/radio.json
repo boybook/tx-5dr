@@ -220,6 +220,7 @@
       "disconnecting": "断开连接中…"
     },
     "error": {
+      "failed": "电源操作失败",
       "timeout": "电源操作超时",
       "notSupported": "此电台不支持远程电源控制",
       "concurrentOperation": "已有电源操作在执行中"
@@ -230,7 +231,33 @@
     "connectionFailed": "电台连接失败",
     "deviceNotFound": "未找到设备",
     "details": "详情",
-    "networkError": "网络错误或服务器无响应"
+    "technicalDetails": "技术详情",
+    "networkError": "网络错误或服务器无响应",
+    "serialDeviceNotFound": "未找到串口设备。电台是否已通过 USB 连接并开机？",
+    "serialDeviceNotFoundWithPath": "未找到串口设备：{{path}}。请确认电台已连接并开机。",
+    "serialPermissionDenied": "没有权限打开串口{{- path}}。请参考下方建议。",
+    "serialPortBusy": "串口{{- path}}被其他程序占用。",
+    "connectionRefused": "连接被拒绝。rigctld 服务或电台未接受此次连接。",
+    "networkUnreachable": "无法访问电台所在网络，请检查 Wi-Fi 或电台 IP 地址。",
+    "operationTimeout": "电台操作超时。",
+    "radioNoResponse": "电台未及时响应。",
+    "suggestion": {
+      "connectRadioUsb": "将电台通过 USB 连接并开机",
+      "refreshSerialPortList": "刷新串口列表并选择正确的设备",
+      "serialPathHint": "macOS 查看 /dev/tty.usbmodem*；Windows 在设备管理器中确认 COM 口编号",
+      "addUserToDialout": "Linux：将当前用户加入 dialout 组，注销后重新登录",
+      "macosFilesPermission": "macOS：授予终端/应用\"文件和文件夹\"权限，或使用 sudo 启动",
+      "windowsRunAsAdmin": "Windows：以管理员身份运行程序",
+      "closeOtherRadioApps": "关闭 WSJT-X / JTDX / FLDIGI 等其他电台控制软件",
+      "reconnectUsb": "拔掉 USB 线并重新插入",
+      "checkRigctldRunning": "确认 rigctld 已在配置的 host:port 上运行",
+      "verifyRadioPoweredOn": "确认电台已开机",
+      "verifyHostPort": "确认主机地址与端口正确",
+      "checkWifi": "检查 Wi-Fi 或网络连接",
+      "verifyRadioIpSameNetwork": "确认电台 IP 地址正确且与电脑处于同一网络",
+      "checkCableConnected": "确认 CAT 线缆连接可靠",
+      "verifyBaudRate": "确认波特率与电台设置一致"
+    }
   },
   "operator": {
     "viewLog": "查看通联日志",

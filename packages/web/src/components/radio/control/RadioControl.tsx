@@ -12,7 +12,7 @@ import type { ModeDescriptor, RealtimeTransportKind } from '@tx5dr/contracts';
 import type { ConnectionState } from '../../../store/radioStore';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
-import { showErrorToast } from '../../../utils/errorToast';
+import { showErrorToast, localizeError } from '../../../utils/errorToast';
 import { useHasMinRole, useCan, useAbility } from '../../../store/authStore';
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -141,8 +141,12 @@ const ConnectWithWakeButton: React.FC<{ onConnect: () => void }> = ({ onConnect 
     try {
       await api.setRadioPower({ profileId: activeProfileId, state: 'on', autoEngine: true });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      addToast({ title: t('power.error.timeout'), description: message, color: 'danger', timeout: 5000 });
+      addToast({
+        title: t('power.error.failed'),
+        description: localizeError(error),
+        color: 'danger',
+        timeout: 5000,
+      });
     } finally {
       setWaking(false);
     }
@@ -384,7 +388,7 @@ interface RadioControlProps {
 }
 
 export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings, voiceCaptureController }) => {
-  const { t } = useTranslation('radio');
+  const { t, i18n } = useTranslation('radio');
   const connection = useConnection();
   const radioConnection = useRadioConnectionState();
   const radioMode = useRadioModeState();
@@ -1723,7 +1727,11 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
             </Button>
           }
         >
-          <span className="text-xs">{latestError.userMessage}</span>
+          <span className="text-xs">
+            {latestError.userMessageKey && i18n.exists(latestError.userMessageKey)
+              ? t(latestError.userMessageKey, latestError.userMessageParams ?? {})
+              : latestError.userMessage}
+          </span>
         </Alert>
       )}
       <RadioErrorHistoryModal
