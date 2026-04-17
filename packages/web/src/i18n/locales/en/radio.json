@@ -179,7 +179,33 @@
     "connectionFailed": "Radio connection failed",
     "deviceNotFound": "Device not found",
     "details": "Details",
-    "networkError": "Network error or server unavailable"
+    "technicalDetails": "Technical details",
+    "networkError": "Network error or server unavailable",
+    "serialDeviceNotFound": "Serial device not found. Is the radio connected via USB?",
+    "serialDeviceNotFoundWithPath": "Serial device not found: {{path}}. Is the radio connected and powered on?",
+    "serialPermissionDenied": "No permission to open the serial port{{- path}}. See suggestions below.",
+    "serialPortBusy": "Serial port{{- path}} is in use by another program.",
+    "connectionRefused": "Connection refused. The rigctld service or radio did not accept the connection.",
+    "networkUnreachable": "Cannot reach the radio network. Check Wi-Fi / IP address.",
+    "operationTimeout": "Radio operation timed out.",
+    "radioNoResponse": "The radio did not respond in time.",
+    "suggestion": {
+      "connectRadioUsb": "Connect the radio via USB and power it on",
+      "refreshSerialPortList": "Refresh the serial port list and pick the correct device",
+      "serialPathHint": "On macOS look for /dev/tty.usbmodem*; on Windows check the COM port number in Device Manager",
+      "addUserToDialout": "Linux: add your user to the \"dialout\" group, then log out and back in",
+      "macosFilesPermission": "macOS: grant terminal / app \"Files and Folders\" access, or launch with sudo",
+      "windowsRunAsAdmin": "Windows: run the program as administrator",
+      "closeOtherRadioApps": "Close WSJT-X / JTDX / FLDIGI or other radio control software",
+      "reconnectUsb": "Disconnect and reconnect the USB cable",
+      "checkRigctldRunning": "Check if rigctld is running at the configured host:port",
+      "verifyRadioPoweredOn": "Verify the radio is powered on",
+      "verifyHostPort": "Verify the host address and port are correct",
+      "checkWifi": "Check your Wi-Fi or network connection",
+      "verifyRadioIpSameNetwork": "Verify the radio IP address is correct and on the same network",
+      "checkCableConnected": "Verify the CAT cable is properly connected",
+      "verifyBaudRate": "Verify the baud rate matches the radio setting"
+    }
   },
   "power": {
     "on": {
@@ -227,6 +253,7 @@
       "disconnecting": "Disconnecting…"
     },
     "error": {
+      "failed": "Power operation failed",
       "timeout": "Power operation timed out",
       "notSupported": "This radio does not support remote power control",
       "concurrentOperation": "Another power operation is already in progress"

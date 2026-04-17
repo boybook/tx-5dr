@@ -477,6 +477,8 @@ export class RadioBridge {
     this.deps.engineEmitter.emit('radioError', {
       message: error.message,
       userMessage: isRadioError ? error.userMessage : error.message,
+      userMessageKey: isRadioError ? error.userMessageKey : undefined,
+      userMessageParams: isRadioError ? error.userMessageParams : undefined,
       suggestions: isRadioError ? error.suggestions : [],
       code: isRadioError ? error.code : undefined,
       severity: isRadioError ? error.severity : 'error',

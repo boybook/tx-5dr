@@ -90,6 +90,9 @@ export interface RadioState {
 export interface ErrorEventData {
   message: string;
   userMessage?: string;
+  /** 后端建议的 i18n 翻译键，前端优先用 t() 展示 */
+  userMessageKey?: string;
+  userMessageParams?: Record<string, string | number>;
   suggestions?: string[];
   severity?: 'info' | 'warning' | 'error' | 'critical';
   code?: string;
@@ -101,6 +104,9 @@ export interface RadioErrorRecord {
   id: string;
   message: string;
   userMessage: string;
+  /** 后端建议的 i18n 翻译键（优先使用 t() 展示） */
+  userMessageKey?: string;
+  userMessageParams?: Record<string, string | number>;
   suggestions: string[];
   severity: 'info' | 'warning' | 'error' | 'critical';
   code?: string;

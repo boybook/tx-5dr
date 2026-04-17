@@ -94,8 +94,14 @@ export class ApiError extends Error {
   /** 错误代码 */
   code?: string;
 
-  /** 用户友好的错误提示（供UI显示） */
+  /** 用户友好的错误提示（供UI显示，作为 userMessageKey 兜底） */
   userMessage: string;
+
+  /** 前端 i18n 翻译键（优先） */
+  userMessageKey?: string;
+
+  /** i18n 参数 */
+  userMessageParams?: Record<string, string | number>;
 
   /** 操作建议列表 */
   suggestions: string[];
@@ -115,6 +121,8 @@ export class ApiError extends Error {
     httpStatus: number,
     options?: {
       code?: string;
+      userMessageKey?: string;
+      userMessageParams?: Record<string, string | number>;
       suggestions?: string[];
       severity?: 'info' | 'warning' | 'error' | 'critical';
       context?: Record<string, unknown>;
@@ -123,6 +131,8 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
     this.userMessage = userMessage;
+    this.userMessageKey = options?.userMessageKey;
+    this.userMessageParams = options?.userMessageParams;
     this.httpStatus = httpStatus;
     this.code = options?.code;
     this.suggestions = options?.suggestions || [];
@@ -146,6 +156,10 @@ export function handleApiError(errorData: unknown, httpStatus: number): ApiError
 
   const message = typeof data.message === 'string' ? data.message : 'Operation failed';
   const userMessage = typeof data.userMessage === 'string' ? data.userMessage : undefined;
+  const userMessageKey = typeof data.userMessageKey === 'string' ? data.userMessageKey : undefined;
+  const userMessageParams = (typeof data.userMessageParams === 'object' && data.userMessageParams !== null)
+    ? data.userMessageParams as Record<string, string | number>
+    : undefined;
   const code = typeof data.code === 'string' ? data.code : undefined;
   const suggestions = Array.isArray(data.suggestions) ? data.suggestions.filter((s): s is string => typeof s === 'string') : [];
   const severity = (data.severity === 'info' || data.severity === 'warning' || data.severity === 'error' || data.severity === 'critical')
@@ -168,7 +182,7 @@ export function handleApiError(errorData: unknown, httpStatus: number): ApiError
     message,
     userMessage || message || 'Operation failed, please try again later',
     httpStatus,
-    { code, suggestions, severity, context }
+    { code, userMessageKey, userMessageParams, suggestions, severity, context }
   );
 }
 

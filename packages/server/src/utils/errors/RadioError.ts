@@ -93,9 +93,21 @@ export class RadioError extends Error {
   public readonly severity: RadioErrorSeverity;
 
   /**
-   * 用户友好的错误消息
+   * 用户友好的错误消息（英文，作为 userMessageKey 缺失时的兜底）
    */
   public readonly userMessage: string;
+
+  /**
+   * 前端 i18n 翻译键（可选）
+   * 若提供，前端应优先用 t(userMessageKey, userMessageParams) 展示；否则回退 userMessage。
+   * 格式示例：'radio:error.serialDeviceNotFound'
+   */
+  public readonly userMessageKey?: string;
+
+  /**
+   * i18n 参数（可选，与 userMessageKey 配合使用）
+   */
+  public readonly userMessageParams?: Record<string, string | number>;
 
   /**
    * 解决建议
@@ -121,6 +133,8 @@ export class RadioError extends Error {
     code: RadioErrorCode;
     message: string;
     userMessage?: string;
+    userMessageKey?: string;
+    userMessageParams?: Record<string, string | number>;
     severity?: RadioErrorSeverity;
     suggestions?: string[];
     cause?: unknown;
@@ -132,6 +146,8 @@ export class RadioError extends Error {
     this.code = options.code;
     this.severity = options.severity || RadioErrorSeverity.ERROR;
     this.userMessage = options.userMessage || options.message;
+    this.userMessageKey = options.userMessageKey;
+    this.userMessageParams = options.userMessageParams;
     this.suggestions = options.suggestions || [];
     this.cause = options.cause;
     this.context = options.context;
@@ -282,6 +298,8 @@ export class RadioError extends Error {
       code: this.code,
       message: this.message,
       userMessage: this.userMessage,
+      userMessageKey: this.userMessageKey,
+      userMessageParams: this.userMessageParams,
       severity: this.severity,
       suggestions: this.suggestions,
       context: this.context,

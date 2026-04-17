@@ -219,6 +219,8 @@ export async function createServer() {
           code: error.code,
           message: error.message,
           userMessage: error.userMessage,
+          userMessageKey: error.userMessageKey,
+          userMessageParams: error.userMessageParams,
           severity: error.severity,
           suggestions: error.suggestions,
           timestamp: error.timestamp,

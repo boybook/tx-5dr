@@ -105,6 +105,62 @@ const HAMLIB_AGC_MODE_TO_CODE: Record<string, number> = Object.fromEntries(
   Object.entries(HAMLIB_AGC_CODE_TO_MODE).map(([code, mode]) => [mode, Number(code)]),
 ) as Record<string, number>;
 
+/**
+ * 从 Hamlib 多行 trace 中提取有语义的一行作为错误摘要，
+ * 过滤掉 rig.c(xxx) / serial_open / icom_xxx 等纯追踪行。
+ */
+function extractHamlibErrorSummary(raw: string): string {
+  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+  const signalPatterns = [
+    /no such file or directory/i,
+    /no such device/i,
+    /permission denied/i,
+    /connection refused/i,
+    /device or resource busy/i,
+    /resource busy/i,
+    /host is unreachable/i,
+    /network is unreachable/i,
+    /timeout/i,
+  ];
+  for (const p of signalPatterns) {
+    const found = lines.find((l) => p.test(l));
+    if (found) return truncate(found, 200);
+  }
+  const tracePrefixes = [
+    /^\*+\d/,
+    /^rig_/,
+    /^rig\.c\(/,
+    /^icom_/,
+    /^icom\.c\(/,
+    /^serial_open/,
+    /^port_open/,
+    /^read_string_generic/,
+    /^write_block/,
+    /^frame\.c\(/,
+    /^initrigs4_/,
+    /^async_/,
+    /^[a-z_]+\(\d+\):/i,
+  ];
+  const meaningful = lines.filter((l) => !tracePrefixes.some((p) => p.test(l)));
+  const picked = meaningful[meaningful.length - 1] ?? lines[lines.length - 1] ?? raw;
+  return truncate(picked, 200);
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+/**
+ * 从 Hamlib trace 中提取设备路径（/dev/tty.* 或 COMxx）
+ */
+function extractDevicePath(raw: string): string | null {
+  const devMatch = raw.match(/\/dev\/[^\s"')]+/);
+  if (devMatch) return devMatch[0];
+  const comMatch = raw.match(/\bCOM\d+\b/i);
+  if (comMatch) return comMatch[0].toUpperCase();
+  return null;
+}
+
 function normalizeModeName(mode: string): string {
   return mode.trim().toUpperCase();
 }
@@ -2859,110 +2915,161 @@ export class HamlibConnection
 
     const errorMessage =
       error instanceof Error ? error.message : String(error);
-    const errorMessageLower = errorMessage.toLowerCase();
+    const lower = errorMessage.toLowerCase();
+    const summary = extractHamlibErrorSummary(errorMessage);
+    const devicePath =
+      extractDevicePath(errorMessage) ?? this.currentConfig?.serial?.path ?? null;
+    const baseContext: Record<string, unknown> = {
+      operation: context,
+      rawHamlibTrace: errorMessage,
+    };
+    if (devicePath) baseContext.devicePath = devicePath;
 
-    // 连接相关错误
+    // 串口设备不存在（ENOENT / No such file or directory / No such device）
     if (
-      errorMessageLower.includes('connection refused') ||
-      errorMessageLower.includes('econnrefused')
+      lower.includes('no such file or directory') ||
+      lower.includes('no such device') ||
+      lower.includes('enoent')
+    ) {
+      return new RadioError({
+        code: RadioErrorCode.DEVICE_ERROR,
+        message: devicePath
+          ? `Serial device not found: ${devicePath}`
+          : 'Serial device not found',
+        userMessage: devicePath
+          ? `Serial device not found: ${devicePath}`
+          : 'Serial device not found',
+        userMessageKey: devicePath
+          ? 'radio:error.serialDeviceNotFoundWithPath'
+          : 'radio:error.serialDeviceNotFound',
+        userMessageParams: devicePath ? { path: devicePath } : undefined,
+        suggestions: [
+          'radio:error.suggestion.connectRadioUsb',
+          'radio:error.suggestion.refreshSerialPortList',
+          'radio:error.suggestion.serialPathHint',
+        ],
+        cause: error,
+        context: baseContext,
+      });
+    }
+
+    // 权限不足
+    if (lower.includes('permission denied') || lower.includes('eacces')) {
+      return new RadioError({
+        code: RadioErrorCode.DEVICE_ERROR,
+        message: devicePath
+          ? `Permission denied opening ${devicePath}`
+          : 'Permission denied opening serial port',
+        userMessage: 'Permission denied opening serial port',
+        userMessageKey: 'radio:error.serialPermissionDenied',
+        userMessageParams: devicePath ? { path: devicePath } : undefined,
+        suggestions: [
+          'radio:error.suggestion.addUserToDialout',
+          'radio:error.suggestion.macosFilesPermission',
+          'radio:error.suggestion.windowsRunAsAdmin',
+        ],
+        cause: error,
+        context: baseContext,
+      });
+    }
+
+    // 设备被占用
+    if (
+      lower.includes('device or resource busy') ||
+      lower.includes('resource busy') ||
+      lower.includes('already in use') ||
+      lower.includes('ebusy')
+    ) {
+      return new RadioError({
+        code: RadioErrorCode.DEVICE_ERROR,
+        message: devicePath
+          ? `Serial port busy: ${devicePath}`
+          : 'Serial port busy',
+        userMessage: 'Serial port is in use by another program',
+        userMessageKey: 'radio:error.serialPortBusy',
+        userMessageParams: devicePath ? { path: devicePath } : undefined,
+        suggestions: [
+          'radio:error.suggestion.closeOtherRadioApps',
+          'radio:error.suggestion.reconnectUsb',
+        ],
+        cause: error,
+        context: baseContext,
+      });
+    }
+
+    // 连接被拒绝（rigctld 未运行等）
+    if (lower.includes('connection refused') || lower.includes('econnrefused')) {
+      return new RadioError({
+        code: RadioErrorCode.CONNECTION_FAILED,
+        message: 'Connection refused',
+        userMessage: 'Cannot connect to radio (connection refused)',
+        userMessageKey: 'radio:error.connectionRefused',
+        suggestions: [
+          'radio:error.suggestion.checkRigctldRunning',
+          'radio:error.suggestion.verifyRadioPoweredOn',
+          'radio:error.suggestion.verifyHostPort',
+        ],
+        cause: error,
+        context: baseContext,
+      });
+    }
+
+    // 网络不可达
+    if (
+      lower.includes('host is unreachable') ||
+      lower.includes('network is unreachable') ||
+      lower.includes('ehostunreach') ||
+      lower.includes('enetunreach')
     ) {
       return new RadioError({
         code: RadioErrorCode.CONNECTION_FAILED,
-        message: `Hamlib connection failed: ${errorMessage}`,
-        userMessage: 'Cannot connect to radio',
+        message: 'Network unreachable',
+        userMessage: 'Cannot reach radio network',
+        userMessageKey: 'radio:error.networkUnreachable',
         suggestions: [
-          'Check if radio is powered on',
-          'Check if network is functioning',
-          'Verify host address and port are correct',
-          'Verify serial device path is correct',
+          'radio:error.suggestion.checkWifi',
+          'radio:error.suggestion.verifyRadioIpSameNetwork',
         ],
         cause: error,
-        context: { operation: context },
+        context: baseContext,
       });
     }
 
+    // 超时（连接/操作）
     if (
-      errorMessageLower.includes('timeout') ||
-      errorMessageLower.includes('etimedout') ||
-      errorMessageLower.includes('connection timeout')
+      lower.includes('timeout') ||
+      lower.includes('etimedout')
     ) {
+      const isOperationTimeout = lower.includes('operation') && lower.includes('timeout');
       return new RadioError({
-        code: RadioErrorCode.CONNECTION_TIMEOUT,
-        message: `Hamlib connection timeout: ${errorMessage}`,
-        userMessage: 'Timeout connecting to radio',
+        code: isOperationTimeout
+          ? RadioErrorCode.OPERATION_TIMEOUT
+          : RadioErrorCode.CONNECTION_TIMEOUT,
+        message: summary,
+        userMessage: isOperationTimeout
+          ? 'Radio operation timed out'
+          : 'Radio did not respond in time',
+        userMessageKey: isOperationTimeout
+          ? 'radio:error.operationTimeout'
+          : 'radio:error.radioNoResponse',
         suggestions: [
-          'Check if network is functioning',
-          'Verify radio responds normally',
-          'Try increasing timeout duration',
+          'radio:error.suggestion.verifyRadioPoweredOn',
+          'radio:error.suggestion.checkCableConnected',
+          'radio:error.suggestion.verifyBaudRate',
         ],
         cause: error,
-        context: { operation: context },
+        context: baseContext,
       });
     }
 
-    // 设备错误
-    if (
-      errorMessageLower.includes('device not configured') ||
-      errorMessageLower.includes('no such device')
-    ) {
-      return new RadioError({
-        code: RadioErrorCode.DEVICE_ERROR,
-        message: `Hamlib device error: ${errorMessage}`,
-        userMessage: 'Radio device not found or not configured',
-        suggestions: [
-          'Verify serial device is properly connected',
-          'Check if device drivers are installed',
-          'Verify device path is correct',
-          'Try disconnecting and reconnecting the device',
-        ],
-        cause: error,
-        context: { operation: context },
-      });
-    }
-
-    // IO 错误
-    if (
-      errorMessageLower.includes('io error') ||
-      errorMessageLower.includes('input/output error')
-    ) {
-      return new RadioError({
-        code: RadioErrorCode.DEVICE_ERROR,
-        message: `Hamlib IO error: ${errorMessage}`,
-        userMessage: 'Radio communication error',
-        suggestions: [
-          'Verify radio connection is stable',
-          'Check if serial cable is functional',
-          'Try restarting the radio',
-          'Verify serial parameters are correct',
-        ],
-        cause: error,
-        context: { operation: context },
-      });
-    }
-
-    // 操作超时
-    if (
-      errorMessageLower.includes('operation') &&
-      errorMessageLower.includes('timeout')
-    ) {
-      return new RadioError({
-        code: RadioErrorCode.OPERATION_TIMEOUT,
-        message: `Operation timeout: ${errorMessage}`,
-        userMessage: 'Radio operation timed out',
-        suggestions: ['Check radio connection status', 'Try executing the operation again'],
-        cause: error,
-        context: { operation: context },
-      });
-    }
-
-    // Windows serial port configuration failure (tcsetattr / Invalid configuration)
+    // Windows 串口配置失败（tcsetattr）
     if (
       errorMessage.includes('tcsetattr') ||
-      (errorMessageLower.includes('invalid configuration') && errorMessage.includes('serial'))
+      (lower.includes('invalid configuration') && lower.includes('serial'))
     ) {
       return new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: `Serial port configuration failed (${context}): ${errorMessage.split('\n')[0]}`,
+        message: 'Serial port configuration failed',
         userMessage: 'Serial port configuration failed',
         suggestions: [
           'Try using the Network (rigctld) connection type',
@@ -2971,22 +3078,38 @@ export class HamlibConnection
           'Try reinstalling or updating the serial port driver',
         ],
         cause: error,
-        context: { operation: context },
+        context: baseContext,
+      });
+    }
+
+    // Hamlib IO 错误（通用，没匹配到具体原因时）
+    if (lower.includes('io error') || lower.includes('input/output error')) {
+      return new RadioError({
+        code: RadioErrorCode.DEVICE_ERROR,
+        message: summary,
+        userMessage: 'Radio communication error',
+        suggestions: [
+          'Verify radio connection is stable',
+          'Check if serial cable is functional',
+          'Try restarting the radio',
+          'Verify serial parameters are correct',
+        ],
+        cause: error,
+        context: baseContext,
       });
     }
 
     // 未知错误
     return new RadioError({
       code: RadioErrorCode.UNKNOWN_ERROR,
-      message: `Hamlib unknown error (${context}): ${errorMessage}`,
+      message: summary,
       userMessage: 'Radio operation failed',
       suggestions: [
-        'Please check detailed error information',
+        'Check the technical details for more information',
         'Try reconnecting to the radio',
-        'If problem persists, contact technical support',
       ],
       cause: error,
-      context: { operation: context },
+      context: baseContext,
     });
   }
 
