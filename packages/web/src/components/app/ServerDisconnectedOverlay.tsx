@@ -61,7 +61,7 @@ export function ServerDisconnectedOverlay({ isConnected, isConnecting, radioServ
     if (!radioService) return;
     setIsManualConnecting(true);
     try {
-      await radioService.connect({ requireHello: true });
+      await radioService.forceReconnect({ requireHello: true });
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : t('errors:code.UNKNOWN_ERROR.userMessage');
       const env = import.meta.env.DEV ? 'development' : 'production';

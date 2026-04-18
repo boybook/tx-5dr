@@ -23,7 +23,6 @@ import { PluginFileStoreProvider } from '../plugin/PluginFileStoreProvider.js';
 import {
   type PluginPageBoundResource,
   getPluginPageFileScopePath,
-  getPluginPageScopePath,
   getPluginPageStorePath,
 } from '../plugin/page-scope.js';
 

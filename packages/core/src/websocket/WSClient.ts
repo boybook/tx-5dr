@@ -25,11 +25,11 @@ export class WSClient extends WSMessageHandler {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private manualDisconnect = false;
-  private wasReplaced = false;
   private connectPromise: Promise<void> | null = null;
 
   private static readonly RECONNECT_BASE_DELAY_MS = 1000;
   private static readonly RECONNECT_MAX_DELAY_MS = 8000;
+  private static readonly HANDSHAKE_TIMEOUT_MS = 10000;
 
   constructor(config: WSClientConfig) {
     super();
@@ -38,12 +38,6 @@ export class WSClient extends WSMessageHandler {
       url: config.url,
       heartbeatInterval: config.heartbeatInterval ?? 30000,
     };
-
-    // Listen for server-side connection replacement notification
-    this.onWSEvent('connectionReplaced' as any, () => {
-      logger.info('Received connectionReplaced from server, marking for no-reconnect');
-      this.wasReplaced = true;
-    });
   }
 
   /**
@@ -63,75 +57,124 @@ export class WSClient extends WSMessageHandler {
     this.isConnecting = true;
 
     this.connectPromise = new Promise((resolve, reject) => {
+      let socket: WebSocket;
       try {
-        const socket = new WebSocket(this.config.url);
-        this.ws = socket;
-        let opened = false;
-        let settled = false;
-
-        socket.onopen = () => {
-          if (this.ws !== socket) {
-            socket.close();
-            return;
-          }
-          logger.info('Connected');
-          opened = true;
-          settled = true;
-          this.isConnecting = false;
-          this.connectPromise = null;
-          this.reconnectAttempt = 0;
-          this.wasReplaced = false;
-          this.startHeartbeat();
-          this.emitWSEvent('connected');
-          resolve();
-        };
-
-        socket.onmessage = (event) => {
-          this.handleRawMessage(event.data);
-        };
-
-        socket.onclose = (event) => {
-          if (this.ws === socket) {
-            this.ws = null;
-          }
-          logger.info(`Disconnected: code=${event.code} reason=${event.reason}`);
-          this.isConnecting = false;
-          this.connectPromise = null;
-          this.stopHeartbeat();
-
-          if (!opened && !settled) {
-            settled = true;
-            reject(new Error(`WebSocket closed before open: code=${event.code}`));
-          }
-
-          if (this.manualDisconnect || this.wasReplaced || event.code === 4001) {
-            if (this.wasReplaced || event.code === 4001) {
-              logger.info('Connection replaced by newer connection, will not reconnect');
-            }
-            this.wasReplaced = false;
-            this.emitWSEvent('disconnected');
-            return;
-          }
-
-          this.scheduleReconnect();
-        };
-
-        socket.onerror = (error) => {
-          logger.error('Connection error:', error);
-          this.emitWSEvent('error', new Error('WebSocket connection error'));
-          if (!opened && !settled) {
-            settled = true;
-            this.isConnecting = false;
-            this.connectPromise = null;
-            reject(new Error('WebSocket connection failed'));
-          }
-        };
-
+        socket = new WebSocket(this.config.url);
       } catch (error) {
         this.isConnecting = false;
         this.connectPromise = null;
         reject(error);
+        return;
       }
+
+      this.ws = socket;
+      let opened = false;
+      let settled = false;
+      let replacedBySelf = false;
+      let handshakeTimer: NodeJS.Timeout | null = null;
+
+      const clearHandshakeTimer = () => {
+        if (handshakeTimer) {
+          clearTimeout(handshakeTimer);
+          handshakeTimer = null;
+        }
+      };
+
+      // Per-socket replacement tracker (bound to this specific socket's lifetime)
+      const replacementHandler = () => {
+        if (this.ws === socket) {
+          logger.info('Received connectionReplaced from server, marking for no-reconnect');
+          replacedBySelf = true;
+        }
+      };
+      this.onWSEvent('connectionReplaced', replacementHandler);
+
+      const detachReplacementHandler = () => {
+        this.offWSEvent('connectionReplaced', replacementHandler);
+      };
+
+      // Application-level handshake timeout — browsers don't enforce one, so if
+      // the TCP socket is established but the HTTP 101 Upgrade never arrives,
+      // WebSocket would sit in CONNECTING indefinitely. socket.close() triggers
+      // onclose which does the rest of the cleanup + reconnect scheduling.
+      handshakeTimer = setTimeout(() => {
+        if (opened || settled) return;
+        logger.warn('Handshake timeout after ' + WSClient.HANDSHAKE_TIMEOUT_MS + 'ms, closing socket');
+        try { socket.close(); } catch { /* ignore */ }
+      }, WSClient.HANDSHAKE_TIMEOUT_MS);
+
+      socket.onopen = () => {
+        clearHandshakeTimer();
+        if (this.ws !== socket) {
+          // Orphan: a newer socket already took over. Must reject to avoid
+          // leaving connectPromise pending forever.
+          if (!settled) {
+            settled = true;
+            reject(new Error('WebSocket orphaned by newer connection'));
+          }
+          detachReplacementHandler();
+          try { socket.close(); } catch { /* ignore */ }
+          return;
+        }
+        logger.info('Connected');
+        opened = true;
+        settled = true;
+        this.isConnecting = false;
+        this.connectPromise = null;
+        this.reconnectAttempt = 0;
+        this.startHeartbeat();
+        this.emitWSEvent('connected');
+        resolve();
+      };
+
+      socket.onmessage = (event) => {
+        this.handleRawMessage(event.data);
+      };
+
+      socket.onclose = (event) => {
+        clearHandshakeTimer();
+        detachReplacementHandler();
+        const isCurrent = this.ws === socket;
+        if (isCurrent) {
+          this.ws = null;
+          this.isConnecting = false;
+          this.connectPromise = null;
+          this.stopHeartbeat();
+        }
+        logger.info(`Disconnected: code=${event.code} reason=${event.reason}`);
+
+        if (!opened && !settled) {
+          settled = true;
+          reject(new Error(`WebSocket closed before open: code=${event.code}`));
+        }
+
+        // Only the current socket's close should drive global reconnect state.
+        if (!isCurrent) return;
+
+        if (this.manualDisconnect || replacedBySelf || event.code === 4001) {
+          if (replacedBySelf || event.code === 4001) {
+            logger.info('Connection replaced by newer connection, will not reconnect');
+          }
+          this.emitWSEvent('disconnected');
+          return;
+        }
+
+        this.scheduleReconnect();
+      };
+
+      socket.onerror = (error) => {
+        logger.error('Connection error:', error);
+        this.emitWSEvent('error', new Error('WebSocket connection error'));
+        if (!opened && !settled) {
+          settled = true;
+          clearHandshakeTimer();
+          if (this.ws === socket) {
+            this.isConnecting = false;
+            this.connectPromise = null;
+          }
+          reject(new Error('WebSocket connection failed'));
+        }
+      };
     });
 
     try {
@@ -142,6 +185,28 @@ export class WSClient extends WSMessageHandler {
       }
       throw error;
     }
+  }
+
+  /**
+   * 强制重建连接
+   * 用于手动"重连"按钮路径：清理任何僵尸状态（pending connectPromise、卡在 CONNECTING 的 socket），
+   * 然后重新连接。与 connect() 的区别是：connect() 若检测到现有 connectPromise 会短路返回它，
+   * 而 forceReconnect() 会先打破短路条件。
+   */
+  async forceReconnect(): Promise<void> {
+    logger.info('Force reconnect requested');
+    this.stopReconnectTimer();
+    this.connectPromise = null;
+    this.isConnecting = false;
+    this.manualDisconnect = false;
+    if (this.ws) {
+      const old = this.ws;
+      // Detach before close so old.onclose sees this.ws !== socket and
+      // leaves global state alone.
+      this.ws = null;
+      try { old.close(); } catch { /* ignore */ }
+    }
+    return this.connect();
   }
 
   /**

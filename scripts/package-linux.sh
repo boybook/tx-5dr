@@ -359,13 +359,15 @@ build_package() {
     rm -f "$OUTPUT_DIR"/tx5dr*"${VERSION}"*"${ARCH}"*."${format}" 2>/dev/null || true
 
     # Package names differ between deb (Debian/Ubuntu) and rpm (Fedora/RHEL)
-    local alsa_dep nginx_dep hamlib_dep
+    local alsa_dep nginx_dep hamlib_dep pulse_dep
     if [[ "$format" == "rpm" ]]; then
         alsa_dep="alsa-lib"
         hamlib_dep="hamlib"
+        pulse_dep="pulseaudio-libs"
     else
         alsa_dep="libasound2"
         hamlib_dep="libhamlib4"
+        pulse_dep="libpulse0"
     fi
 
     local extra_flags=()
@@ -383,6 +385,7 @@ build_package() {
         --depends "nodejs >= 20" \
         --depends "nginx" \
         --depends "$alsa_dep" \
+        --depends "$pulse_dep" \
         --depends "$hamlib_dep" \
         --after-install "$PROJECT_ROOT/linux/postinstall.sh" \
         --before-remove "$PROJECT_ROOT/linux/preremove.sh" \

@@ -7,7 +7,6 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('AudioVolumeController');
 
 const DEFAULT_GAIN_DB = -10;
-const DEFAULT_GAIN_LINEAR = Math.pow(10, DEFAULT_GAIN_DB / 20);
 
 /**
  * 音量控制子系统

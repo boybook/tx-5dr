@@ -88,6 +88,20 @@ export class RadioService {
   }
 
   /**
+   * 强制重建连接（用于"重连"按钮 / 认证变化等场景）
+   * 会清理任何僵尸状态（pending connectPromise、卡住的 socket）再重新连接。
+   */
+  async forceReconnect(options?: { requireHello?: boolean }): Promise<void> {
+    if (options?.requireHello) {
+      const apiBase = getApiBaseUrl();
+      await api.getHello(apiBase);
+      logger.info('REST API reachable before force reconnect');
+    }
+    this._isDecoding = false;
+    await this.wsClient.forceReconnect();
+  }
+
+  /**
    * 启动解码引擎
    */
   startDecoding(): void {

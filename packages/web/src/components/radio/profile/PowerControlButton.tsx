@@ -79,7 +79,7 @@ export function PowerControlButton({ profileId, compact, onPowerOnSuccess }: Pow
     };
   }, [profileId]);
 
-  useWSEvent(connection.state.radioService, 'radioPowerState' as any, (event: RadioPowerStateEvent) => {
+  useWSEvent(connection.state.radioService, 'radioPowerState', (event: RadioPowerStateEvent) => {
     if (event.profileId && event.profileId !== profileId) return;
     setProgress(event);
     if (event.state === 'awake' && lastTargetRef.current === 'on') {

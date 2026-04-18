@@ -39,7 +39,6 @@ import {
   type IRadioConnectionEvents,
   type RadioConnectionConfig,
   type RadioConnectOptions,
-  type MeterData,
   type RadioModeInfo,
   type RadioModeReadBandwidth,
   type RadioModeBandwidth,
