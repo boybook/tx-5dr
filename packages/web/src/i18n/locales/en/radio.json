@@ -425,6 +425,8 @@
       "notConnected": "Radio not connected",
       "noRadioMode": "No radio configured — radio control is unavailable",
       "notSupported": "Not supported by current radio",
+      "noSupported": "The current radio reports no available controls",
+      "unsupportedGroup": "Not supported by current radio",
       "refresh": "Refresh radio parameters",
       "antenna": "Antenna",
       "rf": "RF",
