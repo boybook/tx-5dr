@@ -17,7 +17,7 @@ import type {
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
-import { getPluginPageScopePath } from '@tx5dr/plugin-api';
+import { getPluginPageScopePath, normalizeCallsign as normalizeCallsignBase } from '@tx5dr/plugin-api';
 
 // ===== Types (plugin-internal, formerly in contracts/lotw.schema.ts) =====
 
@@ -259,7 +259,12 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   // ========== Config helpers ==========
 
   private configKey(callsign: string): string {
-    return `${CONFIG_KEY_PREFIX}${callsign.toUpperCase()}`;
+    // Use the plugin-api normalizer (which also strips suffixes like "/P")
+    // so that save (via requireBoundCallsign, which uses the same function)
+    // and read paths resolve to the same key. The local normalizeCallsign
+    // above is intentionally simpler (trim+uppercase) and used for matching
+    // raw certificate attribute values.
+    return `${CONFIG_KEY_PREFIX}${normalizeCallsignBase(callsign)}`;
   }
 
   /** Read per-callsign config from KVStore (synchronous). */

@@ -12,7 +12,7 @@ import type {
   SyncUploadOptions,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
-import { convertQSOToADIF, parseADIFFields, parseADIFRecord } from '@tx5dr/plugin-api';
+import { convertQSOToADIF, parseADIFFields, parseADIFRecord, normalizeCallsign } from '@tx5dr/plugin-api';
 
 const QRZ_API_URL = 'https://logbook.qrz.com/api';
 const QRZ_USER_AGENT = 'TX5DR-QRZSync/1.0';
@@ -68,7 +68,9 @@ export class QRZSyncProvider implements LogbookSyncProvider {
   // ===== Config helpers =====
 
   private configKey(callsign: string): string {
-    return `${CONFIG_KEY_PREFIX}${callsign.toUpperCase()}`;
+    // Use normalizeCallsign so save (via requireBoundCallsign) and read paths
+    // resolve to the same key for suffixed callsigns like "W1ABC/P".
+    return `${CONFIG_KEY_PREFIX}${normalizeCallsign(callsign)}`;
   }
 
   /** Read per-callsign config from KVStore (synchronous — KVStore is in-memory). */

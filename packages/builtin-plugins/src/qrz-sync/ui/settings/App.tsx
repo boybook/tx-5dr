@@ -19,6 +19,7 @@ const I18N: Record<string, Record<string, string>> = {
     saving: '保存中...',
     saved: '已保存',
     saveFailed: '保存失败',
+    missingRequired: '请先填写 API 密钥',
     connected: '连接成功',
     connectionFailed: '连接失败',
     lastSync: '上次同步',
@@ -37,6 +38,7 @@ const I18N: Record<string, Record<string, string>> = {
     saving: 'Saving...',
     saved: 'Saved',
     saveFailed: 'Save failed',
+    missingRequired: 'API key is required',
     connected: 'Connected',
     connectionFailed: 'Connection failed',
     lastSync: 'Last sync',
@@ -109,16 +111,26 @@ export function App() {
 
   // Save config
   const handleSave = useCallback(async () => {
+    const trimmedKey = apiKey.trim();
+    if (!trimmedKey) {
+      setSaveResult({ message: t('missingRequired'), type: 'error' });
+      return;
+    }
+
     setSaving(true);
     setSaveResult(null);
 
     try {
       await window.tx5dr.invoke('saveConfig', {
         callsign,
-        config: { apiKey: apiKey.trim(), autoUploadQSO },
+        config: { apiKey: trimmedKey, autoUploadQSO },
       });
       setSaveResult({ message: t('saved'), type: 'success' });
-      setTimeout(() => setSaveResult(null), 2000);
+      // Close the host modal so the parent can refresh "configured" state.
+      setTimeout(() => {
+        setSaveResult(null);
+        window.tx5dr.requestClose();
+      }, 600);
     } catch (err: any) {
       setSaveResult({ message: `${t('saveFailed')}: ${err.message || ''}`, type: 'error' });
     } finally {
