@@ -30,6 +30,7 @@ const I18N: Record<string, Record<string, string>> = {
     saving: '保存中...',
     saved: '已保存',
     saveFailed: '保存失败',
+    missingRequired: '请先填写 URL、API 密钥，并通过"测试连接"选择电台配置',
     connected: '连接成功',
     connectionFailed: '连接失败',
     lastSync: '上次同步',
@@ -52,6 +53,7 @@ const I18N: Record<string, Record<string, string>> = {
     saving: 'Saving...',
     saved: 'Saved',
     saveFailed: 'Save failed',
+    missingRequired: 'Please fill in URL, API key, and select a station via "Test Connection"',
     connected: 'Connected',
     connectionFailed: 'Connection failed',
     lastSync: 'Last sync',
@@ -170,22 +172,35 @@ export function App() {
 
   // Save config
   const handleSave = useCallback(() => {
+    const trimmedUrl = url.trim();
+    const trimmedKey = apiKey.trim();
+    const trimmedStation = stationId.trim();
+    if (!trimmedUrl || !trimmedKey || !trimmedStation) {
+      setSaveStatus({ type: 'danger', text: t('missingRequired') });
+      return;
+    }
+
     setSaving(true);
     setSaveStatus(null);
 
     window.tx5dr.invoke('saveConfig', {
       callsign,
       config: {
-        url: url.trim(),
-        apiKey: apiKey.trim(),
-        stationId,
+        url: trimmedUrl,
+        apiKey: trimmedKey,
+        stationId: trimmedStation,
         radioName: radioName.trim() || 'TX5DR',
         autoUploadQSO: autoUpload,
       },
     }).then(() => {
       setSaving(false);
       setSaveStatus({ type: 'success', text: t('saved') });
-      setTimeout(() => setSaveStatus(null), 2000);
+      // Close the host modal shortly after showing the toast so the parent
+      // can refresh its "configured" state without forcing the user to click.
+      setTimeout(() => {
+        setSaveStatus(null);
+        window.tx5dr.requestClose();
+      }, 600);
     }).catch((err: any) => {
       setSaving(false);
       setSaveStatus({
@@ -214,7 +229,12 @@ export function App() {
           type="url"
           placeholder={t('urlPlaceholder')}
           value={url}
-          onChange={e => setUrl(e.target.value)}
+          onChange={e => {
+            setUrl(e.target.value);
+            setStations([]);
+            setStationId('');
+            setTestStatus(null);
+          }}
         />
       </div>
 
@@ -224,7 +244,12 @@ export function App() {
           type="password"
           placeholder={t('apiKeyPlaceholder')}
           value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
+          onChange={e => {
+            setApiKey(e.target.value);
+            setStations([]);
+            setStationId('');
+            setTestStatus(null);
+          }}
         />
       </div>
 
