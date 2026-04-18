@@ -80,6 +80,7 @@ const I18N: Record<string, Record<string, string>> = {
     saving: '保存中...',
     saved: '已保存',
     saveFailed: '保存失败',
+    missingRequired: '请先填写用户名、密码和上传台站呼号',
     lastUpload: '上次上传',
     lastDownload: '上次下载',
   },
@@ -131,6 +132,7 @@ const I18N: Record<string, Record<string, string>> = {
     saving: 'Saving...',
     saved: 'Saved',
     saveFailed: 'Save failed',
+    missingRequired: 'Please fill in username, password and upload-station callsign',
     lastUpload: 'Last upload',
     lastDownload: 'Last download',
   },
@@ -378,16 +380,30 @@ export function App() {
 
   // ===== Save =====
   const handleSave = useCallback(async () => {
+    const nextConfig = buildConfig();
+    if (
+      !nextConfig.username.trim()
+      || !nextConfig.password.trim()
+      || !nextConfig.uploadLocation.callsign.trim()
+    ) {
+      setSaveResult({ message: t('missingRequired'), type: 'danger' });
+      return;
+    }
+
     setSaving(true);
     setSaveResult(null);
 
     try {
       await window.tx5dr.invoke('saveConfig', {
         callsign,
-        config: buildConfig(),
+        config: nextConfig,
       });
       setSaveResult({ message: t('saved'), type: 'success' });
-      setTimeout(() => setSaveResult(null), 2000);
+      // Close the host modal so the parent can refresh "configured" state.
+      setTimeout(() => {
+        setSaveResult(null);
+        window.tx5dr.requestClose();
+      }, 600);
     } catch (err: any) {
       setSaveResult({ message: `${t('saveFailed')}: ${err.message || ''}`, type: 'danger' });
     } finally {
