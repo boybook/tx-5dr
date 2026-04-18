@@ -40,10 +40,10 @@ interface ActiveDigitActions {
 }
 
 const activeDigitRef: { current: ActiveDigitActions | null } = { current: null };
-// Track the currently editing digit so clicking another digit can deselect the old one
-const editingDigitDeselect: { current: (() => void) | null } = { current: null };
 
-// Global keydown listener - installed once
+// Global keydown listener - installed once.
+// Keyboard target follows hover (no focus/editing mode): while a digit is hovered,
+// ArrowUp/Down increment/decrement it, and 0-9 set its value directly.
 let globalKeyListenerInstalled = false;
 function installGlobalKeyListener() {
   if (globalKeyListenerInstalled) return;
@@ -65,26 +65,16 @@ function installGlobalKeyListener() {
     } else if (e.key >= '0' && e.key <= '9') {
       e.preventDefault();
       actions.onSetDigit(parseInt(e.key, 10));
-    } else if (e.key === 'Escape') {
-      // Exit editing mode
-      editingDigitDeselect.current?.();
-    }
-  });
-
-  // Click anywhere outside deselects the editing digit
-  window.addEventListener('mousedown', (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (!target.closest('[data-freq-digit]')) {
-      editingDigitDeselect.current?.();
     }
   });
 }
 
 /**
- * Single interactive frequency digit.
- * - Hover: shows arrows, enables keyboard control
- * - Click: enters "editing" mode (highlighted, locks keyboard to this digit)
- * - Escape / click outside: exits editing mode
+ * Single interactive frequency digit (SDR++-style dual-zone overlay).
+ * - Hover top half: red overlay, click → +1
+ * - Hover bottom half: blue overlay, click → -1
+ * - Hover anywhere on the digit: shows ▲/▼ icons above/below and activates keyboard
+ *   (ArrowUp/Down + 0-9 direct entry)
  */
 const FrequencyDigit: React.FC<{
   digit: string;
@@ -96,24 +86,17 @@ const FrequencyDigit: React.FC<{
   onSetDigit: (value: number) => void;
 }> = React.memo(({ digit, disabled, isLeadingZero, onIncrement, onDecrement, onSetDigit }) => {
   const [hovered, setHovered] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const handleDeselectEditing = useCallback(() => {
-    setEditing(false);
-  }, []);
-
-  // Active = hovered OR editing
-  const isActive = hovered || editing;
 
   useEffect(() => {
     installGlobalKeyListener();
   }, []);
 
-  // Keep activeDigitRef in sync when this digit is active
+  // Keep activeDigitRef in sync while hovered
   useEffect(() => {
-    if (isActive && !disabled) {
+    if (hovered && !disabled) {
       activeDigitRef.current = { onIncrement, onDecrement, onSetDigit };
     }
-  }, [isActive, disabled, onIncrement, onDecrement, onSetDigit]);
+  }, [hovered, disabled, onIncrement, onDecrement, onSetDigit]);
 
   const handleMouseEnter = useCallback(() => {
     if (disabled) return;
@@ -123,82 +106,54 @@ const FrequencyDigit: React.FC<{
 
   const handleMouseLeave = useCallback(() => {
     setHovered(false);
-    // Only clear activeDigitRef if not in editing mode
-    if (!editing) {
-      activeDigitRef.current = null;
-    }
-  }, [editing]);
+    activeDigitRef.current = null;
+  }, []);
 
-  const handleClick = useCallback(() => {
-    if (disabled) return;
-    // Deselect previous editing digit
-    if (editingDigitDeselect.current) {
-      editingDigitDeselect.current();
-    }
-    setEditing(true);
-    activeDigitRef.current = { onIncrement, onDecrement, onSetDigit };
-    editingDigitDeselect.current = handleDeselectEditing;
-  }, [disabled, handleDeselectEditing, onIncrement, onDecrement, onSetDigit]);
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      if (editingDigitDeselect.current === handleDeselectEditing) {
-        editingDigitDeselect.current = null;
-      }
-    };
-  }, [handleDeselectEditing]);
-
-  // When disabled, never show interactive states
-  const showActive = isActive && !disabled;
+  const showActive = hovered && !disabled;
+  const interactive = !disabled;
 
   return (
     <div
       data-freq-digit
-      className={`relative flex flex-col items-center select-none ${disabled ? 'cursor-default' : 'cursor-pointer'}`}
+      className="relative flex flex-col items-center select-none"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      onClick={handleClick}
     >
-      {/* Up arrow */}
+      {/* Visual-only stack: arrows + digit. Interaction handled by the two
+          absolute overlays below so the entire vertical extent (arrow + adjacent
+          digit half) is a single contiguous hit zone, with no gaps. */}
       <div
-        className={`h-4 text-xs leading-none transition-opacity duration-150 ${
+        className={`h-4 text-xs leading-none transition-opacity duration-150 pointer-events-none ${
           showActive ? 'opacity-100' : 'opacity-0'
-        } flex items-center justify-center text-default-400 hover:text-primary`}
-        onClick={(e) => { e.stopPropagation(); if (!disabled) onIncrement(); }}
+        } flex items-center justify-center text-danger`}
       >
         ▲
       </div>
-
-      {/* Digit */}
-      <span className={`text-3xl leading-none transition-colors ${
-        !disabled && editing
-          ? 'text-primary'
-          : !disabled && hovered
-            ? 'text-primary'
-            : isLeadingZero
-              ? 'text-default-300 dark:text-default-500'
-              : 'text-foreground'
+      <span className={`block text-3xl leading-none pointer-events-none ${
+        isLeadingZero ? 'text-default-300 dark:text-default-500' : 'text-foreground'
       }`}>
         {digit}
       </span>
-
-      {/* Editing indicator - underline cursor */}
-      <div className={`h-0.5 w-full mt-0.5 rounded-full transition-all duration-150 ${
-        !disabled && editing
-          ? 'bg-primary opacity-100'
-          : 'bg-transparent opacity-0'
-      }`} />
-
-      {/* Down arrow */}
       <div
-        className={`h-4 text-xs leading-none transition-opacity duration-150 ${
+        className={`h-4 text-xs leading-none transition-opacity duration-150 pointer-events-none ${
           showActive ? 'opacity-100' : 'opacity-0'
-        } flex items-center justify-center text-default-400 hover:text-primary`}
-        onClick={(e) => { e.stopPropagation(); if (!disabled) onDecrement(); }}
+        } flex items-center justify-center text-primary`}
       >
         ▼
       </div>
+
+      {interactive && (
+        <>
+          <div
+            className="absolute inset-x-0 top-0 h-1/2 cursor-pointer rounded-sm transition-colors duration-150 hover:bg-danger/25"
+            onClick={onIncrement}
+          />
+          <div
+            className="absolute inset-x-0 bottom-0 h-1/2 cursor-pointer rounded-sm transition-colors duration-150 hover:bg-primary/25"
+            onClick={onDecrement}
+          />
+        </>
+      )}
     </div>
   );
 });
@@ -243,6 +198,77 @@ export const VoiceFrequencyControl: React.FC = () => {
   const [customInput, setCustomInput] = useState('');
   const [customError, setCustomError] = useState('');
   const [isSettingFreq, setIsSettingFreq] = useState(false);
+
+  // Pending frequency tracking: suppresses stale server echo (e.g. from 5s radio polling)
+  // overwriting user's just-typed value. Also used as a trailing-debounce buffer so that
+  // rapid consecutive digit edits (▲/▼ clicks, arrow keys, 0-9 direct entry) coalesce into
+  // a single setRadioFrequency call.
+  const pendingFreqRef = React.useRef<{ intendedFrequency: number; sentAt: number } | null>(null);
+  const freqDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const FREQ_PENDING_TIMEOUT_MS = 1500;
+  const FREQ_MATCH_TOLERANCE_HZ = 10;
+  const FREQ_DEBOUNCE_MS = 50;
+
+  // Accept a server-pushed frequency, honoring any pending local intent.
+  // Server echoes (via WS frequencyChanged OR global radio store sync) can lag behind
+  // rapid user edits — if a pending intent exists and the echo doesn't match it within
+  // the tolerance window, ignore the echo to keep UI stable. Pending auto-releases
+  // after FREQ_PENDING_TIMEOUT_MS so a stuck hardware won't leave UI permanently out of sync.
+  const acceptServerFrequency = useCallback((incoming: number | null | undefined) => {
+    if (typeof incoming !== 'number' || incoming <= 0) return;
+    const pending = pendingFreqRef.current;
+    if (pending) {
+      const withinWindow = Date.now() - pending.sentAt < FREQ_PENDING_TIMEOUT_MS;
+      const matched = Math.abs(incoming - pending.intendedFrequency) < FREQ_MATCH_TOLERANCE_HZ;
+      if (withinWindow && !matched) return;
+      if (matched) pendingFreqRef.current = null;
+    }
+    setCurrentFrequency(incoming);
+  }, []);
+
+  // Send the most recent pending frequency to the server. Reused by both the debounced
+  // digit-edit path and the preset-select path (which bypasses debounce for snappy feel).
+  const flushPendingFrequency = useCallback(async (
+    overrides?: { band?: string; description?: string; radioMode?: string },
+  ) => {
+    const pending = pendingFreqRef.current;
+    if (!pending) return;
+    const freq = pending.intendedFrequency;
+    pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
+    try {
+      await api.setRadioFrequency({
+        frequency: freq,
+        mode: 'VOICE',
+        band: overrides?.band ?? 'Custom',
+        description: overrides?.description ?? `${(freq / 1000000).toFixed(3)} MHz`,
+        radioMode: overrides?.radioMode ?? currentRadioModeRef.current,
+      });
+    } catch (error) {
+      logger.error('Failed to set frequency:', error);
+    }
+  }, []);
+
+  // Apply a new frequency from digit edits. Updates UI immediately, marks pending,
+  // and coalesces rapid consecutive edits via a 50ms trailing debounce.
+  const applyFrequency = useCallback((newFreq: number) => {
+    setCurrentFrequency(newFreq);
+    pendingFreqRef.current = { intendedFrequency: newFreq, sentAt: Date.now() };
+    if (freqDebounceTimerRef.current) {
+      clearTimeout(freqDebounceTimerRef.current);
+    }
+    freqDebounceTimerRef.current = setTimeout(() => {
+      freqDebounceTimerRef.current = null;
+      void flushPendingFrequency();
+    }, FREQ_DEBOUNCE_MS);
+  }, [flushPendingFrequency]);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => () => {
+    if (freqDebounceTimerRef.current) {
+      clearTimeout(freqDebounceTimerRef.current);
+      freqDebounceTimerRef.current = null;
+    }
+  }, []);
 
   const RADIO_MODES = ['USB', 'LSB', 'FM', 'AM'];
   const formatFrequencyLabel = useCallback((frequency: number) => `${(frequency / 1000000).toFixed(3)} MHz`, []);
@@ -308,12 +334,11 @@ export const VoiceFrequencyControl: React.FC = () => {
     };
   }, [loadVoicePresets]);
 
-  // Sync current frequency from radio state
+  // Sync current frequency from radio state (via global store). Goes through
+  // acceptServerFrequency to honor pending local intent and avoid echo-triggered flicker.
   useEffect(() => {
-    if (typeof radio.state.currentRadioFrequency === 'number' && radio.state.currentRadioFrequency > 0) {
-      setCurrentFrequency(radio.state.currentRadioFrequency);
-    }
-  }, [radio.state.currentRadioFrequency]);
+    acceptServerFrequency(radio.state.currentRadioFrequency);
+  }, [radio.state.currentRadioFrequency, acceptServerFrequency]);
 
   useEffect(() => {
     if (radio.state.currentRadioMode) {
@@ -329,8 +354,8 @@ export const VoiceFrequencyControl: React.FC = () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleFreqChanged = (data: any) => {
-      if (data.frequency) setCurrentFrequency(data.frequency);
-      if (data.radioMode) setCurrentRadioMode(data.radioMode);
+      acceptServerFrequency(data?.frequency);
+      if (data?.radioMode) setCurrentRadioMode(data.radioMode);
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wsClient.onWSEvent('frequencyChanged', handleFreqChanged as any);
@@ -338,7 +363,7 @@ export const VoiceFrequencyControl: React.FC = () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       wsClient.offWSEvent('frequencyChanged', handleFreqChanged as any);
     };
-  }, [connection.state.radioService]);
+  }, [connection.state.radioService, acceptServerFrequency]);
 
   // Group presets by band (with CASL frequency condition filtering)
   const groupedPresets = useMemo(() => {
@@ -432,22 +457,6 @@ export const VoiceFrequencyControl: React.FC = () => {
     return result;
   }, [currentFrequency]);
 
-  // Apply a new frequency to radio (reads latest state from refs, stable reference)
-  const applyFrequency = useCallback(async (newFreq: number) => {
-    setCurrentFrequency(newFreq);
-    try {
-      await api.setRadioFrequency({
-        frequency: newFreq,
-        mode: 'VOICE',
-        band: 'Custom',
-        description: `${(newFreq / 1000000).toFixed(3)} MHz`,
-        radioMode: currentRadioModeRef.current,
-      });
-    } catch (error) {
-      logger.error('Failed to set frequency:', error);
-    }
-  }, []);
-
   // Change a single digit at a given place value (stable - reads from ref)
   const changeDigitAtPlace = useCallback((placeValue: number, delta: number) => {
     const freq = currentFrequencyRef.current;
@@ -474,6 +483,16 @@ export const VoiceFrequencyControl: React.FC = () => {
     const preset = presets.find(p => p.key === key);
     if (!preset) return;
 
+    // Immediately update UI + register pending intent so any stale server echo
+    // (incl. in-flight debounced digit edits) is suppressed until preset confirms.
+    setCurrentFrequency(preset.frequency);
+    if (preset.radioMode) setCurrentRadioMode(preset.radioMode);
+    pendingFreqRef.current = { intendedFrequency: preset.frequency, sentAt: Date.now() };
+    if (freqDebounceTimerRef.current) {
+      clearTimeout(freqDebounceTimerRef.current);
+      freqDebounceTimerRef.current = null;
+    }
+
     try {
       const response = await api.setRadioFrequency({
         frequency: preset.frequency,
@@ -484,8 +503,9 @@ export const VoiceFrequencyControl: React.FC = () => {
       });
 
       if (response.success) {
-        setCurrentFrequency(preset.frequency);
-        if (preset.radioMode) setCurrentRadioMode(preset.radioMode);
+        if (pendingFreqRef.current) {
+          pendingFreqRef.current = { intendedFrequency: preset.frequency, sentAt: Date.now() };
+        }
         addToast({
           title: t('frequency.switchSuccess'),
           description: t('frequency.switched', { freq: (preset.frequency / 1000000).toFixed(3) }),
@@ -532,6 +552,12 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
 
     setIsSettingFreq(true);
+    setCurrentFrequency(frequencyHz);
+    pendingFreqRef.current = { intendedFrequency: frequencyHz, sentAt: Date.now() };
+    if (freqDebounceTimerRef.current) {
+      clearTimeout(freqDebounceTimerRef.current);
+      freqDebounceTimerRef.current = null;
+    }
     try {
       const response = await api.setRadioFrequency({
         frequency: frequencyHz,
@@ -542,7 +568,9 @@ export const VoiceFrequencyControl: React.FC = () => {
       });
 
       if (response.success) {
-        setCurrentFrequency(frequencyHz);
+        if (pendingFreqRef.current) {
+          pendingFreqRef.current = { intendedFrequency: frequencyHz, sentAt: Date.now() };
+        }
         setIsCustomModalOpen(false);
         setCustomInput('');
         setCustomError('');
