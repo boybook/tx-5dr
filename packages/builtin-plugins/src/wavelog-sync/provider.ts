@@ -12,7 +12,7 @@ import type {
   SyncUploadOptions,
 } from '@tx5dr/plugin-api';
 import type { QSORecord } from '@tx5dr/contracts';
-import { convertQSOToADIF, parseADIFContent } from '@tx5dr/plugin-api';
+import { convertQSOToADIF, parseADIFContent, normalizeCallsign } from '@tx5dr/plugin-api';
 
 /**
  * Per-callsign WaveLog configuration stored in plugin KVStore.
@@ -59,7 +59,10 @@ export class WaveLogSyncProvider implements LogbookSyncProvider {
   // ===== Config helpers =====
 
   private configKey(callsign: string): string {
-    return `${CONFIG_KEY_PREFIX}${callsign.toUpperCase()}`;
+    // Use normalizeCallsign so writes (via requireBoundCallsign in index.ts,
+    // which already normalizes) and reads always resolve to the same key,
+    // regardless of suffixes like "/P" or "/MM".
+    return `${CONFIG_KEY_PREFIX}${normalizeCallsign(callsign)}`;
   }
 
   /** Read per-callsign config from KVStore (synchronous — KVStore is in-memory). */

@@ -2152,7 +2152,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           onClose={() => setIsSyncConfigOpen(false)}
           callsign={operatorCallsign}
           initialTab={syncConfigInitialTab}
-          onSaved={() => {
+          onAfterClose={() => {
             refreshSyncProviders(operatorCallsign).catch(() => {});
           }}
         />
