@@ -47,6 +47,8 @@ import { PluginManager } from './plugin/PluginManager.js';
 import { tx5drPaths } from './utils/app-paths.js';
 import { CallsignContextTracker } from './slot/CallsignContextTracker.js';
 import { NtpCalibrationService } from './services/NtpCalibrationService.js';
+import { RigctldBridge } from './rigctld/RigctldBridge.js';
+import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 
 /**
  * DigitalRadioEngine — 数字电台引擎 Facade
@@ -89,6 +91,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // 子系统
   private audioVolumeController: AudioVolumeController;
   private radioBridge: RadioBridge;
+  private rigctldBridge: RigctldBridge;
   private transmissionPipeline: TransmissionPipeline;
   private clockCoordinator!: ClockCoordinator;  // 在 initialize() 中初始化
   private engineLifecycle!: EngineLifecycle;     // 在构造函数末尾初始化
@@ -309,6 +312,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     this.radioBridge.setupListeners();
 
+    this.rigctldBridge = new RigctldBridge(this.radioManager);
+    this.rigctldBridge.on('statusChanged', (status) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      this.emit('rigctldStatus' as any, status);
+    });
+
     // 注意：clockCoordinator 和 engineLifecycle 需要在 initialize() 之后才能完全初始化
     // 因为 slotClock 在 initialize() 中创建
   }
@@ -381,7 +390,28 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.restorePersistedModePhase();
     this.finalizeLifecyclePhase();
 
+    // rigctld bridge: lifetime-independent of the engine. Start early so
+    // external clients can poll while the radio spins up.
+    this.rigctldBridge.applyConfig().catch((error) => {
+      logger.warn('rigctld bridge initial apply failed', { error: (error as Error).message });
+    });
+
     logger.info(`Initialization complete, current mode: ${this.currentMode.name}, engine mode: ${this.engineMode}`);
+  }
+
+  /** Current rigctld bridge status snapshot (for /api/rigctld/status). */
+  getRigctldStatus(): RigctldStatus {
+    return this.rigctldBridge.getStatus();
+  }
+
+  /**
+   * Update and persist the rigctld bridge configuration, then reconcile the
+   * live listener against it. Returns the effective new config.
+   */
+  async updateRigctldConfig(patch: Partial<RigctldBridgeConfig>): Promise<RigctldStatus> {
+    await ConfigManager.getInstance().updateRigctldConfig(patch);
+    await this.rigctldBridge.applyConfig();
+    return this.rigctldBridge.getStatus();
   }
 
   private async initializeRuntimePhase(): Promise<void> {
@@ -554,6 +584,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   async destroy(): Promise<void> {
     logger.info('Destroying...');
     await this.stop();
+
+    // rigctld bridge: tear down outside the engine resource pipeline so we
+    // stop accepting external connections before the radio is torn down.
+    await this.rigctldBridge.stop().catch((error) => {
+      logger.warn('rigctld bridge stop failed during shutdown', { error: (error as Error).message });
+    });
 
     // Stop NTP calibration
     this.ntpCalibrationService.stop();

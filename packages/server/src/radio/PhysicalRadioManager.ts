@@ -938,6 +938,16 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     logger.debug('PTT state updated for I/O scheduling', { active });
   }
 
+  /** Whether PTT is currently asserted (software-tracked state). */
+  isPTTActive(): boolean {
+    return this._isPTTActive;
+  }
+
+  /** Expose current connection for subsystems that need optional radio capabilities. */
+  getCurrentConnection(): IRadioConnection | null {
+    return this.connection;
+  }
+
   /**
    * 测试连接
    */

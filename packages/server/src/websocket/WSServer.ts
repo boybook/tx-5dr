@@ -554,6 +554,12 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.RADIO_POWER_STATE, data);
     });
 
+    // 监听 rigctld 桥接状态变化，推送给客户端用于 UI 实时显示
+    this.digitalRadioEngine.on('rigctldStatus' as any, (data: any) => {
+      logger.debug('rigctld status event received');
+      this.broadcast(WSMessageType.RIGCTLD_STATUS, data);
+    });
+
     // 监听电台发射中断开连接事件
     this.digitalRadioEngine.on('radioDisconnectedDuringTransmission', (data) => {
       logger.debug('radio disconnected during transmission event received', data);

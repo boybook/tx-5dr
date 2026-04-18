@@ -1,0 +1,48 @@
+{
+  "name": "@tx5dr/rigctld-server",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Hamlib rigctld protocol emulation server (TCP). Framework-agnostic: you provide a RadioController, it speaks the rigctld protocol to any NET rigctl client (N1MM Logger+, WSJT-X, JTDX, fldigi, ...).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/boybook/tx-5dr.git",
+    "directory": "packages/rigctld-server"
+  },
+  "keywords": [
+    "rigctld",
+    "hamlib",
+    "ham-radio",
+    "amateur-radio",
+    "cat-control",
+    "n1mm",
+    "wsjt-x",
+    "jtdx"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint src/**/*.ts",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@tx5dr/shared-config": "workspace:*",
+    "@types/node": "^20.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}

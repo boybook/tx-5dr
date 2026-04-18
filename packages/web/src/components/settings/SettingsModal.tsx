@@ -18,6 +18,7 @@ import { faSave } from '@fortawesome/free-solid-svg-icons';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
+import { RigctldBridgeSettings, type RigctldBridgeSettingsRef } from './RigctldBridgeSettings';
 import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './FrequencyPresetSettings';
 import { TokenManagement } from '../auth/TokenManagement';
 import { StationInfoSettings, type StationInfoSettingsRef } from './StationInfoSettings';
@@ -38,7 +39,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins';
+export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins';
 
 export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
   const { t } = useTranslation('settings');
@@ -47,6 +48,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const canRadioConfig = useCan('update', 'RadioConfig');
   const canFrequencyPresets = useCan('update', 'SettingsFrequencyPresets');
   const canStationInfo = useCan('update', 'StationInfo');
+  const canRigctld = useCan('execute', 'RigctldBridge');
   // Viewers cannot access the operator tab; fall back to display
   const defaultTab: SettingsTab = isOperator ? 'operator' : 'display';
   // radio/audio 已迁移到 ProfileModal，默认 Tab 改为 operator（或 display 对 viewer）
@@ -62,6 +64,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
   const displaySettingsRef = useRef<DisplayNotificationSettingsRef | null>(null);
   const systemSettingsRef = useRef<SystemSettingsRef | null>(null);
+  const rigctldSettingsRef = useRef<RigctldBridgeSettingsRef | null>(null);
   const frequencyPresetSettingsRef = useRef<FrequencyPresetSettingsRef | null>(null);
   const stationInfoSettingsRef = useRef<StationInfoSettingsRef | null>(null);
   const pluginSettingsRef = useRef<PluginSettingsTabRef | null>(null);
@@ -102,6 +105,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return displaySettingsRef.current?.hasUnsavedChanges() || false;
       case 'system':
         return systemSettingsRef.current?.hasUnsavedChanges() || false;
+      case 'rigctld':
+        return rigctldSettingsRef.current?.hasUnsavedChanges() || false;
       case 'frequency_presets':
         return frequencyPresetSettingsRef.current?.hasUnsavedChanges() || false;
       case 'station_info':
@@ -157,6 +162,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         case 'system':
           if (systemSettingsRef.current) {
             await systemSettingsRef.current.save();
+          }
+          break;
+        case 'rigctld':
+          if (rigctldSettingsRef.current) {
+            await rigctldSettingsRef.current.save();
           }
           break;
         case 'frequency_presets':
@@ -245,6 +255,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           return '📻';
         case 'system':
           return '⚙️';
+        case 'rigctld':
+          return '🔗';
         case 'frequency_presets':
           return '📡';
         case 'tokens':
@@ -270,6 +282,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return `📻 ${t('modal.tabRadioProfile')}`;
       case 'system':
         return `⚙️ ${t('modal.tabSystem')}`;
+      case 'rigctld':
+        return `🔗 ${t('modal.tabRigctld')}`;
       case 'frequency_presets':
         return `📡 ${t('modal.tabFrequencyPresets')}`;
       case 'tokens':
@@ -306,6 +320,13 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return (
           <SystemSettings
             ref={systemSettingsRef}
+            onUnsavedChanges={setHasUnsavedChanges}
+          />
+        );
+      case 'rigctld':
+        return (
+          <RigctldBridgeSettings
+            ref={rigctldSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
           />
         );
@@ -392,17 +413,30 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
               }}
             >
               {/* 标签页菜单 */}
-              <div className={isMobile ? 'px-3 py-2 border-b border-divider' : 'p-5 pr-1'}>
+              {/*
+                Mobile layout is a horizontal bar: the wrapper must allow the
+                flex child to shrink below its content (`min-w-0`) so the
+                inner tabList's `overflow-x-auto` actually takes effect. Without
+                `min-w-0` the wrapper auto-expands past the modal width and the
+                rightmost tabs are clipped off-screen.
+              */}
+              <div
+                className={
+                  isMobile
+                    ? 'min-w-0 w-full px-3 py-2 border-b border-divider'
+                    : 'p-5 pr-1'
+                }
+              >
                 <Tabs
                   selectedKey={activeTab}
                   onSelectionChange={handleTabChange}
                   isVertical={!isMobile}
                   size='md'
-                  className={isMobile ? '' : 'h-full'}
+                  className={isMobile ? 'w-full' : 'h-full'}
                   classNames={{
-                    tab: isMobile ? "h-10" : "w-full h-10 sm:px-4",
+                    tab: isMobile ? 'h-10 flex-shrink-0' : 'w-full h-10 sm:px-4',
                     tabContent: `group-data-[selected=true]:text-primary-600 text-default-500 ${isMobile ? 'text-xl' : ''}`,
-                    tabList: isMobile ? 'overflow-x-auto' : '',
+                    tabList: isMobile ? 'w-full overflow-x-auto flex-nowrap scrollbar-hide' : '',
                   }}
                 >
                   {isOperator && (
@@ -421,6 +455,12 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                     <Tab
                       key="system"
                       title={getTabTitle('system', isMobile)}
+                    />
+                  )}
+                  {canRigctld && (
+                    <Tab
+                      key="rigctld"
+                      title={getTabTitle('rigctld', isMobile)}
                     />
                   )}
                   {canFrequencyPresets && (
