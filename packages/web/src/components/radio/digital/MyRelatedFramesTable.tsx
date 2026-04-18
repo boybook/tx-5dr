@@ -276,9 +276,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
         const slotStartTime = new Date(slotPack.startMs);
         const utcSeconds = slotStartTime.toISOString().slice(11, 19);
         
-        // 使用统一的周期计算方法
-        const utcSecondsNumber = Math.floor(slotPack.startMs / 1000);
-        const cycleNumber = CycleUtils.calculateCycleNumber(utcSecondsNumber, currentMode.slotMs);
+        // 用 ms 直接算，避免 FT4 亚秒级时隙被截断到上一秒
+        const cycleNumber = CycleUtils.calculateCycleNumberFromMs(slotPack.startMs, currentMode.slotMs);
         const isEvenCycle = CycleUtils.isEvenCycle(cycleNumber);
         
         // 判断是否是我的发射周期
@@ -339,9 +338,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
       const logAlignedMs = Math.floor(logTimeMs / currentMode.slotMs) * currentMode.slotMs;
       const groupKey = logGroupKey; // HHMMSS，与接收消息使用相同的键
 
-      // 使用统一的周期计算方法来计算周期类型
-      const utcSecondsNumber = Math.floor(logTimeMs / 1000);
-      const cycleNumber = CycleUtils.calculateCycleNumber(utcSecondsNumber, currentMode?.slotMs || 15000);
+      // 用 ms 直接算，避免 FT4 亚秒级时隙被截断到上一秒
+      const cycleNumber = CycleUtils.calculateCycleNumberFromMs(logTimeMs, currentMode?.slotMs || 15000);
       const isEvenCycle = CycleUtils.isEvenCycle(cycleNumber);
 
       if (!groupsMap.has(groupKey)) {

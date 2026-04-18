@@ -20,8 +20,9 @@ export const ModeDescriptorSchema = z.object({
   windowTiming: z.array(z.number()),
   /**
    * 发射时机（毫秒）- 从时隙开始的延迟
-   * FT8: 500ms (WSJT-X 标准：信号在时隙边界后 ~0.5s 开始，留 ~1.86s 给解码)
-   * FT4: 约550ms (使6.4秒的音频在7.5秒时隙中居中)
+   * 对齐 WSJT-X 标准：信号在时隙边界后 ~0.5s 开始
+   * FT8: 500ms（信号 T+0.5s 起，12.64s 长，T+13.14s 结束）
+   * FT4: 500ms（信号 T+0.5s 起，6.0s 长，T+6.5s 结束，留 1.0s 给末端解码）
    */
   transmitTiming: z.number().nonnegative(),
   /**
@@ -49,9 +50,10 @@ export const MODES = {
     name: 'FT4',
     slotMs: 7500,
     toleranceMs: 50,
-    windowTiming: [0],
-    transmitTiming: 550, // (7500 - 6400) / 2 = 550ms
-    encodeAdvance: 0     // 编码在 transmitStart 时触发，留出 550ms 给策略决策
+    // 双 pass 解码：T+6000ms 早 pass（让下一周期 encodeStart 之前能拿到对端消息）+ T+7500ms 末 pass
+    windowTiming: [-1500, 0],
+    transmitTiming: 500, // WSJT-X 标准：FT4 信号 T+0.5s 起，6.0s 长
+    encodeAdvance: 300   // encodeStart 在 T+200ms 触发，留 ~300ms 给编码完成，使 transmitStart 时音频已就绪
   } as ModeDescriptor,
   VOICE: {
     name: 'VOICE',
@@ -89,10 +91,14 @@ export const FT8_WINDOW_PRESETS: Record<string, number[]> = {
 
 /**
  * FT4 解码窗口预设映射
+ * 偏移量基于时隙结束时间（T+7500ms）
+ * FT4 信号：T+500ms 开始，T+6500ms 结束（6.0s）
+ * 双 pass 设计对齐 WSJT-X/JTDX：早 pass 让下一周期 encodeStart 前能用上结果
  */
 export const FT4_WINDOW_PRESETS: Record<string, number[]> = {
-  maximum: [-500, 0, 250],
-  balanced: [0],
+  maximum: [-2000, -1000, 0],   // 3 轮：T+5.5s / T+6.5s / T+7.5s
+  balanced: [-1500, 0],          // 2 轮：T+6.0s（早 pass）+ T+7.5s（末 pass）
+  lightweight: [0],              // 1 轮：仅末端
 };
 
 /**
@@ -104,7 +110,7 @@ export const DecodeWindowSettingsSchema = z.object({
     customWindowTiming: z.array(z.number().int().min(-5000).max(1000)).optional(),
   }).optional(),
   ft4: z.object({
-    preset: z.enum(['maximum', 'balanced', 'custom']).default('balanced'),
+    preset: z.enum(['maximum', 'balanced', 'lightweight', 'custom']).default('balanced'),
     customWindowTiming: z.array(z.number().int().min(-5000).max(1000)).optional(),
   }).optional(),
 });

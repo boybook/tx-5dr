@@ -71,6 +71,11 @@ export interface OperatorDecisionState {
 export interface DecisionOrchestratorDeps {
   getOperators: () => import('@tx5dr/core').RadioOperator[];
   getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;
+  /**
+   * 当前引擎模式 — **唯一权威来源**。切勿使用 operator.config.mode（它在创建后不会随引擎 setMode
+   * 而更新，FT8↔FT4 切换后会带来错误的 slotMs，导致周期判断按错误的时隙长度进行）。
+   */
+  getCurrentMode: () => import('@tx5dr/contracts').ModeDescriptor;
   getOperatorAutomationSnapshot: (id: string) => import('@tx5dr/plugin-api').StrategyRuntimeSnapshot | null;
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
   analyzeCallsignForOperator?: (
@@ -101,6 +106,8 @@ export interface PluginManagerDeps {
   eventEmitter: import('eventemitter3').EventEmitter<import('@tx5dr/contracts').DigitalRadioEngineEvents>;
   getOperators: () => import('@tx5dr/core').RadioOperator[];
   getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;
+  /** 见 DecisionOrchestratorDeps.getCurrentMode 的注释 */
+  getCurrentMode: () => import('@tx5dr/contracts').ModeDescriptor;
   getOperatorAutomationSnapshot: (id: string) => import('@tx5dr/plugin-api').StrategyRuntimeSnapshot | null;
   requestOperatorCall: (
     operatorId: string,

@@ -100,6 +100,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       eventEmitter,
       getOperators: () => [operator],
       getOperatorById: (id) => (id === operator.config.id ? operator : undefined),
+      getCurrentMode: () => operator.config.mode,
       getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
       requestOperatorCall: (operatorId, callsign, lastMessage) => {
         pluginManager.requestCall(operatorId, callsign, lastMessage);

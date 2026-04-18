@@ -78,7 +78,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       }
 
       // 基于模式校验并必要时截断
-      const expectedDuration = mode === WSJTXMode.FT8 ? 12.64 : 6.4;
+      const expectedDuration = mode === WSJTXMode.FT8 ? 12.64 : 6.0;
       const encodeSampleRate = 48000; // wsjtx-lib 编码输出为 48kHz
       const actualDuration = audioFloat32.length / encodeSampleRate;
       const maxSamples = Math.floor(expectedDuration * encodeSampleRate * 1.5);

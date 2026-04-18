@@ -93,6 +93,7 @@ export class PluginManager {
     this.orchestrator = new DecisionOrchestrator({
       getOperators: deps.getOperators,
       getOperatorById: deps.getOperatorById,
+      getCurrentMode: deps.getCurrentMode,
       getOperatorAutomationSnapshot: deps.getOperatorAutomationSnapshot,
       interruptOperatorTransmission: deps.interruptOperatorTransmission,
       analyzeCallsignForOperator: deps.analyzeCallsignForOperator,
