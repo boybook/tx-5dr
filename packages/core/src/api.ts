@@ -1520,6 +1520,32 @@ export const api = {
     );
   },
 
+  // ========== rigctld 桥接 API ==========
+
+  /** Read the current rigctld bridge status (config + running state + clients). */
+  async getRigctldStatus(apiBase?: string): Promise<import('@tx5dr/contracts').RigctldStatus> {
+    return apiRequest<import('@tx5dr/contracts').RigctldStatus>(
+      '/rigctld/status',
+      undefined,
+      apiBase,
+    );
+  },
+
+  /**
+   * Update rigctld bridge configuration and reconcile the listener.
+   * Requires `execute:RigctldBridge` ability.
+   */
+  async updateRigctldConfig(
+    patch: Partial<import('@tx5dr/contracts').RigctldBridgeConfig>,
+    apiBase?: string,
+  ): Promise<import('@tx5dr/contracts').RigctldStatus> {
+    return apiRequest<import('@tx5dr/contracts').RigctldStatus>(
+      '/rigctld/config',
+      { method: 'PUT', body: JSON.stringify(patch) },
+      apiBase,
+    );
+  },
+
   // ========== Profile 管理 API ==========
 
   async getProfiles(apiBase?: string): Promise<ProfileListResponse> {
@@ -1864,6 +1890,9 @@ export const {
   ,getPSKReporterStatus
   ,triggerPSKReport
   ,resetPSKReporterStats
+  // rigctld bridge 函数
+  ,getRigctldStatus
+  ,updateRigctldConfig
   // Profile 管理函数
   ,getProfiles
   ,createProfile

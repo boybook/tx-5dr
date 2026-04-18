@@ -31,6 +31,7 @@ export type CapabilitySubject =
   | 'RadioReconnect'
   | 'RadioControl'
   | 'RadioPower'
+  | 'RigctldBridge'
   | 'Engine'
   | 'ModeSwitch'
   | 'SettingsDecodeWindows'
@@ -54,6 +55,8 @@ export enum Permission {
   RADIO_CONTROL = 'radio:control',
   /** 电台电源管理（开机/关机）— 独立于 RADIO_CONTROL，影响物理设备可达性 */
   RADIO_POWER = 'radio:power',
+  /** 启停 rigctld TCP 桥接（允许外部软件如 N1MM / WSJT-X 接入当前电台）*/
+  RIGCTLD_BRIDGE = 'rigctld:bridge',
   ENGINE_START_STOP = 'engine:start_stop',
   MODE_SWITCH = 'mode:switch',
   SETTINGS_DECODE_WINDOWS = 'settings:decode_windows',
@@ -73,6 +76,7 @@ export const PERMISSION_RULE_MAP: Record<Permission, { action: AppAction; subjec
   [Permission.RADIO_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
   [Permission.RADIO_CONTROL]: { action: 'execute', subject: 'RadioControl' },
   [Permission.RADIO_POWER]: { action: 'execute', subject: 'RadioPower' },
+  [Permission.RIGCTLD_BRIDGE]: { action: 'execute', subject: 'RigctldBridge' },
   [Permission.ENGINE_START_STOP]: { action: 'execute', subject: 'Engine' },
   [Permission.MODE_SWITCH]: { action: 'execute', subject: 'ModeSwitch' },
   [Permission.SETTINGS_DECODE_WINDOWS]: { action: 'update', subject: 'SettingsDecodeWindows' },
@@ -172,6 +176,7 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
       Permission.RADIO_RECONNECT,
       Permission.RADIO_CONTROL,
       Permission.RADIO_POWER,
+      Permission.RIGCTLD_BRIDGE,
     ],
   },
   { key: 'engine', permissions: [Permission.ENGINE_START_STOP] },

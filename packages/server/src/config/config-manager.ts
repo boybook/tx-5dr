@@ -8,8 +8,10 @@ import {
   HamlibConfig,
   PSKReporterConfig,
   DEFAULT_DECODE_WINDOW_SETTINGS,
+  DEFAULT_RIGCTLD_BRIDGE_CONFIG,
   type LiveKitNetworkMode,
   type RealtimeTransportPolicy,
+  type RigctldBridgeConfig,
 } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
@@ -102,6 +104,8 @@ export interface AppConfig {
   openwebrxStations?: OpenWebRXStationConfig[];
   /** Plugin system configuration */
   plugins?: PluginsConfig;
+  /** rigctld-compatible TCP bridge (lets N1MM / WSJT-X / JTDX connect to this tx5dr instance). */
+  rigctld?: RigctldBridgeConfig;
 }
 
 // 音频处理配置接口
@@ -152,6 +156,7 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   livekitNetworkMode: 'lan',
   livekitNodeIp: null,
+  rigctld: { ...DEFAULT_RIGCTLD_BRIDGE_CONFIG },
 };
 
 // 默认音频配置（无 Profile 时的兜底值）
@@ -920,6 +925,42 @@ export class ConfigManager {
   async resetPSKReporterConfig(): Promise<void> {
     this.config.pskreporter = { ...DEFAULT_CONFIG.pskreporter };
     await this.saveConfig();
+  }
+
+  /**
+   * rigctld-compatible bridge: read configuration. Env overrides (RIGCTLD_ENABLED /
+   * RIGCTLD_BIND / RIGCTLD_PORT) take precedence over the stored value, so Docker
+   * and headless deployments can enable the bridge without touching the UI.
+   */
+  getRigctldConfig(): RigctldBridgeConfig {
+    const stored = this.config.rigctld ?? { ...DEFAULT_RIGCTLD_BRIDGE_CONFIG };
+    const envEnabled = process.env.RIGCTLD_ENABLED;
+    const envBind = process.env.RIGCTLD_BIND;
+    const envPort = process.env.RIGCTLD_PORT;
+    const envReadOnly = process.env.RIGCTLD_READ_ONLY;
+    return {
+      enabled:
+        envEnabled !== undefined
+          ? envEnabled === '1' || envEnabled.toLowerCase() === 'true'
+          : stored.enabled,
+      bindAddress: envBind ?? stored.bindAddress,
+      port: envPort !== undefined && Number.isFinite(Number(envPort)) ? Number(envPort) : stored.port,
+      readOnly:
+        envReadOnly !== undefined
+          ? envReadOnly === '1' || envReadOnly.toLowerCase() === 'true'
+          : stored.readOnly ?? true,
+    };
+  }
+
+  /**
+   * Update and persist the rigctld bridge configuration. The subsystem restart
+   * is driven by whoever calls this (typically `DigitalRadioEngine.setRigctldConfig`).
+   */
+  async updateRigctldConfig(patch: Partial<RigctldBridgeConfig>): Promise<RigctldBridgeConfig> {
+    const current = this.config.rigctld ?? { ...DEFAULT_RIGCTLD_BRIDGE_CONFIG };
+    this.config.rigctld = { ...current, ...patch };
+    await this.saveConfig();
+    return { ...this.config.rigctld };
   }
 
   // ===== 按呼号的同步配置 =====

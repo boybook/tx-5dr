@@ -54,7 +54,7 @@ COPY .yarn/patches/ ./.yarn/patches/
 COPY scripts ./scripts/
 
 # 创建packages目录结构并复制package.json文件
-RUN mkdir -p packages/builtin-plugins packages/client-tools packages/contracts packages/core packages/create-tx5dr-plugin packages/electron-main packages/electron-preload packages/plugin-api packages/server packages/shared-config packages/web
+RUN mkdir -p packages/builtin-plugins packages/client-tools packages/contracts packages/core packages/create-tx5dr-plugin packages/electron-main packages/electron-preload packages/plugin-api packages/rigctld-server packages/server packages/shared-config packages/web
 COPY packages/builtin-plugins/package.json ./packages/builtin-plugins/
 COPY packages/client-tools/package.json ./packages/client-tools/
 COPY packages/contracts/package.json ./packages/contracts/
@@ -63,6 +63,7 @@ COPY packages/create-tx5dr-plugin/package.json ./packages/create-tx5dr-plugin/
 COPY packages/electron-main/package.json ./packages/electron-main/
 COPY packages/electron-preload/package.json ./packages/electron-preload/
 COPY packages/plugin-api/package.json ./packages/plugin-api/
+COPY packages/rigctld-server/package.json ./packages/rigctld-server/
 COPY packages/server/package.json ./packages/server/
 COPY packages/shared-config/package.json ./packages/shared-config/
 COPY packages/web/package.json ./packages/web/
@@ -165,6 +166,8 @@ RUN chown -R www-data:www-data /app/data && \
 # 暴露端口
 EXPOSE 80
 EXPOSE 443
+# rigctld-compatible TCP bridge (enable via Web UI → System Settings → Rigctld Bridge)
+EXPOSE 4532
 
 # 设置entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

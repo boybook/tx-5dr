@@ -136,6 +136,9 @@ export * from './schema/radio-capability.schema.js';
 export * from './schema/radio-power.schema.js';
 export * from './schema/radio-power-support.js';
 
+// rigctld bridge schema
+export * from './schema/rigctld.schema.js';
+
 // Realtime Schema
 export * from './schema/realtime.schema.js';
 

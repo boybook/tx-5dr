@@ -33,6 +33,7 @@
     "@tx5dr/contracts": "workspace:*",
     "@tx5dr/core": "workspace:*",
     "@tx5dr/plugin-api": "workspace:*",
+    "@tx5dr/rigctld-server": "workspace:*",
     "@types/wav": "^1.0.4",
     "@types/ws": "^8.18.1",
     "audify": "patch:audify@npm%3A1.10.1#~/.yarn/patches/audify-npm-1.10.1-076cc4cf40.patch",

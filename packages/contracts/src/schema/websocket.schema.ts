@@ -51,6 +51,7 @@ export enum WSMessageType {
   SYSTEM_STATUS = 'systemStatus',
   CLIENT_COUNT_CHANGED = 'clientCountChanged',
   CLOCK_STATUS_CHANGED = 'clockStatusChanged',
+  RIGCTLD_STATUS = 'rigctldStatus',
   
   // ===== 电台操作员管理 =====
   GET_OPERATORS = 'getOperators',

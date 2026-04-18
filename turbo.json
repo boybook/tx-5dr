@@ -11,7 +11,10 @@
     "LIVEKIT_TCP_PORT",
     "LIVEKIT_UDP_PORT_RANGE",
     "LIVEKIT_API_KEY",
-    "LIVEKIT_API_SECRET"
+    "LIVEKIT_API_SECRET",
+    "RIGCTLD_ENABLED",
+    "RIGCTLD_BIND",
+    "RIGCTLD_PORT"
   ],
   "tasks": {
     "build": {
