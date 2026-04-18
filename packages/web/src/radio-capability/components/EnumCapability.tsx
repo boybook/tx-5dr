@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Select, SelectItem, Tooltip } from '@heroui/react';
+import { Select, SelectItem, Tab, Tabs, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
@@ -37,25 +37,45 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
         )}
       </div>
 
-      <Select
-        size="sm"
-        selectedKeys={selectedKey ? [selectedKey] : []}
-        onSelectionChange={(keys) => {
-          const nextKey = Array.from(keys)[0];
-          const option = options.find((item) => String(item.value) === String(nextKey));
-          if (option) {
-            onWrite(capabilityId, option.value);
-          }
-        }}
-        isDisabled={!isSupported || !canControl || !canWrite || options.length === 0}
-        aria-label={t(descriptor.labelI18nKey)}
-      >
-        {options.map((option) => (
-          <SelectItem key={String(option.value)} value={String(option.value)}>
-            {formatCapabilityOption(option, descriptor, t)}
-          </SelectItem>
-        ))}
-      </Select>
+      {options.length > 0 && options.length <= 4 ? (
+        <Tabs
+          size="sm"
+          fullWidth
+          selectedKey={selectedKey ?? undefined}
+          onSelectionChange={(key) => {
+            const option = options.find((item) => String(item.value) === String(key));
+            if (option) {
+              onWrite(capabilityId, option.value);
+            }
+          }}
+          isDisabled={!isSupported || !canControl || !canWrite}
+          aria-label={t(descriptor.labelI18nKey)}
+        >
+          {options.map((option) => (
+            <Tab key={String(option.value)} title={formatCapabilityOption(option, descriptor, t)} />
+          ))}
+        </Tabs>
+      ) : (
+        <Select
+          size="sm"
+          selectedKeys={selectedKey ? [selectedKey] : []}
+          onSelectionChange={(keys) => {
+            const nextKey = Array.from(keys)[0];
+            const option = options.find((item) => String(item.value) === String(nextKey));
+            if (option) {
+              onWrite(capabilityId, option.value);
+            }
+          }}
+          isDisabled={!isSupported || !canControl || !canWrite || options.length === 0}
+          aria-label={t(descriptor.labelI18nKey)}
+        >
+          {options.map((option) => (
+            <SelectItem key={String(option.value)} value={String(option.value)}>
+              {formatCapabilityOption(option, descriptor, t)}
+            </SelectItem>
+          ))}
+        </Select>
+      )}
 
       {!isSupported && (
         <p className="text-xs text-default-400">{t('radio:capability.panel.notSupported')}</p>

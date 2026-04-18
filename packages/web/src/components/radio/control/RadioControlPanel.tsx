@@ -15,13 +15,14 @@ import {
   Tooltip,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faRotateRight } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import {
   CAPABILITY_CATEGORY_ORDER,
   type CapabilityCategorySection,
   getVisibleCapabilitySections,
   groupCapabilityDescriptors,
+  partitionCapabilityGroupsBySupport,
   splitCapabilitySectionsForColumns,
 } from '../../../radio-capability/capability-descriptors';
 import { getPanelComponent, useCapabilityWriter, useCapabilityRefresher } from '../../../radio-capability/CapabilityRegistry';
@@ -51,7 +52,7 @@ const CompoundCard: React.FC<{
   const capabilityStates = useCapabilityStates();
 
   return (
-    <div className="space-y-3 p-3 rounded-lg border border-divider bg-content2">
+    <div className="space-y-3 p-3 rounded-lg border border-default-200 bg-default-50/40">
       {descriptors.map((desc) => {
         const Component = getPanelComponent(desc.id);
         const state = capabilityStates.get(desc.id);
@@ -84,7 +85,7 @@ const CapabilityCard: React.FC<{
   if (!Component) return null;
 
   return (
-    <div className="p-3 rounded-lg border border-divider bg-content2">
+    <div className="p-3 rounded-lg border border-default-200 bg-default-50/40">
       <Component
         capabilityId={descriptor.id}
         state={state}
@@ -153,21 +154,40 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
     };
   }, []);
 
+  const capabilityStates = useCapabilityStates();
+  const [showUnsupported, setShowUnsupported] = useState(false);
+
   // 按 category 分组，同一 compoundGroup 合并
   const groupedCapabilities = useMemo(() => {
     const descriptors = Array.from(capabilityDescriptors.values()).filter((descriptor) => Boolean(getPanelComponent(descriptor.id)));
     return groupCapabilityDescriptors(descriptors);
   }, [capabilityDescriptors]);
 
-  const visibleSections = useMemo(
-    () => getVisibleCapabilitySections(groupedCapabilities),
-    [groupedCapabilities],
+  const { supportedGroups, unsupportedGroups } = useMemo(() => {
+    const { supported, unsupported } = partitionCapabilityGroupsBySupport(groupedCapabilities, capabilityStates);
+    return { supportedGroups: supported, unsupportedGroups: unsupported };
+  }, [groupedCapabilities, capabilityStates]);
+
+  const supportedSections = useMemo(
+    () => getVisibleCapabilitySections(supportedGroups),
+    [supportedGroups],
+  );
+  const unsupportedSections = useMemo(
+    () => getVisibleCapabilitySections(unsupportedGroups),
+    [unsupportedGroups],
   );
 
-  const panelColumns = useMemo(
-    () => splitCapabilitySectionsForColumns(visibleSections),
-    [visibleSections],
+  const supportedColumns = useMemo(
+    () => splitCapabilitySectionsForColumns(supportedSections),
+    [supportedSections],
   );
+  const unsupportedColumns = useMemo(
+    () => splitCapabilitySectionsForColumns(unsupportedSections),
+    [unsupportedSections],
+  );
+
+  const hasSupported = supportedSections.length > 0;
+  const hasUnsupported = unsupportedSections.length > 0;
 
   const categoryLabels = useMemo(
     () => Object.fromEntries(
@@ -181,7 +201,51 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
 
   const radioName = activeProfile?.name ?? t('radio:connection.none');
   const isNoRadioMode = radioState.radioConfig?.type === 'none';
-  const shouldUseDesktopColumns = !isMobile && panelColumns.right.length > 0;
+
+  const renderSectionGroup = (
+    sections: CapabilityCategorySection[],
+    columns: { left: CapabilityCategorySection[]; right: CapabilityCategorySection[] },
+  ) => {
+    const useDesktopColumns = !isMobile && columns.right.length > 0;
+    if (useDesktopColumns) {
+      return (
+        <div className="grid grid-cols-2 gap-5">
+          <div className="space-y-5">
+            {columns.left.map((section) => (
+              <CapabilitySection
+                key={section.category}
+                section={section}
+                categoryLabel={categoryLabels[section.category]}
+                onWrite={onWrite}
+              />
+            ))}
+          </div>
+          <div className="space-y-5">
+            {columns.right.map((section) => (
+              <CapabilitySection
+                key={section.category}
+                section={section}
+                categoryLabel={categoryLabels[section.category]}
+                onWrite={onWrite}
+              />
+            ))}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-5">
+        {sections.map((section) => (
+          <CapabilitySection
+            key={section.category}
+            section={section}
+            categoryLabel={categoryLabels[section.category]}
+            onWrite={onWrite}
+          />
+        ))}
+      </div>
+    );
+  };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} size={isMobile ? 'sm' : '3xl'} scrollBehavior="inside">
@@ -218,41 +282,36 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
               {t('radio:capability.panel.notConnected')}
             </p>
           ) : (
-            shouldUseDesktopColumns ? (
-              <div className="grid grid-cols-2 gap-5">
-                <div className="space-y-5">
-                  {panelColumns.left.map((section) => (
-                    <CapabilitySection
-                      key={section.category}
-                      section={section}
-                      categoryLabel={categoryLabels[section.category]}
-                      onWrite={onWrite}
+            <div className="space-y-6">
+              {hasSupported ? (
+                renderSectionGroup(supportedSections, supportedColumns)
+              ) : (
+                <p className="text-sm text-default-400 text-center py-2">
+                  {t('radio:capability.panel.noSupported')}
+                </p>
+              )}
+              {hasUnsupported && (
+                <div className="border-t border-divider pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowUnsupported((prev) => !prev)}
+                    className="flex w-full items-center justify-between text-xs font-semibold text-default-500 uppercase tracking-wide hover:text-default-700 transition-colors"
+                    aria-expanded={showUnsupported}
+                  >
+                    <span>{t('radio:capability.panel.unsupportedGroup')}</span>
+                    <FontAwesomeIcon
+                      icon={faChevronDown}
+                      className={`text-xs transition-transform ${showUnsupported ? 'rotate-180' : ''}`}
                     />
-                  ))}
+                  </button>
+                  {showUnsupported && (
+                    <div className="mt-3">
+                      {renderSectionGroup(unsupportedSections, unsupportedColumns)}
+                    </div>
+                  )}
                 </div>
-                <div className="space-y-5">
-                  {panelColumns.right.map((section) => (
-                    <CapabilitySection
-                      key={section.category}
-                      section={section}
-                      categoryLabel={categoryLabels[section.category]}
-                      onWrite={onWrite}
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-5">
-                {visibleSections.map((section) => (
-                  <CapabilitySection
-                    key={section.category}
-                    section={section}
-                    categoryLabel={categoryLabels[section.category]}
-                    onWrite={onWrite}
-                  />
-                ))}
-              </div>
-            )
+              )}
+            </div>
           )}
         </ModalBody>
       </ModalContent>

@@ -1,4 +1,4 @@
-import type { CapabilityCategory, CapabilityDescriptor } from '@tx5dr/contracts';
+import type { CapabilityCategory, CapabilityDescriptor, CapabilityState } from '@tx5dr/contracts';
 
 export const CAPABILITY_CATEGORY_ORDER: CapabilityCategory[] = [
   'antenna',
@@ -84,6 +84,47 @@ export function getVisibleCapabilitySections(
       weight: getCapabilityCategoryWeight(items),
     }];
   });
+}
+export function isCapabilityEntrySupported(
+  entry: CapabilityPanelEntry,
+  states: Map<string, CapabilityState>,
+): boolean {
+  if (entry.type === 'single') {
+    return states.get(entry.item.id)?.supported ?? false;
+  }
+  return entry.items.some((item) => states.get(item.id)?.supported ?? false);
+}
+
+export function partitionCapabilityGroupsBySupport(
+  groups: CapabilityPanelGroups,
+  states: Map<string, CapabilityState>,
+): { supported: CapabilityPanelGroups; unsupported: CapabilityPanelGroups } {
+  const supported: CapabilityPanelGroups = {
+    antenna: [],
+    rf: [],
+    audio: [],
+    operation: [],
+    system: [],
+  };
+  const unsupported: CapabilityPanelGroups = {
+    antenna: [],
+    rf: [],
+    audio: [],
+    operation: [],
+    system: [],
+  };
+
+  for (const category of CAPABILITY_CATEGORY_ORDER) {
+    for (const entry of groups[category]) {
+      if (isCapabilityEntrySupported(entry, states)) {
+        supported[category].push(entry);
+      } else {
+        unsupported[category].push(entry);
+      }
+    }
+  }
+
+  return { supported, unsupported };
 }
 
 export function splitCapabilitySectionsForColumns(
