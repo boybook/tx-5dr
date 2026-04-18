@@ -123,9 +123,9 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
   }
   
   private handleSlotStart(slotStartTime: number): void {
-    const utcSeconds = Math.floor(slotStartTime / 1000);
-    // 使用统一的周期计算方法
-    const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, this.mode.slotMs);
+    // 用 ms 直接算 cycleNumber，避免 FT4 亚秒级时隙（7.5/22.5/...s）被截断到上一秒
+    const cycleNumber = CycleUtils.calculateCycleNumberFromMs(slotStartTime, this.mode.slotMs);
+    const utcSeconds = Math.floor(slotStartTime / 1000); // 仅用于显示/日志，不要再用于周期判断
     const slotId = `${this.mode.name}-${cycleNumber}-${slotStartTime}`;
     const now = this.clockSource.now();
     const phaseMs = now - slotStartTime;
@@ -239,15 +239,6 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
   }
   
   /**
-   * 计算窗口时机
-   * @returns 每个窗口相对于时隙开始的延迟时间（毫秒）
-   * @deprecated 不再需要，直接使用 mode.windowTiming
-   */
-  private calculateWindowTimings(): number[] {
-    return this.mode.windowTiming || [];
-  }
-  
-  /**
    * 获取下一个时隙的倒计时（毫秒）
    */
   public getNextSlotIn(): number {
@@ -272,8 +263,8 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     const now = this.clockSource.now();
     const slotMs = this.mode.slotMs;
     const currentSlotStart = Math.floor(now / slotMs) * slotMs;
-    const utcSeconds = Math.floor(currentSlotStart / 1000);
-    const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, this.mode.slotMs);
+    const cycleNumber = CycleUtils.calculateCycleNumberFromMs(currentSlotStart, this.mode.slotMs);
+    const utcSeconds = Math.floor(currentSlotStart / 1000); // 显示/日志用
     
     return {
       id: `${this.mode.name}-${cycleNumber}-${currentSlotStart}`,

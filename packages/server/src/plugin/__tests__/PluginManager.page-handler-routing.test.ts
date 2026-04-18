@@ -103,6 +103,7 @@ describe('PluginManager page handler routing', () => {
       eventEmitter,
       getOperators: () => operators,
       getOperatorById: (id) => operators.find((operator) => operator.config.id === id),
+      getCurrentMode: () => operators[0]?.config.mode ?? MODES.FT8,
       getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
       requestOperatorCall: (operatorId, callsign, lastMessage) => {
         pluginManager.requestCall(operatorId, callsign, lastMessage);

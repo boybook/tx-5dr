@@ -126,13 +126,17 @@ export class DecisionOrchestrator {
   }
 
   handleEncodeStart(slotInfo: SlotInfo): void {
+    // 用引擎当前模式的 slotMs，不要用 operator.config.mode — 后者从 operator 创建后不会更新，
+    // FT8↔FT4 切换后会残留陈旧 slotMs，导致 FT4 运行期按 FT8 的 15000ms 判周期（每 15s 而不是
+    // 7.5s 一次决策），奇数时隙静默跳过。
+    const currentMode = this.deps.getCurrentMode();
     for (const operator of this.deps.getOperators()) {
       if (!operator.isTransmitting) continue;
 
-      const isTransmitSlot = CycleUtils.isOperatorTransmitCycle(
+      const isTransmitSlot = CycleUtils.isOperatorTransmitCycleFromMs(
         operator.getTransmitCycles(),
-        slotInfo.utcSeconds,
-        operator.config.mode.slotMs,
+        slotInfo.startMs,
+        currentMode.slotMs,
       );
       if (!isTransmitSlot) continue;
 
@@ -615,18 +619,15 @@ export class DecisionOrchestrator {
   }
 
   private buildSourceSlotInfoFromParsedMessage(
-    operatorId: string,
+    _operatorId: string,
     parsedMessage: ParsedFT8Message,
-    fallbackSlotInfo: SlotInfo,
+    _fallbackSlotInfo: SlotInfo,
   ): SlotInfo {
-    const operatorMode = this.deps.getOperatorById(operatorId)?.config.mode;
-    if (!operatorMode) {
-      return fallbackSlotInfo;
-    }
-
+    // 用引擎当前模式（理由同 handleEncodeStart）
+    const currentMode = this.deps.getCurrentMode();
     const startMs = parsedMessage.timestamp;
+    const cycleNumber = CycleUtils.calculateCycleNumberFromMs(startMs, currentMode.slotMs);
     const utcSeconds = Math.floor(startMs / 1000);
-    const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, operatorMode.slotMs);
 
     return {
       id: parsedMessage.slotId,
@@ -635,7 +636,7 @@ export class DecisionOrchestrator {
       phaseMs: 0,
       driftMs: 0,
       cycleNumber,
-      mode: operatorMode.name,
+      mode: currentMode.name,
     };
   }
 

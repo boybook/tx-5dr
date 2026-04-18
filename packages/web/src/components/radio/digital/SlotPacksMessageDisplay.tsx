@@ -79,9 +79,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         const slotStartTime = new Date(slotPack.startMs);
         const utcSeconds = slotStartTime.toISOString().slice(11, 19);
         
-        // 使用统一的周期计算方法
-        const utcSecondsNumber = Math.floor(slotPack.startMs / 1000);
-        const cycleNumber = CycleUtils.calculateCycleNumber(utcSecondsNumber, currentMode.slotMs);
+        // 用 ms 直接算，避免 FT4 亚秒级时隙被截断到上一秒
+        const cycleNumber = CycleUtils.calculateCycleNumberFromMs(slotPack.startMs, currentMode.slotMs);
         const isEvenCycle = CycleUtils.isEvenCycle(cycleNumber);
         
         // 生成组键：使用统一的组键生成方法

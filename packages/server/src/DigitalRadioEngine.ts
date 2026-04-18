@@ -153,6 +153,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       eventEmitter: this,
       getOperators: () => this._operatorManager.getAllOperators(),
       getOperatorById: (id) => this._operatorManager.getOperatorById(id),
+      getCurrentMode: () => this.currentMode,
       getOperatorAutomationSnapshot: (id) => this._pluginManager.getOperatorAutomationSnapshot(id),
       requestOperatorCall: (operatorId, callsign, lastMessage) => {
         this._pluginManager.requestCall(operatorId, callsign, lastMessage);
@@ -684,6 +685,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       this.slotPackManager.setMode(this.currentMode);
       this.clockCoordinator?.onModeChanged(this.currentMode);
+      // 同步 operator.config.mode，避免下游读到陈旧 slotMs（例如 standard-qso 的 retryWindowMs、
+      // PluginContextFactory 暴露给插件的 ctx.operator.mode）
+      for (const op of this._operatorManager?.getAllOperators() ?? []) {
+        op.setMode(this.currentMode);
+      }
 
       await ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
       this.emitModeAndStatusSnapshot();
@@ -731,6 +737,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.slotPackManager.setMode(this.currentMode);
     this.clockCoordinator?.onModeChanged(this.currentMode);
+    // 同步 operator.config.mode —— 与数字模式内 setMode 同款的理由
+    for (const op of this._operatorManager?.getAllOperators() ?? []) {
+      op.setMode(this.currentMode);
+    }
     this.engineLifecycle.rebuildResourcePlan();
 
     const configManager = ConfigManager.getInstance();

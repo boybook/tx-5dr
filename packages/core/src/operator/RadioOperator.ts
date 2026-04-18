@@ -3,6 +3,7 @@ import {
   QSORecord,
   DigitalRadioEngineEvents,
   MODES,
+  ModeDescriptor,
   OperatorSlots,
 } from '@tx5dr/contracts';
 import EventEmitter from 'eventemitter3';
@@ -76,6 +77,15 @@ export class RadioOperator {
         this._stopped = false;
         this._isTransmitting = true;
         this.notifyStatusChanged();
+    }
+
+    /**
+     * 同步当前模式。由 DigitalRadioEngine.setMode 在 FT8↔FT4 切换时调用，
+     * 确保 operator.config.mode 始终与引擎当前模式一致（单一真相源在引擎侧）。
+     * 注意：不广播事件；仅更新内部引用，供下游读取 config.mode.slotMs 等字段时用。
+     */
+    setMode(mode: ModeDescriptor): void {
+        this._config.mode = mode;
     }
 
     setTransmitCycles(transmitCycles: number | number[]): void {

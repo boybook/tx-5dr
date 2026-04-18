@@ -20,6 +20,7 @@ function createDeps(eventEmitter: EventEmitter<DigitalRadioEngineEvents>): Plugi
   return {
     eventEmitter,
     getOperators: () => [],
+    getCurrentMode: () => MODES.FT8,
     getOperatorById: (id) => id === 'operator-1'
       ? {
           config: {

@@ -78,8 +78,8 @@ routes/
 ### 发射时序系统 ⭐
 
 **核心原则**:
-1. **音频居中播放**: 通过 `transmitTiming` 配置使12.64秒的FT8音频在15秒时隙中居中
-2. **提前编码**: 通过 `encodeAdvance` 提前触发编码，补偿编码+混音时间(~400ms)
+1. **WSJT-X 标准对齐**: 通过 `transmitTiming` 让信号在时隙边界后 ~0.5s 起始（FT8/FT4 都按 500ms）
+2. **提前编码**: 通过 `encodeAdvance` 提前触发编码，补偿编码+混音时间（FT8=0；FT4=300，FT4 时隙短必须提前）
 3. **周期判断**: RadioOperator 在 `encodeStart` 事件中判断周期并加入队列
 4. **子系统编排**: ClockCoordinator 桥接时钟事件，TransmissionPipeline 编排发射管线
 5. **智能调度**: AudioMixer 根据目标播放时间动态调整混音窗口
@@ -105,7 +105,7 @@ sequenceDiagram
     Coord->>Manager: broadcastAllOperatorStatusUpdates()
     Coord->>Coord: engineEmitter.emit('slotStart', slotInfo, slotPack)
 
-    Note over Clock,Audio: ═══ 编码时机 (T0 + 780ms = transmitTiming - encodeAdvance) ═══
+    Note over Clock,Audio: ═══ 编码时机 (T0 + transmitTiming - encodeAdvance) ═══
     Clock->>Coord: encodeStart(slotInfo)
     Coord->>Coord: engineEmitter.emit('encodeStart', slotInfo)
     Coord->>Pipeline: onEncodeStart(slotInfo)
@@ -133,9 +133,9 @@ sequenceDiagram
     EncQueue->>Pipeline: encodeComplete 事件
     Pipeline->>Pipeline: transmissionTracker 记录编码完成
     Pipeline->>Mixer: addOperatorAudio(operatorId, audioData, sampleRate, slotStartMs)
-    Pipeline->>Mixer: scheduleMixing(targetPlaybackTime = T0 + 1180ms)
+    Pipeline->>Mixer: scheduleMixing(targetPlaybackTime = T0 + transmitTiming)
 
-    Note over Clock,Audio: ═══ 目标播放时机 (T0 + 1180ms) ═══
+    Note over Clock,Audio: ═══ 目标播放时机 (T0 + transmitTiming) ═══
     Clock->>Coord: transmitStart(slotInfo)
     Coord->>Pipeline: onTransmitStart(slotInfo)
     Pipeline->>Pipeline: 检查编码是否超时（未完成则发出 timingWarning）
@@ -153,7 +153,7 @@ sequenceDiagram
         PTT-->>Pipeline: PTT 激活完成
     and 音频播放
         Pipeline->>Audio: playAudio(mixedAudio)
-        Audio-->>Audio: 分块写入 RtAudio/ICOM (12.64秒)
+        Audio-->>Audio: 分块写入 RtAudio/ICOM（FT8≈12.64s，FT4≈6.0s）
     end
     Pipeline->>Pipeline: schedulePTTStop(duration + 200ms)
 
@@ -167,20 +167,24 @@ sequenceDiagram
 
 #### 时序配置参数 (mode.schema.ts)
 
-**FT8 模式**:
-- `slotMs: 15000` - 时隙长度15秒
-- `transmitTiming: 1180` - 音频播放起始点，使12.64秒音频居中 ((15000-12640)/2)
-- `encodeAdvance: 400` - 提前400ms开始编码，补偿编码+混音时间
-- **实际时间线**: T0 → T0+780ms(编码开始) → T0+1180ms(目标播放) → T0+13820ms(播放结束) → T0+15000ms(时隙结束)
+**FT8 模式** (WSJT-X 标准):
+- `slotMs: 15000` - 时隙长度 15 秒
+- `transmitTiming: 500` - 信号在 T+0.5s 起，12.64s 长，T+13.14s 结束
+- `encodeAdvance: 0` - encodeStart 与 transmitStart 同时触发；编码 100-200ms 完成后由 AudioMixer 智能调度
+- `windowTiming: [-3200, -1500, -300]` - 三轮解码（balanced 预设）
+- **时间线**: T0 → T0+500ms(编码开始 + 目标播放) → T0+13140ms(播放结束) → T0+11800/13500/14700ms(三轮解码) → T0+15000ms(时隙结束)
 
-**FT4 模式**:
-- `slotMs: 7500` - 时隙长度7.5秒
-- `transmitTiming: 550` - 音频播放起始点，使6.4秒音频居中 ((7500-6400)/2)
-- `encodeAdvance: 300` - 提前300ms开始编码
+**FT4 模式** (WSJT-X 标准 + 双 pass 解码):
+- `slotMs: 7500` - 时隙长度 7.5 秒
+- `transmitTiming: 500` - 信号在 T+0.5s 起，6.0s 长，T+6.5s 结束（与 WSJT-X/JTDX 对齐）
+- `encodeAdvance: 300` - encodeStart 在 T+200ms 触发，给编码 ~300ms 完成；FT4 时隙短，必须提前编码避免错过 transmitStart
+- `windowTiming: [-1500, 0]` - 双 pass 解码：T+6000ms 早 pass + T+7500ms 末 pass。早 pass 让下一周期 encodeStart 之前能拿到对端消息（自动 QSO 必需）
+- **时间线**: T0 → T0+200ms(编码开始) → T0+500ms(目标播放) → T0+6000ms(早 pass 解码) → T0+6500ms(播放结束) → T0+7500ms(末 pass 解码 + 时隙结束)
 
 **调优建议**:
-- 如果经常出现编码超时告警，增大 `encodeAdvance` (如改为500ms)
+- 如果经常出现编码超时告警，增大 `encodeAdvance`
 - 如果音频播放偏早/偏晚，微调 `transmitTiming` (±50ms)
+- 自动 QSO 在 FT4 上不响应：检查 `windowTiming` 是否包含早 pass（如 -1500）
 - TransmissionTracker 会记录详细时序统计，用于性能分析
 
 #### 关键事件流
@@ -201,7 +205,7 @@ RadioOperatorManager.pendingTransmissions.push(request)
     ↓
 RadioOperatorManager.processPendingTransmissions(slotInfo)
     ├─ 使用 slotInfo.startMs (准确时间戳)
-    ├─ 计算 targetTime = slotInfo.startMs + 1180ms
+    ├─ 计算 targetTime = slotInfo.startMs + mode.transmitTiming
     ├─ 处理队列中所有请求
     └─ encodeQueue.push() → 开始编码
         ↓
@@ -212,7 +216,7 @@ AudioMixer.addAudio(audioData, targetPlaybackTime)
     ├─ 如果距离目标>100ms: 等待到目标时间-50ms
     └─ 如果距离目标<100ms: 立即混音
         ↓
-混音完成 → 在目标时间 (T0+1180ms) 准确播放
+混音完成 → 在目标时间 (T0 + mode.transmitTiming) 准确播放
 ```
 
 **2. 非发射周期** (奇数周期操作员在偶数时隙)
@@ -238,8 +242,8 @@ RadioOperator A → requestTransmit → 加入队列
 RadioOperator B → requestTransmit → 加入队列
     ↓
 processPendingTransmissions()
-    ├─ 处理 Operator A 请求 → encodeQueue (目标时间: T0+1180ms)
-    ├─ 处理 Operator B 请求 → encodeQueue (目标时间: T0+1180ms)
+    ├─ 处理 Operator A 请求 → encodeQueue (目标时间: T0 + mode.transmitTiming)
+    ├─ 处理 Operator B 请求 → encodeQueue (目标时间: T0 + mode.transmitTiming)
     └─ 两个编码并行进行
         ↓
 AudioMixer 智能调度

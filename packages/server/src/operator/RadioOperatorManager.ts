@@ -67,7 +67,18 @@ export class RadioOperatorManager {
   private eventListeners: Map<string, (...args: any[]) => void> = new Map();
 
   // 晚到解码重决策相关状态
-  private static readonly REDECIDE_DEADLINE_MS = 4000;
+  // 上限 4000ms（FT8 经验值），按当前模式时隙缩放（slotMs * 0.3）
+  // FT8 (15s) → 4000ms；FT4 (7.5s) → 2250ms
+  private static readonly REDECIDE_DEADLINE_CAP_MS = 4000;
+  private static readonly REDECIDE_DEADLINE_RATIO = 0.3;
+
+  private getRedecideDeadlineMs(): number {
+    const slotMs = this.getCurrentMode().slotMs;
+    return Math.min(
+      RadioOperatorManager.REDECIDE_DEADLINE_CAP_MS,
+      Math.floor(slotMs * RadioOperatorManager.REDECIDE_DEADLINE_RATIO),
+    );
+  }
 
   // 每个操作员的最新编码请求ID，用于丢弃过期编码结果
   private latestEncodeRequestIds: Map<string, string> = new Map();
@@ -526,23 +537,21 @@ export class RadioOperatorManager {
     const currentMode = this.getCurrentMode();
     
     for (const [id, operator] of this.operators.entries()) {
-      // 计算周期信息
+      // 计算周期信息（用 ms 直接算，避免 FT4 亚秒级时隙被截断到上一秒造成颜色/进度错位）
       let cycleInfo;
       if (this.isRunning) {
         const now = this.clockSource.now();
         const slotMs = currentMode.slotMs;
         const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
         const cycleProgress = (now - currentSlotStartMs) / slotMs;
-        
-        // 使用统一的周期计算方法
-        const utcSeconds = Math.floor(currentSlotStartMs / 1000);
-        const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, currentMode.slotMs);
-        const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+
+        const cycleNumber = CycleUtils.calculateCycleNumberFromMs(currentSlotStartMs, slotMs);
+        const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
           operator.getTransmitCycles(),
-          utcSeconds,
-          currentMode.slotMs
+          currentSlotStartMs,
+          slotMs
         );
-        
+
         cycleInfo = {
           currentCycle: cycleNumber,
           isTransmitCycle,
@@ -849,15 +858,13 @@ export class RadioOperatorManager {
     const slotMs = currentMode.slotMs;
     const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
     const timeSinceSlotStartMs = now - currentSlotStartMs;
-    
-    // 使用统一的周期计算方法
-    const utcSeconds = Math.floor(currentSlotStartMs / 1000);
-    const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+
+    const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
       operator.getTransmitCycles(),
-      utcSeconds,
-      currentMode.slotMs
+      currentSlotStartMs,
+      slotMs
     );
-    
+
     if (!isTransmitCycle) {
       logger.debug(`Operator ${operatorId} is not in a transmit cycle`);
       // 即使不在发射周期内，也需要更新状态（cycleInfo会显示isTransmitCycle=false）
@@ -914,7 +921,7 @@ export class RadioOperatorManager {
     const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
     const elapsed = now - currentSlotStartMs;
 
-    if (elapsed > RadioOperatorManager.REDECIDE_DEADLINE_MS) return;
+    if (elapsed > this.getRedecideDeadlineMs()) return;
 
     // 立即执行重决策（不 debounce），依赖 messageSet 过滤 + latestEncodeRequestIds 防止副作用
     this.executeReDecision(slotPack);
@@ -965,14 +972,13 @@ export class RadioOperatorManager {
     const slotMs = mode.slotMs;
     const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
 
-    if (now - currentSlotStartMs > RadioOperatorManager.REDECIDE_DEADLINE_MS) return;
+    if (now - currentSlotStartMs > this.getRedecideDeadlineMs()) return;
 
     for (const [operatorId, operator] of this.operators) {
       if (!operator.isTransmitting) continue;
 
-      const utcSeconds = Math.floor(currentSlotStartMs / 1000);
-      const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
-        operator.getTransmitCycles(), utcSeconds, slotMs
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
+        operator.getTransmitCycles(), currentSlotStartMs, slotMs
       );
       if (!isTransmitCycle) continue;
 
@@ -1016,11 +1022,9 @@ export class RadioOperatorManager {
         return;
       }
 
-      // 使用统一的周期计算方法
-      const utcSeconds = Math.floor(currentSlotStartMs / 1000);
-      const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
         operator.getTransmitCycles(),
-        utcSeconds,
+        currentSlotStartMs,
         currentMode.slotMs
       );
 
@@ -1121,7 +1125,6 @@ export class RadioOperatorManager {
     // 这样可以确保周期判断与解码数据的时隙一致
     // 即使解码窗口延迟到下一个时隙才触发（如windowTiming[4]=250），
     // 判断的仍然是slotInfo对应时隙的周期
-    const utcSeconds = Math.floor(slotInfo.startMs / 1000);
     const currentMode = this.getCurrentMode();
 
     // 检查每个操作员
@@ -1130,10 +1133,10 @@ export class RadioOperatorManager {
         continue;
       }
 
-      // 基于slotInfo的周期判断
-      const isTransmitCycle = CycleUtils.isOperatorTransmitCycle(
+      // 基于 slotInfo.startMs 的周期判断（避免 FT4 亚秒级截断）
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
         operator.getTransmitCycles(),
-        utcSeconds,
+        slotInfo.startMs,
         currentMode.slotMs
       );
 

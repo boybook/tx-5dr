@@ -322,6 +322,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       eventEmitter,
       getOperators: () => manager.getAllOperators(),
       getOperatorById: (id) => manager.getOperatorById(id),
+      getCurrentMode: () => MODES.FT8,
       getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
       requestOperatorCall: () => {},
       getRadioFrequency: async () => 7_074_000,

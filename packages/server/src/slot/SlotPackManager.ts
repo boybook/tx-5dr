@@ -612,9 +612,9 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
           if ((parsedMessage as any).senderCallsign &&
               (parsedMessage as any).senderCallsign.toUpperCase() === upperCallsign) {
 
-            // 构造SlotInfo，使用统一的周期计算方法
+            // 构造 SlotInfo（用 ms 直接算，避免 FT4 亚秒级截断）
+            const cycleNumber = CycleUtils.calculateCycleNumberFromMs(slotPack.startMs, this.currentMode.slotMs);
             const utcSeconds = Math.floor(slotPack.startMs / 1000);
-            const cycleNumber = CycleUtils.calculateCycleNumber(utcSeconds, this.currentMode.slotMs);
 
             const slotInfo: SlotInfo = {
               id: slotPack.slotId,

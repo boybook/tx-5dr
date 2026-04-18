@@ -34,9 +34,7 @@ export class CycleManager extends EventEmitter {
    */
   private initializeCycle(): void {
     const now = Date.now();
-    const utcSeconds = Math.floor(now / 1000);
-    // 使用统一的周期计算方法
-    this._currentCycle = CycleUtils.calculateCycleNumber(utcSeconds, this._currentMode.slotMs);
+    this._currentCycle = CycleUtils.calculateCycleNumberFromMs(now, this._currentMode.slotMs);
   }
 
   /**
@@ -81,8 +79,7 @@ export class CycleManager extends EventEmitter {
   private handleCycleEnd(): void {
     // 重新计算当前周期
     const now = Date.now();
-    const utcSeconds = Math.floor(now / 1000);
-    this._currentCycle = CycleUtils.calculateCycleNumber(utcSeconds, this._currentMode.slotMs);
+    this._currentCycle = CycleUtils.calculateCycleNumberFromMs(now, this._currentMode.slotMs);
 
     this.emit('cycleEnd', this.getCycleInfo());
     this.startTimer();
