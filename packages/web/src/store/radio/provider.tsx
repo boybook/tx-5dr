@@ -44,6 +44,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   const { state: authState } = useAuth();
   const authStateRef = useRef(authState);
   authStateRef.current = authState;
+  const prevJwtRef = useRef<string | null>(authState.jwt);
 
   const radioServiceRef = useRef<RadioService | null>(null);
   const pendingDefaultOpenWebRXDetailProfileRef = useRef<string | null>(null);
@@ -130,6 +131,22 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       radioServiceRef.current = null;
     };
   }, []);
+
+  // 认证状态变化（登入/登出/切换账户）时强制重建 WS 连接。
+  // 由于 WSClient 是单例、主 effect 的依赖数组为 []，这里必须独立监听 jwt 变化。
+  // forceReconnect 会走完整握手：新连接 → AUTH_REQUIRED → sendAuthToken → 新的权限过滤。
+  useEffect(() => {
+    const prev = prevJwtRef.current;
+    const next = authState.jwt;
+    prevJwtRef.current = next;
+    if (prev === next) return;
+    const svc = radioServiceRef.current;
+    if (!svc) return;
+    logger.info('Auth jwt changed, forcing WebSocket reconnect');
+    void svc.forceReconnect().catch((err) => {
+      logger.warn('forceReconnect after auth change failed', err);
+    });
+  }, [authState.jwt]);
 
   const markSpectrumSelectionManual = useCallback(() => {
     spectrumAutoPriorityPendingRef.current = false;

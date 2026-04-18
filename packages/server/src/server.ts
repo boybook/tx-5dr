@@ -202,6 +202,10 @@ export async function createServer() {
     options: {
       maxPayload: 1048576, // 1MB 最大消息大小
       clientTracking: true, // 跟踪客户端连接
+      // Note: ws.ServerOptions doesn't expose handshakeTimeout (only ClientOptions does).
+      // Stalled handshake detection is instead covered by:
+      //   1. Nginx proxy_connect_timeout (10s) — catches upstream not accepting
+      //   2. WSClient application-level 10s timeout (core/websocket/WSClient.ts) — catches the rest
     }
   });
 

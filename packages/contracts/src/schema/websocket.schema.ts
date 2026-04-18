@@ -1293,6 +1293,7 @@ export interface DigitalRadioEngineEvents {
   connected: () => void;
   reconnecting: (data: { attempt: number; delayMs: number }) => void;
   disconnected: () => void;
+  connectionReplaced: (data: { reason: string }) => void;
   error: (error: Error) => void;
 
   // 音量控制事件

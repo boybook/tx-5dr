@@ -23,7 +23,6 @@ import type {
   NetworkInfo,
   LiveKitNetworkMode,
   RealtimeSettingsResponseData,
-  RealtimeTransportKind,
   RealtimeTransportPolicy,
   DesktopHttpsStatus,
   DesktopHttpsMode,

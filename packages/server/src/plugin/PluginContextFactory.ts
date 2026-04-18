@@ -11,7 +11,6 @@ import type {
   PluginUIPageDescriptor,
 } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
-import { createLogger } from '../utils/logger.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import { PluginStorageProvider } from './PluginStorageProvider.js';
@@ -19,9 +18,8 @@ import { PluginFileStoreProvider } from './PluginFileStoreProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
+import { createLogger } from '../utils/logger.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
-
-const logger = createLogger('PluginContextFactory');
 
 /**
  * 为插件实例创建 PluginContext。

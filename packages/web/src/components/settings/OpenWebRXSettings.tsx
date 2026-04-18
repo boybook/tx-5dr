@@ -223,7 +223,6 @@ export function OpenWebRXSettings() {
   const handleStartListen = async () => {
     if (!listenStationId || !listenProfileId) return;
     setIsStartingListen(true);
-    let previewSessionId: string | undefined;
     try {
       await audioPlayback.preparePlaybackFromGesture();
       const result = await api.startOpenWebRXListen({
@@ -232,7 +231,6 @@ export function OpenWebRXSettings() {
         frequency: listenFrequency ? parseInt(listenFrequency) : undefined,
         modulation: listenModulation || undefined,
       });
-      previewSessionId = result.status.previewSessionId;
       setListenStatus(result.status);
       await audioPlayback.start({
         previewSessionId: result.status.previewSessionId,
