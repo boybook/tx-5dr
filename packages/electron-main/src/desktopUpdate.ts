@@ -6,8 +6,6 @@ import { createLogger } from './utils/logger.js';
 const logger = createLogger('DesktopUpdate');
 
 const DEFAULT_OSS_BASE_URL = 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com';
-const GITHUB_REPO = 'boybook/tx-5dr';
-const GITHUB_API_BASE = `https://api.github.com/repos/${GITHUB_REPO}`;
 const COUNTRY_LOOKUP_URLS = [
   'https://ipinfo.io/country',
   'https://ifconfig.co/country-iso',
@@ -22,6 +20,10 @@ type UpdateSourcePolicy = 'auto' | 'oss' | 'github';
 export interface DesktopUpdateAsset {
   name: string;
   url: string;
+  url_cn?: string;
+  url_global?: string;
+  url_oss?: string;
+  url_github?: string;
   sha256?: string;
   size?: number;
   platform?: string;
@@ -45,6 +47,7 @@ interface DesktopUpdateManifest {
   tag?: string;
   version?: string;
   commit?: string;
+  commit_title?: string;
   published_at?: string;
   release_notes?: string;
   assets?: DesktopUpdateAsset[];
@@ -58,6 +61,7 @@ export interface DesktopUpdateStatus {
   updateAvailable: boolean;
   latestVersion: string | null;
   latestCommit: string | null;
+  latestCommitTitle: string | null;
   publishedAt: string | null;
   releaseNotes: string | null;
   downloadUrl: string | null;
@@ -131,6 +135,7 @@ function createInitialStatus(): DesktopUpdateStatus {
     updateAvailable: false,
     latestVersion: null,
     latestCommit: null,
+    latestCommitTitle: null,
     publishedAt: null,
     releaseNotes: null,
     downloadUrl: null,
@@ -186,68 +191,9 @@ async function resolvePreferredSource(policy: UpdateSourcePolicy): Promise<Updat
   return country === 'CN' ? 'oss' : 'github';
 }
 
-function getSourceOrder(preferred: UpdateSource): UpdateSource[] {
-  return preferred === 'oss' ? ['oss', 'github'] : ['github', 'oss'];
-}
-
 function getOssManifestUrl(channel: UpdateChannel): string {
   const baseUrl = normalizeUrl(process.env.TX5DR_DOWNLOAD_BASE_URL || DEFAULT_OSS_BASE_URL);
   return joinUrl(baseUrl, `tx-5dr/app/${channel}/latest.json`);
-}
-
-function getGithubNightlyManifestUrl(): string {
-  return `https://github.com/${GITHUB_REPO}/releases/download/nightly-app/latest.json`;
-}
-
-interface GitHubReleaseAsset {
-  name: string;
-  browser_download_url: string;
-  size?: number;
-}
-
-interface GitHubReleaseResponse {
-  tag_name: string;
-  draft: boolean;
-  prerelease: boolean;
-  published_at?: string;
-  body?: string;
-  assets?: GitHubReleaseAsset[];
-}
-
-function isStableDesktopRelease(release: GitHubReleaseResponse): boolean {
-  if (release.draft || release.prerelease) return false;
-  if (!release.tag_name || release.tag_name.endsWith('-server') || release.tag_name.startsWith('nightly-')) return false;
-  return Array.isArray(release.assets) && release.assets.some((asset) => asset.name === 'latest.json');
-}
-
-async function fetchGithubReleaseManifest(channel: UpdateChannel): Promise<DesktopUpdateManifest> {
-  if (channel === 'nightly') {
-    return fetchJson<DesktopUpdateManifest>(getGithubNightlyManifestUrl(), 8000, {
-      Accept: 'application/octet-stream',
-    });
-  }
-
-  const releases = await fetchJson<GitHubReleaseResponse[]>(`${GITHUB_API_BASE}/releases?per_page=20`, 8000, {
-    Accept: 'application/vnd.github+json',
-  });
-  const release = releases.find(isStableDesktopRelease);
-  if (!release) {
-    throw new Error('github_release_manifest_not_found');
-  }
-  const manifestAsset = release.assets?.find((asset) => asset.name === 'latest.json');
-  if (!manifestAsset) {
-    throw new Error('github_release_manifest_asset_not_found');
-  }
-  return fetchJson<DesktopUpdateManifest>(manifestAsset.browser_download_url, 8000, {
-    Accept: 'application/octet-stream',
-  });
-}
-
-async function fetchManifestFromSource(channel: UpdateChannel, source: UpdateSource): Promise<DesktopUpdateManifest> {
-  if (source === 'oss') {
-    return fetchJson<DesktopUpdateManifest>(getOssManifestUrl(channel), 8000);
-  }
-  return fetchGithubReleaseManifest(channel);
 }
 
 function currentArch(): string {
@@ -299,7 +245,32 @@ function preferredPackageTypes(platform: string): string[] {
   return ['zip'];
 }
 
-function listDownloadOptions(manifest: DesktopUpdateManifest, source: UpdateSource): DesktopDownloadOption[] {
+function resolveAssetDownload(
+  asset: DesktopUpdateAsset,
+  preferredSource: UpdateSource,
+): { source: UpdateSource; url: string | null } {
+  const candidates: Array<{ source: UpdateSource; url: string | null }> = preferredSource === 'oss'
+    ? [
+      { source: 'oss', url: asset.url_cn || asset.url_oss || asset.url || null },
+      { source: 'github', url: asset.url_global || asset.url_github || null },
+      { source: 'oss', url: asset.url || null },
+    ]
+    : [
+      { source: 'github', url: asset.url_global || asset.url_github || null },
+      { source: 'oss', url: asset.url_cn || asset.url_oss || asset.url || null },
+      { source: 'oss', url: asset.url || null },
+    ];
+
+  for (const candidate of candidates) {
+    if (candidate.url) {
+      return candidate;
+    }
+  }
+
+  return { source: preferredSource, url: null };
+}
+
+function listDownloadOptions(manifest: DesktopUpdateManifest, preferredSource: UpdateSource): DesktopDownloadOption[] {
   const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
   const platform = currentPlatform();
   const arch = currentArch();
@@ -320,15 +291,23 @@ function listDownloadOptions(manifest: DesktopUpdateManifest, source: UpdateSour
     return left.name.localeCompare(right.name);
   });
 
-  return ordered.map((asset, index) => ({
-    name: asset.name,
-    url: asset.url,
-    packageType: asset.package_type || 'unknown',
-    platform: asset.platform || platform,
-    arch: asset.arch || arch,
-    recommended: index === 0,
-    source,
-  }));
+  return ordered
+    .map((asset, index) => {
+      const resolved = resolveAssetDownload(asset, preferredSource);
+      if (!resolved.url) {
+        return null;
+      }
+      return {
+        name: asset.name,
+        url: resolved.url,
+        packageType: asset.package_type || 'unknown',
+        platform: asset.platform || platform,
+        arch: asset.arch || arch,
+        recommended: index === 0,
+        source: resolved.source,
+      };
+    })
+    .filter((asset): asset is DesktopDownloadOption => Boolean(asset));
 }
 
 function shouldUpdateFromManifest(manifest: DesktopUpdateManifest): boolean {
@@ -369,51 +348,36 @@ export class DesktopUpdateService {
 
     try {
       const preferredSource = await resolvePreferredSource(policy);
-      const sources = getSourceOrder(preferredSource);
-      let lastError: Error | null = null;
-
-      for (const source of sources) {
-        try {
-          const manifest = await fetchManifestFromSource(BUILD_INFO.channel, source);
-          const downloadOptions = listDownloadOptions(manifest, source);
-          const downloadAsset = downloadOptions[0] || null;
-          const updateAvailable = shouldUpdateFromManifest(manifest);
-
-          this.status = {
-            channel: BUILD_INFO.channel,
-            currentVersion: BUILD_INFO.version,
-            currentCommit: BUILD_INFO.commit === 'development' ? null : BUILD_INFO.commitShort,
-            checking: false,
-            updateAvailable,
-            latestVersion: normalizeVersion(manifest.version) || null,
-            latestCommit: manifest.commit?.trim() || null,
-            publishedAt: manifest.published_at || null,
-            releaseNotes: manifest.release_notes || null,
-            downloadUrl: downloadAsset?.url || null,
-            downloadOptions,
-            metadataSource: source,
-            downloadSource: downloadAsset ? source : null,
-            errorMessage: null,
-          };
-
-          logger.info('desktop update status refreshed', {
-            source,
-            updateAvailable,
-            latestVersion: this.status.latestVersion,
-            latestCommit: this.status.latestCommit,
-          });
-          return this.getStatus();
-        } catch (error) {
-          lastError = error instanceof Error ? error : new Error(String(error));
-          logger.warn('failed to load update manifest from source', { source, error: lastError.message });
-        }
-      }
+      const manifest = await fetchJson<DesktopUpdateManifest>(getOssManifestUrl(BUILD_INFO.channel), 8000);
+      const downloadOptions = listDownloadOptions(manifest, preferredSource);
+      const downloadAsset = downloadOptions[0] || null;
+      const updateAvailable = shouldUpdateFromManifest(manifest);
 
       this.status = {
-        ...this.status,
+        channel: BUILD_INFO.channel,
+        currentVersion: BUILD_INFO.version,
+        currentCommit: BUILD_INFO.commit === 'development' ? null : BUILD_INFO.commitShort,
         checking: false,
-        errorMessage: lastError?.message || 'update_manifest_unavailable',
+        updateAvailable,
+        latestVersion: normalizeVersion(manifest.version) || null,
+        latestCommit: manifest.commit?.trim() || null,
+        latestCommitTitle: manifest.commit_title?.trim() || null,
+        publishedAt: manifest.published_at || null,
+        releaseNotes: manifest.release_notes || null,
+        downloadUrl: downloadAsset?.url || null,
+        downloadOptions,
+        metadataSource: 'oss',
+        downloadSource: downloadAsset?.source || null,
+        errorMessage: null,
       };
+
+      logger.info('desktop update status refreshed', {
+        metadataSource: 'oss',
+        downloadSource: this.status.downloadSource,
+        updateAvailable,
+        latestVersion: this.status.latestVersion,
+        latestCommit: this.status.latestCommit,
+      });
       return this.getStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
