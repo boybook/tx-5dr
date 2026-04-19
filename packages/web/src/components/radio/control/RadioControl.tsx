@@ -28,6 +28,7 @@ import {
   shouldShowAutoTunerShortcut,
   shouldShowRadioControlEntry,
 } from '../../../utils/radioControl';
+import { computeSliderWheelUpdate } from '../../../utils/sliderWheel';
 import type { VoiceCaptureController } from '../../../hooks/useVoiceCaptureController';
 import {
   presentRealtimeConnectivityFailure,
@@ -436,6 +437,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
   const [hasActivatedMonitorPlayback, setHasActivatedMonitorPlayback] = useState(false);
+  const monitorWheelPixelRemainderRef = React.useRef(0);
 
   // OpenWebRX client count (for multi-user confirmation)
   const openwebrxClientCountRef = React.useRef(0);
@@ -813,14 +815,39 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   };
 
   // 监听音量变化
-  const handleMonitorVolumeChange = (value: number | number[]) => {
+  const handleMonitorVolumeChange = React.useCallback((value: number | number[]) => {
     const dbValue = Array.isArray(value) ? value[0] : value;
     if (!isNaN(dbValue) && dbValue >= -60 && dbValue <= 20) {
       const gainValue = dbToGain(dbValue);
       setMonitorVolume(gainValue);
       audioMonitor.setVolume(dbValue);
     }
-  };
+  }, [audioMonitor]);
+
+  const handleMonitorVolumeWheel = React.useCallback((event: React.WheelEvent<HTMLElement>) => {
+    const result = computeSliderWheelUpdate({
+      currentValue: gainToDb(monitorVolume),
+      min: -60,
+      max: 20,
+      step: 0.1,
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+      disabled: false,
+      orientation: 'vertical',
+      enableWheel: true,
+      pixelRemainder: monitorWheelPixelRemainderRef.current,
+    });
+
+    monitorWheelPixelRemainderRef.current = result.pixelRemainder;
+
+    if (!result.consumed) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    handleMonitorVolumeChange(result.nextValue);
+  }, [handleMonitorVolumeChange, monitorVolume]);
 
   // 切换监听状态
   const toggleMonitoring = async () => {
@@ -1367,6 +1394,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                           step={0.1}
                           value={[gainToDb(monitorVolume)]}
                           onChange={handleMonitorVolumeChange}
+                          onWheel={handleMonitorVolumeWheel}
                           style={{ height: '120px' }}
                           aria-label={t('monitor.monitorVolume')}
                         />
