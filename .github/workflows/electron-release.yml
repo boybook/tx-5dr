@@ -518,6 +518,23 @@ jobs:
           Built at: ${{ steps.release_info.outputs.timestamp }}
           EOF
 
+          node - <<'EOF' > release-metadata/recent-commits.json
+          const { execFileSync } = require('node:child_process');
+          const lines = execFileSync('git', [
+            'log',
+            '-n',
+            '5',
+            '--date=iso-strict',
+            '--pretty=format:%H%x09%h%x09%s%x09%cI',
+            process.env.GITHUB_SHA,
+          ], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+          const commits = lines.map((line) => {
+            const [id, shortId, title, publishedAt] = line.split('\t');
+            return { id, short_id: shortId, title, published_at: publishedAt };
+          });
+          process.stdout.write(JSON.stringify(commits));
+          EOF
+
           node scripts/generate-oss-manifest.mjs \
             --product app \
             --channel "${{ steps.release_info.outputs.channel }}" \
@@ -534,6 +551,7 @@ jobs:
             --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
             --assets-dir "publish-assets" \
             --release-notes-file "release-metadata/app-release-notes.md" \
+            --recent-commits-json "$(cat release-metadata/recent-commits.json)" \
             --output "release-assets/latest.json"
 
       - name: Validate app manifest
@@ -544,6 +562,15 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
           if (!manifest.version) throw new Error('app manifest missing version');
           if (!manifest.commit_title) throw new Error('app manifest missing commit_title');
+          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 5) {
+            throw new Error('app manifest missing recent_commits');
+          }
+          if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
+            throw new Error('app manifest recent_commits[0] does not match top-level commit');
+          }
+          if (manifest.recent_commits[0]?.title !== manifest.commit_title) {
+            throw new Error('app manifest recent_commits[0] does not match top-level commit_title');
+          }
           if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
             throw new Error('app manifest missing assets');
           }

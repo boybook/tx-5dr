@@ -166,6 +166,52 @@ async function readOptionalTextFile(filePath) {
   return content.trim();
 }
 
+function normalizeRecentCommit(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+  const shortId = typeof entry.short_id === 'string' ? entry.short_id.trim() : '';
+  const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+  const publishedAt = typeof entry.published_at === 'string' ? entry.published_at.trim() : '';
+
+  const resolvedId = id || shortId;
+  const resolvedShortId = shortId || resolvedId.slice(0, 7);
+  if (!resolvedId && !title && !publishedAt) {
+    return null;
+  }
+
+  return {
+    id: resolvedId,
+    short_id: resolvedShortId,
+    title,
+    published_at: publishedAt,
+  };
+}
+
+function parseRecentCommits(value) {
+  if (!value || value === true) {
+    return [];
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(String(value));
+  } catch (error) {
+    throw new Error(`Invalid --recent-commits-json payload: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error('Invalid --recent-commits-json payload: expected a JSON array');
+  }
+
+  return parsed
+    .map((entry) => normalizeRecentCommit(entry))
+    .filter((entry) => Boolean(entry))
+    .slice(0, 5);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const product = requireArg(args, 'product');
@@ -190,6 +236,7 @@ async function main() {
   const releaseNotes = (args['release-notes'] && args['release-notes'] !== true)
     ? String(args['release-notes']).trim()
     : await readOptionalTextFile(args['release-notes-file']);
+  const recentCommits = parseRecentCommits(args['recent-commits-json']);
 
   const assetFiles = await listFiles(assetsDir);
   const assets = [];
@@ -218,6 +265,7 @@ async function main() {
     published_at: publishedAt,
     base_url: joinUrl(baseUrl, objectPrefix),
     release_notes: releaseNotes || '',
+    recent_commits: recentCommits,
     assets,
   };
 
