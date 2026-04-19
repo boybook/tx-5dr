@@ -748,7 +748,26 @@ jobs:
             --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
             --assets-dir "publish-assets" \
             --release-notes-file "release-metadata/app-release-notes.md" \
+            --recent-commits-json "$(cat release-metadata/recent-commits.json)" \
             --output "oss-metadata/app/latest.json"
+
+      - name: Validate OSS app manifest
+        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
+        shell: bash
+        run: |
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync('oss-metadata/app/latest.json', 'utf8'));
+          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 5) {
+            throw new Error('oss app manifest missing recent_commits');
+          }
+          if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
+            throw new Error('oss app manifest recent_commits[0] does not match top-level commit');
+          }
+          if (manifest.recent_commits[0]?.title !== manifest.commit_title) {
+            throw new Error('oss app manifest recent_commits[0] does not match top-level commit_title');
+          }
+          EOF
 
       - name: Upload app assets to OSS
         if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
