@@ -1105,10 +1105,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
         // 如果状态需要改变
         if (result.changeState) {
-            /* if (result.changeState !== 'TX6') {
-                this.operator.start();  // 启动发射
-            } */
-            this.changeState(result.changeState);
+            // FT8 多 pass 解码会在同一 TX 槽内多次喂入同一 RR73；若每次都允许 changeState，
+            // 状态机会在 TX5↔TX6 翻转环里反复跳，导致已记录 QSO 的 operator 把"该发 73"翻成"CQ"。
+            if (options?.isReDecision && this.shouldBlockReDecisionTransition(this.state, result.changeState)) {
+                this.logger.debug(`re-decision blocked changeState ${this.state}→${result.changeState} (late decode within same slot)`);
+            } else {
+                this.changeState(result.changeState);
+            }
         } else if (!options?.isReDecision) {
             // 增加超时计数（重决策时跳过，避免虚假超时累加）
             this.timeoutCycles++;
@@ -1135,6 +1138,17 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         return {
             stop: result.stop
         };
+    }
+
+    private shouldBlockReDecisionTransition(from: SlotsIndex, to: SlotsIndex): boolean {
+        // 仅屏蔽 TX5↔TX6 这条翻转环：
+        //   - TX5→TX6：TX5.handle 中"queued + 无新呼叫"会 armPost73Retry + clearQSOContext + 转 TX6
+        //   - TX6→TX5：TX6.handle 中 post73 retry 命中 RR73 → restorePost73RetryContext + 转 TX5
+        // 这两条互为镜像，late decode 必须断开。
+        // 其他 *→TX6 路径（如 TX4 收 73 直接转 TX6+stop）属于 QSO 自然完成，late decode 应允许。
+        if (from === 'TX5' && to === 'TX6') return true;
+        if (from === 'TX6' && to === 'TX5') return true;
+        return false;
     }
 
     handleTransmitSlot(): string | null {
