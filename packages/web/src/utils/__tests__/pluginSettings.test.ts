@@ -6,39 +6,40 @@ import {
   normalizePluginSettingsForSave,
 } from '../pluginSettings';
 
+const mockPluginSettings = {
+  watchList: {
+    type: 'string[]',
+    label: 'Watch list',
+    scope: 'operator',
+    default: [],
+  },
+  threshold: {
+    type: 'number',
+    label: 'Threshold',
+    scope: 'global',
+    default: -15,
+  },
+} satisfies NonNullable<PluginStatus['settings']>;
+
 const mockPlugin: PluginStatus = {
   name: 'watched-callsign-autocall',
   version: '1.0.0',
   description: 'test plugin',
-  path: '/tmp/plugin',
   type: 'utility',
+  instanceScope: 'operator',
+  isBuiltIn: false,
   enabled: true,
   loaded: true,
-  ui: {
-    displayName: 'Watched Callsign Autocall',
-  },
-  hooks: [],
-  settings: {
-    watchList: {
-      type: 'string[]',
-      label: 'Watch list',
-      scope: 'operator',
-      default: [],
-    },
-    threshold: {
-      type: 'number',
-      label: 'Threshold',
-      scope: 'global',
-      default: -15,
-    },
-  },
+  autoDisabled: false,
+  errorCount: 0,
+  settings: mockPluginSettings,
 };
 
 describe('pluginSettings utils', () => {
   it('treats textarea drafts and normalized arrays as equal for string arrays', () => {
     expect(
       arePluginSettingValuesEqual(
-        mockPlugin.settings.watchList!,
+        mockPluginSettings.watchList,
         ' BG6ABC \n\nBA1XYZ ',
         ['BG6ABC', 'BA1XYZ'],
       ),
@@ -80,7 +81,7 @@ describe('pluginSettings utils', () => {
       getPluginSettingValidationIssue(
         mockPlugin.name,
         'watchList',
-        mockPlugin.settings.watchList!,
+        mockPluginSettings.watchList,
         'BG6ABC\n^(JA\n# comment',
       ),
     ).toEqual({

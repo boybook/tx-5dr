@@ -1357,6 +1357,7 @@ export interface DigitalRadioEngineEvents {
   pluginStatusChanged: (data: { generation: number; plugin: PluginStatus }) => void;
   pluginData: (data: PluginDataPayload) => void;
   pluginLog: (data: PluginLogEntry) => void;
+  rigctldStatus: (data: import('./rigctld.schema.js').RigctldStatus) => void;
   pluginPagePush: (data: {
     pluginName: string;
     pageId: string;

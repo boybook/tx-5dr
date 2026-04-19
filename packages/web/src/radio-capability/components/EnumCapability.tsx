@@ -70,7 +70,7 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
           aria-label={t(descriptor.labelI18nKey)}
         >
           {options.map((option) => (
-            <SelectItem key={String(option.value)} value={String(option.value)}>
+            <SelectItem key={String(option.value)}>
               {formatCapabilityOption(option, descriptor, t)}
             </SelectItem>
           ))}

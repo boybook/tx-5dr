@@ -67,7 +67,9 @@ export function deriveMonitorActivationCtaState(
   return {
     shouldShowActivationCta,
     hasUserActivation: typeof document !== 'undefined'
-      ? Boolean(document.userActivation?.hasBeenActive)
+      ? Boolean((document as Document & {
+        userActivation?: { hasBeenActive?: boolean };
+      }).userActivation?.hasBeenActive)
       : false,
   };
 }

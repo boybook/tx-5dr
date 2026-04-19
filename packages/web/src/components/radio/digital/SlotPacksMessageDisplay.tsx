@@ -68,8 +68,12 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
 
         // Apply display filter when enabled
         if (displayFilterRules.length > 0) {
+          const parsedMessage = FT8MessageParser.parseMessage(frame.message);
+          const parsedSenderCallsign = parsedMessage && 'senderCallsign' in parsedMessage
+            ? parsedMessage.senderCallsign
+            : undefined;
           const sender = frame.logbookAnalysis?.callsign
-            ?? FT8MessageParser.parseMessage(frame.message)?.senderCallsign
+            ?? parsedSenderCallsign
             ?? '';
           if (sender && !evaluateCallsignFilter(sender, displayFilterRules)) {
             return;

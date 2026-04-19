@@ -33,7 +33,9 @@ export function isMacOS(): boolean {
     return false;
   }
 
-  const userAgentDataPlatform = window.navigator.userAgentData?.platform;
+  const userAgentDataPlatform = (window.navigator as Navigator & {
+    userAgentData?: { platform?: string };
+  }).userAgentData?.platform;
   if (typeof userAgentDataPlatform === 'string') {
     return userAgentDataPlatform.toLowerCase() === 'macos';
   }

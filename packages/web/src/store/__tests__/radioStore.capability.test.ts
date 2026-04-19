@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RadioConnectionStatus, type CapabilityDescriptor, type CapabilityState } from '@tx5dr/contracts';
-import { initialRadioState, radioReducer } from '../radioStore';
+import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
 
 describe('radioStore capability reducer', () => {
   it('hydrates runtime descriptors and states from capability list snapshots', () => {
@@ -127,7 +127,7 @@ describe('radioStore capability reducer', () => {
   });
 
   it('resets meter visibility when the active profile changes', () => {
-    const stateWithMeterData = {
+    const stateWithMeterData: RadioState = {
       ...initialRadioState,
       hasReceivedMeterData: true,
       meterData: {
@@ -147,6 +147,8 @@ describe('radioStore capability reducer', () => {
           radio: { type: 'serial' as const },
           audio: {} as any,
           audioLockedToRadio: false,
+          createdAt: 1,
+          updatedAt: 1,
         },
       ],
     };
@@ -161,7 +163,11 @@ describe('radioStore capability reducer', () => {
           radio: { type: 'network' as const, network: { host: '127.0.0.1', port: 4532 } },
           audio: {} as any,
           audioLockedToRadio: false,
+          createdAt: 1,
+          updatedAt: 2,
         },
+        previousProfileId: 'profile-a',
+        wasRunning: false,
       },
     });
 

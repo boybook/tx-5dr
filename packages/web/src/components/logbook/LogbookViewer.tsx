@@ -41,28 +41,6 @@ import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 
 const logger = createLogger('LogbookViewer');
 
-// ElectronAPI 类型定义
-interface ElectronAPI {
-  shell?: {
-    openExternal: (url: string) => Promise<void>;
-    openPath: (path: string) => Promise<string>;
-  };
-  config?: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    get(key: string): Promise<any>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    set(key: string, value: any): Promise<void>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    getAll(): Promise<Record<string, any>>;
-  };
-}
-
-declare global {
-  interface Window {
-    electronAPI?: ElectronAPI;
-  }
-}
-
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
 
 interface LogbookViewerProps {

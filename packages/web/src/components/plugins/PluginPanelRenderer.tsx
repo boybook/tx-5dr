@@ -1,16 +1,10 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, CardBody, CardHeader } from '@heroui/react';
+import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { PluginIframeHost } from './PluginIframeHost';
-
-interface PluginPanelData {
-  pluginName: string;
-  operatorId: string;
-  panelId: string;
-  data: unknown;
-}
 
 interface PluginPanelRendererProps {
   pluginName: string;
@@ -36,7 +30,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   const connection = useConnection();
   const [data, setData] = React.useState<unknown>(null);
 
-  useWSEvent(connection.state.radioService, 'pluginData', (payload: PluginPanelData) => {
+  useWSEvent(connection.state.radioService, 'pluginData', (payload: Parameters<DigitalRadioEngineEvents['pluginData']>[0]) => {
     if (
       payload.pluginName === pluginName
       && payload.operatorId === operatorId
