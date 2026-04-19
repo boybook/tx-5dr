@@ -41,6 +41,20 @@ export interface DesktopDownloadOption {
   source: UpdateSource;
 }
 
+export interface DesktopUpdateRecentCommit {
+  id: string;
+  shortId: string;
+  title: string;
+  publishedAt: string | null;
+}
+
+interface DesktopUpdateManifestRecentCommit {
+  id?: string;
+  short_id?: string;
+  title?: string;
+  published_at?: string;
+}
+
 interface DesktopUpdateManifest {
   product?: string;
   channel?: UpdateChannel | string;
@@ -50,6 +64,7 @@ interface DesktopUpdateManifest {
   commit_title?: string;
   published_at?: string;
   release_notes?: string;
+  recent_commits?: DesktopUpdateManifestRecentCommit[];
   assets?: DesktopUpdateAsset[];
 }
 
@@ -62,6 +77,7 @@ export interface DesktopUpdateStatus {
   latestVersion: string | null;
   latestCommit: string | null;
   latestCommitTitle: string | null;
+  recentCommits: DesktopUpdateRecentCommit[];
   publishedAt: string | null;
   releaseNotes: string | null;
   downloadUrl: string | null;
@@ -136,6 +152,7 @@ function createInitialStatus(): DesktopUpdateStatus {
     latestVersion: null,
     latestCommit: null,
     latestCommitTitle: null,
+    recentCommits: [],
     publishedAt: null,
     releaseNotes: null,
     downloadUrl: null,
@@ -332,11 +349,55 @@ function shouldUpdateFromManifest(manifest: DesktopUpdateManifest): boolean {
   return compareReleaseVersions(latestVersion, currentVersion) > 0;
 }
 
+function normalizeRecentCommits(manifest: DesktopUpdateManifest): DesktopUpdateRecentCommit[] {
+  const entries = Array.isArray(manifest.recent_commits) ? manifest.recent_commits : [];
+  const normalized = entries
+    .map((entry) => {
+      const id = entry.id?.trim() || '';
+      const shortId = entry.short_id?.trim() || id.slice(0, 7);
+      const title = entry.title?.trim() || '';
+      const publishedAt = entry.published_at?.trim() || null;
+      if (!id && !shortId && !title && !publishedAt) {
+        return null;
+      }
+      return {
+        id: id || shortId,
+        shortId,
+        title,
+        publishedAt,
+      };
+    })
+    .filter((entry): entry is DesktopUpdateRecentCommit => Boolean(entry))
+    .slice(0, 5);
+
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  const fallbackCommit = manifest.commit?.trim() || '';
+  const fallbackTitle = manifest.commit_title?.trim() || '';
+  const fallbackPublishedAt = manifest.published_at?.trim() || null;
+  if (!fallbackCommit && !fallbackTitle && !fallbackPublishedAt) {
+    return [];
+  }
+
+  return [{
+    id: fallbackCommit,
+    shortId: fallbackCommit.slice(0, 7),
+    title: fallbackTitle,
+    publishedAt: fallbackPublishedAt,
+  }];
+}
+
 export class DesktopUpdateService {
   private status: DesktopUpdateStatus = createInitialStatus();
 
   getStatus(): DesktopUpdateStatus {
-    return { ...this.status };
+    return {
+      ...this.status,
+      recentCommits: [...this.status.recentCommits],
+      downloadOptions: [...this.status.downloadOptions],
+    };
   }
 
   async checkForUpdates(policy: UpdateSourcePolicy = 'auto'): Promise<DesktopUpdateStatus> {
@@ -350,6 +411,7 @@ export class DesktopUpdateService {
       const preferredSource = await resolvePreferredSource(policy);
       const manifest = await fetchJson<DesktopUpdateManifest>(getOssManifestUrl(BUILD_INFO.channel), 8000);
       const downloadOptions = listDownloadOptions(manifest, preferredSource);
+      const recentCommits = normalizeRecentCommits(manifest);
       const downloadAsset = downloadOptions[0] || null;
       const updateAvailable = shouldUpdateFromManifest(manifest);
 
@@ -362,6 +424,7 @@ export class DesktopUpdateService {
         latestVersion: normalizeVersion(manifest.version) || null,
         latestCommit: manifest.commit?.trim() || null,
         latestCommitTitle: manifest.commit_title?.trim() || null,
+        recentCommits,
         publishedAt: manifest.published_at || null,
         releaseNotes: manifest.release_notes || null,
         downloadUrl: downloadAsset?.url || null,

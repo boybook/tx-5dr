@@ -49,6 +49,12 @@ interface DesktopUpdateState {
   latestVersion: string | null;
   latestCommit: string | null;
   latestCommitTitle: string | null;
+  recentCommits: Array<{
+    id: string;
+    shortId: string;
+    title: string;
+    publishedAt: string | null;
+  }>;
   publishedAt: string | null;
   releaseNotes: string | null;
   downloadUrl: string | null;
@@ -81,6 +87,7 @@ const SETTINGS_MUTED_CLASS = 'text-xs leading-5 text-default-400';
 const SETTINGS_PANEL_CLASS = 'rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5';
 const SETTINGS_SOFT_PANEL_CLASS = 'rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5';
 const SETTINGS_METRIC_CLASS = 'rounded-medium bg-content1 px-3 py-2';
+const DESKTOP_UPDATE_COMMITS_URL = 'https://github.com/boybook/tx-5dr/commits/main';
 
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
   ft8Preset: DEFAULT_DECODE_WINDOW_SETTINGS.ft8?.preset ?? 'balanced',
@@ -312,6 +319,7 @@ export const SystemSettings = forwardRef<
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateState | null>(null);
   const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
   const [desktopUpdateError, setDesktopUpdateError] = useState('');
+  const [desktopUpdateExpanded, setDesktopUpdateExpanded] = useState(false);
 
   // 加载配置
   useEffect(() => {
@@ -474,6 +482,7 @@ export const SystemSettings = forwardRef<
       const status = await window.electronAPI.updater.getStatus();
       setDesktopUpdateStatus(status);
       setDesktopUpdateError(status.errorMessage || '');
+      setDesktopUpdateExpanded(false);
     } catch (err) {
       logger.error('Failed to load desktop update status:', err);
       setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
@@ -488,6 +497,7 @@ export const SystemSettings = forwardRef<
       const status = await window.electronAPI.updater.check();
       setDesktopUpdateStatus(status);
       setDesktopUpdateError(status.errorMessage || '');
+      setDesktopUpdateExpanded(false);
     } catch (err) {
       logger.error('Failed to check desktop update:', err);
       setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateCheckFailed'));
@@ -504,6 +514,20 @@ export const SystemSettings = forwardRef<
       await window.electronAPI.updater.openDownload(url);
     } catch (err) {
       logger.error('Failed to open desktop update download:', err);
+      setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  }, [t]);
+
+  const handleOpenDesktopUpdateCommits = useCallback(async () => {
+    if (!window.electronAPI?.shell?.openExternal) return;
+    setDesktopUpdateBusy(true);
+    setDesktopUpdateError('');
+    try {
+      await window.electronAPI.shell.openExternal(DESKTOP_UPDATE_COMMITS_URL);
+    } catch (err) {
+      logger.error('Failed to open desktop update commits page:', err);
       setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateOpenFailed'));
     } finally {
       setDesktopUpdateBusy(false);
@@ -868,6 +892,7 @@ export const SystemSettings = forwardRef<
     ? t(`system.desktopUpdateSourceValue.${desktopUpdateStatus.metadataSource}`)
     : t('system.desktopUpdateSourceValue.unknown');
   const desktopDownloadOptions = desktopUpdateStatus?.downloadOptions || [];
+  const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -2072,6 +2097,58 @@ export const SystemSettings = forwardRef<
                     {desktopUpdateStatus?.latestCommitTitle || t('system.desktopUpdateNoSummary')}
                   </p>
                 </div>
+
+                {desktopRecentCommits.length > 0 && (
+                  <div className="rounded-medium border border-divider bg-content1 px-3 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateRecentCommitsTitle')}</p>
+                        <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopUpdateRecentCommitsDesc')}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="light"
+                        onPress={() => setDesktopUpdateExpanded((value) => !value)}
+                      >
+                        {desktopUpdateExpanded
+                          ? t('system.desktopUpdateRecentCommitsCollapse')
+                          : t('system.desktopUpdateRecentCommitsExpand')}
+                      </Button>
+                    </div>
+
+                    {desktopUpdateExpanded && (
+                      <div className="mt-3 space-y-2">
+                        {desktopRecentCommits.map((commit) => (
+                          <div key={`${commit.id}-${commit.publishedAt || commit.shortId}`} className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className={SETTINGS_SUBTITLE_CLASS}>
+                                {commit.title || t('system.desktopUpdateNoSummary')}
+                              </p>
+                              <Chip size="sm" color="default" variant="flat">
+                                {commit.shortId || commit.id || '-'}
+                              </Chip>
+                            </div>
+                            <p className={`mt-2 ${SETTINGS_SUBDESC_CLASS}`}>
+                              {t('system.desktopUpdateRecentCommitTime', { value: formatDateTimeValue(commit.publishedAt) })}
+                            </p>
+                            <p className={`mt-1 break-all ${SETTINGS_MUTED_CLASS}`}>
+                              {t('system.desktopUpdateRecentCommitId', { value: commit.id || commit.shortId || '-' })}
+                            </p>
+                          </div>
+                        ))}
+
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          onPress={() => { void handleOpenDesktopUpdateCommits(); }}
+                          isDisabled={desktopUpdateBusy}
+                        >
+                          {t('system.desktopUpdateViewAllCommits')}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <p className={`${SETTINGS_SUBDESC_CLASS} whitespace-pre-wrap`}>
                   {desktopUpdateStatus?.releaseNotes || t('system.desktopUpdateNoNotes')}

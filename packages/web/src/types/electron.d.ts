@@ -2,6 +2,13 @@ import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 
 type DesktopUpdateSource = 'oss' | 'github';
 
+interface DesktopUpdateRecentCommit {
+  id: string;
+  shortId: string;
+  title: string;
+  publishedAt: string | null;
+}
+
 interface DesktopUpdateStatus {
   channel: 'release' | 'nightly';
   currentVersion: string;
@@ -11,6 +18,7 @@ interface DesktopUpdateStatus {
   latestVersion: string | null;
   latestCommit: string | null;
   latestCommitTitle: string | null;
+  recentCommits: DesktopUpdateRecentCommit[];
   publishedAt: string | null;
   releaseNotes: string | null;
   downloadUrl: string | null;
