@@ -129,7 +129,6 @@ describe('RadioCapabilityManager', () => {
     const connection = new MockConnection(RadioConnectionType.HAMLIB, {
       getTuningStep: vi.fn().mockResolvedValue(50),
       getSupportedTuningSteps: vi.fn().mockResolvedValue([10, 50, 100]),
-      getPowerState: vi.fn().mockResolvedValue('operate'),
       getAgcMode: vi.fn().mockResolvedValue('fast'),
       getSupportedAgcModes: vi.fn().mockResolvedValue(['off', 'fast', 'auto']),
       getPreampLevel: vi.fn().mockResolvedValue(10),
@@ -158,15 +157,9 @@ describe('RadioCapabilityManager', () => {
       value: 50,
     });
 
-    expect(getDescriptor(descriptors, 'power_state')).toMatchObject({
-      id: 'power_state',
-      valueType: 'enum',
-    });
-    expect(getCapability(capabilities, 'power_state')).toMatchObject({
-      id: 'power_state',
-      supported: true,
-      value: 'operate',
-    });
+    // power_state has been moved out of the capability system; the
+    // RadioPowerController now owns power transitions, so it is no
+    // longer expected as a capability descriptor or state.
 
     expect(getDescriptor(descriptors, 'agc_mode')).toMatchObject({
       id: 'agc_mode',
