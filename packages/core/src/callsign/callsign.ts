@@ -1537,10 +1537,10 @@ export function parseFT8LocationInfo(message: string): FT8LocationInfo {
   let callsignInfo;
 
   // 尝试从解析后的消息中获取呼号信息
-  if (msg.type !== FT8MessageType.UNKNOWN && msg.type !== FT8MessageType.CUSTOM && msg.type !== FT8MessageType.FOX_RR73) {
+  if ('senderCallsign' in msg && typeof msg.senderCallsign === 'string') {
     callsignInfo = getCallsignInfo(msg.senderCallsign);
   } else if (msg.type === FT8MessageType.FOX_RR73) {
-    // Fox/Hound模式：使用下一个被邀请的Hound呼号（更活跃的一方）
+    // 某些解码器只给出短哈希，此时仍退回到 nextCallsign 以保留旧行为。
     callsignInfo = getCallsignInfo(msg.nextCallsign);
   }
 

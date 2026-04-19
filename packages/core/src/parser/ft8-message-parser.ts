@@ -217,6 +217,10 @@ export class FT8MessageParser {
       foxRR73Result.foxHash = hashToken.startsWith('<') && hashToken.endsWith('>')
         ? hashToken.slice(1, -1)
         : hashToken;
+      const senderCallsign = this.extractFoxSenderCallsign(foxRR73Result.foxHash);
+      if (senderCallsign) {
+        foxRR73Result.senderCallsign = senderCallsign;
+      }
     }
 
     if (snrToken) {
@@ -515,6 +519,23 @@ export class FT8MessageParser {
     }
     
     return false;
+  }
+
+  /**
+   * 从 Fox/Hound RR73 报文里的尖括号 token 提取真实 Fox 呼号。
+   * 当 token 只是短哈希（如 "4"）时返回 undefined。
+   */
+  private static extractFoxSenderCallsign(token: string | undefined): string | undefined {
+    if (!token) {
+      return undefined;
+    }
+
+    const cleanedToken = this.cleanCallsign(token);
+    if (this.isBasicValidCallsign(cleanedToken) || this.isValidCallsignWithSlash(cleanedToken)) {
+      return cleanedToken;
+    }
+
+    return undefined;
   }
 
   /**

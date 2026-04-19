@@ -1520,20 +1520,14 @@ export class WSServer extends WSMessageHandler {
     let grid: string | undefined;
 
     // 根据消息类型提取呼号和网格
-    if (parsedMessage.type === 'cq') {
+    if ('senderCallsign' in parsedMessage && typeof parsedMessage.senderCallsign === 'string') {
       callsign = parsedMessage.senderCallsign;
+    }
+
+    if (parsedMessage.type === 'cq') {
       grid = parsedMessage.grid;
     } else if (parsedMessage.type === 'call') {
-      callsign = parsedMessage.senderCallsign;
       grid = parsedMessage.grid;
-    } else if (parsedMessage.type === 'signal_report') {
-      callsign = parsedMessage.senderCallsign;
-    } else if (parsedMessage.type === 'roger_report') {
-      callsign = parsedMessage.senderCallsign;
-    } else if (parsedMessage.type === 'rrr') {
-      callsign = parsedMessage.senderCallsign;
-    } else if (parsedMessage.type === '73') {
-      callsign = parsedMessage.senderCallsign;
     }
 
     if (!callsign) {

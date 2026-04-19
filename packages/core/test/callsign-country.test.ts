@@ -190,6 +190,24 @@ test('FT8消息解析 - 美国 slash 位置指示', () => {
   assert.equal(info.stateConfidence, 'high');
 });
 
+test('FT8 Fox/Hound RR73 消息应优先解析尖括号内的 Fox 呼号', () => {
+  const message = 'BG5BNW RR73; RY3PAG <EX7CQ> -20';
+  const info = parseFT8LocationInfo(message);
+
+  assert.equal(info.callsign, 'EX7CQ');
+  assert.equal(info.country, 'Kyrgyzstan');
+  assert.equal(info.countryZh, '吉尔吉斯斯坦');
+});
+
+test('FT8 Fox/Hound RR73 消息在仅有哈希时应回退到 nextCallsign', () => {
+  const message = 'JA0OAV RR73; JG1MPG <4>';
+  const info = parseFT8LocationInfo(message);
+
+  assert.equal(info.callsign, 'JG1MPG');
+  assert.equal(info.country, 'Japan');
+  assert.equal(info.countryZh, '日本·关东');
+});
+
 test('前缀冲突优先级 - LU前缀应优先匹配阿根廷', () => {
   // LU 前缀被 5 个实体共享：
   // - Argentina (代码 100, 11个前缀) ← 应优先
