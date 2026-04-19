@@ -13,6 +13,7 @@ import { useSlotPacks, useRadioState, useConnection, useStationInfo } from '../s
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
+import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMeters';
 import { useTranslation } from 'react-i18next';
 
 export const LeftLayout: React.FC = () => {
@@ -27,6 +28,12 @@ export const LeftLayout: React.FC = () => {
   const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
   const [clientCount, setClientCount] = useState(0);
   const [isSpectrumPopedOut, setIsSpectrumPopedOut] = useState(false);
+  const showRadioMeters = shouldShowRadioMetersPanel({
+    radioConnected: radio.state.radioConnected,
+    radioConfigType: radio.state.radioConfig?.type,
+    meterCapabilities: radio.state.meterCapabilities,
+    hasReceivedMeterData: radio.state.hasReceivedMeterData,
+  });
   const stationInfoOffsetClassName = isElectron() && isMacOS()
     ? 'pl-16'
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
@@ -159,9 +166,9 @@ export const LeftLayout: React.FC = () => {
         )}
 
         {/* 电台数值表（无电台模式下隐藏，不支持时由组件内部返回 null） */}
-        {radio.state.radioConnected && radio.state.radioConfig?.type !== 'none' && (
+        {showRadioMeters && (
           <RadioMetersDisplay
-            meterData={radio.state.meterData || { swr: null, alc: null, level: null, power: null }}
+            meterData={radio.state.meterData || EMPTY_METER_DATA}
             isPttActive={radio.state.pttStatus.isTransmitting}
             meterCapabilities={radio.state.meterCapabilities}
           />

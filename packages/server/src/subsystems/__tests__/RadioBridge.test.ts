@@ -61,6 +61,13 @@ describe('RadioBridge', () => {
     expect(radioStatusChanged).toHaveBeenCalledWith(expect.objectContaining({
       connected: true,
       status: RadioConnectionStatus.CONNECTED,
+      meterCapabilities: {
+        strength: false,
+        swr: false,
+        alc: false,
+        power: false,
+        powerWatts: false,
+      },
       tunerCapabilities: { supported: true, hasSwitch: false, hasManualTune: false },
     }));
   });

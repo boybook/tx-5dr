@@ -60,6 +60,7 @@ export interface RadioState {
     operatorIds: string[];
   };
   meterData: MeterData | null;
+  hasReceivedMeterData: boolean;
   meterCapabilities: MeterCapabilities | null;
   tunerCapabilities: TunerCapabilities | null;
   capabilityDescriptors: Map<string, CapabilityDescriptor>;

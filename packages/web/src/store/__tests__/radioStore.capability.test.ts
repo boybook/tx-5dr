@@ -83,4 +83,89 @@ describe('radioStore capability reducer', () => {
     expect(disconnectedState.capabilityDescriptors.size).toBe(0);
     expect(disconnectedState.capabilityStates.size).toBe(0);
   });
+
+  it('marks meter visibility only after a real reading arrives and resets it on disconnect', () => {
+    const withEmptyMeterPayload = radioReducer(initialRadioState, {
+      type: 'meterData',
+      payload: {
+        swr: null,
+        alc: null,
+        level: null,
+        power: null,
+      },
+    });
+
+    expect(withEmptyMeterPayload.hasReceivedMeterData).toBe(false);
+
+    const withRealMeterPayload = radioReducer(withEmptyMeterPayload, {
+      type: 'meterData',
+      payload: {
+        swr: null,
+        alc: {
+          raw: 12,
+          percent: 35,
+          alert: false,
+        },
+        level: null,
+        power: null,
+      },
+    });
+
+    expect(withRealMeterPayload.hasReceivedMeterData).toBe(true);
+
+    const disconnectedState = radioReducer(withRealMeterPayload, {
+      type: 'radioStatusUpdate',
+      payload: {
+        radioConnected: false,
+        status: RadioConnectionStatus.DISCONNECTED,
+        radioInfo: null,
+      },
+    });
+
+    expect(disconnectedState.hasReceivedMeterData).toBe(false);
+    expect(disconnectedState.meterData).toBeNull();
+  });
+
+  it('resets meter visibility when the active profile changes', () => {
+    const stateWithMeterData = {
+      ...initialRadioState,
+      hasReceivedMeterData: true,
+      meterData: {
+        swr: null,
+        alc: {
+          raw: 10,
+          percent: 25,
+          alert: false,
+        },
+        level: null,
+        power: null,
+      },
+      profiles: [
+        {
+          id: 'profile-a',
+          name: 'A',
+          radio: { type: 'serial' as const },
+          audio: {} as any,
+          audioLockedToRadio: false,
+        },
+      ],
+    };
+
+    const nextState = radioReducer(stateWithMeterData, {
+      type: 'profileChanged',
+      payload: {
+        profileId: 'profile-a',
+        profile: {
+          id: 'profile-a',
+          name: 'A',
+          radio: { type: 'network' as const, network: { host: '127.0.0.1', port: 4532 } },
+          audio: {} as any,
+          audioLockedToRadio: false,
+        },
+      },
+    });
+
+    expect(nextState.hasReceivedMeterData).toBe(false);
+    expect(nextState.meterData).toBeNull();
+  });
 });

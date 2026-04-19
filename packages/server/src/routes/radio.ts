@@ -22,6 +22,7 @@ import type { SetRadioModeOptions } from '../radio/connections/IRadioConnection.
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
+import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 
 /** 判断两个配置是否指向同一硬件目标（用于复用判断） */
 function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
@@ -137,16 +138,14 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
     // 广播配置变更事件，确保所有客户端同步最新配置
     const radioInfo = await radioManager.getRadioInfo();
-    engine.emit('radioStatusChanged', {
+    engine.emit('radioStatusChanged', buildRadioStatusPayload({
       connected: radioManager.isConnected(),
       status: radioManager.getConnectionStatus(),
       radioInfo,
       radioConfig: config,
       reason: 'Configuration updated',
-      connectionHealth: radioManager.getConnectionHealth(),
-      coreCapabilities: radioManager.getCoreCapabilities(),
-      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-    });
+      radioManager,
+    }));
     logger.debug(`Config change event broadcast: type=${config.type}, connected=${radioManager.isConnected()}`);
 
     return reply.send({ success: true, config });

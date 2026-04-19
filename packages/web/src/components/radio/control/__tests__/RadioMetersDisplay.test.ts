@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { shouldAutoOpenAlcWarning, shouldShowLevelDbmDetail } from '../RadioMetersDisplay';
+import { hasAnyMeterCapability } from '../../../../utils/radioMeters';
 
 describe('RadioMetersDisplay', () => {
   it('shows dBm detail for s-meter-dbm readings when the container is wide enough', () => {
@@ -62,5 +63,15 @@ describe('RadioMetersDisplay', () => {
       false,
       true,
     )).toBe(true);
+  });
+
+  it('treats an all-false capability snapshot as unsupported', () => {
+    expect(hasAnyMeterCapability({
+      strength: false,
+      swr: false,
+      alc: false,
+      power: false,
+      powerWatts: false,
+    })).toBe(false);
   });
 });

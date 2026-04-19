@@ -12,6 +12,7 @@ import { ListenerManager } from './ListenerManager.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { EngineLifecycle } from './EngineLifecycle.js';
 import { createLogger } from '../utils/logger.js';
+import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 
 const logger = createLogger('RadioBridge');
 const AUTO_RESTORE_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 30000];
@@ -184,15 +185,12 @@ export class RadioBridge {
   private handleRadioConnecting(): void {
     logger.info('Radio connecting...');
 
-    this.deps.engineEmitter.emit('radioStatusChanged', {
+    this.deps.engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
       connected: false,
       status: RadioConnectionStatus.CONNECTING,
       radioInfo: null,
-      radioConfig: this.deps.radioManager.getConfig(),
-      connectionHealth: this.deps.radioManager.getConnectionHealth(),
-      coreCapabilities: this.deps.radioManager.getCoreCapabilities(),
-      coreCapabilityDiagnostics: this.deps.radioManager.getCoreCapabilityDiagnostics(),
-    });
+      radioManager: this.deps.radioManager,
+    }));
   }
 
   private async handleRadioConnected(): Promise<void> {
@@ -203,17 +201,14 @@ export class RadioBridge {
     const radioConfig = radioManager.getConfig();
     const tunerCapabilities = await radioManager.getTunerCapabilities();
 
-    engineEmitter.emit('radioStatusChanged', {
+    engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
       connected: true,
       status: RadioConnectionStatus.CONNECTED,
       radioInfo,
       radioConfig,
-      connectionHealth: radioManager.getConnectionHealth(),
-      coreCapabilities: radioManager.getCoreCapabilities(),
-      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-      meterCapabilities: radioManager.getMeterCapabilities(),
       tunerCapabilities,
-    });
+      radioManager,
+    }));
 
     await this.restoreRunningStateIfNeeded();
   }
@@ -373,17 +368,14 @@ export class RadioBridge {
       }
     }
 
-    engineEmitter.emit('radioStatusChanged', {
+    engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
       connected: false,
       status: RadioConnectionStatus.RECONNECTING,
       radioInfo: null,
-      radioConfig: radioManager.getConfig(),
       message: `Reconnecting to radio... (${attempt}/${maxAttempts})`,
       reconnectProgress: { attempt, maxAttempts, nextRetryMs: delayMs },
-      connectionHealth: radioManager.getConnectionHealth(),
-      coreCapabilities: radioManager.getCoreCapabilities(),
-      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-    });
+      radioManager,
+    }));
   }
 
   private async handleRadioDisconnected(reason?: string): Promise<void> {
@@ -408,18 +400,15 @@ export class RadioBridge {
         lifecycle.sendRadioDisconnected(intentional.reason || 'power state change');
       }
       this._wasRunningBeforeDisconnect = false;
-      engineEmitter.emit('radioStatusChanged', {
+      engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
         connected: false,
         status: RadioConnectionStatus.DISCONNECTED,
         radioInfo: null,
-        radioConfig: radioManager.getConfig(),
         reason: intentional.reason,
         message: 'Radio entered standby / powered off by user',
         recommendation: '',
-        connectionHealth: radioManager.getConnectionHealth(),
-        coreCapabilities: radioManager.getCoreCapabilities(),
-        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-      });
+        radioManager,
+      }));
       return;
     }
 
@@ -447,20 +436,17 @@ export class RadioBridge {
     }
 
     const wasReconnecting = this._wasRunningBeforeDisconnect;
-    engineEmitter.emit('radioStatusChanged', {
+    engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
       connected: false,
       status: wasReconnecting
         ? RadioConnectionStatus.CONNECTION_LOST
         : RadioConnectionStatus.DISCONNECTED,
       radioInfo: null,
-      radioConfig: radioManager.getConfig(),
       reason,
       message: wasReconnecting ? 'Radio connection lost' : 'Radio disconnected',
       recommendation: this.getDisconnectRecommendation(reason),
-      connectionHealth: radioManager.getConnectionHealth(),
-      coreCapabilities: radioManager.getCoreCapabilities(),
-      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-    });
+      radioManager,
+    }));
 
     if (!this.restoreStartInProgress) {
       this._wasRunningBeforeDisconnect = false;
@@ -581,15 +567,13 @@ export class RadioBridge {
       ? await radioManager.getRadioInfo()
       : null;
 
-    this.deps.engineEmitter.emit('radioStatusChanged', {
+    this.deps.engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
       connected: radioManager.isConnected(),
       status: radioManager.getConnectionStatus(),
       radioInfo,
-      radioConfig: radioManager.getConfig(),
-      connectionHealth: radioManager.getConnectionHealth(),
       coreCapabilities,
-      coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-    });
+      radioManager,
+    }));
   }
 
   /**
