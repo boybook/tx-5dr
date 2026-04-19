@@ -25,8 +25,10 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     return this._isRunning;
   }
   private timerId: NodeJS.Timeout | undefined;
-  private lastSlotId = 0;
+  private lastSlotStartMs: number | null = null;
   private compensationMs: number = 0; // 发射时序补偿（毫秒）
+  private pendingEventTimers = new Set<NodeJS.Timeout>();
+  private runGeneration = 0;
 
   constructor(clockSource: ClockSource, mode: ModeDescriptor, compensationMs: number = 0) {
     super();
@@ -44,6 +46,8 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     }
     
     this._isRunning = true;
+    this.runGeneration++;
+    this.lastSlotStartMs = null;
     this.scheduleNextSlot();
   }
   
@@ -52,10 +56,8 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
    */
   stop(): void {
     this._isRunning = false;
-    if (this.timerId) {
-      clearTimeout(this.timerId);
-      this.timerId = undefined;
-    }
+    this.lastSlotStartMs = null;
+    this.clearPendingTimers();
   }
   
   /**
@@ -97,10 +99,17 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     
     try {
       const now = this.clockSource.now();
-      const nextSlotStart = this.calculateNextSlotStart(now);
+      const nextSlotStart = this.lastSlotStartMs === null
+        ? this.calculateNextSlotStart(now)
+        : this.lastSlotStartMs + this.mode.slotMs;
       const delay = Math.max(0, nextSlotStart - now);
+      const generation = this.runGeneration;
       
       this.timerId = setTimeout(() => {
+        this.timerId = undefined;
+        if (!this.isRunning || this.runGeneration !== generation) {
+          return;
+        }
         this.handleSlotStart(nextSlotStart);
       }, delay);
       
@@ -123,6 +132,17 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
   }
   
   private handleSlotStart(slotStartTime: number): void {
+    if (!this.isRunning) {
+      return;
+    }
+    const generation = this.runGeneration;
+
+    if (this.lastSlotStartMs === slotStartTime) {
+      logger.debug(`duplicate slot start suppressed: ${slotStartTime}`);
+      return;
+    }
+    this.lastSlotStartMs = slotStartTime;
+
     // 用 ms 直接算 cycleNumber，避免 FT4 亚秒级时隙（7.5/22.5/...s）被截断到上一秒
     const cycleNumber = CycleUtils.calculateCycleNumberFromMs(slotStartTime, this.mode.slotMs);
     const utcSeconds = Math.floor(slotStartTime / 1000); // 仅用于显示/日志，不要再用于周期判断
@@ -146,6 +166,9 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     
     // 发出时隙开始事件
     this.emit('slotStart', slotInfo);
+    if (!this.isRunning || this.runGeneration !== generation) {
+      return;
+    }
 
     // 计算编码和发射时机
     const transmitDelay = this.mode.transmitTiming || 0;
@@ -169,13 +192,11 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
 
     // 先发射 encodeStart 事件（提前开始编码）
     if (adjustedEncodeDelay > 0) {
-      setTimeout(() => {
-        if (this.isRunning) {
-          logger.debug(`encodeStart fired: slot=${slotInfo.id}, delay=${adjustedEncodeDelay}ms, before transmit=${encodeAdvance}ms`);
-          this.emit('encodeStart', slotInfo);
-        }
-      }, adjustedEncodeDelay);
-    } else {
+      this.scheduleEvent(adjustedEncodeDelay, generation, () => {
+        logger.debug(`encodeStart fired: slot=${slotInfo.id}, delay=${adjustedEncodeDelay}ms, before transmit=${encodeAdvance}ms`);
+        this.emit('encodeStart', slotInfo);
+      });
+    } else if (this.runGeneration === generation) {
       // 如果没有足够时间，立即触发
       logger.debug(`encodeStart fired immediately: slot=${slotInfo.id}`);
       this.emit('encodeStart', slotInfo);
@@ -183,13 +204,11 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
 
     // 然后发射 transmitStart 事件（目标播放时间）
     if (adjustedTransmitDelay > 0) {
-      setTimeout(() => {
-        if (this.isRunning) {
-          logger.debug(`transmitStart fired: slot=${slotInfo.id}, delay=${adjustedTransmitDelay}ms`);
-          this.emit('transmitStart', slotInfo);
-        }
-      }, adjustedTransmitDelay);
-    } else {
+      this.scheduleEvent(adjustedTransmitDelay, generation, () => {
+        logger.debug(`transmitStart fired: slot=${slotInfo.id}, delay=${adjustedTransmitDelay}ms`);
+        this.emit('transmitStart', slotInfo);
+      });
+    } else if (this.runGeneration === generation) {
       // 如果没有延迟，立即发射
       logger.debug(`transmitStart fired immediately: slot=${slotInfo.id}`);
       this.emit('transmitStart', slotInfo);
@@ -223,14 +242,14 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
 
       if (delayMs <= 0) {
         // 立即发出（包括负偏移，即在时隙结束前触发）
-        this.emit('subWindow', slotInfo, windowIdx);
+        if (this.runGeneration === generation) {
+          this.emit('subWindow', slotInfo, windowIdx);
+        }
       } else {
         // 延迟发出
-        setTimeout(() => {
-          if (this.isRunning) {
-            this.emit('subWindow', slotInfo, windowIdx);
-          }
-        }, delayMs);
+        this.scheduleEvent(delayMs, generation, () => {
+          this.emit('subWindow', slotInfo, windowIdx);
+        });
       }
     }
     
@@ -277,5 +296,29 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     };
   }
   
+  private scheduleEvent(delayMs: number, generation: number, callback: () => void): void {
+    const timer = setTimeout(() => {
+      this.pendingEventTimers.delete(timer);
+      if (!this.isRunning || this.runGeneration !== generation) {
+        return;
+      }
+      callback();
+    }, delayMs);
+
+    this.pendingEventTimers.add(timer);
+  }
+
+  private clearPendingTimers(): void {
+    if (this.timerId) {
+      clearTimeout(this.timerId);
+      this.timerId = undefined;
+    }
+
+    for (const timer of this.pendingEventTimers) {
+      clearTimeout(timer);
+    }
+    this.pendingEventTimers.clear();
+  }
+
   // EventEmitter3 已经提供了类型安全的方法
 } 
