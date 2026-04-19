@@ -43,6 +43,7 @@ export class SlotScheduler {
   private transmissionChecker?: ITransmissionChecker;
   private shouldDecodeWhileTransmitting?: () => boolean;
   private isActive = false;
+  private readonly boundHandleSubWindow: (slotInfo: SlotInfo, windowIdx: number) => void;
 
   constructor(
     slotClock: SlotClock,
@@ -56,6 +57,7 @@ export class SlotScheduler {
     this.audioBufferProvider = audioBufferProvider;
     this.transmissionChecker = transmissionChecker;
     this.shouldDecodeWhileTransmitting = shouldDecodeWhileTransmitting;
+    this.boundHandleSubWindow = this.handleSubWindow.bind(this);
   }
   
   /**
@@ -66,7 +68,7 @@ export class SlotScheduler {
     
     this.isActive = true;
     // 只监听子窗口事件
-    this.slotClock.on('subWindow', this.handleSubWindow.bind(this));
+    this.slotClock.on('subWindow', this.boundHandleSubWindow);
   }
   
   /**
@@ -76,7 +78,7 @@ export class SlotScheduler {
     if (!this.isActive) return;
     
     this.isActive = false;
-    this.slotClock.off('subWindow', this.handleSubWindow.bind(this));
+    this.slotClock.off('subWindow', this.boundHandleSubWindow);
   }
   
   /**
