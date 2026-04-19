@@ -57,6 +57,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -460,6 +462,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -523,7 +527,7 @@ jobs:
           const lines = execFileSync('git', [
             'log',
             '-n',
-            '5',
+            '10',
             '--date=iso-strict',
             '--pretty=format:%H%x09%h%x09%s%x09%cI',
             process.env.GITHUB_SHA,
@@ -562,7 +566,7 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
           if (!manifest.version) throw new Error('app manifest missing version');
           if (!manifest.commit_title) throw new Error('app manifest missing commit_title');
-          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 5) {
+          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
             throw new Error('app manifest missing recent_commits');
           }
           if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
@@ -758,7 +762,7 @@ jobs:
           node - <<'EOF'
           const fs = require('node:fs');
           const manifest = JSON.parse(fs.readFileSync('oss-metadata/app/latest.json', 'utf8'));
-          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 5) {
+          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
             throw new Error('oss app manifest missing recent_commits');
           }
           if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
