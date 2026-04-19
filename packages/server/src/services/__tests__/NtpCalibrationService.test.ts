@@ -42,7 +42,8 @@ describe('NtpCalibrationService', () => {
 
   it('stores NTP measurements without auto-applying them', async () => {
     const clockSource = createClockSource();
-    const service = new NtpCalibrationService(clockSource as any);
+    // 显式传入 server 列表，避免对默认 NTP 服务器列表（可能随业务调整）的隐式依赖
+    const service = new NtpCalibrationService(clockSource as any, ['pool.ntp.org']);
 
     vi.spyOn(service as any, 'queryNtpServer').mockResolvedValue(120);
 
