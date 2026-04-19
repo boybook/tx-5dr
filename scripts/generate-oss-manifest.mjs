@@ -50,6 +50,25 @@ function joinUrl(base, suffix) {
   return `${trimSlash(base)}/${suffix.replace(/^\/+/, '')}`;
 }
 
+function normalizeObjectPrefix(value) {
+  return value.replace(/^\/+|\/+$/g, '');
+}
+
+function resolveSourceName(value, fallback) {
+  const normalized = String(value || fallback || '').trim().toLowerCase();
+  if (normalized === 'oss' || normalized === 'github') {
+    return normalized;
+  }
+  return fallback;
+}
+
+function buildOptionalAssetUrl(baseUrl, objectPrefix, fileName) {
+  if (!baseUrl || !objectPrefix) {
+    return undefined;
+  }
+  return joinUrl(trimSlash(ensureAbsoluteUrl(baseUrl)), `${normalizeObjectPrefix(objectPrefix)}/${fileName}`);
+}
+
 function detectServerAssetMetadata(fileName) {
   const match = fileName.match(/^TX-5DR-[^-]+-server-linux-(amd64|arm64)\.(deb|rpm)$/);
   if (!match) {
@@ -79,10 +98,28 @@ function detectAppAssetMetadata(fileName) {
   };
 }
 
-async function buildAssetEntry({ baseUrl, objectPrefix, filePath, product }) {
+async function buildAssetEntry({
+  baseUrl,
+  objectPrefix,
+  filePath,
+  product,
+  ossBaseUrl,
+  ossObjectPrefix,
+  githubBaseUrl,
+  githubObjectPrefix,
+  cnSource,
+  globalSource,
+}) {
   const fileName = path.basename(filePath);
   const [fileBuffer, fileStats] = await Promise.all([readFile(filePath), stat(filePath)]);
   const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+  const canonicalUrl = joinUrl(baseUrl, `${objectPrefix}/${fileName}`);
+  const ossUrl = buildOptionalAssetUrl(ossBaseUrl, ossObjectPrefix, fileName) || canonicalUrl;
+  const githubUrl = buildOptionalAssetUrl(githubBaseUrl, githubObjectPrefix, fileName);
+  const sourceUrls = {
+    oss: ossUrl,
+    github: githubUrl || canonicalUrl,
+  };
 
   let metadata = {
     platform: 'unknown',
@@ -98,7 +135,11 @@ async function buildAssetEntry({ baseUrl, objectPrefix, filePath, product }) {
 
   return {
     name: fileName,
-    url: joinUrl(baseUrl, `${objectPrefix}/${fileName}`),
+    url: ossUrl,
+    url_cn: sourceUrls[cnSource] || ossUrl,
+    url_global: sourceUrls[globalSource] || githubUrl || ossUrl,
+    url_oss: ossUrl,
+    url_github: githubUrl,
     sha256,
     size: fileStats.size,
     ...metadata,
@@ -134,8 +175,17 @@ async function main() {
   const commit = requireArg(args, 'commit');
   const publishedAt = requireArg(args, 'published-at');
   const baseUrl = trimSlash(ensureAbsoluteUrl(requireArg(args, 'base-url')));
-  const objectPrefix = requireArg(args, 'object-prefix').replace(/^\/+|\/+$/g, '');
+  const objectPrefix = normalizeObjectPrefix(requireArg(args, 'object-prefix'));
   const outputPath = requireArg(args, 'output');
+  const commitTitle = (args['commit-title'] && args['commit-title'] !== true)
+    ? String(args['commit-title']).trim()
+    : '';
+  const ossBaseUrl = trimSlash(ensureAbsoluteUrl(args['oss-base-url'] || baseUrl));
+  const ossObjectPrefix = normalizeObjectPrefix(args['oss-object-prefix'] || objectPrefix);
+  const githubBaseUrl = args['github-base-url'] ? trimSlash(ensureAbsoluteUrl(args['github-base-url'])) : '';
+  const githubObjectPrefix = args['github-object-prefix'] ? normalizeObjectPrefix(args['github-object-prefix']) : '';
+  const cnSource = resolveSourceName(args['cn-source'], 'oss');
+  const globalSource = resolveSourceName(args['global-source'], 'github');
   const assetsDir = args['assets-dir'];
   const releaseNotes = (args['release-notes'] && args['release-notes'] !== true)
     ? String(args['release-notes']).trim()
@@ -144,7 +194,18 @@ async function main() {
   const assetFiles = await listFiles(assetsDir);
   const assets = [];
   for (const filePath of assetFiles) {
-    assets.push(await buildAssetEntry({ baseUrl, objectPrefix, filePath, product }));
+    assets.push(await buildAssetEntry({
+      baseUrl,
+      objectPrefix,
+      filePath,
+      product,
+      ossBaseUrl,
+      ossObjectPrefix,
+      githubBaseUrl,
+      githubObjectPrefix,
+      cnSource,
+      globalSource,
+    }));
   }
 
   const manifest = {
@@ -153,6 +214,7 @@ async function main() {
     tag,
     version,
     commit,
+    commit_title: commitTitle || '',
     published_at: publishedAt,
     base_url: joinUrl(baseUrl, objectPrefix),
     release_notes: releaseNotes || '',
@@ -162,7 +224,9 @@ async function main() {
   if (product === 'server') {
     for (const asset of assets) {
       if (asset.package_type === 'deb' || asset.package_type === 'rpm') {
-        manifest[`latest_url_${asset.arch}_${asset.package_type}`] = asset.url;
+        manifest[`latest_url_${asset.arch}_${asset.package_type}`] = asset.url_oss || asset.url;
+        manifest[`latest_url_${asset.arch}_${asset.package_type}_cn`] = asset.url_cn || asset.url_oss || asset.url;
+        manifest[`latest_url_${asset.arch}_${asset.package_type}_global`] = asset.url_global || asset.url_github || asset.url_oss || asset.url;
         manifest[`latest_sha256_${asset.arch}_${asset.package_type}`] = asset.sha256;
       }
       if (asset.name === 'install-online.sh') {

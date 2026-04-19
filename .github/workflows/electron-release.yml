@@ -489,6 +489,7 @@ jobs:
         run: |
           echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
           echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          echo "commit_title=$(git show -s --format=%s "${{ github.sha }}")" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0].split('+')[0]")
           COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
@@ -523,12 +524,37 @@ jobs:
             --tag "${{ steps.release_info.outputs.tag }}" \
             --version "${{ steps.release_info.outputs.app_version }}" \
             --commit "${{ steps.release_info.outputs.short_sha }}" \
+            --commit-title "${{ steps.release_info.outputs.commit_title }}" \
             --published-at "${{ steps.release_info.outputs.timestamp }}" \
-            --base-url "https://github.com/${{ github.repository }}/releases/download" \
-            --object-prefix "${{ steps.release_info.outputs.tag }}" \
+            --base-url "${{ secrets.OSS_BASE_URL }}" \
+            --object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
+            --oss-base-url "${{ secrets.OSS_BASE_URL }}" \
+            --oss-object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
+            --github-base-url "https://github.com/${{ github.repository }}/releases/download" \
+            --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
             --assets-dir "publish-assets" \
             --release-notes-file "release-metadata/app-release-notes.md" \
             --output "release-assets/latest.json"
+
+      - name: Validate app manifest
+        shell: bash
+        run: |
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
+          if (!manifest.version) throw new Error('app manifest missing version');
+          if (!manifest.commit_title) throw new Error('app manifest missing commit_title');
+          if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
+            throw new Error('app manifest missing assets');
+          }
+          const hasMacArmDmg = manifest.assets.some((asset) => asset.platform === 'macos' && asset.arch === 'arm64' && asset.package_type === 'dmg' && asset.url_cn && asset.url_global);
+          if (!hasMacArmDmg) throw new Error('app manifest missing macOS arm64 dmg with dual urls');
+          for (const asset of manifest.assets) {
+            if (!asset.url_cn || !asset.url_global) {
+              throw new Error(`app manifest missing dual urls for ${asset.name}`);
+            }
+          }
+          EOF
 
       # Nightly Release
       - name: Create or Update Nightly Release
@@ -685,9 +711,14 @@ jobs:
             --tag "${{ steps.release_info.outputs.tag }}" \
             --version "${{ steps.release_info.outputs.app_version }}" \
             --commit "${{ steps.release_info.outputs.short_sha }}" \
+            --commit-title "${{ steps.release_info.outputs.commit_title }}" \
             --published-at "${{ steps.release_info.outputs.timestamp }}" \
             --base-url "${OSS_BASE_URL}" \
             --object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
+            --oss-base-url "${OSS_BASE_URL}" \
+            --oss-object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
+            --github-base-url "https://github.com/${{ github.repository }}/releases/download" \
+            --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
             --assets-dir "publish-assets" \
             --release-notes-file "release-metadata/app-release-notes.md" \
             --output "oss-metadata/app/latest.json"

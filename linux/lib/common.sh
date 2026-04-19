@@ -428,11 +428,6 @@ fetch_server_manifest() {
 }
 
 fetch_server_manifest_from_source() {
-    local source="${1:-oss}"
-    if [[ "$source" == "github" ]]; then
-        curl -fsSL "$(get_server_github_manifest_url)"
-        return
-    fi
     fetch_server_manifest
 }
 
@@ -515,12 +510,25 @@ try {
     printf "%s" "$manifest_json" | tr -d '\n' | grep -oP "\"${lookup_key}\":\\s*\"\\K[^\"]+" | head -1
 }
 
-get_server_manifest_package_url() {
-    local manifest_json="$1" pkg_arch="$2" pkg_ext="$3"
+get_server_manifest_package_url_for_source() {
+    local manifest_json="$1" pkg_arch="$2" pkg_ext="$3" source="${4:-oss}"
     local value=""
-    value=$(manifest_lookup_value "$manifest_json" "latest_url_${pkg_arch}_${pkg_ext}")
+
+    if [[ "$source" == "oss" ]]; then
+        value=$(manifest_lookup_value "$manifest_json" "latest_url_${pkg_arch}_${pkg_ext}_cn")
+    elif [[ "$source" == "github" ]]; then
+        value=$(manifest_lookup_value "$manifest_json" "latest_url_${pkg_arch}_${pkg_ext}_global")
+    fi
+
+    if [[ -z "$value" ]]; then
+        value=$(manifest_lookup_value "$manifest_json" "latest_url_${pkg_arch}_${pkg_ext}")
+    fi
     [[ -n "$value" ]] || return 1
     normalize_remote_url "$value"
+}
+
+get_server_manifest_package_url() {
+    get_server_manifest_package_url_for_source "$1" "$2" "$3" "${4:-oss}"
 }
 
 get_server_manifest_package_sha256() {
@@ -541,6 +549,11 @@ get_server_manifest_published_at() {
 get_server_manifest_version() {
     local manifest_json="$1"
     manifest_lookup_value "$manifest_json" "version"
+}
+
+get_server_manifest_commit_title() {
+    local manifest_json="$1"
+    manifest_lookup_value "$manifest_json" "commit_title"
 }
 
 get_livekit_binary_path() {

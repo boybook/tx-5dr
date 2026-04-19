@@ -10,6 +10,7 @@ interface DesktopUpdateStatus {
   updateAvailable: boolean;
   latestVersion: string | null;
   latestCommit: string | null;
+  latestCommitTitle: string | null;
   publishedAt: string | null;
   releaseNotes: string | null;
   downloadUrl: string | null;

@@ -48,6 +48,7 @@ interface DesktopUpdateState {
   updateAvailable: boolean;
   latestVersion: string | null;
   latestCommit: string | null;
+  latestCommitTitle: string | null;
   publishedAt: string | null;
   releaseNotes: string | null;
   downloadUrl: string | null;
@@ -2063,6 +2064,13 @@ export const SystemSettings = forwardRef<
                       {t('system.desktopUpdateLatestCommit', { value: desktopUpdateStatus.latestCommit })}
                     </Chip>
                   )}
+                </div>
+
+                <div>
+                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopUpdateLatestSummary')}</p>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
+                    {desktopUpdateStatus?.latestCommitTitle || t('system.desktopUpdateNoSummary')}
+                  </p>
                 </div>
 
                 <p className={`${SETTINGS_SUBDESC_CLASS} whitespace-pre-wrap`}>
