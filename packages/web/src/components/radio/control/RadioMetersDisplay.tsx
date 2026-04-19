@@ -168,10 +168,13 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     };
   }, [buffered.level.value]);
 
-  // 判断各仪表是否应显示（null = 未知，保持全显示以兼容旧版后端）
-  const showLevelPower = meterCapabilities === null || meterCapabilities.strength || meterCapabilities.power;
-  const showSwr = meterCapabilities === null || meterCapabilities.swr;
-  const showAlc = meterCapabilities === null || meterCapabilities.alc;
+  // 已经挂载此组件意味着布局层确认“整块应该显示”。
+  // 当 capability 未知时，仅展示当前连接周期里实际出现过数据的仪表，避免空占位。
+  const showLevelPower = meterCapabilities
+    ? (meterCapabilities.strength || meterCapabilities.power)
+    : (buffered.level.value !== null || buffered.power.value !== null);
+  const showSwr = meterCapabilities ? meterCapabilities.swr : buffered.swr.value !== null;
+  const showAlc = meterCapabilities ? meterCapabilities.alc : buffered.alc.value !== null;
   const isAlcOverLimit = shouldAutoOpenAlcWarning(
     showAlc,
     isPttActive,

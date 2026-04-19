@@ -794,7 +794,7 @@ export const WSRadioStatusChangedMessageSchema = WSBaseMessageSchema.extend({
     }).optional(),
     coreCapabilities: CoreRadioCapabilitiesSchema.optional(),
     coreCapabilityDiagnostics: CoreCapabilityDiagnosticsSchema.optional(),
-    meterCapabilities: MeterCapabilitiesSchema.optional(), // 电台数值表能力（连接时检测）
+    meterCapabilities: MeterCapabilitiesSchema.optional(), // 电台数值表能力（connected=true 时应始终携带）
     /** @deprecated Tuner capability is now in radioCapabilityList event. Kept for backward compat. */
     tunerCapabilities: TunerCapabilitiesSchema.optional(),
   }),

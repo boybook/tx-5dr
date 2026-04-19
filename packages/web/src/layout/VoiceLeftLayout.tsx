@@ -12,6 +12,7 @@ import { useRadioState, useConnection, useStationInfo } from '../store/radioStor
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
+import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMeters';
 
 /**
  * VoiceLeftLayout
@@ -30,6 +31,12 @@ export const VoiceLeftLayout: React.FC = () => {
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
+  const showRadioMeters = shouldShowRadioMetersPanel({
+    radioConnected: radio.state.radioConnected,
+    radioConfigType: radio.state.radioConfig?.type,
+    meterCapabilities: radio.state.meterCapabilities,
+    hasReceivedMeterData: radio.state.hasReceivedMeterData,
+  });
   const stationInfoOffsetClassName = isElectron() && isMacOS()
     ? 'pl-16'
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
@@ -106,10 +113,10 @@ export const VoiceLeftLayout: React.FC = () => {
         </div>
 
         {/* Radio Meters */}
-        {radio.state.radioConnected && radio.state.radioConfig?.type !== 'none' && (
+        {showRadioMeters && (
           <div className="flex-shrink-0">
             <RadioMetersDisplay
-              meterData={radio.state.meterData || { swr: null, alc: null, level: null, power: null }}
+              meterData={radio.state.meterData || EMPTY_METER_DATA}
               isPttActive={radio.state.pttStatus.isTransmitting}
               meterCapabilities={radio.state.meterCapabilities}
               enableAlcOverLimitPrompt={false}

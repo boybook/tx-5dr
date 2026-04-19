@@ -8,6 +8,7 @@ import type {
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
+import { hasAnyMeterReading } from '../../utils/radioMeters';
 import type {
   ConnectionAction,
   ConnectionState,
@@ -20,6 +21,14 @@ import type {
 } from './types';
 
 const logger = createLogger('RadioStore');
+
+function hasRadioConfigChanged(prev: RadioState['radioConfig'], next?: RadioState['radioConfig']): boolean {
+  if (!next) {
+    return false;
+  }
+
+  return JSON.stringify(prev) !== JSON.stringify(next);
+}
 
 export const initialConnectionState: ConnectionState = {
   isConnected: false,
@@ -73,6 +82,7 @@ export const initialRadioState: RadioState = {
     operatorIds: []
   },
   meterData: null,
+  hasReceivedMeterData: false,
   meterCapabilities: null,
   tunerCapabilities: null,
   capabilityDescriptors: new Map<string, CapabilityDescriptor>(),
@@ -181,14 +191,20 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         currentOperatorId: action.payload
       };
 
-    case 'radioStatusUpdate':
+    case 'radioStatusUpdate': {
+      const nextRadioConfig = action.payload.radioConfig || state.radioConfig;
+      const shouldResetMeterTracking =
+        !action.payload.radioConnected ||
+        nextRadioConfig.type === 'none' ||
+        hasRadioConfigChanged(state.radioConfig, action.payload.radioConfig);
+
       return {
         ...state,
         radioConnected: action.payload.radioConnected,
         radioConnectionStatus: action.payload.status,
         radioInfo: action.payload.radioInfo,
         // 如果事件中包含radioConfig则更新，否则保持现有配置
-        radioConfig: action.payload.radioConfig || state.radioConfig,
+        radioConfig: nextRadioConfig,
         // 同步重连进度
         reconnectProgress: action.payload.reconnectProgress ?? null,
         // 同步连接健康状态（如果事件中包含）
@@ -205,6 +221,8 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         meterCapabilities: action.payload.radioConnected
           ? (action.payload.meterCapabilities ?? state.meterCapabilities)
           : null,
+        meterData: shouldResetMeterTracking ? null : state.meterData,
+        hasReceivedMeterData: shouldResetMeterTracking ? false : state.hasReceivedMeterData,
         // 天调能力：连接时更新，断开时重置为 null
         // TODO: remove after capability system migration (Phase 3)
         tunerCapabilities: action.payload.radioConnected
@@ -228,6 +246,7 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         currentRadioFrequency: action.payload.radioConnected ? state.currentRadioFrequency : null,
         spectrumSessionState: action.payload.radioConnected ? state.spectrumSessionState : null,
       };
+    }
 
     case 'setSpectrumCapabilities':
       return {
@@ -265,16 +284,22 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
     case 'meterData':
       return {
         ...state,
-        meterData: action.payload
+        meterData: action.payload,
+        hasReceivedMeterData: state.hasReceivedMeterData || hasAnyMeterReading(action.payload),
       };
 
-    case 'setProfiles':
+    case 'setProfiles': {
+      const activeProfileChanged = state.activeProfileId !== action.payload.activeProfileId;
       return {
         ...state,
         profiles: action.payload.profiles,
         activeProfileId: action.payload.activeProfileId,
-        profilesLoaded: true
+        profilesLoaded: true,
+        meterData: activeProfileChanged ? null : state.meterData,
+        hasReceivedMeterData: activeProfileChanged ? false : state.hasReceivedMeterData,
+        meterCapabilities: activeProfileChanged ? null : state.meterCapabilities,
       };
+    }
 
     case 'profileChanged': {
       const { profileId, profile } = action.payload;
@@ -283,17 +308,25 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         activeProfileId: profileId,
         // 更新 radioConfig 为新 Profile 的配置
         radioConfig: profile.radio,
+        meterData: null,
+        hasReceivedMeterData: false,
+        meterCapabilities: null,
         // 更新 profiles 列表中对应的 Profile
         profiles: state.profiles.map(p => p.id === profileId ? profile : p)
       };
     }
 
-    case 'profileListUpdated':
+    case 'profileListUpdated': {
+      const activeProfileChanged = state.activeProfileId !== action.payload.activeProfileId;
       return {
         ...state,
         profiles: action.payload.profiles,
-        activeProfileId: action.payload.activeProfileId
+        activeProfileId: action.payload.activeProfileId,
+        meterData: activeProfileChanged ? null : state.meterData,
+        hasReceivedMeterData: activeProfileChanged ? false : state.hasReceivedMeterData,
+        meterCapabilities: activeProfileChanged ? null : state.meterCapabilities,
       };
+    }
 
     case 'radioError': {
       const newErrors = [action.payload, ...state.radioErrors].slice(0, 100);

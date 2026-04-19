@@ -29,6 +29,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
+import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 
 const logger = createLogger('WSServer');
 
@@ -1155,15 +1156,12 @@ export class WSServer extends WSMessageHandler {
     try {
       const radioManager = this.digitalRadioEngine.getRadioManager();
       const radioConnectionStatus = radioManager.getConnectionStatus();
-      connection.send(WSMessageType.RADIO_STATUS_CHANGED, {
+      connection.send(WSMessageType.RADIO_STATUS_CHANGED, buildRadioStatusPayload({
         connected: radioManager.isConnected(),
         status: radioConnectionStatus,
         radioInfo: null,
-        radioConfig: radioManager.getConfig(),
-        connectionHealth: radioManager.getConnectionHealth(),
-        coreCapabilities: radioManager.getCoreCapabilities(),
-        coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-      });
+        radioManager,
+      }));
     } catch (error) {
       logger.error('failed to send radio connection status', error);
     }
@@ -1853,16 +1851,14 @@ export class WSServer extends WSMessageHandler {
         const radioManager = this.digitalRadioEngine.getRadioManager();
         const connectionHealth = radioManager.getConnectionHealth();
 
-        this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, {
+        this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, buildRadioStatusPayload({
           connected: false,
           status: RadioConnectionStatus.DISCONNECTED,
           reason: 'manual reconnect failed',
           radioInfo: null,
-          radioConfig: radioManager.getConfig(),
           connectionHealth,
-          coreCapabilities: radioManager.getCoreCapabilities(),
-          coreCapabilityDiagnostics: radioManager.getCoreCapabilityDiagnostics(),
-        });
+          radioManager,
+        }));
       } catch {}
     }
   }
