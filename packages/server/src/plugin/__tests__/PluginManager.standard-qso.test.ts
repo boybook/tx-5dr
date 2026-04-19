@@ -393,6 +393,70 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('keeps TX5 when a late decode replays the same RR73 within the current TX slot', async () => {
+    // 复盘 2026-04-19 14:11:45 BG5DRB 事故：FT8 多 pass 解码会把同一 RR73 在当前 TX 槽内多次喂入 reDecideOperator。
+    // 修复前：每次 late decode 都让 TX5.handle 走到 `clearQSOContext + changeState:'TX6'`，
+    //         导致正在编码的 73 被翻成 CQ。
+    // 修复后：isReDecision=true 路径下，shouldBlockReDecisionTransition 会拦截 TX5→TX6，状态保持。
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG7XTV',
+      myGrid: 'OL32',
+      targetCallsign: 'BG5DRB',
+      autoResumeCQAfterSuccess: true,
+    });
+
+    setRuntimeState(pluginManager, operator.config.id, 'TX4');
+
+    const rxSlot = createSlotInfo(45_000);
+    const rr73Pack = createSlotPack(rxSlot, [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.RRR,
+        senderCallsign: 'BG5DRB',
+        targetCallsign: 'BG7XTV',
+      }),
+      snr: 0,
+      freq: 1502,
+    }]);
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(60_000), rr73Pack);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+
+    (pluginManager as any).handleEncodeStart(createSlotInfo(60_000));
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG7XTV 73');
+
+    // 同一 TX 槽内 late decode 把同一 RR73 又喂一次（FT8 多 pass 解码的真实场景）。
+    // 修复后：reDecideOperator 不会让 TX5→TX6 翻转。
+    const lateRr73Pack = createSlotPack(rxSlot, [
+      {
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.RRR,
+          senderCallsign: 'BG5DRB',
+          targetCallsign: 'BG7XTV',
+        }),
+        snr: -2,
+        freq: 1502,
+      },
+      // 模拟新 pass 解出的另一帧（让 messageSet 比对认为有新消息，必然进入 standard-qso.handle）
+      {
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.CQ,
+          senderCallsign: 'JA2BBB',
+          grid: 'PM85',
+        }),
+        snr: -10,
+        freq: 1700,
+      },
+    ]);
+
+    const changed = await pluginManager.reDecideOperator(operator.config.id, lateRr73Pack);
+    expect(changed).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX5');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('BG5DRB BG7XTV 73');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('BG5DRB');
+
+    await pluginManager.shutdown();
+  });
+
   it('only retries 73 after returning to CQ when the same target sends RR73 again', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG7XTV',
