@@ -267,6 +267,7 @@ export class PSKReporterService extends EventEmitter<PSKReporterEvents> {
           break;
         case FT8MessageType.RRR:
         case FT8MessageType.SEVENTY_THREE:
+        case FT8MessageType.FOX_RR73:
           senderCallsign = parsedMessage.senderCallsign;
           break;
         default:

@@ -231,6 +231,7 @@ export const FT8MessageSeventyThreeSchema = FT8MessageBaseSchema.extend({
  */
 export const FT8MessageFoxRR73Schema = FT8MessageBaseSchema.extend({
   type: z.literal('fox_rr73'),
+  senderCallsign: z.string().optional(), // 可解析时填入真实 Fox 呼号；仅短哈希时留空
   completedCallsign: z.string(), // 已完成QSO的Hound呼号
   nextCallsign: z.string(),      // 下一个被邀请的Hound呼号
   foxHash: z.string().optional(), // Fox的哈希码（去掉尖括号后的值）
