@@ -227,6 +227,21 @@ export interface CallsignAnalysis {
    * 是否需要人工复核
    */
   dxccNeedsReview?: boolean;
+
+  /**
+   * DXCC 解析命中类型
+   */
+  dxccMatchKind?: 'prefix' | 'regex' | 'heuristic' | 'unknown';
+
+  /**
+   * DXCC 解析数据源
+   */
+  dxccDataSource?: 'local' | 'hamqth';
+
+  /**
+   * DXCC 解析器/数据版本
+   */
+  dxccResolverVersion?: string;
 }
 
 /**

@@ -417,6 +417,8 @@ interface DXCCEntity {
   flag?: string;
   countryCode?: string;
   continent?: string[];
+  cq?: number[];
+  itu?: number[];
   cqZone?: number;
   ituZone?: number;
   deleted?: boolean;
@@ -426,14 +428,33 @@ interface DXCCEntity {
   validEnd?: string;
 }
 
+interface DXCCDataFile {
+  version?: string;
+  source?: {
+    type?: string;
+    upstream?: string;
+    sourceVersion?: string;
+    generatedBy?: string;
+    generatedAt?: string;
+  };
+  dxcc: DXCCEntity[];
+}
+
+export type DXCCMatchKind = 'prefix' | 'regex' | 'heuristic' | 'unknown';
+export type DXCCDataSource = 'local' | 'hamqth';
+
 export interface DXCCResolutionResult {
   entity: DXCCEntity | null;
   matchedPrefix?: string;
   confidence: 'exception' | 'prefix' | 'heuristic' | 'unknown';
   needsReview: boolean;
+  matchKind: DXCCMatchKind;
+  dataSource: DXCCDataSource;
 }
 
-export const DXCC_RESOLVER_VERSION = '2026.04.14';
+const DXCC_DATA = dxccData as DXCCDataFile;
+
+export const DXCC_RESOLVER_VERSION = DXCC_DATA.version || '2026.04.14';
 
 // 前缀Trie结构（字符图）
 interface PrefixTrieNode {
@@ -462,6 +483,20 @@ export interface CallsignInfo {
   dxccStatus?: 'current' | 'deleted' | 'unknown';
   dxccConfidence?: DXCCResolutionResult['confidence'];
   dxccNeedsReview?: boolean;
+  dxccMatchKind?: DXCCMatchKind;
+  dxccDataSource?: DXCCDataSource;
+  dxccResolverVersion?: string;
+}
+
+interface DXCCMatchCandidate {
+  entity: DXCCEntity;
+  matchedPrefix?: string;
+  confidence: 'exception' | 'prefix';
+  matchKind: Extract<DXCCMatchKind, 'prefix' | 'regex'>;
+  active: boolean;
+  specificity: number;
+  candidateOrder: number;
+  priorityScore: number;
 }
 
 function normalizeDXCCDateBound(value?: string, endOfDay = false): number | null {
@@ -477,6 +512,25 @@ function isEntityActiveAt(entity: DXCCEntity, timestamp: number): boolean {
   if (start !== null && timestamp < start) return false;
   if (end !== null && timestamp > end) return false;
   return true;
+}
+
+function normalizeDXCCEntity(entity: DXCCEntity): DXCCEntity {
+  return {
+    ...entity,
+    cqZone: entity.cqZone ?? entity.cq?.[0],
+    ituZone: entity.ituZone ?? entity.itu?.[0],
+  };
+}
+
+function findMatchingDeclaredPrefix(entity: DXCCEntity, callsign: string): string | undefined {
+  const prefixes = entity.prefix?.split(',').map((prefix) => prefix.trim()).filter(Boolean) || [];
+  const upperCallsign = callsign.toUpperCase();
+  const matches = prefixes.filter((prefix) => upperCallsign.startsWith(prefix.toUpperCase()));
+  if (matches.length === 0) {
+    return prefixes[0];
+  }
+
+  return matches.sort((left, right) => right.length - left.length)[0];
 }
 
 function createCandidateCallsigns(callsign: string): string[] {
@@ -1014,7 +1068,7 @@ class DXCCIndex {
    * 4. JSON顺序 (10%)：先出现的实体优先
    */
   private calculateEntityPriorities(): void {
-    const entities = dxccData.dxcc as DXCCEntity[];
+    const entities = DXCC_DATA.dxcc.map(normalizeDXCCEntity);
 
     // 计算归一化所需的最大最小值
     const prefixCounts = entities.map((e) =>
@@ -1072,7 +1126,7 @@ class DXCCIndex {
     this.calculateEntityPriorities();
 
     // 第二步：构建索引和 Trie
-    dxccData.dxcc.forEach(entity => {
+    DXCC_DATA.dxcc.map(normalizeDXCCEntity).forEach(entity => {
       // 实体代码索引
       this.entityMap.set(entity.entityCode, entity);
 
@@ -1170,6 +1224,101 @@ class DXCCIndex {
     return { prefix: lastPrefix, entities: lastEntities };
   }
 
+  private collectTrieMatches(callsign: string): Array<{ prefix: string; entities: DXCCEntity[] }> {
+    const clean = callsign.toUpperCase().trim();
+    const matches: Array<{ prefix: string; entities: DXCCEntity[] }> = [];
+
+    let node = this.prefixTrie;
+    for (let i = 0; i < clean.length; i++) {
+      const ch = clean[i];
+      const next = node.c.get(ch);
+      if (!next) break;
+      node = next;
+      if (node.e && node.p) {
+        matches.push({
+          prefix: node.p,
+          entities: Array.isArray(node.e) ? [...node.e] : [node.e],
+        });
+      }
+    }
+
+    return matches;
+  }
+
+  private compareMatchCandidates(left: DXCCMatchCandidate, right: DXCCMatchCandidate): number {
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1;
+    }
+
+    if (left.candidateOrder !== right.candidateOrder) {
+      return left.candidateOrder - right.candidateOrder;
+    }
+
+    if (left.matchKind !== right.matchKind) {
+      return left.matchKind === 'prefix' ? -1 : 1;
+    }
+
+    if (left.confidence !== right.confidence) {
+      return left.confidence === 'prefix' ? -1 : 1;
+    }
+
+    if (left.specificity !== right.specificity) {
+      return right.specificity - left.specificity;
+    }
+
+    if (left.priorityScore !== right.priorityScore) {
+      return right.priorityScore - left.priorityScore;
+    }
+
+    return left.entity.entityCode - right.entity.entityCode;
+  }
+
+  private collectMatchCandidates(callsign: string, timestamp: number, candidateOrder: number): DXCCMatchCandidate[] {
+    const deduped = new Map<number, DXCCMatchCandidate>();
+    const upsert = (match: DXCCMatchCandidate) => {
+      const existing = deduped.get(match.entity.entityCode);
+      if (!existing || this.compareMatchCandidates(match, existing) < 0) {
+        deduped.set(match.entity.entityCode, match);
+      }
+    };
+
+    for (const trieMatch of this.collectTrieMatches(callsign)) {
+      const activeEntities = trieMatch.entities.filter((entity) => isEntityActiveAt(entity, timestamp));
+      const entitiesToConsider = activeEntities.length > 0 ? activeEntities : trieMatch.entities;
+      const confidence = activeEntities.length > 0 ? 'prefix' as const : 'exception' as const;
+
+      for (const entity of entitiesToConsider) {
+        upsert({
+          entity,
+          matchedPrefix: trieMatch.prefix,
+          confidence,
+          matchKind: 'prefix',
+          active: isEntityActiveAt(entity, timestamp),
+          specificity: trieMatch.prefix.length,
+          candidateOrder,
+          priorityScore: this.entityPriorityScores.get(entity.entityCode) || 0,
+        });
+      }
+    }
+
+    for (const [regex, entity] of this.prefixRegexMap) {
+      if (!regex.test(callsign)) continue;
+      const matchedPrefix = findMatchingDeclaredPrefix(entity, callsign);
+      upsert({
+        entity,
+        matchedPrefix,
+        confidence: 'exception',
+        matchKind: 'regex',
+        active: isEntityActiveAt(entity, timestamp),
+        specificity: matchedPrefix?.length || 0,
+        candidateOrder,
+        priorityScore: this.entityPriorityScores.get(entity.entityCode) || 0,
+      });
+    }
+
+    return Array.from(deduped.values());
+  }
+
   public getLongestPrefix(callsign: string): string | null {
     const { prefix } = this.longestTrieMatch(callsign);
     return prefix || null;
@@ -1181,6 +1330,8 @@ class DXCCIndex {
         entity: null,
         confidence: 'unknown',
         needsReview: false,
+        matchKind: 'unknown',
+        dataSource: 'local',
       };
     }
 
@@ -1195,6 +1346,8 @@ class DXCCIndex {
         matchedPrefix: cached.matchedPrefix,
         confidence: cached.confidence,
         needsReview: cached.needsReview,
+        matchKind: cached.matchKind,
+        dataSource: cached.dataSource,
       };
     }
 
@@ -1217,6 +1370,8 @@ class DXCCIndex {
         matchedPrefix: upperCallsign.substring(0, 2),
         confidence: 'heuristic',
         needsReview: false,
+        matchKind: 'heuristic',
+        dataSource: 'local',
       };
       this.entityLRU.set(cacheKey, result);
       return result;
@@ -1241,48 +1396,47 @@ class DXCCIndex {
         matchedPrefix: upperCallsign.match(/^[A-Z]+/)?.[0],
         confidence: 'heuristic' as const,
         needsReview: false,
+        matchKind: 'heuristic',
+        dataSource: 'local',
       };
       this.entityLRU.set(cacheKey, result);
       return result;
     }
 
-    for (const candidate of createCandidateCallsigns(upperCallsign)) {
-      const trieHit = this.longestTrieMatch(candidate);
-      if (trieHit.entities.length > 0) {
-        const activeEntities = trieHit.entities.filter((entity) => isEntityActiveAt(entity, timestamp));
-        const chosen = (activeEntities[0] || trieHit.entities[0]);
-        const result = {
-          entity: {
-            ...chosen,
-            countryZh: COUNTRY_ZH_MAP[chosen.name] || chosen.name,
-            countryEn: chosen.name,
-          },
-          matchedPrefix: trieHit.prefix || undefined,
-          confidence: activeEntities.length > 0 ? 'prefix' as const : 'exception' as const,
-          needsReview: activeEntities.length > 1,
-        };
-        this.entityLRU.set(cacheKey, result);
-        return result;
+    const deduped = new Map<number, DXCCMatchCandidate>();
+    const upsert = (match: DXCCMatchCandidate) => {
+      const existing = deduped.get(match.entity.entityCode);
+      if (!existing || this.compareMatchCandidates(match, existing) < 0) {
+        deduped.set(match.entity.entityCode, match);
       }
-    }
+    };
 
-    for (const candidate of createCandidateCallsigns(upperCallsign)) {
-      for (const [regex, entity] of this.prefixRegexMap) {
-        if (regex.test(candidate) && isEntityActiveAt(entity, timestamp)) {
-          const result = {
-            entity: {
-              ...entity,
-              countryZh: COUNTRY_ZH_MAP[entity.name] || entity.name,
-              countryEn: entity.name,
-            },
-            matchedPrefix: entity.prefix?.split(',')[0]?.trim(),
-            confidence: 'exception' as const,
-            needsReview: false,
-          };
-          this.entityLRU.set(cacheKey, result);
-          return result;
-        }
+    createCandidateCallsigns(upperCallsign).forEach((candidate, candidateOrder) => {
+      for (const match of this.collectMatchCandidates(candidate, timestamp, candidateOrder)) {
+        upsert(match);
       }
+    });
+
+    const matches = Array.from(deduped.values()).sort((left, right) => this.compareMatchCandidates(left, right));
+    if (matches.length > 0) {
+      const chosen = matches[0];
+      const activeEntityCount = new Set(
+        matches.filter((match) => match.active).map((match) => match.entity.entityCode)
+      ).size;
+      const result = {
+        entity: {
+          ...chosen.entity,
+          countryZh: COUNTRY_ZH_MAP[chosen.entity.name] || chosen.entity.name,
+          countryEn: chosen.entity.name,
+        },
+        matchedPrefix: chosen.matchedPrefix,
+        confidence: chosen.confidence,
+        needsReview: activeEntityCount > 1,
+        matchKind: chosen.matchKind,
+        dataSource: 'local' as const,
+      };
+      this.entityLRU.set(cacheKey, result);
+      return result;
     }
 
     // 不缓存负结果，避免数据或规则更新后“粘住”未命中
@@ -1290,6 +1444,8 @@ class DXCCIndex {
       entity: null,
       confidence: 'unknown',
       needsReview: false,
+      matchKind: 'unknown',
+      dataSource: 'local',
     };
   }
 
@@ -1351,6 +1507,9 @@ export function getCallsignInfo(callsign: string, timestamp: number = Date.now()
     dxccStatus: entity.deleted ? 'deleted' : 'current',
     dxccConfidence: resolution.confidence,
     dxccNeedsReview: resolution.needsReview,
+    dxccMatchKind: resolution.matchKind,
+    dxccDataSource: resolution.dataSource,
+    dxccResolverVersion: DXCC_RESOLVER_VERSION,
   };
 }
 
@@ -1361,6 +1520,11 @@ export function getCallsignInfo(callsign: string, timestamp: number = Date.now()
  */
 export function extractCallsignPrefix(callsign: string): string {
   if (!callsign) return '';
+  const resolution = dxccIndex.resolveCallsign(callsign);
+  if (resolution.matchedPrefix) {
+    return resolution.matchedPrefix;
+  }
+
   // 使用Trie获取最长DXCC前缀
   const prefix = dxccIndex.getLongestPrefix(callsign);
   if (prefix) return prefix;
