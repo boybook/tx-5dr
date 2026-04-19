@@ -370,14 +370,14 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SUBSCRIBE_SPECTRUM]: (data, id) => this.handleSubscribeSpectrum(id, data),
       [WSMessageType.INVOKE_SPECTRUM_CONTROL]: (data: unknown, id: string) => this.handleInvokeSpectrumControl(id, data),
       [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
-      [WSMessageType.SET_OPERATOR_CONTEXT]: (data) => this.handleSetOperatorContext(data),
-      [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: (data) => this.handleSetOperatorRuntimeState(data),
-      [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: (data) => this.handleSetOperatorRuntimeSlotContent(data),
-      [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: (data) => this.handleSetOperatorTransmitCycles(data),
-      [WSMessageType.START_OPERATOR]: (data) => this.handleStartOperator(data),
-      [WSMessageType.STOP_OPERATOR]: (data) => this.handleStopOperator(data),
-      [WSMessageType.OPERATOR_REQUEST_CALL]: (data) => this.handleOperatorRequestCall(data),
-      [WSMessageType.PLUGIN_USER_ACTION]: (data) => this.handlePluginUserAction(data),
+      [WSMessageType.SET_OPERATOR_CONTEXT]: (data, id) => this.handleSetOperatorContext(data, id),
+      [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: (data, id) => this.handleSetOperatorRuntimeState(data, id),
+      [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: (data, id) => this.handleSetOperatorRuntimeSlotContent(data, id),
+      [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: (data, id) => this.handleSetOperatorTransmitCycles(data, id),
+      [WSMessageType.START_OPERATOR]: (data, id) => this.handleStartOperator(data, id),
+      [WSMessageType.STOP_OPERATOR]: (data, id) => this.handleStopOperator(data, id),
+      [WSMessageType.OPERATOR_REQUEST_CALL]: (data, id) => this.handleOperatorRequestCall(data, id),
+      [WSMessageType.PLUGIN_USER_ACTION]: (data, id) => this.handlePluginUserAction(data, id),
       [WSMessageType.PING]: (_data, id) => { this.sendToConnection(id, WSMessageType.PONG); },
       [WSMessageType.SET_VOLUME_GAIN]: (data) => this.handleSetVolumeGain(data),
       [WSMessageType.SET_VOLUME_GAIN_DB]: (data) => this.handleSetVolumeGainDb(data),
@@ -741,6 +741,28 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
+   * Audit log helper for operator-mutating WS commands.
+   * Records connectionId, clientInstanceId, role, label, tokenId so that
+   * any state change can be traced back to the originating client.
+   * Kept at info level — these are low-frequency user actions.
+   */
+  private logOperatorCommand(
+    commandName: string,
+    connectionId: string,
+    payload: { operatorId?: string; [key: string]: unknown },
+  ): void {
+    const conn = this.getConnection(connectionId);
+    logger.info(`WS command: ${commandName}`, {
+      connectionId,
+      clientInstanceId: conn?.getClientInstanceId() ?? null,
+      role: conn?.getUserRole() ?? null,
+      label: conn?.getAuthLabel() ?? '',
+      tokenId: conn?.getTokenId() ?? null,
+      ...payload,
+    });
+  }
+
+  /**
    * 📊 Day14：统一的错误处理辅助方法
    * 将错误转换为RadioError，广播错误信息和系统状态
    */
@@ -917,9 +939,10 @@ export class WSServer extends WSMessageHandler {
    * 处理设置操作员上下文命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleSetOperatorContext(data: any): Promise<void> {
+  private async handleSetOperatorContext(data: any, connectionId: string): Promise<void> {
     try {
       const { operatorId, context } = data;
+      this.logOperatorCommand('setOperatorContext', connectionId, { operatorId, context });
       await this.digitalRadioEngine.operatorManager.updateOperatorContext(operatorId, context);
     } catch (error) {
       this.handleCommandError(error, 'setOperatorContext');
@@ -930,9 +953,10 @@ export class WSServer extends WSMessageHandler {
    * 处理设置操作员策略运行时状态命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleSetOperatorRuntimeState(data: any): Promise<void> {
+  private async handleSetOperatorRuntimeState(data: any, connectionId: string): Promise<void> {
     try {
       const { operatorId, state } = data;
+      this.logOperatorCommand('setOperatorRuntimeState', connectionId, { operatorId, requestedState: state });
       this.digitalRadioEngine.operatorManager.setOperatorRuntimeState(operatorId, state);
     } catch (error) {
       this.handleCommandError(error, 'setOperatorRuntimeState');
@@ -943,9 +967,10 @@ export class WSServer extends WSMessageHandler {
    * 处理设置操作员策略运行时槽位内容命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleSetOperatorRuntimeSlotContent(data: any): Promise<void> {
+  private async handleSetOperatorRuntimeSlotContent(data: any, connectionId: string): Promise<void> {
     try {
       const { operatorId, slot, content } = data;
+      this.logOperatorCommand('setOperatorRuntimeSlotContent', connectionId, { operatorId, slot, content });
       this.digitalRadioEngine.operatorManager.setOperatorRuntimeSlotContent(operatorId, slot, content);
     } catch (error) {
       this.handleCommandError(error, 'setOperatorRuntimeSlotContent');
@@ -955,18 +980,20 @@ export class WSServer extends WSMessageHandler {
   /**
    * 处理设置操作员发射周期命令
    */
-  private async handleSetOperatorTransmitCycles(data: any): Promise<void> {
+  private async handleSetOperatorTransmitCycles(data: any, connectionId: string): Promise<void> {
     try {
       const { operatorId, transmitCycles } = data;
+      this.logOperatorCommand('setOperatorTransmitCycles', connectionId, { operatorId, transmitCycles });
       await this.digitalRadioEngine.operatorManager.setOperatorTransmitCycles(operatorId, transmitCycles);
     } catch (error) {
       this.handleCommandError(error, 'setOperatorTransmitCycles');
     }
   }
 
-  private async handlePluginUserAction(data: any): Promise<void> {
+  private async handlePluginUserAction(data: any, connectionId: string): Promise<void> {
     try {
       const { pluginName, actionId, operatorId, payload } = data ?? {};
+      this.logOperatorCommand('pluginUserAction', connectionId, { operatorId, pluginName, actionId });
       this.digitalRadioEngine.pluginManager.handlePluginUserAction(
         pluginName,
         actionId,
@@ -982,9 +1009,10 @@ export class WSServer extends WSMessageHandler {
    * 处理启动操作员命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleStartOperator(data: any): Promise<void> {
+  private async handleStartOperator(data: any, connectionId: string): Promise<void> {
     try {
       const { operatorId } = data;
+      this.logOperatorCommand('startOperator', connectionId, { operatorId });
       this.digitalRadioEngine.operatorManager.startOperator(operatorId);
       logger.debug(`operator started: ${operatorId}`);
     } catch (error) {
@@ -996,9 +1024,10 @@ export class WSServer extends WSMessageHandler {
    * 处理停止操作员命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleStopOperator(data: any): Promise<void> {
+  private async handleStopOperator(data: any, connectionId: string): Promise<void> {
     try {
       const { operatorId } = data;
+      this.logOperatorCommand('stopOperator', connectionId, { operatorId });
       this.digitalRadioEngine.operatorManager.stopOperator(operatorId);
       logger.debug(`operator stopped: ${operatorId}`);
     } catch (error) {
@@ -1010,9 +1039,15 @@ export class WSServer extends WSMessageHandler {
    * 处理操作员请求呼叫命令
    * 📊 Day14优化：使用统一的错误处理方法
    */
-  private async handleOperatorRequestCall(data: any): Promise<void> {
+  private async handleOperatorRequestCall(data: any, connectionId: string): Promise<void> {
     try {
       const { operatorId, callsign, selectedFrame } = data;
+      this.logOperatorCommand('operatorRequestCall', connectionId, {
+        operatorId,
+        callsign,
+        selectedFrameMessage: selectedFrame?.message ?? null,
+        selectedFrameSlotStartMs: selectedFrame?.slotStartMs ?? null,
+      });
       const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
       if (!operator) {
         throw new Error(`Operator ${operatorId} does not exist`);

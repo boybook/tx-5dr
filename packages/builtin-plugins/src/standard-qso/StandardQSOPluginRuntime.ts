@@ -1282,6 +1282,29 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
     setState(state: SlotsIndex): void {
         const oldState = this.state;
+        // Audit anomaly: external setState that aborts an active QSO by jumping to TX6.
+        // Triggered intentionally only when:
+        //   - state actually changes
+        //   - we were in an active QSO state (TX1..TX5)
+        //   - we have a target callsign (i.e. mid-conversation)
+        //   - the new state is TX6 (the abort destination)
+        // This narrowly targets the "BG5DRB premature CQ" incident pattern and
+        // avoids noise from normal slot dropdown moves between TX1..TX5.
+        if (
+            oldState !== state &&
+            oldState !== 'TX6' &&
+            this.context.targetCallsign &&
+            state === 'TX6'
+        ) {
+            this.logger.warn('External setState aborts active QSO', {
+                from: oldState,
+                to: state,
+                targetCallsign: this.context.targetCallsign,
+                timeoutCycles: this.timeoutCycles,
+                reportSent: this.context.reportSent ?? null,
+                reportReceived: this.context.reportReceived ?? null,
+            });
+        }
         this.state = state;
         this.tx5TransmissionQueued = false;
         if (state !== 'TX6') {

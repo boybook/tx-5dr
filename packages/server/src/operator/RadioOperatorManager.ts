@@ -285,7 +285,20 @@ export class RadioOperatorManager {
 
     // 监听操作员切换发射槽位事件
     const handleOperatorSlotChanged = (data: { operatorId: string; slot: string }) => {
-      logger.debug(`Operator ${data.operatorId} slot changed: ${data.slot}`);
+      const operator = this.operators.get(data.operatorId);
+      const now = this.clockSource.now();
+      const slotMs = this.getCurrentMode().slotMs;
+      const slotStartMs = Math.floor(now / slotMs) * slotMs;
+      // Bumped from debug→info: this event is the bridge between an external
+      // setState and the immediate checkAndTriggerTransmission that would emit
+      // an out-of-band TX. Pairing it with WS audit logs lets us reconstruct
+      // the trigger chain when a slot anomaly is reported.
+      logger.info('operatorSlotChanged → checkAndTriggerTransmission', {
+        operatorId: data.operatorId,
+        newSlot: data.slot,
+        isTransmitting: operator?.isTransmitting ?? false,
+        elapsedInSlotMs: now - slotStartMs,
+      });
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
       // 发送状态更新到前端
@@ -1530,7 +1543,6 @@ export class RadioOperatorManager {
       return left.slotId.localeCompare(right.slotId);
     });
   }
-
 
   private rebuildQSOMessageHistory(
     slotPacks: SlotPack[],

@@ -348,6 +348,21 @@ export class PluginManager {
   setOperatorRuntimeState(operatorId: string, state: StrategyRuntimeSlot): void {
     const runtime = this.getStrategyRuntime(operatorId);
     if (!runtime) return;
+    let beforeState: string = 'unknown';
+    let beforeTargetCallsign: string | undefined;
+    try {
+      const snapshot = runtime.getSnapshot();
+      beforeState = snapshot.currentState;
+      beforeTargetCallsign = snapshot.context?.targetCallsign;
+    } catch {
+      // snapshot may not be available for all runtime implementations
+    }
+    logger.info('PluginManager.setOperatorRuntimeState applied', {
+      operatorId,
+      before: beforeState,
+      after: state,
+      beforeTargetCallsign: beforeTargetCallsign ?? null,
+    });
     runtime.setState(state);
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
