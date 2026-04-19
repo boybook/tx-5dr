@@ -111,7 +111,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private constructor() {
     super();
     this.clockSource = new ClockSourceSystem();
-    this.ntpCalibrationService = new NtpCalibrationService(this.clockSource);
+    this.ntpCalibrationService = new NtpCalibrationService(this.clockSource, ConfigManager.getInstance().getNtpServers());
     this.audioStreamManager = new AudioStreamManager();
     this.realDecodeQueue = new WSJTXDecodeWorkQueue(1);
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);

@@ -64,7 +64,9 @@ import type {
   UpdateAuthConfigRequest,
   NetworkInfo,
   ClockStatusDetail,
+  NtpServerListSettings,
   SetClockOffsetRequest,
+  UpdateNtpServerListRequest,
   PresetFrequency,
   StationInfo,
   StationInfoResponse,
@@ -1638,6 +1640,24 @@ export const api = {
     return apiRequest<ClockStatusDetail>('/system/clock', undefined, apiBase);
   },
 
+  async getNtpServerListSettings(apiBase?: string): Promise<NtpServerListSettings> {
+    return apiRequest<NtpServerListSettings>('/system/clock/settings', undefined, apiBase);
+  },
+
+  async updateNtpServerListSettings(
+    data: UpdateNtpServerListRequest,
+    apiBase?: string,
+  ): Promise<NtpServerListSettings> {
+    return apiRequest<NtpServerListSettings>(
+      '/system/clock/settings',
+      {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      },
+      apiBase,
+    );
+  },
+
   async setClockOffset(data: SetClockOffsetRequest, apiBase?: string): Promise<ClockStatusDetail> {
     return apiRequest<ClockStatusDetail>(
       '/system/clock/offset',
@@ -1929,4 +1949,6 @@ export const {
   ,updatePluginOperatorSettings
   ,setOperatorStrategyPlugin
   ,reloadPlugins
+  ,getNtpServerListSettings
+  ,updateNtpServerListSettings
 } = api;

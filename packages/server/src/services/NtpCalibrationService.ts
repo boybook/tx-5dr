@@ -3,13 +3,13 @@ import { EventEmitter } from 'eventemitter3';
 import type { ClockSourceSystem } from '@tx5dr/core';
 import type { ClockIndicatorState, ClockStatusDetail, ClockStatusSummary, ClockSyncState } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
+import { DEFAULT_NTP_SERVERS } from './ntpServers.js';
 
 const logger = createLogger('NtpCalibration');
 
 /** NTP epoch (1900-01-01) to Unix epoch (1970-01-01) offset in seconds */
 const NTP_EPOCH_OFFSET = 2208988800;
 
-const NTP_SERVERS = ['pool.ntp.org', '0.pool.ntp.org', '1.pool.ntp.org'];
 const NTP_PORT = 123;
 const QUERY_TIMEOUT_MS = 5000;
 const SAMPLE_COUNT = 4;
@@ -29,7 +29,9 @@ interface NtpCalibrationServiceEvents {
  */
 export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEvents> {
   private readonly clockSource: ClockSourceSystem;
+  private servers: string[];
   private intervalTimer: ReturnType<typeof setInterval> | null = null;
+  private measurementPromise: Promise<void> | null = null;
   private measuredOffsetMs = 0;
   private appliedOffsetMs = 0;
   private lastSyncTime: number | null = null;
@@ -37,9 +39,10 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
   private serverUsed: string | null = null;
   private errorMessage: string | null = null;
 
-  constructor(clockSource: ClockSourceSystem) {
+  constructor(clockSource: ClockSourceSystem, servers: string[] = [...DEFAULT_NTP_SERVERS]) {
     super();
     this.clockSource = clockSource;
+    this.servers = [...servers];
     this.appliedOffsetMs = this.clockSource.getCalibrationOffsetMs();
   }
 
@@ -98,6 +101,11 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
     await this.performMeasurement();
   }
 
+  setServers(servers: string[]): void {
+    this.servers = [...servers];
+    logger.info(`Updated NTP server list: ${this.servers.join(', ')}`);
+  }
+
   private getIndicatorState(): ClockIndicatorState {
     if (this.syncState === 'never') return 'never';
     if (this.syncState === 'failed') return 'failed';
@@ -114,9 +122,20 @@ export class NtpCalibrationService extends EventEmitter<NtpCalibrationServiceEve
   }
 
   private async performMeasurement(): Promise<void> {
+    if (this.measurementPromise) {
+      return this.measurementPromise;
+    }
+
+    this.measurementPromise = this.runMeasurement().finally(() => {
+      this.measurementPromise = null;
+    });
+    return this.measurementPromise;
+  }
+
+  private async runMeasurement(): Promise<void> {
     let lastError: Error | null = null;
 
-    for (const server of NTP_SERVERS) {
+    for (const server of this.servers) {
       try {
         const samples: number[] = [];
         for (let i = 0; i < SAMPLE_COUNT; i += 1) {
