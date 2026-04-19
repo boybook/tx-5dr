@@ -132,7 +132,7 @@ export const RigctldBridgeSettings = forwardRef<
   // disconnect or the listener is reconciled.
   useWSEvent(
     connection.state.radioService,
-    'rigctldStatus' as never,
+    'rigctldStatus',
     (incoming: RigctldStatus) => {
       setStatus((prev) => {
         // Only rehydrate form fields when the form currently matches the
@@ -185,7 +185,9 @@ export const RigctldBridgeSettings = forwardRef<
       setForm(toForm(result.config));
     } catch (error) {
       const message = error instanceof ApiError ? error.message : String(error);
-      showErrorToast(t('rigctld.saveFailed', { message }));
+      showErrorToast({
+        userMessage: t('rigctld.saveFailed', { message }),
+      });
       logger.error('rigctld config save failed', error);
       // Re-throw so SettingsModal's handleConfirmSave can skip the post-save
       // transition (close / tab change) when persistence fails.

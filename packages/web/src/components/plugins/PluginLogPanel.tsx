@@ -39,6 +39,26 @@ export const PluginLogPanel: React.FC<PluginLogPanelProps> = ({ pluginNames }) =
     () => Array.from(new Set([...pluginNames, ...entries.map((entry) => entry.pluginName)])).sort(),
     [entries, pluginNames],
   );
+  const pluginSelectItems = React.useMemo(
+    () => [
+      { key: 'all', label: t('plugins.allPlugins', 'All plugins') },
+      ...pluginOptions.map((pluginName) => ({
+        key: pluginName,
+        label: resolvePluginName(pluginName, pluginName),
+      })),
+    ],
+    [pluginOptions, t],
+  );
+  const levelSelectItems = React.useMemo(
+    () => [
+      { key: 'all', label: t('plugins.allLevels', 'All levels') },
+      ...LEVELS.map((level) => ({
+        key: level,
+        label: t(`plugins.level.${level}`, level),
+      })),
+    ],
+    [t],
+  );
 
   return (
     <section className="space-y-3">
@@ -73,15 +93,9 @@ export const PluginLogPanel: React.FC<PluginLogPanelProps> = ({ pluginNames }) =
               }
             }}
             variant="bordered"
+            items={pluginSelectItems}
           >
-            <SelectItem key="all">
-              {t('plugins.allPlugins', 'All plugins')}
-            </SelectItem>
-            {pluginOptions.map((pluginName) => (
-              <SelectItem key={pluginName}>
-                {resolvePluginName(pluginName, pluginName)}
-              </SelectItem>
-            ))}
+            {(item) => <SelectItem key={item.key}>{item.label}</SelectItem>}
           </Select>
 
           <Select
@@ -95,15 +109,9 @@ export const PluginLogPanel: React.FC<PluginLogPanelProps> = ({ pluginNames }) =
               }
             }}
             variant="bordered"
+            items={levelSelectItems}
           >
-            <SelectItem key="all">
-              {t('plugins.allLevels', 'All levels')}
-            </SelectItem>
-            {LEVELS.map((level) => (
-              <SelectItem key={level}>
-                {t(`plugins.level.${level}`, level)}
-              </SelectItem>
-            ))}
+            {(item) => <SelectItem key={item.key}>{item.label}</SelectItem>}
           </Select>
         </div>
 

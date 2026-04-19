@@ -59,6 +59,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       targetGrid: operatorStatus.context.targetGrid || '',
       frequency: operatorStatus.context.frequency, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
       reportSent: operatorStatus.context.reportSent ?? 0,
+      reportReceived: operatorStatus.context.reportReceived ?? 0,
     };
   });
 

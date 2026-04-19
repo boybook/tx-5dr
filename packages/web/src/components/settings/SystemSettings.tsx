@@ -24,6 +24,8 @@ import type {
   NetworkInfo,
   LiveKitNetworkMode,
   RealtimeSettingsResponseData,
+  RealtimeConnectivityErrorCode,
+  RealtimeCredentialStatus,
   RealtimeTransportPolicy,
   DesktopHttpsStatus,
   DesktopHttpsMode,
@@ -511,7 +513,7 @@ export const SystemSettings = forwardRef<
   const loadElectronCloseBehavior = async () => {
     try {
       const value = await window.electronAPI?.config?.get('closeBehavior');
-      if (value) {
+      if (typeof value === 'string') {
         setCloseBehavior(value);
         setOriginalCloseBehavior(value);
       }

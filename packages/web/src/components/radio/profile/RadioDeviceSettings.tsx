@@ -63,11 +63,11 @@ const MULTICAST_FIELD_ORDER = [
   'multicast_cmd_port',
 ] as const;
 
-const CONNECTION_FIELD_NAME_SET = new Set([
+const CONNECTION_FIELD_NAME_SET: ReadonlySet<string> = new Set([
   ...CONNECTION_FIELD_ORDER,
   ...CONNECTION_CONTROL_FIELD_ORDER,
 ] as const);
-const MULTICAST_FIELD_NAME_SET = new Set(MULTICAST_FIELD_ORDER);
+const MULTICAST_FIELD_NAME_SET: ReadonlySet<string> = new Set(MULTICAST_FIELD_ORDER);
 const FIELD_ORDER = [
   ...CONNECTION_FIELD_ORDER,
   ...CONNECTION_CONTROL_FIELD_ORDER,
@@ -404,6 +404,10 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     }
 
     if (field.type === 'combo' && field.options?.length) {
+      const items = [
+        ...(defaultLabel ? [{ key: '__default__', label: defaultLabel }] : []),
+        ...field.options.map((option) => ({ key: option, label: option })),
+      ];
       return (
         <Select
           key={field.name}
@@ -417,18 +421,23 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
           }}
           variant="flat"
           placeholder={defaultLabel}
+          items={items}
         >
-          {defaultLabel ? (
-            <SelectItem key="__default__" textValue={defaultLabel}>{defaultLabel}</SelectItem>
-          ) : null}
-          {field.options.map((option) => (
-            <SelectItem key={option} textValue={option}>{option}</SelectItem>
-          ))}
+          {(item) => (
+            <SelectItem key={item.key} textValue={item.label}>
+              {item.label}
+            </SelectItem>
+          )}
         </Select>
       );
     }
 
     if (field.type === 'checkbutton') {
+      const items = [
+        ...(defaultLabel ? [{ key: '__default__', label: defaultLabel }] : []),
+        { key: '1', label: t('radio.toggleOn') },
+        { key: '0', label: t('radio.toggleOff') },
+      ];
       return (
         <Select
           key={field.name}
@@ -446,12 +455,13 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
           }}
           variant="flat"
           placeholder={defaultLabel}
+          items={items}
         >
-          {defaultLabel ? (
-            <SelectItem key="__default__" textValue={defaultLabel}>{defaultLabel}</SelectItem>
-          ) : null}
-          <SelectItem key="1" textValue="1">{t('radio.toggleOn')}</SelectItem>
-          <SelectItem key="0" textValue="0">{t('radio.toggleOff')}</SelectItem>
+          {(item) => (
+            <SelectItem key={item.key} textValue={item.label}>
+              {item.label}
+            </SelectItem>
+          )}
         </Select>
       );
     }

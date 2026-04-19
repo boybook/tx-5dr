@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SpectrumCapabilities } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { createSpectrumNegotiator } from '../radio/spectrumNegotiation';
-import { initialRadioState, radioReducer } from '../radioStore';
+import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
 
 function createCapabilities(options: {
   audioAvailable?: boolean;
@@ -64,7 +64,7 @@ function createHarness() {
     subscribeSpectrum: vi.fn(),
     invokeSpectrumControl: vi.fn(),
   };
-  const radioStateRef = {
+  const radioStateRef: { current: RadioState } = {
     current: {
       ...initialRadioState,
       currentMode: MODES.VOICE,
