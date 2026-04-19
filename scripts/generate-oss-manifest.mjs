@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 
+const RECENT_COMMITS_LIMIT = 10;
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -209,7 +211,7 @@ function parseRecentCommits(value) {
   return parsed
     .map((entry) => normalizeRecentCommit(entry))
     .filter((entry) => Boolean(entry))
-    .slice(0, 5);
+    .slice(0, RECENT_COMMITS_LIMIT);
 }
 
 async function main() {

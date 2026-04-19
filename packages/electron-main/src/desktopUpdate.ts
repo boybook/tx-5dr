@@ -6,6 +6,7 @@ import { createLogger } from './utils/logger.js';
 const logger = createLogger('DesktopUpdate');
 
 const DEFAULT_OSS_BASE_URL = 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com';
+const RECENT_COMMITS_LIMIT = 10;
 const COUNTRY_LOOKUP_URLS = [
   'https://ipinfo.io/country',
   'https://ifconfig.co/country-iso',
@@ -368,7 +369,7 @@ function normalizeRecentCommits(manifest: DesktopUpdateManifest): DesktopUpdateR
       };
     })
     .filter((entry): entry is DesktopUpdateRecentCommit => Boolean(entry))
-    .slice(0, 5);
+    .slice(0, RECENT_COMMITS_LIMIT);
 
   if (normalized.length > 0) {
     return normalized;
