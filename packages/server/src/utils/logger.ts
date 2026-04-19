@@ -4,13 +4,13 @@
  * File persistence is handled by ConsoleLogger's console override.
  *
  * LOG_LEVEL=debug|info|warn|error
- * Default: production=warn, development=info
+ * Default: production=info, development=debug
  */
 
 const LEVELS: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
 let _logLevel: string = process.env.LOG_LEVEL ||
-  (process.env.NODE_ENV === 'production' ? 'warn' : 'debug');
+  (process.env.NODE_ENV === 'production' ? 'info' : 'debug');
 
 /**
  * Override the active log level at runtime (e.g. from config file).

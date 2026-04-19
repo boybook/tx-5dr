@@ -474,7 +474,7 @@ logger.warn('reconnect failed', err);
 logger.error('PTT failed', err);
 ```
 
-- `LOG_LEVEL=debug|info|warn|error`（production 默认 warn，development 默认 info）
+- `LOG_LEVEL=debug|info|warn|error`（production 默认 info，development 默认 debug）
 - 高频路径（每时隙/每 WS 事件/每次编解码）→ `logger.debug`
 - 生命周期（启动/停止/连接/断开）→ `logger.info`
 - `ConsoleLogger` 通过 console 覆盖拦截所有输出写入日志文件，`createLogger` 做级别过滤后调用 `console.*`

@@ -219,4 +219,4 @@ logger.error('PTT failed', err);         // 错误
 
 **架构说明（server）**：`ConsoleLogger` 通过 console 全局覆盖拦截所有输出写入日志文件；`createLogger` 做级别过滤后调用 `console.*`，由覆盖层统一持久化。`core` 包的日志经级别过滤后同样进入覆盖层写入 server 日志文件。
 
-**server 级别控制**：`LOG_LEVEL=debug|info|warn|error`（production 默认 warn，development 默认 info）
+**server 级别控制**：`LOG_LEVEL=debug|info|warn|error`（production 默认 info，development 默认 debug）

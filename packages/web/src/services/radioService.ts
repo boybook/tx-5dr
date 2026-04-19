@@ -204,6 +204,7 @@ export class RadioService {
     context: WSSetOperatorContextMessage['data']['context'],
   ): void {
     if (this.isConnected) {
+      logger.info('UI command: setOperatorContext', { operatorId, context });
       this.wsClient.send('setOperatorContext', { operatorId, context });
     }
   }
@@ -213,6 +214,7 @@ export class RadioService {
    */
   setOperatorRuntimeState(operatorId: string, state: OperatorRuntimeSlot): void {
     if (this.isConnected) {
+      logger.info('UI command: setOperatorRuntimeState', { operatorId, state });
       this.wsClient.send('setOperatorRuntimeState', { operatorId, state });
     }
   }
@@ -222,6 +224,7 @@ export class RadioService {
    */
   setOperatorRuntimeSlotContent(operatorId: string, slot: OperatorRuntimeSlot, content: string): void {
     if (this.isConnected) {
+      logger.info('UI command: setOperatorRuntimeSlotContent', { operatorId, slot, content });
       this.wsClient.send('setOperatorRuntimeSlotContent', { operatorId, slot, content });
     }
   }
@@ -231,6 +234,7 @@ export class RadioService {
    */
   setOperatorTransmitCycles(operatorId: string, transmitCycles: number[]): void {
     if (this.isConnected) {
+      logger.info('UI command: setOperatorTransmitCycles', { operatorId, transmitCycles });
       this.wsClient.send('setOperatorTransmitCycles', { operatorId, transmitCycles });
     }
   }
@@ -345,6 +349,11 @@ export class RadioService {
    */
   sendRequestCall(operatorId: string, callsign: string, selectedFrame?: WSSelectedFrame): void {
     if (this.isConnected) {
+      logger.info('UI command: sendRequestCall', {
+        operatorId,
+        callsign,
+        selectedFrameMessage: selectedFrame?.message ?? null,
+      });
       this.wsClient.requestCall(operatorId, callsign, selectedFrame);
     }
   }
