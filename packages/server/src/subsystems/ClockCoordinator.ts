@@ -167,9 +167,13 @@ export class ClockCoordinator {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engineEmitter.emit('slotPackUpdated', slotPack as any);
+    });
 
-      // 晚到解码重决策：当上一 RX 时隙的解码结果在 TX 时隙早期到达时，重新评估发射决策
-      operatorManager.reDecideOnLateDecodes(slotPack as unknown as SlotPack);
+    // 晚到解码重决策订阅 decode-only 事件，避免被 addTransmissionFrame 的 TX echo
+    // slotPackUpdated 错误触发（会把当前 TX 槽的 slotPack 当成上一 RX 槽喂给
+    // standard-qso，污染 QSO 上下文——见 2026-04-19 BG5DRB 事故）。
+    this.lm.listen(slotPackManager, 'slotPackDecodeUpdated', (slotPack: SlotPack) => {
+      operatorManager.reDecideOnLateDecodes(slotPack);
     });
 
     // ─── SpectrumScheduler 事件 ────────────────────

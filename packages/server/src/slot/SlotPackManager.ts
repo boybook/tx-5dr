@@ -13,6 +13,12 @@ const logger = createLogger('SlotPackManager');
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
+  /**
+   * 仅在 RX 解码结果写入（processDecodeResult）时触发，不在 TX echo
+   * (addTransmissionFrame) 写入时触发。晚到解码重决策应订阅此事件，避免把
+   * 「自己/其他 operator 的 TX echo 写入当前 TX 槽」当作「上一 RX 槽的晚到解码」。
+   */
+  'slotPackDecodeUpdated': (slotPack: SlotPack) => void;
 }
 
 /**
@@ -213,12 +219,12 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     const allFrames = [...slotPack.frames, ...correctedFrames];
     slotPack.frames = this.deduplicateAndOptimizeFrames(allFrames);
     slotPack.stats.totalFramesAfterDedup = slotPack.frames.length;
-    
+
     // 确保 lastSlotPack 指向最新的 SlotPack
     if (slotPack.startMs > (this.lastSlotPack?.startMs || 0)) {
       this.lastSlotPack = slotPack;
     }
-    
+
     // 异步存储到本地（不阻塞主流程）
     if (this.persistenceEnabled) {
       this.persistence.store(slotPack, 'updated', this.currentMode.name).catch(error => {
@@ -226,8 +232,11 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       });
     }
 
-    // 发出更新事件
+    // 发出通用更新事件（给前端/PSKReporter/callsignTracker 等消费者）
     this.emit('slotPackUpdated', { ...slotPack });
+    // 额外发出 decode-only 事件，专供「晚到解码重决策」订阅，
+    // 区别于 addTransmissionFrame 仅更新 TX echo 时的 slotPackUpdated
+    this.emit('slotPackDecodeUpdated', { ...slotPack });
 
     return { ...slotPack };
   }

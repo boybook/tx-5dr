@@ -290,6 +290,124 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     }
   });
 
+  it('reDecideOnLateDecodes rejects a slotPack from the current TX slot (not the prior RX slot)', async () => {
+    // 2026-04-19 BG5DRB 事故修复（方案 B）：addTransmissionFrame 的 slotPackUpdated
+    // 在「多 operator 混合 TX」场景下会把当前 TX 槽的 slotPack 喂给 reDecideOnLateDecodes。
+    // reDecide 的 slotPack 必须是「上一 RX 槽」；若不是就拒绝，避免 standard-qso 被错误
+    // 输入污染 QSO 上下文。
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: {
+          addQSO: vi.fn().mockResolvedValue(undefined),
+          updateQSO: vi.fn(),
+          getQSO: vi.fn(),
+          getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+          getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 0 }),
+          hasWorkedCallsign: vi.fn().mockResolvedValue(false),
+        },
+      },
+      callsign: 'BG4IAJ',
+      clockNow: 60_001, // 当前 TX 槽 startMs=60_000，上一 RX 槽 startMs=45_000
+      encodeQueue,
+    });
+
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-operator-wrongslot-'));
+    eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {
+      eventEmitter.emit('hasWorkedCallsignResponse' as any, {
+        requestId: data.requestId,
+        hasWorked: false,
+      });
+    });
+
+    let pluginManager!: PluginManager;
+    pluginManager = new PluginManager({
+      eventEmitter,
+      getOperators: () => manager.getAllOperators(),
+      getOperatorById: (id) => manager.getOperatorById(id),
+      getCurrentMode: () => MODES.FT8,
+      getOperatorAutomationSnapshot: (id) => pluginManager.getOperatorAutomationSnapshot(id),
+      requestOperatorCall: () => {},
+      getRadioFrequency: async () => 7_074_000,
+      setRadioFrequency: () => {},
+      getRadioBand: () => '40m',
+      getRadioConnected: () => true,
+      getLatestSlotPack: () => null,
+      interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false,
+      resetOperatorRuntime: () => {},
+      dataDir,
+    });
+
+    try {
+      manager.setPluginManager(pluginManager);
+      pluginManager.loadConfig({ configs: {}, operatorStrategies: {}, operatorSettings: {} });
+      await manager.addOperator({
+        id: 'op1',
+        myCallsign: 'BG4IAJ',
+        myGrid: 'OM96',
+        frequency: 7_074_000,
+        transmitCycles: [0],
+        mode: MODES.FT8,
+      });
+      await pluginManager.start();
+      manager.start();
+      const operator = manager.getOperatorById('op1');
+      operator!.start();
+
+      pluginManager.patchOperatorRuntimeContext('op1', {
+        targetCallsign: 'BG5DRB',
+        targetGrid: 'OM96',
+        reportSent: -6,
+      });
+      pluginManager.setOperatorRuntimeState('op1', 'TX3');
+
+      const reDecideSpy = vi.spyOn(pluginManager, 'reDecideOperator');
+
+      // 关键反例：喂入的 slotPack.startMs 是当前 TX 槽 60_000，不是上一 RX 槽 45_000
+      // （模拟 addTransmissionFrame 写入 TX echo 后 emit 的 slotPackUpdated 漏到本路径）
+      const currentTxSlotPack = buildSlotPack('slot-60000', 60_000, [{
+        message: 'BA4IE BG5BNW -07',
+        snr: -999,
+        dt: 0,
+        freq: 1595,
+        confidence: 1,
+        operatorId: 'other-op',
+      }]);
+
+      manager.reDecideOnLateDecodes(currentTxSlotPack);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(reDecideSpy).not.toHaveBeenCalled();
+
+      // 反向验证：喂入上一 RX 槽的 slotPack 可以正常触发（确保守卫不过度严格）
+      const priorRxSlotPack = buildSlotPack('slot-45000', 45_000, [{
+        message: FT8MessageParser.generateMessage({
+          type: FT8MessageType.ROGER_REPORT,
+          senderCallsign: 'BG5DRB',
+          targetCallsign: 'BG4IAJ',
+          report: -5,
+        }),
+        snr: -4,
+        dt: 0,
+        freq: 1531,
+        confidence: 0.95,
+      }]);
+
+      manager.reDecideOnLateDecodes(priorRxSlotPack);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(reDecideSpy).toHaveBeenCalledTimes(1);
+      expect(reDecideSpy.mock.calls[0]?.[0]).toBe('op1');
+    } finally {
+      manager.stop();
+      await pluginManager.shutdown().catch(() => undefined);
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('refreshes the logbook callsign binding after the operator callsign changes', async () => {
     const perCallsignWorked = new Map<string, boolean>([
       ['BG4IAJ', false],

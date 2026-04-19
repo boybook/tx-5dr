@@ -936,6 +936,18 @@ export class RadioOperatorManager {
 
     if (elapsed > this.getRedecideDeadlineMs()) return;
 
+    // 校验 slotPack 必须属于「上一 RX 槽」。防御式挡住任何把当前 TX 槽或更早
+    // 的 slotPack 传进来的调用（如 addTransmissionFrame 的 slotPackUpdated 漏
+    // 到这条路径）——这类 slotPack 缺失上一 RX 槽的 context，会让 standard-qso
+    // 误判「无新 directCall → 清理 QSO 上下文」。
+    const prevRxSlotStartMs = currentSlotStartMs - slotMs;
+    if (slotPack.startMs !== prevRxSlotStartMs) {
+      logger.debug(
+        `reDecideOnLateDecodes rejecting slotPack from wrong slot: got=${slotPack.startMs} expected=${prevRxSlotStartMs} currentSlot=${currentSlotStartMs}`,
+      );
+      return;
+    }
+
     // 立即执行重决策（不 debounce），依赖 messageSet 过滤 + latestEncodeRequestIds 防止副作用
     this.executeReDecision(slotPack);
   }
