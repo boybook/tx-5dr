@@ -12,12 +12,14 @@ import {
   type LiveKitNetworkMode,
   type RealtimeTransportPolicy,
   type RigctldBridgeConfig,
+  UpdateNtpServerListRequestSchema,
 } from '@tx5dr/contracts';
 import type { RadioProfile, DecodeWindowSettings, PresetFrequency, StationInfo, OpenWebRXStationConfig, PluginsConfig } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio/hamlibConfigUtils.js';
+import { DEFAULT_NTP_SERVERS } from '../services/ntpServers.js';
 
 const logger = createLogger('ConfigManager');
 
@@ -106,6 +108,10 @@ export interface AppConfig {
   plugins?: PluginsConfig;
   /** rigctld-compatible TCP bridge (lets N1MM / WSJT-X / JTDX connect to this tx5dr instance). */
   rigctld?: RigctldBridgeConfig;
+  /** Persisted NTP server order. When absent, built-in defaults are used. */
+  ntp?: {
+    servers?: string[];
+  };
 }
 
 // 音频处理配置接口
@@ -961,6 +967,28 @@ export class ConfigManager {
     this.config.rigctld = { ...current, ...patch };
     await this.saveConfig();
     return { ...this.config.rigctld };
+  }
+
+  getDefaultNtpServers(): string[] {
+    return [...DEFAULT_NTP_SERVERS];
+  }
+
+  getNtpServers(): string[] {
+    const configuredServers = this.config.ntp?.servers;
+    if (Array.isArray(configuredServers) && configuredServers.length > 0) {
+      try {
+        return UpdateNtpServerListRequestSchema.parse({ servers: configuredServers }).servers;
+      } catch (error) {
+        logger.warn('Invalid persisted NTP server list detected, falling back to defaults', error);
+      }
+    }
+    return this.getDefaultNtpServers();
+  }
+
+  async updateNtpServers(servers: string[]): Promise<void> {
+    const parsed = UpdateNtpServerListRequestSchema.parse({ servers });
+    this.config.ntp = { servers: parsed.servers };
+    await this.saveConfig();
   }
 
   // ===== 按呼号的同步配置 =====

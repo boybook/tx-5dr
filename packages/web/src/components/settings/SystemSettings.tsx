@@ -2,18 +2,19 @@ import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallbac
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
+  Button,
   Card,
   CardBody,
-  Switch,
+  Divider,
   Input,
   Select,
   SelectItem,
+  Switch,
   Chip,
-  Divider,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
-import { Button } from '@heroui/react';
+import { faCheck, faCopy, faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons';
+import { Reorder, useDragControls } from 'framer-motion';
 import { api, ApiError } from '@tx5dr/core';
 import type {
   DecodeWindowSettings,
@@ -27,7 +28,7 @@ import type {
   DesktopHttpsStatus,
   DesktopHttpsMode,
 } from '@tx5dr/contracts';
-import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS } from '@tx5dr/contracts';
+import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS, isValidNtpServerHost } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { useConnection } from '../../store/radioStore';
@@ -88,6 +89,90 @@ const SETTINGS_PANEL_CLASS = 'rounded-medium border border-divider bg-default-50
 const SETTINGS_SOFT_PANEL_CLASS = 'rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5';
 const SETTINGS_METRIC_CLASS = 'rounded-medium bg-content1 px-3 py-2';
 const DESKTOP_UPDATE_COMMITS_URL = 'https://github.com/boybook/tx-5dr/commits/main';
+
+interface NtpServerDraftItem {
+  id: string;
+  value: string;
+}
+
+function createNtpServerDraftItem(value = ''): NtpServerDraftItem {
+  return {
+    id: `ntp-server-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    value,
+  };
+}
+
+function toNtpServerDraftItems(servers: string[]): NtpServerDraftItem[] {
+  return servers.map((server) => createNtpServerDraftItem(server));
+}
+
+function getNtpServerValues(items: NtpServerDraftItem[]): string[] {
+  return items.map((item) => item.value.trim());
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+interface NtpServerReorderItemProps {
+  item: NtpServerDraftItem;
+  total: number;
+  isSaving: boolean;
+  onValueChange: (id: string, value: string) => void;
+  onRemove: (id: string) => void;
+  t: (key: string, options?: Record<string, unknown>) => string;
+}
+
+function NtpServerReorderItem({
+  item,
+  total,
+  isSaving,
+  onValueChange,
+  onRemove,
+  t,
+}: NtpServerReorderItemProps) {
+  const dragControls = useDragControls();
+  const trimmedValue = item.value.trim();
+  const isInvalid = trimmedValue.length > 0 && !isValidNtpServerHost(trimmedValue);
+
+  return (
+    <Reorder.Item value={item} as="div" dragListener={false} dragControls={dragControls} className="w-full">
+      <div className="flex items-start gap-2 rounded-medium border border-divider bg-content1 p-3">
+        <button
+          type="button"
+          className="flex h-8 w-4 items-center justify-center self-center cursor-grab text-default-300 transition-colors hover:text-default-500 active:cursor-grabbing"
+          onPointerDown={(event) => dragControls.start(event)}
+          aria-label={t('system.ntpDragHandle')}
+        >
+          <FontAwesomeIcon icon={faGripVertical} className="text-xs leading-none" />
+        </button>
+        <div className="flex-1 space-y-1">
+          <Input
+            size="sm"
+            placeholder={t('system.ntpServerPlaceholder')}
+            value={item.value}
+            onValueChange={(value) => onValueChange(item.id, value)}
+            isDisabled={isSaving}
+            isInvalid={isInvalid}
+            errorMessage={isInvalid ? t('system.ntpServerInvalid') : ' '}
+            classNames={{ input: 'font-mono text-sm' }}
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="light"
+          color="danger"
+          isIconOnly
+          isDisabled={isSaving || total <= 1}
+          onPress={() => onRemove(item.id)}
+          aria-label={t('system.ntpRemove')}
+        >
+          <FontAwesomeIcon icon={faTrash} className="text-xs" />
+        </Button>
+      </div>
+    </Reorder.Item>
+  );
+}
 
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
   ft8Preset: DEFAULT_DECODE_WINDOW_SETTINGS.ft8?.preset ?? 'balanced',
@@ -295,6 +380,9 @@ export const SystemSettings = forwardRef<
   const [originalLiveKitNodeIp, setOriginalLiveKitNodeIp] = useState('');
   const [realtimeRuntime, setRealtimeRuntime] = useState<RealtimeRuntimeView | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
+  const [ntpServers, setNtpServers] = useState<NtpServerDraftItem[]>([]);
+  const [originalNtpServers, setOriginalNtpServers] = useState<string[]>([]);
+  const [defaultNtpServers, setDefaultNtpServers] = useState<string[]>([]);
 
   // 解码窗口设置
   const [decodeWindowState, setDecodeWindowState] = useState<DecodeWindowState>({ ...DEFAULT_DECODE_WINDOW_STATE });
@@ -329,6 +417,7 @@ export const SystemSettings = forwardRef<
     loadPSKReporterStatus();
     loadDecodeWindowSettings();
     loadRealtimeSettings();
+    loadNtpServerListSettings();
     api.getNetworkInfo().then(setNetworkInfo).catch(() => {});
     loadElectronCloseBehavior();
     if (isElectron) {
@@ -662,6 +751,17 @@ export const SystemSettings = forwardRef<
     }
   }, [applyRealtimeSettingsSnapshot]);
 
+  const loadNtpServerListSettings = useCallback(async () => {
+    try {
+      const settings = await api.getNtpServerListSettings();
+      setNtpServers(toNtpServerDraftItems(settings.servers));
+      setOriginalNtpServers([...settings.servers]);
+      setDefaultNtpServers([...settings.defaultServers]);
+    } catch (err) {
+      logger.error('Failed to load NTP server list settings:', err);
+    }
+  }, []);
+
   useWSEvent(
     connection.state.radioService,
     'realtimeSettingsChanged',
@@ -717,6 +817,8 @@ export const SystemSettings = forwardRef<
     );
   };
 
+  const hasNtpServerChanges = () => !areStringArraysEqual(getNtpServerValues(ntpServers), originalNtpServers);
+
   // 检查是否有未保存的更改
   const hasUnsavedChanges = () => {
     return (
@@ -725,6 +827,7 @@ export const SystemSettings = forwardRef<
       hasAuthChanges() ||
       hasPskrChanges() ||
       hasDecodeWindowChanges() ||
+      hasNtpServerChanges() ||
       liveKitPublicUrl !== originalLiveKitPublicUrl ||
       realtimeTransportPolicy !== originalRealtimeTransportPolicy ||
       liveKitNetworkMode !== originalLiveKitNetworkMode ||
@@ -738,6 +841,22 @@ export const SystemSettings = forwardRef<
       ))
     );
   };
+
+  const handleNtpServerValueChange = useCallback((id: string, value: string) => {
+    setNtpServers((current) => current.map((item) => (item.id === id ? { ...item, value } : item)));
+  }, []);
+
+  const handleAddNtpServer = useCallback(() => {
+    setNtpServers((current) => [createNtpServerDraftItem(''), ...current]);
+  }, []);
+
+  const handleRemoveNtpServer = useCallback((id: string) => {
+    setNtpServers((current) => (current.length <= 1 ? current : current.filter((item) => item.id !== id)));
+  }, []);
+
+  const handleRestoreDefaultNtpServers = useCallback(() => {
+    setNtpServers(toNtpServerDraftItems(defaultNtpServers));
+  }, [defaultNtpServers]);
 
   // 保存配置
   const handleSave = async () => {
@@ -801,6 +920,15 @@ export const SystemSettings = forwardRef<
         };
         await api.updateDecodeWindowSettings(dwSettings);
         setOriginalDecodeWindowState({ ...decodeWindowState });
+      }
+
+      if (hasNtpServerChanges()) {
+        const ntpResult = await api.updateNtpServerListSettings({
+          servers: getNtpServerValues(ntpServers),
+        });
+        setNtpServers(toNtpServerDraftItems(ntpResult.servers));
+        setOriginalNtpServers([...ntpResult.servers]);
+        setDefaultNtpServers([...ntpResult.defaultServers]);
       }
 
       if (
@@ -876,7 +1004,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, liveKitNetworkMode, originalLiveKitNetworkMode, liveKitNodeIp, originalLiveKitNodeIp, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, originalDecodeValue, originalSpectrumValue, authConfig, originalAuthConfig, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, liveKitPublicUrl, originalLiveKitPublicUrl, realtimeTransportPolicy, originalRealtimeTransportPolicy, liveKitNetworkMode, originalLiveKitNetworkMode, liveKitNodeIp, originalLiveKitNodeIp, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const runtimeIssueLabel = getRealtimeIssueLabel(realtimeRuntime?.radioBridgeIssueCode ?? null, t);
@@ -893,6 +1021,7 @@ export const SystemSettings = forwardRef<
     : t('system.desktopUpdateSourceValue.unknown');
   const desktopDownloadOptions = desktopUpdateStatus?.downloadOptions || [];
   const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
+  const ntpCanRestoreDefaults = !areStringArraysEqual(getNtpServerValues(ntpServers), defaultNtpServers);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -938,6 +1067,66 @@ export const SystemSettings = forwardRef<
           <p className="text-danger-700 text-sm">{error}</p>
         </div>
       )}
+
+      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div className="flex-1">
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.ntpTitle')}</h4>
+              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.ntpDesc')}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={handleRestoreDefaultNtpServers}
+                isDisabled={isSaving || defaultNtpServers.length === 0 || !ntpCanRestoreDefaults}
+              >
+                {t('system.ntpRestoreDefaults')}
+              </Button>
+              <Button
+                size="sm"
+                color="primary"
+                variant="flat"
+                startContent={<FontAwesomeIcon icon={faPlus} />}
+                onPress={handleAddNtpServer}
+                isDisabled={isSaving}
+              >
+                {t('system.ntpAddServer')}
+              </Button>
+            </div>
+          </div>
+
+          <div className={SETTINGS_SOFT_PANEL_CLASS}>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.ntpPriorityTitle')}</p>
+              <p className={SETTINGS_SUBDESC_CLASS}>{t('system.ntpPriorityDesc')}</p>
+            </div>
+            <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{t('system.ntpPortHint')}</p>
+          </div>
+
+          <Reorder.Group
+            axis="y"
+            values={ntpServers}
+            onReorder={setNtpServers}
+            className="space-y-2"
+            as="div"
+          >
+            {ntpServers.map((item, index) => (
+              <NtpServerReorderItem
+                key={item.id}
+                item={item}
+                total={ntpServers.length}
+                isSaving={isSaving}
+                onValueChange={handleNtpServerValueChange}
+                onRemove={handleRemoveNtpServer}
+                t={t}
+              />
+            ))}
+          </Reorder.Group>
+
+        </CardBody>
+      </Card>
 
       {/* 公开查看权限 */}
       {authConfig && (

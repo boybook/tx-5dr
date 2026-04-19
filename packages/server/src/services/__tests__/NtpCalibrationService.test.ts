@@ -78,4 +78,37 @@ describe('NtpCalibrationService', () => {
       errorMessage: 'offline',
     });
   });
+
+  it('uses the updated server order for later measurements', async () => {
+    const service = new NtpCalibrationService(createClockSource() as any, ['first.example', 'second.example']);
+    const querySpy = vi.spyOn(service as any, 'queryNtpServer')
+      .mockResolvedValue(10);
+
+    await service.triggerMeasurement();
+    expect(querySpy).toHaveBeenNthCalledWith(1, 'first.example');
+
+    querySpy.mockClear();
+    service.setServers(['second.example', 'first.example']);
+
+    await service.triggerMeasurement();
+    expect(querySpy).toHaveBeenNthCalledWith(1, 'second.example');
+  });
+
+  it('deduplicates concurrent measurements through a shared in-flight promise', async () => {
+    const service = new NtpCalibrationService(createClockSource() as any, ['first.example']);
+    let resolveRun: (() => void) | null = null;
+    const runSpy = vi.spyOn(service as any, 'runMeasurement').mockImplementation(() => (
+      new Promise<void>((resolve) => {
+        resolveRun = resolve;
+      })
+    ));
+
+    const pendingA = service.triggerMeasurement();
+    const pendingB = service.triggerMeasurement();
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(resolveRun).not.toBeNull();
+    resolveRun!();
+    await Promise.all([pendingA, pendingB]);
+  });
 });
