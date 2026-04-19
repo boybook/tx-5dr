@@ -4,11 +4,13 @@ import { useTranslation } from 'react-i18next';
 import { useConnection } from '../../../store/radioStore';
 import { useCan } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
+import { computeSliderWheelUpdate } from '../../../utils/sliderWheel';
 
 const logger = createLogger('TxVolumeGainControl');
 
 interface TxVolumeGainControlProps {
   orientation?: 'horizontal' | 'vertical';
+  enableWheel?: boolean;
   onInteracted?: () => void;
   ariaLabel?: string;
   className?: string;
@@ -50,6 +52,7 @@ const parseVolumeGain = (data: unknown): number | null => {
 
 export const TxVolumeGainControl: React.FC<TxVolumeGainControlProps> = ({
   orientation = 'vertical',
+  enableWheel,
   onInteracted,
   ariaLabel,
   className = '',
@@ -61,6 +64,8 @@ export const TxVolumeGainControl: React.FC<TxVolumeGainControlProps> = ({
   const connection = useConnection();
   const canControl = useCan('execute', 'RadioControl');
   const [volumeGain, setVolumeGain] = React.useState(Math.pow(10, -10 / 20));
+  const pixelRemainderRef = React.useRef(0);
+  const wheelEnabled = enableWheel ?? orientation === 'vertical';
 
   const handleVolumeChange = React.useCallback((value: number | number[]) => {
     const dbValue = Array.isArray(value) ? value[0] : value;
@@ -122,6 +127,30 @@ export const TxVolumeGainControl: React.FC<TxVolumeGainControlProps> = ({
   }, [connection.state.isConnected, connection.state.radioService]);
 
   const currentDbValue = gainToDb(volumeGain);
+  const handleWheel = React.useCallback((event: React.WheelEvent<HTMLElement>) => {
+    const result = computeSliderWheelUpdate({
+      currentValue: currentDbValue,
+      min: MIN_DB,
+      max: MAX_DB,
+      step: 0.1,
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+      disabled: !canControl,
+      orientation,
+      enableWheel: wheelEnabled,
+      pixelRemainder: pixelRemainderRef.current,
+    });
+
+    pixelRemainderRef.current = result.pixelRemainder;
+
+    if (!result.consumed) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    handleVolumeChange(result.nextValue);
+  }, [canControl, currentDbValue, handleVolumeChange, orientation, wheelEnabled]);
   const wrapperClassName = orientation === 'horizontal'
     ? `w-full space-y-2 ${className}`.trim()
     : `flex flex-col items-center ${className}`.trim();
@@ -135,6 +164,7 @@ export const TxVolumeGainControl: React.FC<TxVolumeGainControlProps> = ({
         step={0.1}
         value={[currentDbValue]}
         onChange={handleVolumeChange}
+        onWheel={wheelEnabled ? handleWheel : undefined}
         isDisabled={!canControl}
         className={sliderClassName}
         style={sliderStyle}
