@@ -1,6 +1,7 @@
 import type { FrameGroup } from './FramesTable';
 
 export const BOTTOM_TOLERANCE_PX = 50;
+export const TOP_TOLERANCE_PX = 5;
 
 export const getBottomGroupSignature = (groups: FrameGroup[]): string => {
   const lastGroup = groups[groups.length - 1];
@@ -20,4 +21,8 @@ export const getBottomGroupSignature = (groups: FrameGroup[]): string => {
       message: message.message,
     })),
   });
+};
+
+export const shouldShowScrollToBottomButton = (groups: FrameGroup[], isAtBottom: boolean): boolean => {
+  return groups.length > 0 && !isAtBottom;
 };

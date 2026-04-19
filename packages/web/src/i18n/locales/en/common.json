@@ -117,7 +117,8 @@
   "framesTable": {
     "freq": "Freq",
     "message": "Message",
-    "location": "Location"
+    "location": "Location",
+    "scrollToBottom": "Scroll to bottom"
   },
   "callsignPopover": {
     "grid": "Grid",

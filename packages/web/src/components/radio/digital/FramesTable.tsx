@@ -1,5 +1,8 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
+import { faArrowDown } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
+  Button,
   Chip,
   ScrollShadow
 } from '@heroui/react';
@@ -10,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
-import { BOTTOM_TOLERANCE_PX, getBottomGroupSignature } from './framesTableAutoScroll';
+import { BOTTOM_TOLERANCE_PX, TOP_TOLERANCE_PX, getBottomGroupSignature, shouldShowScrollToBottomButton } from './framesTableAutoScroll';
 
 export interface FrameDisplayMessage {
   utc: string;
@@ -341,7 +344,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
   const checkIfAtTop = useCallback(() => {
     if (!scrollRef.current) return true;
-    return scrollRef.current.scrollTop <= 5;
+    return scrollRef.current.scrollTop <= TOP_TOLERANCE_PX;
   }, []);
 
   const syncScrollPositionState = useCallback(() => {
@@ -366,6 +369,13 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const handleScroll = useCallback(() => {
     syncScrollPositionState();
   }, [syncScrollPositionState]);
+
+  const handleScrollToBottomClick = useCallback(() => {
+    followBottomRef.current = true;
+    setWasAtBottom(true);
+    setIsAtTop(false);
+    requestScrollToBottom(true);
+  }, [requestScrollToBottom]);
 
   // Manually control ScrollShadow visibility to work correctly with virtual scrolling
   const scrollShadowVisibility = useMemo(() => {
@@ -454,6 +464,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const gridCols = isNarrow
     ? 'grid-cols-[42px_36px_52px_1fr_80px]'
     : 'grid-cols-[56px_40px_40px_64px_1fr_140px]';
+  const showScrollToBottomButton = shouldShowScrollToBottomButton(groups, wasAtBottom);
 
   if (groups.length === 0) {
     return null;
@@ -474,96 +485,117 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           }
         }
       `}</style>
-      <div ref={containerRef} className={`${className} flex flex-col rounded-lg overflow-hidden cursor-default`}>
-      {/* 固定表头 */}
-      <div className="flex-shrink-0 cursor-default select-none">
-        <div className={`grid ${gridCols} gap-0 ${isNarrow ? 'px-2' : 'px-3'} py-1`}>
-          <div className={`text-left text-xs font-medium text-default-400 ${isNarrow ? '' : 'pl-1'}`}>UTC</div>
-          <div className="text-right text-xs font-medium text-default-400">dB</div>
-          {!isNarrow && <div className="text-right text-xs font-medium text-default-400">DT</div>}
-          <div className="text-center text-xs font-medium text-default-400">{t('common:framesTable.freq')}</div>
-          <div className="text-left text-xs font-medium text-default-400">{t('common:framesTable.message')}</div>
-          <div className={`text-right text-xs font-medium text-default-400 ${isNarrow ? '' : 'pr-1'}`}>{t('common:framesTable.location')}</div>
+      <div ref={containerRef} className={`${className} relative flex flex-col rounded-lg overflow-hidden cursor-default`}>
+        {/* 固定表头 */}
+        <div className="flex-shrink-0 cursor-default select-none">
+          <div className={`grid ${gridCols} gap-0 ${isNarrow ? 'px-2' : 'px-3'} py-1`}>
+            <div className={`text-left text-xs font-medium text-default-400 ${isNarrow ? '' : 'pl-1'}`}>UTC</div>
+            <div className="text-right text-xs font-medium text-default-400">dB</div>
+            {!isNarrow && <div className="text-right text-xs font-medium text-default-400">DT</div>}
+            <div className="text-center text-xs font-medium text-default-400">{t('common:framesTable.freq')}</div>
+            <div className="text-left text-xs font-medium text-default-400">{t('common:framesTable.message')}</div>
+            <div className={`text-right text-xs font-medium text-default-400 ${isNarrow ? '' : 'pr-1'}`}>{t('common:framesTable.location')}</div>
+          </div>
         </div>
-      </div>
 
-      {/* 滚动内容区域 */}
-      <ScrollShadow
-        ref={scrollRef}
-        className="flex-1"
-        onScroll={handleScroll}
-        visibility={scrollShadowVisibility}
-      >
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            width: '100%',
-            position: 'relative',
-          }}
+        {/* 滚动内容区域 */}
+        <ScrollShadow
+          ref={scrollRef}
+          className="flex-1"
+          onScroll={handleScroll}
+          visibility={scrollShadowVisibility}
         >
-          {/* 与原始结构一致的 space-y-1 pt-1 通过 absolute 定位实现 */}
-          {virtualItems.map((vItem) => {
-            const group = groups[vItem.index];
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {/* 与原始结构一致的 space-y-1 pt-1 通过 absolute 定位实现 */}
+            {virtualItems.map((vItem) => {
+              const group = groups[vItem.index];
 
-            return (
-              <div
-                key={vItem.key}
-                data-index={vItem.index}
-                ref={virtualizer.measureElement}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${vItem.start}px)`,
-                }}
-              >
-                {/* 组间距（对应原始的 space-y-1 pt-1） */}
-                <div className="pt-1">
-                  {/* 组容器：与原始结构完全一致 */}
-                  <div
-                    className={`
-                      ${getGroupColor(group.cycle, group.type)}
-                      rounded-md overflow-hidden relative py-1
-                    `}
-                    style={getGroupStyle(group.cycle, group.type)}
-                  >
-                    {/* 左侧装饰条：与原始完全一致 */}
+              return (
+                <div
+                  key={vItem.key}
+                  data-index={vItem.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${vItem.start}px)`,
+                  }}
+                >
+                  {/* 组间距（对应原始的 space-y-1 pt-1） */}
+                  <div className="pt-1">
+                    {/* 组容器：与原始结构完全一致 */}
                     <div
-                      className="absolute left-0 top-1 bottom-1 w-1 rounded-sm"
-                      style={{
-                        backgroundColor: getBorderColor(group.cycle, group.type)
-                      }}
-                    ></div>
+                      className={`
+                        ${getGroupColor(group.cycle, group.type)}
+                        rounded-md overflow-hidden relative py-1
+                      `}
+                      style={getGroupStyle(group.cycle, group.type)}
+                    >
+                      {/* 左侧装饰条：与原始完全一致 */}
+                      <div
+                        className="absolute left-0 top-1 bottom-1 w-1 rounded-sm"
+                        style={{
+                          backgroundColor: getBorderColor(group.cycle, group.type)
+                        }}
+                      ></div>
 
-                    {group.messages.map((message, messageIndex) => (
-                      <MessageRow
-                        key={`${message.utc}-${messageIndex}`}
-                        message={message}
-                        group={group}
-                        gridCols={gridCols}
-                        isNarrow={isNarrow}
-                        myCallsigns={myCallsigns}
-                        targetCallsign={targetCallsign}
-                        showLogbookAnalysisVisuals={showLogbookAnalysisVisuals}
-                        enableCallsignPopover={enableCallsignPopover}
-                        isZh={isZh}
-                        highlightTypeLabels={highlightTypeLabels}
-                        getHighestPriorityHighlight={getHighestPriorityHighlight}
-                        getHighlightColor={getHighlightColor}
-                        onDoubleClick={onRowDoubleClick ? () => onRowDoubleClick(message, group) : undefined}
-                        onMouseEnter={message.db !== 'TX' ? () => handleMessageEnter(message.freq) : undefined}
-                        onMouseLeave={message.db !== 'TX' ? handleMessageLeave : undefined}
-                      />
-                    ))}
+                      {group.messages.map((message, messageIndex) => (
+                        <MessageRow
+                          key={`${message.utc}-${messageIndex}`}
+                          message={message}
+                          group={group}
+                          gridCols={gridCols}
+                          isNarrow={isNarrow}
+                          myCallsigns={myCallsigns}
+                          targetCallsign={targetCallsign}
+                          showLogbookAnalysisVisuals={showLogbookAnalysisVisuals}
+                          enableCallsignPopover={enableCallsignPopover}
+                          isZh={isZh}
+                          highlightTypeLabels={highlightTypeLabels}
+                          getHighestPriorityHighlight={getHighestPriorityHighlight}
+                          getHighlightColor={getHighlightColor}
+                          onDoubleClick={onRowDoubleClick ? () => onRowDoubleClick(message, group) : undefined}
+                          onMouseEnter={message.db !== 'TX' ? () => handleMessageEnter(message.freq) : undefined}
+                          onMouseLeave={message.db !== 'TX' ? handleMessageLeave : undefined}
+                        />
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+        </ScrollShadow>
+
+        <div
+          className={`
+            absolute inset-x-0 bottom-3 z-10 flex justify-center px-3 transition-all duration-150 ease-out
+            ${showScrollToBottomButton ? 'pointer-events-none opacity-100 translate-y-0' : 'pointer-events-none opacity-0 translate-y-1'}
+          `}
+          aria-hidden={!showScrollToBottomButton}
+        >
+          <Button
+            size="sm"
+            variant="light"
+            radius="full"
+            aria-label={t('common:framesTable.scrollToBottom')}
+            className="pointer-events-auto h-7 min-w-0 bg-background/75 px-3 text-xs text-default-500 shadow-sm ring-1 ring-default-200/70 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+            onPress={handleScrollToBottomClick}
+            startContent={<FontAwesomeIcon icon={faArrowDown} className="text-[10px]" />}
+            isDisabled={!showScrollToBottomButton}
+          >
+            {t('common:framesTable.scrollToBottom')}
+          </Button>
         </div>
-      </ScrollShadow>
-    </div>
+      </div>
     </>
   );
 };
