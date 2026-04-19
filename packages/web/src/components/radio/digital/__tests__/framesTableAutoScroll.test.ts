@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FrameDisplayMessage, FrameGroup } from '../FramesTable';
-import { getBottomGroupSignature } from '../framesTableAutoScroll';
+import { getBottomGroupSignature, shouldShowScrollToBottomButton } from '../framesTableAutoScroll';
 
 const createMessage = (overrides: Partial<FrameDisplayMessage> = {}): FrameDisplayMessage => ({
   utc: '12:00:00',
@@ -21,6 +21,14 @@ const createGroup = (startMs: number, messages: FrameDisplayMessage[]): FrameGro
 });
 
 describe('framesTableAutoScroll', () => {
+  it('shows the scroll-to-bottom button only when the list has content and is away from bottom', () => {
+    const groups = [createGroup(1000, [createMessage()])];
+
+    expect(shouldShowScrollToBottomButton(groups, false)).toBe(true);
+    expect(shouldShowScrollToBottomButton(groups, true)).toBe(false);
+    expect(shouldShowScrollToBottomButton([], false)).toBe(false);
+  });
+
   it('changes signature when a new message is appended to the bottom group', () => {
     const previousGroups = [
       createGroup(1000, [createMessage({ message: 'CQ A' })]),

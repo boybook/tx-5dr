@@ -117,7 +117,8 @@
   "framesTable": {
     "freq": "频率",
     "message": "信息",
-    "location": "位置"
+    "location": "位置",
+    "scrollToBottom": "点击滚动到底部"
   },
   "callsignPopover": {
     "grid": "网格",
