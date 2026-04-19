@@ -26,26 +26,27 @@ describe('SlotPackManager event routing', () => {
     const manager = new SlotPackManager();
     manager.setPersistenceEnabled(false);
 
-    const slotPackUpdatedSpy = vi.fn<(pack: SlotPack) => void>();
-    const slotPackDecodeUpdatedSpy = vi.fn<(pack: SlotPack) => void>();
-    manager.on('slotPackUpdated', slotPackUpdatedSpy);
-    manager.on('slotPackDecodeUpdated', slotPackDecodeUpdatedSpy);
+    const slotPackUpdatedSpy = vi.fn();
+    const slotPackDecodeUpdatedSpy = vi.fn();
+    manager.on('slotPackUpdated', slotPackUpdatedSpy as (pack: SlotPack) => void);
+    manager.on('slotPackDecodeUpdated', slotPackDecodeUpdatedSpy as (pack: SlotPack) => void);
 
     manager.processDecodeResult(buildDecodeResult(45_000, [{ message: 'CQ BG5DRB PM00', snr: -5 }]));
 
     expect(slotPackUpdatedSpy).toHaveBeenCalledTimes(1);
     expect(slotPackDecodeUpdatedSpy).toHaveBeenCalledTimes(1);
-    expect(slotPackDecodeUpdatedSpy.mock.calls[0][0].frames.some((f) => f.message === 'CQ BG5DRB PM00')).toBe(true);
+    const emittedPack = slotPackDecodeUpdatedSpy.mock.calls[0]?.[0] as SlotPack;
+    expect(emittedPack.frames.some((f) => f.message === 'CQ BG5DRB PM00')).toBe(true);
   });
 
   it('addTransmissionFrame only emits slotPackUpdated (NOT slotPackDecodeUpdated)', () => {
     const manager = new SlotPackManager();
     manager.setPersistenceEnabled(false);
 
-    const slotPackUpdatedSpy = vi.fn<(pack: SlotPack) => void>();
-    const slotPackDecodeUpdatedSpy = vi.fn<(pack: SlotPack) => void>();
-    manager.on('slotPackUpdated', slotPackUpdatedSpy);
-    manager.on('slotPackDecodeUpdated', slotPackDecodeUpdatedSpy);
+    const slotPackUpdatedSpy = vi.fn();
+    const slotPackDecodeUpdatedSpy = vi.fn();
+    manager.on('slotPackUpdated', slotPackUpdatedSpy as (pack: SlotPack) => void);
+    manager.on('slotPackDecodeUpdated', slotPackDecodeUpdatedSpy as (pack: SlotPack) => void);
 
     manager.addTransmissionFrame(
       'slot-60000',
