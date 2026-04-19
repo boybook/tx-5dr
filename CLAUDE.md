@@ -34,7 +34,15 @@ yarn test                   # 测试
 # Docker
 yarn docker:build          # Docker构建
 docker-compose up -d        # 启动服务
+
+# DXCC 数据
+yarn generate:dxcc         # 生成/更新 core 的 DXCC 数据文件（可配合 BigCTY 手动下载目录使用）
 ```
+
+若需要更新 DXCC 数据，优先使用手动下载的 BigCTY 目录本地生成，例如：
+`node scripts/generate-dxcc-data.mjs --cty-dir=/Users/you/Downloads/bigcty-YYYYMMDD --arrl=https://www.arrl.org/files/file/DXCC/Current_Deleted.txt`
+
+注意：该脚本只应在确认 BigCTY 数据包已手动下载后执行；不要依赖 country-files.com 页面里的旧下载直链。
 
 ## 技术栈
 前端: React 18 + TypeScript + HeroUI + WebGL

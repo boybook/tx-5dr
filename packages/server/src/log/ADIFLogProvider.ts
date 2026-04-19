@@ -1202,6 +1202,9 @@ export class ADIFLogProvider implements ILogProvider {
       state: callsignInfo?.state,
       stateConfidence: callsignInfo?.stateConfidence,
       dxccNeedsReview: resolution.needsReview,
+      dxccMatchKind: resolution.matchKind,
+      dxccDataSource: resolution.dataSource,
+      dxccResolverVersion: DXCC_RESOLVER_VERSION,
     };
   }
   

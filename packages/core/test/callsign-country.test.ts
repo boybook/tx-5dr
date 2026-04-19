@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getCallsignInfo, parseFT8LocationInfo, resolveDXCCEntity } from '../src/callsign/callsign.js';
+import { extractPrefix, getCallsignInfo, parseFT8LocationInfo, resolveDXCCEntity } from '../src/callsign/callsign.js';
 
 test('日本呼号基础国家解析', () => {
   const a = getCallsignInfo('JF1TPR');
@@ -319,6 +319,38 @@ test('DXCC 解析应根据通联日期选择历史实体', () => {
   assert.equal(okinotorishima?.dxccStatus, 'deleted');
 });
 
+test('DXCC 解析应优先返回当前有效实体而不是更长的失效历史前缀', () => {
+  const currentTs = Date.UTC(2026, 3, 19);
+  const historicalTs = Date.UTC(1968, 5, 30);
+  const afterHistoricalTs = Date.UTC(1968, 6, 1);
+  const current = resolveDXCCEntity('4X1UF', currentTs);
+  const historical = resolveDXCCEntity('4X1XXX', historicalTs);
+  const afterHistorical = resolveDXCCEntity('4X1XXX', afterHistoricalTs);
+  const palestine = resolveDXCCEntity('E4ABC', Date.UTC(2026, 3, 19));
+
+  assert.equal(current.entity?.name, 'Israel');
+  assert.equal(current.entity?.entityCode, 336);
+  assert.equal(current.confidence, 'prefix');
+  assert.equal(current.matchKind, 'prefix');
+  assert.equal(current.dataSource, 'local');
+  assert.equal(current.needsReview, false);
+
+  assert.equal(historical.entity?.name, 'Palestine');
+  assert.equal(historical.entity?.entityCode, 196);
+  assert.equal(historical.entity?.deleted, true);
+  assert.equal(historical.matchedPrefix, '4X1');
+
+  assert.equal(afterHistorical.entity?.name, 'Israel');
+  assert.equal(afterHistorical.entity?.entityCode, 336);
+  assert.equal(afterHistorical.matchedPrefix, '4X');
+
+  assert.equal(palestine.entity?.name, 'Palestine');
+  assert.equal(palestine.entity?.entityCode, 510);
+  assert.equal(palestine.matchedPrefix, 'E4');
+
+  assert.equal(extractPrefix('4X1UF'), '4X');
+});
+
 test('DXCC 解析缓存不应丢失前缀置信度', () => {
   const ts = Date.UTC(2026, 3, 2);
   const first = resolveDXCCEntity('JF1TPR', ts);
@@ -327,4 +359,6 @@ test('DXCC 解析缓存不应丢失前缀置信度', () => {
   assert.equal(first.confidence, 'prefix');
   assert.equal(second.confidence, 'prefix');
   assert.equal(second.entity?.entityCode, 339);
+  assert.equal(second.matchKind, 'prefix');
+  assert.equal(second.dataSource, 'local');
 });

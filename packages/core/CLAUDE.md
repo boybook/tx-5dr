@@ -174,6 +174,15 @@ export class WSEventEmitter extends EventEmitter {
 ## 命令
 - `yarn dev` - 开发构建
 - `yarn build` - 生产构建
+- `yarn generate:dxcc` - 生成/更新 `src/callsign/dxcc.json`
+
+## DXCC 数据维护
+
+- `src/callsign/dxcc.json` 是运行时 DXCC 基础数据，包含历史 deleted entity 与 resolver version 元信息。
+- 更新 DXCC 数据时，优先使用手动下载的 BigCTY 目录本地生成，例如：
+  `node scripts/generate-dxcc-data.mjs --cty-dir=/Users/you/Downloads/bigcty-YYYYMMDD --arrl=https://www.arrl.org/files/file/DXCC/Current_Deleted.txt`
+- 生成脚本会优先使用 `cty.csv` 做 current entity 的 code 对齐，`cty.dat` 作为名称/前缀补充；历史 deleted entity 仍以仓库基底和 ARRL current/deleted 校验为准。
+- 不要依赖 country-files.com 页面中的旧 zip 直链；网站文章里的下载 URL 可能失效。
 
 ## 日志规范
 
