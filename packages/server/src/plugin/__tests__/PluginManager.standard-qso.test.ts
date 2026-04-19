@@ -638,15 +638,21 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('filters candidates with the callsign prefix utility plugin', async () => {
+  it('filters candidates with the callsign filter utility plugin', async () => {
+    // The utility plugin is enabled globally via pluginConfigs, but its
+    // filter rules are operator-scoped settings, so they must be supplied
+    // through operatorPluginSettings.
     const { operator, pluginManager } = await createRuntimeHarness({
       pluginConfigs: {
-        'callsign-prefix-filter': {
-          enabled: true,
-          settings: {
-            allowedPrefixes: ['JA', 'BG5DRB'],
-            matchMode: 'prefix',
-          },
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          // Whitelist mode (first rule is an include rule):
+          // - "JA.*" treats the dot/asterisk as regex meta and matches the
+          //   JA prefix family
+          // - "BG5DRB" is a plain literal, matched exactly
+          filterRules: ['JA.*', 'BG5DRB'],
         },
       },
     });
@@ -669,15 +675,17 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('keeps legacy operator-scoped callsign prefix settings working after the plugin moves to global scope', async () => {
+  it('honours per-operator callsign-filter settings supplied via operatorPluginSettings', async () => {
+    // Regression guard: callsign-filter settings live under operator scope, so
+    // the filter rules persisted per operator must drive the candidate filter
+    // for that operator without any extra global plugin config.
     const { operator, pluginManager } = await createRuntimeHarness({
       pluginConfigs: {
-        'callsign-prefix-filter': { enabled: true, settings: {} },
+        'callsign-filter': { enabled: true, settings: {} },
       },
       operatorPluginSettings: {
-        'callsign-prefix-filter': {
-          allowedPrefixes: ['JA'],
-          matchMode: 'prefix',
+        'callsign-filter': {
+          filterRules: ['JA.*'],
         },
       },
     });
