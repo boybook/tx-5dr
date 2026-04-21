@@ -6,6 +6,7 @@ import type {
   SpectrumKind,
 } from '@tx5dr/contracts';
 import {
+  AudioSidecarContext,
   CapabilityDescriptorsContext,
   CapabilityStatesContext,
   ConnectionContext,
@@ -121,6 +122,8 @@ export const useRadioConnectionState = () => {
   if (!context) throw new Error('useRadioConnectionState must be used within RadioProvider');
   return context;
 };
+
+export const useAudioSidecarState = () => useContext(AudioSidecarContext);
 
 export const useRadioModeState = () => {
   const context = useContext(RadioModeContext);

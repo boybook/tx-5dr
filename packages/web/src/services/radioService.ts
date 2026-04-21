@@ -370,6 +370,18 @@ export class RadioService {
     }
   }
 
+  /**
+   * 立即重试音频 sidecar
+   */
+  retryAudioNow(): void {
+    if (this.isConnected) {
+      logger.debug('Sending audio retry-now command');
+      this.wsClient.send('audioRetryNow');
+    } else {
+      logger.warn('Not connected to server, cannot send audio retry-now');
+    }
+  }
+
   // ===== Voice Mode Methods =====
 
   /**

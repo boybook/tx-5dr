@@ -64,6 +64,19 @@
     "recordedDetail": "{{message}} (电台未连接)",
     "confirm": "确认"
   },
+  "audioSidecar": {
+    "popoverTitle": "音频系统",
+    "statusConnecting": "音频启动中",
+    "statusRetrying": "音频重试中",
+    "statusRetryingLong": "音频长时间未就绪",
+    "statusDisabled": "音频已停用",
+    "deviceLabel": "设备",
+    "deviceUnknown": "默认设备",
+    "retryingDetail": "第 {{attempt}} 次重试，下次 {{seconds}} 秒后",
+    "retryingNoDelay": "第 {{attempt}} 次重试中",
+    "disabledHint": "配置不可恢复，请检查音频设备设置",
+    "retryNow": "立即重试"
+  },
   "monitor": {
     "audioMonitor": "音频监听",
     "activateAudioMonitor": "开启监听",

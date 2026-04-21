@@ -64,6 +64,19 @@
     "recordedDetail": "{{message}} (radio not connected)",
     "confirm": "Confirm"
   },
+  "audioSidecar": {
+    "popoverTitle": "Audio system",
+    "statusConnecting": "Starting audio",
+    "statusRetrying": "Retrying audio",
+    "statusRetryingLong": "Audio not ready for a while",
+    "statusDisabled": "Audio disabled",
+    "deviceLabel": "Device",
+    "deviceUnknown": "Default device",
+    "retryingDetail": "Attempt {{attempt}}, next in {{seconds}}s",
+    "retryingNoDelay": "Attempt {{attempt}} in progress",
+    "disabledHint": "Unrecoverable configuration error — check audio device settings",
+    "retryNow": "Retry now"
+  },
   "monitor": {
     "audioMonitor": "Audio monitor",
     "activateAudioMonitor": "Enable monitor",

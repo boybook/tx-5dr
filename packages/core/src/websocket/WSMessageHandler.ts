@@ -32,6 +32,9 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.RADIO_DISCONNECTED_DURING_TRANSMISSION]: 'radioDisconnectedDuringTransmission',
   [WSMessageType.RADIO_POWER_STATE]: 'radioPowerState',
 
+  // 音频 sidecar 事件
+  [WSMessageType.AUDIO_SIDECAR_STATUS_CHANGED]: 'audioSidecarStatusChanged',
+
   // QSO 日志相关事件
   [WSMessageType.QSO_RECORD_ADDED]: 'qsoRecordAdded',
   [WSMessageType.QSO_RECORD_UPDATED]: 'qsoRecordUpdated',

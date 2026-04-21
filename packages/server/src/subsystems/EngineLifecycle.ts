@@ -12,7 +12,8 @@ import { ResourceManager, type SimplifiedResourceConfig } from '../utils/Resourc
 import { IcomWlanAudioAdapter } from '../audio/IcomWlanAudioAdapter.js';
 import { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { AudioDeviceManager } from '../audio/audio-device-manager.js';
-import { AudioMonitorService } from '../audio/AudioMonitorService.js';
+import type { AudioMonitorService } from '../audio/AudioMonitorService.js';
+import type { AudioSidecarController } from './AudioSidecarController.js';
 import {
   createEngineActor,
   isEngineState,
@@ -48,6 +49,7 @@ export interface EngineLifecycleDeps {
   getCurrentMode: () => ModeDescriptor;
   getVoiceSessionManager: () => VoiceSessionManager | null;
   getAudioVolumeController: () => AudioVolumeController;
+  getAudioSidecar: () => AudioSidecarController;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getStatus: () => any;
 }
@@ -75,9 +77,6 @@ export class EngineLifecycle {
   // OpenWebRX 音频适配器
   private openwebrxAudioAdapter: OpenWebRXAudioAdapter | null = null;
 
-  // 音频监听服务
-  private audioMonitorService: AudioMonitorService | null = null;
-
   // 语音会话管理器
   private voiceSessionManager: VoiceSessionManager | null = null;
 
@@ -103,7 +102,7 @@ export class EngineLifecycle {
   }
 
   getAudioMonitorService(): AudioMonitorService | null {
-    return this.audioMonitorService;
+    return this.deps.getAudioSidecar().getAudioMonitorService();
   }
 
   getOpenWebRXAudioAdapter(): OpenWebRXAudioAdapter | null {
@@ -324,54 +323,6 @@ export class EngineLifecycle {
         dependencies: [],
         optional: true,
       },
-      {
-        name: 'audioInputStream',
-        start: async () => {
-          await audioStreamManager.startStream();
-          logger.debug('Audio input stream started');
-        },
-        stop: async () => {
-          await audioStreamManager.stopStream();
-          logger.debug('Audio input stream stopped');
-        },
-        priority: 3,
-        dependencies: [],
-        optional: false,
-      },
-      {
-        name: 'audioOutputStream',
-        start: async () => {
-          await audioStreamManager.startOutput();
-          logger.debug('Audio output stream started');
-          this.deps.getAudioVolumeController().restoreGainForCurrentSlot();
-        },
-        stop: async () => {
-          await audioStreamManager.stopOutput();
-          logger.debug('Audio output stream stopped');
-        },
-        priority: 4,
-        dependencies: ['audioInputStream'],
-        optional: false,
-      },
-      {
-        name: 'audioMonitorService',
-        start: async () => {
-          logger.debug('Initializing audio monitor service...');
-          const audioProvider = audioStreamManager.getAudioProvider();
-          this.audioMonitorService = new AudioMonitorService(audioProvider);
-          logger.debug('Audio monitor service initialized');
-        },
-        stop: async () => {
-          if (this.audioMonitorService) {
-            this.audioMonitorService.destroy();
-            this.audioMonitorService = null;
-            logger.debug('Audio monitor service cleaned up');
-          }
-        },
-        priority: 5,
-        dependencies: ['audioInputStream'],
-        optional: false,
-      },
     ];
   }
 
@@ -393,7 +344,7 @@ export class EngineLifecycle {
           }
         },
         priority: 6,
-        dependencies: ['audioInputStream'],
+        dependencies: [],
         optional: false,
       },
     ];
@@ -411,7 +362,7 @@ export class EngineLifecycle {
           logger.debug('Voice session manager stopped');
         },
         priority: 7,
-        dependencies: ['audioOutputStream', 'audioMonitorService'],
+        dependencies: [],
         optional: false,
       });
     }
@@ -440,7 +391,7 @@ export class EngineLifecycle {
           }
         },
         priority: 6,
-        dependencies: ['audioOutputStream'],
+        dependencies: [],
         optional: false,
       },
       {
@@ -741,12 +692,17 @@ export class EngineLifecycle {
       // 2. 注册编码/混音事件
       this.deps.subsystems.transmissionPipeline.setup();
 
-      // 3. 按优先级启动资源
+      // 3. 按优先级启动资源（不含 audio：由 AudioSidecarController 旁路管理）
       await this.deps.resourceManager.startAll();
 
       // 4. 设置状态标志
       this.isRunning = true;
       this.audioStarted = true;
+
+      // 5. 启动音频 sidecar（fire-and-forget，不阻塞引擎主流程）
+      void this.deps.getAudioSidecar().start().catch((err) => {
+        logger.error('audio sidecar start threw unexpectedly', err);
+      });
 
       logger.info('Engine started successfully');
     } catch (error) {
@@ -782,16 +738,23 @@ export class EngineLifecycle {
     logger.info('Stopping engine');
 
     try {
-      // 1. 清除编码/混音监听器 + PTT 定时器
+      // 1. 先停止音频 sidecar（取消重试 timer + 关闭音频资源）
+      try {
+        await this.deps.getAudioSidecar().stop('engine-stopped');
+      } catch (err) {
+        logger.warn('audio sidecar stop failed', err);
+      }
+
+      // 2. 清除编码/混音监听器 + PTT 定时器
       this.deps.subsystems.transmissionPipeline.teardown();
 
-      // 2. 清除时钟/解码/频谱监听器
+      // 3. 清除时钟/解码/频谱监听器
       this.deps.subsystems.clockCoordinator.teardown();
 
-      // 3. 按逆序停止资源
+      // 4. 按逆序停止资源
       await this.deps.resourceManager.stopAll();
 
-      // 4. 清除状态标志
+      // 5. 清除状态标志
       this.isRunning = false;
       this.audioStarted = false;
 

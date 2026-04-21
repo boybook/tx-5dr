@@ -26,6 +26,7 @@ import type {
   RadioInfo,
   ReconnectProgress,
   ClockStatusSummary,
+  AudioSidecarStatusPayload,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -533,6 +534,11 @@ export function createRadioEventMap({
       const state = data as CapabilityState;
       logger.debug('Radio capability changed', { id: state.id, value: state.value });
       radioDispatch({ type: 'updateCapabilityState', payload: state });
+    },
+    audioSidecarStatusChanged: (data: unknown) => {
+      const payload = data as AudioSidecarStatusPayload;
+      logger.debug('Audio sidecar status changed', { status: payload.status, retryAttempt: payload.retryAttempt });
+      radioDispatch({ type: 'audioSidecarStatusChanged', payload });
     },
   };
 }

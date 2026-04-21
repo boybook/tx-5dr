@@ -6,6 +6,7 @@ import { getWebSocketClientInstanceId } from '../../utils/wsClientInstance';
 import { type RadioService, getOrCreateRadioService } from '../../services/radioService';
 import { useAuth } from '../authStore';
 import {
+  AudioSidecarContext,
   CapabilityDescriptorsContext,
   CapabilityStatesContext,
   ConnectionContext,
@@ -279,7 +280,9 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
                         <RadioErrorsContext.Provider value={radioErrorsContextValue}>
                           <CapabilityDescriptorsContext.Provider value={capabilityDescriptorsContextValue}>
                             <CapabilityStatesContext.Provider value={capabilityStatesContextValue}>
-                              {children}
+                              <AudioSidecarContext.Provider value={radioState.audioSidecar}>
+                                {children}
+                              </AudioSidecarContext.Provider>
                             </CapabilityStatesContext.Provider>
                           </CapabilityDescriptorsContext.Provider>
                         </RadioErrorsContext.Provider>
