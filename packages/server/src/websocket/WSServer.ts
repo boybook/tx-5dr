@@ -385,6 +385,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
+      [WSMessageType.AUDIO_RETRY_NOW]: () => this.handleAudioRetryNow(),
       [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id) => this.handleWriteRadioCapability(id, data),
       [WSMessageType.REFRESH_RADIO_CAPABILITIES]: () => this.handleRefreshRadioCapabilities(),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
@@ -555,6 +556,12 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.RADIO_POWER_STATE, data);
     });
 
+    // 监听音频 sidecar 状态变化
+    this.digitalRadioEngine.on('audioSidecarStatusChanged', (data) => {
+      logger.debug('audio sidecar status changed event received', { status: data.status, retryAttempt: data.retryAttempt });
+      this.broadcast(WSMessageType.AUDIO_SIDECAR_STATUS_CHANGED, data);
+    });
+
     // 监听 rigctld 桥接状态变化，推送给客户端用于 UI 实时显示
     this.digitalRadioEngine.on('rigctldStatus' as any, (data: any) => {
       logger.debug('rigctld status event received');
@@ -653,6 +660,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_MODE]: { action: 'execute', subject: 'ModeSwitch' },
     [WSMessageType.RADIO_MANUAL_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
     [WSMessageType.RADIO_STOP_RECONNECT]: { action: 'execute', subject: 'RadioReconnect' },
+    [WSMessageType.AUDIO_RETRY_NOW]: { action: 'execute', subject: 'Engine' },
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { action: 'execute', subject: 'Engine' },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { action: 'execute', subject: 'RadioControl' },
     [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { action: 'execute', subject: 'RadioControl' },
@@ -1908,6 +1916,18 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
+   * 处理立即重试音频 sidecar 命令
+   */
+  private async handleAudioRetryNow(): Promise<void> {
+    try {
+      logger.debug('audio retry-now command received');
+      await this.digitalRadioEngine.retryAudioSidecar();
+    } catch (error) {
+      logger.error('audio retry-now failed', error);
+    }
+  }
+
+  /**
    * 处理写入电台能力命令
    * 权限: execute:RadioControl（由 COMMAND_ABILITIES 映射）
    */
@@ -2145,6 +2165,14 @@ export class WSServer extends WSMessageHandler {
         logger.debug(`sent capability snapshot to connection ${connectionId}`, { count: snapshot.capabilities.length });
       } catch (error) {
         logger.warn('failed to send capability snapshot', error);
+      }
+
+      // 5.5 推送音频 sidecar 当前状态，避免前端首次连接时不知道音频是否就绪
+      try {
+        const sidecar = this.digitalRadioEngine.getAudioSidecar();
+        connection.send(WSMessageType.AUDIO_SIDECAR_STATUS_CHANGED, sidecar.buildStatusPayload());
+      } catch (error) {
+        logger.warn('failed to send audio sidecar snapshot', error);
       }
 
       try {

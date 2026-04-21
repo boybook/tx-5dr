@@ -1,6 +1,7 @@
 import { createContext } from 'react';
 import type React from 'react';
 import type {
+  AudioSidecarStatusPayload,
   CapabilityDescriptor,
   CapabilityState,
   CoreCapabilityDiagnostics,
@@ -98,6 +99,8 @@ export const RadioErrorsContext = createContext<{
 
 export const CapabilityDescriptorsContext = createContext<Map<string, CapabilityDescriptor> | undefined>(undefined);
 export const CapabilityStatesContext = createContext<Map<string, CapabilityState> | undefined>(undefined);
+
+export const AudioSidecarContext = createContext<AudioSidecarStatusPayload | null>(null);
 
 export const SpectrumContext = createContext<{
   selectedKind: SpectrumKind | null;

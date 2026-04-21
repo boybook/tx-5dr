@@ -13,6 +13,23 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
     stop: vi.fn(),
   };
 
+  const audioSidecar = {
+    start: vi.fn(),
+    stop: vi.fn(),
+    getAudioMonitorService: () => null,
+    isConnected: () => false,
+    getStatus: () => 'idle',
+    buildStatusPayload: () => ({
+      status: 'idle',
+      isConnected: false,
+      retryAttempt: 0,
+      nextRetryMs: null,
+      longRunning: false,
+      lastError: null,
+      deviceName: null,
+    }),
+  };
+
   const lifecycle = new EngineLifecycle({
     engineEmitter: new EventEmitter(),
     resourceManager: resourceManager as any,
@@ -31,6 +48,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' = 'FT8') {
     getCurrentMode: () => ({ name: currentModeName } as any),
     getVoiceSessionManager: () => voiceSessionManager as any,
     getAudioVolumeController: () => ({ restoreGainForCurrentSlot: vi.fn() } as any),
+    getAudioSidecar: () => audioSidecar as any,
     getStatus: () => ({}),
   });
 
@@ -54,9 +72,6 @@ describe('EngineLifecycle', () => {
       'radio',
       'icomWlanAudioAdapter',
       'openwebrxAudioAdapter',
-      'audioInputStream',
-      'audioOutputStream',
-      'audioMonitorService',
       'clock',
       'slotScheduler',
       'spectrumScheduler',
@@ -72,17 +87,15 @@ describe('EngineLifecycle', () => {
     lifecycle.rebuildResourcePlan();
 
     expect(resourceManager.clear).toHaveBeenCalledTimes(2);
+    const firstPlanCount = 7; // see previous test: radio + icom + openwebrx + clock + slotScheduler + spectrumScheduler + operatorManager
     const secondPlanNames = resourceManager.register.mock.calls
-      .slice(10)
+      .slice(firstPlanCount)
       .map(([config]) => config.name);
 
     expect(secondPlanNames).toEqual([
       'radio',
       'icomWlanAudioAdapter',
       'openwebrxAudioAdapter',
-      'audioInputStream',
-      'audioOutputStream',
-      'audioMonitorService',
       'spectrumScheduler',
       'voiceSessionManager',
     ]);

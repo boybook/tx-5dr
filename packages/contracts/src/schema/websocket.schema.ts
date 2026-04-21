@@ -18,6 +18,7 @@ import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { RadioPowerStateEventSchema } from './radio-power.schema.js';
+import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
 import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
 import type { RealtimeSettingsResponseData } from './realtime.schema.js';
 import { ClockStatusSummarySchema } from './system.schema.js';
@@ -122,6 +123,12 @@ export enum WSMessageType {
 
   // ===== 电台重连控制 =====
   RADIO_STOP_RECONNECT = 'radioStopReconnect',
+
+  // ===== 音频旁路（sidecar） =====
+  /** 音频 sidecar 状态变化（server → client） */
+  AUDIO_SIDECAR_STATUS_CHANGED = 'audioSidecarStatusChanged',
+  /** 客户端请求立即重试音频启动（client → server） */
+  AUDIO_RETRY_NOW = 'audioRetryNow',
 
   // ===== 电台电源管理 =====
   /** 电源操作进度事件（server → client） */
@@ -885,6 +892,26 @@ export const WSRadioStopReconnectMessageSchema = WSBaseMessageSchema.extend({
 export type WSRadioStopReconnectMessage = z.infer<typeof WSRadioStopReconnectMessageSchema>;
 
 /**
+ * 音频 sidecar 状态变化消息（服务端→客户端）
+ */
+export const WSAudioSidecarStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUDIO_SIDECAR_STATUS_CHANGED),
+  data: AudioSidecarStatusPayloadSchema,
+});
+
+export type WSAudioSidecarStatusChangedMessage = z.infer<typeof WSAudioSidecarStatusChangedMessageSchema>;
+
+/**
+ * 音频立即重试命令（客户端→服务端）
+ */
+export const WSAudioRetryNowMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.AUDIO_RETRY_NOW),
+  data: z.object({}).optional(),
+});
+
+export type WSAudioRetryNowMessage = z.infer<typeof WSAudioRetryNowMessageSchema>;
+
+/**
  * 电源操作进度事件（服务端→客户端）
  */
 export const WSRadioPowerStateMessageSchema = WSBaseMessageSchema.extend({
@@ -1169,6 +1196,10 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSRadioDisconnectedDuringTransmissionMessageSchema,
   WSRadioPowerStateMessageSchema,
 
+  // 音频 sidecar 消息
+  WSAudioSidecarStatusChangedMessageSchema,
+  WSAudioRetryNowMessageSchema,
+
   // 频率管理消息
   WSFrequencyChangedMessageSchema,
 
@@ -1326,6 +1357,9 @@ export interface DigitalRadioEngineEvents {
   radioError: (data: z.infer<typeof RadioErrorEventDataSchema>) => void;
   radioDisconnectedDuringTransmission: (data: z.infer<typeof WSRadioDisconnectedDuringTransmissionMessageSchema>['data']) => void;
   radioPowerState: (data: import('./radio-power.schema.js').RadioPowerStateEvent) => void;
+
+  // 音频 sidecar 事件
+  audioSidecarStatusChanged: (data: z.infer<typeof AudioSidecarStatusPayloadSchema>) => void;
 
   // Profile 管理事件
   profileChanged: (data: z.infer<typeof ProfileChangedEventSchema>) => void;

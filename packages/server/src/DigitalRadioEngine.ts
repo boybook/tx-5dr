@@ -37,6 +37,7 @@ const logger = createLogger('DigitalRadioEngine');
 
 // 子系统
 import { AudioVolumeController } from './subsystems/AudioVolumeController.js';
+import { AudioSidecarController } from './subsystems/AudioSidecarController.js';
 import { RadioBridge } from './subsystems/RadioBridge.js';
 import { TransmissionPipeline } from './subsystems/TransmissionPipeline.js';
 import { ClockCoordinator } from './subsystems/ClockCoordinator.js';
@@ -90,6 +91,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   // 子系统
   private audioVolumeController: AudioVolumeController;
+  private audioSidecar: AudioSidecarController;
   private radioBridge: RadioBridge;
   private rigctldBridge: RigctldBridge;
   private transmissionPipeline: TransmissionPipeline;
@@ -286,6 +288,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     );
     this.audioVolumeController.setupEventListeners();
 
+    this.audioSidecar = new AudioSidecarController({
+      engineEmitter: this,
+      audioStreamManager: this.audioStreamManager,
+      audioVolumeController: this.audioVolumeController,
+    });
+
     this.transmissionPipeline = new TransmissionPipeline({
       engineEmitter: this,
       audioMixer: this.audioMixer,
@@ -356,7 +364,15 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   public getAudioMonitorService(): AudioMonitorService | null {
-    return this.engineLifecycle.getAudioMonitorService();
+    return this.audioSidecar.getAudioMonitorService();
+  }
+
+  public getAudioSidecar(): AudioSidecarController {
+    return this.audioSidecar;
+  }
+
+  public async retryAudioSidecar(): Promise<void> {
+    await this.audioSidecar.retryNow();
   }
 
   public getSpectrumScheduler(): SpectrumScheduler {
@@ -516,6 +532,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getCurrentMode: () => this.currentMode,
       getVoiceSessionManager: () => this.voiceSessionManager,
       getAudioVolumeController: () => this.audioVolumeController,
+      getAudioSidecar: () => this.audioSidecar,
       getStatus: () => this.getStatus(),
     });
     this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
@@ -583,6 +600,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   async destroy(): Promise<void> {
     logger.info('Destroying...');
+    try {
+      await this.audioSidecar.stop('engine-destroy');
+    } catch (err) {
+      logger.warn('audio sidecar stop during destroy failed', err);
+    }
     await this.stop();
 
     // rigctld bridge: tear down outside the engine resource pipeline so we

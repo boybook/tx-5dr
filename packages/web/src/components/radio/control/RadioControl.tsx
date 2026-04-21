@@ -3,7 +3,9 @@ import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, Pop
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish, faPowerOff } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState } from '../../../store/radioStore';
+import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState } from '../../../store/radioStore';
+import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
+import { AudioSidecarStatus } from '@tx5dr/contracts';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
 import { TunerCapabilitySurface } from '../../../radio-capability/components/TunerCapability';
@@ -202,6 +204,84 @@ interface RadioConnectionSnapshot {
 
 type RadioConnectionState = ReturnType<typeof useRadioConnectionState>;
 
+const AudioSidecarIndicator: React.FC<{
+  sidecar: AudioSidecarStatusPayload;
+  radioService: ConnectionState['radioService'];
+  canOperate: boolean;
+}> = ({ sidecar, radioService, canOperate }) => {
+  const { t } = useTranslation('radio');
+  const isRetrying = sidecar.status === AudioSidecarStatus.RETRYING;
+  const isDisabled = sidecar.status === AudioSidecarStatus.DISABLED;
+  const color: 'warning' | 'danger' = isDisabled ? 'danger' : 'warning';
+  const deviceLabel = sidecar.deviceName || t('audioSidecar.deviceUnknown');
+
+  const statusLabel = React.useMemo(() => {
+    if (isDisabled) return t('audioSidecar.statusDisabled');
+    if (sidecar.longRunning) return t('audioSidecar.statusRetryingLong');
+    if (isRetrying) return t('audioSidecar.statusRetrying');
+    return t('audioSidecar.statusConnecting');
+  }, [isDisabled, isRetrying, sidecar.longRunning, t]);
+
+  const retryLine = React.useMemo(() => {
+    if (!isRetrying) return null;
+    if (sidecar.nextRetryMs && sidecar.nextRetryMs > 0) {
+      return t('audioSidecar.retryingDetail', {
+        attempt: sidecar.retryAttempt,
+        seconds: Math.max(1, Math.round(sidecar.nextRetryMs / 1000)),
+      });
+    }
+    return t('audioSidecar.retryingNoDelay', { attempt: sidecar.retryAttempt });
+  }, [isRetrying, sidecar.nextRetryMs, sidecar.retryAttempt, t]);
+
+  const errorText = sidecar.lastError?.userMessage || sidecar.lastError?.message || null;
+
+  return (
+    <Popover placement="bottom-start">
+      <PopoverTrigger>
+        <button
+          type="button"
+          aria-label={statusLabel}
+          onClick={(e) => {
+            e.stopPropagation();
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="flex items-center justify-center -ml-1 h-5 w-5 rounded-full hover:bg-default-200"
+        >
+          <Spinner size="sm" color={color} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="px-3 py-2 max-w-xs space-y-1">
+        <div className="text-xs font-medium text-foreground">{t('audioSidecar.popoverTitle')}</div>
+        <div className="text-xs text-default-600">
+          {statusLabel} · {deviceLabel}
+        </div>
+        {retryLine && (
+          <div className="text-xs text-default-500">{retryLine}</div>
+        )}
+        {errorText && (
+          <div className="text-xs text-danger break-words">{errorText}</div>
+        )}
+        {isDisabled && (
+          <div className="text-xs text-default-500">{t('audioSidecar.disabledHint')}</div>
+        )}
+        {canOperate && (isRetrying || isDisabled) && radioService && (
+          <div className="pt-1">
+            <Button
+              size="sm"
+              variant="flat"
+              color={color}
+              className="h-6 px-2 text-xs"
+              onPress={() => radioService.retryAudioNow()}
+            >
+              {t('audioSidecar.retryNow')}
+            </Button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+};
+
 const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: RadioConnectionSnapshot; profileName?: string | null; onPress?: () => void; canConfigure?: boolean; canOperate?: boolean }> = ({ connection, radioConnection, profileName, onPress, canConfigure = true, canOperate = true }) => {
   const { t } = useTranslation('radio');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -276,6 +356,12 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: Radi
 
   const status = radioConnection.radioConnectionStatus;
   const label = profileName || getRadioModelText();
+  const audioSidecar = useAudioSidecarState();
+  const showAudioIndicator = Boolean(
+    audioSidecar &&
+      !audioSidecar.isConnected &&
+      audioSidecar.status !== AudioSidecarStatus.IDLE,
+  );
 
   const renderStatus = () => {
     switch (status) {
@@ -297,6 +383,13 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: Radi
             <span className="text-sm text-default-500">
               {label} {t('connection.connected')}
             </span>
+            {showAudioIndicator && audioSidecar && (
+              <AudioSidecarIndicator
+                sidecar={audioSidecar}
+                radioService={connection.radioService}
+                canOperate={canOperate}
+              />
+            )}
           </div>
         );
 

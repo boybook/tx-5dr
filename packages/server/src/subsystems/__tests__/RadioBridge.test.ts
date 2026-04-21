@@ -72,7 +72,7 @@ describe('RadioBridge', () => {
     }));
   });
 
-  it('retries automatic engine restore when the configured audio device is temporarily unavailable', async () => {
+  it('does not retry engine restore on audio failure (handled by AudioSidecarController)', async () => {
     vi.useFakeTimers();
 
     const radioManager = createRadioManagerStub();
@@ -82,20 +82,18 @@ describe('RadioBridge', () => {
       getEngineState: vi.fn().mockReturnValue('idle'),
       start: vi.fn(async () => {
         startAttempts += 1;
-        if (startAttempts === 1) {
-          throw new RadioError({
-            code: RadioErrorCode.DEVICE_NOT_FOUND,
-            message: 'Configured audio input device "IC-705" is temporarily unavailable after USB reconnect',
-            userMessage: 'Configured audio input device "IC-705" is temporarily unavailable.',
-            severity: RadioErrorSeverity.ERROR,
-            context: {
-              temporaryUnavailable: true,
-              recoverable: true,
-              direction: 'input',
-              deviceName: 'IC-705',
-            },
-          });
-        }
+        throw new RadioError({
+          code: RadioErrorCode.DEVICE_NOT_FOUND,
+          message: 'Configured audio input device "IC-705" is temporarily unavailable after USB reconnect',
+          userMessage: 'Configured audio input device "IC-705" is temporarily unavailable.',
+          severity: RadioErrorSeverity.ERROR,
+          context: {
+            temporaryUnavailable: true,
+            recoverable: true,
+            direction: 'input',
+            deviceName: 'IC-705',
+          },
+        });
       }),
       sendRadioDisconnected: vi.fn(),
     };
@@ -114,13 +112,13 @@ describe('RadioBridge', () => {
     bridge.wasRunningBeforeDisconnect = true;
     await (bridge as any).restoreRunningStateIfNeeded();
 
+    // RadioBridge now surfaces engine start failures directly to logs and
+    // clears the pending-restore flag. Audio-device retries are owned by
+    // AudioSidecarController and never loop back through RadioBridge.
     expect(startAttempts).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(2000);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(startAttempts).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(startAttempts).toBe(1);
     expect(bridge.wasRunningBeforeDisconnect).toBe(false);
   });
 
