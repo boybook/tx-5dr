@@ -50,6 +50,10 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     await this.runtime.refreshAll();
   }
 
+  async refreshDescriptor(id: string): Promise<void> {
+    await this.runtime.refreshDescriptor(id);
+  }
+
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {
     await this.runtime.writeCapability(id, value, action);
   }

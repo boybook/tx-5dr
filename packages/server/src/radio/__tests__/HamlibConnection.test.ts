@@ -24,6 +24,7 @@ type MockRig = {
   getPassbandNarrow: ReturnType<typeof vi.fn>;
   getPassbandNormal: ReturnType<typeof vi.fn>;
   getPassbandWide: ReturnType<typeof vi.fn>;
+  getRfPowerStepTable: ReturnType<typeof vi.fn>;
 };
 
 type MockSpectrumController = {
@@ -100,6 +101,7 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
       { modes: ['USB', 'LSB'], width: 2400 },
       { modes: ['USB', 'LSB'], width: 3000 },
     ]),
+    getRfPowerStepTable: vi.fn().mockReturnValue(null),
     getPassbandNarrow: vi.fn().mockReturnValue(1800),
     getPassbandNormal: vi.fn().mockReturnValue(2400),
     getPassbandWide: vi.fn().mockReturnValue(3000),
@@ -223,6 +225,24 @@ describe('HamlibConnection', () => {
     await expect(connection.setMode('USB', undefined, { intent: 'digital' })).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
+  });
+
+  it('returns discrete RF power steps when the hamlib binding exposes a step table', async () => {
+    const { connection } = createConnectedConnection({
+      getRfPowerStepTable: vi.fn().mockReturnValue([
+        { normalized: 0.1, milliwatts: 1000, watts: 1 },
+        { normalized: 0.5, milliwatts: 5000, watts: 5 },
+      ]),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedLevels = new Set(['RFPOWER']);
+    testConnection.currentFrequencyHz = 7100000;
+    testConnection.currentRadioMode = 'USB';
+
+    await expect(connection.getSupportedRFPowerSteps()).resolves.toEqual([
+      { value: 0.1, label: '1 W (10%)' },
+      { value: 0.5, label: '5 W (50%)' },
+    ]);
   });
 
   it('falls back to standard mode for digital intent when DATA mode is unsupported', async () => {

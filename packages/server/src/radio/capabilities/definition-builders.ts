@@ -74,6 +74,18 @@ export function buildTuningStepOptions(steps: number[]): CapabilityOption[] {
     .map((step) => createOption(step));
 }
 
+export function buildDiscreteNumberOptions(
+  options: Array<{ value: number; label?: string }>,
+): CapabilityOption[] {
+  return Array.from(new Map(
+    options
+      .filter((option) => Number.isFinite(option.value))
+      .map((option) => [option.value, option] as const)
+  ).values())
+    .sort((left, right) => left.value - right.value)
+    .map((option) => option.label ? ({ value: option.value, label: option.label }) : createOption(option.value));
+}
+
 export function buildCtcssToneOptions(tones: number[]): CapabilityOption[] {
   return uniqueSortedNumbers(tones)
     .filter((tone) => tone > 0)

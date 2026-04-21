@@ -455,6 +455,12 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   setRFPower?(value: number): Promise<void>;
 
   /**
+   * 获取当前频率/模式下可用的离散发射功率挡位。
+   * 返回 null/空数组 表示无法可靠探测，应回退为连续滑块。
+   */
+  getSupportedRFPowerSteps?(): Promise<Array<{ value: number; label?: string }>>;
+
+  /**
    * 获取 AF 增益（音频输出音量，0.0–1.0）
    * @optional Hamlib: getLevel('AF'), icom-wlan: CI-V 0x14 0x01
    */

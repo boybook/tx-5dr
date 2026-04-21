@@ -73,6 +73,16 @@ interface SpectrumControllerLike {
 
 type SplitSupportState = 'unknown' | 'supported' | 'unsupported';
 type TxFrequencyRange = ReturnType<HamLib['getFrequencyRanges']>['tx'][number];
+type RfPowerStepTableEntry = {
+  normalized: number;
+  milliwatts: number;
+  watts: number;
+  rigUnitRange?: {
+    current: number;
+    min: number;
+    max: number;
+  };
+};
 
 const DATA_TO_BASE_MODE: Record<string, string> = {
   PKTUSB: 'USB',
@@ -1015,6 +1025,20 @@ export class HamlibConnection
     return matchingRange.highPower > 0 ? matchingRange.highPower / 1000 : fallbackMaxWatts;
   }
 
+  private formatRfPowerStepLabel(normalized: number, watts: number): string {
+    const percent = `${Math.round(normalized * 100)}%`;
+    if (!Number.isFinite(watts) || watts <= 0) {
+      return percent;
+    }
+
+    if (watts >= 1) {
+      const roundedWatts = watts >= 10 ? Math.round(watts).toString() : watts.toFixed(1).replace(/\.0$/, '');
+      return `${roundedWatts} W (${percent})`;
+    }
+
+    return `${Math.round(watts * 1000)} mW (${percent})`;
+  }
+
   async getSpectrumSupportSummary(): Promise<SpectrumSupportSummary> {
     return this.runSerializedTask('getSpectrumSupportSummary', async () => {
       this.checkConnected();
@@ -1400,6 +1424,40 @@ export class HamlibConnection
         logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
         throw this.convertError(error, 'setRFPower');
+      }
+    });
+  }
+
+  async getSupportedRFPowerSteps(): Promise<Array<{ value: number; label?: string }>> {
+    return this.runSerializedTask('getSupportedRFPowerSteps', async () => {
+      this.checkConnected();
+
+      if (!this.supportedLevels.has('RFPOWER') || !this.rig || this.currentFrequencyHz <= 0 || !this.currentRadioMode) {
+        return [];
+      }
+
+      const rigWithRfPowerSteps = this.rig as HamLib & {
+        getRfPowerStepTable?: (frequency: number, mode: string) => RfPowerStepTableEntry[] | null;
+      };
+
+      if (typeof rigWithRfPowerSteps.getRfPowerStepTable !== 'function') {
+        return [];
+      }
+
+      try {
+        const table = rigWithRfPowerSteps.getRfPowerStepTable(this.currentFrequencyHz, this.currentRadioMode) ?? [];
+        const options = table
+          .filter((entry) => Number.isFinite(entry.normalized) && entry.normalized >= 0 && entry.normalized <= 1)
+          .map((entry) => ({
+            value: entry.normalized,
+            label: this.formatRfPowerStepLabel(entry.normalized, entry.watts),
+          }));
+
+        return Array.from(new Map(options.map((option) => [option.value, option] as const)).values())
+          .sort((left, right) => left.value - right.value);
+      } catch (error) {
+        logger.debug('Failed to read RF power step table', error);
+        return [];
       }
     });
   }
