@@ -12,6 +12,7 @@ const STORAGE_KEY = 'tx5dr_operator_preferences';
 
 export interface OperatorPreferences {
   hiddenOperatorIds: string[];
+  selectedOperatorId: string | null;
   lastUpdated: number;
 }
 
@@ -31,12 +32,14 @@ export function getOperatorPreferences(): OperatorPreferences {
         localStorage.removeItem(STORAGE_KEY);
         return {
           hiddenOperatorIds: [],
+          selectedOperatorId: null,
           lastUpdated: Date.now()
         };
       }
 
       return {
         hiddenOperatorIds: parsed.hiddenOperatorIds || [],
+        selectedOperatorId: typeof parsed.selectedOperatorId === 'string' ? parsed.selectedOperatorId : null,
         lastUpdated: parsed.lastUpdated || Date.now()
       };
     }
@@ -47,6 +50,7 @@ export function getOperatorPreferences(): OperatorPreferences {
   // 默认值：空黑名单 = 全部显示
   return {
     hiddenOperatorIds: [],
+    selectedOperatorId: null,
     lastUpdated: Date.now()
   };
 }
@@ -90,6 +94,7 @@ export function setOperatorEnabled(operatorId: string, enabled: boolean): void {
 
   setOperatorPreferences({
     hiddenOperatorIds: Array.from(hiddenIds),
+    selectedOperatorId: preferences.selectedOperatorId,
     lastUpdated: Date.now()
   });
 }
@@ -102,12 +107,14 @@ export function setAllOperatorsEnabled(operatorIds: string[], enabled: boolean):
     // 启用所有操作员 = 清空黑名单
     setOperatorPreferences({
       hiddenOperatorIds: [],
+      selectedOperatorId: getOperatorPreferences().selectedOperatorId,
       lastUpdated: Date.now()
     });
   } else {
     // 禁用所有操作员 = 全部加入黑名单
     setOperatorPreferences({
       hiddenOperatorIds: [...operatorIds],
+      selectedOperatorId: getOperatorPreferences().selectedOperatorId,
       lastUpdated: Date.now()
     });
   }
@@ -136,4 +143,21 @@ export function hasHiddenOperators(): boolean {
  */
 export function getHandshakeOperatorIds(): string[] | null {
   return null;
+}
+
+export function getSelectedOperatorId(): string | null {
+  return getOperatorPreferences().selectedOperatorId;
+}
+
+export function setSelectedOperatorId(operatorId: string | null): void {
+  const preferences = getOperatorPreferences();
+  setOperatorPreferences({
+    hiddenOperatorIds: preferences.hiddenOperatorIds,
+    selectedOperatorId: operatorId,
+    lastUpdated: Date.now(),
+  });
+}
+
+export function getHandshakeSelectedOperatorId(): string | null {
+  return getSelectedOperatorId();
 }

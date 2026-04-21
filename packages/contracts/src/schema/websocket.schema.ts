@@ -68,10 +68,12 @@ export enum WSMessageType {
   
   // ===== 客户端操作员过滤 =====
   SET_CLIENT_ENABLED_OPERATORS = 'setClientEnabledOperators',
+  SET_CLIENT_SELECTED_OPERATOR = 'setClientSelectedOperator',
   
   // ===== 握手协议 =====
   CLIENT_HANDSHAKE = 'clientHandshake',
   SERVER_HANDSHAKE_COMPLETE = 'serverHandshakeComplete',
+  SLOT_PACKS_RESET = 'slotPacksReset',
   
   // ===== 发射日志 =====
   TRANSMISSION_LOG = 'transmissionLog',
@@ -662,12 +664,23 @@ export const WSSetClientEnabledOperatorsMessageSchema = WSBaseMessageSchema.exte
 });
 
 /**
+ * 设置客户端当前选中操作员消息
+ */
+export const WSSetClientSelectedOperatorMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_CLIENT_SELECTED_OPERATOR),
+  data: z.object({
+    selectedOperatorId: z.string().nullable(),
+  }),
+});
+
+/**
  * 客户端握手消息
  */
 export const WSClientHandshakeMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.CLIENT_HANDSHAKE),
   data: z.object({
     enabledOperatorIds: z.array(z.string()).nullable(), // null表示新客户端，数组表示已配置的偏好
+    selectedOperatorId: z.string().nullable().optional(),
     clientInstanceId: z.string().min(1),
     clientVersion: z.string().optional(),
     clientCapabilities: z.array(z.string()).optional(),
@@ -682,7 +695,14 @@ export const WSServerHandshakeCompleteMessageSchema = WSBaseMessageSchema.extend
   data: z.object({
     serverVersion: z.string().optional(),
     supportedFeatures: z.array(z.string()).optional(),
+    finalEnabledOperatorIds: z.array(z.string()).optional(),
+    finalSelectedOperatorId: z.string().nullable().optional(),
   }),
+});
+
+export const WSSlotPacksResetMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SLOT_PACKS_RESET),
+  data: z.object({}).optional(),
 });
 
 // 导出类型
@@ -698,8 +718,10 @@ export type WSStopOperatorMessage = z.infer<typeof WSStopOperatorMessageSchema>;
 export type WSSelectedFrame = z.infer<typeof WSSelectedFrameSchema>;
 export type WSOperatorRequestCallMessage = z.infer<typeof WSOperatorRequestCallMessageSchema>;
 export type WSSetClientEnabledOperatorsMessage = z.infer<typeof WSSetClientEnabledOperatorsMessageSchema>;
+export type WSSetClientSelectedOperatorMessage = z.infer<typeof WSSetClientSelectedOperatorMessageSchema>;
 export type WSClientHandshakeMessage = z.infer<typeof WSClientHandshakeMessageSchema>;
 export type WSServerHandshakeCompleteMessage = z.infer<typeof WSServerHandshakeCompleteMessageSchema>;
+export type WSSlotPacksResetMessage = z.infer<typeof WSSlotPacksResetMessageSchema>;
 
 /**
  * 发射日志消息
@@ -1183,10 +1205,12 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   
   // 客户端启用操作员列表消息
   WSSetClientEnabledOperatorsMessageSchema,
+  WSSetClientSelectedOperatorMessageSchema,
   
   // 握手消息
   WSClientHandshakeMessageSchema,
   WSServerHandshakeCompleteMessageSchema,
+  WSSlotPacksResetMessageSchema,
   
   // 电台连接管理消息
   WSRadioStatusChangedMessageSchema,
@@ -1294,6 +1318,7 @@ export interface DigitalRadioEngineEvents {
   
   // 数据更新事件
   slotPackUpdated: (slotPack: z.infer<typeof SlotPackSchema>) => void;
+  slotPacksReset: () => void;
   spectrumCapabilities: (data: z.infer<typeof SpectrumCapabilitiesSchema>) => void;
   spectrumFrame: (data: z.infer<typeof SpectrumFrameSchema>) => void;
   spectrumSessionStateChanged: (data: z.infer<typeof SpectrumSessionStateSchema>) => void;
@@ -1324,6 +1349,7 @@ export interface DigitalRadioEngineEvents {
   connected: () => void;
   reconnecting: (data: { attempt: number; delayMs: number }) => void;
   disconnected: () => void;
+  handshakeComplete: (data: z.infer<typeof WSServerHandshakeCompleteMessageSchema>['data']) => void;
   connectionReplaced: (data: { reason: string }) => void;
   error: (error: Error) => void;
 

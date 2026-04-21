@@ -83,4 +83,27 @@ describe('WSServer initial frequency snapshot', () => {
       source: 'radio',
     });
   });
+
+  it('filters own callsign lookup by the selected operator only', () => {
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = {
+      operatorManager: {
+        getOperator: vi.fn((operatorId: string) => {
+          if (operatorId === 'op-a') {
+            return { config: { myCallsign: 'BG5AAA' } };
+          }
+          if (operatorId === 'op-b') {
+            return { config: { myCallsign: 'BH1BBB' } };
+          }
+          return null;
+        }),
+      },
+    };
+
+    const selectedCallsigns = (server as any).getSelectedOperatorCallsigns('op-b');
+    const noSelectionCallsigns = (server as any).getSelectedOperatorCallsigns(null);
+
+    expect(Array.from(selectedCallsigns)).toEqual(['BH1BBB']);
+    expect(Array.from(noSelectionCallsigns)).toEqual([]);
+  });
 });
