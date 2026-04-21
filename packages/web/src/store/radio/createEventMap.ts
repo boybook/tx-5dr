@@ -318,8 +318,21 @@ export function createRadioEventMap({
     slotPackUpdated: (data: unknown) => {
       slotPacksDispatch({ type: 'slotPackUpdated', payload: data as SlotPack });
     },
-    slotPacksReset: () => {
-      logger.debug('Received slotPacksReset, clearing local slot history');
+    slotPacksReset: (data: unknown) => {
+      const resetData = data as { phase?: 'start' | 'complete' } | undefined;
+      if (resetData?.phase === 'start') {
+        logger.debug('Received slotPacksReset:start, buffering replacement slot history');
+        slotPacksDispatch({ type: 'beginSync' });
+        return;
+      }
+
+      if (resetData?.phase === 'complete') {
+        logger.debug('Received slotPacksReset:complete, swapping in buffered slot history');
+        slotPacksDispatch({ type: 'commitSync' });
+        return;
+      }
+
+      logger.debug('Received legacy slotPacksReset, clearing local slot history');
       slotPacksDispatch({ type: 'CLEAR_DATA' });
     },
     qsoRecordAdded: (data: unknown) => {

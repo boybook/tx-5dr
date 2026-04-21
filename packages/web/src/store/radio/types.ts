@@ -168,12 +168,16 @@ export type RadioAction =
 
 export interface SlotPacksState {
   slotPacks: SlotPack[];
+  pendingSlotPacks: SlotPack[];
   totalMessages: number;
   lastUpdateTime: Date | null;
+  isSyncing: boolean;
 }
 
 export type SlotPacksAction =
   | { type: 'slotPackUpdated'; payload: SlotPack }
+  | { type: 'beginSync' }
+  | { type: 'commitSync' }
   | { type: 'CLEAR_DATA' };
 
 export interface LogbookState {

@@ -102,7 +102,17 @@ describe('createRadioEventMap operator selection flow', () => {
     localStorage.clear();
   });
 
-  it('clears local slot history when slotPacksReset arrives', () => {
+  it('buffers and commits replacement slot history when slotPacksReset phases arrive', () => {
+    const { eventMap, slotPacksDispatch } = createEventMapForTest();
+
+    eventMap.slotPacksReset({ phase: 'start' });
+    eventMap.slotPacksReset({ phase: 'complete' });
+
+    expect(slotPacksDispatch).toHaveBeenNthCalledWith(1, { type: 'beginSync' });
+    expect(slotPacksDispatch).toHaveBeenNthCalledWith(2, { type: 'commitSync' });
+  });
+
+  it('falls back to clearing history for legacy reset messages without phase', () => {
     const { eventMap, slotPacksDispatch } = createEventMapForTest();
 
     eventMap.slotPacksReset();

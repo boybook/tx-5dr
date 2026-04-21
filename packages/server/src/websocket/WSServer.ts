@@ -1581,18 +1581,24 @@ export class WSServer extends WSMessageHandler {
   ): Promise<void> {
     const { reset = false, limit = 50 } = options ?? {};
     if (reset) {
-      connection.send(WSMessageType.SLOT_PACKS_RESET, {});
+      connection.send(WSMessageType.SLOT_PACKS_RESET, { phase: 'start' });
     }
 
-    const activeSlotPacks = this.digitalRadioEngine.getActiveSlotPacks();
-    if (activeSlotPacks.length === 0) {
-      return;
-    }
+    try {
+      const activeSlotPacks = this.digitalRadioEngine.getActiveSlotPacks();
+      if (activeSlotPacks.length === 0) {
+        return;
+      }
 
-    const recentSlotPacks = activeSlotPacks.slice(-limit);
-    for (const slotPack of recentSlotPacks) {
-      const customizedSlotPack = await this.customizeSlotPackForClient(connection, slotPack);
-      connection.send(WSMessageType.SLOT_PACK_UPDATED, customizedSlotPack);
+      const recentSlotPacks = activeSlotPacks.slice(-limit);
+      for (const slotPack of recentSlotPacks) {
+        const customizedSlotPack = await this.customizeSlotPackForClient(connection, slotPack);
+        connection.send(WSMessageType.SLOT_PACK_UPDATED, customizedSlotPack);
+      }
+    } finally {
+      if (reset) {
+        connection.send(WSMessageType.SLOT_PACKS_RESET, { phase: 'complete' });
+      }
     }
   }
 

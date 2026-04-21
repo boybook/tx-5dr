@@ -385,8 +385,10 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
 
 export const initialSlotPacksState: SlotPacksState = {
   slotPacks: [],
+  pendingSlotPacks: [],
   totalMessages: 0,
-  lastUpdateTime: null
+  lastUpdateTime: null,
+  isSyncing: false,
 };
 
 export const initialLogbookState: LogbookState = {
@@ -396,35 +398,64 @@ export const initialLogbookState: LogbookState = {
 };
 
 export function slotPacksReducer(state: SlotPacksState, action: SlotPacksAction): SlotPacksState {
+  const upsertSlotPack = (slotPacks: SlotPack[], newSlotPack: SlotPack): SlotPack[] => {
+    const existingIndex = slotPacks.findIndex(sp => sp.slotId === newSlotPack.slotId);
+    let updatedSlotPacks: SlotPack[];
+
+    if (existingIndex >= 0) {
+      updatedSlotPacks = [...slotPacks];
+      updatedSlotPacks[existingIndex] = newSlotPack;
+    } else {
+      updatedSlotPacks = [...slotPacks, newSlotPack];
+    }
+
+    updatedSlotPacks.sort((a, b) => a.startMs - b.startMs);
+    if (updatedSlotPacks.length > 50) {
+      return updatedSlotPacks.slice(-50);
+    }
+
+    return updatedSlotPacks;
+  };
+
+  const getTotalMessages = (slotPacks: SlotPack[]): number =>
+    slotPacks.reduce((sum, sp) => sum + sp.frames.length, 0);
+
   switch (action.type) {
     case 'slotPackUpdated': {
       const newSlotPack = action.payload;
-      const existingIndex = state.slotPacks.findIndex(sp => sp.slotId === newSlotPack.slotId);
-      
-      let updatedSlotPacks: SlotPack[];
-      if (existingIndex >= 0) {
-        // 更新现有的SlotPack
-        updatedSlotPacks = [...state.slotPacks];
-        updatedSlotPacks[existingIndex] = newSlotPack;
-      } else {
-        // 添加新的SlotPack
-        updatedSlotPacks = [...state.slotPacks, newSlotPack];
+      if (state.isSyncing) {
+        return {
+          ...state,
+          pendingSlotPacks: upsertSlotPack(state.pendingSlotPacks, newSlotPack),
+        };
       }
-      
-      // 按时间排序并只保留最近的50个SlotPack
-      updatedSlotPacks.sort((a, b) => a.startMs - b.startMs);
-      if (updatedSlotPacks.length > 50) {
-        updatedSlotPacks = updatedSlotPacks.slice(-50);
-      }
-      
-      // 计算总消息数
-      const totalMessages = updatedSlotPacks.reduce((sum, sp) => sum + sp.frames.length, 0);
-      
+
+      const updatedSlotPacks = upsertSlotPack(state.slotPacks, newSlotPack);
+
       return {
         ...state,
         slotPacks: updatedSlotPacks,
-        totalMessages,
+        totalMessages: getTotalMessages(updatedSlotPacks),
         lastUpdateTime: new Date()
+      };
+    }
+
+    case 'beginSync':
+      return {
+        ...state,
+        pendingSlotPacks: [],
+        isSyncing: true,
+      };
+
+    case 'commitSync': {
+      const nextSlotPacks = state.pendingSlotPacks;
+      return {
+        ...state,
+        slotPacks: nextSlotPacks,
+        pendingSlotPacks: [],
+        totalMessages: getTotalMessages(nextSlotPacks),
+        lastUpdateTime: new Date(),
+        isSyncing: false,
       };
     }
     
@@ -432,8 +463,10 @@ export function slotPacksReducer(state: SlotPacksState, action: SlotPacksAction)
       return {
         ...state,
         slotPacks: [],
+        pendingSlotPacks: [],
         totalMessages: 0,
-        lastUpdateTime: null
+        lastUpdateTime: null,
+        isSyncing: false,
       };
     
     default:
