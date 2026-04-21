@@ -108,11 +108,17 @@ RUN bash /tmp/tx5dr-linux/install.sh --docker && rm -rf /tmp/tx5dr-linux/
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \
     libasound2 \
+    libglib2.0-0 \
     libpulse0 \
+    libxcomposite1 \
+    libxdamage1 \
     libx11-6 \
+    libxfixes3 \
     libxrandr2 \
     libxinerama1 \
     libxcursor1 \
+    libdrm2 \
+    libgbm1 \
     libjack-jackd2-0 \
     libxi6 \
     libxext6 \
