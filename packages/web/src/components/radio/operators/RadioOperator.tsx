@@ -10,6 +10,10 @@ import { addToast } from '@heroui/toast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
 import { OperatorPluginPanels } from '../../plugins/OperatorPluginPanels';
+import {
+  getRadioOperatorProgressAnimation,
+  shouldRadioOperatorPropsBeEqual,
+} from './radioOperatorProgress';
 
 const logger = createLogger('RadioOperator');
 
@@ -419,28 +423,15 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   // 进度条动画样式 - 只在周期变化时重新计算，避免发射状态变化时重新触发动画
   const progressAnimation = React.useMemo((): React.CSSProperties => {
-    if (!operatorStatus.cycleInfo || !radio.state.currentMode) {
-      return { animation: 'none' };
-    }
-
-    const { cycleProgress } = operatorStatus.cycleInfo;
-    const cycleDurationMs = radio.state.currentMode.slotMs;
-
-    // 超过120%表示服务端可能掉线，显示空条
-    if (cycleProgress > 1.2) {
-      return { animation: 'none' };
-    }
-
-    // 计算动画参数：遮罩从 (100% - 当前进度) 缩小到 0%
-    const remainingMs = Math.max(0, cycleDurationMs * (1 - cycleProgress));
-    const maskStartPercent = Math.max(0, 100 - cycleProgress * 100);
-
-    return {
-      animation: `progress-bar ${remainingMs}ms linear forwards`,
-      // @ts-expect-error CSS custom property for animation start position
-      '--progress-start': `${maskStartPercent}%`,
-    };
-  }, [operatorStatus.cycleInfo?.currentCycle, radio.state.currentMode?.slotMs]);
+    return getRadioOperatorProgressAnimation(
+      operatorStatus.cycleInfo,
+      radio.state.currentMode?.slotMs,
+    );
+  }, [
+    operatorStatus.cycleInfo?.currentCycle,
+    operatorStatus.cycleInfo?.cycleProgress,
+    radio.state.currentMode?.slotMs,
+  ]);
 
   // 选择空闲频率
   const pickIdleFrequency = () => {
@@ -1049,37 +1040,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       </div>
     </div>
   );
-}, (prevProps, nextProps) => {
-  const prev = prevProps.operatorStatus;
-  const next = nextProps.operatorStatus;
-  
-  if (prev.id !== next.id ||
-      prev.isActive !== next.isActive ||
-      prev.isTransmitting !== next.isTransmitting ||
-      prev.currentSlot !== next.currentSlot) {
-    return false;
-  }
-  
-  if (JSON.stringify(prev.context) !== JSON.stringify(next.context)) {
-    return false;
-  }
-  
-  if (JSON.stringify(prev.slots) !== JSON.stringify(next.slots)) {
-    return false;
-  }
-  
-  if (prev.cycleInfo && next.cycleInfo) {
-    if (prev.cycleInfo.currentCycle !== next.cycleInfo.currentCycle ||
-        prev.cycleInfo.isTransmitCycle !== next.cycleInfo.isTransmitCycle) {
-      return false;
-    }
-  } else if (prev.cycleInfo !== next.cycleInfo) {
-    return false;
-  }
-  
-  if (JSON.stringify(prev.transmitCycles) !== JSON.stringify(next.transmitCycles)) {
-    return false;
-  }
-  
-  return true;
-}); 
+}, (prevProps, nextProps) => (
+  shouldRadioOperatorPropsBeEqual(prevProps.operatorStatus, nextProps.operatorStatus)
+)); 
