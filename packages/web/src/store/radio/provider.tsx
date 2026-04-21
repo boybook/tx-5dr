@@ -22,6 +22,7 @@ import {
   StationInfoContext,
 } from './contexts';
 import { createRadioEventMap } from './createEventMap';
+import { setSelectedOperatorId } from '../../utils/operatorPreferences';
 import {
   connectionReducer,
   initialConnectionState,
@@ -155,7 +156,9 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const setCurrentOperatorId = useCallback((operatorId: string) => {
+    setSelectedOperatorId(operatorId);
     radioDispatch({ type: 'setCurrentOperator', payload: operatorId });
+    radioServiceRef.current?.setClientSelectedOperator(operatorId);
   }, []);
 
   const clearRadioErrors = useCallback(() => {

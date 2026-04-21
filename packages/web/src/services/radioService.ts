@@ -327,18 +327,24 @@ export class RadioService {
     }
   }
 
+  setClientSelectedOperator(selectedOperatorId: string | null): void {
+    if (this.isConnected) {
+      logger.debug('Setting client selected operator:', selectedOperatorId);
+      this.wsClient.setClientSelectedOperator(selectedOperatorId);
+    }
+  }
+
   /**
    * 发送握手消息
    */
-  sendHandshake(enabledOperatorIds: string[] | null, clientInstanceId: string): void {
+  sendHandshake(
+    enabledOperatorIds: string[] | null,
+    selectedOperatorId: string | null,
+    clientInstanceId: string,
+  ): void {
     if (this.isConnected) {
-      logger.debug('Sending handshake:', { enabledOperatorIds, clientInstanceId });
-      this.wsClient.send('clientHandshake', {
-        enabledOperatorIds,
-        clientInstanceId,
-        clientVersion: '1.0.0',
-        clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
-      });
+      logger.debug('Sending handshake:', { enabledOperatorIds, selectedOperatorId, clientInstanceId });
+      this.wsClient.sendHandshake(enabledOperatorIds, selectedOperatorId, clientInstanceId);
     }
   }
 

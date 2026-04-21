@@ -16,7 +16,7 @@ import type {
   SubWindowInfo,
   SystemStatus
 } from '@tx5dr/contracts';
-import { WSMessageHandler } from '@tx5dr/core';
+import { FT8MessageParser, WSMessageHandler } from '@tx5dr/core';
 import { getBandFromFrequency } from '@tx5dr/core';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import type { ProcessMonitor } from '../services/ProcessMonitor.js';
@@ -30,6 +30,7 @@ import { createLogger } from '../utils/logger.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
+import { OperatorScopedSlotPackProjectionService } from './OperatorScopedSlotPackProjectionService.js';
 
 const logger = createLogger('WSServer');
 
@@ -53,6 +54,7 @@ export class WSConnection extends WSMessageHandler {
   private id: string;
   private clientInstanceId: string | null = null;
   private enabledOperatorIds: Set<string> = new Set(); // 客户端启用的操作员ID列表
+  private selectedOperatorId: string | null = null;
   private handshakeCompleted: boolean = false; // 握手是否完成
 
   // 认证状态
@@ -167,6 +169,14 @@ export class WSConnection extends WSMessageHandler {
    */
   getEnabledOperatorIds(): string[] {
     return Array.from(this.enabledOperatorIds);
+  }
+
+  setSelectedOperatorId(operatorId: string | null): void {
+    this.selectedOperatorId = operatorId;
+  }
+
+  getSelectedOperatorId(): string | null {
+    return this.selectedOperatorId;
   }
 
   /**
@@ -341,6 +351,7 @@ export class WSServer extends WSMessageHandler {
   private processMonitor: ProcessMonitor | null = null;
   private spectrumCoordinator: SpectrumCoordinator;
   private spectrumSessionCoordinator: SpectrumSessionCoordinator;
+  private slotPackProjectionService: OperatorScopedSlotPackProjectionService;
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
   static getInstance(): WSServer | null {
@@ -359,6 +370,10 @@ export class WSServer extends WSMessageHandler {
     }
     this.spectrumCoordinator = new SpectrumCoordinator(digitalRadioEngine);
     this.spectrumSessionCoordinator = new SpectrumSessionCoordinator(digitalRadioEngine, this.spectrumCoordinator);
+    this.slotPackProjectionService = new OperatorScopedSlotPackProjectionService({
+      callsignTracker: digitalRadioEngine.callsignTracker,
+      logManager: digitalRadioEngine.operatorManager.getLogManager(),
+    });
     this.setupEngineEventListeners();
     this.setupOpenWebRXEventListeners();
 
@@ -382,6 +397,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_VOLUME_GAIN]: (data) => this.handleSetVolumeGain(data),
       [WSMessageType.SET_VOLUME_GAIN_DB]: (data) => this.handleSetVolumeGainDb(data),
       [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: (data, id) => this.handleSetClientEnabledOperators(id, data),
+      [WSMessageType.SET_CLIENT_SELECTED_OPERATOR]: (data, id) => this.handleSetClientSelectedOperator(id, data),
       [WSMessageType.CLIENT_HANDSHAKE]: (data, id) => this.handleClientHandshake(id, data),
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
@@ -1485,196 +1501,99 @@ export class WSServer extends WSMessageHandler {
    * 为特定客户端定制化SlotPack数据
    */
   private async customizeSlotPackForClient(connection: WSConnection, slotPack: SlotPack): Promise<SlotPack> {
-    // 获取该客户端启用的操作员
-    const enabledOperatorIds = connection.getEnabledOperatorIds();
-    if (enabledOperatorIds.length === 0) {
-      // 如果没有启用任何操作员，返回原始数据（不带logbook分析）
-      return slotPack;
+    const selectedOperatorId = connection.getSelectedOperatorId();
+    const projectedSlotPack = await this.slotPackProjectionService.projectSlotPack(
+      slotPack,
+      selectedOperatorId,
+    );
+    const myOperatorCallsigns = this.getSelectedOperatorCallsigns(selectedOperatorId);
+    if (myOperatorCallsigns.size === 0) {
+      return projectedSlotPack;
     }
 
-    // 复制SlotPack以避免修改原始数据
-    const customizedSlotPack = JSON.parse(JSON.stringify(slotPack));
-
-    // 获取该连接启用的操作员的呼号列表，用于过滤该连接用户自己发射的内容
-    const myOperatorCallsigns = new Set<string>();
-    const operatorManager = this.digitalRadioEngine.operatorManager;
-    for (const operatorId of enabledOperatorIds) {
-      const operator = operatorManager.getOperator(operatorId);
-      if (operator && operator.config.myCallsign) {
-        myOperatorCallsigns.add(operator.config.myCallsign.toUpperCase());
+    const filteredFrames = projectedSlotPack.frames.filter((frame) => {
+      if (frame.snr === -999) {
+        return true;
       }
-    }
 
-    // 过滤和处理frames
-    const framePromises = customizedSlotPack.frames.map(async (frame: any) => {
       try {
-        // 过滤掉收到的自己发射的内容（排除发射帧SNR=-999）
-        if (frame.snr !== -999) {
-          const { FT8MessageParser } = await import('@tx5dr/core');
-          try {
-            const parsedMessage = FT8MessageParser.parseMessage(frame.message);
-
-            // 检查是否为该连接用户自己发射的消息（通过sender呼号匹配）
-            const senderCallsign = (parsedMessage as any).senderCallsign;
-            if (senderCallsign && myOperatorCallsigns.has(senderCallsign.toUpperCase())) {
-              logger.debug(`filtered own message for connection ${connection.getId()}: "${frame.message}" (${senderCallsign})`);
-              return null; // 标记为过滤掉
-            }
-          } catch (parseError) {
-            // 解析失败时保留原frame，不影响其他处理
-            logger.warn(`failed to parse message for filtering: "${frame.message}"`, parseError);
-          }
-        }
-
-        // 添加logbook分析
-        const logbookAnalysis = await this.analyzeFrameForOperators(frame, enabledOperatorIds);
-        if (logbookAnalysis) {
-          frame.logbookAnalysis = logbookAnalysis;
+        const parsedMessage = FT8MessageParser.parseMessage(frame.message);
+        const senderCallsign = 'senderCallsign' in parsedMessage
+          ? parsedMessage.senderCallsign
+          : undefined;
+        if (senderCallsign && myOperatorCallsigns.has(senderCallsign.toUpperCase())) {
+          logger.debug(`filtered own message for connection ${connection.getId()}: "${frame.message}" (${senderCallsign})`);
+          return false;
         }
       } catch (error) {
-        logger.warn(`failed to analyze frame: ${frame.message}`, error);
-        // 继续处理，不影响其他frame
+        logger.warn(`failed to parse message for filtering: "${frame.message}"`, error);
       }
-      return frame;
+
+      return true;
     });
 
-    const processedFrames = await Promise.all(framePromises);
-    // 过滤掉被标记为null的frames（即被过滤的自己发射的内容）
-    customizedSlotPack.frames = processedFrames.filter(frame => frame !== null);
-
-    return customizedSlotPack;
+    return {
+      ...projectedSlotPack,
+      frames: filteredFrames,
+    };
   }
 
-
-  /**
-   * 分析单个frame对所有启用操作员的日志本情况
-   */
-  private async analyzeFrameForOperators(frame: any, enabledOperatorIds: string[]): Promise<any> {
-    const { FT8MessageParser, getBandFromFrequency } = await import('@tx5dr/core');
-    const { ConfigManager } = await import('../config/config-manager.js');
-
-    // 解析FT8消息
-    const parsedMessage = FT8MessageParser.parseMessage(frame.message);
-
-    // 提取呼号和网格信息
-    let callsign: string | undefined;
-    let grid: string | undefined;
-
-    // 根据消息类型提取呼号和网格
-    if ('senderCallsign' in parsedMessage && typeof parsedMessage.senderCallsign === 'string') {
-      callsign = parsedMessage.senderCallsign;
+  private getSelectedOperatorCallsigns(selectedOperatorId: string | null): Set<string> {
+    const myOperatorCallsigns = new Set<string>();
+    if (!selectedOperatorId) {
+      return myOperatorCallsigns;
     }
 
-    if (parsedMessage.type === 'cq') {
-      grid = parsedMessage.grid;
-    } else if (parsedMessage.type === 'call') {
-      grid = parsedMessage.grid;
+    const operator = this.digitalRadioEngine.operatorManager.getOperator(selectedOperatorId);
+    if (operator?.config.myCallsign) {
+      myOperatorCallsigns.add(operator.config.myCallsign.toUpperCase());
     }
 
-    if (!callsign) {
-      // 如果没有呼号信息，不进行分析
-      return null;
+    return myOperatorCallsigns;
+  }
+
+  private getVisibleOperatorIds(connection: WSConnection): string[] {
+    return this.digitalRadioEngine.operatorManager.getOperatorsStatus()
+      .filter((operator) => connection.isOperatorEnabled(operator.id))
+      .map((operator) => operator.id);
+  }
+
+  private resolveSelectedOperatorId(
+    connection: WSConnection,
+    requestedSelectedOperatorId: string | null | undefined,
+  ): string | null {
+    const visibleOperatorIds = this.getVisibleOperatorIds(connection);
+    if (requestedSelectedOperatorId && visibleOperatorIds.includes(requestedSelectedOperatorId)) {
+      return requestedSelectedOperatorId;
+    }
+    return visibleOperatorIds[0] ?? null;
+  }
+
+  private sendFilteredOperatorsList(connection: WSConnection): void {
+    const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
+    const filteredOperators = operators.filter((operator) => connection.isOperatorEnabled(operator.id));
+    connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
+  }
+
+  private async sendProjectedRecentSlotPacks(
+    connection: WSConnection,
+    options?: { reset?: boolean; limit?: number },
+  ): Promise<void> {
+    const { reset = false, limit = 50 } = options ?? {};
+    if (reset) {
+      connection.send(WSMessageType.SLOT_PACKS_RESET, {});
     }
 
-    // If grid is missing from this message, look up from callsign context tracker
-    if (!grid) {
-      grid = this.digitalRadioEngine.callsignTracker.getGrid(callsign);
+    const activeSlotPacks = this.digitalRadioEngine.getActiveSlotPacks();
+    if (activeSlotPacks.length === 0) {
+      return;
     }
 
-    // 计算当前系统频段（用于按频段判断"是否新呼号"）
-    let band: string = 'Unknown';
-    try {
-      const cfg = ConfigManager.getInstance();
-      const last = cfg.getLastSelectedFrequency();
-      if (last && last.frequency && last.frequency > 1_000_000) {
-        band = getBandFromFrequency(last.frequency);
-      }
-    } catch {}
-
-    // 对每个启用的操作员检查日志本（按该频段）
-    const operatorManager = this.digitalRadioEngine.operatorManager;
-    const logManager = operatorManager.getLogManager();
-
-    // 合并所有操作员的分析结果
-    let isNewCallsign = true;
-    let isNewDxccEntity = true;
-    let isNewBandDxccEntity = true;
-    let isConfirmedDxcc = false;
-    let isNewGrid = true;
-    let hasSuccessfulAnalysis = false;
-    const canAnalyzeGridByBand = !!grid && !!band && band !== 'Unknown';
-    let prefix: string | undefined;
-    let state: string | undefined;
-    let stateConfidence: 'high' | 'low' | undefined;
-    let dxccId: number | undefined;
-    let dxccEntity: string | undefined;
-    let dxccStatus: 'current' | 'deleted' | 'none' | 'unknown' | undefined;
-
-    for (const operatorId of enabledOperatorIds) {
-      try {
-        const logBook = await logManager.getOperatorLogBook(operatorId);
-        if (logBook) {
-          const analysis = await logBook.provider.analyzeCallsign(callsign, grid, { band });
-          hasSuccessfulAnalysis = true;
-
-          // 如果任一操作员已通联过，则不是新的
-          if (!analysis.isNewCallsign) {
-            isNewCallsign = false;
-          }
-          if (!analysis.isNewDxccEntity) {
-            isNewDxccEntity = false;
-          }
-          if (!analysis.isNewBandDxccEntity) {
-            isNewBandDxccEntity = false;
-          }
-          if (analysis.isConfirmedDxcc) {
-            isConfirmedDxcc = true;
-          }
-          if (canAnalyzeGridByBand && !analysis.isNewGrid) {
-            isNewGrid = false;
-          }
-
-          // 记录前缀信息
-          if (analysis.prefix) {
-            prefix = analysis.prefix;
-          }
-          if (analysis.state) {
-            state = analysis.state;
-          }
-          if (analysis.stateConfidence) {
-            stateConfidence = analysis.stateConfidence;
-          }
-          if (analysis.dxccId) {
-            dxccId = analysis.dxccId;
-          }
-          if (analysis.dxccEntity) {
-            dxccEntity = analysis.dxccEntity;
-          }
-          if (analysis.dxccStatus) {
-            dxccStatus = analysis.dxccStatus;
-          }
-        }
-      } catch (error) {
-        logger.warn(`failed to analyze logbook for operator ${operatorId}`, error);
-        // 继续处理其他操作员
-      }
+    const recentSlotPacks = activeSlotPacks.slice(-limit);
+    for (const slotPack of recentSlotPacks) {
+      const customizedSlotPack = await this.customizeSlotPackForClient(connection, slotPack);
+      connection.send(WSMessageType.SLOT_PACK_UPDATED, customizedSlotPack);
     }
-
-    return {
-      isNewCallsign,
-      isNewDxccEntity,
-      isNewBandDxccEntity,
-      isConfirmedDxcc,
-      isNewGrid: hasSuccessfulAnalysis && canAnalyzeGridByBand ? isNewGrid : undefined,
-      callsign,
-      grid,
-      prefix,
-      state,
-      stateConfidence,
-      dxccId,
-      dxccEntity,
-      dxccStatus,
-    };
   }
 
   broadcastSpectrumCapabilities(capabilities: SpectrumCapabilities): void {
@@ -1857,15 +1776,40 @@ export class WSServer extends WSMessageHandler {
       const connection = this.getConnection(connectionId);
       if (connection) {
         connection.setEnabledOperators(enabledOperatorIds);
+        const selectedOperatorId = this.resolveSelectedOperatorId(
+          connection,
+          connection.getSelectedOperatorId(),
+        );
+        connection.setSelectedOperatorId(selectedOperatorId);
         logger.debug(`connection ${connectionId} set enabled operators: [${enabledOperatorIds.join(', ')}]`);
 
-        // 立即发送过滤后的操作员列表给该客户端
-        const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
-        const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
-        connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
+        this.sendFilteredOperatorsList(connection);
+        await this.sendProjectedRecentSlotPacks(connection, { reset: true });
       }
     } catch (error) {
       this.handleCommandError(error, 'setClientEnabledOperators');
+    }
+  }
+
+  private async handleSetClientSelectedOperator(connectionId: string, data: any): Promise<void> {
+    try {
+      const connection = this.getConnection(connectionId);
+      if (!connection) {
+        throw new Error(`Connection ${connectionId} does not exist`);
+      }
+
+      const nextSelectedOperatorId = this.resolveSelectedOperatorId(
+        connection,
+        data?.selectedOperatorId ?? null,
+      );
+      if (nextSelectedOperatorId === connection.getSelectedOperatorId()) {
+        return;
+      }
+
+      connection.setSelectedOperatorId(nextSelectedOperatorId);
+      await this.sendProjectedRecentSlotPacks(connection, { reset: true });
+    } catch (error) {
+      this.handleCommandError(error, 'setClientSelectedOperator');
     }
   }
 
@@ -2049,7 +1993,11 @@ export class WSServer extends WSMessageHandler {
    */
   private async handleClientHandshake(connectionId: string, data: any): Promise<void> {
     try {
-      const { enabledOperatorIds, clientInstanceId } = data;
+      const {
+        enabledOperatorIds,
+        selectedOperatorId,
+        clientInstanceId,
+      } = data;
       const connection = this.getConnection(connectionId);
       if (!connection) {
         throw new Error(`Connection ${connectionId} does not exist`);
@@ -2102,6 +2050,8 @@ export class WSServer extends WSMessageHandler {
       // 完成握手（带权限过滤：requestedIds ∩ authorizedOperatorIds）
       connection.completeHandshakeWithAuth(requestedOperatorIds);
       const finalEnabledOperatorIds = connection.getEnabledOperatorIds();
+      const finalSelectedOperatorId = this.resolveSelectedOperatorId(connection, selectedOperatorId);
+      connection.setSelectedOperatorId(finalSelectedOperatorId);
 
       // 广播客户端数量变化（新客户端握手完成）
       this.broadcastClientCount();
@@ -2110,23 +2060,14 @@ export class WSServer extends WSMessageHandler {
 
       // 1. 发送过滤后的操作员列表
       try {
-        const operators = this.digitalRadioEngine.operatorManager.getOperatorsStatus();
-        const filteredOperators = operators.filter(op => connection.isOperatorEnabled(op.id));
-        connection.send(WSMessageType.OPERATORS_LIST, { operators: filteredOperators });
+        this.sendFilteredOperatorsList(connection);
       } catch (error) {
         logger.error('failed to send operators list', error);
       }
 
       // 2. 发送最近的时隙包数据（如果有）
       try {
-        const activeSlotPacks = this.digitalRadioEngine.getActiveSlotPacks();
-        if (activeSlotPacks.length > 0) {
-          // 发送最近的几个时隙包（最多10个）
-          const recentSlotPacks = activeSlotPacks.slice(-10);
-          for (const slotPack of recentSlotPacks) {
-            connection.send(WSMessageType.SLOT_PACK_UPDATED, slotPack);
-          }
-        }
+        await this.sendProjectedRecentSlotPacks(connection, { reset: true });
       } catch (error) {
         logger.error('failed to send slot pack data', error);
       }
@@ -2141,8 +2082,14 @@ export class WSServer extends WSMessageHandler {
       // 3. 发送握手完成消息
       connection.send('serverHandshakeComplete', {
         serverVersion: '1.0.0',
-        supportedFeatures: ['operatorFiltering', 'handshakeProtocol', 'spectrumSubscriptions'],
-        finalEnabledOperatorIds: enabledOperatorIds === null ? finalEnabledOperatorIds : undefined // 新客户端需要保存最终的操作员列表
+        supportedFeatures: [
+          'operatorFiltering',
+          'handshakeProtocol',
+          'spectrumSubscriptions',
+          'selectedOperatorScopedAnalysis',
+        ],
+        finalEnabledOperatorIds,
+        finalSelectedOperatorId,
       });
 
       // 3.5 发送进程监控历史数据

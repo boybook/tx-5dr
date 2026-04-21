@@ -408,16 +408,26 @@ export class WSClient extends WSMessageHandler {
     this.send('setClientEnabledOperators', { enabledOperatorIds });
   }
 
+  setClientSelectedOperator(selectedOperatorId: string | null): void {
+    logger.debug('Setting client selected operator:', selectedOperatorId);
+    this.send('setClientSelectedOperator', { selectedOperatorId });
+  }
+
   /**
    * 发送客户端握手消息
    */
-  sendHandshake(enabledOperatorIds: string[] | null, clientInstanceId: string): void {
-    logger.info('Sending handshake:', { enabledOperatorIds, clientInstanceId });
+  sendHandshake(
+    enabledOperatorIds: string[] | null,
+    selectedOperatorId: string | null,
+    clientInstanceId: string,
+  ): void {
+    logger.info('Sending handshake:', { enabledOperatorIds, selectedOperatorId, clientInstanceId });
     this.send('clientHandshake', {
       enabledOperatorIds,
+      selectedOperatorId,
       clientInstanceId,
       clientVersion: '1.0.0',
-      clientCapabilities: ['operatorFiltering', 'handshakeProtocol']
+      clientCapabilities: ['operatorFiltering', 'handshakeProtocol', 'selectedOperatorScopedAnalysis']
     });
   }
 

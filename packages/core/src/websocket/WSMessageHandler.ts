@@ -13,6 +13,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.SLOT_START]: 'slotStart',
   [WSMessageType.SUB_WINDOW]: 'subWindow',
   [WSMessageType.SLOT_PACK_UPDATED]: 'slotPackUpdated',
+  [WSMessageType.SLOT_PACKS_RESET]: 'slotPacksReset',
   [WSMessageType.SPECTRUM_CAPABILITIES]: 'spectrumCapabilities',
   [WSMessageType.SPECTRUM_FRAME]: 'spectrumFrame',
   [WSMessageType.SPECTRUM_SESSION_STATE_CHANGED]: 'spectrumSessionStateChanged',

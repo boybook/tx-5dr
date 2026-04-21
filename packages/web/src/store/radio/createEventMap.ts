@@ -30,7 +30,13 @@ import type {
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
-import { getHandshakeOperatorIds, getHiddenOperatorIds } from '../../utils/operatorPreferences';
+import {
+  getHandshakeOperatorIds,
+  getHandshakeSelectedOperatorId,
+  getHiddenOperatorIds,
+  getSelectedOperatorId,
+  setSelectedOperatorId,
+} from '../../utils/operatorPreferences';
 import {
   showErrorToast,
   createRetryAction,
@@ -104,16 +110,33 @@ export function createRadioEventMap({
     }
   };
 
+  const syncCurrentOperatorSelection = (visibleOperatorIds: string[]): void => {
+    const currentOperatorId = radioStateRef.current.currentOperatorId;
+    const storedSelectedOperatorId = getSelectedOperatorId();
+    const nextOperatorId = currentOperatorId && visibleOperatorIds.includes(currentOperatorId)
+      ? currentOperatorId
+      : storedSelectedOperatorId && visibleOperatorIds.includes(storedSelectedOperatorId)
+        ? storedSelectedOperatorId
+        : visibleOperatorIds[0] ?? null;
+
+    if (nextOperatorId !== currentOperatorId) {
+      setSelectedOperatorId(nextOperatorId);
+      radioDispatch({ type: 'setCurrentOperator', payload: nextOperatorId });
+    }
+  };
+
   return {
     connected: () => {
       connectionDispatch({ type: 'connected' });
       if (!authStateRef.current.authEnabled) {
         const handshakeOperatorIds = getHandshakeOperatorIds();
+        const handshakeSelectedOperatorId = getHandshakeSelectedOperatorId();
         logger.info('Auth disabled, sending handshake directly:', {
           enabledOperatorIds: handshakeOperatorIds,
+          selectedOperatorId: handshakeSelectedOperatorId,
           clientInstanceId,
         });
-        radioService.sendHandshake(handshakeOperatorIds, clientInstanceId);
+        radioService.sendHandshake(handshakeOperatorIds, handshakeSelectedOperatorId, clientInstanceId);
       }
       refreshRealtimeState();
     },
@@ -142,7 +165,8 @@ export function createRadioEventMap({
       if (result.success) {
         logger.info('Auth succeeded, role:', result.role);
         const handshakeOperatorIds = getHandshakeOperatorIds();
-        radioService.sendHandshake(handshakeOperatorIds, clientInstanceId);
+        const handshakeSelectedOperatorId = getHandshakeSelectedOperatorId();
+        radioService.sendHandshake(handshakeOperatorIds, handshakeSelectedOperatorId, clientInstanceId);
         refreshRealtimeState();
       } else {
         const errorCode = result.error;
@@ -294,6 +318,10 @@ export function createRadioEventMap({
     slotPackUpdated: (data: unknown) => {
       slotPacksDispatch({ type: 'slotPackUpdated', payload: data as SlotPack });
     },
+    slotPacksReset: () => {
+      logger.debug('Received slotPacksReset, clearing local slot history');
+      slotPacksDispatch({ type: 'CLEAR_DATA' });
+    },
     qsoRecordAdded: (data: unknown) => {
       const qsoData = data as { operatorId: string; logBookId: string; qsoRecord: QSORecord };
       logger.debug('QSO record added:', qsoData);
@@ -312,6 +340,7 @@ export function createRadioEventMap({
     operatorsList: (data: unknown) => {
       const operatorsData = data as { operators: OperatorStatus[] };
       radioDispatch({ type: 'operatorsList', payload: operatorsData.operators });
+      syncCurrentOperatorSelection(operatorsData.operators.map((op) => op.id));
 
       const hiddenIds = getHiddenOperatorIds();
       if (hiddenIds.length > 0) {
@@ -384,8 +413,16 @@ export function createRadioEventMap({
         }
       };
     })(),
-    handshakeComplete: async () => {
-      logger.info('Handshake complete');
+    handshakeComplete: async (data: unknown) => {
+      const handshakeData = data as {
+        finalSelectedOperatorId?: string | null;
+      };
+      logger.info('Handshake complete', handshakeData);
+      if (Object.prototype.hasOwnProperty.call(handshakeData, 'finalSelectedOperatorId')) {
+        const finalSelectedOperatorId = handshakeData.finalSelectedOperatorId ?? null;
+        setSelectedOperatorId(finalSelectedOperatorId);
+        radioDispatch({ type: 'setCurrentOperator', payload: finalSelectedOperatorId });
+      }
       logger.info('Handshake complete, requesting profile list');
       try {
         const { api } = await import('@tx5dr/core');
