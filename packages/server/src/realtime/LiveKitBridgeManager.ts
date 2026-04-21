@@ -43,6 +43,7 @@ interface PublishedAudioState {
   audioSource: AudioSource;
   track: LocalAudioTrack;
   cleanupMonitor: (() => void) | null;
+  boundMonitor: AudioMonitorService | null;
   roomName: string;
 }
 
@@ -91,6 +92,14 @@ export class LiveKitBridgeManager {
       void this.handleProfileChanged();
     });
     this.engine.on('systemStatus' as never, () => {
+      this.bindRadioAudioMonitor();
+    });
+    // AudioSidecarController owns AudioMonitorService and creates/destroys it
+    // asynchronously as the local audio stream retries. Rebind on every status
+    // change so the bridge latches onto the freshly created instance once the
+    // sidecar enters `connected` (systemStatus alone fires before the sidecar
+    // is ready, so the initial bind would see a null service and never retry).
+    this.engine.on('audioSidecarStatusChanged' as never, () => {
       this.bindRadioAudioMonitor();
     });
 
@@ -146,11 +155,20 @@ export class LiveKitBridgeManager {
     if (!this.radioState) return;
     const audioMonitorService = this.engine.getAudioMonitorService();
 
+    // Rebind only when the monitor instance actually changes. Audio sidecar
+    // keeps the monitor stable across retries now, so sidecar status ticks do
+    // not need to teardown/reinstall the audioData listener (which would
+    // otherwise reset the "no audio" warning timer on every transition).
+    if (this.radioState.boundMonitor === audioMonitorService) {
+      return;
+    }
+
     this.radioState.cleanupMonitor?.();
     this.radioState.cleanupMonitor = this.bindPublishedAudioSource(this.radioState.audioSource, audioMonitorService, {
       roomName: this.radioState.roomName,
       scope: 'radio',
     });
+    this.radioState.boundMonitor = audioMonitorService;
   }
 
   private bindPublishedAudioSource(
@@ -431,6 +449,7 @@ export class LiveKitBridgeManager {
       audioSource,
       track,
       cleanupMonitor: null,
+      boundMonitor: null,
       roomName,
     };
   }
@@ -478,6 +497,8 @@ export class LiveKitBridgeManager {
     if (!state) return;
 
     state.cleanupMonitor?.();
+    state.cleanupMonitor = null;
+    state.boundMonitor = null;
 
     try {
       await state.room.disconnect();

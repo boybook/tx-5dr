@@ -81,7 +81,7 @@ export class AudioSidecarController {
     this.isStopping = true;
     logger.info('stopping audio sidecar', { reason, previousStatus: this.status });
     this.clearRetryTimer();
-    await this.teardownAudio();
+    await this.teardownAudio({ destroyMonitor: true });
     this.retryAttempt = 0;
     this.lastError = null;
     this.deviceName = null;
@@ -155,11 +155,18 @@ export class AudioSidecarController {
     }
 
     if (attemptId !== this.pendingAttempt || this.isStopping) {
-      await this.teardownAudio();
+      await this.teardownAudio({ destroyMonitor: false });
       return;
     }
 
-    this.audioMonitorService = new AudioMonitorService(this.deps.audioStreamManager.getAudioProvider());
+    // Reuse the existing AudioMonitorService across retries so downstream
+    // consumers (LiveKit bridge, WS/PCM clients) keep their event
+    // subscriptions alive. The monitor only references audioProvider (created
+    // once in AudioStreamManager's constructor) and idles while audio is
+    // paused, so it is safe to keep attached.
+    if (!this.audioMonitorService) {
+      this.audioMonitorService = new AudioMonitorService(this.deps.audioStreamManager.getAudioProvider());
+    }
     this.attachAudioStreamErrorListener();
     this.deps.audioVolumeController.restoreGainForCurrentSlot();
 
@@ -213,9 +220,13 @@ export class AudioSidecarController {
     return RETRY_DELAYS_MS[idx] ?? STEADY_RETRY_MS;
   }
 
-  private async teardownAudio(): Promise<void> {
+  private async teardownAudio({ destroyMonitor }: { destroyMonitor: boolean }): Promise<void> {
     this.detachAudioStreamErrorListener();
-    if (this.audioMonitorService) {
+
+    // Only destroy the monitor when the sidecar is being fully stopped
+    // (engine shutdown / destroy). During a runtime loss + retry the monitor
+    // stays alive so downstream consumers keep their subscriptions.
+    if (destroyMonitor && this.audioMonitorService) {
       try {
         this.audioMonitorService.destroy();
       } catch (err) {
@@ -264,7 +275,9 @@ export class AudioSidecarController {
 
   private async handleRuntimeLoss(): Promise<void> {
     if (this.isStopping) return;
-    await this.teardownAudio();
+    // Keep the AudioMonitorService alive so LiveKit / WS-PCM consumers don't
+    // lose their event subscriptions while we reopen the local audio stream.
+    await this.teardownAudio({ destroyMonitor: false });
     if (this.isStopping) return;
     this.retryAttempt = 1;
     this.setStatus(AudioSidecarStatus.RETRYING);

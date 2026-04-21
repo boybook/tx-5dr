@@ -194,4 +194,34 @@ describe('AudioSidecarController', () => {
     expect(statuses).toContain(AudioSidecarStatus.RETRYING);
     expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
   });
+
+  it('keeps the same AudioMonitorService instance across runtime loss + recovery', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+    const firstMonitor = sidecar.getAudioMonitorService();
+    expect(firstMonitor).not.toBeNull();
+
+    // Simulate runtime loss followed by automatic recovery.
+    audioStreamManager.startStream.mockRejectedValueOnce(temporaryDeviceNotFound());
+    audioStreamManager.emit('error', new Error('device disappeared'));
+    await flushAsync();
+    expect(sidecar.getStatus()).toBe(AudioSidecarStatus.RETRYING);
+    expect(sidecar.getAudioMonitorService()).toBe(firstMonitor);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+
+    expect(sidecar.isConnected()).toBe(true);
+    // Downstream consumers subscribed to firstMonitor must still be bound to
+    // the live instance after recovery.
+    expect(sidecar.getAudioMonitorService()).toBe(firstMonitor);
+  });
 });
