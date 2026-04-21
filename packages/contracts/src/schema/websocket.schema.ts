@@ -702,7 +702,9 @@ export const WSServerHandshakeCompleteMessageSchema = WSBaseMessageSchema.extend
 
 export const WSSlotPacksResetMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.SLOT_PACKS_RESET),
-  data: z.object({}).optional(),
+  data: z.object({
+    phase: z.enum(['start', 'complete']),
+  }),
 });
 
 // 导出类型
@@ -1318,7 +1320,7 @@ export interface DigitalRadioEngineEvents {
   
   // 数据更新事件
   slotPackUpdated: (slotPack: z.infer<typeof SlotPackSchema>) => void;
-  slotPacksReset: () => void;
+  slotPacksReset: (data: z.infer<typeof WSSlotPacksResetMessageSchema>['data']) => void;
   spectrumCapabilities: (data: z.infer<typeof SpectrumCapabilitiesSchema>) => void;
   spectrumFrame: (data: z.infer<typeof SpectrumFrameSchema>) => void;
   spectrumSessionStateChanged: (data: z.infer<typeof SpectrumSessionStateSchema>) => void;
