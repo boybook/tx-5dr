@@ -1025,12 +1025,13 @@ export class HamlibConnection
     return matchingRange.highPower > 0 ? matchingRange.highPower / 1000 : fallbackMaxWatts;
   }
 
-  private formatRfPowerStepLabel(normalized: number, watts: number): string {
+  private formatRfPowerStepLabel(normalized: number, maxWatts: number | null): string {
     const percent = `${Math.round(normalized * 100)}%`;
-    if (!Number.isFinite(watts) || watts <= 0) {
+    if (!Number.isFinite(maxWatts) || !maxWatts || maxWatts <= 0) {
       return percent;
     }
 
+    const watts = normalized * maxWatts;
     if (watts >= 1) {
       const roundedWatts = watts >= 10 ? Math.round(watts).toString() : watts.toFixed(1).replace(/\.0$/, '');
       return `${roundedWatts} W (${percent})`;
@@ -1445,12 +1446,13 @@ export class HamlibConnection
       }
 
       try {
+        const maxWatts = this.resolveCurrentTxPowerMaxWatts();
         const table = rigWithRfPowerSteps.getRfPowerStepTable(this.currentFrequencyHz, this.currentRadioMode) ?? [];
         const options = table
           .filter((entry) => Number.isFinite(entry.normalized) && entry.normalized >= 0 && entry.normalized <= 1)
           .map((entry) => ({
             value: entry.normalized,
-            label: this.formatRfPowerStepLabel(entry.normalized, entry.watts),
+            label: this.formatRfPowerStepLabel(entry.normalized, maxWatts),
           }));
 
         return Array.from(new Map(options.map((option) => [option.value, option] as const)).values())

@@ -227,11 +227,42 @@ describe('HamlibConnection', () => {
     expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
   });
 
-  it('returns discrete RF power steps when the hamlib binding exposes a step table', async () => {
+  it('formats discrete RF power labels from the current TX range instead of trusting hamlib watt metadata', async () => {
     const { connection } = createConnectedConnection({
       getRfPowerStepTable: vi.fn().mockReturnValue([
-        { normalized: 0.1, milliwatts: 1000, watts: 1 },
-        { normalized: 0.5, milliwatts: 5000, watts: 5 },
+        { normalized: 0.1, milliwatts: 10000, watts: 10 },
+        { normalized: 0.5, milliwatts: 50000, watts: 50 },
+        { normalized: 1, milliwatts: 100000, watts: 100 },
+      ]),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedLevels = new Set(['RFPOWER']);
+    testConnection.currentFrequencyHz = 7100000;
+    testConnection.currentRadioMode = 'USB';
+    testConnection.txFrequencyRanges = [
+      {
+        startFreq: 1000000,
+        endFreq: 30000000,
+        modes: ['USB'],
+        lowPower: 100,
+        highPower: 10000,
+        vfo: 0,
+        antenna: 0,
+      },
+    ];
+
+    await expect(connection.getSupportedRFPowerSteps()).resolves.toEqual([
+      { value: 0.1, label: '1 W (10%)' },
+      { value: 0.5, label: '5 W (50%)' },
+      { value: 1, label: '10 W (100%)' },
+    ]);
+  });
+
+  it('falls back to percentage labels when the current TX max watts is unknown', async () => {
+    const { connection } = createConnectedConnection({
+      getRfPowerStepTable: vi.fn().mockReturnValue([
+        { normalized: 0.1, milliwatts: 10000, watts: 10 },
+        { normalized: 1, milliwatts: 100000, watts: 100 },
       ]),
     });
     const testConnection = asTestConnection(connection);
@@ -240,8 +271,8 @@ describe('HamlibConnection', () => {
     testConnection.currentRadioMode = 'USB';
 
     await expect(connection.getSupportedRFPowerSteps()).resolves.toEqual([
-      { value: 0.1, label: '1 W (10%)' },
-      { value: 0.5, label: '5 W (50%)' },
+      { value: 0.1, label: '10%' },
+      { value: 1, label: '100%' },
     ]);
   });
 
