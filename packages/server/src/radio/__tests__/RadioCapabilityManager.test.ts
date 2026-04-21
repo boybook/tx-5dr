@@ -131,6 +131,12 @@ describe('RadioCapabilityManager', () => {
       getSupportedTuningSteps: vi.fn().mockResolvedValue([10, 50, 100]),
       getAgcMode: vi.fn().mockResolvedValue('fast'),
       getSupportedAgcModes: vi.fn().mockResolvedValue(['off', 'fast', 'auto']),
+      isSupportedLevel: vi.fn((level: string) => level === 'RFPOWER'),
+      getRFPower: vi.fn().mockResolvedValue(0.5),
+      getSupportedRFPowerSteps: vi.fn().mockResolvedValue([
+        { value: 0.1, label: '1 W (10%)' },
+        { value: 0.5, label: '5 W (50%)' },
+      ]),
       getPreampLevel: vi.fn().mockResolvedValue(10),
       getSupportedPreampLevels: vi.fn().mockResolvedValue([10, 20]),
       getAttenuatorLevel: vi.fn().mockResolvedValue(6),
@@ -155,6 +161,20 @@ describe('RadioCapabilityManager', () => {
       id: 'tuning_step',
       supported: true,
       value: 50,
+    });
+
+    expect(getDescriptor(descriptors, 'rf_power')).toMatchObject({
+      id: 'rf_power',
+      valueType: 'number',
+      discreteOptions: [
+        { value: 0.1, label: '1 W (10%)' },
+        { value: 0.5, label: '5 W (50%)' },
+      ],
+    });
+    expect(getCapability(capabilities, 'rf_power')).toMatchObject({
+      id: 'rf_power',
+      supported: true,
+      value: 0.5,
     });
 
     // power_state has been moved out of the capability system; the
@@ -315,5 +335,28 @@ describe('RadioCapabilityManager', () => {
     expect(setModeBandwidth).toHaveBeenCalledWith(10000);
 
     manager.onDisconnected();
+  });
+
+  it('refreshes the RF power descriptor when discrete steps change', async () => {
+    const manager = new RadioCapabilityManager();
+    let currentSteps = [{ value: 0.1, label: '1 W (10%)' }, { value: 0.5, label: '5 W (50%)' }];
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      isSupportedLevel: vi.fn((level: string) => level === 'RFPOWER'),
+      getRFPower: vi.fn().mockResolvedValue(0.5),
+      getSupportedRFPowerSteps: vi.fn().mockImplementation(async () => currentSteps),
+    });
+
+    let latestSnapshot = manager.getCapabilitySnapshot();
+    manager.on('capabilityList', (snapshot) => {
+      latestSnapshot = snapshot;
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+    expect(getDescriptor(latestSnapshot.descriptors, 'rf_power').discreteOptions).toEqual(currentSteps);
+
+    currentSteps = [{ value: 0.2, label: '2 W (20%)' }, { value: 0.8, label: '8 W (80%)' }];
+    await expect(manager.refreshDescriptor('rf_power')).resolves.toBeUndefined();
+
+    expect(getDescriptor(latestSnapshot.descriptors, 'rf_power').discreteOptions).toEqual(currentSteps);
   });
 });

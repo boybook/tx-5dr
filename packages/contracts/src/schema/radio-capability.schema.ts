@@ -96,6 +96,12 @@ export const CapabilityDescriptorSchema = z.object({
     step: z.number().optional(),
   }).optional(),
 
+  /**
+   * 数值能力的离散候选项（仅 valueType='number' 时有效）
+   * 例：RF 功率只允许若干固定挡位，但仍希望保留 slider 交互。
+   */
+  discreteOptions: z.array(CapabilityOptionSchema).optional(),
+
   /** 枚举项（仅 valueType='enum' 时有效） */
   options: z.array(CapabilityOptionSchema).optional(),
 

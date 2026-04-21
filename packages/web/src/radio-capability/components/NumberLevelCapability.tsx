@@ -11,10 +11,62 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import type { CapabilityComponentProps } from '../CapabilityRegistry';
+import type { CapabilityDescriptor } from '@tx5dr/contracts';
 import { useCan } from '../../store/authStore';
 import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber } from '../display-utils';
 
 const WRITE_DEBOUNCE_MS = 150;
+const DISCRETE_MATCH_EPSILON = 1e-6;
+
+export function getDiscreteNumberOptions(descriptor: CapabilityDescriptor) {
+  return (descriptor.discreteOptions ?? []).filter(
+    (option): option is { value: number; label?: string; labelI18nKey?: string } => typeof option.value === 'number',
+  );
+}
+
+export function findDiscreteOptionIndex(
+  options: Array<{ value: number }>,
+  value: number | null | undefined,
+): number {
+  if (!options.length || value === null || value === undefined || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  const exactIndex = options.findIndex((option) => Math.abs(option.value - value) < DISCRETE_MATCH_EPSILON);
+  if (exactIndex >= 0) {
+    return exactIndex;
+  }
+
+  let nearestIndex = 0;
+  let nearestDelta = Number.POSITIVE_INFINITY;
+  options.forEach((option, index) => {
+    const delta = Math.abs(option.value - value);
+    if (delta < nearestDelta) {
+      nearestDelta = delta;
+      nearestIndex = index;
+    }
+  });
+  return nearestIndex;
+}
+
+export function getDiscreteOptionDisplayText(
+  options: ReturnType<typeof getDiscreteNumberOptions>,
+  descriptor: CapabilityDescriptor,
+  value: number,
+  t: (key: string) => string,
+): string {
+  const option = options[findDiscreteOptionIndex(options, value)];
+  if (!option) {
+    return formatCapabilityNumber(value, descriptor, true);
+  }
+  if (option.labelI18nKey) {
+    return t(option.labelI18nKey);
+  }
+  if (option.label) {
+    return option.label;
+  }
+  return formatCapabilityNumber(option.value, descriptor, true);
+}
 
 export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   capabilityId,
@@ -30,6 +82,8 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const serverValue = typeof state?.value === 'number' ? state.value : null;
   const range = descriptor.range ?? { min: 0, max: 1, step: 0.01 };
   const usesSlider = descriptor.display?.mode === 'percent';
+  const discreteOptions = getDiscreteNumberOptions(descriptor);
+  const isDiscreteSlider = usesSlider && discreteOptions.length >= 2;
 
   const [localValue, setLocalValue] = useState<number | null>(serverValue);
   const [inputValue, setInputValue] = useState<string>(
@@ -81,11 +135,14 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const handleSliderChange = useCallback(
     (value: number | number[]) => {
       const nextValue = Array.isArray(value) ? value[0] : value;
+      const resolvedValue = isDiscreteSlider
+        ? discreteOptions[Math.max(0, Math.min(discreteOptions.length - 1, Math.round(nextValue)))]?.value ?? range.min
+        : nextValue;
       isDragging.current = true;
-      setLocalValue(nextValue);
-      scheduleWrite(nextValue);
+      setLocalValue(resolvedValue);
+      scheduleWrite(resolvedValue);
     },
-    [scheduleWrite],
+    [discreteOptions, isDiscreteSlider, range.min, scheduleWrite],
   );
 
   const handleSliderChangeEnd = useCallback(() => {
@@ -101,9 +158,14 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   }, [capabilityId, onWrite]);
 
   const displayValue = localValue ?? serverValue ?? range.min;
+  const discreteSliderValue = findDiscreteOptionIndex(discreteOptions, displayValue);
   const minDisplayValue = usesSlider ? range.min : toDisplayNumber(range.min, descriptor);
   const maxDisplayValue = usesSlider ? range.max : toDisplayNumber(range.max, descriptor);
-  const displayText = isSupported ? formatCapabilityNumber(displayValue, descriptor, true) : '—';
+  const displayText = isSupported
+    ? (isDiscreteSlider
+      ? getDiscreteOptionDisplayText(discreteOptions, descriptor, displayValue, t)
+      : formatCapabilityNumber(displayValue, descriptor, true))
+    : '—';
 
   return (
     <div className="space-y-1.5">
@@ -122,10 +184,10 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
       {usesSlider ? (
         <Slider
           size="sm"
-          minValue={range.min}
-          maxValue={range.max}
-          step={range.step ?? 0.01}
-          value={displayValue}
+          minValue={isDiscreteSlider ? 0 : range.min}
+          maxValue={isDiscreteSlider ? discreteOptions.length - 1 : range.max}
+          step={isDiscreteSlider ? 1 : (range.step ?? 0.01)}
+          value={isDiscreteSlider ? discreteSliderValue : displayValue}
           onChange={handleSliderChange}
           onChangeEnd={handleSliderChangeEnd}
           isDisabled={!isSupported || !canControl || !canWrite}

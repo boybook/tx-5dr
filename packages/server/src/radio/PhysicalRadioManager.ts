@@ -843,6 +843,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       if (request.mode && result.modeApplied) {
         this.markCoreCapabilitySupported('writeRadioMode');
+        void this.refreshRfPowerDescriptor();
       }
 
       if (result.modeError) {
@@ -981,6 +982,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       await this.connection.setMode(mode, bandwidth, options);
       this.markCoreCapabilitySupported('writeRadioMode');
+      void this.refreshRfPowerDescriptor();
       logger.info(`Mode set: ${mode}${bandwidth ? ` (${bandwidth})` : ''}`, {
         intent: options?.intent ?? 'unspecified',
       });
@@ -1836,6 +1838,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     this.lastKnownFrequency = frequency;
     this.connection.setKnownFrequency(frequency);
+    void this.refreshRfPowerDescriptor();
+  }
+
+  private async refreshRfPowerDescriptor(): Promise<void> {
+    try {
+      await this.capabilityManager.refreshDescriptor('rf_power');
+    } catch (error) {
+      logger.debug(`RF power descriptor refresh skipped: ${(error as Error).message}`);
+    }
   }
 
   /**

@@ -95,6 +95,14 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.emit('capabilityList', this.getCapabilitySnapshot());
   }
 
+  async refreshDescriptor(id: string): Promise<void> {
+    const definition = CAPABILITY_DEFINITION_MAP.get(id);
+    if (!definition) {
+      throw new Error(`Unknown capability '${id}'`);
+    }
+    await this.refreshDescriptorIfNeeded(id, definition);
+  }
+
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {
     if (!this.connection) {
       throw new Error('Radio not connected');
@@ -456,6 +464,12 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         }
         if (descriptor.range && (value < descriptor.range.min || value > descriptor.range.max)) {
           throw new Error(`Capability '${descriptor.id}' value out of range`);
+        }
+        if (descriptor.discreteOptions && descriptor.discreteOptions.length > 0) {
+          const matched = descriptor.discreteOptions.some((option) => option.value === value);
+          if (!matched) {
+            throw new Error(`Capability '${descriptor.id}' received an unsupported discrete numeric value`);
+          }
         }
         return;
       case 'enum': {

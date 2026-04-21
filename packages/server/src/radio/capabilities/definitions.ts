@@ -4,6 +4,7 @@ import type { RadioModeBandwidth } from '../connections/IRadioConnection.js';
 import {
   buildAgcModeOptions,
   buildCtcssToneOptions,
+  buildDiscreteNumberOptions,
   buildDbValueOptions,
   buildDcsCodeOptions,
   buildModeBandwidthOptions,
@@ -78,6 +79,24 @@ function createDefinitions(): CapabilityDefinition[] {
         'radio:capability.rf_power.label',
         'radio:capability.rf_power.description',
       ),
+      resolveDescriptor: async (conn) => {
+        const descriptor = createPercentDescriptor(
+          'rf_power',
+          'rf',
+          'radio:capability.rf_power.label',
+          'radio:capability.rf_power.description',
+        );
+        const discreteOptions = buildDiscreteNumberOptions(
+          conn.getSupportedRFPowerSteps ? await conn.getSupportedRFPowerSteps() : [],
+        );
+
+        return discreteOptions.length >= 2
+          ? {
+              ...descriptor,
+              discreteOptions,
+            }
+          : descriptor;
+      },
       probeSupport: async (conn) => {
         if (conn.getType() === RadioConnectionType.HAMLIB && hasHamlibSupportProbe(conn) && conn.isSupportedLevel('RFPOWER')) {
           return true;
