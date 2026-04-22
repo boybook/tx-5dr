@@ -96,6 +96,12 @@ describe('PluginManager global instance scope', () => {
         },
       };
     `);
+    await mkdir(join(dataDir, 'plugins', 'global-sync-test', 'ui'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'plugins', 'global-sync-test', 'ui', 'settings.html'),
+      '<!doctype html><html><body>settings</body></html>',
+      'utf8',
+    );
 
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     eventEmitter.on('checkHasWorkedCallsign' as any, (data: { requestId: string }) => {

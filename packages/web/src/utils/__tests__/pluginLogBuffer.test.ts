@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { PluginLogEntry } from '@tx5dr/contracts';
 import {
   appendPluginLogEntry,
-  filterPluginLogEntries,
+  type PluginLogViewEntry,
 } from '../pluginLogBuffer';
 
-function createEntry(overrides: Partial<PluginLogEntry> = {}): PluginLogEntry {
+function createEntry(overrides: Partial<PluginLogViewEntry> = {}): PluginLogViewEntry {
   return {
+    source: 'plugin',
     pluginName: 'standard-qso',
     level: 'info',
     message: 'test message',
@@ -16,13 +16,13 @@ function createEntry(overrides: Partial<PluginLogEntry> = {}): PluginLogEntry {
 }
 
 describe('pluginLogBuffer utils', () => {
-  it('prepends new entries and keeps newest first', () => {
+  it('appends new entries and keeps chronological order', () => {
     const first = createEntry({ timestamp: 1, message: 'first' });
     const second = createEntry({ timestamp: 2, message: 'second' });
 
     const result = appendPluginLogEntry([first], second, 10);
 
-    expect(result.map((entry) => entry.message)).toEqual(['second', 'first']);
+    expect(result.map((entry) => entry.message)).toEqual(['first', 'second']);
   });
 
   it('trims the buffer to the configured limit', () => {
@@ -33,24 +33,6 @@ describe('pluginLogBuffer utils', () => {
 
     const result = appendPluginLogEntry(entries, createEntry({ timestamp: 3, message: 'three' }), 2);
 
-    expect(result.map((entry) => entry.message)).toEqual(['three', 'one']);
-  });
-
-  it('filters by plugin name and level', () => {
-    const entries = [
-      createEntry({ pluginName: 'standard-qso', level: 'info', message: 'a' }),
-      createEntry({ pluginName: 'heartbeat-demo', level: 'debug', message: 'b' }),
-      createEntry({ pluginName: 'heartbeat-demo', level: 'error', message: 'c' }),
-    ];
-
-    expect(filterPluginLogEntries(entries, {
-      pluginName: 'heartbeat-demo',
-      level: 'all',
-    }).map((entry) => entry.message)).toEqual(['b', 'c']);
-
-    expect(filterPluginLogEntries(entries, {
-      pluginName: 'heartbeat-demo',
-      level: 'error',
-    }).map((entry) => entry.message)).toEqual(['c']);
+    expect(result.map((entry) => entry.message)).toEqual(['two', 'three']);
   });
 });

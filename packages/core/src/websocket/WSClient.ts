@@ -259,6 +259,14 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.GET_STATUS);
   }
 
+  getPluginRuntimeLogHistory(limit?: number): void {
+    if (typeof limit === 'number') {
+      this.send(WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY, { limit });
+      return;
+    }
+    this.send(WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY);
+  }
+
   /**
    * 设置模式
    */

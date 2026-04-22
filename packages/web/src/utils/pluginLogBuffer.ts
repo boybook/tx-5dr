@@ -1,31 +1,24 @@
-import type { PluginLogEntry } from '@tx5dr/contracts';
+import type { PluginRuntimeLogEntry } from '@tx5dr/contracts';
 
-export const PLUGIN_LOG_BUFFER_LIMIT = 200;
+export const PLUGIN_LOG_BUFFER_LIMIT = 500;
 
-export interface PluginLogFilters {
-  pluginName: string;
-  level: 'all' | PluginLogEntry['level'];
+export type PluginLogSource = 'plugin' | 'system';
+
+export interface PluginLogViewEntry {
+  source: PluginLogSource;
+  pluginName?: string;
+  directoryName?: string;
+  stage?: PluginRuntimeLogEntry['stage'];
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  details?: unknown;
+  timestamp: number;
 }
 
 export function appendPluginLogEntry(
-  entries: PluginLogEntry[],
-  entry: PluginLogEntry,
+  entries: PluginLogViewEntry[],
+  entry: PluginLogViewEntry,
   limit = PLUGIN_LOG_BUFFER_LIMIT,
-): PluginLogEntry[] {
-  return [entry, ...entries].slice(0, limit);
-}
-
-export function filterPluginLogEntries(
-  entries: PluginLogEntry[],
-  filters: PluginLogFilters,
-): PluginLogEntry[] {
-  return entries.filter((entry) => {
-    if (filters.pluginName !== 'all' && entry.pluginName !== filters.pluginName) {
-      return false;
-    }
-    if (filters.level !== 'all' && entry.level !== filters.level) {
-      return false;
-    }
-    return true;
-  });
+): PluginLogViewEntry[] {
+  return [...entries, entry].slice(-limit);
 }

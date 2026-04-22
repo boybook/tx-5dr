@@ -382,6 +382,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.STOP_ENGINE]: () => this.handleStopEngine(),
       [WSMessageType.GET_STATUS]: () => this.handleGetStatus(),
       [WSMessageType.SET_MODE]: (data) => this.handleSetMode((data as any)?.mode),
+      [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: (data, id) => this.handleGetPluginRuntimeLogHistory(id, data),
       [WSMessageType.SUBSCRIBE_SPECTRUM]: (data, id) => this.handleSubscribeSpectrum(id, data),
       [WSMessageType.INVOKE_SPECTRUM_CONTROL]: (data: unknown, id: string) => this.handleInvokeSpectrumControl(id, data),
       [WSMessageType.GET_OPERATORS]: () => this.handleGetOperators(),
@@ -874,6 +875,20 @@ export class WSServer extends WSMessageHandler {
     const currentStatus = this.digitalRadioEngine.getStatus();
     this.broadcastSystemStatus(currentStatus);
     this.broadcastClockStatusChanged(this.digitalRadioEngine.getNtpCalibrationService().getBroadcastStatus());
+  }
+
+  private handleGetPluginRuntimeLogHistory(connectionId: string, data: unknown): void {
+    const connection = this.getConnection(connectionId);
+    if (!connection) {
+      return;
+    }
+
+    const requestedLimit = (data as { limit?: unknown } | undefined)?.limit;
+    const limit = typeof requestedLimit === 'number' && Number.isFinite(requestedLimit)
+      ? requestedLimit
+      : undefined;
+    const entries = this.digitalRadioEngine.pluginManager.getRuntimeLogHistory(limit);
+    connection.send(WSMessageType.PLUGIN_RUNTIME_LOG_HISTORY, { entries });
   }
 
   private async handleSubscribeSpectrum(connectionId: string, data: unknown): Promise<void> {
@@ -1968,6 +1983,9 @@ export class WSServer extends WSMessageHandler {
     });
     this.digitalRadioEngine.on('pluginLog' as any, (data: any) => {
       this.broadcast(WSMessageType.PLUGIN_LOG, data);
+    });
+    this.digitalRadioEngine.on('pluginRuntimeLog' as any, (data: any) => {
+      this.broadcast(WSMessageType.PLUGIN_RUNTIME_LOG, data);
     });
     this.digitalRadioEngine.on('pluginPagePush', (data) => {
       this.broadcast(WSMessageType.PLUGIN_PAGE_PUSH, data);
