@@ -45,10 +45,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@tx5dr/contracts": "workspace:*",
     "@tx5dr/core": "workspace:*"
   },
   "devDependencies": {
-    "@tx5dr/contracts": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"
