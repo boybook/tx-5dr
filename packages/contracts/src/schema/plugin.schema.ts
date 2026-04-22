@@ -449,6 +449,38 @@ export const PluginLogEntrySchema = z.object({
 });
 export type PluginLogEntry = z.infer<typeof PluginLogEntrySchema>;
 
+export const PluginRuntimeLogStageSchema = z.enum([
+  'scan',
+  'load',
+  'validate',
+  'reload',
+  'activate',
+]);
+export type PluginRuntimeLogStage = z.infer<typeof PluginRuntimeLogStageSchema>;
+
+/**
+ * 宿主级插件运行日志条目
+ */
+export const PluginRuntimeLogEntrySchema = z.object({
+  source: z.literal('system'),
+  stage: PluginRuntimeLogStageSchema,
+  level: z.enum(['debug', 'info', 'warn', 'error']),
+  message: z.string(),
+  timestamp: z.number(),
+  pluginName: z.string().optional(),
+  directoryName: z.string().optional(),
+  details: z.unknown().optional(),
+});
+export type PluginRuntimeLogEntry = z.infer<typeof PluginRuntimeLogEntrySchema>;
+
+/**
+ * 宿主级插件运行日志历史响应载荷
+ */
+export const PluginRuntimeLogHistoryPayloadSchema = z.object({
+  entries: z.array(PluginRuntimeLogEntrySchema),
+});
+export type PluginRuntimeLogHistoryPayload = z.infer<typeof PluginRuntimeLogHistoryPayloadSchema>;
+
 /**
  * 插件用户操作载荷（前端 → 后端）
  */

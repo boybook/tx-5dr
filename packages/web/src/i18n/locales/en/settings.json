@@ -390,14 +390,18 @@
     "livePanels": "Live Panels",
     "automationStrategy": "Automation Strategy",
     "standardQSO": "Standard QSO (Built-in)",
-    "logsTitle": "Plugin Logs",
-    "logsDescription": "Live session logs emitted by plugin code.",
+    "logsTitle": "Plugin Runtime Logs",
+    "logsDescription": "Shows plugin loading/reload logs from the host and runtime logs emitted by plugin code.",
     "clearLogs": "Clear",
+    "filterSource": "Source",
     "filterPlugin": "Plugin",
     "filterLevel": "Level",
+    "allSources": "All sources",
     "allPlugins": "All plugins",
     "allLevels": "All levels",
-    "logsEmpty": "No plugin logs in this session yet.",
+    "logsEmpty": "No plugin runtime logs yet. Put plugin folders in the runtime plugin directory, reload plugins, and return here to inspect load attempts and failures.",
+    "directoryTargetPrefix": "Directory",
+    "unknownTarget": "Unknown target",
     "viewLogDetails": "View details",
     "directoryLabel": "Plugin directory",
     "dataDirectoryLabel": "Plugin data directory",
@@ -425,6 +429,10 @@
       "info": "Info",
       "warn": "Warn",
       "error": "Error"
+    },
+    "logSource": {
+      "system": "System",
+      "plugin": "Plugin"
     }
   },
   "serverHealth": {

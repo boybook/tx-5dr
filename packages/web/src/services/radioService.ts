@@ -138,6 +138,12 @@ export class RadioService {
     }
   }
 
+  getPluginRuntimeLogHistory(limit?: number): void {
+    if (this.isConnected) {
+      this.wsClient.getPluginRuntimeLogHistory(limit);
+    }
+  }
+
   subscribeSpectrum(kind: SpectrumKind | null): void {
     if (this.isConnected) {
       this.wsClient.subscribeSpectrum(kind);

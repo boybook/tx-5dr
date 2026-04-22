@@ -1,5 +1,6 @@
 import type {
   DigitalRadioEngineEvents,
+  PluginRuntimeLogEntry,
   PluginStatus,
   PluginSystemSnapshot,
   PluginsConfig,
@@ -17,7 +18,11 @@ import type {
   StrategyRuntimeSnapshot,
 } from '@tx5dr/plugin-api';
 import type { EventEmitter } from 'eventemitter3';
-import { PluginLoader, validatePluginDefinition } from './PluginLoader.js';
+import {
+  PluginLoader,
+  type PluginLoaderRuntimeLogEvent,
+  validatePluginDefinition,
+} from './PluginLoader.js';
 import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { DecisionOrchestrator } from './DecisionOrchestrator.js';
@@ -36,6 +41,7 @@ import path from 'path';
 
 const logger = createLogger('PluginManager');
 const GLOBAL_PLUGIN_SCOPE_ID = '__global__';
+const PLUGIN_RUNTIME_LOG_HISTORY_LIMIT = 1000;
 
 /**
  * 插件管理器 — 中央编排器
@@ -56,12 +62,13 @@ export class PluginManager {
   private dispatcher!: PluginHookDispatcher;
   private orchestrator!: DecisionOrchestrator;
   private contextFactory: PluginContextFactory;
-  private loader = new PluginLoader();
+  private loader: PluginLoader;
   private devWatcher: PluginDevWatcher | null = null;
   private running = false;
   private unsubscribeFns: Array<() => void> = [];
   private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
   private readonly pageSessions = new PluginPageSessionStore();
+  private pluginRuntimeLogHistory: PluginRuntimeLogEntry[] = [];
 
   private systemState: PluginSystemRuntimeState = {
     state: 'ready',
@@ -76,6 +83,7 @@ export class PluginManager {
   };
 
   constructor(private deps: PluginManagerDeps) {
+    this.loader = new PluginLoader((event) => this.emitPluginRuntimeLog(event));
     this._logbookSyncHost = new LogbookSyncHost();
     // Wire the logbook sync registration callback so plugins can register
     // providers via ctx.logbookSync.register().
@@ -479,6 +487,16 @@ export class PluginManager {
 
   getSnapshot(): PluginSystemSnapshot {
     return toPluginSystemSnapshot(this.systemState, this.getPluginStatuses());
+  }
+
+  getRuntimeLogHistory(limit = 500): PluginRuntimeLogEntry[] {
+    const normalizedLimit = Number.isFinite(limit)
+      ? Math.min(Math.max(Math.trunc(limit), 1), PLUGIN_RUNTIME_LOG_HISTORY_LIMIT)
+      : 500;
+    const startIndex = Math.max(this.pluginRuntimeLogHistory.length - normalizedLimit, 0);
+    return this.pluginRuntimeLogHistory
+      .slice(startIndex)
+      .map((entry) => ({ ...entry }));
   }
 
   setPluginEnabled(name: string, enabled: boolean): void {
@@ -911,6 +929,17 @@ export class PluginManager {
     const userPlugins = await this.loader.scanAndLoad(pluginDir);
     for (const plugin of userPlugins) {
       if (discoveredPlugins.has(plugin.definition.name)) {
+        this.emitPluginRuntimeLog({
+          stage: 'validate',
+          level: 'warn',
+          message: 'Plugin name conflict: user plugin cannot override built-in plugin',
+          pluginName: plugin.definition.name,
+          directoryName: plugin.dirPath ? path.basename(plugin.dirPath) : undefined,
+          details: {
+            pluginName: plugin.definition.name,
+            directoryPath: plugin.dirPath,
+          },
+        });
         logger.warn(`Plugin name conflict: ${plugin.definition.name} (user plugin cannot override built-in)`);
         continue;
       }
@@ -953,6 +982,13 @@ export class PluginManager {
       throw new Error('Plugin manager is not running');
     }
 
+    this.emitPluginRuntimeLog({
+      stage: 'reload',
+      level: 'info',
+      message: `Plugin reload started: ${reason}`,
+      details: { reason },
+    });
+
     this.systemState = {
       ...this.systemState,
       state: 'reloading',
@@ -970,6 +1006,12 @@ export class PluginManager {
       };
       this.bumpGeneration();
       this.broadcastPluginList();
+      this.emitPluginRuntimeLog({
+        stage: 'reload',
+        level: 'info',
+        message: `Plugin reload completed: ${reason}`,
+        details: { reason },
+      });
       logger.info(`Plugin reload completed: ${reason}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -980,6 +1022,15 @@ export class PluginManager {
       };
       this.bumpGeneration();
       this.broadcastPluginList();
+      this.emitPluginRuntimeLog({
+        stage: 'reload',
+        level: 'error',
+        message: `Plugin reload failed: ${reason}`,
+        details: {
+          reason,
+          error: message,
+        },
+      });
       logger.error(`Plugin reload failed: ${reason}`, err);
       throw err;
     }
@@ -1054,6 +1105,17 @@ export class PluginManager {
       }
       await hook(instance.ctx);
     } catch (err) {
+      this.emitPluginRuntimeLog({
+        stage: 'activate',
+        level: 'error',
+        message: 'Plugin onLoad hook failed',
+        pluginName: instance.plugin.definition.name,
+        directoryName: instance.plugin.dirPath ? path.basename(instance.plugin.dirPath) : undefined,
+        details: {
+          operatorId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
       logger.error(`onLoad error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
     }
   }
@@ -1064,6 +1126,17 @@ export class PluginManager {
       try {
         await hook(instance.ctx);
       } catch (err) {
+        this.emitPluginRuntimeLog({
+          stage: 'activate',
+          level: 'warn',
+          message: 'Plugin onUnload hook failed',
+          pluginName: instance.plugin.definition.name,
+          directoryName: instance.plugin.dirPath ? path.basename(instance.plugin.dirPath) : undefined,
+          details: {
+            operatorId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        });
         logger.warn(`onUnload error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
       }
     }
@@ -1110,5 +1183,21 @@ export class PluginManager {
 
   invalidateDecisionMessageSet(operatorId: string): void {
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
+  }
+
+  private emitPluginRuntimeLog(event: PluginLoaderRuntimeLogEvent): void {
+    const entry: PluginRuntimeLogEntry = {
+      source: 'system',
+      timestamp: Date.now(),
+      stage: event.stage,
+      level: event.level,
+      message: event.message,
+      pluginName: event.pluginName,
+      directoryName: event.directoryName,
+      details: event.details,
+    };
+    this.pluginRuntimeLogHistory = [...this.pluginRuntimeLogHistory, entry]
+      .slice(-PLUGIN_RUNTIME_LOG_HISTORY_LIMIT);
+    this.eventEmitter.emit('pluginRuntimeLog', entry);
   }
 }

@@ -390,14 +390,18 @@
     "livePanels": "实时面板",
     "automationStrategy": "自动化策略",
     "standardQSO": "标准通联（内置）",
-    "logsTitle": "插件日志",
-    "logsDescription": "当前会话中由插件代码发出的实时日志。",
+    "logsTitle": "插件运行日志",
+    "logsDescription": "展示宿主的扫描/加载/重载日志，以及插件代码发出的运行日志。",
     "clearLogs": "清空",
+    "filterSource": "来源",
     "filterPlugin": "插件",
     "filterLevel": "级别",
+    "allSources": "全部来源",
     "allPlugins": "全部插件",
     "allLevels": "全部级别",
-    "logsEmpty": "当前会话还没有插件日志。",
+    "logsEmpty": "当前会话还没有插件运行日志。请把插件文件夹放到运行时插件目录，点击重载插件后回到此处查看加载尝试和失败原因。",
+    "directoryTargetPrefix": "目录",
+    "unknownTarget": "未知目标",
     "viewLogDetails": "查看详情",
     "directoryLabel": "插件目录",
     "dataDirectoryLabel": "插件数据目录",
@@ -425,6 +429,10 @@
       "info": "信息",
       "warn": "警告",
       "error": "错误"
+    },
+    "logSource": {
+      "system": "系统",
+      "plugin": "插件"
     }
   },
   "serverHealth": {

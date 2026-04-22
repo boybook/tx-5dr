@@ -4,11 +4,21 @@ import { SlotPackSchema, SlotInfoSchema } from './slot-info.schema.js';
 import {
   PluginDataPayloadSchema,
   PluginLogEntrySchema,
+  PluginRuntimeLogEntrySchema,
+  PluginRuntimeLogHistoryPayloadSchema,
   PluginSystemSnapshotSchema,
   PluginStatusSchema,
   PluginUserActionPayloadSchema,
 } from './plugin.schema.js';
-import type { PluginStatus, PluginDataPayload, PluginLogEntry, PluginUserActionPayload, PluginSystemSnapshot } from './plugin.schema.js';
+import type {
+  PluginStatus,
+  PluginDataPayload,
+  PluginLogEntry,
+  PluginRuntimeLogEntry,
+  PluginRuntimeLogHistoryPayload,
+  PluginUserActionPayload,
+  PluginSystemSnapshot,
+} from './plugin.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { QSORecordSchema, TargetSelectionPriorityModeSchema } from './qso.schema.js';
 import { LogBookStatisticsSchema } from './logbook.schema.js';
@@ -164,6 +174,9 @@ export enum WSMessageType {
   PLUGIN_STATUS_CHANGED = 'pluginStatusChanged',
   PLUGIN_DATA = 'pluginData',
   PLUGIN_LOG = 'pluginLog',
+  PLUGIN_RUNTIME_LOG = 'pluginRuntimeLog',
+  GET_PLUGIN_RUNTIME_LOG_HISTORY = 'getPluginRuntimeLogHistory',
+  PLUGIN_RUNTIME_LOG_HISTORY = 'pluginRuntimeLogHistory',
   PLUGIN_USER_ACTION = 'pluginUserAction',
   PLUGIN_PAGE_PUSH = 'pluginPagePush',
 
@@ -1150,6 +1163,26 @@ export const WSPluginLogMessageSchema = WSBaseMessageSchema.extend({
 });
 export type WSPluginLogMessage = z.infer<typeof WSPluginLogMessageSchema>;
 
+export const WSPluginRuntimeLogMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_RUNTIME_LOG),
+  data: PluginRuntimeLogEntrySchema,
+});
+export type WSPluginRuntimeLogMessage = z.infer<typeof WSPluginRuntimeLogMessageSchema>;
+
+export const WSGetPluginRuntimeLogHistoryMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY),
+  data: z.object({
+    limit: z.number().int().positive().max(5000).optional(),
+  }).optional(),
+});
+export type WSGetPluginRuntimeLogHistoryMessage = z.infer<typeof WSGetPluginRuntimeLogHistoryMessageSchema>;
+
+export const WSPluginRuntimeLogHistoryMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_RUNTIME_LOG_HISTORY),
+  data: PluginRuntimeLogHistoryPayloadSchema,
+});
+export type WSPluginRuntimeLogHistoryMessage = z.infer<typeof WSPluginRuntimeLogHistoryMessageSchema>;
+
 export const WSPluginUserActionMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.PLUGIN_USER_ACTION),
   data: PluginUserActionPayloadSchema,
@@ -1252,6 +1285,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPluginStatusChangedMessageSchema,
   WSPluginDataMessageSchema,
   WSPluginLogMessageSchema,
+  WSPluginRuntimeLogMessageSchema,
+  WSGetPluginRuntimeLogHistoryMessageSchema,
+  WSPluginRuntimeLogHistoryMessageSchema,
   WSPluginUserActionMessageSchema,
 ]);
 
@@ -1419,6 +1455,8 @@ export interface DigitalRadioEngineEvents {
   pluginStatusChanged: (data: { generation: number; plugin: PluginStatus }) => void;
   pluginData: (data: PluginDataPayload) => void;
   pluginLog: (data: PluginLogEntry) => void;
+  pluginRuntimeLog: (data: PluginRuntimeLogEntry) => void;
+  pluginRuntimeLogHistory: (data: PluginRuntimeLogHistoryPayload) => void;
   rigctldStatus: (data: import('./rigctld.schema.js').RigctldStatus) => void;
   pluginPagePush: (data: {
     pluginName: string;

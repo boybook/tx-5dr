@@ -5,7 +5,6 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotate, faCopy, faCheck, faFolderOpen } from '@fortawesome/free-solid-svg-icons';
 import { PluginList, type PluginListRef } from './PluginList';
 import { PluginLogPanel } from './PluginLogPanel';
-import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
 import { api } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import type { PluginRuntimeInfo } from '@tx5dr/contracts';
@@ -34,7 +33,6 @@ interface PluginSettingsTabProps {
 export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettingsTabProps>(({ onUnsavedChanges }, ref) => {
   const { t } = useTranslation('settings');
   const pluginListRef = useRef<PluginListRef | null>(null);
-  const pluginSnapshot = usePluginSnapshot();
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<PluginRuntimeInfo | null>(null);
@@ -248,7 +246,7 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
         emptyMessage={emptyMessage}
       />
       <Divider className="my-1" />
-      <PluginLogPanel pluginNames={pluginSnapshot.plugins.map((plugin) => plugin.name)} />
+      <PluginLogPanel />
     </div>
   );
 });
