@@ -46,7 +46,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
       <div className="rounded-lg border border-default-200/60 bg-default-50/70 px-3 py-2.5">
         <div className="text-sm font-medium text-default-700">{label}</div>
         {description && (
-          <div className="mt-1 text-xs leading-5 text-default-500">{description}</div>
+          <div className="mt-1 whitespace-pre-line text-xs leading-5 text-default-500">{description}</div>
         )}
       </div>
     );

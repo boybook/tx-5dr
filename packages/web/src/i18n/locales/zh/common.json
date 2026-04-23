@@ -178,7 +178,8 @@
   "splitLayout": {
     "decode": "解码",
     "call": "呼叫",
-    "pageSwitch": "页面切换"
+    "pageSwitch": "页面切换",
+    "plugin": "插件"
   },
   "webgl": {
     "notSupported": "WebGL不被支持",
@@ -519,5 +520,8 @@
     "clientCount": "当前 {{count}} 个客户端已连接",
     "networkAddress": "网络访问地址:",
     "sameNetworkHint": "确保设备在同一局域网下"
+  },
+  "voice": {
+    "qsoTab": "通联"
   }
 }

@@ -5,10 +5,11 @@ import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
 import { VoiceFrequencyControl } from '../components/voice/VoiceFrequencyControl';
+import { VoiceLeftPluginSlot } from '../components/voice/VoiceLeftPluginSlot';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
-import { useRadioState, useConnection, useStationInfo } from '../store/radioStore';
+import { useRadioState, useConnection, useStationInfo, useCurrentOperatorId, useOperators } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
@@ -28,6 +29,9 @@ export const VoiceLeftLayout: React.FC = () => {
   const radio = useRadioState();
   const connection = useConnection();
   const stationInfo = useStationInfo();
+  const { currentOperatorId } = useCurrentOperatorId();
+  const { operators } = useOperators();
+  const activeOperatorId = currentOperatorId || operators[0]?.id || null;
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
@@ -99,6 +103,8 @@ export const VoiceLeftLayout: React.FC = () => {
 
       {/* Main content */}
       <div className="flex-1 px-2 pb-2 md:px-5 md:pb-5 min-h-0 flex flex-col gap-2 md:gap-4">
+        <VoiceLeftPluginSlot operatorId={activeOperatorId} />
+
         {/* Voice Frequency Control - fills remaining space */}
         <div className="flex-1 min-h-0">
           <VoiceFrequencyControl />

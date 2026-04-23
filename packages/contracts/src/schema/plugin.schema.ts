@@ -182,8 +182,11 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
  *
  * - `operator`: shown in the expanded operator card's live-panel area (default).
  * - `automation`: shown inside the top-right automation quick-action popover.
+ * - `main-right`: shown in the optional main layout plugin pane on the far right.
+ * - `voice-left-top`: shown above the voice frequency control card.
+ * - `voice-right-top`: shown in the tabbed top area of the voice right panel.
  */
-export const PluginPanelSlotSchema = z.enum(['operator', 'automation']);
+export const PluginPanelSlotSchema = z.enum(['operator', 'automation', 'main-right', 'voice-left-top', 'voice-right-top']);
 
 /**
  * Rendering slot that determines where a panel appears in the UI.

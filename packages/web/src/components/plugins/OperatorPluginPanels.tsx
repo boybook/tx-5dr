@@ -1,8 +1,6 @@
 import React from 'react';
 import { PluginPanelRenderer } from './PluginPanelRenderer';
-import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
-import { usePluginPanelMeta } from '../../hooks/usePluginPanelMeta';
-import { resolvePluginLabel, resolvePluginLabelWithValues, resolvePluginName } from '../../utils/pluginLocales';
+import { useVisiblePluginPanelsForSlot } from './pluginPanelSlots';
 import type { PluginPanelDescriptor } from '@tx5dr/contracts';
 
 interface OperatorPluginPanelsProps {
@@ -14,78 +12,48 @@ export function getOperatorPanelContainerClass(panel: PluginPanelDescriptor): st
 }
 
 export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ operatorId }) => {
-  const pluginSnapshot = usePluginSnapshot();
-  const getMeta = usePluginPanelMeta(pluginSnapshot.panelMeta);
+  const visiblePanels = useVisiblePluginPanelsForSlot(operatorId, 'operator');
 
-  const activePluginsWithPanels = React.useMemo(
-    () => pluginSnapshot.plugins.filter((plugin) => {
-      // Only include panels destined for the operator card (no slot or slot === 'operator')
-      const operatorPanels = (plugin.panels ?? []).filter(
-        (panel) => !panel.slot || panel.slot === 'operator',
-      );
-      if (operatorPanels.length === 0) {
-        return false;
-      }
-      if (plugin.type === 'strategy') {
-        return plugin.assignedOperatorIds?.includes(operatorId) ?? false;
-      }
-      return plugin.enabled;
-    }),
-    [operatorId, pluginSnapshot.plugins],
-  );
-
-  if (activePluginsWithPanels.length === 0) {
+  if (visiblePanels.length === 0) {
     return null;
   }
 
+  const groupedPanels = visiblePanels.reduce<Map<string, typeof visiblePanels>>((map, entry) => {
+    const existing = map.get(entry.pluginName) ?? [];
+    existing.push(entry);
+    map.set(entry.pluginName, existing);
+    return map;
+  }, new Map());
+
   return (
     <div className="space-y-3">
-      {activePluginsWithPanels.map((plugin) => {
-        const operatorPanels = (plugin.panels ?? []).filter(
-          (panel) => !panel.slot || panel.slot === 'operator',
-        );
-        const visiblePanels = operatorPanels.filter((panel) => {
-          const meta = getMeta(plugin.name, operatorId, panel.id);
-          return meta.visible !== false;
-        });
-        if (visiblePanels.length === 0) {
-          return null;
-        }
-        const resolvedTitles = visiblePanels.map((panel) => {
-          const meta = getMeta(plugin.name, operatorId, panel.id);
-          const staticTitle = resolvePluginLabel(panel.title, plugin.name);
-          if (meta.title !== undefined && meta.title !== null) {
-            return resolvePluginLabelWithValues(meta.title, plugin.name, meta.titleValues);
-          }
-          return staticTitle;
-        });
-        const isImmersiveIframeOnlySection = visiblePanels.length > 0
-          && visiblePanels.every((panel, index) => panel.component === 'iframe' && resolvedTitles[index]?.trim() === '');
-        const sectionTitle = isImmersiveIframeOnlySection
-          ? ''
-          : resolvePluginName(plugin.name, plugin.name);
+      {Array.from(groupedPanels.entries()).map(([pluginName, entries]) => {
+        const isImmersiveIframeOnlySection = entries.length > 0
+          && entries.every((entry) => entry.panel.component === 'iframe' && entry.resolvedTitle.trim() === '');
+        const sectionTitle = isImmersiveIframeOnlySection ? '' : entries[0]?.pluginDisplayName ?? pluginName;
+
         return (
-          <section key={plugin.name} className={isImmersiveIframeOnlySection ? '' : 'space-y-2'}>
+          <section key={pluginName} className={isImmersiveIframeOnlySection ? '' : 'space-y-2'}>
             {sectionTitle && (
               <div className="text-xs font-medium text-default-600">
                 {sectionTitle}
               </div>
             )}
             <div className={`grid md:grid-cols-2 ${isImmersiveIframeOnlySection ? 'gap-0' : 'gap-2'}`}>
-              {visiblePanels.map((panel, index) => (
+              {entries.map((entry) => (
                 <div
-                  key={`${plugin.name}:${panel.id}`}
-                  className={getOperatorPanelContainerClass(panel)}
+                  key={entry.key}
+                  className={getOperatorPanelContainerClass(entry.panel)}
                 >
                   <PluginPanelRenderer
-                    pluginName={plugin.name}
+                    pluginName={entry.pluginName}
                     operatorId={operatorId}
-                    panelId={panel.id}
-                    pluginGeneration={pluginSnapshot.generation}
-                    title={resolvedTitles[index] ?? ''}
-                    component={panel.component}
-                    pageId={panel.pageId}
-                    initialPanelMeta={pluginSnapshot.panelMeta}
+                    panelId={entry.panel.id}
+                    pluginGeneration={entry.pluginGeneration}
+                    title={entry.resolvedTitle}
+                    component={entry.panel.component}
+                    pageId={entry.panel.pageId}
+                    initialPanelMeta={entry.initialPanelMeta}
                   />
                 </div>
               ))}

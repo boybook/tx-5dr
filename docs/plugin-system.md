@@ -1099,7 +1099,7 @@ interface PluginPanelDescriptor {
   /** 仅 component='iframe' 时需要，引用 ui.pages 中的页面 id */
   pageId?: string;
   /** 面板渲染位置。默认 'operator'（操作员卡片）*/
-  slot?: 'operator' | 'automation';
+  slot?: 'operator' | 'automation' | 'main-right' | 'voice-left-top' | 'voice-right-top';
   /** 面板宽度偏好。默认 'half'；operator host 可将 'full' 解释为整行 */
   width?: 'half' | 'full';
 }
@@ -1118,7 +1118,11 @@ interface PluginPanelDescriptor {
 > **渲染位置（`slot`）**：
 > - `'operator'`（默认）：面板出现在操作员卡片下方的展开区域
 > - `'automation'`：面板出现在右上角自动化 Popover 中
+> - `'main-right'`：面板出现在主界面最右侧的可选插件分屏
+> - `'voice-left-top'`：面板出现在语音模式左侧频率控制卡片上方
+> - `'voice-right-top'`：面板出现在语音模式右侧顶部 Tab 区域
 > - 未指定 `slot` 等同于 `'operator'`
+> - `voice-left-top` 由宿主以卡片位呈现，`main-right`/`voice-right-top` 由宿主以沉浸式 pane 或 tab 呈现
 > - 结构化面板和 iframe 面板均可使用任意 slot
 
 > **宽度偏好（`width`）**：
