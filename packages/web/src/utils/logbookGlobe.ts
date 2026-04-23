@@ -16,6 +16,9 @@ const ARC_BASE_COLOR = '59, 130, 246';
 const HIGHLIGHT_POINT_COLOR = '#f43f5e';
 const HIGHLIGHT_ARC_COLOR = '244, 63, 94';
 const RECENT_QSO_HIGHLIGHT_WINDOW_MS = 10 * 60 * 1000;
+const EARTH_RADIUS_KM = 6371;
+const ARC_SURFACE_CLEARANCE = 0.008;
+const LONG_ARC_LIFT_SOFTENING = 0.82;
 
 export interface GlobeStationPoint {
   lat: number;
@@ -218,14 +221,36 @@ function haversineDistanceKm(
   lng2: number,
 ): number {
   const toRadians = (value: number) => value * Math.PI / 180;
-  const earthRadiusKm = 6371;
   const dLat = toRadians(lat2 - lat1);
   const dLng = toRadians(lng2 - lng1);
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
     + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2))
     * Math.sin(dLng / 2) * Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return earthRadiusKm * c;
+  return EARTH_RADIUS_KM * c;
+}
+
+function getAngularDistanceDegrees(distanceKm: number): number {
+  return distanceKm / EARTH_RADIUS_KM * 180 / Math.PI;
+}
+
+// react-globe.gl arcs use a midpoint altitude. For very long hops that midpoint
+// needs extra lift, otherwise the bezier can dip into the globe interior.
+export function getRenderedArcAltitude(distanceKm: number, highlighted: boolean): number {
+  const baseAltitude = highlighted
+    ? Math.min(0.4, 0.14 + distanceKm / 32000)
+    : Math.min(0.35, 0.08 + distanceKm / 40000);
+  const angularDistanceDegrees = getAngularDistanceDegrees(distanceKm);
+  const nonIntersectingAltitude = Math.min(
+    0.92,
+    Math.max(
+      0,
+      (1 - Math.cos((angularDistanceDegrees * Math.PI / 180) / 2)) * LONG_ARC_LIFT_SOFTENING
+        + ARC_SURFACE_CLEARANCE,
+    ),
+  );
+
+  return Number(Math.max(baseAltitude, nonIntersectingAltitude).toFixed(3));
 }
 
 function getArcOpacity(startTime: number, hours: number): number {
@@ -336,9 +361,7 @@ export function buildRecentQSOGlobeModel(
         color: isHighlightedItem
           ? `rgba(${HIGHLIGHT_ARC_COLOR}, ${getHighlightArcOpacity(item.startTime)})`
           : `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(item.startTime, payload.meta.hours)})`,
-        altitude: isHighlightedItem
-          ? Math.min(0.4, 0.14 + distanceKm / 32000)
-          : Math.min(0.35, 0.08 + distanceKm / 40000),
+        altitude: getRenderedArcAltitude(distanceKm, isHighlightedItem),
         stroke: isHighlightedItem
           ? (distanceKm > 8000 ? 1.1 : 0.9)
           : (distanceKm > 8000 ? 0.75 : 0.5),
@@ -512,9 +535,7 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
         color: isHighlightedQso
           ? `rgba(${HIGHLIGHT_ARC_COLOR}, ${getHighlightArcOpacity(qso.startTime)})`
           : `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(qso.startTime, 24)})`,
-        altitude: isHighlightedQso
-          ? Math.min(0.4, 0.14 + distanceKm / 32000)
-          : Math.min(0.35, 0.08 + distanceKm / 40000),
+        altitude: getRenderedArcAltitude(distanceKm, isHighlightedQso),
         stroke: isHighlightedQso
           ? (distanceKm > 8000 ? 1.1 : 0.9)
           : (distanceKm > 8000 ? 0.75 : 0.5),
