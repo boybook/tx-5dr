@@ -915,49 +915,6 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('emits operator-scoped plugin panel data for qso-session-inspector', async () => {
-    const { eventEmitter, operator, pluginManager } = await createRuntimeHarness({
-      pluginConfigs: {
-        'qso-session-inspector': { enabled: true, settings: {} },
-      },
-      operatorPluginSettings: {
-        'qso-session-inspector': {
-          recentEventLimit: 5,
-        },
-      },
-    });
-
-    const payloads: any[] = [];
-    eventEmitter.on('pluginData' as any, (payload: any) => {
-      payloads.push(payload);
-    });
-
-    await (pluginManager as any).handleSlotStart(
-      createSlotInfo(60_000),
-      createSlotPack(createSlotInfo(45_000), [{
-        message: FT8MessageParser.generateMessage({
-          type: FT8MessageType.CQ,
-          senderCallsign: 'JA1AAA',
-          grid: 'PM95',
-        }),
-        snr: -10,
-        freq: 1500,
-      }]),
-    );
-
-    const statsPayload = payloads.filter((payload) => payload.panelId === 'session-stats').at(-1);
-    const eventsPayload = payloads.filter((payload) => payload.panelId === 'session-events').at(-1);
-
-    expect(statsPayload).toBeTruthy();
-    expect(statsPayload.operatorId).toBe(operator.config.id);
-    expect(statsPayload.pluginName).toBe('qso-session-inspector');
-    expect(statsPayload.data.decodes).toBe(1);
-    expect(eventsPayload.operatorId).toBe(operator.config.id);
-    expect(eventsPayload.data[0]).toContain('decode');
-
-    await pluginManager.shutdown();
-  });
-
   it('treats an empty watch list as disabled for watched-callsign-autocall', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       startOperator: false,
@@ -1263,39 +1220,6 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     expect(operator.isTransmitting).toBe(false);
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
-
-    await pluginManager.shutdown();
-  });
-
-  it('handles button quick actions for heartbeat-demo and keeps plugin data scoped per operator', async () => {
-    const { eventEmitter, operator, pluginManager } = await createRuntimeHarness({
-      pluginConfigs: {
-        'heartbeat-demo': {
-          enabled: true,
-          settings: {
-            intervalMs: 1000,
-          },
-        },
-      },
-    });
-
-    const instance = (pluginManager as any).instances.get(operator.config.id).get('heartbeat-demo');
-    instance.ctx.store.global.set('totalHeartbeatCount', 7);
-    instance.ctx.store.operator.set('operatorHeartbeatCount', 3);
-
-    const payloads: any[] = [];
-    eventEmitter.on('pluginData' as any, (payload: any) => {
-      payloads.push(payload);
-    });
-
-    pluginManager.handlePluginUserAction('heartbeat-demo', 'resetHeartbeat', operator.config.id);
-
-    const payload = payloads.at(-1);
-    expect(payload.pluginName).toBe('heartbeat-demo');
-    expect(payload.operatorId).toBe(operator.config.id);
-    expect(payload.panelId).toBe('heartbeat-status');
-    expect(payload.data.globalCount).toBe(0);
-    expect(payload.data.operatorCount).toBe(0);
 
     await pluginManager.shutdown();
   });

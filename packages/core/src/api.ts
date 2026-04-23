@@ -82,6 +82,10 @@ import type {
   RealtimeStatsRequest,
   RealtimeStatsResponse,
   RealtimeVoiceTxStatsResponse,
+  PluginMarketCatalogEntryResponse,
+  PluginMarketCatalogResponse,
+  PluginMarketChannel,
+  PluginMarketInstallResult,
   PluginRuntimeInfo,
 } from '@tx5dr/contracts';
 
@@ -1791,6 +1795,51 @@ export const api = {
     return apiRequest('/plugins/runtime-info', undefined, apiBase);
   },
 
+  async getPluginMarketCatalog(
+    channel: PluginMarketChannel = 'stable',
+    apiBase?: string,
+  ): Promise<PluginMarketCatalogResponse> {
+    const params = new URLSearchParams({ channel });
+    return apiRequest(`/plugins/market/catalog?${params.toString()}`, undefined, apiBase);
+  },
+
+  async getPluginMarketCatalogEntry(
+    name: string,
+    channel: PluginMarketChannel = 'stable',
+    apiBase?: string,
+  ): Promise<PluginMarketCatalogEntryResponse> {
+    const params = new URLSearchParams({ channel });
+    return apiRequest(`/plugins/market/catalog/${encodeURIComponent(name)}?${params.toString()}`, undefined, apiBase);
+  },
+
+  async installPluginFromMarket(
+    name: string,
+    channel: PluginMarketChannel = 'stable',
+    apiBase?: string,
+  ): Promise<PluginMarketInstallResult> {
+    return apiRequest(`/plugins/market/${encodeURIComponent(name)}/install`, {
+      method: 'POST',
+      body: JSON.stringify({ channel }),
+    }, apiBase);
+  },
+
+  async updatePluginFromMarket(
+    name: string,
+    channel: PluginMarketChannel = 'stable',
+    apiBase?: string,
+  ): Promise<PluginMarketInstallResult> {
+    return apiRequest(`/plugins/market/${encodeURIComponent(name)}/update`, {
+      method: 'POST',
+      body: JSON.stringify({ channel }),
+    }, apiBase);
+  },
+
+  async uninstallPluginFromMarket(name: string, apiBase?: string): Promise<PluginMarketInstallResult> {
+    return apiRequest(`/plugins/market/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }, apiBase);
+  },
+
   async enablePlugin(name: string, apiBase?: string): Promise<{ success: boolean }> {
     return apiRequest(`/plugins/${name}/enable`, { method: 'POST' }, apiBase);
   },
@@ -1939,6 +1988,11 @@ export const {
   // 插件系统函数
   ,getPlugins
   ,getPluginRuntimeInfo
+  ,getPluginMarketCatalog
+  ,getPluginMarketCatalogEntry
+  ,installPluginFromMarket
+  ,updatePluginFromMarket
+  ,uninstallPluginFromMarket
   ,enablePlugin
   ,disablePlugin
   ,reloadPlugin

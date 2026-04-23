@@ -5,14 +5,21 @@ import type { PluginUIInstanceTarget } from '@tx5dr/plugin-api';
 import type {
   JWTPayload,
   PermissionGrant,
+  PluginMarketChannel,
   PluginUIPageDescriptor,
 } from '@tx5dr/contracts';
-import { UserRole } from '@tx5dr/contracts';
+import { PluginMarketChannelSchema, UserRole } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { AuthManager } from '../auth/AuthManager.js';
 import { createLogger } from '../utils/logger.js';
 import { getPluginRuntimeInfo } from '../plugin/runtime-info.js';
+import { fetchPluginMarketCatalog } from '../plugin/marketplace.js';
+import {
+  installPluginFromMarketplace,
+  uninstallPluginFromMarketplace,
+  updatePluginFromMarketplace,
+} from '../plugin/marketplace-installer.js';
 import { normalizeCallsign } from '../utils/callsign.js';
 import {
   type PluginPageSession,
@@ -287,10 +294,20 @@ function createSessionBootstrapScript(sessionId: string): string {
  * POST /api/plugins/reload                       — 热重载全部插件
  * POST /api/plugins/rescan                       — 重扫插件目录
  * PUT  /api/plugins/operators/:id/strategy       — 设置操作员策略插件
+ * GET  /api/plugins/market/catalog               — 获取官方插件市场索引
+ * GET  /api/plugins/market/catalog/:name         — 获取单个市场插件条目
+ * POST /api/plugins/market/:name/install         — 从官方市场安装插件
+ * POST /api/plugins/market/:name/update          — 从官方市场更新插件
+ * DELETE /api/plugins/market/:name               — 卸载市场插件（保留 plugin-data）
  */
 export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   const engine = DigitalRadioEngine.getInstance();
   const configManager = ConfigManager.getInstance();
+
+  const parseMarketChannel = (value: unknown): PluginMarketChannel | null => {
+    const parsed = PluginMarketChannelSchema.safeParse(value ?? 'stable');
+    return parsed.success ? parsed.data : null;
+  };
 
   const getResolvedGlobalSettings = (name: string): Record<string, unknown> => {
     const config = configManager.getPluginsConfig();
@@ -339,6 +356,196 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     }
     return reply.send(engine.pluginManager.getSnapshot());
   });
+
+  fastify.get<{ Querystring: { channel?: string } }>('/market/catalog', async (req, reply) => {
+    if (!await requireMinimumRole(fastify, req, reply, UserRole.VIEWER)) {
+      return;
+    }
+
+    const channel = parseMarketChannel((req.query as { channel?: string } | undefined)?.channel);
+    if (!channel) {
+      return reply.status(400).send({
+        code: 'INVALID_PLUGIN_MARKET_CHANNEL',
+        message: 'Unsupported plugin market channel',
+        userMessage: 'Unsupported plugin market channel',
+      });
+    }
+
+    try {
+      return reply.send(await fetchPluginMarketCatalog(channel));
+    } catch (err) {
+      logger.error(`Failed to fetch plugin marketplace catalog: channel=${channel}`, err);
+      return reply.status(502).send({
+        code: 'PLUGIN_MARKET_UNAVAILABLE',
+        message: err instanceof Error ? err.message : 'Failed to fetch plugin marketplace catalog',
+        userMessage: 'Plugin marketplace is temporarily unavailable',
+      });
+    }
+  });
+
+  fastify.get<{ Params: { name: string }; Querystring: { channel?: string } }>(
+    '/market/catalog/:name',
+    async (req, reply) => {
+      if (!await requireMinimumRole(fastify, req, reply, UserRole.VIEWER)) {
+        return;
+      }
+
+      const channel = parseMarketChannel((req.query as { channel?: string } | undefined)?.channel);
+      if (!channel) {
+        return reply.status(400).send({
+          code: 'INVALID_PLUGIN_MARKET_CHANNEL',
+          message: 'Unsupported plugin market channel',
+          userMessage: 'Unsupported plugin market channel',
+        });
+      }
+
+      try {
+        const result = await fetchPluginMarketCatalog(channel);
+        const plugin = result.catalog.plugins.find((entry: { name: string }) => entry.name === req.params.name);
+        if (!plugin) {
+          return reply.status(404).send({
+            code: 'PLUGIN_MARKET_PLUGIN_NOT_FOUND',
+            message: `Plugin not found in marketplace catalog: ${req.params.name}`,
+            userMessage: 'Plugin not found in marketplace',
+          });
+        }
+
+        return reply.send({
+          plugin,
+          channel,
+          sourceUrl: result.sourceUrl,
+        });
+      } catch (err) {
+        logger.error(`Failed to fetch plugin marketplace entry: channel=${channel}, plugin=${req.params.name}`, err);
+        return reply.status(502).send({
+          code: 'PLUGIN_MARKET_UNAVAILABLE',
+          message: err instanceof Error ? err.message : 'Failed to fetch plugin marketplace catalog',
+          userMessage: 'Plugin marketplace is temporarily unavailable',
+        });
+      }
+    },
+  );
+
+  fastify.post<{ Params: { name: string }; Body: { channel?: string } }>(
+    '/market/:name/install',
+    async (req, reply) => {
+      if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+        return;
+      }
+
+      const channel = parseMarketChannel((req.body as { channel?: string } | undefined)?.channel);
+      if (!channel) {
+        return reply.status(400).send({
+          code: 'INVALID_PLUGIN_MARKET_CHANNEL',
+          message: 'Unsupported plugin market channel',
+          userMessage: 'Unsupported plugin market channel',
+        });
+      }
+
+      const runtimeInfo = await getPluginRuntimeInfo();
+      const existing = engine.pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === req.params.name);
+      if (existing?.isBuiltIn) {
+        return reply.status(400).send({
+          code: 'PLUGIN_MARKET_CONFLICTS_WITH_BUILTIN',
+          message: `Built-in plugins cannot be replaced from marketplace: ${req.params.name}`,
+          userMessage: 'Built-in plugins cannot be installed from marketplace',
+        });
+      }
+
+      try {
+        const result = await installPluginFromMarketplace(req.params.name, runtimeInfo.pluginDir, channel);
+        await engine.pluginManager.rescanPlugins();
+        return reply.send(result);
+      } catch (err) {
+        logger.error(`Failed to install plugin from marketplace: plugin=${req.params.name}, channel=${channel}`, err);
+        return reply.status(502).send({
+          code: 'PLUGIN_MARKET_INSTALL_FAILED',
+          message: err instanceof Error ? err.message : 'Failed to install plugin from marketplace',
+          userMessage: 'Plugin installation failed',
+        });
+      }
+    },
+  );
+
+  fastify.post<{ Params: { name: string }; Body: { channel?: string } }>(
+    '/market/:name/update',
+    async (req, reply) => {
+      if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+        return;
+      }
+
+      const channel = parseMarketChannel((req.body as { channel?: string } | undefined)?.channel);
+      if (!channel) {
+        return reply.status(400).send({
+          code: 'INVALID_PLUGIN_MARKET_CHANNEL',
+          message: 'Unsupported plugin market channel',
+          userMessage: 'Unsupported plugin market channel',
+        });
+      }
+
+      const installed = engine.pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === req.params.name);
+      if (!installed || installed.isBuiltIn) {
+        return reply.status(404).send({
+          code: 'PLUGIN_MARKET_UPDATE_TARGET_NOT_FOUND',
+          message: `Installed marketplace plugin not found: ${req.params.name}`,
+          userMessage: 'Installed plugin not found',
+        });
+      }
+
+      const runtimeInfo = await getPluginRuntimeInfo();
+      try {
+        const result = await updatePluginFromMarketplace(req.params.name, runtimeInfo.pluginDir, channel);
+        await engine.pluginManager.rescanPlugins();
+        return reply.send(result);
+      } catch (err) {
+        logger.error(`Failed to update plugin from marketplace: plugin=${req.params.name}, channel=${channel}`, err);
+        return reply.status(502).send({
+          code: 'PLUGIN_MARKET_UPDATE_FAILED',
+          message: err instanceof Error ? err.message : 'Failed to update plugin from marketplace',
+          userMessage: 'Plugin update failed',
+        });
+      }
+    },
+  );
+
+  fastify.delete<{ Params: { name: string } }>(
+    '/market/:name',
+    async (req, reply) => {
+      if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {
+        return;
+      }
+
+      const installed = engine.pluginManager.getSnapshot().plugins.find((plugin) => plugin.name === req.params.name);
+      if (!installed) {
+        return reply.status(404).send({
+          code: 'PLUGIN_MARKET_UNINSTALL_TARGET_NOT_FOUND',
+          message: `Installed plugin not found: ${req.params.name}`,
+          userMessage: 'Installed plugin not found',
+        });
+      }
+      if (installed.isBuiltIn) {
+        return reply.status(400).send({
+          code: 'PLUGIN_MARKET_CANNOT_UNINSTALL_BUILTIN',
+          message: `Built-in plugins cannot be uninstalled: ${req.params.name}`,
+          userMessage: 'Built-in plugins cannot be uninstalled',
+        });
+      }
+
+      const runtimeInfo = await getPluginRuntimeInfo();
+      try {
+        const result = await uninstallPluginFromMarketplace(req.params.name, runtimeInfo.pluginDir);
+        await engine.pluginManager.rescanPlugins();
+        return reply.send(result);
+      } catch (err) {
+        logger.error(`Failed to uninstall plugin from marketplace: plugin=${req.params.name}`, err);
+        return reply.status(500).send({
+          code: 'PLUGIN_MARKET_UNINSTALL_FAILED',
+          message: err instanceof Error ? err.message : 'Failed to uninstall plugin from marketplace',
+          userMessage: 'Plugin uninstall failed',
+        });
+      }
+    },
+  );
 
   fastify.get('/runtime-info', async (req, reply) => {
     if (!await requireMinimumRole(fastify, req, reply, UserRole.ADMIN)) {

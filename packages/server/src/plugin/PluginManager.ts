@@ -36,6 +36,7 @@ import {
 import { BUILTIN_MIGRATIONS } from './builtin-migrations/index.js';
 import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
 import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRuntimeState, FlushableKVStore } from './types.js';
+import { readPluginSource } from './plugin-source.js';
 import { createLogger } from '../utils/logger.js';
 import path from 'path';
 
@@ -486,7 +487,10 @@ export class PluginManager {
   }
 
   getSnapshot(): PluginSystemSnapshot {
-    return toPluginSystemSnapshot(this.systemState, this.getPluginStatuses());
+    return toPluginSystemSnapshot(
+      this.systemState,
+      this.getPluginStatuses(),
+    );
   }
 
   getRuntimeLogHistory(limit = 500): PluginRuntimeLogEntry[] {
@@ -943,7 +947,10 @@ export class PluginManager {
         logger.warn(`Plugin name conflict: ${plugin.definition.name} (user plugin cannot override built-in)`);
         continue;
       }
-      discoveredPlugins.set(plugin.definition.name, plugin);
+      discoveredPlugins.set(plugin.definition.name, {
+        ...plugin,
+        source: plugin.dirPath ? await readPluginSource(plugin.dirPath) : undefined,
+      });
     }
 
     this.loadedPlugins = discoveredPlugins;

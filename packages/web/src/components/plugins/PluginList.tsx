@@ -5,6 +5,7 @@ import React, {
   useImperativeHandle,
   forwardRef,
   useMemo,
+  useRef,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -34,6 +35,10 @@ interface PluginListProps {
   onSelect?: (plugin: PluginStatus | null) => void;
   onUnsavedChanges?: (hasChanges: boolean) => void;
   emptyMessage?: string;
+  selectedPluginName?: string | null;
+  selectedPluginRequestKey?: number;
+  isVisible?: boolean;
+  onSelectedPluginRequestHandled?: (requestKey: number) => void;
 }
 
 export interface PluginListRef {
@@ -45,10 +50,15 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
   onSelect,
   onUnsavedChanges,
   emptyMessage,
+  selectedPluginName,
+  selectedPluginRequestKey,
+  isVisible = true,
+  onSelectedPluginRequestHandled,
 }, ref) => {
   const { t } = useTranslation('settings');
   const [selectedPlugin, setSelectedPlugin] = useState<PluginStatus | null>(null);
   const [_saving, setSaving] = useState(false);
+  const pluginCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pluginSnapshot = usePluginSnapshot();
   const plugins = pluginSnapshot.plugins;
   const [enabledDrafts, setEnabledDrafts] = useState<Record<string, boolean>>({});
@@ -73,6 +83,42 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
       return plugins.find((plugin) => plugin.name === prev.name) ?? null;
     });
   }, [plugins]);
+
+  useEffect(() => {
+    if (!selectedPluginName) {
+      return;
+    }
+
+    const plugin = plugins.find((entry) => entry.name === selectedPluginName) ?? null;
+    if (!plugin) {
+      return;
+    }
+
+    setSelectedPlugin((prev) => prev?.name === plugin.name ? prev : plugin);
+    onSelect?.(plugin);
+  }, [onSelect, plugins, selectedPluginName]);
+
+  useEffect(() => {
+    if (!selectedPluginName || !isVisible || selectedPluginRequestKey === undefined) {
+      return;
+    }
+
+    const scrollToCard = () => {
+      pluginCardRefs.current[selectedPluginName]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(scrollToCard);
+      });
+      onSelectedPluginRequestHandled?.(selectedPluginRequestKey);
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isVisible, onSelectedPluginRequestHandled, plugins, selectedPluginName, selectedPluginRequestKey]);
 
   useEffect(() => {
     setOriginalEnabledMap((prevOriginal) => {
@@ -277,6 +323,9 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
                   selected={isSelected}
                   onSelect={handleSelect}
                   onToggle={handleToggle}
+                  cardRef={(node) => {
+                    pluginCardRefs.current[plugin.name] = node;
+                  }}
                 />
                 {isSelected && (
                   <div className="-mt-1">
@@ -323,6 +372,9 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
                   selected={isSelected}
                   onSelect={handleSelect}
                   onToggle={handleToggle}
+                  cardRef={(node) => {
+                    pluginCardRefs.current[plugin.name] = node;
+                  }}
                 />
                 {isSelected && (
                   <div className="-mt-1">
@@ -415,9 +467,10 @@ interface PluginCardProps {
   selected: boolean;
   onSelect: (plugin: PluginStatus) => void;
   onToggle: (plugin: PluginStatus, enabled: boolean) => void;
+  cardRef?: (node: HTMLDivElement | null) => void;
 }
 
-const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onToggle }) => {
+const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onToggle, cardRef }) => {
   const { t } = useTranslation('settings');
   const canToggle = plugin.type === 'utility';
   const pluginTitle = resolvePluginName(plugin.name, plugin.name);
@@ -442,53 +495,55 @@ const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onT
       : t('plugins.statusDisabled', 'Disabled');
 
   return (
-    <Card
-      isPressable
-      className={`cursor-pointer transition-all ${selected ? 'ring-2 ring-primary' : ''}`}
-      onPress={() => onSelect(plugin)}
-    >
-      <CardBody className="py-2 px-3">
-        <div className="flex items-center gap-2">
-          <FontAwesomeIcon icon={faPuzzlePiece} className="text-default-400 text-xs" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium truncate">{pluginTitle}</span>
-              <span className="text-xs text-default-400">v{plugin.version}</span>
-              {plugin.isBuiltIn && (
-                <Chip size="sm" variant="flat" color="primary" className="text-xs h-4">
-                  {t('plugins.builtin', 'Built-in')}
-                </Chip>
+    <div ref={cardRef} className="w-full">
+      <Card
+        isPressable
+        className={`w-full cursor-pointer transition-all ${selected ? 'ring-2 ring-primary' : ''}`}
+        onPress={() => onSelect(plugin)}
+      >
+        <CardBody className="py-2 px-3">
+          <div className="flex items-center gap-2">
+            <FontAwesomeIcon icon={faPuzzlePiece} className="text-default-400 text-xs" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium truncate">{pluginTitle}</span>
+                <span className="text-xs text-default-400">v{plugin.version}</span>
+                {plugin.isBuiltIn && (
+                  <Chip size="sm" variant="flat" color="primary" className="text-xs h-4">
+                    {t('plugins.builtin', 'Built-in')}
+                  </Chip>
+                )}
+              </div>
+              {pluginDescription && (
+                <div className="text-xs text-default-400 truncate">{pluginDescription}</div>
               )}
             </div>
-            {pluginDescription && (
-              <div className="text-xs text-default-400 truncate">{pluginDescription}</div>
-            )}
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Chip
-              size="sm"
-              variant="dot"
-              color={statusColor}
-              className="text-xs"
-            >
-              {statusLabel}
-            </Chip>
-            {canToggle && (
-              <Switch
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Chip
                 size="sm"
-                isSelected={plugin.enabled}
-                onValueChange={(val) => onToggle(plugin, val)}
-                onClick={(e) => e.stopPropagation()}
-              />
-            )}
+                variant="dot"
+                color={statusColor}
+                className="text-xs"
+              >
+                {statusLabel}
+              </Chip>
+              {canToggle && (
+                <Switch
+                  size="sm"
+                  isSelected={plugin.enabled}
+                  onValueChange={(val) => onToggle(plugin, val)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              )}
+            </div>
           </div>
-        </div>
-        {plugin.errorCount > 0 && plugin.lastError && (
-          <div className="mt-1 text-xs text-danger truncate">
-            {t('plugins.errorCount', '{{count}} errors', { count: plugin.errorCount })}: {plugin.lastError}
-          </div>
-        )}
-      </CardBody>
-    </Card>
+          {plugin.errorCount > 0 && plugin.lastError && (
+            <div className="mt-1 text-xs text-danger truncate">
+              {t('plugins.errorCount', '{{count}} errors', { count: plugin.errorCount })}: {plugin.lastError}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+    </div>
   );
 };
