@@ -39,23 +39,6 @@ import {
 } from './worked-station-bias/index.js';
 
 import {
-  qsoSessionInspectorPlugin,
-  qsoSessionInspectorLocales,
-} from './qso-session-inspector/index.js';
-
-import {
-  heartbeatDemoPlugin,
-  heartbeatDemoLocales,
-} from './heartbeat-demo/index.js';
-
-import {
-  iframePanelDemoPlugin,
-  iframePanelDemoLocales,
-  iframePanelDemoDirPath,
-  BUILTIN_IFRAME_PANEL_DEMO_PLUGIN_NAME,
-} from './iframe-panel-demo/index.js';
-
-import {
   watchedCallsignAutocallPlugin,
   watchedCallsignAutocallLocales,
 } from './watched-callsign-autocall/index.js';
@@ -101,7 +84,6 @@ export interface BuiltinPluginEntry {
 
 export {
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
-  BUILTIN_IFRAME_PANEL_DEMO_PLUGIN_NAME,
   BUILTIN_WAVELOG_SYNC_PLUGIN_NAME,
   BUILTIN_QRZ_SYNC_PLUGIN_NAME,
   BUILTIN_LOTW_SYNC_PLUGIN_NAME,
@@ -133,22 +115,6 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     definition: workedStationBiasPlugin,
     locales: workedStationBiasLocales,
     enabledByDefault: false,
-  },
-  {
-    definition: qsoSessionInspectorPlugin,
-    locales: qsoSessionInspectorLocales,
-    enabledByDefault: false,
-  },
-  {
-    definition: heartbeatDemoPlugin,
-    locales: heartbeatDemoLocales,
-    enabledByDefault: false,
-  },
-  {
-    definition: iframePanelDemoPlugin,
-    locales: iframePanelDemoLocales,
-    enabledByDefault: false,
-    dirPath: iframePanelDemoDirPath,
   },
   {
     definition: watchedCallsignAutocallPlugin,

@@ -5,7 +5,12 @@ import type {
   KVStore,
   PluginUIInstanceTarget,
 } from '@tx5dr/plugin-api';
-import type { PluginStatus, PluginSystemSnapshot, PluginSystemState } from '@tx5dr/contracts';
+import type {
+  PluginSource,
+  PluginStatus,
+  PluginSystemSnapshot,
+  PluginSystemState,
+} from '@tx5dr/contracts';
 
 /**
  * 内部 KVStore 扩展，暴露 flush() 供宿主生命周期管理使用。
@@ -24,6 +29,8 @@ export interface LoadedPlugin {
   isBuiltIn: boolean;
   /** 插件目录路径（内置插件若有 UI 文件也需提供） */
   dirPath?: string;
+  /** 插件来源声明，由宿主扫描插件目录后读取 */
+  source?: PluginSource;
   /** 插件加载的 i18n 资源 */
   locales?: Record<string, Record<string, string>>;
 }
@@ -189,6 +196,7 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
       pages: plugin.definition.ui.pages ?? [],
     } : undefined,
     locales: plugin.locales,
+    source: plugin.source,
   };
 }
 

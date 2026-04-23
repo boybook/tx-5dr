@@ -1,7 +1,0 @@
-{
-  "pluginName": "iframe Panel Demo",
-  "pluginDescription": "Demonstrates iframe custom UI panels in operator card and automation popover.",
-  "liveMonitorPanel": "Live Monitor",
-  "quickControlsPanel": "Quick Controls",
-  "statsPanel": "Stats"
-}

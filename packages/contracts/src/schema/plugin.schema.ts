@@ -327,6 +327,24 @@ export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 
 // ===== 运行时状态（推送给前端） =====
 
+export const PluginMarketChannelSchema = z.enum(['stable', 'nightly']);
+export type PluginMarketChannel = z.infer<typeof PluginMarketChannelSchema>;
+
+export const PluginSourceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('marketplace'),
+    version: z.string(),
+    channel: PluginMarketChannelSchema,
+    artifactUrl: z.string().url(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+    installedAt: z.number().int().nonnegative(),
+  }),
+]);
+export type PluginSource = z.infer<typeof PluginSourceSchema>;
+
+export const PluginLocalesSchema = z.record(z.string(), z.record(z.string(), z.string()));
+export type PluginLocales = z.infer<typeof PluginLocalesSchema>;
+
 /**
  * Runtime-facing plugin status snapshot exposed to the frontend.
  *
@@ -355,13 +373,22 @@ export const PluginStatusSchema = z.object({
   permissions: z.array(PluginPermissionSchema).optional(),
   capabilities: z.array(PluginCapabilitySchema).optional(),
   ui: PluginUIConfigSchema.optional(),
-  locales: z.record(z.string(), z.record(z.string(), z.string())).optional(),
+  locales: PluginLocalesSchema.optional(),
+  source: PluginSourceSchema.optional(),
 });
 
 /**
  * Runtime-facing plugin status snapshot exposed to the frontend.
  */
 export type PluginStatus = z.infer<typeof PluginStatusSchema>;
+
+const PluginMarketInstallRecordInternalSchema = z.object({
+  version: z.string(),
+  channel: PluginMarketChannelSchema,
+  artifactUrl: z.string().url(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  installedAt: z.number().int().nonnegative(),
+});
 
 export const PluginSystemStateSchema = z.enum(['ready', 'reloading', 'error']);
 export type PluginSystemState = z.infer<typeof PluginSystemStateSchema>;
@@ -407,6 +434,71 @@ export const PluginConfigEntrySchema = z.object({
   settings: z.record(z.string(), z.unknown()),
 });
 export type PluginConfigEntry = z.infer<typeof PluginConfigEntrySchema>;
+
+// ===== 插件市场（官方索引） =====
+
+export const PluginMarketScreenshotSchema = z.object({
+  src: z.string().url(),
+  alt: z.string().optional(),
+});
+export type PluginMarketScreenshot = z.infer<typeof PluginMarketScreenshotSchema>;
+
+export const PluginMarketCatalogEntrySchema = z.object({
+  name: z.string(),
+  title: z.string(),
+  description: z.string(),
+  locales: PluginLocalesSchema.optional(),
+  latestVersion: z.string(),
+  minHostVersion: z.string(),
+  author: z.string().optional(),
+  license: z.string().optional(),
+  repository: z.string().url().optional(),
+  homepage: z.string().url().optional(),
+  categories: z.array(z.string()).optional().default([]),
+  keywords: z.array(z.string()).optional().default([]),
+  permissions: z.array(PluginPermissionSchema).optional().default([]),
+  screenshots: z.array(PluginMarketScreenshotSchema).optional().default([]),
+  artifactUrl: z.string().url(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  size: z.number().int().nonnegative(),
+  publishedAt: z.string(),
+});
+export type PluginMarketCatalogEntry = z.infer<typeof PluginMarketCatalogEntrySchema>;
+
+export const PluginMarketCatalogSchema = z.object({
+  schemaVersion: z.number().int().positive(),
+  generatedAt: z.string(),
+  channel: PluginMarketChannelSchema,
+  plugins: z.array(PluginMarketCatalogEntrySchema),
+});
+export type PluginMarketCatalog = z.infer<typeof PluginMarketCatalogSchema>;
+
+export const PluginMarketCatalogResponseSchema = z.object({
+  catalog: PluginMarketCatalogSchema,
+  sourceUrl: z.string().url(),
+});
+export type PluginMarketCatalogResponse = z.infer<typeof PluginMarketCatalogResponseSchema>;
+
+export const PluginMarketCatalogEntryResponseSchema = z.object({
+  plugin: PluginMarketCatalogEntrySchema,
+  sourceUrl: z.string().url(),
+  channel: PluginMarketChannelSchema,
+});
+export type PluginMarketCatalogEntryResponse = z.infer<typeof PluginMarketCatalogEntryResponseSchema>;
+
+export const PluginMarketInstallRecordSchema = PluginMarketInstallRecordInternalSchema;
+export type PluginMarketInstallRecord = z.infer<typeof PluginMarketInstallRecordSchema>;
+
+export const PluginMarketInstallActionSchema = z.enum(['install', 'update', 'uninstall']);
+export type PluginMarketInstallAction = z.infer<typeof PluginMarketInstallActionSchema>;
+
+export const PluginMarketInstallResultSchema = z.object({
+  success: z.literal(true),
+  action: PluginMarketInstallActionSchema,
+  pluginName: z.string(),
+  record: PluginMarketInstallRecordSchema.optional(),
+});
+export type PluginMarketInstallResult = z.infer<typeof PluginMarketInstallResultSchema>;
 
 /**
  * 所有插件的持久化配置

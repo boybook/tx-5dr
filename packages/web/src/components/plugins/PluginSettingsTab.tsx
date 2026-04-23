@@ -1,10 +1,11 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Divider, Tooltip } from '@heroui/react';
+import { Button, Divider, Tab, Tabs, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotate, faCopy, faCheck, faFolderOpen } from '@fortawesome/free-solid-svg-icons';
 import { PluginList, type PluginListRef } from './PluginList';
 import { PluginLogPanel } from './PluginLogPanel';
+import { PluginMarketplace } from './PluginMarketplace';
 import { api } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import type { PluginRuntimeInfo } from '@tx5dr/contracts';
@@ -30,6 +31,13 @@ interface PluginSettingsTabProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
+type PluginSettingsView = 'installed' | 'marketplace';
+
+interface InstalledPluginNavigationRequest {
+  name: string;
+  nonce: number;
+}
+
 export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettingsTabProps>(({ onUnsavedChanges }, ref) => {
   const { t } = useTranslation('settings');
   const pluginListRef = useRef<PluginListRef | null>(null);
@@ -37,6 +45,9 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
   const [reloading, setReloading] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<PluginRuntimeInfo | null>(null);
   const [copiedKey, setCopiedKey] = useState<'pluginDir' | 'pluginDataDir' | null>(null);
+  const [activeView, setActiveView] = useState<PluginSettingsView>('installed');
+  const [selectedInstalledPluginName, setSelectedInstalledPluginName] = useState<string | null>(null);
+  const [installedPluginNavigationRequest, setInstalledPluginNavigationRequest] = useState<InstalledPluginNavigationRequest | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +169,21 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
   const canOpenPath = typeof window !== 'undefined'
     && Boolean(window.electronAPI?.shell?.openPath);
 
+  const handleOpenInstalledPlugin = useCallback((pluginName: string) => {
+    setSelectedInstalledPluginName(pluginName);
+    setInstalledPluginNavigationRequest((prev) => ({
+      name: pluginName,
+      nonce: (prev?.nonce ?? 0) + 1,
+    }));
+    setActiveView('installed');
+  }, []);
+
+  const handleInstalledPluginNavigationHandled = useCallback((requestKey: number) => {
+    setInstalledPluginNavigationRequest((prev) => (
+      prev?.nonce === requestKey ? null : prev
+    ));
+  }, []);
+
   useImperativeHandle(ref, () => ({
     hasUnsavedChanges: () => pluginListRef.current?.hasUnsavedChanges() || false,
     save: async () => {
@@ -167,7 +193,7 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3">
         <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2 flex-wrap">
             <h3 className="text-base font-semibold">{t('plugins.title', 'Plugin Management')}</h3>
@@ -178,75 +204,107 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
             )}
           </div>
           <p className="text-sm text-default-400">
-            {t('plugins.description', 'Manage automation plugins and load user plugins from the runtime plugin directory.')}
+            {t('plugins.description', 'Manage installed automation plugins and browse the plugin marketplace.')}
           </p>
         </div>
-        <Tooltip content={t('plugins.reload', 'Reload plugins')}>
-          <Button
+        <div className="flex items-center justify-between gap-3">
+          <Tabs
+            aria-label={t('plugins.tabTitle', 'Plugins')}
+            selectedKey={activeView}
+            onSelectionChange={(key) => setActiveView(key as PluginSettingsView)}
             size="sm"
-            variant="flat"
-            isIconOnly
-            isLoading={reloading}
-            isDisabled={hasUnsavedChanges}
-            onPress={handleReload}
-            aria-label={t('plugins.reload', 'Reload plugins')}
+            radius="full"
+            variant="solid"
+            classNames={{
+              tabList: 'w-fit',
+            }}
           >
-            <FontAwesomeIcon icon={faRotate} />
-          </Button>
-        </Tooltip>
-      </div>
-      <div className="rounded-medium border border-divider bg-default-50/70 px-3 py-3">
-        <div className="flex flex-col gap-3">
-          <DirectoryField
-            label={t('plugins.directoryLabel', 'Plugin directory')}
-            value={runtimeInfo?.pluginDir}
-            loadingLabel={t('plugins.directoryLoading', 'Loading...')}
-            copied={copiedKey === 'pluginDir'}
-            canOpen={canOpenPath}
-            onCopy={() => { void handleCopyPath(runtimeInfo?.pluginDir, 'pluginDir'); }}
-            onOpen={() => { void handleOpenPath(runtimeInfo?.pluginDir); }}
-            copyLabel={t('plugins.copyPath', 'Copy path')}
-            copiedLabel={t('plugins.pathCopied', 'Copied')}
-            openLabel={t('plugins.openDirectory', 'Open folder')}
-          />
-          <DirectoryField
-            label={t('plugins.dataDirectoryLabel', 'Plugin data directory')}
-            value={runtimeInfo?.pluginDataDir}
-            loadingLabel={t('plugins.directoryLoading', 'Loading...')}
-            copied={copiedKey === 'pluginDataDir'}
-            canOpen={canOpenPath}
-            onCopy={() => { void handleCopyPath(runtimeInfo?.pluginDataDir, 'pluginDataDir'); }}
-            onOpen={() => { void handleOpenPath(runtimeInfo?.pluginDataDir); }}
-            copyLabel={t('plugins.copyPath', 'Copy path')}
-            copiedLabel={t('plugins.pathCopied', 'Copied')}
-            openLabel={t('plugins.openDirectory', 'Open folder')}
-          />
-          <div className="min-w-0">
-            <p className="text-xs leading-5 text-default-500">{runtimeHint}</p>
-            {runtimeInfo?.hostPluginDirHint && (
-              <p className="mt-1 text-xs leading-5 text-default-400">
-                {t('plugins.directoryHostHint', {
-                  defaultValue: 'Official docker-compose host mapping: {{path}}',
-                  path: runtimeInfo.hostPluginDirHint,
-                })}
-              </p>
-            )}
-            <p className="mt-2 text-xs leading-5 text-default-400">
-              {t(
-                'plugins.dataDirectoryHint',
-                'Plugin source files stay in the plugin directory, while runtime state and store files are written into the plugin data directory.',
-              )}
-            </p>
-          </div>
+            <Tab key="installed" title={t('plugins.viewInstalled', 'Installed')} />
+            <Tab key="marketplace" title={t('plugins.viewMarketplace', 'Marketplace')} />
+          </Tabs>
+          {activeView === 'installed' && (
+            <Tooltip content={t('plugins.reload', 'Reload plugins')}>
+              <Button
+                size="sm"
+                variant="flat"
+                isIconOnly
+                isLoading={reloading}
+                isDisabled={hasUnsavedChanges}
+                onPress={handleReload}
+                aria-label={t('plugins.reload', 'Reload plugins')}
+              >
+                <FontAwesomeIcon icon={faRotate} />
+              </Button>
+            </Tooltip>
+          )}
         </div>
       </div>
-      <PluginList
-        ref={pluginListRef}
-        onUnsavedChanges={handleUnsavedChanges}
-        emptyMessage={emptyMessage}
-      />
-      <Divider className="my-1" />
-      <PluginLogPanel />
+
+      <div className={activeView === 'installed' ? 'flex flex-col gap-4' : 'hidden'}>
+        <div className="rounded-medium border border-divider bg-default-50/70 px-3 py-3">
+          <div className="flex flex-col gap-3">
+            <DirectoryField
+              label={t('plugins.directoryLabel', 'Plugin directory')}
+              value={runtimeInfo?.pluginDir}
+              loadingLabel={t('plugins.directoryLoading', 'Loading...')}
+              copied={copiedKey === 'pluginDir'}
+              canOpen={canOpenPath}
+              onCopy={() => { void handleCopyPath(runtimeInfo?.pluginDir, 'pluginDir'); }}
+              onOpen={() => { void handleOpenPath(runtimeInfo?.pluginDir); }}
+              copyLabel={t('plugins.copyPath', 'Copy path')}
+              copiedLabel={t('plugins.pathCopied', 'Copied')}
+              openLabel={t('plugins.openDirectory', 'Open folder')}
+            />
+            <DirectoryField
+              label={t('plugins.dataDirectoryLabel', 'Plugin data directory')}
+              value={runtimeInfo?.pluginDataDir}
+              loadingLabel={t('plugins.directoryLoading', 'Loading...')}
+              copied={copiedKey === 'pluginDataDir'}
+              canOpen={canOpenPath}
+              onCopy={() => { void handleCopyPath(runtimeInfo?.pluginDataDir, 'pluginDataDir'); }}
+              onOpen={() => { void handleOpenPath(runtimeInfo?.pluginDataDir); }}
+              copyLabel={t('plugins.copyPath', 'Copy path')}
+              copiedLabel={t('plugins.pathCopied', 'Copied')}
+              openLabel={t('plugins.openDirectory', 'Open folder')}
+            />
+            <div className="min-w-0">
+              <p className="text-xs leading-5 text-default-500">{runtimeHint}</p>
+              {runtimeInfo?.hostPluginDirHint && (
+                <p className="mt-1 text-xs leading-5 text-default-400">
+                  {t('plugins.directoryHostHint', {
+                    defaultValue: 'Official docker-compose host mapping: {{path}}',
+                    path: runtimeInfo.hostPluginDirHint,
+                  })}
+                </p>
+              )}
+              <p className="mt-2 text-xs leading-5 text-default-400">
+                {t(
+                  'plugins.dataDirectoryHint',
+                  'Plugin source files stay in the plugin directory, while runtime state and store files are written into the plugin data directory.',
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+        <PluginList
+          ref={pluginListRef}
+          onUnsavedChanges={handleUnsavedChanges}
+          emptyMessage={emptyMessage}
+          selectedPluginName={selectedInstalledPluginName}
+          selectedPluginRequestKey={installedPluginNavigationRequest?.nonce}
+          isVisible={activeView === 'installed'}
+          onSelectedPluginRequestHandled={handleInstalledPluginNavigationHandled}
+        />
+        <Divider className="my-1" />
+        <PluginLogPanel />
+      </div>
+
+      <div className={activeView === 'marketplace' ? 'block' : 'hidden'}>
+        <PluginMarketplace
+          isActive={activeView === 'marketplace'}
+          onOpenInstalledPlugin={handleOpenInstalledPlugin}
+        />
+      </div>
     </div>
   );
 });

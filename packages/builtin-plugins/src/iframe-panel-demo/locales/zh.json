@@ -1,7 +1,0 @@
-{
-  "pluginName": "iframe 面板演示",
-  "pluginDescription": "演示 iframe 自定义 UI 面板在操作员卡片和自动化面板中的使用。",
-  "liveMonitorPanel": "实时监控",
-  "quickControlsPanel": "快捷控制",
-  "statsPanel": "统计信息"
-}
