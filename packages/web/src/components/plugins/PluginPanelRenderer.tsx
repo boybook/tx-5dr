@@ -4,6 +4,8 @@ import { Card, CardBody, CardHeader } from '@heroui/react';
 import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
+import { usePluginPanelMeta } from '../../hooks/usePluginPanelMeta';
+import { resolvePluginLabelWithValues } from '../../utils/pluginLocales';
 import { PluginIframeHost } from './PluginIframeHost';
 
 interface PluginPanelRendererProps {
@@ -21,14 +23,26 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   pluginName,
   operatorId,
   panelId,
-  title,
+  title: staticTitle,
   component,
   pageId,
   variant = 'card',
 }) => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
+  const getMeta = usePluginPanelMeta();
   const [data, setData] = React.useState<unknown>(null);
+
+  const meta = getMeta(pluginName, operatorId, panelId);
+
+  if (meta.visible === false) {
+    return null;
+  }
+
+  const effectiveTitle = meta.title !== undefined && meta.title !== null
+    ? resolvePluginLabelWithValues(meta.title, pluginName, meta.titleValues)
+    : staticTitle;
+  const hasTitle = effectiveTitle.trim().length > 0;
 
   useWSEvent(connection.state.radioService, 'pluginData', (payload: Parameters<DigitalRadioEngineEvents['pluginData']>[0]) => {
     if (
@@ -52,10 +66,20 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
         />
       );
     }
+    if (!hasTitle) {
+      return (
+        <PluginIframeHost
+          pluginName={pluginName}
+          pageId={pageId}
+          params={{ operatorId }}
+          minHeight={0}
+        />
+      );
+    }
     return (
       <Card>
         <CardHeader className="pb-0 pt-2 px-3">
-          <span className="text-xs font-medium text-default-600">{title}</span>
+          <span className="text-xs font-medium text-default-600">{effectiveTitle}</span>
         </CardHeader>
         <CardBody className="p-0 overflow-hidden">
           <PluginIframeHost
@@ -74,7 +98,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
     return (
       <div className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2">
         <div className="mb-1 text-[11px] text-default-500">
-          {title}
+          {effectiveTitle}
         </div>
         {data === null ? (
           <div className="text-xs text-default-400 text-center py-1">
@@ -91,7 +115,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   return (
     <Card>
       <CardHeader className="pb-0 pt-2 px-3">
-        <span className="text-xs font-medium text-default-600">{title}</span>
+        <span className="text-xs font-medium text-default-600">{effectiveTitle}</span>
       </CardHeader>
       <CardBody className="pt-2">
         {data === null ? (

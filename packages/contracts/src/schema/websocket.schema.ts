@@ -179,6 +179,7 @@ export enum WSMessageType {
   PLUGIN_RUNTIME_LOG_HISTORY = 'pluginRuntimeLogHistory',
   PLUGIN_USER_ACTION = 'pluginUserAction',
   PLUGIN_PAGE_PUSH = 'pluginPagePush',
+  PLUGIN_PANEL_META = 'pluginPanelMeta',
 
   // ===== OpenWebRX SDR =====
   OPENWEBRX_LISTEN_STATUS = 'openwebrxListenStatus',
@@ -1465,6 +1466,7 @@ export interface DigitalRadioEngineEvents {
     action: string;
     data?: unknown;
   }) => void;
+  pluginPanelMeta: (data: import('./plugin.schema.js').PluginPanelMetaPayload) => void;
 
   // 内部子系统间通信事件（不通过 WebSocket 广播，用于 engine emitter 内部编排）
   encodeStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;

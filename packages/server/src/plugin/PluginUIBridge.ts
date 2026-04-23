@@ -48,6 +48,16 @@ export class PluginUIBridge implements UIBridge {
     });
   }
 
+  setPanelMeta(panelId: string, meta: import('@tx5dr/plugin-api').PanelMeta): void {
+    logger.debug(`Plugin UI meta: plugin=${this.pluginName}, panel=${panelId}`, meta);
+    this.eventEmitter.emit('pluginPanelMeta', {
+      pluginName: this.pluginName,
+      operatorId: this.operatorId,
+      panelId,
+      meta,
+    });
+  }
+
   registerPageHandler(handler: PluginUIHandler): void {
     this.pageHandler = handler;
     logger.debug(`Page handler registered for plugin=${this.pluginName}`);

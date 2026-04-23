@@ -56,6 +56,7 @@ export type {
   AutoTargetEligibilityReason,
   AutoTargetEligibilityDecision,
   UIBridge,
+  PanelMeta,
   PluginUIHandler,
   PluginUIRequestContext,
   PluginUIRequestUser,

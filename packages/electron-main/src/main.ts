@@ -1329,16 +1329,33 @@ async function createMainWindowOnly(): Promise<BrowserWindow> {
     }
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mainWindow.webContents.on('did-fail-load', (_event: any, errorCode: any, errorDescription: any, validatedURL: any) => {
-    logger.error(`page load failed: ${errorCode} - ${errorDescription} (${validatedURL})`);
-    errorType = 'UNKNOWN';
-    hasStartupError = true;
-    mainWindow.close();
-    const logPath = log.transports.file.getFile().path;
-    dialog.showErrorBox('TX-5DR - Page Load Failed',
-      `Error ${errorCode}: ${errorDescription}\nURL: ${validatedURL}\n\nLog file: ${logPath}`);
-  });
+  // Ignore subframe failures so broken plugin/external iframes do not get
+  // misclassified as a fatal app startup error.
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (
+      _event,
+      errorCode,
+      errorDescription,
+      validatedURL,
+      isMainFrame,
+    ) => {
+      if (!isMainFrame) {
+        logger.warn(`subframe load failed: ${errorCode} - ${errorDescription} (${validatedURL})`);
+        return;
+      }
+
+      logger.error(`page load failed: ${errorCode} - ${errorDescription} (${validatedURL})`);
+      errorType = 'UNKNOWN';
+      hasStartupError = true;
+      mainWindow.close();
+      const logPath = log.transports.file.getFile().path;
+      dialog.showErrorBox(
+        'TX-5DR - Page Load Failed',
+        `Error ${errorCode}: ${errorDescription}\nURL: ${validatedURL}\n\nLog file: ${logPath}`,
+      );
+    },
+  );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mainWindow.webContents.on('render-process-gone', (_event: any, details: any) => {

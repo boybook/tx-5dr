@@ -1,7 +1,8 @@
 import React from 'react';
 import { PluginPanelRenderer } from './PluginPanelRenderer';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
-import { resolvePluginLabel, resolvePluginName } from '../../utils/pluginLocales';
+import { usePluginPanelMeta } from '../../hooks/usePluginPanelMeta';
+import { resolvePluginLabel, resolvePluginLabelWithValues, resolvePluginName } from '../../utils/pluginLocales';
 import type { PluginPanelDescriptor } from '@tx5dr/contracts';
 
 interface OperatorPluginPanelsProps {
@@ -14,6 +15,7 @@ export function getOperatorPanelContainerClass(panel: PluginPanelDescriptor): st
 
 export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ operatorId }) => {
   const pluginSnapshot = usePluginSnapshot();
+  const getMeta = usePluginPanelMeta();
 
   const activePluginsWithPanels = React.useMemo(
     () => pluginSnapshot.plugins.filter((plugin) => {
@@ -42,13 +44,35 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
         const operatorPanels = (plugin.panels ?? []).filter(
           (panel) => !panel.slot || panel.slot === 'operator',
         );
+        const visiblePanels = operatorPanels.filter((panel) => {
+          const meta = getMeta(plugin.name, operatorId, panel.id);
+          return meta.visible !== false;
+        });
+        if (visiblePanels.length === 0) {
+          return null;
+        }
+        const resolvedTitles = visiblePanels.map((panel) => {
+          const meta = getMeta(plugin.name, operatorId, panel.id);
+          const staticTitle = resolvePluginLabel(panel.title, plugin.name);
+          if (meta.title !== undefined && meta.title !== null) {
+            return resolvePluginLabelWithValues(meta.title, plugin.name, meta.titleValues);
+          }
+          return staticTitle;
+        });
+        const isImmersiveIframeOnlySection = visiblePanels.length > 0
+          && visiblePanels.every((panel, index) => panel.component === 'iframe' && resolvedTitles[index]?.trim() === '');
+        const sectionTitle = isImmersiveIframeOnlySection
+          ? ''
+          : resolvePluginName(plugin.name, plugin.name);
         return (
-          <section key={plugin.name} className="space-y-2">
-            <div className="text-xs font-medium text-default-600">
-              {resolvePluginName(plugin.name, plugin.name)}
-            </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              {operatorPanels.map((panel) => (
+          <section key={plugin.name} className={isImmersiveIframeOnlySection ? '' : 'space-y-2'}>
+            {sectionTitle && (
+              <div className="text-xs font-medium text-default-600">
+                {sectionTitle}
+              </div>
+            )}
+            <div className={`grid md:grid-cols-2 ${isImmersiveIframeOnlySection ? 'gap-0' : 'gap-2'}`}>
+              {visiblePanels.map((panel, index) => (
                 <div
                   key={`${plugin.name}:${panel.id}`}
                   className={getOperatorPanelContainerClass(panel)}
@@ -57,7 +81,7 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
                     pluginName={plugin.name}
                     operatorId={operatorId}
                     panelId={panel.id}
-                    title={resolvePluginLabel(panel.title, plugin.name)}
+                    title={resolvedTitles[index] ?? ''}
                     component={panel.component}
                     pageId={panel.pageId}
                   />
