@@ -38,22 +38,91 @@ jobs:
         run: yarn install --immutable
 
       - name: Update package versions
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
           echo "Setting version to $VERSION"
-          for pkg in packages/plugin-api packages/create-tx5dr-plugin; do
-            sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$pkg/package.json"
-          done
+          node <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+
+          const version = process.env.VERSION;
+          const packageDirs = [
+            'packages/contracts',
+            'packages/core',
+            'packages/plugin-api',
+            'packages/create-tx5dr-plugin',
+          ];
+          const publishedVersions = new Map([
+            ['@tx5dr/contracts', version],
+            ['@tx5dr/core', version],
+            ['@tx5dr/plugin-api', version],
+            ['create-tx5dr-plugin', version],
+          ]);
+
+          for (const packageDir of packageDirs) {
+            const packageJsonPath = path.join(packageDir, 'package.json');
+            const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+            pkg.version = version;
+
+            for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
+              if (!pkg[field]) continue;
+              for (const [name, resolvedVersion] of publishedVersions.entries()) {
+                if (typeof pkg[field][name] === 'string' && pkg[field][name].startsWith('workspace:')) {
+                  pkg[field][name] = resolvedVersion;
+                }
+              }
+            }
+
+            if (pkg.devDependencies) {
+              for (const [name, spec] of Object.entries(pkg.devDependencies)) {
+                if (typeof spec === 'string' && spec.startsWith('workspace:')) {
+                  delete pkg.devDependencies[name];
+                }
+              }
+              if (Object.keys(pkg.devDependencies).length === 0) {
+                delete pkg.devDependencies;
+              }
+            }
+
+            fs.writeFileSync(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
+          }
+          EOF
 
       - name: Build packages
         run: |
           yarn workspace @tx5dr/contracts build
+          yarn workspace @tx5dr/core build
           yarn workspace @tx5dr/plugin-api build
           yarn workspace create-tx5dr-plugin build
 
       - name: Run tests
         run: |
           yarn workspace @tx5dr/plugin-api test
+
+      - name: Publish @tx5dr/contracts
+        run: |
+          cd packages/contracts
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npm pack --dry-run
+            echo "DRY RUN: would publish @tx5dr/contracts@${{ inputs.version }}"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @tx5dr/core
+        run: |
+          cd packages/core
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npm pack --dry-run
+            echo "DRY RUN: would publish @tx5dr/core@${{ inputs.version }}"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @tx5dr/plugin-api
         run: |
@@ -85,5 +154,11 @@ jobs:
           VERSION="${{ inputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "contracts-v${VERSION}"
+          git push origin "contracts-v${VERSION}"
+          git tag "core-v${VERSION}"
+          git push origin "core-v${VERSION}"
           git tag "plugin-api-v${VERSION}"
           git push origin "plugin-api-v${VERSION}"
+          git tag "create-tx5dr-plugin-v${VERSION}"
+          git push origin "create-tx5dr-plugin-v${VERSION}"
