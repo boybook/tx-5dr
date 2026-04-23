@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -19,6 +18,8 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('PluginMarketplaceInstaller');
 const execFileAsync = promisify(execFile);
 const ENTRY_FILE_CANDIDATES = ['plugin.js', 'plugin.mjs', 'index.js', 'index.mjs'] as const;
+const MARKETPLACE_TEMP_DIR_NAME = '.plugin-market-tmp';
+const MARKETPLACE_TEMP_DIR_PREFIX = 'install-';
 
 function ensureHexSha256(content: Uint8Array): string {
   return createHash('sha256').update(content).digest('hex');
@@ -30,10 +31,27 @@ function resolveSafeExtractPath(root: string, relativePath: string): string | nu
     return null;
   }
   const resolved = path.resolve(root, normalized);
-  if (!resolved.startsWith(root)) {
+  const normalizedRoot = path.resolve(root);
+  const relativeToRoot = path.relative(normalizedRoot, resolved);
+  if (relativeToRoot !== '' && (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot))) {
     return null;
   }
   return resolved;
+}
+
+function resolveMarketplaceWorkspaceBase(pluginDir: string): string {
+  const managedRoot = path.dirname(path.resolve(pluginDir));
+  const workspaceBase = resolveSafeExtractPath(managedRoot, MARKETPLACE_TEMP_DIR_NAME);
+  if (!workspaceBase) {
+    throw new Error(`Invalid plugin workspace root: ${pluginDir}`);
+  }
+  return workspaceBase;
+}
+
+async function createMarketplaceInstallWorkspace(pluginDir: string): Promise<string> {
+  const workspaceBase = resolveMarketplaceWorkspaceBase(pluginDir);
+  await fs.mkdir(workspaceBase, { recursive: true });
+  return fs.mkdtemp(path.join(workspaceBase, MARKETPLACE_TEMP_DIR_PREFIX));
 }
 
 async function extractZipArchive(archivePath: string, outputDir: string): Promise<void> {
@@ -117,6 +135,7 @@ async function replacePluginDirectory(nextPluginRoot: string, destinationDir: st
 
 async function downloadArchiveToTempFile(
   artifact: PluginMarketCatalogEntry,
+  pluginDir: string,
   options: {
     fetchImpl?: typeof fetch;
   } = {},
@@ -132,7 +151,7 @@ async function downloadArchiveToTempFile(
     throw new Error(`Plugin asset request failed: ${response.status} ${response.statusText}`);
   }
 
-  const tempRoot = await fs.mkdtemp(path.join(tmpdir(), 'tx5dr-plugin-market-'));
+  const tempRoot = await createMarketplaceInstallWorkspace(pluginDir);
   const archivePath = path.join(tempRoot, `${artifact.name}-${artifact.latestVersion}.zip`);
   const payload = new Uint8Array(await response.arrayBuffer());
   const checksum = ensureHexSha256(payload);
@@ -166,7 +185,7 @@ export async function installPluginFromMarketplace(
   } = {},
 ): Promise<PluginMarketInstallResult> {
   const artifact = await fetchMarketPluginEntry(pluginName, channel, options);
-  const { archivePath, checksum, tempRoot } = await downloadArchiveToTempFile(artifact, options);
+  const { archivePath, checksum, tempRoot } = await downloadArchiveToTempFile(artifact, pluginDir, options);
 
   try {
     if (checksum.toLowerCase() !== artifact.sha256.toLowerCase()) {
