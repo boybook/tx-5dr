@@ -163,9 +163,12 @@ export interface PluginDefinition {
    * render a custom HTML page and communicate via `invoke` / `onPush`.
    *
    * Each panel has a `slot` that controls where it renders: `'operator'` (the
-   * default, shown in the operator card) or `'automation'` (shown in the
-   * top-right automation popover). Panels may also declare a preferred
-   * `width`, such as `'full'`, so hosts can promote more important live panels.
+   * default, shown in the operator card), `'automation'` (shown in the
+   * top-right automation popover), `'main-right'` (the optional far-right main
+   * pane), `'voice-left-top'` (above the voice frequency card), or
+   * `'voice-right-top'` (the tabbed top area of the voice right panel). Panels
+   * may also declare a preferred `width`, such as `'full'`, so hosts can
+   * promote more important live panels.
    */
   panels?: PluginPanelDescriptor[];
 

@@ -27,6 +27,7 @@ interface PluginIframeHostProps {
   /** Arbitrary key-value params forwarded to the iframe as URL query and init message. */
   params?: Record<string, string>;
   minHeight?: number;
+  fillHeight?: boolean;
   className?: string;
 }
 
@@ -61,6 +62,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   pageId,
   params,
   minHeight = 300,
+  fillHeight = false,
   className,
 }) => {
   const { i18n } = useTranslation();
@@ -290,7 +292,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
           break;
 
         case 'tx5dr:resize':
-          if (typeof msg.height === 'number' && msg.height > 0) {
+          if (!fillHeight && typeof msg.height === 'number' && msg.height > 0) {
             setHeight(Math.max(msg.height, minHeight));
           }
           break;
@@ -309,7 +311,7 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [handleFileRequest, handleInvoke, handleStoreRequest, minHeight]);
+  }, [fillHeight, handleFileRequest, handleInvoke, handleStoreRequest, minHeight]);
 
   // Send init message when iframe loads
   const handleIframeLoad = useCallback(() => {
@@ -423,7 +425,17 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
   );
 
   return (
-    <div className={className} style={{ position: 'relative', minHeight }}>
+    <div
+      className={className}
+      style={{
+        position: 'relative',
+        minHeight: fillHeight ? 0 : minHeight,
+        height: fillHeight ? '100%' : undefined,
+        display: fillHeight ? 'flex' : undefined,
+        flexDirection: fillHeight ? 'column' : undefined,
+        flex: fillHeight ? '1 1 auto' : undefined,
+      }}
+    >
       {loading && (
         <div className="absolute inset-0 overflow-hidden rounded-[14px] border border-default-200/60 bg-content1/85">
           <div className="flex h-full min-h-[inherit] flex-col justify-between p-3">
@@ -446,7 +458,9 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
         sandbox="allow-scripts allow-same-origin allow-forms"
         style={{
           width: '100%',
-          height,
+          height: fillHeight ? '100%' : height,
+          flex: fillHeight ? '1 1 auto' : undefined,
+          minHeight: fillHeight ? 0 : undefined,
           border: 'none',
           background: 'transparent',
           display: loading ? 'none' : 'block',

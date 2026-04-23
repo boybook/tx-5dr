@@ -16,8 +16,11 @@ interface PluginPanelRendererProps {
   title: string;
   component: 'table' | 'key-value' | 'chart' | 'log' | 'iframe';
   pageId?: string;
-  /** 'card' wraps in a Card (operator panel), 'inline' renders bare (automation popover). */
-  variant?: 'card' | 'inline';
+  /** 'card' wraps in a Card, 'inline' renders compact chrome, 'pane' is full-bleed host content. */
+  variant?: 'card' | 'inline' | 'pane';
+  minHeight?: number;
+  fillHeight?: boolean;
+  className?: string;
   initialPanelMeta?: PluginPanelMetaPayload[];
 }
 
@@ -30,6 +33,9 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   component,
   pageId,
   variant = 'card',
+  minHeight = 0,
+  fillHeight = false,
+  className,
   initialPanelMeta = [],
 }) => {
   const { t } = useTranslation('settings');
@@ -60,6 +66,19 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
 
   // --- iframe panel ---
   if (component === 'iframe' && pageId) {
+    if (variant === 'pane') {
+      return (
+        <PluginIframeHost
+          key={`${pluginName}:${pageId}:${pluginGeneration}`}
+          pluginName={pluginName}
+          pageId={pageId}
+          params={{ operatorId }}
+          minHeight={minHeight}
+          fillHeight={fillHeight}
+          className={className}
+        />
+      );
+    }
     if (variant === 'inline') {
       return (
         <div className="rounded-md border border-default-200/70 bg-content1 overflow-hidden">
@@ -73,7 +92,9 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
             pluginName={pluginName}
             pageId={pageId}
             params={{ operatorId }}
-            minHeight={64}
+            minHeight={Math.max(minHeight, 64)}
+            fillHeight={fillHeight}
+            className={className}
           />
         </div>
       );
@@ -91,10 +112,27 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
             pluginName={pluginName}
             pageId={pageId}
             params={{ operatorId }}
-            minHeight={0}
+            minHeight={minHeight}
+            fillHeight={fillHeight}
+            className={className}
           />
         </CardBody>
       </Card>
+    );
+  }
+
+  // --- full-bleed pane variant ---
+  if (variant === 'pane') {
+    return (
+      <div className={className}>
+        {data === null ? (
+          <div className="flex h-full min-h-[inherit] items-center justify-center text-xs text-default-400">
+            {t('plugins.noData', 'No data yet')}
+          </div>
+        ) : (
+          <PanelContent component={component} data={data} />
+        )}
+      </div>
     );
   }
 

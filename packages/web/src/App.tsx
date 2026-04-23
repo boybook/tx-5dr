@@ -4,7 +4,9 @@ import { RightLayout } from './layout/RightLayout';
 import { VoiceLeftLayout } from './layout/VoiceLeftLayout';
 import { VoiceRightLayout } from './layout/VoiceRightLayout';
 import { SplitLayout } from './components/common/SplitLayout';
-import { RadioProvider, useRadioState, useProfiles, useConnection } from './store/radioStore';
+import { MainRightPluginPane } from './components/plugins/MainRightPluginPane';
+import { useVisiblePluginPanelsForSlot } from './components/plugins/pluginPanelSlots';
+import { RadioProvider, useRadioState, useProfiles, useConnection, useCurrentOperatorId, useOperators } from './store/radioStore';
 import { AuthProvider, useAuth, useHasMinRole } from './store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTheme } from './hooks/useTheme';
@@ -24,7 +26,11 @@ function AppContent() {
   const { pttStatus, engineMode } = state;
   const { profiles, profilesLoaded } = useProfiles();
   const { state: connectionState } = useConnection();
+  const { currentOperatorId } = useCurrentOperatorId();
+  const { operators } = useOperators();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
+  const activeOperatorId = currentOperatorId || operators[0]?.id || null;
+  const mainRightPanels = useVisiblePluginPanelsForSlot(activeOperatorId, 'main-right');
 
   // 初次连接状态：未曾连接成功时，显示专用页面代替空 UI
   if (!connectionState.wasEverConnected) {
@@ -62,9 +68,19 @@ function AppContent() {
       <SplitLayout
         leftContent={isVoiceMode ? <VoiceLeftLayout /> : <LeftLayout />}
         rightContent={isVoiceMode ? <VoiceRightLayout /> : <RightLayout />}
+        extraContent={activeOperatorId ? (
+          <MainRightPluginPane
+            operatorId={activeOperatorId}
+            entries={mainRightPanels}
+          />
+        ) : null}
+        extraEnabled={mainRightPanels.length > 0}
         defaultLeftWidth={isVoiceMode ? 30 : 50}
         minLeftWidth={25}
         maxLeftWidth={isVoiceMode ? 50 : 75}
+        defaultExtraWidth={26}
+        minExtraWidth={18}
+        maxExtraWidth={38}
       />
 
       {/* 服务器断连蒙层：仅在曾经连接成功后断线时显示，避免首次加载闪烁 */}

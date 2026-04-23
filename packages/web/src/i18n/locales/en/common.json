@@ -178,7 +178,8 @@
   "splitLayout": {
     "decode": "Decode",
     "call": "Call",
-    "pageSwitch": "Page Switch"
+    "pageSwitch": "Page Switch",
+    "plugin": "Plugin"
   },
   "webgl": {
     "notSupported": "WebGL is not supported",
@@ -519,5 +520,8 @@
     "clientCount": "{{count}} client(s) connected",
     "networkAddress": "Network access URL:",
     "sameNetworkHint": "Ensure devices are on the same LAN"
+  },
+  "voice": {
+    "qsoTab": "QSOs"
   }
 }
