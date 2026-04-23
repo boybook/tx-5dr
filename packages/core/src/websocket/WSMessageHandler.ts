@@ -98,6 +98,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.PLUGIN_RUNTIME_LOG]: 'pluginRuntimeLog',
   [WSMessageType.PLUGIN_RUNTIME_LOG_HISTORY]: 'pluginRuntimeLogHistory',
   [WSMessageType.PLUGIN_PAGE_PUSH]: 'pluginPagePush',
+  [WSMessageType.PLUGIN_PANEL_META]: 'pluginPanelMeta',
 };
 
 /**
