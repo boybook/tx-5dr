@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, CardBody, CardHeader } from '@heroui/react';
-import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, PluginPanelMetaPayload } from '@tx5dr/contracts';
 import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { usePluginPanelMeta } from '../../hooks/usePluginPanelMeta';
@@ -12,25 +12,29 @@ interface PluginPanelRendererProps {
   pluginName: string;
   operatorId: string;
   panelId: string;
+  pluginGeneration?: number;
   title: string;
   component: 'table' | 'key-value' | 'chart' | 'log' | 'iframe';
   pageId?: string;
   /** 'card' wraps in a Card (operator panel), 'inline' renders bare (automation popover). */
   variant?: 'card' | 'inline';
+  initialPanelMeta?: PluginPanelMetaPayload[];
 }
 
 export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   pluginName,
   operatorId,
   panelId,
+  pluginGeneration = 0,
   title: staticTitle,
   component,
   pageId,
   variant = 'card',
+  initialPanelMeta = [],
 }) => {
   const { t } = useTranslation('settings');
   const connection = useConnection();
-  const getMeta = usePluginPanelMeta();
+  const getMeta = usePluginPanelMeta(initialPanelMeta);
   const [data, setData] = React.useState<unknown>(null);
 
   const meta = getMeta(pluginName, operatorId, panelId);
@@ -65,6 +69,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
             </div>
           )}
           <PluginIframeHost
+            key={`${pluginName}:${pageId}:${pluginGeneration}`}
             pluginName={pluginName}
             pageId={pageId}
             params={{ operatorId }}
@@ -82,6 +87,7 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
         )}
         <CardBody className="p-0 overflow-hidden">
           <PluginIframeHost
+            key={`${pluginName}:${pageId}:${pluginGeneration}`}
             pluginName={pluginName}
             pageId={pageId}
             params={{ operatorId }}

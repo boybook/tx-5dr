@@ -6,6 +6,7 @@ import type {
   PluginUIInstanceTarget,
 } from '@tx5dr/plugin-api';
 import type {
+  PluginPanelMetaPayload,
   PluginSource,
   PluginStatus,
   PluginSystemSnapshot,
@@ -203,11 +204,13 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
 export function toPluginSystemSnapshot(
   state: PluginSystemRuntimeState,
   plugins: PluginStatus[],
+  panelMeta: PluginPanelMetaPayload[],
 ): PluginSystemSnapshot {
   return {
     state: state.state,
     generation: state.generation,
     lastError: state.lastError,
     plugins,
+    panelMeta,
   };
 }

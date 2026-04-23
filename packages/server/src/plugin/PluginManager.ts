@@ -1,5 +1,6 @@
 import type {
   DigitalRadioEngineEvents,
+  PluginPanelMetaPayload,
   PluginRuntimeLogEntry,
   PluginStatus,
   PluginSystemSnapshot,
@@ -69,6 +70,7 @@ export class PluginManager {
   private unsubscribeFns: Array<() => void> = [];
   private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
   private readonly pageSessions = new PluginPageSessionStore();
+  private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
   private pluginRuntimeLogHistory: PluginRuntimeLogEntry[] = [];
 
   private systemState: PluginSystemRuntimeState = {
@@ -93,7 +95,7 @@ export class PluginManager {
     };
     deps.listPluginPageSessions = (pluginName, instanceTarget, pageId) =>
       this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
-    this.contextFactory = new PluginContextFactory(deps);
+    this.contextFactory = new PluginContextFactory(deps, (payload) => this.recordPanelMeta(payload));
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
       (operatorId) => this.getStrategyInstance(operatorId),
@@ -490,6 +492,7 @@ export class PluginManager {
     return toPluginSystemSnapshot(
       this.systemState,
       this.getPluginStatuses(),
+      this.getPanelMetaSnapshot(),
     );
   }
 
@@ -1079,6 +1082,37 @@ export class PluginManager {
     this.deps.eventEmitter.emit('pluginList', snapshot);
   }
 
+  private getPanelMetaSnapshot(): PluginPanelMetaPayload[] {
+    return Array.from(this.panelMetaState.values()).map((entry) => ({
+      ...entry,
+      meta: { ...entry.meta },
+    }));
+  }
+
+  private getPanelMetaKey(pluginName: string, operatorId: string, panelId: string): string {
+    return `${pluginName}:${operatorId}:${panelId}`;
+  }
+
+  private recordPanelMeta(payload: PluginPanelMetaPayload): void {
+    const key = this.getPanelMetaKey(payload.pluginName, payload.operatorId, payload.panelId);
+    this.panelMetaState.set(key, {
+      ...payload,
+      meta: { ...payload.meta },
+    });
+  }
+
+  private clearPanelMetaForInstance(instance: PluginInstance): void {
+    const operatorId = instance.scope.kind === 'operator'
+      ? instance.scope.operatorId
+      : GLOBAL_PLUGIN_SCOPE_ID;
+    const prefix = `${instance.plugin.definition.name}:${operatorId}:`;
+    for (const key of this.panelMetaState.keys()) {
+      if (key.startsWith(prefix)) {
+        this.panelMetaState.delete(key);
+      }
+    }
+  }
+
   private broadcastStatusChanged(pluginName: string): void {
     const plugin = this.loadedPlugins.get(pluginName);
     if (!plugin) return;
@@ -1102,6 +1136,7 @@ export class PluginManager {
     const hook = instance.plugin.definition.onLoad;
     if (!hook) return;
     try {
+      this.clearPanelMetaForInstance(instance);
       this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
       // Run legacy migration for built-in plugins before onLoad
       if (instance.plugin.isBuiltIn) {
@@ -1147,6 +1182,7 @@ export class PluginManager {
         logger.warn(`onUnload error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
       }
     }
+    this.clearPanelMetaForInstance(instance);
     this._logbookSyncHost.unregisterByPlugin(instance.plugin.definition.name);
     instance.ctx.timers.clearAll();
     // PluginContextFactory 总是创建 PluginStorageProvider 实例（实现 FlushableKVStore）

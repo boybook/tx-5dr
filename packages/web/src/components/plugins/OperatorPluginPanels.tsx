@@ -15,7 +15,7 @@ export function getOperatorPanelContainerClass(panel: PluginPanelDescriptor): st
 
 export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ operatorId }) => {
   const pluginSnapshot = usePluginSnapshot();
-  const getMeta = usePluginPanelMeta();
+  const getMeta = usePluginPanelMeta(pluginSnapshot.panelMeta);
 
   const activePluginsWithPanels = React.useMemo(
     () => pluginSnapshot.plugins.filter((plugin) => {
@@ -81,9 +81,11 @@ export const OperatorPluginPanels: React.FC<OperatorPluginPanelsProps> = ({ oper
                     pluginName={plugin.name}
                     operatorId={operatorId}
                     panelId={panel.id}
+                    pluginGeneration={pluginSnapshot.generation}
                     title={resolvedTitles[index] ?? ''}
                     component={panel.component}
                     pageId={panel.pageId}
+                    initialPanelMeta={pluginSnapshot.panelMeta}
                   />
                 </div>
               ))}

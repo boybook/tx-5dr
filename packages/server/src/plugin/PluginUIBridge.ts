@@ -6,7 +6,7 @@ import type {
   PluginUIPageSessionInfo,
 } from '@tx5dr/plugin-api';
 import type { EventEmitter } from 'eventemitter3';
-import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, PluginPanelMetaPayload } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import type { PluginPageSession } from './PluginPageSessionStore.js';
 
@@ -32,6 +32,7 @@ export class PluginUIBridge implements UIBridge {
       instanceTarget: PluginUIInstanceTarget,
       pageId?: string,
     ) => PluginPageSession[],
+    private readonly onPanelMeta?: (payload: PluginPanelMetaPayload) => void,
   ) {
     this.operatorId = instanceTarget.kind === 'operator'
       ? instanceTarget.operatorId
@@ -50,12 +51,14 @@ export class PluginUIBridge implements UIBridge {
 
   setPanelMeta(panelId: string, meta: import('@tx5dr/plugin-api').PanelMeta): void {
     logger.debug(`Plugin UI meta: plugin=${this.pluginName}, panel=${panelId}`, meta);
-    this.eventEmitter.emit('pluginPanelMeta', {
+    const payload: PluginPanelMetaPayload = {
       pluginName: this.pluginName,
       operatorId: this.operatorId,
       panelId,
       meta,
-    });
+    };
+    this.onPanelMeta?.(payload);
+    this.eventEmitter.emit('pluginPanelMeta', payload);
   }
 
   registerPageHandler(handler: PluginUIHandler): void {

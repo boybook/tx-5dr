@@ -393,10 +393,32 @@ const PluginMarketInstallRecordInternalSchema = z.object({
 export const PluginSystemStateSchema = z.enum(['ready', 'reloading', 'error']);
 export type PluginSystemState = z.infer<typeof PluginSystemStateSchema>;
 
+/**
+ * Dynamic plugin panel metadata pushed by runtime code.
+ */
+export const PluginPanelMetaSchema = z.object({
+  title: z.string().nullable().optional(),
+  titleValues: z.record(z.unknown()).optional(),
+  visible: z.boolean().optional(),
+});
+export type PluginPanelMeta = z.infer<typeof PluginPanelMetaSchema>;
+
+/**
+ * Plugin panel metadata payload for websocket deltas and initial snapshots.
+ */
+export const PluginPanelMetaPayloadSchema = z.object({
+  pluginName: z.string(),
+  operatorId: z.string(),
+  panelId: z.string(),
+  meta: PluginPanelMetaSchema,
+});
+export type PluginPanelMetaPayload = z.infer<typeof PluginPanelMetaPayloadSchema>;
+
 export const PluginSystemSnapshotSchema = z.object({
   state: PluginSystemStateSchema,
   generation: z.number().int().nonnegative(),
   plugins: z.array(PluginStatusSchema),
+  panelMeta: z.array(PluginPanelMetaPayloadSchema).optional().default([]),
   lastError: z.string().optional(),
 });
 export type PluginSystemSnapshot = z.infer<typeof PluginSystemSnapshotSchema>;
@@ -572,21 +594,6 @@ export const PluginRuntimeLogHistoryPayloadSchema = z.object({
   entries: z.array(PluginRuntimeLogEntrySchema),
 });
 export type PluginRuntimeLogHistoryPayload = z.infer<typeof PluginRuntimeLogHistoryPayloadSchema>;
-
-/**
- * 插件面板元数据推送载荷（ctx.ui.setPanelMeta() 发送到前端）
- */
-export const PluginPanelMetaPayloadSchema = z.object({
-  pluginName: z.string(),
-  operatorId: z.string(),
-  panelId: z.string(),
-  meta: z.object({
-    title: z.string().nullable().optional(),
-    titleValues: z.record(z.unknown()).optional(),
-    visible: z.boolean().optional(),
-  }),
-});
-export type PluginPanelMetaPayload = z.infer<typeof PluginPanelMetaPayloadSchema>;
 
 /**
  * 插件用户操作载荷（前端 → 后端）
