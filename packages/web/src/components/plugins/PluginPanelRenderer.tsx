@@ -58,29 +58,28 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   if (component === 'iframe' && pageId) {
     if (variant === 'inline') {
       return (
-        <PluginIframeHost
-          pluginName={pluginName}
-          pageId={pageId}
-          params={{ operatorId }}
-          minHeight={64}
-        />
-      );
-    }
-    if (!hasTitle) {
-      return (
-        <PluginIframeHost
-          pluginName={pluginName}
-          pageId={pageId}
-          params={{ operatorId }}
-          minHeight={0}
-        />
+        <div className="rounded-md border border-default-200/70 bg-content1 overflow-hidden">
+          {hasTitle && (
+            <div className="px-2.5 pt-2 pb-0 text-[11px] text-default-500">
+              {effectiveTitle}
+            </div>
+          )}
+          <PluginIframeHost
+            pluginName={pluginName}
+            pageId={pageId}
+            params={{ operatorId }}
+            minHeight={64}
+          />
+        </div>
       );
     }
     return (
       <Card>
-        <CardHeader className="pb-0 pt-2 px-3">
-          <span className="text-xs font-medium text-default-600">{effectiveTitle}</span>
-        </CardHeader>
+        {hasTitle && (
+          <CardHeader className="pb-0 pt-2 px-3">
+            <span className="text-xs font-medium text-default-600">{effectiveTitle}</span>
+          </CardHeader>
+        )}
         <CardBody className="p-0 overflow-hidden">
           <PluginIframeHost
             pluginName={pluginName}
@@ -97,9 +96,11 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   if (variant === 'inline') {
     return (
       <div className="rounded-md border border-default-200/70 bg-content1 px-2.5 py-2">
-        <div className="mb-1 text-[11px] text-default-500">
-          {effectiveTitle}
-        </div>
+        {hasTitle && (
+          <div className="mb-1 text-[11px] text-default-500">
+            {effectiveTitle}
+          </div>
+        )}
         {data === null ? (
           <div className="text-xs text-default-400 text-center py-1">
             {t('plugins.noData', 'No data yet')}
@@ -114,9 +115,11 @@ export const PluginPanelRenderer: React.FC<PluginPanelRendererProps> = ({
   // --- structured panel: card variant (default) ---
   return (
     <Card>
-      <CardHeader className="pb-0 pt-2 px-3">
-        <span className="text-xs font-medium text-default-600">{effectiveTitle}</span>
-      </CardHeader>
+      {hasTitle && (
+        <CardHeader className="pb-0 pt-2 px-3">
+          <span className="text-xs font-medium text-default-600">{effectiveTitle}</span>
+        </CardHeader>
+      )}
       <CardBody className="pt-2">
         {data === null ? (
           <div className="text-xs text-default-400 text-center py-2">
