@@ -13,6 +13,7 @@ import { PLUGIN_SOURCE_FILE_NAME } from '../plugin-source.js';
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
+const MARKETPLACE_TEMP_DIR_NAME = '.plugin-market-tmp';
 
 async function makeTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -34,7 +35,24 @@ async function createPluginArchive(root: string, pluginName: string, version: st
   return archivePath;
 }
 
+async function expectMarketplaceWorkspaceEmpty(root: string): Promise<void> {
+  const workspaceDir = path.join(root, MARKETPLACE_TEMP_DIR_NAME);
+  const entries = await fs.readdir(workspaceDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  });
+
+  if (entries === null) {
+    return;
+  }
+
+  expect(entries).toEqual([]);
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -67,6 +85,7 @@ describe('plugin marketplace installer', () => {
         ],
       }), { status: 200 }))
       .mockResolvedValueOnce(new Response(artifactBytes, { status: 200 }));
+    const mkdtempSpy = vi.spyOn(fs, 'mkdtemp');
 
     const result = await installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
       fetchImpl,
@@ -91,6 +110,8 @@ describe('plugin marketplace installer', () => {
       version: '1.0.0',
       channel: 'stable',
     });
+    expect(mkdtempSpy).toHaveBeenCalledWith(path.join(root, MARKETPLACE_TEMP_DIR_NAME, 'install-'));
+    await expectMarketplaceWorkspaceEmpty(root);
   });
 
   it('updates an existing installed plugin by replacing the runtime directory', async () => {
@@ -146,6 +167,44 @@ describe('plugin marketplace installer', () => {
       version: '1.1.0',
       channel: 'nightly',
     });
+    await expectMarketplaceWorkspaceEmpty(root);
+  });
+
+  it('cleans up the managed temp workspace after an invalid marketplace archive fails', async () => {
+    const root = await makeTempDir('tx5dr-market-invalid-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+
+    const invalidArtifactBytes = Buffer.from('not-a-zip-archive', 'utf8');
+    const sha256 = (await import('node:crypto')).createHash('sha256').update(invalidArtifactBytes).digest('hex');
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: '2026-04-22T12:00:00.000Z',
+        channel: 'stable',
+        plugins: [
+          {
+            name: 'hello-plugin',
+            title: 'Hello Plugin',
+            description: 'test plugin',
+            latestVersion: '1.0.0',
+            minHostVersion: '1.0.0',
+            artifactUrl: 'https://cdn.example.com/hello-plugin-1.0.0.zip',
+            sha256,
+            size: invalidArtifactBytes.length,
+            publishedAt: '2026-04-22T12:00:00.000Z',
+          },
+        ],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(invalidArtifactBytes, { status: 200 }));
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toThrow();
+
+    await expect(fs.access(path.join(pluginDir, 'hello-plugin'))).rejects.toThrow();
+    await expectMarketplaceWorkspaceEmpty(root);
   });
 
   it('uninstalls plugin code but leaves plugin-data untouched', async () => {
