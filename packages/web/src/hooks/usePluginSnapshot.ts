@@ -12,6 +12,7 @@ const EMPTY_SNAPSHOT: PluginSystemSnapshot = {
   state: 'ready',
   generation: 0,
   plugins: [],
+  panelMeta: [],
 };
 
 export function usePluginSnapshot(): PluginSystemSnapshot {

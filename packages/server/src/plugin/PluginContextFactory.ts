@@ -7,6 +7,7 @@ import type {
 import type {
   LogBookStatistics,
   PluginLogEntry,
+  PluginPanelMetaPayload,
   ModeDescriptor,
   PluginUIPageDescriptor,
 } from '@tx5dr/contracts';
@@ -25,7 +26,10 @@ import type { LoadedPlugin, PluginManagerDeps } from './types.js';
  * 为插件实例创建 PluginContext。
  */
 export class PluginContextFactory {
-  constructor(private deps: PluginManagerDeps) {}
+  constructor(
+    private deps: PluginManagerDeps,
+    private readonly onPanelMeta?: (payload: PluginPanelMetaPayload) => void,
+  ) {}
 
   async create(
     plugin: LoadedPlugin,
@@ -51,6 +55,7 @@ export class PluginContextFactory {
       this.deps.eventEmitter,
       (pluginName, instanceTarget, pageId) =>
         this.deps.listPluginPageSessions?.(pluginName, instanceTarget, pageId) ?? [],
+      this.onPanelMeta,
     );
     const pluginLogger = this.createLogger(plugin.definition.name);
     const operatorControl = this.createOperatorControl(operatorId, instanceScope);

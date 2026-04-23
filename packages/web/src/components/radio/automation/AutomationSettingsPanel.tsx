@@ -111,7 +111,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   const { t } = useTranslation('settings');
   const connection = useConnection();
   const pluginSnapshot = usePluginSnapshot();
-  const getMeta = usePluginPanelMeta();
+  const getMeta = usePluginPanelMeta(pluginSnapshot.panelMeta);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string>('');
   const [draftSettingsMap, setDraftSettingsMap] = React.useState<Record<string, Record<string, unknown>>>({});
@@ -578,10 +578,12 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                     pluginName={plugin.name}
                     operatorId={operatorId}
                     panelId={panel.id}
+                    pluginGeneration={pluginSnapshot.generation}
                     title={resolvePluginLabel(panel.title, plugin.name)}
                     component={panel.component}
                     pageId={panel.pageId}
                     variant="inline"
+                    initialPanelMeta={pluginSnapshot.panelMeta}
                   />
                 ))}
             </div>

@@ -9,15 +9,30 @@ export interface PanelMeta {
   visible?: boolean;
 }
 
-export function usePluginPanelMeta() {
+function getPanelMetaKey(payload: Pick<PluginPanelMetaPayload, 'pluginName' | 'operatorId' | 'panelId'>): string {
+  return `${payload.pluginName}:${payload.operatorId}:${payload.panelId}`;
+}
+
+function buildMetaMap(entries: PluginPanelMetaPayload[]): Record<string, PanelMeta> {
+  return Object.fromEntries(entries.map((entry) => [
+    getPanelMetaKey(entry),
+    { ...entry.meta },
+  ]));
+}
+
+export function usePluginPanelMeta(initialEntries: PluginPanelMetaPayload[] = []) {
   const connection = useConnection();
-  const [metaMap, setMetaMap] = React.useState<Record<string, PanelMeta>>({});
+  const [metaMap, setMetaMap] = React.useState<Record<string, PanelMeta>>(() => buildMetaMap(initialEntries));
+
+  React.useEffect(() => {
+    setMetaMap(buildMetaMap(initialEntries));
+  }, [initialEntries]);
 
   useWSEvent(
     connection.state.radioService,
     'pluginPanelMeta',
     (payload: PluginPanelMetaPayload) => {
-      const key = `${payload.pluginName}:${payload.operatorId}:${payload.panelId}`;
+      const key = getPanelMetaKey(payload);
       setMetaMap((prev) => ({
         ...prev,
         [key]: { ...prev[key], ...payload.meta },

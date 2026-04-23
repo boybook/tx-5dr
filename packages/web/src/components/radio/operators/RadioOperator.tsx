@@ -79,6 +79,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   // 展开/收起时隙内容的状态
   const [isSlotContentExpanded, setIsSlotContentExpanded] = React.useState(false);
+  const expandedContentRef = React.useRef<HTMLDivElement | null>(null);
+  const [expandedContentHeight, setExpandedContentHeight] = React.useState(0);
   
   // 本地发射周期状态（用于乐观更新）
   const [localTransmitCycles, setLocalTransmitCycles] = React.useState<number[]>(() => {
@@ -114,6 +116,26 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       hasRequestedForceStopRef.current = false;
     }
   }, [operatorStatus.isInActivePTT, operatorStatus.isTransmitting]);
+
+  React.useLayoutEffect(() => {
+    const element = expandedContentRef.current;
+    if (!element) {
+      return;
+    }
+
+    const syncExpandedHeight = () => {
+      setExpandedContentHeight(element.scrollHeight);
+    };
+
+    syncExpandedHeight();
+
+    const observer = new ResizeObserver(() => {
+      syncExpandedHeight();
+    });
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, []);
 
   // 判断是否显示立即停止发射Popover
   // 条件：当前操作员已关闭发射开关，但其音频仍在被实际播放
@@ -667,13 +689,14 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       {/* 下半部分 - 带展开/收起动画 */}
       <div
         className={`overflow-hidden transition-all duration-[250ms] ${
-          isSelected ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'
+          isSelected ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
-          transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
+          maxHeight: isSelected ? `${Math.max(expandedContentHeight, 1)}px` : '0px',
+          transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
         }}
       >
-        <div className="p-4 flex flex-col gap-3">
+        <div ref={expandedContentRef} className="p-4 flex flex-col gap-3">
         {/* 第一行 - 发射周期和发射槽位选择 */}
         <div className="flex gap-2 -my-1">
           <div className="flex items-center gap-0">
