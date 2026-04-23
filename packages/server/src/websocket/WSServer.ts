@@ -1990,6 +1990,9 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('pluginPagePush', (data) => {
       this.broadcast(WSMessageType.PLUGIN_PAGE_PUSH, data);
     });
+    this.digitalRadioEngine.on('pluginPanelMeta' as any, (data: any) => {
+      this.broadcast(WSMessageType.PLUGIN_PANEL_META, data);
+    });
 
     // Forward profile select requests from engine to clients
     this.digitalRadioEngine.on('openwebrxProfileSelectRequest' as any, (data: any) => {

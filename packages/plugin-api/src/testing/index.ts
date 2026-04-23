@@ -230,6 +230,9 @@ export function createMockUIBridge(): MockUIBridge {
       existing.push(data);
       sentData.set(panelId, existing);
     },
+    setPanelMeta(_panelId: string, _meta: Parameters<UIBridge['setPanelMeta']>[1]): void {
+      // no-op in mock
+    },
     registerPageHandler(_handler: Parameters<UIBridge['registerPageHandler']>[0]): void {
       // no-op in mock
     },

@@ -21,6 +21,7 @@ import { createLogger } from '../../../utils/logger';
 import { pluginApi } from '../../../utils/pluginApi';
 import { resolvePluginLabel, resolvePluginName } from '../../../utils/pluginLocales';
 import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import { usePluginPanelMeta } from '../../../hooks/usePluginPanelMeta';
 import {
   arePluginSettingValuesEqual,
   getPluginSettingValidationIssue,
@@ -110,6 +111,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
   const { t } = useTranslation('settings');
   const connection = useConnection();
   const pluginSnapshot = usePluginSnapshot();
+  const getMeta = usePluginPanelMeta();
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string>('');
   const [draftSettingsMap, setDraftSettingsMap] = React.useState<Record<string, Record<string, unknown>>>({});
@@ -176,7 +178,8 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
         const actions = plugin.plugin.quickActions ?? [];
         const panels = (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation');
-        if (settings.length === 0 && actions.length === 0 && panels.length === 0) {
+        const visiblePanels = panels.filter((p) => getMeta(plugin.name, operatorId, p.id).visible !== false);
+        if (settings.length === 0 && actions.length === 0 && visiblePanels.length === 0) {
           return false;
         }
         if (plugin.plugin.type === 'strategy') {
@@ -198,7 +201,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         actions: plugin.plugin.quickActions ?? [],
         panels: (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation'),
       }));
-  }, [operatorId, pluginSnapshot.plugins]);
+  }, [getMeta, operatorId, pluginSnapshot.plugins]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -565,20 +568,22 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
             </div>
           )}
 
-          {panels.length > 0 && (
+          {panels.filter((p) => getMeta(plugin.name, operatorId, p.id).visible !== false).length > 0 && (
             <div className="space-y-1.5">
-              {panels.map((panel) => (
-                <PluginPanelRenderer
-                  key={`${plugin.name}:${panel.id}`}
-                  pluginName={plugin.name}
-                  operatorId={operatorId}
-                  panelId={panel.id}
-                  title={resolvePluginLabel(panel.title, plugin.name)}
-                  component={panel.component}
-                  pageId={panel.pageId}
-                  variant="inline"
-                />
-              ))}
+              {panels
+                .filter((p) => getMeta(plugin.name, operatorId, p.id).visible !== false)
+                .map((panel) => (
+                  <PluginPanelRenderer
+                    key={`${plugin.name}:${panel.id}`}
+                    pluginName={plugin.name}
+                    operatorId={operatorId}
+                    panelId={panel.id}
+                    title={resolvePluginLabel(panel.title, plugin.name)}
+                    component={panel.component}
+                    pageId={panel.pageId}
+                    variant="inline"
+                  />
+                ))}
             </div>
           )}
 

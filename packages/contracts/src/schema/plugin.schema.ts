@@ -574,6 +574,21 @@ export const PluginRuntimeLogHistoryPayloadSchema = z.object({
 export type PluginRuntimeLogHistoryPayload = z.infer<typeof PluginRuntimeLogHistoryPayloadSchema>;
 
 /**
+ * 插件面板元数据推送载荷（ctx.ui.setPanelMeta() 发送到前端）
+ */
+export const PluginPanelMetaPayloadSchema = z.object({
+  pluginName: z.string(),
+  operatorId: z.string(),
+  panelId: z.string(),
+  meta: z.object({
+    title: z.string().nullable().optional(),
+    titleValues: z.record(z.unknown()).optional(),
+    visible: z.boolean().optional(),
+  }),
+});
+export type PluginPanelMetaPayload = z.infer<typeof PluginPanelMetaPayloadSchema>;
+
+/**
  * 插件用户操作载荷（前端 → 后端）
  */
 export const PluginUserActionPayloadSchema = z.object({

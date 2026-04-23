@@ -355,6 +355,34 @@ export interface BandAccess {
 }
 
 /**
+ * Dynamic metadata for a plugin panel, sent via {@link UIBridge.setPanelMeta}.
+ */
+export interface PanelMeta {
+  /**
+   * Overrides the panel title dynamically.
+   * - i18n key (e.g. `"statusActive"`): resolved from the plugin's locale namespace
+   * - literal string (e.g. `"Active: 5"`): displayed as-is
+   * - empty string `""`: hides the title bar entirely (immersive)
+   * - null / undefined: reverts to the statically declared title
+   */
+  title?: string | null;
+
+  /**
+   * Interpolation values for the title when it is an i18n key.
+   * For example, if the plugin locale defines `"statusActive": "Active: {{count}}"`,
+   * pass `{ count: 5 }` to render "Active: 5".
+   */
+  titleValues?: Record<string, unknown>;
+
+  /**
+   * Controls whether the panel is visible.
+   * - false: the host hides the panel entirely (it takes no layout space)
+   * - true / undefined: normal display
+   */
+  visible?: boolean;
+}
+
+/**
  * Minimal bridge for sending structured data to plugin panels in the frontend.
  */
 export interface UIBridge {
@@ -362,6 +390,13 @@ export interface UIBridge {
    * Publishes new panel data for the given declarative panel id.
    */
   send(panelId: string, data: unknown): void;
+
+  /**
+   * Updates the panel's display metadata at runtime. All fields are optional
+   * and use patch semantics. Subsequent calls overwrite previous values for the
+   * same keys.
+   */
+  setPanelMeta(panelId: string, meta: PanelMeta): void;
 
   /**
    * Registers a handler for custom messages sent from iframe UI pages via the
