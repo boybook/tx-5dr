@@ -455,7 +455,17 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
         ref={iframeRef}
         src={iframeSrc}
         onLoad={handleIframeLoad}
-        sandbox="allow-scripts allow-same-origin allow-forms"
+        sandbox={[
+          'allow-scripts',
+          'allow-same-origin',
+          'allow-forms',
+          'allow-popups',
+          'allow-popups-to-escape-sandbox',
+          'allow-downloads',
+          // Some embedded sites rely on user-activated storage access during
+          // redirect/login flows inside nested iframes.
+          'allow-storage-access-by-user-activation',
+        ].join(' ')}
         style={{
           width: '100%',
           height: fillHeight ? '100%' : height,

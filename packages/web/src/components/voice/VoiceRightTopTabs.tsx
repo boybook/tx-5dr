@@ -79,14 +79,14 @@ export const VoiceRightTopTabs: React.FC<VoiceRightTopTabsProps> = ({
   return (
     <div className="h-full flex flex-col">
       <div
-        className="flex-shrink-0 flex justify-between items-center p-1 px-2 md:p-2 md:px-3"
+        className="flex-shrink-0 flex items-center gap-2 p-1 px-2 md:p-2 md:px-3 select-none"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties & { WebkitAppRegion: string }}
       >
-        <div
-          className="min-w-0 flex-1"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
-        >
-          {showTabBar ? (
+        {showTabBar ? (
+          <div
+            className="min-w-0 flex-shrink overflow-hidden"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
+          >
             <div className="flex flex-wrap items-center gap-1">
               {items.map((item) => {
                 const selected = item.key === selectedKey;
@@ -107,12 +107,11 @@ export const VoiceRightTopTabs: React.FC<VoiceRightTopTabsProps> = ({
                 );
               })}
             </div>
-          ) : (
-            <div />
-          )}
-        </div>
+          </div>
+        ) : null}
+        <div className="min-w-0 flex-1 self-stretch" aria-hidden="true" />
         <div
-          className="flex items-center gap-2"
+          className="flex flex-shrink-0 items-center gap-2"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}
         >
           {toolbarRight}
