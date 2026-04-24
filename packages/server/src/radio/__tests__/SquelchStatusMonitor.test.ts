@@ -91,4 +91,79 @@ describe('SquelchStatusMonitor', () => {
     });
     monitor.stop();
   });
+  it('disables polling only for the failing connection and resumes after reconnect', async () => {
+    const failingConnection = {
+      getDCD: vi.fn().mockRejectedValue(new Error('getDCD unavailable')),
+    };
+    const recoveredConnection = {
+      getDCD: vi.fn().mockResolvedValue(false),
+    };
+    const radioManager = {
+      isConnected: vi.fn().mockReturnValue(true),
+      isPTTActive: vi.fn().mockReturnValue(false),
+      getCurrentConnection: vi.fn().mockReturnValue(failingConnection),
+    };
+    const emitStatus = vi.fn();
+    const monitor = new SquelchStatusMonitor({
+      radioManager: radioManager as any,
+      getEngineMode: () => 'voice',
+      emitStatus,
+    });
+
+    monitor.reevaluate();
+    await vi.advanceTimersByTimeAsync(900);
+
+    expect(failingConnection.getDCD).toHaveBeenCalledTimes(3);
+    expect(emitStatus).toHaveBeenLastCalledWith(expect.objectContaining({
+      supported: false,
+      source: 'unsupported',
+    }));
+
+    vi.clearAllMocks();
+    monitor.reevaluate();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(failingConnection.getDCD).not.toHaveBeenCalled();
+
+    radioManager.getCurrentConnection.mockReturnValue(recoveredConnection);
+    monitor.reevaluate();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(recoveredConnection.getDCD).toHaveBeenCalled();
+    expect(emitStatus).toHaveBeenCalledWith(expect.objectContaining({
+      supported: true,
+      open: false,
+      muted: true,
+      source: 'hamlib-dcd',
+    }));
+    monitor.stop();
+  });
+
+  it('publishes unsupported on disconnect but preserves squelch state while only PTT pauses polling', async () => {
+    const { radioManager, connection } = createRadioManager();
+    const emitStatus = vi.fn();
+    const monitor = new SquelchStatusMonitor({
+      radioManager: radioManager as any,
+      getEngineMode: () => 'voice',
+      emitStatus,
+    });
+
+    monitor.reevaluate();
+    await vi.runOnlyPendingTimersAsync();
+    expect(emitStatus).toHaveBeenLastCalledWith(expect.objectContaining({ supported: true }));
+
+    vi.clearAllMocks();
+    radioManager.isPTTActive.mockReturnValue(true);
+    monitor.reevaluate();
+    expect(emitStatus).not.toHaveBeenCalled();
+    expect(monitor.getSnapshot()).toMatchObject({ supported: true, open: true });
+
+    vi.clearAllMocks();
+    radioManager.isPTTActive.mockReturnValue(false);
+    radioManager.isConnected.mockReturnValue(false);
+    monitor.reevaluate();
+    expect(connection.getDCD).not.toHaveBeenCalled();
+    expect(emitStatus).toHaveBeenCalledWith(expect.objectContaining({ supported: false }));
+    monitor.stop();
+  });
+
 });
