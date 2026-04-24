@@ -69,6 +69,7 @@ export function connectionReducer(state: ConnectionState, action: ConnectionActi
 export const initialRadioState: RadioState = {
   isDecoding: false,
   currentMode: null,
+  currentSlotInfo: null,
   systemStatus: null,
   operators: [],
   currentOperatorId: null,
@@ -163,6 +164,12 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         ...state,
         operators: action.payload || []
       };
+
+    case 'slotStart':
+      return {
+        ...state,
+        currentSlotInfo: action.payload,
+      };
     
     case 'operatorStatusUpdate':
       return {
@@ -174,16 +181,15 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
               JSON.stringify(op.context) !== JSON.stringify(action.payload.context);
             const hasSlotChanged = op.currentSlot !== action.payload.currentSlot;
             const hasTransmittingChanged = op.isTransmitting !== action.payload.isTransmitting;
+            const hasActivePTTChanged = op.isInActivePTT !== action.payload.isInActivePTT;
             const hasSlotsChanged =
               JSON.stringify(op.slots) !== JSON.stringify(action.payload.slots);
-            const hasCycleInfoChanged =
-              JSON.stringify(op.cycleInfo) !== JSON.stringify(action.payload.cycleInfo);
             const hasTransmitCyclesChanged =
               JSON.stringify(op.transmitCycles) !== JSON.stringify(action.payload.transmitCycles);
 
             // 如果没有实质性变化，返回原对象（避免重新渲染）
             if (!hasContextChanged && !hasSlotChanged && !hasTransmittingChanged &&
-                !hasSlotsChanged && !hasCycleInfoChanged && !hasTransmitCyclesChanged) {
+                !hasActivePTTChanged && !hasSlotsChanged && !hasTransmitCyclesChanged) {
               return op;
             }
 

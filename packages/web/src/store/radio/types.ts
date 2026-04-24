@@ -28,6 +28,7 @@ import type {
   ClockStatusSummary,
   AudioSidecarStatusPayload,
   SquelchStatus,
+  SlotInfo,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -50,6 +51,7 @@ export type ConnectionAction =
 export interface RadioState {
   isDecoding: boolean;
   currentMode: ModeDescriptor | null;
+  currentSlotInfo: SlotInfo | null;
   systemStatus: SystemStatus | null;
   operators: OperatorStatus[];
   currentOperatorId: string | null;
@@ -144,6 +146,7 @@ export type RadioAction =
   | { type: 'decodeError'; payload: DecodeErrorData }
   | { type: 'error'; payload: Error }
   | { type: 'operatorsList'; payload: OperatorStatus[] }
+  | { type: 'slotStart'; payload: SlotInfo }
   | { type: 'operatorStatusUpdate'; payload: OperatorStatus }
   | { type: 'setCurrentOperator'; payload: string | null }
   | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; coreCapabilities?: CoreRadioCapabilities; coreCapabilityDiagnostics?: CoreCapabilityDiagnostics; meterCapabilities?: MeterCapabilities; tunerCapabilities?: TunerCapabilities } }

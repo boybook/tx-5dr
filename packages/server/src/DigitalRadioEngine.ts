@@ -8,6 +8,7 @@ import {
   MODES,
   type LogbookAnalysis,
   type ModeDescriptor,
+  type SlotInfo,
   type SlotPack,
   type DigitalRadioEngineEvents,
   type EngineMode,
@@ -882,6 +883,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getSquelchStatus(): SquelchStatus {
     return this.squelchStatusMonitor.getSnapshot();
+  }
+
+  public getCurrentSlotInfo(): SlotInfo | null {
+    return this.slotClock?.getCurrentSlotInfo() ?? null;
   }
 
   public getStatus() {

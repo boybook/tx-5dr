@@ -14,6 +14,7 @@ import type {
   RadioErrorEventData,
   RadioProfile,
   SlotPack,
+  SlotInfo,
   SpectrumCapabilities,
   SpectrumFrame,
   SpectrumSessionState,
@@ -101,6 +102,25 @@ export function createRadioEventMap({
   spectrumNegotiation,
   logger,
 }: CreateRadioEventMapDeps): Record<string, (data?: unknown) => void> {
+  const pendingOperatorStatuses = new Map<string, OperatorStatus>();
+  let operatorStatusFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushPendingOperatorStatuses = () => {
+    if (operatorStatusFlushTimer) {
+      clearTimeout(operatorStatusFlushTimer);
+      operatorStatusFlushTimer = null;
+    }
+
+    if (pendingOperatorStatuses.size === 0) {
+      return;
+    }
+
+    for (const status of pendingOperatorStatuses.values()) {
+      radioDispatch({ type: 'operatorStatusUpdate', payload: status });
+    }
+    pendingOperatorStatuses.clear();
+  };
+
   const refreshRealtimeState = () => {
     radioService.getSystemStatus();
 
@@ -196,6 +216,10 @@ export function createRadioEventMap({
       if (nextMode.name !== previousModeName) {
         spectrumNegotiation.applyModeDrivenSpectrumNegotiation();
       }
+    },
+    slotStart: (data: unknown) => {
+      flushPendingOperatorStatuses();
+      radioDispatch({ type: 'slotStart', payload: data as SlotInfo });
     },
     systemStatus: (data: unknown) => {
       const status = data as SystemStatus;
@@ -370,18 +394,28 @@ export function createRadioEventMap({
       }
     },
     operatorStatusUpdate: (() => {
-      const pending = new Map<string, OperatorStatus>();
-      let timer: ReturnType<typeof setTimeout> | null = null;
       return (data: unknown) => {
         const status = data as OperatorStatus;
-        pending.set(status.id, status);
-        if (!timer) {
-          timer = setTimeout(() => {
-            for (const s of pending.values()) {
+
+        const current = radioStateRef.current.operators.find((op) => op.id === status.id);
+        const isHighPriority = !current ||
+          current.isTransmitting !== status.isTransmitting ||
+          current.isInActivePTT !== status.isInActivePTT;
+
+        if (isHighPriority) {
+          pendingOperatorStatuses.delete(status.id);
+          radioDispatch({ type: 'operatorStatusUpdate', payload: status });
+          return;
+        }
+
+        pendingOperatorStatuses.set(status.id, status);
+        if (!operatorStatusFlushTimer) {
+          operatorStatusFlushTimer = setTimeout(() => {
+            for (const s of pendingOperatorStatuses.values()) {
               radioDispatch({ type: 'operatorStatusUpdate', payload: s });
             }
-            pending.clear();
-            timer = null;
+            pendingOperatorStatuses.clear();
+            operatorStatusFlushTimer = null;
           }, 200);
         }
       };

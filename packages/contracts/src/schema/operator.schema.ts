@@ -85,11 +85,6 @@ export const RadioOperatorStatusResponseSchema = z.object({
       }).optional(),
       availableSlots: z.array(z.string()).optional(),
     }).optional(),
-    cycleInfo: z.object({
-      currentCycle: z.number(),
-      isTransmitCycle: z.boolean(),
-      cycleProgress: z.number().min(0).max(1),
-    }).optional(),
     slots: z.object({
       TX1: z.string().optional(),
       TX2: z.string().optional(),

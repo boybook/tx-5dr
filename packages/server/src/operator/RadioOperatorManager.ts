@@ -277,7 +277,6 @@ export class RadioOperatorManager {
       this._pluginManager?.invalidateDecisionMessageSet(data.operatorId);
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
-      // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
     };
     this.eventEmitter.on('operatorTransmitCyclesChanged', handleOperatorTransmitCyclesChanged);
@@ -301,7 +300,6 @@ export class RadioOperatorManager {
       });
       // 立即检查并触发发射
       this.checkAndTriggerTransmission(data.operatorId);
-      // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
     };
     this.eventEmitter.on('operatorSlotChanged', handleOperatorSlotChanged);
@@ -327,7 +325,6 @@ export class RadioOperatorManager {
         logger.debug(`Currently transmitting on slot ${data.slot}, updating content immediately`);
         this.checkAndTriggerTransmission(data.operatorId);
       }
-      // 发送状态更新到前端
       this.emitOperatorStatusUpdate(data.operatorId);
     };
     this.eventEmitter.on('operatorSlotContentChanged', handleOperatorSlotContentChanged);
@@ -547,31 +544,7 @@ export class RadioOperatorManager {
    */
   getOperatorsStatus(): any[] {
     const operators = [];
-    const currentMode = this.getCurrentMode();
-    
     for (const [id, operator] of this.operators.entries()) {
-      // 计算周期信息（用 ms 直接算，避免 FT4 亚秒级时隙被截断到上一秒造成颜色/进度错位）
-      let cycleInfo;
-      if (this.isRunning) {
-        const now = this.clockSource.now();
-        const slotMs = currentMode.slotMs;
-        const currentSlotStartMs = Math.floor(now / slotMs) * slotMs;
-        const cycleProgress = (now - currentSlotStartMs) / slotMs;
-
-        const cycleNumber = CycleUtils.calculateCycleNumberFromMs(currentSlotStartMs, slotMs);
-        const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
-          operator.getTransmitCycles(),
-          currentSlotStartMs,
-          slotMs
-        );
-
-        cycleInfo = {
-          currentCycle: cycleNumber,
-          isTransmitCycle,
-          cycleProgress
-        };
-      }
-      
       const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(id);
       const currentSlot = runtimeState?.currentSlot ?? 'TX6';
       const slots = runtimeState?.slots;
@@ -608,7 +581,6 @@ export class RadioOperatorManager {
           context: runtimeState.context as any,
           availableSlots: runtimeState.availableSlots,
         } : undefined,
-        cycleInfo,
         slots,
         transmitCycles: operator.getTransmitCycles(),
       });
@@ -758,11 +730,11 @@ export class RadioOperatorManager {
     
     operator.start();
     logger.info(`Started transmitting for operator ${operatorId}`);
-    
+    this.emitOperatorStatusUpdate(operatorId);
+
     // 立即检查并触发发射（如果在发射周期内）
     this.checkAndTriggerTransmission(operatorId);
     
-    this.emitOperatorStatusUpdate(operatorId);
   }
 
   /**
@@ -880,8 +852,6 @@ export class RadioOperatorManager {
 
     if (!isTransmitCycle) {
       logger.debug(`Operator ${operatorId} is not in a transmit cycle`);
-      // 即使不在发射周期内，也需要更新状态（cycleInfo会显示isTransmitCycle=false）
-      this.emitOperatorStatusUpdate(operatorId);
       return;
     }
 
@@ -889,8 +859,6 @@ export class RadioOperatorManager {
     const transmission = this._pluginManager?.getCurrentTransmission(operatorId);
     if (!transmission) {
       logger.debug(`Operator ${operatorId} has no transmission content`);
-      // 即使没有发射内容，也需要更新状态
-      this.emitOperatorStatusUpdate(operatorId);
       return;
     }
     
@@ -916,8 +884,6 @@ export class RadioOperatorManager {
     } as any;
     this.processPendingTransmissions(slotInfo);
     
-    // 发送状态更新到前端
-    this.emitOperatorStatusUpdate(operatorId);
   }
 
   /**
@@ -1384,7 +1350,6 @@ export class RadioOperatorManager {
    * - isActive, isTransmitting, currentSlot（核心状态）
    * - context（完整上下文）
    * - strategy.state（策略状态）
-   * - cycleInfo（周期信息）
    * - slots（时隙内容）
    * - transmitCycles（发射周期）
    *
@@ -1401,7 +1366,6 @@ export class RadioOperatorManager {
       currentSlot: status.currentSlot,
       context: status.context,
       strategyState: status.strategy?.state,
-      cycleInfo: status.cycleInfo,
       slots: status.slots,
       transmitCycles: status.transmitCycles,
     };

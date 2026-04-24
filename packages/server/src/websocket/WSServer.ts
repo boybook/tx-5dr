@@ -446,6 +446,7 @@ export class WSServer extends WSMessageHandler {
     this.digitalRadioEngine.on('modeChanged', (mode) => {
       logger.debug('modeChanged event received, broadcasting to clients');
       this.broadcastModeChanged(mode);
+      this.broadcastCurrentSlotSnapshot();
     });
 
     this.digitalRadioEngine.on('slotStart', (slotInfo) => {
@@ -1437,6 +1438,30 @@ export class WSServer extends WSMessageHandler {
   }
 
   /**
+   * 向单个新连接补发当前时隙快照，用于处理中途打开页面的进度同步。
+   */
+  private sendCurrentSlotSnapshot(connection: WSConnection): void {
+    const slotInfo = this.digitalRadioEngine.getCurrentSlotInfo();
+    if (!slotInfo) {
+      return;
+    }
+
+    connection.send(WSMessageType.SLOT_START, slotInfo);
+  }
+
+  /**
+   * 广播当前时隙快照，用于模式切换后立即同步新的 slotMs/phase。
+   */
+  private broadcastCurrentSlotSnapshot(): void {
+    const slotInfo = this.digitalRadioEngine.getCurrentSlotInfo();
+    if (!slotInfo) {
+      return;
+    }
+
+    this.broadcastSlotStart(slotInfo);
+  }
+
+  /**
    * 广播子窗口事件
    */
   broadcastSubWindow(windowInfo: SubWindowInfo): void {
@@ -2140,6 +2165,7 @@ export class WSServer extends WSMessageHandler {
       if (status.isRunning) {
         connection.send(WSMessageType.SYSTEM_STATUS, status);
         logger.debug(`sent running status sync to connection ${connectionId}`);
+        this.sendCurrentSlotSnapshot(connection);
       }
 
       // 4.5 推送当前实际静噪状态
