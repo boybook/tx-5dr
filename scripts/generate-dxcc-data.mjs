@@ -101,6 +101,32 @@ function buildPrefixRegex(prefixes) {
   return `^(${sorted.map(escapeRegex).join('|')})[A-Z0-9/]*$`;
 }
 
+function splitPrefixes(prefixText) {
+  return String(prefixText || '')
+    .split(',')
+    .map((prefix) => prefix.trim())
+    .filter(Boolean);
+}
+
+function hasNarrowPreviousPrefixOverlap(prefixes, previousPrefixes) {
+  return prefixes.some((prefix) =>
+    previousPrefixes.some((previousPrefix) => prefix !== previousPrefix && previousPrefix.startsWith(prefix))
+  );
+}
+
+function mergePreservedNarrowPrefixes(prefixes, previousPrefixText) {
+  const merged = new Set(prefixes);
+  const previousPrefixes = splitPrefixes(previousPrefixText);
+
+  for (const previousPrefix of previousPrefixes) {
+    if (prefixes.some((prefix) => prefix !== previousPrefix && previousPrefix.startsWith(prefix))) {
+      merged.add(previousPrefix);
+    }
+  }
+
+  return [...merged];
+}
+
 function parseARRLCurrentDeleted(text) {
   const lines = text.split(/\r?\n/);
   let section = null;
@@ -292,7 +318,10 @@ function mergeDXCCData(baseData, sources) {
       ? null
       : sources.byCode?.get(entity.entityCode)
         || (currentNameCounts.get(entity.name) === 1 ? sources.byName?.get(entity.name) : null);
-    const prefixes = ctyEntry?.prefixes?.length ? ctyEntry.prefixes : null;
+    const sourcePrefixes = ctyEntry?.prefixes?.length ? ctyEntry.prefixes : null;
+    const prefixes = sourcePrefixes && hasNarrowPreviousPrefixOverlap(sourcePrefixes, splitPrefixes(entity.prefix))
+      ? mergePreservedNarrowPrefixes(sourcePrefixes, entity.prefix)
+      : sourcePrefixes;
 
     return {
       ...entity,
