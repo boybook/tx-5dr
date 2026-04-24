@@ -27,6 +27,7 @@ export class SquelchStatusMonitor {
   private lastStatus: SquelchStatus | null = null;
   private consecutiveErrors = 0;
   private pollInFlight = false;
+  private disabledForConnection: unknown = null;
 
   constructor(options: SquelchStatusMonitorOptions) {
     this.radioManager = options.radioManager;
@@ -35,15 +36,18 @@ export class SquelchStatusMonitor {
   }
 
   reevaluate(): void {
-    const shouldPoll = this.shouldPoll();
-    logger.debug('Squelch monitor reevaluate', { shouldPoll, engineMode: this.getEngineMode(), connected: this.radioManager.isConnected(), pttActive: this.radioManager.isPTTActive(), hasDCD: typeof this.radioManager.getCurrentConnection()?.getDCD === 'function' });
+    const connection = this.radioManager.getCurrentConnection();
+    const shouldPoll = this.shouldPoll(connection);
+    logger.debug('Squelch monitor reevaluate', { shouldPoll, engineMode: this.getEngineMode(), connected: this.radioManager.isConnected(), pttActive: this.radioManager.isPTTActive(), hasDCD: typeof connection?.getDCD === 'function', disabledForCurrentConnection: this.disabledForConnection === connection });
     if (shouldPoll) {
       this.startPolling();
       return;
     }
 
     this.stopPolling();
-    this.publishUnsupported();
+    if (!this.radioManager.isPTTActive()) {
+      this.publishUnsupported();
+    }
   }
 
   setPTTActive(active: boolean): void {
@@ -63,13 +67,15 @@ export class SquelchStatusMonitor {
     this.stopPolling();
     this.lastStatus = null;
     this.consecutiveErrors = 0;
+    this.disabledForConnection = null;
   }
 
-  private shouldPoll(): boolean {
+  private shouldPoll(connection = this.radioManager.getCurrentConnection()): boolean {
     if (this.getEngineMode() !== 'voice') return false;
     if (!this.radioManager.isConnected()) return false;
     if (this.radioManager.isPTTActive()) return false;
-    return typeof this.radioManager.getCurrentConnection()?.getDCD === 'function';
+    if (!connection || this.disabledForConnection === connection) return false;
+    return typeof connection.getDCD === 'function';
   }
 
   private startPolling(): void {
@@ -91,12 +97,12 @@ export class SquelchStatusMonitor {
 
   private async pollOnce(): Promise<void> {
     if (this.pollInFlight) return;
-    if (!this.shouldPoll()) {
+    const connection = this.radioManager.getCurrentConnection();
+    if (!this.shouldPoll(connection)) {
       this.reevaluate();
       return;
     }
 
-    const connection = this.radioManager.getCurrentConnection();
     if (!connection?.getDCD) {
       this.publishUnsupported();
       return;
@@ -106,6 +112,9 @@ export class SquelchStatusMonitor {
     try {
       const open = await connection.getDCD();
       this.consecutiveErrors = 0;
+      if (this.disabledForConnection === connection) {
+        this.disabledForConnection = null;
+      }
       this.publish({
         supported: true,
         open,
@@ -122,7 +131,8 @@ export class SquelchStatusMonitor {
       this.consecutiveErrors += 1;
       logger.debug('DCD poll failed', { error: message, consecutiveErrors: this.consecutiveErrors });
       if (this.consecutiveErrors >= 3) {
-        logger.warn('Disabling squelch DCD polling after repeated failures', { error: message });
+        logger.warn('Disabling squelch DCD polling for current radio connection after repeated failures', { error: message });
+        this.disabledForConnection = connection;
         this.stopPolling();
         this.publishUnsupported();
       }
