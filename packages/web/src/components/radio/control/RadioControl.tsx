@@ -3,7 +3,7 @@ import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, Pop
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faSatelliteDish, faPowerOff } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState } from '../../../store/radioStore';
+import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
@@ -487,6 +487,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const radioConnection = useRadioConnectionState();
   const radioMode = useRadioModeState();
   const { pttStatus, voicePttLock } = usePTTState();
+  const { state: radioState } = useRadioState();
   const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -1327,12 +1328,16 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     }
   };
 
-  // Voice PTT mute: mute monitor during voice transmission to prevent echo
+  // Voice monitor mute: TX has priority, then software squelch gates output gain.
   useEffect(() => {
-    if (radioMode.engineMode !== 'voice') return;
-    const shouldMute = pttStatus.isTransmitting;
-    audioMonitor.setVolume(shouldMute ? -60 : gainToDb(monitorVolume));
-  }, [pttStatus.isTransmitting, radioMode.engineMode, monitorVolume]);
+    const squelchStatus = radioState.squelchStatus;
+    const localVoiceTxActive = voiceCaptureController?.isPTTActive ?? false;
+    const isTransmitting = pttStatus.isTransmitting || localVoiceTxActive;
+    const shouldMute = radioMode.engineMode === 'voice'
+      && (isTransmitting || (squelchStatus.supported && squelchStatus.open === false));
+    const targetDb = shouldMute ? -60 : gainToDb(monitorVolume);
+    audioMonitor.setVolume(targetDb);
+  }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, radioMode.engineMode, monitorVolume, radioState.squelchStatus]);
 
   // 监听频率变化事件
   useEffect(() => {

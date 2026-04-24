@@ -1550,6 +1550,35 @@ export class HamlibConnection
     });
   }
 
+  /**
+   * 获取实际静噪/DCD 状态。
+   * true = squelch open / 有信号，false = squelch closed / 应软件静音。
+   */
+  async getDCD(): Promise<boolean> {
+    this.checkConnected();
+    const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+      this.ensureSession(activeSessionId);
+      try {
+        const value = (await Promise.race([
+          this.rig!.getDcd(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Get DCD timeout')), 1000)
+          ),
+        ])) as boolean;
+        this.lastSuccessfulOperation = Date.now();
+        return value;
+      } catch (error) {
+        throw this.convertOptionalOperationError(error, 'getDCD');
+      }
+    });
+
+    if (result === RADIO_IO_SKIPPED) {
+      throw new Error('DCD poll skipped because radio I/O is busy');
+    }
+
+    return result;
+  }
+
   async getMicGain(): Promise<number> {
     return this.runSerializedTask('getMicGain', async () => {
       this.checkConnected();

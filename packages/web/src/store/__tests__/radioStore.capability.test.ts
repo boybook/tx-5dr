@@ -84,6 +84,37 @@ describe('radioStore capability reducer', () => {
     expect(disconnectedState.capabilityStates.size).toBe(0);
   });
 
+
+  it('stores squelch status and resets it on disconnect', () => {
+    const withSquelch = radioReducer(initialRadioState, {
+      type: 'squelchStatusChanged',
+      payload: {
+        supported: true,
+        open: false,
+        muted: true,
+        source: 'hamlib-dcd',
+        updatedAt: 123,
+      },
+    });
+
+    expect(withSquelch.squelchStatus).toMatchObject({
+      supported: true,
+      open: false,
+      muted: true,
+    });
+
+    const disconnectedState = radioReducer(withSquelch, {
+      type: 'radioStatusUpdate',
+      payload: {
+        radioConnected: false,
+        status: RadioConnectionStatus.DISCONNECTED,
+        radioInfo: null,
+      },
+    });
+
+    expect(disconnectedState.squelchStatus).toEqual(initialRadioState.squelchStatus);
+  });
+
   it('marks meter visibility only after a real reading arrives and resets it on disconnect', () => {
     const withEmptyMeterPayload = radioReducer(initialRadioState, {
       type: 'meterData',

@@ -48,6 +48,9 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   // PTT状态相关事件
   [WSMessageType.PTT_STATUS_CHANGED]: 'pttStatusChanged',
 
+  // 电台实际静噪状态事件
+  [WSMessageType.SQUELCH_STATUS_CHANGED]: 'squelchStatusChanged',
+
   // 电台数值表相关事件
   [WSMessageType.METER_DATA]: 'meterData',
 

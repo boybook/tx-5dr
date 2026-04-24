@@ -629,6 +629,10 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.PTT_STATUS_CHANGED, data);
     });
 
+    this.digitalRadioEngine.on('squelchStatusChanged', (data) => {
+      this.broadcast(WSMessageType.SQUELCH_STATUS_CHANGED, data);
+    });
+
     // 监听电台数值表数据事件（通过事件总线，优化路径）
     globalEventBus.on('bus:meterData', (data) => {
       // 数值表数据频率较高，使用静默广播（不打印日志）
@@ -1224,6 +1228,13 @@ export class WSServer extends WSMessageHandler {
       });
     } catch (error) {
       logger.error('failed to send volume gain', error);
+    }
+
+    // 3.5 发送当前实际静噪状态
+    try {
+      connection.send(WSMessageType.SQUELCH_STATUS_CHANGED, this.digitalRadioEngine.getSquelchStatus());
+    } catch (error) {
+      logger.error('failed to send squelch status', error);
     }
 
     // 4. 发送当前电台连接状态（确保前端获取 connecting/reconnecting 等中间状态）
@@ -2129,6 +2140,13 @@ export class WSServer extends WSMessageHandler {
       if (status.isRunning) {
         connection.send(WSMessageType.SYSTEM_STATUS, status);
         logger.debug(`sent running status sync to connection ${connectionId}`);
+      }
+
+      // 4.5 推送当前实际静噪状态
+      try {
+        connection.send(WSMessageType.SQUELCH_STATUS_CHANGED, this.digitalRadioEngine.getSquelchStatus());
+      } catch (error) {
+        logger.warn('failed to send squelch status snapshot', error);
       }
 
       // 5. 推送当前能力快照（电台已连接时有意义，未连接时为空列表）

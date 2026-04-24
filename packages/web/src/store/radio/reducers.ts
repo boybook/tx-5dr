@@ -83,6 +83,13 @@ export const initialRadioState: RadioState = {
   },
   meterData: null,
   hasReceivedMeterData: false,
+  squelchStatus: {
+    supported: false,
+    open: null,
+    muted: false,
+    source: 'unsupported',
+    updatedAt: 0,
+  },
   meterCapabilities: null,
   tunerCapabilities: null,
   capabilityDescriptors: new Map<string, CapabilityDescriptor>(),
@@ -224,6 +231,7 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
           : null,
         meterData: shouldResetMeterTracking ? null : state.meterData,
         hasReceivedMeterData: shouldResetMeterTracking ? false : state.hasReceivedMeterData,
+        squelchStatus: action.payload.radioConnected ? state.squelchStatus : initialRadioState.squelchStatus,
         // 天调能力：连接时更新，断开时重置为 null
         // TODO: remove after capability system migration (Phase 3)
         tunerCapabilities: action.payload.radioConnected
@@ -293,6 +301,12 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         ...state,
         meterData: action.payload,
         hasReceivedMeterData: state.hasReceivedMeterData || hasAnyMeterReading(action.payload),
+      };
+
+    case 'squelchStatusChanged':
+      return {
+        ...state,
+        squelchStatus: action.payload,
       };
 
     case 'setProfiles': {

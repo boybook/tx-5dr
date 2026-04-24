@@ -342,6 +342,15 @@ export class RadioControllerAdapter implements RadioController {
       'getTuningStep',
     );
   }
+
+  async getDCD(): Promise<boolean> {
+    return this.readOptional(
+      (c) => c.getDCD,
+      (getter, c) => getter.call(c),
+      false,
+      'getDCD',
+    );
+  }
   async setTuningStep(stepHz: number): Promise<void> {
     return this.writeOptional(
       (c) => c.setTuningStep,

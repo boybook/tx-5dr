@@ -485,6 +485,13 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   setSQL?(value: number): Promise<void>;
 
   /**
+   * 获取实际静噪/DCD 状态。
+   * true = squelch open / 有信号，false = squelch closed / 应软件静音。
+   * @optional Hamlib: getDcd()
+   */
+  getDCD?(): Promise<boolean>;
+
+  /**
    * 获取 MIC 增益（0.0–1.0）
    * @optional Hamlib: getLevel('MICGAIN'), icom-wlan: CI-V 0x14 0x0F
    */
