@@ -482,3 +482,56 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(fakeLogManager.registerOperatorCallsign).toHaveBeenLastCalledWith('op1', 'BG7XTV');
   });
 });
+
+describe('RadioOperatorManager operator status payloads', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not include cycleInfo in operator status updates', async () => {
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      clockNow: 14_999,
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      frequency: 1000,
+      transmitCycles: [0],
+    } as RadioOperatorConfig);
+    manager.start();
+
+    const statusSpy = vi.fn();
+    eventEmitter.on('operatorStatusUpdate' as any, statusSpy);
+
+    manager.emitOperatorStatusUpdate('op1');
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy.mock.calls[0]?.[0]).not.toHaveProperty('cycleInfo');
+  });
+
+  it('does not rebroadcast operator status only because the clock moved to another slot', async () => {
+    const { manager, eventEmitter, clockSource } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      clockNow: 0,
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      frequency: 1000,
+      transmitCycles: [0],
+    } as RadioOperatorConfig);
+    manager.start();
+
+    const statusSpy = vi.fn();
+    eventEmitter.on('operatorStatusUpdate' as any, statusSpy);
+
+    manager.emitOperatorStatusUpdate('op1');
+    clockSource.now.mockReturnValue(MODES.FT8.slotMs);
+    manager.emitOperatorStatusUpdate('op1');
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+  });
+});

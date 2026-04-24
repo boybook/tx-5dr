@@ -538,11 +538,6 @@ export const OperatorStatusSchema = z.object({
     availableSlots: z.array(z.string()),
   }),
   runtime: StrategyRuntimeSnapshotSchema.optional(),
-  cycleInfo: z.object({
-    currentCycle: z.number(),
-    isTransmitCycle: z.boolean(),
-    cycleProgress: z.number().min(0).max(1), // 0-1 表示周期进度百分比
-  }).optional(),
   // TX1-TX6 时隙内容
   slots: z.object({
     TX1: z.string().optional(),

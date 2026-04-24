@@ -107,3 +107,64 @@ describe('WSServer initial frequency snapshot', () => {
     expect(Array.from(noSelectionCallsigns)).toEqual([]);
   });
 });
+
+describe('WSServer current slot handshake snapshot', () => {
+  it('sends the current slot snapshot to only the new connection', () => {
+    const slotInfo = {
+      id: 'FT8-42-630000',
+      startMs: 630000,
+      phaseMs: 7500,
+      driftMs: 0,
+      cycleNumber: 42,
+      utcSeconds: 630,
+      mode: 'FT8',
+    };
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = {
+      getCurrentSlotInfo: vi.fn(() => slotInfo),
+    };
+    const connection = {
+      send: vi.fn(),
+    };
+
+    (server as any).sendCurrentSlotSnapshot(connection);
+
+    expect(connection.send).toHaveBeenCalledWith('slotStart', slotInfo);
+  });
+
+  it('does not send a slot snapshot when no digital slot is active', () => {
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = {
+      getCurrentSlotInfo: vi.fn(() => null),
+    };
+    const connection = {
+      send: vi.fn(),
+    };
+
+    (server as any).sendCurrentSlotSnapshot(connection);
+
+    expect(connection.send).not.toHaveBeenCalled();
+  });
+
+
+  it('broadcasts a current slot snapshot after modeChanged', () => {
+    const slotInfo = {
+      id: 'FT4-84-630000',
+      startMs: 630000,
+      phaseMs: 2500,
+      driftMs: 0,
+      cycleNumber: 84,
+      utcSeconds: 630,
+      mode: 'FT4',
+    };
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = {
+      getCurrentSlotInfo: vi.fn(() => slotInfo),
+    };
+    server.broadcastSlotStart = vi.fn();
+
+    (server as any).broadcastCurrentSlotSnapshot();
+
+    expect(server.broadcastSlotStart).toHaveBeenCalledWith(slotInfo);
+  });
+});

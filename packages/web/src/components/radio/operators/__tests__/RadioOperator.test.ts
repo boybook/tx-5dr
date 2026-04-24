@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { OperatorStatus } from '@tx5dr/contracts';
+import type { OperatorStatus, SlotInfo } from '@tx5dr/contracts';
 
 import {
   getRadioOperatorProgressAnimation,
@@ -31,50 +31,55 @@ function createOperatorStatus(overrides: Partial<OperatorStatus> = {}): Operator
       TX6: 'CQ BG5DRB PM01',
     },
     transmitCycles: [0],
-    cycleInfo: {
-      currentCycle: 42,
-      isTransmitCycle: true,
-      cycleProgress: 0.25,
-    },
+    ...overrides,
+  };
+}
+
+function createSlotInfo(overrides: Partial<SlotInfo> = {}): SlotInfo {
+  return {
+    id: 'FT8-42-630000',
+    startMs: 630000,
+    phaseMs: 0,
+    driftMs: 0,
+    cycleNumber: 42,
+    utcSeconds: 630,
+    mode: 'FT8',
     ...overrides,
   };
 }
 
 describe('RadioOperator progress animation helpers', () => {
-  it('recomputes animation timing when cycleProgress advances within the same cycle', () => {
-    const style = getRadioOperatorProgressAnimation({
-      currentCycle: 42,
-      isTransmitCycle: true,
-      cycleProgress: 0.6,
-    }, 15000);
+  it('starts animation from the global slot phase sample', () => {
+    const style = getRadioOperatorProgressAnimation(createSlotInfo({ phaseMs: 9000 }), 15000);
 
     expect(style.animation).toBe('progress-bar 6000ms linear forwards');
     expect((style as Record<string, string>)['--progress-start']).toBe('40%');
   });
 
-  it('returns a disabled animation when cycleInfo is missing', () => {
+  it('returns a disabled animation when global slot info is missing', () => {
     expect(getRadioOperatorProgressAnimation(undefined, 15000)).toEqual({ animation: 'none' });
   });
 });
 
 describe('RadioOperator memo comparison', () => {
-  it('treats same-cycle progress changes as a meaningful update', () => {
-    const prev = createOperatorStatus();
-    const next = createOperatorStatus({
-      cycleInfo: {
-        currentCycle: 42,
-        isTransmitCycle: true,
-        cycleProgress: 0.55,
-      },
-    });
-
-    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
-  });
-
   it('keeps identical operator status snapshots memoized', () => {
     const prev = createOperatorStatus();
     const next = createOperatorStatus();
 
     expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(true);
+  });
+
+  it('treats active PTT changes as a meaningful update', () => {
+    const prev = createOperatorStatus({ isInActivePTT: false });
+    const next = createOperatorStatus({ isInActivePTT: true });
+
+    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
+
+  it('treats transmit cycle changes as a meaningful update', () => {
+    const prev = createOperatorStatus({ transmitCycles: [0] });
+    const next = createOperatorStatus({ transmitCycles: [1] });
+
+    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
   });
 });

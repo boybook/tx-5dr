@@ -29,6 +29,22 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
   const operatorCallsign = operatorStatus.context.myCall || 'N0CALL';
+  const currentSlotInfo = radio.state.currentSlotInfo;
+  const currentSlotMs = radio.state.currentMode?.slotMs ?? null;
+  const isCurrentTransmitCycle = React.useMemo(() => {
+    if (!currentSlotInfo || !currentSlotMs) {
+      return false;
+    }
+    return CycleUtils.isOperatorTransmitCycleFromMs(
+      operatorStatus.transmitCycles || [],
+      currentSlotInfo.startMs,
+      currentSlotMs,
+    );
+  }, [
+    currentSlotInfo?.startMs,
+    currentSlotMs,
+    JSON.stringify(operatorStatus.transmitCycles || []),
+  ]);
 
   // 判断当前卡片是否被选中
   const isSelected = currentOperatorId === operatorStatus.id;
@@ -428,31 +444,29 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   // 获取进度条颜色 - 颜色变化用 CSS transition 平滑过渡
   const getProgressColor = (): string => {
-    if (!operatorStatus.cycleInfo) {
+    if (!currentSlotInfo) {
       return 'var(--ft8-cycle-even-bg)';
     }
 
-    const { currentCycle, isTransmitCycle } = operatorStatus.cycleInfo;
-    const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
+    const isActuallyTransmitting = operatorStatus.isTransmitting && isCurrentTransmitCycle;
 
     if (isActuallyTransmitting) {
       return 'hsl(var(--heroui-danger) / 0.15)';
     }
 
-    const isEvenCycle = CycleUtils.isEvenCycle(currentCycle);
+    const isEvenCycle = CycleUtils.isEvenCycle(currentSlotInfo.cycleNumber);
     return isEvenCycle ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)';
   };
 
-  // 进度条动画样式 - 只在周期变化时重新计算，避免发射状态变化时重新触发动画
+  // 进度条动画由全局 slotStart 驱动，operatorStatusUpdate 不会重置周期进度。
   const progressAnimation = React.useMemo((): React.CSSProperties => {
     return getRadioOperatorProgressAnimation(
-      operatorStatus.cycleInfo,
-      radio.state.currentMode?.slotMs,
+      currentSlotInfo,
+      currentSlotMs,
     );
   }, [
-    operatorStatus.cycleInfo?.currentCycle,
-    operatorStatus.cycleInfo?.cycleProgress,
-    radio.state.currentMode?.slotMs,
+    currentSlotInfo?.id,
+    currentSlotMs,
   ]);
 
   // 选择空闲频率
@@ -574,7 +588,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         {/* 进度条遮罩层 - 仅在解码时显示 */}
         {radio.state.isDecoding && (
           <div
-            key={operatorStatus.cycleInfo?.currentCycle ?? 'idle'}
+            key={currentSlotInfo?.id ?? 'idle'}
             className="absolute inset-0 progress-bar-mask"
             style={progressAnimation}
           />
@@ -592,8 +606,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 );
               }
 
-              // 解码中但无周期信息
-              if (!operatorStatus.cycleInfo) {
+              // 解码中但无全局周期信息
+              if (!currentSlotInfo) {
                 return (
                   <div className="text-foreground opacity-65 font-bold text-lg">
                     {t('operator.listening', { callsign: operatorCallsign })}
@@ -601,8 +615,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 );
               }
 
-              const { isTransmitCycle } = operatorStatus.cycleInfo;
-              const isActuallyTransmitting = operatorStatus.isTransmitting && isTransmitCycle;
+              const isActuallyTransmitting = operatorStatus.isTransmitting && isCurrentTransmitCycle;
 
               return isActuallyTransmitting ? (
                 <div className="font-bold font-mono text-lg text-danger">
