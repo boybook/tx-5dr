@@ -3,9 +3,26 @@ version = 1
 name = "tx-5dr"
 
 [setup]
-script = ""
+script = '''
+set -euxo pipefail
+
+if command -v apt-get >/dev/null 2>&1; then
+  sudo_cmd=""
+  if [ "$(id -u)" -ne 0 ]; then
+    sudo_cmd="sudo"
+  fi
+
+  export DEBIAN_FRONTEND=noninteractive
+  $sudo_cmd apt-get update
+  $sudo_cmd apt-get install -y --no-install-recommends build-essential ca-certificates git libasound2-dev libhamlib-dev libhamlib4 libjack-jackd2-dev libopus-dev libpulse-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxinerama-dev libxrandr-dev pkg-config python3 python3-dev
+fi
+
+corepack enable
+corepack prepare yarn@4.9.1 --activate
+yarn install --immutable --network-timeout 300000
+'''
 
 [[actions]]
 name = "运行"
 icon = "run"
-command = "npm run dev:electron"
+command = "yarn dev:electron"
