@@ -10,14 +10,14 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "NODE_ENV=development tsx watch --watch-path=src src/index.ts",
-    "dev:prof": "NODE_ENV=development tsx --prof src/index.ts",
+    "dev": "NODE_ENV=development GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" tsx watch --watch-path=src src/index.ts",
+    "dev:prof": "NODE_ENV=development GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" tsx --prof src/index.ts",
     "clinic:doctor": "yarn build && clinic doctor -- node dist/index.js",
     "clinic:flame": "yarn build && clinic flame -- node dist/index.js",
     "clinic:bubble": "yarn build && clinic bubbleprof -- node dist/index.js",
     "clinic:heap": "yarn build && clinic heapprofiler -- node dist/index.js",
     "dev:check-native": "tsx src/scripts/check-native-modules.ts",
-    "start": "node dist/index.js",
+    "start": "GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" node dist/index.js",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run"
   },
