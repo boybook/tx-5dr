@@ -272,6 +272,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private lastKnownFrequency: number | null = null;
   private cachedTunerCapabilities: TunerCapabilities | null = null;
   private readonly postConnectSettleMs = 250;
+  private postFrequencyCapabilityRefresh: Promise<void> = Promise.resolve();
 
   /**
    * 统一电台控制能力管理器
@@ -802,6 +803,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       await this.connection.setFrequency(freq);
       this.markCoreCapabilitySupported('writeFrequency');
       this.updateKnownFrequency(freq);
+      this.queuePostFrequencyCapabilityRefresh('setFrequency');
       logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
       return true;
     } catch (error) {
@@ -839,6 +841,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (request.frequency !== undefined && result.frequencyApplied) {
         this.markCoreCapabilitySupported('writeFrequency');
         this.updateKnownFrequency(request.frequency);
+        this.queuePostFrequencyCapabilityRefresh('applyOperatingState');
       }
 
       if (request.mode && result.modeApplied) {
@@ -2035,6 +2038,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
         // 发射频率变化事件
         this.emit('radioFrequencyChanged', currentFrequency);
+        this.queuePostFrequencyCapabilityRefresh('frequencyMonitor');
       } else if (previousKnownFrequency === null && currentFrequency > 0) {
         // 首次获取频率
         logger.debug(`Initial frequency: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
@@ -2051,6 +2055,22 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private startTunerMonitoring(): void { /* no-op: replaced by RadioCapabilityManager */ }
   /** @deprecated */
   private stopTunerMonitoring(): void { /* no-op: replaced by RadioCapabilityManager */ }
+
+  private queuePostFrequencyCapabilityRefresh(reason: string): void {
+    this.postFrequencyCapabilityRefresh = this.postFrequencyCapabilityRefresh
+      .catch(() => undefined)
+      .then(async () => {
+        if (!this.connection || this._isPTTActive) {
+          return;
+        }
+
+        logger.debug('Refreshing radio capabilities after frequency change', { reason });
+        await this.capabilityManager.refreshAll();
+      })
+      .catch((error) => {
+        logger.debug('Post-frequency capability refresh failed', error);
+      });
+  }
 
   /**
    * 比较两个配置是否相同
