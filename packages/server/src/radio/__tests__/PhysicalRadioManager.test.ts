@@ -48,6 +48,7 @@ type PhysicalRadioManagerTestAccessor = {
     onDisconnected: ReturnType<typeof vi.fn>;
     writeCapability: ReturnType<typeof vi.fn>;
     syncTunerStatus: ReturnType<typeof vi.fn>;
+    refreshAll: ReturnType<typeof vi.fn>;
   };
   postConnectSettleMs: number;
   checkFrequencyChange: () => Promise<void>;
@@ -265,6 +266,60 @@ describe('PhysicalRadioManager', () => {
       type: 'HEALTH_CHECK_FAILED',
       error: expect.any(Error),
     });
+  });
+
+
+  it('queues a serialized capability refresh after direct frequency writes', async () => {
+    const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
+    asTestManager(manager).connection = {
+      setFrequency: vi.fn().mockResolvedValue(undefined),
+      setKnownFrequency: vi.fn(),
+    };
+
+    await expect(manager.setFrequency(7100000)).resolves.toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(refreshAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues capability refreshes serially after operating-state frequency changes', async () => {
+    const order: string[] = [];
+    let releaseFirstRefresh!: () => void;
+    const firstRefresh = new Promise<void>((resolve) => {
+      releaseFirstRefresh = resolve;
+    });
+    const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll')
+      .mockImplementationOnce(async () => {
+        order.push('refresh-1-start');
+        await firstRefresh;
+        order.push('refresh-1-end');
+      })
+      .mockImplementationOnce(async () => {
+        order.push('refresh-2');
+      });
+    const applyOperatingState = vi.fn().mockResolvedValue({
+      frequencyApplied: true,
+      modeApplied: false,
+    });
+    asTestManager(manager).connection = {
+      applyOperatingState,
+      setKnownFrequency: vi.fn(),
+    };
+
+    await manager.applyOperatingState({ frequency: 7100000 });
+    await manager.applyOperatingState({ frequency: 7200000 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(order).toEqual(['refresh-1-start']);
+    expect(refreshAll).toHaveBeenCalledTimes(1);
+
+    releaseFirstRefresh();
+    await vi.waitFor(() => {
+      expect(order).toEqual(['refresh-1-start', 'refresh-1-end', 'refresh-2']);
+    });
+    expect(refreshAll).toHaveBeenCalledTimes(2);
   });
 
   it('applies frequency and mode through the connection-level operating state helper', async () => {
