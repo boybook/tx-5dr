@@ -403,6 +403,9 @@ export function createRadioEventMap({
       logger.debug(`PTT status changed: ${pttData.isTransmitting ? 'transmitting' : 'idle'}, operators=[${pttData.operatorIds?.join(', ') || ''}]`);
       radioDispatch({ type: 'pttStatusChanged', payload: pttData });
     },
+    squelchStatusChanged: (data: unknown) => {
+      radioDispatch({ type: 'squelchStatusChanged', payload: data as import('@tx5dr/contracts').SquelchStatus });
+    },
     meterData: (() => {
       let lastDispatchTime = 0;
       let pendingData: MeterData | null = null;

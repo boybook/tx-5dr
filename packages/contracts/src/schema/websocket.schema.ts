@@ -116,6 +116,9 @@ export enum WSMessageType {
   // ===== 电台数值表 =====
   METER_DATA = 'meterData',
 
+  // ===== 电台实际静噪状态 =====
+  SQUELCH_STATUS_CHANGED = 'squelchStatusChanged',
+
   // ===== 极简文本消息 =====
   TEXT_MESSAGE = 'textMessage',
 
@@ -259,6 +262,14 @@ export const PTTStatusSchema = z.object({
   operatorIds: z.array(z.string()),
 });
 
+export const SquelchStatusSchema = z.object({
+  supported: z.boolean(),
+  open: z.boolean().nullable(),
+  muted: z.boolean(),
+  source: z.enum(['hamlib-dcd', 'unsupported']),
+  updatedAt: z.number(),
+});
+
 export const OperatorRuntimeSlotSchema = z.enum(['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6']);
 export type OperatorRuntimeSlot = z.infer<typeof OperatorRuntimeSlotSchema>;
 
@@ -357,6 +368,7 @@ export type SubWindowInfo = z.infer<typeof SubWindowInfoSchema>;
 export type DecodeErrorInfo = z.infer<typeof DecodeErrorInfoSchema>;
 export type FrequencyState = z.infer<typeof FrequencyStateSchema>;
 export type PTTStatus = z.infer<typeof PTTStatusSchema>;
+export type SquelchStatus = z.infer<typeof SquelchStatusSchema>;
 export type MeterData = z.infer<typeof MeterDataSchema>;
 
 // ===== WebSocket消息Schema定义 =====
@@ -1020,6 +1032,13 @@ export const WSMeterDataMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSMeterDataMessage = z.infer<typeof WSMeterDataMessageSchema>;
 
+export const WSSquelchStatusChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SQUELCH_STATUS_CHANGED),
+  data: SquelchStatusSchema,
+});
+
+export type WSSquelchStatusChangedMessage = z.infer<typeof WSSquelchStatusChangedMessageSchema>;
+
 /**
  * 文本消息（Toast通知）
  * 用于向客户端推送提示信息
@@ -1270,6 +1289,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
 
   // 电台数值表消息
   WSMeterDataMessageSchema,
+  WSSquelchStatusChangedMessageSchema,
 
   // 文本消息（Toast通知）
   WSTextMessageSchema,
@@ -1403,6 +1423,9 @@ export interface DigitalRadioEngineEvents {
 
   // 电台数值表事件
   meterData: (data: MeterData) => void;
+
+  // 电台实际静噪状态事件
+  squelchStatusChanged: (data: SquelchStatus) => void;
 
   // QSO 日志事件
   qsoRecordAdded: (data: { operatorId: string; logBookId: string; qsoRecord: z.infer<typeof QSORecordSchema> }) => void;

@@ -11,6 +11,7 @@ import {
   type SlotPack,
   type DigitalRadioEngineEvents,
   type EngineMode,
+  type SquelchStatus,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
@@ -49,6 +50,7 @@ import { tx5drPaths } from './utils/app-paths.js';
 import { CallsignContextTracker } from './slot/CallsignContextTracker.js';
 import { NtpCalibrationService } from './services/NtpCalibrationService.js';
 import { RigctldBridge } from './rigctld/RigctldBridge.js';
+import { SquelchStatusMonitor } from './radio/SquelchStatusMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 
 /**
@@ -94,6 +96,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private audioSidecar: AudioSidecarController;
   private radioBridge: RadioBridge;
   private rigctldBridge: RigctldBridge;
+  private squelchStatusMonitor: SquelchStatusMonitor;
   private transmissionPipeline: TransmissionPipeline;
   private clockCoordinator!: ClockCoordinator;  // 在 initialize() 中初始化
   private engineLifecycle!: EngineLifecycle;     // 在构造函数末尾初始化
@@ -319,6 +322,15 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getEngineMode: () => this.engineMode,
     });
     this.radioBridge.setupListeners();
+
+    this.squelchStatusMonitor = new SquelchStatusMonitor({
+      radioManager: this.radioManager,
+      getEngineMode: () => this.engineMode,
+      emitStatus: (status) => this.emit('squelchStatusChanged', status),
+    });
+    this.on('radioStatusChanged', () => {
+      this.squelchStatusMonitor.reevaluate();
+    });
 
     this.rigctldBridge = new RigctldBridge(this.radioManager);
     this.rigctldBridge.on('statusChanged', (status) => {
@@ -549,6 +561,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.emit('voicePttLockChanged', lock);
     });
     this.voiceSessionManager.on('pttStatusChanged', (data) => {
+      this.squelchStatusMonitor.setPTTActive(data.isTransmitting);
       this.emit('pttStatusChanged', data);
     });
     this.voiceSessionManager.on('voiceRadioModeChanged', (data) => {
@@ -606,6 +619,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       logger.warn('audio sidecar stop during destroy failed', err);
     }
     await this.stop();
+    this.squelchStatusMonitor.stop();
 
     // rigctld bridge: tear down outside the engine resource pipeline so we
     // stop accepting external connections before the radio is torn down.
@@ -809,6 +823,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     this.emitModeAndStatusSnapshot();
 
+    this.squelchStatusMonitor.reevaluate();
+
     if (shouldResumeAfterSwitch) {
       await this.engineLifecycle.startAndWaitForRunning();
       this.emitStatusSnapshot();
@@ -862,6 +878,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   getAvailableModes(): ModeDescriptor[] {
     return Object.values(MODES);
+  }
+
+  public getSquelchStatus(): SquelchStatus {
+    return this.squelchStatusMonitor.getSnapshot();
   }
 
   public getStatus() {

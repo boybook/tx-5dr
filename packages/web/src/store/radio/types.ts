@@ -27,6 +27,7 @@ import type {
   CoreCapabilityDiagnostics,
   ClockStatusSummary,
   AudioSidecarStatusPayload,
+  SquelchStatus,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -62,6 +63,7 @@ export interface RadioState {
   };
   meterData: MeterData | null;
   hasReceivedMeterData: boolean;
+  squelchStatus: SquelchStatus;
   meterCapabilities: MeterCapabilities | null;
   tunerCapabilities: TunerCapabilities | null;
   capabilityDescriptors: Map<string, CapabilityDescriptor>;
@@ -147,6 +149,7 @@ export type RadioAction =
   | { type: 'radioStatusUpdate'; payload: { radioConnected: boolean; status: RadioConnectionStatus; radioInfo: RadioInfo | null; radioConfig?: HamlibConfig; radioConnectionHealth?: ConnectionHealthInfo; reconnectProgress?: ReconnectProgress | null; coreCapabilities?: CoreRadioCapabilities; coreCapabilityDiagnostics?: CoreCapabilityDiagnostics; meterCapabilities?: MeterCapabilities; tunerCapabilities?: TunerCapabilities } }
   | { type: 'pttStatusChanged'; payload: { isTransmitting: boolean; operatorIds: string[] } }
   | { type: 'meterData'; payload: MeterData }
+  | { type: 'squelchStatusChanged'; payload: SquelchStatus }
   | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
   | { type: 'profileChanged'; payload: ProfileChangedEvent }
   | { type: 'profileListUpdated'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }

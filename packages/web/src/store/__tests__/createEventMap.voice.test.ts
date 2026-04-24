@@ -4,6 +4,75 @@ import { initialRadioState } from '../radioStore';
 import type { AuthState } from '../authStore';
 
 describe('createRadioEventMap voice frequency sync', () => {
+
+  it('dispatches squelch status changes', () => {
+    const connectionDispatch = vi.fn();
+    const radioDispatch = vi.fn();
+    const slotPacksDispatch = vi.fn();
+    const logbookDispatch = vi.fn();
+
+    const authState: AuthState = {
+      initialized: true,
+      sessionResolved: true,
+      authEnabled: false,
+      allowPublicViewing: true,
+      jwt: null,
+      role: 'admin' as any,
+      label: null,
+      operatorIds: [],
+      isPublicViewer: false,
+      loginError: null,
+      loginLoading: false,
+    };
+
+    const eventMap = createRadioEventMap({
+      connectionDispatch,
+      radioDispatch,
+      slotPacksDispatch,
+      logbookDispatch,
+      authStateRef: { current: authState },
+      radioService: {
+        getSystemStatus: vi.fn(),
+        subscribeSpectrum: vi.fn(),
+        sendHandshake: vi.fn(),
+        setClientEnabledOperators: vi.fn(),
+        wsClientInstance: {} as any,
+      } as any,
+      radioServiceRef: { current: null },
+      clientInstanceId: 'client-test',
+      radioStateRef: { current: initialRadioState },
+      capabilitiesRef: { current: null },
+      activeProfileIdRef: { current: null },
+      spectrumNegotiation: {
+        applySpectrumSelection: vi.fn(),
+        applyProfileDrivenSpectrumNegotiation: vi.fn(),
+        applyModeDrivenSpectrumNegotiation: vi.fn(),
+        onSpectrumSessionStateChanged: vi.fn(),
+        shouldAcceptSpectrumProfile: vi.fn().mockReturnValue(true),
+      },
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    const payload = {
+      supported: true,
+      open: false,
+      muted: true,
+      source: 'hamlib-dcd' as const,
+      updatedAt: 123,
+    };
+    eventMap.squelchStatusChanged(payload);
+
+    expect(radioDispatch).toHaveBeenCalledWith({
+      type: 'squelchStatusChanged',
+      payload,
+    });
+  });
+
   it('updates both current frequency and voice radio mode from frequencyChanged events', () => {
     const connectionDispatch = vi.fn();
     const radioDispatch = vi.fn();

@@ -15,6 +15,7 @@ type MockRig = {
   getMode: ReturnType<typeof vi.fn>;
   getLevel: ReturnType<typeof vi.fn>;
   setLevel: ReturnType<typeof vi.fn>;
+  getDcd: ReturnType<typeof vi.fn>;
   getFunction: ReturnType<typeof vi.fn>;
   setFunction: ReturnType<typeof vi.fn>;
   getPreampValues: ReturnType<typeof vi.fn>;
@@ -91,6 +92,7 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 2400 }),
     getLevel: vi.fn().mockResolvedValue(0),
     setLevel: vi.fn().mockResolvedValue(0),
+    getDcd: vi.fn().mockResolvedValue(false),
     getFunction: vi.fn().mockResolvedValue(false),
     setFunction: vi.fn().mockResolvedValue(0),
     getPreampValues: vi.fn().mockReturnValue([]),
@@ -124,6 +126,41 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
 describe('HamlibConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+
+  it('reads DCD squelch state via low-priority Hamlib polling', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getDcd: vi.fn().mockResolvedValue(true),
+    });
+
+    await expect(connection.getDCD()).resolves.toBe(true);
+    expect(rig.getDcd).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips DCD polling while a critical CAT write is active', async () => {
+    const firstWrite = createDeferred<number>();
+    const { connection, rig } = createConnectedConnection({
+      setFrequency: vi.fn().mockReturnValue(firstWrite.promise),
+      getDcd: vi.fn().mockResolvedValue(true),
+    });
+
+    const writePromise = connection.setFrequency(7100000);
+    await Promise.resolve();
+
+    await expect(connection.getDCD()).rejects.toThrow(/busy/);
+    expect(rig.getDcd).not.toHaveBeenCalled();
+
+    firstWrite.resolve(0);
+    await writePromise;
+  });
+
+  it('surfaces DCD read failures as optional operation errors', async () => {
+    const { connection } = createConnectedConnection({
+      getDcd: vi.fn().mockRejectedValue(new Error('Feature not available')),
+    });
+
+    await expect(connection.getDCD()).rejects.toThrow(/getDCD/);
   });
 
   it('does not write split TX frequency when split is disabled', async () => {

@@ -26,6 +26,7 @@ const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
 const AUDIO_TRACK_WAIT_TIMEOUT_MS = 5000;
 const TRANSPORT_SWITCH_DRAIN_TIMEOUT_MS = 1200;
+const VOLUME_RAMP_SECONDS = 0.003;
 
 type InboundRtpStatsLike = {
   jitterBufferEmittedCount?: number;
@@ -90,6 +91,29 @@ function waitForRoomDisconnected(room: Room, timeoutMs = TRANSPORT_SWITCH_DRAIN_
     room.on(RoomEvent.Disconnected, finish);
     window.setTimeout(finish, timeoutMs);
   });
+}
+
+
+function setLiveKitTrackVolume(track: RemoteAudioTrack, linear: number, rampSeconds: number): void {
+  const liveKitTrack = track as unknown as {
+    gainNode?: GainNode;
+    elementVolume?: number;
+  };
+
+  if (liveKitTrack.gainNode) {
+    const gainParam = liveKitTrack.gainNode.gain;
+    const contextTime = liveKitTrack.gainNode.context.currentTime;
+    gainParam.cancelScheduledValues(contextTime);
+    if (rampSeconds > 0) {
+      gainParam.setTargetAtTime(linear, contextTime, rampSeconds);
+    } else {
+      gainParam.setValueAtTime(linear, contextTime);
+    }
+    liveKitTrack.elementVolume = linear;
+    return;
+  }
+
+  track.setVolume(linear);
 }
 
 export interface MonitorStatsData {
@@ -457,13 +481,13 @@ export function useAudioMonitorPlayback(
     }
 
     track.setPlayoutDelay(0);
-    track.setVolume(currentVolumeRef.current);
 
     const element = track.attach();
     element.autoplay = true;
     element.setAttribute('playsinline', 'true');
     element.style.display = 'none';
     document.body.appendChild(element);
+    setLiveKitTrackVolume(track, currentVolumeRef.current, 0);
 
     attachedTracksRef.current.set(key, track);
     attachedElementsRef.current.set(key, element);
@@ -802,10 +826,13 @@ export function useAudioMonitorPlayback(
     const linear = Math.max(0, Math.pow(10, db / 20));
     currentVolumeRef.current = linear;
     attachedTracksRef.current.forEach((track) => {
-      track.setVolume(linear);
+      setLiveKitTrackVolume(track, linear, VOLUME_RAMP_SECONDS);
     });
     if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = linear;
+      const gainParam = gainNodeRef.current.gain;
+      const contextTime = gainNodeRef.current.context.currentTime;
+      gainParam.cancelScheduledValues(contextTime);
+      gainParam.setTargetAtTime(linear, contextTime, VOLUME_RAMP_SECONDS);
     }
   }, []);
 
