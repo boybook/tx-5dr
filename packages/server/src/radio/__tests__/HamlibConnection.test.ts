@@ -227,7 +227,7 @@ describe('HamlibConnection', () => {
     expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', undefined);
   });
 
-  it('formats discrete RF power labels from the current TX range instead of trusting hamlib watt metadata', async () => {
+  it('uses Hamlib-provided watt labels for discrete RF power steps without local correction', async () => {
     const { connection } = createConnectedConnection({
       getRfPowerStepTable: vi.fn().mockReturnValue([
         { normalized: 0.1, milliwatts: 10000, watts: 10 },
@@ -239,30 +239,18 @@ describe('HamlibConnection', () => {
     testConnection.supportedLevels = new Set(['RFPOWER']);
     testConnection.currentFrequencyHz = 7100000;
     testConnection.currentRadioMode = 'USB';
-    testConnection.txFrequencyRanges = [
-      {
-        startFreq: 1000000,
-        endFreq: 30000000,
-        modes: ['USB'],
-        lowPower: 100,
-        highPower: 10000,
-        vfo: 0,
-        antenna: 0,
-      },
-    ];
-
     await expect(connection.getSupportedRFPowerSteps()).resolves.toEqual([
-      { value: 0.1, label: '1 W (10%)' },
-      { value: 0.5, label: '5 W (50%)' },
-      { value: 1, label: '10 W (100%)' },
+      { value: 0.1, label: '10 W' },
+      { value: 0.5, label: '50 W' },
+      { value: 1, label: '100 W' },
     ]);
   });
 
-  it('falls back to percentage labels when the current TX max watts is unknown', async () => {
+  it('falls back to unlabeled discrete RF power steps when Hamlib does not provide raw power values', async () => {
     const { connection } = createConnectedConnection({
       getRfPowerStepTable: vi.fn().mockReturnValue([
-        { normalized: 0.1, milliwatts: 10000, watts: 10 },
-        { normalized: 1, milliwatts: 100000, watts: 100 },
+        { normalized: 0.1, milliwatts: 0, watts: 0 },
+        { normalized: 1, milliwatts: 0, watts: 0 },
       ]),
     });
     const testConnection = asTestConnection(connection);
@@ -271,8 +259,8 @@ describe('HamlibConnection', () => {
     testConnection.currentRadioMode = 'USB';
 
     await expect(connection.getSupportedRFPowerSteps()).resolves.toEqual([
-      { value: 0.1, label: '10%' },
-      { value: 1, label: '100%' },
+      { value: 0.1, label: undefined },
+      { value: 1, label: undefined },
     ]);
   });
 

@@ -5,8 +5,8 @@
  * - value 模式：使用数字输入框，适合 RIT/XIT/中继偏移等非归一化参数
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Input, Slider, Tooltip } from '@heroui/react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { Input, Slider, Tab, Tabs, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
@@ -17,11 +17,47 @@ import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber } from '../d
 
 const WRITE_DEBOUNCE_MS = 150;
 const DISCRETE_MATCH_EPSILON = 1e-6;
+export type RfPowerInteractionMode = 'percent' | 'hamlib-discrete';
+const RF_POWER_MODE_TABS_CLASSNAMES = {
+  base: 'max-w-fit',
+  tabList: 'gap-1 rounded-md bg-default-100 p-0.5',
+  tab: 'h-6 min-w-0 px-2',
+  tabContent: 'text-[11px] leading-none',
+  cursor: 'rounded-[6px]',
+} as const;
 
 export function getDiscreteNumberOptions(descriptor: CapabilityDescriptor) {
   return (descriptor.discreteOptions ?? []).filter(
     (option): option is { value: number; label?: string; labelI18nKey?: string } => typeof option.value === 'number',
   );
+}
+
+export function isRfPowerCapability(capabilityId: string): boolean {
+  return capabilityId === 'rf_power';
+}
+
+export function canUseRfPowerDiscreteMode(
+  capabilityId: string,
+  discreteOptions: Array<{ value: number }>,
+): boolean {
+  return isRfPowerCapability(capabilityId) && discreteOptions.length >= 2;
+}
+
+export function shouldUseDiscreteSlider(
+  capabilityId: string,
+  usesSlider: boolean,
+  discreteOptions: Array<{ value: number }>,
+  rfPowerMode: RfPowerInteractionMode,
+): boolean {
+  if (!usesSlider || discreteOptions.length < 2) {
+    return false;
+  }
+
+  if (!isRfPowerCapability(capabilityId)) {
+    return true;
+  }
+
+  return rfPowerMode === 'hamlib-discrete';
 }
 
 export function findDiscreteOptionIndex(
@@ -83,7 +119,9 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const range = descriptor.range ?? { min: 0, max: 1, step: 0.01 };
   const usesSlider = descriptor.display?.mode === 'percent';
   const discreteOptions = getDiscreteNumberOptions(descriptor);
-  const isDiscreteSlider = usesSlider && discreteOptions.length >= 2;
+  const [rfPowerMode, setRfPowerMode] = useState<RfPowerInteractionMode>('percent');
+  const showRfPowerModeToggle = canUseRfPowerDiscreteMode(capabilityId, discreteOptions);
+  const isDiscreteSlider = shouldUseDiscreteSlider(capabilityId, usesSlider, discreteOptions, rfPowerMode);
 
   const [localValue, setLocalValue] = useState<number | null>(serverValue);
   const [inputValue, setInputValue] = useState<string>(
@@ -98,8 +136,31 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
     }
   }, [descriptor, serverValue]);
 
+  const discreteSignature = useMemo(
+    () => discreteOptions.map((option) => `${option.value}:${option.label ?? option.labelI18nKey ?? ''}`).join('|'),
+    [discreteOptions],
+  );
+  useEffect(() => {
+    if (isRfPowerCapability(capabilityId)) {
+      setRfPowerMode('percent');
+    }
+  }, [capabilityId, descriptor.id, discreteSignature]);
+
   const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingValue = useRef<number | null>(null);
+
+  const cancelPendingWrite = useCallback(() => {
+    if (writeTimer.current) {
+      clearTimeout(writeTimer.current);
+      writeTimer.current = null;
+    }
+    pendingValue.current = null;
+    isDragging.current = false;
+  }, []);
+
+  useEffect(() => () => {
+    cancelPendingWrite();
+  }, [cancelPendingWrite]);
 
   const scheduleWrite = useCallback(
     (value: number) => {
@@ -157,6 +218,14 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
     }
   }, [capabilityId, onWrite]);
 
+  const handleRfPowerModeChange = useCallback(
+    (key: React.Key) => {
+      cancelPendingWrite();
+      setRfPowerMode(String(key) as RfPowerInteractionMode);
+    },
+    [cancelPendingWrite],
+  );
+
   const displayValue = localValue ?? serverValue ?? range.min;
   const discreteSliderValue = findDiscreteOptionIndex(discreteOptions, displayValue);
   const minDisplayValue = usesSlider ? range.min : toDisplayNumber(range.min, descriptor);
@@ -169,7 +238,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1">
           <span className="text-sm font-medium">{t(descriptor.labelI18nKey)}</span>
           {descriptor.descriptionI18nKey && (
@@ -178,7 +247,22 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
             </Tooltip>
           )}
         </div>
-        <span className="text-xs text-default-400 font-mono">{displayText}</span>
+        <div className="flex items-center gap-2">
+          {showRfPowerModeToggle && (
+            <Tabs
+              size="sm"
+              selectedKey={rfPowerMode}
+              onSelectionChange={handleRfPowerModeChange}
+              isDisabled={!isSupported || !canControl || !canWrite}
+              aria-label={t('radio:capability.rf_power.label')}
+              classNames={RF_POWER_MODE_TABS_CLASSNAMES}
+            >
+              <Tab key="percent" title={t('radio:capability.rf_power.modes.percent')} />
+              <Tab key="hamlib-discrete" title={t('radio:capability.rf_power.modes.hamlib')} />
+            </Tabs>
+          )}
+          <span className="whitespace-nowrap text-xs text-default-400 font-mono">{displayText}</span>
+        </div>
       </div>
 
       {usesSlider ? (
