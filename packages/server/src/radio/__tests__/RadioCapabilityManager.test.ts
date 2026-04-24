@@ -359,4 +359,23 @@ describe('RadioCapabilityManager', () => {
 
     expect(getDescriptor(latestSnapshot.descriptors, 'rf_power').discreteOptions).toEqual(currentSteps);
   });
+
+  it('allows rf_power percent writes even when Hamlib discrete steps are present', async () => {
+    const manager = new RadioCapabilityManager();
+    const setRFPower = vi.fn().mockResolvedValue(undefined);
+    const connection = new MockConnection(RadioConnectionType.HAMLIB, {
+      isSupportedLevel: vi.fn((level: string) => level === 'RFPOWER'),
+      getRFPower: vi.fn().mockResolvedValue(0.5),
+      setRFPower,
+      getSupportedRFPowerSteps: vi.fn().mockResolvedValue([
+        { value: 0.1, label: '10 W' },
+        { value: 0.5, label: '50 W' },
+        { value: 1, label: '100 W' },
+      ]),
+    });
+
+    await expect(manager.onConnected(connection as never)).resolves.toBeUndefined();
+    await expect(manager.writeCapability('rf_power', 0.57)).resolves.toBeUndefined();
+    expect(setRFPower).toHaveBeenCalledWith(0.57);
+  });
 });

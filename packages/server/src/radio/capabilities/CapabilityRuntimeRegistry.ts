@@ -12,6 +12,12 @@ import type { CapabilityRuntimeEvents } from './types.js';
 
 const logger = createLogger('CapabilityRuntimeRegistry');
 
+function shouldEnforceDiscreteNumberOptions(descriptor: CapabilityDescriptor): boolean {
+  // rf_power keeps Hamlib discrete metadata for the optional step slider, but
+  // the default UI mode writes arbitrary 0-1 percentages.
+  return descriptor.id !== 'rf_power';
+}
+
 export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEvents> {
   private connection: IRadioConnection | null = null;
   private readonly supportedCapabilities = new Set<string>();
@@ -465,7 +471,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         if (descriptor.range && (value < descriptor.range.min || value > descriptor.range.max)) {
           throw new Error(`Capability '${descriptor.id}' value out of range`);
         }
-        if (descriptor.discreteOptions && descriptor.discreteOptions.length > 0) {
+        if (
+          shouldEnforceDiscreteNumberOptions(descriptor)
+          && descriptor.discreteOptions
+          && descriptor.discreteOptions.length > 0
+        ) {
           const matched = descriptor.discreteOptions.some((option) => option.value === value);
           if (!matched) {
             throw new Error(`Capability '${descriptor.id}' received an unsupported discrete numeric value`);

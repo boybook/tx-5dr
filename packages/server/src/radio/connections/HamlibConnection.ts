@@ -1025,19 +1025,16 @@ export class HamlibConnection
     return matchingRange.highPower > 0 ? matchingRange.highPower / 1000 : fallbackMaxWatts;
   }
 
-  private formatRfPowerStepLabel(normalized: number, maxWatts: number | null): string {
-    const percent = `${Math.round(normalized * 100)}%`;
-    if (!Number.isFinite(maxWatts) || !maxWatts || maxWatts <= 0) {
-      return percent;
+  private formatHamlibRfPowerStepLabel(entry: RfPowerStepTableEntry): string | undefined {
+    if (Number.isFinite(entry.watts) && entry.watts > 0) {
+      return `${entry.watts.toFixed(3).replace(/\.?0+$/, '')} W`;
     }
 
-    const watts = normalized * maxWatts;
-    if (watts >= 1) {
-      const roundedWatts = watts >= 10 ? Math.round(watts).toString() : watts.toFixed(1).replace(/\.0$/, '');
-      return `${roundedWatts} W (${percent})`;
+    if (Number.isFinite(entry.milliwatts) && entry.milliwatts > 0) {
+      return `${Math.round(entry.milliwatts)} mW`;
     }
 
-    return `${Math.round(watts * 1000)} mW (${percent})`;
+    return undefined;
   }
 
   async getSpectrumSupportSummary(): Promise<SpectrumSupportSummary> {
@@ -1446,13 +1443,12 @@ export class HamlibConnection
       }
 
       try {
-        const maxWatts = this.resolveCurrentTxPowerMaxWatts();
         const table = rigWithRfPowerSteps.getRfPowerStepTable(this.currentFrequencyHz, this.currentRadioMode) ?? [];
         const options = table
           .filter((entry) => Number.isFinite(entry.normalized) && entry.normalized >= 0 && entry.normalized <= 1)
           .map((entry) => ({
             value: entry.normalized,
-            label: this.formatRfPowerStepLabel(entry.normalized, maxWatts),
+            label: this.formatHamlibRfPowerStepLabel(entry),
           }));
 
         return Array.from(new Map(options.map((option) => [option.value, option] as const)).values())

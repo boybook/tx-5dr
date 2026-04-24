@@ -457,7 +457,11 @@
     },
     "rf_power": {
       "label": "TX Power",
-      "description": "Set transmit power from 0–100% of the radio's rated maximum. Reducing power is advisable for extended digital mode operation to prevent PA overheating; for voice, adjust freely based on propagation conditions."
+      "description": "Set transmit power from 0–100% of the radio's rated maximum. Reducing power is advisable for extended digital mode operation to prevent PA overheating; for voice, adjust freely based on propagation conditions.",
+      "modes": {
+        "percent": "Percent",
+        "hamlib": "Hamlib"
+      }
     },
     "af_gain": {
       "label": "AF Gain",
