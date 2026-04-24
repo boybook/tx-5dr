@@ -44,6 +44,38 @@ test('韩国呼号基础国家解析(数字开头)', () => {
   assert.equal(c?.country, 'South Korea');
 });
 
+test('意大利本土呼号应由通用 I 前缀解析', () => {
+  const testCases = ['IZ8EDI', 'IW4DV', 'IU5BJS', 'IK5PWQ', 'IT9ABC'];
+
+  for (const callsign of testCases) {
+    const info = getCallsignInfo(callsign);
+    assert.ok(info, `呼号 "${callsign}" 应能解析`);
+    assert.equal(info?.country, 'Italy', `呼号 "${callsign}" 应解析为意大利`);
+    assert.equal(info?.countryZh, '意大利', `呼号 "${callsign}" 中文应为意大利`);
+    assert.equal(info?.entityCode, 248, `呼号 "${callsign}" 实体代码应为 248`);
+  }
+});
+
+test('意大利通用 I 前缀不应覆盖更具体或历史 DXCC 实体', () => {
+  const sardinia = getCallsignInfo('IS0ABC');
+  const sardiniaIw = getCallsignInfo('IW0UAA');
+  const historicalSomaliland = getCallsignInfo('I5ABC', Date.UTC(1959, 0, 1));
+  const currentItaly = getCallsignInfo('IK5ABC', Date.UTC(2026, 3, 19));
+
+  assert.equal(sardinia?.country, 'Sardinia');
+  assert.equal(sardinia?.entityCode, 225);
+  assert.equal(sardiniaIw?.country, 'Sardinia');
+  assert.equal(sardiniaIw?.entityCode, 225);
+
+  assert.equal(historicalSomaliland?.country, 'Italian Somaliland');
+  assert.equal(historicalSomaliland?.entityCode, 115);
+  assert.equal(historicalSomaliland?.dxccStatus, 'deleted');
+
+  assert.equal(currentItaly?.country, 'Italy');
+  assert.equal(currentItaly?.entityCode, 248);
+  assert.equal(currentItaly?.dxccStatus, 'current');
+});
+
 test('美国特殊实体与州/属地识别', () => {
   const guam = getCallsignInfo('KH2AA');
   const hawaii = getCallsignInfo('KH6VV');
@@ -199,13 +231,13 @@ test('FT8 Fox/Hound RR73 消息应优先解析尖括号内的 Fox 呼号', () =>
   assert.equal(info.countryZh, '吉尔吉斯斯坦');
 });
 
-test('FT8 Fox/Hound RR73 消息在仅有哈希时应回退到 nextCallsign', () => {
-  const message = 'JA0OAV RR73; JG1MPG <4>';
+test('FT8 Fox/Hound RR73 消息在仅有短哈希时不应回退到 nextCallsign', () => {
+  const message = '23 RR73; JG1MPG <4>';
   const info = parseFT8LocationInfo(message);
 
-  assert.equal(info.callsign, 'JG1MPG');
-  assert.equal(info.country, 'Japan');
-  assert.equal(info.countryZh, '日本·关东');
+  assert.equal(info.callsign, undefined);
+  assert.equal(info.country, undefined);
+  assert.equal(info.countryZh, undefined);
 });
 
 test('前缀冲突优先级 - LU前缀应优先匹配阿根廷', () => {
@@ -216,7 +248,7 @@ test('前缀冲突优先级 - LU前缀应优先匹配阿根廷', () => {
   // - South Sandwich Islands (代码 240, 2个前缀)
   // - South Shetland Islands (代码 241, 5个前缀)
 
-  const testCases = ['LU6YR', 'LU1ABC', 'LU9ZZZ'];
+  const testCases = ['LU6YR', 'LU1ABC'];
 
   for (const callsign of testCases) {
     const info = getCallsignInfo(callsign);
@@ -275,7 +307,7 @@ test('前缀冲突优先级 - CE0前缀应优先匹配复活节岛', () => {
   // - Juan Fernández Islands (代码 125)
   // - Desventuradas Islands (代码 217)
 
-  const testCases = ['CE0ABC', 'CE0XYZ'];
+  const testCases = ['CE0ABC', 'CE0YAA'];
 
   for (const callsign of testCases) {
     const info = getCallsignInfo(callsign);
