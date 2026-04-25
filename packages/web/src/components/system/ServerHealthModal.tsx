@@ -36,6 +36,8 @@ interface SparklineProps {
   criticalColor?: string;
   timestamps?: number[];
   formatValue?: (v: number) => string;
+  valueMin?: number;
+  valueMaxFloor?: number;
   /** 多线模式：传入后忽略 values/color/warnThreshold/criticalThreshold */
   series?: SparklineSeries[];
 }
@@ -55,6 +57,8 @@ function Sparkline({
   criticalColor = 'hsl(var(--heroui-danger))',
   timestamps,
   formatValue,
+  valueMin,
+  valueMaxFloor,
   series,
 }: SparklineProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -208,8 +212,8 @@ function Sparkline({
   }
 
   // ── Single-series mode (original) ─────────────────────────────────────────
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = valueMin ?? Math.min(...values);
+  const max = Math.max(Math.max(...values), valueMaxFloor ?? -Infinity);
   const range = max - min || 1;
   const latest = values[values.length - 1];
 
@@ -313,6 +317,8 @@ interface MetricCardProps {
   sparkCritical?: number;
   sparkTimestamps?: number[];
   sparkFormatValue?: (v: number) => string;
+  sparkValueMin?: number;
+  sparkValueMaxFloor?: number;
   /** 多线模式：传入后 sparkValues/sparkWarn/sparkCritical/sparkFormatValue 被忽略 */
   sparkSeries?: SparklineSeries[];
 }
@@ -327,6 +333,8 @@ function MetricCard({
   sparkCritical,
   sparkTimestamps,
   sparkFormatValue,
+  sparkValueMin,
+  sparkValueMaxFloor,
   sparkSeries,
 }: MetricCardProps) {
   return (
@@ -345,6 +353,8 @@ function MetricCard({
         criticalThreshold={sparkSeries ? undefined : sparkCritical}
         timestamps={sparkTimestamps}
         formatValue={sparkFormatValue}
+        valueMin={sparkSeries ? undefined : sparkValueMin}
+        valueMaxFloor={sparkSeries ? undefined : sparkValueMaxFloor}
         series={sparkSeries}
       />
       {rows && rows.length > 0 && (
@@ -401,6 +411,11 @@ function toCapacityPercent(value: number | null | undefined, capacity: number | 
 function normalizedCpuPercent(value: number | null | undefined, capacity: number | null | undefined): number | null {
   if (value == null || Number.isNaN(value)) return null;
   return toCapacityPercent(value, capacity);
+}
+
+function singleCoreNormalizedPercent(capacity: number | null | undefined): number {
+  if (capacity == null || Number.isNaN(capacity) || capacity <= 0) return 100;
+  return Math.min(Math.max(10000 / capacity, 0), 100);
 }
 
 function formatCpuLoad(
@@ -664,6 +679,8 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   sparkValues={cpuValues.length > 0 ? cpuValues : [0]}
                   sparkTimestamps={timestamps}
                   sparkFormatValue={(v) => `${v.toFixed(1)}%`}
+                  sparkValueMin={0}
+                  sparkValueMaxFloor={singleCoreNormalizedPercent(latest.cpu.capacity)}
                   rows={[
                     {
                       label: t('serverHealth.user'),
