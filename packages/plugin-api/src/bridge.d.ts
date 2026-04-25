@@ -30,6 +30,27 @@
 // Bridge SDK interface
 // ---------------------------------------------------------------------------
 
+interface Tx5drBridgeState {
+  /** URL/init parameters passed to this iframe page. */
+  readonly params: Readonly<Record<string, string>>;
+
+  /** Current theme: `'dark'` or `'light'`. */
+  readonly theme: 'dark' | 'light';
+
+  /** Current locale code (e.g. `'zh'`, `'zh-CN'`, `'en'`). */
+  readonly locale: string;
+
+  /** Unique session ID assigned to this iframe instance by the host. */
+  readonly pageSessionId: string;
+}
+
+interface Tx5drBridgeStateChange {
+  readonly previous: Tx5drBridgeState;
+  readonly current: Tx5drBridgeState;
+}
+
+type Tx5drBridgeUnsubscribe = () => void;
+
 /**
  * The TX-5DR Plugin Bridge SDK exposed as `window.tx5dr` inside plugin
  * iframe pages.
@@ -40,17 +61,29 @@
 interface Tx5drBridge {
   // ── State (read-only) ────────────────────────────────────────────────
 
-  /** URL query parameters passed to this iframe page (read-only). */
+  /** URL/init parameters passed to this iframe page (read-only). */
   readonly params: Readonly<Record<string, string>>;
 
   /** Current theme: `'dark'` or `'light'`. */
   readonly theme: 'dark' | 'light';
 
-  /** Current locale code (e.g. `'zh'`, `'en'`). */
+  /** Current locale code (e.g. `'zh'`, `'zh-CN'`, `'en'`). */
   readonly locale: string;
 
   /** Unique session ID assigned to this iframe instance by the host. */
   readonly pageSessionId: string;
+
+  /** Resolves after the host sends the initial authoritative iframe state. */
+  readonly ready: Promise<Tx5drBridgeState>;
+
+  /** Return a snapshot of the current bridge state. */
+  getState(): Tx5drBridgeState;
+
+  /** Subscribe to any bridge state change. Returns an unsubscribe function. */
+  onStateChange(callback: (change: Tx5drBridgeStateChange) => void): Tx5drBridgeUnsubscribe;
+
+  /** Subscribe to locale changes. Returns an unsubscribe function. */
+  onLocaleChange(callback: (locale: string) => void): Tx5drBridgeUnsubscribe;
 
   // ── RPC ──────────────────────────────────────────────────────────────
 
@@ -125,8 +158,8 @@ interface Tx5drBridge {
   /** Ask the parent component to close this iframe (e.g. close a modal). */
   requestClose(): void;
 
-  /** Register a callback invoked when the host theme changes. */
-  onThemeChange(callback: (theme: 'dark' | 'light') => void): void;
+  /** Register a callback invoked when the host theme changes. Returns an unsubscribe function. */
+  onThemeChange(callback: (theme: 'dark' | 'light') => void): Tx5drBridgeUnsubscribe;
 }
 
 // ---------------------------------------------------------------------------

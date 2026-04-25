@@ -27,6 +27,7 @@ import {
 import { ScopedPluginFileStoreProvider } from '../plugin/ScopedPluginFileStoreProvider.js';
 import { PluginStorageProvider } from '../plugin/PluginStorageProvider.js';
 import { PluginFileStoreProvider } from '../plugin/PluginFileStoreProvider.js';
+import { getPluginBridgeSdkScript } from '../plugin/bridge-sdk.js';
 import {
   type PluginPageBoundResource,
   getPluginPageFileScopePath,
@@ -947,164 +948,6 @@ html, body {
 `;
 }
 
-// ===== Bridge SDK =====
-// Type definitions for the public surface (`window.tx5dr`) are maintained in:
-//   packages/plugin-api/src/bridge.d.ts
-// Keep that file in sync when modifying the IIFE below.
-
-const BRIDGE_SDK = `/* TX-5DR Plugin Bridge SDK */
-(function() {
-  'use strict';
-  var pending = {};
-  var pushListeners = {};
-  var themeListeners = [];
-  var nextId = 1;
-  var state = {
-    params: {},
-    theme: 'dark',
-    locale: 'en',
-    pageSessionId: typeof window.__TX5DR_PAGE_SESSION_ID__ === 'string'
-      ? window.__TX5DR_PAGE_SESSION_ID__
-      : ''
-  };
-
-  // === Theme-aware CSS variable tokens ===
-  var THEME_TOKENS = {
-    dark: {
-      '--tx5dr-bg': '#18181b',
-      '--tx5dr-bg-content': '#27272a',
-      '--tx5dr-bg-hover': '#3f3f46',
-      '--tx5dr-text': '#fafafa',
-      '--tx5dr-text-secondary': '#a1a1aa',
-      '--tx5dr-border': '#3f3f46'
-    },
-    light: {
-      '--tx5dr-bg': '#ffffff',
-      '--tx5dr-bg-content': '#f4f4f5',
-      '--tx5dr-bg-hover': '#e4e4e7',
-      '--tx5dr-text': '#18181b',
-      '--tx5dr-text-secondary': '#71717a',
-      '--tx5dr-border': '#d4d4d8'
-    }
-  };
-
-  function applyThemeTokens(theme) {
-    var tokens = THEME_TOKENS[theme] || THEME_TOKENS.dark;
-    var root = document.documentElement;
-    for (var key in tokens) {
-      root.style.setProperty(key, tokens[key]);
-    }
-  }
-
-  // Apply theme immediately from URL params (available before postMessage).
-  var urlTheme = new URLSearchParams(window.location.search).get('_theme');
-  if (urlTheme) {
-    state.theme = urlTheme;
-    applyThemeTokens(urlTheme);
-  }
-
-  window.addEventListener('message', function(e) {
-    var msg = e.data;
-    if (!msg || typeof msg.type !== 'string' || !msg.type.startsWith('tx5dr:')) return;
-    if (msg.type === 'tx5dr:init') {
-      state.params = msg.params || {};
-      state.theme = msg.theme || 'dark';
-      state.locale = msg.locale || 'en';
-      applyThemeTokens(state.theme);
-      return;
-    }
-    if (msg.type === 'tx5dr:theme-changed') {
-      state.theme = msg.theme;
-      applyThemeTokens(state.theme);
-      themeListeners.forEach(function(cb) { cb(msg.theme); });
-      return;
-    }
-    if (msg.type === 'tx5dr:push') {
-      var cbs = pushListeners[msg.action];
-      if (cbs) cbs.forEach(function(cb) { try { cb(msg.data); } catch(err) { setTimeout(function() { throw err; }, 0); } });
-      return;
-    }
-    if (msg.type === 'tx5dr:response' && msg.requestId && pending[msg.requestId]) {
-      var p = pending[msg.requestId];
-      delete pending[msg.requestId];
-      if (msg.error) p.reject(new Error(msg.error));
-      else p.resolve(msg.result);
-    }
-  });
-
-  function request(type, payload) {
-    return new Promise(function(resolve, reject) {
-      var id = 'r' + (nextId++);
-      pending[id] = { resolve: resolve, reject: reject };
-      var msg = Object.assign({
-        type: type,
-        requestId: id,
-        pageSessionId: state.pageSessionId
-      }, payload);
-      window.parent.postMessage(msg, '*');
-    });
-  }
-
-  function base64FromArrayBuffer(buffer) {
-    var bytes = new Uint8Array(buffer);
-    var chunkSize = 0x8000;
-    var binary = '';
-    for (var i = 0; i < bytes.length; i += chunkSize) {
-      var chunk = bytes.subarray(i, i + chunkSize);
-      binary += String.fromCharCode.apply(null, Array.prototype.slice.call(chunk));
-    }
-    return btoa(binary);
-  }
-
-  function arrayBufferFromBase64(base64) {
-    var binary = atob(base64);
-    var bytes = new Uint8Array(binary.length);
-    for (var i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes.buffer;
-  }
-
-  window.tx5dr = {
-    get params() { return state.params; },
-    get theme() { return state.theme; },
-    get locale() { return state.locale; },
-    get pageSessionId() { return state.pageSessionId; },
-    storeGet: function(key, def) { return request('tx5dr:store:get', { key: key }).then(function(v) { return v != null ? v : def; }); },
-    storeSet: function(key, value) { return request('tx5dr:store:set', { key: key, value: value }); },
-    storeDelete: function(key) { return request('tx5dr:store:delete', { key: key }); },
-    fileUpload: function(p, file) {
-      return file.arrayBuffer().then(function(buf) {
-        return request('tx5dr:file:upload', {
-          path: p,
-          data: base64FromArrayBuffer(buf)
-        });
-      });
-    },
-    fileRead: function(p) {
-      return request('tx5dr:file:read', { path: p }).then(function(v) {
-        if (!v) return null;
-        return new Blob([arrayBufferFromBase64(v)]);
-      });
-    },
-    fileDelete: function(p) { return request('tx5dr:file:delete', { path: p }); },
-    fileList: function(prefix) { return request('tx5dr:file:list', { prefix: prefix || '' }); },
-    requestClose: function() { window.parent.postMessage({ type: 'tx5dr:request-close' }, '*'); },
-    onThemeChange: function(cb) { themeListeners.push(cb); },
-    invoke: function(action, data) { return request('tx5dr:invoke', { action: action, data: data }); },
-    onPush: function(action, cb) {
-      if (!pushListeners[action]) pushListeners[action] = [];
-      pushListeners[action].push(cb);
-    },
-    offPush: function(action, cb) {
-      var arr = pushListeners[action];
-      if (arr) pushListeners[action] = arr.filter(function(f) { return f !== cb; });
-    },
-    resize: function(height) { window.parent.postMessage({ type: 'tx5dr:resize', height: height }, '*'); },
-  };
-})();
-`;
-
 // ===== Safe path resolution =====
 
 function resolveSafePath(root: string, relative: string): string | null {
@@ -1309,7 +1152,7 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
 
   // GET /api/plugins/_bridge/bridge.js
   fastify.get('/_bridge/bridge.js', async (_req: FastifyRequest, reply: FastifyReply) => {
-    return reply.type('application/javascript; charset=utf-8').send(BRIDGE_SDK);
+    return reply.type('application/javascript; charset=utf-8').send(getPluginBridgeSdkScript());
   });
 
   // GET /api/plugins/:name/ui/* — serve plugin static files
