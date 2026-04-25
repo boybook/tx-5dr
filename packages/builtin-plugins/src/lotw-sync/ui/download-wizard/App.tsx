@@ -1,5 +1,5 @@
 /// <reference types="@tx5dr/plugin-api/bridge" />
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '../../../_shared/ui/useI18n';
 import { useAutoResize } from '../../../_shared/ui/useAutoResize';
 import './App.css';

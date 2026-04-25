@@ -1,5 +1,6 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   Alert,
   Button,
@@ -282,7 +283,7 @@ function getCpuProfileChipColor(state: ServerCpuProfileStatus['state']): 'defaul
 
 function getCpuProfileStateLabel(
   state: ServerCpuProfileStatus['state'],
-  t: (key: string, defaultValue?: string) => string,
+  t: TFunction,
 ): string {
   switch (state) {
     case 'armed':
@@ -304,7 +305,7 @@ function getCpuProfileStateLabel(
 
 function getCpuProfileRuntimeLabel(
   distribution: ServerCpuProfileStatus['distribution'],
-  t: (key: string, defaultValue?: string) => string,
+  t: TFunction,
 ): string {
   switch (distribution) {
     case 'electron':
@@ -323,7 +324,7 @@ function getCpuProfileRuntimeLabel(
 function getCpuProfileRecommendedAction(
   distribution: ServerCpuProfileStatus['distribution'],
   phase: 'start' | 'finish',
-  t: (key: string, defaultValue?: string) => string,
+  t: TFunction,
   fallback?: string,
 ): string {
   const keyBase = phase === 'finish'
