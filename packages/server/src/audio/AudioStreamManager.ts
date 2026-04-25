@@ -20,6 +20,9 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/
 
 const logger = createLogger('AudioStreamManager');
 const INTERNAL_SAMPLE_RATE = 12000;
+const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
+const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
+const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
@@ -1071,6 +1074,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
     // 检查是否使用 ICOM WLAN 输出（零重采样优化）
     if (this.usingIcomWlanOutput && this.icomWlanAudioAdapter) {
+      const icomWlanAudioAdapter = this.icomWlanAudioAdapter;
       logger.info('playing audio via ICOM WLAN output (zero-resample)', {
         samples: audioData.length,
         sampleRate: targetSampleRate,
@@ -1083,25 +1087,48 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.playbackStartTime = playStartTime;
       this.shouldStopPlayback = false;
 
-      try {
+      const playbackPromise = (async () => {
         // 分块发送音频，支持实时音量调整
-        // 块大小：1200样本（≈100ms @ 12kHz），与普通声卡路径保持一致的响应速度
-        const chunkSize = 1200;
+        // 块大小：1200样本（≈100ms @ 12kHz），并维持少量预缓冲避免 ICOM 侧 underrun。
+        const chunkSize = ICOM_WLAN_TX_CHUNK_SIZE;
         const totalChunks = Math.ceil(audioData.length / chunkSize);
 
-        logger.debug(`ICOM WLAN chunked send: ${totalChunks} chunks, chunkSize=${chunkSize}`);
+        logger.debug(`ICOM WLAN chunked send: ${totalChunks} chunks, chunkSize=${chunkSize}, targetLeadMs=${ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS}`);
 
         const chunkStartTime = Date.now();
         const hrStart = performance.now();
         let samplesWritten = 0;
 
-        const wait = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
+        const assertNotStopped = () => {
+          if (this.shouldStopPlayback) {
+            throw new Error('playback interrupted');
+          }
+        };
+
+        const waitRespectingStop = async (ms: number): Promise<void> => {
+          let remainingMs = Math.max(0, ms);
+          while (remainingMs > 0) {
+            assertNotStopped();
+            const sleepMs = Math.min(ICOM_WLAN_TX_MAX_WAIT_SLICE_MS, remainingMs);
+            await new Promise<void>(res => setTimeout(res, sleepMs));
+            remainingMs -= sleepMs;
+          }
+          assertNotStopped();
+        };
+
+        const getBufferedLeadMs = () => {
+          const elapsedMs = performance.now() - hrStart;
+          const producedMs = (samplesWritten / targetSampleRate) * 1000;
+          return producedMs - elapsedMs;
+        };
 
         for (let i = 0; i < totalChunks; i++) {
           // 检查是否需要停止播放
-          if (this.shouldStopPlayback) {
+          try {
+            assertNotStopped();
+          } catch (error) {
             logger.debug(`ICOM WLAN stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
-            throw new Error('playback interrupted');
+            throw error;
           }
 
           const start = i * chunkSize;
@@ -1117,18 +1144,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             chunk[j] = s > 1 ? 1 : (s < -1 ? -1 : s);
           }
 
-          // 节奏控制：确保按照实际播放速度发送，避免过度领先
-          const elapsedMs = performance.now() - hrStart;
-          const producedMs = (samplesWritten / targetSampleRate) * 1000;
-          const leadMs = producedMs - elapsedMs;
-
-          // 如果领先超过100ms，等待至合理窗口内
-          if (leadMs > 100) {
-            await wait(Math.min(20, Math.max(1, Math.floor(leadMs - 50))));
+          // 节奏控制：保持约 150ms 的 ICOM 侧预缓冲，既不让缓冲见底，也避免数倍速灌入后过早结束 PTT。
+          const leadMs = getBufferedLeadMs();
+          if (leadMs > ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS) {
+            await waitRespectingStop(leadMs - ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS);
           }
 
           // 发送音频数据
-          await this.icomWlanAudioAdapter.sendAudio(chunk);
+          await icomWlanAudioAdapter.sendAudio(chunk);
           if (options.injectIntoMonitor) {
             this.emit('txMonitorAudioData', { samples: chunk, sampleRate: targetSampleRate });
           }
@@ -1136,16 +1159,33 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           samplesWritten += chunk.length;
         }
 
+        // 等待已注入的最后一段预缓冲自然播放完，避免上层 PTT 轮询把“发送完成”误判为“音频结束”。
+        const remainingBufferedMs = getBufferedLeadMs();
+        if (remainingBufferedMs > 0) {
+          await waitRespectingStop(remainingBufferedMs);
+        }
+
         const chunkEndTime = Date.now();
         const chunkDuration = chunkEndTime - chunkStartTime;
         logger.info(`ICOM WLAN audio send complete, duration: ${chunkDuration}ms`);
+      })();
 
+      this.currentPlaybackPromise = playbackPromise;
+
+      try {
+        await playbackPromise;
       } catch (error) {
-        logger.error('ICOM WLAN audio send failed', error);
+        const isInterrupted = error instanceof Error && error.message === 'playback interrupted';
+        if (!isInterrupted) {
+          logger.error('ICOM WLAN audio send failed', error);
+        }
         throw error;
       } finally {
         // 清理播放状态
         this.playing = false;
+        if (this.currentPlaybackPromise === playbackPromise) {
+          this.currentPlaybackPromise = null;
+        }
         this.currentAudioData = null;
         this.currentSampleRate = 0;
       }

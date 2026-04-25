@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldAutoOpenAlcWarning, shouldShowLevelDbmDetail } from '../RadioMetersDisplay';
+import {
+  shouldAutoOpenAlcWarning,
+  shouldShowLevelDbmDetail,
+  shouldShowLevelPowerMeter,
+} from '../RadioMetersDisplay';
 import { hasAnyMeterCapability } from '../../../../utils/radioMeters';
 
 describe('RadioMetersDisplay', () => {
@@ -73,5 +77,25 @@ describe('RadioMetersDisplay', () => {
       power: false,
       powerWatts: false,
     })).toBe(false);
+  });
+
+  it('keeps the Level/Power meter slot when TX power data is unavailable', () => {
+    expect(shouldShowLevelPowerMeter({
+      strength: true,
+      swr: true,
+      alc: true,
+      power: false,
+      powerWatts: false,
+    }, true, false)).toBe(true);
+  });
+
+  it('still shows the RX Level meter when only strength capability is enabled', () => {
+    expect(shouldShowLevelPowerMeter({
+      strength: true,
+      swr: true,
+      alc: true,
+      power: false,
+      powerWatts: false,
+    }, true, false)).toBe(true);
   });
 });

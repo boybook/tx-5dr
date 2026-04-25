@@ -12,7 +12,7 @@ import { EventEmitter } from 'eventemitter3';
 import { IcomControl, AUDIO_RATE, type IcomScopeFrame } from 'icom-wlan-node';
 import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
-import { RadioError, RadioErrorCode } from '../../utils/errors/RadioError.js';
+import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
@@ -33,6 +33,10 @@ import {
 } from './IRadioConnection.js';
 
 const logger = createLogger('IcomWlanConnection');
+const SPECTRUM_CAT_TIMEOUT_MS = 1000;
+const TX_METER_SETTLE_MS = 200;
+const METER_SAMPLE_LOG_INTERVAL_MS = 5000;
+const ICOM_WLAN_POWER_METER_SUPPORTED = false;
 
 /**
  * IcomWlanConnection 实现类
@@ -80,6 +84,10 @@ export class IcomWlanConnection
    */
   private tunerEnabled = false;
   private scopeEnabled = false;
+  private readonly isolatedSpectrumTasks = new Set<string>();
+  private softwarePttActive = false;
+  private pttActivatedAt: number | null = null;
+  private lastMeterSampleLoggedAt = 0;
 
   constructor() {
     super();
@@ -148,6 +156,45 @@ export class IcomWlanConnection
     });
   }
 
+  private async runIsolatedSpectrumTask<T>(
+    taskName: string,
+    task: () => Promise<T>,
+    options?: { timeoutMs?: number; skipIfBusy?: boolean; skippedValue?: T },
+  ): Promise<T> {
+    if (options?.skipIfBusy && this.isolatedSpectrumTasks.size > 0) {
+      logger.debug(`Skipping isolated spectrum CAT task because previous call is still active: ${taskName}`);
+      return options.skippedValue as T;
+    }
+
+    this.isolatedSpectrumTasks.add(taskName);
+    const operation = Promise.resolve()
+      .then(task)
+      .finally(() => {
+        this.isolatedSpectrumTasks.delete(taskName);
+      });
+
+    if (!options?.timeoutMs) {
+      return operation;
+    }
+
+    let timeout: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<T>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(`${taskName} timed out after ${options.timeoutMs}ms`)),
+            options.timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
   private async performFrequencyWrite(frequency: number): Promise<void> {
     this.checkConnected();
 
@@ -159,7 +206,11 @@ export class IcomWlanConnection
     }
   }
 
-  private async performModeWrite(mode: string, bandwidth?: RadioModeBandwidth): Promise<void> {
+  private async performModeWrite(
+    mode: string,
+    bandwidth?: RadioModeBandwidth,
+    options?: SetRadioModeOptions,
+  ): Promise<void> {
     this.checkConnected();
 
     try {
@@ -171,7 +222,11 @@ export class IcomWlanConnection
         ? true
         : bandwidth === 'narrow'
           ? false
-          : this.defaultDataMode;
+          : options?.intent === 'digital'
+            ? true
+            : options?.intent === 'voice'
+              ? false
+              : this.defaultDataMode;
 
       const modeCode = this.mapModeToIcom(mode);
       await this.rig!.setMode(modeCode, { dataMode });
@@ -188,6 +243,8 @@ export class IcomWlanConnection
     try {
       logger.debug(`PTT ${enabled ? 'TX start' : 'RX start'}`);
       await this.rig!.setPtt(enabled);
+      this.softwarePttActive = enabled;
+      this.pttActivatedAt = enabled ? Date.now() : null;
       logger.debug(`PTT ${enabled ? 'TX active' : 'RX active'}`);
     } catch (error) {
       throw RadioError.pttActivationFailed(
@@ -407,9 +464,9 @@ export class IcomWlanConnection
   /**
    * 设置电台工作模式
    */
-  async setMode(mode: string, bandwidth?: RadioModeBandwidth, _options?: SetRadioModeOptions): Promise<void> {
+  async setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
     await this.runSerializedTask('setMode', async () => {
-      await this.performModeWrite(mode, bandwidth);
+      await this.performModeWrite(mode, bandwidth, options);
     }, { critical: true });
   }
 
@@ -428,7 +485,7 @@ export class IcomWlanConnection
 
       if (request.mode) {
         try {
-          await this.performModeWrite(request.mode, request.bandwidth);
+          await this.performModeWrite(request.mode, request.bandwidth, request.options);
           modeApplied = true;
         } catch (error) {
           if (!request.tolerateModeFailure) {
@@ -458,7 +515,21 @@ export class IcomWlanConnection
             bandwidth: result.filterName || 'Normal',
           };
         }
-        throw new Error('Get mode returned null');
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_OPERATION,
+          message: 'Optional radio operation unavailable (getMode): Get mode returned null',
+          userMessage: 'Radio mode read is currently unavailable',
+          severity: RadioErrorSeverity.WARNING,
+          suggestions: [
+            'Continue using explicit frequency/mode writes',
+            'Avoid relying on ICOM WLAN mode readback',
+          ],
+          context: {
+            operation: 'getMode',
+            optional: true,
+            recoverable: true,
+          },
+        });
       } catch (error) {
         throw this.convertError(error, 'getMode');
       }
@@ -521,7 +592,7 @@ export class IcomWlanConnection
   }
 
   async enableScopeStream(): Promise<void> {
-    await this.runSerializedTask('enableScopeStream', async () => {
+    await this.runIsolatedSpectrumTask('enableScopeStream', async () => {
       this.checkConnected();
       if (this.scopeEnabled) {
         return;
@@ -529,18 +600,18 @@ export class IcomWlanConnection
 
       await this.rig!.enableScope();
       this.scopeEnabled = true;
-    });
+    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
   }
 
   async disableScopeStream(): Promise<void> {
-    await this.runSerializedTask('disableScopeStream', async () => {
+    await this.runIsolatedSpectrumTask('disableScopeStream', async () => {
       if (!this.rig || !this.scopeEnabled) {
         return;
       }
 
       await this.rig.disableScope();
       this.scopeEnabled = false;
-    });
+    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
   }
 
   addScopeFrameListener(listener: (frame: IcomScopeFrame) => void): void {
@@ -570,7 +641,7 @@ export class IcomWlanConnection
   }
 
   async getCurrentSpectrumSpan(): Promise<number | null> {
-    return this.runSerializedTask('getCurrentSpectrumSpan', async () => {
+    return this.runIsolatedSpectrumTask('getCurrentSpectrumSpan', async () => {
       this.checkConnected();
       try {
         const info = await this.rig!.readScopeSpan();
@@ -578,22 +649,22 @@ export class IcomWlanConnection
       } catch (error) {
         throw this.convertError(error, 'getCurrentSpectrumSpan');
       }
-    });
+    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS, skipIfBusy: true, skippedValue: null });
   }
 
   async setSpectrumSpan(spanHz: number): Promise<void> {
-    await this.runSerializedTask('setSpectrumSpan', async () => {
+    await this.runIsolatedSpectrumTask('setSpectrumSpan', async () => {
       this.checkConnected();
       try {
         await this.rig!.setScopeSpan(spanHz);
       } catch (error) {
         throw this.convertError(error, 'setSpectrumSpan');
       }
-    });
+    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
   }
 
   async getSpectrumDisplayState(): Promise<RadioSpectrumDisplayState | null> {
-    return this.runSerializedTask('getSpectrumDisplayState', async () => {
+    return this.runIsolatedSpectrumTask('getSpectrumDisplayState', async () => {
       this.checkConnected();
       try {
         const state = await this.rig!.getSpectrumDisplayState();
@@ -612,7 +683,7 @@ export class IcomWlanConnection
       } catch (error) {
         throw this.convertError(error, 'getSpectrumDisplayState');
       }
-    });
+    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS, skipIfBusy: true, skippedValue: null });
   }
 
   async configureSpectrumDisplay(config: {
@@ -622,14 +693,14 @@ export class IcomWlanConnection
     edgeLowHz?: number;
     edgeHighHz?: number;
   }): Promise<void> {
-    await this.runSerializedTask('configureSpectrumDisplay', async () => {
+    await this.runIsolatedSpectrumTask('configureSpectrumDisplay', async () => {
       this.checkConnected();
       try {
         await this.rig!.configureSpectrumDisplay(config);
       } catch (error) {
         throw this.convertError(error, 'configureSpectrumDisplay');
       }
-    });
+    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
   }
 
   // ===== 天线调谐器控制 =====
@@ -647,15 +718,18 @@ export class IcomWlanConnection
   }
 
   /**
-   * 获取电台数值表能力
-   * ICOM WLAN 始终支持全部数值表
+   * 获取电台数值表能力。
+   *
+   * icom-wlan-node 当前 readPowerLevel() 会把 raw=0 映射成 50%，
+   * 在实机上会造成假的发射功率读数。先禁用 Power meter，保留
+   * RX Level / TX SWR / TX ALC。
    */
   getMeterCapabilities(): MeterCapabilities {
     return {
       strength: true,
       swr: true,
       alc: true,
-      power: true,
+      power: ICOM_WLAN_POWER_METER_SUPPORTED,
       powerWatts: false,
     };
   }
@@ -982,13 +1056,24 @@ export class IcomWlanConnection
           return;
         }
 
-        const swr = await this.readMeterValue('SWR', () => this.rig!.readSWR({ timeout: 200 }));
-        const alcRaw = await this.readMeterValue('ALC', () => this.rig!.readALC({ timeout: 200 }));
-        const levelRaw = await this.readMeterValue('LEVEL', () => this.rig!.getLevelMeter({ timeout: 200 }));
-        const power = await this.readMeterValue('POWER', () => this.rig!.readPowerLevel({ timeout: 200 }));
-        const level = levelRaw ? { ...levelRaw, displayStyle: 's-meter-dbm' as const } : null;
+        const txMetersReady = this.areTxMetersReady();
+        const levelRaw = txMetersReady
+          ? null
+          : await this.readMeterValue('LEVEL', () => this.rig!.getLevelMeter({ timeout: 200 }));
+        const swrRaw = txMetersReady
+          ? await this.readMeterValue('SWR', () => this.rig!.readSWR({ timeout: 200 }))
+          : null;
+        const alcRaw = txMetersReady
+          ? await this.readMeterValue('ALC', () => this.rig!.readALC({ timeout: 200 }))
+          : null;
+        const powerRaw = txMetersReady && ICOM_WLAN_POWER_METER_SUPPORTED
+          ? await this.readMeterValue('POWER', () => this.rig!.readPowerLevel({ timeout: 200 }))
+          : null;
 
+        const level = levelRaw ? { ...levelRaw, displayStyle: 's-meter-dbm' as const } : null;
+        const swr = swrRaw ? { ...swrRaw, swr: Math.max(1, swrRaw.swr) } : null;
         const alc = alcRaw ? { ...alcRaw, alert: alcRaw.percent >= 100 } : null;
+        const power = powerRaw !== null ? { ...powerRaw, watts: null, maxWatts: null } : null;
 
         if (swr === null && alc === null && level === null && power === null) {
           return;
@@ -998,9 +1083,10 @@ export class IcomWlanConnection
           swr,
           alc,
           level,
-          power: power !== null ? { ...power, watts: null, maxWatts: null } : null,
+          power,
         };
 
+        this.logMeterSample(meterData, { txMetersReady });
         this.emit('meterData', meterData);
         globalEventBus.emit('bus:meterData', meterData);
       });
@@ -1020,6 +1106,29 @@ export class IcomWlanConnection
       logger.debug(`Meter read failed for ${name}: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
+  }
+
+  private areTxMetersReady(): boolean {
+    return this.softwarePttActive
+      && this.pttActivatedAt !== null
+      && Date.now() - this.pttActivatedAt >= TX_METER_SETTLE_MS;
+  }
+
+  private logMeterSample(meterData: MeterData, context: { txMetersReady: boolean }): void {
+    const now = Date.now();
+    if (now - this.lastMeterSampleLoggedAt < METER_SAMPLE_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastMeterSampleLoggedAt = now;
+    logger.debug('ICOM WLAN meter sample', {
+      pttActive: this.softwarePttActive,
+      txMetersReady: context.txMetersReady,
+      swr: meterData.swr ? { raw: meterData.swr.raw, swr: meterData.swr.swr } : null,
+      alc: meterData.alc ? { raw: meterData.alc.raw, percent: meterData.alc.percent } : null,
+      power: meterData.power ? { raw: meterData.power.raw, percent: meterData.power.percent } : null,
+      level: meterData.level ? { raw: meterData.level.raw, percent: meterData.level.percent, formatted: meterData.level.formatted } : null,
+    });
   }
 
   /**

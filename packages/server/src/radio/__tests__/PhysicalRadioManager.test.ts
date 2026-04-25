@@ -9,6 +9,7 @@ vi.mock('icom-wlan-node', () => ({
 import { PhysicalRadioManager } from '../PhysicalRadioManager.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { RadioConnectionFactory } from '../connections/RadioConnectionFactory.js';
+import { RadioConnectionType } from '../connections/IRadioConnection.js';
 
 type TestRadioActor = {
   send: ReturnType<typeof vi.fn>;
@@ -22,6 +23,7 @@ type TestRadioConnection = {
   isHealthy?: ReturnType<typeof vi.fn>;
   isCriticalOperationActive?: ReturnType<typeof vi.fn>;
   startBackgroundTasks?: ReturnType<typeof vi.fn>;
+  getType?: ReturnType<typeof vi.fn>;
   setKnownFrequency?: ReturnType<typeof vi.fn>;
   getTunerCapabilities?: ReturnType<typeof vi.fn>;
   getTunerStatus?: ReturnType<typeof vi.fn>;
@@ -47,8 +49,10 @@ type PhysicalRadioManagerTestAccessor = {
   capabilityManager: {
     onConnected: ReturnType<typeof vi.fn>;
     onDisconnected: ReturnType<typeof vi.fn>;
+    getCapabilitySnapshot: ReturnType<typeof vi.fn>;
     writeCapability: ReturnType<typeof vi.fn>;
     syncTunerStatus: ReturnType<typeof vi.fn>;
+    setPTTActive: ReturnType<typeof vi.fn>;
     refreshAll: ReturnType<typeof vi.fn>;
   };
   postConnectSettleMs: number;
@@ -273,6 +277,7 @@ describe('PhysicalRadioManager', () => {
   it('queues a serialized capability refresh after direct frequency writes', async () => {
     const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
     asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
       setFrequency: vi.fn().mockResolvedValue(undefined),
       setKnownFrequency: vi.fn(),
     };
@@ -282,6 +287,66 @@ describe('PhysicalRadioManager', () => {
     await Promise.resolve();
 
     expect(refreshAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips post-frequency capability refreshes after ICOM WLAN direct frequency writes', async () => {
+    const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      setFrequency: vi.fn().mockResolvedValue(undefined),
+      setKnownFrequency: vi.fn(),
+    };
+
+    await expect(manager.setFrequency(7100000)).resolves.toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(refreshAll).not.toHaveBeenCalled();
+  });
+
+  it('bypasses the capability system while ICOM WLAN is active', async () => {
+    const testManager = asTestManager(manager);
+    testManager.connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      setTuner: vi.fn(),
+    };
+    const getSnapshot = vi.spyOn(testManager.capabilityManager, 'getCapabilitySnapshot');
+    const refreshAll = vi.spyOn(testManager.capabilityManager, 'refreshAll').mockResolvedValue(undefined);
+
+    expect(manager.getCapabilitySnapshot()).toEqual({ descriptors: [], capabilities: [] });
+    await expect(manager.refreshCapabilities()).resolves.toBeUndefined();
+    await expect(manager.writeCapability('tuner_switch', true)).rejects.toThrow(
+      'radio capability system is disabled for ICOM WLAN'
+    );
+
+    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(refreshAll).not.toHaveBeenCalled();
+    expect(testManager.connection.setTuner).not.toHaveBeenCalled();
+  });
+
+  it('does not notify capability runtime of PTT/tuner state while ICOM WLAN is active', async () => {
+    const testManager = asTestManager(manager);
+    testManager.connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      setTuner: vi.fn().mockResolvedValue(undefined),
+      startTuning: vi.fn().mockResolvedValue(true),
+      getTunerStatus: vi.fn().mockResolvedValue({
+        enabled: true,
+        active: false,
+        status: 'idle',
+      }),
+    };
+    const setPTTActive = vi.spyOn(testManager.capabilityManager, 'setPTTActive');
+    const syncTunerStatus = vi.spyOn(testManager.capabilityManager, 'syncTunerStatus');
+
+    manager.setPTTActive(true);
+    manager.setPTTActive(false);
+    await expect(manager.setTuner(true)).resolves.toBeUndefined();
+    await expect(manager.startTuning()).resolves.toBe(true);
+
+    expect(setPTTActive).not.toHaveBeenCalled();
+    expect(syncTunerStatus).not.toHaveBeenCalled();
+    expect(manager.isPTTActive()).toBe(false);
   });
 
   it('queues capability refreshes serially after operating-state frequency changes', async () => {
@@ -304,6 +369,7 @@ describe('PhysicalRadioManager', () => {
       modeApplied: false,
     });
     asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
       applyOperatingState,
       setKnownFrequency: vi.fn(),
     };
@@ -321,6 +387,24 @@ describe('PhysicalRadioManager', () => {
       expect(order).toEqual(['refresh-1-start', 'refresh-1-end', 'refresh-2']);
     });
     expect(refreshAll).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips post-frequency capability refreshes after ICOM WLAN operating-state frequency changes', async () => {
+    const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      applyOperatingState: vi.fn().mockResolvedValue({
+        frequencyApplied: true,
+        modeApplied: false,
+      }),
+      setKnownFrequency: vi.fn(),
+    };
+
+    await manager.applyOperatingState({ frequency: 7100000 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(refreshAll).not.toHaveBeenCalled();
   });
 
   it('applies frequency and mode through the connection-level operating state helper', async () => {
@@ -423,6 +507,7 @@ describe('PhysicalRadioManager', () => {
     const setKnownFrequency = vi.fn();
     asTestManager(manager).lastKnownFrequency = 14074000;
     asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
       isCriticalOperationActive: vi.fn().mockReturnValue(false),
       getFrequency: vi.fn().mockResolvedValue(14075000),
       setKnownFrequency,
@@ -436,6 +521,24 @@ describe('PhysicalRadioManager', () => {
     expect(setKnownFrequency).toHaveBeenCalledWith(14075000);
     expect(asTestManager(manager).lastKnownFrequency).toBe(14075000);
     expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14075000);
+  });
+
+  it('skips post-frequency capability refreshes for ICOM WLAN frequency monitor changes', async () => {
+    const refreshAll = vi.spyOn(asTestManager(manager).capabilityManager, 'refreshAll').mockResolvedValue(undefined);
+    asTestManager(manager).lastKnownFrequency = 14074000;
+    asTestManager(manager).connection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getFrequency: vi.fn().mockResolvedValue(14075000),
+      setKnownFrequency: vi.fn(),
+    };
+    vi.spyOn(manager, 'isConnected').mockReturnValue(true);
+
+    await asTestManager(manager).checkFrequencyChange();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(refreshAll).not.toHaveBeenCalled();
   });
 
   it('completes conservative post-connect bootstrap before emitting connected', async () => {
@@ -511,6 +614,77 @@ describe('PhysicalRadioManager', () => {
     expect(connection.setPTT).toHaveBeenCalledWith(false);
     expect(connection.setFrequency).toHaveBeenCalledWith(14074000);
     expect(testManager.capabilityManager.onConnected).toHaveBeenCalledTimes(1);
+
+    await manager.disconnect('test cleanup');
+  });
+
+  it('skips capability bootstrap probes for ICOM WLAN connections', async () => {
+    const order: string[] = [];
+    const testManager = asTestManager(manager);
+    const connection: TestRadioConnection = {
+      on: vi.fn(),
+      off: vi.fn(),
+      connect: vi.fn().mockImplementation(async () => {
+        order.push('connect');
+      }),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      isHealthy: vi.fn().mockReturnValue(true),
+      isCriticalOperationActive: vi.fn().mockReturnValue(false),
+      getType: vi.fn().mockReturnValue(RadioConnectionType.ICOM_WLAN),
+      startBackgroundTasks: vi.fn().mockImplementation(() => {
+        order.push('background');
+      }),
+      setPTT: vi.fn().mockImplementation(async () => {
+        order.push('ptt-off');
+      }),
+      setKnownFrequency: vi.fn(),
+      getTunerCapabilities: vi.fn().mockImplementation(async () => {
+        order.push('tuner');
+        return { supported: true, hasSwitch: true, hasManualTune: true };
+      }),
+      setFrequency: vi.fn().mockImplementation(async () => {
+        order.push('restore');
+      }),
+      getFrequency: vi.fn().mockResolvedValue(21074000),
+    };
+
+    vi.spyOn(RadioConnectionFactory, 'create').mockReturnValue(connection as never);
+    vi.spyOn(testManager.configManager, 'getLastEngineMode').mockReturnValue('digital');
+    vi.spyOn(testManager.configManager, 'getLastSelectedFrequency').mockReturnValue({
+      frequency: 21074000,
+      mode: 'FT8',
+      band: '15m',
+      description: '15m FT8',
+    });
+    vi.spyOn(testManager.configManager, 'getLastVoiceFrequency').mockReturnValue(null);
+    const onConnected = vi.spyOn(testManager.capabilityManager, 'onConnected').mockResolvedValue(undefined);
+    const onDisconnected = vi.spyOn(testManager.capabilityManager, 'onDisconnected');
+    vi.spyOn(testManager, 'startFrequencyMonitoring').mockImplementation(() => {
+      order.push('monitor');
+    });
+    testManager.radioActor = null;
+
+    await manager.applyConfig({
+      type: 'icom-wlan',
+      icomWlan: {
+        ip: '192.168.31.253',
+        port: 50001,
+        userName: 'icom',
+        password: 'icomicom',
+        dataMode: false,
+      },
+    } as HamlibConfig);
+
+    expect(order).toEqual([
+      'connect',
+      'ptt-off',
+      'tuner',
+      'restore',
+      'background',
+      'monitor',
+    ]);
+    expect(onConnected).not.toHaveBeenCalled();
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
 
     await manager.disconnect('test cleanup');
   });
