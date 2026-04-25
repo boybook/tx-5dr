@@ -15,6 +15,16 @@ function makeWav(durationSec = 1, sampleRate = 16000): Buffer {
   return nodeWav.encode([samples], { sampleRate, float: false, bitDepth: 16 });
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function createManager() {
   const root = await mkdtemp(join(tmpdir(), 'tx5dr-voice-keyer-'));
   tempDirs.push(root);
@@ -170,11 +180,21 @@ describe('VoiceKeyerManager', () => {
 
     it('stops active playback but keeps repeat CQ waiting when manual PTT starts', async () => {
       const { manager, voiceSessionManager, audioStreamManager } = await createManager();
+      const playback = createDeferred<void>();
+      audioStreamManager.playAudio.mockReturnValueOnce(playback.promise);
+      audioStreamManager.stopCurrentPlayback.mockImplementationOnce(async () => {
+        playback.reject(new Error('playback interrupted'));
+        await playback.promise.catch(() => undefined);
+        return 1200;
+      });
+
       await manager.saveSlotAudio('BG5DRB', '1', makeWav());
       await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
 
       await manager.play({ callsign: 'BG5DRB', slotId: '1', repeat: true, connectionId: 'c1', label: 'Op' });
       await vi.waitFor(() => expect(manager.getStatus().mode).toBe('playing'));
+      await vi.advanceTimersByTimeAsync(PTT_AUDIO_WINDOW_MS);
+      await vi.waitFor(() => expect(audioStreamManager.playAudio).toHaveBeenCalled());
 
       manager.setManualPttActive(true);
       await vi.waitFor(() => expect(manager.getStatus().mode).toBe('repeat-waiting'));
@@ -182,6 +202,7 @@ describe('VoiceKeyerManager', () => {
       expect(audioStreamManager.stopCurrentPlayback).toHaveBeenCalled();
       await vi.waitFor(() => expect(voiceSessionManager.stopTransmit).toHaveBeenCalledWith('voice-keyer:c1'));
       expect(manager.getStatus().nextRunAt).toBeNull();
+      expect(manager.getStatus().error).toBeNull();
 
       manager.setManualPttActive(false);
       await vi.waitFor(() => expect(manager.getStatus().nextRunAt).toEqual(expect.any(Number)));

@@ -1307,7 +1307,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       });
 
       } catch (error) {
-        logger.error('audio playback failed', error);
+        if (error instanceof Error && error.message.includes('playback interrupted')) {
+          logger.debug('audio playback interrupted');
+        } else {
+          logger.error('audio playback failed', error);
+        }
         throw error;
       } finally {
         // 清理播放状态

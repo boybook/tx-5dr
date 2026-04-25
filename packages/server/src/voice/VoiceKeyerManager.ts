@@ -19,6 +19,10 @@ const PTT_LEAD_IN_MS = 150;
 const PTT_TAIL_MS = 500;
 type WaitWakeReason = 'elapsed' | 'ptt-change' | 'stop';
 
+function isPlaybackInterrupted(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('playback interrupted');
+}
+
 interface StoredManifest {
   version: 1;
   callsign: string;
@@ -329,9 +333,16 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     if (active.stopRequested || active.playbackInterrupted || this.active !== active) {
       return;
     }
-    await this.deps.audioStreamManager.playAudio(decoded.samples, decoded.sampleRate, {
-      injectIntoMonitor: true,
-    });
+    try {
+      await this.deps.audioStreamManager.playAudio(decoded.samples, decoded.sampleRate, {
+        injectIntoMonitor: true,
+      });
+    } catch (error) {
+      if ((active.stopRequested || active.playbackInterrupted) && isPlaybackInterrupted(error)) {
+        return;
+      }
+      throw error;
+    }
     if (active.stopRequested || active.playbackInterrupted || this.active !== active) {
       return;
     }
