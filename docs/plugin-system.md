@@ -1245,14 +1245,18 @@ panels: [
 
 | 方法/属性 | 说明 |
 |-----------|------|
-| `tx5dr.params` | 初始化时传入的参数对象（只读） |
+| `tx5dr.params` | 当前参数对象（只读；会先由 URL bootstrap，再由宿主 init 校准） |
 | `tx5dr.theme` | 当前主题：`'dark'` 或 `'light'` |
-| `tx5dr.locale` | 当前语言：如 `'zh'` 或 `'en'` |
+| `tx5dr.locale` | 当前语言：如 `'zh'`、`'zh-CN'` 或 `'en'` |
+| `tx5dr.ready` | 首次宿主 init 后 resolve，返回 `{ params, theme, locale, pageSessionId }` 快照 |
+| `tx5dr.getState()` | 返回当前 Bridge 状态快照 |
+| `tx5dr.onStateChange(callback)` | 监听任意 Bridge 状态变化，返回取消订阅函数 |
+| `tx5dr.onLocaleChange(callback)` | 监听语言变化，返回取消订阅函数 |
 | `tx5dr.invoke(action, data)` | 发送请求到服务端（返回 Promise） |
 | `tx5dr.onPush(action, callback)` | 监听服务端主动推送 |
 | `tx5dr.offPush(action, callback)` | 取消推送监听 |
 | `tx5dr.resize(height)` | 报告内容高度，宿主据此调整 iframe 尺寸 |
-| `tx5dr.onThemeChange(callback)` | 监听主题切换 |
+| `tx5dr.onThemeChange(callback)` | 监听主题切换，返回取消订阅函数 |
 | `tx5dr.requestClose()` | 请求关闭当前页面（由父组件处理） |
 | `tx5dr.storeGet(key, default)` | 读取页面私有 KV（按实例目标 + 绑定资源 + pageId 共享，返回 Promise） |
 | `tx5dr.storeSet(key, value)` | 写入页面私有 KV |
@@ -1331,6 +1335,8 @@ for (const session of ctx.ui.listActivePageSessions('dashboard')) {
 | `--tx5dr-spacing-xs` / `-sm` / `-md` / `-lg` / `-xl` | 间距 |
 | `--tx5dr-font` / `--tx5dr-font-mono` | 字体 |
 | `--tx5dr-font-size-sm` / `-md` / `-lg` | 字号 |
+
+Bridge SDK 会在插件脚本运行前从 iframe URL 读取 `_locale`、`_theme` 和普通 query 参数，因此首屏可以同步读取 `tx5dr.locale/theme/params`。宿主随后发送 `tx5dr:init` 作为权威状态；新插件若依赖完整初始化，应等待 `tx5dr.ready`，或通过 `tx5dr.onStateChange()` / `tx5dr.onLocaleChange()` 响应后续变化，不要假设 postMessage init 一定早于前端框架首轮渲染。
 
 当宿主切换主题时，Design Tokens 自动更新，同时触发 `tx5dr.onThemeChange()` 回调。
 

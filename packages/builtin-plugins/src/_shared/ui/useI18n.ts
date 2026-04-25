@@ -1,7 +1,53 @@
 /// <reference types="@tx5dr/plugin-api/bridge" />
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 type Translations = Record<string, Record<string, string>>;
+
+function getBridgeLocale(): string {
+  const bridge = typeof window !== 'undefined' ? window.tx5dr : undefined;
+  if (bridge?.getState) {
+    return bridge.getState().locale || 'en';
+  }
+  return bridge?.locale || 'en';
+}
+
+export function resolveTranslationLocale(
+  translations: Translations,
+  locale: string,
+): string {
+  if (translations[locale]) {
+    return locale;
+  }
+
+  const baseLocale = locale.split('-')[0];
+  if (baseLocale && translations[baseLocale]) {
+    return baseLocale;
+  }
+
+  return translations.en ? 'en' : Object.keys(translations)[0] ?? 'en';
+}
+
+export function interpolateText(
+  text: string,
+  vars?: Record<string, string | number>,
+): string {
+  if (!vars) return text;
+  return text.replace(/\{([^{}]+)\}/g, (match, key) => (
+    Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : match
+  ));
+}
+
+export function translateMessage(
+  translations: Translations,
+  locale: string,
+  key: string,
+  vars?: Record<string, string | number>,
+): string {
+  const resolvedLocale = resolveTranslationLocale(translations, locale);
+  const dict = translations[resolvedLocale] ?? translations.en ?? {};
+  const fallback = resolvedLocale !== 'en' ? translations.en ?? {} : dict;
+  return interpolateText(dict[key] ?? fallback[key] ?? key, vars);
+}
 
 /**
  * Lightweight i18n hook for plugin iframe pages.
@@ -9,6 +55,9 @@ type Translations = Record<string, Record<string, string>>;
  * Reads the current locale from the Bridge SDK (`window.tx5dr.locale`),
  * falls back to `'en'`, and returns a `t()` function that looks up keys
  * from the provided translation dictionary.
+ *
+ * The hook also subscribes to Bridge locale changes so pages keep working if
+ * the host changes language without reloading the iframe.
  *
  * @example
  * ```tsx
@@ -30,26 +79,21 @@ type Translations = Record<string, Record<string, string>>;
  * ```
  */
 export function useI18n(translations: Translations) {
-  const locale = useMemo(() => window.tx5dr?.locale || 'en', []);
-  const dict = useMemo(
-    () => translations[locale] ?? translations.en ?? {},
-    [translations, locale],
-  );
-  const fallback = useMemo(
-    () => (locale !== 'en' ? translations.en ?? {} : dict),
-    [translations, locale, dict],
-  );
+  const [locale, setLocale] = useState(getBridgeLocale);
+
+  useEffect(() => {
+    const bridge = window.tx5dr;
+    if (!bridge?.onLocaleChange) return;
+    const unsubscribe = bridge.onLocaleChange((nextLocale) => {
+      setLocale(nextLocale || 'en');
+    });
+    return typeof unsubscribe === 'function' ? unsubscribe : undefined;
+  }, []);
 
   return useCallback(
     (key: string, vars?: Record<string, string | number>): string => {
-      let text = dict[key] ?? fallback[key] ?? key;
-      if (vars) {
-        for (const [k, v] of Object.entries(vars)) {
-          text = text.replace(`{${k}}`, String(v));
-        }
-      }
-      return text;
+      return translateMessage(translations, locale, key, vars);
     },
-    [dict, fallback],
+    [translations, locale],
   );
 }
