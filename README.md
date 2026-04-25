@@ -128,6 +128,9 @@ Linux Server is not a single standalone process. The installer sets up and wires
 - If you use a dedicated domain, an extra reverse proxy layer, or a non-standard path, configure the custom browser-facing entrypoint in "System Settings > Realtime Audio"; the same page also exposes the shared LAN / Internet Auto / Internet Manual LiveKit media modes
 - Linux Server and Docker now generate a managed `livekit.resolved.yaml` from that shared configuration. Do not hand-edit the generated runtime YAML
 - Download source override: set `TX5DR_DOWNLOAD_SOURCE=github|oss|auto` in `/etc/tx5dr/config.env` if you need to force a specific source
+- Server-only CPU profile capture is available from `System Settings > Performance Diagnostics`, or by setting `TX5DR_SERVER_CPU_PROFILE=1` in `/etc/tx5dr/config.env` for a manual override. This never enables profiling for nginx, LiveKit, Electron main, or other child processes
+- CPU profile files are flushed only when the backend server exits cleanly. Use a normal restart such as `sudo tx5dr restart` or `docker restart tx5dr`, not a force kill
+- Generated files are stored under `logs/diagnostics/cpu` in the managed runtime root. Linux service installs use `/var/lib/tx5dr/logs/diagnostics/cpu`; official Docker uses `/app/data/logs/diagnostics/cpu` in-container and `./data/logs/diagnostics/cpu` on the host
 
 ---
 

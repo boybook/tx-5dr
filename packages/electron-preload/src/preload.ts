@@ -101,6 +101,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 退出应用
      */
     quit: () => ipcRenderer.invoke('app:quit'),
+
+    /**
+     * 重启应用
+     */
+    restart: () => ipcRenderer.invoke('app:restart'),
     
     /**
      * 最小化窗口
@@ -212,6 +217,7 @@ declare global {
       app: {
         getVersion(): Promise<string>;
         quit(): Promise<void>;
+        restart(): Promise<void>;
         minimize(): Promise<void>;
         toggleMaximize(): Promise<void>;
       };

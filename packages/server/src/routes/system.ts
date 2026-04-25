@@ -1,10 +1,19 @@
+import { createReadStream } from 'node:fs';
+import { access } from 'node:fs/promises';
+import path from 'node:path';
 import { FastifyInstance } from 'fastify';
 import os from 'node:os';
-import { NtpServerListSettingsSchema, SetClockOffsetRequestSchema, UpdateNtpServerListRequestSchema } from '@tx5dr/contracts';
+import {
+  NtpServerListSettingsSchema,
+  ServerCpuProfileStatusSchema,
+  SetClockOffsetRequestSchema,
+  UpdateNtpServerListRequestSchema,
+} from '@tx5dr/contracts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { requireAbility } from '../auth/authPlugin.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
+import { ServerCpuProfileManager } from '../services/ServerCpuProfileManager.js';
 
 /**
  * 系统信息路由
@@ -12,6 +21,10 @@ import { ConfigManager } from '../config/config-manager.js';
 export async function systemRoutes(fastify: FastifyInstance) {
   const engine = DigitalRadioEngine.getInstance();
   const configManager = ConfigManager.getInstance();
+
+  async function getCpuProfileManager() {
+    return ServerCpuProfileManager.create({ env: process.env });
+  }
 
   // 获取网络访问地址
   fastify.get('/network-info', async (_request, reply) => {
@@ -89,5 +102,65 @@ export async function systemRoutes(fastify: FastifyInstance) {
       servers: configManager.getNtpServers(),
       defaultServers: configManager.getDefaultNtpServers(),
     }));
+  });
+
+  fastify.get('/cpu-profile', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
+    const manager = await getCpuProfileManager();
+    return reply.send(ServerCpuProfileStatusSchema.parse(await manager.getStatus()));
+  });
+
+  fastify.post('/cpu-profile/arm', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
+    const manager = await getCpuProfileManager();
+    return reply.send(ServerCpuProfileStatusSchema.parse(await manager.armGuidedCapture()));
+  });
+
+  fastify.post('/cpu-profile/cancel', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
+    const manager = await getCpuProfileManager();
+    return reply.send(ServerCpuProfileStatusSchema.parse(await manager.cancelGuidedCapture()));
+  });
+
+  fastify.post('/cpu-profile/dismiss', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
+    const manager = await getCpuProfileManager();
+    return reply.send(ServerCpuProfileStatusSchema.parse(await manager.dismissResult()));
+  });
+
+  fastify.get('/cpu-profile/download', {
+    preHandler: [requireAbility('manage', 'all')],
+  }, async (_request, reply) => {
+    const manager = await getCpuProfileManager();
+    const status = await manager.getStatus();
+
+    if (status.state !== 'completed' || !status.profilePath) {
+      return reply.code(404).send({
+        error: {
+          message: 'CPU profile file is not available yet',
+          code: 'CPU_PROFILE_NOT_READY',
+        },
+      });
+    }
+
+    try {
+      await access(status.profilePath);
+    } catch {
+      return reply.code(404).send({
+        error: {
+          message: 'CPU profile file is missing',
+          code: 'CPU_PROFILE_MISSING',
+        },
+      });
+    }
+
+    const fileName = path.basename(status.profilePath);
+    reply.header('Content-Type', 'application/octet-stream');
+    reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
+    return reply.send(createReadStream(status.profilePath));
   });
 }

@@ -6,7 +6,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./server": "./dist/server.js",
-    "./DigitalRadioEngine": "./dist/DigitalRadioEngine.js"
+    "./DigitalRadioEngine": "./dist/DigitalRadioEngine.js",
+    "./cpu-profile": "./dist/services/ServerCpuProfileManager.js"
   },
   "scripts": {
     "build": "tsc",
@@ -17,7 +18,7 @@
     "clinic:bubble": "yarn build && clinic bubbleprof -- node dist/index.js",
     "clinic:heap": "yarn build && clinic heapprofiler -- node dist/index.js",
     "dev:check-native": "tsx src/scripts/check-native-modules.ts",
-    "start": "GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" node dist/index.js",
+    "start": "GLIBC_TUNABLES=\"${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.execstack=2\" node dist/scripts/server-launcher.js dist/index.js",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run"
   },

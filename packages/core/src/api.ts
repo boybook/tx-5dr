@@ -81,6 +81,7 @@ import type {
   RealtimeSessionResponse,
   RealtimeStatsRequest,
   RealtimeStatsResponse,
+  ServerCpuProfileStatus,
   RealtimeVoiceTxStatsResponse,
   PluginMarketCatalogEntryResponse,
   PluginMarketCatalogResponse,
@@ -272,6 +273,63 @@ function getConfiguredApiBase(): string {
 function getAuthHeaders(): Record<string, string> {
   const jwt = ApiConfig.getInstance().getJwtToken();
   return jwt ? { Authorization: `Bearer ${jwt}` } : {};
+}
+
+async function apiBlobRequest(
+  url: string,
+  options?: globalThis.RequestInit,
+  apiBase?: string
+): Promise<Blob> {
+  const baseUrl = apiBase || getConfiguredApiBase();
+  const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
+
+  const response = await fetch(fullUrl, {
+    ...options,
+    headers: {
+      ...getAuthHeaders(),
+      ...(options?.headers as Record<string, string>),
+    },
+  });
+
+  if (!response.ok) {
+    try {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await response.json();
+        if (data?.error) {
+          throw handleApiError(data.error, response.status);
+        }
+        if (data?.code || data?.message) {
+          throw new ApiError(
+            data.message || `HTTP ${response.status}`,
+            data.message || 'Operation failed, please try again later',
+            response.status,
+            {
+              code: data.code,
+              suggestions: data.suggestions,
+              severity: 'error',
+            }
+          );
+        }
+      }
+    } catch (parseError) {
+      if (parseError instanceof ApiError) {
+        throw parseError;
+      }
+    }
+
+    throw new ApiError(
+      `HTTP ${response.status}: ${response.statusText}`,
+      'Operation failed, please try again later',
+      response.status,
+      {
+        code: 'HTTP_ERROR',
+        severity: 'error',
+      }
+    );
+  }
+
+  return response.blob();
 }
 
 
@@ -1015,6 +1073,26 @@ export const api = {
       },
       apiBase
     );
+  },
+
+  async getServerCpuProfileStatus(apiBase?: string): Promise<ServerCpuProfileStatus> {
+    return apiRequest('/system/cpu-profile', undefined, apiBase);
+  },
+
+  async armServerCpuProfile(apiBase?: string): Promise<ServerCpuProfileStatus> {
+    return apiRequest('/system/cpu-profile/arm', { method: 'POST' }, apiBase);
+  },
+
+  async cancelServerCpuProfile(apiBase?: string): Promise<ServerCpuProfileStatus> {
+    return apiRequest('/system/cpu-profile/cancel', { method: 'POST' }, apiBase);
+  },
+
+  async dismissServerCpuProfile(apiBase?: string): Promise<ServerCpuProfileStatus> {
+    return apiRequest('/system/cpu-profile/dismiss', { method: 'POST' }, apiBase);
+  },
+
+  async downloadServerCpuProfile(apiBase?: string): Promise<Blob> {
+    return apiBlobRequest('/system/cpu-profile/download', undefined, apiBase);
   },
 
   // ========== 频率预设管理 ==========

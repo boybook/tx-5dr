@@ -286,6 +286,13 @@ function webGatewayEntryPath(): string {
   return path.resolve(__dirname, '../../client-tools/src/proxy.js');
 }
 
+function serverLauncherEntryPath(): string {
+  if (app.isPackaged) {
+    return join(resourcesRoot(), 'app', 'packages', 'server', 'dist', 'scripts', 'server-launcher.js');
+  }
+  return path.resolve(__dirname, '../../server/dist/scripts/server-launcher.js');
+}
+
 async function restartWebGateway(): Promise<void> {
   if (!selectedServerPort || !selectedWebPort) {
     throw new Error('web_gateway_not_ready');
@@ -1717,6 +1724,7 @@ async function createWindow() {
     const res = resourcesRoot();
     const livekitBinary = livekitServerPath();
     const serverEntry = join(res, 'app', 'packages', 'server', 'dist', 'index.js');
+    const serverLauncherEntry = serverLauncherEntryPath();
     const webEntry = webGatewayEntryPath();
     const livekitEnabled = Boolean(livekitBinary);
     if (!livekitEnabled) {
@@ -1812,9 +1820,10 @@ async function createWindow() {
     // Start server immediately — do not wait for LiveKit to become ready.
     // Server's LiveKitBridgeManager handles LiveKit availability detection
     // and recovery probing, falling back to ws-compat when unavailable.
-    serverProcess = runChild('server', serverEntry, {
+    serverProcess = runChild('server', serverLauncherEntry, {
       PORT: String(serverPort),
       WEB_PORT: String(webPort),
+      TX5DR_SERVER_ENTRY: serverEntry,
       LIVEKIT_DISABLED: livekitEnabled ? '0' : '1',
       ...(livekitEnabled && livekitPort && livekitTcpPort && livekitCredentialPath && livekitConfigPath
         ? {
@@ -1944,14 +1953,16 @@ let isCleaningUp = false;
 let hasCleanedUp = false;
 let cleanupPromise: Promise<void> | null = null;
 let lastQuitSource: QuitSource = 'unknown';
+let relaunchAfterCleanup = false;
 
 // 统一的清理和退出处理函数
-async function cleanupAndQuit(source: QuitSource = 'unknown'): Promise<void> {
+async function cleanupAndQuit(source: QuitSource = 'unknown', options?: { relaunch?: boolean }): Promise<void> {
   if (cleanupPromise) {
     return cleanupPromise;
   }
 
   lastQuitSource = source;
+  relaunchAfterCleanup = options?.relaunch === true;
   cleanupPromise = (async () => {
     const totalStartedAt = Date.now();
 
@@ -1979,6 +1990,9 @@ async function cleanupAndQuit(source: QuitSource = 'unknown'): Promise<void> {
       });
     } finally {
       isCleaningUp = false;
+      if (relaunchAfterCleanup) {
+        app.relaunch();
+      }
       app.exit(0);
     }
   })();
@@ -2211,6 +2225,9 @@ function setupIpcHandlers() {
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:quit', async () => {
     await cleanupAndQuit('renderer');
+  });
+  ipcMain.handle('app:restart', async () => {
+    await cleanupAndQuit('renderer', { relaunch: true });
   });
 
   ipcMain.handle('updater:getStatus', () => {

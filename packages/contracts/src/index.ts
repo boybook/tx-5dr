@@ -126,6 +126,9 @@ export * from './utils/grid.js';
 // Process Monitor Schema
 export * from './schema/process-monitor.schema.js';
 
+// CPU Profile Schema
+export * from './schema/cpu-profile.schema.js';
+
 // OpenWebRX Schema
 export * from './schema/openwebrx.schema.js';
 

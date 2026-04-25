@@ -12,8 +12,9 @@ import {
   Switch,
   Chip,
 } from '@heroui/react';
+import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCheck, faCopy, faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons';
+import { faCheck, faCopy, faDownload, faGripVertical, faPlus, faTrash } from '@fortawesome/free-solid-svg-icons';
 import { Reorder, useDragControls } from 'framer-motion';
 import { api, ApiError } from '@tx5dr/core';
 import type {
@@ -29,6 +30,7 @@ import type {
   RealtimeTransportPolicy,
   DesktopHttpsStatus,
   DesktopHttpsMode,
+  ServerCpuProfileStatus,
 } from '@tx5dr/contracts';
 import { DEFAULT_DECODE_WINDOW_SETTINGS, FT8_WINDOW_PRESETS, FT4_WINDOW_PRESETS, isValidNtpServerHost } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
@@ -258,6 +260,88 @@ function buildDecodeWindowState(settings?: DecodeWindowSettings): DecodeWindowSt
   };
 }
 
+function getCpuProfileChipColor(state: ServerCpuProfileStatus['state']): 'default' | 'warning' | 'success' | 'danger' | 'primary' {
+  switch (state) {
+    case 'armed':
+      return 'warning';
+    case 'running':
+      return 'primary';
+    case 'completed':
+      return 'success';
+    case 'interrupted':
+    case 'missing':
+      return 'danger';
+    case 'env-override':
+      return 'warning';
+    default:
+      return 'default';
+  }
+}
+
+function getCpuProfileStateLabel(
+  state: ServerCpuProfileStatus['state'],
+  t: (key: string, defaultValue?: string) => string,
+): string {
+  switch (state) {
+    case 'armed':
+      return t('system.cpuProfile.state.armed', 'Armed');
+    case 'running':
+      return t('system.cpuProfile.state.running', 'Running');
+    case 'completed':
+      return t('system.cpuProfile.state.completed', 'Completed');
+    case 'interrupted':
+      return t('system.cpuProfile.state.interrupted', 'Interrupted');
+    case 'missing':
+      return t('system.cpuProfile.state.missing', 'Missing');
+    case 'env-override':
+      return t('system.cpuProfile.state.envOverride', 'External Override');
+    default:
+      return t('system.cpuProfile.state.idle', 'Idle');
+  }
+}
+
+function getCpuProfileRuntimeLabel(
+  distribution: ServerCpuProfileStatus['distribution'],
+  t: (key: string, defaultValue?: string) => string,
+): string {
+  switch (distribution) {
+    case 'electron':
+      return t('system.cpuProfile.runtime.electron', 'Electron');
+    case 'docker':
+      return t('system.cpuProfile.runtime.docker', 'Docker');
+    case 'linux-service':
+      return t('system.cpuProfile.runtime.linuxService', 'Linux Server');
+    case 'web-dev':
+      return t('system.cpuProfile.runtime.dev', 'Dev');
+    default:
+      return t('system.cpuProfile.runtime.generic', 'Server');
+  }
+}
+
+function getCpuProfileRecommendedAction(
+  distribution: ServerCpuProfileStatus['distribution'],
+  phase: 'start' | 'finish',
+  t: (key: string, defaultValue?: string) => string,
+  fallback?: string,
+): string {
+  const keyBase = phase === 'finish'
+    ? 'system.cpuProfile.recommended.finish'
+    : 'system.cpuProfile.recommended.start';
+
+  switch (distribution) {
+    case 'electron':
+      return t(`${keyBase}.electron`, fallback || 'Restart app');
+    case 'docker':
+      return t(`${keyBase}.docker`, fallback || 'docker restart tx5dr');
+    case 'linux-service':
+      return t(`${keyBase}.linuxService`, fallback || 'sudo tx5dr restart');
+    case 'web-dev':
+      return t(`${keyBase}.dev`, fallback || 'Restart the server normally');
+    default:
+      return t(`${keyBase}.generic`, fallback || 'Restart the server normally');
+  }
+}
+
 function getCpuLoadInfo(count: number, t: (key: string) => string): { label: string; color: 'success' | 'primary' | 'warning' | 'danger' } {
   if (count <= 1) return { label: t('system.cpuVeryLow'), color: 'success' };
   if (count <= 2) return { label: t('system.cpuLow'), color: 'success' };
@@ -410,6 +494,10 @@ export const SystemSettings = forwardRef<
   const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
   const [desktopUpdateError, setDesktopUpdateError] = useState('');
   const [desktopUpdateExpanded, setDesktopUpdateExpanded] = useState(false);
+  const [cpuProfileStatus, setCpuProfileStatus] = useState<ServerCpuProfileStatus | null>(null);
+  const [cpuProfileBusy, setCpuProfileBusy] = useState(false);
+  const [cpuProfilePathCopied, setCpuProfilePathCopied] = useState(false);
+  const [cpuProfileDownloadBusy, setCpuProfileDownloadBusy] = useState(false);
 
   // 加载配置
   useEffect(() => {
@@ -493,6 +581,124 @@ export const SystemSettings = forwardRef<
       setPskrStatusLoading(false);
     }
   }, []);
+
+  const loadCpuProfileStatus = useCallback(async () => {
+    try {
+      const status = await api.getServerCpuProfileStatus();
+      setCpuProfileStatus(status);
+    } catch (err) {
+      logger.error('Failed to load CPU profile status:', err);
+    }
+  }, []);
+
+  const runCpuProfileAction = useCallback(async (
+    action: () => Promise<ServerCpuProfileStatus>,
+    successTitle: string,
+  ) => {
+    setCpuProfileBusy(true);
+    try {
+      const status = await action();
+      setCpuProfileStatus(status);
+      addToast({ title: successTitle, color: 'success', timeout: 2500 });
+    } catch (err) {
+      logger.error('CPU profile action failed:', err);
+      if (err instanceof ApiError) {
+        showErrorToast({
+          userMessage: err.userMessage,
+          suggestions: err.suggestions,
+          severity: err.severity,
+          code: err.code,
+        });
+      } else {
+        showErrorToast({
+          userMessage: err instanceof Error ? err.message : t('system.saveFailed'),
+          severity: 'error',
+        });
+      }
+    } finally {
+      setCpuProfileBusy(false);
+    }
+  }, [t]);
+
+  const handleCopyCpuProfilePath = useCallback(async (pathValue: string | null | undefined) => {
+    if (!pathValue) return;
+    try {
+      await navigator.clipboard.writeText(pathValue);
+      setCpuProfilePathCopied(true);
+      window.setTimeout(() => setCpuProfilePathCopied(false), 1500);
+    } catch (err) {
+      logger.error('Failed to copy CPU profile path:', err);
+    }
+  }, []);
+
+  const handleOpenCpuProfileFolder = useCallback(async () => {
+    if (!cpuProfileStatus?.profilePath || !window.electronAPI?.shell?.openPath) {
+      return;
+    }
+
+    try {
+      const normalized = cpuProfileStatus.profilePath.replace(/\\/g, '/');
+      const folderPath = normalized.includes('/') ? normalized.slice(0, normalized.lastIndexOf('/')) : cpuProfileStatus.profilePath;
+      await window.electronAPI.shell.openPath(folderPath);
+    } catch (err) {
+      logger.error('Failed to open CPU profile folder:', err);
+    }
+  }, [cpuProfileStatus?.profilePath]);
+
+  const handleDownloadCpuProfile = useCallback(async () => {
+    if (!cpuProfileStatus?.profilePath) {
+      return;
+    }
+
+    setCpuProfileDownloadBusy(true);
+    try {
+      const blob = await api.downloadServerCpuProfile();
+      const objectUrl = URL.createObjectURL(blob);
+      const fileName = cpuProfileStatus.profilePath.split(/[\\/]/).pop() || 'server.cpuprofile';
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      logger.error('Failed to download CPU profile:', err);
+      if (err instanceof ApiError) {
+        showErrorToast({
+          userMessage: err.userMessage,
+          suggestions: err.suggestions,
+          severity: err.severity,
+          code: err.code,
+        });
+      } else {
+        showErrorToast({
+          userMessage: t('system.cpuProfile.downloadFailed', 'Failed to download CPU profile'),
+          severity: 'error',
+        });
+      }
+    } finally {
+      setCpuProfileDownloadBusy(false);
+    }
+  }, [cpuProfileStatus?.profilePath, t]);
+
+  const handleRestartAppForCpuProfile = useCallback(async () => {
+    if (!window.electronAPI?.app?.restart) {
+      return;
+    }
+
+    setCpuProfileBusy(true);
+    try {
+      await window.electronAPI.app.restart();
+    } catch (err) {
+      logger.error('Failed to restart app for CPU profile flow:', err);
+      setCpuProfileBusy(false);
+      showErrorToast({
+        userMessage: err instanceof Error ? err.message : t('system.saveFailed'),
+        severity: 'error',
+      });
+    }
+  }, [t]);
 
   // 加载解码窗口设置
   const loadDecodeWindowSettings = async () => {
@@ -782,6 +988,18 @@ export const SystemSettings = forwardRef<
     return () => window.clearInterval(interval);
   }, [loadRealtimeSettings]);
 
+  useEffect(() => {
+    void loadCpuProfileStatus();
+  }, [loadCpuProfileStatus]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void loadCpuProfileStatus();
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [loadCpuProfileStatus]);
+
   // 定期刷新 PSKReporter 状态
   useEffect(() => {
     if (!pskrConfig?.enabled) return;
@@ -1024,6 +1242,18 @@ export const SystemSettings = forwardRef<
   const desktopDownloadOptions = desktopUpdateStatus?.downloadOptions || [];
   const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
   const ntpCanRestoreDefaults = !areStringArraysEqual(getNtpServerValues(ntpServers), defaultNtpServers);
+  const cpuProfileState = cpuProfileStatus?.state ?? 'idle';
+  const cpuProfilePrimaryAction = cpuProfileStatus
+    ? getCpuProfileRecommendedAction(
+        cpuProfileStatus.distribution,
+        cpuProfileState === 'running' ? 'finish' : 'start',
+        t,
+        cpuProfileState === 'running'
+          ? cpuProfileStatus.recommendedFinishAction
+          : cpuProfileStatus.recommendedStartAction,
+      )
+    : null;
+  const isCpuProfileElectronFlow = cpuProfileStatus?.distribution === 'electron' && Boolean(window.electronAPI?.app?.restart);
 
   // PSKReporter 配置更新辅助函数
   const updatePskrConfig = (updates: Partial<PSKReporterConfig>) => {
@@ -1052,6 +1282,254 @@ export const SystemSettings = forwardRef<
     }
     return t('system.reportInSecs', { secs });
   };
+
+  const cpuProfileCard = cpuProfileStatus && (
+    <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <CardBody className={SETTINGS_CARD_BODY_CLASS}>
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className={SETTINGS_CARD_TITLE_CLASS}>
+                {t('system.cpuProfile.title', 'Performance Diagnostics')}
+              </h4>
+              <Chip size="sm" color={getCpuProfileChipColor(cpuProfileState)} variant="flat">
+                {getCpuProfileStateLabel(cpuProfileState, t)}
+              </Chip>
+            </div>
+            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
+              {t(
+                'system.cpuProfile.desc',
+                'Capture a server-only CPU profile for performance analysis. This affects only the backend server process.',
+              )}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {cpuProfileState === 'idle' && (
+              <Button
+                size="sm"
+                color="primary"
+                onPress={() => void runCpuProfileAction(
+                  () => api.armServerCpuProfile(),
+                  t('system.cpuProfile.armedToast', 'CPU profile capture armed'),
+                )}
+                isDisabled={cpuProfileBusy}
+              >
+                {t('system.cpuProfile.start', 'Start Guided Capture')}
+              </Button>
+            )}
+            {cpuProfileState === 'armed' && (
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={() => void runCpuProfileAction(
+                  () => api.cancelServerCpuProfile(),
+                  t('system.cpuProfile.cancelledToast', 'CPU profile capture cancelled'),
+                )}
+                isDisabled={cpuProfileBusy}
+              >
+                {t('system.cpuProfile.cancel', 'Cancel Armed Capture')}
+              </Button>
+            )}
+            {(cpuProfileState === 'completed' || cpuProfileState === 'interrupted' || cpuProfileState === 'missing') && (
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={() => void runCpuProfileAction(
+                  () => api.dismissServerCpuProfile(),
+                  t('system.cpuProfile.dismissedToast', 'CPU profile status cleared'),
+                )}
+                isDisabled={cpuProfileBusy}
+              >
+                {t('system.cpuProfile.dismiss', 'Dismiss Result')}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className={SETTINGS_SOFT_PANEL_CLASS}>
+          <p className={SETTINGS_SUBTITLE_CLASS}>
+            {t('system.cpuProfile.serverOnlyTitle', 'Server-only capture')}
+          </p>
+          <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
+            {t(
+              'system.cpuProfile.serverOnlyDesc',
+              'Files are generated only after the profiled server process exits cleanly. Starting is easy; finishing correctly is the important part.',
+            )}
+          </p>
+        </div>
+
+        {cpuProfileState === 'idle' && (
+          <Alert
+            color="default"
+            variant="flat"
+            title={t('system.cpuProfile.idleTitle', 'Ready to arm a one-time capture')}
+            description={t(
+              'system.cpuProfile.idleDesc',
+              'Arm the next server start, reproduce the issue, then perform one more normal restart to flush the .cpuprofile file.',
+            )}
+          />
+        )}
+
+        {cpuProfileState === 'armed' && (
+          <Alert
+            color="warning"
+            variant="flat"
+            title={t('system.cpuProfile.armedTitle', 'Capture armed for the next server start')}
+            description={t(
+              'system.cpuProfile.armedDesc',
+              'The next normal restart begins profiling. Do not force kill the process.',
+            )}
+          />
+        )}
+
+        {cpuProfileState === 'running' && (
+          <Alert
+            color="primary"
+            variant="flat"
+            title={t('system.cpuProfile.runningTitle', 'Capture in progress')}
+            description={t(
+              'system.cpuProfile.runningDesc',
+              'The profile file will not appear until the next normal stop or restart. Use the recommended finish action below, not a force kill.',
+            )}
+          />
+        )}
+
+        {(cpuProfileState === 'interrupted' || cpuProfileState === 'missing') && (
+          <Alert
+            color="danger"
+            variant="flat"
+            title={t('system.cpuProfile.failedTitle', 'The last capture did not produce a usable file')}
+            description={t(
+              'system.cpuProfile.failedDesc',
+              'This usually means the server did not exit cleanly, or no .cpuprofile file was flushed before shutdown.',
+            )}
+          />
+        )}
+
+        {cpuProfileState === 'env-override' && (
+          <Alert
+            color="warning"
+            variant="flat"
+            title={t('system.cpuProfile.overrideTitle', 'Externally forced profiling is active')}
+            description={t(
+              'system.cpuProfile.overrideDesc',
+              'This runtime is controlled by TX5DR_SERVER_CPU_PROFILE* environment variables, so the guided capture flow is read-only.',
+            )}
+          />
+        )}
+
+        {cpuProfileState === 'completed' && (
+          <Alert
+            color="success"
+            variant="flat"
+            title={t('system.cpuProfile.completedTitle', 'CPU profile file generated')}
+            description={t(
+              'system.cpuProfile.completedDesc',
+              'Open the file with Chrome DevTools or speedscope, then include it together with version, runtime, and reproduction steps when reporting the issue.',
+            )}
+          />
+        )}
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className={SETTINGS_PANEL_CLASS}>
+            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.runtimeLabel', 'Runtime')}</p>
+            <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{getCpuProfileRuntimeLabel(cpuProfileStatus.distribution, t)}</p>
+          </div>
+          <div className={SETTINGS_PANEL_CLASS}>
+            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.outputDirLabel', 'Output directory')}</p>
+            <p className={`mt-1 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{cpuProfileStatus.outputDir}</p>
+            {cpuProfileStatus.hostOutputDirHint && (
+              <p className={`mt-1 break-all font-mono ${SETTINGS_MUTED_CLASS}`}>
+                {t('system.cpuProfile.hostDirHint', 'Host path')}: {cpuProfileStatus.hostOutputDirHint}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {(cpuProfileState === 'armed' || cpuProfileState === 'running') && cpuProfilePrimaryAction && (
+          <div className={SETTINGS_PANEL_CLASS}>
+            <p className={SETTINGS_SUBTITLE_CLASS}>
+              {cpuProfileState === 'running'
+                ? t('system.cpuProfile.finishActionTitle', 'Recommended finish action')
+                : t('system.cpuProfile.startActionTitle', 'Recommended start action')}
+            </p>
+            <p className={`mt-2 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{cpuProfilePrimaryAction}</p>
+            {isCpuProfileElectronFlow && (
+              <Button
+                size="sm"
+                color="primary"
+                variant="flat"
+                className="mt-3"
+                onPress={() => void handleRestartAppForCpuProfile()}
+                isDisabled={cpuProfileBusy}
+              >
+                {cpuProfileState === 'running'
+                  ? t('system.cpuProfile.restartToFinish', 'Restart App and Finish Capture')
+                  : t('system.cpuProfile.restartToStart', 'Restart App and Start Capture')}
+              </Button>
+            )}
+          </div>
+        )}
+
+        {cpuProfileState === 'completed' && cpuProfileStatus.profilePath && (
+          <div className={SETTINGS_PANEL_CLASS}>
+            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+              <div className="flex-1">
+                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.profilePathLabel', 'Profile file')}</p>
+                <p className={`mt-2 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{cpuProfileStatus.profilePath}</p>
+                {cpuProfileStatus.hostProfilePathHint && (
+                  <p className={`mt-1 break-all font-mono ${SETTINGS_MUTED_CLASS}`}>
+                    {t('system.cpuProfile.hostPathHint', 'Host file')}: {cpuProfileStatus.hostProfilePathHint}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  color="primary"
+                  variant="flat"
+                  startContent={<FontAwesomeIcon icon={faDownload} />}
+                  onPress={() => void handleDownloadCpuProfile()}
+                  isDisabled={cpuProfileDownloadBusy}
+                  isLoading={cpuProfileDownloadBusy}
+                >
+                  {t('system.cpuProfile.download', 'Download')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  startContent={<FontAwesomeIcon icon={cpuProfilePathCopied ? faCheck : faCopy} />}
+                  onPress={() => void handleCopyCpuProfilePath(cpuProfileStatus.profilePath)}
+                >
+                  {cpuProfilePathCopied ? t('system.cpuProfile.copied', 'Copied') : t('system.cpuProfile.copyPath', 'Copy path')}
+                </Button>
+                {cpuProfileState === 'completed' && isElectron && window.electronAPI?.shell?.openPath && (
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    onPress={() => void handleOpenCpuProfileFolder()}
+                  >
+                    {t('system.cpuProfile.openFolder', 'Open Folder')}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {cpuProfileState === 'completed' && (
+          <div className={SETTINGS_PANEL_CLASS}>
+            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.feedbackTitle', 'Feedback checklist')}</p>
+            <div className={`mt-2 space-y-1 ${SETTINGS_SUBDESC_CLASS}`}>
+              <p>{t('system.cpuProfile.feedback1', '1. Attach the .cpuprofile file.')}</p>
+              <p>{t('system.cpuProfile.feedback2', '2. Include the app version and runtime mode.')}</p>
+              <p>{t('system.cpuProfile.feedback3', '3. Describe what you were doing during the capture and how long it lasted.')}</p>
+            </div>
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
 
   return (
     <div className="space-y-6">
@@ -2406,6 +2884,8 @@ export const SystemSettings = forwardRef<
           </Card>
         </>
       )}
+
+      {cpuProfileCard}
 
       {/* 提示信息 */}
       {hasUnsavedChanges() && (
