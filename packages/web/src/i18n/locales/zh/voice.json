@@ -106,6 +106,7 @@
     "editMode": "编辑",
     "stop": "停止",
     "slotCount": "槽位数",
+    "slotCountOption": "{{count}} 槽",
     "loadFailed": "语音键控加载失败",
     "recordTooShort": "录音时间太短",
     "recordSaved": "录音已保存",
