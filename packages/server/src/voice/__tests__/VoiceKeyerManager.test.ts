@@ -145,7 +145,30 @@ describe('VoiceKeyerManager', () => {
       await vi.waitFor(() => expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(2));
     });
 
-    it('stops active playback when manual PTT starts', async () => {
+    it('can start repeat CQ in countdown mode without an immediate first transmission', async () => {
+      const { manager, voiceSessionManager } = await createManager();
+      await manager.saveSlotAudio('BG5DRB', '1', makeWav());
+      await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
+
+      await manager.play({
+        callsign: 'BG5DRB',
+        slotId: '1',
+        repeat: true,
+        startImmediately: false,
+        connectionId: 'c1',
+        label: 'Op',
+      });
+
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('repeat-waiting'));
+      expect(voiceSessionManager.startTransmit).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(voiceSessionManager.startTransmit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(voiceSessionManager.startTransmit).toHaveBeenCalledTimes(1));
+    });
+
+    it('stops active playback but keeps repeat CQ waiting when manual PTT starts', async () => {
       const { manager, voiceSessionManager, audioStreamManager } = await createManager();
       await manager.saveSlotAudio('BG5DRB', '1', makeWav());
       await manager.updateSlot('BG5DRB', '1', { repeatEnabled: true, repeatIntervalSec: 4 });
@@ -154,10 +177,14 @@ describe('VoiceKeyerManager', () => {
       await vi.waitFor(() => expect(manager.getStatus().mode).toBe('playing'));
 
       manager.setManualPttActive(true);
-      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('idle'));
+      await vi.waitFor(() => expect(manager.getStatus().mode).toBe('repeat-waiting'));
 
       expect(audioStreamManager.stopCurrentPlayback).toHaveBeenCalled();
-      expect(voiceSessionManager.stopTransmit).toHaveBeenCalledWith('voice-keyer:c1');
+      await vi.waitFor(() => expect(voiceSessionManager.stopTransmit).toHaveBeenCalledWith('voice-keyer:c1'));
+      expect(manager.getStatus().nextRunAt).toBeNull();
+
+      manager.setManualPttActive(false);
+      await vi.waitFor(() => expect(manager.getStatus().nextRunAt).toEqual(expect.any(Number)));
     });
   });
 });

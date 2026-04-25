@@ -453,13 +453,18 @@ export const VoiceKeyerCard: React.FC = () => {
     }
   }, [callsign, previewPlayingSlotId, stopPreview, t]);
 
-  const updateSlot = useCallback(async (slotId: string, update: Partial<Pick<VoiceKeyerSlot, 'label' | 'repeatEnabled' | 'repeatIntervalSec'>>) => {
-    if (!callsign) return;
+  const updateSlot = useCallback(async (
+    slotId: string,
+    update: Partial<Pick<VoiceKeyerSlot, 'label' | 'repeatEnabled' | 'repeatIntervalSec'>>,
+  ): Promise<VoiceKeyerPanel | null> => {
+    if (!callsign) return null;
     try {
       const response = await api.updateVoiceKeyerSlot(callsign, slotId, update);
       setPanel(response.panel);
+      return response.panel;
     } catch (error) {
       logger.error('Failed to update voice keyer slot', error);
+      return null;
     }
   }, [callsign]);
 
@@ -503,15 +508,33 @@ export const VoiceKeyerCard: React.FC = () => {
     }
   }, [callsign, t]);
 
-  const playSlot = useCallback((slot: VoiceKeyerSlot, repeat = false) => {
+  const playSlot = useCallback((slot: VoiceKeyerSlot, repeat = false, startImmediately = true) => {
     if (!canOperate || !slot.hasAudio || !callsign) return;
     stopPreview();
-    radioService?.playVoiceKeyer(callsign, slot.id, repeat);
+    radioService?.playVoiceKeyer(callsign, slot.id, repeat, startImmediately);
   }, [callsign, canOperate, radioService, stopPreview]);
 
   const stopKeyer = useCallback(() => {
     radioService?.stopVoiceKeyer();
   }, [radioService]);
+
+  const toggleRepeat = useCallback(async (slot: VoiceKeyerSlot) => {
+    const repeatEnabled = !slot.repeatEnabled;
+    updateSlotLocal(slot.id, { repeatEnabled });
+    const updatedPanel = await updateSlot(slot.id, { repeatEnabled });
+    if (!updatedPanel) {
+      updateSlotLocal(slot.id, { repeatEnabled: slot.repeatEnabled });
+      return;
+    }
+
+    const updatedSlot = updatedPanel.slots.find(candidate => candidate.id === slot.id) ?? slot;
+    const activeOnThisSlot = activeForCallsign && status.slotId === slot.id;
+    if (repeatEnabled) {
+      playSlot(updatedSlot, true, false);
+    } else if (activeOnThisSlot) {
+      stopKeyer();
+    }
+  }, [activeForCallsign, playSlot, status.slotId, stopKeyer, updateSlot, updateSlotLocal]);
 
   const changePanelMode = useCallback((mode: KeyerPanelMode) => {
     if (mode === panelMode) return;
@@ -805,11 +828,7 @@ export const VoiceKeyerCard: React.FC = () => {
                               color={slot.repeatEnabled ? 'warning' : 'default'}
                               variant={slot.repeatEnabled ? 'solid' : 'flat'}
                               aria-label={t('keyer.repeatToggle')}
-                              onPress={() => {
-                                const repeatEnabled = !slot.repeatEnabled;
-                                updateSlotLocal(slot.id, { repeatEnabled });
-                                void updateSlot(slot.id, { repeatEnabled });
-                              }}
+                              onPress={() => void toggleRepeat(slot)}
                               isDisabled={!canOperate || !slot.hasAudio}
                               className="h-7 min-w-7 rounded-md"
                             >
@@ -971,12 +990,8 @@ export const VoiceKeyerCard: React.FC = () => {
                               color={slot.repeatEnabled ? 'warning' : 'default'}
                               variant="flat"
                               aria-label={t('keyer.repeatToggle')}
-                              onPress={() => {
-                                const repeatEnabled = !slot.repeatEnabled;
-                                updateSlotLocal(slot.id, { repeatEnabled });
-                                void updateSlot(slot.id, { repeatEnabled });
-                              }}
-                              isDisabled={!canOperate}
+                              onPress={() => void toggleRepeat(slot)}
+                              isDisabled={!canOperate || !slot.hasAudio}
                               className="h-6 min-w-6 rounded-md"
                             >
                               <FontAwesomeIcon icon={active && status.mode === 'repeat-waiting' ? faPause : faRepeat} className="text-[10px]" />
