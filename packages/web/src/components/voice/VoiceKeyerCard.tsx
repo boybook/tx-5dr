@@ -839,7 +839,7 @@ export const VoiceKeyerCard: React.FC = () => {
                             variant={transmitting ? 'solid' : active ? 'flat' : 'solid'}
                             className="relative h-16 w-full overflow-hidden rounded-md px-2 pt-1 pb-1.5"
                             onPress={() => active ? stopKeyer() : playSlot(slot, slot.repeatEnabled)}
-                            isDisabled={!slot.hasAudio || !canOperate || (status.active && !active)}
+                            isDisabled={!slot.hasAudio || !canOperate}
                           >
                             {transmitting && (
                               <span
