@@ -18,7 +18,6 @@ import {
   faClock,
   faCircle,
   faPen,
-  faPause,
   faPlay,
   faRepeat,
   faStop,
@@ -787,10 +786,10 @@ export const VoiceKeyerCard: React.FC = () => {
       </CardHeader>
 
       <div
-        className="grid transition-[grid-template-rows] duration-200 ease-in-out"
+        className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${isCollapsed ? 'overflow-hidden' : 'overflow-visible'}`}
         style={{ gridTemplateRows: isCollapsed ? '0fr' : '1fr' }}
       >
-        <div className="overflow-hidden">
+        <div className={isCollapsed ? 'overflow-hidden' : 'overflow-visible'}>
           <CardBody className="pt-0">
             {!canOperate && (
               <div className="rounded-md bg-warning-50 px-2 py-1.5 text-xs text-warning dark:bg-warning-50/10">
@@ -1007,7 +1006,7 @@ export const VoiceKeyerCard: React.FC = () => {
                             <FontAwesomeIcon icon={faTrash} className="text-xs" />
                           </Button>
                         </div>
-                        {recording ? (
+                        {recording && (
                           <div className="mt-1 flex h-6 items-center gap-1 rounded-md bg-danger-50 px-1.5 text-danger dark:bg-danger-950/20">
                             <span className="shrink-0 text-[10px] font-semibold uppercase">{t('keyer.recordingActive')}</span>
                             <div
@@ -1029,35 +1028,6 @@ export const VoiceKeyerCard: React.FC = () => {
                             >
                               {formatRecordingElapsed(recordingElapsedMs)}
                             </span>
-                          </div>
-                        ) : (
-                          <div className="mt-1 flex h-6 items-center gap-1 text-[11px] text-default-500">
-                            <Button
-                              isIconOnly
-                              size="sm"
-                              color={slot.repeatEnabled ? 'warning' : 'default'}
-                              variant="flat"
-                              aria-label={t('keyer.repeatToggle')}
-                              onPress={() => void toggleRepeat(slot)}
-                              isDisabled={!canOperate || !slot.hasAudio}
-                              className="h-6 min-w-6 rounded-md"
-                            >
-                              <FontAwesomeIcon icon={active && status.mode === 'repeat-waiting' ? faPause : faRepeat} className="text-[10px]" />
-                            </Button>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={300}
-                              size="sm"
-                              variant="flat"
-                              value={String(intervalValue)}
-                              aria-label={t('keyer.repeatInterval')}
-                              classNames={{ inputWrapper: 'h-6 min-h-6 px-1', input: 'text-[11px]' }}
-                              onValueChange={(value) => updateSlotLocal(slot.id, { repeatIntervalSec: Math.max(1, Math.min(300, Math.round(Number(value) || 1))) })}
-                              onBlur={(event) => void updateSlot(slot.id, { repeatIntervalSec: Number(event.currentTarget.value) || 1 })}
-                              isDisabled={!canOperate}
-                            />
-                            <span>s</span>
                           </div>
                         )}
                       </div>
