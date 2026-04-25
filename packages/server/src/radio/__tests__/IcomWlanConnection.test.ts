@@ -12,6 +12,7 @@ type MockRig = {
   setFrequency: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
+  readTransceiverState: ReturnType<typeof vi.fn>;
   readSWR: ReturnType<typeof vi.fn>;
   readALC: ReturnType<typeof vi.fn>;
   getLevelMeter: ReturnType<typeof vi.fn>;
@@ -45,6 +46,7 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
     setFrequency: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockResolvedValue(undefined),
     setPtt: vi.fn().mockResolvedValue(undefined),
+    readTransceiverState: vi.fn().mockResolvedValue('RX'),
     readSWR: vi.fn().mockResolvedValue(null),
     readALC: vi.fn().mockResolvedValue(null),
     getLevelMeter: vi.fn().mockResolvedValue(null),
@@ -98,6 +100,25 @@ describe('IcomWlanConnection', () => {
     });
     expect(rig.setFrequency).toHaveBeenCalledWith(7100000);
     expect(rig.setMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps ICOM transceiver TX/RX state to PTT state', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.readTransceiverState
+      .mockResolvedValueOnce('TX')
+      .mockResolvedValueOnce('RX');
+
+    await expect(connection.getPTT()).resolves.toBe(true);
+    await expect(connection.getPTT()).resolves.toBe(false);
+
+    expect(rig.readTransceiverState).toHaveBeenCalledWith({ timeout: 1000 });
+  });
+
+  it('treats unknown ICOM transceiver state as unavailable PTT state', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.readTransceiverState.mockResolvedValueOnce('UNKNOWN');
+
+    await expect(connection.getPTT()).rejects.toThrow(/getPTT/);
   });
 
   it('reads ICOM meter values sequentially within one polling pass', async () => {

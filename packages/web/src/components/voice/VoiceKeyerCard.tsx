@@ -622,6 +622,7 @@ export const VoiceKeyerCard: React.FC = () => {
       const seconds = Math.max(0, Math.ceil((status.nextRunAt - Date.now()) / 1000));
       return t('keyer.waiting', { callsign: status.callsign, seconds });
     }
+    if (status.mode === 'repeat-waiting') return t('keyer.waitingForPtt', { callsign: status.callsign });
     if (status.mode === 'playing') return t('keyer.transmittingSlot', { callsign: status.callsign, slot: status.slotId });
     if (status.mode === 'stopping') return t('keyer.stopping');
     if (status.mode === 'error') return t('keyer.error');

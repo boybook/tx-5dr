@@ -236,7 +236,6 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
   const attemptPTTDown = useCallback(async () => {
     if (!isOperator || !radioService || isPttDownRef.current) return;
-    if (isVoiceKeyerPttLock) return;
     if (pttState === 'locked-by-other') return;
 
     const pressId = pressTrackerRef.current.beginPress();
@@ -286,7 +285,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     }
 
     logger.debug('PTT pressed');
-  }, [acquireWakeLock, isOperator, isVoiceKeyerPttLock, pttState, radioService, voiceCaptureController]);
+  }, [acquireWakeLock, isOperator, pttState, radioService, voiceCaptureController]);
 
   // PTT press handler
   const handlePTTDown = useCallback(async () => {
@@ -458,7 +457,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   };
 
   const { bgClass, label, subLabel } = getButtonStyle();
-  const isDisabled = !isOperator || pttState === 'locked-by-other' || Boolean(isVoiceKeyerPttLock);
+  const isDisabled = !isOperator || pttState === 'locked-by-other';
   const useDisabledVisual = !isOperator || pttState === 'locked-by-other';
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const meterPercent = Math.round(Math.max(0, Math.min(1, inputLevel)) * 100);

@@ -117,6 +117,7 @@
     "deleteFailed": "Delete failed",
     "noCallsign": "No callsign",
     "waiting": "{{callsign}} waiting {{seconds}}s",
+    "waitingForPtt": "{{callsign}} waiting for PTT",
     "transmittingSlot": "{{callsign}} TX M{{slot}}",
     "stopping": "Stopping",
     "error": "Error",
