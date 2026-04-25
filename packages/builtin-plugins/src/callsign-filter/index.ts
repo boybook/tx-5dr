@@ -1,5 +1,9 @@
 import type { PluginDefinition } from '@tx5dr/plugin-api';
-import { parseCallsignFilterRules, evaluateCallsignFilter } from '@tx5dr/core';
+import {
+  evaluateCallsignFilter,
+  normalizeCallsignFilterMode,
+  parseCallsignFilterRules,
+} from '@tx5dr/core';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 
@@ -15,7 +19,7 @@ export const callsignFilterPlugin: PluginDefinition = {
   name: 'callsign-filter',
   version: '1.0.0',
   type: 'utility',
-  description: 'Filter candidate stations by callsign rules (whitelist/blacklist with regex)',
+  description: 'Filter candidate stations by callsign or advanced regex keep rules',
 
   settings: {
     filterOverview: {
@@ -24,6 +28,17 @@ export const callsignFilterPlugin: PluginDefinition = {
       label: 'filterOverview',
       description: 'filterOverviewDesc',
       scope: 'operator',
+    },
+    filterMode: {
+      type: 'string',
+      default: 'blocklist',
+      label: 'filterMode',
+      description: 'filterModeDesc',
+      scope: 'operator',
+      options: [
+        { label: 'filterModeBlocklist', value: 'blocklist' },
+        { label: 'filterModeRegexKeep', value: 'regex-keep' },
+      ],
     },
     filterRules: {
       type: 'string[]',
@@ -46,6 +61,7 @@ export const callsignFilterPlugin: PluginDefinition = {
   },
 
   quickSettings: [
+    { settingKey: 'filterMode' },
     { settingKey: 'filterRules' },
     { settingKey: 'filterScope' },
   ],
@@ -55,7 +71,8 @@ export const callsignFilterPlugin: PluginDefinition = {
       const rawEntries = Array.isArray(ctx.config.filterRules)
         ? ctx.config.filterRules
         : [];
-      const rules = parseCallsignFilterRules(rawEntries as string[]);
+      const filterMode = normalizeCallsignFilterMode(ctx.config.filterMode);
+      const rules = parseCallsignFilterRules(rawEntries as string[], filterMode);
       if (rules.length === 0) {
         return candidates;
       }
@@ -72,6 +89,7 @@ export const callsignFilterPlugin: PluginDefinition = {
         before: candidates.length,
         after: filtered.length,
         ruleCount: rules.length,
+        mode: filterMode,
       });
 
       return filtered;

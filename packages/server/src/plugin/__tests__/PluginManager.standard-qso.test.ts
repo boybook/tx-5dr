@@ -648,10 +648,9 @@ describe('PluginManager standard-qso late re-decision', () => {
       },
       operatorPluginSettings: {
         'callsign-filter': {
-          // Whitelist mode (first rule is an include rule):
-          // - "JA.*" treats the dot/asterisk as regex meta and matches the
-          //   JA prefix family
-          // - "BG5DRB" is a plain literal, matched exactly
+          // Advanced regex keep mode keeps only candidates matching one of
+          // these regexes.
+          filterMode: 'regex-keep',
           filterRules: ['JA.*', 'BG5DRB'],
         },
       },
@@ -685,6 +684,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       },
       operatorPluginSettings: {
         'callsign-filter': {
+          filterMode: 'regex-keep',
           filterRules: ['JA.*'],
         },
       },
@@ -700,6 +700,34 @@ describe('PluginManager standard-qso late re-decision', () => {
     );
 
     expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['JA1AAA']);
+
+    await pluginManager.shutdown();
+  });
+
+  it('filters out callsigns by simple callsign or prefix rules', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      pluginConfigs: {
+        'callsign-filter': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'callsign-filter': {
+          filterMode: 'blocklist',
+          filterRules: ['JA', 'BG5DRB'],
+        },
+      },
+    });
+
+    const filtered = await pluginManager.getHookDispatcher().dispatchFilterCandidates(
+      operator.config.id,
+      [
+        createParsedMessage('CQ JA1AAA PM95', -5, 1200),
+        createParsedMessage('CQ BG5DRB OL32', -7, 1400),
+        createParsedMessage('CQ K1ABC FN31', -3, 1600),
+      ],
+      (instance) => pluginManager.getCtxForInstance(instance),
+    );
+
+    expect(filtered.map((candidate) => getSenderCallsign(candidate.message))).toEqual(['K1ABC']);
 
     await pluginManager.shutdown();
   });
