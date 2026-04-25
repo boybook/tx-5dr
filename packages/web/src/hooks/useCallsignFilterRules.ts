@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  normalizeCallsignFilterMode,
   parseCallsignFilterRules,
+  type CallsignFilterMode,
   type CallsignFilterRule,
 } from '@tx5dr/core';
 import { pluginApi } from '../utils/pluginApi';
@@ -15,24 +17,27 @@ export type CallsignFilterScope = 'auto-reply' | 'auto-reply-and-display';
 
 interface CallsignFilterState {
   rules: CallsignFilterRule[];
+  filterMode: CallsignFilterMode;
   filterScope: CallsignFilterScope;
 }
 
 const EMPTY_STATE: CallsignFilterState = {
   rules: [],
+  filterMode: 'blocklist',
   filterScope: 'auto-reply',
 };
 
 /**
  * Hook that loads the current operator's callsign-filter plugin settings and
- * returns parsed rules + filterScope. Refreshes when the operator changes or
- * the plugin system generation bumps.
+ * returns parsed rules plus active mode/scope. Refreshes when the operator
+ * changes or the plugin system generation bumps.
  */
 export function useCallsignFilterRules(
   operatorId: string | undefined,
 ): CallsignFilterState {
   const pluginSnapshot = usePluginSnapshot();
   const [rawRules, setRawRules] = useState<string[]>([]);
+  const [filterMode, setFilterMode] = useState<CallsignFilterMode>('blocklist');
   const [filterScope, setFilterScope] = useState<CallsignFilterScope>('auto-reply');
 
   const isEnabled = useMemo(
@@ -43,6 +48,7 @@ export function useCallsignFilterRules(
   useEffect(() => {
     if (!operatorId || !isEnabled) {
       setRawRules([]);
+      setFilterMode('blocklist');
       setFilterScope('auto-reply');
       return;
     }
@@ -53,6 +59,7 @@ export function useCallsignFilterRules(
         const settings = res?.operatorSettings?.[PLUGIN_NAME] ?? {};
         const entries = Array.isArray(settings.filterRules) ? settings.filterRules as string[] : [];
         setRawRules(entries);
+        setFilterMode(normalizeCallsignFilterMode(settings.filterMode));
         setFilterScope(
           settings.filterScope === 'auto-reply-and-display'
             ? 'auto-reply-and-display'
@@ -66,10 +73,10 @@ export function useCallsignFilterRules(
 
   const rules = useMemo(() => {
     if (rawRules.length === 0) return [];
-    return parseCallsignFilterRules(rawRules);
-  }, [rawRules]);
+    return parseCallsignFilterRules(rawRules, filterMode);
+  }, [filterMode, rawRules]);
 
   if (!isEnabled) return EMPTY_STATE;
 
-  return { rules, filterScope };
+  return { rules, filterMode, filterScope };
 }
