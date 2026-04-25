@@ -24,6 +24,7 @@ import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
 import { usePluginPanelMeta } from '../../../hooks/usePluginPanelMeta';
 import {
   arePluginSettingValuesEqual,
+  getPluginSettingDescriptionKey,
   getPluginSettingValidationIssue,
   normalizePluginSettingsForSave,
 } from '../../../utils/pluginSettings';
@@ -333,14 +334,18 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       return;
     }
 
+    const currentSettings = {
+      ...(savedSettingsMap[plugin.name] ?? {}),
+      ...(draftSettingsMap[plugin.name] ?? {}),
+    };
     const currentValue = getEffectiveValue(plugin, descriptor, key, draftSettingsMap);
-    const validationIssue = getPluginSettingValidationIssue(plugin.name, key, descriptor, currentValue);
+    const validationIssue = getPluginSettingValidationIssue(plugin.name, key, descriptor, currentValue, currentSettings);
     if (validationIssue) {
       return;
     }
 
     await persistPluginSettings(plugin, draftSettingsMap[plugin.name] ?? {}, key);
-  }, [draftSettingsMap, getEffectiveValue, persistPluginSettings]);
+  }, [draftSettingsMap, getEffectiveValue, persistPluginSettings, savedSettingsMap]);
 
   const handleButtonAction = React.useCallback(async (plugin: PluginStatus, action: PluginQuickAction) => {
     const actionKey = `${plugin.name}:${action.id}`;
@@ -393,6 +398,10 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                   return null;
                 }
 
+                const currentSettings = {
+                  ...(savedSettingsMap[plugin.name] ?? {}),
+                  ...(draftSettingsMap[plugin.name] ?? {}),
+                };
                 const currentValue = getEffectiveValue(plugin, descriptor, entry.settingKey, draftSettingsMap);
                 const savedValue = getEffectiveValue(plugin, descriptor, entry.settingKey, savedSettingsMap);
                 const dirty = !arePluginSettingValuesEqual(
@@ -407,12 +416,20 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                   entry.settingKey,
                   descriptor,
                   currentValue,
+                  currentSettings,
                 );
                 const validationMessage = validationIssue
                   ? resolvePluginLabel(validationIssue.key, plugin.name).replace('{{line}}', String(validationIssue.params?.line ?? ''))
                   : '';
                 const fieldId = `${plugin.name}:${entry.settingKey}`;
                 const label = resolvePluginLabel(descriptor.label, plugin.name);
+                const descriptionKey = getPluginSettingDescriptionKey(
+                  plugin.name,
+                  entry.settingKey,
+                  descriptor,
+                  currentSettings,
+                );
+                const description = descriptionKey ? resolvePluginLabel(descriptionKey, plugin.name) : '';
 
                 if (descriptor.type === 'boolean') {
                   const isEnabled = currentValue === true;
@@ -507,6 +524,11 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
                           </Button>
                         )}
                       </div>
+                      {description && (
+                        <div className="mb-1.5 text-[11px] leading-4 text-default-400">
+                          {description}
+                        </div>
+                      )}
                       <Textarea
                         size="sm"
                         aria-label={label}

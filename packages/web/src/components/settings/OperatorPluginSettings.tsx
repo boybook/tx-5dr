@@ -89,7 +89,13 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
       const hasValidationIssues = Object.entries(plugin.settings ?? {}).some(([key, descriptor]) => (
         descriptor.scope === 'operator'
         && descriptor.type !== 'info'
-        && Boolean(getPluginSettingValidationIssue(plugin.name, key, descriptor, settingsMap[pluginName]?.[key]))
+        && Boolean(getPluginSettingValidationIssue(
+          plugin.name,
+          key,
+          descriptor,
+          settingsMap[pluginName]?.[key],
+          settingsMap[pluginName],
+        ))
       ));
       if (hasValidationIssues) {
         logger.warn('Skipped saving operator plugin settings because validation failed', {
@@ -159,7 +165,7 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
         const hasValidationIssues = persistableKeys.some((key) => {
           const descriptor = plugin.settings?.[key];
           return descriptor
-            ? Boolean(getPluginSettingValidationIssue(plugin.name, key, descriptor, currentSettings[key]))
+            ? Boolean(getPluginSettingValidationIssue(plugin.name, key, descriptor, currentSettings[key], currentSettings))
             : false;
         });
         const normalizedHasChanges = persistableKeys.some((key) => {
@@ -215,6 +221,7 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
                   value={currentSettings[key] ?? descriptor.default}
                   onChange={(val) => handleChange(plugin.name, key, val)}
                   pluginName={plugin.name}
+                  settings={currentSettings}
                 />
               ))}
             </div>

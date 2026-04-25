@@ -1,5 +1,5 @@
 import type { PluginSettingDescriptor, PluginStatus } from '@tx5dr/contracts';
-import { validateFilterRuleLine } from '@tx5dr/core';
+import { normalizeCallsignFilterMode, validateFilterRuleLine } from '@tx5dr/core';
 
 export interface PluginSettingValidationIssue {
   key: string;
@@ -120,11 +120,27 @@ export function normalizePluginSettingsForSave(
   return normalized;
 }
 
+export function getPluginSettingDescriptionKey(
+  pluginName: string,
+  fieldKey: string,
+  descriptor: PluginSettingDescriptor,
+  settings?: Record<string, unknown>,
+): string | undefined {
+  if (pluginName === 'callsign-filter' && fieldKey === 'filterRules') {
+    return normalizeCallsignFilterMode(settings?.filterMode) === 'regex-keep'
+      ? 'filterRulesRegexKeepDesc'
+      : 'filterRulesBlocklistDesc';
+  }
+
+  return descriptor.description;
+}
+
 export function getPluginSettingValidationIssue(
   pluginName: string,
   fieldKey: string,
   descriptor: PluginSettingDescriptor,
   value: unknown,
+  settings?: Record<string, unknown>,
 ): PluginSettingValidationIssue | null {
   if (descriptor.type !== 'string[]') {
     return null;
@@ -152,8 +168,9 @@ export function getPluginSettingValidationIssue(
 
   if (pluginName === 'callsign-filter' && fieldKey === 'filterRules') {
     const entries = normalizeWatchedCallsignWatchListValue(value);
+    const mode = normalizeCallsignFilterMode(settings?.filterMode);
     for (let index = 0; index < entries.length; index += 1) {
-      const issue = validateFilterRuleLine(entries[index], index + 1);
+      const issue = validateFilterRuleLine(entries[index], index + 1, mode);
       if (issue) return issue;
     }
     return null;
