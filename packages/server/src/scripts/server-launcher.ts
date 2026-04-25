@@ -2,6 +2,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { ServerCpuProfileManager } from '../services/ServerCpuProfileManager.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('ServerLauncher');
 
 function resolveDefaultServerEntry(): string {
   const currentFile = fileURLToPath(import.meta.url);
@@ -35,7 +38,7 @@ async function main() {
   process.on('SIGINT', () => forwardSignal('SIGINT'));
 
   child.on('error', async (error) => {
-    console.error('[server-launcher] child failed to start', error);
+    logger.error('Child failed to start', error);
     await manager.completeLaunchSession({
       launchSession: buildResult.launchSession,
       exitCode: 1,
@@ -63,6 +66,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('[server-launcher] failed', error);
+  logger.error('Failed', error);
   process.exit(1);
 });

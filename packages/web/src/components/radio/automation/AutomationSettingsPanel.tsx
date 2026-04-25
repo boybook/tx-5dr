@@ -179,7 +179,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
         const settings = (plugin.plugin.quickSettings ?? []).filter((entry) => hasOperatorQuickSetting(plugin.plugin, entry));
         const actions = plugin.plugin.quickActions ?? [];
         const panels = (plugin.plugin.panels ?? []).filter((p) => p.slot === 'automation');
-        const visiblePanels = panels.filter((p) => getMeta(plugin.name, operatorId, p.id).visible !== false);
+        const visiblePanels = panels.filter((p) => getMeta(plugin.plugin.name, operatorId, p.id).visible !== false);
         if (settings.length === 0 && actions.length === 0 && visiblePanels.length === 0) {
           return false;
         }
