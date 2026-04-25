@@ -226,3 +226,16 @@ textarea.font-mono,
 .voice-keyer-tx-progress {
   width: 0%;
 }
+
+@keyframes voice-keyer-wait-progress {
+  from {
+    width: var(--voice-keyer-progress-start, 0%);
+  }
+  to {
+    width: 100%;
+  }
+}
+
+.voice-keyer-wait-progress {
+  width: var(--voice-keyer-progress-start, 0%);
+}

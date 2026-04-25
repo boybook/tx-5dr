@@ -128,6 +128,44 @@ function getTxProgressStyle(durationMs: number): React.CSSProperties {
   };
 }
 
+function getRemainingSeconds(nextRunAt: number | null): number | null {
+  if (!nextRunAt) return null;
+  return Math.max(0, Math.ceil((nextRunAt - Date.now()) / 1000));
+}
+
+function getWaitProgressStyle(nextRunAt: number, intervalSec: number): React.CSSProperties {
+  const totalMs = Math.max(1000, intervalSec * 1000);
+  const remainingMs = Math.max(0, nextRunAt - Date.now());
+  const elapsedMs = Math.max(0, totalMs - remainingMs);
+  const startPercent = Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
+
+  return {
+    '--voice-keyer-progress-start': `${startPercent}%`,
+    animation: `voice-keyer-wait-progress ${Math.max(1, remainingMs)}ms linear forwards`,
+  } as React.CSSProperties;
+}
+
+const VoiceKeyerWaitProgress = React.memo(function VoiceKeyerWaitProgress({
+  nextRunAt,
+  intervalSec,
+}: {
+  nextRunAt: number;
+  intervalSec: number;
+}) {
+  const style = useMemo(
+    () => getWaitProgressStyle(nextRunAt, intervalSec),
+    [intervalSec, nextRunAt],
+  );
+
+  return (
+    <span
+      key={`${nextRunAt}-${intervalSec}`}
+      className="voice-keyer-wait-progress absolute inset-y-0 left-0 pointer-events-none bg-warning/25"
+      style={style}
+    />
+  );
+});
+
 function mergeChunks(chunks: Float32Array[]): Float32Array {
   const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const merged = new Float32Array(length);
@@ -201,7 +239,7 @@ export const VoiceKeyerCard: React.FC = () => {
   const [panel, setPanel] = useState<VoiceKeyerPanel | null>(null);
   const [status, setStatus] = useState<VoiceKeyerStatus>(idleStatus);
   const [loading, setLoading] = useState(false);
-  const [tick, setTick] = useState(0);
+  const [, setCountdownTick] = useState(0);
   const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(currentOperatorId);
   const [recordingSlotId, setRecordingSlotId] = useState<string | null>(null);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
@@ -239,7 +277,7 @@ export const VoiceKeyerCard: React.FC = () => {
     if (!(status.active && status.mode === 'repeat-waiting')) {
       return undefined;
     }
-    const timer = window.setInterval(() => setTick(value => value + 1), 1000);
+    const timer = window.setInterval(() => setCountdownTick(value => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, [status.active, status.mode]);
 
@@ -641,16 +679,12 @@ export const VoiceKeyerCard: React.FC = () => {
 
   const statusText = useMemo(() => {
     if (!status.active) return hasCallsign ? callsign : t('keyer.noCallsign');
-    if (status.mode === 'repeat-waiting' && status.nextRunAt) {
-      const seconds = Math.max(0, Math.ceil((status.nextRunAt - Date.now()) / 1000));
-      return t('keyer.waiting', { callsign: status.callsign, seconds });
-    }
     if (status.mode === 'repeat-waiting') return t('keyer.waitingForPtt', { callsign: status.callsign });
     if (status.mode === 'playing') return t('keyer.transmittingSlot', { callsign: status.callsign, slot: status.slotId });
     if (status.mode === 'stopping') return t('keyer.stopping');
     if (status.mode === 'error') return t('keyer.error');
     return callsign;
-  }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.nextRunAt, status.slotId, t, tick]);
+  }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.slotId, t]);
 
   return (
     <Card className="w-full" shadow="sm">
@@ -786,14 +820,19 @@ export const VoiceKeyerCard: React.FC = () => {
                     const previewLoading = previewLoadingSlotId === slot.id;
                     const previewPlaying = previewPlayingSlotId === slot.id;
                     const shortcutPreset = slotShortcuts[slot.id] ?? VOICE_KEYER_SHORTCUT_NONE;
+                    const waiting = active && status.mode === 'repeat-waiting';
+                    const activeToneClass = waiting
+                      ? 'bg-warning-50 dark:bg-warning-950/20'
+                      : active
+                        ? 'bg-danger-50 dark:bg-danger-950/20'
+                        : 'bg-content2';
                     if (panelMode === 'operate') {
                       const transmitting = active && status.mode === 'playing';
+                      const remainingSeconds = waiting ? getRemainingSeconds(status.nextRunAt) : null;
                       return (
                         <div
                           key={slot.id}
-                          className={`rounded-lg p-2 transition-colors ${
-                            active ? 'bg-danger-50 dark:bg-danger-950/20' : 'bg-content2'
-                          }`}
+                          className={`rounded-lg p-2 transition-colors ${activeToneClass}`}
                         >
                           <Button
                             color={transmitting ? 'danger' : active ? 'warning' : 'primary'}
@@ -809,12 +848,22 @@ export const VoiceKeyerCard: React.FC = () => {
                                 style={getTxProgressStyle(slot.durationMs)}
                               />
                             )}
+                            {waiting && status.nextRunAt && (
+                              <VoiceKeyerWaitProgress
+                                nextRunAt={status.nextRunAt}
+                                intervalSec={intervalValue}
+                              />
+                            )}
                             <div className="relative z-10 flex w-full flex-col items-start gap-1 text-left">
                               <div className="flex w-full items-center justify-between gap-1">
                                 <span className="font-mono text-xs font-semibold">
                                   {getShortcutOptionLabel(shortcutPreset)}
                                 </span>
-                                <span className="text-[11px] opacity-80">{formatDuration(slot.durationMs)}</span>
+                                <span className={`font-mono opacity-90 ${waiting ? 'text-sm font-semibold tabular-nums' : 'text-[11px]'}`}>
+                                  {waiting
+                                    ? remainingSeconds !== null ? `${remainingSeconds}s` : 'PTT'
+                                    : formatDuration(slot.durationMs)}
+                                </span>
                               </div>
                               <span className="max-w-full truncate text-sm font-semibold">
                                 {slot.hasAudio ? slot.label : t('keyer.emptySlot')}
@@ -858,9 +907,7 @@ export const VoiceKeyerCard: React.FC = () => {
                     return (
                       <div
                         key={slot.id}
-                        className={`rounded-lg p-2 transition-colors ${
-                          active ? 'bg-danger-50 dark:bg-danger-950/20' : 'bg-content2'
-                        }`}
+                        className={`rounded-lg p-2 transition-colors ${activeToneClass}`}
                       >
                         <div className="flex items-center justify-between gap-1">
                           <div
