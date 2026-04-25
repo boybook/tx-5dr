@@ -679,12 +679,13 @@ export const VoiceKeyerCard: React.FC = () => {
 
   const statusText = useMemo(() => {
     if (!status.active) return hasCallsign ? callsign : t('keyer.noCallsign');
+    if (status.mode === 'repeat-waiting' && status.nextRunAt) return t('keyer.waitingArmed', { callsign: status.callsign });
     if (status.mode === 'repeat-waiting') return t('keyer.waitingForPtt', { callsign: status.callsign });
     if (status.mode === 'playing') return t('keyer.transmittingSlot', { callsign: status.callsign, slot: status.slotId });
     if (status.mode === 'stopping') return t('keyer.stopping');
     if (status.mode === 'error') return t('keyer.error');
     return callsign;
-  }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.slotId, t]);
+  }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.nextRunAt, status.slotId, t]);
 
   return (
     <Card className="w-full" shadow="sm">
@@ -837,7 +838,7 @@ export const VoiceKeyerCard: React.FC = () => {
                           <Button
                             color={transmitting ? 'danger' : active ? 'warning' : 'primary'}
                             variant={transmitting ? 'solid' : active ? 'flat' : 'solid'}
-                            className="relative h-16 w-full overflow-hidden rounded-md px-2"
+                            className="relative h-16 w-full overflow-hidden rounded-md px-2 pt-1 pb-1.5"
                             onPress={() => active ? stopKeyer() : playSlot(slot, slot.repeatEnabled)}
                             isDisabled={!slot.hasAudio || !canOperate || (status.active && !active)}
                           >
