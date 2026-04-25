@@ -194,6 +194,8 @@ export class RadioOperatorManager {
           qsoRecord: persistedQSO
         });
         logger.debug(`Emitted ${eventName} event: ${persistedQSO.callsign}`);
+
+        await this._pluginManager?.notifyQSOComplete(data.operatorId, persistedQSO);
         
         // 获取更新的统计信息并发射日志本更新事件
         try {

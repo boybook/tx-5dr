@@ -8,6 +8,7 @@ import type {
   SlotInfo,
   SlotPack,
   FrameMessage,
+  QSORecord,
   StrategyRuntimeContext,
 } from '@tx5dr/contracts';
 import type {
@@ -433,6 +434,15 @@ export class PluginManager {
   notifyTransmissionQueued(operatorId: string, transmission: string): void {
     const runtime = this.getStrategyRuntime(operatorId);
     runtime?.onTransmissionQueued?.(transmission);
+  }
+
+  async notifyQSOComplete(operatorId: string, record: QSORecord): Promise<void> {
+    await this.dispatcher.dispatchBroadcast(
+      operatorId,
+      'onQSOComplete',
+      (hook, ctx) => hook(record, ctx),
+      (instance) => this.getCtxForInstance(instance),
+    );
   }
 
   async reDecideOperator(operatorId: string, slotPack: SlotPack): Promise<boolean> {

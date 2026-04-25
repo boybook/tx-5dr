@@ -1,0 +1,18 @@
+{
+  "pluginName": "QSO UDP 广播",
+  "pluginDescription": "在 QSO 完成后，以 WSJT/JTDX 兼容格式通过 UDP 广播 ADIF 记录。",
+  "enableType12": "启用 WSJT/JTDX LoggedADIF Type 12",
+  "enableType12Desc": "QSO 完成时发送 WSJT/JTDX UDP 二进制 LoggedADIF 包。",
+  "type12Host": "Type 12 主机",
+  "type12HostDesc": "WSJT/JTDX LoggedADIF Type 12 包的 UDP 主机名或 IP 地址。",
+  "type12Port": "Type 12 端口",
+  "type12PortDesc": "WSJT/JTDX LoggedADIF Type 12 包的 UDP 端口。默认：2237。",
+  "enableRawAdif": "启用裸 ADIF",
+  "enableRawAdifDesc": "QSO 完成时发送单条裸 ADIF UDP 数据报。",
+  "rawAdifHost": "裸 ADIF 主机",
+  "rawAdifHostDesc": "裸 ADIF 数据报的 UDP 主机名或 IP 地址。",
+  "rawAdifPort": "裸 ADIF 端口",
+  "rawAdifPortDesc": "裸 ADIF 数据报的 UDP 端口。默认：2333。",
+  "udpClientId": "UDP 客户端 ID",
+  "udpClientIdDesc": "写入 WSJT/JTDX Type 12 包的客户端标识。"
+}
