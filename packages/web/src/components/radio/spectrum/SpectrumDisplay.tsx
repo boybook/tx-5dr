@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Tab, Tabs, Tooltip } from '@heroui/react';
-import { ArrowsPointingOutIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
@@ -12,6 +12,7 @@ import { useTxFrequencies } from '../../../hooks/useTxFrequencies';
 import { WebGLWaterfall } from './WebGLWaterfall';
 import type { AutoRangeConfig, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
 import { SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
+import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '../../../utils/spectrumSubscriptionPause';
 
 const logger = createLogger('SpectrumDisplay');
 
@@ -30,6 +31,8 @@ const AUDIO_SOURCE: SpectrumKind = 'audio';
 const RADIO_SDR_SOURCE: SpectrumKind = 'radio-sdr';
 const OPENWEBRX_SDR_SOURCE: SpectrumKind = 'openwebrx-sdr';
 const BASEBAND_INTERACTION_RANGE = { min: 0, max: 3000 };
+const COLLAPSED_DIGITAL_HEIGHT = 32;
+const COLLAPSED_VOICE_HEIGHT = 24;
 const OPENWEBRX_MIN_VIEWPORT_SPAN_HZ = 1000;
 const OPENWEBRX_MAX_ZOOM_STEPS = 32;
 
@@ -353,6 +356,86 @@ function buildOpenWebRXZoomLevels(totalSpan: number): number[] {
   return Array.from(levels).sort((a, b) => b - a);
 }
 
+export function clampCollapsedSpectrumFrequency(frequency: number): number {
+  return Math.max(
+    BASEBAND_INTERACTION_RANGE.min,
+    Math.min(BASEBAND_INTERACTION_RANGE.max, frequency)
+  );
+}
+
+export function getCollapsedSpectrumPosition(frequency: number): number {
+  const span = BASEBAND_INTERACTION_RANGE.max - BASEBAND_INTERACTION_RANGE.min;
+  if (span <= 0) {
+    return 0;
+  }
+
+  return ((clampCollapsedSpectrumFrequency(frequency) - BASEBAND_INTERACTION_RANGE.min) / span) * 100;
+}
+
+interface CollapsedSpectrumBarProps {
+  className?: string;
+  controller: SpectrumStreamController;
+  height: number;
+  isVoiceMode: boolean;
+  hoverFrequency?: number | null;
+  rxFrequencies: Array<{ callsign: string; frequency: number }>;
+  txFrequencies: Array<{ operatorId: string; frequency: number; callsign?: string }>;
+  onTxFrequencyChange: (operatorId: string, frequency: number) => void;
+  onRestore: () => void;
+}
+
+const CollapsedSpectrumBar: React.FC<CollapsedSpectrumBarProps> = ({
+  className = '',
+  controller,
+  height,
+  isVoiceMode,
+  hoverFrequency,
+  rxFrequencies,
+  txFrequencies,
+  onTxFrequencyChange,
+  onRestore,
+}) => {
+  return (
+    <div
+      className={`relative overflow-hidden bg-default-50 dark:bg-default-100/50 ${className}`}
+      style={{ height }}
+    >
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.08)_1px,transparent_1px),linear-gradient(180deg,rgba(0,0,0,0.06)_1px,transparent_1px)] bg-[length:12.5%_100%,100%_50%] opacity-80 dark:bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(180deg,rgba(255,255,255,0.05)_1px,transparent_1px)]" />
+      <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-transparent via-primary-500/45 to-transparent dark:via-primary-400/35" />
+      <div className="absolute left-2 top-1/2 z-10 -translate-y-1/2 select-none text-[11px] font-medium text-default-400/60 dark:text-default-500/60">频谱已收起</div>
+      {!isVoiceMode && (
+        <WebGLWaterfall
+          controller={controller}
+          markerOnly
+          markerAxis={{
+            minHz: BASEBAND_INTERACTION_RANGE.min,
+            maxHz: BASEBAND_INTERACTION_RANGE.max + 15,
+            binCount: BASEBAND_INTERACTION_RANGE.max - BASEBAND_INTERACTION_RANGE.min + 15,
+          }}
+          height={height}
+          rxFrequencies={rxFrequencies}
+          txFrequencies={txFrequencies}
+          frequencyRangeMode="baseband"
+          basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
+          onTxFrequencyChange={onTxFrequencyChange}
+          hoverFrequency={hoverFrequency}
+          className="absolute inset-0 bg-transparent"
+        />
+      )}
+      <Button
+        isIconOnly
+        size="sm"
+        variant="light"
+        onPress={onRestore}
+        className="absolute right-1 top-1/2 z-20 h-6 min-w-6 w-6 -translate-y-1/2 px-0 text-default-500 hover:bg-black/25 hover:text-default-900 dark:text-default-300 dark:hover:bg-white/15 dark:hover:text-default-50"
+        aria-label="Restore spectrum"
+      >
+        <ChevronUpIcon className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+};
+
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
   height = 200,
@@ -368,7 +451,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { activeProfileId } = useProfiles();
   const { currentRadioMode, currentRadioFrequency, engineMode } = useRadioModeState();
   const { pttStatus } = usePTTState();
-  const { capabilities, selectedKind, sessionState, setSelectedKind } = useSpectrum();
+  const { capabilities, selectedKind, sessionState, setSelectedKind, setSubscribedKind } = useSpectrum();
   const controllerRef = useRef<SpectrumStreamController | null>(null);
   if (!controllerRef.current) {
     controllerRef.current = new SpectrumStreamController(WATERFALL_HISTORY);
@@ -385,6 +468,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const [actualRange, setActualRange] = useState<{ min: number; max: number } | null>(null);
   const [persistedRangeSettings, setPersistedRangeSettings] = useState<PersistedRangeSettings>(() => loadPersistedRangeSettings());
   const [openWebRXViewport, setOpenWebRXViewport] = useState<OpenWebRXViewport | null>(() => readOpenWebRXViewport(activeProfileId));
+  const [isCollapsed, setIsCollapsed] = useState(() => readSpectrumSubscriptionPaused());
   const openWebRXPanStateRef = useRef<{ startX: number; startCenterHz: number; width: number } | null>(null);
 
   const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
@@ -548,11 +632,40 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     void handleVoiceFrequencyChange(frequency);
   }, [handleVoiceFrequencyChange]);
+
+  const handleCollapseSpectrum = useCallback(() => {
+    const radioService = connection.state.radioService;
+    setSpectrumSubscriptionPaused(true);
+    setIsCollapsed(true);
+    setSubscribedKind(null);
+    streamController.reset();
+    radioService?.subscribeSpectrum(null);
+  }, [connection.state.radioService, setSubscribedKind, streamController]);
+
+  const handleRestoreSpectrum = useCallback(() => {
+    const radioService = connection.state.radioService;
+    const kind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
+    setSpectrumSubscriptionPaused(false);
+    setIsCollapsed(false);
+    setSubscribedKind(kind);
+    radioService?.subscribeSpectrum(kind);
+  }, [capabilities?.defaultKind, connection.state.radioService, selectedKind, setSubscribedKind]);
+
   useEffect(() => {
     return () => {
       streamController.destroy();
     };
   }, [streamController]);
+
+  useEffect(() => {
+    if (!isCollapsed) {
+      return;
+    }
+
+    setSubscribedKind(null);
+    streamController.reset();
+    connection.state.radioService?.subscribeSpectrum(null);
+  }, [connection.state.radioService, isCollapsed, setSubscribedKind, streamController]);
 
   useEffect(() => {
     const radioService = connection.state.radioService;
@@ -563,6 +676,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     const wsClient = radioService.wsClientInstance;
     const handleSpectrumFrame = (data: unknown) => {
+      if (isCollapsed) {
+        return;
+      }
       streamController.pushFrame(data as SpectrumFrame);
     };
 
@@ -570,7 +686,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return () => {
       wsClient.offWSEvent('spectrumFrame', handleSpectrumFrame);
     };
-  }, [connection.state.radioService, streamController]);
+  }, [connection.state.radioService, isCollapsed, streamController]);
 
   useEffect(() => {
     streamController.updateContext({
@@ -727,9 +843,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     if (!radioService) return;
 
     setSelectedKind(kind);
-    radioService.subscribeSpectrum(kind);
+    if (!isCollapsed) {
+      radioService.subscribeSpectrum(kind);
+    } else {
+      setSubscribedKind(null);
+    }
     setPreferredSpectrumKind(activeProfileId, kind);
-  }, [activeProfileId, connection.state.radioService, setSelectedKind]);
+  }, [activeProfileId, connection.state.radioService, isCollapsed, setSelectedKind, setSubscribedKind]);
 
   const handleInvokeSpectrumControl = useCallback((id: string, action: 'in' | 'out' | 'toggle') => {
     connection.state.radioService?.invokeSpectrumControl(id, action);
@@ -1011,6 +1131,35 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     };
   }, [isOpenWebRXSdrSelected, updateOpenWebRXViewport]);
 
+  const renderCollapseButton = (rightClassName = 'right-1') => (
+    <Button
+      isIconOnly
+      size="sm"
+      variant="light"
+      onPress={handleCollapseSpectrum}
+      className={`absolute top-1 ${rightClassName} z-30 h-6 min-w-6 w-6 px-0 text-default-600 hover:bg-black/30 hover:text-default-900 dark:text-default-300 dark:hover:bg-white/15 dark:hover:text-default-50`}
+      aria-label="Collapse spectrum"
+    >
+      <ChevronDownIcon className="h-3.5 w-3.5" />
+    </Button>
+  );
+
+  if (isCollapsed) {
+    return (
+      <CollapsedSpectrumBar
+        className={className}
+        controller={streamController}
+        height={isVoiceMode ? COLLAPSED_VOICE_HEIGHT : COLLAPSED_DIGITAL_HEIGHT}
+        isVoiceMode={isVoiceMode}
+        hoverFrequency={effectiveHoverFrequency}
+        rxFrequencies={showMarkers && !isVoiceMode ? rxFrequencies : []}
+        txFrequencies={showMarkers && !isVoiceMode ? txFrequencies : []}
+        onTxFrequencyChange={handleTxFrequencyChange}
+        onRestore={handleRestoreSpectrum}
+      />
+    );
+  }
+
   if (!streamStatus.hasData) {
     return (
       <div className={`relative flex items-center justify-center ${className}`} style={{ height }}>
@@ -1043,16 +1192,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
           </div>
         )}
         {renderBottomRightControls()}
+        {renderCollapseButton()}
         {canPopOut && (
           <Button
             isIconOnly
             size="sm"
             variant="light"
             onPress={handlePopOut}
-            className="absolute top-1 right-1 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
-            title={t('spectrum.popOut')}
+            className="absolute top-1 right-8 z-30 h-6 min-w-6 w-6 px-0 text-default-600 hover:bg-black/30 hover:text-default-900 dark:text-default-300 dark:hover:bg-white/15 dark:hover:text-default-50"
+            aria-label={t('spectrum.popOut')}
           >
-            <ArrowsPointingOutIcon className="w-4 h-4" />
+            <ArrowsPointingOutIcon className="h-3.5 w-3.5" />
           </Button>
         )}
       </div>
@@ -1156,16 +1306,18 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
       {renderBottomRightControls()}
 
+      {renderCollapseButton()}
+
       {canPopOut && (
         <Button
           isIconOnly
           size="sm"
           variant="light"
           onPress={handlePopOut}
-          className="absolute top-1 right-9 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
-          title={t('spectrum.popOut')}
+          className="absolute top-1 right-[3.75rem] z-30 h-6 min-w-6 w-6 px-0 text-default-600 hover:bg-black/30 hover:text-default-900 dark:text-default-300 dark:hover:bg-white/15 dark:hover:text-default-50"
+          aria-label={t('spectrum.popOut')}
         >
-          <ArrowsPointingOutIcon className="w-4 h-4" />
+          <ArrowsPointingOutIcon className="h-3.5 w-3.5" />
         </Button>
       )}
 
@@ -1175,9 +1327,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             isIconOnly
             size="sm"
             variant="light"
-            className="absolute top-1 right-1 min-w-unit-8 w-8 h-8 text-default-600 hover:text-default-900 dark:text-default-400 dark:hover:text-default-100 hover:bg-black/30 dark:hover:bg-white/20 hover:backdrop-blur-sm transition-all"
+            className="absolute top-1 right-8 z-30 h-6 min-w-6 w-6 px-0 text-default-600 hover:bg-black/30 hover:text-default-900 dark:text-default-300 dark:hover:bg-white/15 dark:hover:text-default-50"
+            aria-label="Spectrum settings"
           >
-            <Cog6ToothIcon className="w-4 h-4" />
+            <Cog6ToothIcon className="h-3.5 w-3.5" />
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-80 p-0">

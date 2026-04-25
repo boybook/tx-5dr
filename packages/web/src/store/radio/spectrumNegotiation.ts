@@ -7,6 +7,7 @@ import type {
 import type { RadioService } from '../../services/radioService';
 import type { RadioAction, RadioState } from './types';
 import type { createLogger } from '../../utils/logger';
+import { isSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
 
 type Logger = ReturnType<typeof createLogger>;
 
@@ -110,8 +111,10 @@ export function createSpectrumNegotiator({
     capabilitiesRef.current = capabilities;
     radioDispatch({ type: 'setSpectrumCapabilities', payload: capabilities });
     radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
-    radioDispatch({ type: 'setSubscribedSpectrumKind', payload: effectiveKind });
-    radioService.subscribeSpectrum(effectiveKind);
+    radioDispatch({ type: 'setSubscribedSpectrumKind', payload: isSpectrumSubscriptionPaused() ? null : effectiveKind });
+    if (!isSpectrumSubscriptionPaused()) {
+      radioService.subscribeSpectrum(effectiveKind);
+    }
 
     pendingDefaultOpenWebRXDetailProfileRef.current = shouldAutoEnableOpenWebRXDetail
       ? profileId
@@ -143,8 +146,10 @@ export function createSpectrumNegotiator({
       const effectiveKind = pickSpectrumKindByPriority(currentCapabilities);
       radioDispatch({ type: 'setSpectrumCapabilities', payload: currentCapabilities });
       radioDispatch({ type: 'setSelectedSpectrumKind', payload: effectiveKind });
-      radioDispatch({ type: 'setSubscribedSpectrumKind', payload: effectiveKind });
-      radioService.subscribeSpectrum(effectiveKind);
+      radioDispatch({ type: 'setSubscribedSpectrumKind', payload: isSpectrumSubscriptionPaused() ? null : effectiveKind });
+      if (!isSpectrumSubscriptionPaused()) {
+        radioService.subscribeSpectrum(effectiveKind);
+      }
     }
 
     // Auto-priority stays ON — the definitive selection happens when

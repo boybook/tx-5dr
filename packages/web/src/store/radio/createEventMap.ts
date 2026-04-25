@@ -44,6 +44,7 @@ import {
   createRefreshStatusAction,
   isRetryableError,
 } from '../../utils/errorToast';
+import { isSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
 import i18n from '../../i18n/index';
 import type { AuthState } from '../authStore';
 import type {
@@ -125,7 +126,7 @@ export function createRadioEventMap({
     radioService.getSystemStatus();
 
     const subscribedKind = radioStateRef.current.subscribedSpectrumKind;
-    if (subscribedKind) {
+    if (subscribedKind && !isSpectrumSubscriptionPaused()) {
       radioService.subscribeSpectrum(subscribedKind);
     }
   };

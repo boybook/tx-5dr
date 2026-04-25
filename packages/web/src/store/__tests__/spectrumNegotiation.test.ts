@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SpectrumCapabilities } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { createSpectrumNegotiator } from '../radio/spectrumNegotiation';
 import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
+import { setSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
 
 function createCapabilities(options: {
   audioAvailable?: boolean;
@@ -109,6 +110,10 @@ function createHarness() {
 }
 
 describe('spectrum negotiation', () => {
+  beforeEach(() => {
+    setSpectrumSubscriptionPaused(false);
+  });
+
   it('auto-upgrades from audio to radio SDR when radio SDR becomes available later', () => {
     const harness = createHarness();
 
@@ -215,5 +220,35 @@ describe('spectrum negotiation', () => {
 
     expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('radio-sdr');
     expect(harness.radioService.subscribeSpectrum).toHaveBeenLastCalledWith('radio-sdr');
+  });
+
+  it('keeps selection but skips subscribing while spectrum is collapsed', () => {
+    const harness = createHarness();
+    setSpectrumSubscriptionPaused(true);
+
+    harness.negotiator.applySpectrumSelection(createCapabilities({
+      radioSupported: true,
+      radioAvailable: true,
+    }));
+
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('radio-sdr');
+    expect(harness.radioStateRef.current.subscribedSpectrumKind).toBeNull();
+    expect(harness.radioService.subscribeSpectrum).not.toHaveBeenCalled();
+  });
+
+  it('does not resubscribe during mode-driven negotiation while spectrum is collapsed', () => {
+    const harness = createHarness();
+    const capabilities = createCapabilities({
+      radioSupported: true,
+      radioAvailable: true,
+    });
+    harness.capabilitiesRef.current = capabilities;
+    setSpectrumSubscriptionPaused(true);
+
+    harness.negotiator.applyModeDrivenSpectrumNegotiation();
+
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('radio-sdr');
+    expect(harness.radioStateRef.current.subscribedSpectrumKind).toBeNull();
+    expect(harness.radioService.subscribeSpectrum).not.toHaveBeenCalled();
   });
 });

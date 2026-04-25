@@ -145,12 +145,17 @@ export const useSpectrum = () => {
     dispatch({ type: 'setSubscribedSpectrumKind', payload: kind });
   }, [dispatch, markSpectrumSelectionManual]);
 
+  const setSubscribedKind = useCallback((kind: SpectrumKind | null) => {
+    dispatch({ type: 'setSubscribedSpectrumKind', payload: kind });
+  }, [dispatch]);
+
   return {
     capabilities: state.spectrumCapabilities,
     sessionState: state.spectrumSessionState,
     selectedKind: state.selectedSpectrumKind,
     subscribedKind: state.subscribedSpectrumKind,
     setSelectedKind,
+    setSubscribedKind,
   };
 };
 
