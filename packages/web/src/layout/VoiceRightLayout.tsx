@@ -12,6 +12,7 @@ import { RadioControl } from '../components/radio/control/RadioControl';
 import { VoiceQSOLogCard } from '../components/voice/VoiceQSOLogCard';
 import { VoiceRecentQSOList } from '../components/voice/VoiceRecentQSOList';
 import { VoicePTTButton } from '../components/voice/VoicePTTButton';
+import { VoiceKeyerCard } from '../components/voice/VoiceKeyerCard';
 import { VoiceRightTopTabs } from '../components/voice/VoiceRightTopTabs';
 import { ThemeToggle } from '../components/common/ThemeToggle';
 import { QSONotificationToggleButton } from '../components/common/QSONotificationToggleButton';
@@ -192,6 +193,9 @@ export const VoiceRightLayout: React.FC = () => {
       </div>
 
       <div className="flex-shrink-0 p-2 pt-0 md:px-5 md:pb-5 md:pt-0">
+        <div className="mb-3 md:mb-4">
+          <VoiceKeyerCard />
+        </div>
         {/* PTT Button + Radio Control */}
         {/* Mobile: stacked vertically. Desktop: side-by-side */}
         <div className="flex-shrink-0 flex flex-col md:flex-row gap-2 md:gap-3 md:items-stretch">

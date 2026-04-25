@@ -83,6 +83,9 @@ import type {
   RealtimeStatsResponse,
   ServerCpuProfileStatus,
   RealtimeVoiceTxStatsResponse,
+  VoiceKeyerPanel,
+  VoiceKeyerPanelUpdate,
+  VoiceKeyerSlotUpdate,
   PluginMarketCatalogEntryResponse,
   PluginMarketCatalogResponse,
   PluginMarketChannel,
@@ -1861,6 +1864,83 @@ export const api = {
   async getRealtimeVoiceTxStats(scope: 'radio', apiBase?: string): Promise<RealtimeVoiceTxStatsResponse> {
     const params = new URLSearchParams({ scope });
     return apiRequest<RealtimeVoiceTxStatsResponse>(`/realtime/tx-stats?${params.toString()}`, undefined, apiBase);
+  },
+
+  async getVoiceKeyerPanel(callsign: string, apiBase?: string): Promise<{ success: boolean; panel: VoiceKeyerPanel }> {
+    return apiRequest<{ success: boolean; panel: VoiceKeyerPanel }>(
+      `/voice/keyer/${encodeURIComponent(callsign)}`,
+      undefined,
+      apiBase,
+    );
+  },
+
+  async updateVoiceKeyerPanel(
+    callsign: string,
+    body: VoiceKeyerPanelUpdate,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: VoiceKeyerPanel }> {
+    return apiRequest<{ success: boolean; panel: VoiceKeyerPanel }>(
+      `/voice/keyer/${encodeURIComponent(callsign)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      },
+      apiBase,
+    );
+  },
+
+  async updateVoiceKeyerSlot(
+    callsign: string,
+    slotId: string,
+    body: VoiceKeyerSlotUpdate,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: VoiceKeyerPanel }> {
+    return apiRequest<{ success: boolean; panel: VoiceKeyerPanel }>(
+      `/voice/keyer/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      },
+      apiBase,
+    );
+  },
+
+  async uploadVoiceKeyerSlot(
+    callsign: string,
+    slotId: string,
+    wav: Blob,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: VoiceKeyerPanel }> {
+    const formData = new FormData();
+    formData.append('audio', wav, `${slotId}.wav`);
+    return apiRequest<{ success: boolean; panel: VoiceKeyerPanel }>(
+      `/voice/keyer/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}/audio`,
+      {
+        method: 'POST',
+        body: formData,
+      },
+      apiBase,
+    );
+  },
+
+  async deleteVoiceKeyerSlot(
+    callsign: string,
+    slotId: string,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: VoiceKeyerPanel }> {
+    return apiRequest<{ success: boolean; panel: VoiceKeyerPanel }>(
+      `/voice/keyer/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}/audio`,
+      { method: 'DELETE' },
+      apiBase,
+    );
+  },
+
+  async getVoiceKeyerSlotAudio(callsign: string, slotId: string, apiBase?: string): Promise<Blob> {
+    return apiBlobRequest(
+      `/voice/keyer/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}/audio`,
+      undefined,
+      apiBase,
+    );
   },
 
   // ===== 插件系统 API =====

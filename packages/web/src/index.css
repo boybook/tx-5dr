@@ -212,4 +212,17 @@ textarea.font-mono,
   width: 100%;
   left: auto;
   right: 0;
-} 
+}
+
+@keyframes voice-keyer-tx-progress {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+.voice-keyer-tx-progress {
+  width: 0%;
+}

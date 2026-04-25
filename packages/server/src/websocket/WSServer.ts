@@ -412,6 +412,8 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.VOICE_PTT_REQUEST]: (data, id) => this.handleVoicePttRequest(id, data),
       [WSMessageType.VOICE_PTT_RELEASE]: (_data, id) => this.handleVoicePttRelease(id),
       [WSMessageType.VOICE_SET_RADIO_MODE]: (data) => this.handleVoiceSetRadioMode(data),
+      [WSMessageType.VOICE_KEYER_PLAY]: (data, id) => this.handleVoiceKeyerPlay(id, data),
+      [WSMessageType.VOICE_KEYER_STOP]: () => this.handleVoiceKeyerStop(),
       [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: async (data: any) => {
         const adapter = this.digitalRadioEngine.getOpenWebRXAudioAdapter();
         if (!adapter) {
@@ -672,6 +674,11 @@ export class WSServer extends WSMessageHandler {
       logger.debug('voice radio mode changed', data);
       this.broadcast(WSMessageType.VOICE_RADIO_MODE_CHANGED, data);
     });
+
+    this.digitalRadioEngine.on('voiceKeyerStatusChanged', (data) => {
+      logger.debug('voice keyer status changed', data);
+      this.broadcast(WSMessageType.VOICE_KEYER_STATUS_CHANGED, data);
+    });
   }
 
   // CASL ability requirements for WebSocket commands
@@ -692,6 +699,8 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_VOLUME_GAIN]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.SET_VOLUME_GAIN_DB]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.VOICE_PTT_REQUEST]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.VOICE_KEYER_PLAY]: { action: 'manage', subject: 'Transmission' },
+    [WSMessageType.VOICE_KEYER_STOP]: { action: 'manage', subject: 'Transmission' },
     [WSMessageType.VOICE_SET_RADIO_MODE]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.START_OPERATOR]: { action: 'manage', subject: 'Operator' },
     [WSMessageType.STOP_OPERATOR]: { action: 'manage', subject: 'Operator' },
@@ -1162,6 +1171,41 @@ export class WSServer extends WSMessageHandler {
     }
   }
 
+  private async handleVoiceKeyerPlay(connectionId: string, data: any): Promise<void> {
+    try {
+      const manager = this.digitalRadioEngine.getVoiceKeyerManager();
+      if (!manager) {
+        throw new Error('Voice keyer manager not available');
+      }
+
+      const connection = this.getConnection(connectionId);
+      const label = connection?.getAuthLabel() || connectionId;
+      const callsign = String(data?.callsign || '');
+      const slotId = String(data?.slotId || '');
+      if (!callsign || !slotId) {
+        throw new Error('callsign and slotId are required');
+      }
+
+      await manager.play({
+        callsign,
+        slotId,
+        repeat: Boolean(data?.repeat),
+        connectionId,
+        label,
+      });
+    } catch (error) {
+      this.handleCommandError(error, 'voiceKeyerPlay');
+    }
+  }
+
+  private async handleVoiceKeyerStop(): Promise<void> {
+    try {
+      await this.digitalRadioEngine.getVoiceKeyerManager()?.stopActive('stopped by client');
+    } catch (error) {
+      this.handleCommandError(error, 'voiceKeyerStop');
+    }
+  }
+
   private async handleVoiceSetRadioMode(data: any): Promise<void> {
     try {
       const voiceSessionManager = this.digitalRadioEngine.getVoiceSessionManager();
@@ -1307,6 +1351,12 @@ export class WSServer extends WSMessageHandler {
       if (voiceSessionManager) {
         voiceSessionManager.handleClientDisconnect(id).catch((err) => {
           logger.error('failed to handle voice client disconnect', err);
+        });
+      }
+      const voiceKeyerManager = this.digitalRadioEngine.getVoiceKeyerManager();
+      if (voiceKeyerManager) {
+        voiceKeyerManager.handleClientDisconnect(id).catch((err) => {
+          logger.error('failed to handle voice keyer client disconnect', err);
         });
       }
 

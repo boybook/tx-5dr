@@ -26,6 +26,7 @@ import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabiliti
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
 import type { VoicePTTLock } from './voice.schema.js';
+import type { VoiceKeyerStatus } from './voice-keyer.schema.js';
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
@@ -167,6 +168,9 @@ export enum WSMessageType {
   VOICE_PTT_LOCK_CHANGED = 'voicePttLockChanged',
   VOICE_SET_RADIO_MODE = 'voiceSetRadioMode',
   VOICE_RADIO_MODE_CHANGED = 'voiceRadioModeChanged',
+  VOICE_KEYER_PLAY = 'voiceKeyerPlay',
+  VOICE_KEYER_STOP = 'voiceKeyerStop',
+  VOICE_KEYER_STATUS_CHANGED = 'voiceKeyerStatusChanged',
 
   // ===== 进程监控 =====
   PROCESS_SNAPSHOT = 'processSnapshot',
@@ -1457,6 +1461,7 @@ export interface DigitalRadioEngineEvents {
   // 语音模式事件
   voicePttLockChanged: (data: VoicePTTLock) => void;
   voiceRadioModeChanged: (data: { radioMode: string }) => void;
+  voiceKeyerStatusChanged: (data: VoiceKeyerStatus) => void;
 
   // 进程监控事件
   processSnapshot: (data: import('./process-monitor.schema.js').ProcessSnapshot) => void;

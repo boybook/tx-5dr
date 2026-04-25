@@ -23,6 +23,7 @@ const INTERNAL_SAMPLE_RATE = 12000;
 
 export interface AudioStreamEvents {
   'audioData': (samples: Float32Array) => void;
+  'txMonitorAudioData': (data: { samples: Float32Array; sampleRate: number }) => void;
   'error': (error: Error) => void;
   'started': () => void;
   'stopped': () => void;
@@ -66,6 +67,15 @@ interface RtAudioDeviceDescriptor {
 interface ResolvedStreamDevice {
   actualDeviceId: number;
   persistedDeviceId: string;
+}
+
+export interface PlayAudioOptions {
+  /**
+   * Mirrors the audio chunks written to the TX output into the monitor broadcast
+   * side path. This is intentionally opt-in: normal RX monitor, spectrum, and
+   * decoding must continue to use the physical input ring buffer only.
+   */
+  injectIntoMonitor?: boolean;
 }
 
 /**
@@ -1056,7 +1066,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   /**
    * 播放编码后的音频数据
    */
-  async playAudio(audioData: Float32Array, targetSampleRate: number = 48000): Promise<void> {
+  async playAudio(audioData: Float32Array, targetSampleRate: number = 48000, options: PlayAudioOptions = {}): Promise<void> {
     const playStartTime = Date.now();
 
     // 检查是否使用 ICOM WLAN 输出（零重采样优化）
@@ -1119,6 +1129,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
           // 发送音频数据
           await this.icomWlanAudioAdapter.sendAudio(chunk);
+          if (options.injectIntoMonitor) {
+            this.emit('txMonitorAudioData', { samples: chunk, sampleRate: targetSampleRate });
+          }
 
           samplesWritten += chunk.length;
         }
@@ -1220,15 +1233,23 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             // RtAudio requires exactly chunkSize frames per write; pad short last chunk with silence
             const bufferSamples = chunkSize;
             const buffer = Buffer.allocUnsafe(bufferSamples * 4);
+            const monitorChunk = options.injectIntoMonitor ? new Float32Array(chunk.length) : null;
             for (let j = 0; j < chunk.length; j++) {
               const s = chunk[j] * gain;
-              buffer.writeFloatLE(s > 1 ? 1 : (s < -1 ? -1 : s), j * 4);
+              const clamped = s > 1 ? 1 : (s < -1 ? -1 : s);
+              buffer.writeFloatLE(clamped, j * 4);
+              if (monitorChunk) {
+                monitorChunk[j] = clamped;
+              }
             }
             // Zero-fill remainder (silence padding for short last chunk)
             for (let j = chunk.length; j < bufferSamples; j++) {
               buffer.writeFloatLE(0, j * 4);
             }
             this.rtAudioOutput.write(buffer);
+            if (monitorChunk && monitorChunk.length > 0) {
+              this.emit('txMonitorAudioData', { samples: monitorChunk, sampleRate: this.sampleRate });
+            }
             samplesWritten += chunk.length;
             return true;
           } catch {

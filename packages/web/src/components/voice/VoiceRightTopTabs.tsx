@@ -118,7 +118,7 @@ export const VoiceRightTopTabs: React.FC<VoiceRightTopTabsProps> = ({
         </div>
       </div>
 
-      <div className="flex-1 p-2 pt-0 md:p-5 md:pt-0 flex flex-col gap-2 md:gap-3 min-h-0">
+      <div className="flex-1 px-2 pb-1 pt-0 md:px-5 md:pb-2 md:pt-0 flex flex-col gap-2 md:gap-3 min-h-0">
         {items.map((item) => {
           const selected = item.key === selectedKey;
           return (

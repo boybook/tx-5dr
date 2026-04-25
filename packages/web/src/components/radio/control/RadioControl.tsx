@@ -51,6 +51,10 @@ const clampWidth = (value: number, minWidth: number, maxWidth: number): number =
   Math.min(maxWidth, Math.max(minWidth, value))
 );
 
+const isVoiceKeyerLockHolder = (lockHolder: string | null | undefined): boolean => (
+  typeof lockHolder === 'string' && lockHolder.startsWith('voice-keyer:')
+);
+
 const ToolbarIconTooltip: React.FC<{
   label: string;
   children: React.ReactNode;
@@ -1332,12 +1336,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   useEffect(() => {
     const squelchStatus = radioState.squelchStatus;
     const localVoiceTxActive = voiceCaptureController?.isPTTActive ?? false;
+    const voiceKeyerTxActive = voicePttLock?.locked && isVoiceKeyerLockHolder(voicePttLock.lockedBy);
     const isTransmitting = pttStatus.isTransmitting || localVoiceTxActive;
     const shouldMute = radioMode.engineMode === 'voice'
+      && !voiceKeyerTxActive
       && (isTransmitting || (squelchStatus.supported && squelchStatus.open === false));
     const targetDb = shouldMute ? -60 : gainToDb(monitorVolume);
     audioMonitor.setVolume(targetDb);
-  }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, radioMode.engineMode, monitorVolume, radioState.squelchStatus]);
+  }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, voicePttLock?.locked, voicePttLock?.lockedBy, radioMode.engineMode, monitorVolume, radioState.squelchStatus]);
 
   // 监听频率变化事件
   useEffect(() => {
