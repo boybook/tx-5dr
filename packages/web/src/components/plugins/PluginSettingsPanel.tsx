@@ -71,6 +71,7 @@ export const PluginSettingsPanel: React.FC<PluginSettingsPanelProps> = ({
             value={effectiveSettings[key] ?? descriptor.default}
             onChange={(val) => onChange(key, val)}
             pluginName={plugin.name}
+            settings={effectiveSettings}
           />
         ))}
         {isLoading && (

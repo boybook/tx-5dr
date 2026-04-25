@@ -3,7 +3,10 @@ import { Switch, Input, Select, SelectItem, Textarea } from '@heroui/react';
 import type { PluginSettingDescriptor } from '@tx5dr/contracts';
 import i18n from '../../i18n/index';
 import { resolvePluginLabel } from '../../utils/pluginLocales';
-import { getPluginSettingValidationIssue } from '../../utils/pluginSettings';
+import {
+  getPluginSettingDescriptionKey,
+  getPluginSettingValidationIssue,
+} from '../../utils/pluginSettings';
 
 interface PluginSettingFieldProps {
   fieldKey: string;
@@ -12,6 +15,7 @@ interface PluginSettingFieldProps {
   onChange: (value: unknown) => void;
   /** 用于从插件独立命名空间查找 label 翻译 */
   pluginName: string;
+  settings?: Record<string, unknown>;
 }
 
 /**
@@ -27,12 +31,14 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   value,
   onChange,
   pluginName,
+  settings,
 }) => {
   const label = resolvePluginLabel(descriptor.label, pluginName);
-  const description = descriptor.description
-    ? resolvePluginLabel(descriptor.description, pluginName)
+  const descriptionKey = getPluginSettingDescriptionKey(pluginName, fieldKey, descriptor, settings);
+  const description = descriptionKey
+    ? resolvePluginLabel(descriptionKey, pluginName)
     : '';
-  const validationIssue = getPluginSettingValidationIssue(pluginName, fieldKey, descriptor, value);
+  const validationIssue = getPluginSettingValidationIssue(pluginName, fieldKey, descriptor, value, settings);
   const validationMessage = validationIssue
     ? i18n.t(validationIssue.key, {
       ns: `plugin:${pluginName}`,
