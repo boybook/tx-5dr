@@ -345,6 +345,10 @@ export class TransmissionPipeline {
     }
   }
 
+  private shouldReleasePTTImmediatelyAfterAudio(): boolean {
+    return this.deps.radioManager.getConfig().type === 'icom-wlan';
+  }
+
   private async handleEncodeComplete(result: {
     operatorId: string;
     audioData: Float32Array;
@@ -493,6 +497,12 @@ export class TransmissionPipeline {
       await Promise.all([pttPromise, audioPromise]);
 
       this.deps.audioMixer.markPlaybackStop();
+
+      if (this.shouldReleasePTTImmediatelyAfterAudio()) {
+        logger.debug('ICOM WLAN audio complete, stopping PTT without post-audio hold');
+        this.stopPTTPoll();
+        await this.stopPTT();
+      }
 
       for (const operatorId of mixedAudio.operatorIds) {
         this.deps.engineEmitter.emit('transmissionComplete', {

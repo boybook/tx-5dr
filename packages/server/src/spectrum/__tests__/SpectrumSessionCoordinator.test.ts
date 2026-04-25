@@ -1,9 +1,11 @@
 import { EventEmitter } from 'eventemitter3';
 import { describe, expect, it, vi } from 'vitest';
 import { SpectrumSessionCoordinator } from '../SpectrumSessionCoordinator.js';
+import { IcomWlanConnection } from '../../radio/connections/IcomWlanConnection.js';
 
 class MockEngine extends EventEmitter<Record<string, never>> {
   readonly radioManager = {
+    getConfig: vi.fn(() => ({ type: 'icom-wlan' })),
     getCoreCapabilities: vi.fn(() => ({ readRadioMode: true })),
     getMode: vi.fn(),
     isConnected: vi.fn(() => false),
@@ -48,5 +50,24 @@ describe('SpectrumSessionCoordinator', () => {
       occupiedBandwidthHz: 2400,
       offsetModel: 'upper',
     });
+  });
+
+  it('derives ICOM WLAN scope span from the latest frame instead of polling CAT', async () => {
+    const engine = new MockEngine();
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    const connection = new IcomWlanConnection();
+    const getCurrentSpectrumSpan = vi.fn().mockResolvedValue(25_000);
+    (connection as any).getCurrentSpectrumSpan = getCurrentSpectrumSpan;
+    (coordinator as any).lastRadioFrame = {
+      kind: 'radio-sdr',
+      frequencyRange: { min: 7_050_000, max: 7_150_000 },
+      meta: { spanHz: 100_000 },
+    };
+
+    const span = await (coordinator as any).resolveCurrentSpan(connection, null);
+
+    expect(span).toBe(50_000);
+    expect(getCurrentSpectrumSpan).not.toHaveBeenCalled();
   });
 });

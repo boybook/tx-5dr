@@ -17,6 +17,7 @@ import { resolveHamlibSpectrumRuntimeConfig } from './hamlibSpectrumConfig.js';
 const logger = createLogger('SpectrumCoordinator');
 
 const RADIO_SOURCE_STOP_DELAY_MS = 2000;
+const ICOM_WLAN_SCOPE_FRAME_MIN_INTERVAL_MS = 250;
 
 export interface SpectrumCoordinatorEvents {
   frame: (frame: SpectrumFrame) => void;
@@ -46,7 +47,17 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
   private currentScopeConnection: ScopeCapableConnection | null = null;
   private currentHamlibScopeConnection: OfficialSpectrumCapableHamlibConnection | null = null;
   private currentOpenWebRXAdapter: OpenWebRXSpectrumCapableAdapter | null = null;
+  private lastIcomScopeFrameEmittedAt = 0;
   private readonly onScopeFrame = (frame: IcomScopeFrame) => {
+    const now = Date.now();
+    if (
+      this.lastIcomScopeFrameEmittedAt > 0
+      && now - this.lastIcomScopeFrameEmittedAt < ICOM_WLAN_SCOPE_FRAME_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    this.lastIcomScopeFrameEmittedAt = now;
     const profileId = ConfigManager.getInstance().getActiveProfileId();
     this.emit('frame', createRadioSpectrumFrame(frame, profileId, 'ICOM WLAN'));
   };
@@ -450,6 +461,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     if (this.currentScopeConnection !== scopeConnection) {
       await this.stopRadioScope();
       this.currentScopeConnection = scopeConnection;
+      this.lastIcomScopeFrameEmittedAt = 0;
       this.currentScopeConnection.addScopeFrameListener(this.onScopeFrame);
     }
 

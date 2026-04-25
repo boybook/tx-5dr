@@ -352,6 +352,7 @@ export class WSServer extends WSMessageHandler {
   private spectrumCoordinator: SpectrumCoordinator;
   private spectrumSessionCoordinator: SpectrumSessionCoordinator;
   private slotPackProjectionService: OperatorScopedSlotPackProjectionService;
+  private lastRadioConnectedForToast: boolean | null = null;
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
   static getInstance(): WSServer | null {
@@ -552,8 +553,9 @@ export class WSServer extends WSMessageHandler {
       logger.debug('radio status changed event received', data);
       this.broadcast(WSMessageType.RADIO_STATUS_CHANGED, data);
 
-      // 仅连接成功时推送 Toast（断开/失败由前端 RadioControl Alert 展示）
-      if (data.connected) {
+      // 仅在连接状态从非 connected 进入 connected 时推送 Toast。
+      // capability/meter 等状态刷新也会复用 radioStatusChanged，不应反复提示连接成功。
+      if (this.shouldBroadcastRadioConnectedToast(data.connected)) {
         this.broadcastTextMessage(
           'Radio Connected',
           data.reason || 'Radio connection successful',
@@ -679,6 +681,12 @@ export class WSServer extends WSMessageHandler {
       logger.debug('voice keyer status changed', data);
       this.broadcast(WSMessageType.VOICE_KEYER_STATUS_CHANGED, data);
     });
+  }
+
+  private shouldBroadcastRadioConnectedToast(connected: boolean): boolean {
+    const shouldBroadcast = connected && this.lastRadioConnectedForToast !== true;
+    this.lastRadioConnectedForToast = connected;
+    return shouldBroadcast;
   }
 
   // CASL ability requirements for WebSocket commands

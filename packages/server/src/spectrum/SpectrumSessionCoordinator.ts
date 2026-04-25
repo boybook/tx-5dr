@@ -12,6 +12,7 @@ import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import type {
   IRadioConnection,
+  RadioSpectrumDisplayState,
   SpectrumDisplayMode,
 } from '../radio/connections/IRadioConnection.js';
 import { HamlibConnection } from '../radio/connections/HamlibConnection.js';
@@ -22,8 +23,10 @@ import type { SpectrumCoordinator } from './SpectrumCoordinator.js';
 const logger = createLogger('SpectrumSessionCoordinator');
 
 const DISPLAY_STATE_POLL_INTERVAL_MS = 2000;
+const ICOM_WLAN_DISPLAY_STATE_POLL_INTERVAL_MS = 5000;
 const VOICE_STATE_POLL_INTERVAL_MS = 2000;
 const DISPLAY_STATE_RETRY_MS = 30_000;
+const RADIO_FRAME_SESSION_STATE_MIN_INTERVAL_MS = 2000;
 const ZOOM_CONFIRM_TIMEOUT_MS = 2000;
 const STANDARD_FREQUENCY_TOLERANCE_HZ = 1500;
 const ACTIVE_WINDOW_TOLERANCE_HZ = 10;
@@ -101,8 +104,15 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   private lastKnownRadioFrequency: number | null = null;
   private cachedVoiceState: CachedVoiceState = EMPTY_VOICE_STATE;
   private displayPollTimer: NodeJS.Timeout | null = null;
+  private displayPollIntervalMs: number | null = null;
   private voicePollTimer: NodeJS.Timeout | null = null;
   private displayStateFailedAt: number | null = null;
+  private spectrumDisplayStateCache: {
+    connection: IRadioConnection;
+    readAt: number;
+    state: RadioSpectrumDisplayState;
+  } | null = null;
+  private lastRadioFrameStateDirtyAt = 0;
   private pendingTargetSpanHz: number | null = null;
   private pendingConnectionType: 'hamlib' | 'icom-wlan' | null = null;
   private pendingZoomTimer: NodeJS.Timeout | null = null;
@@ -117,6 +127,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
     this.engine.on('radioStatusChanged', () => {
       this.displayStateFailedAt = null;
+      this.clearSpectrumDisplayStateCache();
       if (!this.engine.getRadioManager().isConnected()) {
         this.lastKnownRadioFrequency = null;
         this.cachedVoiceState = EMPTY_VOICE_STATE;
@@ -130,6 +141,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
     this.engine.on('profileChanged', () => {
       this.displayStateFailedAt = null;
+      this.clearSpectrumDisplayStateCache();
       this.clearPendingZoom();
       this.clearPendingDigitalTransition();
       void this.ensureVoiceRadioFollowMode();
@@ -153,12 +165,31 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
     this.spectrumCoordinator.on('frame', (frame) => {
       if (frame.kind === 'radio-sdr') {
+        const now = Date.now();
+        let shouldMarkDirty = false;
         this.lastRadioFrame = frame;
         if (this.pendingTargetSpanHz !== null && this.isPendingZoomConfirmed(frame)) {
           this.clearPendingZoom();
+          shouldMarkDirty = true;
         }
+
+        const hadPendingDigitalTransition = this.pendingDigitalTransition !== null;
         this.resolvePendingDigitalTransition(frame.frequencyRange.min, frame.frequencyRange.max);
+        if (hadPendingDigitalTransition && this.pendingDigitalTransition === null) {
+          shouldMarkDirty = true;
+        }
+
+        if (!shouldMarkDirty && now - this.lastRadioFrameStateDirtyAt >= RADIO_FRAME_SESSION_STATE_MIN_INTERVAL_MS) {
+          shouldMarkDirty = true;
+        }
+
+        if (shouldMarkDirty) {
+          this.lastRadioFrameStateDirtyAt = now;
+          this.markDirty();
+        }
+        return;
       }
+
       this.markDirty();
     });
 
@@ -216,15 +247,25 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     this.emit('stateChanged');
   }
 
+  private clearSpectrumDisplayStateCache(): void {
+    this.spectrumDisplayStateCache = null;
+  }
+
   private updatePollingState(): void {
     const connected = this.engine.getRadioManager().isConnected();
-    if (connected && !this.displayPollTimer) {
+    const displayPollIntervalMs = this.resolveDisplayStatePollIntervalMs();
+    if (connected && (!this.displayPollTimer || this.displayPollIntervalMs !== displayPollIntervalMs)) {
+      if (this.displayPollTimer) {
+        clearInterval(this.displayPollTimer);
+      }
+      this.displayPollIntervalMs = displayPollIntervalMs;
       this.displayPollTimer = setInterval(() => {
         this.markDirty();
-      }, DISPLAY_STATE_POLL_INTERVAL_MS);
+      }, displayPollIntervalMs);
     } else if (!connected && this.displayPollTimer) {
       clearInterval(this.displayPollTimer);
       this.displayPollTimer = null;
+      this.displayPollIntervalMs = null;
     }
 
     const shouldVoicePoll = connected && this.engine.getEngineMode() === 'voice';
@@ -236,6 +277,12 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       clearInterval(this.voicePollTimer);
       this.voicePollTimer = null;
     }
+  }
+
+  private resolveDisplayStatePollIntervalMs(): number {
+    return this.engine.getRadioManager().getConfig?.().type === 'icom-wlan'
+      ? ICOM_WLAN_DISPLAY_STATE_POLL_INTERVAL_MS
+      : DISPLAY_STATE_POLL_INTERVAL_MS;
   }
 
   private async handleFrequencyChanged(data: { frequency?: number; mode?: string; source?: 'program' | 'radio' }): Promise<void> {
@@ -290,6 +337,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       edgeLowHz: lowHz,
       edgeHighHz: highHz,
     });
+    this.clearSpectrumDisplayStateCache();
 
     this.markDirty();
   }
@@ -627,13 +675,35 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const now = Date.now();
     const canTryDisplayState = Boolean(activeConnection?.getSpectrumDisplayState)
       && (this.displayStateFailedAt === null || now - this.displayStateFailedAt >= DISPLAY_STATE_RETRY_MS);
-    const configured = canTryDisplayState
-      ? await activeConnection!.getSpectrumDisplayState!().catch((error) => {
-          logger.debug('Failed to read spectrum display state', error);
-          this.displayStateFailedAt = now;
-          return null;
-        })
-      : null;
+    let configured: RadioSpectrumDisplayState | null = null;
+    const cacheTtlMs = activeConnection instanceof IcomWlanConnection
+      ? ICOM_WLAN_DISPLAY_STATE_POLL_INTERVAL_MS
+      : 0;
+    const cachedDisplayState = this.spectrumDisplayStateCache;
+    const canUseCachedDisplayState = Boolean(
+      activeConnection
+      && cachedDisplayState
+      && cachedDisplayState.connection === activeConnection
+      && now - cachedDisplayState.readAt < cacheTtlMs,
+    );
+
+    if (canUseCachedDisplayState) {
+      configured = cachedDisplayState!.state;
+    } else if (canTryDisplayState) {
+      configured = await activeConnection!.getSpectrumDisplayState!().catch((error) => {
+        logger.debug('Failed to read spectrum display state', error);
+        this.displayStateFailedAt = now;
+        return null;
+      });
+
+      if (configured && activeConnection) {
+        this.spectrumDisplayStateCache = {
+          connection: activeConnection,
+          readAt: now,
+          state: configured,
+        };
+      }
+    }
 
     if (configured) {
       this.displayStateFailedAt = null;
@@ -834,6 +904,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     this.pendingConnectionType = connection instanceof HamlibConnection ? 'hamlib' : 'icom-wlan';
     this.resetPendingZoomTimer();
     await connection.setSpectrumSpan(nextLevel.spanHz);
+    this.clearSpectrumDisplayStateCache();
   }
 
   private getZoomCapableConnection(): HamlibConnection | IcomWlanConnection | null {
@@ -862,6 +933,13 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     connection: HamlibConnection | IcomWlanConnection,
     displaySpanHz: number | null,
   ): Promise<number | null> {
+    if (connection instanceof IcomWlanConnection && this.lastRadioFrame) {
+      const frameSpanHz = this.lastRadioFrame.meta.spanHz ?? Math.abs(this.lastRadioFrame.frequencyRange.max - this.lastRadioFrame.frequencyRange.min);
+      if (Number.isFinite(frameSpanHz) && frameSpanHz > 0) {
+        return Math.round(frameSpanHz / 2);
+      }
+    }
+
     const queriedSpanHz = await connection.getCurrentSpectrumSpan?.();
     if (typeof queriedSpanHz === 'number' && Number.isFinite(queriedSpanHz) && queriedSpanHz > 0) {
       return queriedSpanHz;
@@ -1031,6 +1109,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         edgeHighHz: state.highHz ?? undefined,
       });
     }
+    this.clearSpectrumDisplayStateCache();
   }
 
   private async resolveCurrentStandardFrequency(currentRadioFrequency: number | null): Promise<number | null> {
@@ -1132,6 +1211,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
       this.clearPendingDigitalTransition();
       await connection.configureSpectrumDisplay({ mode: 'center' });
+      this.clearSpectrumDisplayStateCache();
       logger.info('Restored radio spectrum to follow mode for voice');
     } catch (error) {
       logger.warn('Failed to restore radio spectrum follow mode for voice', error);

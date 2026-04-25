@@ -35,24 +35,24 @@ export function useBufferedMeterData(meterData: MeterData): BufferedMeterData {
       const newValue = meterData[key];
       const currentValue = buffered[key].value;
 
-      if (timers.current[key]) {
-        clearTimeout(timers.current[key]!);
-        timers.current[key] = null;
-      }
-
       if (newValue !== null) {
+        if (timers.current[key]) {
+          clearTimeout(timers.current[key]!);
+          timers.current[key] = null;
+        }
         // 有数据：立即更新
         setBuffered((prev) => ({
           ...prev,
           [key]: { value: newValue, isTimeout: false },
         }));
-      } else if (currentValue !== null) {
+      } else if (currentValue !== null && !timers.current[key]) {
         // 数据变 null：保持旧值，启动超时
         timers.current[key] = setTimeout(() => {
           setBuffered((prev) => ({
             ...prev,
             [key]: { ...prev[key], isTimeout: true },
           }));
+          timers.current[key] = null;
         }, TIMEOUT_MS);
       } else {
         // 一直无数据：标记超时
@@ -63,12 +63,15 @@ export function useBufferedMeterData(meterData: MeterData): BufferedMeterData {
       }
     });
 
+  }, [meterData.swr, meterData.alc, meterData.level, meterData.power]);
+
+  useEffect(() => {
     return () => {
       Object.values(timers.current).forEach((timer) => {
         if (timer) clearTimeout(timer);
       });
     };
-  }, [meterData.swr, meterData.alc, meterData.level, meterData.power]);
+  }, []);
 
   return buffered;
 }

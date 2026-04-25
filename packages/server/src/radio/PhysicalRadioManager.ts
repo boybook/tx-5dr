@@ -938,7 +938,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   setPTTActive(active: boolean): void {
     this._isPTTActive = active;
-    this.capabilityManager.setPTTActive(active);
+    if (!this.shouldBypassCapabilitySystem()) {
+      this.capabilityManager.setPTTActive(active);
+    }
     logger.debug('PTT state updated for I/O scheduling', { active });
   }
 
@@ -1081,6 +1083,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取当前所有能力的状态快照（用于 REST 接口和客户端首次连接）
    */
   getCapabilitySnapshot(): { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] } {
+    if (this.shouldBypassCapabilitySystem()) {
+      return { descriptors: [], capabilities: [] };
+    }
     return this.capabilityManager.getCapabilitySnapshot();
   }
 
@@ -1088,6 +1093,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * Refresh all capability values on demand (triggered by frontend button).
    */
   async refreshCapabilities(): Promise<void> {
+    if (this.shouldBypassCapabilitySystem()) {
+      logger.debug('Skipping capability refresh because capability system is disabled for ICOM WLAN');
+      return;
+    }
     await this.capabilityManager.refreshAll();
   }
 
@@ -1099,6 +1108,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     value?: boolean | number,
     action?: boolean,
   ): Promise<void> {
+    if (this.shouldBypassCapabilitySystem()) {
+      throw new Error('radio capability system is disabled for ICOM WLAN');
+    }
+
     if (id === 'tuner_switch') {
       if (typeof value !== 'boolean') {
         throw new Error('tuner_switch expects a boolean value');
@@ -1140,7 +1153,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       // 获取更新后的状态并广播事件
       const status = await this.getTunerStatus();
-      this.capabilityManager.syncTunerStatus(status);
+      if (!this.shouldBypassCapabilitySystem()) {
+        this.capabilityManager.syncTunerStatus(status);
+      }
       this.emit('tunerStatusChanged', status);
     } catch (error) {
       // 天调设置失败不影响主连接状态
@@ -1209,7 +1224,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           active: true,
           status: 'tuning',
         };
-        this.capabilityManager.syncTunerStatus(beforeStatus);
+        if (!this.shouldBypassCapabilitySystem()) {
+          this.capabilityManager.syncTunerStatus(beforeStatus);
+        }
         this.emit('tunerStatusChanged', beforeStatus);
       }
 
@@ -1223,7 +1240,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         // 根据结果更新状态
         afterStatus.status = result ? 'success' : 'failed';
         afterStatus.active = false;
-        this.capabilityManager.syncTunerStatus(afterStatus);
+        if (!this.shouldBypassCapabilitySystem()) {
+          this.capabilityManager.syncTunerStatus(afterStatus);
+        }
         this.emit('tunerStatusChanged', afterStatus);
       }
 
@@ -1239,7 +1258,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           active: false,
           status: 'failed',
         };
-        this.capabilityManager.syncTunerStatus(failedStatus);
+        if (!this.shouldBypassCapabilitySystem()) {
+          this.capabilityManager.syncTunerStatus(failedStatus);
+        }
         this.emit('tunerStatusChanged', failedStatus);
       }
 
@@ -1589,7 +1610,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     const restoredFrequency = await this.restoreSavedFrequencyIfAvailable();
 
     logger.debug('Bootstrap phase: capability manager');
-    await this.capabilityManager.onConnected(connection);
+    if (this.shouldBypassCapabilitySystem(connection)) {
+      logger.info('Skipping radio capability system for ICOM WLAN');
+      this.capabilityManager.onDisconnected();
+    } else {
+      await this.capabilityManager.onConnected(connection);
+    }
 
     if (restoredFrequency !== null) {
       this.updateKnownFrequency(restoredFrequency);
@@ -1855,11 +1881,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private async refreshRfPowerDescriptor(): Promise<void> {
+    if (this.shouldBypassCapabilitySystem()) {
+      return;
+    }
+
     try {
       await this.capabilityManager.refreshDescriptor('rf_power');
     } catch (error) {
       logger.debug(`RF power descriptor refresh skipped: ${(error as Error).message}`);
     }
+  }
+
+  private shouldBypassCapabilitySystem(connection: IRadioConnection | null = this.connection): boolean {
+    return connection?.getType?.() === RadioConnectionType.ICOM_WLAN;
   }
 
   /**
@@ -2070,7 +2104,16 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.postFrequencyCapabilityRefresh = this.postFrequencyCapabilityRefresh
       .catch(() => undefined)
       .then(async () => {
-        if (!this.connection || this._isPTTActive) {
+        const connection = this.connection;
+        if (!connection || this._isPTTActive) {
+          return;
+        }
+
+        const connectionType = typeof connection.getType === 'function'
+          ? connection.getType()
+          : null;
+        if (connectionType === RadioConnectionType.ICOM_WLAN) {
+          logger.debug('Skipping post-frequency capability refresh for ICOM WLAN', { reason });
           return;
         }
 

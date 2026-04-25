@@ -106,6 +106,17 @@ describe('WSServer initial frequency snapshot', () => {
     expect(Array.from(selectedCallsigns)).toEqual(['BH1BBB']);
     expect(Array.from(noSelectionCallsigns)).toEqual([]);
   });
+
+  it('only shows the radio connected toast on disconnected-to-connected transitions', () => {
+    const server = Object.create(WSServer.prototype) as any;
+    server.lastRadioConnectedForToast = null;
+
+    expect(server.shouldBroadcastRadioConnectedToast(false)).toBe(false);
+    expect(server.shouldBroadcastRadioConnectedToast(true)).toBe(true);
+    expect(server.shouldBroadcastRadioConnectedToast(true)).toBe(false);
+    expect(server.shouldBroadcastRadioConnectedToast(false)).toBe(false);
+    expect(server.shouldBroadcastRadioConnectedToast(true)).toBe(true);
+  });
 });
 
 describe('WSServer current slot handshake snapshot', () => {

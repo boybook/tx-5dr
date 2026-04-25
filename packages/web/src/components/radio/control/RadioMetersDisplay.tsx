@@ -32,6 +32,16 @@ export function shouldAutoOpenAlcWarning(
   return alc.percent >= 100;
 }
 
+export function shouldShowLevelPowerMeter(
+  meterCapabilities: MeterCapabilities | null,
+  hasLevelValue: boolean,
+  hasPowerValue: boolean
+): boolean {
+  return meterCapabilities
+    ? meterCapabilities.strength || meterCapabilities.power
+    : hasLevelValue || hasPowerValue;
+}
+
 interface RadioMetersDisplayProps {
   meterData: MeterData;
   isPttActive: boolean;
@@ -170,11 +180,15 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
 
   // 已经挂载此组件意味着布局层确认“整块应该显示”。
   // 当 capability 未知时，仅展示当前连接周期里实际出现过数据的仪表，避免空占位。
-  const showLevelPower = meterCapabilities
-    ? (meterCapabilities.strength || meterCapabilities.power)
-    : (buffered.level.value !== null || buffered.power.value !== null);
+  const showLevelPower = shouldShowLevelPowerMeter(
+    meterCapabilities,
+    buffered.level.value !== null,
+    buffered.power.value !== null
+  );
   const showSwr = meterCapabilities ? meterCapabilities.swr : buffered.swr.value !== null;
   const showAlc = meterCapabilities ? meterCapabilities.alc : buffered.alc.value !== null;
+  const powerValue = meterCapabilities?.power === false ? null : buffered.power.value;
+  const powerIsTimeout = meterCapabilities?.power === false ? true : buffered.power.isTimeout;
   const isAlcOverLimit = shouldAutoOpenAlcWarning(
     showAlc,
     isPttActive,
@@ -238,12 +252,12 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
         {showLevelPower && (isPttActive ? (
           <Meter
             label="Power"
-            value={buffered.power.value?.percent ?? null}
-            unit={buffered.power.value?.watts != null && buffered.power.value?.maxWatts != null ? '' : (buffered.power.value?.watts != null ? 'W' : '%')}
-            isTimeout={buffered.power.isTimeout}
+            value={powerValue?.percent ?? null}
+            unit={powerValue?.watts != null && powerValue?.maxWatts != null ? '' : (powerValue?.watts != null ? 'W' : '%')}
+            isTimeout={powerIsTimeout}
             formatValue={(_value) => {
-              if (!buffered.power.value) return '--';
-              const { watts, percent, maxWatts } = buffered.power.value;
+              if (!powerValue) return '--';
+              const { watts, percent, maxWatts } = powerValue;
               if (watts != null && maxWatts != null) return `${watts.toFixed(1)}/${maxWatts.toFixed(1)}W`;
               if (watts != null) return watts.toFixed(1);
               return percent.toFixed(1);
