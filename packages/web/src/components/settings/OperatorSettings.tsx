@@ -443,28 +443,24 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
           {/* 通联日志同步 */}
           {syncProviderNames.length > 0 && (
-            <>
-              <Divider className="my-3" />
-              <div
-                className="rounded-lg border border-default-200 bg-default-50/60 px-3 py-2.5 flex items-center justify-between cursor-pointer hover:bg-default-100/80 transition-colors"
-                onClick={() => openSyncModal(operator.myCallsign)}
-              >
-                <div>
-                  <p className="text-sm font-medium">{t('settings.logSync')}</p>
-                  <p className="text-xs text-default-400 mt-0.5">{syncProviderNames.join(' / ')}</p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="light"
-                  onPress={() => openSyncModal(operator.myCallsign)}
-                >
-                  {t('settings.configure')}
-                </Button>
+            <div
+              className="rounded-lg border border-default-200 bg-default-50/60 px-3 py-2.5 flex items-center justify-between cursor-pointer hover:bg-default-100/80 transition-colors"
+              onClick={() => openSyncModal(operator.myCallsign)}
+            >
+              <div>
+                <p className="text-sm font-medium">{t('settings.logSync')}</p>
+                <p className="text-xs text-default-400 mt-0.5">{syncProviderNames.join(' / ')}</p>
               </div>
-            </>
+              <Button
+                size="sm"
+                variant="light"
+                onPress={() => openSyncModal(operator.myCallsign)}
+              >
+                {t('settings.configure')}
+              </Button>
+            </div>
           )}
 
-          <Divider />
           <OperatorPluginSettings operatorId={operator.id} />
         </div>
       );
@@ -752,6 +748,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
             onSelectionChange={(key) => setActiveTab(key as 'manage' | 'preferences')}
             size="md"
             className="w-full"
+            classNames={{
+              panel: 'pt-2',
+            }}
           >
             <Tab
               key="manage"
@@ -762,7 +761,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 </div>
               }
             >
-            <div className="space-y-6 pt-4">
+            <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <div>
                   <h4 className="text-md font-semibold">{t('settings.operatorConfig')}</h4>
@@ -817,7 +816,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               </div>
             }
           >
-            <div className="pt-4">
+            <div>
               {renderPreferencesTab()}
             </div>
           </Tab>
