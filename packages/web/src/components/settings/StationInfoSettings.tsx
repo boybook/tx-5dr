@@ -90,7 +90,7 @@ export const StationInfoSettings = forwardRef<StationInfoSettingsRef, StationInf
       <div className="grid grid-cols-2 gap-3">
         <Input
           label={t('stationInfo.qthGrid')}
-          placeholder="PM01"
+          placeholder="FN31"
           value={localInfo.qth?.grid ?? ''}
           onValueChange={v => updateQth('grid', v)}
           isDisabled={isSaving}
