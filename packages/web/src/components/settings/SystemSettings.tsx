@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   CardBody,
-  Divider,
   Input,
   Select,
   SelectItem,
@@ -140,40 +139,43 @@ function NtpServerReorderItem({
   const isInvalid = trimmedValue.length > 0 && !isValidNtpServerHost(trimmedValue);
 
   return (
-    <Reorder.Item value={item} as="div" dragListener={false} dragControls={dragControls} className="w-full">
-      <div className="flex items-start gap-2 rounded-medium border border-divider bg-content1 p-3">
-        <button
-          type="button"
-          className="flex h-8 w-4 items-center justify-center self-center cursor-grab text-default-300 transition-colors hover:text-default-500 active:cursor-grabbing"
-          onPointerDown={(event) => dragControls.start(event)}
-          aria-label={t('system.ntpDragHandle')}
-        >
-          <FontAwesomeIcon icon={faGripVertical} className="text-xs leading-none" />
-        </button>
-        <div className="flex-1 space-y-1">
-          <Input
-            size="sm"
-            placeholder={t('system.ntpServerPlaceholder')}
-            value={item.value}
-            onValueChange={(value) => onValueChange(item.id, value)}
-            isDisabled={isSaving}
-            isInvalid={isInvalid}
-            errorMessage={isInvalid ? t('system.ntpServerInvalid') : ' '}
-            classNames={{ input: 'font-mono text-sm' }}
-          />
-        </div>
-        <Button
-          size="sm"
-          variant="light"
-          color="danger"
-          isIconOnly
-          isDisabled={isSaving || total <= 1}
-          onPress={() => onRemove(item.id)}
-          aria-label={t('system.ntpRemove')}
-        >
-          <FontAwesomeIcon icon={faTrash} className="text-xs" />
-        </Button>
-      </div>
+    <Reorder.Item
+      value={item}
+      as="div"
+      dragListener={false}
+      dragControls={dragControls}
+      className="flex w-full items-start gap-2"
+    >
+      <button
+        type="button"
+        className="flex h-8 w-4 shrink-0 items-center justify-center cursor-grab text-default-300 transition-colors hover:text-default-500 active:cursor-grabbing"
+        onPointerDown={(event) => dragControls.start(event)}
+        aria-label={t('system.ntpDragHandle')}
+      >
+        <FontAwesomeIcon icon={faGripVertical} className="text-xs leading-none" />
+      </button>
+      <Input
+        size="sm"
+        placeholder={t('system.ntpServerPlaceholder')}
+        value={item.value}
+        onValueChange={(value) => onValueChange(item.id, value)}
+        isDisabled={isSaving}
+        isInvalid={isInvalid}
+        errorMessage={isInvalid ? t('system.ntpServerInvalid') : undefined}
+        className="flex-1"
+        classNames={{ input: 'font-mono text-sm' }}
+      />
+      <Button
+        size="sm"
+        variant="light"
+        color="danger"
+        isIconOnly
+        isDisabled={isSaving || total <= 1}
+        onPress={() => onRemove(item.id)}
+        aria-label={t('system.ntpRemove')}
+      >
+        <FontAwesomeIcon icon={faTrash} className="text-xs" />
+      </Button>
     </Reorder.Item>
   );
 }
@@ -1284,7 +1286,7 @@ export const SystemSettings = forwardRef<
   };
 
   const cpuProfileCard = cpuProfileStatus && (
-    <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+    <Card shadow="none" radius="lg" className="order-[10]" classNames={SETTINGS_CARD_CLASS_NAMES}>
       <CardBody className={SETTINGS_CARD_BODY_CLASS}>
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="flex-1">
@@ -1299,7 +1301,7 @@ export const SystemSettings = forwardRef<
             <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
               {t(
                 'system.cpuProfile.desc',
-                'Capture a server-only CPU profile for performance analysis. This affects only the backend server process.',
+                'If TX5DR feels sluggish, responds slowly, or keeps using a lot of CPU, run a diagnosis and send the result to the developers.',
               )}
             </p>
           </div>
@@ -1314,7 +1316,7 @@ export const SystemSettings = forwardRef<
                 )}
                 isDisabled={cpuProfileBusy}
               >
-                {t('system.cpuProfile.start', 'Start Guided Capture')}
+                {t('system.cpuProfile.start', 'Start Diagnosis')}
               </Button>
             )}
             {cpuProfileState === 'armed' && (
@@ -1327,7 +1329,7 @@ export const SystemSettings = forwardRef<
                 )}
                 isDisabled={cpuProfileBusy}
               >
-                {t('system.cpuProfile.cancel', 'Cancel Armed Capture')}
+                {t('system.cpuProfile.cancel', 'Cancel Diagnosis')}
               </Button>
             )}
             {(cpuProfileState === 'completed' || cpuProfileState === 'interrupted' || cpuProfileState === 'missing') && (
@@ -1348,12 +1350,12 @@ export const SystemSettings = forwardRef<
 
         <div className={SETTINGS_SOFT_PANEL_CLASS}>
           <p className={SETTINGS_SUBTITLE_CLASS}>
-            {t('system.cpuProfile.serverOnlyTitle', 'Server-only capture')}
+            {t('system.cpuProfile.serverOnlyTitle', 'When to use this')}
           </p>
           <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
             {t(
               'system.cpuProfile.serverOnlyDesc',
-              'Files are generated only after the profiled server process exits cleanly. Starting is easy; finishing correctly is the important part.',
+              'Use this when sluggishness or high CPU usage can be reproduced. Start the diagnosis, repeat the action that causes the problem, then finish it as prompted.',
             )}
           </p>
         </div>
@@ -1362,10 +1364,10 @@ export const SystemSettings = forwardRef<
           <Alert
             color="default"
             variant="flat"
-            title={t('system.cpuProfile.idleTitle', 'Ready to arm a one-time capture')}
+            title={t('system.cpuProfile.idleTitle', 'Ready to record one slow moment')}
             description={t(
               'system.cpuProfile.idleDesc',
-              'Arm the next server start, reproduce the issue, then perform one more normal restart to flush the .cpuprofile file.',
+              'Start here, restart TX5DR when prompted, then reproduce the sluggishness or high CPU usage.',
             )}
           />
         )}
@@ -1374,10 +1376,10 @@ export const SystemSettings = forwardRef<
           <Alert
             color="warning"
             variant="flat"
-            title={t('system.cpuProfile.armedTitle', 'Capture armed for the next server start')}
+            title={t('system.cpuProfile.armedTitle', 'Diagnosis will start after restart')}
             description={t(
               'system.cpuProfile.armedDesc',
-              'The next normal restart begins profiling. Do not force kill the process.',
+              'Restart TX5DR normally. After it starts again, TX5DR will record the problem while you reproduce it.',
             )}
           />
         )}
@@ -1386,10 +1388,10 @@ export const SystemSettings = forwardRef<
           <Alert
             color="primary"
             variant="flat"
-            title={t('system.cpuProfile.runningTitle', 'Capture in progress')}
+            title={t('system.cpuProfile.runningTitle', 'Recording the problem now')}
             description={t(
               'system.cpuProfile.runningDesc',
-              'The profile file will not appear until the next normal stop or restart. Use the recommended finish action below, not a force kill.',
+              'Reproduce the sluggishness, slow response, or high CPU usage now. When done, use the recommended action below to finish the diagnosis.',
             )}
           />
         )}
@@ -1398,10 +1400,10 @@ export const SystemSettings = forwardRef<
           <Alert
             color="danger"
             variant="flat"
-            title={t('system.cpuProfile.failedTitle', 'The last capture did not produce a usable file')}
+            title={t('system.cpuProfile.failedTitle', 'This diagnosis did not produce a usable result')}
             description={t(
               'system.cpuProfile.failedDesc',
-              'This usually means the server did not exit cleanly, or no .cpuprofile file was flushed before shutdown.',
+              'This usually happens when TX5DR did not close normally. Start again and use the buttons on this page to restart and finish.',
             )}
           />
         )}
@@ -1410,10 +1412,10 @@ export const SystemSettings = forwardRef<
           <Alert
             color="warning"
             variant="flat"
-            title={t('system.cpuProfile.overrideTitle', 'Externally forced profiling is active')}
+            title={t('system.cpuProfile.overrideTitle', 'Diagnosis is enabled by external configuration')}
             description={t(
               'system.cpuProfile.overrideDesc',
-              'This runtime is controlled by TX5DR_SERVER_CPU_PROFILE* environment variables, so the guided capture flow is read-only.',
+              'This environment has diagnosis enabled outside the app, so the guided flow on this page is read-only.',
             )}
           />
         )}
@@ -1422,10 +1424,10 @@ export const SystemSettings = forwardRef<
           <Alert
             color="success"
             variant="flat"
-            title={t('system.cpuProfile.completedTitle', 'CPU profile file generated')}
+            title={t('system.cpuProfile.completedTitle', 'Diagnosis file generated')}
             description={t(
               'system.cpuProfile.completedDesc',
-              'Open the file with Chrome DevTools or speedscope, then include it together with version, runtime, and reproduction steps when reporting the issue.',
+              'Download or copy this file, then include what you were doing, how long the slowdown lasted, and roughly how high CPU usage was when reporting the issue.',
             )}
           />
         )}
@@ -1450,8 +1452,8 @@ export const SystemSettings = forwardRef<
           <div className={SETTINGS_PANEL_CLASS}>
             <p className={SETTINGS_SUBTITLE_CLASS}>
               {cpuProfileState === 'running'
-                ? t('system.cpuProfile.finishActionTitle', 'Recommended finish action')
-                : t('system.cpuProfile.startActionTitle', 'Recommended start action')}
+                ? t('system.cpuProfile.finishActionTitle', 'Recommended way to finish')
+                : t('system.cpuProfile.startActionTitle', 'Recommended way to start')}
             </p>
             <p className={`mt-2 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{cpuProfilePrimaryAction}</p>
             {isCpuProfileElectronFlow && (
@@ -1464,8 +1466,8 @@ export const SystemSettings = forwardRef<
                 isDisabled={cpuProfileBusy}
               >
                 {cpuProfileState === 'running'
-                  ? t('system.cpuProfile.restartToFinish', 'Restart App and Finish Capture')
-                  : t('system.cpuProfile.restartToStart', 'Restart App and Start Capture')}
+                  ? t('system.cpuProfile.restartToFinish', 'Restart App and Finish Diagnosis')
+                  : t('system.cpuProfile.restartToStart', 'Restart App and Start Diagnosis')}
               </Button>
             )}
           </div>
@@ -1475,7 +1477,7 @@ export const SystemSettings = forwardRef<
           <div className={SETTINGS_PANEL_CLASS}>
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div className="flex-1">
-                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.profilePathLabel', 'Profile file')}</p>
+                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.profilePathLabel', 'Diagnosis file')}</p>
                 <p className={`mt-2 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{cpuProfileStatus.profilePath}</p>
                 {cpuProfileStatus.hostProfilePathHint && (
                   <p className={`mt-1 break-all font-mono ${SETTINGS_MUTED_CLASS}`}>
@@ -1519,11 +1521,11 @@ export const SystemSettings = forwardRef<
 
         {cpuProfileState === 'completed' && (
           <div className={SETTINGS_PANEL_CLASS}>
-            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.feedbackTitle', 'Feedback checklist')}</p>
+            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.feedbackTitle', 'When sending feedback, include')}</p>
             <div className={`mt-2 space-y-1 ${SETTINGS_SUBDESC_CLASS}`}>
-              <p>{t('system.cpuProfile.feedback1', '1. Attach the .cpuprofile file.')}</p>
-              <p>{t('system.cpuProfile.feedback2', '2. Include the app version and runtime mode.')}</p>
-              <p>{t('system.cpuProfile.feedback3', '3. Describe what you were doing during the capture and how long it lasted.')}</p>
+              <p>{t('system.cpuProfile.feedback1', '1. The diagnosis file generated here.')}</p>
+              <p>{t('system.cpuProfile.feedback2', '2. The app version and whether you use Desktop, Docker, or a server deployment.')}</p>
+              <p>{t('system.cpuProfile.feedback3', '3. What you were doing when it slowed down and how long it lasted.')}</p>
             </div>
           </div>
         )}
@@ -1532,9 +1534,9 @@ export const SystemSettings = forwardRef<
   );
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* 页面标题和描述 */}
-      <div>
+      <div className="order-0">
         <h3 className="text-xl font-bold text-default-900 mb-2">{t('system.title')}</h3>
         <p className="text-default-600">
           {t('system.description')}
@@ -1543,12 +1545,12 @@ export const SystemSettings = forwardRef<
 
       {/* 错误提示 */}
       {error && (
-        <div className="p-3 bg-danger-50 border border-danger-200 rounded-lg">
+        <div className="order-1 p-3 bg-danger-50 border border-danger-200 rounded-lg">
           <p className="text-danger-700 text-sm">{error}</p>
         </div>
       )}
 
-      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-[9]" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
             <div className="flex-1">
@@ -1610,7 +1612,7 @@ export const SystemSettings = forwardRef<
 
       {/* 公开查看权限 */}
       {authConfig && (
-        <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <Card shadow="none" radius="lg" className="order-2" classNames={SETTINGS_CARD_CLASS_NAMES}>
           <CardBody className={SETTINGS_CARD_BODY_CLASS}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1">
@@ -1668,7 +1670,7 @@ export const SystemSettings = forwardRef<
       )}
 
       {isElectron && (
-        <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+        <Card shadow="none" radius="lg" className="order-3" classNames={SETTINGS_CARD_CLASS_NAMES}>
           <CardBody className={SETTINGS_CARD_BODY_CLASS}>
             <div>
               <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.desktopHttpsTitle')}</h4>
@@ -1855,7 +1857,7 @@ export const SystemSettings = forwardRef<
         </Card>
       )}
 
-      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-8" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div>
             <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.realtimeSettingsCardTitle')}</h4>
@@ -2184,10 +2186,8 @@ export const SystemSettings = forwardRef<
         </CardBody>
       </Card>
 
-      <Divider className="my-4" />
-
       {/* 发射时解码设置 */}
-      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-4" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
@@ -2213,7 +2213,7 @@ export const SystemSettings = forwardRef<
       </Card>
 
       {/* 发射时频谱分析设置 */}
-      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-6" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
@@ -2239,9 +2239,7 @@ export const SystemSettings = forwardRef<
       </Card>
 
       {/* 解码窗口设置 */}
-      <Divider className="my-4" />
-
-      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      <Card shadow="none" radius="lg" className="order-5" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div>
             <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.decodeWindowTitle')}</h4>
@@ -2482,10 +2480,8 @@ export const SystemSettings = forwardRef<
         </CardBody>
       </Card>
 
-      {/* PSKReporter 设置分隔 */}
-      <Divider className="my-4" />
-
-      <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+      {/* PSKReporter 设置 */}
+      <Card shadow="none" radius="lg" className="order-7" classNames={SETTINGS_CARD_CLASS_NAMES}>
         <CardBody className={SETTINGS_CARD_BODY_CLASS}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 space-y-2">
@@ -2677,8 +2673,7 @@ export const SystemSettings = forwardRef<
       {/* 桌面应用设置 - 仅 Electron 环境显示 */}
       {isElectron && (
         <>
-          <Divider className="my-4" />
-          <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+          <Card shadow="none" radius="lg" className="order-[11]" classNames={SETTINGS_CARD_CLASS_NAMES}>
             <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-3`}>
               <div>
                 <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.closeBehavior')}</h4>
@@ -2701,7 +2696,7 @@ export const SystemSettings = forwardRef<
             </CardBody>
           </Card>
 
-          <Card shadow="none" radius="lg" classNames={SETTINGS_CARD_CLASS_NAMES}>
+          <Card shadow="none" radius="lg" className="order-[12]" classNames={SETTINGS_CARD_CLASS_NAMES}>
             <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-4`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -2889,7 +2884,7 @@ export const SystemSettings = forwardRef<
 
       {/* 提示信息 */}
       {hasUnsavedChanges() && (
-        <div className="text-sm text-default-500">
+        <div className="order-last text-sm text-default-500">
           {t('unsavedChanges')}
         </div>
       )}
