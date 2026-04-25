@@ -8,7 +8,7 @@ import {
 } from '@heroui/react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDisplayNotificationSettings } from '../../../hooks/useDisplayNotificationSettings';
-import { getHighlightTypeLabels, HighlightType } from '../../../utils/displayNotificationSettings';
+import { type FrameTableCycleBackgrounds, getHighlightTypeLabels, HighlightType } from '../../../utils/displayNotificationSettings';
 import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
@@ -121,6 +121,7 @@ interface MessageRowProps {
   targetCallsign: string;
   showLogbookAnalysisVisuals: boolean;
   enableCallsignPopover: boolean;
+  cycleBackgrounds: FrameTableCycleBackgrounds['light'];
   isZh: boolean;
   highlightTypeLabels: Record<string, string>;
   getHighestPriorityHighlight: (analysis: NonNullable<FrameDisplayMessage['logbookAnalysis']>) => HighlightType | null;
@@ -132,7 +133,7 @@ interface MessageRowProps {
 
 const MessageRow = React.memo<MessageRowProps>(({
   message, group, gridCols, isNarrow, myCallsigns, targetCallsign,
-  showLogbookAnalysisVisuals, enableCallsignPopover, isZh, highlightTypeLabels,
+  showLogbookAnalysisVisuals, enableCallsignPopover, cycleBackgrounds, isZh, highlightTypeLabels,
   getHighestPriorityHighlight, getHighlightColor,
   onDoubleClick, onMouseEnter, onMouseLeave,
 }) => {
@@ -153,9 +154,9 @@ const MessageRow = React.memo<MessageRowProps>(({
       }
     }
     return {
-      '--hover-bg': group.cycle === 'even' ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)'
+      '--hover-bg': group.cycle === 'even' ? cycleBackgrounds.even : cycleBackgrounds.odd
     } as React.CSSProperties;
-  }, [message.db, message.logbookAnalysis, message.message, showLogbookAnalysisVisuals, group.cycle, getHighestPriorityHighlight, getHighlightColor]);
+  }, [message.db, message.logbookAnalysis, message.message, showLogbookAnalysisVisuals, group.cycle, cycleBackgrounds.even, cycleBackgrounds.odd, getHighestPriorityHighlight, getHighlightColor]);
 
   // Logbook analysis background style
   const logbookStyle = useMemo(() => {
@@ -319,7 +320,11 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [isAtTop, setIsAtTop] = useState(true);
   const [isNarrow, setIsNarrow] = useState(false);
-  const { getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
+  const [activeTheme, setActiveTheme] = useState<'light' | 'dark'>(() => (
+    typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+  ));
+  const { settings, getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
+  const cycleBackgrounds = settings.frameTableCycleBackgrounds[activeTheme];
   const bottomGroupSignature = useMemo(() => getBottomGroupSignature(groups), [groups]);
 
 
@@ -434,6 +439,19 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
     return () => resizeObserver.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    const syncTheme = () => {
+      setActiveTheme(root.classList.contains('dark') ? 'dark' : 'light');
+    };
+    syncTheme();
+
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
   // ─── Hover 回调 ─────────────────────────
   const handleMessageEnter = useCallback((freq: number) => {
     onMessageHover?.(freq);
@@ -452,7 +470,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
       return { backgroundColor: 'var(--ft8-tx-group-bg)' };
     }
     return {
-      backgroundColor: cycle === 'even' ? 'var(--ft8-cycle-even-bg)' : 'var(--ft8-cycle-odd-bg)'
+      backgroundColor: cycle === 'even' ? cycleBackgrounds.even : cycleBackgrounds.odd
     };
   };
 
@@ -558,6 +576,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                           targetCallsign={targetCallsign}
                           showLogbookAnalysisVisuals={showLogbookAnalysisVisuals}
                           enableCallsignPopover={enableCallsignPopover}
+                          cycleBackgrounds={cycleBackgrounds}
                           isZh={isZh}
                           highlightTypeLabels={highlightTypeLabels}
                           getHighestPriorityHighlight={getHighestPriorityHighlight}

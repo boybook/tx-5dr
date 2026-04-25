@@ -8,6 +8,17 @@ export interface HighlightConfig {
   color: string;
 }
 
+export interface FrameTableCycleBackgrounds {
+  light: {
+    even: string;
+    odd: string;
+  };
+  dark: {
+    even: string;
+    odd: string;
+  };
+}
+
 export interface DisplayNotificationSettings {
   enabled: boolean; // 全局开关
   highlights: {
@@ -15,6 +26,7 @@ export interface DisplayNotificationSettings {
     newPrefix: HighlightConfig;
     newCallsign: HighlightConfig;
   };
+  frameTableCycleBackgrounds: FrameTableCycleBackgrounds;
 }
 
 // 默认设置
@@ -32,6 +44,16 @@ export const DEFAULT_DISPLAY_SETTINGS: DisplayNotificationSettings = {
     newCallsign: {
       enabled: true,
       color: '#fbbf24', // amber-400
+    },
+  },
+  frameTableCycleBackgrounds: {
+    light: {
+      even: 'rgba(153, 255, 145, 0.2)',
+      odd: 'rgba(255, 205, 148, 0.2)',
+    },
+    dark: {
+      even: 'rgba(5, 150, 105, 0.25)',
+      odd: 'rgba(217, 119, 6, 0.25)',
     },
   },
 };
@@ -94,6 +116,55 @@ export function getHighlightTypeDescriptions(t: (key: string) => string): Record
 
 const STORAGE_KEY = 'tx5dr_display_notification_settings';
 
+function cloneDefaultSettings(): DisplayNotificationSettings {
+  return {
+    enabled: DEFAULT_DISPLAY_SETTINGS.enabled,
+    highlights: {
+      newGrid: { ...DEFAULT_DISPLAY_SETTINGS.highlights.newGrid },
+      newPrefix: { ...DEFAULT_DISPLAY_SETTINGS.highlights.newPrefix },
+      newCallsign: { ...DEFAULT_DISPLAY_SETTINGS.highlights.newCallsign },
+    },
+    frameTableCycleBackgrounds: {
+      light: { ...DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.light },
+      dark: { ...DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.dark },
+    },
+  };
+}
+
+export function getDefaultDisplayNotificationSettings(): DisplayNotificationSettings {
+  return cloneDefaultSettings();
+}
+
+function mergeDisplayNotificationSettings(parsed: Partial<DisplayNotificationSettings> | null | undefined): DisplayNotificationSettings {
+  return {
+    enabled: parsed?.enabled ?? DEFAULT_DISPLAY_SETTINGS.enabled,
+    highlights: {
+      newGrid: {
+        enabled: parsed?.highlights?.newGrid?.enabled ?? DEFAULT_DISPLAY_SETTINGS.highlights.newGrid.enabled,
+        color: parsed?.highlights?.newGrid?.color ?? DEFAULT_DISPLAY_SETTINGS.highlights.newGrid.color,
+      },
+      newPrefix: {
+        enabled: parsed?.highlights?.newPrefix?.enabled ?? DEFAULT_DISPLAY_SETTINGS.highlights.newPrefix.enabled,
+        color: parsed?.highlights?.newPrefix?.color ?? DEFAULT_DISPLAY_SETTINGS.highlights.newPrefix.color,
+      },
+      newCallsign: {
+        enabled: parsed?.highlights?.newCallsign?.enabled ?? DEFAULT_DISPLAY_SETTINGS.highlights.newCallsign.enabled,
+        color: parsed?.highlights?.newCallsign?.color ?? DEFAULT_DISPLAY_SETTINGS.highlights.newCallsign.color,
+      },
+    },
+    frameTableCycleBackgrounds: {
+      light: {
+        even: parsed?.frameTableCycleBackgrounds?.light?.even ?? DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.light.even,
+        odd: parsed?.frameTableCycleBackgrounds?.light?.odd ?? DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.light.odd,
+      },
+      dark: {
+        even: parsed?.frameTableCycleBackgrounds?.dark?.even ?? DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.dark.even,
+        odd: parsed?.frameTableCycleBackgrounds?.dark?.odd ?? DEFAULT_DISPLAY_SETTINGS.frameTableCycleBackgrounds.dark.odd,
+      },
+    },
+  };
+}
+
 /**
  * 从localStorage读取显示通知设置
  */
@@ -101,32 +172,14 @@ export function getDisplayNotificationSettings(): DisplayNotificationSettings {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) {
-      return { ...DEFAULT_DISPLAY_SETTINGS };
+      return cloneDefaultSettings();
     }
 
     const parsed = JSON.parse(stored);
-    
-    // 合并默认设置，确保所有字段都存在
-    return {
-      enabled: parsed.enabled ?? DEFAULT_DISPLAY_SETTINGS.enabled,
-      highlights: {
-        newGrid: {
-          enabled: parsed.highlights?.newGrid?.enabled ?? DEFAULT_DISPLAY_SETTINGS.highlights.newGrid.enabled,
-          color: parsed.highlights?.newGrid?.color ?? DEFAULT_DISPLAY_SETTINGS.highlights.newGrid.color,
-        },
-        newPrefix: {
-          enabled: parsed.highlights?.newPrefix?.enabled ?? DEFAULT_DISPLAY_SETTINGS.highlights.newPrefix.enabled,
-          color: parsed.highlights?.newPrefix?.color ?? DEFAULT_DISPLAY_SETTINGS.highlights.newPrefix.color,
-        },
-        newCallsign: {
-          enabled: parsed.highlights?.newCallsign?.enabled ?? DEFAULT_DISPLAY_SETTINGS.highlights.newCallsign.enabled,
-          color: parsed.highlights?.newCallsign?.color ?? DEFAULT_DISPLAY_SETTINGS.highlights.newCallsign.color,
-        },
-      },
-    };
+    return mergeDisplayNotificationSettings(parsed);
   } catch (error) {
     logger.error('Failed to read display notification settings:', error);
-    return { ...DEFAULT_DISPLAY_SETTINGS };
+    return cloneDefaultSettings();
   }
 }
 
@@ -148,7 +201,7 @@ export function saveDisplayNotificationSettings(settings: DisplayNotificationSet
  * 重置设置为默认值
  */
 export function resetDisplayNotificationSettings(): DisplayNotificationSettings {
-  const defaultSettings = { ...DEFAULT_DISPLAY_SETTINGS };
+  const defaultSettings = getDefaultDisplayNotificationSettings();
   saveDisplayNotificationSettings(defaultSettings);
   return defaultSettings;
 }
