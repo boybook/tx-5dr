@@ -101,6 +101,10 @@ function persistHttpsWarningBypass(enabled: boolean): void {
   }
 }
 
+function isVoiceKeyerLockHolder(lockHolder: string | null | undefined): boolean {
+  return typeof lockHolder === 'string' && lockHolder.startsWith('voice-keyer:');
+}
+
 export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureController }) => {
   const { t } = useTranslation(['voice', 'common']);
   const { state: authState } = useAuth();
@@ -124,6 +128,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   const pressTrackerRef = useRef(new VoicePttPressTracker());
 
   const radioService = connection.state.radioService;
+  const isVoiceKeyerPttLock = voicePttLock?.locked && isVoiceKeyerLockHolder(voicePttLock.lockedBy);
 
   useEffect(() => {
     voiceCaptureControllerRef.current = voiceCaptureController;
@@ -165,7 +170,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     }
 
     if (voicePttLock.locked) {
-      if (isPttDownRef.current) {
+      if (isPttDownRef.current || isVoiceKeyerLockHolder(voicePttLock.lockedBy)) {
         setPttState('transmitting');
       } else {
         setPttState('locked-by-other');
@@ -231,6 +236,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
   const attemptPTTDown = useCallback(async () => {
     if (!isOperator || !radioService || isPttDownRef.current) return;
+    if (isVoiceKeyerPttLock) return;
     if (pttState === 'locked-by-other') return;
 
     const pressId = pressTrackerRef.current.beginPress();
@@ -280,7 +286,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     }
 
     logger.debug('PTT pressed');
-  }, [acquireWakeLock, isOperator, pttState, radioService, voiceCaptureController]);
+  }, [acquireWakeLock, isOperator, isVoiceKeyerPttLock, pttState, radioService, voiceCaptureController]);
 
   // PTT press handler
   const handlePTTDown = useCallback(async () => {
@@ -434,12 +440,12 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
         return {
           bgClass: 'bg-danger-600 shadow-lg shadow-danger-600/50 animate-pulse',
           label: t('ptt.transmitting'),
-          subLabel: t('ptt.releaseHint'),
+          subLabel: isVoiceKeyerPttLock ? undefined : t('ptt.releaseHint'),
         };
       case 'locked-by-other':
         return {
           bgClass: 'bg-default-300 dark:bg-default-500 cursor-not-allowed',
-          label: t('ptt.lockedByOther', { user: voicePttLock?.lockedByLabel || '?' }),
+          label: t('ptt.lockedByOther'),
         };
       case 'idle':
       default:
@@ -452,7 +458,8 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
   };
 
   const { bgClass, label, subLabel } = getButtonStyle();
-  const isDisabled = !isOperator || pttState === 'locked-by-other';
+  const isDisabled = !isOperator || pttState === 'locked-by-other' || Boolean(isVoiceKeyerPttLock);
+  const useDisabledVisual = !isOperator || pttState === 'locked-by-other';
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const meterPercent = Math.round(Math.max(0, Math.min(1, inputLevel)) * 100);
   const meterIsArmed = voiceCaptureController.captureState !== 'idle';
@@ -538,7 +545,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
               text-white font-bold whitespace-nowrap
               [-webkit-touch-callout:none] [-webkit-user-select:none]
               ${bgClass}
-              ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}
+              ${useDisabledVisual ? 'opacity-60 cursor-not-allowed' : isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}
             `}
             onMouseDown={(e) => {
               e.preventDefault();

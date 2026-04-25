@@ -7,6 +7,7 @@ const MONITOR_STREAM_SAMPLE_RATE = 16000;
 const MONITOR_FRAME_MS = 20;
 const HIGH_LATENCY_WARN_MS = 120;
 const HIGH_LATENCY_LOG_THROTTLE_MS = 5000;
+const TX_MONITOR_HOLD_MS = 120;
 
 /**
  * 音频监听统计信息
@@ -39,6 +40,8 @@ export interface AudioMonitorServiceEvents {
  * 负责独立于数字电台引擎的音频监听功能
  * - 广播模式：自动启动，向所有已连接客户端推送音频
  * - 解耦设计：直接从 RingBufferAudioProvider 读取，不依赖现有发射链路
+ * - TX 监听注入：语音键控可把已写入发射输出的音频块注入广播侧；
+ *   这条旁路不会写入 RingBufferAudioProvider，避免污染频谱、解码和真实接收音频。
  * - 统一采样率：固定16kHz输出（足够覆盖电台监听所需带宽）
  * - 客户端音量：在浏览器播放侧调整
  */
@@ -53,6 +56,8 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   private readonly sourceSampleRate: number;
   private readonly needsResample: boolean;
   private outputBuffer = new Float32Array(0);
+  private txOutputBuffer = new Float32Array(0);
+  private txMonitorActiveUntil = 0;
   private isProcessingChunk = false;
 
   // 统计信息
@@ -116,6 +121,10 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   private async checkAndPush(): Promise<void> {
     try {
       if (this.isProcessingChunk) {
+        return;
+      }
+
+      if (Date.now() < this.txMonitorActiveUntil) {
         return;
       }
 
@@ -202,6 +211,45 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   }
 
   /**
+   * Inject TX audio into the monitor broadcast stream without touching the RX
+   * ring buffer. Used by the voice keyer so remote operators can hear the PCM
+   * blocks that were actually submitted to the radio output path.
+   */
+  injectTxMonitorAudio(samples: Float32Array, sampleRate: number): void {
+    if (!samples.length || sampleRate <= 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const processed = sampleRate === this.TARGET_SAMPLE_RATE
+      ? samples
+      : this.resampleChunkLinear(samples, sampleRate, this.TARGET_SAMPLE_RATE);
+
+    if (!processed.length) {
+      return;
+    }
+
+    const rms = this.calculateRMS(processed);
+    this.txMonitorActiveUntil = now + Math.max(
+      TX_MONITOR_HOLD_MS,
+      Math.ceil((processed.length / this.TARGET_SAMPLE_RATE) * 1000) + TX_MONITOR_HOLD_MS,
+    );
+    this.appendToTxOutputBuffer(processed);
+    this.emitReadyTxFrames(now);
+
+    const stats: AudioMonitorStats = {
+      latencyMs: 0,
+      bufferFillPercent: 100,
+      isActive: true,
+      audioLevel: rms,
+      droppedSamples: this.droppedSamplesCount,
+      sampleRate: this.TARGET_SAMPLE_RATE,
+    };
+    this.latestStats = stats;
+    this.emit('stats', stats);
+  }
+
+  /**
    * Append resampled audio to a small staging buffer so downstream always
    * receives fixed-size 20ms frames even if the native resampler output size
    * varies because of filter warm-up and internal delay.
@@ -220,6 +268,20 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
     this.outputBuffer = merged;
   }
 
+  private appendToTxOutputBuffer(samples: Float32Array): void {
+    if (samples.length === 0) return;
+
+    if (this.txOutputBuffer.length === 0) {
+      this.txOutputBuffer = new Float32Array(samples);
+      return;
+    }
+
+    const merged = new Float32Array(this.txOutputBuffer.length + samples.length);
+    merged.set(this.txOutputBuffer);
+    merged.set(samples, this.txOutputBuffer.length);
+    this.txOutputBuffer = merged;
+  }
+
   private emitReadyFrames(timestamp: number): number {
     let emittedFrames = 0;
 
@@ -228,6 +290,27 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
       this.outputBuffer = this.outputBuffer.slice(this.OUTPUT_FRAME_SAMPLES);
 
       // 广播音频数据（创建独立副本，避免底层缓冲区复用问题）
+      const audioCopy = new Float32Array(frame).buffer;
+      this.emit('audioData', {
+        audioData: audioCopy,
+        sampleRate: this.TARGET_SAMPLE_RATE,
+        samples: frame.length,
+        timestamp,
+        sequence: this.sequenceNumber++,
+      });
+      emittedFrames++;
+    }
+
+    return emittedFrames;
+  }
+
+  private emitReadyTxFrames(timestamp: number): number {
+    let emittedFrames = 0;
+
+    while (this.txOutputBuffer.length >= this.OUTPUT_FRAME_SAMPLES) {
+      const frame = this.txOutputBuffer.slice(0, this.OUTPUT_FRAME_SAMPLES);
+      this.txOutputBuffer = this.txOutputBuffer.slice(this.OUTPUT_FRAME_SAMPLES);
+
       const audioCopy = new Float32Array(frame).buffer;
       this.emit('audioData', {
         audioData: audioCopy,
@@ -333,6 +416,8 @@ export class AudioMonitorService extends EventEmitter<AudioMonitorServiceEvents>
   destroy(): void {
     this.stopPushingAudio();
     this.outputBuffer = new Float32Array(0);
+    this.txOutputBuffer = new Float32Array(0);
+    this.txMonitorActiveUntil = 0;
     this.latestStats = null;
     this.removeAllListeners();
     logger.info('Service destroyed');

@@ -6,6 +6,7 @@ vi.mock('../../audio/AudioMonitorService.js', () => ({
   AudioMonitorService: class {
     constructor(_provider: unknown) {}
     destroy = vi.fn();
+    injectTxMonitorAudio = vi.fn();
   },
 }));
 
@@ -223,5 +224,24 @@ describe('AudioSidecarController', () => {
     // Downstream consumers subscribed to firstMonitor must still be bound to
     // the live instance after recovery.
     expect(sidecar.getAudioMonitorService()).toBe(firstMonitor);
+  });
+
+  it('forwards TX monitor audio chunks to the monitor side path without replacing the monitor', async () => {
+    const { engineEmitter, audioStreamManager, audioVolumeController } = makeDeps();
+
+    const sidecar = new AudioSidecarController({
+      engineEmitter: engineEmitter as any,
+      audioStreamManager: audioStreamManager as any,
+      audioVolumeController: audioVolumeController as any,
+    });
+
+    await sidecar.start();
+    await flushAsync();
+
+    const monitor = sidecar.getAudioMonitorService() as any;
+    const samples = new Float32Array([0.1, -0.1, 0.2]);
+    audioStreamManager.emit('txMonitorAudioData', { samples, sampleRate: 16000 });
+
+    expect(monitor.injectTxMonitorAudio).toHaveBeenCalledWith(samples, 16000);
   });
 });

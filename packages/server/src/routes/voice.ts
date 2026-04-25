@@ -1,5 +1,10 @@
 import { FastifyInstance } from 'fastify';
-import { UserRole } from '@tx5dr/contracts';
+import { readFile } from 'fs/promises';
+import {
+  UserRole,
+  VoiceKeyerPanelUpdateSchema,
+  VoiceKeyerSlotUpdateSchema,
+} from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { requireRole } from '../auth/authPlugin.js';
@@ -62,5 +67,87 @@ export async function voiceRoutes(fastify: FastifyInstance) {
     } catch (error) {
       throw RadioError.from(error, RadioErrorCode.INVALID_CONFIG);
     }
+  });
+
+  fastify.get('/keyer/:callsign', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const { callsign } = req.params as { callsign: string };
+    const manager = engine.getVoiceKeyerManager();
+    if (!manager) {
+      throw new Error('Voice keyer manager not available');
+    }
+    const panel = await manager.getPanel(callsign);
+    return reply.send({ success: true, panel });
+  });
+
+  fastify.patch('/keyer/:callsign', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const { callsign } = req.params as { callsign: string };
+    const body = VoiceKeyerPanelUpdateSchema.parse(req.body);
+    const manager = engine.getVoiceKeyerManager();
+    if (!manager) {
+      throw new Error('Voice keyer manager not available');
+    }
+    const panel = await manager.updatePanel(callsign, body.slotCount);
+    return reply.send({ success: true, panel });
+  });
+
+  fastify.patch('/keyer/:callsign/slots/:slotId', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const { callsign, slotId } = req.params as { callsign: string; slotId: string };
+    const body = VoiceKeyerSlotUpdateSchema.parse(req.body);
+    const manager = engine.getVoiceKeyerManager();
+    if (!manager) {
+      throw new Error('Voice keyer manager not available');
+    }
+    const panel = await manager.updateSlot(callsign, slotId, body);
+    return reply.send({ success: true, panel });
+  });
+
+  fastify.post('/keyer/:callsign/slots/:slotId/audio', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const { callsign, slotId } = req.params as { callsign: string; slotId: string };
+    const file = await req.file();
+    if (!file) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: 'audio file is required',
+        userMessage: 'Please record audio before uploading',
+      });
+    }
+    const manager = engine.getVoiceKeyerManager();
+    if (!manager) {
+      throw new Error('Voice keyer manager not available');
+    }
+    const panel = await manager.saveSlotAudio(callsign, slotId, await file.toBuffer());
+    return reply.send({ success: true, panel });
+  });
+
+  fastify.get('/keyer/:callsign/slots/:slotId/audio', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const { callsign, slotId } = req.params as { callsign: string; slotId: string };
+    const manager = engine.getVoiceKeyerManager();
+    if (!manager) {
+      throw new Error('Voice keyer manager not available');
+    }
+    const audioPath = await manager.getSlotAudioPathForRead(callsign, slotId);
+    return reply.type('audio/wav').send(await readFile(audioPath));
+  });
+
+  fastify.delete('/keyer/:callsign/slots/:slotId/audio', {
+    preHandler: [requireRole(UserRole.OPERATOR)],
+  }, async (req, reply) => {
+    const { callsign, slotId } = req.params as { callsign: string; slotId: string };
+    const manager = engine.getVoiceKeyerManager();
+    if (!manager) {
+      throw new Error('Voice keyer manager not available');
+    }
+    const panel = await manager.deleteSlotAudio(callsign, slotId);
+    return reply.send({ success: true, panel });
   });
 }

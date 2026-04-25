@@ -493,6 +493,14 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.VOICE_PTT_RELEASE);
   }
 
+  playVoiceKeyer(callsign: string, slotId: string, repeat = false): void {
+    this.send(WSMessageType.VOICE_KEYER_PLAY, { callsign, slotId, repeat });
+  }
+
+  stopVoiceKeyer(): void {
+    this.send(WSMessageType.VOICE_KEYER_STOP);
+  }
+
   /**
    * 设置电台调制模式（语音模式下使用，如 USB/LSB/FM/AM）
    */

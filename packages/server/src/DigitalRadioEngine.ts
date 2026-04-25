@@ -45,6 +45,7 @@ import { TransmissionPipeline } from './subsystems/TransmissionPipeline.js';
 import { ClockCoordinator } from './subsystems/ClockCoordinator.js';
 import { EngineLifecycle } from './subsystems/EngineLifecycle.js';
 import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
+import { VoiceKeyerManager } from './voice/VoiceKeyerManager.js';
 import { EngineState } from './state-machines/types.js';
 import { PluginManager } from './plugin/PluginManager.js';
 import { tx5drPaths } from './utils/app-paths.js';
@@ -90,6 +91,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   // 语音模式
   private engineMode: EngineMode = 'digital';
   private voiceSessionManager: VoiceSessionManager | null = null;
+  private voiceKeyerManager: VoiceKeyerManager | null = null;
   private modeSwitchTail: Promise<void> = Promise.resolve();
 
   // 子系统
@@ -404,6 +406,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.voiceSessionManager;
   }
 
+  public getVoiceKeyerManager(): VoiceKeyerManager | null {
+    return this.voiceKeyerManager;
+  }
+
   public getNtpCalibrationService(): NtpCalibrationService {
     return this.ntpCalibrationService;
   }
@@ -524,6 +530,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       radioManager: this.radioManager,
       audioStreamManager: this.audioStreamManager,
     });
+    this.voiceKeyerManager = new VoiceKeyerManager({
+      voiceSessionManager: this.voiceSessionManager,
+      audioStreamManager: this.audioStreamManager,
+    });
 
     await this.initializeVoiceSessionManager();
 
@@ -567,6 +577,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     });
     this.voiceSessionManager.on('voiceRadioModeChanged', (data) => {
       this.emit('voiceRadioModeChanged', data);
+    });
+
+    this.voiceKeyerManager?.on('voiceKeyerStatusChanged', (data) => {
+      this.emit('voiceKeyerStatusChanged', data);
     });
   }
 
@@ -777,6 +791,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
     let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
     logger.info(`Switching engine mode: ${this.engineMode}/${this.currentMode.name} -> ${targetEngineMode}/${targetMode.name}`);
+
+    if (this.engineMode === 'voice' && targetEngineMode !== 'voice') {
+      await this.voiceKeyerManager?.stopActive('leaving voice mode');
+    }
 
     if (engineState === EngineState.STARTING) {
       logger.info('Mode switch requested while engine is starting, waiting for startup to settle first');

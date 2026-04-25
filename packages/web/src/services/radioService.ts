@@ -414,6 +414,18 @@ export class RadioService {
     }
   }
 
+  playVoiceKeyer(callsign: string, slotId: string, repeat = false): void {
+    if (this.isConnected) {
+      this.wsClient.playVoiceKeyer(callsign, slotId, repeat);
+    }
+  }
+
+  stopVoiceKeyer(): void {
+    if (this.isConnected) {
+      this.wsClient.stopVoiceKeyer();
+    }
+  }
+
   /**
    * 设置电台调制模式（语音模式使用，如 USB/LSB/FM/AM）
    */

@@ -48,6 +48,7 @@ export class AudioSidecarController {
   private audioMonitorService: AudioMonitorService | null = null;
   private pendingAttempt = 0;
   private audioStreamErrorHandler: ((error: Error) => void) | null = null;
+  private txMonitorAudioHandler: ((data: { samples: Float32Array; sampleRate: number }) => void) | null = null;
   private isStopping = false;
 
   constructor(private deps: AudioSidecarDeps) {}
@@ -167,6 +168,7 @@ export class AudioSidecarController {
     if (!this.audioMonitorService) {
       this.audioMonitorService = new AudioMonitorService(this.deps.audioStreamManager.getAudioProvider());
     }
+    this.attachTxMonitorInjection();
     this.attachAudioStreamErrorListener();
     this.deps.audioVolumeController.restoreGainForCurrentSlot();
 
@@ -227,6 +229,7 @@ export class AudioSidecarController {
     // (engine shutdown / destroy). During a runtime loss + retry the monitor
     // stays alive so downstream consumers keep their subscriptions.
     if (destroyMonitor && this.audioMonitorService) {
+      this.detachTxMonitorInjection();
       try {
         this.audioMonitorService.destroy();
       } catch (err) {
@@ -265,6 +268,26 @@ export class AudioSidecarController {
     };
     this.audioStreamErrorHandler = handler;
     this.deps.audioStreamManager.on('error', handler);
+  }
+
+  private attachTxMonitorInjection(): void {
+    if (this.txMonitorAudioHandler || !this.audioMonitorService) return;
+
+    // Keep TX monitor injection as an explicit side path:
+    // AudioStreamManager emits only chunks that were submitted to TX output,
+    // and AudioMonitorService broadcasts them without writing RX ring buffers.
+    const monitor = this.audioMonitorService;
+    const handler = (data: { samples: Float32Array; sampleRate: number }) => {
+      monitor.injectTxMonitorAudio(data.samples, data.sampleRate);
+    };
+    this.deps.audioStreamManager.on('txMonitorAudioData', handler);
+    this.txMonitorAudioHandler = handler;
+  }
+
+  private detachTxMonitorInjection(): void {
+    if (!this.txMonitorAudioHandler) return;
+    this.deps.audioStreamManager.off('txMonitorAudioData', this.txMonitorAudioHandler);
+    this.txMonitorAudioHandler = null;
   }
 
   private detachAudioStreamErrorListener(): void {
