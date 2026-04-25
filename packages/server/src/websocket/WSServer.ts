@@ -1147,7 +1147,7 @@ export class WSServer extends WSMessageHandler {
       const voiceAudioClientId = data?.voiceAudioClientId as string | undefined;
       const lock = voiceSessionManager.getPTTLockState();
       if (lock.locked && typeof lock.lockedBy === 'string' && lock.lockedBy.startsWith('voice-keyer:')) {
-        await this.digitalRadioEngine.getVoiceKeyerManager()?.stopActive('manual PTT override');
+        await this.digitalRadioEngine.getVoiceKeyerManager()?.preemptForManualPtt();
       }
       const result = await voiceSessionManager.startTransmit(connectionId, label, voiceAudioClientId);
 
@@ -1194,6 +1194,7 @@ export class WSServer extends WSMessageHandler {
         callsign,
         slotId,
         repeat: Boolean(data?.repeat),
+        startImmediately: data?.startImmediately !== false,
         connectionId,
         label,
       });

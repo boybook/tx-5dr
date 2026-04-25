@@ -44,6 +44,7 @@ export const VoiceKeyerPlayRequestSchema = z.object({
   callsign: z.string(),
   slotId: z.string(),
   repeat: z.boolean().optional(),
+  startImmediately: z.boolean().optional(),
 });
 
 export type VoiceKeyerSlot = z.infer<typeof VoiceKeyerSlotSchema>;

@@ -33,6 +33,8 @@ interface ActivePlayback {
   callsign: string;
   slotId: string;
   repeating: boolean;
+  startImmediately: boolean;
+  playbackInterrupted: boolean;
   stopRequested: boolean;
   timer: NodeJS.Timeout | null;
   timerResolve: ((reason: WaitWakeReason) => void) | null;
@@ -167,6 +169,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
       callsign: string;
       slotId: string;
       repeat: boolean;
+      startImmediately?: boolean;
       connectionId: string;
       label: string;
     },
@@ -187,6 +190,8 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
       callsign: normalized,
       slotId: slot.id,
       repeating: params.repeat,
+      startImmediately: params.startImmediately ?? true,
+      playbackInterrupted: false,
       stopRequested: false,
       timer: null,
       timerResolve: null,
@@ -232,6 +237,20 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
     }
   }
 
+  async preemptForManualPtt(): Promise<void> {
+    const current = this.active;
+    if (!current || current.stopRequested) {
+      return;
+    }
+
+    if (current.repeating && this.status.mode === 'playing') {
+      await this.preemptPlaybackForManualPtt(current);
+      return;
+    }
+
+    await this.stopActive('manual PTT override');
+  }
+
   setManualPttActive(active: boolean): void {
     if (this.manualPttActive === active) {
       return;
@@ -240,6 +259,11 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
 
     const current = this.active;
     if (!current || current.stopRequested) {
+      return;
+    }
+
+    if (active && this.status.mode === 'playing' && current.repeating) {
+      void this.preemptPlaybackForManualPtt(current);
       return;
     }
 
@@ -258,16 +282,21 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
 
   private async runPlaybackLoop(active: ActivePlayback): Promise<void> {
     try {
+      let shouldPlayNow = active.startImmediately;
       while (!active.stopRequested && this.active === active) {
+        if (!shouldPlayNow) {
+          const shouldPlayAfterDelay = await this.waitForRepeatDelay(active);
+          if (!shouldPlayAfterDelay) {
+            break;
+          }
+        }
+
         await this.playOnce(active);
         if (!active.repeating || active.stopRequested || this.active !== active) {
           break;
         }
 
-        const shouldPlayAgain = await this.waitForRepeatDelay(active);
-        if (!shouldPlayAgain) {
-          break;
-        }
+        shouldPlayNow = false;
       }
     } catch (error) {
       logger.error('Voice keyer playback failed', error);
@@ -286,6 +315,7 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
   private async playOnce(active: ActivePlayback): Promise<void> {
     const audioPath = await this.getSlotAudioPathForRead(active.callsign, active.slotId);
     const decoded = this.decodeWav(await fs.readFile(audioPath));
+    active.playbackInterrupted = false;
     const lock = await this.deps.voiceSessionManager.startTransmit(
       active.keyerClientId,
       `${active.startedByLabel} Voice Keyer`,
@@ -296,16 +326,28 @@ export class VoiceKeyerManager extends EventEmitter<VoiceKeyerManagerEvents> {
 
     this.setStatus(this.statusFor(active, 'playing'));
     await this.sleep(PTT_LEAD_IN_MS, active);
-    if (active.stopRequested || this.active !== active) {
+    if (active.stopRequested || active.playbackInterrupted || this.active !== active) {
       return;
     }
     await this.deps.audioStreamManager.playAudio(decoded.samples, decoded.sampleRate, {
       injectIntoMonitor: true,
     });
-    if (active.stopRequested || this.active !== active) {
+    if (active.stopRequested || active.playbackInterrupted || this.active !== active) {
       return;
     }
     await this.sleep(PTT_TAIL_MS, active);
+    await this.deps.voiceSessionManager.stopTransmit(active.keyerClientId);
+  }
+
+  private async preemptPlaybackForManualPtt(active: ActivePlayback): Promise<void> {
+    active.playbackInterrupted = true;
+    this.setStatus(this.statusFor(active, 'repeat-waiting', null));
+
+    try {
+      await this.deps.audioStreamManager.stopCurrentPlayback();
+    } catch {
+      // The lead-in/tail path may not have an audio clip in flight yet.
+    }
     await this.deps.voiceSessionManager.stopTransmit(active.keyerClientId);
   }
 
