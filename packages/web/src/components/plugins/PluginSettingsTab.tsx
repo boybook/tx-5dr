@@ -29,6 +29,7 @@ export interface PluginSettingsTabRef {
 
 interface PluginSettingsTabProps {
   onUnsavedChanges?: (hasChanges: boolean) => void;
+  onUsesModalFooterSaveChange?: (usesFooter: boolean) => void;
 }
 
 type PluginSettingsView = 'installed' | 'marketplace';
@@ -38,7 +39,10 @@ interface InstalledPluginNavigationRequest {
   nonce: number;
 }
 
-export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettingsTabProps>(({ onUnsavedChanges }, ref) => {
+export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettingsTabProps>(({
+  onUnsavedChanges,
+  onUsesModalFooterSaveChange,
+}, ref) => {
   const { t } = useTranslation('settings');
   const pluginListRef = useRef<PluginListRef | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -69,6 +73,10 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
     setHasUnsavedChanges(hasChanges);
     onUnsavedChanges?.(hasChanges);
   }, [onUnsavedChanges]);
+
+  useEffect(() => {
+    onUsesModalFooterSaveChange?.(activeView === 'installed' || hasUnsavedChanges);
+  }, [activeView, hasUnsavedChanges, onUsesModalFooterSaveChange]);
 
   const handleReload = useCallback(async () => {
     setReloading(true);

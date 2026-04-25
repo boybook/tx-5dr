@@ -41,6 +41,21 @@ interface SettingsModalProps {
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
 export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins';
 
+const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
+  radio: false,
+  audio: false,
+  operator: true,
+  display: true,
+  radio_profile: false,
+  system: true,
+  rigctld: true,
+  frequency_presets: true,
+  tokens: false,
+  station_info: true,
+  openwebrx: false,
+  plugins: true,
+};
+
 export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPresetMode }: SettingsModalProps) {
   const { t } = useTranslation('settings');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -59,6 +74,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const [pendingAction, setPendingAction] = useState<'close' | 'changeTab' | null>(null);
   const [pendingTab, setPendingTab] = useState<SettingsTab | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [footerSaveOverrides, setFooterSaveOverrides] = useState<Partial<Record<SettingsTab, boolean>>>({});
 
   // 用于检查组件是否有未保存的更改
   const operatorSettingsRef = useRef<OperatorSettingsRef | null>(null);
@@ -75,8 +91,22 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
       const tab = (initialTab === 'radio' || initialTab === 'audio') ? defaultTab : (initialTab || defaultTab);
       setActiveTab(tab);
       setHasUnsavedChanges(false);
+      setFooterSaveOverrides({});
     }
   }, [isOpen, initialTab, defaultTab]);
+
+  const usesModalFooterSave = footerSaveOverrides[activeTab]
+    ?? DEFAULT_USES_MODAL_FOOTER_SAVE[activeTab];
+
+  const setTabUsesModalFooterSave = useCallback((tab: SettingsTab, usesFooter: boolean) => {
+    setFooterSaveOverrides(prev => (
+      prev[tab] === usesFooter ? prev : { ...prev, [tab]: usesFooter }
+    ));
+  }, []);
+
+  const handlePluginFooterSaveChange = useCallback((usesFooter: boolean) => {
+    setTabUsesModalFooterSave('plugins', usesFooter);
+  }, [setTabUsesModalFooterSave]);
 
   // 监听屏幕宽度变化，判断是否为移动端
   useEffect(() => {
@@ -371,6 +401,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           <PluginSettingsTab
             ref={pluginSettingsRef}
             onUnsavedChanges={setHasUnsavedChanges}
+            onUsesModalFooterSaveChange={handlePluginFooterSaveChange}
           />
         </React.Suspense>;
       default:
@@ -407,9 +438,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
             <div
               className={`min-h-0 ${isMobile ? 'flex flex-col' : 'flex'}`}
               style={{
-                height: isMobile ? 'calc(100vh - 180px)' : 'calc(95vh - 180px)',
+                height: usesModalFooterSave
+                  ? (isMobile ? 'calc(100vh - 180px)' : 'calc(95vh - 180px)')
+                  : (isMobile ? 'calc(100vh - 116px)' : 'calc(95vh - 116px)'),
                 minHeight: '400px',
-                maxHeight: isMobile ? 'none' : '600px'
+                maxHeight: isMobile ? 'none' : (usesModalFooterSave ? '600px' : '664px')
               }}
             >
               {/* 标签页菜单 */}
@@ -509,26 +542,28 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
             </div>
           </ModalBody>
 
-          <ModalFooter>
-            <div className="flex justify-between items-center w-full">
-              <div className="text-sm text-default-400">
-                {hasUnsavedChanges && (
-                  <span className="text-warning-600">{t('hasUnsavedChanges')}</span>
-                )}
+          {usesModalFooterSave && (
+            <ModalFooter>
+              <div className="flex justify-between items-center w-full">
+                <div className="text-sm text-default-400">
+                  {hasUnsavedChanges && (
+                    <span className="text-warning-600">{t('hasUnsavedChanges')}</span>
+                  )}
+                </div>
+                <div className="flex gap-3">
+                  <Button
+                    variant="flat"
+                    onPress={handleSave}
+                    isDisabled={!hasUnsavedChanges}
+                    className="bg-content1 border border-divider hover:bg-content2"
+                  >
+                    <FontAwesomeIcon icon={faSave} className="mr-2" />
+                    {t('modal.saveSettings')}
+                  </Button>
+                </div>
               </div>
-              <div className="flex gap-3">
-                <Button 
-                  variant="flat"
-                  onPress={handleSave}
-                  isDisabled={!hasUnsavedChanges}
-                  className="bg-content1 border border-divider hover:bg-content2"
-                >
-                  <FontAwesomeIcon icon={faSave} className="mr-2" />
-                  {t('modal.saveSettings')}
-                </Button>
-              </div>
-            </div>
-          </ModalFooter>
+            </ModalFooter>
+          )}
         </ModalContent>
       </Modal>
 
