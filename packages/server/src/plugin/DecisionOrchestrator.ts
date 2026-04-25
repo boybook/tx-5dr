@@ -64,13 +64,21 @@ export class DecisionOrchestrator {
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
-      const autoCallProposals = await this.deps.dispatcher.dispatchAutoCallCandidates(
-        operator.config.id,
-        slotInfo,
-        parsedMessages,
-        (instance) => this.deps.getCtxForInstance(instance),
-      );
-      await this.applyAutoCallProposal(operator.config.id, slotInfo, parsedMessages, autoCallProposals);
+      let automaticTargetMessages: ParsedFT8Message[] | undefined;
+      if (this.isOperatorPureStandby(operator.config.id)) {
+        automaticTargetMessages = await this.getFilteredAutomaticTargetMessages(
+          operator.config.id,
+          parsedMessages,
+        );
+
+        const autoCallProposals = await this.deps.dispatcher.dispatchAutoCallCandidates(
+          operator.config.id,
+          slotInfo,
+          automaticTargetMessages,
+          (instance) => this.deps.getCtxForInstance(instance),
+        );
+        await this.applyAutoCallProposal(operator.config.id, slotInfo, automaticTargetMessages, autoCallProposals);
+      }
 
       if (!operator.isTransmitting) continue;
 
@@ -78,16 +86,13 @@ export class DecisionOrchestrator {
       session.lastDecisionTransmission = null;
       session.lastDecisionMessageSet = null;
       session.preDecisionEncodedTransmission = undefined;
-      const automaticTargetMessages = this.filterAutomaticTargetMessages(operator.config.id, parsedMessages);
-
-      const filtered = await this.deps.dispatcher.dispatchFilterCandidates(
+      automaticTargetMessages ??= await this.getFilteredAutomaticTargetMessages(
         operator.config.id,
-        automaticTargetMessages,
-        (instance) => this.deps.getCtxForInstance(instance),
+        parsedMessages,
       );
       const scored = await this.deps.dispatcher.dispatchScoreCandidates(
         operator.config.id,
-        filtered.map((message) => ({ ...message, score: 0 })),
+        automaticTargetMessages.map((message) => ({ ...message, score: 0 })),
         (instance) => this.deps.getCtxForInstance(instance),
       );
       scored.sort((a, b) => b.score - a.score);
@@ -182,15 +187,13 @@ export class DecisionOrchestrator {
     }
 
     const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
-    const automaticTargetMessages = this.filterAutomaticTargetMessages(operatorId, parsedMessages);
-    const filtered = await this.deps.dispatcher.dispatchFilterCandidates(
+    const automaticTargetMessages = await this.getFilteredAutomaticTargetMessages(
       operatorId,
-      automaticTargetMessages,
-      (instance) => this.deps.getCtxForInstance(instance),
+      parsedMessages,
     );
     const scored = await this.deps.dispatcher.dispatchScoreCandidates(
       operatorId,
-      filtered.map((message) => ({ ...message, score: 0 })),
+      automaticTargetMessages.map((message) => ({ ...message, score: 0 })),
       (instance) => this.deps.getCtxForInstance(instance),
     );
     scored.sort((a, b) => b.score - a.score);
@@ -317,6 +320,18 @@ export class DecisionOrchestrator {
   }
 
   // ===== Private: Decision pipeline =====
+
+  private async getFilteredAutomaticTargetMessages(
+    operatorId: string,
+    messages: ParsedFT8Message[],
+  ): Promise<ParsedFT8Message[]> {
+    const automaticTargetMessages = this.filterAutomaticTargetMessages(operatorId, messages);
+    return this.deps.dispatcher.dispatchFilterCandidates(
+      operatorId,
+      automaticTargetMessages,
+      (instance) => this.deps.getCtxForInstance(instance),
+    );
+  }
 
   private filterAutomaticTargetMessages(
     operatorId: string,

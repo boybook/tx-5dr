@@ -253,6 +253,42 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
     expect(deleted.pluginManager.getOperatorRuntimeStatus(deleted.operator.config.id).context?.targetCallsign).toBeUndefined();
   });
 
+  it('applies hard candidate filters before watched novelty autocall proposals', async () => {
+    const { eventEmitter, operator, pluginManager } = await createHarness({
+      pluginConfigs: {
+        'snr-filter': {
+          enabled: true,
+          settings: {
+            minSNR: -10,
+          },
+        },
+        'watched-novelty-autocall': { enabled: true, settings: {} },
+      },
+      operatorPluginSettings: {
+        'watched-novelty-autocall': {
+          watchNewDxcc: true,
+          triggerMode: 'cq',
+          autocallPriority: 80,
+        },
+      },
+      analyzeCallsign: async (callsign) => ({
+        callsign,
+        isNewDxccEntity: true,
+        dxccStatus: 'current',
+        dxccEntity: 'Fresh DX',
+      }),
+    });
+
+    const slotInfo = createSlotInfo(60_000);
+    eventEmitter.emit('slotStart', slotInfo, createSlotPack(slotInfo, [
+      { message: 'CQ DX4LOW OJ11', snr: -18 },
+    ]));
+    await flushAsyncWork();
+
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBeUndefined();
+  });
+
   it('can auto-select an idle transmit frequency before accepting an autocall proposal', async () => {
     const observedSlotIds: string[] = [];
     const { eventEmitter, operator } = await createHarness({
