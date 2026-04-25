@@ -1,5 +1,7 @@
 import React from 'react';
 import { Button } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faRotateRight, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import i18n from '../../i18n';
 import { createLogger } from '../../utils/logger';
 
@@ -40,19 +42,31 @@ export class AppErrorBoundary extends React.Component<AppErrorBoundaryProps, App
     }
 
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-background px-6">
-        <div className="max-w-md w-full rounded-2xl border border-default-200 bg-content1 p-6 shadow-lg text-center">
-          <h1 className="text-xl font-semibold text-foreground">
-            {i18n.t('common:appError.title')}
-          </h1>
-          <p className="mt-3 text-sm text-default-500">
-            {i18n.t('common:appError.description')}
-          </p>
-          <div className="mt-6 flex justify-center gap-3">
-            <Button color="primary" onPress={this.handleRetry}>
+      <div className="min-h-screen w-full flex items-center justify-center bg-background px-6 py-10">
+        <div className="flex w-full max-w-lg flex-col items-center gap-6 text-center">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-danger-50">
+            <FontAwesomeIcon icon={faTriangleExclamation} className="text-3xl text-danger" />
+          </div>
+
+          <div className="space-y-2">
+            <h1 className="text-xl font-semibold text-foreground">
+              {i18n.t('common:appError.title')}
+            </h1>
+            <p className="mx-auto max-w-md text-sm leading-6 text-default-500">
+              {i18n.t('common:appError.description')}
+            </p>
+          </div>
+
+          <div className="flex w-full max-w-xs flex-col gap-3 sm:max-w-none sm:flex-row sm:justify-center">
+            <Button
+              color="primary"
+              variant="flat"
+              startContent={<FontAwesomeIcon icon={faRotateRight} />}
+              onPress={this.handleRetry}
+            >
               {i18n.t('common:appError.retry')}
             </Button>
-            <Button variant="flat" onPress={() => window.location.reload()}>
+            <Button variant="light" onPress={() => window.location.reload()}>
               {i18n.t('common:appError.refresh')}
             </Button>
           </div>
