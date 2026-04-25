@@ -235,6 +235,7 @@ export const VoiceKeyerCard: React.FC = () => {
   const radioService = connection.state.radioService;
 
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const [bodyOverflowVisible, setBodyOverflowVisible] = useState(false);
   const [panel, setPanel] = useState<VoiceKeyerPanel | null>(null);
   const [status, setStatus] = useState<VoiceKeyerStatus>(idleStatus);
   const [loading, setLoading] = useState(false);
@@ -686,11 +687,19 @@ export const VoiceKeyerCard: React.FC = () => {
     return callsign;
   }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.nextRunAt, status.slotId, t]);
 
+  const toggleCollapsed = useCallback(() => {
+    setBodyOverflowVisible(false);
+    setShortcutMenuSlotId(null);
+    setIsCollapsed(current => !current);
+  }, []);
+
+  const bodyOverflowClass = bodyOverflowVisible ? 'overflow-visible' : 'overflow-hidden';
+
   return (
     <Card className="w-full overflow-visible" shadow="sm">
       <CardHeader
         className="flex items-center justify-between gap-2 cursor-pointer select-none py-2"
-        onClick={() => setIsCollapsed(prev => !prev)}
+        onClick={toggleCollapsed}
       >
         <div className="flex min-w-0 items-center gap-2">
           <FontAwesomeIcon
@@ -788,10 +797,16 @@ export const VoiceKeyerCard: React.FC = () => {
       </CardHeader>
 
       <div
-        className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${isCollapsed ? 'overflow-hidden' : 'overflow-visible'}`}
+        className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${bodyOverflowClass}`}
         style={{ gridTemplateRows: isCollapsed ? '0fr' : '1fr' }}
+        onTransitionEnd={(event) => {
+          if (event.target !== event.currentTarget || event.propertyName !== 'grid-template-rows') return;
+          if (!isCollapsed) {
+            setBodyOverflowVisible(true);
+          }
+        }}
       >
-        <div className={isCollapsed ? 'overflow-hidden' : 'overflow-visible'}>
+        <div className={bodyOverflowClass}>
           <CardBody className="overflow-visible pt-0">
             {!canOperate && (
               <div className="rounded-md bg-warning-50 px-2 py-1.5 text-xs text-warning dark:bg-warning-50/10">
