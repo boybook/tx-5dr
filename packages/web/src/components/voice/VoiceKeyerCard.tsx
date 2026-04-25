@@ -687,7 +687,7 @@ export const VoiceKeyerCard: React.FC = () => {
   }, [callsign, hasCallsign, status.active, status.callsign, status.mode, status.nextRunAt, status.slotId, t]);
 
   return (
-    <Card className="w-full" shadow="sm">
+    <Card className="w-full overflow-visible" shadow="sm">
       <CardHeader
         className="flex items-center justify-between gap-2 cursor-pointer select-none py-2"
         onClick={() => setIsCollapsed(prev => !prev)}
@@ -790,7 +790,7 @@ export const VoiceKeyerCard: React.FC = () => {
         style={{ gridTemplateRows: isCollapsed ? '0fr' : '1fr' }}
       >
         <div className={isCollapsed ? 'overflow-hidden' : 'overflow-visible'}>
-          <CardBody className="pt-0">
+          <CardBody className="overflow-visible pt-0">
             {!canOperate && (
               <div className="rounded-md bg-warning-50 px-2 py-1.5 text-xs text-warning dark:bg-warning-50/10">
                 {hasCallsign ? t('keyer.operatorRequired') : t('keyer.noOperator')}
