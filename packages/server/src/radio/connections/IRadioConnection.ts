@@ -290,6 +290,15 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
   setPTT(enabled: boolean): Promise<void>;
 
   /**
+   * 获取电台当前 PTT/TX 状态。
+   * true = radio reports TX, false = radio reports RX.
+   *
+   * Optional and intended for low-priority observation only. Implementations
+   * should skip or fail softly when the radio I/O path is busy.
+   */
+  getPTT?(): Promise<boolean>;
+
+  /**
    * 设置电台工作模式
    *
    * @param mode - 模式名称 (USB, LSB, AM, CW, FM, etc.)

@@ -493,8 +493,8 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.VOICE_PTT_RELEASE);
   }
 
-  playVoiceKeyer(callsign: string, slotId: string, repeat = false): void {
-    this.send(WSMessageType.VOICE_KEYER_PLAY, { callsign, slotId, repeat });
+  playVoiceKeyer(callsign: string, slotId: string, repeat = false, startImmediately = true): void {
+    this.send(WSMessageType.VOICE_KEYER_PLAY, { callsign, slotId, repeat, startImmediately });
   }
 
   stopVoiceKeyer(): void {

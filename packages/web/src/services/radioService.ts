@@ -414,9 +414,9 @@ export class RadioService {
     }
   }
 
-  playVoiceKeyer(callsign: string, slotId: string, repeat = false): void {
+  playVoiceKeyer(callsign: string, slotId: string, repeat = false, startImmediately = true): void {
     if (this.isConnected) {
-      this.wsClient.playVoiceKeyer(callsign, slotId, repeat);
+      this.wsClient.playVoiceKeyer(callsign, slotId, repeat, startImmediately);
     }
   }
 

@@ -383,6 +383,27 @@ export class IcomWlanConnection
     }, { critical: true });
   }
 
+  async getPTT(): Promise<boolean> {
+    this.checkConnected();
+    const result = await this.ioQueue.runLowPriority({ sessionId: this.ioSessionId }, async (activeSessionId) => {
+      this.ensureSession(activeSessionId);
+      try {
+        const state = await this.rig!.readTransceiverState({ timeout: 1000 });
+        if (state === 'TX') return true;
+        if (state === 'RX') return false;
+        throw new Error(`ICOM PTT state unavailable: ${state ?? 'null'}`);
+      } catch (error) {
+        throw this.convertError(error, 'getPTT');
+      }
+    });
+
+    if (result === RADIO_IO_SKIPPED) {
+      throw new Error('PTT poll skipped because radio I/O is busy');
+    }
+
+    return result;
+  }
+
   /**
    * 设置电台工作模式
    */
