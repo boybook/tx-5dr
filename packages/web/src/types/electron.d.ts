@@ -51,6 +51,7 @@ interface ElectronAPI {
   app?: {
     getVersion(): Promise<string>;
     quit(): Promise<void>;
+    restart(): Promise<void>;
     minimize(): Promise<void>;
     toggleMaximize(): Promise<void>;
   };

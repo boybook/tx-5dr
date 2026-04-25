@@ -33,6 +33,17 @@ docker compose -f docker-compose.livekit.yml up -d
 
 Configure the LiveKit topology from the app's "System Settings > Realtime Audio" page. The container now persists the whole `./data` root and generates a managed `livekit.resolved.yaml`; do not hand-edit the generated YAML.
 
+#### Server-only CPU profile capture
+
+The Web UI now provides a guided capture flow at `System Settings > Performance Diagnostics`. It arms the next backend `server` start only, and never injects `--cpu-prof` into nginx or other companion processes.
+
+If you need a manual override, set `TX5DR_SERVER_CPU_PROFILE=1` on the `tx5dr-server` process environment. Do not use container-wide `NODE_OPTIONS`.
+
+The `.cpuprofile` file is written only after a clean backend stop or restart. Use `docker restart tx5dr` to finish the capture, then collect the result from:
+
+- Container path: `/app/data/logs/diagnostics/cpu`
+- Host path: `./data/logs/diagnostics/cpu`
+
 ### Two Compose Files
 
 | File | Mode | Command |
@@ -99,6 +110,17 @@ docker compose -f docker-compose.livekit.yml up -d
 ```
 
 LiveKit 的网络拓扑现在统一从应用内“系统设置 > 实时音频”配置。容器会持久化整个 `./data` 根目录，并生成托管的 `livekit.resolved.yaml`；不要再手工修改生成后的 YAML。
+
+#### 仅 `server` 子进程的 CPU Profile
+
+现在 Web UI 在“系统设置 > 性能诊断”里提供一次性引导采样，只会作用在后端 `server` 进程，不会把 `--cpu-prof` 注入 nginx 或其他伴随进程。
+
+如需手动覆盖，可为 `tx5dr-server` 进程设置 `TX5DR_SERVER_CPU_PROFILE=1`。不要通过容器级 `NODE_OPTIONS` 全局注入。
+
+`.cpuprofile` 文件只有在后端正常停止或重启后才会写出。完成采样时请使用 `docker restart tx5dr`，然后到以下位置取文件：
+
+- 容器内路径：`/app/data/logs/diagnostics/cpu`
+- 宿主机路径：`./data/logs/diagnostics/cpu`
 
 ### 两个 Compose 文件
 

@@ -2,16 +2,8 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { PluginDistribution, PluginRuntimeInfo } from '@tx5dr/contracts';
 import { tx5drPaths } from '../utils/app-paths.js';
+import { resolveRuntimeDistribution, type RuntimeDetectionOptions } from '../utils/runtime-distribution.js';
 
-function normalizeEnvValue(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-interface RuntimeDetectionOptions {
-  env?: NodeJS.ProcessEnv;
-  hasDockerEnvFile?: boolean;
-}
 
 interface PluginRuntimePaths {
   configDir: string;
@@ -24,26 +16,10 @@ export function resolvePluginDistribution(
   dataDir: string,
   options: RuntimeDetectionOptions = {},
 ): PluginDistribution {
-  const env = options.env ?? process.env;
-  const hasDockerEnvFile = options.hasDockerEnvFile ?? existsSync('/.dockerenv');
-
-  if (normalizeEnvValue(env.APP_RESOURCES) || normalizeEnvValue(env.EMBEDDED) === 'true') {
-    return 'electron';
-  }
-
-  if (hasDockerEnvFile || dataDir === '/app/data') {
-    return 'docker';
-  }
-
-  if (env.NODE_ENV === 'development') {
-    return 'web-dev';
-  }
-
-  if (dataDir === '/var/lib/tx5dr') {
-    return 'linux-service';
-  }
-
-  return 'generic-server';
+  return resolveRuntimeDistribution(dataDir, {
+    env: options.env,
+    hasDockerEnvFile: options.hasDockerEnvFile ?? existsSync('/.dockerenv'),
+  });
 }
 
 export function buildPluginRuntimeInfo(
