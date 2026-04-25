@@ -15,6 +15,7 @@ import type {
   PluginContext,
   PluginUIRequestContext,
   PluginUIInstanceTarget,
+  QSOFailureInfo,
   StrategyRuntime,
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
@@ -117,6 +118,7 @@ export class PluginManager {
       eventEmitter: deps.eventEmitter,
       requestCall: (operatorId, callsign, lastMessage) => this.requestCall(operatorId, callsign, lastMessage),
       notifyTransmissionQueued: (operatorId, transmission) => this.notifyTransmissionQueued(operatorId, transmission),
+      notifyQSOFail: (operatorId, info) => this.notifyQSOFail(operatorId, info),
       triggerReEncode: deps.triggerReEncode,
     });
   }
@@ -441,6 +443,15 @@ export class PluginManager {
       operatorId,
       'onQSOComplete',
       (hook, ctx) => hook(record, ctx),
+      (instance) => this.getCtxForInstance(instance),
+    );
+  }
+
+  async notifyQSOFail(operatorId: string, info: QSOFailureInfo): Promise<void> {
+    await this.dispatcher.dispatchBroadcast(
+      operatorId,
+      'onQSOFail',
+      (hook, ctx) => hook(info, ctx),
       (instance) => this.getCtxForInstance(instance),
     );
   }

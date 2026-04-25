@@ -15,6 +15,7 @@ import type {
 import type {
   AutoCallExecutionPlan,
   AutoCallExecutionRequest,
+  StrategyDecision,
   StrategyDecisionMeta,
 } from '@tx5dr/plugin-api';
 import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
@@ -109,6 +110,7 @@ export class DecisionOrchestrator {
         session.lastDecisionMessageSet = this.buildDecisionMessageSet(slotPack, operator.config.id);
       }
       session.lastDecisionTransmission = this.readCurrentTransmission(operator.config.id);
+      await this.notifyQSOFailIfPresent(operator.config.id, decision);
 
       // 竞态检测：如果 handleEncodeStart 在决策完成前已排队了发射内容，
       // 且决策结果与之不同，触发替换编码以纠正过时的发射
@@ -198,16 +200,17 @@ export class DecisionOrchestrator {
     );
     scored.sort((a, b) => b.score - a.score);
 
-    let decisionStop = false;
+    let decision: StrategyDecision | null = null;
     session.decisionInProgress = true;
     try {
-      const decision = await this.invokeStrategyDecision(operatorId, scored, { isReDecision: true });
-      decisionStop = decision?.stop ?? false;
+      decision = await this.invokeStrategyDecision(operatorId, scored, { isReDecision: true });
     } finally {
       session.decisionInProgress = false;
     }
 
-    if (decisionStop) {
+    await this.notifyQSOFailIfPresent(operatorId, decision);
+
+    if (decision?.stop) {
       await this.applyStrategyStop(operatorId, { interruptActiveTransmission: true });
       return false;
     }
@@ -363,7 +366,7 @@ export class DecisionOrchestrator {
     operatorId: string,
     messages: ParsedFT8Message[],
     meta: StrategyDecisionMeta,
-  ): Promise<{ stop?: boolean } | null> {
+  ): Promise<StrategyDecision | null> {
     const runtime = this.deps.getStrategyRuntime(operatorId);
     if (!runtime) {
       return null;
@@ -371,6 +374,25 @@ export class DecisionOrchestrator {
 
     const result = runtime.decide(messages, meta);
     return result instanceof Promise ? await result : result;
+  }
+
+  private async notifyQSOFailIfPresent(
+    operatorId: string,
+    decision: StrategyDecision | null | undefined,
+  ): Promise<void> {
+    const failure = decision?.qsoFailure;
+    if (!failure?.targetCallsign || !failure.reason) {
+      return;
+    }
+
+    try {
+      await this.deps.notifyQSOFail(operatorId, {
+        ...failure,
+        targetCallsign: failure.targetCallsign.trim().toUpperCase(),
+      });
+    } catch (error) {
+      logger.warn(`Failed to notify QSO failure for operator ${operatorId}`, error);
+    }
   }
 
   private async applyStrategyStop(

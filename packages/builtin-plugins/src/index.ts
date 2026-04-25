@@ -29,6 +29,12 @@ import {
 import { snrFilterPlugin, snrFilterLocales } from './snr-filter/index.js';
 
 import {
+  noReplyMemoryFilterPlugin,
+  noReplyMemoryFilterLocales,
+  BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
+} from './no-reply-memory-filter/index.js';
+
+import {
   callsignFilterPlugin,
   callsignFilterLocales,
 } from './callsign-filter/index.js';
@@ -95,6 +101,7 @@ export {
   BUILTIN_LOTW_SYNC_PLUGIN_NAME,
   BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
   BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
+  BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
 };
 
 // ===== Registry =====
@@ -111,6 +118,11 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
   {
     definition: snrFilterPlugin,
     locales: snrFilterLocales,
+    enabledByDefault: false,
+  },
+  {
+    definition: noReplyMemoryFilterPlugin,
+    locales: noReplyMemoryFilterLocales,
     enabledByDefault: false,
   },
   {

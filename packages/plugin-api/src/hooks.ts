@@ -19,6 +19,14 @@ export interface ScoredCandidate extends ParsedFT8Message {
   score: number;
 }
 
+export interface QSOFailureInfo {
+  targetCallsign: string;
+  reason: string;
+  stage?: string;
+  unansweredTransmissions?: number;
+  hadTargetReply?: boolean;
+}
+
 /**
  * Decision returned from {@link StrategyRuntime.decide}.
  *
@@ -36,6 +44,7 @@ export interface StrategyDecision {
    * - interrupt the operator's current audio/PTT contribution right away.
    */
   stop?: boolean;
+  qsoFailure?: QSOFailureInfo;
 }
 
 /**
@@ -207,7 +216,7 @@ export interface PluginHooks {
   /**
    * Broadcast when an in-progress QSO terminates unsuccessfully.
    */
-  onQSOFail?(info: { targetCallsign: string; reason: string }, ctx: PluginContext): void;
+  onQSOFail?(info: QSOFailureInfo, ctx: PluginContext): void;
 
   /**
    * Broadcast when a named timer created through {@link PluginContext.timers}

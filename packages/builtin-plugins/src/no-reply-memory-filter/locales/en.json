@@ -1,0 +1,6 @@
+{
+  "pluginName": "No-reply Memory Filter",
+  "pluginDescription": "Temporarily suppress automatic calls to stations that recently ignored repeated calls.",
+  "memoryOverview": "Memory Policy",
+  "memoryOverviewDesc": "Keeps a global per-callsign memory of recent no-reply failures. Low scores block automatic chasing, recover lazily over time, and do not block stations that directly call you."
+}

@@ -21,6 +21,7 @@ import type {
     StrategyRuntimeContext,
     StrategyRuntimeSnapshot,
     StrategyRuntimeSlotContentUpdate,
+    QSOFailureInfo,
 } from '@tx5dr/plugin-api';
 import { FT8MessageParser } from '@tx5dr/core';
 import type { PluginLogger } from '@tx5dr/plugin-api';
@@ -49,6 +50,7 @@ type Slots = {
 interface StateHandleResult {
     stop?: boolean;
     changeState?: SlotsIndex;
+    qsoFailure?: QSOFailureInfo;
 }
 
 export interface StandardQSOPluginOperator {
@@ -193,6 +195,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         } else {
                             strategy.logger.debug(`TX1: target not replying, switching to new direct call ${newCallsign} (SNR: ${newCall.snr}dB), dropping ${strategy.context.targetCallsign}`);
 
+                            const droppedCallsign = strategy.context.targetCallsign;
+                            const qsoFailure = strategy.buildNoReplyFailure(
+                                'tx1_switched_to_direct_call',
+                                Math.max(1, strategy.callAttempts + 1),
+                                droppedCallsign,
+                            );
+
                             // 清空旧上下文（自动保存到缓存）
                             strategy.clearQSOContext();
 
@@ -210,7 +219,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             }
 
                             strategy.updateSlots();
-                            return { changeState: 'TX2' };
+                            return { changeState: 'TX2', qsoFailure };
                         }
                     } else {
                         strategy.logger.debug(`TX1: new call ${newCallsign} already worked and replyToWorkedStations=false, continuing to wait for ${strategy.context.targetCallsign}`);
@@ -232,6 +241,13 @@ const states: { [key in SlotsIndex]: StandardState } = {
                         } else {
                             strategy.logger.debug(`TX1: target not replying, switching to new direct signal report ${newCallsign} (SNR: ${newCall.snr}dB), dropping ${strategy.context.targetCallsign}`);
 
+                            const droppedCallsign = strategy.context.targetCallsign;
+                            const qsoFailure = strategy.buildNoReplyFailure(
+                                'tx1_switched_to_direct_signal_report',
+                                Math.max(1, strategy.callAttempts + 1),
+                                droppedCallsign,
+                            );
+
                             // 清空旧上下文（自动保存到缓存）
                             strategy.clearQSOContext();
 
@@ -249,7 +265,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                             }
 
                             strategy.updateSlots();
-                            return { changeState: 'TX3' };
+                            return { changeState: 'TX3', qsoFailure };
                         }
                     } else {
                         strategy.logger.debug(`TX1: new signal report ${newCallsign} already worked and replyToWorkedStations=false, continuing to wait for ${strategy.context.targetCallsign}`);
@@ -275,6 +291,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (strategy.callAttempts >= strategy.operator.config.maxCallAttempts) {
                 strategy.logger.debug(`TX1 timeout: max attempts (${strategy.operator.config.maxCallAttempts}) reached, giving up on ${strategy.context.targetCallsign}`);
 
+                const qsoFailure = strategy.buildNoReplyFailure(
+                    'tx1_max_call_attempts',
+                    Math.max(8, strategy.operator.config.maxCallAttempts + 3, strategy.callAttempts + 3),
+                );
+
                 // 清理QSO开始时间
                 strategy.qsoStartTime = undefined;
 
@@ -287,11 +308,11 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 // QSO失败，检查是否自动恢复CQ
                 if (strategy.operator.config.autoResumeCQAfterFail) {
                     strategy.logger.debug('TX1 timeout: autoResumeCQAfterFail=true, switching to TX6');
-                    return { changeState: 'TX6' };
+                    return { changeState: 'TX6', qsoFailure };
                 }
 
                 strategy.logger.debug('TX1 timeout: autoResumeCQAfterFail=false, stopping');
-                return { changeState: 'TX6', stop: true };
+                return { changeState: 'TX6', stop: true, qsoFailure };
             }
 
             // haven't reached max attempts, continue calling (keep TX1)
@@ -1066,6 +1087,24 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         return this._context;
     }
 
+    public buildNoReplyFailure(
+        reason: string,
+        unansweredTransmissions: number,
+        targetCallsign = this.context.targetCallsign,
+    ): QSOFailureInfo | undefined {
+        if (!targetCallsign) {
+            return undefined;
+        }
+
+        return {
+            targetCallsign,
+            reason,
+            stage: 'TX1',
+            unansweredTransmissions,
+            hadTargetReply: false,
+        };
+    }
+
     changeState(state: SlotsIndex) {
         const oldState = this.state;
         this.state = state;
@@ -1126,14 +1165,23 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                     }
                     if (timeoutResult.stop) {
                         this.logger.debug('Stopping operator after timeout');
-                        return { stop: true };
+                        return {
+                            stop: true,
+                            qsoFailure: timeoutResult.qsoFailure,
+                        };
+                    }
+                    if (timeoutResult.qsoFailure) {
+                        return {
+                            qsoFailure: timeoutResult.qsoFailure,
+                        };
                     }
                 }
             }
         }
 
         return {
-            stop: result.stop
+            stop: result.stop,
+            qsoFailure: result.qsoFailure,
         };
     }
 

@@ -763,6 +763,169 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('does not auto-reply to a low-score no-reply memory CQ candidate', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      autoReplyToCQ: true,
+      pluginConfigs: {
+        'no-reply-memory-filter': {
+          enabled: true,
+          settings: {},
+        },
+      },
+    });
+
+    await pluginManager.notifyQSOFail(operator.config.id, {
+      targetCallsign: 'JA1AAA',
+      reason: 'tx1_max_call_attempts',
+      stage: 'TX1',
+      unansweredTransmissions: 8,
+      hadTargetReply: false,
+    });
+    await pluginManager.notifyQSOFail(operator.config.id, {
+      targetCallsign: 'JA1AAA',
+      reason: 'tx1_max_call_attempts',
+      stage: 'TX1',
+      unansweredTransmissions: 8,
+      hadTargetReply: false,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CQ,
+        senderCallsign: 'JA1AAA',
+        grid: 'PM95',
+      }),
+      snr: -5,
+      freq: 1200,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX6');
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('CQ BG4IAJ OM96');
+
+    await pluginManager.shutdown();
+  });
+
+  it('still replies when a low-score no-reply station directly calls my station', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      autoReplyToCQ: true,
+      pluginConfigs: {
+        'no-reply-memory-filter': {
+          enabled: true,
+          settings: {},
+        },
+      },
+    });
+
+    await pluginManager.notifyQSOFail(operator.config.id, {
+      targetCallsign: 'JA1AAA',
+      reason: 'tx1_max_call_attempts',
+      stage: 'TX1',
+      unansweredTransmissions: 8,
+      hadTargetReply: false,
+    });
+    await pluginManager.notifyQSOFail(operator.config.id, {
+      targetCallsign: 'JA1AAA',
+      reason: 'tx1_max_call_attempts',
+      stage: 'TX1',
+      unansweredTransmissions: 8,
+      hadTargetReply: false,
+    });
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(15_000), createSlotPack(createSlotInfo(15_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CALL,
+        senderCallsign: 'JA1AAA',
+        targetCallsign: 'BG4IAJ',
+        grid: 'PM95',
+      }),
+      snr: -5,
+      freq: 1200,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX2');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.targetCallsign).toBe('JA1AAA');
+
+    await pluginManager.shutdown();
+  });
+
+  it('penalizes standard-qso TX1 no-reply failures but not later-stage timeouts', async () => {
+    const tx1Failure = await createRuntimeHarness({
+      autoReplyToCQ: true,
+      targetCallsign: 'JA1AAA',
+      maxQSOTimeoutCycles: 1,
+      maxCallAttempts: 1,
+      pluginConfigs: {
+        'no-reply-memory-filter': {
+          enabled: true,
+          settings: {},
+        },
+      },
+    });
+    setRuntimeState(tx1Failure.pluginManager, tx1Failure.operator.config.id, 'TX1');
+
+    await (tx1Failure.pluginManager as any).handleSlotStart(
+      createSlotInfo(15_000),
+      createSlotPack(createSlotInfo(15_000), []),
+    );
+    tx1Failure.operator.start();
+    patchRuntimeContext(tx1Failure.pluginManager, tx1Failure.operator.config.id, {
+      targetCallsign: 'JA1AAA',
+      targetGrid: 'PM95',
+      reportSent: -5,
+    });
+    setRuntimeState(tx1Failure.pluginManager, tx1Failure.operator.config.id, 'TX1');
+    await (tx1Failure.pluginManager as any).handleSlotStart(
+      createSlotInfo(30_000),
+      createSlotPack(createSlotInfo(30_000), []),
+    );
+    tx1Failure.operator.start();
+    await (tx1Failure.pluginManager as any).handleSlotStart(createSlotInfo(45_000), createSlotPack(createSlotInfo(45_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CQ,
+        senderCallsign: 'JA1AAA',
+        grid: 'PM95',
+      }),
+      snr: -5,
+      freq: 1200,
+    }]));
+
+    expect(tx1Failure.pluginManager.getOperatorRuntimeStatus(tx1Failure.operator.config.id).currentSlot).toBe('TX6');
+
+    const tx2Failure = await createRuntimeHarness({
+      autoReplyToCQ: true,
+      targetCallsign: 'JA1AAA',
+      maxQSOTimeoutCycles: 1,
+      pluginConfigs: {
+        'no-reply-memory-filter': {
+          enabled: true,
+          settings: {},
+        },
+      },
+    });
+    setRuntimeState(tx2Failure.pluginManager, tx2Failure.operator.config.id, 'TX2');
+
+    await (tx2Failure.pluginManager as any).handleSlotStart(
+      createSlotInfo(45_000),
+      createSlotPack(createSlotInfo(45_000), []),
+    );
+    tx2Failure.operator.start();
+    await (tx2Failure.pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(60_000), [{
+      message: FT8MessageParser.generateMessage({
+        type: FT8MessageType.CQ,
+        senderCallsign: 'JA1AAA',
+        grid: 'PM95',
+      }),
+      snr: -5,
+      freq: 1200,
+    }]));
+
+    expect(tx2Failure.pluginManager.getOperatorRuntimeStatus(tx2Failure.operator.config.id).currentSlot).toBe('TX1');
+    expect(tx2Failure.pluginManager.getOperatorRuntimeStatus(tx2Failure.operator.config.id).context?.targetCallsign).toBe('JA1AAA');
+
+    await tx1Failure.pluginManager.shutdown();
+    await tx2Failure.pluginManager.shutdown();
+  });
+
   it('does not auto-reply to a directed CQ whose modifier excludes my station identity', async () => {
     const { operator, pluginManager } = await createRuntimeHarness({
       myCallsign: 'BG4IAJ',
